@@ -73,6 +73,22 @@ pub enum Instruction {
         min_amount_out: u128,
         token_definition_id_in: AccountId,
     },
+
+    /// Swap tokens specifying the exact desired output amount,
+    /// while maintaining the Pool constant product.
+    ///
+    /// Required accounts:
+    /// - AMM Pool (initialized)
+    /// - Vault Holding Account for Token A (initialized)
+    /// - Vault Holding Account for Token B (initialized)
+    /// - User Holding Account for Token A
+    /// - User Holding Account for Token B Either User Holding Account for Token A or Token B is
+    ///   authorized.
+    SwapExactOutput {
+        exact_amount_out: u128,
+        max_amount_in: u128,
+        token_definition_id_in: AccountId,
+    },
 }
 
 #[derive(Clone, Default, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
