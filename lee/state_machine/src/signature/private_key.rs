@@ -1,7 +1,9 @@
 use std::str::FromStr;
 
+use k256::elliptic_curve::{PrimeField as _, sec1::ToEncodedPoint as _};
 use rand::{Rng as _, rngs::OsRng};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
+use sha2::{Digest as _, Sha256};
 
 use crate::error::LeeError;
 
@@ -59,6 +61,27 @@ impl PrivateKey {
     #[must_use]
     pub const fn value(&self) -> &[u8; 32] {
         &self.0
+    }
+
+    pub fn tweak(value: &[u8; 32]) -> Result<Self, LeeError> {
+        assert!(Self::is_valid_key(*value));
+
+        let sk = k256::SecretKey::from_bytes(value.into()).unwrap();
+
+        let mut bytes = vec![];
+        let pk = sk.public_key();
+        bytes.extend_from_slice(pk.to_encoded_point(true).as_bytes());
+        let hashed: [u8; 32] = Sha256::digest(&bytes).into();
+
+        let tweaked_sk = Self::try_new(
+            k256::Scalar::from_repr((*value).into())
+                .unwrap()
+                .add(&k256::Scalar::from_repr(hashed.into()).unwrap())
+                .to_bytes()
+                .into(),
+        );
+
+        tweaked_sk
     }
 }
 
