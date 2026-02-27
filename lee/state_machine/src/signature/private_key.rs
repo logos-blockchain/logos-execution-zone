@@ -73,15 +73,13 @@ impl PrivateKey {
         bytes.extend_from_slice(pk.to_encoded_point(true).as_bytes());
         let hashed: [u8; 32] = Sha256::digest(&bytes).into();
 
-        let tweaked_sk = Self::try_new(
+        Self::try_new(
             k256::Scalar::from_repr((*value).into())
                 .unwrap()
                 .add(&k256::Scalar::from_repr(hashed.into()).unwrap())
                 .to_bytes()
                 .into(),
-        );
-
-        tweaked_sk
+        )
     }
 }
 
