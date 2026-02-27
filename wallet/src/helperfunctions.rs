@@ -1,7 +1,6 @@
 use std::{collections::HashMap, path::PathBuf, str::FromStr};
 
 use anyhow::Result;
-use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use key_protocol::key_protocol_core::NSSAUserData;
 use nssa::Account;
 use nssa_core::account::Nonce;
@@ -149,19 +148,25 @@ pub(crate) fn parse_addr_with_privacy_prefix(
 #[derive(Serialize)]
 pub(crate) struct HumanReadableAccount {
     balance: u128,
-    program_owner_b64: String,
-    data_b64: String,
+    program_owner: String,
+    data: String,
     nonce: u128,
 }
 
 impl From<Account> for HumanReadableAccount {
     fn from(account: Account) -> Self {
-        let program_owner_b64 = BASE64.encode(bytemuck::cast_slice(&account.program_owner));
-        let data_b64 = BASE64.encode(account.data);
+        let program_owner = hex::encode(
+            account
+                .program_owner
+                .iter()
+                .flat_map(|n| n.to_le_bytes())
+                .collect::<Vec<u8>>(),
+        );
+        let data = hex::encode(account.data);
         Self {
             balance: account.balance,
-            program_owner_b64,
-            data_b64,
+            program_owner,
+            data,
             nonce: account.nonce,
         }
     }

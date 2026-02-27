@@ -7,12 +7,26 @@ use serde::Serialize;
 
 use crate::{AccountId, error::NssaError, program::Program};
 
-#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Message {
     pub program_id: ProgramId,
     pub account_ids: Vec<AccountId>,
     pub nonces: Vec<Nonce>,
     pub instruction_data: InstructionData,
+}
+
+impl std::fmt::Debug for Message {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let program_id_hex = hex::encode(
+            self.program_id.iter().flat_map(|n| n.to_le_bytes()).collect::<Vec<u8>>(),
+        );
+        f.debug_struct("Message")
+            .field("program_id", &program_id_hex)
+            .field("account_ids", &self.account_ids)
+            .field("nonces", &self.nonces)
+            .field("instruction_data", &self.instruction_data)
+            .finish()
+    }
 }
 
 impl Message {

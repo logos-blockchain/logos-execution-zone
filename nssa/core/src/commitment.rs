@@ -7,9 +7,17 @@ use crate::{NullifierPublicKey, account::Account};
 #[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(
     any(feature = "host", test),
-    derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)
+    derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)
 )]
 pub struct Commitment(pub(super) [u8; 32]);
+
+#[cfg(any(feature = "host", test))]
+impl std::fmt::Debug for Commitment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let hex: String = self.0.iter().map(|b| format!("{b:02x}")).collect();
+        write!(f, "Commitment({hex})")
+    }
+}
 
 /// A commitment to all zero data.
 /// ```python

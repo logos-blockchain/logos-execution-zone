@@ -22,8 +22,16 @@ pub struct SharedSecretKey(pub [u8; 32]);
 pub struct EncryptionScheme;
 
 #[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
-#[cfg_attr(any(feature = "host", test), derive(Debug, Clone, PartialEq, Eq))]
+#[cfg_attr(any(feature = "host", test), derive(Clone, PartialEq, Eq))]
 pub struct Ciphertext(pub(crate) Vec<u8>);
+
+#[cfg(any(feature = "host", test))]
+impl std::fmt::Debug for Ciphertext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let hex: String = self.0.iter().map(|b| format!("{b:02x}")).collect();
+        write!(f, "Ciphertext({hex})")
+    }
+}
 
 impl EncryptionScheme {
     pub fn encrypt(

@@ -43,7 +43,7 @@ impl EncryptedAccountData {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Message {
     pub public_account_ids: Vec<AccountId>,
     pub nonces: Vec<Nonce>,
@@ -51,6 +51,30 @@ pub struct Message {
     pub encrypted_private_post_states: Vec<EncryptedAccountData>,
     pub new_commitments: Vec<Commitment>,
     pub new_nullifiers: Vec<(Nullifier, CommitmentSetDigest)>,
+}
+
+impl std::fmt::Debug for Message {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        struct HexDigest<'a>(&'a [u8; 32]);
+        impl std::fmt::Debug for HexDigest<'_> {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{}", hex::encode(self.0))
+            }
+        }
+        let nullifiers: Vec<_> = self
+            .new_nullifiers
+            .iter()
+            .map(|(n, d)| (n, HexDigest(d)))
+            .collect();
+        f.debug_struct("Message")
+            .field("public_account_ids", &self.public_account_ids)
+            .field("nonces", &self.nonces)
+            .field("public_post_states", &self.public_post_states)
+            .field("encrypted_private_post_states", &self.encrypted_private_post_states)
+            .field("new_commitments", &self.new_commitments)
+            .field("new_nullifiers", &nullifiers)
+            .finish()
+    }
 }
 
 impl Message {

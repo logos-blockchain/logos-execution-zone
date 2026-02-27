@@ -14,13 +14,30 @@ pub type Nonce = u128;
 
 /// Account to be used both in public and private contexts
 #[derive(
-    Debug, Default, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
+    Default, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
 )]
 pub struct Account {
     pub program_owner: ProgramId,
     pub balance: u128,
     pub data: Data,
     pub nonce: Nonce,
+}
+
+impl std::fmt::Debug for Account {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let program_owner_hex: String = self
+            .program_owner
+            .iter()
+            .flat_map(|n| n.to_le_bytes())
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        f.debug_struct("Account")
+            .field("program_owner", &program_owner_hex)
+            .field("balance", &self.balance)
+            .field("data", &self.data)
+            .field("nonce", &self.nonce)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -42,7 +59,6 @@ impl AccountWithMetadata {
 }
 
 #[derive(
-    Debug,
     Default,
     Copy,
     Clone,
@@ -57,6 +73,12 @@ impl AccountWithMetadata {
 #[cfg_attr(any(feature = "host", test), derive(PartialOrd, Ord))]
 pub struct AccountId {
     value: [u8; 32],
+}
+
+impl std::fmt::Debug for AccountId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.value.to_base58())
+    }
 }
 
 impl AccountId {

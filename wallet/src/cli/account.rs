@@ -165,10 +165,13 @@ fn format_account_details(account: &Account) -> (String, String) {
     let token_prog_id = Program::token().id();
 
     match &account.program_owner {
-        o if *o == auth_tr_prog_id => (
-            "Account owned by authenticated transfer program".to_string(),
-            serde_json::to_string(&account).unwrap(),
-        ),
+        o if *o == auth_tr_prog_id => {
+            let account_hr: HumanReadableAccount = account.clone().into();
+            (
+                "Account owned by authenticated transfer program".to_string(),
+                serde_json::to_string(&account_hr).unwrap(),
+            )
+        }
         o if *o == token_prog_id => {
             if let Ok(token_def) = TokenDefinition::try_from(&account.data) {
                 (
