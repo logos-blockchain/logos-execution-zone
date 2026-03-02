@@ -131,6 +131,25 @@ fn main() {
                 token_definition_id_in,
             )
         }
+        Instruction::SyncReserves => {
+            let [pool, vault_a, vault_b] = pre_states
+                .try_into()
+                .expect("Sync reserves instruction requires exactly three accounts");
+            amm_program::sync::sync_reserves(pool, vault_a, vault_b)
+        }
+        Instruction::RecoverSurplus { mode } => {
+            let [pool, vault_a, vault_b, to_holding_a, to_holding_b] = pre_states
+                .try_into()
+                .expect("Recover surplus instruction requires exactly five accounts");
+            amm_program::recover::recover_surplus(
+                pool,
+                vault_a,
+                vault_b,
+                to_holding_a,
+                to_holding_b,
+                mode,
+            )
+        }
     };
 
     write_nssa_outputs_with_chained_call(

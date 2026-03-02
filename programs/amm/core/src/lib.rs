@@ -73,7 +73,32 @@ pub enum Instruction {
         min_amount_out: u128,
         token_definition_id_in: AccountId,
     },
+
+    /// Sync pool reserves with current vault balances.
+    ///
+    /// Required accounts:
+    /// - AMM Pool (initialized, active)
+    /// - Vault Holding Account for Token A (initialized)
+    /// - Vault Holding Account for Token B (initialized)
+    SyncReserves,
+
+    /// Recover vault surplus balances that are not reserve-backed.
+    ///
+    /// Required accounts:
+    /// - AMM Pool (initialized)
+    /// - Vault Holding Account for Token A (initialized)
+    /// - Vault Holding Account for Token B (initialized)
+    /// - Recipient Holding Account for Token A (initialized)
+    /// - Recipient Holding Account for Token B (initialized)
+    RecoverSurplus { mode: RecoverSurplusMode },
 }
+
+#[derive(Clone, Copy, Serialize, Deserialize)]
+pub enum RecoverSurplusMode {
+    InactiveOrZeroSupplyOnly,
+}
+
+pub const MINIMUM_LIQUIDITY: u128 = 1;
 
 #[derive(Clone, Default, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct PoolDefinition {
@@ -187,6 +212,25 @@ pub fn compute_liquidity_token_pda_seed(pool_id: AccountId) -> PdaSeed {
     let mut bytes = [0; 64];
     bytes[0..32].copy_from_slice(&pool_id.to_bytes());
     bytes[32..].copy_from_slice(&[0; 32]);
+
+    PdaSeed::new(
+        Impl::hash_bytes(&bytes)
+            .as_bytes()
+            .try_into()
+            .expect("Hash output must be exactly 32 bytes long"),
+    )
+}
+
+pub fn compute_lp_lock_holding_pda(amm_program_id: ProgramId, pool_id: AccountId) -> AccountId {
+    AccountId::from((&amm_program_id, &compute_lp_lock_holding_pda_seed(pool_id)))
+}
+
+pub fn compute_lp_lock_holding_pda_seed(pool_id: AccountId) -> PdaSeed {
+    use risc0_zkvm::sha::{Impl, Sha256};
+
+    let mut bytes = [0; 64];
+    bytes[0..32].copy_from_slice(&pool_id.to_bytes());
+    bytes[32..].copy_from_slice(&[1; 32]);
 
     PdaSeed::new(
         Impl::hash_bytes(&bytes)

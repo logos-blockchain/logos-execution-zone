@@ -1,6 +1,8 @@
 use std::num::NonZeroU128;
 
-use amm_core::{PoolDefinition, compute_liquidity_token_pda_seed, compute_vault_pda_seed};
+use amm_core::{
+    MINIMUM_LIQUIDITY, PoolDefinition, compute_liquidity_token_pda_seed, compute_vault_pda_seed,
+};
 use nssa_core::{
     account::{AccountWithMetadata, Data},
     program::{AccountPostState, ChainedCall},
@@ -78,6 +80,14 @@ pub fn remove_liquidity(
         pool_def_data.liquidity_pool_id,
         "Invalid liquidity account provided"
     );
+    assert!(
+        pool_def_data.liquidity_pool_supply > MINIMUM_LIQUIDITY,
+        "Pool only contains locked liquidity"
+    );
+    assert!(
+        remove_liquidity_amount <= pool_def_data.liquidity_pool_supply - MINIMUM_LIQUIDITY,
+        "Cannot remove locked minimum liquidity"
+    );
 
     let withdraw_amount_a =
         (pool_def_data.reserve_a * remove_liquidity_amount) / pool_def_data.liquidity_pool_supply;
@@ -95,10 +105,7 @@ pub fn remove_liquidity(
     );
 
     // 4. Calculate LP to reduce cap by
-    let delta_lp: u128 = (pool_def_data.liquidity_pool_supply * remove_liquidity_amount)
-        / pool_def_data.liquidity_pool_supply;
-
-    let active: bool = pool_def_data.liquidity_pool_supply - delta_lp != 0;
+    let delta_lp: u128 = remove_liquidity_amount;
 
     // 5. Update pool account
     let mut pool_post = pool.account.clone();
@@ -106,7 +113,7 @@ pub fn remove_liquidity(
         liquidity_pool_supply: pool_def_data.liquidity_pool_supply - delta_lp,
         reserve_a: pool_def_data.reserve_a - withdraw_amount_a,
         reserve_b: pool_def_data.reserve_b - withdraw_amount_b,
-        active,
+        active: true,
         ..pool_def_data.clone()
     };
 
