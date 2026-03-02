@@ -138,7 +138,7 @@
                         63
                     ],
                     "private_key_holder": {
-                        "nullifier_secret_key": [
+                        "nullifer_secret_key": [
                             174,
                             56,
                             101,
@@ -333,7 +333,7 @@
                         133
                     ],
                     "private_key_holder": {
-                        "nullifier_secret_key": [
+                        "nullifer_secret_key": [
                             188,
                             235,
                             121,

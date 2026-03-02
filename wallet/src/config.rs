@@ -416,7 +416,7 @@ impl Default for WalletConfig {
                             247
                         ]
                     },
-                    "nullifier_public_key": [
+                    "nullifer_public_key": [
                         139,
                         19,
                         158,
@@ -611,7 +611,7 @@ impl Default for WalletConfig {
                             145
                         ]
                     },
-                    "nullifier_public_key": [
+                    "nullifer_public_key": [
                         173,
                         134,
                         33,
