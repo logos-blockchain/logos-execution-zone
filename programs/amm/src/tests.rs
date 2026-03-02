@@ -977,6 +977,36 @@ impl AccountForTests {
     }
 }
 
+fn pool_with_reserves(reserve_a: u128, reserve_b: u128) -> AccountWithMetadata {
+    let mut pool = AccountForTests::pool_definition_init();
+    let mut pool_definition =
+        PoolDefinition::try_from(&pool.account.data).expect("Pool definition must be valid");
+
+    pool_definition.reserve_a = reserve_a;
+    pool_definition.reserve_b = reserve_b;
+    pool.account.data = Data::from(&pool_definition);
+
+    pool
+}
+
+fn vault_a_with_balance(balance: u128) -> AccountWithMetadata {
+    let mut vault = AccountForTests::vault_a_init();
+    vault.account.data = Data::from(&TokenHolding::Fungible {
+        definition_id: IdForTests::token_a_definition_id(),
+        balance,
+    });
+    vault
+}
+
+fn vault_b_with_balance(balance: u128) -> AccountWithMetadata {
+    let mut vault = AccountForTests::vault_b_init();
+    vault.account.data = Data::from(&TokenHolding::Fungible {
+        definition_id: IdForTests::token_b_definition_id(),
+        balance,
+    });
+    vault
+}
+
 #[test]
 fn test_pool_pda_produces_unique_id_for_token_pair() {
     assert!(
@@ -1660,6 +1690,97 @@ fn test_call_swap_below_min_out() {
         BalanceForTests::add_max_amount_a(),
         BalanceForTests::min_amount_out(),
         IdForTests::token_a_definition_id(),
+    );
+}
+
+#[should_panic(expected = "Swap amount in should be nonzero")]
+#[test]
+fn test_call_swap_zero_amount_in() {
+    let _post_states = swap(
+        AccountForTests::pool_definition_init(),
+        AccountForTests::vault_a_init(),
+        AccountForTests::vault_b_init(),
+        AccountForTests::user_holding_a(),
+        AccountForTests::user_holding_b(),
+        0,
+        0,
+        IdForTests::token_a_definition_id(),
+    );
+}
+
+#[should_panic(expected = "Withdraw amount must be less than reserve withdraw amount")]
+#[test]
+fn test_call_swap_withdraw_equal_to_reserve() {
+    let _post_states = swap(
+        AccountForTests::pool_definition_init_reserve_a_zero(),
+        AccountForTests::vault_a_init(),
+        AccountForTests::vault_b_init(),
+        AccountForTests::user_holding_a(),
+        AccountForTests::user_holding_b(),
+        1,
+        0,
+        IdForTests::token_a_definition_id(),
+    );
+}
+
+#[should_panic(expected = "Swap withdraw numerator overflow")]
+#[test]
+fn test_call_swap_withdraw_numerator_overflow() {
+    let _post_states = swap(
+        pool_with_reserves(1, u128::MAX),
+        vault_a_with_balance(1),
+        vault_b_with_balance(u128::MAX),
+        AccountForTests::user_holding_a(),
+        AccountForTests::user_holding_b(),
+        2,
+        0,
+        IdForTests::token_a_definition_id(),
+    );
+}
+
+#[should_panic(expected = "Swap withdraw denominator overflow")]
+#[test]
+fn test_call_swap_withdraw_denominator_overflow() {
+    let _post_states = swap(
+        pool_with_reserves(u128::MAX, 10),
+        vault_a_with_balance(u128::MAX),
+        vault_b_with_balance(10),
+        AccountForTests::user_holding_a(),
+        AccountForTests::user_holding_b(),
+        1,
+        0,
+        IdForTests::token_a_definition_id(),
+    );
+}
+
+#[test]
+fn test_call_swap_widened_k_boundary() {
+    let old_reserve_a = u128::MAX - 2;
+    let old_reserve_b = u128::MAX - 1;
+
+    assert!(old_reserve_a.checked_mul(old_reserve_b).is_none());
+
+    let (post_states, _chained_calls) = swap(
+        pool_with_reserves(old_reserve_a, old_reserve_b),
+        vault_a_with_balance(old_reserve_a),
+        vault_b_with_balance(old_reserve_b),
+        AccountForTests::user_holding_a(),
+        AccountForTests::user_holding_b(),
+        1,
+        0,
+        IdForTests::token_a_definition_id(),
+    );
+
+    let pool_post = post_states[0].clone();
+    let pool_post_definition = PoolDefinition::try_from(&pool_post.account().data).unwrap();
+
+    assert_eq!(pool_post_definition.reserve_a, u128::MAX - 1);
+    assert_eq!(pool_post_definition.reserve_b, u128::MAX - 2);
+    assert!(
+        pool_post_definition
+            .reserve_a
+            .checked_mul(pool_post_definition.reserve_b)
+            .is_none()
     );
 }
 
