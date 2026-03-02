@@ -1765,6 +1765,7 @@ dependencies = [
  "serde_with",
  "sha2",
  "thiserror 2.0.18",
+ "tokio-retry",
  "url",
 ]
 

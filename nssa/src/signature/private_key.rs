@@ -1,4 +1,5 @@
 use rand::{Rng, rngs::OsRng};
+use risc0_zkvm::sha::{Impl, Sha256};
 use serde::{Deserialize, Serialize};
 
 use crate::error::NssaError;
@@ -34,6 +35,23 @@ impl PrivateKey {
 
     pub fn value(&self) -> &[u8; 32] {
         &self.0
+    }
+
+    pub fn tweak(value: &[u8; 32]) -> Result<Self, NssaError> {
+        assert!(Self::is_valid_key(*value));
+
+        let sk = secp256k1::SecretKey::from_byte_array(*value).unwrap();
+
+        let mut bytes = vec![];
+        let pk = secp256k1::PublicKey::from_secret_key(&secp256k1::Secp256k1::new(), &sk);
+        bytes.extend_from_slice(&secp256k1::PublicKey::serialize(&pk));
+        let hashed: [u8; 32] = Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap();
+
+        PrivateKey::try_new(
+            sk.add_tweak(&secp256k1::Scalar::from_be_bytes(hashed).unwrap())
+                .expect("Expect a valid Scalar")
+                .secret_bytes(),
+        )
     }
 }
 

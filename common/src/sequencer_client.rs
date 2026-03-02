@@ -67,15 +67,24 @@ impl SequencerClient {
             "Calling method {method} with payload {request:?} to sequencer at {}",
             self.sequencer_addr
         );
-        let mut call_builder = self.client.post(self.sequencer_addr.clone());
 
-        if let Some(BasicAuth { username, password }) = &self.basic_auth {
-            call_builder = call_builder.basic_auth(username, password.as_deref());
-        }
+        let strategy = tokio_retry::strategy::FixedInterval::from_millis(10000).take(60);
 
-        let call_res = call_builder.json(&request).send().await?;
+        let response_vall = tokio_retry::Retry::spawn(strategy, || async {
+            let mut call_builder = self.client.post(self.sequencer_addr.clone());
 
-        let response_vall = call_res.json::<Value>().await?;
+            if let Some(BasicAuth { username, password }) = &self.basic_auth {
+                call_builder = call_builder.basic_auth(username, password.as_deref());
+            }
+
+            let call_res_res = call_builder.json(&request).send().await;
+
+            match call_res_res {
+                Err(err) => Err(err),
+                Ok(call_res) => call_res.json::<Value>().await,
+            }
+        })
+        .await?;
 
         #[derive(Debug, Clone, Deserialize)]
         #[allow(dead_code)]

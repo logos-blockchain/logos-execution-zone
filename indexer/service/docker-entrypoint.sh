@@ -5,7 +5,7 @@
 
 set -e
 
-CONFIG="/etc/indexer_service/indexer_service.json"
+CONFIG="/etc/indexer_service/indexer_config.json"
 
 # Check config file exists
 if [ ! -f "$CONFIG" ]; then
