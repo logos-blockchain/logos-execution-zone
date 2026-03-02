@@ -211,15 +211,15 @@ pub async fn execute_subcommand(
             let confirmed = wait_for_tx_confirmation(
                 &wallet_core.sequencer_client,
                 tx_hash,
-                30,   // max attempts
-                1000, // ms between polls
+                23,   // max attempts (3 blocks × 15s, polling every 2s)
+                2000, // ms between polls (2s)
             )
             .await?;
 
             if !confirmed {
                 anyhow::bail!(
                     "Transaction was not confirmed after timeout. \
-                     The program may not have been deployed. Check sequencer logs."
+                     Timed out after ~3 blocks (45s). The program may not have been deployed. Check sequencer logs."
                 );
             }
 
