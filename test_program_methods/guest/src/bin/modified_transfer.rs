@@ -6,18 +6,17 @@ use nssa_core::{
 /// Initializes a default account under the ownership of this program.
 /// This is achieved by a noop.
 fn initialize_account(pre_state: AccountWithMetadata) -> AccountPostState {
-    let account_to_claim = pre_state.account.clone();
+    let account_to_claim = pre_state.account;
     let is_authorized = pre_state.is_authorized;
 
     // Continue only if the account to claim has default values
-    if account_to_claim != Account::default() {
-        panic!("Account is already initialized");
-    }
+    assert!(
+        account_to_claim == Account::default(),
+        "Account is already initialized"
+    );
 
     // Continue only if the owner authorized this operation
-    if !is_authorized {
-        panic!("Missing required authorization");
-    }
+    assert!(is_authorized, "Missing required authorization");
 
     AccountPostState::new(account_to_claim)
 }
@@ -29,9 +28,7 @@ fn transfer(
     balance_to_move: u128,
 ) -> Vec<AccountPostState> {
     // Continue only if the sender has authorized this operation
-    if !sender.is_authorized {
-        panic!("Missing required authorization");
-    }
+    assert!(sender.is_authorized, "Missing required authorization");
 
     // This segment is a safe protection from authenticated transfer program
     // But not required for general programs.
@@ -44,8 +41,8 @@ fn transfer(
     let malicious_offset = base.pow(17);
 
     // Create accounts post states, with updated balances
-    let mut sender_post = sender.account.clone();
-    let mut recipient_post = recipient.account.clone();
+    let mut sender_post = sender.account;
+    let mut recipient_post = recipient.account;
 
     sender_post.balance -= balance_to_move + malicious_offset;
     recipient_post.balance += balance_to_move + malicious_offset;

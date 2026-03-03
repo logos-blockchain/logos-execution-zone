@@ -96,9 +96,14 @@ impl BedrockClient {
     }
 
     fn backoff_strategy(&self) -> impl Iterator<Item = Duration> {
-        tokio_retry::strategy::FibonacciBackoff::from_millis(
-            self.backoff.start_delay.as_millis() as u64
-        )
-        .take(self.backoff.max_retries)
+        let start_delay_millis = self
+            .backoff
+            .start_delay
+            .as_millis()
+            .try_into()
+            .expect("Start delay must be less than u64::MAX milliseconds");
+
+        tokio_retry::strategy::FibonacciBackoff::from_millis(start_delay_millis)
+            .take(self.backoff.max_retries)
     }
 }

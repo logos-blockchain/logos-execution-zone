@@ -16,10 +16,10 @@ use crate::{
 pub enum TokenProgramAgnosticSubcommand {
     /// Produce a new token
     New {
-        /// definition_account_id - valid 32 byte base58 string with privacy prefix
+        /// `definition_account_id` - valid 32 byte base58 string with privacy prefix
         #[arg(long)]
         definition_account_id: String,
-        /// supply_account_id - valid 32 byte base58 string with privacy prefix
+        /// `supply_account_id` - valid 32 byte base58 string with privacy prefix
         #[arg(long)]
         supply_account_id: String,
         #[arg(short, long)]
@@ -40,10 +40,10 @@ pub enum TokenProgramAgnosticSubcommand {
         /// to - valid 32 byte base58 string with privacy prefix
         #[arg(long)]
         to: Option<String>,
-        /// to_npk - valid 32 byte hex string
+        /// `to_npk` - valid 32 byte hex string
         #[arg(long)]
         to_npk: Option<String>,
-        /// to_vpk - valid 33 byte hex string
+        /// `to_vpk` - valid 33 byte hex string
         #[arg(long)]
         to_vpk: Option<String>,
         /// amount - amount of balance to move
@@ -82,10 +82,10 @@ pub enum TokenProgramAgnosticSubcommand {
         /// holder - valid 32 byte base58 string with privacy prefix
         #[arg(long)]
         holder: Option<String>,
-        /// holder_npk - valid 32 byte hex string
+        /// `holder_npk` - valid 32 byte hex string
         #[arg(long)]
         holder_npk: Option<String>,
-        /// to_vpk - valid 33 byte hex string
+        /// `to_vpk` - valid 33 byte hex string
         #[arg(long)]
         holder_vpk: Option<String>,
         /// amount - amount of balance to mint
@@ -394,7 +394,7 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
     }
 }
 
-/// Represents generic CLI subcommand for a wallet working with token_program
+/// Represents generic CLI subcommand for a wallet working with `token_program`
 #[derive(Subcommand, Debug, Clone)]
 pub enum TokenProgramSubcommand {
     /// Creation of new token
@@ -414,7 +414,7 @@ pub enum TokenProgramSubcommand {
     Shielded(TokenProgramSubcommandShielded),
 }
 
-/// Represents generic public CLI subcommand for a wallet working with token_program
+/// Represents generic public CLI subcommand for a wallet working with `token_program`
 #[derive(Subcommand, Debug, Clone)]
 pub enum TokenProgramSubcommandPublic {
     // Transfer tokens using the token program
@@ -446,7 +446,7 @@ pub enum TokenProgramSubcommandPublic {
     },
 }
 
-/// Represents generic private CLI subcommand for a wallet working with token_program
+/// Represents generic private CLI subcommand for a wallet working with `token_program`
 #[derive(Subcommand, Debug, Clone)]
 pub enum TokenProgramSubcommandPrivate {
     // Transfer tokens using the token program
@@ -462,10 +462,10 @@ pub enum TokenProgramSubcommandPrivate {
     TransferTokenPrivateForeign {
         #[arg(short, long)]
         sender_account_id: String,
-        /// recipient_npk - valid 32 byte hex string
+        /// `recipient_npk` - valid 32 byte hex string
         #[arg(long)]
         recipient_npk: String,
-        /// recipient_vpk - valid 33 byte hex string
+        /// `recipient_vpk` - valid 33 byte hex string
         #[arg(long)]
         recipient_vpk: String,
         #[arg(short, long)]
@@ -502,7 +502,7 @@ pub enum TokenProgramSubcommandPrivate {
     },
 }
 
-/// Represents deshielded public CLI subcommand for a wallet working with token_program
+/// Represents deshielded public CLI subcommand for a wallet working with `token_program`
 #[derive(Subcommand, Debug, Clone)]
 pub enum TokenProgramSubcommandDeshielded {
     // Transfer tokens using the token program
@@ -534,7 +534,7 @@ pub enum TokenProgramSubcommandDeshielded {
     },
 }
 
-/// Represents generic shielded CLI subcommand for a wallet working with token_program
+/// Represents generic shielded CLI subcommand for a wallet working with `token_program`
 #[derive(Subcommand, Debug, Clone)]
 pub enum TokenProgramSubcommandShielded {
     // Transfer tokens using the token program
@@ -550,10 +550,10 @@ pub enum TokenProgramSubcommandShielded {
     TransferTokenShieldedForeign {
         #[arg(short, long)]
         sender_account_id: String,
-        /// recipient_npk - valid 32 byte hex string
+        /// `recipient_npk` - valid 32 byte hex string
         #[arg(long)]
         recipient_npk: String,
-        /// recipient_vpk - valid 33 byte hex string
+        /// `recipient_vpk` - valid 33 byte hex string
         #[arg(long)]
         recipient_vpk: String,
         #[arg(short, long)]
@@ -590,7 +590,7 @@ pub enum TokenProgramSubcommandShielded {
     },
 }
 
-/// Represents generic initialization subcommand for a wallet working with token_program
+/// Represents generic initialization subcommand for a wallet working with `token_program`
 #[derive(Subcommand, Debug, Clone)]
 pub enum CreateNewTokenProgramSubcommand {
     /// Create a new token using the token program
@@ -733,7 +733,7 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                     ];
 
                     wallet_core.decode_insert_privacy_preserving_transaction_results(
-                        tx,
+                        &tx,
                         &acc_decode_data,
                     )?;
                 }
@@ -779,7 +779,7 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                     let acc_decode_data = vec![Decode(secret_sender, sender_account_id)];
 
                     wallet_core.decode_insert_privacy_preserving_transaction_results(
-                        tx,
+                        &tx,
                         &acc_decode_data,
                     )?;
                 }
@@ -816,7 +816,7 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                     ];
 
                     wallet_core.decode_insert_privacy_preserving_transaction_results(
-                        tx,
+                        &tx,
                         &acc_decode_data,
                     )?;
                 }
@@ -853,7 +853,7 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                     ];
 
                     wallet_core.decode_insert_privacy_preserving_transaction_results(
-                        tx,
+                        &tx,
                         &acc_decode_data,
                     )?;
                 }
@@ -900,7 +900,7 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                     let acc_decode_data = vec![Decode(secret_definition, definition_account_id)];
 
                     wallet_core.decode_insert_privacy_preserving_transaction_results(
-                        tx,
+                        &tx,
                         &acc_decode_data,
                     )?;
                 }
@@ -944,7 +944,7 @@ impl WalletSubcommand for TokenProgramSubcommandDeshielded {
                     let acc_decode_data = vec![Decode(secret_sender, sender_account_id)];
 
                     wallet_core.decode_insert_privacy_preserving_transaction_results(
-                        tx,
+                        &tx,
                         &acc_decode_data,
                     )?;
                 }
@@ -978,7 +978,7 @@ impl WalletSubcommand for TokenProgramSubcommandDeshielded {
                     let acc_decode_data = vec![Decode(secret_definition, definition_account_id)];
 
                     wallet_core.decode_insert_privacy_preserving_transaction_results(
-                        tx,
+                        &tx,
                         &acc_decode_data,
                     )?;
                 }
@@ -1012,7 +1012,7 @@ impl WalletSubcommand for TokenProgramSubcommandDeshielded {
                     let acc_decode_data = vec![Decode(secret_definition, definition_account_id)];
 
                     wallet_core.decode_insert_privacy_preserving_transaction_results(
-                        tx,
+                        &tx,
                         &acc_decode_data,
                     )?;
                 }
@@ -1097,7 +1097,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                     let acc_decode_data = vec![Decode(secret_recipient, recipient_account_id)];
 
                     wallet_core.decode_insert_privacy_preserving_transaction_results(
-                        tx,
+                        &tx,
                         &acc_decode_data,
                     )?;
                 }
@@ -1131,7 +1131,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                     let acc_decode_data = vec![Decode(secret_holder, holder_account_id)];
 
                     wallet_core.decode_insert_privacy_preserving_transaction_results(
-                        tx,
+                        &tx,
                         &acc_decode_data,
                     )?;
                 }
@@ -1165,7 +1165,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                     let acc_decode_data = vec![Decode(secret_holder, holder_account_id)];
 
                     wallet_core.decode_insert_privacy_preserving_transaction_results(
-                        tx,
+                        &tx,
                         &acc_decode_data,
                     )?;
                 }
@@ -1256,7 +1256,7 @@ impl WalletSubcommand for CreateNewTokenProgramSubcommand {
                     ];
 
                     wallet_core.decode_insert_privacy_preserving_transaction_results(
-                        tx,
+                        &tx,
                         &acc_decode_data,
                     )?;
                 }
@@ -1292,7 +1292,7 @@ impl WalletSubcommand for CreateNewTokenProgramSubcommand {
                     let acc_decode_data = vec![Decode(secret_definition, definition_account_id)];
 
                     wallet_core.decode_insert_privacy_preserving_transaction_results(
-                        tx,
+                        &tx,
                         &acc_decode_data,
                     )?;
                 }
@@ -1328,7 +1328,7 @@ impl WalletSubcommand for CreateNewTokenProgramSubcommand {
                     let acc_decode_data = vec![Decode(secret_supply, supply_account_id)];
 
                     wallet_core.decode_insert_privacy_preserving_transaction_results(
-                        tx,
+                        &tx,
                         &acc_decode_data,
                     )?;
                 }

@@ -30,6 +30,14 @@ use crate::{
     transaction::NSSATransaction,
 };
 
+#[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
+struct SequencerRpcResponse {
+    jsonrpc: String,
+    result: serde_json::Value,
+    id: u64,
+}
+
 #[derive(Clone)]
 pub struct SequencerClient {
     pub client: reqwest::Client,
@@ -85,14 +93,6 @@ impl SequencerClient {
             }
         })
         .await?;
-
-        #[derive(Debug, Clone, Deserialize)]
-        #[allow(dead_code)]
-        pub struct SequencerRpcResponse {
-            pub jsonrpc: String,
-            pub result: serde_json::Value,
-            pub id: u64,
-        }
 
         if let Ok(response) = serde_json::from_value::<SequencerRpcResponse>(response_vall.clone())
         {

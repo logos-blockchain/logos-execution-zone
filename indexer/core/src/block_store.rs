@@ -3,7 +3,7 @@ use std::{path::Path, sync::Arc};
 use anyhow::Result;
 use bedrock_client::HeaderId;
 use common::{
-    block::{BedrockStatus, Block},
+    block::{BedrockStatus, Block, BlockId},
     transaction::NSSATransaction,
 };
 use nssa::{Account, AccountId, V02State};
@@ -50,7 +50,7 @@ impl IndexerStore {
         Ok(self.dbio.get_block(id)?)
     }
 
-    pub fn get_block_batch(&self, before: Option<u64>, limit: u64) -> Result<Vec<Block>> {
+    pub fn get_block_batch(&self, before: Option<BlockId>, limit: u64) -> Result<Vec<Block>> {
         Ok(self.dbio.get_block_batch(before, limit)?)
     }
 
@@ -79,12 +79,14 @@ impl IndexerStore {
         Ok(self.dbio.get_acc_transactions(acc_id, offset, limit)?)
     }
 
+    #[must_use]
     pub fn genesis_id(&self) -> u64 {
         self.dbio
             .get_meta_first_block_in_db()
             .expect("Must be set at the DB startup")
     }
 
+    #[must_use]
     pub fn last_block(&self) -> u64 {
         self.dbio
             .get_meta_last_block_in_db()

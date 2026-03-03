@@ -4,6 +4,7 @@ use nssa_core::{
 };
 use token_core::TokenHolding;
 
+#[must_use]
 pub fn print_nft(
     master_account: AccountWithMetadata,
     printed_account: AccountWithMetadata,

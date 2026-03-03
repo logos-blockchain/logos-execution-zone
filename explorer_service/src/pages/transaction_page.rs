@@ -105,7 +105,7 @@ pub fn TransactionPage() -> impl IntoView {
                                                 </div>
                                                 <div class="info-row">
                                                     <span class="info-label">"Proof Size:"</span>
-                                                    <span class="info-value">{format!("{} bytes", proof_len)}</span>
+                                                    <span class="info-value">{format!("{proof_len} bytes")}</span>
                                                 </div>
                                                 <div class="info-row">
                                                     <span class="info-label">"Signatures:"</span>
@@ -212,7 +212,7 @@ pub fn TransactionPage() -> impl IntoView {
                                                 </div>
                                                 <div class="info-row">
                                                     <span class="info-label">"Proof Size:"</span>
-                                                    <span class="info-value">{format!("{} bytes", proof_len)}</span>
+                                                    <span class="info-value">{format!("{proof_len} bytes")}</span>
                                                 </div>
                                             </div>
 
@@ -284,7 +284,7 @@ pub fn TransactionPage() -> impl IntoView {
                                                 <div class="info-row">
                                                     <span class="info-label">"Bytecode Size:"</span>
                                                     <span class="info-value">
-                                                        {format!("{} bytes", bytecode_len)}
+                                                        {format!("{bytecode_len} bytes")}
                                                     </span>
                                                 </div>
                                             </div>
@@ -302,7 +302,7 @@ pub fn TransactionPage() -> impl IntoView {
                                 view! {
                                     <div class="error-page">
                                         <h1>"Error"</h1>
-                                        <p>{format!("Failed to load transaction: {}", e)}</p>
+                                        <p>{format!("Failed to load transaction: {e}")}</p>
                                     </div>
                                 }
                                     .into_any()

@@ -9,14 +9,14 @@ use crate::error::NssaError;
 pub struct PrivateKey([u8; 32]);
 
 impl PrivateKey {
+    #[must_use]
     pub fn new_os_random() -> Self {
         let mut rng = OsRng;
 
         loop {
-            match Self::try_new(rng.r#gen()) {
-                Ok(key) => break key,
-                Err(_) => continue,
-            };
+            if let Ok(key) = Self::try_new(rng.r#gen()) {
+                break key;
+            }
         }
     }
 
@@ -32,6 +32,7 @@ impl PrivateKey {
         }
     }
 
+    #[must_use]
     pub fn value(&self) -> &[u8; 32] {
         &self.0
     }

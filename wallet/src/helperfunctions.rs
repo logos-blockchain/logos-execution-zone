@@ -54,6 +54,7 @@ pub fn fetch_persistent_storage_path() -> Result<PathBuf> {
 }
 
 /// Produces data for storage
+#[must_use]
 pub fn produce_data_for_storage(
     user_data: &NSSAUserData,
     last_synced_block: u64,
@@ -94,7 +95,7 @@ pub fn produce_data_for_storage(
                 pub_sign_key: key.clone(),
             })
             .into(),
-        )
+        );
     }
 
     for (account_id, (key_chain, account)) in &user_data.default_user_private_accounts {
@@ -105,7 +106,7 @@ pub fn produce_data_for_storage(
                 key_chain: key_chain.clone(),
             })
             .into(),
-        )
+        );
     }
 
     PersistentStorage {
@@ -117,7 +118,9 @@ pub fn produce_data_for_storage(
 
 pub(crate) fn produce_random_nonces(size: usize) -> Vec<Nonce> {
     let mut result = vec![[0; 16]; size];
-    result.iter_mut().for_each(|bytes| OsRng.fill_bytes(bytes));
+    for bytes in &mut result {
+        OsRng.fill_bytes(bytes);
+    }
     result.into_iter().map(Nonce::from_le_bytes).collect()
 }
 

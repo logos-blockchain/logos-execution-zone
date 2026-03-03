@@ -32,6 +32,7 @@ impl Message {
         })
     }
 
+    #[must_use]
     pub fn new_preserialized(
         program_id: ProgramId,
         account_ids: Vec<AccountId>,

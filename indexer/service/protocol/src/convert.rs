@@ -1,6 +1,12 @@
-//! Conversions between indexer_service_protocol types and nssa/nssa_core types
+//! Conversions between `indexer_service_protocol` types and `nssa/nssa_core` types
 
-use crate::*;
+use crate::{
+    Account, AccountId, BedrockStatus, Block, BlockBody, BlockHeader, Ciphertext, Commitment,
+    CommitmentSetDigest, Data, EncryptedAccountData, EphemeralPublicKey, HashType, MantleMsgId,
+    Nullifier, PrivacyPreservingMessage, PrivacyPreservingTransaction, ProgramDeploymentMessage,
+    ProgramDeploymentTransaction, ProgramId, Proof, PublicKey, PublicMessage, PublicTransaction,
+    Signature, Transaction, WitnessSet,
+};
 
 // ============================================================================
 // Account-related conversions

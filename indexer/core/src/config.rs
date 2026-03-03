@@ -43,11 +43,16 @@ pub struct IndexerConfig {
 
 impl IndexerConfig {
     pub fn from_path(config_path: &Path) -> Result<IndexerConfig> {
-        let file = File::open(config_path)
-            .with_context(|| format!("Failed to open indexer config at {config_path:?}"))?;
+        let file = File::open(config_path).with_context(|| {
+            format!("Failed to open indexer config at {}", config_path.display())
+        })?;
         let reader = BufReader::new(file);
 
-        serde_json::from_reader(reader)
-            .with_context(|| format!("Failed to parse indexer config at {config_path:?}"))
+        serde_json::from_reader(reader).with_context(|| {
+            format!(
+                "Failed to parse indexer config at {}",
+                config_path.display()
+            )
+        })
     }
 }

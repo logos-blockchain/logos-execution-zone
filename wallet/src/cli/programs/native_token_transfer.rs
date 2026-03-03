@@ -16,7 +16,7 @@ use crate::{
 pub enum AuthTransferSubcommand {
     /// Initialize account under authenticated transfer program
     Init {
-        /// account_id - valid 32 byte base58 string with privacy prefix
+        /// `account_id` - valid 32 byte base58 string with privacy prefix
         #[arg(long)]
         account_id: String,
     },
@@ -33,10 +33,10 @@ pub enum AuthTransferSubcommand {
         /// to - valid 32 byte base58 string with privacy prefix
         #[arg(long)]
         to: Option<String>,
-        /// to_npk - valid 32 byte hex string
+        /// `to_npk` - valid 32 byte hex string
         #[arg(long)]
         to_npk: Option<String>,
-        /// to_vpk - valid 33 byte hex string
+        /// `to_vpk` - valid 33 byte hex string
         #[arg(long)]
         to_vpk: Option<String>,
         /// amount - amount of balance to move
@@ -87,7 +87,7 @@ impl WalletSubcommand for AuthTransferSubcommand {
                             let acc_decode_data = vec![Decode(secret, account_id)];
 
                             wallet_core.decode_insert_privacy_preserving_transaction_results(
-                                tx,
+                                &tx,
                                 &acc_decode_data,
                             )?;
                         }
@@ -252,10 +252,10 @@ pub enum NativeTokenTransferProgramSubcommandShielded {
         /// from - valid 32 byte hex string
         #[arg(long)]
         from: String,
-        /// to_npk - valid 32 byte hex string
+        /// `to_npk` - valid 32 byte hex string
         #[arg(long)]
         to_npk: String,
-        /// to_vpk - valid 33 byte hex string
+        /// `to_vpk` - valid 33 byte hex string
         #[arg(long)]
         to_vpk: String,
         /// amount - amount of balance to move
@@ -289,10 +289,10 @@ pub enum NativeTokenTransferProgramSubcommandPrivate {
         /// from - valid 32 byte hex string
         #[arg(long)]
         from: String,
-        /// to_npk - valid 32 byte hex string
+        /// `to_npk` - valid 32 byte hex string
         #[arg(long)]
         to_npk: String,
-        /// to_vpk - valid 33 byte hex string
+        /// `to_vpk` - valid 33 byte hex string
         #[arg(long)]
         to_vpk: String,
         /// amount - amount of balance to move
@@ -324,7 +324,7 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandPrivate {
                     let acc_decode_data = vec![Decode(secret_from, from), Decode(secret_to, to)];
 
                     wallet_core.decode_insert_privacy_preserving_transaction_results(
-                        tx,
+                        &tx,
                         &acc_decode_data,
                     )?;
                 }
@@ -364,7 +364,7 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandPrivate {
                     let acc_decode_data = vec![Decode(secret_from, from)];
 
                     wallet_core.decode_insert_privacy_preserving_transaction_results(
-                        tx,
+                        &tx,
                         &acc_decode_data,
                     )?;
                 }
@@ -400,7 +400,7 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandShielded {
                     let acc_decode_data = vec![Decode(secret, to)];
 
                     wallet_core.decode_insert_privacy_preserving_transaction_results(
-                        tx,
+                        &tx,
                         &acc_decode_data,
                     )?;
                 }
@@ -473,7 +473,7 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommand {
                     let acc_decode_data = vec![Decode(secret, from)];
 
                     wallet_core.decode_insert_privacy_preserving_transaction_results(
-                        tx,
+                        &tx,
                         &acc_decode_data,
                     )?;
                 }

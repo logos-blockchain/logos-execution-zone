@@ -91,38 +91,35 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
             .expect("Failed to read latest block meta from store");
 
         #[cfg_attr(not(feature = "testnet"), allow(unused_mut))]
-        let mut state = match store.get_nssa_state() {
-            Some(state) => {
-                info!("Found local database. Loading state and pending blocks from it.");
-                state
-            }
-            None => {
-                info!(
-                    "No database found when starting the sequencer. Creating a fresh new with the initial data in config"
-                );
-                let initial_commitments: Vec<nssa_core::Commitment> = config
-                    .initial_commitments
-                    .iter()
-                    .map(|init_comm_data| {
-                        let npk = &init_comm_data.npk;
+        let mut state = if let Some(state) = store.get_nssa_state() {
+            info!("Found local database. Loading state and pending blocks from it.");
+            state
+        } else {
+            info!(
+                "No database found when starting the sequencer. Creating a fresh new with the initial data in config"
+            );
+            let initial_commitments: Vec<nssa_core::Commitment> = config
+                .initial_commitments
+                .iter()
+                .map(|init_comm_data| {
+                    let npk = &init_comm_data.npk;
 
-                        let mut acc = init_comm_data.account.clone();
+                    let mut acc = init_comm_data.account.clone();
 
-                        acc.program_owner =
-                            nssa::program::Program::authenticated_transfer_program().id();
+                    acc.program_owner =
+                        nssa::program::Program::authenticated_transfer_program().id();
 
-                        nssa_core::Commitment::new(npk, &acc)
-                    })
-                    .collect();
+                    nssa_core::Commitment::new(npk, &acc)
+                })
+                .collect();
 
-                let init_accs: Vec<(nssa::AccountId, u128)> = config
-                    .initial_accounts
-                    .iter()
-                    .map(|acc_data| (acc_data.account_id, acc_data.balance))
-                    .collect();
+            let init_accs: Vec<(nssa::AccountId, u128)> = config
+                .initial_accounts
+                .iter()
+                .map(|acc_data| (acc_data.account_id, acc_data.balance))
+                .collect();
 
-                nssa::V02State::new_with_genesis_accounts(&init_accs, &initial_commitments)
-            }
+            nssa::V02State::new_with_genesis_accounts(&init_accs, &initial_commitments)
         };
 
         #[cfg(feature = "testnet")]
@@ -179,7 +176,7 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
         Ok(self.chain_height)
     }
 
-    /// Produces new block from transactions in mempool and packs it into a SignedMantleTx.
+    /// Produces new block from transactions in mempool and packs it into a `SignedMantleTx`.
     pub fn produce_new_block_with_mempool_transactions(
         &mut self,
     ) -> Result<(SignedMantleTx, MsgId)> {
@@ -189,14 +186,16 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
 
         let mut valid_transactions = vec![];
 
-        let max_block_size = self.sequencer_config.max_block_size.as_u64() as usize;
+        let max_block_size = usize::try_from(self.sequencer_config.max_block_size.as_u64())
+            .expect("`max_block_size` should fit into usize");
 
         let latest_block_meta = self
             .store
             .latest_block_meta()
             .context("Failed to get latest block meta from store")?;
 
-        let curr_time = chrono::Utc::now().timestamp_millis() as u64;
+        let curr_time = u64::try_from(chrono::Utc::now().timestamp_millis())
+            .expect("Timestamp must be positive");
 
         while let Some(tx) = self.mempool.pop() {
             let tx_hash = tx.hash();
@@ -305,10 +304,7 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
             .map(|block| block.header.block_id)
             .min()
         {
-            info!(
-                "Clearing pending blocks up to id: {}",
-                last_finalized_block_id
-            );
+            info!("Clearing pending blocks up to id: {last_finalized_block_id}");
             // TODO: Delete blocks instead of marking them as finalized.
             // Current approach is used because we still have `GetBlockDataRequest`.
             (first_pending_block_id..=last_finalized_block_id)
@@ -544,7 +540,7 @@ mod tests {
         let sign_key1 = create_signing_key_for_account1();
 
         let tx = common::test_utils::create_transaction_native_token_transfer(
-            acc1, 0, acc2, 10, sign_key1,
+            acc1, 0, acc2, 10, &sign_key1,
         );
         let result = tx.transaction_stateless_check();
 
@@ -561,7 +557,7 @@ mod tests {
         let sign_key2 = create_signing_key_for_account2();
 
         let tx = common::test_utils::create_transaction_native_token_transfer(
-            acc1, 0, acc2, 10, sign_key2,
+            acc1, 0, acc2, 10, &sign_key2,
         );
 
         // Signature is valid, stateless check pass
@@ -586,7 +582,7 @@ mod tests {
         let sign_key1 = create_signing_key_for_account1();
 
         let tx = common::test_utils::create_transaction_native_token_transfer(
-            acc1, 0, acc2, 10000000, sign_key1,
+            acc1, 0, acc2, 10_000_000, &sign_key1,
         );
 
         let result = tx.transaction_stateless_check();
@@ -613,7 +609,7 @@ mod tests {
         let sign_key1 = create_signing_key_for_account1();
 
         let tx = common::test_utils::create_transaction_native_token_transfer(
-            acc1, 0, acc2, 100, sign_key1,
+            acc1, 0, acc2, 100, &sign_key1,
         );
 
         sequencer.execute_check_transaction_on_state(tx).unwrap();
@@ -675,7 +671,7 @@ mod tests {
         let sign_key1 = create_signing_key_for_account1();
 
         let tx = common::test_utils::create_transaction_native_token_transfer(
-            acc1, 0, acc2, 100, sign_key1,
+            acc1, 0, acc2, 100, &sign_key1,
         );
 
         let tx_original = tx.clone();
@@ -707,7 +703,7 @@ mod tests {
         let sign_key1 = create_signing_key_for_account1();
 
         let tx = common::test_utils::create_transaction_native_token_transfer(
-            acc1, 0, acc2, 100, sign_key1,
+            acc1, 0, acc2, 100, &sign_key1,
         );
 
         // The transaction should be included the first time
@@ -753,7 +749,7 @@ mod tests {
                 0,
                 acc2_account_id,
                 balance_to_move,
-                signing_key,
+                &signing_key,
             );
 
             mempool_handle.push(tx.clone()).await.unwrap();
@@ -844,7 +840,7 @@ mod tests {
                 0,
                 acc2_account_id,
                 100,
-                signing_key,
+                &signing_key,
             );
 
             mempool_handle.push(tx).await.unwrap();
@@ -867,7 +863,7 @@ mod tests {
             1, // Next nonce
             acc2_account_id,
             50,
-            signing_key,
+            &signing_key,
         );
 
         mempool_handle.push(tx.clone()).await.unwrap();

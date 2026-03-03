@@ -23,7 +23,7 @@ async fn modify_config_field() -> Result<()> {
     // Return how it was at the beginning
     let command = Command::Config(ConfigSubcommand::Set {
         key: "seq_poll_timeout".to_string(),
-        value: format!("{:?}", old_seq_poll_timeout),
+        value: format!("{old_seq_poll_timeout:?}"),
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 

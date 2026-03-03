@@ -17,7 +17,7 @@ pub struct WalletHandle {
     _private: [u8; 0],
 }
 
-/// 32-byte array type for AccountId, keys, hashes, etc.
+/// 32-byte array type for `AccountId`, keys, hashes, etc.
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct FfiBytes32 {
@@ -103,7 +103,7 @@ pub struct FfiAccountListEntry {
     pub is_public: bool,
 }
 
-/// List of accounts returned by wallet_ffi_list_accounts.
+/// List of accounts returned by `wallet_ffi_list_accounts`.
 #[repr(C)]
 pub struct FfiAccountList {
     pub entries: *mut FfiAccountListEntry,
@@ -142,17 +142,20 @@ impl Default for FfiTransferResult {
 
 impl FfiBytes32 {
     /// Create from a 32-byte array.
+    #[must_use]
     pub fn from_bytes(bytes: [u8; 32]) -> Self {
         Self { data: bytes }
     }
 
-    /// Create from an AccountId.
+    /// Create from an `AccountId`.
+    #[must_use]
     pub fn from_account_id(id: &nssa::AccountId) -> Self {
         Self { data: *id.value() }
     }
 }
 
 impl FfiPrivateAccountKeys {
+    #[must_use]
     pub fn npk(&self) -> nssa_core::NullifierPublicKey {
         nssa_core::NullifierPublicKey(self.nullifier_public_key.data)
     }

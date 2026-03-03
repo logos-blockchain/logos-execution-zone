@@ -28,7 +28,7 @@ impl FromStr for ChainIndex {
 
         let uprooted_substring = s.strip_prefix("/").unwrap();
 
-        let splitted_chain: Vec<&str> = uprooted_substring.split("/").collect();
+        let splitted_chain: Vec<&str> = uprooted_substring.split('/').collect();
         let mut res = vec![];
 
         for split_ch in splitted_chain {
@@ -47,7 +47,7 @@ impl Display for ChainIndex {
             write!(f, "{cci}/")?;
         }
         if let Some(last) = self.0.last() {
-            write!(f, "{}", last)?;
+            write!(f, "{last}")?;
         }
         Ok(())
     }
@@ -60,28 +60,33 @@ impl Default for ChainIndex {
 }
 
 impl ChainIndex {
+    #[must_use]
     pub fn root() -> Self {
         ChainIndex::default()
     }
 
+    #[must_use]
     pub fn chain(&self) -> &[u32] {
         &self.0
     }
 
+    #[must_use]
     pub fn index(&self) -> Option<u32> {
         self.chain().last().copied()
     }
 
+    #[must_use]
     pub fn next_in_line(&self) -> ChainIndex {
         let mut chain = self.0.clone();
         // ToDo: Add overflow check
         if let Some(last_p) = chain.last_mut() {
-            *last_p += 1
+            *last_p += 1;
         }
 
         ChainIndex(chain)
     }
 
+    #[must_use]
     pub fn previous_in_line(&self) -> Option<ChainIndex> {
         let mut chain = self.0.clone();
         if let Some(last_p) = chain.last_mut() {
@@ -91,6 +96,7 @@ impl ChainIndex {
         Some(ChainIndex(chain))
     }
 
+    #[must_use]
     pub fn parent(&self) -> Option<ChainIndex> {
         if self.0.is_empty() {
             None
@@ -99,6 +105,7 @@ impl ChainIndex {
         }
     }
 
+    #[must_use]
     pub fn nth_child(&self, child_id: u32) -> ChainIndex {
         let mut chain = self.0.clone();
         chain.push(child_id);
@@ -106,6 +113,7 @@ impl ChainIndex {
         ChainIndex(chain)
     }
 
+    #[must_use]
     pub fn depth(&self) -> u32 {
         self.0.iter().map(|cci| cci + 1).sum()
     }
@@ -124,7 +132,7 @@ impl ChainIndex {
             .iter()
             .permutations(self.0.len())
             .unique()
-            .map(|item| ChainIndex(item.into_iter().cloned().collect()))
+            .map(|item| ChainIndex(item.into_iter().copied().collect()))
     }
 
     pub fn chain_ids_at_depth(depth: usize) -> impl Iterator<Item = ChainIndex> {
@@ -227,7 +235,7 @@ mod tests {
 
         let prev_chain_id = chain_id.previous_in_line().unwrap();
 
-        assert_eq!(prev_chain_id, ChainIndex(vec![1, 7, 2]))
+        assert_eq!(prev_chain_id, ChainIndex(vec![1, 7, 2]));
     }
 
     #[test]
@@ -236,7 +244,7 @@ mod tests {
 
         let prev_chain_id = chain_id.previous_in_line();
 
-        assert_eq!(prev_chain_id, None)
+        assert_eq!(prev_chain_id, None);
     }
 
     #[test]
@@ -245,7 +253,7 @@ mod tests {
 
         let parent_chain_id = chain_id.parent().unwrap();
 
-        assert_eq!(parent_chain_id, ChainIndex(vec![1, 7]))
+        assert_eq!(parent_chain_id, ChainIndex(vec![1, 7]));
     }
 
     #[test]
@@ -254,7 +262,7 @@ mod tests {
 
         let parent_chain_id = chain_id.parent();
 
-        assert_eq!(parent_chain_id, None)
+        assert_eq!(parent_chain_id, None);
     }
 
     #[test]
@@ -263,7 +271,7 @@ mod tests {
 
         let parent_chain_id = chain_id.parent().unwrap();
 
-        assert_eq!(parent_chain_id, ChainIndex::root())
+        assert_eq!(parent_chain_id, ChainIndex::root());
     }
 
     #[test]
@@ -272,7 +280,7 @@ mod tests {
 
         let collapsed = chain_id.collapse_back().unwrap();
 
-        assert_eq!(collapsed, ChainIndex(vec![3]))
+        assert_eq!(collapsed, ChainIndex(vec![3]));
     }
 
     #[test]
@@ -281,7 +289,7 @@ mod tests {
 
         let collapsed = chain_id.collapse_back();
 
-        assert_eq!(collapsed, None)
+        assert_eq!(collapsed, None);
     }
 
     #[test]
@@ -290,7 +298,7 @@ mod tests {
 
         let collapsed = chain_id.collapse_back();
 
-        assert_eq!(collapsed, None)
+        assert_eq!(collapsed, None);
     }
 
     #[test]

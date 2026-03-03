@@ -1,3 +1,8 @@
+#![expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_lossless,
+    reason = "Mock service uses intentional casts and format patterns for test data generation"
+)]
 use std::collections::HashMap;
 
 use indexer_service_protocol::{
@@ -9,7 +14,7 @@ use indexer_service_protocol::{
 };
 use jsonrpsee::{core::SubscriptionResult, types::ErrorObjectOwned};
 
-/// A mock implementation of the IndexerService RPC for testing purposes.
+/// A mock implementation of the `IndexerService` RPC for testing purposes.
 pub struct MockIndexerService {
     blocks: Vec<Block>,
     accounts: HashMap<AccountId, Account>,
@@ -17,6 +22,7 @@ pub struct MockIndexerService {
 }
 
 impl MockIndexerService {
+    #[must_use]
     pub fn new_with_mock_blocks() -> Self {
         let mut blocks = Vec::new();
         let mut accounts = HashMap::new();
@@ -136,7 +142,7 @@ impl MockIndexerService {
                     block_id,
                     prev_block_hash: prev_hash,
                     hash: block_hash,
-                    timestamp: 1704067200000 + (block_id * 12000), // ~12 seconds per block
+                    timestamp: 1_704_067_200_000 + (block_id * 12_000), // ~12 seconds per block
                     signature: Signature([0u8; 64]),
                 },
                 body: BlockBody {
@@ -197,7 +203,7 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
             .ok_or_else(|| {
                 ErrorObjectOwned::owned(
                     -32001,
-                    format!("Block with ID {} not found", block_id),
+                    format!("Block with ID {block_id} not found"),
                     None::<()>,
                 )
             })
@@ -227,15 +233,18 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
 
     async fn get_blocks(
         &self,
-        before: Option<u64>,
-        limit: u32,
+        before: Option<BlockId>,
+        limit: u64,
     ) -> Result<Vec<Block>, ErrorObjectOwned> {
-        let start_id = before.map_or_else(|| self.blocks.len() as u64, |id| id.saturating_sub(1));
+        let start_id = before.map_or_else(
+            || self.blocks.len(),
+            |id| usize::try_from(id.saturating_sub(1)).expect("u64 should fit in usize"),
+        );
 
         let result = (1..=start_id)
             .rev()
             .take(limit as usize)
-            .map_while(|block_id| self.blocks.get(block_id as usize - 1).cloned())
+            .map_while(|block_id| self.blocks.get(block_id - 1).cloned())
             .collect();
 
         Ok(result)
@@ -244,8 +253,8 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
     async fn get_transactions_by_account(
         &self,
         account_id: AccountId,
-        limit: u32,
-        offset: u32,
+        offset: u64,
+        limit: u64,
     ) -> Result<Vec<Transaction>, ErrorObjectOwned> {
         let mut account_txs: Vec<_> = self
             .transactions

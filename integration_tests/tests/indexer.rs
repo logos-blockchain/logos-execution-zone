@@ -12,7 +12,7 @@ use tokio::test;
 use wallet::cli::{Command, programs::native_token_transfer::AuthTransferSubcommand};
 
 /// Timeout in milliseconds to reliably await for block finalization
-const L2_TO_L1_TIMEOUT_MILLIS: u64 = 600000;
+const L2_TO_L1_TIMEOUT_MILLIS: u64 = 600_000;
 
 #[test]
 async fn indexer_test_run() -> Result<()> {

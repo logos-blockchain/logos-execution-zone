@@ -97,7 +97,7 @@ impl WalletSubcommand for ConfigSubcommand {
                     "seq_poll_timeout" => {
                         wallet_core.storage.wallet_config.seq_poll_timeout =
                             humantime::parse_duration(&value)
-                                .map_err(|e| anyhow::anyhow!("Invalid duration: {}", e))?;
+                                .map_err(|e| anyhow::anyhow!("Invalid duration: {e}"))?;
                     }
                     "seq_tx_poll_max_blocks" => {
                         wallet_core.storage.wallet_config.seq_tx_poll_max_blocks = value.parse()?;
@@ -120,7 +120,7 @@ impl WalletSubcommand for ConfigSubcommand {
                     }
                 }
 
-                wallet_core.store_config_changes().await?
+                wallet_core.store_config_changes().await?;
             }
             ConfigSubcommand::Description { key } => match key.as_str() {
                 "override_rust_log" => {

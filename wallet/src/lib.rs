@@ -70,8 +70,12 @@ impl WalletCore {
             accounts: persistent_accounts,
             last_synced_block,
             labels,
-        } = PersistentStorage::from_path(&storage_path)
-            .with_context(|| format!("Failed to read persistent storage at {storage_path:#?}"))?;
+        } = PersistentStorage::from_path(&storage_path).with_context(|| {
+            format!(
+                "Failed to read persistent storage at {}",
+                storage_path.display()
+            )
+        })?;
 
         Self::new(
             config_path,
@@ -104,8 +108,13 @@ impl WalletCore {
         storage_ctor: impl FnOnce(WalletConfig) -> Result<WalletChainStore>,
         last_synced_block: u64,
     ) -> Result<Self> {
-        let mut config = WalletConfig::from_path_or_initialize_default(&config_path)
-            .with_context(|| format!("Failed to deserialize wallet config at {config_path:#?}"))?;
+        let mut config =
+            WalletConfig::from_path_or_initialize_default(&config_path).with_context(|| {
+                format!(
+                    "Failed to deserialize wallet config at {}",
+                    config_path.display()
+                )
+            })?;
         if let Some(config_overrides) = config_overrides.clone() {
             config.apply_overrides(config_overrides);
         }
@@ -114,7 +123,7 @@ impl WalletCore {
             config.sequencer_addr.clone(),
             config.basic_auth.clone(),
         )?);
-        let tx_poller = TxPoller::new(config.clone(), Arc::clone(&sequencer_client));
+        let tx_poller = TxPoller::new(&config, Arc::clone(&sequencer_client));
 
         let storage = storage_ctor(config)?;
 
@@ -130,11 +139,13 @@ impl WalletCore {
     }
 
     /// Get configuration with applied overrides
+    #[must_use]
     pub fn config(&self) -> &WalletConfig {
         &self.storage.wallet_config
     }
 
     /// Get storage
+    #[must_use]
     pub fn storage(&self) -> &WalletChainStore {
         &self.storage
     }
@@ -159,7 +170,10 @@ impl WalletCore {
         // Ensure data is flushed to disk before returning to prevent race conditions
         storage_file.sync_all().await?;
 
-        println!("Stored persistent accounts at {:#?}", self.storage_path);
+        println!(
+            "Stored persistent accounts at {}",
+            self.storage_path.display()
+        );
 
         Ok(())
     }
@@ -173,7 +187,7 @@ impl WalletCore {
         // Ensure data is flushed to disk before returning to prevent race conditions
         config_file.sync_all().await?;
 
-        info!("Stored data at {:#?}", self.config_path);
+        info!("Stored data at {}", self.config_path.display());
 
         Ok(())
     }
@@ -220,6 +234,7 @@ impl WalletCore {
         Ok(response.account)
     }
 
+    #[must_use]
     pub fn get_account_public_signing_key(
         &self,
         account_id: AccountId,
@@ -229,6 +244,7 @@ impl WalletCore {
             .get_pub_account_signing_key(account_id)
     }
 
+    #[must_use]
     pub fn get_account_private(&self, account_id: AccountId) -> Option<Account> {
         self.storage
             .user_data
@@ -236,6 +252,7 @@ impl WalletCore {
             .map(|value| value.1.clone())
     }
 
+    #[must_use]
     pub fn get_private_account_commitment(&self, account_id: AccountId) -> Option<Commitment> {
         let (keys, account) = self.storage.user_data.get_private_account(account_id)?;
         Some(Commitment::new(&keys.nullifer_public_key, account))
@@ -266,7 +283,7 @@ impl WalletCore {
 
     pub fn decode_insert_privacy_preserving_transaction_results(
         &mut self,
-        tx: nssa::privacy_preserving_transaction::PrivacyPreservingTransaction,
+        tx: &nssa::privacy_preserving_transaction::PrivacyPreservingTransaction,
         acc_decode_mask: &[AccDecodeData],
     ) -> Result<()> {
         for (output_index, acc_decode_data) in acc_decode_mask.iter().enumerate() {
@@ -279,7 +296,9 @@ impl WalletCore {
                         &acc_ead.ciphertext,
                         secret,
                         &acc_comm,
-                        output_index as u32,
+                        output_index
+                            .try_into()
+                            .expect("Output index is expected to fit in u32"),
                     )
                     .unwrap();
 
@@ -433,8 +452,8 @@ impl WalletCore {
         let affected_accounts = private_account_key_chains
             .flat_map(|(acc_account_id, key_chain, index)| {
                 let view_tag = EncryptedAccountData::compute_view_tag(
-                    key_chain.nullifer_public_key.clone(),
-                    key_chain.viewing_public_key.clone(),
+                    &key_chain.nullifer_public_key,
+                    &key_chain.viewing_public_key,
                 );
 
                 tx.message()
@@ -445,14 +464,16 @@ impl WalletCore {
                     .filter_map(|(ciph_id, encrypted_data)| {
                         let ciphertext = &encrypted_data.ciphertext;
                         let commitment = &tx.message.new_commitments[ciph_id];
-                        let shared_secret = key_chain
-                            .calculate_shared_secret_receiver(encrypted_data.epk.clone(), index);
+                        let shared_secret =
+                            key_chain.calculate_shared_secret_receiver(&encrypted_data.epk, index);
 
                         nssa_core::EncryptionScheme::decrypt(
                             ciphertext,
                             &shared_secret,
                             commitment,
-                            ciph_id as u32,
+                            ciph_id
+                                .try_into()
+                                .expect("Ciphertext ID is expected to fit in u32"),
                         )
                     })
                     .map(move |res_acc| (acc_account_id, res_acc))
@@ -469,14 +490,17 @@ impl WalletCore {
         }
     }
 
+    #[must_use]
     pub fn config_path(&self) -> &PathBuf {
         &self.config_path
     }
 
+    #[must_use]
     pub fn storage_path(&self) -> &PathBuf {
         &self.storage_path
     }
 
+    #[must_use]
     pub fn config_overrides(&self) -> &Option<WalletConfigOverrides> {
         &self.config_overrides
     }

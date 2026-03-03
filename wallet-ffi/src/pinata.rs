@@ -63,7 +63,7 @@ pub unsafe extern "C" fn wallet_ffi_claim_pinata(
     let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
-            print_error(format!("Failed to lock wallet: {}", e));
+            print_error(format!("Failed to lock wallet: {e}"));
             return WalletFfiError::InternalError;
         }
     };
@@ -75,9 +75,9 @@ pub unsafe extern "C" fn wallet_ffi_claim_pinata(
     let pinata = Pinata(&wallet);
 
     match block_on(pinata.claim(pinata_id, winner_id, solution)) {
-        Ok(Ok(response)) => {
+        Ok(response) => {
             let tx_hash = CString::new(response.tx_hash.to_string())
-                .map(|s| s.into_raw())
+                .map(std::ffi::CString::into_raw)
                 .unwrap_or(ptr::null_mut());
 
             unsafe {
@@ -86,15 +86,14 @@ pub unsafe extern "C" fn wallet_ffi_claim_pinata(
             }
             WalletFfiError::Success
         }
-        Ok(Err(e)) => {
-            print_error(format!("Pinata claim failed: {:?}", e));
+        Err(e) => {
+            print_error(format!("Pinata claim failed: {e:?}"));
             unsafe {
                 (*out_result).tx_hash = ptr::null_mut();
                 (*out_result).success = false;
             }
-            map_execution_error(e)
+            map_execution_error(&e)
         }
-        Err(e) => e,
     }
 }
 
@@ -161,7 +160,7 @@ pub unsafe extern "C" fn wallet_ffi_claim_pinata_private_owned_already_initializ
     let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
-            print_error(format!("Failed to lock wallet: {}", e));
+            print_error(format!("Failed to lock wallet: {e}"));
             return WalletFfiError::InternalError;
         }
     };
@@ -183,9 +182,9 @@ pub unsafe extern "C" fn wallet_ffi_claim_pinata_private_owned_already_initializ
         pinata
             .claim_private_owned_account_already_initialized(pinata_id, winner_id, solution, proof),
     ) {
-        Ok(Ok((response, _shared_key))) => {
+        Ok((response, _shared_key)) => {
             let tx_hash = CString::new(response.tx_hash.to_string())
-                .map(|s| s.into_raw())
+                .map(std::ffi::CString::into_raw)
                 .unwrap_or(ptr::null_mut());
 
             unsafe {
@@ -194,18 +193,16 @@ pub unsafe extern "C" fn wallet_ffi_claim_pinata_private_owned_already_initializ
             }
             WalletFfiError::Success
         }
-        Ok(Err(e)) => {
+        Err(e) => {
             print_error(format!(
-                "Pinata private claim (already initialized) failed: {:?}",
-                e
+                "Pinata private claim (already initialized) failed: {e:?}"
             ));
             unsafe {
                 (*out_result).tx_hash = ptr::null_mut();
                 (*out_result).success = false;
             }
-            map_execution_error(e)
+            map_execution_error(&e)
         }
-        Err(e) => e,
     }
 }
 
@@ -259,7 +256,7 @@ pub unsafe extern "C" fn wallet_ffi_claim_pinata_private_owned_not_initialized(
     let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
-            print_error(format!("Failed to lock wallet: {}", e));
+            print_error(format!("Failed to lock wallet: {e}"));
             return WalletFfiError::InternalError;
         }
     };
@@ -271,9 +268,9 @@ pub unsafe extern "C" fn wallet_ffi_claim_pinata_private_owned_not_initialized(
     let pinata = Pinata(&wallet);
 
     match block_on(pinata.claim_private_owned_account(pinata_id, winner_id, solution)) {
-        Ok(Ok((response, _shared_key))) => {
+        Ok((response, _shared_key)) => {
             let tx_hash = CString::new(response.tx_hash.to_string())
-                .map(|s| s.into_raw())
+                .map(std::ffi::CString::into_raw)
                 .unwrap_or(ptr::null_mut());
 
             unsafe {
@@ -282,27 +279,26 @@ pub unsafe extern "C" fn wallet_ffi_claim_pinata_private_owned_not_initialized(
             }
             WalletFfiError::Success
         }
-        Ok(Err(e)) => {
+        Err(e) => {
             print_error(format!(
-                "Pinata private claim (not initialized) failed: {:?}",
-                e
+                "Pinata private claim (not initialized) failed: {e:?}"
             ));
             unsafe {
                 (*out_result).tx_hash = ptr::null_mut();
                 (*out_result).success = false;
             }
-            map_execution_error(e)
+            map_execution_error(&e)
         }
-        Err(e) => e,
     }
 }
 
-fn map_execution_error(e: ExecutionFailureKind) -> WalletFfiError {
+fn map_execution_error(e: &ExecutionFailureKind) -> WalletFfiError {
     match e {
         ExecutionFailureKind::InsufficientFundsError => WalletFfiError::InsufficientFunds,
         ExecutionFailureKind::KeyNotFoundError => WalletFfiError::KeyNotFound,
-        ExecutionFailureKind::SequencerError => WalletFfiError::NetworkError,
-        ExecutionFailureKind::SequencerClientError(_) => WalletFfiError::NetworkError,
+        ExecutionFailureKind::SequencerError | ExecutionFailureKind::SequencerClientError(_) => {
+            WalletFfiError::NetworkError
+        }
         _ => WalletFfiError::InternalError,
     }
 }

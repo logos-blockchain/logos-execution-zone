@@ -32,7 +32,7 @@ impl<'de> serde::Deserialize<'de> for Version {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         struct VersionVisitor;
         #[allow(clippy::needless_lifetimes)]
-        impl<'de> Visitor<'de> for VersionVisitor {
+        impl Visitor<'_> for VersionVisitor {
             type Value = Version;
 
             fn expecting(&self, formatter: &mut Formatter<'_>) -> FmtResult {
@@ -62,6 +62,7 @@ pub struct Request {
 }
 
 impl Request {
+    #[must_use]
     pub fn from_payload_version_2_0(method: String, payload: serde_json::Value) -> Self {
         Self {
             jsonrpc: Version,
@@ -75,6 +76,7 @@ impl Request {
     /// Answer the request with a (positive) reply.
     ///
     /// The ID is taken from the request.
+    #[must_use]
     pub fn reply(&self, reply: Value) -> Message {
         Message::Response(Response {
             jsonrpc: Version,
@@ -84,6 +86,7 @@ impl Request {
     }
 
     /// Answer the request with an error.
+    #[must_use]
     pub fn error(&self, error: RpcError) -> Message {
         Message::Response(Response {
             jsonrpc: Version,
@@ -212,6 +215,7 @@ impl Message {
     /// A constructor for a request.
     ///
     /// The ID is auto-set to dontcare.
+    #[must_use]
     pub fn request(method: String, params: Value) -> Self {
         let id = Value::from("dontcare");
         Message::Request(Request {
@@ -223,6 +227,7 @@ impl Message {
     }
 
     /// Create a top-level error (without an ID).
+    #[must_use]
     pub fn error(error: RpcError) -> Self {
         Message::Response(Response {
             jsonrpc: Version,
@@ -232,6 +237,7 @@ impl Message {
     }
 
     /// A constructor for a notification.
+    #[must_use]
     pub fn notification(method: String, params: Value) -> Self {
         Message::Notification(Notification {
             jsonrpc: Version,
@@ -241,6 +247,7 @@ impl Message {
     }
 
     /// A constructor for a response.
+    #[must_use]
     pub fn response(id: Value, result: Result<Value, RpcError>) -> Self {
         Message::Response(Response {
             jsonrpc: Version,
@@ -250,6 +257,7 @@ impl Message {
     }
 
     /// Returns id or Null if there is no id.
+    #[must_use]
     pub fn id(&self) -> Value {
         match self {
             Message::Request(req) => req.id.clone(),
@@ -276,6 +284,7 @@ impl Broken {
     ///
     /// The error message for these things are specified in the RFC, so this just creates an error
     /// with the right values.
+    #[must_use]
     pub fn reply(&self) -> Message {
         match *self {
             Broken::Unmatched(_) => Message::error(RpcError::parse_error(
@@ -343,7 +352,6 @@ mod tests {
     /// But since serialization doesn't have to produce the exact same result (order, spaces, …),
     /// we then serialize and deserialize the thing again and check it matches.
     #[test]
-    #[allow(clippy::too_many_lines)]
     fn message_serde() {
         // A helper for running one message test
         fn one(input: &str, expected: &Message) {
@@ -491,10 +499,10 @@ mod tests {
         // Something completely different
         one(r#"{"x": [1, 2, 3]}"#);
 
-        match from_str(r#"{]"#) {
+        match from_str(r"{]") {
             Err(Broken::SyntaxError(_)) => (),
             other => panic!("Something unexpected: {other:?}"),
-        };
+        }
     }
 
     /// Test some non-trivial aspects of the constructors
@@ -503,7 +511,7 @@ mod tests {
     /// Most of it is related to the ids.
     #[test]
     #[allow(clippy::panic)]
-    #[ignore]
+    #[ignore = "Not a full coverage test"]
     fn constructors() {
         let msg1 = Message::request("call".to_owned(), json!([1, 2, 3]));
         let msg2 = Message::request("call".to_owned(), json!([1, 2, 3]));

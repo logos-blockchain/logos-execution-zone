@@ -17,13 +17,14 @@ pub struct TxPoller {
 }
 
 impl TxPoller {
-    pub fn new(config: WalletConfig, client: Arc<SequencerClient>) -> Self {
+    #[must_use]
+    pub fn new(config: &WalletConfig, client: Arc<SequencerClient>) -> Self {
         Self {
             polling_delay: config.seq_poll_timeout,
             polling_max_blocks_to_query: config.seq_tx_poll_max_blocks,
             polling_max_error_attempts: config.seq_poll_max_retries,
             block_poll_max_amount: config.seq_block_poll_max_amount,
-            client: client.clone(),
+            client,
         }
     }
 
@@ -43,14 +44,13 @@ impl TxPoller {
                     .get_transaction_by_hash(tx_hash)
                     .await
                     .inspect_err(|err| {
-                        warn!("Failed to get transaction by hash {tx_hash} with error: {err:#?}")
+                        warn!("Failed to get transaction by hash {tx_hash} with error: {err:#?}");
                     });
 
                 if let Ok(tx_obj) = tx_obj {
                     break tx_obj;
-                } else {
-                    try_error_counter += 1;
                 }
+                try_error_counter += 1;
 
                 if try_error_counter > self.polling_max_error_attempts {
                     anyhow::bail!("Number of retries exceeded");

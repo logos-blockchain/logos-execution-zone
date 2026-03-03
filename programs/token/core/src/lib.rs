@@ -127,6 +127,7 @@ pub enum TokenHolding {
 }
 
 impl TokenHolding {
+    #[must_use]
     pub fn zeroized_clone_from(other: &Self) -> Self {
         match other {
             TokenHolding::Fungible { definition_id, .. } => TokenHolding::Fungible {
@@ -144,6 +145,7 @@ impl TokenHolding {
         }
     }
 
+    #[must_use]
     pub fn zeroized_from_definition(
         definition_id: AccountId,
         definition: &TokenDefinition,
@@ -160,11 +162,12 @@ impl TokenHolding {
         }
     }
 
+    #[must_use]
     pub fn definition_id(&self) -> AccountId {
         match self {
-            TokenHolding::Fungible { definition_id, .. } => *definition_id,
-            TokenHolding::NftMaster { definition_id, .. } => *definition_id,
-            TokenHolding::NftPrintedCopy { definition_id, .. } => *definition_id,
+            TokenHolding::Fungible { definition_id, .. }
+            | TokenHolding::NftMaster { definition_id, .. }
+            | TokenHolding::NftPrintedCopy { definition_id, .. } => *definition_id,
         }
     }
 }

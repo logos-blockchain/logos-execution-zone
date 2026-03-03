@@ -38,13 +38,12 @@ async fn reject_oversized_transaction() -> Result<()> {
     );
 
     let err = result.unwrap_err();
-    let err_str = format!("{:?}", err);
+    let err_str = format!("{err:?}");
 
     // Check if the error contains information about transaction being too large
     assert!(
         err_str.contains("TransactionTooLarge") || err_str.contains("too large"),
-        "Expected TransactionTooLarge error, got: {}",
-        err_str
+        "Expected TransactionTooLarge error, got: {err_str}"
     );
 
     Ok(())

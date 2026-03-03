@@ -90,19 +90,19 @@ impl indexer_service_rpc::RpcServer for IndexerService {
 
     async fn get_blocks(
         &self,
-        before: Option<u64>,
-        limit: u32,
+        before: Option<BlockId>,
+        limit: u64,
     ) -> Result<Vec<Block>, ErrorObjectOwned> {
         let blocks = self
             .indexer
             .store
-            .get_block_batch(before, limit as u64)
+            .get_block_batch(before, limit)
             .map_err(db_error)?;
 
         let mut block_res = vec![];
 
         for block in blocks {
-            block_res.push(block.into())
+            block_res.push(block.into());
         }
 
         Ok(block_res)
@@ -111,19 +111,19 @@ impl indexer_service_rpc::RpcServer for IndexerService {
     async fn get_transactions_by_account(
         &self,
         account_id: AccountId,
-        limit: u32,
-        offset: u32,
+        offset: u64,
+        limit: u64,
     ) -> Result<Vec<Transaction>, ErrorObjectOwned> {
         let transactions = self
             .indexer
             .store
-            .get_transactions_by_account(account_id.value, offset as u64, limit as u64)
+            .get_transactions_by_account(account_id.value, offset, limit)
             .map_err(db_error)?;
 
         let mut tx_res = vec![];
 
         for tx in transactions {
-            tx_res.push(tx.into())
+            tx_res.push(tx.into());
         }
 
         Ok(tx_res)
@@ -177,8 +177,8 @@ impl SubscriptionService {
                 }
             }
 
-            bail!(err);
-        };
+            bail!(err)
+        }
 
         Ok(())
     }
@@ -190,7 +190,7 @@ impl SubscriptionService {
         let handle = tokio::spawn(async move {
             let mut subscribers = Vec::new();
 
-            let mut block_stream = pin!(indexer.subscribe_parse_block_stream().await);
+            let mut block_stream = pin!(indexer.subscribe_parse_block_stream());
 
             loop {
                 tokio::select! {
@@ -273,6 +273,7 @@ impl<T> Drop for Subscription<T> {
     }
 }
 
+#[must_use]
 pub fn not_yet_implemented_error() -> ErrorObjectOwned {
     ErrorObject::owned(
         ErrorCode::InternalError.code(),
@@ -281,6 +282,10 @@ pub fn not_yet_implemented_error() -> ErrorObjectOwned {
     )
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Error is consumed to extract details for error response"
+)]
 fn db_error(err: anyhow::Error) -> ErrorObjectOwned {
     ErrorObjectOwned::owned(
         ErrorCode::InternalError.code(),

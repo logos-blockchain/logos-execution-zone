@@ -60,14 +60,17 @@ pub struct AccountId {
 }
 
 impl AccountId {
+    #[must_use]
     pub fn new(value: [u8; 32]) -> Self {
         Self { value }
     }
 
+    #[must_use]
     pub fn value(&self) -> &[u8; 32] {
         &self.value
     }
 
+    #[must_use]
     pub fn into_value(self) -> [u8; 32] {
         self.value
     }
@@ -150,7 +153,7 @@ mod tests {
                 .to_vec()
                 .try_into()
                 .unwrap(),
-            nonce: 0xdeadbeef,
+            nonce: 0xdead_beef,
         };
         let fingerprint = AccountId::new([8; 32]);
         let new_acc_with_metadata = AccountWithMetadata::new(account.clone(), true, fingerprint);

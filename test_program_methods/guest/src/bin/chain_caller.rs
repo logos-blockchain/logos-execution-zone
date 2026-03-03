@@ -1,3 +1,5 @@
+#![expect(clippy::manual_let_else, reason = "Looks much better")]
+
 use nssa_core::program::{
     AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, read_nssa_inputs,
     write_nssa_outputs_with_chained_call,
@@ -8,7 +10,8 @@ type Instruction = (u128, ProgramId, u32, Option<PdaSeed>);
 
 /// A program that calls another program `num_chain_calls` times.
 /// It permutes the order of the input accounts on the subsequent call
-/// The `ProgramId` in the instruction must be the program_id of the authenticated transfers program
+/// The `ProgramId` in the instruction must be the `program_id` of the authenticated transfers
+/// program
 fn main() {
     let (
         ProgramInput {

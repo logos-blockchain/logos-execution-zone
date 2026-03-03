@@ -68,11 +68,11 @@ pub enum Command {
     DeployProgram { binary_filepath: PathBuf },
 }
 
-/// To execute commands, env var NSSA_WALLET_HOME_DIR must be set into directory with config
+/// To execute commands, env var `NSSA_WALLET_HOME_DIR` must be set into directory with config
 ///
 /// All account addresses must be valid 32 byte base58 strings.
 ///
-/// All account account_ids must be provided as {privacy_prefix}/{account_id},
+/// All account `account_ids` must be provided as {`privacy_prefix}/{account_id`},
 /// where valid options for `privacy_prefix` is `Public` and `Private`
 #[derive(Parser, Debug)]
 #[clap(version, about)]
@@ -124,27 +124,31 @@ pub async fn execute_subcommand(
             else {
                 panic!("Missing authenticated transfer ID from remote");
             };
-            if authenticated_transfer_id != &Program::authenticated_transfer_program().id() {
-                panic!("Local ID for authenticated transfer program is different from remote");
-            }
+            assert!(
+                authenticated_transfer_id == &Program::authenticated_transfer_program().id(),
+                "Local ID for authenticated transfer program is different from remote"
+            );
             let Some(token_id) = remote_program_ids.get("token") else {
                 panic!("Missing token program ID from remote");
             };
-            if token_id != &Program::token().id() {
-                panic!("Local ID for token program is different from remote");
-            }
+            assert!(
+                token_id == &Program::token().id(),
+                "Local ID for token program is different from remote"
+            );
             let Some(circuit_id) = remote_program_ids.get("privacy_preserving_circuit") else {
                 panic!("Missing privacy preserving circuit ID from remote");
             };
-            if circuit_id != &nssa::PRIVACY_PRESERVING_CIRCUIT_ID {
-                panic!("Local ID for privacy preserving circuit is different from remote");
-            }
+            assert!(
+                circuit_id == &nssa::PRIVACY_PRESERVING_CIRCUIT_ID,
+                "Local ID for privacy preserving circuit is different from remote"
+            );
             let Some(amm_id) = remote_program_ids.get("amm") else {
                 panic!("Missing AMM program ID from remote");
             };
-            if amm_id != &Program::amm().id() {
-                panic!("Local ID for AMM program is different from remote");
-            }
+            assert!(
+                amm_id == &Program::amm().id(),
+                "Local ID for AMM program is different from remote"
+            );
 
             println!("✅All looks good!");
 

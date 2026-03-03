@@ -16,21 +16,18 @@ impl ChildKeysPublic {
     fn compute_hash_value(&self, cci: u32) -> [u8; 64] {
         let mut hash_input = vec![];
 
-        match ((2u32).pow(31)).cmp(&cci) {
+        if 2u32.pow(31) > cci {
             // Non-harden
-            std::cmp::Ordering::Greater => {
-                hash_input.extend_from_slice(self.cpk.value());
-                hash_input.extend_from_slice(&cci.to_le_bytes());
+            hash_input.extend_from_slice(self.cpk.value());
+            hash_input.extend_from_slice(&cci.to_le_bytes());
 
-                hmac_sha512::HMAC::mac(hash_input, self.ccc)
-            }
+            hmac_sha512::HMAC::mac(hash_input, self.ccc)
+        } else {
             // Harden
-            _ => {
-                hash_input.extend_from_slice(self.csk.value());
-                hash_input.extend_from_slice(&(cci).to_le_bytes());
+            hash_input.extend_from_slice(self.csk.value());
+            hash_input.extend_from_slice(&(cci).to_le_bytes());
 
-                hmac_sha512::HMAC::mac(hash_input, self.ccc)
-            }
+            hmac_sha512::HMAC::mac(hash_input, self.ccc)
         }
     }
 }
@@ -68,9 +65,10 @@ impl KeyNode for ChildKeysPublic {
         )
         .unwrap();
 
-        if secp256k1::constants::CURVE_ORDER < *csk.value() {
-            panic!("Secret key cannot exceed curve order");
-        }
+        assert!(
+            secp256k1::constants::CURVE_ORDER >= *csk.value(),
+            "Secret key cannot exceed curve order"
+        );
 
         let ccc = *hash_value
             .last_chunk::<32>()

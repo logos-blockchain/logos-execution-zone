@@ -10,6 +10,7 @@ use nssa_core::{
 };
 
 #[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
+#[must_use]
 pub fn new_definition(
     pool: AccountWithMetadata,
     vault_a: AccountWithMetadata,
@@ -79,8 +80,20 @@ pub fn new_definition(
     // LP Token minting calculation
     let initial_lp = (token_a_amount.get() * token_b_amount.get()).isqrt();
 
+    // Chain call for liquidity token (TokenLP definition -> User LP Holding)
+    let instruction = if pool.account == Account::default() {
+        token_core::Instruction::NewFungibleDefinition {
+            name: String::from("LP Token"),
+            total_supply: initial_lp,
+        }
+    } else {
+        token_core::Instruction::Mint {
+            amount_to_mint: initial_lp,
+        }
+    };
+
     // Update pool account
-    let mut pool_post = pool.account.clone();
+    let mut pool_post = pool.account;
     let pool_post_definition = PoolDefinition {
         definition_token_a_id,
         definition_token_b_id,
@@ -95,11 +108,7 @@ pub fn new_definition(
     };
 
     pool_post.data = Data::from(&pool_post_definition);
-    let pool_post: AccountPostState = if pool.account == Account::default() {
-        AccountPostState::new_claimed(pool_post.clone())
-    } else {
-        AccountPostState::new(pool_post.clone())
-    };
+    let pool_post = AccountPostState::new_claimed_if_default(pool_post);
 
     let token_program_id = user_holding_a.account.program_owner;
 
@@ -120,18 +129,6 @@ pub fn new_definition(
         },
     );
 
-    // Chain call for liquidity token (TokenLP definition -> User LP Holding)
-    let instruction = if pool.account == Account::default() {
-        token_core::Instruction::NewFungibleDefinition {
-            name: String::from("LP Token"),
-            total_supply: initial_lp,
-        }
-    } else {
-        token_core::Instruction::Mint {
-            amount_to_mint: initial_lp,
-        }
-    };
-
     let mut pool_lp_auth = pool_definition_lp.clone();
     pool_lp_auth.is_authorized = true;
 
@@ -145,13 +142,13 @@ pub fn new_definition(
     let chained_calls = vec![call_token_lp, call_token_b, call_token_a];
 
     let post_states = vec![
-        pool_post.clone(),
-        AccountPostState::new(vault_a.account.clone()),
-        AccountPostState::new(vault_b.account.clone()),
-        AccountPostState::new(pool_definition_lp.account.clone()),
-        AccountPostState::new(user_holding_a.account.clone()),
-        AccountPostState::new(user_holding_b.account.clone()),
-        AccountPostState::new(user_holding_lp.account.clone()),
+        pool_post,
+        AccountPostState::new(vault_a.account),
+        AccountPostState::new(vault_b.account),
+        AccountPostState::new(pool_definition_lp.account),
+        AccountPostState::new(user_holding_a.account),
+        AccountPostState::new(user_holding_b.account),
+        AccountPostState::new(user_holding_lp.account),
     ];
 
     (post_states.clone(), chained_calls)

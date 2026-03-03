@@ -21,10 +21,12 @@ pub enum PrivacyPreservingAccount {
 }
 
 impl PrivacyPreservingAccount {
+    #[must_use]
     pub fn is_public(&self) -> bool {
         matches!(&self, Self::Public(_))
     }
 
+    #[must_use]
     pub fn is_private(&self) -> bool {
         matches!(
             &self,
@@ -124,7 +126,7 @@ impl AccountManager {
             .iter()
             .filter_map(|state| match state {
                 State::Public { account, sk } => sk.as_ref().map(|_| account.account.nonce),
-                _ => None,
+                State::Private(_) => None,
             })
             .collect()
     }
@@ -143,7 +145,7 @@ impl AccountManager {
                         epk: eph_holder.generate_ephemeral_public_key(),
                     })
                 }
-                _ => None,
+                State::Public { .. } => None,
             })
             .collect()
     }
@@ -153,7 +155,7 @@ impl AccountManager {
             .iter()
             .filter_map(|state| match state {
                 State::Private(pre) => pre.nsk,
-                _ => None,
+                State::Public { .. } => None,
             })
             .collect()
     }
@@ -163,7 +165,7 @@ impl AccountManager {
             .iter()
             .filter_map(|state| match state {
                 State::Private(pre) => Some(pre.proof.clone()),
-                _ => None,
+                State::Public { .. } => None,
             })
             .collect()
     }
@@ -173,7 +175,7 @@ impl AccountManager {
             .iter()
             .filter_map(|state| match state {
                 State::Public { account, .. } => Some(account.account_id),
-                _ => None,
+                State::Private(_) => None,
             })
             .collect()
     }
@@ -183,7 +185,7 @@ impl AccountManager {
             .iter()
             .filter_map(|state| match state {
                 State::Public { sk, .. } => sk.as_ref(),
-                _ => None,
+                State::Private(_) => None,
             })
             .collect()
     }

@@ -146,4 +146,16 @@ codegen-units = 1
 warnings = "deny"
 
 [workspace.lints]
-clippy.all = "deny"
+clippy.all = { level = "deny", priority = -1 }
+clippy.pedantic = { level = "deny", priority = -1 }
+
+# Reason: documenting every function returning Result is too verbose and doesn't add much value when you have good error types.
+clippy.missing-errors-doc = "allow"
+# Reason: most of the panics are internal and not part of the public API, so documenting them is not necessary.
+clippy.missing-panics-doc = "allow"
+# Reason: this isn't always bad and actually works well for our financial and cryptography code.
+clippy.similar-names = "allow"
+# Reason: this lint is too strict and hard to fix.
+clippy.too-many-lines = "allow"
+# Reason: std hasher is fine for us in public functions
+clippy.implicit-hasher = "allow"

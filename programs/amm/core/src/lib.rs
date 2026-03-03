@@ -89,7 +89,7 @@ pub struct PoolDefinition {
     pub fees: u128,
     /// A pool becomes inactive (active = false)
     /// once all of its liquidity has been removed (e.g., reserves are emptied and
-    /// liquidity_pool_supply = 0)
+    /// `liquidity_pool_supply` = 0)
     pub active: bool,
 }
 
@@ -113,6 +113,7 @@ impl From<&PoolDefinition> for Data {
     }
 }
 
+#[must_use]
 pub fn compute_pool_pda(
     amm_program_id: ProgramId,
     definition_token_a_id: AccountId,
@@ -124,6 +125,7 @@ pub fn compute_pool_pda(
     ))
 }
 
+#[must_use]
 pub fn compute_pool_pda_seed(
     definition_token_a_id: AccountId,
     definition_token_b_id: AccountId,
@@ -151,6 +153,7 @@ pub fn compute_pool_pda_seed(
     )
 }
 
+#[must_use]
 pub fn compute_vault_pda(
     amm_program_id: ProgramId,
     pool_id: AccountId,
@@ -162,6 +165,7 @@ pub fn compute_vault_pda(
     ))
 }
 
+#[must_use]
 pub fn compute_vault_pda_seed(pool_id: AccountId, definition_token_id: AccountId) -> PdaSeed {
     use risc0_zkvm::sha::{Impl, Sha256};
 
@@ -177,10 +181,12 @@ pub fn compute_vault_pda_seed(pool_id: AccountId, definition_token_id: AccountId
     )
 }
 
+#[must_use]
 pub fn compute_liquidity_token_pda(amm_program_id: ProgramId, pool_id: AccountId) -> AccountId {
     AccountId::from((&amm_program_id, &compute_liquidity_token_pda_seed(pool_id)))
 }
 
+#[must_use]
 pub fn compute_liquidity_token_pda_seed(pool_id: AccountId) -> PdaSeed {
     use risc0_zkvm::sha::{Impl, Sha256};
 

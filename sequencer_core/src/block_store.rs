@@ -39,8 +39,8 @@ impl SequencerStore {
 
         Ok(Self {
             dbio,
-            genesis_id,
             tx_hash_to_block_map,
+            genesis_id,
             signing_key,
         })
     }
@@ -67,7 +67,7 @@ impl SequencerStore {
         let block_id = self.tx_hash_to_block_map.get(&hash);
         let block = block_id.map(|&id| self.get_block_at_id(id));
         if let Some(Ok(block)) = block {
-            for transaction in block.body.transactions.into_iter() {
+            for transaction in block.body.transactions {
                 if transaction.hash() == hash {
                     return Some(transaction);
                 }

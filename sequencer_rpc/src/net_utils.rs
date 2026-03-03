@@ -68,7 +68,9 @@ pub async fn new_http_server(
         .await
         .sequencer_config()
         .max_block_size
-        .as_u64() as usize;
+        .as_u64()
+        .try_into()
+        .expect("`max_block_size` is expected to fit into usize");
     let handler = web::Data::new(JsonHandler {
         sequencer_state: seuquencer_core.clone(),
         mempool_handle,
@@ -77,13 +79,15 @@ pub async fn new_http_server(
 
     // HTTP server
     let http_server = HttpServer::new(move || {
+        let json_limit = limits_config
+            .json_payload_max_size
+            .as_u64()
+            .try_into()
+            .expect("`json_payload_max_size` is expected to fit into usize");
         App::new()
             .wrap(get_cors(&cors_allowed_origins))
             .app_data(handler.clone())
-            .app_data(
-                web::JsonConfig::default()
-                    .limit(limits_config.json_payload_max_size.as_u64() as usize),
-            )
+            .app_data(web::JsonConfig::default().limit(json_limit))
             .wrap(middleware::Logger::default())
             .service(web::resource("/").route(web::post().to(rpc_handler::<JsonHandler>)))
     })

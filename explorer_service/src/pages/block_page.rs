@@ -144,7 +144,7 @@ pub fn BlockPage() -> impl IntoView {
                                 view! {
                                     <div class="error-page">
                                         <h1>"Error"</h1>
-                                        <p>{format!("Failed to load block: {}", e)}</p>
+                                        <p>{format!("Failed to load block: {e}")}</p>
                                     </div>
                                 }
                                     .into_any()

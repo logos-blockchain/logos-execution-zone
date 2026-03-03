@@ -21,6 +21,7 @@ pub struct PrivacyPreservingTransaction {
 }
 
 impl PrivacyPreservingTransaction {
+    #[must_use]
     pub fn new(message: Message, witness_set: WitnessSet) -> Self {
         Self {
             message,
@@ -119,19 +120,22 @@ impl PrivacyPreservingTransaction {
         Ok(message
             .public_account_ids
             .iter()
-            .cloned()
+            .copied()
             .zip(message.public_post_states.clone())
             .collect())
     }
 
+    #[must_use]
     pub fn message(&self) -> &Message {
         &self.message
     }
 
+    #[must_use]
     pub fn witness_set(&self) -> &WitnessSet {
         &self.witness_set
     }
 
+    #[must_use]
     pub fn hash(&self) -> [u8; 32] {
         let bytes = self.to_bytes();
         let mut hasher = sha2::Sha256::new();
@@ -147,6 +151,7 @@ impl PrivacyPreservingTransaction {
             .collect()
     }
 
+    #[must_use]
     pub fn affected_public_account_ids(&self) -> Vec<AccountId> {
         let mut acc_set = self
             .signer_account_ids()

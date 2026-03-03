@@ -4,6 +4,7 @@ pub trait KeyNode {
     fn root(seed: [u8; 64]) -> Self;
 
     /// `cci`'s child of node
+    #[must_use]
     fn nth_child(&self, cci: u32) -> Self;
 
     fn chain_code(&self) -> &[u8; 32];

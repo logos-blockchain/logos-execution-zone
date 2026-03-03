@@ -12,6 +12,7 @@ pub struct Signature {
 }
 
 impl Signature {
+    #[must_use]
     pub fn new(key: &PrivateKey, message: &[u8]) -> Self {
         let mut aux_random = [0u8; 32];
         OsRng.fill_bytes(&mut aux_random);
@@ -33,6 +34,7 @@ impl Signature {
         Self { value }
     }
 
+    #[must_use]
     pub fn is_valid_for(&self, bytes: &[u8], public_key: &PublicKey) -> bool {
         let pk = secp256k1::XOnlyPublicKey::from_byte_array(*public_key.value()).unwrap();
         let secp = secp256k1::Secp256k1::new();

@@ -69,6 +69,7 @@ pub struct HashableBlockData {
 }
 
 impl HashableBlockData {
+    #[must_use]
     pub fn into_pending_block(
         self,
         signing_key: &nssa::PrivateKey,
@@ -93,6 +94,7 @@ impl HashableBlockData {
         }
     }
 
+    #[must_use]
     pub fn block_hash(&self) -> BlockHash {
         OwnHasher::hash(&borsh::to_vec(&self).unwrap())
     }

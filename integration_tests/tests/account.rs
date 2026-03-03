@@ -45,9 +45,8 @@ async fn new_public_account_with_label() -> Result<()> {
     let result = execute_subcommand(ctx.wallet_mut(), command).await?;
 
     // Extract the account_id from the result
-    let account_id = match result {
-        wallet::cli::SubcommandReturnValue::RegisterAccount { account_id } => account_id,
-        _ => panic!("Expected RegisterAccount return value"),
+    let wallet::cli::SubcommandReturnValue::RegisterAccount { account_id } = result else {
+        panic!("Expected RegisterAccount return value")
     };
 
     // Verify the label was stored
@@ -78,9 +77,9 @@ async fn new_private_account_with_label() -> Result<()> {
     let result = execute_subcommand(ctx.wallet_mut(), command).await?;
 
     // Extract the account_id from the result
-    let account_id = match result {
-        wallet::cli::SubcommandReturnValue::RegisterAccount { account_id } => account_id,
-        _ => panic!("Expected RegisterAccount return value"),
+
+    let wallet::cli::SubcommandReturnValue::RegisterAccount { account_id } = result else {
+        panic!("Expected RegisterAccount return value")
     };
 
     // Verify the label was stored
@@ -110,9 +109,9 @@ async fn new_public_account_without_label() -> Result<()> {
     let result = execute_subcommand(ctx.wallet_mut(), command).await?;
 
     // Extract the account_id from the result
-    let account_id = match result {
-        wallet::cli::SubcommandReturnValue::RegisterAccount { account_id } => account_id,
-        _ => panic!("Expected RegisterAccount return value"),
+
+    let wallet::cli::SubcommandReturnValue::RegisterAccount { account_id } = result else {
+        panic!("Expected RegisterAccount return value")
     };
 
     // Verify no label was stored

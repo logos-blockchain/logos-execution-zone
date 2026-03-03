@@ -56,16 +56,17 @@ pub async fn tps_test() -> Result<()> {
 
     for (i, tx_hash) in tx_hashes.iter().enumerate() {
         loop {
-            if now.elapsed().as_millis() > target_time.as_millis() {
-                panic!("TPS test failed by timeout");
-            }
+            assert!(
+                now.elapsed().as_millis() <= target_time.as_millis(),
+                "TPS test failed by timeout"
+            );
 
             let tx_obj = ctx
                 .sequencer_client()
                 .get_transaction_by_hash(*tx_hash)
                 .await
                 .inspect_err(|err| {
-                    log::warn!("Failed to get transaction by hash {tx_hash} with error: {err:#?}")
+                    log::warn!("Failed to get transaction by hash {tx_hash} with error: {err:#?}");
                 });
 
             if let Ok(tx_obj) = tx_obj
@@ -119,6 +120,10 @@ impl TpsTestManager {
         }
     }
 
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "This is just for testing purposes, we don't care about precision loss here"
+    )]
     pub(crate) fn target_time(&self) -> Duration {
         let number_transactions = (self.public_keypairs.len() - 1) as u64;
         Duration::from_secs_f64(number_transactions as f64 / self.target_tps as f64)
@@ -165,7 +170,7 @@ impl TpsTestManager {
         let key_chain = KeyChain::new_os_random();
         let account = Account {
             balance: 100,
-            nonce: 0xdeadbeef,
+            nonce: 0xdead_beef,
             program_owner: Program::authenticated_transfer_program().id(),
             data: Data::default(),
         };
@@ -200,7 +205,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
     let sender_pre = AccountWithMetadata::new(
         Account {
             balance: 100,
-            nonce: 0xdeadbeef,
+            nonce: 0xdead_beef,
             program_owner: program.id(),
             data: Data::default(),
         },
@@ -234,7 +239,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
         vec![sender_pre, recipient_pre],
         Program::serialize_instruction(balance_to_move).unwrap(),
         vec![1, 2],
-        vec![0xdeadbeef1, 0xdeadbeef2],
+        vec![0xdead_beef1, 0xdead_beef2],
         vec![
             (sender_npk.clone(), sender_ss),
             (recipient_npk.clone(), recipient_ss),

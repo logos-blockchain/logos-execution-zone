@@ -112,7 +112,7 @@ async fn failed_transfer_with_insufficient_balance() -> Result<()> {
         to: Some(format_public_account_id(ctx.existing_public_accounts()[1])),
         to_npk: None,
         to_vpk: None,
-        amount: 1000000,
+        amount: 1_000_000,
     });
 
     let failed_send = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await;

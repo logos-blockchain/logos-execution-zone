@@ -52,6 +52,7 @@ impl TestContext {
         Self::builder().build().await
     }
 
+    #[must_use]
     pub fn builder() -> TestContextBuilder {
         TestContextBuilder::new()
     }
@@ -120,6 +121,10 @@ impl TestContext {
             // Setting port to 0 to avoid conflicts between parallel tests, actual port will be retrieved after container is up
             .with_env("PORT", "0");
 
+        #[expect(
+            clippy::items_after_statements,
+            reason = "This is more readable is this function used just after its definition"
+        )]
         async fn up_and_retrieve_port(compose: &mut DockerCompose) -> Result<u16> {
             compose
                 .up()
@@ -181,7 +186,10 @@ impl TestContext {
         let temp_indexer_dir =
             tempfile::tempdir().context("Failed to create temp dir for indexer home")?;
 
-        debug!("Using temp indexer home at {:?}", temp_indexer_dir.path());
+        debug!(
+            "Using temp indexer home at {}",
+            temp_indexer_dir.path().display()
+        );
 
         let indexer_config = config::indexer_config(
             bedrock_addr,
@@ -206,8 +214,8 @@ impl TestContext {
             tempfile::tempdir().context("Failed to create temp dir for sequencer home")?;
 
         debug!(
-            "Using temp sequencer home at {:?}",
-            temp_sequencer_dir.path()
+            "Using temp sequencer home at {}",
+            temp_sequencer_dir.path().display()
         );
 
         let config = config::sequencer_config(
@@ -260,10 +268,12 @@ impl TestContext {
     }
 
     /// Get reference to the wallet.
+    #[must_use]
     pub fn wallet(&self) -> &WalletCore {
         &self.wallet
     }
 
+    #[must_use]
     pub fn wallet_password(&self) -> &str {
         &self.wallet_password
     }
@@ -274,16 +284,19 @@ impl TestContext {
     }
 
     /// Get reference to the sequencer client.
+    #[must_use]
     pub fn sequencer_client(&self) -> &SequencerClient {
         &self.sequencer_client
     }
 
     /// Get reference to the indexer client.
+    #[must_use]
     pub fn indexer_client(&self) -> &IndexerClient {
         &self.indexer_client
     }
 
     /// Get existing public account IDs in the wallet.
+    #[must_use]
     pub fn existing_public_accounts(&self) -> Vec<AccountId> {
         self.wallet
             .storage()
@@ -293,6 +306,7 @@ impl TestContext {
     }
 
     /// Get existing private account IDs in the wallet.
+    #[must_use]
     pub fn existing_private_accounts(&self) -> Vec<AccountId> {
         self.wallet
             .storage()
@@ -386,11 +400,13 @@ impl TestContextBuilder {
         }
     }
 
+    #[must_use]
     pub fn with_initial_data(mut self, initial_data: config::InitialData) -> Self {
         self.initial_data = Some(initial_data);
         self
     }
 
+    #[must_use]
     pub fn with_sequencer_partial_config(
         mut self,
         sequencer_partial_config: config::SequencerPartialConfig,
@@ -419,14 +435,16 @@ impl Drop for BlockingTestContext {
             if let Some(ctx) = ctx.take() {
                 drop(ctx);
             }
-        })
+        });
     }
 }
 
+#[must_use]
 pub fn format_public_account_id(account_id: AccountId) -> String {
     format!("Public/{account_id}")
 }
 
+#[must_use]
 pub fn format_private_account_id(account_id: AccountId) -> String {
     format!("Private/{account_id}")
 }

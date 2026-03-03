@@ -14,17 +14,17 @@ use crate::{
 pub enum AmmProgramAgnosticSubcommand {
     /// Produce a new pool
     ///
-    /// user_holding_a and user_holding_b must be owned.
+    /// `user_holding_a` and `user_holding_b` must be owned.
     ///
     /// Only public execution allowed
     New {
-        /// user_holding_a - valid 32 byte base58 string with privacy prefix
+        /// `user_holding_a` - valid 32 byte base58 string with privacy prefix
         #[arg(long)]
         user_holding_a: String,
-        /// user_holding_b - valid 32 byte base58 string with privacy prefix
+        /// `user_holding_b` - valid 32 byte base58 string with privacy prefix
         #[arg(long)]
         user_holding_b: String,
-        /// user_holding_lp - valid 32 byte base58 string with privacy prefix
+        /// `user_holding_lp` - valid 32 byte base58 string with privacy prefix
         #[arg(long)]
         user_holding_lp: String,
         #[arg(long)]
@@ -38,33 +38,33 @@ pub enum AmmProgramAgnosticSubcommand {
     ///
     /// Only public execution allowed
     Swap {
-        /// user_holding_a - valid 32 byte base58 string with privacy prefix
+        /// `user_holding_a` - valid 32 byte base58 string with privacy prefix
         #[arg(long)]
         user_holding_a: String,
-        /// user_holding_b - valid 32 byte base58 string with privacy prefix
+        /// `user_holding_b` - valid 32 byte base58 string with privacy prefix
         #[arg(long)]
         user_holding_b: String,
         #[arg(long)]
         amount_in: u128,
         #[arg(long)]
         min_amount_out: u128,
-        /// token_definition - valid 32 byte base58 string WITHOUT privacy prefix
+        /// `token_definition` - valid 32 byte base58 string WITHOUT privacy prefix
         #[arg(long)]
         token_definition: String,
     },
     /// Add liquidity
     ///
-    /// user_holding_a and user_holding_b must be owned.
+    /// `user_holding_a` and `user_holding_b` must be owned.
     ///
     /// Only public execution allowed
     AddLiquidity {
-        /// user_holding_a - valid 32 byte base58 string with privacy prefix
+        /// `user_holding_a` - valid 32 byte base58 string with privacy prefix
         #[arg(long)]
         user_holding_a: String,
-        /// user_holding_b - valid 32 byte base58 string with privacy prefix
+        /// `user_holding_b` - valid 32 byte base58 string with privacy prefix
         #[arg(long)]
         user_holding_b: String,
-        /// user_holding_lp - valid 32 byte base58 string with privacy prefix
+        /// `user_holding_lp` - valid 32 byte base58 string with privacy prefix
         #[arg(long)]
         user_holding_lp: String,
         #[arg(long)]
@@ -76,17 +76,17 @@ pub enum AmmProgramAgnosticSubcommand {
     },
     /// Remove liquidity
     ///
-    /// user_holding_lp must be owned.
+    /// `user_holding_lp` must be owned.
     ///
     /// Only public execution allowed
     RemoveLiquidity {
-        /// user_holding_a - valid 32 byte base58 string with privacy prefix
+        /// `user_holding_a` - valid 32 byte base58 string with privacy prefix
         #[arg(long)]
         user_holding_a: String,
-        /// user_holding_b - valid 32 byte base58 string with privacy prefix
+        /// `user_holding_b` - valid 32 byte base58 string with privacy prefix
         #[arg(long)]
         user_holding_b: String,
-        /// user_holding_lp - valid 32 byte base58 string with privacy prefix
+        /// `user_holding_lp` - valid 32 byte base58 string with privacy prefix
         #[arg(long)]
         user_holding_lp: String,
         #[arg(long)]

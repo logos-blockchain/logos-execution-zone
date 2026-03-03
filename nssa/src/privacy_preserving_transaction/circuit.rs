@@ -21,10 +21,12 @@ use crate::{
 pub struct Proof(pub(crate) Vec<u8>);
 
 impl Proof {
+    #[must_use]
     pub fn into_inner(self) -> Vec<u8> {
         self.0
     }
 
+    #[must_use]
     pub fn from_inner(inner: Vec<u8>) -> Self {
         Self(inner)
     }
@@ -38,6 +40,7 @@ pub struct ProgramWithDependencies {
 }
 
 impl ProgramWithDependencies {
+    #[must_use]
     pub fn new(program: Program, dependencies: HashMap<ProgramId, Program>) -> Self {
         Self {
             program,
@@ -74,7 +77,7 @@ pub fn execute_and_prove(
 
     let initial_call = ChainedCall {
         program_id: program.id(),
-        instruction_data: instruction_data.clone(),
+        instruction_data,
         pre_states,
         pda_seeds: vec![],
     };
@@ -217,7 +220,7 @@ mod tests {
         let expected_recipient_post = Account {
             program_owner: program.id(),
             balance: balance_to_move,
-            nonce: 0xdeadbeef,
+            nonce: 0xdead_beef,
             data: Data::default(),
         };
 
@@ -230,7 +233,7 @@ mod tests {
             vec![sender, recipient],
             Program::serialize_instruction(balance_to_move).unwrap(),
             vec![0, 2],
-            vec![0xdeadbeef],
+            vec![0xdead_beef],
             vec![(recipient_keys.npk(), shared_secret)],
             vec![],
             vec![None],
@@ -267,7 +270,7 @@ mod tests {
         let sender_pre = AccountWithMetadata::new(
             Account {
                 balance: 100,
-                nonce: 0xdeadbeef,
+                nonce: 0xdead_beef,
                 program_owner: program.id(),
                 data: Data::default(),
             },
@@ -302,13 +305,13 @@ mod tests {
         let expected_private_account_1 = Account {
             program_owner: program.id(),
             balance: 100 - balance_to_move,
-            nonce: 0xdeadbeef1,
+            nonce: 0xdead_beef1,
             ..Default::default()
         };
         let expected_private_account_2 = Account {
             program_owner: program.id(),
             balance: balance_to_move,
-            nonce: 0xdeadbeef2,
+            nonce: 0xdead_beef2,
             ..Default::default()
         };
         let expected_new_commitments = vec![
@@ -326,7 +329,7 @@ mod tests {
             vec![sender_pre.clone(), recipient],
             Program::serialize_instruction(balance_to_move).unwrap(),
             vec![1, 2],
-            vec![0xdeadbeef1, 0xdeadbeef2],
+            vec![0xdead_beef1, 0xdead_beef2],
             vec![
                 (sender_keys.npk(), shared_secret_1),
                 (recipient_keys.npk(), shared_secret_2),

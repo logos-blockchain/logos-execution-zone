@@ -44,6 +44,15 @@ pub enum WalletFfiError {
     InternalError = 99,
 }
 
+impl WalletFfiError {
+    /// Check if it's [`WalletFfiError::Success`] or panic.
+    pub fn unwrap(self) {
+        let WalletFfiError::Success = self else {
+            panic!("Called `unwrap()` on error value `{self:#?}`");
+        };
+    }
+}
+
 /// Log an error message to stderr.
 pub fn print_error(msg: impl Into<String>) {
     eprintln!("[wallet-ffi] {}", msg.into());

@@ -6,6 +6,7 @@ pub struct MemPool<T> {
 }
 
 impl<T> MemPool<T> {
+    #[must_use]
     pub fn new(max_size: usize) -> (Self, MemPoolHandle<T>) {
         let (sender, receiver) = tokio::sync::mpsc::channel(max_size);
 
@@ -17,6 +18,7 @@ impl<T> MemPool<T> {
         (mem_pool, sender)
     }
 
+    /// Pop an item from the mempool first checking the front buffer (LIFO) then the channel (FIFO).
     pub fn pop(&mut self) -> Option<T> {
         use tokio::sync::mpsc::error::TryRecvError;
 

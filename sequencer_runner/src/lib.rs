@@ -68,12 +68,14 @@ impl SequencerHandle {
         }
     }
 
+    #[must_use]
     pub fn is_finished(&self) -> bool {
         self.main_loop_handle.is_finished()
             || self.retry_pending_blocks_loop_handle.is_finished()
             || self.listen_for_bedrock_blocks_loop_handle.is_finished()
     }
 
+    #[must_use]
     pub fn addr(&self) -> SocketAddr {
         self.addr
     }
@@ -192,7 +194,7 @@ async fn retry_pending_blocks(seq_core: &Arc<Mutex<SequencerCore>>) -> Result<()
         );
     }
 
-    for block in pending_blocks.iter() {
+    for block in &pending_blocks {
         debug!(
             "Resubmitting pending block with id {}",
             block.header.block_id

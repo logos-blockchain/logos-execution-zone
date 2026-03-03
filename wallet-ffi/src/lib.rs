@@ -36,12 +36,12 @@ pub use error::WalletFfiError as FfiError;
 use tokio::runtime::Handle;
 pub use types::*;
 
-use crate::error::{print_error, WalletFfiError};
+use crate::error::print_error;
 
 static TOKIO_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
 
 /// Get a reference to the global runtime.
-pub(crate) fn get_runtime() -> Result<&'static Handle, WalletFfiError> {
+pub(crate) fn get_runtime() -> &'static Handle {
     let runtime = TOKIO_RUNTIME.get_or_init(|| {
         match tokio::runtime::Builder::new_multi_thread()
             .enable_all()
@@ -54,11 +54,11 @@ pub(crate) fn get_runtime() -> Result<&'static Handle, WalletFfiError> {
             }
         }
     });
-    Ok(runtime.handle())
+    runtime.handle()
 }
 
 /// Run an async future on the global runtime, blocking until completion.
-pub(crate) fn block_on<F: std::future::Future>(future: F) -> Result<F::Output, WalletFfiError> {
-    let runtime = get_runtime()?;
-    Ok(runtime.block_on(future))
+pub(crate) fn block_on<F: std::future::Future>(future: F) -> F::Output {
+    let runtime = get_runtime();
+    runtime.block_on(future)
 }

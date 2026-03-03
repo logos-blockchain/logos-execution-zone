@@ -1,3 +1,5 @@
+#![expect(clippy::manual_let_else, reason = "Looks much better")]
+
 use nssa_core::{
     account::Account,
     program::{AccountPostState, ProgramInput, read_nssa_inputs, write_nssa_outputs},

@@ -38,6 +38,7 @@ pub fn indexer_config(
 }
 
 /// Sequencer config options available for custom changes in integration tests.
+#[derive(Debug, Clone, Copy)]
 pub struct SequencerPartialConfig {
     pub max_num_tx_in_block: usize,
     pub max_block_size: ByteSize,
@@ -122,6 +123,7 @@ pub struct InitialData {
 }
 
 impl InitialData {
+    #[must_use]
     pub fn with_two_public_and_two_private_initialized_accounts() -> Self {
         let mut public_alice_private_key = PrivateKey::new_os_random();
         let mut public_alice_public_key =
@@ -231,6 +233,7 @@ impl InitialData {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum UrlProtocol {
     Http,
     Ws,

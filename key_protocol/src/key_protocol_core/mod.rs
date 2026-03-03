@@ -34,7 +34,7 @@ impl NSSAUserData {
             let expected_account_id =
                 nssa::AccountId::from(&nssa::PublicKey::new_from_private_key(key));
             if &expected_account_id != account_id {
-                println!("{}, {}", expected_account_id, account_id);
+                println!("{expected_account_id}, {account_id}");
                 check_res = false;
             }
         }
@@ -48,7 +48,7 @@ impl NSSAUserData {
         for (account_id, (key, _)) in accounts_keys_map {
             let expected_account_id = nssa::AccountId::from(&key.nullifer_public_key);
             if expected_account_id != *account_id {
-                println!("{}, {}", expected_account_id, account_id);
+                println!("{expected_account_id}, {account_id}");
                 check_res = false;
             }
         }
@@ -86,7 +86,7 @@ impl NSSAUserData {
 
     /// Generated new private key for public transaction signatures
     ///
-    /// Returns the account_id of new account
+    /// Returns the `account_id` of new account
     pub fn generate_new_public_transaction_private_key(
         &mut self,
         parent_cci: Option<ChainIndex>,
@@ -119,7 +119,7 @@ impl NSSAUserData {
 
     /// Generated new private key for privacy preserving transactions
     ///
-    /// Returns the account_id of new account
+    /// Returns the `account_id` of new account
     pub fn generate_new_privacy_preserving_transaction_key_chain(
         &mut self,
         parent_cci: Option<ChainIndex>,

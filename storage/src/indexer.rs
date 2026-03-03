@@ -1,6 +1,9 @@
 use std::{collections::HashMap, ops::Div, path::Path, sync::Arc};
 
-use common::{block::Block, transaction::NSSATransaction};
+use common::{
+    block::{Block, BlockId},
+    transaction::NSSATransaction,
+};
 use nssa::V02State;
 use rocksdb::{
     BoundColumnFamily, ColumnFamilyDescriptor, DBWithThreadMode, MultiThreaded, Options, WriteBatch,
@@ -33,7 +36,7 @@ pub const DB_META_FIRST_BLOCK_SET_KEY: &str = "first_block_set";
 pub const DB_META_LAST_BREAKPOINT_ID: &str = "last_breakpoint_id";
 
 /// Interval between state breakpoints
-pub const BREAKPOINT_INTERVAL: u64 = 100;
+pub const BREAKPOINT_INTERVAL: u8 = 100;
 
 /// Name of block column family
 pub const CF_BLOCK_NAME: &str = "cf_block";
@@ -53,7 +56,9 @@ pub const CF_ACC_TO_TX: &str = "cf_acc_to_tx";
 pub type DbResult<T> = Result<T, DbError>;
 
 fn closest_breakpoint_id(block_id: u64) -> u64 {
-    block_id.saturating_sub(1).div(BREAKPOINT_INTERVAL)
+    block_id
+        .saturating_sub(1)
+        .div(u64::from(BREAKPOINT_INTERVAL))
 }
 
 pub struct RocksDBIO {
@@ -98,7 +103,7 @@ impl RocksDBIO {
             dbio.put_meta_is_first_block_set()?;
 
             // First breakpoint setup
-            dbio.put_breakpoint(0, initial_state)?;
+            dbio.put_breakpoint(0, &initial_state)?;
             dbio.put_meta_last_breakpoint_id(0)?;
 
             Ok(dbio)
@@ -488,7 +493,7 @@ impl RocksDBIO {
             let acc_ids = tx
                 .affected_public_account_ids()
                 .into_iter()
-                .map(|account_id| account_id.into_value())
+                .map(nssa::AccountId::into_value)
                 .collect::<Vec<_>>();
 
             for acc_id in acc_ids {
@@ -500,10 +505,14 @@ impl RocksDBIO {
         }
 
         for (acc_id, tx_hashes) in acc_to_tx_map {
-            self.put_account_transactions(acc_id, tx_hashes)?;
+            self.put_account_transactions(acc_id, &tx_hashes)?;
         }
 
-        if block.header.block_id.is_multiple_of(BREAKPOINT_INTERVAL) {
+        if block
+            .header
+            .block_id
+            .is_multiple_of(u64::from(BREAKPOINT_INTERVAL))
+        {
             self.put_next_breakpoint()?;
         }
 
@@ -539,7 +548,7 @@ impl RocksDBIO {
         }
     }
 
-    pub fn get_block_batch(&self, before: Option<u64>, limit: u64) -> DbResult<Vec<Block>> {
+    pub fn get_block_batch(&self, before: Option<BlockId>, limit: u64) -> DbResult<Vec<Block>> {
         let cf_block = self.block_column();
         let mut block_batch = vec![];
 
@@ -592,7 +601,7 @@ impl RocksDBIO {
 
     // State
 
-    pub fn put_breakpoint(&self, br_id: u64, breakpoint: V02State) -> DbResult<()> {
+    pub fn put_breakpoint(&self, br_id: u64, breakpoint: &V02State) -> DbResult<()> {
         let cf_br = self.breakpoint_column();
 
         self.db
@@ -653,7 +662,7 @@ impl RocksDBIO {
             // ToDo: update it to handle any genesis id
             // right now works correctly only if genesis_id < BREAKPOINT_INTERVAL
             let start = if br_id != 0 {
-                BREAKPOINT_INTERVAL * br_id
+                u64::from(BREAKPOINT_INTERVAL) * br_id
             } else {
                 self.get_meta_first_block_in_db()?
             };
@@ -693,12 +702,12 @@ impl RocksDBIO {
     pub fn put_next_breakpoint(&self) -> DbResult<()> {
         let last_block = self.get_meta_last_block_in_db()?;
         let next_breakpoint_id = self.get_meta_last_breakpoint_id()? + 1;
-        let block_to_break_id = next_breakpoint_id * BREAKPOINT_INTERVAL;
+        let block_to_break_id = next_breakpoint_id * u64::from(BREAKPOINT_INTERVAL);
 
         if block_to_break_id <= last_block {
             let next_breakpoint = self.calculate_state_for_id(block_to_break_id)?;
 
-            self.put_breakpoint(next_breakpoint_id, next_breakpoint)?;
+            self.put_breakpoint(next_breakpoint_id, &next_breakpoint)?;
             self.put_meta_last_breakpoint_id(next_breakpoint_id)
         } else {
             Err(DbError::db_interaction_error(
@@ -812,7 +821,7 @@ impl RocksDBIO {
     pub fn put_account_transactions(
         &self,
         acc_id: [u8; 32],
-        tx_hashes: Vec<[u8; 32]>,
+        tx_hashes: &[[u8; 32]],
     ) -> DbResult<()> {
         let acc_num_tx = self.get_acc_meta_num_tx(acc_id)?.unwrap_or(0);
         let cf_att = self.account_id_to_tx_hash_column();
@@ -985,7 +994,7 @@ mod tests {
         }
 
         common::test_utils::create_transaction_native_token_transfer(
-            from, nonce, to, amount, sign_key,
+            from, nonce, to, amount, &sign_key,
         )
     }
 
@@ -1072,10 +1081,13 @@ mod tests {
             let last_block = dbio.get_block(last_id).unwrap();
 
             let prev_hash = last_block.header.hash;
-            let transfer_tx = transfer(1, (i - 1) as u128, true);
-            let block =
-                common::test_utils::produce_dummy_block(i + 1, Some(prev_hash), vec![transfer_tx]);
-            dbio.put_block(block, [i as u8; 32]).unwrap();
+            let transfer_tx = transfer(1, u128::from(i - 1), true);
+            let block = common::test_utils::produce_dummy_block(
+                u64::from(i + 1),
+                Some(prev_hash),
+                vec![transfer_tx],
+            );
+            dbio.put_block(block, [i; 32]).unwrap();
         }
 
         let last_id = dbio.get_meta_last_block_in_db().unwrap();
@@ -1320,6 +1332,6 @@ mod tests {
         let acc1_tx_limited_hashes: Vec<[u8; 32]> =
             acc1_tx_limited.into_iter().map(|tx| tx.hash().0).collect();
 
-        assert_eq!(acc1_tx_limited_hashes.as_slice(), &tx_hash_res[1..])
+        assert_eq!(acc1_tx_limited_hashes.as_slice(), &tx_hash_res[1..]);
     }
 }

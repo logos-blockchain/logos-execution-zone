@@ -15,7 +15,7 @@ pub struct ProgramInput<T> {
     pub instruction: T,
 }
 
-/// A 32-byte seed used to compute a *Program-Derived AccountId* (PDA).
+/// A 32-byte seed used to compute a *Program-Derived `AccountId`* (PDA).
 ///
 /// Each program can derive up to `2^256` unique account IDs by choosing different
 /// seeds. PDAs allow programs to control namespaced account identifiers without
@@ -24,11 +24,13 @@ pub struct ProgramInput<T> {
 pub struct PdaSeed([u8; 32]);
 
 impl PdaSeed {
+    #[must_use]
     pub const fn new(value: [u8; 32]) -> Self {
         Self(value)
     }
 }
 
+#[must_use]
 pub fn compute_authorized_pdas(
     caller_program_id: Option<ProgramId>,
     pda_seeds: &[PdaSeed],
@@ -90,6 +92,7 @@ impl ChainedCall {
         }
     }
 
+    #[must_use]
     pub fn with_pda_seeds(mut self, pda_seeds: Vec<PdaSeed>) -> Self {
         self.pda_seeds = pda_seeds;
         self
@@ -110,6 +113,7 @@ pub struct AccountPostState {
 impl AccountPostState {
     /// Creates a post state without a claim request.
     /// The executing program is not requesting ownership of the account.
+    #[must_use]
     pub fn new(account: Account) -> Self {
         Self {
             account,
@@ -120,6 +124,7 @@ impl AccountPostState {
     /// Creates a post state that requests ownership of the account.
     /// This indicates that the executing program intends to claim the
     /// account as its own and is allowed to mutate it.
+    #[must_use]
     pub fn new_claimed(account: Account) -> Self {
         Self {
             account,
@@ -129,6 +134,7 @@ impl AccountPostState {
 
     /// Creates a post state that requests ownership of the account
     /// if the account's program owner is the default program ID.
+    #[must_use]
     pub fn new_claimed_if_default(account: Account) -> Self {
         let claim = account.program_owner == DEFAULT_PROGRAM_ID;
         Self { account, claim }
@@ -136,11 +142,13 @@ impl AccountPostState {
 
     /// Returns `true` if this post state requests that the account
     /// be claimed (owned) by the executing program.
+    #[must_use]
     pub fn requires_claim(&self) -> bool {
         self.claim
     }
 
     /// Returns the underlying account
+    #[must_use]
     pub fn account(&self) -> &Account {
         &self.account
     }
@@ -151,6 +159,7 @@ impl AccountPostState {
     }
 
     /// Consumes the post state and returns the underlying account
+    #[must_use]
     pub fn into_account(self) -> Account {
         self.account
     }
@@ -167,6 +176,8 @@ pub struct ProgramOutput {
     pub chained_calls: Vec<ChainedCall>,
 }
 
+/// Reads the NSSA inputs from the guest environment.
+#[must_use]
 pub fn read_nssa_inputs<T: DeserializeOwned>() -> (ProgramInput<T>, InstructionData) {
     let pre_states: Vec<AccountWithMetadata> = env::read();
     let instruction_words: InstructionData = env::read();
@@ -215,6 +226,7 @@ pub fn write_nssa_outputs_with_chained_call(
 /// - `pre_states`: The list of input accounts, each annotated with authorization metadata.
 /// - `post_states`: The list of resulting accounts after executing the program logic.
 /// - `executing_program_id`: The identifier of the program that was executed.
+#[must_use]
 pub fn validate_execution(
     pre_states: &[AccountWithMetadata],
     post_states: &[AccountPostState],

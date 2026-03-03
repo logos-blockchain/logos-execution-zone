@@ -23,6 +23,7 @@ impl BorshDeserialize for PublicKey {
 }
 
 impl PublicKey {
+    #[must_use]
     pub fn new_from_private_key(key: &PrivateKey) -> Self {
         let value = {
             let secret_key = secp256k1::SecretKey::from_byte_array(*key.value()).unwrap();
@@ -41,6 +42,7 @@ impl PublicKey {
         Ok(Self(value))
     }
 
+    #[must_use]
     pub fn value(&self) -> &[u8; 32] {
         &self.0
     }

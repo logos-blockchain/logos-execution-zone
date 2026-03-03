@@ -10,11 +10,11 @@ use crate::{api, components::TransactionPreview};
 #[component]
 pub fn AccountPage() -> impl IntoView {
     let params = use_params_map();
-    let (tx_offset, set_tx_offset) = signal(0u32);
+    let (tx_offset, set_tx_offset) = signal(0u64);
     let (all_transactions, set_all_transactions) = signal(Vec::new());
     let (is_loading, set_is_loading) = signal(false);
     let (has_more, set_has_more) = signal(true);
-    let tx_limit = 10u32;
+    let tx_limit = 10u64;
 
     // Parse account ID from URL params
     let account_id = move || {
@@ -35,7 +35,7 @@ pub fn AccountPage() -> impl IntoView {
     // Load initial transactions
     let transactions_resource = Resource::new(account_id, move |acc_id_opt| async move {
         match acc_id_opt {
-            Some(acc_id) => api::get_transactions_by_account(acc_id, tx_limit, 0).await,
+            Some(acc_id) => api::get_transactions_by_account(acc_id, 0, tx_limit).await,
             None => Err(leptos::prelude::ServerFnError::ServerError(
                 "Invalid account ID".to_string(),
             )),
@@ -46,7 +46,9 @@ pub fn AccountPage() -> impl IntoView {
     Effect::new(move || {
         if let Some(Ok(txs)) = transactions_resource.get() {
             set_all_transactions.set(txs.clone());
-            set_has_more.set(txs.len() as u32 == tx_limit);
+            set_has_more.set(
+                u64::try_from(txs.len()).expect("Transaction count should fit in u64") == tx_limit,
+            );
         }
     });
 
@@ -61,14 +63,15 @@ pub fn AccountPage() -> impl IntoView {
         set_tx_offset.set(current_offset);
 
         leptos::task::spawn_local(async move {
-            match api::get_transactions_by_account(acc_id, tx_limit, current_offset).await {
+            match api::get_transactions_by_account(acc_id, current_offset, tx_limit).await {
                 Ok(new_txs) => {
-                    let txs_count = new_txs.len() as u32;
+                    let txs_count =
+                        u64::try_from(new_txs.len()).expect("Transaction count should fit in u64");
                     set_all_transactions.update(|txs| txs.extend(new_txs));
                     set_has_more.set(txs_count == tx_limit);
                 }
                 Err(e) => {
-                    log::error!("Failed to load more transactions: {}", e);
+                    log::error!("Failed to load more transactions: {e}");
                 }
             }
             set_is_loading.set(false);
@@ -123,7 +126,7 @@ pub fn AccountPage() -> impl IntoView {
                                     </div>
                                     <div class="info-row">
                                         <span class="info-label">"Data:"</span>
-                                        <span class="info-value">{format!("{} bytes", data_len)}</span>
+                                        <span class="info-value">{format!("{data_len} bytes")}</span>
                                     </div>
                                 </div>
                             </div>
@@ -190,7 +193,7 @@ pub fn AccountPage() -> impl IntoView {
                                                 Err(e) => {
                                                     view! {
                                                         <div class="error">
-                                                            {format!("Failed to load transactions: {}", e)}
+                                                            {format!("Failed to load transactions: {e}")}
                                                         </div>
                                                     }
                                                         .into_any()
@@ -208,7 +211,7 @@ pub fn AccountPage() -> impl IntoView {
                                 view! {
                                     <div class="error-page">
                                         <h1>"Error"</h1>
-                                        <p>{format!("Failed to load account: {}", e)}</p>
+                                        <p>{format!("Failed to load account: {e}")}</p>
                                     </div>
                                 }
                                     .into_any()

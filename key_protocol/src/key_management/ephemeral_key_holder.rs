@@ -12,6 +12,7 @@ pub struct EphemeralKeyHolder {
     ephemeral_secret_key: EphemeralSecretKey,
 }
 
+#[must_use]
 pub fn produce_one_sided_shared_secret_receiver(
     vpk: &ViewingPublicKey,
 ) -> (SharedSecretKey, EphemeralPublicKey) {
@@ -24,6 +25,7 @@ pub fn produce_one_sided_shared_secret_receiver(
 }
 
 impl EphemeralKeyHolder {
+    #[must_use]
     pub fn new(receiver_nullifier_public_key: &NullifierPublicKey) -> Self {
         let mut nonce_bytes = [0; 16];
         OsRng.fill_bytes(&mut nonce_bytes);
@@ -36,10 +38,12 @@ impl EphemeralKeyHolder {
         }
     }
 
+    #[must_use]
     pub fn generate_ephemeral_public_key(&self) -> EphemeralPublicKey {
         EphemeralPublicKey::from_scalar(self.ephemeral_secret_key)
     }
 
+    #[must_use]
     pub fn calculate_shared_secret_sender(
         &self,
         receiver_viewing_public_key: &ViewingPublicKey,

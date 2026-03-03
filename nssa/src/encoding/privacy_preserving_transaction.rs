@@ -4,6 +4,7 @@ use crate::{
 };
 
 impl Message {
+    #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
         borsh::to_vec(&self).expect("Autoderived borsh serialization failure")
     }
@@ -14,6 +15,7 @@ impl Message {
 }
 
 impl PrivacyPreservingTransaction {
+    #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
         borsh::to_vec(&self).expect("Autoderived borsh serialization failure")
     }

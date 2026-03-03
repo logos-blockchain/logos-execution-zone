@@ -49,6 +49,7 @@ impl RpcError {
     /// A generic constructor.
     ///
     /// Mostly for completeness, doesn't do anything but filling in the corresponding fields.
+    #[must_use]
     pub fn new(code: i64, message: String, data: Option<Value>) -> Self {
         RpcError {
             code,
@@ -82,6 +83,7 @@ impl RpcError {
     }
 
     /// Create a parse error.
+    #[must_use]
     pub fn parse_error(e: String) -> Self {
         RpcError {
             code: -32_700,
@@ -93,12 +95,14 @@ impl RpcError {
         }
     }
 
+    #[must_use]
     pub fn serialization_error(e: &str) -> Self {
         RpcError::new_internal_error(Some(Value::String(e.to_owned())), e)
     }
 
     /// Helper method to define extract `INTERNAL_ERROR` in separate `RpcErrorKind`
     /// Returns `HANDLER_ERROR` if the error is not internal one
+    #[must_use]
     pub fn new_internal_or_handler_error(error_data: Option<Value>, error_struct: Value) -> Self {
         if error_struct["name"] == "INTERNAL_ERROR" {
             let error_message = match error_struct["info"].get("error_message") {
@@ -111,6 +115,7 @@ impl RpcError {
         }
     }
 
+    #[must_use]
     pub fn new_internal_error(error_data: Option<Value>, info: &str) -> Self {
         RpcError {
             code: -32_000,
@@ -133,6 +138,7 @@ impl RpcError {
     }
 
     /// Create a method not found error.
+    #[must_use]
     pub fn method_not_found(method: String) -> Self {
         RpcError {
             code: -32_601,

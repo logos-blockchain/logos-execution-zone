@@ -32,6 +32,7 @@ pub type KeyTreePublic = KeyTree<ChildKeysPublic>;
 pub type KeyTreePrivate = KeyTree<ChildKeysPrivate>;
 
 impl<N: KeyNode> KeyTree<N> {
+    #[must_use]
     pub fn new(seed: &SeedHolder) -> Self {
         let seed_fit: [u8; 64] = seed
             .seed
@@ -63,6 +64,7 @@ impl<N: KeyNode> KeyTree<N> {
 
     // ToDo: Add function to create a tree from list of nodes with consistency check.
 
+    #[must_use]
     pub fn find_next_last_child_of_id(&self, parent_id: &ChainIndex) -> Option<u32> {
         if !self.key_map.contains_key(parent_id) {
             return None;
@@ -87,14 +89,14 @@ impl<N: KeyNode> KeyTree<N> {
             match (&rightmost_ref, &rightmost_ref_next) {
                 (Some(_), Some(_)) => {
                     left_border = right;
-                    right = (right + right_border) / 2;
+                    right = u32::midpoint(right, right_border);
                 }
                 (Some(_), None) => {
                     break Some(right + 1);
                 }
                 (None, None) => {
                     right_border = right;
-                    right = (left_border + right) / 2;
+                    right = u32::midpoint(left_border, right);
                 }
                 (None, Some(_)) => {
                     unreachable!();
@@ -152,6 +154,7 @@ impl<N: KeyNode> KeyTree<N> {
         self.fill_node(&self.find_next_slot_layered())
     }
 
+    #[must_use]
     pub fn get_node(&self, account_id: nssa::AccountId) -> Option<&N> {
         self.account_id_map
             .get(&account_id)

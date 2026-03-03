@@ -39,6 +39,7 @@ impl Default for RpcConfig {
 }
 
 impl RpcConfig {
+    #[must_use]
     pub fn new(addr: &str) -> Self {
         RpcConfig {
             addr: addr.to_owned(),
@@ -46,6 +47,7 @@ impl RpcConfig {
         }
     }
 
+    #[must_use]
     pub fn with_port(port: u16) -> Self {
         RpcConfig {
             addr: format!("0.0.0.0:{port}"),

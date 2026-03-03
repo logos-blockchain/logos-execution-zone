@@ -120,7 +120,7 @@ typedef struct WalletHandle {
 } WalletHandle;
 
 /**
- * 32-byte array type for AccountId, keys, hashes, etc.
+ * 32-byte array type for `AccountId`, keys, hashes, etc.
  */
 typedef struct FfiBytes32 {
   uint8_t data[32];
@@ -135,7 +135,7 @@ typedef struct FfiAccountListEntry {
 } FfiAccountListEntry;
 
 /**
- * List of accounts returned by wallet_ffi_list_accounts.
+ * List of accounts returned by `wallet_ffi_list_accounts`.
  */
 typedef struct FfiAccountList {
   struct FfiAccountListEntry *entries;

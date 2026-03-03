@@ -13,6 +13,10 @@ fn transaction_type_info(tx: &Transaction) -> (&'static str, &'static str) {
 
 /// Transaction preview component
 #[component]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Leptos component props are passed by value by framework convention"
+)]
 pub fn TransactionPreview(transaction: Transaction) -> impl IntoView {
     let hash = transaction.hash();
     let hash_str = hash.to_string();

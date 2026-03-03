@@ -21,6 +21,7 @@ pub struct KeyChain {
 }
 
 impl KeyChain {
+    #[must_use]
     pub fn new_os_random() -> Self {
         // Currently dropping SeedHolder at the end of initialization.
         // Now entirely sure if we need it in the future.
@@ -40,6 +41,7 @@ impl KeyChain {
         }
     }
 
+    #[must_use]
     pub fn new_mnemonic(passphrase: String) -> Self {
         // Currently dropping SeedHolder at the end of initialization.
         // Not entirely sure if we need it in the future.
@@ -59,14 +61,15 @@ impl KeyChain {
         }
     }
 
+    #[must_use]
     pub fn calculate_shared_secret_receiver(
         &self,
-        ephemeral_public_key_sender: EphemeralPublicKey,
+        ephemeral_public_key_sender: &EphemeralPublicKey,
         index: Option<u32>,
     ) -> SharedSecretKey {
         SharedSecretKey::new(
             &self.secret_spending_key.generate_viewing_secret_key(index),
-            &ephemeral_public_key_sender,
+            ephemeral_public_key_sender,
         )
     }
 }
@@ -106,7 +109,7 @@ mod tests {
 
         // Calculate shared secret
         let _shared_secret = account_id_key_holder
-            .calculate_shared_secret_receiver(ephemeral_public_key_sender, None);
+            .calculate_shared_secret_receiver(&ephemeral_public_key_sender, None);
     }
 
     #[test]
@@ -184,7 +187,7 @@ mod tests {
 
         let key_sender = eph_key_holder.calculate_shared_secret_sender(&keys.viewing_public_key);
         let key_receiver = keys.calculate_shared_secret_receiver(
-            eph_key_holder.generate_ephemeral_public_key(),
+            &eph_key_holder.generate_ephemeral_public_key(),
             Some(2),
         );
 

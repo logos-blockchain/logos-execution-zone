@@ -49,6 +49,7 @@ impl RpcErrKind for TransactionMalformationError {
 }
 
 #[allow(clippy::needless_pass_by_value)]
+#[must_use]
 pub fn from_rpc_err_into_anyhow_err(rpc_err: RpcError) -> anyhow::Error {
     debug!("Rpc error cast to anyhow error : err {rpc_err:?}");
     anyhow::anyhow!(format!("{rpc_err:#?}"))

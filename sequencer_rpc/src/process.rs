@@ -90,13 +90,15 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> JsonHandler<BC, IC>
     }
 
     async fn process_send_tx(&self, request: Request) -> Result<Value, RpcErr> {
-        let send_tx_req = SendTxRequest::parse(Some(request.params))?;
-        let tx = borsh::from_slice::<NSSATransaction>(&send_tx_req.transaction).unwrap();
-        let tx_hash = tx.hash();
-
         // Check transaction size against block size limit
         // Reserve ~200 bytes for block header overhead
         const BLOCK_HEADER_OVERHEAD: usize = 200;
+
+        let send_tx_req = SendTxRequest::parse(Some(request.params))?;
+        let tx = borsh::from_slice::<NSSATransaction>(&send_tx_req.transaction).unwrap();
+
+        let tx_hash = tx.hash();
+
         let tx_size = borsh::to_vec(&tx)
             .map_err(|_| TransactionMalformationError::FailedToDecode { tx: tx_hash })?
             .len();
@@ -196,7 +198,7 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> JsonHandler<BC, IC>
     }
 
     /// Returns the initial accounts for testnet
-    /// ToDo: Useful only for testnet and needs to be removed later
+    /// `ToDo`: Useful only for testnet and needs to be removed later
     async fn get_initial_testnet_accounts(&self, request: Request) -> Result<Value, RpcErr> {
         let _get_initial_testnet_accounts_request =
             GetInitialTestnetAccountsRequest::parse(Some(request.params))?;
@@ -210,8 +212,8 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> JsonHandler<BC, IC>
         respond(initial_accounts)
     }
 
-    /// Returns the balance of the account at the given account_id.
-    /// The account_id must be a valid hex string of the correct length.
+    /// Returns the balance of the account at the given `account_id`.
+    /// The `account_id` must be a valid hex string of the correct length.
     async fn process_get_account_balance(&self, request: Request) -> Result<Value, RpcErr> {
         let get_account_req = GetAccountBalanceRequest::parse(Some(request.params))?;
         let account_id = get_account_req.account_id;
@@ -227,8 +229,8 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> JsonHandler<BC, IC>
         respond(response)
     }
 
-    /// Returns the nonces of the accounts at the given account_ids.
-    /// Each account_id must be a valid hex string of the correct length.
+    /// Returns the nonces of the accounts at the given `account_ids`.
+    /// Each `account_id` must be a valid hex string of the correct length.
     async fn process_get_accounts_nonces(&self, request: Request) -> Result<Value, RpcErr> {
         let get_account_nonces_req = GetAccountsNoncesRequest::parse(Some(request.params))?;
         let account_ids = get_account_nonces_req.account_ids;
@@ -247,8 +249,8 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> JsonHandler<BC, IC>
         respond(response)
     }
 
-    /// Returns account struct for given account_id.
-    /// AccountId must be a valid hex string of the correct length.
+    /// Returns account struct for given `account_id`.
+    /// `AccountId` must be a valid hex string of the correct length.
     async fn process_get_account(&self, request: Request) -> Result<Value, RpcErr> {
         let get_account_nonces_req = GetAccountRequest::parse(Some(request.params))?;
 
@@ -299,7 +301,7 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> JsonHandler<BC, IC>
         respond(response)
     }
 
-    async fn process_get_program_ids(&self, request: Request) -> Result<Value, RpcErr> {
+    fn process_get_program_ids(request: Request) -> Result<Value, RpcErr> {
         let _get_proof_req = GetProgramIdsRequest::parse(Some(request.params))?;
 
         let mut program_ids = HashMap::new();
@@ -332,12 +334,16 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> JsonHandler<BC, IC>
             GET_ACCOUNT => self.process_get_account(request).await,
             GET_TRANSACTION_BY_HASH => self.process_get_transaction_by_hash(request).await,
             GET_PROOF_FOR_COMMITMENT => self.process_get_proof_by_commitment(request).await,
-            GET_PROGRAM_IDS => self.process_get_program_ids(request).await,
+            GET_PROGRAM_IDS => Self::process_get_program_ids(request),
             _ => Err(RpcErr(RpcError::method_not_found(request.method))),
         }
     }
 }
 
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "Test code assumes usize is large enough for max_block_size"
+)]
 #[cfg(test)]
 mod tests {
     use std::{str::FromStr as _, sync::Arc, time::Duration};
@@ -443,7 +449,7 @@ mod tests {
             0,
             AccountId::from_str(&[2; 32].to_base58()).unwrap(),
             balance_to_move,
-            signing_key,
+            &signing_key,
         );
 
         mempool_handle

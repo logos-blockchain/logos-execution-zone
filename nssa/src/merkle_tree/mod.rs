@@ -64,12 +64,12 @@ impl MerkleTree {
         let capacity = capacity.next_power_of_two();
         let total_depth = capacity.trailing_zeros() as usize;
 
-        let nodes = default_values::DEFAULT_VALUES[..(total_depth + 1)]
+        let nodes = default_values::DEFAULT_VALUES[..=total_depth]
             .iter()
             .rev()
             .enumerate()
             .flat_map(|(level, default_value)| std::iter::repeat_n(default_value, 1 << level))
-            .cloned()
+            .copied()
             .collect();
 
         Self {
@@ -164,7 +164,7 @@ mod tests {
     impl MerkleTree {
         pub fn new(values: &[Value]) -> Self {
             let mut this = Self::with_capacity(values.len());
-            for value in values.iter().cloned() {
+            for value in values.iter().copied() {
                 this.insert(value);
             }
             this
@@ -201,7 +201,7 @@ mod tests {
             hex!("48c73f7821a58a8d2a703e5b39c571c0aa20cf14abcd0af8f2b955bc202998de");
         assert_eq!(tree.root(), expected_root);
         assert_eq!(tree.capacity, 4);
-        assert_eq!(tree.length, 4)
+        assert_eq!(tree.length, 4);
     }
 
     #[test]
@@ -283,15 +283,15 @@ mod tests {
         assert_eq!(tree.length, 0);
         assert_eq!(tree.nodes.len(), 15);
         for i in 7..15 {
-            assert_eq!(*tree.get_node(i), default_values::DEFAULT_VALUES[0])
+            assert_eq!(*tree.get_node(i), default_values::DEFAULT_VALUES[0]);
         }
         for i in 3..7 {
-            assert_eq!(*tree.get_node(i), default_values::DEFAULT_VALUES[1])
+            assert_eq!(*tree.get_node(i), default_values::DEFAULT_VALUES[1]);
         }
         for i in 1..3 {
-            assert_eq!(*tree.get_node(i), default_values::DEFAULT_VALUES[2])
+            assert_eq!(*tree.get_node(i), default_values::DEFAULT_VALUES[2]);
         }
-        assert_eq!(*tree.get_node(0), default_values::DEFAULT_VALUES[3])
+        assert_eq!(*tree.get_node(0), default_values::DEFAULT_VALUES[3]);
     }
 
     #[test]

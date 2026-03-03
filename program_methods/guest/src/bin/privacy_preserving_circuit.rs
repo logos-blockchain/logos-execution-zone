@@ -113,7 +113,7 @@ impl ExecutionState {
             );
             execution_state.validate_and_sync_states(
                 chained_call.program_id,
-                authorized_pdas,
+                &authorized_pdas,
                 program_output.pre_states,
                 program_output.post_states,
             );
@@ -153,7 +153,7 @@ impl ExecutionState {
     fn validate_and_sync_states(
         &mut self,
         program_id: ProgramId,
-        authorized_pdas: HashSet<AccountId>,
+        authorized_pdas: &HashSet<AccountId>,
         pre_states: Vec<AccountWithMetadata>,
         post_states: Vec<AccountPostState>,
     ) {
@@ -173,12 +173,12 @@ impl ExecutionState {
                         .pre_states
                         .iter()
                         .find(|acc| acc.account_id == pre_account_id)
-                        .map(|acc| acc.is_authorized)
-                        .unwrap_or_else(|| {
-                            panic!(
+                        .map_or_else(
+                            || panic!(
                                 "Pre state must exist in execution state for account {pre_account_id:?}",
-                            )
-                        });
+                            ),
+                            |acc| acc.is_authorized
+                        );
 
                     let is_authorized =
                         previous_is_authorized || authorized_pdas.contains(&pre_account_id);
@@ -379,18 +379,8 @@ fn compute_nullifier_and_set_digest(
     npk: &NullifierPublicKey,
     nsk: &NullifierSecretKey,
 ) -> (Nullifier, CommitmentSetDigest) {
-    membership_proof_opt
-        .as_ref()
-        .map(|membership_proof| {
-            // Compute commitment set digest associated with provided auth path
-            let commitment_pre = Commitment::new(npk, pre_account);
-            let set_digest = compute_digest_for_path(&commitment_pre, membership_proof);
-
-            // Compute update nullifier
-            let nullifier = Nullifier::for_account_update(&commitment_pre, nsk);
-            (nullifier, set_digest)
-        })
-        .unwrap_or_else(|| {
+    membership_proof_opt.as_ref().map_or_else(
+        || {
             assert_eq!(
                 *pre_account,
                 Account::default(),
@@ -400,5 +390,15 @@ fn compute_nullifier_and_set_digest(
             // Compute initialization nullifier
             let nullifier = Nullifier::for_account_initialization(npk);
             (nullifier, DUMMY_COMMITMENT_HASH)
-        })
+        },
+        |membership_proof| {
+            // Compute commitment set digest associated with provided auth path
+            let commitment_pre = Commitment::new(npk, pre_account);
+            let set_digest = compute_digest_for_path(&commitment_pre, membership_proof);
+
+            // Compute update nullifier
+            let nullifier = Nullifier::for_account_update(&commitment_pre, nsk);
+            (nullifier, set_digest)
+        },
+    )
 }

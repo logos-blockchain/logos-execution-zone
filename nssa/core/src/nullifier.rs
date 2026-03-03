@@ -28,10 +28,10 @@ impl AsRef<[u8]> for NullifierPublicKey {
 
 impl From<&NullifierSecretKey> for NullifierPublicKey {
     fn from(value: &NullifierSecretKey) -> Self {
-        let mut bytes = Vec::new();
         const PREFIX: &[u8; 8] = b"LEE/keys";
         const SUFFIX_1: &[u8; 1] = &[7];
         const SUFFIX_2: &[u8; 23] = &[0; 23];
+        let mut bytes = Vec::new();
         bytes.extend_from_slice(PREFIX);
         bytes.extend_from_slice(value);
         bytes.extend_from_slice(SUFFIX_1);
@@ -50,6 +50,8 @@ pub type NullifierSecretKey = [u8; 32];
 pub struct Nullifier(pub(super) [u8; 32]);
 
 impl Nullifier {
+    /// Computes a nullifier for an account update.
+    #[must_use]
     pub fn for_account_update(commitment: &Commitment, nsk: &NullifierSecretKey) -> Self {
         const UPDATE_PREFIX: &[u8; 32] = b"/NSSA/v0.2/Nullifier/Update/\x00\x00\x00\x00";
         let mut bytes = UPDATE_PREFIX.to_vec();
@@ -58,6 +60,8 @@ impl Nullifier {
         Self(Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap())
     }
 
+    /// Computes a nullifier for an account initialization.
+    #[must_use]
     pub fn for_account_initialization(npk: &NullifierPublicKey) -> Self {
         const INIT_PREFIX: &[u8; 32] = b"/NSSA/v0.2/Nullifier/Initialize/";
         let mut bytes = INIT_PREFIX.to_vec();

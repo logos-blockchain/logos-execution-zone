@@ -35,6 +35,7 @@ fn respond<T: Serialize>(val: T) -> Result<Value, RpcErr> {
     Ok(serde_json::to_value(val)?)
 }
 
+#[must_use]
 pub fn rpc_error_responce_inverter(err: RpcError) -> RpcError {
     let mut content: Option<Value> = None;
     if err.error_struct.is_some() {

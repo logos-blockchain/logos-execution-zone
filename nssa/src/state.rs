@@ -52,8 +52,8 @@ impl CommitmentSet {
     }
 
     /// Initializes an empty `CommitmentSet` with a given capacity.
-    /// If the capacity is not a power_of_two, then capacity is taken
-    /// to be the next power_of_two.
+    /// If the capacity is not a `power_of_two`, then capacity is taken
+    /// to be the next `power_of_two`.
     pub(crate) fn with_capacity(capacity: usize) -> CommitmentSet {
         Self {
             merkle_tree: MerkleTree::with_capacity(capacity),
@@ -114,6 +114,7 @@ pub struct V02State {
 }
 
 impl V02State {
+    #[must_use]
     pub fn new_with_genesis_accounts(
         initial_data: &[(AccountId, u128)],
         initial_commitments: &[nssa_core::Commitment],
@@ -159,7 +160,7 @@ impl V02State {
     ) -> Result<(), NssaError> {
         let state_diff = tx.validate_and_produce_public_state_diff(self)?;
 
-        for (account_id, post) in state_diff.into_iter() {
+        for (account_id, post) in state_diff {
             let current_account = self.get_account_by_id_mut(account_id);
 
             *current_account = post;
@@ -195,7 +196,7 @@ impl V02State {
         self.private_state.1.extend(new_nullifiers);
 
         // 4. Update public accounts
-        for (account_id, post) in public_state_diff.into_iter() {
+        for (account_id, post) in public_state_diff {
             let current_account = self.get_account_by_id_mut(account_id);
             *current_account = post;
         }
@@ -222,6 +223,7 @@ impl V02State {
         self.public_state.entry(account_id).or_default()
     }
 
+    #[must_use]
     pub fn get_account_by_id(&self, account_id: AccountId) -> Account {
         self.public_state
             .get(&account_id)
@@ -229,6 +231,7 @@ impl V02State {
             .unwrap_or(Account::default())
     }
 
+    #[must_use]
     pub fn get_proof_for_commitment(&self, commitment: &Commitment) -> Option<MembershipProof> {
         self.private_state.0.get_proof_for(commitment)
     }
@@ -237,6 +240,7 @@ impl V02State {
         &self.programs
     }
 
+    #[must_use]
     pub fn commitment_set_digest(&self) -> CommitmentSetDigest {
         self.private_state.0.digest()
     }
@@ -245,7 +249,7 @@ impl V02State {
         &self,
         new_commitments: &[Commitment],
     ) -> Result<(), NssaError> {
-        for commitment in new_commitments.iter() {
+        for commitment in new_commitments {
             if self.private_state.0.contains(commitment) {
                 return Err(NssaError::InvalidInput(
                     "Commitment already seen".to_string(),
@@ -259,7 +263,7 @@ impl V02State {
         &self,
         new_nullifiers: &[(Nullifier, CommitmentSetDigest)],
     ) -> Result<(), NssaError> {
-        for (nullifier, digest) in new_nullifiers.iter() {
+        for (nullifier, digest) in new_nullifiers {
             if self.private_state.1.contains(nullifier) {
                 return Err(NssaError::InvalidInput(
                     "Nullifier already seen".to_string(),
@@ -284,7 +288,7 @@ impl V02State {
             account_id,
             Account {
                 program_owner: Program::pinata().id(),
-                balance: 1500000,
+                balance: 1_500_000,
                 // Difficulty: 3
                 data: vec![3; 33].try_into().expect("should fit"),
                 nonce: 0,
@@ -339,7 +343,7 @@ pub mod tests {
 
     fn transfer_transaction(
         from: AccountId,
-        from_key: PrivateKey,
+        from_key: &PrivateKey,
         nonce: u128,
         to: AccountId,
         balance: u128,
@@ -349,7 +353,7 @@ pub mod tests {
         let program_id = Program::authenticated_transfer_program().id();
         let message =
             public_transaction::Message::try_new(program_id, account_ids, nonces, balance).unwrap();
-        let witness_set = public_transaction::WitnessSet::for_message(&message, &[&from_key]);
+        let witness_set = public_transaction::WitnessSet::for_message(&message, &[from_key]);
         PublicTransaction::new(message, witness_set)
     }
 
@@ -454,7 +458,7 @@ pub mod tests {
         assert_eq!(state.get_account_by_id(to), Account::default());
         let balance_to_move = 5;
 
-        let tx = transfer_transaction(from, key, 0, to, balance_to_move);
+        let tx = transfer_transaction(from, &key, 0, to, balance_to_move);
         state.transition_from_public_transaction(&tx).unwrap();
 
         assert_eq!(state.get_account_by_id(from).balance, 95);
@@ -475,7 +479,7 @@ pub mod tests {
         let balance_to_move = 101;
         assert!(state.get_account_by_id(from).balance < balance_to_move);
 
-        let tx = transfer_transaction(from, from_key, 0, to, balance_to_move);
+        let tx = transfer_transaction(from, &from_key, 0, to, balance_to_move);
         let result = state.transition_from_public_transaction(&tx);
 
         assert!(matches!(result, Err(NssaError::ProgramExecutionFailed(_))));
@@ -499,7 +503,7 @@ pub mod tests {
         assert_ne!(state.get_account_by_id(to), Account::default());
         let balance_to_move = 8;
 
-        let tx = transfer_transaction(from, from_key, 0, to, balance_to_move);
+        let tx = transfer_transaction(from, &from_key, 0, to, balance_to_move);
         state.transition_from_public_transaction(&tx).unwrap();
 
         assert_eq!(state.get_account_by_id(from).balance, 192);
@@ -519,10 +523,10 @@ pub mod tests {
         let account_id3 = AccountId::new([3; 32]);
         let balance_to_move = 5;
 
-        let tx = transfer_transaction(account_id1, key1, 0, account_id2, balance_to_move);
+        let tx = transfer_transaction(account_id1, &key1, 0, account_id2, balance_to_move);
         state.transition_from_public_transaction(&tx).unwrap();
         let balance_to_move = 3;
-        let tx = transfer_transaction(account_id2, key2, 0, account_id3, balance_to_move);
+        let tx = transfer_transaction(account_id2, &key2, 0, account_id3, balance_to_move);
         state.transition_from_public_transaction(&tx).unwrap();
 
         assert_eq!(state.get_account_by_id(account_id1).balance, 95);
@@ -539,6 +543,7 @@ pub mod tests {
         }
 
         /// Include test programs in the builtin programs map
+        #[must_use]
         pub fn with_test_programs(mut self) -> Self {
             self.insert_program(Program::nonce_changer_program());
             self.insert_program(Program::extra_output_program());
@@ -555,6 +560,7 @@ pub mod tests {
             self
         }
 
+        #[must_use]
         pub fn with_non_default_accounts_but_default_program_owners(mut self) -> Self {
             let account_with_default_values_except_balance = Account {
                 balance: 100,
@@ -583,6 +589,7 @@ pub mod tests {
             self
         }
 
+        #[must_use]
         pub fn with_account_owned_by_burner_program(mut self) -> Self {
             let account = Account {
                 program_owner: Program::burner().id(),
@@ -593,6 +600,7 @@ pub mod tests {
             self
         }
 
+        #[must_use]
         pub fn with_private_account(mut self, keys: &TestPrivateKeys, account: &Account) -> Self {
             let commitment = Commitment::new(&keys.npk(), account);
             self.private_state.0.extend(&[commitment]);
@@ -916,7 +924,7 @@ pub mod tests {
             vec![sender, recipient],
             Program::serialize_instruction(balance_to_move).unwrap(),
             vec![0, 2],
-            vec![0xdeadbeef],
+            vec![0xdead_beef],
             vec![(recipient_keys.npk(), shared_secret)],
             vec![],
             vec![None],
@@ -1084,7 +1092,7 @@ pub mod tests {
         let sender_private_account = Account {
             program_owner: Program::authenticated_transfer_program().id(),
             balance: 100,
-            nonce: 0xdeadbeef,
+            nonce: 0xdead_beef,
             data: Data::default(),
         };
         let recipient_keys = test_private_account_keys_2();
@@ -1099,7 +1107,7 @@ pub mod tests {
             &sender_private_account,
             &recipient_keys,
             balance_to_move,
-            [0xcafecafe, 0xfecafeca],
+            [0xcafe_cafe, 0xfeca_feca],
             &state,
         );
 
@@ -1107,7 +1115,7 @@ pub mod tests {
             &sender_keys.npk(),
             &Account {
                 program_owner: Program::authenticated_transfer_program().id(),
-                nonce: 0xcafecafe,
+                nonce: 0xcafe_cafe,
                 balance: sender_private_account.balance - balance_to_move,
                 data: Data::default(),
             },
@@ -1121,7 +1129,7 @@ pub mod tests {
             &recipient_keys.npk(),
             &Account {
                 program_owner: Program::authenticated_transfer_program().id(),
-                nonce: 0xfecafeca,
+                nonce: 0xfeca_feca,
                 balance: balance_to_move,
                 ..Account::default()
             },
@@ -1150,7 +1158,7 @@ pub mod tests {
         let sender_private_account = Account {
             program_owner: Program::authenticated_transfer_program().id(),
             balance: 100,
-            nonce: 0xdeadbeef,
+            nonce: 0xdead_beef,
             data: Data::default(),
         };
         let recipient_keys = test_public_account_keys_1();
@@ -1174,7 +1182,7 @@ pub mod tests {
             &sender_private_account,
             &recipient_keys.account_id(),
             balance_to_move,
-            0xcafecafe,
+            0xcafe_cafe,
             &state,
         );
 
@@ -1182,7 +1190,7 @@ pub mod tests {
             &sender_keys.npk(),
             &Account {
                 program_owner: Program::authenticated_transfer_program().id(),
-                nonce: 0xcafecafe,
+                nonce: 0xcafe_cafe,
                 balance: sender_private_account.balance - balance_to_move,
                 data: Data::default(),
             },
@@ -1333,7 +1341,12 @@ pub mod tests {
         );
 
         let large_data: Vec<u8> =
-            vec![0; nssa_core::account::data::DATA_MAX_LENGTH.as_u64() as usize + 1];
+            vec![
+                0;
+                usize::try_from(nssa_core::account::data::DATA_MAX_LENGTH.as_u64())
+                    .expect("DATA_MAX_LENGTH fits in usize")
+                    + 1
+            ];
 
         let result = execute_and_prove(
             vec![public_account],
@@ -1343,7 +1356,7 @@ pub mod tests {
             vec![],
             vec![],
             vec![],
-            &program.to_owned().into(),
+            &program.clone().into(),
         );
 
         assert!(matches!(result, Err(NssaError::ProgramProveFailed(_))));
@@ -1531,7 +1544,7 @@ pub mod tests {
             AccountWithMetadata::new(Account::default(), false, &recipient_keys.npk());
 
         // Setting only one nonce for an execution with two private accounts.
-        let private_account_nonces = [0xdeadbeef1];
+        let private_account_nonces = [0xdead_beef1];
         let result = execute_and_prove(
             vec![private_account_1, private_account_2],
             Program::serialize_instruction(10u128).unwrap(),
@@ -1580,7 +1593,7 @@ pub mod tests {
             vec![private_account_1, private_account_2],
             Program::serialize_instruction(10u128).unwrap(),
             vec![1, 2],
-            vec![0xdeadbeef1, 0xdeadbeef2],
+            vec![0xdead_beef1, 0xdead_beef2],
             private_account_keys.to_vec(),
             vec![sender_keys.nsk],
             vec![Some((0, vec![]))],
@@ -1613,7 +1626,7 @@ pub mod tests {
             vec![private_account_1, private_account_2],
             Program::serialize_instruction(10u128).unwrap(),
             vec![1, 2],
-            vec![0xdeadbeef1, 0xdeadbeef2],
+            vec![0xdead_beef1, 0xdead_beef2],
             vec![
                 (
                     sender_keys.npk(),
@@ -1655,7 +1668,7 @@ pub mod tests {
             vec![private_account_1, private_account_2],
             Program::serialize_instruction(10u128).unwrap(),
             vec![1, 2],
-            vec![0xdeadbeef1, 0xdeadbeef2],
+            vec![0xdead_beef1, 0xdead_beef2],
             vec![
                 (
                     sender_keys.npk(),
@@ -1713,7 +1726,7 @@ pub mod tests {
             vec![private_account_1, private_account_2],
             Program::serialize_instruction(10u128).unwrap(),
             vec![1, 2],
-            vec![0xdeadbeef1, 0xdeadbeef2],
+            vec![0xdead_beef1, 0xdead_beef2],
             private_account_keys.to_vec(),
             private_account_nsks.to_vec(),
             private_account_membership_proofs.to_vec(),
@@ -1751,7 +1764,7 @@ pub mod tests {
             vec![private_account_1, private_account_2],
             Program::serialize_instruction(10u128).unwrap(),
             vec![1, 2],
-            vec![0xdeadbeef1, 0xdeadbeef2],
+            vec![0xdead_beef1, 0xdead_beef2],
             vec![
                 (
                     sender_keys.npk(),
@@ -1799,7 +1812,7 @@ pub mod tests {
             vec![private_account_1, private_account_2],
             Program::serialize_instruction(10u128).unwrap(),
             vec![1, 2],
-            vec![0xdeadbeef1, 0xdeadbeef2],
+            vec![0xdead_beef1, 0xdead_beef2],
             vec![
                 (
                     sender_keys.npk(),
@@ -1846,7 +1859,7 @@ pub mod tests {
             vec![private_account_1, private_account_2],
             Program::serialize_instruction(10u128).unwrap(),
             vec![1, 2],
-            vec![0xdeadbeef1, 0xdeadbeef2],
+            vec![0xdead_beef1, 0xdead_beef2],
             vec![
                 (
                     sender_keys.npk(),
@@ -1882,7 +1895,7 @@ pub mod tests {
         let private_account_2 = AccountWithMetadata::new(
             Account {
                 // Non default nonce
-                nonce: 0xdeadbeef,
+                nonce: 0xdead_beef,
                 ..Account::default()
             },
             false,
@@ -1893,7 +1906,7 @@ pub mod tests {
             vec![private_account_1, private_account_2],
             Program::serialize_instruction(10u128).unwrap(),
             vec![1, 2],
-            vec![0xdeadbeef1, 0xdeadbeef2],
+            vec![0xdead_beef1, 0xdead_beef2],
             vec![
                 (
                     sender_keys.npk(),
@@ -1938,7 +1951,7 @@ pub mod tests {
             vec![private_account_1, private_account_2],
             Program::serialize_instruction(10u128).unwrap(),
             vec![1, 2],
-            vec![0xdeadbeef1, 0xdeadbeef2],
+            vec![0xdead_beef1, 0xdead_beef2],
             vec![
                 (
                     sender_keys.npk(),
@@ -2006,7 +2019,7 @@ pub mod tests {
 
         // Setting three new private account nonces for a circuit execution with only two private
         // accounts.
-        let private_account_nonces = [0xdeadbeef1, 0xdeadbeef2, 0xdeadbeef3];
+        let private_account_nonces = [0xdead_beef1, 0xdead_beef2, 0xdead_beef3];
         let result = execute_and_prove(
             vec![private_account_1, private_account_2],
             Program::serialize_instruction(10u128).unwrap(),
@@ -2067,7 +2080,7 @@ pub mod tests {
             vec![private_account_1, private_account_2],
             Program::serialize_instruction(10u128).unwrap(),
             vec![1, 2],
-            vec![0xdeadbeef1, 0xdeadbeef2],
+            vec![0xdead_beef1, 0xdead_beef2],
             private_account_keys.to_vec(),
             vec![sender_keys.nsk],
             vec![Some((0, vec![]))],
@@ -2103,7 +2116,7 @@ pub mod tests {
             vec![private_account_1, private_account_2],
             Program::serialize_instruction(10u128).unwrap(),
             visibility_mask.to_vec(),
-            vec![0xdeadbeef1, 0xdeadbeef2],
+            vec![0xdead_beef1, 0xdead_beef2],
             vec![
                 (
                     sender_keys.npk(),
@@ -2128,7 +2141,7 @@ pub mod tests {
         let sender_private_account = Account {
             program_owner: Program::authenticated_transfer_program().id(),
             balance: 100,
-            nonce: 0xdeadbeef,
+            nonce: 0xdead_beef,
             data: Data::default(),
         };
         let recipient_keys = test_private_account_keys_2();
@@ -2143,7 +2156,7 @@ pub mod tests {
             &sender_private_account,
             &recipient_keys,
             balance_to_move,
-            [0xcafecafe, 0xfecafeca],
+            [0xcafe_cafe, 0xfeca_feca],
             &state,
         );
 
@@ -2154,7 +2167,7 @@ pub mod tests {
         let sender_private_account = Account {
             program_owner: Program::authenticated_transfer_program().id(),
             balance: 100 - balance_to_move,
-            nonce: 0xcafecafe,
+            nonce: 0xcafe_cafe,
             data: Data::default(),
         };
 
@@ -2199,7 +2212,7 @@ pub mod tests {
             vec![private_account_1.clone(), private_account_1],
             Program::serialize_instruction(100u128).unwrap(),
             visibility_mask.to_vec(),
-            vec![0xdeadbeef1, 0xdeadbeef2],
+            vec![0xdead_beef1, 0xdead_beef2],
             vec![
                 (sender_keys.npk(), shared_secret),
                 (sender_keys.npk(), shared_secret),
@@ -2308,7 +2321,8 @@ pub mod tests {
         let instruction: (u128, ProgramId, u32, Option<PdaSeed>) = (
             amount,
             Program::authenticated_transfer_program().id(),
-            MAX_NUMBER_CHAINED_CALLS as u32 + 1,
+            u32::try_from(MAX_NUMBER_CHAINED_CALLS).expect("MAX_NUMBER_CHAINED_CALLS fits in u32")
+                + 1,
             None,
         );
 
@@ -3829,18 +3843,18 @@ pub mod tests {
         dependencies.insert(auth_transfers.id(), auth_transfers);
         let program_with_deps = ProgramWithDependencies::new(chain_caller, dependencies);
 
-        let from_new_nonce = 0xdeadbeef1;
-        let to_new_nonce = 0xdeadbeef2;
+        let from_new_nonce = 0xdead_beef1;
+        let to_new_nonce = 0xdead_beef2;
 
         let from_expected_post = Account {
-            balance: initial_balance - number_of_calls as u128 * amount,
+            balance: initial_balance - u128::from(number_of_calls) * amount,
             nonce: from_new_nonce,
             ..from_account.account.clone()
         };
         let from_expected_commitment = Commitment::new(&from_keys.npk(), &from_expected_post);
 
         let to_expected_post = Account {
-            balance: number_of_calls as u128 * amount,
+            balance: u128::from(number_of_calls) * amount,
             nonce: to_new_nonce,
             ..to_account.account.clone()
         };
@@ -3948,7 +3962,7 @@ pub mod tests {
         state.transition_from_public_transaction(&tx).unwrap();
 
         // Submit a solution to the pinata program to claim the prize
-        let solution: u128 = 989106;
+        let solution: u128 = 989_106;
         let message = public_transaction::Message::try_new(
             pinata_token.id(),
             vec![
@@ -3994,7 +4008,7 @@ pub mod tests {
 
         let result = state.transition_from_public_transaction(&tx);
 
-        assert!(matches!(result, Err(NssaError::InvalidProgramBehavior)))
+        assert!(matches!(result, Err(NssaError::InvalidProgramBehavior)));
     }
 
     /// This test ensures that even if a malicious program tries to perform overflow of balances
@@ -4083,7 +4097,7 @@ pub mod tests {
         // Balance to initialize the account with (0 for a new account)
         let balance: u128 = 0;
 
-        let nonce = 0xdeadbeef1;
+        let nonce = 0xdead_beef1;
 
         // Execute and prove the circuit with the authorized account but no commitment proof
         let (output, proof) = execute_and_prove(
@@ -4136,7 +4150,7 @@ pub mod tests {
         let epk = EphemeralPublicKey::from_scalar(esk);
 
         let balance: u128 = 0;
-        let nonce = 0xdeadbeef1;
+        let nonce = 0xdead_beef1;
 
         // Step 2: Execute claimer program to claim the account with authentication
         let (output, proof) = execute_and_prove(
@@ -4184,7 +4198,7 @@ pub mod tests {
         let esk2 = [4; 32];
         let shared_secret2 = SharedSecretKey::new(&esk2, &private_keys.vpk());
 
-        let nonce2 = 0xdeadbeef2;
+        let nonce2 = 0xdead_beef2;
 
         // Step 3: Try to execute noop program with authentication but without initialization
         let res = execute_and_prove(
@@ -4341,7 +4355,7 @@ pub mod tests {
         dependencies.insert(auth_transfers.id(), auth_transfers);
         let program_with_deps = ProgramWithDependencies::new(malicious_program, dependencies);
 
-        let recipient_new_nonce = 0xdeadbeef1;
+        let recipient_new_nonce = 0xdead_beef1;
 
         // Act - execute the malicious program - this should fail during proving
         let result = execute_and_prove(

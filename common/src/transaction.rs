@@ -13,6 +13,7 @@ pub enum NSSATransaction {
 }
 
 impl NSSATransaction {
+    #[must_use]
     pub fn hash(&self) -> HashType {
         HashType(match self {
             NSSATransaction::Public(tx) => tx.hash(),
@@ -21,6 +22,7 @@ impl NSSATransaction {
         })
     }
 
+    #[must_use]
     pub fn affected_public_account_ids(&self) -> Vec<AccountId> {
         match self {
             NSSATransaction::ProgramDeployment(tx) => tx.affected_public_account_ids(),

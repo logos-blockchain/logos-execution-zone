@@ -26,10 +26,10 @@ async fn main() -> Result<()> {
     let indexer_handle = indexer_service::run_server(config, port).await?;
 
     tokio::select! {
-        _ = cancellation_token.cancelled() => {
+        () = cancellation_token.cancelled() => {
             info!("Shutting down server...");
         }
-        _ = indexer_handle.stopped() => {
+        () = indexer_handle.stopped() => {
             error!("Server stopped unexpectedly");
         }
     }

@@ -20,8 +20,8 @@ pub struct EncryptedAccountData {
 impl EncryptedAccountData {
     fn new(
         ciphertext: Ciphertext,
-        npk: NullifierPublicKey,
-        vpk: ViewingPublicKey,
+        npk: &NullifierPublicKey,
+        vpk: &ViewingPublicKey,
         epk: EphemeralPublicKey,
     ) -> Self {
         let view_tag = Self::compute_view_tag(npk, vpk);
@@ -33,7 +33,8 @@ impl EncryptedAccountData {
     }
 
     /// Computes the tag as the first byte of SHA256("/NSSA/v0.2/ViewTag/" || Npk || vpk)
-    pub fn compute_view_tag(npk: NullifierPublicKey, vpk: ViewingPublicKey) -> ViewTag {
+    #[must_use]
+    pub fn compute_view_tag(npk: &NullifierPublicKey, vpk: &ViewingPublicKey) -> ViewTag {
         let mut hasher = Sha256::new();
         hasher.update(b"/NSSA/v0.2/ViewTag/");
         hasher.update(npk.to_byte_array());
@@ -71,7 +72,7 @@ impl Message {
             .into_iter()
             .zip(public_keys)
             .map(|(ciphertext, (npk, vpk, epk))| {
-                EncryptedAccountData::new(ciphertext, npk, vpk, epk)
+                EncryptedAccountData::new(ciphertext, &npk, &vpk, epk)
             })
             .collect();
         Ok(Self {
@@ -99,6 +100,7 @@ pub mod tests {
         privacy_preserving_transaction::message::{EncryptedAccountData, Message},
     };
 
+    #[must_use]
     pub fn message_for_tests() -> Message {
         let account1 = Account::default();
         let account2 = Account::default();
@@ -146,7 +148,7 @@ pub mod tests {
         let epk = EphemeralPublicKey::from_scalar(esk);
         let ciphertext = EncryptionScheme::encrypt(&account, &shared_secret, &commitment, 2);
         let encrypted_account_data =
-            EncryptedAccountData::new(ciphertext.clone(), npk.clone(), vpk.clone(), epk.clone());
+            EncryptedAccountData::new(ciphertext.clone(), &npk, &vpk, epk.clone());
 
         let expected_view_tag = {
             let mut hasher = Sha256::new();
@@ -161,7 +163,7 @@ pub mod tests {
         assert_eq!(encrypted_account_data.epk, epk);
         assert_eq!(
             encrypted_account_data.view_tag,
-            EncryptedAccountData::compute_view_tag(npk, vpk)
+            EncryptedAccountData::compute_view_tag(&npk, &vpk)
         );
         assert_eq!(encrypted_account_data.view_tag, expected_view_tag);
     }

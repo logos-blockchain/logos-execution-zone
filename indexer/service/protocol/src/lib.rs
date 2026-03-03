@@ -141,6 +141,7 @@ pub enum Transaction {
 
 impl Transaction {
     /// Get the hash of the transaction
+    #[must_use]
     pub fn hash(&self) -> &self::HashType {
         match self {
             Transaction::Public(tx) => &tx.hash,
@@ -308,7 +309,7 @@ mod base64 {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
     pub mod arr {
-        use super::*;
+        use super::{Deserializer, Serializer};
 
         pub fn serialize<S: Serializer>(v: &[u8], s: S) -> Result<S::Ok, S::Error> {
             super::serialize(v, s)

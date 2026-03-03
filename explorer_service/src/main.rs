@@ -8,8 +8,6 @@ async fn main() {
     use leptos_axum::{LeptosRoutes, generate_route_list};
     use leptos_meta::MetaTags;
 
-    env_logger::init();
-
     /// LEZ Block Explorer Server CLI arguments.
     #[derive(Parser, Debug)]
     #[command(version, about, long_about = None)]
@@ -18,6 +16,8 @@ async fn main() {
         #[arg(long, env = "INDEXER_RPC_URL", default_value = "http://localhost:8779")]
         indexer_rpc_url: url::Url,
     }
+
+    env_logger::init();
 
     let args = Args::parse();
 

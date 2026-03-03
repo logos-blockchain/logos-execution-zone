@@ -71,6 +71,7 @@ pub enum PersistentAccountData {
 pub struct Label(String);
 
 impl Label {
+    #[must_use]
     pub fn new(label: String) -> Self {
         Self(label)
     }
@@ -112,6 +113,7 @@ impl PersistentStorage {
 }
 
 impl InitialAccountData {
+    #[must_use]
     pub fn account_id(&self) -> nssa::AccountId {
         match &self {
             Self::Public(acc) => acc.account_id,
@@ -121,6 +123,7 @@ impl InitialAccountData {
 }
 
 impl PersistentAccountData {
+    #[must_use]
     pub fn account_id(&self) -> nssa::AccountId {
         match &self {
             Self::Public(acc) => acc.account_id,
@@ -513,12 +516,13 @@ impl WalletConfig {
 
                 let config_home = config_path.parent().ok_or_else(|| {
                     anyhow::anyhow!(
-                        "Could not get parent directory of config file at {config_path:#?}"
+                        "Could not get parent directory of config file at {}",
+                        config_path.display()
                     )
                 })?;
                 std::fs::create_dir_all(config_home)?;
 
-                println!("Created configs dir at path {config_home:#?}");
+                println!("Created configs dir at path {}", config_home.display());
 
                 let mut file = std::fs::OpenOptions::new()
                     .write(true)

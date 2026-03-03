@@ -159,7 +159,7 @@ impl WalletSubcommand for NewSubcommand {
     }
 }
 
-/// Formats account details for display, returning (description, json_view)
+/// Formats account details for display, returning (description, `json_view`)
 fn format_account_details(account: &Account) -> (String, String) {
     let auth_tr_prog_id = Program::authenticated_transfer_program().id();
     let token_prog_id = Program::token().id();
@@ -381,7 +381,7 @@ impl WalletSubcommand for AccountSubcommand {
                 }
 
                 // Public key tree accounts
-                for (id, chain_index) in user_data.public_key_tree.account_id_map.iter() {
+                for (id, chain_index) in &user_data.public_key_tree.account_id_map {
                     println!(
                         "{}",
                         format_with_label(&format!("{chain_index} Public/{id}"), *id)
@@ -398,7 +398,7 @@ impl WalletSubcommand for AccountSubcommand {
                 }
 
                 // Private key tree accounts
-                for (id, chain_index) in user_data.private_key_tree.account_id_map.iter() {
+                for (id, chain_index) in &user_data.private_key_tree.account_id_map {
                     println!(
                         "{}",
                         format_with_label(&format!("{chain_index} Private/{id}"), *id)

@@ -14,6 +14,7 @@ use crate::{SharedSecretKey, encryption::Scalar};
 pub struct Secp256k1Point(pub Vec<u8>);
 
 impl Secp256k1Point {
+    #[must_use]
     pub fn from_scalar(value: Scalar) -> Secp256k1Point {
         let x_bytes: FieldBytes = value.into();
         let x = k256::Scalar::from_repr(x_bytes).unwrap();
@@ -36,6 +37,8 @@ impl From<&EphemeralSecretKey> for EphemeralPublicKey {
 }
 
 impl SharedSecretKey {
+    /// Creates a new shared secret key from a scalar and a point.
+    #[must_use]
     pub fn new(scalar: &Scalar, point: &Secp256k1Point) -> Self {
         let scalar = k256::Scalar::from_repr((*scalar).into()).unwrap();
         let point: [u8; 33] = point.0.clone().try_into().unwrap();
