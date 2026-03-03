@@ -141,3 +141,9 @@ inherits = "release"
 opt-level = 'z'
 lto = true
 codegen-units = 1
+
+[workspace.lints.rust]
+warnings = "deny"
+
+[workspace.lints]
+clippy.all = "deny"
