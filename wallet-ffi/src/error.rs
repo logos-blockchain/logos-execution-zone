@@ -54,6 +54,10 @@ impl WalletFfiError {
 }
 
 /// Log an error message to stderr.
+#[expect(
+    clippy::print_stderr,
+    reason = "In FFI context it's better to print errors than to return strings"
+)]
 pub fn print_error(msg: impl Into<String>) {
     eprintln!("[wallet-ffi] {}", msg.into());
 }

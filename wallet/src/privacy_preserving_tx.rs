@@ -69,7 +69,7 @@ impl AccountManager {
                     let acc = wallet
                         .get_account_public(account_id)
                         .await
-                        .map_err(|_| ExecutionFailureKind::KeyNotFoundError)?;
+                        .map_err(ExecutionFailureKind::SequencerError)?;
 
                     let sk = wallet.get_account_public_signing_key(account_id).cloned();
                     let account = AccountWithMetadata::new(acc.clone(), sk.is_some(), account_id);

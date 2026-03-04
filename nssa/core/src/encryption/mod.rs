@@ -1,18 +1,16 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use chacha20::{
     ChaCha20,
-    cipher::{KeyIvInit, StreamCipher},
+    cipher::{KeyIvInit as _, StreamCipher as _},
 };
-use risc0_zkvm::sha::{Impl, Sha256};
+use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde::{Deserialize, Serialize};
-
-#[cfg(feature = "host")]
-pub mod shared_key_derivation;
-
 #[cfg(feature = "host")]
 pub use shared_key_derivation::{EphemeralPublicKey, EphemeralSecretKey, ViewingPublicKey};
 
 use crate::{Commitment, account::Account};
+#[cfg(feature = "host")]
+pub mod shared_key_derivation;
 
 pub type Scalar = [u8; 32];
 
@@ -65,6 +63,10 @@ impl EncryptionScheme {
     }
 
     #[cfg(feature = "host")]
+    #[expect(
+        clippy::print_stdout,
+        reason = "This is the current way to debug things. TODO: fix later"
+    )]
     #[must_use]
     pub fn decrypt(
         ciphertext: &Ciphertext,

@@ -2,7 +2,7 @@
 #[cfg(feature = "host")]
 use std::io::Cursor;
 #[cfg(feature = "host")]
-use std::io::Read;
+use std::io::Read as _;
 
 #[cfg(feature = "host")]
 use crate::Nullifier;
@@ -37,11 +37,11 @@ impl Account {
     pub fn from_cursor(cursor: &mut Cursor<&[u8]>) -> Result<Self, NssaCoreError> {
         use crate::account::data::Data;
 
-        let mut u32_bytes = [0u8; 4];
-        let mut u128_bytes = [0u8; 16];
+        let mut u32_bytes = [0_u8; 4];
+        let mut u128_bytes = [0_u8; 16];
 
         // program owner
-        let mut program_owner = [0u32; 8];
+        let mut program_owner = [0_u32; 8];
         for word in &mut program_owner {
             cursor.read_exact(&mut u32_bytes)?;
             *word = u32::from_le_bytes(u32_bytes);
@@ -82,7 +82,7 @@ impl Commitment {
     /// Deserializes a commitment from a cursor.
     #[cfg(feature = "host")]
     pub fn from_cursor(cursor: &mut Cursor<&[u8]>) -> Result<Self, NssaCoreError> {
-        let mut bytes = [0u8; 32];
+        let mut bytes = [0_u8; 32];
         cursor.read_exact(&mut bytes)?;
         Ok(Self(bytes))
     }
@@ -110,7 +110,7 @@ impl Nullifier {
 
     /// Deserializes a nullifier from a cursor.
     pub fn from_cursor(cursor: &mut Cursor<&[u8]>) -> Result<Self, NssaCoreError> {
-        let mut bytes = [0u8; 32];
+        let mut bytes = [0_u8; 32];
         cursor.read_exact(&mut bytes)?;
         Ok(Self(bytes))
     }
@@ -148,7 +148,9 @@ impl Ciphertext {
 
         cursor.read_exact(&mut u32_bytes)?;
         let ciphertext_lenght = u32::from_le_bytes(u32_bytes);
-        let mut ciphertext = vec![0; ciphertext_lenght as usize];
+        let ciphertext_length =
+            usize::try_from(ciphertext_lenght).expect("ciphertext length fits in usize");
+        let mut ciphertext = vec![0; ciphertext_length];
         cursor.read_exact(&mut ciphertext)?;
 
         Ok(Self(ciphertext))
@@ -183,7 +185,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_enconding() {
+    fn enconding() {
         let account = Account {
             program_owner: [1, 2, 3, 4, 5, 6, 7, 8],
             balance: 123_456_789_012_345_678_901_234_567_890_123_456,
@@ -204,7 +206,7 @@ mod tests {
     }
 
     #[test]
-    fn test_commitment_to_bytes() {
+    fn commitment_to_bytes() {
         let commitment = Commitment((0..32).collect::<Vec<u8>>().try_into().unwrap());
         let expected_bytes: [u8; 32] = (0..32).collect::<Vec<u8>>().try_into().unwrap();
 
@@ -214,7 +216,7 @@ mod tests {
 
     #[cfg(feature = "host")]
     #[test]
-    fn test_nullifier_to_bytes() {
+    fn nullifier_to_bytes() {
         let nullifier = Nullifier((0..32).collect::<Vec<u8>>().try_into().unwrap());
         let expected_bytes: [u8; 32] = (0..32).collect::<Vec<u8>>().try_into().unwrap();
 
@@ -224,7 +226,7 @@ mod tests {
 
     #[cfg(feature = "host")]
     #[test]
-    fn test_commitment_to_bytes_roundtrip() {
+    fn commitment_to_bytes_roundtrip() {
         let commitment = Commitment((0..32).collect::<Vec<u8>>().try_into().unwrap());
         let bytes = commitment.to_byte_array();
         let mut cursor = Cursor::new(bytes.as_ref());
@@ -234,7 +236,7 @@ mod tests {
 
     #[cfg(feature = "host")]
     #[test]
-    fn test_nullifier_to_bytes_roundtrip() {
+    fn nullifier_to_bytes_roundtrip() {
         let nullifier = Nullifier((0..32).collect::<Vec<u8>>().try_into().unwrap());
         let bytes = nullifier.to_byte_array();
         let mut cursor = Cursor::new(bytes.as_ref());
@@ -244,7 +246,7 @@ mod tests {
 
     #[cfg(feature = "host")]
     #[test]
-    fn test_account_to_bytes_roundtrip() {
+    fn account_to_bytes_roundtrip() {
         let account = Account {
             program_owner: [1, 2, 3, 4, 5, 6, 7, 8],
             balance: 123_456_789_012_345_678_901_234_567_890_123_456,

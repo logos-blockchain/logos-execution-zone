@@ -4,7 +4,7 @@ use nssa_core::{
     account::{Account, Nonce},
     encryption::{Ciphertext, EphemeralPublicKey, ViewingPublicKey},
 };
-use sha2::{Digest, Sha256};
+use sha2::{Digest as _, Sha256};
 
 use crate::{AccountId, error::NssaError};
 
@@ -93,7 +93,7 @@ pub mod tests {
         account::Account,
         encryption::{EphemeralPublicKey, ViewingPublicKey},
     };
-    use sha2::{Digest, Sha256};
+    use sha2::{Digest as _, Sha256};
 
     use crate::{
         AccountId,
@@ -138,7 +138,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_encrypted_account_data_constructor() {
+    fn encrypted_account_data_constructor() {
         let npk = NullifierPublicKey::from(&[1; 32]);
         let vpk = ViewingPublicKey::from_scalar([2; 32]);
         let account = Account::default();

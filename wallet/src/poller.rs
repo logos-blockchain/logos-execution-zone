@@ -36,7 +36,7 @@ impl TxPoller {
         for poll_id in 1..max_blocks_to_query {
             info!("Poll {poll_id}");
 
-            let mut try_error_counter = 0;
+            let mut try_error_counter = 0_u64;
 
             let tx_obj = loop {
                 let tx_obj = self
@@ -50,7 +50,9 @@ impl TxPoller {
                 if let Ok(tx_obj) = tx_obj {
                     break tx_obj;
                 }
-                try_error_counter += 1;
+                try_error_counter = try_error_counter
+                    .checked_add(1)
+                    .expect("We check error counter in this loop");
 
                 if try_error_counter > self.polling_max_error_attempts {
                     anyhow::bail!("Number of retries exceeded");
@@ -75,7 +77,7 @@ impl TxPoller {
             let mut chunk_start = *range.start();
 
             loop {
-                let chunk_end = std::cmp::min(chunk_start + self.block_poll_max_amount - 1, *range.end());
+                let chunk_end = std::cmp::min(chunk_start.saturating_add(self.block_poll_max_amount).saturating_sub(1), *range.end());
 
                 let blocks = self.client.get_block_range(chunk_start..=chunk_end).await?.blocks;
                 for block in blocks {
@@ -83,7 +85,7 @@ impl TxPoller {
                     yield Ok(block);
                 }
 
-                chunk_start = chunk_end + 1;
+                chunk_start = chunk_end.saturating_add(1);
                 if chunk_start > *range.end() {
                     break;
                 }

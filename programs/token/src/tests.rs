@@ -1,4 +1,9 @@
 #![cfg(test)]
+#![expect(
+    clippy::shadow_unrelated,
+    clippy::arithmetic_side_effects,
+    reason = "We don't care about it in tests"
+)]
 
 use nssa_core::account::{Account, AccountId, AccountWithMetadata, Data};
 use token_core::{
@@ -25,8 +30,8 @@ impl AccountForTests {
     fn definition_account_auth() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [5u32; 8],
-                balance: 0u128,
+                program_owner: [5_u32; 8],
+                balance: 0_u128,
                 data: Data::from(&TokenDefinition::Fungible {
                     name: String::from("test"),
                     total_supply: BalanceForTests::init_supply(),
@@ -42,8 +47,8 @@ impl AccountForTests {
     fn definition_account_without_auth() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [5u32; 8],
-                balance: 0u128,
+                program_owner: [5_u32; 8],
+                balance: 0_u128,
                 data: Data::from(&TokenDefinition::Fungible {
                     name: String::from("test"),
                     total_supply: BalanceForTests::init_supply(),
@@ -59,8 +64,8 @@ impl AccountForTests {
     fn holding_different_definition() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [5u32; 8],
-                balance: 0u128,
+                program_owner: [5_u32; 8],
+                balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::pool_definition_id_diff(),
                     balance: BalanceForTests::holding_balance(),
@@ -75,8 +80,8 @@ impl AccountForTests {
     fn holding_same_definition_with_authorization() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [5u32; 8],
-                balance: 0u128,
+                program_owner: [5_u32; 8],
+                balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::pool_definition_id(),
                     balance: BalanceForTests::holding_balance(),
@@ -91,8 +96,8 @@ impl AccountForTests {
     fn holding_same_definition_without_authorization() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [5u32; 8],
-                balance: 0u128,
+                program_owner: [5_u32; 8],
+                balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::pool_definition_id(),
                     balance: BalanceForTests::holding_balance(),
@@ -107,8 +112,8 @@ impl AccountForTests {
     fn holding_same_definition_without_authorization_overflow() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [5u32; 8],
-                balance: 0u128,
+                program_owner: [5_u32; 8],
+                balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::pool_definition_id(),
                     balance: BalanceForTests::init_supply(),
@@ -123,8 +128,8 @@ impl AccountForTests {
     fn definition_account_post_burn() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [5u32; 8],
-                balance: 0u128,
+                program_owner: [5_u32; 8],
+                balance: 0_u128,
                 data: Data::from(&TokenDefinition::Fungible {
                     name: String::from("test"),
                     total_supply: BalanceForTests::init_supply_burned(),
@@ -140,8 +145,8 @@ impl AccountForTests {
     fn holding_account_post_burn() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [5u32; 8],
-                balance: 0u128,
+                program_owner: [5_u32; 8],
+                balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::pool_definition_id(),
                     balance: BalanceForTests::holding_balance_burned(),
@@ -164,8 +169,8 @@ impl AccountForTests {
     fn init_mint() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [0u32; 8],
-                balance: 0u128,
+                program_owner: [0_u32; 8],
+                balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::pool_definition_id(),
                     balance: BalanceForTests::mint_success(),
@@ -180,8 +185,8 @@ impl AccountForTests {
     fn holding_account_same_definition_mint() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [5u32; 8],
-                balance: 0u128,
+                program_owner: [5_u32; 8],
+                balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::pool_definition_id(),
                     balance: BalanceForTests::holding_balance_mint(),
@@ -196,8 +201,8 @@ impl AccountForTests {
     fn definition_account_mint() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [5u32; 8],
-                balance: 0u128,
+                program_owner: [5_u32; 8],
+                balance: 0_u128,
                 data: Data::from(&TokenDefinition::Fungible {
                     name: String::from("test"),
                     total_supply: BalanceForTests::init_supply_mint(),
@@ -213,8 +218,8 @@ impl AccountForTests {
     fn holding_same_definition_with_authorization_and_large_balance() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [5u32; 8],
-                balance: 0u128,
+                program_owner: [5_u32; 8],
+                balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::pool_definition_id(),
                     balance: BalanceForTests::mint_overflow(),
@@ -229,8 +234,8 @@ impl AccountForTests {
     fn definition_account_with_authorization_nonfungible() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [5u32; 8],
-                balance: 0u128,
+                program_owner: [5_u32; 8],
+                balance: 0_u128,
                 data: Data::from(&TokenDefinition::NonFungible {
                     name: String::from("test"),
                     printable_supply: BalanceForTests::printable_copies(),
@@ -254,8 +259,8 @@ impl AccountForTests {
     fn holding_account_init() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [5u32; 8],
-                balance: 0u128,
+                program_owner: [5_u32; 8],
+                balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::pool_definition_id(),
                     balance: BalanceForTests::init_supply(),
@@ -270,8 +275,8 @@ impl AccountForTests {
     fn definition_account_unclaimed() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [0u32; 8],
-                balance: 0u128,
+                program_owner: [0_u32; 8],
+                balance: 0_u128,
                 data: Data::from(&TokenDefinition::Fungible {
                     name: String::from("test"),
                     total_supply: BalanceForTests::init_supply(),
@@ -287,8 +292,8 @@ impl AccountForTests {
     fn holding_account_unclaimed() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [0u32; 8],
-                balance: 0u128,
+                program_owner: [0_u32; 8],
+                balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::pool_definition_id(),
                     balance: BalanceForTests::init_supply(),
@@ -303,8 +308,8 @@ impl AccountForTests {
     fn holding_account2_init() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [5u32; 8],
-                balance: 0u128,
+                program_owner: [5_u32; 8],
+                balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::pool_definition_id(),
                     balance: BalanceForTests::init_supply(),
@@ -319,8 +324,8 @@ impl AccountForTests {
     fn holding_account2_init_post_transfer() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [5u32; 8],
-                balance: 0u128,
+                program_owner: [5_u32; 8],
+                balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::pool_definition_id(),
                     balance: BalanceForTests::recipient_post_transfer(),
@@ -335,8 +340,8 @@ impl AccountForTests {
     fn holding_account_init_post_transfer() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [5u32; 8],
-                balance: 0u128,
+                program_owner: [5_u32; 8],
+                balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::pool_definition_id(),
                     balance: BalanceForTests::sender_post_transfer(),
@@ -351,8 +356,8 @@ impl AccountForTests {
     fn holding_account_master_nft() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [5u32; 8],
-                balance: 0u128,
+                program_owner: [5_u32; 8],
+                balance: 0_u128,
                 data: Data::from(&TokenHolding::NftMaster {
                     definition_id: IdForTests::pool_definition_id(),
                     print_balance: BalanceForTests::printable_copies(),
@@ -367,8 +372,8 @@ impl AccountForTests {
     fn holding_account_master_nft_insufficient_balance() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [5u32; 8],
-                balance: 0u128,
+                program_owner: [5_u32; 8],
+                balance: 0_u128,
                 data: Data::from(&TokenHolding::NftMaster {
                     definition_id: IdForTests::pool_definition_id(),
                     print_balance: 1,
@@ -383,8 +388,8 @@ impl AccountForTests {
     fn holding_account_master_nft_after_print() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [5u32; 8],
-                balance: 0u128,
+                program_owner: [5_u32; 8],
+                balance: 0_u128,
                 data: Data::from(&TokenHolding::NftMaster {
                     definition_id: IdForTests::pool_definition_id(),
                     print_balance: BalanceForTests::printable_copies() - 1,
@@ -399,8 +404,8 @@ impl AccountForTests {
     fn holding_account_printed_nft() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [0u32; 8],
-                balance: 0u128,
+                program_owner: [0_u32; 8],
+                balance: 0_u128,
                 data: Data::from(&TokenHolding::NftPrintedCopy {
                     definition_id: IdForTests::pool_definition_id(),
                     owned: true,
@@ -415,8 +420,8 @@ impl AccountForTests {
     fn holding_account_with_master_nft_transferred_to() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [0u32; 8],
-                balance: 0u128,
+                program_owner: [0_u32; 8],
+                balance: 0_u128,
                 data: Data::from(&TokenHolding::NftMaster {
                     definition_id: IdForTests::pool_definition_id(),
                     print_balance: BalanceForTests::printable_copies(),
@@ -431,8 +436,8 @@ impl AccountForTests {
     fn holding_account_master_nft_post_transfer() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [5u32; 8],
-                balance: 0u128,
+                program_owner: [5_u32; 8],
+                balance: 0_u128,
                 data: Data::from(&TokenHolding::NftMaster {
                     definition_id: IdForTests::pool_definition_id(),
                     print_balance: 0,
@@ -523,7 +528,7 @@ impl IdForTests {
 
 #[should_panic(expected = "Definition target account must have default values")]
 #[test]
-fn test_new_definition_non_default_first_account_should_fail() {
+fn new_definition_non_default_first_account_should_fail() {
     let definition_account = AccountWithMetadata {
         account: Account {
             program_owner: [1, 2, 3, 4, 5, 6, 7, 8],
@@ -547,7 +552,7 @@ fn test_new_definition_non_default_first_account_should_fail() {
 
 #[should_panic(expected = "Holding target account must have default values")]
 #[test]
-fn test_new_definition_non_default_second_account_should_fail() {
+fn new_definition_non_default_second_account_should_fail() {
     let definition_account = AccountWithMetadata {
         account: Account::default(),
         is_authorized: true,
@@ -570,7 +575,7 @@ fn test_new_definition_non_default_second_account_should_fail() {
 }
 
 #[test]
-fn test_new_definition_with_valid_inputs_succeeds() {
+fn new_definition_with_valid_inputs_succeeds() {
     let definition_account = AccountForTests::definition_account_uninit();
     let holding_account = AccountForTests::holding_account_uninit();
 
@@ -595,7 +600,7 @@ fn test_new_definition_with_valid_inputs_succeeds() {
 
 #[should_panic(expected = "Sender and recipient definition id mismatch")]
 #[test]
-fn test_transfer_with_different_definition_ids_should_fail() {
+fn transfer_with_different_definition_ids_should_fail() {
     let sender = AccountForTests::holding_same_definition_with_authorization();
     let recipient = AccountForTests::holding_different_definition();
     let _post_states = transfer(sender, recipient, 10);
@@ -603,7 +608,7 @@ fn test_transfer_with_different_definition_ids_should_fail() {
 
 #[should_panic(expected = "Insufficient balance")]
 #[test]
-fn test_transfer_with_insufficient_balance_should_fail() {
+fn transfer_with_insufficient_balance_should_fail() {
     let sender = AccountForTests::holding_same_definition_with_authorization();
     let recipient = AccountForTests::holding_account_same_definition_mint();
     // Attempt to transfer more than balance
@@ -612,14 +617,14 @@ fn test_transfer_with_insufficient_balance_should_fail() {
 
 #[should_panic(expected = "Sender authorization is missing")]
 #[test]
-fn test_transfer_without_sender_authorization_should_fail() {
+fn transfer_without_sender_authorization_should_fail() {
     let sender = AccountForTests::holding_same_definition_without_authorization();
     let recipient = AccountForTests::holding_account_uninit();
     let _post_states = transfer(sender, recipient, 37);
 }
 
 #[test]
-fn test_transfer_with_valid_inputs_succeeds() {
+fn transfer_with_valid_inputs_succeeds() {
     let sender = AccountForTests::holding_account_init();
     let recipient = AccountForTests::holding_account2_init();
     let post_states = transfer(sender, recipient, BalanceForTests::transfer_amount());
@@ -637,7 +642,7 @@ fn test_transfer_with_valid_inputs_succeeds() {
 
 #[should_panic(expected = "Invalid balance for NFT Master transfer")]
 #[test]
-fn test_transfer_with_master_nft_invalid_balance() {
+fn transfer_with_master_nft_invalid_balance() {
     let sender = AccountForTests::holding_account_master_nft();
     let recipient = AccountForTests::holding_account_uninit();
     let _post_states = transfer(sender, recipient, BalanceForTests::transfer_amount());
@@ -645,14 +650,14 @@ fn test_transfer_with_master_nft_invalid_balance() {
 
 #[should_panic(expected = "Invalid balance in recipient account for NFT transfer")]
 #[test]
-fn test_transfer_with_master_nft_invalid_recipient_balance() {
+fn transfer_with_master_nft_invalid_recipient_balance() {
     let sender = AccountForTests::holding_account_master_nft();
     let recipient = AccountForTests::holding_account_with_master_nft_transferred_to();
     let _post_states = transfer(sender, recipient, BalanceForTests::printable_copies());
 }
 
 #[test]
-fn test_transfer_with_master_nft_success() {
+fn transfer_with_master_nft_success() {
     let sender = AccountForTests::holding_account_master_nft();
     let recipient = AccountForTests::holding_account_uninit();
     let post_states = transfer(sender, recipient, BalanceForTests::printable_copies());
@@ -669,7 +674,7 @@ fn test_transfer_with_master_nft_success() {
 }
 
 #[test]
-fn test_token_initialize_account_succeeds() {
+fn token_initialize_account_succeeds() {
     let sender = AccountForTests::holding_account_init();
     let recipient = AccountForTests::holding_account2_init();
     let post_states = transfer(sender, recipient, BalanceForTests::transfer_amount());
@@ -687,7 +692,7 @@ fn test_token_initialize_account_succeeds() {
 
 #[test]
 #[should_panic(expected = "Mismatch Token Definition and Token Holding")]
-fn test_burn_mismatch_def() {
+fn burn_mismatch_def() {
     let definition_account = AccountForTests::definition_account_auth();
     let holding_account = AccountForTests::holding_different_definition();
     let _post_states = burn(
@@ -699,7 +704,7 @@ fn test_burn_mismatch_def() {
 
 #[test]
 #[should_panic(expected = "Authorization is missing")]
-fn test_burn_missing_authorization() {
+fn burn_missing_authorization() {
     let definition_account = AccountForTests::definition_account_auth();
     let holding_account = AccountForTests::holding_same_definition_without_authorization();
     let _post_states = burn(
@@ -711,7 +716,7 @@ fn test_burn_missing_authorization() {
 
 #[test]
 #[should_panic(expected = "Insufficient balance to burn")]
-fn test_burn_insufficient_balance() {
+fn burn_insufficient_balance() {
     let definition_account = AccountForTests::definition_account_auth();
     let holding_account = AccountForTests::holding_same_definition_with_authorization();
     let _post_states = burn(
@@ -723,7 +728,7 @@ fn test_burn_insufficient_balance() {
 
 #[test]
 #[should_panic(expected = "Total supply underflow")]
-fn test_burn_total_supply_underflow() {
+fn burn_total_supply_underflow() {
     let definition_account = AccountForTests::definition_account_auth();
     let holding_account =
         AccountForTests::holding_same_definition_with_authorization_and_large_balance();
@@ -735,7 +740,7 @@ fn test_burn_total_supply_underflow() {
 }
 
 #[test]
-fn test_burn_success() {
+fn burn_success() {
     let definition_account = AccountForTests::definition_account_auth();
     let holding_account = AccountForTests::holding_same_definition_with_authorization();
     let post_states = burn(
@@ -758,7 +763,7 @@ fn test_burn_success() {
 
 #[test]
 #[should_panic(expected = "Holding account must be valid")]
-fn test_mint_not_valid_holding_account() {
+fn mint_not_valid_holding_account() {
     let definition_account = AccountForTests::definition_account_auth();
     let holding_account = AccountForTests::definition_account_without_auth();
     let _post_states = mint(
@@ -770,7 +775,7 @@ fn test_mint_not_valid_holding_account() {
 
 #[test]
 #[should_panic(expected = "Definition account must be valid")]
-fn test_mint_not_valid_definition_account() {
+fn mint_not_valid_definition_account() {
     let definition_account = AccountForTests::holding_same_definition_with_authorization();
     let holding_account = AccountForTests::holding_same_definition_without_authorization();
     let _post_states = mint(
@@ -782,7 +787,7 @@ fn test_mint_not_valid_definition_account() {
 
 #[test]
 #[should_panic(expected = "Definition authorization is missing")]
-fn test_mint_missing_authorization() {
+fn mint_missing_authorization() {
     let definition_account = AccountForTests::definition_account_without_auth();
     let holding_account = AccountForTests::holding_same_definition_without_authorization();
     let _post_states = mint(
@@ -794,7 +799,7 @@ fn test_mint_missing_authorization() {
 
 #[test]
 #[should_panic(expected = "Mismatch Token Definition and Token Holding")]
-fn test_mint_mismatched_token_definition() {
+fn mint_mismatched_token_definition() {
     let definition_account = AccountForTests::definition_account_auth();
     let holding_account = AccountForTests::holding_different_definition();
     let _post_states = mint(
@@ -805,7 +810,7 @@ fn test_mint_mismatched_token_definition() {
 }
 
 #[test]
-fn test_mint_success() {
+fn mint_success() {
     let definition_account = AccountForTests::definition_account_auth();
     let holding_account = AccountForTests::holding_same_definition_without_authorization();
     let post_states = mint(
@@ -827,7 +832,7 @@ fn test_mint_success() {
 }
 
 #[test]
-fn test_mint_uninit_holding_success() {
+fn mint_uninit_holding_success() {
     let definition_account = AccountForTests::definition_account_auth();
     let holding_account = AccountForTests::holding_account_uninit();
     let post_states = mint(
@@ -851,7 +856,7 @@ fn test_mint_uninit_holding_success() {
 
 #[test]
 #[should_panic(expected = "Total supply overflow")]
-fn test_mint_total_supply_overflow() {
+fn mint_total_supply_overflow() {
     let definition_account = AccountForTests::definition_account_auth();
     let holding_account = AccountForTests::holding_same_definition_without_authorization();
     let _post_states = mint(
@@ -863,7 +868,7 @@ fn test_mint_total_supply_overflow() {
 
 #[test]
 #[should_panic(expected = "Balance overflow on minting")]
-fn test_mint_holding_account_overflow() {
+fn mint_holding_account_overflow() {
     let definition_account = AccountForTests::definition_account_auth();
     let holding_account = AccountForTests::holding_same_definition_without_authorization_overflow();
     let _post_states = mint(
@@ -875,7 +880,7 @@ fn test_mint_holding_account_overflow() {
 
 #[test]
 #[should_panic(expected = "Cannot mint additional supply for Non-Fungible Tokens")]
-fn test_mint_cannot_mint_unmintable_tokens() {
+fn mint_cannot_mint_unmintable_tokens() {
     let definition_account = AccountForTests::definition_account_with_authorization_nonfungible();
     let holding_account = AccountForTests::holding_account_master_nft();
     let _post_states = mint(
@@ -887,7 +892,7 @@ fn test_mint_cannot_mint_unmintable_tokens() {
 
 #[should_panic(expected = "Definition target account must have default values")]
 #[test]
-fn test_call_new_definition_metadata_with_init_definition() {
+fn call_new_definition_metadata_with_init_definition() {
     let definition_account = AccountForTests::definition_account_auth();
     let metadata_account = AccountWithMetadata {
         account: Account::default(),
@@ -901,12 +906,12 @@ fn test_call_new_definition_metadata_with_init_definition() {
     };
     let new_definition = NewTokenDefinition::Fungible {
         name: String::from("test"),
-        total_supply: 15u128,
+        total_supply: 15_u128,
     };
     let metadata = NewTokenMetadata {
         standard: MetadataStandard::Simple,
-        uri: "test_uri".to_string(),
-        creators: "test_creators".to_string(),
+        uri: "test_uri".to_owned(),
+        creators: "test_creators".to_owned(),
     };
     let _post_states = new_definition_with_metadata(
         definition_account,
@@ -919,7 +924,7 @@ fn test_call_new_definition_metadata_with_init_definition() {
 
 #[should_panic(expected = "Metadata target account must have default values")]
 #[test]
-fn test_call_new_definition_metadata_with_init_metadata() {
+fn call_new_definition_metadata_with_init_metadata() {
     let definition_account = AccountWithMetadata {
         account: Account::default(),
         is_authorized: true,
@@ -933,12 +938,12 @@ fn test_call_new_definition_metadata_with_init_metadata() {
     let metadata_account = AccountForTests::holding_account_same_definition_mint();
     let new_definition = NewTokenDefinition::Fungible {
         name: String::from("test"),
-        total_supply: 15u128,
+        total_supply: 15_u128,
     };
     let metadata = NewTokenMetadata {
         standard: MetadataStandard::Simple,
-        uri: "test_uri".to_string(),
-        creators: "test_creators".to_string(),
+        uri: "test_uri".to_owned(),
+        creators: "test_creators".to_owned(),
     };
     let _post_states = new_definition_with_metadata(
         definition_account,
@@ -951,7 +956,7 @@ fn test_call_new_definition_metadata_with_init_metadata() {
 
 #[should_panic(expected = "Holding target account must have default values")]
 #[test]
-fn test_call_new_definition_metadata_with_init_holding() {
+fn call_new_definition_metadata_with_init_holding() {
     let definition_account = AccountWithMetadata {
         account: Account::default(),
         is_authorized: true,
@@ -965,12 +970,12 @@ fn test_call_new_definition_metadata_with_init_holding() {
     let holding_account = AccountForTests::holding_account_same_definition_mint();
     let new_definition = NewTokenDefinition::Fungible {
         name: String::from("test"),
-        total_supply: 15u128,
+        total_supply: 15_u128,
     };
     let metadata = NewTokenMetadata {
         standard: MetadataStandard::Simple,
-        uri: "test_uri".to_string(),
-        creators: "test_creators".to_string(),
+        uri: "test_uri".to_owned(),
+        creators: "test_creators".to_owned(),
     };
     let _post_states = new_definition_with_metadata(
         definition_account,
@@ -983,7 +988,7 @@ fn test_call_new_definition_metadata_with_init_holding() {
 
 #[should_panic(expected = "Master NFT Account must be authorized")]
 #[test]
-fn test_print_nft_master_account_must_be_authorized() {
+fn print_nft_master_account_must_be_authorized() {
     let master_account = AccountForTests::holding_account_uninit();
     let printed_account = AccountForTests::holding_account_uninit();
     let _post_states = print_nft(master_account, printed_account);
@@ -991,7 +996,7 @@ fn test_print_nft_master_account_must_be_authorized() {
 
 #[should_panic(expected = "Printed Account must be uninitialized")]
 #[test]
-fn test_print_nft_print_account_initialized() {
+fn print_nft_print_account_initialized() {
     let master_account = AccountForTests::holding_account_master_nft();
     let printed_account = AccountForTests::holding_account_init();
     let _post_states = print_nft(master_account, printed_account);
@@ -999,7 +1004,7 @@ fn test_print_nft_print_account_initialized() {
 
 #[should_panic(expected = "Invalid Token Holding data")]
 #[test]
-fn test_print_nft_master_nft_invalid_token_holding() {
+fn print_nft_master_nft_invalid_token_holding() {
     let master_account = AccountForTests::definition_account_auth();
     let printed_account = AccountForTests::holding_account_uninit();
     let _post_states = print_nft(master_account, printed_account);
@@ -1007,7 +1012,7 @@ fn test_print_nft_master_nft_invalid_token_holding() {
 
 #[should_panic(expected = "Invalid Token Holding provided as NFT Master Account")]
 #[test]
-fn test_print_nft_master_nft_not_nft_master_account() {
+fn print_nft_master_nft_not_nft_master_account() {
     let master_account = AccountForTests::holding_account_init();
     let printed_account = AccountForTests::holding_account_uninit();
     let _post_states = print_nft(master_account, printed_account);
@@ -1015,14 +1020,14 @@ fn test_print_nft_master_nft_not_nft_master_account() {
 
 #[should_panic(expected = "Insufficient balance to print another NFT copy")]
 #[test]
-fn test_print_nft_master_nft_insufficient_balance() {
+fn print_nft_master_nft_insufficient_balance() {
     let master_account = AccountForTests::holding_account_master_nft_insufficient_balance();
     let printed_account = AccountForTests::holding_account_uninit();
     let _post_states = print_nft(master_account, printed_account);
 }
 
 #[test]
-fn test_print_nft_success() {
+fn print_nft_success() {
     let master_account = AccountForTests::holding_account_master_nft();
     let printed_account = AccountForTests::holding_account_uninit();
     let post_states = print_nft(master_account, printed_account);

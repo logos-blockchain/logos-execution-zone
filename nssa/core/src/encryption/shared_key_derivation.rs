@@ -1,9 +1,14 @@
+#![expect(
+    clippy::arithmetic_side_effects,
+    reason = "Multiplication of finite field elements can't overflow"
+)]
+
 use borsh::{BorshDeserialize, BorshSerialize};
 use k256::{
     AffinePoint, EncodedPoint, FieldBytes, ProjectivePoint,
     elliptic_curve::{
-        PrimeField,
-        sec1::{FromEncodedPoint, ToEncodedPoint},
+        PrimeField as _,
+        sec1::{FromEncodedPoint as _, ToEncodedPoint as _},
     },
 };
 use serde::{Deserialize, Serialize};
@@ -49,9 +54,9 @@ impl SharedSecretKey {
         let shared = ProjectivePoint::from(pubkey_affine) * scalar;
         let shared_affine = shared.to_affine();
 
-        let encoded = shared_affine.to_encoded_point(false);
-        let x_bytes_slice = encoded.x().unwrap();
-        let mut x_bytes = [0u8; 32];
+        let shared_affine_encoded = shared_affine.to_encoded_point(false);
+        let x_bytes_slice = shared_affine_encoded.x().unwrap();
+        let mut x_bytes = [0_u8; 32];
         x_bytes.copy_from_slice(x_bytes_slice);
 
         Self(x_bytes)

@@ -41,7 +41,7 @@ impl FromStr for HashType {
     type Err = hex::FromHexError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut bytes = [0u8; 32];
+        let mut bytes = [0_u8; 32];
         hex::decode_to_slice(s, &mut bytes)?;
         Ok(HashType(bytes))
     }
@@ -85,7 +85,7 @@ mod tests {
 
     #[test]
     fn serialization_roundtrip() {
-        let original = HashType([1u8; 32]);
+        let original = HashType([1_u8; 32]);
         let serialized = original.to_string();
         let deserialized = HashType::from_str(&serialized).unwrap();
         assert_eq!(original, deserialized);

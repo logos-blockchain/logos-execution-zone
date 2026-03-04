@@ -20,7 +20,7 @@ pub enum NssaError {
     Io(#[from] io::Error),
 
     #[error("Invalid Public Key")]
-    InvalidPublicKey,
+    InvalidPublicKey(#[source] secp256k1::Error),
 
     #[error("Risc0 error: {0}")]
     ProgramWriteInputFailed(String),
@@ -50,11 +50,14 @@ pub enum NssaError {
     CircuitProvingError(String),
 
     #[error("Invalid program bytecode")]
-    InvalidProgramBytecode,
+    InvalidProgramBytecode(#[source] anyhow::Error),
 
     #[error("Program already exists")]
     ProgramAlreadyExists,
 
     #[error("Chain of calls is too long")]
     MaxChainedCallsDepthExceeded,
+
+    #[error("Max account nonce reached")]
+    MaxAccountNonceReached,
 }

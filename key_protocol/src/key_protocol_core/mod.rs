@@ -190,8 +190,8 @@ impl Default for NSSAUserData {
         Self::new_with_accounts(
             BTreeMap::new(),
             BTreeMap::new(),
-            KeyTreePublic::new(&SeedHolder::new_mnemonic("default".to_string())),
-            KeyTreePrivate::new(&SeedHolder::new_mnemonic("default".to_string())),
+            KeyTreePublic::new(&SeedHolder::new_mnemonic("default".to_owned())),
+            KeyTreePrivate::new(&SeedHolder::new_mnemonic("default".to_owned())),
         )
         .unwrap()
     }
@@ -202,7 +202,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_new_account() {
+    fn new_account() {
         let mut user_data = NSSAUserData::default();
 
         let (account_id_private, _) = user_data

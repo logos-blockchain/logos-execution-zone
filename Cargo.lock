@@ -5561,6 +5561,7 @@ name = "nssa"
 version = "0.1.0"
 dependencies = [
  "amm_core",
+ "anyhow",
  "borsh",
  "env_logger",
  "hex",

@@ -1,7 +1,17 @@
+#![expect(
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "This is a CLI application, printing to stdout and stderr is expected and convenient"
+)]
+#![expect(
+    clippy::shadow_unrelated,
+    reason = "Most of the shadows come from args parsing which is ok"
+)]
+
 use std::{path::PathBuf, sync::Arc};
 
-use anyhow::{Context, Result};
-use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
+use anyhow::{Context as _, Result};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use chain_storage::WalletChainStore;
 use common::{
     HashType, error::ExecutionFailureKind, rpc_primitives::requests::SendTxResponse,
@@ -18,15 +28,13 @@ use nssa::{
 };
 use nssa_core::{Commitment, MembershipProof, SharedSecretKey, program::InstructionData};
 pub use privacy_preserving_tx::PrivacyPreservingAccount;
-use tokio::io::AsyncWriteExt;
+use tokio::io::AsyncWriteExt as _;
 
 use crate::{
     config::{PersistentStorage, WalletConfigOverrides},
     helperfunctions::{produce_data_for_storage, produce_random_nonces},
     poller::TxPoller,
 };
-
-pub const HOME_DIR_ENV_VAR: &str = "NSSA_WALLET_HOME_DIR";
 
 pub mod chain_storage;
 pub mod cli;
@@ -36,18 +44,20 @@ pub mod poller;
 mod privacy_preserving_tx;
 pub mod program_facades;
 
+pub const HOME_DIR_ENV_VAR: &str = "NSSA_WALLET_HOME_DIR";
+
 pub enum AccDecodeData {
     Skip,
     Decode(nssa_core::SharedSecretKey, AccountId),
 }
 
+#[expect(clippy::partial_pub_fields, reason = "TODO: make all fields private")]
 pub struct WalletCore {
     config_path: PathBuf,
     config_overrides: Option<WalletConfigOverrides>,
     storage: WalletChainStore,
     storage_path: PathBuf,
     poller: TxPoller,
-    // TODO: Make all fields private
     pub sequencer_client: Arc<SequencerClient>,
     pub last_synced_block: u64,
 }
@@ -322,7 +332,6 @@ impl WalletCore {
         program: &ProgramWithDependencies,
     ) -> Result<(SendTxResponse, Vec<SharedSecretKey>), ExecutionFailureKind> {
         // TODO: handle large Err-variant properly
-        #[allow(clippy::result_large_err)]
         self.send_privacy_preserving_tx_with_pre_check(accounts, instruction_data, program, |_| {
             Ok(())
         })
@@ -401,12 +410,17 @@ impl WalletCore {
         }
 
         let before_polling = std::time::Instant::now();
-        let num_of_blocks = block_id - self.last_synced_block;
+        let num_of_blocks = block_id.saturating_sub(self.last_synced_block);
+        if num_of_blocks == 0 {
+            return Ok(());
+        }
+
         println!("Syncing to block {block_id}. Blocks to sync: {num_of_blocks}");
 
         let poller = self.poller.clone();
-        let mut blocks =
-            std::pin::pin!(poller.poll_block_range(self.last_synced_block + 1..=block_id));
+        let mut blocks = std::pin::pin!(
+            poller.poll_block_range(self.last_synced_block.saturating_add(1)..=block_id)
+        );
 
         let bar = indicatif::ProgressBar::new(num_of_blocks);
         while let Some(block) = blocks.try_next().await? {

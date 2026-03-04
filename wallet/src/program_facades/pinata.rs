@@ -4,7 +4,7 @@ use nssa_core::{MembershipProof, SharedSecretKey};
 
 use crate::{PrivacyPreservingAccount, WalletCore};
 
-pub struct Pinata<'w>(pub &'w WalletCore);
+pub struct Pinata<'wallet>(pub &'wallet WalletCore);
 
 impl Pinata<'_> {
     pub async fn claim(

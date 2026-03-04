@@ -32,7 +32,7 @@ pub(crate) fn get_wallet(
 }
 
 /// Helper to get a mutable reference to the wallet wrapper.
-#[allow(dead_code)]
+#[expect(dead_code, reason = "Maybe used later")]
 pub(crate) fn get_wallet_mut(
     handle: *mut WalletHandle,
 ) -> Result<&'static mut WalletWrapper, WalletFfiError> {
@@ -69,7 +69,7 @@ fn c_str_to_string(ptr: *const c_char, name: &str) -> Result<String, WalletFfiEr
 
     let c_str = unsafe { CStr::from_ptr(ptr) };
     match c_str.to_str() {
-        Ok(s) => Ok(s.to_string()),
+        Ok(s) => Ok(s.to_owned()),
         Err(e) => {
             print_error(format!("Invalid UTF-8 in {name}: {e}"));
             Err(WalletFfiError::InvalidUtf8)

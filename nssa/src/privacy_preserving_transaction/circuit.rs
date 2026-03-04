@@ -30,6 +30,12 @@ impl Proof {
     pub fn from_inner(inner: Vec<u8>) -> Self {
         Self(inner)
     }
+
+    pub(crate) fn is_valid_for(&self, circuit_output: &PrivacyPreservingCircuitOutput) -> bool {
+        let inner: InnerReceipt = borsh::from_slice(&self.0).unwrap();
+        let receipt = Receipt::new(inner, circuit_output.to_bytes());
+        receipt.verify(PRIVACY_PRESERVING_CIRCUIT_ID).is_ok()
+    }
 }
 
 #[derive(Clone)]
@@ -69,20 +75,20 @@ pub fn execute_and_prove(
     program_with_dependencies: &ProgramWithDependencies,
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), NssaError> {
     let ProgramWithDependencies {
-        program,
+        program: initial_program,
         dependencies,
     } = program_with_dependencies;
     let mut env_builder = ExecutorEnv::builder();
     let mut program_outputs = Vec::new();
 
     let initial_call = ChainedCall {
-        program_id: program.id(),
+        program_id: initial_program.id(),
         instruction_data,
         pre_states,
         pda_seeds: vec![],
     };
 
-    let mut chained_calls = VecDeque::from_iter([(initial_call, program)]);
+    let mut chained_calls = VecDeque::from_iter([(initial_call, initial_program)]);
     let mut chain_calls_counter = 0;
     while let Some((chained_call, program)) = chained_calls.pop_front() {
         if chain_calls_counter >= MAX_NUMBER_CHAINED_CALLS {
@@ -113,7 +119,9 @@ pub fn execute_and_prove(
             chained_calls.push_front((new_call, next_program));
         }
 
-        chain_calls_counter += 1;
+        chain_calls_counter = chain_calls_counter
+            .checked_add(1)
+            .expect("we check the max depth at the beginning of the loop");
     }
 
     let circuit_input = PrivacyPreservingCircuitInput {
@@ -163,16 +171,10 @@ fn execute_and_prove_program(
         .receipt)
 }
 
-impl Proof {
-    pub(crate) fn is_valid_for(&self, circuit_output: &PrivacyPreservingCircuitOutput) -> bool {
-        let inner: InnerReceipt = borsh::from_slice(&self.0).unwrap();
-        let receipt = Receipt::new(inner, circuit_output.to_bytes());
-        receipt.verify(PRIVACY_PRESERVING_CIRCUIT_ID).is_ok()
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    #![expect(clippy::shadow_unrelated, reason = "We don't care about it in tests")]
+
     use nssa_core::{
         Commitment, DUMMY_COMMITMENT_HASH, EncryptionScheme, Nullifier,
         account::{Account, AccountId, AccountWithMetadata, data::Data},

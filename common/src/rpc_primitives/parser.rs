@@ -3,6 +3,17 @@ use serde_json::Value;
 
 use super::errors::RpcParseError;
 
+#[macro_export]
+macro_rules! parse_request {
+    ($request_name:ty) => {
+        impl RpcRequest for $request_name {
+            fn parse(value: Option<Value>) -> Result<Self, RpcParseError> {
+                parse_params::<Self>(value)
+            }
+        }
+    };
+}
+
 pub trait RpcRequest: Sized {
     fn parse(value: Option<Value>) -> Result<Self, RpcParseError>;
 }
@@ -14,14 +25,4 @@ pub fn parse_params<T: DeserializeOwned>(value: Option<Value>) -> Result<T, RpcP
     } else {
         Err(RpcParseError("Require at least one parameter".to_owned()))
     }
-}
-#[macro_export]
-macro_rules! parse_request {
-    ($request_name:ty) => {
-        impl RpcRequest for $request_name {
-            fn parse(value: Option<Value>) -> Result<Self, RpcParseError> {
-                parse_params::<Self>(value)
-            }
-        }
-    };
 }

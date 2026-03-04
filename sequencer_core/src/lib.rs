@@ -13,6 +13,8 @@ use config::SequencerConfig;
 use log::{error, info, warn};
 use logos_blockchain_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
 use mempool::{MemPool, MemPoolHandle};
+#[cfg(feature = "mock")]
+pub use mock::SequencerCoreWithMockClients;
 
 use crate::{
     block_settlement_client::{BlockSettlementClient, BlockSettlementClientTrait, MsgId},
@@ -24,11 +26,9 @@ pub mod block_settlement_client;
 pub mod block_store;
 pub mod config;
 pub mod indexer_client;
-#[cfg(feature = "mock")]
-pub mod mock;
 
 #[cfg(feature = "mock")]
-pub use mock::SequencerCoreWithMockClients;
+pub mod mock;
 
 pub struct SequencerCore<
     BC: BlockSettlementClientTrait = BlockSettlementClient,
@@ -82,7 +82,8 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
         // as fixing this issue may require actions non-native to program scope
         let store = SequencerStore::open_db_with_genesis(
             &config.home.join("rocksdb"),
-            Some((&genesis_block, genesis_msg_id.into())),
+            &genesis_block,
+            genesis_msg_id.into(),
             signing_key,
         )
         .unwrap();
@@ -182,7 +183,10 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
     ) -> Result<(SignedMantleTx, MsgId)> {
         let now = Instant::now();
 
-        let new_block_height = self.chain_height + 1;
+        let new_block_height = self
+            .chain_height
+            .checked_add(1)
+            .with_context(|| format!("Max block height reached: {}", self.chain_height))?;
 
         let mut valid_transactions = vec![];
 
@@ -338,12 +342,14 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
 fn load_or_create_signing_key(path: &Path) -> Result<Ed25519Key> {
     if path.exists() {
         let key_bytes = std::fs::read(path)?;
+
         let key_array: [u8; ED25519_SECRET_KEY_SIZE] = key_bytes
             .try_into()
-            .map_err(|_| anyhow!("Found key with incorrect length"))?;
+            .map_err(|_bytes| anyhow!("Found key with incorrect length"))?;
+
         Ok(Ed25519Key::from_bytes(&key_array))
     } else {
-        let mut key_bytes = [0u8; ED25519_SECRET_KEY_SIZE];
+        let mut key_bytes = [0_u8; ED25519_SECRET_KEY_SIZE];
         rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut key_bytes);
         // Create parent directory if it doesn't exist
         if let Some(parent) = path.parent() {
@@ -354,11 +360,14 @@ fn load_or_create_signing_key(path: &Path) -> Result<Ed25519Key> {
     }
 }
 
-#[cfg(all(test, feature = "mock"))]
+#[cfg(test)]
+#[cfg(feature = "mock")]
 mod tests {
+    #![expect(clippy::shadow_unrelated, reason = "We don't care about it in tests")]
+
     use std::{pin::pin, str::FromStr as _, time::Duration};
 
-    use base58::ToBase58;
+    use base58::ToBase58 as _;
     use bedrock_client::BackoffConfig;
     use common::{
         block::AccountInitialData, test_utils::sequencer_sign_key_for_testing,
@@ -381,7 +390,7 @@ mod tests {
 
         SequencerConfig {
             home,
-            override_rust_log: Some("info".to_string()),
+            override_rust_log: Some("info".to_owned()),
             genesis_id: 1,
             is_genesis_random: false,
             max_num_tx_in_block: 10,
@@ -462,7 +471,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_start_from_config() {
+    async fn start_from_config() {
         let config = setup_sequencer_config();
         let (sequencer, _mempool_handle) =
             SequencerCoreWithMockClients::start_from_config(config.clone()).await;
@@ -482,7 +491,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_start_different_intial_accounts_balances() {
+    async fn start_different_intial_accounts_balances() {
         let acc1_account_id: Vec<u8> = vec![
             27, 132, 197, 86, 123, 18, 100, 64, 153, 93, 62, 213, 170, 186, 5, 101, 215, 30, 24,
             52, 96, 72, 25, 255, 156, 23, 245, 233, 213, 221, 7, 143,
@@ -523,7 +532,7 @@ mod tests {
     }
 
     #[test]
-    fn test_transaction_pre_check_pass() {
+    fn transaction_pre_check_pass() {
         let tx = common::test_utils::produce_dummy_empty_transaction();
         let result = tx.transaction_stateless_check();
 
@@ -531,7 +540,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_transaction_pre_check_native_transfer_valid() {
+    async fn transaction_pre_check_native_transfer_valid() {
         let (sequencer, _mempool_handle) = common_setup().await;
 
         let acc1 = sequencer.sequencer_config.initial_accounts[0].account_id;
@@ -548,7 +557,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_transaction_pre_check_native_transfer_other_signature() {
+    async fn transaction_pre_check_native_transfer_other_signature() {
         let (mut sequencer, _mempool_handle) = common_setup().await;
 
         let acc1 = sequencer.sequencer_config.initial_accounts[0].account_id;
@@ -573,7 +582,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_transaction_pre_check_native_transfer_sent_too_much() {
+    async fn transaction_pre_check_native_transfer_sent_too_much() {
         let (mut sequencer, _mempool_handle) = common_setup().await;
 
         let acc1 = sequencer.sequencer_config.initial_accounts[0].account_id;
@@ -600,7 +609,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_transaction_execute_native_transfer() {
+    async fn transaction_execute_native_transfer() {
         let (mut sequencer, _mempool_handle) = common_setup().await;
 
         let acc1 = sequencer.sequencer_config.initial_accounts[0].account_id;
@@ -622,7 +631,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_push_tx_into_mempool_blocks_until_mempool_is_full() {
+    async fn push_tx_into_mempool_blocks_until_mempool_is_full() {
         let config = SequencerConfig {
             mempool_max_size: 1,
             ..setup_sequencer_config()
@@ -649,7 +658,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_produce_new_block_with_mempool_transactions() {
+    async fn produce_new_block_with_mempool_transactions() {
         let (mut sequencer, mempool_handle) = common_setup().await;
         let genesis_height = sequencer.chain_height;
 
@@ -662,7 +671,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_replay_transactions_are_rejected_in_the_same_block() {
+    async fn replay_transactions_are_rejected_in_the_same_block() {
         let (mut sequencer, mempool_handle) = common_setup().await;
 
         let acc1 = sequencer.sequencer_config.initial_accounts[0].account_id;
@@ -694,7 +703,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_replay_transactions_are_rejected_in_different_blocks() {
+    async fn replay_transactions_are_rejected_in_different_blocks() {
         let (mut sequencer, mempool_handle) = common_setup().await;
 
         let acc1 = sequencer.sequencer_config.initial_accounts[0].account_id;
@@ -730,7 +739,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_restart_from_storage() {
+    async fn restart_from_storage() {
         let config = setup_sequencer_config();
         let acc1_account_id = config.initial_accounts[0].account_id;
         let acc2_account_id = config.initial_accounts[1].account_id;
@@ -782,7 +791,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_pending_blocks() {
+    async fn get_pending_blocks() {
         let config = setup_sequencer_config();
         let (mut sequencer, _mempool_handle) =
             SequencerCoreWithMockClients::start_from_config(config).await;
@@ -799,7 +808,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_delete_blocks() {
+    async fn delete_blocks() {
         let config = setup_sequencer_config();
         let (mut sequencer, _mempool_handle) =
             SequencerCoreWithMockClients::start_from_config(config).await;
@@ -822,7 +831,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_produce_block_with_correct_prev_meta_after_restart() {
+    async fn produce_block_with_correct_prev_meta_after_restart() {
         let config = setup_sequencer_config();
         let acc1_account_id = config.initial_accounts[0].account_id;
         let acc2_account_id = config.initial_accounts[1].account_id;
@@ -895,7 +904,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_start_from_config_uses_db_height_not_config_genesis() {
+    async fn start_from_config_uses_db_height_not_config_genesis() {
         let mut config = setup_sequencer_config();
         let original_genesis_id = config.genesis_id;
 

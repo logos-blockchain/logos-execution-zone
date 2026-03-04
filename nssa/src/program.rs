@@ -24,10 +24,10 @@ pub struct Program {
 impl Program {
     pub fn new(bytecode: Vec<u8>) -> Result<Self, NssaError> {
         let binary = risc0_binfmt::ProgramBinary::decode(&bytecode)
-            .map_err(|_| NssaError::InvalidProgramBytecode)?;
+            .map_err(NssaError::InvalidProgramBytecode)?;
         let id = binary
             .compute_image_id()
-            .map_err(|_| NssaError::InvalidProgramBytecode)?
+            .map_err(NssaError::InvalidProgramBytecode)?
             .into();
         Ok(Self { elf: bytecode, id })
     }
@@ -117,6 +117,7 @@ impl Program {
     }
 
     #[must_use]
+    #[expect(clippy::non_ascii_literal, reason = "More readable")]
     pub fn pinata_token() -> Self {
         use crate::program_methods::PINATA_TOKEN_ELF;
         Self::new(PINATA_TOKEN_ELF.to_vec()).expect("Piñata program must be a valid R0BF file")
@@ -286,7 +287,7 @@ mod tests {
     }
 
     #[test]
-    fn test_program_execution() {
+    fn program_execution() {
         let program = Program::simple_balance_transfer();
         let balance_to_move: u128 = 11_223_344_556_677;
         let instruction_data = Program::serialize_instruction(balance_to_move).unwrap();
@@ -320,7 +321,7 @@ mod tests {
     }
 
     #[test]
-    fn test_builtin_programs() {
+    fn builtin_programs() {
         let auth_transfer_program = Program::authenticated_transfer_program();
         let token_program = Program::token();
         let pinata_program = Program::pinata();

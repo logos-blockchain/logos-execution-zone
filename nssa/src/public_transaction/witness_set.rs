@@ -60,7 +60,7 @@ mod tests {
     use crate::AccountId;
 
     #[test]
-    fn test_for_message_constructor() {
+    fn for_message_constructor() {
         let key1 = PrivateKey::try_new([1; 32]).unwrap();
         let key2 = PrivateKey::try_new([2; 32]).unwrap();
         let pubkey1 = PublicKey::new_from_private_key(&key1);

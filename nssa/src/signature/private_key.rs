@@ -1,4 +1,4 @@
-use rand::{Rng, rngs::OsRng};
+use rand::{Rng as _, rngs::OsRng};
 use serde::{Deserialize, Serialize};
 
 use crate::error::NssaError;
@@ -42,13 +42,13 @@ impl PrivateKey {
 mod tests {
     use super::*;
     #[test]
-    fn test_value_getter() {
+    fn value_getter() {
         let key = PrivateKey::try_new([1; 32]).unwrap();
         assert_eq!(key.value(), &key.0);
     }
 
     #[test]
-    fn test_produce_key() {
+    fn produce_key() {
         let _key = PrivateKey::new_os_random();
     }
 }

@@ -1,4 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    hash::Hash,
+};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use nssa_core::{
@@ -188,7 +191,6 @@ fn check_privacy_preserving_circuit_proof_is_valid(
         .ok_or(NssaError::InvalidPrivacyPreservingProof)
 }
 
-use std::hash::Hash;
 fn n_unique<T: Eq + Hash>(data: &[T]) -> usize {
     let set: HashSet<&T> = data.iter().collect();
     set.len()
@@ -225,7 +227,7 @@ mod tests {
     }
 
     #[test]
-    fn test_privacy_preserving_transaction_encoding_bytes_roundtrip() {
+    fn privacy_preserving_transaction_encoding_bytes_roundtrip() {
         let tx = transaction_for_tests();
         let bytes = tx.to_bytes();
         let tx_from_bytes = PrivacyPreservingTransaction::from_bytes(&bytes).unwrap();

@@ -2,13 +2,13 @@
 
 use std::{ffi::CString, ptr};
 
-use common::error::ExecutionFailureKind;
 use nssa::AccountId;
 use wallet::program_facades::native_token_transfer::NativeTokenTransfer;
 
 use crate::{
     block_on,
     error::{print_error, WalletFfiError},
+    map_execution_error,
     types::{FfiBytes32, FfiTransferResult, WalletHandle},
     wallet::get_wallet,
     FfiPrivateAccountKeys,
@@ -683,20 +683,5 @@ pub unsafe extern "C" fn wallet_ffi_free_transfer_result(result: *mut FfiTransfe
         if !result.tx_hash.is_null() {
             drop(CString::from_raw(result.tx_hash));
         }
-    }
-}
-
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "Error is consumed to create FFI error response"
-)]
-fn map_execution_error(e: ExecutionFailureKind) -> WalletFfiError {
-    match e {
-        ExecutionFailureKind::InsufficientFundsError => WalletFfiError::InsufficientFunds,
-        ExecutionFailureKind::KeyNotFoundError => WalletFfiError::KeyNotFound,
-        ExecutionFailureKind::SequencerError | ExecutionFailureKind::SequencerClientError(_) => {
-            WalletFfiError::NetworkError
-        }
-        _ => WalletFfiError::InternalError,
     }
 }

@@ -1,3 +1,8 @@
+#![expect(
+    clippy::print_stdout,
+    reason = "This is a CLI application, printing to stdout is expected and convenient"
+)]
+
 use anyhow::{Context as _, Result};
 use clap::{CommandFactory as _, Parser as _};
 use wallet::{

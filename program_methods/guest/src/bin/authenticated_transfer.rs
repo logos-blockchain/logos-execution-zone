@@ -31,24 +31,24 @@ fn transfer(
     // Continue only if the sender has authorized this operation
     assert!(sender.is_authorized, "Sender must be authorized");
 
-    // Continue only if the sender has enough balance
-    assert!(
-        sender.account.balance >= balance_to_move,
-        "Sender has insufficient balance"
-    );
-
     // Create accounts post states, with updated balances
     let sender_post = {
         // Modify sender's balance
         let mut sender_post_account = sender.account;
-        sender_post_account.balance -= balance_to_move;
+        sender_post_account.balance = sender_post_account
+            .balance
+            .checked_sub(balance_to_move)
+            .expect("Sender has insufficient balance");
         AccountPostState::new(sender_post_account)
     };
 
     let recipient_post = {
         // Modify recipient's balance
         let mut recipient_post_account = recipient.account;
-        recipient_post_account.balance += balance_to_move;
+        recipient_post_account.balance = recipient_post_account
+            .balance
+            .checked_add(balance_to_move)
+            .expect("Recipient balance overflow");
 
         // Claim recipient account if it has default program owner
         if recipient_post_account.program_owner == DEFAULT_PROGRAM_ID {

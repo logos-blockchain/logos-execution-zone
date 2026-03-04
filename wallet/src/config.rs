@@ -48,21 +48,19 @@ pub struct PersistentAccountDataPrivate {
 // Big difference in enum variants sizes
 // however it is improbable, that we will have that much accounts, that it will substantialy affect
 // memory
-#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum InitialAccountData {
     Public(InitialAccountDataPublic),
-    Private(InitialAccountDataPrivate),
+    Private(Box<InitialAccountDataPrivate>),
 }
 
 // Big difference in enum variants sizes
 // however it is improbable, that we will have that much accounts, that it will substantialy affect
 // memory
-#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PersistentAccountData {
     Public(PersistentAccountDataPublic),
-    Private(PersistentAccountDataPrivate),
+    Private(Box<PersistentAccountDataPrivate>),
     Preconfigured(InitialAccountData),
 }
 
@@ -95,6 +93,10 @@ pub struct PersistentStorage {
 
 impl PersistentStorage {
     pub fn from_path(path: &Path) -> Result<Self> {
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "We want to provide a specific error message for not found case"
+        )]
         match std::fs::File::open(path) {
             Ok(file) => {
                 let storage_content = BufReader::new(file);
@@ -141,7 +143,7 @@ impl From<InitialAccountDataPublic> for InitialAccountData {
 
 impl From<InitialAccountDataPrivate> for InitialAccountData {
     fn from(value: InitialAccountDataPrivate) -> Self {
-        Self::Private(value)
+        Self::Private(Box::new(value))
     }
 }
 
@@ -153,7 +155,7 @@ impl From<PersistentAccountDataPublic> for PersistentAccountData {
 
 impl From<PersistentAccountDataPrivate> for PersistentAccountData {
     fn from(value: PersistentAccountDataPrivate) -> Self {
-        Self::Private(value)
+        Self::Private(Box::new(value))
     }
 }
 

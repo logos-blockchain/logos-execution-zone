@@ -24,16 +24,13 @@ impl SequencerStore {
     /// ATTENTION: Will overwrite genesis block.
     pub fn open_db_with_genesis(
         location: &Path,
-        genesis_block: Option<(&Block, MantleMsgId)>,
+        genesis_block: &Block,
+        genesis_msg_id: MantleMsgId,
         signing_key: nssa::PrivateKey,
     ) -> Result<Self> {
-        let tx_hash_to_block_map = if let Some((block, _msg_id)) = &genesis_block {
-            block_to_transactions_map(block)
-        } else {
-            HashMap::new()
-        };
+        let tx_hash_to_block_map = block_to_transactions_map(genesis_block);
 
-        let dbio = RocksDBIO::open_or_create(location, genesis_block)?;
+        let dbio = RocksDBIO::open_or_create(location, genesis_block, genesis_msg_id)?;
 
         let genesis_id = dbio.get_meta_first_block_in_db()?;
 
@@ -43,11 +40,6 @@ impl SequencerStore {
             genesis_id,
             signing_key,
         })
-    }
-
-    /// Reopening existing database
-    pub fn open_db_restart(location: &Path, signing_key: nssa::PrivateKey) -> Result<Self> {
-        SequencerStore::open_db_with_genesis(location, None, signing_key)
     }
 
     pub fn get_block_at_id(&self, id: u64) -> Result<Block> {
@@ -120,13 +112,15 @@ pub(crate) fn block_to_transactions_map(block: &Block) -> HashMap<HashType, u64>
 
 #[cfg(test)]
 mod tests {
+    #![expect(clippy::shadow_unrelated, reason = "We don't care about it in tests")]
+
     use common::{block::HashableBlockData, test_utils::sequencer_sign_key_for_testing};
     use tempfile::tempdir;
 
     use super::*;
 
     #[test]
-    fn test_get_transaction_by_hash() {
+    fn get_transaction_by_hash() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path();
 
@@ -141,12 +135,9 @@ mod tests {
 
         let genesis_block = genesis_block_hashable_data.into_pending_block(&signing_key, [0; 32]);
         // Start an empty node store
-        let mut node_store = SequencerStore::open_db_with_genesis(
-            path,
-            Some((&genesis_block, [0; 32])),
-            signing_key,
-        )
-        .unwrap();
+        let mut node_store =
+            SequencerStore::open_db_with_genesis(path, &genesis_block, [0; 32], signing_key)
+                .unwrap();
 
         let tx = common::test_utils::produce_dummy_empty_transaction();
         let block = common::test_utils::produce_dummy_block(1, None, vec![tx.clone()]);
@@ -163,7 +154,7 @@ mod tests {
     }
 
     #[test]
-    fn test_latest_block_meta_returns_genesis_meta_initially() {
+    fn latest_block_meta_returns_genesis_meta_initially() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path();
 
@@ -179,12 +170,9 @@ mod tests {
         let genesis_block = genesis_block_hashable_data.into_pending_block(&signing_key, [0; 32]);
         let genesis_hash = genesis_block.header.hash;
 
-        let node_store = SequencerStore::open_db_with_genesis(
-            path,
-            Some((&genesis_block, [0; 32])),
-            signing_key,
-        )
-        .unwrap();
+        let node_store =
+            SequencerStore::open_db_with_genesis(path, &genesis_block, [0; 32], signing_key)
+                .unwrap();
 
         // Verify that initially the latest block hash equals genesis hash
         let latest_meta = node_store.latest_block_meta().unwrap();
@@ -193,7 +181,7 @@ mod tests {
     }
 
     #[test]
-    fn test_latest_block_meta_updates_after_new_block() {
+    fn latest_block_meta_updates_after_new_block() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path();
 
@@ -207,12 +195,9 @@ mod tests {
         };
 
         let genesis_block = genesis_block_hashable_data.into_pending_block(&signing_key, [0; 32]);
-        let mut node_store = SequencerStore::open_db_with_genesis(
-            path,
-            Some((&genesis_block, [0; 32])),
-            signing_key,
-        )
-        .unwrap();
+        let mut node_store =
+            SequencerStore::open_db_with_genesis(path, &genesis_block, [0; 32], signing_key)
+                .unwrap();
 
         // Add a new block
         let tx = common::test_utils::produce_dummy_empty_transaction();
@@ -232,7 +217,7 @@ mod tests {
     }
 
     #[test]
-    fn test_mark_block_finalized() {
+    fn mark_block_finalized() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path();
 
@@ -246,12 +231,9 @@ mod tests {
         };
 
         let genesis_block = genesis_block_hashable_data.into_pending_block(&signing_key, [0; 32]);
-        let mut node_store = SequencerStore::open_db_with_genesis(
-            path,
-            Some((&genesis_block, [0; 32])),
-            signing_key,
-        )
-        .unwrap();
+        let mut node_store =
+            SequencerStore::open_db_with_genesis(path, &genesis_block, [0; 32], signing_key)
+                .unwrap();
 
         // Add a new block with Pending status
         let tx = common::test_utils::produce_dummy_empty_transaction();

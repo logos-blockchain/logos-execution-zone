@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 
 use actix_web::Error as HttpError;
-use base64::{Engine, engine::general_purpose};
+use base64::{Engine as _, engine::general_purpose};
 use common::{
     block::{AccountInitialData, HashableBlockData},
     rpc_primitives::{
         errors::RpcError,
         message::{Message, Request},
-        parser::RpcRequest,
+        parser::RpcRequest as _,
         requests::{
             GetAccountBalanceRequest, GetAccountBalanceResponse, GetAccountRequest,
             GetAccountResponse, GetAccountsNoncesRequest, GetAccountsNoncesResponse,
@@ -78,12 +78,11 @@ impl<
 
 impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> JsonHandler<BC, IC> {
     /// Example of request processing
-    #[allow(clippy::unused_async)]
-    async fn process_temp_hello(&self, request: Request) -> Result<Value, RpcErr> {
+    fn process_temp_hello(request: Request) -> Result<Value, RpcErr> {
         let _hello_request = HelloRequest::parse(Some(request.params))?;
 
         let response = HelloResponse {
-            greeting: HELLO_FROM_SEQUENCER.to_string(),
+            greeting: HELLO_FROM_SEQUENCER.to_owned(),
         };
 
         respond(response)
@@ -99,9 +98,7 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> JsonHandler<BC, IC>
 
         let tx_hash = tx.hash();
 
-        let tx_size = borsh::to_vec(&tx)
-            .map_err(|_| TransactionMalformationError::FailedToDecode { tx: tx_hash })?
-            .len();
+        let tx_size = send_tx_req.transaction.len();
 
         let max_tx_size = self.max_block_size.saturating_sub(BLOCK_HEADER_OVERHEAD);
 
@@ -125,7 +122,7 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> JsonHandler<BC, IC>
             .expect("Mempool is closed, this is a bug");
 
         let response = SendTxResponse {
-            status: TRANSACTION_SUBMITTED.to_string(),
+            status: TRANSACTION_SUBMITTED.to_owned(),
             tx_hash,
         };
 
@@ -306,14 +303,14 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> JsonHandler<BC, IC>
 
         let mut program_ids = HashMap::new();
         program_ids.insert(
-            "authenticated_transfer".to_string(),
+            "authenticated_transfer".to_owned(),
             Program::authenticated_transfer_program().id(),
         );
-        program_ids.insert("token".to_string(), Program::token().id());
-        program_ids.insert("pinata".to_string(), Program::pinata().id());
-        program_ids.insert("amm".to_string(), Program::amm().id());
+        program_ids.insert("token".to_owned(), Program::token().id());
+        program_ids.insert("pinata".to_owned(), Program::pinata().id());
+        program_ids.insert("amm".to_owned(), Program::amm().id());
         program_ids.insert(
-            "privacy_preserving_circuit".to_string(),
+            "privacy_preserving_circuit".to_owned(),
             nssa::PRIVACY_PRESERVING_CIRCUIT_ID,
         );
         let response = GetProgramIdsResponse { program_ids };
@@ -322,7 +319,7 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> JsonHandler<BC, IC>
 
     pub async fn process_request_internal(&self, request: Request) -> Result<Value, RpcErr> {
         match request.method.as_ref() {
-            HELLO => self.process_temp_hello(request).await,
+            HELLO => Self::process_temp_hello(request),
             SEND_TX => self.process_send_tx(request).await,
             GET_BLOCK => self.process_get_block_data(request).await,
             GET_BLOCK_RANGE => self.process_get_block_range_data(request).await,
@@ -340,16 +337,12 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> JsonHandler<BC, IC>
     }
 }
 
-#[expect(
-    clippy::cast_possible_truncation,
-    reason = "Test code assumes usize is large enough for max_block_size"
-)]
 #[cfg(test)]
 mod tests {
     use std::{str::FromStr as _, sync::Arc, time::Duration};
 
-    use base58::ToBase58;
-    use base64::{Engine, engine::general_purpose};
+    use base58::ToBase58 as _;
+    use base64::{Engine as _, engine::general_purpose};
     use bedrock_client::BackoffConfig;
     use common::{
         block::AccountInitialData, config::BasicAuth, test_utils::sequencer_sign_key_for_testing,
@@ -396,7 +389,7 @@ mod tests {
 
         SequencerConfig {
             home,
-            override_rust_log: Some("info".to_string()),
+            override_rust_log: Some("info".to_owned()),
             genesis_id: 1,
             is_genesis_random: false,
             max_num_tx_in_block: 10,
@@ -416,7 +409,7 @@ mod tests {
                 channel_id: [42; 32].into(),
                 node_url: "http://localhost:8080".parse().unwrap(),
                 auth: Some(BasicAuth {
-                    username: "user".to_string(),
+                    username: "user".to_owned(),
                     password: None,
                 }),
             },
@@ -461,7 +454,9 @@ mod tests {
             .produce_new_block_with_mempool_transactions()
             .unwrap();
 
-        let max_block_size = sequencer_core.sequencer_config().max_block_size.as_u64() as usize;
+        let max_block_size =
+            usize::try_from(sequencer_core.sequencer_config().max_block_size.as_u64())
+                .expect("`max_block_size` is expected to fit in usize");
         let sequencer_core = Arc::new(Mutex::new(sequencer_core));
 
         (
@@ -499,7 +494,7 @@ mod tests {
     }
 
     #[actix_web::test]
-    async fn test_get_account_balance_for_non_existent_account() {
+    async fn get_account_balance_for_non_existent_account() {
         let (json_handler, _, _) = components_for_tests().await;
         let request = serde_json::json!({
             "jsonrpc": "2.0",
@@ -521,7 +516,7 @@ mod tests {
     }
 
     #[actix_web::test]
-    async fn test_get_account_balance_for_invalid_base58() {
+    async fn get_account_balance_for_invalid_base58() {
         let (json_handler, _, _) = components_for_tests().await;
         let request = serde_json::json!({
             "jsonrpc": "2.0",
@@ -551,7 +546,7 @@ mod tests {
     }
 
     #[actix_web::test]
-    async fn test_get_account_balance_for_invalid_length() {
+    async fn get_account_balance_for_invalid_length() {
         let (json_handler, _, _) = components_for_tests().await;
         let request = serde_json::json!({
             "jsonrpc": "2.0",
@@ -581,7 +576,7 @@ mod tests {
     }
 
     #[actix_web::test]
-    async fn test_get_account_balance_for_existing_account() {
+    async fn get_account_balance_for_existing_account() {
         let (json_handler, initial_accounts, _) = components_for_tests().await;
 
         let acc1_id = initial_accounts[0].account_id;
@@ -606,7 +601,7 @@ mod tests {
     }
 
     #[actix_web::test]
-    async fn test_get_accounts_nonces_for_non_existent_account() {
+    async fn get_accounts_nonces_for_non_existent_account() {
         let (json_handler, _, _) = components_for_tests().await;
         let request = serde_json::json!({
             "jsonrpc": "2.0",
@@ -628,7 +623,7 @@ mod tests {
     }
 
     #[actix_web::test]
-    async fn test_get_accounts_nonces_for_existent_account() {
+    async fn get_accounts_nonces_for_existent_account() {
         let (json_handler, initial_accounts, _) = components_for_tests().await;
 
         let acc1_id = initial_accounts[0].account_id;
@@ -654,7 +649,7 @@ mod tests {
     }
 
     #[actix_web::test]
-    async fn test_get_account_data_for_non_existent_account() {
+    async fn get_account_data_for_non_existent_account() {
         let (json_handler, _, _) = components_for_tests().await;
         let request = serde_json::json!({
             "jsonrpc": "2.0",
@@ -681,7 +676,7 @@ mod tests {
     }
 
     #[actix_web::test]
-    async fn test_get_transaction_by_hash_for_non_existent_hash() {
+    async fn get_transaction_by_hash_for_non_existent_hash() {
         let (json_handler, _, _) = components_for_tests().await;
         let request = serde_json::json!({
             "jsonrpc": "2.0",
@@ -703,7 +698,7 @@ mod tests {
     }
 
     #[actix_web::test]
-    async fn test_get_transaction_by_hash_for_invalid_hex() {
+    async fn get_transaction_by_hash_for_invalid_hex() {
         let (json_handler, _, _) = components_for_tests().await;
         let request = serde_json::json!({
             "jsonrpc": "2.0",
@@ -734,7 +729,7 @@ mod tests {
     }
 
     #[actix_web::test]
-    async fn test_get_transaction_by_hash_for_invalid_length() {
+    async fn get_transaction_by_hash_for_invalid_length() {
         let (json_handler, _, _) = components_for_tests().await;
         let request = serde_json::json!({
             "jsonrpc": "2.0",
@@ -765,7 +760,7 @@ mod tests {
     }
 
     #[actix_web::test]
-    async fn test_get_transaction_by_hash_for_existing_transaction() {
+    async fn get_transaction_by_hash_for_existing_transaction() {
         let (json_handler, _, tx) = components_for_tests().await;
         let tx_hash_hex = hex::encode(tx.hash());
         let expected_base64_encoded = general_purpose::STANDARD.encode(borsh::to_vec(&tx).unwrap());

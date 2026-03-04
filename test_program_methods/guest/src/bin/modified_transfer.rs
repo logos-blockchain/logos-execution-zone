@@ -1,3 +1,8 @@
+#![expect(
+    clippy::arithmetic_side_effects,
+    reason = "This program is intentionally malicious and is expected to have side effects."
+)]
+
 use nssa_core::{
     account::{Account, AccountWithMetadata},
     program::{AccountPostState, ProgramInput, read_nssa_inputs, write_nssa_outputs},

@@ -5,11 +5,11 @@ use nssa_core::{
 use secret_holders::{PrivateKeyHolder, SecretSpendingKey, SeedHolder};
 use serde::{Deserialize, Serialize};
 
-pub type PublicAccountSigningKey = [u8; 32];
-
 pub mod ephemeral_key_holder;
 pub mod key_tree;
 pub mod secret_holders;
+
+pub type PublicAccountSigningKey = [u8; 32];
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 /// Entrypoint to key management
@@ -77,9 +77,9 @@ impl KeyChain {
 #[cfg(test)]
 mod tests {
     use aes_gcm::aead::OsRng;
-    use base58::ToBase58;
-    use k256::{AffinePoint, elliptic_curve::group::GroupEncoding};
-    use rand::RngCore;
+    use base58::ToBase58 as _;
+    use k256::{AffinePoint, elliptic_curve::group::GroupEncoding as _};
+    use rand::RngCore as _;
 
     use super::*;
     use crate::key_management::{
@@ -87,19 +87,19 @@ mod tests {
     };
 
     #[test]
-    fn test_new_os_random() {
+    fn new_os_random() {
         // Ensure that a new KeyChain instance can be created without errors.
         let account_id_key_holder = KeyChain::new_os_random();
 
         // Check that key holder fields are initialized with expected types
         assert_ne!(
             account_id_key_holder.nullifer_public_key.as_ref(),
-            &[0u8; 32]
+            &[0_u8; 32]
         );
     }
 
     #[test]
-    fn test_calculate_shared_secret_receiver() {
+    fn calculate_shared_secret_receiver() {
         let account_id_key_holder = KeyChain::new_os_random();
 
         // Generate a random ephemeral public key sender
@@ -180,7 +180,7 @@ mod tests {
     }
 
     #[test]
-    fn test_non_trivial_chain_index() {
+    fn non_trivial_chain_index() {
         let keys = account_with_chain_index_2_for_tests();
 
         let eph_key_holder = EphemeralKeyHolder::new(&keys.nullifer_public_key);

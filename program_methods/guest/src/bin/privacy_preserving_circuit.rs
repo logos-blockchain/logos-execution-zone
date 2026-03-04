@@ -16,31 +16,6 @@ use nssa_core::{
 };
 use risc0_zkvm::{guest::env, serde::to_vec};
 
-fn main() {
-    let PrivacyPreservingCircuitInput {
-        program_outputs,
-        visibility_mask,
-        private_account_nonces,
-        private_account_keys,
-        private_account_nsks,
-        private_account_membership_proofs,
-        program_id,
-    } = env::read();
-
-    let execution_state = ExecutionState::derive_from_outputs(program_id, program_outputs);
-
-    let output = compute_circuit_output(
-        execution_state,
-        &visibility_mask,
-        &private_account_nonces,
-        &private_account_keys,
-        &private_account_nsks,
-        &private_account_membership_proofs,
-    );
-
-    env::commit(&output);
-}
-
 /// State of the involved accounts before and after program execution.
 struct ExecutionState {
     pre_states: Vec<AccountWithMetadata>,
@@ -117,7 +92,7 @@ impl ExecutionState {
                 program_output.pre_states,
                 program_output.post_states,
             );
-            chain_calls_counter += 1;
+            chain_calls_counter = chain_calls_counter.checked_add(1).expect("Checked above");
         }
 
         assert!(
@@ -249,10 +224,10 @@ fn compute_circuit_output(
     let mut private_membership_proofs_iter = private_account_membership_proofs.iter();
 
     let mut output_index = 0;
-    for (visibility_mask, (pre_state, post_state)) in
+    for (account_visibility_mask, (pre_state, post_state)) in
         visibility_mask.iter().copied().zip(states_iter)
     {
-        match visibility_mask {
+        match account_visibility_mask {
             0 => {
                 // Public account
                 output.public_pre_states.push(pre_state);
@@ -269,7 +244,7 @@ fn compute_circuit_output(
                     "AccountId mismatch"
                 );
 
-                let new_nullifier = if visibility_mask == 1 {
+                let new_nullifier = if account_visibility_mask == 1 {
                     // Private account with authentication
 
                     let Some(nsk) = private_nsks_iter.next() else {
@@ -347,7 +322,10 @@ fn compute_circuit_output(
 
                 output.new_commitments.push(commitment_post);
                 output.ciphertexts.push(encrypted_account);
-                output_index += 1;
+                output_index = match output_index.checked_add(1) {
+                    Some(val) => val,
+                    None => panic!("Too many private accounts, output index overflow"),
+                }
             }
             _ => panic!("Invalid visibility mask value"),
         }
@@ -401,4 +379,29 @@ fn compute_nullifier_and_set_digest(
             (nullifier, set_digest)
         },
     )
+}
+
+fn main() {
+    let PrivacyPreservingCircuitInput {
+        program_outputs,
+        visibility_mask,
+        private_account_nonces,
+        private_account_keys,
+        private_account_nsks,
+        private_account_membership_proofs,
+        program_id,
+    } = env::read();
+
+    let execution_state = ExecutionState::derive_from_outputs(program_id, program_outputs);
+
+    let output = compute_circuit_output(
+        execution_state,
+        &visibility_mask,
+        &private_account_nonces,
+        &private_account_keys,
+        &private_account_nsks,
+        &private_account_membership_proofs,
+    );
+
+    env::commit(&output);
 }

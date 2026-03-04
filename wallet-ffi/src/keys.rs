@@ -130,6 +130,10 @@ pub unsafe extern "C" fn wallet_ffi_get_private_account_keys(
     let vpk_len = vpk_bytes.len();
     let vpk_vec = vpk_bytes.to_vec();
     let vpk_boxed = vpk_vec.into_boxed_slice();
+    #[expect(
+        clippy::as_conversions,
+        reason = "We need to convert the boxed slice into a raw pointer for FFI"
+    )]
     let vpk_ptr = Box::into_raw(vpk_boxed) as *const u8;
 
     unsafe {

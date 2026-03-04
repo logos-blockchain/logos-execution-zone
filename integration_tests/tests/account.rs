@@ -1,3 +1,8 @@
+#![expect(
+    clippy::tests_outside_test_module,
+    reason = "We don't care about these in tests"
+)]
+
 use anyhow::Result;
 use integration_tests::TestContext;
 use log::info;
@@ -36,7 +41,7 @@ async fn get_existing_account() -> Result<()> {
 async fn new_public_account_with_label() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
-    let label = "my-test-public-account".to_string();
+    let label = "my-test-public-account".to_owned();
     let command = Command::Account(AccountSubcommand::New(NewSubcommand::Public {
         cci: None,
         label: Some(label.clone()),
@@ -68,7 +73,7 @@ async fn new_public_account_with_label() -> Result<()> {
 async fn new_private_account_with_label() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
-    let label = "my-test-private-account".to_string();
+    let label = "my-test-private-account".to_owned();
     let command = Command::Account(AccountSubcommand::New(NewSubcommand::Private {
         cci: None,
         label: Some(label.clone()),

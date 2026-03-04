@@ -103,7 +103,7 @@ pub fn new_definition(
         liquidity_pool_supply: initial_lp,
         reserve_a: token_a_amount.into(),
         reserve_b: token_b_amount.into(),
-        fees: 0u128, // TODO: we assume all fees are 0 for now.
+        fees: 0_u128, // TODO: we assume all fees are 0 for now.
         active: true,
     };
 

@@ -5,10 +5,10 @@ use serde_json::{Value, to_value};
 #[derive(serde::Serialize)]
 pub struct RpcParseError(pub String);
 
-#[allow(clippy::too_long_first_doc_paragraph)]
-/// This struct may be returned from JSON RPC server in case of error
+/// This struct may be returned from JSON RPC server in case of error.
+///
 /// It is expected that that this struct has impls From<_> all other RPC errors
-/// like [`RpcBlockError`](crate::types::blocks::RpcBlockError)
+/// like [`RpcBlockError`](crate::types::blocks::RpcBlockError).
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct RpcError {
@@ -167,6 +167,7 @@ impl From<RpcParseError> for RpcError {
 
 impl From<std::convert::Infallible> for RpcError {
     fn from(_: std::convert::Infallible) -> Self {
+        // SAFETY: Infallible error can never be constructed, so this code can never be reached.
         unsafe { core::hint::unreachable_unchecked() }
     }
 }

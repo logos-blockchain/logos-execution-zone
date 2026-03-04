@@ -1,7 +1,4 @@
-use std::{
-    collections::{BTreeMap, HashMap},
-    sync::Arc,
-};
+use std::{collections::BTreeMap, sync::Arc};
 
 use anyhow::Result;
 use common::sequencer_client::SequencerClient;
@@ -25,7 +22,7 @@ pub const DEPTH_SOFT_CAP: u32 = 20;
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct KeyTree<N: KeyNode> {
     pub key_map: BTreeMap<ChainIndex, N>,
-    pub account_id_map: HashMap<nssa::AccountId, ChainIndex>,
+    pub account_id_map: BTreeMap<nssa::AccountId, ChainIndex>,
 }
 
 pub type KeyTreePublic = KeyTree<ChildKeysPublic>;
@@ -44,7 +41,7 @@ impl<N: KeyNode> KeyTree<N> {
         let account_id = root_keys.account_id();
 
         let key_map = BTreeMap::from_iter([(ChainIndex::root(), root_keys)]);
-        let account_id_map = HashMap::from_iter([(account_id, ChainIndex::root())]);
+        let account_id_map = BTreeMap::from_iter([(account_id, ChainIndex::root())]);
 
         Self {
             key_map,
@@ -53,7 +50,7 @@ impl<N: KeyNode> KeyTree<N> {
     }
 
     pub fn new_from_root(root: N) -> Self {
-        let account_id_map = HashMap::from_iter([(root.account_id(), ChainIndex::root())]);
+        let account_id_map = BTreeMap::from_iter([(root.account_id(), ChainIndex::root())]);
         let key_map = BTreeMap::from_iter([(ChainIndex::root(), root)]);
 
         Self {
@@ -84,7 +81,7 @@ impl<N: KeyNode> KeyTree<N> {
             let rightmost_child = parent_id.nth_child(right);
 
             let rightmost_ref = self.key_map.get(&rightmost_child);
-            let rightmost_ref_next = self.key_map.get(&rightmost_child.next_in_line());
+            let rightmost_ref_next = self.key_map.get(&rightmost_child.next_in_line()?);
 
             match (&rightmost_ref, &rightmost_ref_next) {
                 (Some(_), Some(_)) => {
@@ -92,7 +89,7 @@ impl<N: KeyNode> KeyTree<N> {
                     right = u32::midpoint(right, right_border);
                 }
                 (Some(_), None) => {
-                    break Some(right + 1);
+                    break Some(right.checked_add(1)?);
                 }
                 (None, None) => {
                     right_border = right;
@@ -133,7 +130,7 @@ impl<N: KeyNode> KeyTree<N> {
                     break 'outer chain_id;
                 }
             }
-            depth += 1;
+            depth = depth.checked_add(1).expect("Max depth reached");
         }
     }
 
@@ -156,15 +153,13 @@ impl<N: KeyNode> KeyTree<N> {
 
     #[must_use]
     pub fn get_node(&self, account_id: nssa::AccountId) -> Option<&N> {
-        self.account_id_map
-            .get(&account_id)
-            .and_then(|chain_id| self.key_map.get(chain_id))
+        let chain_id = self.account_id_map.get(&account_id)?;
+        self.key_map.get(chain_id)
     }
 
     pub fn get_node_mut(&mut self, account_id: nssa::AccountId) -> Option<&mut N> {
-        self.account_id_map
-            .get(&account_id)
-            .and_then(|chain_id| self.key_map.get_mut(chain_id))
+        let chain_id = self.account_id_map.get(&account_id)?;
+        self.key_map.get_mut(chain_id)
     }
 
     pub fn insert(&mut self, account_id: nssa::AccountId, chain_index: ChainIndex, node: N) {
@@ -173,7 +168,7 @@ impl<N: KeyNode> KeyTree<N> {
     }
 
     pub fn remove(&mut self, addr: nssa::AccountId) -> Option<N> {
-        let chain_index = self.account_id_map.remove(&addr).unwrap();
+        let chain_index = self.account_id_map.remove(&addr)?;
         self.key_map.remove(&chain_index)
     }
 
@@ -192,7 +187,10 @@ impl<N: KeyNode> KeyTree<N> {
             while (next_id.depth()) < depth {
                 self.generate_new_node(&curr_id);
                 id_stack.push(next_id.clone());
-                next_id = next_id.next_in_line();
+                next_id = match next_id.next_in_line() {
+                    Some(id) => id,
+                    None => break,
+                };
             }
         }
     }
@@ -225,7 +223,10 @@ impl KeyTree<ChildKeysPrivate> {
 
             while (next_id.depth()) < depth {
                 id_stack.push(next_id.clone());
-                next_id = next_id.next_in_line();
+                next_id = match next_id.next_in_line() {
+                    Some(id) => id,
+                    None => break,
+                };
             }
         }
     }
@@ -240,7 +241,8 @@ impl KeyTree<ChildKeysPrivate> {
     ///
     /// Slow, maintains tree consistency.
     pub fn cleanup_tree_remove_uninit_layered(&mut self, depth: u32) {
-        'outer: for i in (1..(depth as usize)).rev() {
+        let depth = usize::try_from(depth).expect("Depth is expected to fit in usize");
+        'outer: for i in (1..depth).rev() {
             println!("Cleanup of tree at depth {i}");
             for id in ChainIndex::chain_ids_at_depth(i) {
                 if let Some(node) = self.key_map.get(&id) {
@@ -286,7 +288,10 @@ impl KeyTree<ChildKeysPublic> {
 
             while (next_id.depth()) < depth {
                 id_stack.push(next_id.clone());
-                next_id = next_id.next_in_line();
+                next_id = match next_id.next_in_line() {
+                    Some(id) => id,
+                    None => break,
+                };
             }
         }
 
@@ -305,7 +310,8 @@ impl KeyTree<ChildKeysPublic> {
         depth: u32,
         client: Arc<SequencerClient>,
     ) -> Result<()> {
-        'outer: for i in (1..(depth as usize)).rev() {
+        let depth = usize::try_from(depth).expect("Depth is expected to fit in usize");
+        'outer: for i in (1..depth).rev() {
             println!("Cleanup of tree at depth {i}");
             for id in ChainIndex::chain_ids_at_depth(i) {
                 if let Some(node) = self.key_map.get(&id) {
@@ -328,7 +334,9 @@ impl KeyTree<ChildKeysPublic> {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashSet, str::FromStr};
+    #![expect(clippy::shadow_unrelated, reason = "We don't care about this in tests")]
+
+    use std::{collections::HashSet, str::FromStr as _};
 
     use nssa::AccountId;
 
@@ -341,7 +349,7 @@ mod tests {
     }
 
     #[test]
-    fn test_simple_key_tree() {
+    fn simple_key_tree() {
         let seed_holder = seed_holder_for_tests();
 
         let tree = KeyTreePublic::new(&seed_holder);
@@ -354,7 +362,7 @@ mod tests {
     }
 
     #[test]
-    fn test_small_key_tree() {
+    fn small_key_tree() {
         let seed_holder = seed_holder_for_tests();
 
         let mut tree = KeyTreePrivate::new(&seed_holder);
@@ -393,7 +401,7 @@ mod tests {
     }
 
     #[test]
-    fn test_key_tree_can_not_make_child_keys() {
+    fn key_tree_can_not_make_child_keys() {
         let seed_holder = seed_holder_for_tests();
 
         let mut tree = KeyTreePrivate::new(&seed_holder);
@@ -423,7 +431,7 @@ mod tests {
     }
 
     #[test]
-    fn test_key_tree_complex_structure() {
+    fn key_tree_complex_structure() {
         let seed_holder = seed_holder_for_tests();
 
         let mut tree = KeyTreePublic::new(&seed_holder);
@@ -518,7 +526,7 @@ mod tests {
     }
 
     #[test]
-    fn test_tree_balancing_automatic() {
+    fn tree_balancing_automatic() {
         let seed_holder = seed_holder_for_tests();
 
         let mut tree = KeyTreePublic::new(&seed_holder);
@@ -533,7 +541,7 @@ mod tests {
     }
 
     #[test]
-    fn test_cleanup() {
+    fn cleanup() {
         let seed_holder = seed_holder_for_tests();
 
         let mut tree = KeyTreePrivate::new(&seed_holder);
@@ -566,13 +574,13 @@ mod tests {
         tree.cleanup_tree_remove_uninit_layered(10);
 
         let mut key_set_res = HashSet::new();
-        key_set_res.insert("/0".to_string());
-        key_set_res.insert("/1".to_string());
-        key_set_res.insert("/2".to_string());
-        key_set_res.insert("/".to_string());
-        key_set_res.insert("/0/0".to_string());
-        key_set_res.insert("/0/1".to_string());
-        key_set_res.insert("/1/0".to_string());
+        key_set_res.insert("/0".to_owned());
+        key_set_res.insert("/1".to_owned());
+        key_set_res.insert("/2".to_owned());
+        key_set_res.insert("/".to_owned());
+        key_set_res.insert("/0/0".to_owned());
+        key_set_res.insert("/0/1".to_owned());
+        key_set_res.insert("/1/0".to_owned());
 
         let mut key_set = HashSet::new();
 
@@ -582,28 +590,16 @@ mod tests {
 
         assert_eq!(key_set, key_set_res);
 
-        let acc = tree
-            .key_map
-            .get(&ChainIndex::from_str("/1").unwrap())
-            .unwrap();
+        let acc = &tree.key_map[&ChainIndex::from_str("/1").unwrap()];
         assert_eq!(acc.value.1.balance, 2);
 
-        let acc = tree
-            .key_map
-            .get(&ChainIndex::from_str("/2").unwrap())
-            .unwrap();
+        let acc = &tree.key_map[&ChainIndex::from_str("/2").unwrap()];
         assert_eq!(acc.value.1.balance, 3);
 
-        let acc = tree
-            .key_map
-            .get(&ChainIndex::from_str("/0/1").unwrap())
-            .unwrap();
+        let acc = &tree.key_map[&ChainIndex::from_str("/0/1").unwrap()];
         assert_eq!(acc.value.1.balance, 5);
 
-        let acc = tree
-            .key_map
-            .get(&ChainIndex::from_str("/1/0").unwrap())
-            .unwrap();
+        let acc = &tree.key_map[&ChainIndex::from_str("/1/0").unwrap()];
         assert_eq!(acc.value.1.balance, 6);
     }
 }

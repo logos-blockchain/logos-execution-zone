@@ -1,9 +1,9 @@
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use bedrock_client::BedrockClient;
 pub use common::block::Block;
 pub use logos_blockchain_core::mantle::{MantleTx, SignedMantleTx, ops::channel::MsgId};
 use logos_blockchain_core::mantle::{
-    Op, OpProof, Transaction, TxHash, ledger,
+    Op, OpProof, Transaction as _, TxHash, ledger,
     ops::channel::{ChannelId, inscribe::InscriptionOp},
 };
 pub use logos_blockchain_key_management_system_service::keys::Ed25519Key;
@@ -14,7 +14,7 @@ use crate::config::BedrockConfig;
 #[expect(async_fn_in_trait, reason = "We don't care about Send/Sync here")]
 pub trait BlockSettlementClientTrait: Clone {
     //// Create a new client.
-    fn new(config: &BedrockConfig, bedrock_signing_key: Ed25519Key) -> Result<Self>;
+    fn new(config: &BedrockConfig, signing_key: Ed25519Key) -> Result<Self>;
 
     /// Get the bedrock channel ID used by this client.
     fn bedrock_channel_id(&self) -> ChannelId;

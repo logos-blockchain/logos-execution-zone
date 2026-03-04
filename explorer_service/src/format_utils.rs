@@ -1,6 +1,11 @@
 //! Formatting utilities for the explorer
 
 /// Format timestamp to human-readable string
+#[expect(
+    clippy::integer_division,
+    clippy::integer_division_remainder_used,
+    reason = "We need to convert milliseconds to seconds, and this is the most straightforward way to do it"
+)]
 pub fn format_timestamp(timestamp: u64) -> String {
     let seconds = timestamp / 1000;
     let datetime = chrono::DateTime::from_timestamp(

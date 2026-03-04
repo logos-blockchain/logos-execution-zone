@@ -21,9 +21,10 @@ use nssa_core::{
 // In case an input account is uninitialized, the program will claim it when
 // producing the post-state.
 
-type Instruction = (u8, Vec<u8>);
 const WRITE_FUNCTION_ID: u8 = 0;
 const MOVE_DATA_FUNCTION_ID: u8 = 1;
+
+type Instruction = (u8, Vec<u8>);
 
 fn build_post_state(post_account: Account) -> AccountPostState {
     if post_account.program_owner == DEFAULT_PROGRAM_ID {

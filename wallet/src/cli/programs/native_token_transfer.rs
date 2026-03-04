@@ -346,7 +346,7 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandPrivate {
                 let to_npk = nssa_core::NullifierPublicKey(to_npk);
 
                 let to_vpk_res = hex::decode(to_vpk)?;
-                let mut to_vpk = [0u8; 33];
+                let mut to_vpk = [0_u8; 33];
                 to_vpk.copy_from_slice(&to_vpk_res);
                 let to_vpk =
                     nssa_core::encryption::shared_key_derivation::Secp256k1Point(to_vpk.to_vec());
@@ -423,7 +423,7 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandShielded {
                 let to_npk = nssa_core::NullifierPublicKey(to_npk);
 
                 let to_vpk_res = hex::decode(to_vpk)?;
-                let mut to_vpk = [0u8; 33];
+                let mut to_vpk = [0_u8; 33];
                 to_vpk.copy_from_slice(&to_vpk_res);
                 let to_vpk =
                     nssa_core::encryption::shared_key_derivation::Secp256k1Point(to_vpk.to_vec());

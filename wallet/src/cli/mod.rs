@@ -1,6 +1,6 @@
-use std::{io::Write, path::PathBuf};
+use std::{io::Write as _, path::PathBuf, sync::Arc};
 
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use clap::{Parser, Subcommand};
 use common::HashType;
 use nssa::{ProgramDeploymentTransaction, program::Program};
@@ -52,7 +52,7 @@ pub enum Command {
     AMM(AmmProgramAgnosticSubcommand),
     /// Check the wallet can connect to the node and builtin local programs
     /// match the remote versions
-    CheckHealth {},
+    CheckHealth,
     /// Command to setup config, get and set config fields
     #[command(subcommand)]
     Config(ConfigSubcommand),
@@ -114,7 +114,7 @@ pub async fn execute_subcommand(
         Command::Pinata(pinata_subcommand) => {
             pinata_subcommand.handle_subcommand(wallet_core).await?
         }
-        Command::CheckHealth {} => {
+        Command::CheckHealth => {
             let remote_program_ids = wallet_core
                 .sequencer_client
                 .get_program_ids()
@@ -150,7 +150,7 @@ pub async fn execute_subcommand(
                 "Local ID for AMM program is different from remote"
             );
 
-            println!("✅All looks good!");
+            println!("\u{2705}All looks good!");
 
             SubcommandReturnValue::Empty
         }
@@ -206,7 +206,7 @@ pub fn read_password_from_stdin() -> Result<String> {
     std::io::stdout().flush()?;
     std::io::stdin().read_line(&mut password)?;
 
-    Ok(password.trim().to_string())
+    Ok(password.trim().to_owned())
 }
 
 pub async fn execute_keys_restoration(wallet_core: &mut WalletCore, depth: u32) -> Result<()> {
@@ -230,7 +230,7 @@ pub async fn execute_keys_restoration(wallet_core: &mut WalletCore, depth: u32) 
         .storage
         .user_data
         .public_key_tree
-        .cleanup_tree_remove_uninit_layered(depth, wallet_core.sequencer_client.clone())
+        .cleanup_tree_remove_uninit_layered(depth, Arc::clone(&wallet_core.sequencer_client))
         .await?;
 
     println!("Public tree cleaned up");

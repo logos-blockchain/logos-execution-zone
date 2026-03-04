@@ -11,7 +11,7 @@ use crate::{
 #[derive(Subcommand, Debug, Clone)]
 pub enum ChainSubcommand {
     /// Get current block id from sequencer
-    CurrentBlockId {},
+    CurrentBlockId,
     /// Get block at id from sequencer
     Block {
         #[arg(short, long)]
@@ -31,7 +31,7 @@ impl WalletSubcommand for ChainSubcommand {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         match self {
-            ChainSubcommand::CurrentBlockId {} => {
+            ChainSubcommand::CurrentBlockId => {
                 let latest_block_res = wallet_core.sequencer_client.get_last_block().await?;
 
                 println!("Last block id is {}", latest_block_res.last_block);

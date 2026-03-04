@@ -16,7 +16,7 @@ mod tests {
     use crate::{ProgramDeploymentTransaction, program_deployment_transaction::Message};
 
     #[test]
-    fn test_roundtrip() {
+    fn roundtrip() {
         let message = Message::new(vec![0xca, 0xfe, 0xca, 0xfe, 0x01, 0x02, 0x03]);
         let tx = ProgramDeploymentTransaction::new(message);
         let bytes = tx.to_bytes();

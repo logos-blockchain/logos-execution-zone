@@ -66,13 +66,13 @@ mod tests {
     use super::*;
 
     #[test]
-    async fn test_mempool_new() {
+    async fn mempool_new() {
         let (mut pool, _handle): (MemPool<u64>, _) = MemPool::new(10);
         assert_eq!(pool.pop(), None);
     }
 
     #[test]
-    async fn test_push_and_pop() {
+    async fn push_and_pop() {
         let (mut pool, handle) = MemPool::new(10);
 
         handle.push(1).await.unwrap();
@@ -83,7 +83,7 @@ mod tests {
     }
 
     #[test]
-    async fn test_multiple_push_pop() {
+    async fn multiple_push_pop() {
         let (mut pool, handle) = MemPool::new(10);
 
         handle.push(1).await.unwrap();
@@ -97,13 +97,13 @@ mod tests {
     }
 
     #[test]
-    async fn test_pop_empty() {
+    async fn pop_empty() {
         let (mut pool, _handle): (MemPool<u64>, _) = MemPool::new(10);
         assert_eq!(pool.pop(), None);
     }
 
     #[test]
-    async fn test_max_size() {
+    async fn max_size() {
         let (mut pool, handle) = MemPool::new(2);
 
         handle.push(1).await.unwrap();
@@ -116,7 +116,7 @@ mod tests {
     }
 
     #[test]
-    async fn test_push_front() {
+    async fn push_front() {
         let (mut pool, handle) = MemPool::new(10);
 
         handle.push(1).await.unwrap();

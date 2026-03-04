@@ -106,7 +106,7 @@ pub fn new_definition_with_metadata(
         standard: metadata.standard,
         uri: metadata.uri,
         creators: metadata.creators,
-        primary_sale_date: 0u64, // TODO #261: future works to implement this
+        primary_sale_date: 0_u64, // TODO #261: future works to implement this
     };
 
     let mut definition_target_account_post = definition_target_account.account;

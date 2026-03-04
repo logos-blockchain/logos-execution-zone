@@ -20,7 +20,7 @@ fn main() {
 
     let account_pre = &pre.account;
     let mut account_post = account_pre.clone();
-    account_post.balance -= balance_to_burn;
+    account_post.balance = account_post.balance.saturating_sub(balance_to_burn);
 
     write_nssa_outputs(
         instruction_words,

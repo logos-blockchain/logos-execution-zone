@@ -45,8 +45,16 @@ fn main() {
         };
         chained_calls.push(new_chained_call);
 
-        running_sender_pre.account.balance -= balance;
-        running_recipient_pre.account.balance += balance;
+        running_sender_pre.account.balance =
+            match running_sender_pre.account.balance.checked_sub(balance) {
+                Some(new_balance) => new_balance,
+                None => return,
+            };
+        running_recipient_pre.account.balance =
+            match running_recipient_pre.account.balance.checked_add(balance) {
+                Some(new_balance) => new_balance,
+                None => return,
+            };
     }
 
     write_nssa_outputs_with_chained_call(

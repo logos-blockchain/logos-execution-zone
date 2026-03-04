@@ -2,7 +2,6 @@
 
 use std::{ffi::CString, ptr, slice};
 
-use common::error::ExecutionFailureKind;
 use nssa::AccountId;
 use nssa_core::MembershipProof;
 use wallet::program_facades::pinata::Pinata;
@@ -10,6 +9,7 @@ use wallet::program_facades::pinata::Pinata;
 use crate::{
     block_on,
     error::{print_error, WalletFfiError},
+    map_execution_error,
     types::{FfiBytes32, FfiTransferResult, WalletHandle},
     wallet::get_wallet,
 };
@@ -92,7 +92,7 @@ pub unsafe extern "C" fn wallet_ffi_claim_pinata(
                 (*out_result).tx_hash = ptr::null_mut();
                 (*out_result).success = false;
             }
-            map_execution_error(&e)
+            map_execution_error(e)
         }
     }
 }
@@ -201,7 +201,7 @@ pub unsafe extern "C" fn wallet_ffi_claim_pinata_private_owned_already_initializ
                 (*out_result).tx_hash = ptr::null_mut();
                 (*out_result).success = false;
             }
-            map_execution_error(&e)
+            map_execution_error(e)
         }
     }
 }
@@ -287,18 +287,7 @@ pub unsafe extern "C" fn wallet_ffi_claim_pinata_private_owned_not_initialized(
                 (*out_result).tx_hash = ptr::null_mut();
                 (*out_result).success = false;
             }
-            map_execution_error(&e)
+            map_execution_error(e)
         }
-    }
-}
-
-fn map_execution_error(e: &ExecutionFailureKind) -> WalletFfiError {
-    match e {
-        ExecutionFailureKind::InsufficientFundsError => WalletFfiError::InsufficientFunds,
-        ExecutionFailureKind::KeyNotFoundError => WalletFfiError::KeyNotFound,
-        ExecutionFailureKind::SequencerError | ExecutionFailureKind::SequencerClientError(_) => {
-            WalletFfiError::NetworkError
-        }
-        _ => WalletFfiError::InternalError,
     }
 }

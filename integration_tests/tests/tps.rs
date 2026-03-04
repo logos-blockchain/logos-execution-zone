@@ -1,3 +1,14 @@
+#![expect(
+    clippy::arithmetic_side_effects,
+    clippy::float_arithmetic,
+    clippy::missing_asserts_for_indexing,
+    clippy::as_conversions,
+    clippy::tests_outside_test_module,
+    clippy::integer_division,
+    clippy::integer_division_remainder_used,
+    reason = "We don't care about these in tests"
+)]
+
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
@@ -20,6 +31,102 @@ use nssa_core::{
     encryption::ViewingPublicKey,
 };
 use tokio::test;
+
+pub(crate) struct TpsTestManager {
+    public_keypairs: Vec<(PrivateKey, AccountId)>,
+    target_tps: u64,
+}
+
+impl TpsTestManager {
+    /// Generates public account keypairs. These are used to populate the config and to generate
+    /// valid public transactions for the tps test.
+    pub(crate) fn new(target_tps: u64, number_transactions: usize) -> Self {
+        let public_keypairs = (1..(number_transactions + 2))
+            .map(|i| {
+                let mut private_key_bytes = [0_u8; 32];
+                private_key_bytes[..8].copy_from_slice(&i.to_le_bytes());
+                let private_key = PrivateKey::try_new(private_key_bytes).unwrap();
+                let public_key = PublicKey::new_from_private_key(&private_key);
+                let account_id = AccountId::from(&public_key);
+                (private_key, account_id)
+            })
+            .collect();
+        Self {
+            public_keypairs,
+            target_tps,
+        }
+    }
+
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "This is just for testing purposes, we don't care about precision loss here"
+    )]
+    pub(crate) fn target_time(&self) -> Duration {
+        let number_transactions = (self.public_keypairs.len() - 1) as u64;
+        Duration::from_secs_f64(number_transactions as f64 / self.target_tps as f64)
+    }
+
+    /// Build a batch of public transactions to submit to the node.
+    pub fn build_public_txs(&self) -> Vec<PublicTransaction> {
+        // Create valid public transactions
+        let program = Program::authenticated_transfer_program();
+        let public_txs: Vec<PublicTransaction> = self
+            .public_keypairs
+            .windows(2)
+            .map(|pair| {
+                let amount: u128 = 1;
+                let message = putx::Message::try_new(
+                    program.id(),
+                    [pair[0].1, pair[1].1].to_vec(),
+                    [0_u128].to_vec(),
+                    amount,
+                )
+                .unwrap();
+                let witness_set =
+                    nssa::public_transaction::WitnessSet::for_message(&message, &[&pair[0].0]);
+                PublicTransaction::new(message, witness_set)
+            })
+            .collect();
+
+        public_txs
+    }
+
+    /// Generates a sequencer configuration with initial balance in a number of public accounts.
+    /// The transactions generated with the function `build_public_txs` will be valid in a node
+    /// started with the config from this method.
+    fn generate_initial_data(&self) -> InitialData {
+        // Create public public keypairs
+        let public_accounts = self
+            .public_keypairs
+            .iter()
+            .map(|(key, _)| (key.clone(), 10))
+            .collect();
+
+        // Generate an initial commitment to be used with the privacy preserving transaction
+        // created with the `build_privacy_transaction` function.
+        let key_chain = KeyChain::new_os_random();
+        let account = Account {
+            balance: 100,
+            nonce: 0xdead_beef,
+            program_owner: Program::authenticated_transfer_program().id(),
+            data: Data::default(),
+        };
+
+        InitialData {
+            public_accounts,
+            private_accounts: vec![(key_chain, account)],
+        }
+    }
+
+    fn generate_sequencer_partial_config() -> SequencerPartialConfig {
+        SequencerPartialConfig {
+            max_num_tx_in_block: 300,
+            max_block_size: ByteSize::mb(500),
+            mempool_max_size: 10_000,
+            block_create_timeout: Duration::from_secs(12),
+        }
+    }
+}
 
 // TODO: Make a proper benchmark instead of an ad-hoc test
 #[test]
@@ -93,102 +200,6 @@ pub async fn tps_test() -> Result<()> {
     info!("TPS test finished successfully");
 
     Ok(())
-}
-
-pub(crate) struct TpsTestManager {
-    public_keypairs: Vec<(PrivateKey, AccountId)>,
-    target_tps: u64,
-}
-
-impl TpsTestManager {
-    /// Generates public account keypairs. These are used to populate the config and to generate
-    /// valid public transactions for the tps test.
-    pub(crate) fn new(target_tps: u64, number_transactions: usize) -> Self {
-        let public_keypairs = (1..(number_transactions + 2))
-            .map(|i| {
-                let mut private_key_bytes = [0u8; 32];
-                private_key_bytes[..8].copy_from_slice(&i.to_le_bytes());
-                let private_key = PrivateKey::try_new(private_key_bytes).unwrap();
-                let public_key = PublicKey::new_from_private_key(&private_key);
-                let account_id = AccountId::from(&public_key);
-                (private_key, account_id)
-            })
-            .collect();
-        Self {
-            public_keypairs,
-            target_tps,
-        }
-    }
-
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "This is just for testing purposes, we don't care about precision loss here"
-    )]
-    pub(crate) fn target_time(&self) -> Duration {
-        let number_transactions = (self.public_keypairs.len() - 1) as u64;
-        Duration::from_secs_f64(number_transactions as f64 / self.target_tps as f64)
-    }
-
-    /// Build a batch of public transactions to submit to the node.
-    pub fn build_public_txs(&self) -> Vec<PublicTransaction> {
-        // Create valid public transactions
-        let program = Program::authenticated_transfer_program();
-        let public_txs: Vec<PublicTransaction> = self
-            .public_keypairs
-            .windows(2)
-            .map(|pair| {
-                let amount: u128 = 1;
-                let message = putx::Message::try_new(
-                    program.id(),
-                    [pair[0].1, pair[1].1].to_vec(),
-                    [0u128].to_vec(),
-                    amount,
-                )
-                .unwrap();
-                let witness_set =
-                    nssa::public_transaction::WitnessSet::for_message(&message, &[&pair[0].0]);
-                PublicTransaction::new(message, witness_set)
-            })
-            .collect();
-
-        public_txs
-    }
-
-    /// Generates a sequencer configuration with initial balance in a number of public accounts.
-    /// The transactions generated with the function `build_public_txs` will be valid in a node
-    /// started with the config from this method.
-    fn generate_initial_data(&self) -> InitialData {
-        // Create public public keypairs
-        let public_accounts = self
-            .public_keypairs
-            .iter()
-            .map(|(key, _)| (key.clone(), 10))
-            .collect();
-
-        // Generate an initial commitment to be used with the privacy preserving transaction
-        // created with the `build_privacy_transaction` function.
-        let key_chain = KeyChain::new_os_random();
-        let account = Account {
-            balance: 100,
-            nonce: 0xdead_beef,
-            program_owner: Program::authenticated_transfer_program().id(),
-            data: Data::default(),
-        };
-
-        InitialData {
-            public_accounts,
-            private_accounts: vec![(key_chain, account)],
-        }
-    }
-
-    fn generate_sequencer_partial_config() -> SequencerPartialConfig {
-        SequencerPartialConfig {
-            max_num_tx_in_block: 300,
-            max_block_size: ByteSize::mb(500),
-            mempool_max_size: 10_000,
-            block_create_timeout: Duration::from_secs(12),
-        }
-    }
 }
 
 /// Builds a single privacy transaction to use in stress tests. This involves generating a proof so

@@ -61,7 +61,7 @@ mod tests {
     };
 
     #[test]
-    fn test_privacy_preserving_circuit_output_to_bytes_is_compatible_with_from_slice() {
+    fn privacy_preserving_circuit_output_to_bytes_is_compatible_with_from_slice() {
         let output = PrivacyPreservingCircuitOutput {
             public_pre_states: vec![
                 AccountWithMetadata::new(
@@ -69,7 +69,7 @@ mod tests {
                         program_owner: [1, 2, 3, 4, 5, 6, 7, 8],
                         balance: 12_345_678_901_234_567_890,
                         data: b"test data".to_vec().try_into().unwrap(),
-                        nonce: 18_446_744_073_709_551_614,
+                        nonce: 0xFFFF_FFFF_FFFF_FFFE,
                     },
                     true,
                     AccountId::new([0; 32]),
@@ -89,7 +89,7 @@ mod tests {
                 program_owner: [1, 2, 3, 4, 5, 6, 7, 8],
                 balance: 100,
                 data: b"post state data".to_vec().try_into().unwrap(),
-                nonce: 18_446_744_073_709_551_615,
+                nonce: 0xFFFF_FFFF_FFFF_FFFF,
             }],
             ciphertexts: vec![Ciphertext(vec![255, 255, 1, 1, 2, 2])],
             new_commitments: vec![Commitment::new(

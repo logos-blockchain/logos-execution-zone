@@ -755,7 +755,7 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                 let recipient_npk = nssa_core::NullifierPublicKey(recipient_npk);
 
                 let recipient_vpk_res = hex::decode(recipient_vpk)?;
-                let mut recipient_vpk = [0u8; 33];
+                let mut recipient_vpk = [0_u8; 33];
                 recipient_vpk.copy_from_slice(&recipient_vpk_res);
                 let recipient_vpk = nssa_core::encryption::shared_key_derivation::Secp256k1Point(
                     recipient_vpk.to_vec(),
@@ -876,7 +876,7 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                 let holder_npk = nssa_core::NullifierPublicKey(holder_npk);
 
                 let holder_vpk_res = hex::decode(holder_vpk)?;
-                let mut holder_vpk = [0u8; 33];
+                let mut holder_vpk = [0_u8; 33];
                 holder_vpk.copy_from_slice(&holder_vpk_res);
                 let holder_vpk = nssa_core::encryption::shared_key_derivation::Secp256k1Point(
                     holder_vpk.to_vec(),
@@ -1044,7 +1044,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                 let recipient_npk = nssa_core::NullifierPublicKey(recipient_npk);
 
                 let recipient_vpk_res = hex::decode(recipient_vpk)?;
-                let mut recipient_vpk = [0u8; 33];
+                let mut recipient_vpk = [0_u8; 33];
                 recipient_vpk.copy_from_slice(&recipient_vpk_res);
                 let recipient_vpk = nssa_core::encryption::shared_key_derivation::Secp256k1Point(
                     recipient_vpk.to_vec(),
@@ -1188,7 +1188,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                 let holder_npk = nssa_core::NullifierPublicKey(holder_npk);
 
                 let holder_vpk_res = hex::decode(holder_vpk)?;
-                let mut holder_vpk = [0u8; 33];
+                let mut holder_vpk = [0_u8; 33];
                 holder_vpk.copy_from_slice(&holder_vpk_res);
                 let holder_vpk = nssa_core::encryption::shared_key_derivation::Secp256k1Point(
                     holder_vpk.to_vec(),

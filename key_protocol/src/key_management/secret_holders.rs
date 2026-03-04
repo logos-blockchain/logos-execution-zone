@@ -4,9 +4,9 @@ use nssa_core::{
     NullifierPublicKey, NullifierSecretKey,
     encryption::{Scalar, ViewingPublicKey},
 };
-use rand::{RngCore, rngs::OsRng};
+use rand::{RngCore as _, rngs::OsRng};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, digest::FixedOutput};
+use sha2::{Digest as _, digest::FixedOutput as _};
 
 const NSSA_ENTROPY_BYTES: [u8; 32] = [0; 32];
 
@@ -27,6 +27,7 @@ pub type ViewingSecretKey = Scalar;
 #[derive(Serialize, Deserialize, Debug, Clone)]
 /// Private key holder. Produces public keys. Can produce `account_id`. Can produce shared secret
 /// for recepient.
+#[expect(clippy::partial_pub_fields, reason = "TODO: fix later")]
 pub struct PrivateKeyHolder {
     pub nullifier_secret_key: NullifierSecretKey,
     pub(crate) viewing_secret_key: ViewingSecretKey,
@@ -84,7 +85,7 @@ impl SecretSpendingKey {
         const SUFFIX_2: &[u8; 19] = &[0; 19];
 
         let index = match index {
-            None => 0u32,
+            None => 0_u32,
             _ => index.expect("Expect a valid u32"),
         };
 
@@ -105,7 +106,7 @@ impl SecretSpendingKey {
         const SUFFIX_2: &[u8; 19] = &[0; 19];
 
         let index = match index {
-            None => 0u32,
+            None => 0_u32,
             _ => index.expect("Expect a valid u32"),
         };
 
@@ -158,7 +159,7 @@ mod tests {
 
         assert_eq!(seed_holder.seed.len(), 64);
 
-        let _ = seed_holder.generate_secret_spending_key_hash();
+        let _hash = seed_holder.generate_secret_spending_key_hash();
     }
 
     #[test]
@@ -169,15 +170,15 @@ mod tests {
 
         let top_secret_key_holder = seed_holder.produce_top_secret_key_holder();
 
-        let _ = top_secret_key_holder.generate_viewing_secret_key(None);
+        let _vsk = top_secret_key_holder.generate_viewing_secret_key(None);
     }
 
     #[test]
     fn two_seeds_generated_same_from_same_mnemonic() {
         let mnemonic = "test_pass";
 
-        let seed_holder1 = SeedHolder::new_mnemonic(mnemonic.to_string());
-        let seed_holder2 = SeedHolder::new_mnemonic(mnemonic.to_string());
+        let seed_holder1 = SeedHolder::new_mnemonic(mnemonic.to_owned());
+        let seed_holder2 = SeedHolder::new_mnemonic(mnemonic.to_owned());
 
         assert_eq!(seed_holder1.seed, seed_holder2.seed);
     }

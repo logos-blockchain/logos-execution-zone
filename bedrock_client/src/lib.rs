@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use common::config::BasicAuth;
-use futures::{Stream, TryFutureExt};
+use futures::{Stream, TryFutureExt as _};
 #[expect(clippy::single_component_path_imports, reason = "Satisfy machete")]
 use humantime_serde;
 use log::{info, warn};

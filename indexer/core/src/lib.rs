@@ -52,7 +52,7 @@ impl IndexerCore {
         // ToDo: remove key from indexer config, use some default.
         let signing_key = nssa::PrivateKey::try_new(config.signing_key).unwrap();
         let channel_genesis_msg_id = [0; 32];
-        let start_block = hashable_data.into_pending_block(&signing_key, channel_genesis_msg_id);
+        let genesis_block = hashable_data.into_pending_block(&signing_key, channel_genesis_msg_id);
 
         // This is a troubling moment, because changes in key protocol can
         // affect this. And indexer can not reliably ask this data from sequencer
@@ -94,7 +94,7 @@ impl IndexerCore {
                 config.bedrock_client_config.auth.clone(),
             )?,
             config,
-            store: IndexerStore::open_db_with_genesis(&home, Some((start_block, state)))?,
+            store: IndexerStore::open_db_with_genesis(&home, &genesis_block, &state)?,
         })
     }
 
@@ -102,9 +102,9 @@ impl IndexerCore {
         async_stream::stream! {
             info!("Searching for initial header");
 
-            let last_l1_lib_header = self.store.last_observed_l1_lib_header()?;
+            let last_stored_l1_lib_header = self.store.last_observed_l1_lib_header()?;
 
-            let mut prev_last_l1_lib_header = if let Some(last_l1_lib_header) = last_l1_lib_header {
+            let mut prev_last_l1_lib_header = if let Some(last_l1_lib_header) = last_stored_l1_lib_header {
                 info!("Last l1 lib header found: {last_l1_lib_header}");
                 last_l1_lib_header
             } else {
@@ -318,6 +318,10 @@ fn parse_block_owned(
     decoded_channel_id: &ChannelId,
 ) -> (Vec<Block>, HeaderId) {
     (
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "We are only interested in channel inscription ops, so it's fine to ignore the rest"
+        )]
         l1_block
             .transactions()
             .flat_map(|tx| {

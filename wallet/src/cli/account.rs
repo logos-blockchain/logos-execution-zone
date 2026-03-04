@@ -31,7 +31,7 @@ pub enum AccountSubcommand {
     #[command(subcommand)]
     New(NewSubcommand),
     /// Sync private accounts
-    SyncPrivate {},
+    SyncPrivate,
     /// List all accounts owned by the wallet
     #[command(visible_alias = "ls")]
     List {
@@ -80,7 +80,7 @@ impl WalletSubcommand for NewSubcommand {
     ) -> Result<SubcommandReturnValue> {
         match self {
             NewSubcommand::Public { cci, label } => {
-                if let Some(ref label) = label
+                if let Some(label) = &label
                     && wallet_core
                         .storage
                         .labels
@@ -117,7 +117,7 @@ impl WalletSubcommand for NewSubcommand {
                 Ok(SubcommandReturnValue::RegisterAccount { account_id })
             }
             NewSubcommand::Private { cci, label } => {
-                if let Some(ref label) = label
+                if let Some(label) = &label
                     && wallet_core
                         .storage
                         .labels
@@ -159,46 +159,8 @@ impl WalletSubcommand for NewSubcommand {
     }
 }
 
-/// Formats account details for display, returning (description, `json_view`)
-fn format_account_details(account: &Account) -> (String, String) {
-    let auth_tr_prog_id = Program::authenticated_transfer_program().id();
-    let token_prog_id = Program::token().id();
-
-    match &account.program_owner {
-        o if *o == auth_tr_prog_id => (
-            "Account owned by authenticated transfer program".to_string(),
-            serde_json::to_string(&account).unwrap(),
-        ),
-        o if *o == token_prog_id => {
-            if let Ok(token_def) = TokenDefinition::try_from(&account.data) {
-                (
-                    "Definition account owned by token program".to_string(),
-                    serde_json::to_string(&token_def).unwrap(),
-                )
-            } else if let Ok(token_hold) = TokenHolding::try_from(&account.data) {
-                (
-                    "Holding account owned by token program".to_string(),
-                    serde_json::to_string(&token_hold).unwrap(),
-                )
-            } else {
-                let account_hr: HumanReadableAccount = account.clone().into();
-                (
-                    "Unknown token program account".to_string(),
-                    serde_json::to_string(&account_hr).unwrap(),
-                )
-            }
-        }
-        _ => {
-            let account_hr: HumanReadableAccount = account.clone().into();
-            (
-                "Account".to_string(),
-                serde_json::to_string(&account_hr).unwrap(),
-            )
-        }
-    }
-}
-
 impl WalletSubcommand for AccountSubcommand {
+    #[expect(clippy::cognitive_complexity, reason = "TODO: fix later")]
     async fn handle_subcommand(
         self,
         wallet_core: &mut WalletCore,
@@ -283,7 +245,7 @@ impl WalletSubcommand for AccountSubcommand {
             AccountSubcommand::New(new_subcommand) => {
                 new_subcommand.handle_subcommand(wallet_core).await
             }
-            AccountSubcommand::SyncPrivate {} => {
+            AccountSubcommand::SyncPrivate => {
                 let curr_last_block = wallet_core
                     .sequencer_client
                     .get_last_block()
@@ -315,7 +277,7 @@ impl WalletSubcommand for AccountSubcommand {
                     if let Some(label) = labels.get(&id_str) {
                         format!("{prefix} [{label}]")
                     } else {
-                        prefix.to_string()
+                        prefix.to_owned()
                     }
                 };
 
@@ -447,6 +409,45 @@ impl WalletSubcommand for AccountSubcommand {
 
                 Ok(SubcommandReturnValue::Empty)
             }
+        }
+    }
+}
+
+/// Formats account details for display, returning (description, `json_view`)
+fn format_account_details(account: &Account) -> (String, String) {
+    let auth_tr_prog_id = Program::authenticated_transfer_program().id();
+    let token_prog_id = Program::token().id();
+
+    match &account.program_owner {
+        o if *o == auth_tr_prog_id => (
+            "Account owned by authenticated transfer program".to_owned(),
+            serde_json::to_string(&account).unwrap(),
+        ),
+        o if *o == token_prog_id => {
+            if let Ok(token_def) = TokenDefinition::try_from(&account.data) {
+                (
+                    "Definition account owned by token program".to_owned(),
+                    serde_json::to_string(&token_def).unwrap(),
+                )
+            } else if let Ok(token_hold) = TokenHolding::try_from(&account.data) {
+                (
+                    "Holding account owned by token program".to_owned(),
+                    serde_json::to_string(&token_hold).unwrap(),
+                )
+            } else {
+                let account_hr: HumanReadableAccount = account.clone().into();
+                (
+                    "Unknown token program account".to_owned(),
+                    serde_json::to_string(&account_hr).unwrap(),
+                )
+            }
+        }
+        _ => {
+            let account_hr: HumanReadableAccount = account.clone().into();
+            (
+                "Account".to_owned(),
+                serde_json::to_string(&account_hr).unwrap(),
+            )
         }
     }
 }

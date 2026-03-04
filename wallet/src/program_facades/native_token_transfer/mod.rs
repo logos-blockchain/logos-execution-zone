@@ -9,7 +9,7 @@ pub mod private;
 pub mod public;
 pub mod shielded;
 
-pub struct NativeTokenTransfer<'w>(pub &'w WalletCore);
+pub struct NativeTokenTransfer<'wallet>(pub &'wallet WalletCore);
 
 fn auth_transfer_preparation(
     balance_to_move: u128,
@@ -22,7 +22,6 @@ fn auth_transfer_preparation(
     let program = Program::authenticated_transfer_program();
 
     // TODO: handle large Err-variant properly
-    #[allow(clippy::result_large_err)]
     let tx_pre_check = move |accounts: &[&Account]| {
         let from = accounts[0];
         if from.balance >= balance_to_move {

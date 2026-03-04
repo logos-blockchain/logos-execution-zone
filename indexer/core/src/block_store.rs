@@ -21,18 +21,14 @@ impl IndexerStore {
     /// ATTENTION: Will overwrite genesis block.
     pub fn open_db_with_genesis(
         location: &Path,
-        start_data: Option<(Block, V02State)>,
+        genesis_block: &Block,
+        initial_state: &V02State,
     ) -> Result<Self> {
-        let dbio = RocksDBIO::open_or_create(location, start_data)?;
+        let dbio = RocksDBIO::open_or_create(location, genesis_block, initial_state)?;
 
         Ok(Self {
             dbio: Arc::new(dbio),
         })
-    }
-
-    /// Reopening existing database
-    pub fn open_db_restart(location: &Path) -> Result<Self> {
-        Self::open_db_with_genesis(location, None)
     }
 
     pub fn last_observed_l1_lib_header(&self) -> Result<Option<HeaderId>> {
@@ -120,6 +116,6 @@ impl IndexerStore {
         // to represent correct block finality
         block.bedrock_status = BedrockStatus::Finalized;
 
-        Ok(self.dbio.put_block(block, l1_header.into())?)
+        Ok(self.dbio.put_block(&block, l1_header.into())?)
     }
 }

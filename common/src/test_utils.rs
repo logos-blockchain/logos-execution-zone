@@ -31,7 +31,7 @@ pub fn produce_dummy_block(
     let block_data = HashableBlockData {
         block_id: id,
         prev_block_hash: prev_hash.unwrap_or_default(),
-        timestamp: id * 100,
+        timestamp: id.saturating_mul(100),
         transactions,
     };
 

@@ -1,7 +1,13 @@
+#![expect(
+    clippy::shadow_unrelated,
+    clippy::tests_outside_test_module,
+    reason = "We don't care about these in tests"
+)]
+
 use std::time::Duration;
 
-use anyhow::{Context, Result};
-use indexer_service_rpc::RpcClient;
+use anyhow::{Context as _, Result};
+use indexer_service_rpc::RpcClient as _;
 use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, format_private_account_id,
     format_public_account_id, verify_commitment_is_in_state,

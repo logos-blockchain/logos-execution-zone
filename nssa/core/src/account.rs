@@ -1,6 +1,6 @@
 use std::{fmt::Display, str::FromStr};
 
-use base58::{FromBase58, ToBase58};
+use base58::{FromBase58 as _, ToBase58 as _};
 use borsh::{BorshDeserialize, BorshSerialize};
 pub use data::Data;
 use serde::{Deserialize, Serialize};
@@ -98,7 +98,7 @@ impl FromStr for AccountId {
         if bytes.len() != 32 {
             return Err(AccountIdError::InvalidLength(bytes.len()));
         }
-        let mut value = [0u8; 32];
+        let mut value = [0_u8; 32];
         value.copy_from_slice(&bytes);
         Ok(AccountId { value })
     }
@@ -116,28 +116,28 @@ mod tests {
     use crate::program::DEFAULT_PROGRAM_ID;
 
     #[test]
-    fn test_zero_balance_account_data_creation() {
+    fn zero_balance_account_data_creation() {
         let new_acc = Account::default();
 
         assert_eq!(new_acc.balance, 0);
     }
 
     #[test]
-    fn test_zero_nonce_account_data_creation() {
+    fn zero_nonce_account_data_creation() {
         let new_acc = Account::default();
 
         assert_eq!(new_acc.nonce, 0);
     }
 
     #[test]
-    fn test_empty_data_account_data_creation() {
+    fn empty_data_account_data_creation() {
         let new_acc = Account::default();
 
         assert!(new_acc.data.is_empty());
     }
 
     #[test]
-    fn test_default_program_owner_account_data_creation() {
+    fn default_program_owner_account_data_creation() {
         let new_acc = Account::default();
 
         assert_eq!(new_acc.program_owner, DEFAULT_PROGRAM_ID);
@@ -145,7 +145,7 @@ mod tests {
 
     #[cfg(feature = "host")]
     #[test]
-    fn test_account_with_metadata_constructor() {
+    fn account_with_metadata_constructor() {
         let account = Account {
             program_owner: [1, 2, 3, 4, 5, 6, 7, 8],
             balance: 1337,
@@ -167,7 +167,7 @@ mod tests {
     fn parse_valid_account_id() {
         let base58_str = "11111111111111111111111111111111";
         let account_id: AccountId = base58_str.parse().unwrap();
-        assert_eq!(account_id.value, [0u8; 32]);
+        assert_eq!(account_id.value, [0_u8; 32]);
     }
 
     #[cfg(feature = "host")]

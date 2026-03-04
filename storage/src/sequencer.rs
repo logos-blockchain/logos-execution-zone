@@ -50,7 +50,8 @@ pub struct RocksDBIO {
 impl RocksDBIO {
     pub fn open_or_create(
         path: &Path,
-        start_block: Option<(&Block, MantleMsgId)>,
+        genesis_block: &Block,
+        genesis_msg_id: MantleMsgId,
     ) -> DbResult<Self> {
         let mut cf_opts = Options::default();
         cf_opts.set_max_write_buffer_number(16);
@@ -66,33 +67,31 @@ impl RocksDBIO {
             &db_opts,
             path,
             vec![cfb, cfmeta, cfstate],
-        );
+        )
+        .map_err(|err| DbError::RocksDbError {
+            error: err,
+            additional_info: Some("Failed to open or create DB".to_owned()),
+        })?;
 
-        let dbio = Self {
-            // There is no point in handling this from runner code
-            db: db.unwrap(),
-        };
+        let dbio = Self { db };
 
         let is_start_set = dbio.get_meta_is_first_block_set()?;
 
         if is_start_set {
             Ok(dbio)
-        } else if let Some((block, msg_id)) = start_block {
-            let block_id = block.header.block_id;
-            dbio.put_meta_first_block_in_db(block, msg_id)?;
+        } else {
+            let block_id = genesis_block.header.block_id;
+            dbio.put_meta_first_block_in_db(genesis_block, genesis_msg_id)?;
             dbio.put_meta_is_first_block_set()?;
             dbio.put_meta_last_block_in_db(block_id)?;
             dbio.put_meta_last_finalized_block_id(None)?;
             dbio.put_meta_latest_block_meta(&BlockMeta {
-                id: block.header.block_id,
-                hash: block.header.hash,
-                msg_id,
+                id: genesis_block.header.block_id,
+                hash: genesis_block.header.hash,
+                msg_id: genesis_msg_id,
             })?;
 
             Ok(dbio)
-        } else {
-            // Here we are trying to start a DB without a block, one should not do it.
-            unreachable!()
         }
     }
 
@@ -132,7 +131,7 @@ impl RocksDBIO {
                 borsh::to_vec(&DB_META_FIRST_BLOCK_IN_DB_KEY).map_err(|err| {
                     DbError::borsh_cast_message(
                         err,
-                        Some("Failed to serialize DB_META_FIRST_BLOCK_IN_DB_KEY".to_string()),
+                        Some("Failed to serialize DB_META_FIRST_BLOCK_IN_DB_KEY".to_owned()),
                     )
                 })?,
             )
@@ -142,12 +141,12 @@ impl RocksDBIO {
             Ok(borsh::from_slice::<u64>(&data).map_err(|err| {
                 DbError::borsh_cast_message(
                     err,
-                    Some("Failed to deserialize first block".to_string()),
+                    Some("Failed to deserialize first block".to_owned()),
                 )
             })?)
         } else {
             Err(DbError::db_interaction_error(
-                "First block not found".to_string(),
+                "First block not found".to_owned(),
             ))
         }
     }
@@ -161,7 +160,7 @@ impl RocksDBIO {
                 borsh::to_vec(&DB_META_LAST_BLOCK_IN_DB_KEY).map_err(|err| {
                     DbError::borsh_cast_message(
                         err,
-                        Some("Failed to serialize DB_META_LAST_BLOCK_IN_DB_KEY".to_string()),
+                        Some("Failed to serialize DB_META_LAST_BLOCK_IN_DB_KEY".to_owned()),
                     )
                 })?,
             )
@@ -171,12 +170,12 @@ impl RocksDBIO {
             Ok(borsh::from_slice::<u64>(&data).map_err(|err| {
                 DbError::borsh_cast_message(
                     err,
-                    Some("Failed to deserialize last block".to_string()),
+                    Some("Failed to deserialize last block".to_owned()),
                 )
             })?)
         } else {
             Err(DbError::db_interaction_error(
-                "Last block not found".to_string(),
+                "Last block not found".to_owned(),
             ))
         }
     }
@@ -190,7 +189,7 @@ impl RocksDBIO {
                 borsh::to_vec(&DB_META_FIRST_BLOCK_SET_KEY).map_err(|err| {
                     DbError::borsh_cast_message(
                         err,
-                        Some("Failed to serialize DB_META_FIRST_BLOCK_SET_KEY".to_string()),
+                        Some("Failed to serialize DB_META_FIRST_BLOCK_SET_KEY".to_owned()),
                     )
                 })?,
             )
@@ -206,11 +205,11 @@ impl RocksDBIO {
             borsh::to_vec(&DB_NSSA_STATE_KEY).map_err(|err| {
                 DbError::borsh_cast_message(
                     err,
-                    Some("Failed to serialize DB_NSSA_STATE_KEY".to_string()),
+                    Some("Failed to serialize DB_NSSA_STATE_KEY".to_owned()),
                 )
             })?,
             borsh::to_vec(state).map_err(|err| {
-                DbError::borsh_cast_message(err, Some("Failed to serialize NSSA state".to_string()))
+                DbError::borsh_cast_message(err, Some("Failed to serialize NSSA state".to_owned()))
             })?,
         );
 
@@ -225,13 +224,13 @@ impl RocksDBIO {
                 borsh::to_vec(&DB_META_FIRST_BLOCK_IN_DB_KEY).map_err(|err| {
                     DbError::borsh_cast_message(
                         err,
-                        Some("Failed to serialize DB_META_FIRST_BLOCK_IN_DB_KEY".to_string()),
+                        Some("Failed to serialize DB_META_FIRST_BLOCK_IN_DB_KEY".to_owned()),
                     )
                 })?,
                 borsh::to_vec(&block.header.block_id).map_err(|err| {
                     DbError::borsh_cast_message(
                         err,
-                        Some("Failed to serialize first block id".to_string()),
+                        Some("Failed to serialize first block id".to_owned()),
                     )
                 })?,
             )
@@ -242,7 +241,7 @@ impl RocksDBIO {
         self.db.write(batch).map_err(|rerr| {
             DbError::rocksdb_cast_message(
                 rerr,
-                Some("Failed to write first block in db".to_string()),
+                Some("Failed to write first block in db".to_owned()),
             )
         })?;
 
@@ -257,13 +256,13 @@ impl RocksDBIO {
                 borsh::to_vec(&DB_META_LAST_BLOCK_IN_DB_KEY).map_err(|err| {
                     DbError::borsh_cast_message(
                         err,
-                        Some("Failed to serialize DB_META_LAST_BLOCK_IN_DB_KEY".to_string()),
+                        Some("Failed to serialize DB_META_LAST_BLOCK_IN_DB_KEY".to_owned()),
                     )
                 })?,
                 borsh::to_vec(&block_id).map_err(|err| {
                     DbError::borsh_cast_message(
                         err,
-                        Some("Failed to serialize last block id".to_string()),
+                        Some("Failed to serialize last block id".to_owned()),
                     )
                 })?,
             )
@@ -282,13 +281,13 @@ impl RocksDBIO {
             borsh::to_vec(&DB_META_LAST_BLOCK_IN_DB_KEY).map_err(|err| {
                 DbError::borsh_cast_message(
                     err,
-                    Some("Failed to serialize DB_META_LAST_BLOCK_IN_DB_KEY".to_string()),
+                    Some("Failed to serialize DB_META_LAST_BLOCK_IN_DB_KEY".to_owned()),
                 )
             })?,
             borsh::to_vec(&block_id).map_err(|err| {
                 DbError::borsh_cast_message(
                     err,
-                    Some("Failed to serialize last block id".to_string()),
+                    Some("Failed to serialize last block id".to_owned()),
                 )
             })?,
         );
@@ -303,13 +302,13 @@ impl RocksDBIO {
                 borsh::to_vec(&DB_META_LAST_FINALIZED_BLOCK_ID).map_err(|err| {
                     DbError::borsh_cast_message(
                         err,
-                        Some("Failed to serialize DB_META_LAST_FINALIZED_BLOCK_ID".to_string()),
+                        Some("Failed to serialize DB_META_LAST_FINALIZED_BLOCK_ID".to_owned()),
                     )
                 })?,
                 borsh::to_vec(&block_id).map_err(|err| {
                     DbError::borsh_cast_message(
                         err,
-                        Some("Failed to serialize last block id".to_string()),
+                        Some("Failed to serialize last block id".to_owned()),
                     )
                 })?,
             )
@@ -325,10 +324,10 @@ impl RocksDBIO {
                 borsh::to_vec(&DB_META_FIRST_BLOCK_SET_KEY).map_err(|err| {
                     DbError::borsh_cast_message(
                         err,
-                        Some("Failed to serialize DB_META_FIRST_BLOCK_SET_KEY".to_string()),
+                        Some("Failed to serialize DB_META_FIRST_BLOCK_SET_KEY".to_owned()),
                     )
                 })?,
-                [1u8; 1],
+                [1_u8; 1],
             )
             .map_err(|rerr| DbError::rocksdb_cast_message(rerr, None))?;
         Ok(())
@@ -342,13 +341,13 @@ impl RocksDBIO {
                 borsh::to_vec(&DB_META_LATEST_BLOCK_META_KEY).map_err(|err| {
                     DbError::borsh_cast_message(
                         err,
-                        Some("Failed to serialize DB_META_LATEST_BLOCK_META_KEY".to_string()),
+                        Some("Failed to serialize DB_META_LATEST_BLOCK_META_KEY".to_owned()),
                     )
                 })?,
                 borsh::to_vec(&block_meta).map_err(|err| {
                     DbError::borsh_cast_message(
                         err,
-                        Some("Failed to serialize latest block meta".to_string()),
+                        Some("Failed to serialize latest block meta".to_owned()),
                     )
                 })?,
             )
@@ -367,13 +366,13 @@ impl RocksDBIO {
             borsh::to_vec(&DB_META_LATEST_BLOCK_META_KEY).map_err(|err| {
                 DbError::borsh_cast_message(
                     err,
-                    Some("Failed to serialize DB_META_LATEST_BLOCK_META_KEY".to_string()),
+                    Some("Failed to serialize DB_META_LATEST_BLOCK_META_KEY".to_owned()),
                 )
             })?,
             borsh::to_vec(&block_meta).map_err(|err| {
                 DbError::borsh_cast_message(
                     err,
-                    Some("Failed to serialize latest block meta".to_string()),
+                    Some("Failed to serialize latest block meta".to_owned()),
                 )
             })?,
         );
@@ -389,7 +388,7 @@ impl RocksDBIO {
                 borsh::to_vec(&DB_META_LATEST_BLOCK_META_KEY).map_err(|err| {
                     DbError::borsh_cast_message(
                         err,
-                        Some("Failed to serialize DB_META_LATEST_BLOCK_META_KEY".to_string()),
+                        Some("Failed to serialize DB_META_LATEST_BLOCK_META_KEY".to_owned()),
                     )
                 })?,
             )
@@ -399,12 +398,12 @@ impl RocksDBIO {
             Ok(borsh::from_slice::<BlockMeta>(&data).map_err(|err| {
                 DbError::borsh_cast_message(
                     err,
-                    Some("Failed to deserialize latest block meta".to_string()),
+                    Some("Failed to deserialize latest block meta".to_owned()),
                 )
             })?)
         } else {
             Err(DbError::db_interaction_error(
-                "Latest block meta not found".to_string(),
+                "Latest block meta not found".to_owned(),
             ))
         }
     }
@@ -437,10 +436,10 @@ impl RocksDBIO {
         batch.put_cf(
             &cf_block,
             borsh::to_vec(&block.header.block_id).map_err(|err| {
-                DbError::borsh_cast_message(err, Some("Failed to serialize block id".to_string()))
+                DbError::borsh_cast_message(err, Some("Failed to serialize block id".to_owned()))
             })?,
             borsh::to_vec(block).map_err(|err| {
-                DbError::borsh_cast_message(err, Some("Failed to serialize block data".to_string()))
+                DbError::borsh_cast_message(err, Some("Failed to serialize block data".to_owned()))
             })?,
         );
         Ok(())
@@ -455,7 +454,7 @@ impl RocksDBIO {
                 borsh::to_vec(&block_id).map_err(|err| {
                     DbError::borsh_cast_message(
                         err,
-                        Some("Failed to serialize block id".to_string()),
+                        Some("Failed to serialize block id".to_owned()),
                     )
                 })?,
             )
@@ -465,12 +464,12 @@ impl RocksDBIO {
             Ok(borsh::from_slice::<Block>(&data).map_err(|serr| {
                 DbError::borsh_cast_message(
                     serr,
-                    Some("Failed to deserialize block data".to_string()),
+                    Some("Failed to deserialize block data".to_owned()),
                 )
             })?)
         } else {
             Err(DbError::db_interaction_error(
-                "Block on this id not found".to_string(),
+                "Block on this id not found".to_owned(),
             ))
         }
     }
@@ -484,7 +483,7 @@ impl RocksDBIO {
                 borsh::to_vec(&DB_NSSA_STATE_KEY).map_err(|err| {
                     DbError::borsh_cast_message(
                         err,
-                        Some("Failed to serialize block id".to_string()),
+                        Some("Failed to serialize block id".to_owned()),
                     )
                 })?,
             )
@@ -494,12 +493,12 @@ impl RocksDBIO {
             Ok(borsh::from_slice::<V02State>(&data).map_err(|serr| {
                 DbError::borsh_cast_message(
                     serr,
-                    Some("Failed to deserialize block data".to_string()),
+                    Some("Failed to deserialize block data".to_owned()),
                 )
             })?)
         } else {
             Err(DbError::db_interaction_error(
-                "Block on this id not found".to_string(),
+                "Block on this id not found".to_owned(),
             ))
         }
     }
@@ -507,7 +506,7 @@ impl RocksDBIO {
     pub fn delete_block(&self, block_id: u64) -> DbResult<()> {
         let cf_block = self.block_column();
         let key = borsh::to_vec(&block_id).map_err(|err| {
-            DbError::borsh_cast_message(err, Some("Failed to serialize block id".to_string()))
+            DbError::borsh_cast_message(err, Some("Failed to serialize block id".to_owned()))
         })?;
 
         if self
@@ -517,7 +516,7 @@ impl RocksDBIO {
             .is_none()
         {
             return Err(DbError::db_interaction_error(
-                "Block on this id not found".to_string(),
+                "Block on this id not found".to_owned(),
             ));
         }
 
@@ -539,13 +538,13 @@ impl RocksDBIO {
                 borsh::to_vec(&block_id).map_err(|err| {
                     DbError::borsh_cast_message(
                         err,
-                        Some("Failed to serialize block id".to_string()),
+                        Some("Failed to serialize block id".to_owned()),
                     )
                 })?,
                 borsh::to_vec(&block).map_err(|err| {
                     DbError::borsh_cast_message(
                         err,
-                        Some("Failed to serialize block data".to_string()),
+                        Some("Failed to serialize block data".to_owned()),
                     )
                 })?,
             )
@@ -567,14 +566,14 @@ impl RocksDBIO {
                 let (_key, value) = res.map_err(|rerr| {
                     DbError::rocksdb_cast_message(
                         rerr,
-                        Some("Failed to get key value pair".to_string()),
+                        Some("Failed to get key value pair".to_owned()),
                     )
                 })?;
 
                 borsh::from_slice::<Block>(&value).map_err(|err| {
                     DbError::borsh_cast_message(
                         err,
-                        Some("Failed to deserialize block data".to_string()),
+                        Some("Failed to deserialize block data".to_owned()),
                     )
                 })
             })

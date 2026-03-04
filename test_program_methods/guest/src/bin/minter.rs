@@ -14,7 +14,10 @@ fn main() {
 
     let account_pre = &pre.account;
     let mut account_post = account_pre.clone();
-    account_post.balance += 1;
+    account_post.balance = account_post
+        .balance
+        .checked_add(1)
+        .expect("Balance overflow");
 
     write_nssa_outputs(
         instruction_words,

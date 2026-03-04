@@ -1,5 +1,5 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use risc0_zkvm::sha::{Impl, Sha256};
+use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde::{Deserialize, Serialize};
 
 use crate::{Commitment, account::AccountId};
@@ -75,8 +75,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_constructor_for_account_update() {
-        let commitment = Commitment((0..32u8).collect::<Vec<_>>().try_into().unwrap());
+    fn constructor_for_account_update() {
+        let commitment = Commitment((0..32_u8).collect::<Vec<_>>().try_into().unwrap());
         let nsk = [0x42; 32];
         let expected_nullifier = Nullifier([
             148, 243, 116, 209, 140, 231, 211, 61, 35, 62, 114, 110, 143, 224, 82, 201, 221, 34,
@@ -87,7 +87,7 @@ mod tests {
     }
 
     #[test]
-    fn test_constructor_for_account_initialization() {
+    fn constructor_for_account_initialization() {
         let npk = NullifierPublicKey([
             112, 188, 193, 129, 150, 55, 228, 67, 88, 168, 29, 151, 5, 92, 23, 190, 17, 162, 164,
             255, 29, 105, 42, 186, 43, 11, 157, 168, 132, 225, 17, 163,
@@ -101,7 +101,7 @@ mod tests {
     }
 
     #[test]
-    fn test_from_secret_key() {
+    fn from_secret_key() {
         let nsk = [
             57, 5, 64, 115, 153, 56, 184, 51, 207, 238, 99, 165, 147, 214, 213, 151, 30, 251, 30,
             196, 134, 22, 224, 211, 237, 120, 136, 225, 188, 220, 249, 28,
@@ -115,7 +115,7 @@ mod tests {
     }
 
     #[test]
-    fn test_account_id_from_nullifier_public_key() {
+    fn account_id_from_nullifier_public_key() {
         let nsk = [
             57, 5, 64, 115, 153, 56, 184, 51, 207, 238, 99, 165, 147, 214, 213, 151, 30, 251, 30,
             196, 134, 22, 224, 211, 237, 120, 136, 225, 188, 220, 249, 28,

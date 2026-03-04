@@ -1,15 +1,8 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use risc0_zkvm::sha::{Impl, Sha256};
+use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde::{Deserialize, Serialize};
 
 use crate::{NullifierPublicKey, account::Account};
-
-#[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
-#[cfg_attr(
-    any(feature = "host", test),
-    derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)
-)]
-pub struct Commitment(pub(super) [u8; 32]);
 
 /// A commitment to all zero data.
 /// ```python
@@ -34,6 +27,13 @@ pub const DUMMY_COMMITMENT_HASH: [u8; 32] = [
     170, 10, 217, 228, 20, 35, 189, 177, 238, 235, 97, 129, 132, 89, 96, 247, 86, 91, 222, 214, 38,
     194, 216, 67, 56, 251, 208, 226, 0, 117, 149, 39,
 ];
+
+#[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[cfg_attr(
+    any(feature = "host", test),
+    derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)
+)]
+pub struct Commitment(pub(super) [u8; 32]);
 
 impl Commitment {
     /// Generates the commitment to a private account owned by user for npk:
@@ -80,12 +80,12 @@ pub fn compute_digest_for_path(
     for node in &proof.1 {
         let is_left_child = level_index & 1 == 0;
         if is_left_child {
-            let mut bytes = [0u8; 64];
+            let mut bytes = [0_u8; 64];
             bytes[..32].copy_from_slice(&result);
             bytes[32..].copy_from_slice(node);
             result = Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap();
         } else {
-            let mut bytes = [0u8; 64];
+            let mut bytes = [0_u8; 64];
             bytes[..32].copy_from_slice(node);
             bytes[32..].copy_from_slice(&result);
             result = Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap();
@@ -97,14 +97,14 @@ pub fn compute_digest_for_path(
 
 #[cfg(test)]
 mod tests {
-    use risc0_zkvm::sha::{Impl, Sha256};
+    use risc0_zkvm::sha::{Impl, Sha256 as _};
 
     use crate::{
         Commitment, DUMMY_COMMITMENT, DUMMY_COMMITMENT_HASH, NullifierPublicKey, account::Account,
     };
 
     #[test]
-    fn test_nothing_up_my_sleeve_dummy_commitment() {
+    fn nothing_up_my_sleeve_dummy_commitment() {
         let default_account = Account::default();
         let npk_null = NullifierPublicKey([0; 32]);
         let expected_dummy_commitment = Commitment::new(&npk_null, &default_account);
@@ -112,7 +112,7 @@ mod tests {
     }
 
     #[test]
-    fn test_nothing_up_my_sleeve_dummy_commitment_hash() {
+    fn nothing_up_my_sleeve_dummy_commitment_hash() {
         let expected_dummy_commitment_hash: [u8; 32] =
             Impl::hash_bytes(&DUMMY_COMMITMENT.to_byte_array())
                 .as_bytes()

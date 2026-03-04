@@ -1,7 +1,19 @@
+#![expect(
+    clippy::redundant_test_prefix,
+    reason = "Otherwise names interfere with ffi bindings"
+)]
+#![expect(
+    clippy::tests_outside_test_module,
+    clippy::undocumented_unsafe_blocks,
+    clippy::multiple_unsafe_ops_per_block,
+    clippy::shadow_unrelated,
+    reason = "We don't care about these in tests"
+)]
+
 use std::{
     collections::HashSet,
     ffi::{CStr, CString, c_char},
-    io::Write,
+    io::Write as _,
     path::Path,
     time::Duration,
 };
@@ -208,7 +220,7 @@ fn new_wallet_rust_with_default_config(password: &str) -> Result<WalletCore> {
         config_path.clone(),
         storage_path.clone(),
         None,
-        password.to_string(),
+        password.to_owned(),
     )
 }
 
@@ -222,7 +234,7 @@ fn load_existing_ffi_wallet(home: &Path) -> Result<*mut WalletHandle> {
 }
 
 #[test]
-fn test_wallet_ffi_create_public_accounts() -> Result<()> {
+fn wallet_ffi_create_public_accounts() -> Result<()> {
     let password = "password_for_tests";
     let n_accounts = 10;
     // First `n_accounts` public accounts created with Rust wallet
@@ -257,7 +269,7 @@ fn test_wallet_ffi_create_public_accounts() -> Result<()> {
 }
 
 #[test]
-fn test_wallet_ffi_create_private_accounts() -> Result<()> {
+fn wallet_ffi_create_private_accounts() -> Result<()> {
     let password = "password_for_tests";
     let n_accounts = 10;
     // First `n_accounts` private accounts created with Rust wallet
@@ -291,7 +303,7 @@ fn test_wallet_ffi_create_private_accounts() -> Result<()> {
     Ok(())
 }
 #[test]
-fn test_wallet_ffi_save_and_load_persistent_storage() -> Result<()> {
+fn wallet_ffi_save_and_load_persistent_storage() -> Result<()> {
     let ctx = BlockingTestContext::new()?;
     let mut out_private_account_id = FfiBytes32::from_bytes([0; 32]);
     let home = tempfile::tempdir()?;
@@ -635,7 +647,7 @@ fn test_wallet_ffi_account_id_to_base58() -> Result<()> {
 }
 
 #[test]
-fn test_wallet_ffi_base58_to_account_id() -> Result<()> {
+fn wallet_ffi_base58_to_account_id() -> Result<()> {
     let private_key = PrivateKey::new_os_random();
     let public_key = PublicKey::new_from_private_key(&private_key);
     let account_id = AccountId::from(&public_key);
@@ -655,7 +667,7 @@ fn test_wallet_ffi_base58_to_account_id() -> Result<()> {
 }
 
 #[test]
-fn test_wallet_ffi_init_public_account_auth_transfer() -> Result<()> {
+fn wallet_ffi_init_public_account_auth_transfer() -> Result<()> {
     let ctx = BlockingTestContext::new()?;
     let home = tempfile::tempdir()?;
     let wallet_ffi_handle = new_wallet_ffi_with_test_context_config(&ctx, home.path())?;
@@ -717,7 +729,7 @@ fn test_wallet_ffi_init_public_account_auth_transfer() -> Result<()> {
 }
 
 #[test]
-fn test_wallet_ffi_init_private_account_auth_transfer() -> Result<()> {
+fn wallet_ffi_init_private_account_auth_transfer() -> Result<()> {
     let ctx = BlockingTestContext::new()?;
     let home = tempfile::tempdir()?;
     let wallet_ffi_handle = new_wallet_ffi_with_test_context_config(&ctx, home.path())?;
@@ -791,7 +803,7 @@ fn test_wallet_ffi_transfer_public() -> Result<()> {
     let wallet_ffi_handle = new_wallet_ffi_with_test_context_config(&ctx, home.path())?;
     let from: FfiBytes32 = (&ctx.ctx().existing_public_accounts()[0]).into();
     let to: FfiBytes32 = (&ctx.ctx().existing_public_accounts()[1]).into();
-    let amount: [u8; 16] = 100u128.to_le_bytes();
+    let amount: [u8; 16] = 100_u128.to_le_bytes();
 
     let mut transfer_result = FfiTransferResult::default();
     unsafe {
@@ -854,7 +866,7 @@ fn test_wallet_ffi_transfer_shielded() -> Result<()> {
         );
         (out_account_id, out_keys)
     };
-    let amount: [u8; 16] = 100u128.to_le_bytes();
+    let amount: [u8; 16] = 100_u128.to_le_bytes();
 
     let mut transfer_result = FfiTransferResult::default();
     unsafe {
@@ -918,7 +930,7 @@ fn test_wallet_ffi_transfer_deshielded() -> Result<()> {
     let wallet_ffi_handle = new_wallet_ffi_with_test_context_config(&ctx, home.path())?;
     let from: FfiBytes32 = (&ctx.ctx().existing_private_accounts()[0]).into();
     let to = FfiBytes32::from_bytes([37; 32]);
-    let amount: [u8; 16] = 100u128.to_le_bytes();
+    let amount: [u8; 16] = 100_u128.to_le_bytes();
 
     let mut transfer_result = FfiTransferResult::default();
     unsafe {
@@ -989,7 +1001,7 @@ fn test_wallet_ffi_transfer_private() -> Result<()> {
         (out_account_id, out_keys)
     };
 
-    let amount: [u8; 16] = 100u128.to_le_bytes();
+    let amount: [u8; 16] = 100_u128.to_le_bytes();
 
     let mut transfer_result = FfiTransferResult::default();
     unsafe {

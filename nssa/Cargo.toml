@@ -10,6 +10,7 @@ workspace = true
 [dependencies]
 nssa_core = { workspace = true, features = ["host"] }
 
+anyhow.workspace = true
 thiserror.workspace = true
 risc0-zkvm.workspace = true
 serde.workspace = true

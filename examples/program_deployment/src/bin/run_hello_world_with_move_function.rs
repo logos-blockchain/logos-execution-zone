@@ -19,9 +19,10 @@ use wallet::{PrivacyPreservingAccount, WalletCore};
 //     methods/guest/target/riscv32im-risc0-zkvm-elf/docker/hello_world_with_move_function.bin \
 //     write-public Ds8q5PjLcKwwV97Zi7duhRVF9uwA2PuYMoLL7FwCzsXE Hola
 
-type Instruction = (u8, Vec<u8>);
 const WRITE_FUNCTION_ID: u8 = 0;
 const MOVE_DATA_FUNCTION_ID: u8 = 1;
+
+type Instruction = (u8, Vec<u8>);
 
 #[derive(Parser, Debug)]
 struct Cli {

@@ -199,6 +199,10 @@ impl From<FfiBytes32> for nssa::AccountId {
 }
 
 impl From<nssa::Account> for FfiAccount {
+    #[expect(
+        clippy::as_conversions,
+        reason = "We need to convert to byte arrays for FFI"
+    )]
     fn from(value: nssa::Account) -> Self {
         // Convert account data to FFI type
         let data_vec: Vec<u8> = value.data.into();
@@ -230,7 +234,8 @@ impl TryFrom<&FfiAccount> for nssa::Account {
         let data = if value.data_len > 0 {
             unsafe {
                 let slice = slice::from_raw_parts(value.data, value.data_len);
-                Data::try_from(slice.to_vec()).map_err(|_| WalletFfiError::InvalidTypeConversion)?
+                Data::try_from(slice.to_vec())
+                    .map_err(|_err| WalletFfiError::InvalidTypeConversion)?
             }
         } else {
             Data::default()
@@ -257,7 +262,7 @@ impl TryFrom<&FfiPublicAccountKey> for nssa::PublicKey {
 
     fn try_from(value: &FfiPublicAccountKey) -> Result<Self, Self::Error> {
         let public_key = nssa::PublicKey::try_new(value.public_key.data)
-            .map_err(|_| WalletFfiError::InvalidTypeConversion)?;
+            .map_err(|_err| WalletFfiError::InvalidTypeConversion)?;
         Ok(public_key)
     }
 }

@@ -2,15 +2,15 @@
 
 use std::{net::SocketAddr, path::PathBuf, sync::LazyLock};
 
-use anyhow::{Context, Result, bail};
-use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
+use anyhow::{Context as _, Result, bail};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use common::{HashType, sequencer_client::SequencerClient, transaction::NSSATransaction};
 use futures::FutureExt as _;
 use indexer_service::IndexerHandle;
 use log::{debug, error, warn};
 use nssa::{AccountId, PrivacyPreservingTransaction};
 use nssa_core::Commitment;
-use sequencer_core::indexer_client::{IndexerClient, IndexerClientTrait};
+use sequencer_core::indexer_client::{IndexerClient, IndexerClientTrait as _};
 use sequencer_runner::SequencerHandle;
 use tempfile::TempDir;
 use testcontainers::compose::DockerCompose;
@@ -156,10 +156,12 @@ impl TestContext {
         }
 
         let mut port = None;
-        let mut attempt = 0;
-        let max_attempts = 5;
+        let mut attempt = 0_u32;
+        let max_attempts = 5_u32;
         while port.is_none() && attempt < max_attempts {
-            attempt += 1;
+            attempt = attempt
+                .checked_add(1)
+                .expect("We check that attempt < max_attempts, so this won't overflow");
             match up_and_retrieve_port(&mut compose).await {
                 Ok(p) => {
                     port = Some(p);
@@ -449,6 +451,10 @@ pub fn format_private_account_id(account_id: AccountId) -> String {
     format!("Private/{account_id}")
 }
 
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "We want the code to panic if the transaction type is not PrivacyPreserving"
+)]
 pub async fn fetch_privacy_preserving_tx(
     seq_client: &SequencerClient,
     tx_hash: HashType,

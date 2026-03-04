@@ -1,6 +1,9 @@
 #![expect(
+    clippy::as_conversions,
+    clippy::arithmetic_side_effects,
     clippy::cast_possible_truncation,
     clippy::cast_lossless,
+    clippy::integer_division_remainder_used,
     reason = "Mock service uses intentional casts and format patterns for test data generation"
 )]
 use std::collections::HashMap;
@@ -31,7 +34,7 @@ impl MockIndexerService {
         // Create some mock accounts
         let account_ids: Vec<AccountId> = (0..5)
             .map(|i| {
-                let mut value = [0u8; 32];
+                let mut value = [0_u8; 32];
                 value[0] = i;
                 AccountId { value }
             })
@@ -50,11 +53,11 @@ impl MockIndexerService {
         }
 
         // Create 100 blocks with transactions
-        let mut prev_hash = HashType([0u8; 32]);
+        let mut prev_hash = HashType([0_u8; 32]);
 
         for block_id in 1..=100 {
             let block_hash = {
-                let mut hash = [0u8; 32];
+                let mut hash = [0_u8; 32];
                 hash[0] = block_id as u8;
                 hash[1] = 0xff;
                 HashType(hash)
@@ -67,7 +70,7 @@ impl MockIndexerService {
 
             for tx_idx in 0..num_txs {
                 let tx_hash = {
-                    let mut hash = [0u8; 32];
+                    let mut hash = [0_u8; 32];
                     hash[0] = block_id as u8;
                     hash[1] = tx_idx as u8;
                     HashType(hash)
@@ -79,7 +82,7 @@ impl MockIndexerService {
                     0 | 1 => Transaction::Public(PublicTransaction {
                         hash: tx_hash,
                         message: PublicMessage {
-                            program_id: ProgramId([1u32; 8]),
+                            program_id: ProgramId([1_u32; 8]),
                             account_ids: vec![
                                 account_ids[tx_idx as usize % account_ids.len()],
                                 account_ids[(tx_idx as usize + 1) % account_ids.len()],
@@ -101,7 +104,7 @@ impl MockIndexerService {
                             ],
                             nonces: vec![block_id as u128],
                             public_post_states: vec![Account {
-                                program_owner: ProgramId([1u32; 8]),
+                                program_owner: ProgramId([1_u32; 8]),
                                 balance: 500,
                                 data: Data(vec![0xdd, 0xee]),
                                 nonce: block_id as u128,
@@ -143,7 +146,7 @@ impl MockIndexerService {
                     prev_block_hash: prev_hash,
                     hash: block_hash,
                     timestamp: 1_704_067_200_000 + (block_id * 12_000), // ~12 seconds per block
-                    signature: Signature([0u8; 64]),
+                    signature: Signature([0_u8; 64]),
                 },
                 body: BlockBody {
                     transactions: block_transactions,
@@ -191,7 +194,7 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
             .last()
             .map(|bl| bl.header.block_id)
             .ok_or_else(|| {
-                ErrorObjectOwned::owned(-32001, "Last block not found".to_string(), None::<()>)
+                ErrorObjectOwned::owned(-32001, "Last block not found".to_owned(), None::<()>)
             })
     }
 

@@ -130,7 +130,7 @@ pub fn compute_pool_pda_seed(
     definition_token_a_id: AccountId,
     definition_token_b_id: AccountId,
 ) -> PdaSeed {
-    use risc0_zkvm::sha::{Impl, Sha256};
+    use risc0_zkvm::sha::{Impl, Sha256 as _};
 
     let (token_1, token_2) = match definition_token_a_id
         .value()
@@ -167,7 +167,7 @@ pub fn compute_vault_pda(
 
 #[must_use]
 pub fn compute_vault_pda_seed(pool_id: AccountId, definition_token_id: AccountId) -> PdaSeed {
-    use risc0_zkvm::sha::{Impl, Sha256};
+    use risc0_zkvm::sha::{Impl, Sha256 as _};
 
     let mut bytes = [0; 64];
     bytes[0..32].copy_from_slice(&pool_id.to_bytes());
@@ -188,7 +188,7 @@ pub fn compute_liquidity_token_pda(amm_program_id: ProgramId, pool_id: AccountId
 
 #[must_use]
 pub fn compute_liquidity_token_pda_seed(pool_id: AccountId) -> PdaSeed {
-    use risc0_zkvm::sha::{Impl, Sha256};
+    use risc0_zkvm::sha::{Impl, Sha256 as _};
 
     let mut bytes = [0; 64];
     bytes[0..32].copy_from_slice(&pool_id.to_bytes());

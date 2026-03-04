@@ -1,3 +1,9 @@
+#![expect(
+    clippy::shadow_unrelated,
+    clippy::tests_outside_test_module,
+    reason = "We don't care about these in tests"
+)]
+
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
@@ -69,7 +75,7 @@ async fn create_and_transfer_public_token() -> Result<()> {
     };
 
     // Create new token
-    let name = "A NAME".to_string();
+    let name = "A NAME".to_owned();
     let total_supply = 37;
     let subcommand = TokenProgramAgnosticSubcommand::New {
         definition_account_id: format_public_account_id(definition_account_id),
@@ -317,7 +323,7 @@ async fn create_and_transfer_token_with_private_supply() -> Result<()> {
     };
 
     // Create new token
-    let name = "A NAME".to_string();
+    let name = "A NAME".to_owned();
     let total_supply = 37;
     let subcommand = TokenProgramAgnosticSubcommand::New {
         definition_account_id: format_public_account_id(definition_account_id),
@@ -475,7 +481,7 @@ async fn create_token_with_private_definition() -> Result<()> {
     };
 
     // Create token with private definition
-    let name = "A NAME".to_string();
+    let name = "A NAME".to_owned();
     let total_supply = 37;
     let subcommand = TokenProgramAgnosticSubcommand::New {
         definition_account_id: format_private_account_id(definition_account_id),
@@ -671,7 +677,7 @@ async fn create_token_with_private_definition_and_supply() -> Result<()> {
     };
 
     // Create token with both private definition and supply
-    let name = "A NAME".to_string();
+    let name = "A NAME".to_owned();
     let total_supply = 37;
     let subcommand = TokenProgramAgnosticSubcommand::New {
         definition_account_id: format_private_account_id(definition_account_id),
@@ -843,7 +849,7 @@ async fn shielded_token_transfer() -> Result<()> {
     };
 
     // Create token
-    let name = "A NAME".to_string();
+    let name = "A NAME".to_owned();
     let total_supply = 37;
     let subcommand = TokenProgramAgnosticSubcommand::New {
         definition_account_id: format_public_account_id(definition_account_id),
@@ -966,7 +972,7 @@ async fn deshielded_token_transfer() -> Result<()> {
     };
 
     // Create token with private supply
-    let name = "A NAME".to_string();
+    let name = "A NAME".to_owned();
     let total_supply = 37;
     let subcommand = TokenProgramAgnosticSubcommand::New {
         definition_account_id: format_public_account_id(definition_account_id),
@@ -1073,7 +1079,7 @@ async fn token_claiming_path_with_private_accounts() -> Result<()> {
     };
 
     // Create token
-    let name = "A NAME".to_string();
+    let name = "A NAME".to_owned();
     let total_supply = 37;
     let subcommand = TokenProgramAgnosticSubcommand::New {
         definition_account_id: format_private_account_id(definition_account_id),

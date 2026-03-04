@@ -1,9 +1,5 @@
 use crate::{PrivateKey, PublicKey, Signature};
 
-fn hex_to_bytes<const N: usize>(hex: &str) -> [u8; N] {
-    hex::decode(hex).unwrap().try_into().unwrap()
-}
-
 pub struct TestVector {
     pub seckey: Option<PrivateKey>,
     pub pubkey: PublicKey,
@@ -364,4 +360,8 @@ pub fn test_vectors() -> Vec<TestVector> {
             verification_result: true,
         },
     ]
+}
+
+fn hex_to_bytes<const N: usize>(hex: &str) -> [u8; N] {
+    hex::decode(hex).unwrap().try_into().unwrap()
 }

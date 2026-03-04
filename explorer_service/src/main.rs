@@ -1,3 +1,7 @@
+#[expect(
+    clippy::print_stdout,
+    reason = "This is just simple and handy for such a small server"
+)]
 #[cfg(feature = "ssr")]
 #[tokio::main]
 async fn main() {
@@ -5,7 +9,7 @@ async fn main() {
     use clap::Parser;
     use explorer_service::App;
     use leptos::prelude::*;
-    use leptos_axum::{LeptosRoutes, generate_route_list};
+    use leptos_axum::{LeptosRoutes as _, generate_route_list};
     use leptos_meta::MetaTags;
 
     /// LEZ Block Explorer Server CLI arguments.

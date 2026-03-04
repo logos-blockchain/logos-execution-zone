@@ -1,6 +1,12 @@
-use std::{str::FromStr, time::Duration};
+#![expect(
+    clippy::shadow_unrelated,
+    clippy::tests_outside_test_module,
+    reason = "We don't care about these in tests"
+)]
 
-use anyhow::{Context, Result};
+use std::{str::FromStr as _, time::Duration};
+
+use anyhow::{Context as _, Result};
 use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, fetch_privacy_preserving_tx,
     format_private_account_id, format_public_account_id, verify_commitment_is_in_state,

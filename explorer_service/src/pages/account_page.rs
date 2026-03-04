@@ -10,11 +10,11 @@ use crate::{api, components::TransactionPreview};
 #[component]
 pub fn AccountPage() -> impl IntoView {
     let params = use_params_map();
-    let (tx_offset, set_tx_offset) = signal(0u64);
+    let (tx_offset, set_tx_offset) = signal(0_u64);
     let (all_transactions, set_all_transactions) = signal(Vec::new());
     let (is_loading, set_is_loading) = signal(false);
     let (has_more, set_has_more) = signal(true);
-    let tx_limit = 10u64;
+    let tx_limit = 10_u64;
 
     // Parse account ID from URL params
     let account_id = move || {
@@ -27,7 +27,7 @@ pub fn AccountPage() -> impl IntoView {
         match acc_id_opt {
             Some(acc_id) => api::get_account(acc_id).await,
             None => Err(leptos::prelude::ServerFnError::ServerError(
-                "Invalid account ID".to_string(),
+                "Invalid account ID".to_owned(),
             )),
         }
     });
@@ -37,7 +37,7 @@ pub fn AccountPage() -> impl IntoView {
         match acc_id_opt {
             Some(acc_id) => api::get_transactions_by_account(acc_id, 0, tx_limit).await,
             None => Err(leptos::prelude::ServerFnError::ServerError(
-                "Invalid account ID".to_string(),
+                "Invalid account ID".to_owned(),
             )),
         }
     });
@@ -59,7 +59,7 @@ pub fn AccountPage() -> impl IntoView {
         };
 
         set_is_loading.set(true);
-        let current_offset = tx_offset.get() + tx_limit;
+        let current_offset = tx_offset.get().saturating_add(tx_limit);
         set_tx_offset.set(current_offset);
 
         leptos::task::spawn_local(async move {
@@ -111,101 +111,99 @@ pub fn AccountPage() -> impl IntoView {
                                                 <div class="info-row">
                                                     <span class="info-label">"Account ID:"</span>
                                                     <span class="info-value hash">{account_id_str}</span>
-                                    </div>
-                                    <div class="info-row">
-                                        <span class="info-label">"Balance:"</span>
-                                        <span class="info-value">{balance_str}</span>
-                                    </div>
-                                    <div class="info-row">
-                                        <span class="info-label">"Program Owner:"</span>
-                                        <span class="info-value hash">{program_id}</span>
-                                    </div>
-                                    <div class="info-row">
-                                        <span class="info-label">"Nonce:"</span>
-                                        <span class="info-value">{nonce_str}</span>
-                                    </div>
-                                    <div class="info-row">
-                                        <span class="info-label">"Data:"</span>
-                                        <span class="info-value">{format!("{data_len} bytes")}</span>
-                                    </div>
-                                </div>
-                            </div>
+                                                </div>
+                                                <div class="info-row">
+                                                    <span class="info-label">"Balance:"</span>
+                                                    <span class="info-value">{balance_str}</span>
+                                                </div>
+                                                <div class="info-row">
+                                                    <span class="info-label">"Program Owner:"</span>
+                                                    <span class="info-value hash">{program_id}</span>
+                                                </div>
+                                                <div class="info-row">
+                                                    <span class="info-label">"Nonce:"</span>
+                                                    <span class="info-value">{nonce_str}</span>
+                                                </div>
+                                                <div class="info-row">
+                                                    <span class="info-label">"Data:"</span>
+                                                    <span class="info-value">{format!("{data_len} bytes")}</span>
+                                                </div>
+                                            </div>
+                                        </div>
 
-                            <div class="account-transactions">
-                                <h2>"Transactions"</h2>
-                                <Suspense fallback=move || {
-                                    view! { <div class="loading">"Loading transactions..."</div> }
-                                }>
-
-                                    {move || {
-                                        transactions_resource
-                                            .get()
-                                            .map(|result| match result {
-                                                Ok(_) => {
-                                                    let txs = all_transactions.get();
-                                                    if txs.is_empty() {
-                                                        view! {
-                                                            <div class="no-transactions">
-                                                                "No transactions found"
-                                                            </div>
-                                                        }
-                                                            .into_any()
-                                                    } else {
-                                                        view! {
-                                                            <div>
-                                                                <div class="transactions-list">
-                                                                    {txs
-                                                                        .into_iter()
-                                                                        .map(|tx| {
-                                                                            view! { <TransactionPreview transaction=tx /> }
-                                                                        })
-                                                                        .collect::<Vec<_>>()}
-                                                                </div>
-                                                                {move || {
-                                                                    if has_more.get() {
-                                                                        view! {
-                                                                            <button
-                                                                                class="load-more-button"
-                                                                                on:click=load_more
-                                                                                disabled=move || is_loading.get()
-                                                                            >
-                                                                                {move || {
-                                                                                    if is_loading.get() {
-                                                                                        "Loading..."
-                                                                                    } else {
-                                                                                        "Load More"
-                                                                                    }
-                                                                                }}
-
-                                                                            </button>
-                                                                        }
-                                                                            .into_any()
-                                                                    } else {
-                                                                        ().into_any()
+                                        <div class="account-transactions">
+                                            <h2>"Transactions"</h2>
+                                            <Suspense fallback=move || {
+                                                view! { <div class="loading">"Loading transactions..."</div> }
+                                            }>
+                                                {move || {
+                                                    transactions_resource
+                                                        .get()
+                                                        .map(|load_tx_result| match load_tx_result {
+                                                            Ok(_) => {
+                                                                let txs = all_transactions.get();
+                                                                if txs.is_empty() {
+                                                                    view! {
+                                                                        <div class="no-transactions">
+                                                                            "No transactions found"
+                                                                        </div>
                                                                     }
-                                                                }}
+                                                                        .into_any()
+                                                                } else {
+                                                                    view! {
+                                                                        <div>
+                                                                            <div class="transactions-list">
+                                                                                {txs
+                                                                                    .into_iter()
+                                                                                    .map(|tx| {
+                                                                                        view! { <TransactionPreview transaction=tx /> }
+                                                                                    })
+                                                                                    .collect::<Vec<_>>()}
+                                                                            </div>
+                                                                            {move || {
+                                                                                if has_more.get() {
+                                                                                    view! {
+                                                                                        <button
+                                                                                            class="load-more-button"
+                                                                                            on:click=load_more
+                                                                                            disabled=move || is_loading.get()
+                                                                                        >
+                                                                                            {move || {
+                                                                                                if is_loading.get() {
+                                                                                                    "Loading..."
+                                                                                                } else {
+                                                                                                    "Load More"
+                                                                                                }
+                                                                                            }}
 
-                                                            </div>
-                                                        }
-                                                            .into_any()
-                                                    }
-                                                }
-                                                Err(e) => {
-                                                    view! {
-                                                        <div class="error">
-                                                            {format!("Failed to load transactions: {e}")}
-                                                        </div>
-                                                    }
-                                                        .into_any()
-                                                }
-                                            })
-                                    }}
+                                                                                        </button>
+                                                                                    }
+                                                                                        .into_any()
+                                                                                } else {
+                                                                                    ().into_any()
+                                                                                }
+                                                                            }}
 
-                                </Suspense>
-                            </div>
-                        </div>
-                    }
-                        .into_any()
+                                                                        </div>
+                                                                    }
+                                                                        .into_any()
+                                                                }
+                                                            }
+                                                            Err(e) => {
+                                                                view! {
+                                                                    <div class="error">
+                                                                        {format!("Failed to load transactions: {e}")}
+                                                                    </div>
+                                                                }
+                                                                    .into_any()
+                                                            }
+                                                        })
+                                                }}
+                                            </Suspense>
+                                        </div>
+                                    </div>
+                                }
+                                    .into_any()
                             }
                             Err(e) => {
                                 view! {
@@ -218,7 +216,6 @@ pub fn AccountPage() -> impl IntoView {
                             }
                         })
                 }}
-
             </Suspense>
         </div>
     }

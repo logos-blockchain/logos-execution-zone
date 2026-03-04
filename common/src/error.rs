@@ -28,8 +28,8 @@ impl From<SequencerRpcError> for SequencerClientError {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ExecutionFailureKind {
-    #[error("Failed to get account data from sequencer")]
-    SequencerError,
+    #[error("Failed to get data from sequencer")]
+    SequencerError(#[source] anyhow::Error),
     #[error("Inputs amounts does not match outputs")]
     AmountMismatchError,
     #[error("Accounts key not found")]

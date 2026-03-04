@@ -1,4 +1,4 @@
-use std::{collections::HashMap, ops::Div, path::Path, sync::Arc};
+use std::{collections::HashMap, path::Path, sync::Arc};
 
 use common::{
     block::{Block, BlockId},
@@ -55,18 +55,16 @@ pub const CF_ACC_TO_TX: &str = "cf_acc_to_tx";
 
 pub type DbResult<T> = Result<T, DbError>;
 
-fn closest_breakpoint_id(block_id: u64) -> u64 {
-    block_id
-        .saturating_sub(1)
-        .div(u64::from(BREAKPOINT_INTERVAL))
-}
-
 pub struct RocksDBIO {
     pub db: DBWithThreadMode<MultiThreaded>,
 }
 
 impl RocksDBIO {
-    pub fn open_or_create(path: &Path, start_data: Option<(Block, V02State)>) -> DbResult<Self> {
+    pub fn open_or_create(
+        path: &Path,
+        genesis_block: &Block,
+        initial_state: &V02State,
+    ) -> DbResult<Self> {
         let mut cf_opts = Options::default();
         cf_opts.set_max_write_buffer_number(16);
         // ToDo: Add more column families for different data
@@ -85,31 +83,29 @@ impl RocksDBIO {
             &db_opts,
             path,
             vec![cfb, cfmeta, cfbreakpoint, cfhti, cftti, cfameta, cfatt],
-        );
+        )
+        .map_err(|err| DbError::RocksDbError {
+            error: err,
+            additional_info: Some("Failed to open or create DB".to_owned()),
+        })?;
 
-        let dbio = Self {
-            // There is no point in handling this from runner code
-            db: db.unwrap(),
-        };
+        let dbio = Self { db };
 
         let is_start_set = dbio.get_meta_is_first_block_set()?;
 
         if is_start_set {
             Ok(dbio)
-        } else if let Some((block, initial_state)) = start_data {
-            let block_id = block.header.block_id;
+        } else {
+            let block_id = genesis_block.header.block_id;
             dbio.put_meta_last_block_in_db(block_id)?;
-            dbio.put_meta_first_block_in_db(block)?;
+            dbio.put_meta_first_block_in_db(genesis_block)?;
             dbio.put_meta_is_first_block_set()?;
 
             // First breakpoint setup
-            dbio.put_breakpoint(0, &initial_state)?;
+            dbio.put_breakpoint(0, initial_state)?;
             dbio.put_meta_last_breakpoint_id(0)?;
 
             Ok(dbio)
-        } else {
-            // Here we are trying to start a DB without a block, one should not do it.
-            unreachable!()
         }
     }
 
@@ -173,7 +169,7 @@ impl RocksDBIO {
                 borsh::to_vec(&DB_META_FIRST_BLOCK_IN_DB_KEY).map_err(|err| {
                     DbError::borsh_cast_message(
                         err,
-                        Some("Failed to serialize DB_META_FIRST_BLOCK_IN_DB_KEY".to_string()),
+                        Some("Failed to serialize DB_META_FIRST_BLOCK_IN_DB_KEY".to_owned()),
                     )
                 })?,
             )
@@ -183,12 +179,12 @@ impl RocksDBIO {
             Ok(borsh::from_slice::<u64>(&data).map_err(|err| {
                 DbError::borsh_cast_message(
                     err,
-                    Some("Failed to deserialize first block".to_string()),
+                    Some("Failed to deserialize first block".to_owned()),
                 )
             })?)
         } else {
             Err(DbError::db_interaction_error(
-                "First block not found".to_string(),
+                "First block not found".to_owned(),
             ))
         }
     }
@@ -202,7 +198,7 @@ impl RocksDBIO {
                 borsh::to_vec(&DB_META_LAST_BLOCK_IN_DB_KEY).map_err(|err| {
                     DbError::borsh_cast_message(
                         err,
-                        Some("Failed to serialize DB_META_LAST_BLOCK_IN_DB_KEY".to_string()),
+                        Some("Failed to serialize DB_META_LAST_BLOCK_IN_DB_KEY".to_owned()),
                     )
                 })?,
             )
@@ -212,12 +208,12 @@ impl RocksDBIO {
             Ok(borsh::from_slice::<u64>(&data).map_err(|err| {
                 DbError::borsh_cast_message(
                     err,
-                    Some("Failed to deserialize last block".to_string()),
+                    Some("Failed to deserialize last block".to_owned()),
                 )
             })?)
         } else {
             Err(DbError::db_interaction_error(
-                "Last block not found".to_string(),
+                "Last block not found".to_owned(),
             ))
         }
     }
@@ -233,8 +229,7 @@ impl RocksDBIO {
                         DbError::borsh_cast_message(
                         err,
                         Some(
-                            "Failed to serialize DB_META_LAST_OBSERVED_L1_LIB_HEADER_ID_IN_DB_KEY"
-                                .to_string(),
+                            "Failed to serialize DB_META_LAST_OBSERVED_L1_LIB_HEADER_ID_IN_DB_KEY".to_owned(),
                         ),
                     )
                     },
@@ -246,7 +241,7 @@ impl RocksDBIO {
             borsh::from_slice::<[u8; 32]>(&data).map_err(|err| {
                 DbError::borsh_cast_message(
                     err,
-                    Some("Failed to deserialize last l1 lib header".to_string()),
+                    Some("Failed to deserialize last l1 lib header".to_owned()),
                 )
             })
         })
@@ -262,7 +257,7 @@ impl RocksDBIO {
                 borsh::to_vec(&DB_META_FIRST_BLOCK_SET_KEY).map_err(|err| {
                     DbError::borsh_cast_message(
                         err,
-                        Some("Failed to serialize DB_META_FIRST_BLOCK_SET_KEY".to_string()),
+                        Some("Failed to serialize DB_META_FIRST_BLOCK_SET_KEY".to_owned()),
                     )
                 })?,
             )
@@ -280,7 +275,7 @@ impl RocksDBIO {
                 borsh::to_vec(&DB_META_LAST_BREAKPOINT_ID).map_err(|err| {
                     DbError::borsh_cast_message(
                         err,
-                        Some("Failed to serialize DB_META_LAST_BREAKPOINT_ID".to_string()),
+                        Some("Failed to serialize DB_META_LAST_BREAKPOINT_ID".to_owned()),
                     )
                 })?,
             )
@@ -290,17 +285,17 @@ impl RocksDBIO {
             Ok(borsh::from_slice::<u64>(&data).map_err(|err| {
                 DbError::borsh_cast_message(
                     err,
-                    Some("Failed to deserialize last breakpoint id".to_string()),
+                    Some("Failed to deserialize last breakpoint id".to_owned()),
                 )
             })?)
         } else {
             Err(DbError::db_interaction_error(
-                "Last breakpoint id not found".to_string(),
+                "Last breakpoint id not found".to_owned(),
             ))
         }
     }
 
-    pub fn put_meta_first_block_in_db(&self, block: Block) -> DbResult<()> {
+    pub fn put_meta_first_block_in_db(&self, block: &Block) -> DbResult<()> {
         let cf_meta = self.meta_column();
         self.db
             .put_cf(
@@ -308,13 +303,13 @@ impl RocksDBIO {
                 borsh::to_vec(&DB_META_FIRST_BLOCK_IN_DB_KEY).map_err(|err| {
                     DbError::borsh_cast_message(
                         err,
-                        Some("Failed to serialize DB_META_FIRST_BLOCK_IN_DB_KEY".to_string()),
+                        Some("Failed to serialize DB_META_FIRST_BLOCK_IN_DB_KEY".to_owned()),
                     )
                 })?,
                 borsh::to_vec(&block.header.block_id).map_err(|err| {
                     DbError::borsh_cast_message(
                         err,
-                        Some("Failed to serialize first block id".to_string()),
+                        Some("Failed to serialize first block id".to_owned()),
                     )
                 })?,
             )
@@ -332,13 +327,13 @@ impl RocksDBIO {
                 borsh::to_vec(&DB_META_LAST_BLOCK_IN_DB_KEY).map_err(|err| {
                     DbError::borsh_cast_message(
                         err,
-                        Some("Failed to serialize DB_META_LAST_BLOCK_IN_DB_KEY".to_string()),
+                        Some("Failed to serialize DB_META_LAST_BLOCK_IN_DB_KEY".to_owned()),
                     )
                 })?,
                 borsh::to_vec(&block_id).map_err(|err| {
                     DbError::borsh_cast_message(
                         err,
-                        Some("Failed to serialize last block id".to_string()),
+                        Some("Failed to serialize last block id".to_owned()),
                     )
                 })?,
             )
@@ -359,8 +354,7 @@ impl RocksDBIO {
                         DbError::borsh_cast_message(
                         err,
                         Some(
-                            "Failed to serialize DB_META_LAST_OBSERVED_L1_LIB_HEADER_ID_IN_DB_KEY"
-                                .to_string(),
+                            "Failed to serialize DB_META_LAST_OBSERVED_L1_LIB_HEADER_ID_IN_DB_KEY".to_owned(),
                         ),
                     )
                     },
@@ -368,7 +362,7 @@ impl RocksDBIO {
                 borsh::to_vec(&l1_lib_header).map_err(|err| {
                     DbError::borsh_cast_message(
                         err,
-                        Some("Failed to serialize last l1 block header".to_string()),
+                        Some("Failed to serialize last l1 block header".to_owned()),
                     )
                 })?,
             )
@@ -384,13 +378,13 @@ impl RocksDBIO {
                 borsh::to_vec(&DB_META_LAST_BREAKPOINT_ID).map_err(|err| {
                     DbError::borsh_cast_message(
                         err,
-                        Some("Failed to serialize DB_META_LAST_BREAKPOINT_ID".to_string()),
+                        Some("Failed to serialize DB_META_LAST_BREAKPOINT_ID".to_owned()),
                     )
                 })?,
                 borsh::to_vec(&br_id).map_err(|err| {
                     DbError::borsh_cast_message(
                         err,
-                        Some("Failed to serialize last block id".to_string()),
+                        Some("Failed to serialize last block id".to_owned()),
                     )
                 })?,
             )
@@ -406,10 +400,10 @@ impl RocksDBIO {
                 borsh::to_vec(&DB_META_FIRST_BLOCK_SET_KEY).map_err(|err| {
                     DbError::borsh_cast_message(
                         err,
-                        Some("Failed to serialize DB_META_FIRST_BLOCK_SET_KEY".to_string()),
+                        Some("Failed to serialize DB_META_FIRST_BLOCK_SET_KEY".to_owned()),
                     )
                 })?,
-                [1u8; 1],
+                [1_u8; 1],
             )
             .map_err(|rerr| DbError::rocksdb_cast_message(rerr, None))?;
         Ok(())
@@ -417,7 +411,7 @@ impl RocksDBIO {
 
     // Block
 
-    pub fn put_block(&self, block: Block, l1_lib_header: [u8; 32]) -> DbResult<()> {
+    pub fn put_block(&self, block: &Block, l1_lib_header: [u8; 32]) -> DbResult<()> {
         let cf_block = self.block_column();
         let cf_hti = self.hash_to_id_column();
         let cf_tti: Arc<BoundColumnFamily<'_>> = self.tx_hash_to_id_column();
@@ -430,13 +424,13 @@ impl RocksDBIO {
                 borsh::to_vec(&block.header.block_id).map_err(|err| {
                     DbError::borsh_cast_message(
                         err,
-                        Some("Failed to serialize block id".to_string()),
+                        Some("Failed to serialize block id".to_owned()),
                     )
                 })?,
                 borsh::to_vec(&block).map_err(|err| {
                     DbError::borsh_cast_message(
                         err,
-                        Some("Failed to serialize block data".to_string()),
+                        Some("Failed to serialize block data".to_owned()),
                     )
                 })?,
             )
@@ -455,13 +449,13 @@ impl RocksDBIO {
                 borsh::to_vec(&block.header.hash).map_err(|err| {
                     DbError::borsh_cast_message(
                         err,
-                        Some("Failed to serialize block hash".to_string()),
+                        Some("Failed to serialize block hash".to_owned()),
                     )
                 })?,
                 borsh::to_vec(&block.header.block_id).map_err(|err| {
                     DbError::borsh_cast_message(
                         err,
-                        Some("Failed to serialize block id".to_string()),
+                        Some("Failed to serialize block id".to_owned()),
                     )
                 })?,
             )
@@ -469,7 +463,7 @@ impl RocksDBIO {
 
         let mut acc_to_tx_map: HashMap<[u8; 32], Vec<[u8; 32]>> = HashMap::new();
 
-        for tx in block.body.transactions {
+        for tx in &block.body.transactions {
             let tx_hash = tx.hash();
 
             self.db
@@ -478,13 +472,13 @@ impl RocksDBIO {
                     borsh::to_vec(&tx_hash).map_err(|err| {
                         DbError::borsh_cast_message(
                             err,
-                            Some("Failed to serialize tx hash".to_string()),
+                            Some("Failed to serialize tx hash".to_owned()),
                         )
                     })?,
                     borsh::to_vec(&block.header.block_id).map_err(|err| {
                         DbError::borsh_cast_message(
                             err,
-                            Some("Failed to serialize block id".to_string()),
+                            Some("Failed to serialize block id".to_owned()),
                         )
                     })?,
                 )
@@ -504,6 +498,10 @@ impl RocksDBIO {
             }
         }
 
+        #[expect(
+            clippy::iter_over_hash_type,
+            reason = "RocksDB will keep ordering persistent"
+        )]
         for (acc_id, tx_hashes) in acc_to_tx_map {
             self.put_account_transactions(acc_id, &tx_hashes)?;
         }
@@ -528,7 +526,7 @@ impl RocksDBIO {
                 borsh::to_vec(&block_id).map_err(|err| {
                     DbError::borsh_cast_message(
                         err,
-                        Some("Failed to serialize block id".to_string()),
+                        Some("Failed to serialize block id".to_owned()),
                     )
                 })?,
             )
@@ -538,12 +536,12 @@ impl RocksDBIO {
             Ok(borsh::from_slice::<Block>(&data).map_err(|serr| {
                 DbError::borsh_cast_message(
                     serr,
-                    Some("Failed to deserialize block data".to_string()),
+                    Some("Failed to deserialize block data".to_owned()),
                 )
             })?)
         } else {
             Err(DbError::db_interaction_error(
-                "Block on this id not found".to_string(),
+                "Block on this id not found".to_owned(),
             ))
         }
     }
@@ -575,7 +573,7 @@ impl RocksDBIO {
                     borsh::to_vec(&block_id).map_err(|err| {
                         DbError::borsh_cast_message(
                             err,
-                            Some("Failed to serialize block id".to_string()),
+                            Some("Failed to serialize block id".to_owned()),
                         )
                     })?,
                 )
@@ -585,7 +583,7 @@ impl RocksDBIO {
                 Ok(borsh::from_slice::<Block>(&data).map_err(|serr| {
                     DbError::borsh_cast_message(
                         serr,
-                        Some("Failed to deserialize block data".to_string()),
+                        Some("Failed to deserialize block data".to_owned()),
                     )
                 })?)
             } else {
@@ -610,13 +608,13 @@ impl RocksDBIO {
                 borsh::to_vec(&br_id).map_err(|err| {
                     DbError::borsh_cast_message(
                         err,
-                        Some("Failed to serialize breakpoint id".to_string()),
+                        Some("Failed to serialize breakpoint id".to_owned()),
                     )
                 })?,
                 borsh::to_vec(&breakpoint).map_err(|err| {
                     DbError::borsh_cast_message(
                         err,
-                        Some("Failed to serialize breakpoint data".to_string()),
+                        Some("Failed to serialize breakpoint data".to_owned()),
                     )
                 })?,
             )
@@ -632,7 +630,7 @@ impl RocksDBIO {
                 borsh::to_vec(&br_id).map_err(|err| {
                     DbError::borsh_cast_message(
                         err,
-                        Some("Failed to serialize breakpoint id".to_string()),
+                        Some("Failed to serialize breakpoint id".to_owned()),
                     )
                 })?,
             )
@@ -642,12 +640,12 @@ impl RocksDBIO {
             Ok(borsh::from_slice::<V02State>(&data).map_err(|serr| {
                 DbError::borsh_cast_message(
                     serr,
-                    Some("Failed to deserialize breakpoint data".to_string()),
+                    Some("Failed to deserialize breakpoint data".to_owned()),
                 )
             })?)
         } else {
             Err(DbError::db_interaction_error(
-                "Breakpoint on this id not found".to_string(),
+                "Breakpoint on this id not found".to_owned(),
             ))
         }
     }
@@ -662,7 +660,9 @@ impl RocksDBIO {
             // ToDo: update it to handle any genesis id
             // right now works correctly only if genesis_id < BREAKPOINT_INTERVAL
             let start = if br_id != 0 {
-                u64::from(BREAKPOINT_INTERVAL) * br_id
+                u64::from(BREAKPOINT_INTERVAL)
+                    .checked_mul(br_id)
+                    .expect("Reached maximum breakpoint id")
             } else {
                 self.get_meta_first_block_in_db()?
             };
@@ -690,7 +690,7 @@ impl RocksDBIO {
             Ok(breakpoint)
         } else {
             Err(DbError::db_interaction_error(
-                "Block on this id not found".to_string(),
+                "Block on this id not found".to_owned(),
             ))
         }
     }
@@ -701,8 +701,13 @@ impl RocksDBIO {
 
     pub fn put_next_breakpoint(&self) -> DbResult<()> {
         let last_block = self.get_meta_last_block_in_db()?;
-        let next_breakpoint_id = self.get_meta_last_breakpoint_id()? + 1;
-        let block_to_break_id = next_breakpoint_id * u64::from(BREAKPOINT_INTERVAL);
+        let next_breakpoint_id = self
+            .get_meta_last_breakpoint_id()?
+            .checked_add(1)
+            .expect("Reached maximum breakpoint id");
+        let block_to_break_id = next_breakpoint_id
+            .checked_mul(u64::from(BREAKPOINT_INTERVAL))
+            .expect("Reached maximum breakpoint id");
 
         if block_to_break_id <= last_block {
             let next_breakpoint = self.calculate_state_for_id(block_to_break_id)?;
@@ -711,7 +716,7 @@ impl RocksDBIO {
             self.put_meta_last_breakpoint_id(next_breakpoint_id)
         } else {
             Err(DbError::db_interaction_error(
-                "Breakpoint not yet achieved".to_string(),
+                "Breakpoint not yet achieved".to_owned(),
             ))
         }
     }
@@ -727,7 +732,7 @@ impl RocksDBIO {
                 borsh::to_vec(&hash).map_err(|err| {
                     DbError::borsh_cast_message(
                         err,
-                        Some("Failed to serialize block hash".to_string()),
+                        Some("Failed to serialize block hash".to_owned()),
                     )
                 })?,
             )
@@ -735,14 +740,11 @@ impl RocksDBIO {
 
         if let Some(data) = res {
             Ok(borsh::from_slice::<u64>(&data).map_err(|serr| {
-                DbError::borsh_cast_message(
-                    serr,
-                    Some("Failed to deserialize block id".to_string()),
-                )
+                DbError::borsh_cast_message(serr, Some("Failed to deserialize block id".to_owned()))
             })?)
         } else {
             Err(DbError::db_interaction_error(
-                "Block on this hash not found".to_string(),
+                "Block on this hash not found".to_owned(),
             ))
         }
     }
@@ -756,7 +758,7 @@ impl RocksDBIO {
                 borsh::to_vec(&tx_hash).map_err(|err| {
                     DbError::borsh_cast_message(
                         err,
-                        Some("Failed to serialize transaction hash".to_string()),
+                        Some("Failed to serialize transaction hash".to_owned()),
                     )
                 })?,
             )
@@ -764,14 +766,11 @@ impl RocksDBIO {
 
         if let Some(data) = res {
             Ok(borsh::from_slice::<u64>(&data).map_err(|serr| {
-                DbError::borsh_cast_message(
-                    serr,
-                    Some("Failed to deserialize block id".to_string()),
-                )
+                DbError::borsh_cast_message(serr, Some("Failed to deserialize block id".to_owned()))
             })?)
         } else {
             Err(DbError::db_interaction_error(
-                "Block for this tx hash not found".to_string(),
+                "Block for this tx hash not found".to_owned(),
             ))
         }
     }
@@ -789,12 +788,12 @@ impl RocksDBIO {
         write_batch.put_cf(
             &cf_ameta,
             borsh::to_vec(&acc_id).map_err(|err| {
-                DbError::borsh_cast_message(err, Some("Failed to serialize account id".to_string()))
+                DbError::borsh_cast_message(err, Some("Failed to serialize account id".to_owned()))
             })?,
             borsh::to_vec(&num_tx).map_err(|err| {
                 DbError::borsh_cast_message(
                     err,
-                    Some("Failed to serialize acc metadata".to_string()),
+                    Some("Failed to serialize acc metadata".to_owned()),
                 )
             })?,
         );
@@ -805,12 +804,12 @@ impl RocksDBIO {
     fn get_acc_meta_num_tx(&self, acc_id: [u8; 32]) -> DbResult<Option<u64>> {
         let cf_ameta = self.account_meta_column();
         let res = self.db.get_cf(&cf_ameta, acc_id).map_err(|rerr| {
-            DbError::rocksdb_cast_message(rerr, Some("Failed to read from acc meta cf".to_string()))
+            DbError::rocksdb_cast_message(rerr, Some("Failed to read from acc meta cf".to_owned()))
         })?;
 
         res.map(|data| {
             borsh::from_slice::<u64>(&data).map_err(|serr| {
-                DbError::borsh_cast_message(serr, Some("Failed to deserialize num tx".to_string()))
+                DbError::borsh_cast_message(serr, Some("Failed to deserialize num tx".to_owned()))
             })
         })
         .transpose()
@@ -828,16 +827,18 @@ impl RocksDBIO {
         let mut write_batch = WriteBatch::new();
 
         for (tx_id, tx_hash) in tx_hashes.iter().enumerate() {
-            let put_id = acc_num_tx + tx_id as u64;
+            let put_id = acc_num_tx
+                .checked_add(
+                    u64::try_from(tx_id)
+                        .expect("Transaction number for account expected to fit in u64"),
+                )
+                .expect("Reached maximum number of transactions for account");
 
             let mut prefix = borsh::to_vec(&acc_id).map_err(|berr| {
-                DbError::borsh_cast_message(
-                    berr,
-                    Some("Failed to serialize account id".to_string()),
-                )
+                DbError::borsh_cast_message(berr, Some("Failed to serialize account id".to_owned()))
             })?;
             let suffix = borsh::to_vec(&put_id).map_err(|berr| {
-                DbError::borsh_cast_message(berr, Some("Failed to serialize tx id".to_string()))
+                DbError::borsh_cast_message(berr, Some("Failed to serialize tx id".to_owned()))
             })?;
 
             prefix.extend_from_slice(&suffix);
@@ -848,7 +849,7 @@ impl RocksDBIO {
                 borsh::to_vec(tx_hash).map_err(|berr| {
                     DbError::borsh_cast_message(
                         berr,
-                        Some("Failed to serialize tx hash".to_string()),
+                        Some("Failed to serialize tx hash".to_owned()),
                     )
                 })?,
             );
@@ -856,12 +857,17 @@ impl RocksDBIO {
 
         self.update_acc_meta_batch(
             acc_id,
-            acc_num_tx + (tx_hashes.len() as u64),
+            acc_num_tx
+                .checked_add(
+                    u64::try_from(tx_hashes.len())
+                        .expect("Number of transactions expected to fit in u64"),
+                )
+                .expect("Reached maximum number of transactions for account"),
             &mut write_batch,
         )?;
 
         self.db.write(write_batch).map_err(|rerr| {
-            DbError::rocksdb_cast_message(rerr, Some("Failed to write batch".to_string()))
+            DbError::rocksdb_cast_message(rerr, Some("Failed to write batch".to_owned()))
         })
     }
 
@@ -876,15 +882,12 @@ impl RocksDBIO {
 
         // ToDo: Multi get this
 
-        for tx_id in offset..(offset + limit) {
+        for tx_id in offset..(offset.saturating_add(limit)) {
             let mut prefix = borsh::to_vec(&acc_id).map_err(|berr| {
-                DbError::borsh_cast_message(
-                    berr,
-                    Some("Failed to serialize account id".to_string()),
-                )
+                DbError::borsh_cast_message(berr, Some("Failed to serialize account id".to_owned()))
             })?;
             let suffix = borsh::to_vec(&tx_id).map_err(|berr| {
-                DbError::borsh_cast_message(berr, Some("Failed to serialize tx id".to_string()))
+                DbError::borsh_cast_message(berr, Some("Failed to serialize tx id".to_owned()))
             })?;
 
             prefix.extend_from_slice(&suffix);
@@ -898,7 +901,7 @@ impl RocksDBIO {
                 Ok(borsh::from_slice::<[u8; 32]>(&data).map_err(|serr| {
                     DbError::borsh_cast_message(
                         serr,
-                        Some("Failed to deserialize tx_hash".to_string()),
+                        Some("Failed to deserialize tx_hash".to_owned()),
                     )
                 })?)
             } else {
@@ -941,8 +944,17 @@ impl RocksDBIO {
     }
 }
 
+fn closest_breakpoint_id(block_id: u64) -> u64 {
+    block_id
+        .saturating_sub(1)
+        .checked_div(u64::from(BREAKPOINT_INTERVAL))
+        .expect("Breakpoint interval is not zero")
+}
+
 #[cfg(test)]
 mod tests {
+    #![expect(clippy::shadow_unrelated, reason = "We don't care about it in tests")]
+
     use nssa::AccountId;
     use tempfile::tempdir;
 
@@ -999,12 +1011,12 @@ mod tests {
     }
 
     #[test]
-    fn test_start_db() {
+    fn start_db() {
         let temp_dir = tempdir().unwrap();
         let temdir_path = temp_dir.path();
 
-        let dbio = RocksDBIO::open_or_create(temdir_path, Some((genesis_block(), initial_state())))
-            .unwrap();
+        let dbio =
+            RocksDBIO::open_or_create(temdir_path, &genesis_block(), &initial_state()).unwrap();
 
         let last_id = dbio.get_meta_last_block_in_db().unwrap();
         let first_id = dbio.get_meta_first_block_in_db().unwrap();
@@ -1030,18 +1042,18 @@ mod tests {
     }
 
     #[test]
-    fn test_one_block_insertion() {
+    fn one_block_insertion() {
         let temp_dir = tempdir().unwrap();
         let temdir_path = temp_dir.path();
 
-        let dbio = RocksDBIO::open_or_create(temdir_path, Some((genesis_block(), initial_state())))
-            .unwrap();
+        let dbio =
+            RocksDBIO::open_or_create(temdir_path, &genesis_block(), &initial_state()).unwrap();
 
         let prev_hash = genesis_block().header.hash;
         let transfer_tx = transfer(1, 0, true);
         let block = common::test_utils::produce_dummy_block(2, Some(prev_hash), vec![transfer_tx]);
 
-        dbio.put_block(block, [1; 32]).unwrap();
+        dbio.put_block(&block, [1; 32]).unwrap();
 
         let last_id = dbio.get_meta_last_block_in_db().unwrap();
         let first_id = dbio.get_meta_first_block_in_db().unwrap();
@@ -1069,12 +1081,12 @@ mod tests {
     }
 
     #[test]
-    fn test_new_breakpoint() {
+    fn new_breakpoint() {
         let temp_dir = tempdir().unwrap();
         let temdir_path = temp_dir.path();
 
-        let dbio = RocksDBIO::open_or_create(temdir_path, Some((genesis_block(), initial_state())))
-            .unwrap();
+        let dbio =
+            RocksDBIO::open_or_create(temdir_path, &genesis_block(), &initial_state()).unwrap();
 
         for i in 1..BREAKPOINT_INTERVAL {
             let last_id = dbio.get_meta_last_block_in_db().unwrap();
@@ -1087,7 +1099,7 @@ mod tests {
                 Some(prev_hash),
                 vec![transfer_tx],
             );
-            dbio.put_block(block, [i; 32]).unwrap();
+            dbio.put_block(&block, [i; 32]).unwrap();
         }
 
         let last_id = dbio.get_meta_last_block_in_db().unwrap();
@@ -1125,12 +1137,12 @@ mod tests {
     }
 
     #[test]
-    fn test_simple_maps() {
+    fn simple_maps() {
         let temp_dir = tempdir().unwrap();
         let temdir_path = temp_dir.path();
 
-        let dbio = RocksDBIO::open_or_create(temdir_path, Some((genesis_block(), initial_state())))
-            .unwrap();
+        let dbio =
+            RocksDBIO::open_or_create(temdir_path, &genesis_block(), &initial_state()).unwrap();
 
         let last_id = dbio.get_meta_last_block_in_db().unwrap();
         let last_block = dbio.get_block(last_id).unwrap();
@@ -1141,7 +1153,7 @@ mod tests {
 
         let control_hash1 = block.header.hash;
 
-        dbio.put_block(block, [1; 32]).unwrap();
+        dbio.put_block(&block, [1; 32]).unwrap();
 
         let last_id = dbio.get_meta_last_block_in_db().unwrap();
         let last_block = dbio.get_block(last_id).unwrap();
@@ -1152,7 +1164,7 @@ mod tests {
 
         let control_hash2 = block.header.hash;
 
-        dbio.put_block(block, [2; 32]).unwrap();
+        dbio.put_block(&block, [2; 32]).unwrap();
 
         let last_id = dbio.get_meta_last_block_in_db().unwrap();
         let last_block = dbio.get_block(last_id).unwrap();
@@ -1163,7 +1175,7 @@ mod tests {
         let control_tx_hash1 = transfer_tx.hash();
 
         let block = common::test_utils::produce_dummy_block(4, Some(prev_hash), vec![transfer_tx]);
-        dbio.put_block(block, [3; 32]).unwrap();
+        dbio.put_block(&block, [3; 32]).unwrap();
 
         let last_id = dbio.get_meta_last_block_in_db().unwrap();
         let last_block = dbio.get_block(last_id).unwrap();
@@ -1174,7 +1186,7 @@ mod tests {
         let control_tx_hash2 = transfer_tx.hash();
 
         let block = common::test_utils::produce_dummy_block(5, Some(prev_hash), vec![transfer_tx]);
-        dbio.put_block(block, [4; 32]).unwrap();
+        dbio.put_block(&block, [4; 32]).unwrap();
 
         let control_block_id1 = dbio.get_block_id_by_hash(control_hash1.0).unwrap();
         let control_block_id2 = dbio.get_block_id_by_hash(control_hash2.0).unwrap();
@@ -1188,14 +1200,14 @@ mod tests {
     }
 
     #[test]
-    fn test_block_batch() {
+    fn block_batch() {
         let temp_dir = tempdir().unwrap();
         let temdir_path = temp_dir.path();
 
         let mut block_res = vec![];
 
-        let dbio = RocksDBIO::open_or_create(temdir_path, Some((genesis_block(), initial_state())))
-            .unwrap();
+        let dbio =
+            RocksDBIO::open_or_create(temdir_path, &genesis_block(), &initial_state()).unwrap();
 
         let last_id = dbio.get_meta_last_block_in_db().unwrap();
         let last_block = dbio.get_block(last_id).unwrap();
@@ -1205,7 +1217,7 @@ mod tests {
         let block = common::test_utils::produce_dummy_block(2, Some(prev_hash), vec![transfer_tx]);
 
         block_res.push(block.clone());
-        dbio.put_block(block, [1; 32]).unwrap();
+        dbio.put_block(&block, [1; 32]).unwrap();
 
         let last_id = dbio.get_meta_last_block_in_db().unwrap();
         let last_block = dbio.get_block(last_id).unwrap();
@@ -1215,7 +1227,7 @@ mod tests {
         let block = common::test_utils::produce_dummy_block(3, Some(prev_hash), vec![transfer_tx]);
 
         block_res.push(block.clone());
-        dbio.put_block(block, [2; 32]).unwrap();
+        dbio.put_block(&block, [2; 32]).unwrap();
 
         let last_id = dbio.get_meta_last_block_in_db().unwrap();
         let last_block = dbio.get_block(last_id).unwrap();
@@ -1225,7 +1237,7 @@ mod tests {
 
         let block = common::test_utils::produce_dummy_block(4, Some(prev_hash), vec![transfer_tx]);
         block_res.push(block.clone());
-        dbio.put_block(block, [3; 32]).unwrap();
+        dbio.put_block(&block, [3; 32]).unwrap();
 
         let last_id = dbio.get_meta_last_block_in_db().unwrap();
         let last_block = dbio.get_block(last_id).unwrap();
@@ -1235,7 +1247,7 @@ mod tests {
 
         let block = common::test_utils::produce_dummy_block(5, Some(prev_hash), vec![transfer_tx]);
         block_res.push(block.clone());
-        dbio.put_block(block, [4; 32]).unwrap();
+        dbio.put_block(&block, [4; 32]).unwrap();
 
         let block_hashes_mem: Vec<[u8; 32]> =
             block_res.into_iter().map(|bl| bl.header.hash.0).collect();
@@ -1266,14 +1278,14 @@ mod tests {
     }
 
     #[test]
-    fn test_account_map() {
+    fn account_map() {
         let temp_dir = tempdir().unwrap();
         let temdir_path = temp_dir.path();
 
         let mut tx_hash_res = vec![];
 
-        let dbio = RocksDBIO::open_or_create(temdir_path, Some((genesis_block(), initial_state())))
-            .unwrap();
+        let dbio =
+            RocksDBIO::open_or_create(temdir_path, &genesis_block(), &initial_state()).unwrap();
 
         let last_id = dbio.get_meta_last_block_in_db().unwrap();
         let last_block = dbio.get_block(last_id).unwrap();
@@ -1285,7 +1297,7 @@ mod tests {
 
         let block = common::test_utils::produce_dummy_block(2, Some(prev_hash), vec![transfer_tx]);
 
-        dbio.put_block(block, [1; 32]).unwrap();
+        dbio.put_block(&block, [1; 32]).unwrap();
 
         let last_id = dbio.get_meta_last_block_in_db().unwrap();
         let last_block = dbio.get_block(last_id).unwrap();
@@ -1297,7 +1309,7 @@ mod tests {
 
         let block = common::test_utils::produce_dummy_block(3, Some(prev_hash), vec![transfer_tx]);
 
-        dbio.put_block(block, [2; 32]).unwrap();
+        dbio.put_block(&block, [2; 32]).unwrap();
 
         let last_id = dbio.get_meta_last_block_in_db().unwrap();
         let last_block = dbio.get_block(last_id).unwrap();
@@ -1309,7 +1321,7 @@ mod tests {
 
         let block = common::test_utils::produce_dummy_block(4, Some(prev_hash), vec![transfer_tx]);
 
-        dbio.put_block(block, [3; 32]).unwrap();
+        dbio.put_block(&block, [3; 32]).unwrap();
 
         let last_id = dbio.get_meta_last_block_in_db().unwrap();
         let last_block = dbio.get_block(last_id).unwrap();
@@ -1321,7 +1333,7 @@ mod tests {
 
         let block = common::test_utils::produce_dummy_block(5, Some(prev_hash), vec![transfer_tx]);
 
-        dbio.put_block(block, [4; 32]).unwrap();
+        dbio.put_block(&block, [4; 32]).unwrap();
 
         let acc1_tx = dbio.get_acc_transactions(*acc1().value(), 0, 4).unwrap();
         let acc1_tx_hashes: Vec<[u8; 32]> = acc1_tx.into_iter().map(|tx| tx.hash().0).collect();

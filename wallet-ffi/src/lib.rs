@@ -20,6 +20,22 @@
 //! - Use the corresponding `wallet_ffi_free_*` function to free memory
 //! - Never free memory returned by FFI using standard C `free()`
 
+#![expect(
+    clippy::undocumented_unsafe_blocks,
+    clippy::multiple_unsafe_ops_per_block,
+    reason = "TODO: fix later"
+)]
+
+use std::sync::OnceLock;
+
+use common::error::ExecutionFailureKind;
+// Re-export public types for cbindgen
+pub use error::WalletFfiError as FfiError;
+use tokio::runtime::Handle;
+pub use types::*;
+
+use crate::error::print_error;
+
 pub mod account;
 pub mod error;
 pub mod keys;
@@ -28,15 +44,6 @@ pub mod sync;
 pub mod transfer;
 pub mod types;
 pub mod wallet;
-
-use std::sync::OnceLock;
-
-// Re-export public types for cbindgen
-pub use error::WalletFfiError as FfiError;
-use tokio::runtime::Handle;
-pub use types::*;
-
-use crate::error::print_error;
 
 static TOKIO_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
 
@@ -61,4 +68,23 @@ pub(crate) fn get_runtime() -> &'static Handle {
 pub(crate) fn block_on<F: std::future::Future>(future: F) -> F::Output {
     let runtime = get_runtime();
     runtime.block_on(future)
+}
+
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Error is consumed to create FFI error response"
+)]
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "We want to catch all errors for future proofing"
+)]
+pub(crate) fn map_execution_error(e: ExecutionFailureKind) -> FfiError {
+    match e {
+        ExecutionFailureKind::InsufficientFundsError => FfiError::InsufficientFunds,
+        ExecutionFailureKind::KeyNotFoundError => FfiError::KeyNotFound,
+        ExecutionFailureKind::SequencerError(_) | ExecutionFailureKind::SequencerClientError(_) => {
+            FfiError::NetworkError
+        }
+        _ => FfiError::InternalError,
+    }
 }

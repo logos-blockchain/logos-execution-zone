@@ -31,11 +31,12 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)]
 struct SequencerRpcResponse {
-    jsonrpc: String,
+    #[serde(rename = "jsonrpc")]
+    _jsonrpc: String,
     result: serde_json::Value,
-    id: u64,
+    #[serde(rename = "id")]
+    _id: u64,
 }
 
 #[derive(Clone)]
@@ -69,7 +70,7 @@ impl SequencerClient {
         payload: Value,
     ) -> Result<Value, SequencerClientError> {
         let request =
-            rpc_primitives::message::Request::from_payload_version_2_0(method.to_string(), payload);
+            rpc_primitives::message::Request::from_payload_version_2_0(method.to_owned(), payload);
 
         log::debug!(
             "Calling method {method} with payload {request:?} to sequencer at {}",
