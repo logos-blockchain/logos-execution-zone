@@ -42,7 +42,11 @@ pub trait Rpc {
     async fn get_transaction(&self, tx_hash: HashType) -> Result<Transaction, ErrorObjectOwned>;
 
     #[method(name = "getBlocks")]
-    async fn get_blocks(&self, offset: u32, limit: u32) -> Result<Vec<Block>, ErrorObjectOwned>;
+    async fn get_blocks(
+        &self,
+        before: Option<u64>,
+        limit: u32,
+    ) -> Result<Vec<Block>, ErrorObjectOwned>;
 
     #[method(name = "getTransactionsByAccount")]
     async fn get_transactions_by_account(

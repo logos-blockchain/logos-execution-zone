@@ -539,13 +539,26 @@ impl RocksDBIO {
         }
     }
 
-    pub fn get_block_batch(&self, offset: u64, limit: u64) -> DbResult<Vec<Block>> {
+    pub fn get_block_batch(&self, before: Option<u64>, limit: u64) -> DbResult<Vec<Block>> {
         let cf_block = self.block_column();
         let mut block_batch = vec![];
 
+        // Determine the starting block ID
+        let start_block_id = if let Some(before_id) = before {
+            before_id.saturating_sub(1)
+        } else {
+            // Get the latest block ID
+            self.get_meta_last_block_in_db()?
+        };
+
         // ToDo: Multi get this
 
-        for block_id in offset..(offset + limit) {
+        for i in 0..limit {
+            let block_id = start_block_id.saturating_sub(i);
+            if block_id == 0 {
+                break;
+            }
+
             let res = self
                 .db
                 .get_cf(
@@ -1215,7 +1228,10 @@ mod tests {
         let block_hashes_mem: Vec<[u8; 32]> =
             block_res.into_iter().map(|bl| bl.header.hash.0).collect();
 
-        let batch_res = dbio.get_block_batch(2, 4).unwrap();
+        // Get blocks before ID 6 (i.e., starting from 5 going backwards), limit 4
+        // This should return blocks 5, 4, 3, 2 in descending order
+        let mut batch_res = dbio.get_block_batch(Some(6), 4).unwrap();
+        batch_res.reverse(); // Reverse to match ascending order for comparison
 
         let block_hashes_db: Vec<[u8; 32]> =
             batch_res.into_iter().map(|bl| bl.header.hash.0).collect();
@@ -1224,7 +1240,10 @@ mod tests {
 
         let block_hashes_mem_limited = &block_hashes_mem[1..];
 
-        let batch_res_limited = dbio.get_block_batch(3, 4).unwrap();
+        // Get blocks before ID 6, limit 3
+        // This should return blocks 5, 4, 3 in descending order
+        let mut batch_res_limited = dbio.get_block_batch(Some(6), 3).unwrap();
+        batch_res_limited.reverse(); // Reverse to match ascending order for comparison
 
         let block_hashes_db_limited: Vec<[u8; 32]> = batch_res_limited
             .into_iter()

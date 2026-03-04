@@ -61,8 +61,11 @@ async fn indexer_block_batching() -> Result<()> {
 
     assert!(last_block_indexer > 1);
 
-    // Getting wide batch to fit all blocks
-    let block_batch = ctx.indexer_client().get_blocks(1, 100).await.unwrap();
+    // Getting wide batch to fit all blocks (from latest backwards)
+    let mut block_batch = ctx.indexer_client().get_blocks(None, 100).await.unwrap();
+
+    // Reverse to check chain consistency from oldest to newest
+    block_batch.reverse();
 
     // Checking chain consistency
     let mut prev_block_hash = block_batch.first().unwrap().header.hash;

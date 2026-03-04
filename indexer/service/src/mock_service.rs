@@ -43,10 +43,10 @@ impl MockIndexerService {
             );
         }
 
-        // Create 10 blocks with transactions
+        // Create 100 blocks with transactions
         let mut prev_hash = HashType([0u8; 32]);
 
-        for block_id in 0..10 {
+        for block_id in 1..=100 {
             let block_hash = {
                 let mut hash = [0u8; 32];
                 hash[0] = block_id as u8;
@@ -225,23 +225,20 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
             .ok_or_else(|| ErrorObjectOwned::owned(-32001, "Transaction not found", None::<()>))
     }
 
-    async fn get_blocks(&self, offset: u32, limit: u32) -> Result<Vec<Block>, ErrorObjectOwned> {
-        let offset = offset as usize;
-        let limit = limit as usize;
-        let total = self.blocks.len();
+    async fn get_blocks(
+        &self,
+        before: Option<u64>,
+        limit: u32,
+    ) -> Result<Vec<Block>, ErrorObjectOwned> {
+        let start_id = before.map_or_else(|| self.blocks.len() as u64, |id| id.saturating_sub(1));
 
-        // Return blocks in reverse order (newest first), with pagination
-        let start = offset.min(total);
-        let end = (offset + limit).min(total);
-
-        Ok(self
-            .blocks
-            .iter()
+        let result = (1..=start_id)
             .rev()
-            .skip(start)
-            .take(end - start)
-            .cloned()
-            .collect())
+            .take(limit as usize)
+            .map_while(|block_id| self.blocks.get(block_id as usize - 1).cloned())
+            .collect();
+
+        Ok(result)
     }
 
     async fn get_transactions_by_account(

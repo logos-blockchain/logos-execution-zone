@@ -118,11 +118,11 @@ pub async fn get_transaction(tx_hash: HashType) -> Result<Transaction, ServerFnE
 
 /// Get blocks with pagination
 #[server]
-pub async fn get_blocks(offset: u32, limit: u32) -> Result<Vec<Block>, ServerFnError> {
+pub async fn get_blocks(before: Option<u64>, limit: u32) -> Result<Vec<Block>, ServerFnError> {
     use indexer_service_rpc::RpcClient as _;
     let client = expect_context::<IndexerRpcClient>();
     client
-        .get_blocks(offset, limit)
+        .get_blocks(before, limit)
         .await
         .map_err(|e| ServerFnError::ServerError(format!("RPC error: {}", e)))
 }
