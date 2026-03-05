@@ -79,6 +79,7 @@ mod tests {
     use rand::RngCore;
 
     use super::*;
+    use crate::key_management::ephemeral_key_holder::EphemeralKeyHolder;
 
     #[test]
     fn test_new_os_random() {
@@ -150,5 +151,202 @@ mod tests {
             "Viewing public key {:?}",
             hex::encode(viewing_public_key.to_bytes())
         );
+    }
+
+    fn account_with_chain_index_2_for_tests() -> KeyChain {
+        let key_chain_raw = r#"
+            {
+              "secret_spending_key": [
+                208,
+                155,
+                82,
+                128,
+                101,
+                206,
+                20,
+                95,
+                241,
+                147,
+                159,
+                231,
+                207,
+                78,
+                152,
+                28,
+                114,
+                111,
+                61,
+                69,
+                254,
+                51,
+                242,
+                28,
+                28,
+                195,
+                170,
+                242,
+                160,
+                24,
+                47,
+                189
+              ],
+              "private_key_holder": {
+                "nullifier_secret_key": [
+                  142,
+                  76,
+                  154,
+                  157,
+                  42,
+                  40,
+                  174,
+                  199,
+                  151,
+                  63,
+                  2,
+                  216,
+                  52,
+                  103,
+                  81,
+                  42,
+                  200,
+                  177,
+                  189,
+                  49,
+                  81,
+                  39,
+                  166,
+                  139,
+                  203,
+                  154,
+                  156,
+                  166,
+                  88,
+                  159,
+                  11,
+                  151
+                ],
+                "viewing_secret_key": [
+                  122,
+                  94,
+                  159,
+                  21,
+                  28,
+                  49,
+                  169,
+                  79,
+                  12,
+                  156,
+                  171,
+                  90,
+                  41,
+                  216,
+                  203,
+                  75,
+                  251,
+                  192,
+                  204,
+                  217,
+                  18,
+                  49,
+                  28,
+                  219,
+                  213,
+                  147,
+                  244,
+                  194,
+                  205,
+                  237,
+                  134,
+                  36
+                ]
+              },
+              "nullifer_public_key": [
+                235,
+                24,
+                62,
+                99,
+                243,
+                236,
+                137,
+                35,
+                153,
+                149,
+                6,
+                10,
+                118,
+                239,
+                117,
+                188,
+                64,
+                8,
+                33,
+                52,
+                220,
+                231,
+                11,
+                39,
+                180,
+                117,
+                1,
+                22,
+                62,
+                199,
+                164,
+                169
+              ],
+              "viewing_public_key": [
+                2,
+                253,
+                204,
+                5,
+                212,
+                86,
+                249,
+                156,
+                132,
+                143,
+                1,
+                172,
+                80,
+                61,
+                18,
+                185,
+                233,
+                36,
+                221,
+                58,
+                64,
+                110,
+                89,
+                242,
+                202,
+                230,
+                154,
+                66,
+                45,
+                252,
+                138,
+                174,
+                37
+              ]
+            }
+        "#;
+
+        serde_json::from_str(key_chain_raw).unwrap()
+    }
+
+    #[test]
+    fn test_non_trivial_chain_index() {
+        let keys = account_with_chain_index_2_for_tests();
+
+        let eph_key_holder = EphemeralKeyHolder::new(&keys.nullifer_public_key);
+
+        let key_sender = eph_key_holder.calculate_shared_secret_sender(&keys.viewing_public_key);
+        let key_receiver = keys.calculate_shared_secret_receiver(
+            eph_key_holder.generate_ephemeral_public_key(),
+            Some(2),
+        );
+
+        assert_eq!(key_sender.0, key_receiver.0);
     }
 }
