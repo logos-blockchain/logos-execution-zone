@@ -461,14 +461,12 @@ impl WalletCore {
                         let shared_secret = key_chain
                             .calculate_shared_secret_receiver(encrypted_data.epk.clone(), index);
 
-                        let res = nssa_core::EncryptionScheme::decrypt(
+                        nssa_core::EncryptionScheme::decrypt(
                             ciphertext,
                             &shared_secret,
                             commitment,
                             ciph_id as u32,
-                        );
-
-                        res
+                        )
                     })
                     .map(move |res_acc| (acc_account_id, res_acc))
                     .collect::<Vec<_>>()

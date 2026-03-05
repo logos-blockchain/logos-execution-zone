@@ -1087,6 +1087,21 @@ async fn token_claiming_path_with_private_accounts() -> Result<()> {
     info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
+    // Key Tree shift
+    // This way we have account with child index > 0.
+    // Shared secret derivation dependant of child index, so this way we can test it as well.
+    let result = wallet::cli::execute_subcommand(
+        ctx.wallet_mut(),
+        Command::Account(AccountSubcommand::New(NewSubcommand::Private {
+            cci: None,
+            label: None,
+        })),
+    )
+    .await?;
+    let SubcommandReturnValue::RegisterAccount { account_id: _ } = result else {
+        anyhow::bail!("Expected RegisterAccount return value");
+    };
+
     // Create new private account for claiming path
     let result = wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
