@@ -7,7 +7,7 @@ use crate::{
     components::{AccountPreview, BlockPreview, TransactionPreview},
 };
 
-const RECENT_BLOCKS_LIMIT: u64 = 10;
+const RECENT_BLOCKS_LIMIT: u32 = 10;
 
 /// Main page component
 #[component]
@@ -39,22 +39,56 @@ pub fn MainPage() -> impl IntoView {
         }
     });
 
+    // Pagination state for blocks
+    let (all_blocks, set_all_blocks) = signal(Vec::new());
+    let (is_loading_blocks, set_is_loading_blocks) = signal(false);
+    let (has_more_blocks, set_has_more_blocks) = signal(true);
+    let (oldest_loaded_block_id, set_oldest_loaded_block_id) = signal(None::<u64>);
+
     // Load recent blocks on mount
     let recent_blocks_resource = Resource::new(
         || (),
-        |_| async {
-            match api::get_latest_block_id().await {
-                Ok(last_id) => {
-                    api::get_blocks(
-                        std::cmp::max(last_id.saturating_sub(RECENT_BLOCKS_LIMIT) as u32, 1),
-                        (RECENT_BLOCKS_LIMIT + 1) as u32,
-                    )
-                    .await
-                }
-                Err(err) => Err(err),
-            }
-        },
+        |_| async { api::get_blocks(None, RECENT_BLOCKS_LIMIT).await },
     );
+
+    // Update all_blocks when initial load completes
+    Effect::new(move || {
+        if let Some(Ok(blocks)) = recent_blocks_resource.get() {
+            let oldest_id = blocks.last().map(|b| b.header.block_id);
+            set_all_blocks.set(blocks.clone());
+            set_oldest_loaded_block_id.set(oldest_id);
+            set_has_more_blocks
+                .set(blocks.len() as u32 == RECENT_BLOCKS_LIMIT && oldest_id.unwrap_or(0) > 1);
+        }
+    });
+
+    // Load more blocks handler
+    let load_more_blocks = move |_| {
+        let before_id = oldest_loaded_block_id.get();
+
+        if before_id.is_none() {
+            return;
+        }
+
+        set_is_loading_blocks.set(true);
+
+        leptos::task::spawn_local(async move {
+            match api::get_blocks(before_id, RECENT_BLOCKS_LIMIT).await {
+                Ok(new_blocks) => {
+                    let blocks_count = new_blocks.len() as u32;
+                    let new_oldest_id = new_blocks.last().map(|b| b.header.block_id);
+                    set_all_blocks.update(|blocks| blocks.extend(new_blocks));
+                    set_oldest_loaded_block_id.set(new_oldest_id);
+                    set_has_more_blocks
+                        .set(blocks_count == RECENT_BLOCKS_LIMIT && new_oldest_id.unwrap_or(0) > 1);
+                }
+                Err(e) => {
+                    log::error!("Failed to load more blocks: {}", e);
+                }
+            }
+            set_is_loading_blocks.set(false);
+        });
+    };
 
     // Handle search - update URL parameter
     let on_search = move |ev: SubmitEvent| {
@@ -196,19 +230,48 @@ pub fn MainPage() -> impl IntoView {
                         recent_blocks_resource
                             .get()
                             .map(|result| match result {
-                                Ok(blocks) if !blocks.is_empty() => {
-                                    view! {
-                                        <div class="blocks-list">
-                                            {blocks
-                                                .into_iter()
-                                                .map(|block| view! { <BlockPreview block=block /> })
-                                                .collect::<Vec<_>>()}
-                                        </div>
-                                    }
-                                        .into_any()
-                                }
                                 Ok(_) => {
-                                    view! { <div class="no-blocks">"No blocks found"</div> }.into_any()
+                                    let blocks = all_blocks.get();
+                                    if blocks.is_empty() {
+                                        view! { <div class="no-blocks">"No blocks found"</div> }
+                                            .into_any()
+                                    } else {
+                                        view! {
+                                            <div>
+                                                <div class="blocks-list">
+                                                    {blocks
+                                                        .into_iter()
+                                                        .map(|block| view! { <BlockPreview block=block /> })
+                                                        .collect::<Vec<_>>()}
+                                                </div>
+                                                {move || {
+                                                    if has_more_blocks.get() {
+                                                        view! {
+                                                            <button
+                                                                class="load-more-button"
+                                                                on:click=load_more_blocks
+                                                                disabled=move || is_loading_blocks.get()
+                                                            >
+                                                                {move || {
+                                                                    if is_loading_blocks.get() {
+                                                                        "Loading..."
+                                                                    } else {
+                                                                        "Load More"
+                                                                    }
+                                                                }}
+
+                                                            </button>
+                                                        }
+                                                            .into_any()
+                                                    } else {
+                                                        ().into_any()
+                                                    }
+                                                }}
+
+                                            </div>
+                                        }
+                                            .into_any()
+                                    }
                                 }
                                 Err(e) => {
                                     view! { <div class="error">{format!("Error: {}", e)}</div> }

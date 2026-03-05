@@ -1,5 +1,5 @@
 {
-    "home": "./indexer/service",
+    "home": ".",
     "consensus_info_polling_interval": "60s",
     "bedrock_client_config": {
         "addr": "http://localhost:8080",

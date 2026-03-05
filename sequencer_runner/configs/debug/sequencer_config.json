@@ -1,5 +1,5 @@
 {
-    "home": "./sequencer_runner",
+    "home": ".",
     "override_rust_log": null,
     "genesis_id": 1,
     "is_genesis_random": true,

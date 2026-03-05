@@ -88,11 +88,15 @@ impl indexer_service_rpc::RpcServer for IndexerService {
             .into())
     }
 
-    async fn get_blocks(&self, offset: u32, limit: u32) -> Result<Vec<Block>, ErrorObjectOwned> {
+    async fn get_blocks(
+        &self,
+        before: Option<u64>,
+        limit: u32,
+    ) -> Result<Vec<Block>, ErrorObjectOwned> {
         let blocks = self
             .indexer
             .store
-            .get_block_batch(offset as u64, limit as u64)
+            .get_block_batch(before, limit as u64)
             .map_err(db_error)?;
 
         let mut block_res = vec![];
