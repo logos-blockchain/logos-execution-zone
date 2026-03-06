@@ -20,17 +20,50 @@
     "indexer_rpc_url": "ws://indexer_service:8779",
     "initial_accounts": [
         {
-            "account_id": "BLgCRDXYdQPMMWVHYRFGQZbgeHx9frkipa8GtpG2Syqy",
+            "account_id": "6iArKUXxhUJqS7kCaPNhwMWt3ro71PDyBj7jwAyE2VQV",
             "balance": 10000
         },
         {
-            "account_id": "Gj1mJy5W7J5pfmLRujmQaLfLMWidNxQ6uwnhb666ZwHw",
+            "account_id": "7wHg9sbJwc6h3NP1S9bekfAzB8CHifEcxKswCKUt3YQo",
             "balance": 20000
         }
     ],
     "initial_commitments": [
         {
-            "npk": [13, 25, 40, 5, 198, 248, 210, 248, 237, 121, 124, 145, 186, 142, 253, 216, 236, 69, 193, 32, 166, 167, 49, 133, 172, 111, 159, 46, 84, 17, 157, 23],
+            "npk":[
+                177,
+                64,
+                1,
+                11,
+                87,
+                38,
+                254,
+                159,
+                231,
+                165,
+                1,
+                94,
+                64,
+                137,
+                243,
+                76,
+                249,
+                101,
+                251,
+                129,
+                33,
+                101,
+                189,
+                30,
+                42,
+                11,
+                191,
+                34,
+                103,
+                186,
+                227,
+                230
+            ] ,
             "account": {
                 "program_owner": [
                     0,
@@ -48,7 +81,40 @@
             }
         },
         {
-            "npk": [32, 67, 72, 164, 106, 53, 66, 239, 141, 15, 52, 230, 136, 177, 2, 236, 207, 243, 134, 135, 210, 143, 87, 232, 215, 128, 194, 120, 113, 224, 4, 165],
+            "npk": [
+                32,
+                67,
+                72,
+                164,
+                106,
+                53,
+                66,
+                239,
+                141,
+                15,
+                52,
+                230,
+                136,
+                177,
+                2,
+                236,
+                207,
+                243,
+                134,
+                135,
+                210,
+                143,
+                87,
+                232,
+                215,
+                128,
+                194,
+                120,
+                113,
+                224,
+                4,
+                165
+            ],
             "account": {
                 "program_owner": [
                     0,

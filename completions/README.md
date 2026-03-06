@@ -1,6 +1,6 @@
 # Wallet CLI Completion
 
-Completion scripts for the LSSA `wallet` command. 
+Completion scripts for the LSSA `wallet` command.
 
 ## ZSH
 
@@ -19,9 +19,9 @@ Preconfigured accounts and accounts only with `/` (no number) are not completed.
 e.g.:
 
 ```
-▶ wallet account list 
-Preconfigured Public/Gj1mJy5W7J5pfmLRujmQaLfLMWidNxQ6uwnhb666ZwHw,
-Preconfigured Public/BLgCRDXYdQPMMWVHYRFGQZbgeHx9frkipa8GtpG2Syqy,
+▶ wallet account list
+Preconfigured Public/7wHg9sbJwc6h3NP1S9bekfAzB8CHifEcxKswCKUt3YQo,
+Preconfigured Public/6iArKUXxhUJqS7kCaPNhwMWt3ro71PDyBj7jwAyE2VQV,
 Preconfigured Private/3oCG8gqdKLMegw4rRfyaMQvuPHpcASt7xwttsmnZLSkw,
 Preconfigured Private/AKTcXgJ1xoynta1Ec7y6Jso1z1JQtHqd7aPQ1h9er6xX,
 / Public/8DstRgMQrB2N9a7ymv98RDDbt8nctrP9ZzaNRSpKDZSu,
