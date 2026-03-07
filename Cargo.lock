@@ -977,6 +977,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "ata_core"
+version = "0.1.0"
+dependencies = [
+ "borsh",
+ "nssa_core",
+ "risc0-zkvm",
+ "serde",
+]
+
+[[package]]
+name = "ata_program"
+version = "0.1.0"
+dependencies = [
+ "ata_core",
+ "nssa_core",
+ "token_core",
+]
+
+[[package]]
 name = "atomic-polyfill"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6198,6 +6217,8 @@ version = "0.1.0"
 dependencies = [
  "amm_core",
  "amm_program",
+ "ata_core",
+ "ata_program",
  "nssa_core",
  "risc0-zkvm",
  "serde",
@@ -8989,6 +9010,7 @@ dependencies = [
  "amm_core",
  "anyhow",
  "async-stream",
+ "ata_core",
  "base64 0.22.1",
  "borsh",
  "bytemuck",

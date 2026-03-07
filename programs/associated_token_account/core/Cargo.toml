@@ -1,0 +1,11 @@
+[package]
+name = "ata_core"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+
+[dependencies]
+nssa_core.workspace = true
+serde.workspace = true
+risc0-zkvm.workspace = true
+borsh.workspace = true
