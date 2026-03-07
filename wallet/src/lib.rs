@@ -64,6 +64,8 @@ pub enum ExecutionFailureKind {
     InsufficientFundsError,
     #[error("Account {0} data is invalid")]
     AccountDataError(AccountId),
+    #[error("Failed to build transaction: {0}")]
+    TransactionBuildError(#[from] nssa::error::NssaError),
 }
 
 #[expect(clippy::partial_pub_fields, reason = "TODO: make all fields private")]

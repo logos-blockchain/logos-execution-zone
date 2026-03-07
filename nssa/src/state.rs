@@ -146,6 +146,7 @@ impl V03State {
         this.insert_program(Program::authenticated_transfer_program());
         this.insert_program(Program::token());
         this.insert_program(Program::amm());
+        this.insert_program(Program::ata());
 
         this
     }
@@ -501,6 +502,7 @@ pub mod tests {
             );
             this.insert(Program::token().id(), Program::token());
             this.insert(Program::amm().id(), Program::amm());
+            this.insert(Program::ata().id(), Program::ata());
             this
         };
 

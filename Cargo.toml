@@ -17,6 +17,8 @@ members = [
   "programs/amm",
   "programs/token/core",
   "programs/token",
+  "programs/associated_token_account/core",
+  "programs/associated_token_account",
   "sequencer/core",
   "sequencer/service",
   "sequencer/service/protocol",
@@ -57,6 +59,8 @@ token_core = { path = "programs/token/core" }
 token_program = { path = "programs/token" }
 amm_core = { path = "programs/amm/core" }
 amm_program = { path = "programs/amm" }
+ata_core = { path = "programs/associated_token_account/core" }
+ata_program = { path = "programs/associated_token_account" }
 test_program_methods = { path = "test_program_methods" }
 bedrock_client = { path = "bedrock_client" }
 

@@ -8,7 +8,9 @@ use serde::Serialize;
 
 use crate::{
     error::NssaError,
-    program_methods::{AMM_ELF, AUTHENTICATED_TRANSFER_ELF, PINATA_ELF, TOKEN_ELF},
+    program_methods::{
+        AMM_ELF, ASSOCIATED_TOKEN_ACCOUNT_ELF, AUTHENTICATED_TRANSFER_ELF, PINATA_ELF, TOKEN_ELF,
+    },
 };
 
 /// Maximum number of cycles for a public execution.
@@ -104,6 +106,12 @@ impl Program {
     #[must_use]
     pub fn amm() -> Self {
         Self::new(AMM_ELF.to_vec()).expect("The AMM program must be a valid Risc0 program")
+    }
+
+    #[must_use]
+    pub fn ata() -> Self {
+        Self::new(ASSOCIATED_TOKEN_ACCOUNT_ELF.to_vec())
+            .expect("The ATA program must be a valid Risc0 program")
     }
 }
 

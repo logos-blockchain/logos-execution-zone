@@ -18,6 +18,7 @@ key_protocol.workspace = true
 indexer_service.workspace = true
 serde_json.workspace = true
 token_core.workspace = true
+ata_core.workspace = true
 indexer_service_rpc.workspace = true
 sequencer_service_rpc = { workspace = true, features = ["client"] }
 wallet-ffi.workspace = true

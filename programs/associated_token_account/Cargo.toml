@@ -1,0 +1,10 @@
+[package]
+name = "ata_program"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+
+[dependencies]
+nssa_core.workspace = true
+token_core.workspace = true
+ata_core.workspace = true
