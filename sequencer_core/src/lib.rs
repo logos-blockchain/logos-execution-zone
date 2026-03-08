@@ -11,7 +11,7 @@ use common::{
 };
 use config::SequencerConfig;
 use log::{error, info, warn};
-use logos_blockchain_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
+use logos_blockchain_zone_sdk::kms::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
 use mempool::{MemPool, MemPoolHandle};
 
 use crate::{
@@ -368,7 +368,7 @@ mod tests {
         block::AccountInitialData, test_utils::sequencer_sign_key_for_testing,
         transaction::NSSATransaction,
     };
-    use logos_blockchain_core::mantle::ops::channel::ChannelId;
+    use logos_blockchain_zone_sdk::mantle::ops::channel::ChannelId;
     use mempool::MemPoolHandle;
     use nssa::{AccountId, PrivateKey};
 

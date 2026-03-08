@@ -1,7 +1,7 @@
 use anyhow::{Result, anyhow};
 use bedrock_client::SignedMantleTx;
-use logos_blockchain_core::mantle::ops::channel::ChannelId;
-use logos_blockchain_key_management_system_service::keys::Ed25519Key;
+use logos_blockchain_zone_sdk::mantle::ops::channel::ChannelId;
+use logos_blockchain_zone_sdk::kms::keys::Ed25519Key;
 use url::Url;
 
 use crate::{

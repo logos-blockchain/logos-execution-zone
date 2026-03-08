@@ -6,7 +6,7 @@ use common::block::{Block, HashableBlockData};
 // ToDo: Remove after testnet
 use common::{HashType, PINATA_BASE58};
 use log::{debug, error, info};
-use logos_blockchain_core::mantle::{
+use logos_blockchain_zone_sdk::mantle::{
     Op, SignedMantleTx,
     ops::channel::{ChannelId, inscribe::InscriptionOp},
 };

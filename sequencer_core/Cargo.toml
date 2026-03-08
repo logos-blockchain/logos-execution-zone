@@ -5,6 +5,7 @@ edition = "2024"
 license = { workspace = true }
 
 [dependencies]
+logos-blockchain-zone-sdk.workspace = true
 nssa.workspace = true
 nssa_core.workspace = true
 common.workspace = true
@@ -21,8 +22,6 @@ tempfile.workspace = true
 chrono.workspace = true
 log.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
-logos-blockchain-key-management-system-service.workspace = true
-logos-blockchain-core.workspace = true
 rand.workspace = true
 borsh.workspace = true
 bytesize.workspace = true

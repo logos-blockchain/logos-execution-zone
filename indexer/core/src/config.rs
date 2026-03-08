@@ -12,7 +12,7 @@ use common::{
     config::BasicAuth,
 };
 use humantime_serde;
-pub use logos_blockchain_core::mantle::ops::channel::ChannelId;
+pub use logos_blockchain_zone_sdk::mantle::ops::channel::ChannelId;
 use serde::{Deserialize, Serialize};
 use url::Url;
 

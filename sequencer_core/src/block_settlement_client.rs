@@ -1,13 +1,13 @@
 use anyhow::{Context, Result};
 use bedrock_client::BedrockClient;
 pub use common::block::Block;
-pub use logos_blockchain_core::mantle::{MantleTx, SignedMantleTx, ops::channel::MsgId};
-use logos_blockchain_core::mantle::{
+pub use logos_blockchain_zone_sdk::mantle::{MantleTx, SignedMantleTx, ops::channel::MsgId};
+use logos_blockchain_zone_sdk::mantle::{
     Op, OpProof, Transaction, TxHash, ledger,
     ops::channel::{ChannelId, inscribe::InscriptionOp},
 };
-pub use logos_blockchain_key_management_system_service::keys::Ed25519Key;
-use logos_blockchain_key_management_system_service::keys::Ed25519PublicKey;
+pub use logos_blockchain_zone_sdk::kms::keys::Ed25519Key;
+use logos_blockchain_zone_sdk::kms::keys::Ed25519PublicKey;
 
 use crate::config::BedrockConfig;
 
@@ -61,7 +61,7 @@ pub trait BlockSettlementClientTrait: Clone {
             .sign_payload(tx_hash.as_signing_bytes().as_ref())
             .to_bytes();
         let signature =
-            logos_blockchain_key_management_system_service::keys::Ed25519Signature::from_bytes(
+            logos_blockchain_zone_sdk::kms::keys::Ed25519Signature::from_bytes(
                 &signature_bytes,
             );
 
@@ -120,7 +120,7 @@ impl BlockSettlementClientTrait for BlockSettlementClient {
 
 fn empty_ledger_signature(
     tx_hash: &TxHash,
-) -> logos_blockchain_key_management_system_service::keys::ZkSignature {
-    logos_blockchain_key_management_system_service::keys::ZkKey::multi_sign(&[], tx_hash.as_ref())
+) -> logos_blockchain_zone_sdk::kms::keys::ZkSignature {
+    logos_blockchain_zone_sdk::kms::keys::ZkKey::multi_sign(&[], tx_hash.as_ref())
         .expect("multi-sign with empty key set works")
 }

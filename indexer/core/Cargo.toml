@@ -5,6 +5,7 @@ edition = "2024"
 license = { workspace = true }
 
 [dependencies]
+logos-blockchain-zone-sdk.workspace = true
 common.workspace = true
 bedrock_client.workspace = true
 nssa.workspace = true
@@ -19,6 +20,5 @@ tokio.workspace = true
 borsh.workspace = true
 futures.workspace = true
 url.workspace = true
-logos-blockchain-core.workspace = true
 serde_json.workspace = true
 async-stream.workspace = true

@@ -110,11 +110,7 @@ tokio-retry = "0.3.0"
 schemars = "1.2.0"
 async-stream = "0.3.6"
 
-logos-blockchain-common-http-client = { git = "https://github.com/logos-blockchain/logos-blockchain.git" }
-logos-blockchain-key-management-system-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git" }
-logos-blockchain-core = { git = "https://github.com/logos-blockchain/logos-blockchain.git" }
-logos-blockchain-chain-broadcast-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git" }
-logos-blockchain-chain-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git" }
+logos-blockchain-zone-sdk = { path = "../logos-blockchain/zone-sdk" }
 
 rocksdb = { version = "0.24.0", default-features = false, features = [
   "snappy",

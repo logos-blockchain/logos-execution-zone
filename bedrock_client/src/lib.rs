@@ -6,10 +6,11 @@ use futures::{Stream, TryFutureExt};
 #[expect(clippy::single_component_path_imports, reason = "Satisfy machete")]
 use humantime_serde;
 use log::{info, warn};
-pub use logos_blockchain_chain_broadcast_service::BlockInfo;
-use logos_blockchain_chain_service::CryptarchiaInfo;
-pub use logos_blockchain_common_http_client::{CommonHttpClient, Error};
-pub use logos_blockchain_core::{block::Block, header::HeaderId, mantle::SignedMantleTx};
+use logos_blockchain_zone_sdk::chain::CryptarchiaInfo;
+pub use logos_blockchain_zone_sdk::http::{CommonHttpClient, Error};
+use logos_blockchain_zone_sdk::BasicAuthCredentials;
+pub use logos_blockchain_zone_sdk::BlockInfo;
+pub use logos_blockchain_zone_sdk::{block::Block, header::HeaderId, mantle::SignedMantleTx};
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use tokio_retry::Retry;
@@ -50,9 +51,7 @@ impl BedrockClient {
                 .build()
                 .context("Failed to build HTTP client")?;
 
-        let auth = auth.map(|a| {
-            logos_blockchain_common_http_client::BasicAuthCredentials::new(a.username, a.password)
-        });
+        let auth = auth.map(|a| BasicAuthCredentials::new(a.username, a.password));
 
         let http_client = CommonHttpClient::new_with_client(client, auth);
         Ok(Self {
