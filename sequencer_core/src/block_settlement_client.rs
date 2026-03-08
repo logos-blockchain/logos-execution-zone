@@ -102,7 +102,8 @@ impl BlockSettlementClientTrait for BlockSettlementClient {
         self.bedrock_client
             .post_transaction(tx)
             .await
-            .context("Failed to post transaction to Bedrock")?;
+            .context("Failed to post transaction to Bedrock after retries")?
+            .context("Failed to post transaction to Bedrock with non-retryable error")?;
 
         log::debug!("Posted block to Bedrock with parent id {parent_id:?} and msg id: {msg_id:?}");
 

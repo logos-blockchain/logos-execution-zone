@@ -31,9 +31,9 @@ impl Default for BackoffConfig {
     }
 }
 
-// Simple wrapper
-// maybe extend in the future for our purposes
-// `Clone` is cheap because `CommonHttpClient` is internally reference counted (`Arc`).
+/// Simple wrapper
+/// maybe extend in the future for our purposes
+/// `Clone` is cheap because `CommonHttpClient` is internally reference counted (`Arc`).
 #[derive(Clone)]
 pub struct BedrockClient {
     http_client: CommonHttpClient,
@@ -62,10 +62,22 @@ impl BedrockClient {
         })
     }
 
-    pub async fn post_transaction(&self, tx: SignedMantleTx) -> Result<(), Error> {
-        Retry::spawn(self.backoff_strategy(), || {
-            self.http_client
+    pub async fn post_transaction(&self, tx: SignedMantleTx) -> Result<Result<(), Error>, Error> {
+        Retry::spawn(self.backoff_strategy(), || async {
+            match self
+                .http_client
                 .post_transaction(self.node_url.clone(), tx.clone())
+                .await
+            {
+                Ok(_) => Ok(Ok(())),
+                Err(err) => match err {
+                    // Retry arm.
+                    // Retrying only reqwest errors: mainly connected to http.
+                    Error::Request(_) => Err(err),
+                    // Returning non-retryable error
+                    _ => Ok(Err(err)),
+                },
+            }
         })
         .await
     }
