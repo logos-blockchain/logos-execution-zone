@@ -265,3 +265,6 @@ clippy.complexity = { level = "deny", priority = -1 }
 
 # Perf
 clippy.perf = { level = "deny", priority = -1 }
+
+# Suspicious
+clippy.suspicious = { level = "deny", priority = -1 }
