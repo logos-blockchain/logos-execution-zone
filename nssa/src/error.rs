@@ -67,3 +67,23 @@ pub enum NssaError {
     #[error("Chain of calls is too long")]
     MaxChainedCallsDepthExceeded,
 }
+
+#[derive(Debug)]
+enum testError {
+    testErr,
+}
+
+
+fn test_function_ensure(cond: bool) -> Result<(), testError> {
+    ensure!(cond, testError::testErr);
+
+    Ok(())
+}
+
+
+#[test]
+fn test_ensure() {
+    assert!(test_function_ensure(true).is_ok());
+    assert!(test_function_ensure(false).is_err());
+
+}
