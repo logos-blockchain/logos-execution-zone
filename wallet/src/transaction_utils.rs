@@ -39,7 +39,7 @@ impl WalletCore {
         let mut nsk = None;
         let mut proof = None;
 
-        let from_npk = from_keys.nullifer_public_key;
+        let from_npk = from_keys.nullifier_public_key;
         let from_vpk = from_keys.viewing_public_key;
 
         let sender_commitment = Commitment::new(&from_npk, &from_acc);

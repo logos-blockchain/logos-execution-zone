@@ -39,7 +39,7 @@ impl KeyNode for ChildKeysPrivate {
             value: (
                 KeyChain {
                     secret_spending_key: ssk,
-                    nullifer_public_key: npk,
+                    nullifier_public_key: npk,
                     viewing_public_key: vpk,
                     private_key_holder: PrivateKeyHolder {
                         nullifier_secret_key: nsk,
@@ -63,7 +63,7 @@ impl KeyNode for ChildKeysPrivate {
 
         input.extend_from_slice(b"LEE_seed_priv");
         input.extend_from_slice(&parent_pt.to_bytes());
-        input.extend_from_slice(&cci.to_le_bytes());
+        input.extend_from_slice(&cci.to_be_bytes());
 
         let hash_value = hmac_sha512::HMAC::mac(input, self.ccc);
 
@@ -86,7 +86,7 @@ impl KeyNode for ChildKeysPrivate {
             value: (
                 KeyChain {
                     secret_spending_key: ssk,
-                    nullifer_public_key: npk,
+                    nullifier_public_key: npk,
                     viewing_public_key: vpk,
                     private_key_holder: PrivateKeyHolder {
                         nullifier_secret_key: nsk,
@@ -109,7 +109,7 @@ impl KeyNode for ChildKeysPrivate {
     }
 
     fn account_id(&self) -> nssa::AccountId {
-        nssa::AccountId::from(&self.value.0.nullifer_public_key)
+        nssa::AccountId::from(&self.value.0.nullifier_public_key)
     }
 }
 
@@ -175,7 +175,7 @@ mod tests {
         assert!(expected_ssk == keys.value.0.secret_spending_key);
         assert!(expected_ccc == keys.ccc);
         assert!(expected_nsk == keys.value.0.private_key_holder.nullifier_secret_key);
-        assert!(expected_npk == keys.value.0.nullifer_public_key);
+        assert!(expected_npk == keys.value.0.nullifier_public_key);
         assert!(expected_vsk == keys.value.0.private_key_holder.viewing_secret_key);
         assert!(expected_vpk_as_bytes == keys.value.0.viewing_public_key.to_bytes());
     }
@@ -193,31 +193,31 @@ mod tests {
         let child_node = ChildKeysPrivate::nth_child(&root_node, 42u32);
 
         let expected_ccc: [u8; 32] = [
-            145, 59, 225, 32, 54, 168, 14, 45, 60, 253, 57, 202, 31, 86, 142, 234, 51, 57, 154, 88,
-            132, 200, 92, 191, 220, 144, 42, 184, 108, 35, 226, 146,
+            27, 73, 133, 213, 214, 63, 217, 184, 164, 17, 172, 140, 223, 95, 255, 157, 11, 0, 58,
+            53, 82, 147, 121, 120, 199, 50, 30, 28, 103, 24, 121, 187,
         ];
 
         let expected_nsk: NullifierSecretKey = [
-            19, 100, 119, 73, 191, 225, 234, 219, 129, 88, 40, 229, 63, 225, 189, 136, 69, 172,
-            221, 186, 147, 83, 150, 207, 70, 17, 228, 70, 113, 87, 227, 31,
+            124, 61, 40, 92, 33, 135, 3, 41, 200, 234, 3, 69, 102, 184, 57, 191, 106, 151, 194,
+            192, 103, 132, 141, 112, 249, 108, 192, 117, 24, 48, 70, 216,
         ];
         let expected_npk: NullifierPublicKey = nssa_core::NullifierPublicKey([
-            133, 235, 223, 151, 12, 69, 26, 222, 60, 125, 235, 125, 167, 212, 201, 168, 101, 242,
-            111, 239, 1, 228, 12, 252, 146, 53, 75, 17, 187, 255, 122, 181,
+            116, 231, 246, 189, 145, 240, 37, 59, 219, 223, 216, 246, 116, 171, 223, 55, 197, 200,
+            134, 192, 221, 40, 218, 167, 239, 5, 11, 95, 147, 247, 162, 226,
         ]);
 
         let expected_vsk: ViewingSecretKey = [
-            218, 219, 193, 132, 160, 6, 178, 194, 139, 248, 199, 81, 17, 133, 37, 201, 58, 104, 49,
-            222, 187, 46, 156, 93, 14, 118, 209, 243, 38, 101, 77, 45,
+            33, 155, 68, 60, 102, 70, 47, 105, 194, 129, 44, 26, 143, 198, 44, 244, 185, 31, 236,
+            252, 205, 89, 138, 107, 39, 38, 154, 73, 109, 166, 41, 114,
         ];
         let expected_vpk_as_bytes: [u8; 33] = [
-            3, 164, 65, 167, 88, 167, 179, 51, 159, 27, 241, 174, 77, 174, 142, 106, 128, 96, 69,
-            74, 117, 231, 42, 193, 235, 153, 206, 116, 102, 7, 101, 192, 45,
+            2, 78, 213, 113, 117, 105, 162, 248, 175, 68, 128, 232, 106, 204, 208, 159, 11, 78, 48,
+            244, 127, 112, 46, 0, 93, 184, 1, 77, 132, 160, 75, 152, 88,
         ];
 
         assert!(expected_ccc == child_node.ccc);
         assert!(expected_nsk == child_node.value.0.private_key_holder.nullifier_secret_key);
-        assert!(expected_npk == child_node.value.0.nullifer_public_key);
+        assert!(expected_npk == child_node.value.0.nullifier_public_key);
         assert!(expected_vsk == child_node.value.0.private_key_holder.viewing_secret_key);
         assert!(expected_vpk_as_bytes == child_node.value.0.viewing_public_key.to_bytes());
     }

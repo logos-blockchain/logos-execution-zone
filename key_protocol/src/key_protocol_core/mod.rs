@@ -46,7 +46,7 @@ impl NSSAUserData {
     ) -> bool {
         let mut check_res = true;
         for (account_id, (key, _)) in accounts_keys_map {
-            let expected_account_id = nssa::AccountId::from(&key.nullifer_public_key);
+            let expected_account_id = nssa::AccountId::from(&key.nullifier_public_key);
             if expected_account_id != *account_id {
                 println!("{}, {}", expected_account_id, account_id);
                 check_res = false;

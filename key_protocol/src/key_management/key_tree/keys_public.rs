@@ -19,15 +19,21 @@ impl ChildKeysPublic {
         match ((2u32).pow(31)).cmp(&cci) {
             // Non-harden
             std::cmp::Ordering::Greater => {
-                hash_input.extend_from_slice(self.cpk.value());
-                hash_input.extend_from_slice(&cci.to_le_bytes());
+                // BIP-032 compatibility requires 1-byte header from the public_key;
+                // Not stored in `self.cpk.value()`
+                let sk = secp256k1::SecretKey::from_byte_array(*self.csk.value())
+                    .expect("32 bytes, within curve order");
+                let pk = secp256k1::PublicKey::from_secret_key(&secp256k1::Secp256k1::new(), &sk);
+                hash_input.extend_from_slice(&secp256k1::PublicKey::serialize(&pk));
+                hash_input.extend_from_slice(&cci.to_be_bytes());
 
                 hmac_sha512::HMAC::mac(hash_input, self.ccc)
             }
             // Harden
             _ => {
+                hash_input.extend_from_slice(&[0u8]);
                 hash_input.extend_from_slice(self.csk.value());
-                hash_input.extend_from_slice(&(cci).to_le_bytes());
+                hash_input.extend_from_slice(&cci.to_be_bytes());
 
                 hmac_sha512::HMAC::mac(hash_input, self.ccc)
             }
@@ -62,7 +68,7 @@ impl KeyNode for ChildKeysPublic {
         .unwrap();
 
         let csk = nssa::PrivateKey::try_new(
-            csk.add_tweak(&Scalar::from_le_bytes(*self.csk.value()).unwrap())
+            csk.add_tweak(&Scalar::from_be_bytes(*self.csk.value()).unwrap())
                 .expect("Expect a valid Scalar")
                 .secret_bytes(),
         )
@@ -131,6 +137,7 @@ mod tests {
             202, 148, 181, 228, 35, 222, 58, 84, 156, 24, 146, 86,
         ])
         .unwrap();
+
         let expected_cpk: PublicKey = PublicKey::try_new([
             219, 141, 130, 105, 11, 203, 187, 124, 112, 75, 223, 22, 11, 164, 153, 127, 59, 247,
             244, 166, 75, 66, 242, 224, 35, 156, 161, 75, 41, 51, 76, 245,
@@ -154,26 +161,20 @@ mod tests {
         let cci = (2u32).pow(31) + 13;
         let child_keys = ChildKeysPublic::nth_child(&root_keys, cci);
 
-        print!(
-            "{} {}",
-            child_keys.csk.value()[0],
-            child_keys.csk.value()[1]
-        );
-
         let expected_ccc = [
-            126, 175, 244, 41, 41, 173, 134, 103, 139, 140, 195, 86, 194, 147, 116, 48, 71, 107,
-            253, 235, 114, 139, 60, 115, 226, 205, 215, 248, 240, 190, 196, 6,
+            149, 226, 13, 4, 194, 12, 69, 29, 9, 234, 209, 119, 98, 4, 128, 91, 37, 103, 192, 31,
+            130, 126, 123, 20, 90, 34, 173, 209, 101, 248, 155, 36,
         ];
 
         let expected_csk: PrivateKey = PrivateKey::try_new([
-            128, 148, 53, 165, 222, 155, 163, 108, 186, 182, 124, 67, 90, 86, 59, 123, 95, 224,
-            171, 4, 51, 131, 254, 57, 241, 178, 82, 161, 204, 206, 79, 107,
+            9, 65, 33, 228, 25, 82, 219, 117, 91, 217, 11, 223, 144, 85, 246, 26, 123, 216, 107,
+            213, 33, 52, 188, 22, 198, 246, 71, 46, 245, 174, 16, 47,
         ])
         .unwrap();
 
         let expected_cpk: PublicKey = PublicKey::try_new([
-            149, 240, 55, 15, 178, 67, 245, 254, 44, 141, 95, 223, 238, 62, 85, 11, 248, 9, 11, 40,
-            69, 211, 116, 13, 189, 35, 8, 95, 233, 154, 129, 58,
+            142, 143, 238, 159, 105, 165, 224, 252, 108, 62, 53, 209, 176, 219, 249, 38, 90, 241,
+            201, 81, 194, 146, 236, 5, 83, 152, 238, 243, 138, 16, 229, 15,
         ])
         .unwrap();
 
@@ -194,26 +195,20 @@ mod tests {
         let cci = 13;
         let child_keys = ChildKeysPublic::nth_child(&root_keys, cci);
 
-        print!(
-            "{} {}",
-            child_keys.csk.value()[0],
-            child_keys.csk.value()[1]
-        );
-
         let expected_ccc = [
-            50, 29, 113, 102, 49, 130, 64, 0, 247, 95, 135, 187, 118, 162, 65, 65, 194, 53, 189,
-            242, 66, 178, 168, 2, 51, 193, 155, 72, 209, 2, 207, 251,
+            79, 228, 242, 119, 211, 203, 198, 175, 95, 36, 4, 234, 139, 45, 137, 138, 54, 211, 187,
+            16, 28, 79, 80, 232, 216, 101, 145, 19, 101, 220, 217, 141,
         ];
 
         let expected_csk: PrivateKey = PrivateKey::try_new([
-            162, 32, 211, 190, 180, 74, 151, 246, 189, 93, 8, 57, 182, 239, 125, 245, 192, 255, 24,
-            186, 251, 23, 194, 186, 252, 121, 190, 54, 147, 199, 1, 109,
+            185, 147, 32, 242, 145, 91, 123, 77, 42, 33, 134, 84, 12, 165, 117, 70, 158, 201, 95,
+            153, 14, 12, 92, 235, 128, 156, 194, 169, 68, 35, 165, 127,
         ])
         .unwrap();
 
         let expected_cpk: PublicKey = PublicKey::try_new([
-            183, 48, 207, 170, 221, 111, 118, 9, 40, 67, 123, 162, 159, 169, 34, 157, 23, 37, 232,
-            102, 231, 187, 199, 191, 205, 146, 159, 22, 79, 100, 10, 223,
+            119, 16, 145, 121, 97, 244, 186, 35, 136, 34, 140, 171, 206, 139, 11, 208, 207, 121,
+            158, 45, 28, 22, 140, 98, 161, 179, 212, 173, 238, 220, 2, 34,
         ])
         .unwrap();
 
@@ -235,19 +230,19 @@ mod tests {
         let child_keys = ChildKeysPublic::nth_child(&root_keys, cci);
 
         let expected_ccc = [
-            101, 15, 69, 152, 144, 22, 105, 89, 175, 21, 13, 50, 160, 167, 93, 80, 94, 99, 192,
-            252, 1, 126, 196, 217, 149, 164, 60, 75, 237, 90, 104, 83,
+            221, 208, 47, 189, 174, 152, 33, 25, 151, 114, 233, 191, 57, 15, 40, 140, 46, 87, 126,
+            58, 215, 40, 246, 111, 166, 113, 183, 145, 173, 11, 27, 182,
         ];
 
         let expected_csk: PrivateKey = PrivateKey::try_new([
-            46, 196, 131, 199, 190, 180, 250, 222, 41, 188, 221, 156, 255, 239, 251, 207, 239, 202,
-            166, 216, 107, 236, 195, 48, 167, 69, 97, 13, 132, 117, 76, 89,
+            223, 29, 87, 189, 126, 24, 117, 225, 190, 57, 0, 143, 207, 168, 231, 139, 170, 192, 81,
+            254, 126, 10, 115, 42, 141, 157, 70, 171, 199, 231, 198, 132,
         ])
         .unwrap();
 
         let expected_cpk: PublicKey = PublicKey::try_new([
-            93, 151, 154, 238, 175, 198, 53, 146, 255, 43, 37, 52, 214, 165, 69, 161, 38, 20, 68,
-            166, 143, 80, 149, 216, 124, 203, 240, 114, 168, 111, 33, 83,
+            96, 123, 245, 51, 214, 216, 215, 205, 70, 145, 105, 221, 166, 169, 122, 27, 94, 112,
+            228, 110, 249, 177, 85, 173, 180, 248, 185, 199, 112, 246, 83, 33,
         ])
         .unwrap();
 

@@ -212,7 +212,7 @@ async fn private_acc_preparation(
 
     let nsk = from_keys.private_key_holder.nullifier_secret_key;
 
-    let from_npk = from_keys.nullifer_public_key;
+    let from_npk = from_keys.nullifier_public_key;
     let from_vpk = from_keys.viewing_public_key;
 
     // TODO: Remove this unwrap, error types must be compatible

@@ -64,7 +64,7 @@ async fn sync_private_account_with_non_zero_chain_index() -> Result<()> {
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
         from: format_private_account_id(from),
         to: None,
-        to_npk: Some(hex::encode(to_keys.nullifer_public_key.0)),
+        to_npk: Some(hex::encode(to_keys.nullifier_public_key.0)),
         to_vpk: Some(hex::encode(to_keys.viewing_public_key.0)),
         amount: 100,
     });

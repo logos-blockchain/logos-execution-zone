@@ -87,7 +87,7 @@ impl SecretSpendingKey {
         hasher.update(PREFIX);
         hasher.update(self.0);
         hasher.update(SUFFIX_1);
-        hasher.update(index.to_le_bytes());
+        hasher.update(index.to_be_bytes());
         hasher.update(SUFFIX_2);
 
         <NullifierSecretKey>::from(hasher.finalize_fixed())
@@ -106,7 +106,7 @@ impl SecretSpendingKey {
         hasher.update(PREFIX);
         hasher.update(self.0);
         hasher.update(SUFFIX_1);
-        hasher.update(index.to_le_bytes());
+        hasher.update(index.to_be_bytes());
         hasher.update(SUFFIX_2);
 
         hasher.finalize_fixed().into()
