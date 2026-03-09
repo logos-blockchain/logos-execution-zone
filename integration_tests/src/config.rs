@@ -85,10 +85,6 @@ pub fn sequencer_config(
         initial_commitments: initial_data.sequencer_initial_commitments(),
         signing_key: [37; 32],
         bedrock_config: BedrockConfig {
-            backoff: BackoffConfig {
-                start_delay: Duration::from_millis(100),
-                max_retries: 5,
-            },
             channel_id: bedrock_channel_id(),
             node_url: addr_to_url(UrlProtocol::Http, bedrock_addr)
                 .context("Failed to convert bedrock addr to URL")?,

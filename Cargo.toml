@@ -115,6 +115,7 @@ logos-blockchain-key-management-system-service = { git = "https://github.com/log
 logos-blockchain-core = { git = "https://github.com/logos-blockchain/logos-blockchain.git" }
 logos-blockchain-chain-broadcast-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git" }
 logos-blockchain-chain-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git" }
+logos-blockchain-zone-sdk = { git = "https://github.com/logos-blockchain/logos-blockchain.git" }
 
 rocksdb = { version = "0.24.0", default-features = false, features = [
   "snappy",
