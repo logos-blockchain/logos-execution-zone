@@ -66,6 +66,5 @@ clean:
     rm -rf sequencer_runner/rocksdb
     rm -rf sequencer_runner/zone_sdk_checkpoint.json
     rm -rf indexer/service/rocksdb
-    rm -rf indexer/service/zone_sdk_indexer_cursor.json
     rm -rf wallet/configs/debug/storage.json
     cd bedrock && docker compose down -v
