@@ -69,13 +69,13 @@ impl Account {
 
 impl Commitment {
     #[must_use]
-    pub fn to_byte_array(&self) -> [u8; 32] {
+    pub const fn to_byte_array(&self) -> [u8; 32] {
         self.0
     }
 
     #[cfg(feature = "host")]
     #[must_use]
-    pub fn from_byte_array(bytes: [u8; 32]) -> Self {
+    pub const fn from_byte_array(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
 
@@ -90,7 +90,7 @@ impl Commitment {
 
 impl NullifierPublicKey {
     #[must_use]
-    pub fn to_byte_array(&self) -> [u8; 32] {
+    pub const fn to_byte_array(&self) -> [u8; 32] {
         self.0
     }
 }
@@ -98,13 +98,13 @@ impl NullifierPublicKey {
 #[cfg(feature = "host")]
 impl Nullifier {
     #[must_use]
-    pub fn to_byte_array(&self) -> [u8; 32] {
+    pub const fn to_byte_array(&self) -> [u8; 32] {
         self.0
     }
 
     #[cfg(feature = "host")]
     #[must_use]
-    pub fn from_byte_array(bytes: [u8; 32]) -> Self {
+    pub const fn from_byte_array(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
 
@@ -137,7 +137,7 @@ impl Ciphertext {
 
     #[cfg(feature = "host")]
     #[must_use]
-    pub fn from_inner(inner: Vec<u8>) -> Self {
+    pub const fn from_inner(inner: Vec<u8>) -> Self {
         Self(inner)
     }
 
@@ -175,7 +175,7 @@ impl Secp256k1Point {
 
 impl AccountId {
     #[must_use]
-    pub fn to_bytes(&self) -> [u8; 32] {
+    pub const fn to_bytes(&self) -> [u8; 32] {
         *self.value()
     }
 }

@@ -298,6 +298,6 @@ mod tests {
         let config = create_sample_wallet_config();
         let accs = create_sample_persistent_accounts();
 
-        let _ = WalletChainStore::new(config.clone(), accs, HashMap::new()).unwrap();
+        let _ = WalletChainStore::new(config, accs, HashMap::new()).unwrap();
     }
 }

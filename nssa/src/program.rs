@@ -33,7 +33,7 @@ impl Program {
     }
 
     #[must_use]
-    pub fn id(&self) -> ProgramId {
+    pub const fn id(&self) -> ProgramId {
         self.id
     }
 
@@ -142,7 +142,7 @@ mod tests {
         pub fn nonce_changer_program() -> Self {
             use test_program_methods::{NONCE_CHANGER_ELF, NONCE_CHANGER_ID};
 
-            Program {
+            Self {
                 id: NONCE_CHANGER_ID,
                 elf: NONCE_CHANGER_ELF.to_vec(),
             }
@@ -153,7 +153,7 @@ mod tests {
         pub fn extra_output_program() -> Self {
             use test_program_methods::{EXTRA_OUTPUT_ELF, EXTRA_OUTPUT_ID};
 
-            Program {
+            Self {
                 id: EXTRA_OUTPUT_ID,
                 elf: EXTRA_OUTPUT_ELF.to_vec(),
             }
@@ -164,7 +164,7 @@ mod tests {
         pub fn missing_output_program() -> Self {
             use test_program_methods::{MISSING_OUTPUT_ELF, MISSING_OUTPUT_ID};
 
-            Program {
+            Self {
                 id: MISSING_OUTPUT_ID,
                 elf: MISSING_OUTPUT_ELF.to_vec(),
             }
@@ -175,7 +175,7 @@ mod tests {
         pub fn program_owner_changer() -> Self {
             use test_program_methods::{PROGRAM_OWNER_CHANGER_ELF, PROGRAM_OWNER_CHANGER_ID};
 
-            Program {
+            Self {
                 id: PROGRAM_OWNER_CHANGER_ID,
                 elf: PROGRAM_OWNER_CHANGER_ELF.to_vec(),
             }
@@ -186,7 +186,7 @@ mod tests {
         pub fn simple_balance_transfer() -> Self {
             use test_program_methods::{SIMPLE_BALANCE_TRANSFER_ELF, SIMPLE_BALANCE_TRANSFER_ID};
 
-            Program {
+            Self {
                 id: SIMPLE_BALANCE_TRANSFER_ID,
                 elf: SIMPLE_BALANCE_TRANSFER_ELF.to_vec(),
             }
@@ -197,7 +197,7 @@ mod tests {
         pub fn data_changer() -> Self {
             use test_program_methods::{DATA_CHANGER_ELF, DATA_CHANGER_ID};
 
-            Program {
+            Self {
                 id: DATA_CHANGER_ID,
                 elf: DATA_CHANGER_ELF.to_vec(),
             }
@@ -208,7 +208,7 @@ mod tests {
         pub fn minter() -> Self {
             use test_program_methods::{MINTER_ELF, MINTER_ID};
 
-            Program {
+            Self {
                 id: MINTER_ID,
                 elf: MINTER_ELF.to_vec(),
             }
@@ -219,7 +219,7 @@ mod tests {
         pub fn burner() -> Self {
             use test_program_methods::{BURNER_ELF, BURNER_ID};
 
-            Program {
+            Self {
                 id: BURNER_ID,
                 elf: BURNER_ELF.to_vec(),
             }
@@ -229,7 +229,7 @@ mod tests {
         pub fn chain_caller() -> Self {
             use test_program_methods::{CHAIN_CALLER_ELF, CHAIN_CALLER_ID};
 
-            Program {
+            Self {
                 id: CHAIN_CALLER_ID,
                 elf: CHAIN_CALLER_ELF.to_vec(),
             }
@@ -239,7 +239,7 @@ mod tests {
         pub fn claimer() -> Self {
             use test_program_methods::{CLAIMER_ELF, CLAIMER_ID};
 
-            Program {
+            Self {
                 id: CLAIMER_ID,
                 elf: CLAIMER_ELF.to_vec(),
             }
@@ -249,7 +249,7 @@ mod tests {
         pub fn changer_claimer() -> Self {
             use test_program_methods::{CHANGER_CLAIMER_ELF, CHANGER_CLAIMER_ID};
 
-            Program {
+            Self {
                 id: CHANGER_CLAIMER_ID,
                 elf: CHANGER_CLAIMER_ELF.to_vec(),
             }
@@ -259,7 +259,7 @@ mod tests {
         pub fn noop() -> Self {
             use test_program_methods::{NOOP_ELF, NOOP_ID};
 
-            Program {
+            Self {
                 id: NOOP_ID,
                 elf: NOOP_ELF.to_vec(),
             }
@@ -271,7 +271,7 @@ mod tests {
                 MALICIOUS_AUTHORIZATION_CHANGER_ELF, MALICIOUS_AUTHORIZATION_CHANGER_ID,
             };
 
-            Program {
+            Self {
                 id: MALICIOUS_AUTHORIZATION_CHANGER_ID,
                 elf: MALICIOUS_AUTHORIZATION_CHANGER_ELF.to_vec(),
             }

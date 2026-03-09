@@ -23,7 +23,7 @@ impl FromStr for ChainIndex {
         }
 
         if s == "/" {
-            return Ok(ChainIndex(vec![]));
+            return Ok(Self(vec![]));
         }
 
         let uprooted_substring = s.strip_prefix("/").unwrap();
@@ -55,14 +55,14 @@ impl Display for ChainIndex {
 
 impl Default for ChainIndex {
     fn default() -> Self {
-        ChainIndex::from_str("/").expect("Root parsing failure")
+        Self::from_str("/").expect("Root parsing failure")
     }
 }
 
 impl ChainIndex {
     #[must_use]
     pub fn root() -> Self {
-        ChainIndex::default()
+        Self::default()
     }
 
     #[must_use]
@@ -76,42 +76,42 @@ impl ChainIndex {
     }
 
     #[must_use]
-    pub fn next_in_line(&self) -> Option<ChainIndex> {
+    pub fn next_in_line(&self) -> Option<Self> {
         let mut chain = self.0.clone();
         // ToDo: Add overflow check
         if let Some(last_p) = chain.last_mut() {
             *last_p = last_p.checked_add(1)?;
         }
 
-        Some(ChainIndex(chain))
+        Some(Self(chain))
     }
 
     #[must_use]
-    pub fn previous_in_line(&self) -> Option<ChainIndex> {
+    pub fn previous_in_line(&self) -> Option<Self> {
         let mut chain = self.0.clone();
         if let Some(last_p) = chain.last_mut() {
             *last_p = last_p.checked_sub(1)?;
         }
 
-        Some(ChainIndex(chain))
+        Some(Self(chain))
     }
 
     #[must_use]
-    pub fn parent(&self) -> Option<ChainIndex> {
+    pub fn parent(&self) -> Option<Self> {
         if self.0.is_empty() {
             None
         } else {
             let last = self.0.len().checked_sub(1)?;
-            Some(ChainIndex(self.0[..last].to_vec()))
+            Some(Self(self.0[..last].to_vec()))
         }
     }
 
     #[must_use]
-    pub fn nth_child(&self, child_id: u32) -> ChainIndex {
+    pub fn nth_child(&self, child_id: u32) -> Self {
         let mut chain = self.0.clone();
         chain.push(child_id);
 
-        ChainIndex(chain)
+        Self(chain)
     }
 
     #[must_use]
@@ -131,17 +131,17 @@ impl ChainIndex {
         Some(res)
     }
 
-    fn shuffle_iter(&self) -> impl Iterator<Item = ChainIndex> {
+    fn shuffle_iter(&self) -> impl Iterator<Item = Self> {
         self.0
             .iter()
             .permutations(self.0.len())
             .unique()
-            .map(|item| ChainIndex(item.into_iter().copied().collect()))
+            .map(|item| Self(item.into_iter().copied().collect()))
     }
 
-    pub fn chain_ids_at_depth(depth: usize) -> impl Iterator<Item = ChainIndex> {
-        let mut stack = vec![ChainIndex(vec![0; depth])];
-        let mut cumulative_stack = vec![ChainIndex(vec![0; depth])];
+    pub fn chain_ids_at_depth(depth: usize) -> impl Iterator<Item = Self> {
+        let mut stack = vec![Self(vec![0; depth])];
+        let mut cumulative_stack = vec![Self(vec![0; depth])];
 
         while let Some(top_id) = stack.pop() {
             if let Some(collapsed_id) = top_id.collapse_back() {
@@ -155,9 +155,9 @@ impl ChainIndex {
         cumulative_stack.into_iter().unique()
     }
 
-    pub fn chain_ids_at_depth_rev(depth: usize) -> impl Iterator<Item = ChainIndex> {
-        let mut stack = vec![ChainIndex(vec![0; depth])];
-        let mut cumulative_stack = vec![ChainIndex(vec![0; depth])];
+    pub fn chain_ids_at_depth_rev(depth: usize) -> impl Iterator<Item = Self> {
+        let mut stack = vec![Self(vec![0; depth])];
+        let mut cumulative_stack = vec![Self(vec![0; depth])];
 
         while let Some(top_id) = stack.pop() {
             if let Some(collapsed_id) = top_id.collapse_back() {

@@ -16,7 +16,12 @@ impl From<&NullifierPublicKey> for AccountId {
         let mut bytes = [0; 64];
         bytes[0..32].copy_from_slice(PRIVATE_ACCOUNT_ID_PREFIX);
         bytes[32..].copy_from_slice(&value.0);
-        AccountId::new(Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap())
+        Self::new(
+            Impl::hash_bytes(&bytes)
+                .as_bytes()
+                .try_into()
+                .expect("Conversion should not fail"),
+        )
     }
 }
 
@@ -36,7 +41,12 @@ impl From<&NullifierSecretKey> for NullifierPublicKey {
         bytes.extend_from_slice(value);
         bytes.extend_from_slice(SUFFIX_1);
         bytes.extend_from_slice(SUFFIX_2);
-        Self(Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap())
+        Self(
+            Impl::hash_bytes(&bytes)
+                .as_bytes()
+                .try_into()
+                .expect("hash should be exactly 32 bytes long"),
+        )
     }
 }
 

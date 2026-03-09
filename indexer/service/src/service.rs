@@ -252,7 +252,7 @@ struct Subscription<T> {
 }
 
 impl<T> Subscription<T> {
-    fn new(sink: SubscriptionSink) -> Self {
+    const fn new(sink: SubscriptionSink) -> Self {
         Self {
             sink,
             _marker: std::marker::PhantomData,

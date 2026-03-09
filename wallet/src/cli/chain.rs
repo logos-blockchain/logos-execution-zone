@@ -31,17 +31,17 @@ impl WalletSubcommand for ChainSubcommand {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         match self {
-            ChainSubcommand::CurrentBlockId => {
+            Self::CurrentBlockId => {
                 let latest_block_res = wallet_core.sequencer_client.get_last_block().await?;
 
                 println!("Last block id is {}", latest_block_res.last_block);
             }
-            ChainSubcommand::Block { id } => {
+            Self::Block { id } => {
                 let block_res = wallet_core.sequencer_client.get_block(id).await?;
 
                 println!("Last block id is {:#?}", block_res.block);
             }
-            ChainSubcommand::Transaction { hash } => {
+            Self::Transaction { hash } => {
                 let tx_res = wallet_core
                     .sequencer_client
                     .get_transaction_by_hash(hash)

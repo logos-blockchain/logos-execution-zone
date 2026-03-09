@@ -51,7 +51,7 @@ impl WalletSubcommand for AuthTransferSubcommand {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         match self {
-            AuthTransferSubcommand::Init { account_id } => {
+            Self::Init { account_id } => {
                 let (account_id, addr_privacy) = parse_addr_with_privacy_prefix(&account_id)?;
 
                 match addr_privacy {
@@ -98,7 +98,7 @@ impl WalletSubcommand for AuthTransferSubcommand {
 
                 Ok(SubcommandReturnValue::Empty)
             }
-            AuthTransferSubcommand::Send {
+            Self::Send {
                 from,
                 to,
                 to_npk,
@@ -307,7 +307,7 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandPrivate {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         match self {
-            NativeTokenTransferProgramSubcommandPrivate::PrivateOwned { from, to, amount } => {
+            Self::PrivateOwned { from, to, amount } => {
                 let from: AccountId = from.parse().unwrap();
                 let to: AccountId = to.parse().unwrap();
 
@@ -333,7 +333,7 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandPrivate {
 
                 Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
             }
-            NativeTokenTransferProgramSubcommandPrivate::PrivateForeign {
+            Self::PrivateForeign {
                 from,
                 to_npk,
                 to_vpk,
@@ -383,7 +383,7 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandShielded {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         match self {
-            NativeTokenTransferProgramSubcommandShielded::ShieldedOwned { from, to, amount } => {
+            Self::ShieldedOwned { from, to, amount } => {
                 let from: AccountId = from.parse().unwrap();
                 let to: AccountId = to.parse().unwrap();
 
@@ -409,7 +409,7 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandShielded {
 
                 Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
             }
-            NativeTokenTransferProgramSubcommandShielded::ShieldedForeign {
+            Self::ShieldedForeign {
                 from,
                 to_npk,
                 to_vpk,
@@ -450,13 +450,13 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommand {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         match self {
-            NativeTokenTransferProgramSubcommand::Private(private_subcommand) => {
+            Self::Private(private_subcommand) => {
                 private_subcommand.handle_subcommand(wallet_core).await
             }
-            NativeTokenTransferProgramSubcommand::Shielded(shielded_subcommand) => {
+            Self::Shielded(shielded_subcommand) => {
                 shielded_subcommand.handle_subcommand(wallet_core).await
             }
-            NativeTokenTransferProgramSubcommand::Deshielded { from, to, amount } => {
+            Self::Deshielded { from, to, amount } => {
                 let from: AccountId = from.parse().unwrap();
                 let to: AccountId = to.parse().unwrap();
 
@@ -482,7 +482,7 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommand {
 
                 Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
             }
-            NativeTokenTransferProgramSubcommand::Public { from, to, amount } => {
+            Self::Public { from, to, amount } => {
                 let from: AccountId = from.parse().unwrap();
                 let to: AccountId = to.parse().unwrap();
 

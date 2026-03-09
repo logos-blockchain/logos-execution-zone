@@ -72,11 +72,11 @@ impl SequencerStore {
         Ok(self.dbio.latest_block_meta()?)
     }
 
-    pub fn genesis_id(&self) -> u64 {
+    pub const fn genesis_id(&self) -> u64 {
         self.genesis_id
     }
 
-    pub fn signing_key(&self) -> &nssa::PrivateKey {
+    pub const fn signing_key(&self) -> &nssa::PrivateKey {
         &self.signing_key
     }
 
@@ -201,7 +201,7 @@ mod tests {
 
         // Add a new block
         let tx = common::test_utils::produce_dummy_empty_transaction();
-        let block = common::test_utils::produce_dummy_block(1, None, vec![tx.clone()]);
+        let block = common::test_utils::produce_dummy_block(1, None, vec![tx]);
         let block_hash = block.header.hash;
         let block_msg_id = [1; 32];
 
@@ -237,7 +237,7 @@ mod tests {
 
         // Add a new block with Pending status
         let tx = common::test_utils::produce_dummy_empty_transaction();
-        let block = common::test_utils::produce_dummy_block(1, None, vec![tx.clone()]);
+        let block = common::test_utils::produce_dummy_block(1, None, vec![tx]);
         let block_id = block.header.block_id;
 
         let dummy_state = V02State::new_with_genesis_accounts(&[], &[]);

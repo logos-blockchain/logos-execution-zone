@@ -22,12 +22,12 @@ pub enum PrivacyPreservingAccount {
 
 impl PrivacyPreservingAccount {
     #[must_use]
-    pub fn is_public(&self) -> bool {
+    pub const fn is_public(&self) -> bool {
         matches!(&self, Self::Public(_))
     }
 
     #[must_use]
-    pub fn is_private(&self) -> bool {
+    pub const fn is_private(&self) -> bool {
         matches!(
             &self,
             Self::PrivateOwned(_) | Self::PrivateForeign { npk: _, vpk: _ }

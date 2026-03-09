@@ -16,7 +16,7 @@ pub struct IndexerHandle {
     server_handle: Option<jsonrpsee::server::ServerHandle>,
 }
 impl IndexerHandle {
-    fn new(addr: SocketAddr, server_handle: jsonrpsee::server::ServerHandle) -> Self {
+    const fn new(addr: SocketAddr, server_handle: jsonrpsee::server::ServerHandle) -> Self {
         Self {
             addr,
             server_handle: Some(server_handle),
@@ -24,7 +24,7 @@ impl IndexerHandle {
     }
 
     #[must_use]
-    pub fn addr(&self) -> SocketAddr {
+    pub const fn addr(&self) -> SocketAddr {
         self.addr
     }
 

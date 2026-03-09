@@ -52,7 +52,7 @@ impl<'de> serde::Deserialize<'de> for Version {
 }
 
 /// An RPC request.
-#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq)]
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 #[expect(
     clippy::partial_pub_fields,
@@ -108,7 +108,7 @@ impl Request {
     clippy::partial_pub_fields,
     reason = "We don't want to allow access to the version, but the others are public for ease of use"
 )]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Response {
     jsonrpc: Version,
     pub result: Result<Value, RpcError>,
@@ -156,7 +156,7 @@ impl<'de> serde::Deserialize<'de> for Response {
                 return Err(err);
             }
         };
-        Ok(Response {
+        Ok(Self {
             jsonrpc: Version,
             result,
             id: wr.id,
@@ -169,7 +169,7 @@ impl<'de> serde::Deserialize<'de> for Response {
     clippy::partial_pub_fields,
     reason = "We don't want to allow access to the version, but the others are public for ease of use"
 )]
-#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq)]
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Notification {
     jsonrpc: Version,
@@ -223,7 +223,7 @@ impl Message {
     #[must_use]
     pub fn request(method: String, params: Value) -> Self {
         let id = Value::from("dontcare");
-        Message::Request(Request {
+        Self::Request(Request {
             jsonrpc: Version,
             method,
             params,
@@ -233,8 +233,8 @@ impl Message {
 
     /// Create a top-level error (without an ID).
     #[must_use]
-    pub fn error(error: RpcError) -> Self {
-        Message::Response(Response {
+    pub const fn error(error: RpcError) -> Self {
+        Self::Response(Response {
             jsonrpc: Version,
             result: Err(error),
             id: Value::Null,
@@ -243,8 +243,8 @@ impl Message {
 
     /// A constructor for a notification.
     #[must_use]
-    pub fn notification(method: String, params: Value) -> Self {
-        Message::Notification(Notification {
+    pub const fn notification(method: String, params: Value) -> Self {
+        Self::Notification(Notification {
             jsonrpc: Version,
             method,
             params,
@@ -253,8 +253,8 @@ impl Message {
 
     /// A constructor for a response.
     #[must_use]
-    pub fn response(id: Value, result: Result<Value, RpcError>) -> Self {
-        Message::Response(Response {
+    pub const fn response(id: Value, result: Result<Value, RpcError>) -> Self {
+        Self::Response(Response {
             jsonrpc: Version,
             result,
             id,
@@ -265,29 +265,30 @@ impl Message {
     #[must_use]
     pub fn id(&self) -> Value {
         match self {
-            Message::Request(req) => req.id.clone(),
-            Message::Response(response) => response.id.clone(),
-            Message::Notification(_) | Message::Batch(_) | Message::UnmatchedSub(_) => Value::Null,
+            Self::Request(req) => req.id.clone(),
+            Self::Response(response) => response.id.clone(),
+            Self::Notification(_) | Self::Batch(_) | Self::UnmatchedSub(_) => Value::Null,
         }
     }
 }
 
 impl From<Message> for String {
     fn from(val: Message) -> Self {
-        ::serde_json::ser::to_string(&val).unwrap()
+        ::serde_json::ser::to_string(&val).expect("message serialization to json should not fail")
     }
 }
 
 impl From<Message> for Vec<u8> {
     fn from(val: Message) -> Self {
-        ::serde_json::ser::to_vec(&val).unwrap()
+        ::serde_json::ser::to_vec(&val)
+            .expect("message serialization to json bytes should not fail")
     }
 }
 
 /// A broken message.
 ///
 /// Protocol-level errors.
-#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 #[serde(untagged)]
 pub enum Broken {
     /// It was valid JSON, but doesn't match the form of a JSONRPC 2.0 message.
@@ -305,10 +306,10 @@ impl Broken {
     #[must_use]
     pub fn reply(&self) -> Message {
         match self {
-            Broken::Unmatched(_) => Message::error(RpcError::parse_error(
+            Self::Unmatched(_) => Message::error(RpcError::parse_error(
                 "JSON RPC Request format was expected".to_owned(),
             )),
-            Broken::SyntaxError(e) => Message::error(RpcError::parse_error(e.clone())),
+            Self::SyntaxError(e) => Message::error(RpcError::parse_error(e.clone())),
         }
     }
 }

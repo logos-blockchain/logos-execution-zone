@@ -281,19 +281,19 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
         Ok((tx, msg_id))
     }
 
-    pub fn state(&self) -> &nssa::V02State {
+    pub const fn state(&self) -> &nssa::V02State {
         &self.state
     }
 
-    pub fn block_store(&self) -> &SequencerStore {
+    pub const fn block_store(&self) -> &SequencerStore {
         &self.store
     }
 
-    pub fn chain_height(&self) -> u64 {
+    pub const fn chain_height(&self) -> u64 {
         self.chain_height
     }
 
-    pub fn sequencer_config(&self) -> &SequencerConfig {
+    pub const fn sequencer_config(&self) -> &SequencerConfig {
         &self.sequencer_config
     }
 
@@ -302,20 +302,17 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
     /// All pending blocks with an ID less than or equal to `last_finalized_block_id`
     /// are removed from the database.
     pub fn clean_finalized_blocks_from_db(&mut self, last_finalized_block_id: u64) -> Result<()> {
-        if let Some(first_pending_block_id) = self
-            .get_pending_blocks()?
+        self.get_pending_blocks()?
             .iter()
             .map(|block| block.header.block_id)
             .min()
-        {
-            info!("Clearing pending blocks up to id: {last_finalized_block_id}");
-            // TODO: Delete blocks instead of marking them as finalized.
-            // Current approach is used because we still have `GetBlockDataRequest`.
-            (first_pending_block_id..=last_finalized_block_id)
-                .try_for_each(|id| self.store.mark_block_as_finalized(id))
-        } else {
-            Ok(())
-        }
+            .map_or(Ok(()), |first_pending_block_id| {
+                info!("Clearing pending blocks up to id: {last_finalized_block_id}");
+                // TODO: Delete blocks instead of marking them as finalized.
+                // Current approach is used because we still have `GetBlockDataRequest`.
+                (first_pending_block_id..=last_finalized_block_id)
+                    .try_for_each(|id| self.store.mark_block_as_finalized(id))
+            })
     }
 
     /// Returns the list of stored pending blocks.

@@ -216,12 +216,7 @@ fn new_wallet_rust_with_default_config(password: &str) -> Result<WalletCore> {
     let config_path = tempdir.path().join("wallet_config.json");
     let storage_path = tempdir.path().join("storage.json");
 
-    WalletCore::new_init_storage(
-        config_path.clone(),
-        storage_path.clone(),
-        None,
-        password.to_owned(),
-    )
+    WalletCore::new_init_storage(config_path, storage_path, None, password.to_owned())
 }
 
 fn load_existing_ffi_wallet(home: &Path) -> Result<*mut WalletHandle> {

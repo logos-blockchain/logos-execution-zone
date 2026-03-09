@@ -22,7 +22,7 @@ pub enum SequencerClientError {
 
 impl From<SequencerRpcError> for SequencerClientError {
     fn from(value: SequencerRpcError) -> Self {
-        SequencerClientError::InternalError(value)
+        Self::InternalError(value)
     }
 }
 

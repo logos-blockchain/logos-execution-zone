@@ -37,7 +37,7 @@ impl ExecutionState {
         };
         let mut chained_calls = VecDeque::from_iter([(initial_call, None)]);
 
-        let mut execution_state = ExecutionState {
+        let mut execution_state = Self {
             pre_states: Vec::new(),
             post_states: HashMap::new(),
         };
@@ -322,10 +322,9 @@ fn compute_circuit_output(
 
                 output.new_commitments.push(commitment_post);
                 output.ciphertexts.push(encrypted_account);
-                output_index = match output_index.checked_add(1) {
-                    Some(val) => val,
-                    None => panic!("Too many private accounts, output index overflow"),
-                }
+                output_index = output_index
+                    .checked_add(1)
+                    .unwrap_or_else(|| panic!("Too many private accounts, output index overflow"));
             }
             _ => panic!("Invalid visibility mask value"),
         }

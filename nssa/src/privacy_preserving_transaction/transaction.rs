@@ -25,7 +25,7 @@ pub struct PrivacyPreservingTransaction {
 
 impl PrivacyPreservingTransaction {
     #[must_use]
-    pub fn new(message: Message, witness_set: WitnessSet) -> Self {
+    pub const fn new(message: Message, witness_set: WitnessSet) -> Self {
         Self {
             message,
             witness_set,
@@ -129,12 +129,12 @@ impl PrivacyPreservingTransaction {
     }
 
     #[must_use]
-    pub fn message(&self) -> &Message {
+    pub const fn message(&self) -> &Message {
         &self.message
     }
 
     #[must_use]
-    pub fn witness_set(&self) -> &WitnessSet {
+    pub const fn witness_set(&self) -> &WitnessSet {
         &self.witness_set
     }
 

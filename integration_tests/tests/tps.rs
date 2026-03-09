@@ -118,7 +118,7 @@ impl TpsTestManager {
         }
     }
 
-    fn generate_sequencer_partial_config() -> SequencerPartialConfig {
+    const fn generate_sequencer_partial_config() -> SequencerPartialConfig {
         SequencerPartialConfig {
             max_num_tx_in_block: 300,
             max_block_size: ByteSize::mb(500),

@@ -69,7 +69,7 @@ pub struct BedrockConfig {
 }
 
 impl SequencerConfig {
-    pub fn from_path(config_home: &Path) -> Result<SequencerConfig> {
+    pub fn from_path(config_home: &Path) -> Result<Self> {
         let file = File::open(config_home)?;
         let reader = BufReader::new(file);
 
@@ -77,6 +77,6 @@ impl SequencerConfig {
     }
 }
 
-fn default_max_block_size() -> ByteSize {
+const fn default_max_block_size() -> ByteSize {
     ByteSize::mib(1)
 }

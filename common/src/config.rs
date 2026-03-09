@@ -50,6 +50,6 @@ impl FromStr for BasicAuth {
 
 impl From<BasicAuth> for BasicAuthCredentials {
     fn from(value: BasicAuth) -> Self {
-        BasicAuthCredentials::new(value.username, value.password)
+        Self::new(value.username, value.password)
     }
 }

@@ -47,7 +47,7 @@ pub enum WalletFfiError {
 impl WalletFfiError {
     /// Check if it's [`WalletFfiError::Success`] or panic.
     pub fn unwrap(self) {
-        let WalletFfiError::Success = self else {
+        let Self::Success = self else {
             panic!("Called `unwrap()` on error value `{self:#?}`");
         };
     }

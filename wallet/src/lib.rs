@@ -150,13 +150,13 @@ impl WalletCore {
 
     /// Get configuration with applied overrides
     #[must_use]
-    pub fn config(&self) -> &WalletConfig {
+    pub const fn config(&self) -> &WalletConfig {
         &self.storage.wallet_config
     }
 
     /// Get storage
     #[must_use]
-    pub fn storage(&self) -> &WalletChainStore {
+    pub const fn storage(&self) -> &WalletChainStore {
         &self.storage
     }
 
@@ -505,17 +505,17 @@ impl WalletCore {
     }
 
     #[must_use]
-    pub fn config_path(&self) -> &PathBuf {
+    pub const fn config_path(&self) -> &PathBuf {
         &self.config_path
     }
 
     #[must_use]
-    pub fn storage_path(&self) -> &PathBuf {
+    pub const fn storage_path(&self) -> &PathBuf {
         &self.storage_path
     }
 
     #[must_use]
-    pub fn config_overrides(&self) -> &Option<WalletConfigOverrides> {
+    pub const fn config_overrides(&self) -> &Option<WalletConfigOverrides> {
         &self.config_overrides
     }
 }

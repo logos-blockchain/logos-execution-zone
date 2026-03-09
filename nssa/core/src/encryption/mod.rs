@@ -31,7 +31,7 @@ impl EncryptionScheme {
         commitment: &Commitment,
         output_index: u32,
     ) -> Ciphertext {
-        let mut buffer = account.to_bytes().clone();
+        let mut buffer = account.to_bytes();
         Self::symmetric_transform(&mut buffer, shared_secret, commitment, output_index);
         Ciphertext(buffer)
     }

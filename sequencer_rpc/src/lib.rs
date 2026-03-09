@@ -42,13 +42,10 @@ fn respond<T: Serialize>(val: T) -> Result<Value, RpcErr> {
 
 #[must_use]
 pub fn rpc_error_responce_inverter(err: RpcError) -> RpcError {
-    let mut content: Option<Value> = None;
-    if err.error_struct.is_some() {
-        content = match err.error_struct.clone().unwrap() {
-            RpcErrorKind::HandlerError(val) | RpcErrorKind::InternalError(val) => Some(val),
-            RpcErrorKind::RequestValidationError(vall) => Some(serde_json::to_value(vall).unwrap()),
-        };
-    }
+    let content = err.error_struct.map(|error| match error {
+        RpcErrorKind::HandlerError(val) | RpcErrorKind::InternalError(val) => val,
+        RpcErrorKind::RequestValidationError(vall) => serde_json::to_value(vall).unwrap(),
+    });
     RpcError {
         error_struct: None,
         code: err.code,

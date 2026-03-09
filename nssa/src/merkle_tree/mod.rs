@@ -156,7 +156,7 @@ fn hash_value(value: &Value) -> Node {
     hasher.finalize().into()
 }
 
-fn prev_power_of_two(x: usize) -> usize {
+const fn prev_power_of_two(x: usize) -> usize {
     if x == 0 {
         return 0;
     }

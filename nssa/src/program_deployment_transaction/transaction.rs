@@ -13,7 +13,7 @@ pub struct ProgramDeploymentTransaction {
 
 impl ProgramDeploymentTransaction {
     #[must_use]
-    pub fn new(message: Message) -> Self {
+    pub const fn new(message: Message) -> Self {
         Self { message }
     }
 
@@ -44,7 +44,7 @@ impl ProgramDeploymentTransaction {
     }
 
     #[must_use]
-    pub fn affected_public_account_ids(&self) -> Vec<AccountId> {
+    pub const fn affected_public_account_ids(&self) -> Vec<AccountId> {
         vec![]
     }
 }

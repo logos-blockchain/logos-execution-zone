@@ -3,7 +3,7 @@
 use core::slice;
 use std::{ffi::c_char, ptr};
 
-use nssa::{Account, Data};
+use nssa::Data;
 use nssa_core::encryption::shared_key_derivation::Secp256k1Point;
 
 use crate::error::WalletFfiError;
@@ -143,20 +143,20 @@ impl Default for FfiTransferResult {
 impl FfiBytes32 {
     /// Create from a 32-byte array.
     #[must_use]
-    pub fn from_bytes(bytes: [u8; 32]) -> Self {
+    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
         Self { data: bytes }
     }
 
     /// Create from an `AccountId`.
     #[must_use]
-    pub fn from_account_id(id: &nssa::AccountId) -> Self {
+    pub const fn from_account_id(id: &nssa::AccountId) -> Self {
         Self { data: *id.value() }
     }
 }
 
 impl FfiPrivateAccountKeys {
     #[must_use]
-    pub fn npk(&self) -> nssa_core::NullifierPublicKey {
+    pub const fn npk(&self) -> nssa_core::NullifierPublicKey {
         nssa_core::NullifierPublicKey(self.nullifier_public_key.data)
     }
 
@@ -182,7 +182,7 @@ impl From<u128> for FfiU128 {
 
 impl From<FfiU128> for u128 {
     fn from(value: FfiU128) -> Self {
-        u128::from_le_bytes(value.data)
+        Self::from_le_bytes(value.data)
     }
 }
 
@@ -194,7 +194,7 @@ impl From<&nssa::AccountId> for FfiBytes32 {
 
 impl From<FfiBytes32> for nssa::AccountId {
     fn from(bytes: FfiBytes32) -> Self {
-        nssa::AccountId::new(bytes.data)
+        Self::new(bytes.data)
     }
 }
 
@@ -217,7 +217,7 @@ impl From<nssa::Account> for FfiAccount {
         let program_owner = FfiProgramId {
             data: value.program_owner,
         };
-        FfiAccount {
+        Self {
             program_owner,
             balance: value.balance.into(),
             data,
@@ -240,7 +240,7 @@ impl TryFrom<&FfiAccount> for nssa::Account {
         } else {
             Data::default()
         };
-        Ok(Account {
+        Ok(Self {
             program_owner: value.program_owner.data,
             balance: value.balance.into(),
             data,
@@ -261,7 +261,7 @@ impl TryFrom<&FfiPublicAccountKey> for nssa::PublicKey {
     type Error = WalletFfiError;
 
     fn try_from(value: &FfiPublicAccountKey) -> Result<Self, Self::Error> {
-        let public_key = nssa::PublicKey::try_new(value.public_key.data)
+        let public_key = Self::try_new(value.public_key.data)
             .map_err(|_err| WalletFfiError::InvalidTypeConversion)?;
         Ok(public_key)
     }

@@ -100,7 +100,7 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         match self {
-            TokenProgramAgnosticSubcommand::New {
+            Self::New {
                 definition_account_id,
                 supply_account_id,
                 name,
@@ -156,7 +156,7 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
 
                 underlying_subcommand.handle_subcommand(wallet_core).await
             }
-            TokenProgramAgnosticSubcommand::Send {
+            Self::Send {
                 from,
                 to,
                 to_npk,
@@ -246,7 +246,7 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
 
                 underlying_subcommand.handle_subcommand(wallet_core).await
             }
-            TokenProgramAgnosticSubcommand::Burn {
+            Self::Burn {
                 definition,
                 holder,
                 amount,
@@ -298,7 +298,7 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
 
                 underlying_subcommand.handle_subcommand(wallet_core).await
             }
-            TokenProgramAgnosticSubcommand::Mint {
+            Self::Mint {
                 definition,
                 holder,
                 holder_npk,
@@ -653,7 +653,7 @@ impl WalletSubcommand for TokenProgramSubcommandPublic {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         match self {
-            TokenProgramSubcommandPublic::TransferToken {
+            Self::TransferToken {
                 sender_account_id,
                 recipient_account_id,
                 balance_to_move,
@@ -667,7 +667,7 @@ impl WalletSubcommand for TokenProgramSubcommandPublic {
                     .await?;
                 Ok(SubcommandReturnValue::Empty)
             }
-            TokenProgramSubcommandPublic::BurnToken {
+            Self::BurnToken {
                 definition_account_id,
                 holder_account_id,
                 amount,
@@ -681,7 +681,7 @@ impl WalletSubcommand for TokenProgramSubcommandPublic {
                     .await?;
                 Ok(SubcommandReturnValue::Empty)
             }
-            TokenProgramSubcommandPublic::MintToken {
+            Self::MintToken {
                 definition_account_id,
                 holder_account_id,
                 amount,
@@ -705,7 +705,7 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         match self {
-            TokenProgramSubcommandPrivate::TransferTokenPrivateOwned {
+            Self::TransferTokenPrivateOwned {
                 sender_account_id,
                 recipient_account_id,
                 balance_to_move,
@@ -742,7 +742,7 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
 
                 Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
             }
-            TokenProgramSubcommandPrivate::TransferTokenPrivateForeign {
+            Self::TransferTokenPrivateForeign {
                 sender_account_id,
                 recipient_npk,
                 recipient_vpk,
@@ -788,7 +788,7 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
 
                 Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
             }
-            TokenProgramSubcommandPrivate::BurnTokenPrivateOwned {
+            Self::BurnTokenPrivateOwned {
                 definition_account_id,
                 holder_account_id,
                 amount,
@@ -825,7 +825,7 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
 
                 Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
             }
-            TokenProgramSubcommandPrivate::MintTokenPrivateOwned {
+            Self::MintTokenPrivateOwned {
                 definition_account_id,
                 holder_account_id,
                 amount,
@@ -862,7 +862,7 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
 
                 Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
             }
-            TokenProgramSubcommandPrivate::MintTokenPrivateForeign {
+            Self::MintTokenPrivateForeign {
                 definition_account_id,
                 holder_npk,
                 holder_vpk,
@@ -919,7 +919,7 @@ impl WalletSubcommand for TokenProgramSubcommandDeshielded {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         match self {
-            TokenProgramSubcommandDeshielded::TransferTokenDeshielded {
+            Self::TransferTokenDeshielded {
                 sender_account_id,
                 recipient_account_id,
                 balance_to_move,
@@ -953,7 +953,7 @@ impl WalletSubcommand for TokenProgramSubcommandDeshielded {
 
                 Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
             }
-            TokenProgramSubcommandDeshielded::BurnTokenDeshieldedOwned {
+            Self::BurnTokenDeshieldedOwned {
                 definition_account_id,
                 holder_account_id,
                 amount,
@@ -987,7 +987,7 @@ impl WalletSubcommand for TokenProgramSubcommandDeshielded {
 
                 Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
             }
-            TokenProgramSubcommandDeshielded::MintTokenDeshielded {
+            Self::MintTokenDeshielded {
                 definition_account_id,
                 holder_account_id,
                 amount,
@@ -1031,7 +1031,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         match self {
-            TokenProgramSubcommandShielded::TransferTokenShieldedForeign {
+            Self::TransferTokenShieldedForeign {
                 sender_account_id,
                 recipient_npk,
                 recipient_vpk,
@@ -1072,7 +1072,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
 
                 Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
             }
-            TokenProgramSubcommandShielded::TransferTokenShieldedOwned {
+            Self::TransferTokenShieldedOwned {
                 sender_account_id,
                 recipient_account_id,
                 balance_to_move,
@@ -1106,7 +1106,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
 
                 Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
             }
-            TokenProgramSubcommandShielded::BurnTokenShielded {
+            Self::BurnTokenShielded {
                 definition_account_id,
                 holder_account_id,
                 amount,
@@ -1140,7 +1140,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
 
                 Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
             }
-            TokenProgramSubcommandShielded::MintTokenShieldedOwned {
+            Self::MintTokenShieldedOwned {
                 definition_account_id,
                 holder_account_id,
                 amount,
@@ -1174,7 +1174,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
 
                 Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
             }
-            TokenProgramSubcommandShielded::MintTokenShieldedForeign {
+            Self::MintTokenShieldedForeign {
                 definition_account_id,
                 holder_npk,
                 holder_vpk,
@@ -1226,7 +1226,7 @@ impl WalletSubcommand for CreateNewTokenProgramSubcommand {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         match self {
-            CreateNewTokenProgramSubcommand::NewPrivateDefPrivateSupp {
+            Self::NewPrivateDefPrivateSupp {
                 definition_account_id,
                 supply_account_id,
                 name,
@@ -1265,7 +1265,7 @@ impl WalletSubcommand for CreateNewTokenProgramSubcommand {
 
                 Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
             }
-            CreateNewTokenProgramSubcommand::NewPrivateDefPublicSupp {
+            Self::NewPrivateDefPublicSupp {
                 definition_account_id,
                 supply_account_id,
                 name,
@@ -1301,7 +1301,7 @@ impl WalletSubcommand for CreateNewTokenProgramSubcommand {
 
                 Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
             }
-            CreateNewTokenProgramSubcommand::NewPublicDefPrivateSupp {
+            Self::NewPublicDefPrivateSupp {
                 definition_account_id,
                 supply_account_id,
                 name,
@@ -1337,7 +1337,7 @@ impl WalletSubcommand for CreateNewTokenProgramSubcommand {
 
                 Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
             }
-            CreateNewTokenProgramSubcommand::NewPublicDefPublicSupp {
+            Self::NewPublicDefPublicSupp {
                 definition_account_id,
                 supply_account_id,
                 name,
@@ -1363,19 +1363,19 @@ impl WalletSubcommand for TokenProgramSubcommand {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         match self {
-            TokenProgramSubcommand::Create(creation_subcommand) => {
+            Self::Create(creation_subcommand) => {
                 creation_subcommand.handle_subcommand(wallet_core).await
             }
-            TokenProgramSubcommand::Private(private_subcommand) => {
+            Self::Private(private_subcommand) => {
                 private_subcommand.handle_subcommand(wallet_core).await
             }
-            TokenProgramSubcommand::Public(public_subcommand) => {
+            Self::Public(public_subcommand) => {
                 public_subcommand.handle_subcommand(wallet_core).await
             }
-            TokenProgramSubcommand::Deshielded(deshielded_subcommand) => {
+            Self::Deshielded(deshielded_subcommand) => {
                 deshielded_subcommand.handle_subcommand(wallet_core).await
             }
-            TokenProgramSubcommand::Shielded(shielded_subcommand) => {
+            Self::Shielded(shielded_subcommand) => {
                 shielded_subcommand.handle_subcommand(wallet_core).await
             }
         }

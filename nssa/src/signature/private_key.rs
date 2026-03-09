@@ -33,7 +33,7 @@ impl PrivateKey {
     }
 
     #[must_use]
-    pub fn value(&self) -> &[u8; 32] {
+    pub const fn value(&self) -> &[u8; 32] {
         &self.0
     }
 }

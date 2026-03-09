@@ -53,7 +53,7 @@ impl TestContext {
     }
 
     #[must_use]
-    pub fn builder() -> TestContextBuilder {
+    pub const fn builder() -> TestContextBuilder {
         TestContextBuilder::new()
     }
 
@@ -271,7 +271,7 @@ impl TestContext {
 
     /// Get reference to the wallet.
     #[must_use]
-    pub fn wallet(&self) -> &WalletCore {
+    pub const fn wallet(&self) -> &WalletCore {
         &self.wallet
     }
 
@@ -281,19 +281,19 @@ impl TestContext {
     }
 
     /// Get mutable reference to the wallet.
-    pub fn wallet_mut(&mut self) -> &mut WalletCore {
+    pub const fn wallet_mut(&mut self) -> &mut WalletCore {
         &mut self.wallet
     }
 
     /// Get reference to the sequencer client.
     #[must_use]
-    pub fn sequencer_client(&self) -> &SequencerClient {
+    pub const fn sequencer_client(&self) -> &SequencerClient {
         &self.sequencer_client
     }
 
     /// Get reference to the indexer client.
     #[must_use]
-    pub fn indexer_client(&self) -> &IndexerClient {
+    pub const fn indexer_client(&self) -> &IndexerClient {
         &self.indexer_client
     }
 
@@ -384,7 +384,7 @@ impl BlockingTestContext {
         })
     }
 
-    pub fn ctx(&self) -> &TestContext {
+    pub const fn ctx(&self) -> &TestContext {
         self.ctx.as_ref().expect("TestContext is set")
     }
 }
@@ -395,7 +395,7 @@ pub struct TestContextBuilder {
 }
 
 impl TestContextBuilder {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
             initial_data: None,
             sequencer_partial_config: None,
@@ -409,7 +409,7 @@ impl TestContextBuilder {
     }
 
     #[must_use]
-    pub fn with_sequencer_partial_config(
+    pub const fn with_sequencer_partial_config(
         mut self,
         sequencer_partial_config: config::SequencerPartialConfig,
     ) -> Self {

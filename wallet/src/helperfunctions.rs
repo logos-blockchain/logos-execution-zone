@@ -1,6 +1,6 @@
 use std::{collections::HashMap, path::PathBuf, str::FromStr as _};
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use key_protocol::key_protocol_core::NSSAUserData;
 use nssa::Account;
@@ -53,16 +53,12 @@ fn get_home_nssa_var() -> Result<PathBuf> {
 fn get_home_default_path() -> Result<PathBuf> {
     std::env::home_dir()
         .map(|path| path.join(".nssa").join("wallet"))
-        .ok_or(anyhow::anyhow!("Failed to get HOME"))
+        .context("Failed to get HOME")
 }
 
 /// Get home dir for wallet.
 pub fn get_home() -> Result<PathBuf> {
-    if let Ok(home) = get_home_nssa_var() {
-        Ok(home)
-    } else {
-        get_home_default_path()
-    }
+    get_home_nssa_var().or_else(|_| get_home_default_path())
 }
 
 /// Fetch config path from default home

@@ -27,7 +27,7 @@ impl WalletSubcommand for PinataProgramAgnosticSubcommand {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let underlying_subcommand = match self {
-            PinataProgramAgnosticSubcommand::Claim { to } => {
+            Self::Claim { to } => {
                 let (to, to_addr_privacy) = parse_addr_with_privacy_prefix(&to)?;
 
                 match to_addr_privacy {
@@ -98,7 +98,7 @@ impl WalletSubcommand for PinataProgramSubcommandPublic {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         match self {
-            PinataProgramSubcommandPublic::Claim {
+            Self::Claim {
                 pinata_account_id,
                 winner_account_id,
             } => {
@@ -134,7 +134,7 @@ impl WalletSubcommand for PinataProgramSubcommandPrivate {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         match self {
-            PinataProgramSubcommandPrivate::ClaimPrivateOwned {
+            Self::ClaimPrivateOwned {
                 pinata_account_id,
                 winner_account_id,
             } => {
@@ -178,10 +178,10 @@ impl WalletSubcommand for PinataProgramSubcommand {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         match self {
-            PinataProgramSubcommand::Private(private_subcommand) => {
+            Self::Private(private_subcommand) => {
                 private_subcommand.handle_subcommand(wallet_core).await
             }
-            PinataProgramSubcommand::Public(public_subcommand) => {
+            Self::Public(public_subcommand) => {
                 public_subcommand.handle_subcommand(wallet_core).await
             }
         }

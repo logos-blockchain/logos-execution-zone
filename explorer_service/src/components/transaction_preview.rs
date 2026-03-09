@@ -3,7 +3,7 @@ use leptos::prelude::*;
 use leptos_router::components::A;
 
 /// Get transaction type name and CSS class
-fn transaction_type_info(tx: &Transaction) -> (&'static str, &'static str) {
+const fn transaction_type_info(tx: &Transaction) -> (&'static str, &'static str) {
     match tx {
         Transaction::Public(_) => ("Public", "tx-type-public"),
         Transaction::PrivacyPreserving(_) => ("Privacy-Preserving", "tx-type-private"),

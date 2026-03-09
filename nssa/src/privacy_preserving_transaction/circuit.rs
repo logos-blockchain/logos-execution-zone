@@ -27,7 +27,7 @@ impl Proof {
     }
 
     #[must_use]
-    pub fn from_inner(inner: Vec<u8>) -> Self {
+    pub const fn from_inner(inner: Vec<u8>) -> Self {
         Self(inner)
     }
 
@@ -47,7 +47,7 @@ pub struct ProgramWithDependencies {
 
 impl ProgramWithDependencies {
     #[must_use]
-    pub fn new(program: Program, dependencies: HashMap<ProgramId, Program>) -> Self {
+    pub const fn new(program: Program, dependencies: HashMap<ProgramId, Program>) -> Self {
         Self {
             program,
             dependencies,
@@ -57,7 +57,7 @@ impl ProgramWithDependencies {
 
 impl From<Program> for ProgramWithDependencies {
     fn from(program: Program) -> Self {
-        ProgramWithDependencies::new(program, HashMap::new())
+        Self::new(program, HashMap::new())
     }
 }
 
@@ -328,7 +328,7 @@ mod tests {
         let shared_secret_2 = SharedSecretKey::new(&esk_2, &recipient_keys.vpk());
 
         let (output, proof) = execute_and_prove(
-            vec![sender_pre.clone(), recipient],
+            vec![sender_pre, recipient],
             Program::serialize_instruction(balance_to_move).unwrap(),
             vec![1, 2],
             vec![0xdead_beef1, 0xdead_beef2],

@@ -71,8 +71,8 @@ pub enum ProgramIdParseError {
 impl Display for ProgramIdParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ProgramIdParseError::InvalidBase58(err) => write!(f, "invalid base58: {err:?}"),
-            ProgramIdParseError::InvalidLength(len) => {
+            Self::InvalidBase58(err) => write!(f, "invalid base58: {err:?}"),
+            Self::InvalidLength(len) => {
                 write!(f, "invalid length: expected 32 bytes, got {len}")
             }
         }
@@ -93,7 +93,7 @@ impl FromStr for ProgramId {
         for (i, chunk) in bytes.chunks_exact(4).enumerate() {
             arr[i] = u32::from_le_bytes(chunk.try_into().unwrap());
         }
-        Ok(ProgramId(arr))
+        Ok(Self(arr))
     }
 }
 
@@ -125,7 +125,7 @@ impl FromStr for AccountId {
         }
         let mut value = [0_u8; 32];
         value.copy_from_slice(&bytes);
-        Ok(AccountId { value })
+        Ok(Self { value })
     }
 }
 
@@ -174,7 +174,7 @@ impl FromStr for Signature {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let mut bytes = [0_u8; 64];
         hex::decode_to_slice(s, &mut bytes)?;
-        Ok(Signature(bytes))
+        Ok(Self(bytes))
     }
 }
 
@@ -194,11 +194,11 @@ impl Transaction {
     /// Get the hash of the transaction
     #[expect(clippy::same_name_method, reason = "This is handy")]
     #[must_use]
-    pub fn hash(&self) -> &self::HashType {
+    pub const fn hash(&self) -> &self::HashType {
         match self {
-            Transaction::Public(tx) => &tx.hash,
-            Transaction::PrivacyPreserving(tx) => &tx.hash,
-            Transaction::ProgramDeployment(tx) => &tx.hash,
+            Self::Public(tx) => &tx.hash,
+            Self::PrivacyPreserving(tx) => &tx.hash,
+            Self::ProgramDeployment(tx) => &tx.hash,
         }
     }
 }
@@ -338,7 +338,7 @@ impl FromStr for HashType {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let mut bytes = [0_u8; 32];
         hex::decode_to_slice(s, &mut bytes)?;
-        Ok(HashType(bytes))
+        Ok(Self(bytes))
     }
 }
 

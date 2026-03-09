@@ -97,7 +97,7 @@ impl TryFrom<&Data> for PoolDefinition {
     type Error = std::io::Error;
 
     fn try_from(data: &Data) -> Result<Self, Self::Error> {
-        PoolDefinition::try_from_slice(data.as_ref())
+        Self::try_from_slice(data.as_ref())
     }
 }
 
@@ -109,7 +109,7 @@ impl From<&PoolDefinition> for Data {
         BorshSerialize::serialize(definition, &mut data)
             .expect("Serialization to Vec should not fail");
 
-        Data::try_from(data).expect("Token definition encoded data should fit into Data")
+        Self::try_from(data).expect("Token definition encoded data should fit into Data")
     }
 }
 

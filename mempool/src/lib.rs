@@ -49,7 +49,7 @@ pub struct MemPoolHandle<T> {
 }
 
 impl<T> MemPoolHandle<T> {
-    fn new(sender: Sender<T>) -> Self {
+    const fn new(sender: Sender<T>) -> Self {
         Self { sender }
     }
 

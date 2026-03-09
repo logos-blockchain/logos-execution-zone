@@ -42,7 +42,7 @@ impl From<(&ProgramId, &PdaSeed)> for AccountId {
             bytemuck::try_cast_slice(value.0).expect("ProgramId should be castable to &[u8]");
         bytes[32..64].copy_from_slice(program_id_bytes);
         bytes[64..].copy_from_slice(&value.1.0);
-        AccountId::new(
+        Self::new(
             Impl::hash_bytes(&bytes)
                 .as_bytes()
                 .try_into()
@@ -85,6 +85,7 @@ impl ChainedCall {
 }
 
 /// Represents the final state of an `Account` after a program execution.
+///
 /// A post state may optionally request that the executing program
 /// becomes the owner of the account (a “claim”). This is used to signal
 /// that the program intends to take ownership of the account.
@@ -99,7 +100,7 @@ impl AccountPostState {
     /// Creates a post state without a claim request.
     /// The executing program is not requesting ownership of the account.
     #[must_use]
-    pub fn new(account: Account) -> Self {
+    pub const fn new(account: Account) -> Self {
         Self {
             account,
             claim: false,
@@ -110,7 +111,7 @@ impl AccountPostState {
     /// This indicates that the executing program intends to claim the
     /// account as its own and is allowed to mutate it.
     #[must_use]
-    pub fn new_claimed(account: Account) -> Self {
+    pub const fn new_claimed(account: Account) -> Self {
         Self {
             account,
             claim: true,
@@ -128,18 +129,18 @@ impl AccountPostState {
     /// Returns `true` if this post state requests that the account
     /// be claimed (owned) by the executing program.
     #[must_use]
-    pub fn requires_claim(&self) -> bool {
+    pub const fn requires_claim(&self) -> bool {
         self.claim
     }
 
     /// Returns the underlying account
     #[must_use]
-    pub fn account(&self) -> &Account {
+    pub const fn account(&self) -> &Account {
         &self.account
     }
 
     /// Returns the underlying account
-    pub fn account_mut(&mut self) -> &mut Account {
+    pub const fn account_mut(&mut self) -> &mut Account {
         &mut self.account
     }
 
@@ -174,7 +175,7 @@ impl WrappedBalanceSum {
     /// Returns [`None`] if balance sum overflows `lo + hi * 2^128` representation, which is not
     /// expected in practical scenarios.
     fn from_balances(balances: impl Iterator<Item = u128>) -> Option<Self> {
-        let mut wrapped = WrappedBalanceSum { lo: 0, hi: 0 };
+        let mut wrapped = Self { lo: 0, hi: 0 };
 
         for balance in balances {
             let (new_sum, did_overflow) = wrapped.lo.overflowing_add(balance);

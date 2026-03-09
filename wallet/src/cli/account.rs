@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use clap::Subcommand;
 use itertools::Itertools as _;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
@@ -79,7 +79,7 @@ impl WalletSubcommand for NewSubcommand {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         match self {
-            NewSubcommand::Public { cci, label } => {
+            Self::Public { cci, label } => {
                 if let Some(label) = &label
                     && wallet_core
                         .storage
@@ -116,7 +116,7 @@ impl WalletSubcommand for NewSubcommand {
 
                 Ok(SubcommandReturnValue::RegisterAccount { account_id })
             }
-            NewSubcommand::Private { cci, label } => {
+            Self::Private { cci, label } => {
                 if let Some(label) = &label
                     && wallet_core
                         .storage
@@ -166,7 +166,7 @@ impl WalletSubcommand for AccountSubcommand {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         match self {
-            AccountSubcommand::Get {
+            Self::Get {
                 raw,
                 keys,
                 account_id,
@@ -185,7 +185,7 @@ impl WalletSubcommand for AccountSubcommand {
                     }
                     AccountPrivacyKind::Private => wallet_core
                         .get_account_private(account_id)
-                        .ok_or(anyhow::anyhow!("Private account not found in storage"))?,
+                        .context("Private account not found in storage")?,
                 };
 
                 // Helper closure to display keys for the account
@@ -196,7 +196,7 @@ impl WalletSubcommand for AccountSubcommand {
                                 .storage
                                 .user_data
                                 .get_pub_account_signing_key(account_id)
-                                .ok_or(anyhow::anyhow!("Public account not found in storage"))?;
+                                .context("Public account not found in storage")?;
 
                             let public_key = PublicKey::new_from_private_key(private_key);
                             println!("pk {}", hex::encode(public_key.value()));
@@ -206,7 +206,7 @@ impl WalletSubcommand for AccountSubcommand {
                                 .storage
                                 .user_data
                                 .get_private_account(account_id)
-                                .ok_or(anyhow::anyhow!("Private account not found in storage"))?;
+                                .context("Private account not found in storage")?;
 
                             println!("npk {}", hex::encode(key.nullifer_public_key.0));
                             println!("vpk {}", hex::encode(key.viewing_public_key.to_bytes()));
@@ -226,7 +226,7 @@ impl WalletSubcommand for AccountSubcommand {
                 }
 
                 if raw {
-                    let account_hr: HumanReadableAccount = account.clone().into();
+                    let account_hr: HumanReadableAccount = account.into();
                     println!("{}", serde_json::to_string(&account_hr).unwrap());
 
                     return Ok(SubcommandReturnValue::Empty);
@@ -242,10 +242,8 @@ impl WalletSubcommand for AccountSubcommand {
 
                 Ok(SubcommandReturnValue::Empty)
             }
-            AccountSubcommand::New(new_subcommand) => {
-                new_subcommand.handle_subcommand(wallet_core).await
-            }
-            AccountSubcommand::SyncPrivate => {
+            Self::New(new_subcommand) => new_subcommand.handle_subcommand(wallet_core).await,
+            Self::SyncPrivate => {
                 let curr_last_block = wallet_core
                     .sequencer_client
                     .get_last_block()
@@ -268,17 +266,15 @@ impl WalletSubcommand for AccountSubcommand {
 
                 Ok(SubcommandReturnValue::SyncedToBlock(curr_last_block))
             }
-            AccountSubcommand::List { long } => {
+            Self::List { long } => {
                 let user_data = &wallet_core.storage.user_data;
                 let labels = &wallet_core.storage.labels;
 
                 let format_with_label = |prefix: &str, id: nssa::AccountId| {
                     let id_str = id.to_string();
-                    if let Some(label) = labels.get(&id_str) {
-                        format!("{prefix} [{label}]")
-                    } else {
-                        prefix.to_owned()
-                    }
+                    labels
+                        .get(&id_str)
+                        .map_or_else(|| prefix.to_owned(), |label| format!("{prefix} [{label}]"))
                 };
 
                 if !long {
@@ -378,7 +374,7 @@ impl WalletSubcommand for AccountSubcommand {
 
                 Ok(SubcommandReturnValue::Empty)
             }
-            AccountSubcommand::Label { account_id, label } => {
+            Self::Label { account_id, label } => {
                 let (account_id_str, _) = parse_addr_with_privacy_prefix(&account_id)?;
 
                 // Check if label is already used by a different account
@@ -423,25 +419,28 @@ fn format_account_details(account: &Account) -> (String, String) {
             "Account owned by authenticated transfer program".to_owned(),
             serde_json::to_string(&account).unwrap(),
         ),
-        o if *o == token_prog_id => {
-            if let Ok(token_def) = TokenDefinition::try_from(&account.data) {
+        o if *o == token_prog_id => TokenDefinition::try_from(&account.data)
+            .map(|token_def| {
                 (
                     "Definition account owned by token program".to_owned(),
                     serde_json::to_string(&token_def).unwrap(),
                 )
-            } else if let Ok(token_hold) = TokenHolding::try_from(&account.data) {
-                (
-                    "Holding account owned by token program".to_owned(),
-                    serde_json::to_string(&token_hold).unwrap(),
-                )
-            } else {
+            })
+            .or_else(|_| {
+                TokenHolding::try_from(&account.data).map(|token_hold| {
+                    (
+                        "Holding account owned by token program".to_owned(),
+                        serde_json::to_string(&token_hold).unwrap(),
+                    )
+                })
+            })
+            .unwrap_or_else(|_| {
                 let account_hr: HumanReadableAccount = account.clone().into();
                 (
                     "Unknown token program account".to_owned(),
                     serde_json::to_string(&account_hr).unwrap(),
                 )
-            }
-        }
+            }),
         _ => {
             let account_hr: HumanReadableAccount = account.clone().into();
             (

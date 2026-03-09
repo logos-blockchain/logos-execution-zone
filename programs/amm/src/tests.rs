@@ -107,7 +107,7 @@ impl BalanceForTests {
 
     fn lp_supply_init() -> u128 {
         // sqrt(vault_a_reserve_init * vault_b_reserve_init) = sqrt(1000 * 500) = 707
-        (BalanceForTests::vault_a_reserve_init() * BalanceForTests::vault_b_reserve_init()).isqrt()
+        (Self::vault_a_reserve_init() * Self::vault_b_reserve_init()).isqrt()
     }
 
     fn vault_a_swap_test_1() -> u128 {
@@ -365,7 +365,7 @@ impl IdForTests {
     }
 
     fn token_lp_definition_id() -> AccountId {
-        compute_liquidity_token_pda(AMM_PROGRAM_ID, IdForTests::pool_definition_id())
+        compute_liquidity_token_pda(AMM_PROGRAM_ID, Self::pool_definition_id())
     }
 
     fn user_token_a_id() -> AccountId {
@@ -383,24 +383,24 @@ impl IdForTests {
     fn pool_definition_id() -> AccountId {
         compute_pool_pda(
             AMM_PROGRAM_ID,
-            IdForTests::token_a_definition_id(),
-            IdForTests::token_b_definition_id(),
+            Self::token_a_definition_id(),
+            Self::token_b_definition_id(),
         )
     }
 
     fn vault_a_id() -> AccountId {
         compute_vault_pda(
             AMM_PROGRAM_ID,
-            IdForTests::pool_definition_id(),
-            IdForTests::token_a_definition_id(),
+            Self::pool_definition_id(),
+            Self::token_a_definition_id(),
         )
     }
 
     fn vault_b_id() -> AccountId {
         compute_vault_pda(
             AMM_PROGRAM_ID,
-            IdForTests::pool_definition_id(),
-            IdForTests::token_b_definition_id(),
+            Self::pool_definition_id(),
+            Self::token_b_definition_id(),
         )
     }
 }

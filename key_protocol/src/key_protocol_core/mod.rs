@@ -104,17 +104,14 @@ impl NSSAUserData {
     }
 
     /// Returns the signing key for public transaction signatures
+    #[must_use]
     pub fn get_pub_account_signing_key(
         &self,
         account_id: nssa::AccountId,
     ) -> Option<&nssa::PrivateKey> {
-        // First seek in defaults
-        if let Some(key) = self.default_pub_account_signing_keys.get(&account_id) {
-            Some(key)
-        // Then seek in tree
-        } else {
-            self.public_key_tree.get_node(account_id).map(Into::into)
-        }
+        self.default_pub_account_signing_keys
+            .get(&account_id)
+            .or_else(|| self.public_key_tree.get_node(account_id).map(Into::into))
     }
 
     /// Generated new private key for privacy preserving transactions
@@ -137,17 +134,14 @@ impl NSSAUserData {
     }
 
     /// Returns the signing key for public transaction signatures
+    #[must_use]
     pub fn get_private_account(
         &self,
         account_id: nssa::AccountId,
     ) -> Option<&(KeyChain, nssa_core::account::Account)> {
-        // First seek in defaults
-        if let Some(key) = self.default_user_private_accounts.get(&account_id) {
-            Some(key)
-        // Then seek in tree
-        } else {
-            self.private_key_tree.get_node(account_id).map(Into::into)
-        }
+        self.default_user_private_accounts
+            .get(&account_id)
+            .or_else(|| self.private_key_tree.get_node(account_id).map(Into::into))
     }
 
     /// Returns the signing key for public transaction signatures

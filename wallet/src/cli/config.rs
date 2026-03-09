@@ -29,7 +29,7 @@ impl WalletSubcommand for ConfigSubcommand {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         match self {
-            ConfigSubcommand::Get { all, key } => {
+            Self::Get { all, key } => {
                 if all {
                     let config_str =
                         serde_json::to_string_pretty(&wallet_core.storage.wallet_config)?;
@@ -86,7 +86,7 @@ impl WalletSubcommand for ConfigSubcommand {
                     println!("Please provide a key or use --all flag");
                 }
             }
-            ConfigSubcommand::Set { key, value } => {
+            Self::Set { key, value } => {
                 match key.as_str() {
                     "override_rust_log" => {
                         wallet_core.storage.wallet_config.override_rust_log = Some(value);
@@ -122,7 +122,7 @@ impl WalletSubcommand for ConfigSubcommand {
 
                 wallet_core.store_config_changes().await?;
             }
-            ConfigSubcommand::Description { key } => match key.as_str() {
+            Self::Description { key } => match key.as_str() {
                 "override_rust_log" => {
                     println!("Value of variable RUST_LOG to override, affects logging");
                 }

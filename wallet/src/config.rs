@@ -70,7 +70,7 @@ pub struct Label(String);
 
 impl Label {
     #[must_use]
-    pub fn new(label: String) -> Self {
+    pub const fn new(label: String) -> Self {
         Self(label)
     }
 }
@@ -507,7 +507,7 @@ impl Default for WalletConfig {
 }
 
 impl WalletConfig {
-    pub fn from_path_or_initialize_default(config_path: &Path) -> Result<WalletConfig> {
+    pub fn from_path_or_initialize_default(config_path: &Path) -> Result<Self> {
         match std::fs::File::open(config_path) {
             Ok(file) => {
                 let reader = std::io::BufReader::new(file);
@@ -532,7 +532,7 @@ impl WalletConfig {
                     .truncate(true)
                     .open(config_path)?;
 
-                let config = WalletConfig::default();
+                let config = Self::default();
                 let default_config_serialized = serde_json::to_vec_pretty(&config).unwrap();
 
                 file.write_all(&default_config_serialized)?;
@@ -545,7 +545,7 @@ impl WalletConfig {
     }
 
     pub fn apply_overrides(&mut self, overrides: WalletConfigOverrides) {
-        let WalletConfig {
+        let Self {
             override_rust_log,
             sequencer_addr,
             seq_poll_timeout,

@@ -78,18 +78,16 @@ pub fn compute_digest_for_path(
         .unwrap();
     let mut level_index = proof.0;
     for node in &proof.1 {
+        let mut bytes = [0_u8; 64];
         let is_left_child = level_index & 1 == 0;
         if is_left_child {
-            let mut bytes = [0_u8; 64];
             bytes[..32].copy_from_slice(&result);
             bytes[32..].copy_from_slice(node);
-            result = Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap();
         } else {
-            let mut bytes = [0_u8; 64];
             bytes[..32].copy_from_slice(node);
             bytes[32..].copy_from_slice(&result);
-            result = Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap();
         }
+        result = Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap();
         level_index >>= 1;
     }
     result

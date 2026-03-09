@@ -18,7 +18,7 @@ pub const MAX_NUMBER_CHAINED_CALLS: usize = 10;
 
 #[derive(Clone, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(test, derive(Debug, PartialEq, Eq))]
-pub(crate) struct CommitmentSet {
+pub struct CommitmentSet {
     merkle_tree: MerkleTree,
     commitments: HashMap<Commitment, usize>,
     root_history: HashSet<CommitmentSetDigest>,
@@ -54,7 +54,7 @@ impl CommitmentSet {
     /// Initializes an empty `CommitmentSet` with a given capacity.
     /// If the capacity is not a `power_of_two`, then capacity is taken
     /// to be the next `power_of_two`.
-    pub(crate) fn with_capacity(capacity: usize) -> CommitmentSet {
+    pub(crate) fn with_capacity(capacity: usize) -> Self {
         Self {
             merkle_tree: MerkleTree::with_capacity(capacity),
             commitments: HashMap::new(),
@@ -68,7 +68,7 @@ impl CommitmentSet {
 struct NullifierSet(BTreeSet<Nullifier>);
 
 impl NullifierSet {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self(BTreeSet::new())
     }
 
@@ -242,7 +242,7 @@ impl V02State {
         self.public_state
             .get(&account_id)
             .cloned()
-            .unwrap_or(Account::default())
+            .unwrap_or_else(Account::default)
     }
 
     #[must_use]
@@ -250,7 +250,7 @@ impl V02State {
         self.private_state.0.get_proof_for(commitment)
     }
 
-    pub(crate) fn programs(&self) -> &HashMap<ProgramId, Program> {
+    pub(crate) const fn programs(&self) -> &HashMap<ProgramId, Program> {
         &self.programs
     }
 
@@ -631,8 +631,7 @@ pub mod tests {
 
         fn lp_supply_init() -> u128 {
             // isqrt(vault_a_balance_init * vault_b_balance_init) = isqrt(5_000 * 2_500) = 3535
-            (BalanceForTests::vault_a_balance_init() * BalanceForTests::vault_b_balance_init())
-                .isqrt()
+            (Self::vault_a_balance_init() * Self::vault_b_balance_init()).isqrt()
         }
     }
 
@@ -642,16 +641,13 @@ pub mod tests {
         fn pool_definition_id() -> AccountId {
             amm_core::compute_pool_pda(
                 Program::amm().id(),
-                IdForTests::token_a_definition_id(),
-                IdForTests::token_b_definition_id(),
+                Self::token_a_definition_id(),
+                Self::token_b_definition_id(),
             )
         }
 
         fn token_lp_definition_id() -> AccountId {
-            amm_core::compute_liquidity_token_pda(
-                Program::amm().id(),
-                IdForTests::pool_definition_id(),
-            )
+            amm_core::compute_liquidity_token_pda(Program::amm().id(), Self::pool_definition_id())
         }
 
         fn token_a_definition_id() -> AccountId {
@@ -683,16 +679,16 @@ pub mod tests {
         fn vault_a_id() -> AccountId {
             amm_core::compute_vault_pda(
                 Program::amm().id(),
-                IdForTests::pool_definition_id(),
-                IdForTests::token_a_definition_id(),
+                Self::pool_definition_id(),
+                Self::token_a_definition_id(),
             )
         }
 
         fn vault_b_id() -> AccountId {
             amm_core::compute_vault_pda(
                 Program::amm().id(),
-                IdForTests::pool_definition_id(),
-                IdForTests::token_b_definition_id(),
+                Self::pool_definition_id(),
+                Self::token_b_definition_id(),
             )
         }
     }
@@ -2199,7 +2195,7 @@ pub mod tests {
             vec![],
             vec![],
             vec![],
-            &program.clone().into(),
+            &program.into(),
         );
 
         assert!(matches!(result, Err(NssaError::ProgramProveFailed(_))));
@@ -4205,7 +4201,7 @@ pub mod tests {
 
         // Prepare new state of account
         let account_metadata = {
-            let mut acc = authorized_account.clone();
+            let mut acc = authorized_account;
             acc.account.program_owner = Program::claimer().id();
             acc
         };

@@ -76,10 +76,7 @@ impl RocksDBIO {
         let dbio = Self { db };
 
         let is_start_set = dbio.get_meta_is_first_block_set()?;
-
-        if is_start_set {
-            Ok(dbio)
-        } else {
+        if !is_start_set {
             let block_id = genesis_block.header.block_id;
             dbio.put_meta_first_block_in_db(genesis_block, genesis_msg_id)?;
             dbio.put_meta_is_first_block_set()?;
@@ -90,9 +87,9 @@ impl RocksDBIO {
                 hash: genesis_block.header.hash,
                 msg_id: genesis_msg_id,
             })?;
-
-            Ok(dbio)
         }
+
+        Ok(dbio)
     }
 
     pub fn destroy(path: &Path) -> DbResult<()> {

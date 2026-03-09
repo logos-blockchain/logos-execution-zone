@@ -18,7 +18,7 @@ pub struct TxPoller {
 
 impl TxPoller {
     #[must_use]
-    pub fn new(config: &WalletConfig, client: Arc<SequencerClient>) -> Self {
+    pub const fn new(config: &WalletConfig, client: Arc<SequencerClient>) -> Self {
         Self {
             polling_delay: config.seq_poll_timeout,
             polling_max_blocks_to_query: config.seq_tx_poll_max_blocks,

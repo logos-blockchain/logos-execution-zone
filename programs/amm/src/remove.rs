@@ -108,7 +108,7 @@ pub fn remove_liquidity(
         reserve_a: pool_def_data.reserve_a - withdraw_amount_a,
         reserve_b: pool_def_data.reserve_b - withdraw_amount_b,
         active,
-        ..pool_def_data.clone()
+        ..pool_def_data
     };
 
     pool_post.data = Data::from(&pool_post_definition);

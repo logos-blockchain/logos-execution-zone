@@ -156,7 +156,7 @@ pub fn add_liquidity(
     pool_definition_lp_auth.is_authorized = true;
     let call_token_lp = ChainedCall::new(
         token_program_id,
-        vec![pool_definition_lp_auth.clone(), user_holding_lp.clone()],
+        vec![pool_definition_lp_auth, user_holding_lp.clone()],
         &token_core::Instruction::Mint {
             amount_to_mint: delta_lp,
         },

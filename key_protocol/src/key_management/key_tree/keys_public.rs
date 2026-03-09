@@ -19,16 +19,13 @@ impl ChildKeysPublic {
         if 2_u32.pow(31) > cci {
             // Non-harden
             hash_input.extend_from_slice(self.cpk.value());
-            hash_input.extend_from_slice(&cci.to_le_bytes());
-
-            hmac_sha512::HMAC::mac(hash_input, self.ccc)
         } else {
             // Harden
             hash_input.extend_from_slice(self.csk.value());
-            hash_input.extend_from_slice(&(cci).to_le_bytes());
-
-            hmac_sha512::HMAC::mac(hash_input, self.ccc)
         }
+        hash_input.extend_from_slice(&cci.to_le_bytes());
+
+        hmac_sha512::HMAC::mac(hash_input, self.ccc)
     }
 }
 

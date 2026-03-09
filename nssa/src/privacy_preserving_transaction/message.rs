@@ -128,12 +128,12 @@ pub mod tests {
         )];
 
         Message {
-            public_account_ids: public_account_ids.clone(),
-            nonces: nonces.clone(),
-            public_post_states: public_post_states.clone(),
-            encrypted_private_post_states: encrypted_private_post_states.clone(),
-            new_commitments: new_commitments.clone(),
-            new_nullifiers: new_nullifiers.clone(),
+            public_account_ids,
+            nonces,
+            public_post_states,
+            encrypted_private_post_states,
+            new_commitments,
+            new_nullifiers,
         }
     }
 

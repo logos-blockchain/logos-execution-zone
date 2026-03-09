@@ -134,7 +134,7 @@ pub fn new_definition(
 
     let call_token_lp = ChainedCall::new(
         token_program_id,
-        vec![pool_lp_auth.clone(), user_holding_lp.clone()],
+        vec![pool_lp_auth, user_holding_lp.clone()],
         &instruction,
     )
     .with_pda_seeds(vec![compute_liquidity_token_pda_seed(pool.account_id)]);
@@ -151,5 +151,5 @@ pub fn new_definition(
         AccountPostState::new(user_holding_lp.account),
     ];
 
-    (post_states.clone(), chained_calls)
+    (post_states, chained_calls)
 }

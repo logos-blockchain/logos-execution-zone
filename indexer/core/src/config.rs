@@ -42,7 +42,7 @@ pub struct IndexerConfig {
 }
 
 impl IndexerConfig {
-    pub fn from_path(config_path: &Path) -> Result<IndexerConfig> {
+    pub fn from_path(config_path: &Path) -> Result<Self> {
         let file = File::open(config_path).with_context(|| {
             format!("Failed to open indexer config at {}", config_path.display())
         })?;

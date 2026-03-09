@@ -158,8 +158,8 @@ pub enum UrlProtocol {
 impl std::fmt::Display for UrlProtocol {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            UrlProtocol::Http => write!(f, "http"),
-            UrlProtocol::Ws => write!(f, "ws"),
+            Self::Http => write!(f, "http"),
+            Self::Ws => write!(f, "ws"),
         }
     }
 }

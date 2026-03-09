@@ -47,7 +47,7 @@ impl WitnessSet {
     }
 
     #[must_use]
-    pub fn proof(&self) -> &Proof {
+    pub const fn proof(&self) -> &Proof {
         &self.proof
     }
 
@@ -57,7 +57,7 @@ impl WitnessSet {
     }
 
     #[must_use]
-    pub fn from_raw_parts(
+    pub const fn from_raw_parts(
         signatures_and_public_keys: Vec<(Signature, PublicKey)>,
         proof: Proof,
     ) -> Self {

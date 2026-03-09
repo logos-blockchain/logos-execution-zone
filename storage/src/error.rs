@@ -18,7 +18,7 @@ pub enum DbError {
 
 impl DbError {
     #[must_use]
-    pub fn rocksdb_cast_message(rerr: rocksdb::Error, message: Option<String>) -> Self {
+    pub const fn rocksdb_cast_message(rerr: rocksdb::Error, message: Option<String>) -> Self {
         Self::RocksDbError {
             error: rerr,
             additional_info: message,
@@ -26,7 +26,7 @@ impl DbError {
     }
 
     #[must_use]
-    pub fn borsh_cast_message(berr: borsh::io::Error, message: Option<String>) -> Self {
+    pub const fn borsh_cast_message(berr: borsh::io::Error, message: Option<String>) -> Self {
         Self::SerializationError {
             error: berr,
             additional_info: message,
@@ -34,7 +34,7 @@ impl DbError {
     }
 
     #[must_use]
-    pub fn db_interaction_error(message: String) -> Self {
+    pub const fn db_interaction_error(message: String) -> Self {
         Self::DbInteractionError {
             additional_info: message,
         }

@@ -248,3 +248,11 @@ clippy.let-underscore-untyped = "allow"
 # Reason: this lint is actually bad as it forces to use wildcard `..` instead of
 # field-by-field `_` which may lead to subtle bugs when new fields are added to the struct.
 clippy.unneeded-field-pattern = "allow"
+
+# Nursery
+clippy.nursery = { level = "deny", priority = -1 }
+
+# Reason: this is okay if it compiles.
+clippy.future-not-send = "allow"
+# Reason: this is actually a good lint, but currently it gives a lot of false-positives.
+clippy.significant-drop-tightening = "allow"

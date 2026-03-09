@@ -104,7 +104,7 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         match self {
-            AmmProgramAgnosticSubcommand::New {
+            Self::New {
                 user_holding_a,
                 user_holding_b,
                 user_holding_lp,
@@ -150,7 +150,7 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
                     }
                 }
             }
-            AmmProgramAgnosticSubcommand::Swap {
+            Self::Swap {
                 user_holding_a,
                 user_holding_b,
                 amount_in,
@@ -185,7 +185,7 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
                     }
                 }
             }
-            AmmProgramAgnosticSubcommand::AddLiquidity {
+            Self::AddLiquidity {
                 user_holding_a,
                 user_holding_b,
                 user_holding_lp,
@@ -233,7 +233,7 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
                     }
                 }
             }
-            AmmProgramAgnosticSubcommand::RemoveLiquidity {
+            Self::RemoveLiquidity {
                 user_holding_a,
                 user_holding_b,
                 user_holding_lp,

@@ -20,7 +20,7 @@ pub struct Secp256k1Point(pub Vec<u8>);
 
 impl Secp256k1Point {
     #[must_use]
-    pub fn from_scalar(value: Scalar) -> Secp256k1Point {
+    pub fn from_scalar(value: Scalar) -> Self {
         let x_bytes: FieldBytes = value.into();
         let x = k256::Scalar::from_repr(x_bytes).unwrap();
 
@@ -37,7 +37,7 @@ pub type EphemeralPublicKey = Secp256k1Point;
 pub type ViewingPublicKey = Secp256k1Point;
 impl From<&EphemeralSecretKey> for EphemeralPublicKey {
     fn from(value: &EphemeralSecretKey) -> Self {
-        Secp256k1Point::from_scalar(*value)
+        Self::from_scalar(*value)
     }
 }
 

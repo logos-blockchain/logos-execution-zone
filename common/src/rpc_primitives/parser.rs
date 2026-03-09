@@ -19,10 +19,11 @@ pub trait RpcRequest: Sized {
 }
 
 pub fn parse_params<T: DeserializeOwned>(value: Option<Value>) -> Result<T, RpcParseError> {
-    if let Some(value) = value {
-        serde_json::from_value(value)
-            .map_err(|err| RpcParseError(format!("Failed parsing args: {err}")))
-    } else {
-        Err(RpcParseError("Require at least one parameter".to_owned()))
-    }
+    value.map_or_else(
+        || Err(RpcParseError("Require at least one parameter".to_owned())),
+        |value| {
+            serde_json::from_value(value)
+                .map_err(|err| RpcParseError(format!("Failed parsing args: {err}")))
+        },
+    )
 }

@@ -61,17 +61,17 @@ pub struct AccountId {
 
 impl AccountId {
     #[must_use]
-    pub fn new(value: [u8; 32]) -> Self {
+    pub const fn new(value: [u8; 32]) -> Self {
         Self { value }
     }
 
     #[must_use]
-    pub fn value(&self) -> &[u8; 32] {
+    pub const fn value(&self) -> &[u8; 32] {
         &self.value
     }
 
     #[must_use]
-    pub fn into_value(self) -> [u8; 32] {
+    pub const fn into_value(self) -> [u8; 32] {
         self.value
     }
 }
@@ -100,7 +100,7 @@ impl FromStr for AccountId {
         }
         let mut value = [0_u8; 32];
         value.copy_from_slice(&bytes);
-        Ok(AccountId { value })
+        Ok(Self { value })
     }
 }
 

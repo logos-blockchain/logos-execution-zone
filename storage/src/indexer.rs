@@ -92,10 +92,7 @@ impl RocksDBIO {
         let dbio = Self { db };
 
         let is_start_set = dbio.get_meta_is_first_block_set()?;
-
-        if is_start_set {
-            Ok(dbio)
-        } else {
+        if !is_start_set {
             let block_id = genesis_block.header.block_id;
             dbio.put_meta_last_block_in_db(block_id)?;
             dbio.put_meta_first_block_in_db(genesis_block)?;
@@ -104,9 +101,9 @@ impl RocksDBIO {
             // First breakpoint setup
             dbio.put_breakpoint(0, initial_state)?;
             dbio.put_meta_last_breakpoint_id(0)?;
-
-            Ok(dbio)
         }
+
+        Ok(dbio)
     }
 
     pub fn destroy(path: &Path) -> DbResult<()> {
@@ -494,7 +491,7 @@ impl RocksDBIO {
                 acc_to_tx_map
                     .entry(acc_id)
                     .and_modify(|tx_hashes| tx_hashes.push(tx_hash.into()))
-                    .or_insert(vec![tx_hash.into()]);
+                    .or_insert_with(|| vec![tx_hash.into()]);
             }
         }
 
@@ -932,10 +929,12 @@ impl RocksDBIO {
                 .transactions
                 .iter()
                 .find(|tx| tx.hash().0 == tx_hash)
-                .ok_or(DbError::db_interaction_error(format!(
-                    "Missing transaction in block {} with hash {:#?}",
-                    block.header.block_id, tx_hash
-                )))?;
+                .ok_or_else(|| {
+                    DbError::db_interaction_error(format!(
+                        "Missing transaction in block {} with hash {:#?}",
+                        block.header.block_id, tx_hash
+                    ))
+                })?;
 
             tx_batch.push(transaction.clone());
         }
@@ -993,17 +992,15 @@ mod tests {
     fn transfer(amount: u128, nonce: u128, direction: bool) -> NSSATransaction {
         let from;
         let to;
-        let sign_key;
-
-        if direction {
+        let sign_key = if direction {
             from = acc1();
             to = acc2();
-            sign_key = acc1_sign_key();
+            acc1_sign_key()
         } else {
             from = acc2();
             to = acc1();
-            sign_key = acc2_sign_key();
-        }
+            acc2_sign_key()
+        };
 
         common::test_utils::create_transaction_native_token_transfer(
             from, nonce, to, amount, &sign_key,

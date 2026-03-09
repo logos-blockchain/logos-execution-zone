@@ -1,4 +1,4 @@
-pub(crate) const DEFAULT_VALUES: [[u8; 32]; 32] = [
+pub const DEFAULT_VALUES: [[u8; 32]; 32] = [
     [
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0,

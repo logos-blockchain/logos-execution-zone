@@ -47,7 +47,7 @@ impl WitnessSet {
     }
 
     #[must_use]
-    pub fn from_raw_parts(signatures_and_public_keys: Vec<(Signature, PublicKey)>) -> Self {
+    pub const fn from_raw_parts(signatures_and_public_keys: Vec<(Signature, PublicKey)>) -> Self {
         Self {
             signatures_and_public_keys,
         }
