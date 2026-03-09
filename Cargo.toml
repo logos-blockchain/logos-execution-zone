@@ -268,3 +268,6 @@ clippy.perf = { level = "deny", priority = -1 }
 
 # Suspicious
 clippy.suspicious = { level = "deny", priority = -1 }
+
+# Style
+clippy.style = { level = "deny", priority = -1 }
