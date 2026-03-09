@@ -256,3 +256,6 @@ clippy.nursery = { level = "deny", priority = -1 }
 clippy.future-not-send = "allow"
 # Reason: this is actually a good lint, but currently it gives a lot of false-positives.
 clippy.significant-drop-tightening = "allow"
+
+# Correctness
+clippy.correctness = { level = "deny", priority = -1 }
