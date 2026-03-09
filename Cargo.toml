@@ -259,3 +259,6 @@ clippy.significant-drop-tightening = "allow"
 
 # Correctness
 clippy.correctness = { level = "deny", priority = -1 }
+
+# Complexity
+clippy.complexity = { level = "deny", priority = -1 }
