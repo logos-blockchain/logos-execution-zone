@@ -58,7 +58,7 @@ amm_program = { path = "programs/amm" }
 test_program_methods = { path = "test_program_methods" }
 bedrock_client = { path = "bedrock_client" }
 
-tokio = { version = "1.28.2", features = [
+tokio = { version = "1.50", features = [
   "net",
   "rt-multi-thread",
   "sync",
@@ -75,15 +75,15 @@ serde = { version = "1.0.60", default-features = false, features = ["derive"] }
 serde_json = "1.0.81"
 serde_with = "3.16.1"
 actix = "0.13.0"
-actix-cors = "0.6.1"
+actix-cors = "0.7.1"
 jsonrpsee = "0.26.0"
 futures = "0.3"
 actix-rt = "*"
 lazy_static = "1.5.0"
-env_logger = "0.10"
+env_logger = "0.11"
 log = "0.4.28"
-lru = "0.7.8"
-thiserror = "2.0.12"
+lru = "0.16.3"
+thiserror = "2.0"
 sha2 = "0.10.8"
 hex = "0.4.3"
 bytemuck = "1.24.0"
@@ -91,7 +91,7 @@ bytesize = { version = "2.3.1", features = ["serde"] }
 humantime-serde = "1.1"
 humantime = "2.1"
 aes-gcm = "0.10.3"
-toml = "0.7.4"
+toml = "0.9.8"
 bincode = "1.3.3"
 tempfile = "3.14.0"
 light-poseidon = "0.3.0"
@@ -107,7 +107,7 @@ base58 = "0.2.0"
 itertools = "0.14.0"
 url = { version = "2.5.4", features = ["serde"] }
 tokio-retry = "0.3.0"
-schemars = "1.2.0"
+schemars = "1.2"
 async-stream = "0.3.6"
 
 logos-blockchain-common-http-client = { git = "https://github.com/logos-blockchain/logos-blockchain.git" }
@@ -129,7 +129,7 @@ k256 = { version = "0.13.3", features = [
   "pem",
 ] }
 elliptic-curve = { version = "0.13.8", features = ["arithmetic"] }
-actix-web = { version = "=4.1.0", default-features = false, features = [
+actix-web = { version = "4.13.0", default-features = false, features = [
   "macros",
 ] }
 clap = { version = "4.5.42", features = ["derive", "env"] }
