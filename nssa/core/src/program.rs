@@ -53,10 +53,10 @@ impl From<(&ProgramId, &PdaSeed)> for AccountId {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct ChainedCall {
-    /// The program ID of the program to execute
+    /// The program ID of the program to execute.
     pub program_id: ProgramId,
     pub pre_states: Vec<AccountWithMetadata>,
-    /// The instruction data to pass
+    /// The instruction data to pass.
     pub instruction_data: InstructionData,
     pub pda_seeds: Vec<PdaSeed>,
 }
@@ -133,18 +133,18 @@ impl AccountPostState {
         self.claim
     }
 
-    /// Returns the underlying account
+    /// Returns the underlying account.
     #[must_use]
     pub const fn account(&self) -> &Account {
         &self.account
     }
 
-    /// Returns the underlying account
+    /// Returns the underlying account.
     pub const fn account_mut(&mut self) -> &mut Account {
         &mut self.account
     }
 
-    /// Consumes the post state and returns the underlying account
+    /// Consumes the post state and returns the underlying account.
     #[must_use]
     pub fn into_account(self) -> Account {
         self.account
@@ -154,9 +154,9 @@ impl AccountPostState {
 #[derive(Serialize, Deserialize, Clone)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
 pub struct ProgramOutput {
-    /// The instruction data the program received to produce this output
+    /// The instruction data the program received to produce this output.
     pub instruction_data: InstructionData,
-    /// The account pre states the program received to produce this output
+    /// The account pre states the program received to produce this output.
     pub pre_states: Vec<AccountWithMetadata>,
     pub post_states: Vec<AccountPostState>,
     pub chained_calls: Vec<ChainedCall>,
@@ -248,7 +248,7 @@ pub fn write_nssa_outputs_with_chained_call(
     env::commit(&output);
 }
 
-/// Validates well-behaved program execution
+/// Validates well-behaved program execution.
 ///
 /// # Parameters
 /// - `pre_states`: The list of input accounts, each annotated with authorization metadata.

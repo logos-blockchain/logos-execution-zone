@@ -12,7 +12,7 @@ use crate::key_management::{
 pub struct ChildKeysPrivate {
     pub value: (KeyChain, nssa::Account),
     pub ccc: [u8; 32],
-    /// Can be [`None`] if root
+    /// Can be [`None`] if root.
     pub cci: Option<u32>,
 }
 

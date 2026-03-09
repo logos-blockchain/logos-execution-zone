@@ -111,14 +111,14 @@ impl From<Block> for HashableBlockData {
     }
 }
 
-/// Helper struct for account (de-)serialization
+/// Helper struct for account (de-)serialization.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccountInitialData {
     pub account_id: AccountId,
     pub balance: u128,
 }
 
-/// Helper struct to (de-)serialize initial commitments
+/// Helper struct to (de-)serialize initial commitments.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommitmentsInitialData {
     pub npk: nssa_core::NullifierPublicKey,

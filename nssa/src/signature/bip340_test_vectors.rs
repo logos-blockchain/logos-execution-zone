@@ -10,7 +10,7 @@ pub struct TestVector {
 }
 
 /// Test vectors from
-/// <https://github.com/bitcoin/bips/blob/master/bip-0340/test-vectors.csv>
+/// <https://github.com/bitcoin/bips/blob/master/bip-0340/test-vectors.csv>.
 //
 pub fn test_vectors() -> Vec<TestVector> {
     vec![

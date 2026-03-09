@@ -84,7 +84,7 @@ pub struct GetBlockDataRequest {
     pub block_id: u64,
 }
 
-/// Get a range of blocks from `start_block_id` to `end_block_id` (inclusive)
+/// Get a range of blocks from `start_block_id` to `end_block_id` (inclusive).
 #[derive(Serialize, Deserialize, Debug)]
 pub struct GetBlockRangeDataRequest {
     pub start_block_id: u64,
@@ -213,7 +213,7 @@ pub struct GetProgramIdsResponse {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct GetInitialTestnetAccountsResponse {
-    /// Hex encoded account id
+    /// Hex encoded account id.
     pub account_id: String,
     pub balance: u64,
 }

@@ -1,5 +1,5 @@
 # Should be kept in sync with Dockerfiles
 
 [toolchain]
-channel = "1.91.1"
+channel = "1.94.0"
 profile = "default"

@@ -40,7 +40,7 @@ impl Challenge {
     }
 }
 
-/// A pinata program
+/// A pinata program.
 fn main() {
     // Read input accounts.
     // It is expected to receive only two accounts: [pinata_account, winner_account]

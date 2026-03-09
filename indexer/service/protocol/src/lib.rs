@@ -191,7 +191,7 @@ pub enum Transaction {
 }
 
 impl Transaction {
-    /// Get the hash of the transaction
+    /// Get the hash of the transaction.
     #[expect(clippy::same_name_method, reason = "This is handy")]
     #[must_use]
     pub const fn hash(&self) -> &self::HashType {

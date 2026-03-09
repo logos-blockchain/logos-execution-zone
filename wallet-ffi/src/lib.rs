@@ -1,4 +1,4 @@
-//! NSSA Wallet FFI Library
+//! NSSA Wallet FFI Library.
 //!
 //! This crate provides C-compatible bindings for the NSSA wallet functionality.
 //!

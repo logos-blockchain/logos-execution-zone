@@ -16,7 +16,7 @@ pub const DUMMY_COMMITMENT: Commitment = Commitment([
     165, 33, 34, 172, 227, 30, 215, 20, 85, 47, 230, 29,
 ]);
 
-/// The hash of the dummy commitment
+/// The hash of the dummy commitment.
 /// ```python
 /// from hashlib import sha256
 /// hasher = sha256()
@@ -50,7 +50,7 @@ impl std::fmt::Debug for Commitment {
 
 impl Commitment {
     /// Generates the commitment to a private account owned by user for npk:
-    /// SHA256(npk || `program_owner` || balance || nonce || SHA256(data))
+    /// SHA256(npk || `program_owner` || balance || nonce || SHA256(data)).
     #[must_use]
     pub fn new(npk: &NullifierPublicKey, account: &Account) -> Self {
         let mut bytes = Vec::new();
@@ -78,7 +78,7 @@ pub type CommitmentSetDigest = [u8; 32];
 
 pub type MembershipProof = (usize, Vec<[u8; 32]>);
 
-/// Computes the resulting digest for the given membership proof and corresponding commitment
+/// Computes the resulting digest for the given membership proof and corresponding commitment.
 #[must_use]
 pub fn compute_digest_for_path(
     commitment: &Commitment,

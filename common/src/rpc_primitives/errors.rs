@@ -14,11 +14,11 @@ pub struct RpcParseError(pub String);
 pub struct RpcError {
     #[serde(flatten)]
     pub error_struct: Option<RpcErrorKind>,
-    /// Deprecated please use the `error_struct` instead
+    /// Deprecated please use the `error_struct` instead.
     pub code: i64,
-    /// Deprecated please use the `error_struct` instead
+    /// Deprecated please use the `error_struct` instead.
     pub message: String,
-    /// Deprecated please use the `error_struct` instead
+    /// Deprecated please use the `error_struct` instead.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<Value>,
 }
@@ -38,7 +38,7 @@ pub enum RpcRequestValidationErrorKind {
     ParseError { error_message: String },
 }
 
-/// A general Server Error
+/// A general Server Error.
 #[derive(serde::Serialize, serde::Deserialize, Debug, PartialEq, Eq, Clone)]
 pub enum ServerError {
     Timeout,
@@ -101,7 +101,7 @@ impl RpcError {
     }
 
     /// Helper method to define extract `INTERNAL_ERROR` in separate `RpcErrorKind`
-    /// Returns `HANDLER_ERROR` if the error is not internal one
+    /// Returns `HANDLER_ERROR` if the error is not internal one.
     #[must_use]
     pub fn new_internal_or_handler_error(error_data: Option<Value>, error_struct: Value) -> Self {
         if error_struct["name"] == "INTERNAL_ERROR" {

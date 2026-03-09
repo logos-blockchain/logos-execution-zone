@@ -12,7 +12,7 @@ pub mod secret_holders;
 pub type PublicAccountSigningKey = [u8; 32];
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-/// Entrypoint to key management
+/// Entrypoint to key management.
 pub struct KeyChain {
     pub secret_spending_key: SecretSpendingKey,
     pub private_key_holder: PrivateKeyHolder,

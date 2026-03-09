@@ -335,7 +335,7 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
     }
 }
 
-/// Load signing key from file or generate a new one if it doesn't exist
+/// Load signing key from file or generate a new one if it doesn't exist.
 fn load_or_create_signing_key(path: &Path) -> Result<Ed25519Key> {
     if path.exists() {
         let key_bytes = std::fs::read(path)?;

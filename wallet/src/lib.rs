@@ -148,25 +148,25 @@ impl WalletCore {
         })
     }
 
-    /// Get configuration with applied overrides
+    /// Get configuration with applied overrides.
     #[must_use]
     pub const fn config(&self) -> &WalletConfig {
         &self.storage.wallet_config
     }
 
-    /// Get storage
+    /// Get storage.
     #[must_use]
     pub const fn storage(&self) -> &WalletChainStore {
         &self.storage
     }
 
-    /// Reset storage
+    /// Reset storage.
     pub fn reset_storage(&mut self, password: String) -> Result<()> {
         self.storage = WalletChainStore::new_storage(self.storage.wallet_config.clone(), password)?;
         Ok(())
     }
 
-    /// Store persistent data at home
+    /// Store persistent data at home.
     pub async fn store_persistent_data(&self) -> Result<()> {
         let data = produce_data_for_storage(
             &self.storage.user_data,
@@ -188,7 +188,7 @@ impl WalletCore {
         Ok(())
     }
 
-    /// Store persistent data at home
+    /// Store persistent data at home.
     pub async fn store_config_changes(&self) -> Result<()> {
         let config = serde_json::to_vec_pretty(&self.storage.wallet_config)?;
 
@@ -220,7 +220,7 @@ impl WalletCore {
             .generate_new_privacy_preserving_transaction_key_chain(chain_index)
     }
 
-    /// Get account balance
+    /// Get account balance.
     pub async fn get_account_balance(&self, acc: AccountId) -> Result<u128> {
         Ok(self
             .sequencer_client
@@ -229,7 +229,7 @@ impl WalletCore {
             .balance)
     }
 
-    /// Get accounts nonces
+    /// Get accounts nonces.
     pub async fn get_accounts_nonces(&self, accs: Vec<AccountId>) -> Result<Vec<u128>> {
         Ok(self
             .sequencer_client
@@ -238,7 +238,7 @@ impl WalletCore {
             .nonces)
     }
 
-    /// Get account
+    /// Get account.
     pub async fn get_account_public(&self, account_id: AccountId) -> Result<Account> {
         let response = self.sequencer_client.get_account(account_id).await?;
         Ok(response.account)
@@ -268,7 +268,7 @@ impl WalletCore {
         Some(Commitment::new(&keys.nullifer_public_key, account))
     }
 
-    /// Poll transactions
+    /// Poll transactions.
     pub async fn poll_native_token_transfer(&self, hash: HashType) -> Result<NSSATransaction> {
         let transaction_encoded = self.poller.poll_tx(hash).await?;
         let tx_base64_decode = BASE64.decode(transaction_encoded)?;
@@ -325,13 +325,14 @@ impl WalletCore {
         Ok(())
     }
 
+    // TODO: handle large Err-variant properly
+    #[expect(clippy::result_large_err, reason = "ExecutionFailureKind is large, tracked by TODO")]
     pub async fn send_privacy_preserving_tx(
         &self,
         accounts: Vec<PrivacyPreservingAccount>,
         instruction_data: InstructionData,
         program: &ProgramWithDependencies,
     ) -> Result<(SendTxResponse, Vec<SharedSecretKey>), ExecutionFailureKind> {
-        // TODO: handle large Err-variant properly
         self.send_privacy_preserving_tx_with_pre_check(accounts, instruction_data, program, |_| {
             Ok(())
         })

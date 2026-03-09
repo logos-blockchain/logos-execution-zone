@@ -12,63 +12,63 @@ use crate::{
     helperfunctions::{AccountPrivacyKind, HumanReadableAccount, parse_addr_with_privacy_prefix},
 };
 
-/// Represents generic chain CLI subcommand
+/// Represents generic chain CLI subcommand.
 #[derive(Subcommand, Debug, Clone)]
 pub enum AccountSubcommand {
-    /// Get account data
+    /// Get account data.
     Get {
-        /// Flag to get raw account data
+        /// Flag to get raw account data.
         #[arg(short, long)]
         raw: bool,
-        /// Display keys (pk for public accounts, npk/vpk for private accounts)
+        /// Display keys (pk for public accounts, npk/vpk for private accounts).
         #[arg(short, long)]
         keys: bool,
-        /// Valid 32 byte base58 string with privacy prefix
+        /// Valid 32 byte base58 string with privacy prefix.
         #[arg(short, long)]
         account_id: String,
     },
-    /// Produce new public or private account
+    /// Produce new public or private account.
     #[command(subcommand)]
     New(NewSubcommand),
-    /// Sync private accounts
+    /// Sync private accounts.
     SyncPrivate,
-    /// List all accounts owned by the wallet
+    /// List all accounts owned by the wallet.
     #[command(visible_alias = "ls")]
     List {
-        /// Show detailed account information (like `account get`)
+        /// Show detailed account information (like `account get`).
         #[arg(short, long)]
         long: bool,
     },
-    /// Set a label for an account
+    /// Set a label for an account.
     Label {
-        /// Valid 32 byte base58 string with privacy prefix
+        /// Valid 32 byte base58 string with privacy prefix.
         #[arg(short, long)]
         account_id: String,
-        /// The label to assign to the account
+        /// The label to assign to the account.
         #[arg(short, long)]
         label: String,
     },
 }
 
-/// Represents generic register CLI subcommand
+/// Represents generic register CLI subcommand.
 #[derive(Subcommand, Debug, Clone)]
 pub enum NewSubcommand {
-    /// Register new public account
+    /// Register new public account.
     Public {
         #[arg(long)]
-        /// Chain index of a parent node
+        /// Chain index of a parent node.
         cci: Option<ChainIndex>,
         #[arg(short, long)]
-        /// Label to assign to the new account
+        /// Label to assign to the new account.
         label: Option<String>,
     },
-    /// Register new private account
+    /// Register new private account.
     Private {
         #[arg(long)]
-        /// Chain index of a parent node
+        /// Chain index of a parent node.
         cci: Option<ChainIndex>,
         #[arg(short, long)]
-        /// Label to assign to the new account
+        /// Label to assign to the new account.
         label: Option<String>,
     },
 }
@@ -409,7 +409,7 @@ impl WalletSubcommand for AccountSubcommand {
     }
 }
 
-/// Formats account details for display, returning (description, `json_view`)
+/// Formats account details for display, returning (description, `json_view`).
 fn format_account_details(account: &Account) -> (String, String) {
     let auth_tr_prog_id = Program::authenticated_transfer_program().id();
     let token_prog_id = Program::token().id();

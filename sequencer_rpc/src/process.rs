@@ -77,7 +77,7 @@ impl<
 }
 
 impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> JsonHandler<BC, IC> {
-    /// Example of request processing
+    /// Example of request processing.
     fn process_temp_hello(request: Request) -> Result<Value, RpcErr> {
         let _hello_request = HelloRequest::parse(Some(request.params))?;
 
@@ -194,8 +194,8 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> JsonHandler<BC, IC>
         respond(response)
     }
 
-    /// Returns the initial accounts for testnet
-    /// `ToDo`: Useful only for testnet and needs to be removed later
+    /// Returns the initial accounts for testnet.
+    /// `ToDo`: Useful only for testnet and needs to be removed later.
     async fn get_initial_testnet_accounts(&self, request: Request) -> Result<Value, RpcErr> {
         let _get_initial_testnet_accounts_request =
             GetInitialTestnetAccountsRequest::parse(Some(request.params))?;
@@ -284,7 +284,7 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> JsonHandler<BC, IC>
         respond(response)
     }
 
-    /// Returns the commitment proof, corresponding to commitment
+    /// Returns the commitment proof, corresponding to commitment.
     async fn process_get_proof_by_commitment(&self, request: Request) -> Result<Value, RpcErr> {
         let get_proof_req = GetProofForCommitmentRequest::parse(Some(request.params))?;
 

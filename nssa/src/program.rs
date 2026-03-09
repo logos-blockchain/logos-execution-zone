@@ -12,7 +12,7 @@ use crate::{
 };
 
 /// Maximum number of cycles for a public execution.
-/// TODO: Make this variable when fees are implemented
+/// TODO: Make this variable when fees are implemented.
 const MAX_NUM_CYCLES_PUBLIC_EXECUTION: u64 = 1024 * 1024 * 32; // 32M cycles
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -74,7 +74,7 @@ impl Program {
         Ok(program_output)
     }
 
-    /// Writes inputs to `env_builder` in the order expected by the programs
+    /// Writes inputs to `env_builder` in the order expected by the programs.
     pub(crate) fn write_inputs(
         pre_states: &[AccountWithMetadata],
         instruction_data: &[u32],
@@ -137,7 +137,7 @@ mod tests {
     };
 
     impl Program {
-        /// A program that changes the nonce of an account
+        /// A program that changes the nonce of an account.
         #[must_use]
         pub fn nonce_changer_program() -> Self {
             use test_program_methods::{NONCE_CHANGER_ELF, NONCE_CHANGER_ID};
@@ -148,7 +148,7 @@ mod tests {
             }
         }
 
-        /// A program that produces more output accounts than the inputs it received
+        /// A program that produces more output accounts than the inputs it received.
         #[must_use]
         pub fn extra_output_program() -> Self {
             use test_program_methods::{EXTRA_OUTPUT_ELF, EXTRA_OUTPUT_ID};
@@ -159,7 +159,7 @@ mod tests {
             }
         }
 
-        /// A program that produces less output accounts than the inputs it received
+        /// A program that produces less output accounts than the inputs it received.
         #[must_use]
         pub fn missing_output_program() -> Self {
             use test_program_methods::{MISSING_OUTPUT_ELF, MISSING_OUTPUT_ID};
@@ -170,7 +170,7 @@ mod tests {
             }
         }
 
-        /// A program that changes the program owner of an account to [0, 1, 2, 3, 4, 5, 6, 7]
+        /// A program that changes the program owner of an account to [0, 1, 2, 3, 4, 5, 6, 7].
         #[must_use]
         pub fn program_owner_changer() -> Self {
             use test_program_methods::{PROGRAM_OWNER_CHANGER_ELF, PROGRAM_OWNER_CHANGER_ID};
@@ -181,7 +181,7 @@ mod tests {
             }
         }
 
-        /// A program that transfers balance without caring about authorizations
+        /// A program that transfers balance without caring about authorizations.
         #[must_use]
         pub fn simple_balance_transfer() -> Self {
             use test_program_methods::{SIMPLE_BALANCE_TRANSFER_ELF, SIMPLE_BALANCE_TRANSFER_ID};
@@ -192,7 +192,7 @@ mod tests {
             }
         }
 
-        /// A program that modifies the data of an account
+        /// A program that modifies the data of an account.
         #[must_use]
         pub fn data_changer() -> Self {
             use test_program_methods::{DATA_CHANGER_ELF, DATA_CHANGER_ID};
@@ -203,7 +203,7 @@ mod tests {
             }
         }
 
-        /// A program that mints balance
+        /// A program that mints balance.
         #[must_use]
         pub fn minter() -> Self {
             use test_program_methods::{MINTER_ELF, MINTER_ID};
@@ -214,7 +214,7 @@ mod tests {
             }
         }
 
-        /// A program that burns balance
+        /// A program that burns balance.
         #[must_use]
         pub fn burner() -> Self {
             use test_program_methods::{BURNER_ELF, BURNER_ID};

@@ -368,7 +368,7 @@ impl Drop for TestContext {
     }
 }
 
-/// A test context to be used in normal #[test] tests
+/// A test context to be used in normal #[test] tests.
 pub struct BlockingTestContext {
     ctx: Option<TestContext>,
     runtime: tokio::runtime::Runtime,

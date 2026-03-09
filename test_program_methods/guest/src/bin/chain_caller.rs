@@ -9,7 +9,7 @@ type Instruction = (u128, ProgramId, u32, Option<PdaSeed>);
 /// A program that calls another program `num_chain_calls` times.
 /// It permutes the order of the input accounts on the subsequent call
 /// The `ProgramId` in the instruction must be the `program_id` of the authenticated transfers
-/// program
+/// program.
 fn main() {
     let (
         ProgramInput {

@@ -26,7 +26,7 @@ pub enum Instruction {
         amm_program_id: ProgramId,
     },
 
-    /// Adds liquidity to the Pool
+    /// Adds liquidity to the Pool.
     ///
     /// Required accounts:
     /// - AMM Pool (initialized)
@@ -42,7 +42,7 @@ pub enum Instruction {
         max_amount_to_add_token_b: u128,
     },
 
-    /// Removes liquidity from the Pool
+    /// Removes liquidity from the Pool.
     ///
     /// Required accounts:
     /// - AMM Pool (initialized)
@@ -85,11 +85,11 @@ pub struct PoolDefinition {
     pub liquidity_pool_supply: u128,
     pub reserve_a: u128,
     pub reserve_b: u128,
-    /// Fees are currently not used
+    /// Fees are currently not used.
     pub fees: u128,
     /// A pool becomes inactive (active = false)
     /// once all of its liquidity has been removed (e.g., reserves are emptied and
-    /// `liquidity_pool_supply` = 0)
+    /// `liquidity_pool_supply` = 0).
     pub active: bool,
 }
 

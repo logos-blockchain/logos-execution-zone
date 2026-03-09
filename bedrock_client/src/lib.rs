@@ -14,7 +14,7 @@ use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use tokio_retry::Retry;
 
-/// Fibonacci backoff retry strategy configuration
+/// Fibonacci backoff retry strategy configuration.
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct BackoffConfig {
     #[serde(with = "humantime_serde")]

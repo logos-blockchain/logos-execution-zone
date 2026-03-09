@@ -6,20 +6,20 @@ use crate::{
     cli::{SubcommandReturnValue, WalletSubcommand},
 };
 
-/// Represents generic config CLI subcommand
+/// Represents generic config CLI subcommand.
 #[derive(Subcommand, Debug, Clone)]
 pub enum ConfigSubcommand {
-    /// Getter of config fields
+    /// Getter of config fields.
     Get {
-        /// Print all config fields
+        /// Print all config fields.
         #[arg(short, long)]
         all: bool,
-        /// Config field key to get
+        /// Config field key to get.
         key: Option<String>,
     },
-    /// Setter of config fields
+    /// Setter of config fields.
     Set { key: String, value: String },
-    /// Prints description of corresponding field
+    /// Prints description of corresponding field.
     Description { key: String },
 }
 

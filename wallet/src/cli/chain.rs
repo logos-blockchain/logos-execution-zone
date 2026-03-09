@@ -7,19 +7,19 @@ use crate::{
     cli::{SubcommandReturnValue, WalletSubcommand},
 };
 
-/// Represents generic chain CLI subcommand
+/// Represents generic chain CLI subcommand.
 #[derive(Subcommand, Debug, Clone)]
 pub enum ChainSubcommand {
-    /// Get current block id from sequencer
+    /// Get current block id from sequencer.
     CurrentBlockId,
-    /// Get block at id from sequencer
+    /// Get block at id from sequencer.
     Block {
         #[arg(short, long)]
         id: u64,
     },
-    /// Get transaction at hash from sequencer
+    /// Get transaction at hash from sequencer.
     Transaction {
-        /// hash - valid 32 byte hex string
+        /// hash - valid 32 byte hex string.
         #[arg(short = 't', long)]
         hash: HashType,
     },

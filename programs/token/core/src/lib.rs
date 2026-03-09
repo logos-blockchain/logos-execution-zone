@@ -29,7 +29,7 @@ pub enum Instruction {
     /// - Token Metadata account (uninitialized).
     NewDefinitionWithMetadata {
         new_definition: NewTokenDefinition,
-        /// Boxed to avoid large enum variant size
+        /// Boxed to avoid large enum variant size.
         metadata: Box<NewTokenMetadata>,
     },
 
@@ -196,7 +196,7 @@ impl From<&TokenHolding> for Data {
 pub struct NewTokenMetadata {
     /// Metadata standard.
     pub standard: MetadataStandard,
-    /// Pointer to off-chain metadata
+    /// Pointer to off-chain metadata.
     pub uri: String,
     /// Creators of the token.
     pub creators: String,

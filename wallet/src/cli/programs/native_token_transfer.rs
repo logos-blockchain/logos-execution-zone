@@ -11,35 +11,35 @@ use crate::{
     program_facades::native_token_transfer::NativeTokenTransfer,
 };
 
-/// Represents generic CLI subcommand for a wallet working with native token transfer program
+/// Represents generic CLI subcommand for a wallet working with native token transfer program.
 #[derive(Subcommand, Debug, Clone)]
 pub enum AuthTransferSubcommand {
-    /// Initialize account under authenticated transfer program
+    /// Initialize account under authenticated transfer program.
     Init {
-        /// `account_id` - valid 32 byte base58 string with privacy prefix
+        /// `account_id` - valid 32 byte base58 string with privacy prefix.
         #[arg(long)]
         account_id: String,
     },
-    /// Send native tokens from one account to another with variable privacy
+    /// Send native tokens from one account to another with variable privacy.
     ///
     /// If receiver is private, then `to` and (`to_npk` , `to_vpk`) is a mutually exclusive
     /// patterns.
     ///
     /// First is used for owned accounts, second otherwise.
     Send {
-        /// from - valid 32 byte base58 string with privacy prefix
+        /// from - valid 32 byte base58 string with privacy prefix.
         #[arg(long)]
         from: String,
-        /// to - valid 32 byte base58 string with privacy prefix
+        /// to - valid 32 byte base58 string with privacy prefix.
         #[arg(long)]
         to: Option<String>,
-        /// `to_npk` - valid 32 byte hex string
+        /// `to_npk` - valid 32 byte hex string.
         #[arg(long)]
         to_npk: Option<String>,
-        /// `to_vpk` - valid 33 byte hex string
+        /// `to_vpk` - valid 33 byte hex string.
         #[arg(long)]
         to_vpk: Option<String>,
-        /// amount - amount of balance to move
+        /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
     },
@@ -188,114 +188,114 @@ impl WalletSubcommand for AuthTransferSubcommand {
     }
 }
 
-/// Represents generic CLI subcommand for a wallet working with native token transfer program
+/// Represents generic CLI subcommand for a wallet working with native token transfer program.
 #[derive(Subcommand, Debug, Clone)]
 pub enum NativeTokenTransferProgramSubcommand {
-    /// Send native token transfer from `from` to `to` for `amount`
+    /// Send native token transfer from `from` to `to` for `amount`.
     ///
-    /// Public operation
+    /// Public operation.
     Public {
-        /// from - valid 32 byte hex string
+        /// from - valid 32 byte hex string.
         #[arg(long)]
         from: String,
-        /// to - valid 32 byte hex string
+        /// to - valid 32 byte hex string.
         #[arg(long)]
         to: String,
-        /// amount - amount of balance to move
+        /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
     },
-    /// Private execution
+    /// Private execution.
     #[command(subcommand)]
     Private(NativeTokenTransferProgramSubcommandPrivate),
-    /// Send native token transfer from `from` to `to` for `amount`
+    /// Send native token transfer from `from` to `to` for `amount`.
     ///
-    /// Deshielded operation
+    /// Deshielded operation.
     Deshielded {
-        /// from - valid 32 byte hex string
+        /// from - valid 32 byte hex string.
         #[arg(long)]
         from: String,
-        /// to - valid 32 byte hex string
+        /// to - valid 32 byte hex string.
         #[arg(long)]
         to: String,
-        /// amount - amount of balance to move
+        /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
     },
-    /// Shielded execution
+    /// Shielded execution.
     #[command(subcommand)]
     Shielded(NativeTokenTransferProgramSubcommandShielded),
 }
 
 /// Represents generic shielded CLI subcommand for a wallet working with native token transfer
-/// program
+/// program.
 #[derive(Subcommand, Debug, Clone)]
 pub enum NativeTokenTransferProgramSubcommandShielded {
-    /// Send native token transfer from `from` to `to` for `amount`
+    /// Send native token transfer from `from` to `to` for `amount`.
     ///
-    /// Shielded operation
+    /// Shielded operation.
     ShieldedOwned {
-        /// from - valid 32 byte hex string
+        /// from - valid 32 byte hex string.
         #[arg(long)]
         from: String,
-        /// to - valid 32 byte hex string
+        /// to - valid 32 byte hex string.
         #[arg(long)]
         to: String,
-        /// amount - amount of balance to move
+        /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
     },
-    /// Send native token transfer from `from` to `to` for `amount`
+    /// Send native token transfer from `from` to `to` for `amount`.
     ///
-    /// Shielded operation
+    /// Shielded operation.
     ShieldedForeign {
-        /// from - valid 32 byte hex string
+        /// from - valid 32 byte hex string.
         #[arg(long)]
         from: String,
-        /// `to_npk` - valid 32 byte hex string
+        /// `to_npk` - valid 32 byte hex string.
         #[arg(long)]
         to_npk: String,
-        /// `to_vpk` - valid 33 byte hex string
+        /// `to_vpk` - valid 33 byte hex string.
         #[arg(long)]
         to_vpk: String,
-        /// amount - amount of balance to move
+        /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
     },
 }
 
 /// Represents generic private CLI subcommand for a wallet working with native token transfer
-/// program
+/// program.
 #[derive(Subcommand, Debug, Clone)]
 pub enum NativeTokenTransferProgramSubcommandPrivate {
-    /// Send native token transfer from `from` to `to` for `amount`
+    /// Send native token transfer from `from` to `to` for `amount`.
     ///
-    /// Private operation
+    /// Private operation.
     PrivateOwned {
-        /// from - valid 32 byte hex string
+        /// from - valid 32 byte hex string.
         #[arg(long)]
         from: String,
-        /// to - valid 32 byte hex string
+        /// to - valid 32 byte hex string.
         #[arg(long)]
         to: String,
-        /// amount - amount of balance to move
+        /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
     },
-    /// Send native token transfer from `from` to `to` for `amount`
+    /// Send native token transfer from `from` to `to` for `amount`.
     ///
-    /// Private operation
+    /// Private operation.
     PrivateForeign {
-        /// from - valid 32 byte hex string
+        /// from - valid 32 byte hex string.
         #[arg(long)]
         from: String,
-        /// `to_npk` - valid 32 byte hex string
+        /// `to_npk` - valid 32 byte hex string.
         #[arg(long)]
         to_npk: String,
-        /// `to_vpk` - valid 33 byte hex string
+        /// `to_vpk` - valid 33 byte hex string.
         #[arg(long)]
         to_vpk: String,
-        /// amount - amount of balance to move
+        /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
     },

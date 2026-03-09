@@ -29,7 +29,7 @@ impl CommitmentSet {
         self.merkle_tree.root()
     }
 
-    /// Queries the `CommitmentSet` for a membership proof of commitment
+    /// Queries the `CommitmentSet` for a membership proof of commitment.
     pub fn get_proof_for(&self, commitment: &Commitment) -> Option<MembershipProof> {
         let index = *self.commitments.get(commitment)?;
 
@@ -363,7 +363,7 @@ pub mod tests {
             self.public_state.insert(account_id, account);
         }
 
-        /// Include test programs in the builtin programs map
+        /// Include test programs in the builtin programs map.
         #[must_use]
         pub fn with_test_programs(mut self) -> Self {
             self.insert_program(Program::nonce_changer_program());

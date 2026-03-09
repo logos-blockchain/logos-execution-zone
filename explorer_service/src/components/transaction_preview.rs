@@ -2,7 +2,7 @@ use indexer_service_protocol::Transaction;
 use leptos::prelude::*;
 use leptos_router::components::A;
 
-/// Get transaction type name and CSS class
+/// Get transaction type name and CSS class.
 const fn transaction_type_info(tx: &Transaction) -> (&'static str, &'static str) {
     match tx {
         Transaction::Public(_) => ("Public", "tx-type-public"),

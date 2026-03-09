@@ -74,7 +74,7 @@ pub trait BlockSettlementClientTrait: Clone {
     }
 }
 
-/// A component that posts block data to logos blockchain
+/// A component that posts block data to logos blockchain.
 #[derive(Clone)]
 pub struct BlockSettlementClient {
     client: BedrockClient,
