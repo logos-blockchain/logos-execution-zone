@@ -39,7 +39,7 @@ impl KeyNode for ChildKeysPrivate {
             value: (
                 KeyChain {
                     secret_spending_key: ssk,
-                    nullifer_public_key: npk,
+                    nullifier_public_key: npk,
                     viewing_public_key: vpk,
                     private_key_holder: PrivateKeyHolder {
                         nullifier_secret_key: nsk,
@@ -86,7 +86,7 @@ impl KeyNode for ChildKeysPrivate {
             value: (
                 KeyChain {
                     secret_spending_key: ssk,
-                    nullifer_public_key: npk,
+                    nullifier_public_key: npk,
                     viewing_public_key: vpk,
                     private_key_holder: PrivateKeyHolder {
                         nullifier_secret_key: nsk,
@@ -109,7 +109,7 @@ impl KeyNode for ChildKeysPrivate {
     }
 
     fn account_id(&self) -> nssa::AccountId {
-        nssa::AccountId::from(&self.value.0.nullifer_public_key)
+        nssa::AccountId::from(&self.value.0.nullifier_public_key)
     }
 }
 
@@ -175,7 +175,7 @@ mod tests {
         assert!(expected_ssk == keys.value.0.secret_spending_key);
         assert!(expected_ccc == keys.ccc);
         assert!(expected_nsk == keys.value.0.private_key_holder.nullifier_secret_key);
-        assert!(expected_npk == keys.value.0.nullifer_public_key);
+        assert!(expected_npk == keys.value.0.nullifier_public_key);
         assert!(expected_vsk == keys.value.0.private_key_holder.viewing_secret_key);
         assert!(expected_vpk_as_bytes == keys.value.0.viewing_public_key.to_bytes());
     }
@@ -217,7 +217,7 @@ mod tests {
 
         assert!(expected_ccc == child_node.ccc);
         assert!(expected_nsk == child_node.value.0.private_key_holder.nullifier_secret_key);
-        assert!(expected_npk == child_node.value.0.nullifer_public_key);
+        assert!(expected_npk == child_node.value.0.nullifier_public_key);
         assert!(expected_vsk == child_node.value.0.private_key_holder.viewing_secret_key);
         assert!(expected_vpk_as_bytes == child_node.value.0.viewing_public_key.to_bytes());
     }

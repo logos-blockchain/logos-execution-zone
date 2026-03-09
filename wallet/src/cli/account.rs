@@ -145,7 +145,7 @@ impl WalletSubcommand for NewSubcommand {
                 println!(
                     "Generated new account with account_id Private/{account_id} at path {chain_index}",
                 );
-                println!("With npk {}", hex::encode(key.nullifer_public_key.0));
+                println!("With npk {}", hex::encode(key.nullifier_public_key.0));
                 println!(
                     "With vpk {}",
                     hex::encode(key.viewing_public_key.to_bytes())
@@ -246,7 +246,7 @@ impl WalletSubcommand for AccountSubcommand {
                                 .get_private_account(account_id)
                                 .ok_or(anyhow::anyhow!("Private account not found in storage"))?;
 
-                            println!("npk {}", hex::encode(key.nullifer_public_key.0));
+                            println!("npk {}", hex::encode(key.nullifier_public_key.0));
                             println!("vpk {}", hex::encode(key.viewing_public_key.to_bytes()));
                         }
                     }

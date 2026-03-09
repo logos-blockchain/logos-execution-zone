@@ -16,7 +16,7 @@ pub mod secret_holders;
 pub struct KeyChain {
     pub secret_spending_key: SecretSpendingKey,
     pub private_key_holder: PrivateKeyHolder,
-    pub nullifer_public_key: NullifierPublicKey,
+    pub nullifier_public_key: NullifierPublicKey,
     pub viewing_public_key: ViewingPublicKey,
 }
 
@@ -29,13 +29,13 @@ impl KeyChain {
 
         let private_key_holder = secret_spending_key.produce_private_key_holder(None);
 
-        let nullifer_public_key = private_key_holder.generate_nullifier_public_key();
+        let nullifier_public_key = private_key_holder.generate_nullifier_public_key();
         let viewing_public_key = private_key_holder.generate_viewing_public_key();
 
         Self {
             secret_spending_key,
             private_key_holder,
-            nullifer_public_key,
+            nullifier_public_key,
             viewing_public_key,
         }
     }
@@ -48,13 +48,13 @@ impl KeyChain {
 
         let private_key_holder = secret_spending_key.produce_private_key_holder(None);
 
-        let nullifer_public_key = private_key_holder.generate_nullifier_public_key();
+        let nullifier_public_key = private_key_holder.generate_nullifier_public_key();
         let viewing_public_key = private_key_holder.generate_viewing_public_key();
 
         Self {
             secret_spending_key,
             private_key_holder,
-            nullifer_public_key,
+            nullifier_public_key,
             viewing_public_key,
         }
     }
@@ -90,7 +90,7 @@ mod tests {
 
         // Check that key holder fields are initialized with expected types
         assert_ne!(
-            account_id_key_holder.nullifer_public_key.as_ref(),
+            account_id_key_holder.nullifier_public_key.as_ref(),
             &[0u8; 32]
         );
     }
@@ -116,7 +116,7 @@ mod tests {
 
         let utxo_secret_key_holder = top_secret_key_holder.produce_private_key_holder(None);
 
-        let nullifer_public_key = utxo_secret_key_holder.generate_nullifier_public_key();
+        let nullifier_public_key = utxo_secret_key_holder.generate_nullifier_public_key();
         let viewing_public_key = utxo_secret_key_holder.generate_viewing_public_key();
 
         let pub_account_signing_key = nssa::PrivateKey::new_os_random();
@@ -147,7 +147,7 @@ mod tests {
         println!("Account {:?}", account.value().to_base58());
         println!(
             "Nulifier public key {:?}",
-            hex::encode(nullifer_public_key.to_byte_array())
+            hex::encode(nullifier_public_key.to_byte_array())
         );
         println!(
             "Viewing public key {:?}",
@@ -180,7 +180,7 @@ mod tests {
     fn test_non_trivial_chain_index() {
         let keys = account_with_chain_index_2_for_tests();
 
-        let eph_key_holder = EphemeralKeyHolder::new(&keys.nullifer_public_key);
+        let eph_key_holder = EphemeralKeyHolder::new(&keys.nullifier_public_key);
 
         let key_sender = eph_key_holder.calculate_shared_secret_sender(&keys.viewing_public_key);
         let key_receiver = keys.calculate_shared_secret_receiver(

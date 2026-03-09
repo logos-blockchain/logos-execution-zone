@@ -1117,7 +1117,7 @@ async fn token_claiming_path_with_private_accounts() -> Result<()> {
     let subcommand = TokenProgramAgnosticSubcommand::Mint {
         definition: format_private_account_id(definition_account_id),
         holder: None,
-        holder_npk: Some(hex::encode(holder_keys.nullifer_public_key.0)),
+        holder_npk: Some(hex::encode(holder_keys.nullifier_public_key.0)),
         holder_vpk: Some(hex::encode(holder_keys.viewing_public_key.0)),
         amount: mint_amount,
     };
