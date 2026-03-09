@@ -271,3 +271,12 @@ clippy.suspicious = { level = "deny", priority = -1 }
 
 # Style
 clippy.style = { level = "deny", priority = -1 }
+
+# Cargo
+clippy.cargo = { level = "deny", priority = -1 }
+
+# Reason: we're not at this stage yet and it will be a pain to create a new crate.
+clippy.cargo-common-metadata = "allow"
+# Reason: hard to address right now and mostly comes from dependencies
+# so the fix would be just a long list of exceptions.
+clippy.multiple-crate-versions = "allow"
