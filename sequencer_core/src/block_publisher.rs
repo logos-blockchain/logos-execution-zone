@@ -1,4 +1,4 @@
-use std::{path::Path, sync::Arc};
+use std::{path::Path, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use common::block::Block;
@@ -20,6 +20,7 @@ pub trait BlockPublisherTrait: Clone {
         config: &BedrockConfig,
         bedrock_signing_key: Ed25519Key,
         checkpoint: Option<SequencerCheckpoint>,
+        resubmit_interval: Duration,
     ) -> Result<Self>;
 
     /// Publish a block. Returns the checkpoint to persist.
@@ -37,15 +38,19 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         config: &BedrockConfig,
         bedrock_signing_key: Ed25519Key,
         checkpoint: Option<SequencerCheckpoint>,
+        resubmit_interval: Duration,
     ) -> Result<Self> {
         let auth = config.auth.clone().map(Into::into);
 
         let sequencer = ZoneSequencer::init_with_config(
             config.channel_id,
             bedrock_signing_key,
-            Url::from(config.node_url.clone()),
+            config.node_url.clone(),
             auth,
-            ZoneSdkSequencerConfig::default(),
+            ZoneSdkSequencerConfig {
+                resubmit_interval,
+                ..ZoneSdkSequencerConfig::default()
+            },
             checkpoint,
         );
 

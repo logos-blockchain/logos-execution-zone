@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use anyhow::Result;
 use common::block::Block;
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
@@ -18,6 +20,7 @@ impl BlockPublisherTrait for MockBlockPublisher {
         _config: &BedrockConfig,
         _bedrock_signing_key: Ed25519Key,
         _checkpoint: Option<SequencerCheckpoint>,
+        _resubmit_interval: Duration,
     ) -> Result<Self> {
         Ok(Self)
     }
