@@ -2,6 +2,15 @@ use std::io;
 
 use thiserror::Error;
 
+#[macro_export]
+macro_rules! ensure {
+    ($cond:expr, $err:expr) => {
+        if !$cond {
+            return Err($err);
+        }
+    };
+}
+
 #[derive(Error, Debug)]
 pub enum NssaError {
     #[error("Invalid input: {0}")]
@@ -57,4 +66,25 @@ pub enum NssaError {
 
     #[error("Chain of calls is too long")]
     MaxChainedCallsDepthExceeded,
+}
+
+#[cfg(test)]
+mod tests {
+
+    #[derive(Debug)]
+    enum TestError {
+        TestErr,
+    }
+
+    fn test_function_ensure(cond: bool) -> Result<(), testError> {
+        ensure!(cond, TestError::TestErr);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ensure() {
+        assert!(test_function_ensure(true).is_ok());
+        assert!(test_function_ensure(false).is_err());
+    }
 }
