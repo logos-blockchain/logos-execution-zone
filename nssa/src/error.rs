@@ -68,22 +68,23 @@ pub enum NssaError {
     MaxChainedCallsDepthExceeded,
 }
 
-#[derive(Debug)]
-enum testError {
-    testErr,
-}
+#[cfg(test)]
+mod tests {
 
+    #[derive(Debug)]
+    enum TestError {
+        TestErr,
+    }
 
-fn test_function_ensure(cond: bool) -> Result<(), testError> {
-    ensure!(cond, testError::testErr);
+    fn test_function_ensure(cond: bool) -> Result<(), testError> {
+        ensure!(cond, TestError::TestErr);
 
-    Ok(())
-}
+        Ok(())
+    }
 
-
-#[test]
-fn test_ensure() {
-    assert!(test_function_ensure(true).is_ok());
-    assert!(test_function_ensure(false).is_err());
-
+    #[test]
+    fn test_ensure() {
+        assert!(test_function_ensure(true).is_ok());
+        assert!(test_function_ensure(false).is_err());
+    }
 }
