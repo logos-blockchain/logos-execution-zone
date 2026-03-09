@@ -8,8 +8,7 @@ use crate::{
     block_publisher::BlockPublisherTrait, config::BedrockConfig, indexer_client::IndexerClientTrait,
 };
 
-pub type SequencerCoreWithMockClients =
-    crate::SequencerCore<MockBlockPublisher, MockIndexerClient>;
+pub type SequencerCoreWithMockClients = crate::SequencerCore<MockBlockPublisher, MockIndexerClient>;
 
 #[derive(Clone)]
 pub struct MockBlockPublisher;
@@ -24,8 +23,7 @@ impl BlockPublisherTrait for MockBlockPublisher {
     }
 
     async fn publish_block(&self, _block: &Block) -> Result<SequencerCheckpoint> {
-        use logos_blockchain_core::header::HeaderId;
-        use logos_blockchain_core::mantle::ops::channel::MsgId;
+        use logos_blockchain_core::{header::HeaderId, mantle::ops::channel::MsgId};
 
         Ok(SequencerCheckpoint {
             last_msg_id: MsgId::from([0; 32]),

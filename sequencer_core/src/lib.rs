@@ -88,13 +88,11 @@ impl<BP: BlockPublisherTrait, IC: IndexerClientTrait> SequencerCore<BP, IC> {
 
         // Load zone-sdk checkpoint from disk for crash recovery.
         // On fresh start this will be None and zone-sdk starts from scratch.
-        let checkpoint = load_checkpoint(&config.home)
-            .expect("Failed to load zone-sdk checkpoint");
+        let checkpoint = load_checkpoint(&config.home).expect("Failed to load zone-sdk checkpoint");
 
-        let block_publisher =
-            BP::new(&config.bedrock_config, bedrock_signing_key, checkpoint)
-                .await
-                .expect("Failed to initialize Block Publisher");
+        let block_publisher = BP::new(&config.bedrock_config, bedrock_signing_key, checkpoint)
+            .await
+            .expect("Failed to initialize Block Publisher");
 
         #[cfg_attr(not(feature = "testnet"), allow(unused_mut))]
         let mut state = match store.get_nssa_state() {

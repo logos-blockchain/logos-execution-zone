@@ -25,9 +25,7 @@ use common::{
 use itertools::Itertools as _;
 use log::warn;
 use nssa::{self, program::Program};
-use sequencer_core::{
-    block_publisher::BlockPublisherTrait, indexer_client::IndexerClientTrait,
-};
+use sequencer_core::{block_publisher::BlockPublisherTrait, indexer_client::IndexerClientTrait};
 use serde_json::Value;
 
 use super::{JsonHandler, respond, types::err_rpc::RpcErr};
@@ -359,8 +357,7 @@ mod tests {
 
     use crate::rpc_handler;
 
-    type JsonHandlerWithMockClients =
-        crate::JsonHandler<MockBlockPublisher, MockIndexerClient>;
+    type JsonHandlerWithMockClients = crate::JsonHandler<MockBlockPublisher, MockIndexerClient>;
 
     fn sequencer_config_for_tests() -> SequencerConfig {
         let tempdir = tempdir().unwrap();
@@ -446,10 +443,7 @@ mod tests {
             .await
             .expect("Mempool is closed, this is a bug");
 
-        sequencer_core
-            .produce_new_block()
-            .await
-            .unwrap();
+        sequencer_core.produce_new_block().await.unwrap();
 
         let max_block_size = sequencer_core.sequencer_config().max_block_size.as_u64() as usize;
         let sequencer_core = Arc::new(Mutex::new(sequencer_core));

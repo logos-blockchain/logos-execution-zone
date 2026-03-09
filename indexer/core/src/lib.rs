@@ -1,10 +1,10 @@
 use std::{path::Path, sync::Arc};
 
 use anyhow::{Context as _, Result};
+use bedrock_client::HeaderId;
 use common::block::{Block, HashableBlockData};
 // ToDo: Remove after testnet
 use common::{HashType, PINATA_BASE58};
-use bedrock_client::HeaderId;
 use log::{error, info};
 use logos_blockchain_zone_sdk::indexer::{Cursor, ZoneIndexer};
 

@@ -3,15 +3,14 @@ use std::{path::Path, sync::Arc};
 use anyhow::{Context, Result};
 use common::block::Block;
 use log::info;
+pub use logos_blockchain_core::mantle::ops::channel::MsgId;
+pub use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 use logos_blockchain_zone_sdk::sequencer::{
     PublishResult, SequencerCheckpoint, SequencerConfig as ZoneSdkSequencerConfig, ZoneSequencer,
 };
 use url::Url;
 
 use crate::config::BedrockConfig;
-
-pub use logos_blockchain_core::mantle::ops::channel::MsgId;
-pub use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 
 /// Trait for publishing L2 blocks to the L1 chain.
 #[expect(async_fn_in_trait, reason = "We don't care about Send/Sync here")]

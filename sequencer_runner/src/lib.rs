@@ -8,11 +8,11 @@ use futures::{FutureExt as _, never::Never};
 #[cfg(not(feature = "standalone"))]
 use log::warn;
 use log::{error, info};
+#[cfg(not(feature = "standalone"))]
+use sequencer_core::SequencerCore;
 #[cfg(feature = "standalone")]
 use sequencer_core::SequencerCoreWithMockClients as SequencerCore;
 use sequencer_core::config::SequencerConfig;
-#[cfg(not(feature = "standalone"))]
-use sequencer_core::SequencerCore;
 use sequencer_rpc::new_http_server;
 use tokio::{sync::Mutex, task::JoinHandle};
 
