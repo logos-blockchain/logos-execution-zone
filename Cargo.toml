@@ -262,3 +262,6 @@ clippy.correctness = { level = "deny", priority = -1 }
 
 # Complexity
 clippy.complexity = { level = "deny", priority = -1 }
+
+# Perf
+clippy.perf = { level = "deny", priority = -1 }
