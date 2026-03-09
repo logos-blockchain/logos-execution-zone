@@ -326,7 +326,10 @@ impl WalletCore {
     }
 
     // TODO: handle large Err-variant properly
-    #[expect(clippy::result_large_err, reason = "ExecutionFailureKind is large, tracked by TODO")]
+    #[expect(
+        clippy::result_large_err,
+        reason = "ExecutionFailureKind is large, tracked by TODO"
+    )]
     pub async fn send_privacy_preserving_tx(
         &self,
         accounts: Vec<PrivacyPreservingAccount>,

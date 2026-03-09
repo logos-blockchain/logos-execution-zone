@@ -9,11 +9,17 @@ pub mod private;
 pub mod public;
 pub mod shielded;
 
-#[expect(clippy::multiple_inherent_impl, reason = "impl blocks split across multiple files for organization")]
+#[expect(
+    clippy::multiple_inherent_impl,
+    reason = "impl blocks split across multiple files for organization"
+)]
 pub struct NativeTokenTransfer<'wallet>(pub &'wallet WalletCore);
 
 // TODO: handle large Err-variant properly
-#[expect(clippy::result_large_err, reason = "ExecutionFailureKind is large, tracked by TODO")]
+#[expect(
+    clippy::result_large_err,
+    reason = "ExecutionFailureKind is large, tracked by TODO"
+)]
 fn auth_transfer_preparation(
     balance_to_move: u128,
 ) -> (
