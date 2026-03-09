@@ -1,6 +1,6 @@
-//! Formatting utilities for the explorer
+//! Formatting utilities for the explorer.
 
-/// Format timestamp to human-readable string
+/// Format timestamp to human-readable string.
 #[expect(
     clippy::integer_division,
     clippy::integer_division_remainder_used,

@@ -86,7 +86,7 @@ pub struct PersistentStorage {
     pub accounts: Vec<PersistentAccountData>,
     pub last_synced_block: u64,
     /// Account labels keyed by account ID string (e.g.,
-    /// "2rnKprXqWGWJTkDZKsQbFXa4ctKRbapsdoTKQFnaVGG8")
+    /// "2rnKprXqWGWJTkDZKsQbFXa4ctKRbapsdoTKQFnaVGG8").
     #[serde(default)]
     pub labels: HashMap<String, Label>,
 }
@@ -167,42 +167,42 @@ impl From<InitialAccountData> for PersistentAccountData {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GasConfig {
-    /// Gas spent per deploying one byte of data
+    /// Gas spent per deploying one byte of data.
     pub gas_fee_per_byte_deploy: u64,
-    /// Gas spent per reading one byte of data in VM
+    /// Gas spent per reading one byte of data in VM.
     pub gas_fee_per_input_buffer_runtime: u64,
-    /// Gas spent per one byte of contract data in runtime
+    /// Gas spent per one byte of contract data in runtime.
     pub gas_fee_per_byte_runtime: u64,
-    /// Cost of one gas of runtime in public balance
+    /// Cost of one gas of runtime in public balance.
     pub gas_cost_runtime: u64,
-    /// Cost of one gas of deployment in public balance
+    /// Cost of one gas of deployment in public balance.
     pub gas_cost_deploy: u64,
-    /// Gas limit for deployment
+    /// Gas limit for deployment.
     pub gas_limit_deploy: u64,
-    /// Gas limit for runtime
+    /// Gas limit for runtime.
     pub gas_limit_runtime: u64,
 }
 
 #[optfield::optfield(pub WalletConfigOverrides, rewrap, attrs = (derive(Debug, Default, Clone)))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WalletConfig {
-    /// Override rust log (env var logging level)
+    /// Override rust log (env var logging level).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub override_rust_log: Option<String>,
-    /// Sequencer URL
+    /// Sequencer URL.
     pub sequencer_addr: Url,
-    /// Sequencer polling duration for new blocks
+    /// Sequencer polling duration for new blocks.
     #[serde(with = "humantime_serde")]
     pub seq_poll_timeout: Duration,
-    /// Sequencer polling max number of blocks to find transaction
+    /// Sequencer polling max number of blocks to find transaction.
     pub seq_tx_poll_max_blocks: usize,
-    /// Sequencer polling max number error retries
+    /// Sequencer polling max number error retries.
     pub seq_poll_max_retries: u64,
-    /// Max amount of blocks to poll in one request
+    /// Max amount of blocks to poll in one request.
     pub seq_block_poll_max_amount: u64,
-    /// Initial accounts for wallet
+    /// Initial accounts for wallet.
     pub initial_accounts: Vec<InitialAccountData>,
-    /// Basic authentication credentials
+    /// Basic authentication credentials.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub basic_auth: Option<BasicAuth>,
 }

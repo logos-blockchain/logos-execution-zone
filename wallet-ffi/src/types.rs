@@ -31,7 +31,7 @@ pub struct FfiProgramId {
     pub data: [u32; 8],
 }
 
-/// U128 - 16 bytes little endian
+/// U128 - 16 bytes little endian.
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct FfiU128 {
@@ -45,13 +45,13 @@ pub struct FfiU128 {
 #[repr(C)]
 pub struct FfiAccount {
     pub program_owner: FfiProgramId,
-    /// Balance as little-endian [u8; 16]
+    /// Balance as little-endian [u8; 16].
     pub balance: FfiU128,
-    /// Pointer to account data bytes
+    /// Pointer to account data bytes.
     pub data: *const u8,
-    /// Length of account data
+    /// Length of account data.
     pub data_len: usize,
-    /// Nonce as little-endian [u8; 16]
+    /// Nonce as little-endian [u8; 16].
     pub nonce: FfiU128,
 }
 
@@ -70,11 +70,11 @@ impl Default for FfiAccount {
 /// Public keys for a private account (safe to expose).
 #[repr(C)]
 pub struct FfiPrivateAccountKeys {
-    /// Nullifier public key (32 bytes)
+    /// Nullifier public key (32 bytes).
     pub nullifier_public_key: FfiBytes32,
-    /// viewing public key (compressed secp256k1 point)
+    /// viewing public key (compressed secp256k1 point).
     pub viewing_public_key: *const u8,
-    /// Length of viewing public key (typically 33 bytes)
+    /// Length of viewing public key (typically 33 bytes).
     pub viewing_public_key_len: usize,
 }
 
@@ -123,9 +123,9 @@ impl Default for FfiAccountList {
 #[repr(C)]
 pub struct FfiTransferResult {
     // TODO: Replace with HashType FFI representation
-    /// Transaction hash (null-terminated string, or null on failure)
+    /// Transaction hash (null-terminated string, or null on failure).
     pub tx_hash: *mut c_char,
-    /// Whether the transfer succeeded
+    /// Whether the transfer succeeded.
     pub success: bool,
 }
 

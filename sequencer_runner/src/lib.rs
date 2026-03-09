@@ -21,7 +21,7 @@ pub const RUST_LOG: &str = "RUST_LOG";
 #[derive(Parser, Debug)]
 #[clap(version)]
 struct Args {
-    /// Path to configs
+    /// Path to configs.
     home_dir: PathBuf,
 }
 

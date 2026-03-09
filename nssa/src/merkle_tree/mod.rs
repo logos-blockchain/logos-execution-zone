@@ -35,7 +35,7 @@ impl MerkleTree {
         }
     }
 
-    /// Number of levels required to hold all nodes
+    /// Number of levels required to hold all nodes.
     fn depth(&self) -> usize {
         usize::try_from(self.length.next_power_of_two().trailing_zeros())
             .expect("u32 fits in usize")
@@ -70,7 +70,7 @@ impl MerkleTree {
     }
 
     /// Reallocates storage of Merkle tree for double capacity.
-    /// The current tree is embedded into the new tree as a subtree
+    /// The current tree is embedded into the new tree as a subtree.
     fn reallocate_to_double_capacity(&mut self) {
         let old_capacity = self.capacity;
         let new_capacity = old_capacity << 1;
@@ -142,7 +142,7 @@ impl MerkleTree {
     }
 }
 
-/// Compute parent as the hash of two child nodes
+/// Compute parent as the hash of two child nodes.
 fn hash_two(left: &Node, right: &Node) -> Node {
     let mut hasher = Sha256::new();
     hasher.update(left);

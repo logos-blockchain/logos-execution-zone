@@ -61,14 +61,14 @@ pub fn get_home() -> Result<PathBuf> {
     get_home_nssa_var().or_else(|_| get_home_default_path())
 }
 
-/// Fetch config path from default home
+/// Fetch config path from default home.
 pub fn fetch_config_path() -> Result<PathBuf> {
     let home = get_home()?;
     let config_path = home.join("wallet_config.json");
     Ok(config_path)
 }
 
-/// Fetch path to data storage from default home
+/// Fetch path to data storage from default home.
 ///
 /// File must be created through setup beforehand.
 pub fn fetch_persistent_storage_path() -> Result<PathBuf> {
@@ -77,7 +77,7 @@ pub fn fetch_persistent_storage_path() -> Result<PathBuf> {
     Ok(accs_path)
 }
 
-/// Produces data for storage
+/// Produces data for storage.
 #[must_use]
 pub fn produce_data_for_storage(
     user_data: &NSSAUserData,

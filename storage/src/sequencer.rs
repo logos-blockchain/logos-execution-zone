@@ -8,37 +8,37 @@ use rocksdb::{
 
 use crate::error::DbError;
 
-/// Maximal size of stored blocks in base
+/// Maximal size of stored blocks in base.
 ///
-/// Used to control db size
+/// Used to control db size.
 ///
 /// Currently effectively unbounded.
 pub const BUFF_SIZE_ROCKSDB: usize = usize::MAX;
 
-/// Size of stored blocks cache in memory
+/// Size of stored blocks cache in memory.
 ///
-/// Keeping small to not run out of memory
+/// Keeping small to not run out of memory.
 pub const CACHE_SIZE: usize = 1000;
 
-/// Key base for storing metainformation about id of first block in db
+/// Key base for storing metainformation about id of first block in db.
 pub const DB_META_FIRST_BLOCK_IN_DB_KEY: &str = "first_block_in_db";
-/// Key base for storing metainformation about id of last current block in db
+/// Key base for storing metainformation about id of last current block in db.
 pub const DB_META_LAST_BLOCK_IN_DB_KEY: &str = "last_block_in_db";
-/// Key base for storing metainformation which describe if first block has been set
+/// Key base for storing metainformation which describe if first block has been set.
 pub const DB_META_FIRST_BLOCK_SET_KEY: &str = "first_block_set";
-/// Key base for storing metainformation about the last finalized block on Bedrock
+/// Key base for storing metainformation about the last finalized block on Bedrock.
 pub const DB_META_LAST_FINALIZED_BLOCK_ID: &str = "last_finalized_block_id";
-/// Key base for storing metainformation about the latest block meta
+/// Key base for storing metainformation about the latest block meta.
 pub const DB_META_LATEST_BLOCK_META_KEY: &str = "latest_block_meta";
 
-/// Key base for storing the NSSA state
+/// Key base for storing the NSSA state.
 pub const DB_NSSA_STATE_KEY: &str = "nssa_state";
 
-/// Name of block column family
+/// Name of block column family.
 pub const CF_BLOCK_NAME: &str = "cf_block";
-/// Name of meta column family
+/// Name of meta column family.
 pub const CF_META_NAME: &str = "cf_meta";
-/// Name of state column family
+/// Name of state column family.
 pub const CF_NSSA_STATE_NAME: &str = "cf_nssa_state";
 
 pub type DbResult<T> = Result<T, DbError>;

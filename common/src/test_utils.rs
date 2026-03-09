@@ -15,13 +15,13 @@ pub fn sequencer_sign_key_for_testing() -> nssa::PrivateKey {
 
 // Dummy producers
 
-/// Produce dummy block with
+/// Produce dummy block with.
 ///
-/// `id` - block id, provide zero for genesis
+/// `id` - block id, provide zero for genesis.
 ///
-/// `prev_hash` - hash of previous block, provide None for genesis
+/// `prev_hash` - hash of previous block, provide None for genesis.
 ///
-/// `transactions` - vector of `EncodedTransaction` objects
+/// `transactions` - vector of `EncodedTransaction` objects.
 #[must_use]
 pub fn produce_dummy_block(
     id: u64,

@@ -16,7 +16,7 @@ use crate::{
     state::MAX_NUMBER_CHAINED_CALLS,
 };
 
-/// Proof of the privacy preserving execution circuit
+/// Proof of the privacy preserving execution circuit.
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Proof(pub(crate) Vec<u8>);
 

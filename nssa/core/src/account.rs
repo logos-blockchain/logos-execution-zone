@@ -12,7 +12,7 @@ pub mod data;
 
 pub type Nonce = u128;
 
-/// Account to be used both in public and private contexts
+/// Account to be used both in public and private contexts.
 #[derive(
     Debug, Default, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
 )]

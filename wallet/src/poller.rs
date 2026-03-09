@@ -7,7 +7,7 @@ use log::{info, warn};
 use crate::config::WalletConfig;
 
 #[derive(Clone)]
-/// Helperstruct to poll transactions
+/// Helperstruct to poll transactions.
 pub struct TxPoller {
     polling_max_blocks_to_query: usize,
     polling_max_error_attempts: u64,

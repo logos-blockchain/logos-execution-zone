@@ -24,14 +24,14 @@ pub struct IndexerCore {
 }
 
 #[derive(Clone)]
-/// This struct represents one L1 block data fetched from backfilling
+/// This struct represents one L1 block data fetched from backfilling.
 pub struct BackfillBlockData {
     l2_blocks: Vec<Block>,
     l1_header: HeaderId,
 }
 
 #[derive(Clone)]
-/// This struct represents data fetched fom backfilling in one iteration
+/// This struct represents data fetched fom backfilling in one iteration.
 pub struct BackfillData {
     block_data: VecDeque<BackfillBlockData>,
     curr_fin_l1_lib_header: HeaderId,
@@ -187,7 +187,7 @@ impl IndexerCore {
     }
 
     /// WARNING: depending on channel state,
-    /// may take indefinite amount of time
+    /// may take indefinite amount of time.
     pub async fn search_for_channel_start(&self) -> Result<BackfillData> {
         let mut curr_last_l1_lib_header = self.get_lib().await?;
         let mut backfill_start = curr_last_l1_lib_header;

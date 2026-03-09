@@ -14,14 +14,14 @@ pub type PublicKey = AffinePoint;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NSSAUserData {
-    /// Default public accounts
+    /// Default public accounts.
     pub default_pub_account_signing_keys: BTreeMap<nssa::AccountId, nssa::PrivateKey>,
-    /// Default private accounts
+    /// Default private accounts.
     pub default_user_private_accounts:
         BTreeMap<nssa::AccountId, (KeyChain, nssa_core::account::Account)>,
-    /// Tree of public keys
+    /// Tree of public keys.
     pub public_key_tree: KeyTreePublic,
-    /// Tree of private keys
+    /// Tree of private keys.
     pub private_key_tree: KeyTreePrivate,
 }
 
@@ -84,9 +84,9 @@ impl NSSAUserData {
         })
     }
 
-    /// Generated new private key for public transaction signatures
+    /// Generated new private key for public transaction signatures.
     ///
-    /// Returns the `account_id` of new account
+    /// Returns the `account_id` of new account.
     pub fn generate_new_public_transaction_private_key(
         &mut self,
         parent_cci: Option<ChainIndex>,
@@ -103,7 +103,7 @@ impl NSSAUserData {
         }
     }
 
-    /// Returns the signing key for public transaction signatures
+    /// Returns the signing key for public transaction signatures.
     #[must_use]
     pub fn get_pub_account_signing_key(
         &self,
@@ -114,9 +114,9 @@ impl NSSAUserData {
             .or_else(|| self.public_key_tree.get_node(account_id).map(Into::into))
     }
 
-    /// Generated new private key for privacy preserving transactions
+    /// Generated new private key for privacy preserving transactions.
     ///
-    /// Returns the `account_id` of new account
+    /// Returns the `account_id` of new account.
     pub fn generate_new_privacy_preserving_transaction_key_chain(
         &mut self,
         parent_cci: Option<ChainIndex>,
@@ -133,7 +133,7 @@ impl NSSAUserData {
         }
     }
 
-    /// Returns the signing key for public transaction signatures
+    /// Returns the signing key for public transaction signatures.
     #[must_use]
     pub fn get_private_account(
         &self,
@@ -144,7 +144,7 @@ impl NSSAUserData {
             .or_else(|| self.private_key_tree.get_node(account_id).map(Into::into))
     }
 
-    /// Returns the signing key for public transaction signatures
+    /// Returns the signing key for public transaction signatures.
     pub fn get_private_account_mut(
         &mut self,
         account_id: &nssa::AccountId,

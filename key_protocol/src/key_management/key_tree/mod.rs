@@ -177,7 +177,7 @@ impl<N: KeyNode> KeyTree<N> {
     /// For given `depth` adds children to a tree such that their `ChainIndex::depth(&self) <
     /// depth`.
     ///
-    /// Tree must be empty before start
+    /// Tree must be empty before start.
     pub fn generate_tree_for_depth(&mut self, depth: u32) {
         let mut id_stack = vec![ChainIndex::root()];
 
@@ -197,16 +197,16 @@ impl<N: KeyNode> KeyTree<N> {
 }
 
 impl KeyTree<ChildKeysPrivate> {
-    /// Cleanup of all non-initialized accounts in a private tree
+    /// Cleanup of all non-initialized accounts in a private tree.
     ///
     /// For given `depth` checks children to a tree such that their `ChainIndex::depth(&self) <
     /// depth`.
     ///
     /// If account is default, removes them.
     ///
-    /// Chain must be parsed for accounts beforehand
+    /// Chain must be parsed for accounts beforehand.
     ///
-    /// Fast, leaves gaps between accounts
+    /// Fast, leaves gaps between accounts.
     pub fn cleanup_tree_remove_uninit_for_depth(&mut self, depth: u32) {
         let mut id_stack = vec![ChainIndex::root()];
 
@@ -231,13 +231,13 @@ impl KeyTree<ChildKeysPrivate> {
         }
     }
 
-    /// Cleanup of non-initialized accounts in a private tree
+    /// Cleanup of non-initialized accounts in a private tree.
     ///
     /// If account is default, removes them, stops at first non-default account.
     ///
-    /// Walks through tree in lairs of same depth using `ChainIndex::chain_ids_at_depth()`
+    /// Walks through tree in lairs of same depth using `ChainIndex::chain_ids_at_depth()`.
     ///
-    /// Chain must be parsed for accounts beforehand
+    /// Chain must be parsed for accounts beforehand.
     ///
     /// Slow, maintains tree consistency.
     pub fn cleanup_tree_remove_uninit_layered(&mut self, depth: u32) {
@@ -259,14 +259,14 @@ impl KeyTree<ChildKeysPrivate> {
 }
 
 impl KeyTree<ChildKeysPublic> {
-    /// Cleanup of all non-initialized accounts in a public tree
+    /// Cleanup of all non-initialized accounts in a public tree.
     ///
     /// For given `depth` checks children to a tree such that their `ChainIndex::depth(&self) <
     /// depth`.
     ///
     /// If account is default, removes them.
     ///
-    /// Fast, leaves gaps between accounts
+    /// Fast, leaves gaps between accounts.
     pub async fn cleanup_tree_remove_ininit_for_depth(
         &mut self,
         depth: u32,
@@ -298,11 +298,11 @@ impl KeyTree<ChildKeysPublic> {
         Ok(())
     }
 
-    /// Cleanup of non-initialized accounts in a public tree
+    /// Cleanup of non-initialized accounts in a public tree.
     ///
     /// If account is default, removes them, stops at first non-default account.
     ///
-    /// Walks through tree in lairs of same depth using `ChainIndex::chain_ids_at_depth()`
+    /// Walks through tree in lairs of same depth using `ChainIndex::chain_ids_at_depth()`.
     ///
     /// Slow, maintains tree consistency.
     pub async fn cleanup_tree_remove_uninit_layered(

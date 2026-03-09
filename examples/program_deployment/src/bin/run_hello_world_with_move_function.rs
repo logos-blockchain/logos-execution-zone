@@ -26,7 +26,7 @@ type Instruction = (u8, Vec<u8>);
 
 #[derive(Parser, Debug)]
 struct Cli {
-    /// Path to program binary
+    /// Path to program binary.
     program_path: String,
 
     #[command(subcommand)]
@@ -35,7 +35,7 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Write instruction into one account
+    /// Write instruction into one account.
     WritePublic {
         account_id: String,
         greeting: String,
@@ -44,7 +44,7 @@ enum Command {
         account_id: String,
         greeting: String,
     },
-    /// Move data between two accounts
+    /// Move data between two accounts.
     MoveDataPublicToPublic {
         from: String,
         to: String,

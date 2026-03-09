@@ -16,7 +16,7 @@ async fn main() {
     #[derive(Parser, Debug)]
     #[command(version, about, long_about = None)]
     struct Args {
-        /// Indexer RPC URL
+        /// Indexer RPC URL.
         #[arg(long, env = "INDEXER_RPC_URL", default_value = "http://localhost:8779")]
         indexer_rpc_url: url::Url,
     }

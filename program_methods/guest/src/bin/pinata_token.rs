@@ -48,7 +48,7 @@ impl Challenge {
     }
 }
 
-/// A pinata program
+/// A pinata program.
 fn main() {
     // Read input accounts.
     // It is expected to receive three accounts: [pinata_definition, pinata_token_holding,

@@ -2,7 +2,7 @@ use indexer_service_protocol::{Account, AccountId, Block, BlockId, HashType, Tra
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
-/// Search results structure
+/// Search results structure.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SearchResults {
     pub blocks: Vec<Block>,
@@ -10,7 +10,7 @@ pub struct SearchResults {
     pub accounts: Vec<(AccountId, Account)>,
 }
 
-/// RPC client type
+/// RPC client type.
 #[cfg(feature = "ssr")]
 pub type IndexerRpcClient = jsonrpsee::http_client::HttpClient;
 
@@ -142,7 +142,7 @@ pub async fn get_transactions_by_account(
         .map_err(|e| ServerFnError::ServerError(format!("RPC error: {e}")))
 }
 
-/// Create the RPC client for the indexer service (server-side only)
+/// Create the RPC client for the indexer service (server-side only).
 #[cfg(feature = "ssr")]
 pub fn create_indexer_rpc_client(url: &url::Url) -> Result<IndexerRpcClient, String> {
     use jsonrpsee::http_client::HttpClientBuilder;

@@ -206,7 +206,7 @@ pub enum Message {
     /// message.
     ///
     /// This variant has no direct constructor and is expected to be constructed manually.
-    Batch(Vec<Message>),
+    Batch(Vec<Self>),
     /// An unmatched sub entry in a `Batch`.
     ///
     /// When there's a `Batch` and an element doesn't comform to the JSONRPC 2.0 format, that one
@@ -359,7 +359,7 @@ mod tests {
 
     use super::*;
 
-    /// Test serialization and deserialization of the Message
+    /// Test serialization and deserialization of the Message.
     ///
     /// We first deserialize it from a string. That way we check deserialization works.
     /// But since serialization doesn't have to produce the exact same result (order, spaces, …),
@@ -484,7 +484,7 @@ mod tests {
     ///
     /// Check that the given JSON string parses, but is not recognized as a valid RPC message.
     ///
-    /// Test things that are almost but not entirely JSONRPC are rejected
+    /// Test things that are almost but not entirely JSONRPC are rejected.
     ///
     /// The reject is done by returning it as Unmatched.
     #[test]
@@ -517,7 +517,7 @@ mod tests {
         }
     }
 
-    /// Test some non-trivial aspects of the constructors
+    /// Test some non-trivial aspects of the constructors.
     ///
     /// This doesn't have a full coverage, because there's not much to actually test there.
     /// Most of it is related to the ids.

@@ -1,4 +1,4 @@
-//! Conversions between `indexer_service_protocol` types and `nssa/nssa_core` types
+//! Conversions between `indexer_service_protocol` types and `nssa/nssa_core` types.
 
 use crate::{
     Account, AccountId, BedrockStatus, Block, BlockBody, BlockHeader, Ciphertext, Commitment,

@@ -38,7 +38,7 @@ impl<T> MemPool<T> {
         }
     }
 
-    /// Push an item to the front of the mempool (will be popped first)
+    /// Push an item to the front of the mempool (will be popped first).
     pub fn push_front(&mut self, item: T) {
         self.front_buffer.push(item);
     }
@@ -53,7 +53,7 @@ impl<T> MemPoolHandle<T> {
         Self { sender }
     }
 
-    /// Send an item to the mempool blocking if max size is reached
+    /// Send an item to the mempool blocking if max size is reached.
     pub async fn push(&self, item: T) -> Result<(), tokio::sync::mpsc::error::SendError<T>> {
         self.sender.send(item).await
     }
