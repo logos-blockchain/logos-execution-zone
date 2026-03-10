@@ -7472,7 +7472,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "base58",
- "bedrock_client",
  "borsh",
  "bytesize",
  "chrono",

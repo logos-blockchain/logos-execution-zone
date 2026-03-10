@@ -10,7 +10,6 @@ nssa_core.workspace = true
 common.workspace = true
 storage.workspace = true
 mempool.workspace = true
-bedrock_client.workspace = true
 logos-blockchain-zone-sdk.workspace = true
 
 base58.workspace = true
