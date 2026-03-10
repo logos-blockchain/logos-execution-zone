@@ -14,7 +14,7 @@ use nssa_core::program::{
 /// `cargo risczero build --manifest-path examples/program_deployment/methods/guest/Cargo.toml`
 /// This compiles the programs and outputs the IDs in hex that can be used to copy here.
 const HELLO_WORLD_PROGRAM_ID_HEX: &str =
-    "e9dfc5a5d03c9afa732adae6e0edfce4bbb44c7a2afb9f148f4309917eb2de6f";
+    "075d33a4ffe411d14df68194c0d4a416abed564b3eb788649cabeb730f393258";
 
 fn hello_world_program_id() -> ProgramId {
     let hello_world_program_id_bytes: [u8; 32] = hex::decode(HELLO_WORLD_PROGRAM_ID_HEX)
