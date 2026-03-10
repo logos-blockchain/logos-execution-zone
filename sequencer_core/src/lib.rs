@@ -89,6 +89,7 @@ impl<BP: BlockPublisherTrait, IC: IndexerClientTrait> SequencerCore<BP, IC> {
         // Load zone-sdk checkpoint from disk for crash recovery.
         // On fresh start this will be None and zone-sdk starts from scratch.
         let checkpoint = load_checkpoint(&config.home).expect("Failed to load zone-sdk checkpoint");
+        let is_fresh_start = checkpoint.is_none();
 
         let block_publisher = BP::new(
             &config.bedrock_config,
@@ -98,6 +99,14 @@ impl<BP: BlockPublisherTrait, IC: IndexerClientTrait> SequencerCore<BP, IC> {
         )
         .await
         .expect("Failed to initialize Block Publisher");
+
+        // On fresh start, publish the genesis block so it gets inscribed to L1.
+        // The indexer requires block_id=1 to be on-chain to find the channel start.
+        if is_fresh_start {
+            if let Err(err) = block_publisher.publish_block(&genesis_block).await {
+                error!("Failed to publish genesis block: {err:#}");
+            }
+        }
 
         #[cfg_attr(not(feature = "testnet"), allow(unused_mut))]
         let mut state = match store.get_nssa_state() {
