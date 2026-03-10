@@ -97,6 +97,32 @@ pub enum SubcommandReturnValue {
     SyncedToBlock(u64),
 }
 
+/// Poll the sequencer until a transaction appears in a block.
+/// Returns `Ok(true)` if confirmed, `Ok(false)` if timed out.
+async fn wait_for_tx_confirmation(
+    client: &common::sequencer_client::SequencerClient,
+    tx_hash: HashType,
+    max_attempts: u32,
+    poll_interval_ms: u64,
+) -> Result<bool> {
+    for attempt in 1..=max_attempts {
+        tokio::time::sleep(std::time::Duration::from_millis(poll_interval_ms)).await;
+
+        match client.get_transaction_by_hash(tx_hash).await {
+            Ok(resp) if resp.transaction.is_some() => {
+                return Ok(true);
+            }
+            Ok(_) => {
+                println!("  Attempt {}/{}: pending...", attempt, max_attempts);
+            }
+            Err(e) => {
+                println!("  Attempt {}/{}: error querying tx: {}", attempt, max_attempts, e);
+            }
+        }
+    }
+    Ok(false)
+}
+
 pub async fn execute_subcommand(
     wallet_core: &mut WalletCore,
     command: Command,
@@ -169,12 +195,35 @@ pub async fn execute_subcommand(
             ))?;
             let message = nssa::program_deployment_transaction::Message::new(bytecode);
             let transaction = ProgramDeploymentTransaction::new(message);
-            let _response = wallet_core
+
+            println!("Submitting program deployment transaction...");
+            let response = wallet_core
                 .sequencer_client
                 .send_tx_program(transaction)
                 .await
                 .context("Transaction submission error")?;
 
+            let tx_hash = response.tx_hash;
+            println!("Transaction submitted: {}", tx_hash);
+            println!("Waiting for confirmation...");
+
+            // Poll until the transaction is included in a block
+            let confirmed = wait_for_tx_confirmation(
+                &wallet_core.sequencer_client,
+                tx_hash,
+                23,   // max attempts (3 blocks × 15s, polling every 2s)
+                2000, // ms between polls (2s)
+            )
+            .await?;
+
+            if !confirmed {
+                anyhow::bail!(
+                    "Transaction was not confirmed after timeout. \
+                     Timed out after ~3 blocks (45s). The program may not have been deployed. Check sequencer logs."
+                );
+            }
+
+            println!("Program deployed successfully! Program ID: {}", tx_hash);
             SubcommandReturnValue::Empty
         }
     };
