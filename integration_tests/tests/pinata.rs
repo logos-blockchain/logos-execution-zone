@@ -17,6 +17,118 @@ use wallet::cli::{
 };
 
 #[test]
+async fn claim_pinata_to_uninitialized_public_account_fails_fast() -> Result<()> {
+    let mut ctx = TestContext::new().await?;
+
+    let result = wallet::cli::execute_subcommand(
+        ctx.wallet_mut(),
+        Command::Account(AccountSubcommand::New(NewSubcommand::Public {
+            cci: None,
+            label: None,
+        })),
+    )
+    .await?;
+    let SubcommandReturnValue::RegisterAccount {
+        account_id: winner_account_id,
+    } = result
+    else {
+        anyhow::bail!("Expected RegisterAccount return value");
+    };
+
+    let winner_account_id_formatted = format_public_account_id(winner_account_id);
+
+    let pinata_balance_pre = ctx
+        .sequencer_client()
+        .get_account_balance(PINATA_BASE58.parse().unwrap())
+        .await?
+        .balance;
+
+    let claim_result = wallet::cli::execute_subcommand(
+        ctx.wallet_mut(),
+        Command::Pinata(PinataProgramAgnosticSubcommand::Claim {
+            to: winner_account_id_formatted,
+        }),
+    )
+    .await;
+
+    assert!(
+        claim_result.is_err(),
+        "Expected uninitialized account error"
+    );
+    let err = claim_result.unwrap_err().to_string();
+    assert!(
+        err.contains("wallet auth-transfer init --account-id Public/"),
+        "Expected init guidance, got: {err}",
+    );
+
+    let pinata_balance_post = ctx
+        .sequencer_client()
+        .get_account_balance(PINATA_BASE58.parse().unwrap())
+        .await?
+        .balance;
+
+    assert_eq!(pinata_balance_post, pinata_balance_pre);
+
+    Ok(())
+}
+
+#[test]
+async fn claim_pinata_to_uninitialized_private_account_fails_fast() -> Result<()> {
+    let mut ctx = TestContext::new().await?;
+
+    let result = wallet::cli::execute_subcommand(
+        ctx.wallet_mut(),
+        Command::Account(AccountSubcommand::New(NewSubcommand::Private {
+            cci: None,
+            label: None,
+        })),
+    )
+    .await?;
+    let SubcommandReturnValue::RegisterAccount {
+        account_id: winner_account_id,
+    } = result
+    else {
+        anyhow::bail!("Expected RegisterAccount return value");
+    };
+
+    let winner_account_id_formatted = format_private_account_id(winner_account_id);
+
+    let pinata_balance_pre = ctx
+        .sequencer_client()
+        .get_account_balance(PINATA_BASE58.parse().unwrap())
+        .await?
+        .balance;
+
+    let claim_result = wallet::cli::execute_subcommand(
+        ctx.wallet_mut(),
+        Command::Pinata(PinataProgramAgnosticSubcommand::Claim {
+            to: winner_account_id_formatted,
+        }),
+    )
+    .await;
+
+    assert!(
+        claim_result.is_err(),
+        "Expected uninitialized account error"
+    );
+    let err = claim_result.unwrap_err().to_string();
+    assert!(
+        err.contains("wallet auth-transfer init --account-id Private/"),
+        "Expected init guidance, got: {err}",
+    );
+
+    let pinata_balance_post = ctx
+        .sequencer_client()
+        .get_account_balance(PINATA_BASE58.parse().unwrap())
+        .await?
+        .balance;
+
+    assert_eq!(pinata_balance_post, pinata_balance_pre);
+
+    Ok(())
+}
+
+#[test]
 async fn claim_pinata_to_existing_public_account() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
