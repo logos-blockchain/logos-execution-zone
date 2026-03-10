@@ -15,6 +15,8 @@ pub fn swap(
     min_amount_out: u128,
     token_in_id: AccountId,
 ) -> (Vec<AccountPostState>, Vec<ChainedCall>) {
+    assert!(swap_amount_in > 0, "Swap amount in should be nonzero");
+
     // Verify vaults are in fact vaults
     let pool_def_data = PoolDefinition::try_from(&pool.account.data)
         .expect("Swap: AMM Program expects a valid Pool Definition Account");
@@ -94,11 +96,33 @@ pub fn swap(
             panic!("AccountId is not a token type for the pool");
         };
 
+    let old_reserve_a = pool_def_data.reserve_a;
+    let old_reserve_b = pool_def_data.reserve_b;
+
+    let new_reserve_a = old_reserve_a
+        .checked_add(deposit_a)
+        .expect("Reserve A overflow on swap deposit")
+        .checked_sub(withdraw_a)
+        .expect("Reserve A underflow on swap withdrawal");
+    let new_reserve_b = old_reserve_b
+        .checked_add(deposit_b)
+        .expect("Reserve B overflow on swap deposit")
+        .checked_sub(withdraw_b)
+        .expect("Reserve B underflow on swap withdrawal");
+
+    let old_k = mul_u128_wide(old_reserve_a, old_reserve_b);
+    let new_k = mul_u128_wide(new_reserve_a, new_reserve_b);
+
+    assert!(
+        new_k >= old_k,
+        "Swap invariant violation: new k must be greater than or equal to old k"
+    );
+
     // Update pool account
     let mut pool_post = pool.account.clone();
     let pool_post_definition = PoolDefinition {
-        reserve_a: pool_def_data.reserve_a + deposit_a - withdraw_a,
-        reserve_b: pool_def_data.reserve_b + deposit_b - withdraw_b,
+        reserve_a: new_reserve_a,
+        reserve_b: new_reserve_b,
         ..pool_def_data
     };
 
@@ -130,8 +154,13 @@ fn swap_logic(
     // Compute withdraw amount
     // Maintains pool constant product
     // k = pool_def_data.reserve_a * pool_def_data.reserve_b;
-    let withdraw_amount = (reserve_withdraw_vault_amount * swap_amount_in)
-        / (reserve_deposit_vault_amount + swap_amount_in);
+    let withdraw_numerator = reserve_withdraw_vault_amount
+        .checked_mul(swap_amount_in)
+        .expect("Swap withdraw numerator overflow");
+    let withdraw_denominator = reserve_deposit_vault_amount
+        .checked_add(swap_amount_in)
+        .expect("Swap withdraw denominator overflow");
+    let withdraw_amount = withdraw_numerator / withdraw_denominator;
 
     // Slippage check
     assert!(
@@ -139,6 +168,10 @@ fn swap_logic(
         "Withdraw amount is less than minimal amount out"
     );
     assert!(withdraw_amount != 0, "Withdraw amount should be nonzero");
+    assert!(
+        withdraw_amount < reserve_withdraw_vault_amount,
+        "Withdraw amount must be less than reserve withdraw amount"
+    );
 
     let token_program_id = user_deposit.account.program_owner;
 
@@ -173,4 +206,32 @@ fn swap_logic(
     );
 
     (chained_calls, swap_amount_in, withdraw_amount)
+}
+
+fn mul_u128_wide(a: u128, b: u128) -> (u128, u128) {
+    const LIMB_MASK: u128 = (1u128 << 64) - 1;
+
+    let a_lo = a & LIMB_MASK;
+    let a_hi = a >> 64;
+    let b_lo = b & LIMB_MASK;
+    let b_hi = b >> 64;
+
+    let p0 = a_lo * b_lo;
+    let p1 = a_lo * b_hi;
+    let p2 = a_hi * b_lo;
+    let p3 = a_hi * b_hi;
+
+    let carry = (p0 >> 64)
+        .checked_add(p1 & LIMB_MASK)
+        .and_then(|v| v.checked_add(p2 & LIMB_MASK))
+        .expect("Wide multiplication carry overflow");
+
+    let lo = (p0 & LIMB_MASK) | ((carry & LIMB_MASK) << 64);
+    let hi = p3
+        .checked_add(p1 >> 64)
+        .and_then(|v| v.checked_add(p2 >> 64))
+        .and_then(|v| v.checked_add(carry >> 64))
+        .expect("Wide multiplication high-part overflow");
+
+    (hi, lo)
 }
