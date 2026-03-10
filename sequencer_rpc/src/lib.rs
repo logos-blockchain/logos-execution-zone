@@ -12,7 +12,7 @@ use mempool::MemPoolHandle;
 pub use net_utils::*;
 use sequencer_core::{
     SequencerCore,
-    block_settlement_client::{BlockSettlementClient, BlockSettlementClientTrait},
+    block_publisher::{BlockPublisherTrait, ZoneSdkPublisher},
     indexer_client::{IndexerClient, IndexerClientTrait},
 };
 use serde::Serialize;
@@ -23,10 +23,10 @@ use self::types::err_rpc::RpcErr;
 
 // ToDo: Add necessary fields
 pub struct JsonHandler<
-    BC: BlockSettlementClientTrait = BlockSettlementClient,
+    BP: BlockPublisherTrait = ZoneSdkPublisher,
     IC: IndexerClientTrait = IndexerClient,
 > {
-    sequencer_state: Arc<Mutex<SequencerCore<BC, IC>>>,
+    sequencer_state: Arc<Mutex<SequencerCore<BP, IC>>>,
     mempool_handle: MemPoolHandle<NSSATransaction>,
     max_block_size: usize,
 }
@@ -52,7 +52,7 @@ pub fn rpc_error_responce_inverter(err: RpcError) -> RpcError {
 }
 
 #[cfg(feature = "standalone")]
-use sequencer_core::mock::{MockBlockSettlementClient, MockIndexerClient};
+use sequencer_core::mock::{MockBlockPublisher, MockIndexerClient};
 
 #[cfg(feature = "standalone")]
-pub type JsonHandlerWithMockClients = JsonHandler<MockBlockSettlementClient, MockIndexerClient>;
+pub type JsonHandlerWithMockClients = JsonHandler<MockBlockPublisher, MockIndexerClient>;

@@ -8,11 +8,11 @@ use futures::{FutureExt as _, never::Never};
 #[cfg(not(feature = "standalone"))]
 use log::warn;
 use log::{error, info};
+#[cfg(not(feature = "standalone"))]
+use sequencer_core::SequencerCore;
 #[cfg(feature = "standalone")]
 use sequencer_core::SequencerCoreWithMockClients as SequencerCore;
 use sequencer_core::config::SequencerConfig;
-#[cfg(not(feature = "standalone"))]
-use sequencer_core::{SequencerCore, block_settlement_client::BlockSettlementClientTrait as _};
 use sequencer_rpc::new_http_server;
 use tokio::{sync::Mutex, task::JoinHandle};
 
@@ -32,7 +32,6 @@ pub struct SequencerHandle {
     addr: SocketAddr,
     http_server_handle: ServerHandle,
     main_loop_handle: JoinHandle<Result<Never>>,
-    retry_pending_blocks_loop_handle: JoinHandle<Result<Never>>,
     listen_for_bedrock_blocks_loop_handle: JoinHandle<Result<Never>>,
 }
 
@@ -45,7 +44,6 @@ impl SequencerHandle {
             addr: _,
             http_server_handle: _,
             main_loop_handle,
-            retry_pending_blocks_loop_handle,
             listen_for_bedrock_blocks_loop_handle,
         } = self;
 
@@ -54,11 +52,6 @@ impl SequencerHandle {
                 res
                    .context("Main loop task panicked")?
                    .context("Main loop exited unexpectedly")
-            }
-            res = retry_pending_blocks_loop_handle => {
-                res
-                   .context("Retry pending blocks loop task panicked")?
-                   .context("Retry pending blocks loop exited unexpectedly")
             }
             res = listen_for_bedrock_blocks_loop_handle => {
                 res
@@ -70,7 +63,6 @@ impl SequencerHandle {
 
     pub fn is_finished(&self) -> bool {
         self.main_loop_handle.is_finished()
-            || self.retry_pending_blocks_loop_handle.is_finished()
             || self.listen_for_bedrock_blocks_loop_handle.is_finished()
     }
 
@@ -85,12 +77,10 @@ impl Drop for SequencerHandle {
             addr: _,
             http_server_handle,
             main_loop_handle,
-            retry_pending_blocks_loop_handle,
             listen_for_bedrock_blocks_loop_handle,
         } = self;
 
         main_loop_handle.abort();
-        retry_pending_blocks_loop_handle.abort();
         listen_for_bedrock_blocks_loop_handle.abort();
 
         // Can't wait here as Drop can't be async, but anyway stop signal should be sent
@@ -100,7 +90,6 @@ impl Drop for SequencerHandle {
 
 pub async fn startup_sequencer(app_config: SequencerConfig) -> Result<SequencerHandle> {
     let block_timeout = app_config.block_create_timeout;
-    let retry_pending_blocks_timeout = app_config.retry_pending_blocks_timeout;
     let port = app_config.port;
 
     let (sequencer_core, mempool_handle) = SequencerCore::start_from_config(app_config).await;
@@ -119,22 +108,8 @@ pub async fn startup_sequencer(app_config: SequencerConfig) -> Result<SequencerH
     let http_server_handle = http_server.handle();
     tokio::spawn(http_server);
 
-    #[cfg(not(feature = "standalone"))]
-    {
-        info!("Submitting stored pending blocks");
-        retry_pending_blocks(&seq_core_wrapped)
-            .await
-            .expect("Failed to submit pending blocks on startup");
-    }
-
     info!("Starting main sequencer loop");
     let main_loop_handle = tokio::spawn(main_loop(Arc::clone(&seq_core_wrapped), block_timeout));
-
-    info!("Starting pending block retry loop");
-    let retry_pending_blocks_loop_handle = tokio::spawn(retry_pending_blocks_loop(
-        Arc::clone(&seq_core_wrapped),
-        retry_pending_blocks_timeout,
-    ));
 
     info!("Starting bedrock block listening loop");
     let listen_for_bedrock_blocks_loop_handle =
@@ -144,7 +119,6 @@ pub async fn startup_sequencer(app_config: SequencerConfig) -> Result<SequencerH
         addr,
         http_server_handle,
         main_loop_handle,
-        retry_pending_blocks_loop_handle,
         listen_for_bedrock_blocks_loop_handle,
     })
 }
@@ -164,71 +138,6 @@ async fn main_loop(seq_core: Arc<Mutex<SequencerCore>>, block_timeout: Duration)
         info!("Block with id {id} created");
 
         info!("Waiting for new transactions");
-    }
-}
-
-#[cfg(not(feature = "standalone"))]
-async fn retry_pending_blocks(seq_core: &Arc<Mutex<SequencerCore>>) -> Result<()> {
-    use std::time::Instant;
-
-    use log::debug;
-
-    let (mut pending_blocks, block_settlement_client) = {
-        let sequencer_core = seq_core.lock().await;
-        let client = sequencer_core.block_settlement_client();
-        let pending_blocks = sequencer_core
-            .get_pending_blocks()
-            .expect("Sequencer should be able to retrieve pending blocks");
-        (pending_blocks, client)
-    };
-
-    pending_blocks.sort_by(|block1, block2| block1.header.block_id.cmp(&block2.header.block_id));
-
-    if !pending_blocks.is_empty() {
-        info!(
-            "Resubmitting blocks from {} to {}",
-            pending_blocks.first().unwrap().header.block_id,
-            pending_blocks.last().unwrap().header.block_id
-        );
-    }
-
-    for block in pending_blocks.iter() {
-        debug!(
-            "Resubmitting pending block with id {}",
-            block.header.block_id
-        );
-        // TODO: We could cache the inscribe tx for each pending block to avoid re-creating it
-        // on every retry.
-        let now = Instant::now();
-        let (tx, _msg_id) = block_settlement_client
-            .create_inscribe_tx(block)
-            .context("Failed to create inscribe tx for pending block")?;
-
-        debug!(">>>> Create inscribe: {:?}", now.elapsed());
-
-        let now = Instant::now();
-        if let Err(e) = block_settlement_client
-            .submit_inscribe_tx_to_bedrock(tx)
-            .await
-        {
-            warn!(
-                "Failed to resubmit block with id {} with error {e:#}",
-                block.header.block_id
-            );
-        }
-        debug!(">>>> Post: {:?}", now.elapsed());
-    }
-    Ok(())
-}
-
-#[cfg(not(feature = "standalone"))]
-async fn retry_pending_blocks_loop(
-    seq_core: Arc<Mutex<SequencerCore>>,
-    retry_pending_blocks_timeout: Duration,
-) -> Result<Never> {
-    loop {
-        tokio::time::sleep(retry_pending_blocks_timeout).await;
-        retry_pending_blocks(&seq_core).await?;
     }
 }
 
@@ -271,14 +180,6 @@ async fn listen_for_bedrock_blocks_loop(seq_core: Arc<Mutex<SequencerCore>>) -> 
 
 #[cfg(feature = "standalone")]
 async fn listen_for_bedrock_blocks_loop(_seq_core: Arc<Mutex<SequencerCore>>) -> Result<Never> {
-    std::future::pending::<Result<Never>>().await
-}
-
-#[cfg(feature = "standalone")]
-async fn retry_pending_blocks_loop(
-    _seq_core: Arc<Mutex<SequencerCore>>,
-    _retry_pending_blocks_timeout: Duration,
-) -> Result<Never> {
     std::future::pending::<Result<Never>>().await
 }
 

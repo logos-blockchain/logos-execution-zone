@@ -6,7 +6,6 @@ use std::{
 };
 
 use anyhow::Result;
-use bedrock_client::BackoffConfig;
 use bytesize::ByteSize;
 use common::{
     block::{AccountInitialData, CommitmentsInitialData},
@@ -57,9 +56,6 @@ pub struct SequencerConfig {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct BedrockConfig {
-    /// Fibonacci backoff retry strategy configuration
-    #[serde(default)]
-    pub backoff: BackoffConfig,
     /// Bedrock channel ID
     pub channel_id: ChannelId,
     /// Bedrock Url
