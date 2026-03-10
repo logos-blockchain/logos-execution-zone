@@ -16,7 +16,6 @@ anyhow.workspace = true
 log.workspace = true
 serde.workspace = true
 humantime-serde.workspace = true
-tokio.workspace = true
 borsh.workspace = true
 futures.workspace = true
 url.workspace = true
