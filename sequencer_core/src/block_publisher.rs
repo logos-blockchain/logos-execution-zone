@@ -8,7 +8,6 @@ pub use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 use logos_blockchain_zone_sdk::sequencer::{
     PublishResult, SequencerCheckpoint, SequencerConfig as ZoneSdkSequencerConfig, ZoneSequencer,
 };
-use url::Url;
 
 use crate::config::BedrockConfig;
 

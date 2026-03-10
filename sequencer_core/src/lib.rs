@@ -102,10 +102,8 @@ impl<BP: BlockPublisherTrait, IC: IndexerClientTrait> SequencerCore<BP, IC> {
 
         // On fresh start, publish the genesis block so it gets inscribed to L1.
         // The indexer requires block_id=1 to be on-chain to find the channel start.
-        if is_fresh_start {
-            if let Err(err) = block_publisher.publish_block(&genesis_block).await {
-                error!("Failed to publish genesis block: {err:#}");
-            }
+        if is_fresh_start && let Err(err) = block_publisher.publish_block(&genesis_block).await {
+            error!("Failed to publish genesis block: {err:#}");
         }
 
         #[cfg_attr(not(feature = "testnet"), allow(unused_mut))]

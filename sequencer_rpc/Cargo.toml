@@ -9,7 +9,6 @@ nssa.workspace = true
 common.workspace = true
 mempool.workspace = true
 sequencer_core = { workspace = true }
-bedrock_client.workspace = true
 
 anyhow.workspace = true
 serde_json.workspace = true
