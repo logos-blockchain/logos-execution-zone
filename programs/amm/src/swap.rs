@@ -4,6 +4,8 @@ use nssa_core::{
     program::{AccountPostState, ChainedCall},
 };
 
+use crate::vault_utils::read_vault_fungible_balances;
+
 #[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
 pub fn swap(
     pool: AccountWithMetadata,
@@ -31,30 +33,12 @@ pub fn swap(
 
     // fetch pool reserves
     // validates reserves is at least the vaults' balances
-    let vault_a_token_holding = token_core::TokenHolding::try_from(&vault_a.account.data)
-        .expect("Swap: AMM Program expects a valid Token Holding Account for Vault A");
-    let token_core::TokenHolding::Fungible {
-        definition_id: _,
-        balance: vault_a_balance,
-    } = vault_a_token_holding
-    else {
-        panic!("Swap: AMM Program expects a valid Fungible Token Holding Account for Vault A");
-    };
+    let (vault_a_balance, vault_b_balance) = read_vault_fungible_balances(&vault_a, &vault_b);
 
     assert!(
         vault_a_balance >= pool_def_data.reserve_a,
         "Reserve for Token A exceeds vault balance"
     );
-
-    let vault_b_token_holding = token_core::TokenHolding::try_from(&vault_b.account.data)
-        .expect("Swap: AMM Program expects a valid Token Holding Account for Vault B");
-    let token_core::TokenHolding::Fungible {
-        definition_id: _,
-        balance: vault_b_balance,
-    } = vault_b_token_holding
-    else {
-        panic!("Swap: AMM Program expects a valid Fungible Token Holding Account for Vault B");
-    };
 
     assert!(
         vault_b_balance >= pool_def_data.reserve_b,

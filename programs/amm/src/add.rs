@@ -6,6 +6,8 @@ use nssa_core::{
     program::{AccountPostState, ChainedCall},
 };
 
+use crate::vault_utils::read_vault_fungible_balances;
+
 #[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
 pub fn add_liquidity(
     pool: AccountWithMetadata,
@@ -44,29 +46,7 @@ pub fn add_liquidity(
     );
 
     // 2. Determine deposit amount
-    let vault_b_token_holding = token_core::TokenHolding::try_from(&vault_b.account.data)
-        .expect("Add liquidity: AMM Program expects valid Token Holding Account for Vault B");
-    let token_core::TokenHolding::Fungible {
-        definition_id: _,
-        balance: vault_b_balance,
-    } = vault_b_token_holding
-    else {
-        panic!(
-            "Add liquidity: AMM Program expects valid Fungible Token Holding Account for Vault B"
-        );
-    };
-
-    let vault_a_token_holding = token_core::TokenHolding::try_from(&vault_a.account.data)
-        .expect("Add liquidity: AMM Program expects valid Token Holding Account for Vault A");
-    let token_core::TokenHolding::Fungible {
-        definition_id: _,
-        balance: vault_a_balance,
-    } = vault_a_token_holding
-    else {
-        panic!(
-            "Add liquidity: AMM Program expects valid Fungible Token Holding Account for Vault A"
-        );
-    };
+    let (vault_a_balance, vault_b_balance) = read_vault_fungible_balances(&vault_a, &vault_b);
 
     assert!(pool_def_data.reserve_a != 0, "Reserves must be nonzero");
     assert!(pool_def_data.reserve_b != 0, "Reserves must be nonzero");
