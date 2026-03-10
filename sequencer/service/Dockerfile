@@ -40,7 +40,7 @@ RUN r0vm --version
 # Install logos blockchain circuits
 RUN curl -sSL https://raw.githubusercontent.com/logos-blockchain/logos-blockchain/main/scripts/setup-logos-blockchain-circuits.sh | bash
 
-WORKDIR /sequencer_runner
+WORKDIR /sequencer_service
 
 # Build argument to enable standalone feature (defaults to false)
 ARG STANDALONE=false
@@ -48,17 +48,17 @@ ARG STANDALONE=false
 # Planner stage - generates dependency recipe
 FROM chef AS planner
 COPY . .
-RUN cargo chef prepare --bin sequencer_runner --recipe-path recipe.json
+RUN cargo chef prepare --bin sequencer_service --recipe-path recipe.json
 
 # Builder stage - builds dependencies and application
 FROM chef AS builder
 ARG STANDALONE
-COPY --from=planner /sequencer_runner/recipe.json recipe.json
+COPY --from=planner /sequencer_service/recipe.json recipe.json
 # Build dependencies only (this layer will be cached)
 RUN if [ "$STANDALONE" = "true" ]; then \
-      cargo chef cook --bin sequencer_runner --features standalone --release --recipe-path recipe.json; \
+      cargo chef cook --bin sequencer_service --features standalone --release --recipe-path recipe.json; \
     else \
-      cargo chef cook --bin sequencer_runner --release --recipe-path recipe.json; \
+      cargo chef cook --bin sequencer_service --release --recipe-path recipe.json; \
     fi
 
 # Copy source code
@@ -66,13 +66,13 @@ COPY . .
 
 # Build the actual application
 RUN if [ "$STANDALONE" = "true" ]; then \
-      cargo build --release --features standalone --bin sequencer_runner; \
+      cargo build --release --features standalone --bin sequencer_service; \
     else \
-      cargo build --release --bin sequencer_runner; \
+      cargo build --release --bin sequencer_service; \
     fi
 
 # Strip debug symbols to reduce binary size
-RUN strip /sequencer_runner/target/release/sequencer_runner
+RUN strip /sequencer_service/target/release/sequencer_service
 
 # Runtime stage - minimal image
 FROM debian:trixie-slim
@@ -84,11 +84,11 @@ RUN apt-get update \
 
 # Create non-root user for security
 RUN useradd -m -u 1000 -s /bin/bash sequencer_user && \
-    mkdir -p /sequencer_runner /etc/sequencer_runner && \
-    chown -R sequencer_user:sequencer_user /sequencer_runner /etc/sequencer_runner
+    mkdir -p /sequencer_service /etc/sequencer_service && \
+    chown -R sequencer_user:sequencer_user /sequencer_service /etc/sequencer_service
 
 # Copy binary from builder
-COPY --from=builder --chown=sequencer_user:sequencer_user /sequencer_runner/target/release/sequencer_runner /usr/local/bin/sequencer_runner
+COPY --from=builder --chown=sequencer_user:sequencer_user /sequencer_service/target/release/sequencer_service /usr/local/bin/sequencer_service
 
 # Copy r0vm binary from builder
 COPY --from=builder --chown=sequencer_user:sequencer_user /usr/local/bin/r0vm /usr/local/bin/r0vm
@@ -97,7 +97,7 @@ COPY --from=builder --chown=sequencer_user:sequencer_user /usr/local/bin/r0vm /u
 COPY --from=builder --chown=sequencer_user:sequencer_user /root/.logos-blockchain-circuits /home/sequencer_user/.logos-blockchain-circuits
 
 # Copy entrypoint script
-COPY sequencer_runner/docker-entrypoint.sh /docker-entrypoint.sh
+COPY sequencer_service/docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh
 
 # Expose default port
@@ -124,5 +124,5 @@ USER root
 
 ENTRYPOINT ["/docker-entrypoint.sh"]
 
-WORKDIR /sequencer_runner
-CMD ["sequencer_runner", "/etc/sequencer_runner"]
+WORKDIR /sequencer_service
+CMD ["sequencer_service", "/etc/sequencer_service"]

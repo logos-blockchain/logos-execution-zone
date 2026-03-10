@@ -19,7 +19,7 @@ members = [
   "programs/token",
   "sequencer_core",
   "sequencer_rpc",
-  "sequencer_runner",
+  "sequencer_service",
   "indexer/core",
   "indexer/service",
   "indexer/service/protocol",
@@ -44,7 +44,7 @@ storage = { path = "storage" }
 key_protocol = { path = "key_protocol" }
 sequencer_core = { path = "sequencer_core" }
 sequencer_rpc = { path = "sequencer_rpc" }
-sequencer_runner = { path = "sequencer_runner" }
+sequencer_service = { path = "sequencer/service" }
 indexer_core = { path = "indexer/core" }
 indexer_service = { path = "indexer/service" }
 indexer_service_protocol = { path = "indexer/service/protocol" }

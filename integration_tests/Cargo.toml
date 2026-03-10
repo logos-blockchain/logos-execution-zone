@@ -11,7 +11,7 @@ workspace = true
 nssa_core = { workspace = true, features = ["host"] }
 nssa.workspace = true
 sequencer_core = { workspace = true, features = ["default", "testnet"] }
-sequencer_runner.workspace = true
+sequencer_service.workspace = true
 wallet.workspace = true
 common.workspace = true
 key_protocol.workspace = true

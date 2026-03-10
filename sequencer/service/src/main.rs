@@ -1,5 +1,5 @@
 use anyhow::Result;
-use sequencer_runner::main_runner;
+use sequencer_service::main_runner;
 
 pub const NUM_THREADS: usize = 4;
 

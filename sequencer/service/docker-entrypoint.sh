@@ -1,11 +1,11 @@
 #!/bin/sh
 
-# This is an entrypoint script for the sequencer_runner Docker container,
+# This is an entrypoint script for the sequencer_service Docker container,
 # it's not meant to be executed outside of the container.
 
 set -e
 
-CONFIG="/etc/sequencer_runner/sequencer_config.json"
+CONFIG="/etc/sequencer/service/sequencer_config.json"
 
 # Check config file exists
 if [ ! -f "$CONFIG" ]; then

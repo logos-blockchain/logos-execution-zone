@@ -1,5 +1,5 @@
 [package]
-name = "sequencer_runner"
+name = "sequencer_service"
 version = "0.1.0"
 edition = "2024"
 license = { workspace = true }

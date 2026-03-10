@@ -15,7 +15,7 @@ use wallet::{
 // TODO #169: We have sample configs for sequencer, but not for wallet
 // TODO #168: Why it requires config as a directory? Maybe better to deduce directory from config
 // file path?
-// TODO #172: Why it requires config as env var while sequencer_runner accepts as
+// TODO #172: Why it requires config as env var while sequencer_service accepts as
 // argument?
 #[tokio::main]
 async fn main() -> Result<()> {

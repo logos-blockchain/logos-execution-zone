@@ -11,7 +11,7 @@ use log::{debug, error, warn};
 use nssa::{AccountId, PrivacyPreservingTransaction};
 use nssa_core::Commitment;
 use sequencer_core::indexer_client::{IndexerClient, IndexerClientTrait as _};
-use sequencer_runner::SequencerHandle;
+use sequencer_service::SequencerHandle;
 use tempfile::TempDir;
 use testcontainers::compose::DockerCompose;
 use wallet::{WalletCore, config::WalletConfigOverrides};
@@ -229,7 +229,7 @@ impl TestContext {
         )
         .context("Failed to create Sequencer config")?;
 
-        let sequencer_handle = sequencer_runner::startup_sequencer(config).await?;
+        let sequencer_handle = sequencer_service::startup_sequencer(config).await?;
 
         Ok((sequencer_handle, temp_sequencer_dir))
     }

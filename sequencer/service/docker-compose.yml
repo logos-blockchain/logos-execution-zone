@@ -1,0 +1,14 @@
+services:
+  sequencer_service:
+    image: lssa/sequencer_service
+    build:
+      context: ..
+      dockerfile: sequencer/service/Dockerfile
+    container_name: sequencer_service
+    ports:
+      - "3040:3040"
+    volumes:
+      # Mount configuration folder
+      - ./configs/docker:/etc/sequencer_service
+      # Mount data folder
+      - ./data:/var/lib/sequencer_service

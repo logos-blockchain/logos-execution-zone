@@ -7,12 +7,12 @@ services:
     environment:
       - RUST_LOG=error
 
-  sequencer_runner:
+  sequencer_service:
     depends_on:
       - logos-blockchain-node-0
       - indexer_service
     volumes: !override
-      - ./configs/docker-all-in-one/sequencer:/etc/sequencer_runner
+      - ./configs/docker-all-in-one/sequencer:/etc/sequencer_service
 
   indexer_service:
     depends_on:

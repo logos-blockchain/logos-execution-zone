@@ -1,5 +1,5 @@
 {
-    "home": "/var/lib/sequencer_runner",
+    "home": "/var/lib/sequencer_service",
     "override_rust_log": null,
     "genesis_id": 1,
     "is_genesis_random": true,
