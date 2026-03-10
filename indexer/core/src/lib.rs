@@ -1,20 +1,18 @@
-use std::{path::Path, sync::Arc};
+use std::sync::Arc;
 
-use anyhow::{Context as _, Result};
-use bedrock_client::HeaderId;
+use anyhow::Result;
 use common::block::{Block, HashableBlockData};
 // ToDo: Remove after testnet
 use common::{HashType, PINATA_BASE58};
+use futures::StreamExt as _;
 use log::{error, info, warn};
-use logos_blockchain_zone_sdk::indexer::{Cursor, ZoneIndexer};
+use logos_blockchain_core::header::HeaderId;
+use logos_blockchain_zone_sdk::indexer::ZoneIndexer;
 
 use crate::{block_store::IndexerStore, config::IndexerConfig};
 
 pub mod block_store;
 pub mod config;
-
-const POLL_BATCH_LIMIT: usize = 1000;
-const CURSOR_FILE_NAME: &str = "zone_sdk_indexer_cursor.json";
 
 #[derive(Clone)]
 pub struct IndexerCore {
@@ -89,79 +87,41 @@ impl IndexerCore {
 
     pub async fn subscribe_parse_block_stream(&self) -> impl futures::Stream<Item = Result<Block>> {
         async_stream::stream! {
-            let mut cursor = load_cursor(&self.config.home)?;
+            info!("Starting zone-sdk indexer using follow()");
 
-            if cursor.is_some() {
-                info!("Resuming zone-sdk indexer from persisted cursor");
-            } else {
-                info!("Starting zone-sdk indexer from the beginning");
-            }
+            let follow_stream = match self.zone_indexer.follow().await {
+                Ok(s) => s,
+                Err(e) => {
+                    error!("Failed to start zone-sdk follow stream: {e}");
+                    return;
+                }
+            };
 
-            loop {
-                info!("Polling next_messages with cursor={cursor:?}");
+            let mut follow_stream = std::pin::pin!(follow_stream);
 
-                let poll_result = match self
-                    .zone_indexer
-                    .next_messages(cursor, POLL_BATCH_LIMIT)
-                    .await
-                {
-                    Ok(result) => result,
+            while let Some(zone_block) = follow_stream.next().await {
+                let block: Block = match borsh::from_slice(&zone_block.data) {
+                    Ok(b) => b,
                     Err(e) => {
-                        warn!("next_messages failed: {e}, retrying in {:?}", self.config.consensus_info_polling_interval);
-                        tokio::time::sleep(self.config.consensus_info_polling_interval).await;
+                        error!("Failed to deserialize L2 block from zone-sdk: {e}");
                         continue;
                     }
                 };
 
-                info!("next_messages returned {} messages, cursor={:?}", poll_result.messages.len(), poll_result.cursor);
+                info!("Indexed L2 block {}", block.header.block_id);
 
-                if poll_result.messages.is_empty() {
-                    // Caught up to LIB, wait before polling again
-                    tokio::time::sleep(self.config.consensus_info_polling_interval).await;
-                    cursor = Some(poll_result.cursor);
-                    continue;
+                // TODO: Remove l1_header placeholder once storage layer
+                // no longer requires it. Zone-sdk handles L1 tracking internally.
+                let placeholder_l1_header = HeaderId::from([0u8; 32]);
+
+                if let Err(err) = self.store.put_block(block.clone(), placeholder_l1_header) {
+                    error!("Failed to store block {}: {err:#}", block.header.block_id);
                 }
 
-                for zone_block in &poll_result.messages {
-                    let block: Block = borsh::from_slice(&zone_block.data)
-                        .context("Failed to deserialize L2 block from zone-sdk")?;
-
-                    info!("Indexed L2 block {}", block.header.block_id);
-
-                    // TODO: Remove l1_header placeholder once storage layer
-                    // no longer requires it. Zone-sdk handles L1 tracking internally.
-                    let placeholder_l1_header = HeaderId::from([0u8; 32]);
-
-                    if let Err(err) = self.store.put_block(block.clone(), placeholder_l1_header) {
-                        error!("Failed to store block {}: {err:#}", block.header.block_id);
-                    }
-
-                    yield Ok(block);
-                }
-
-                cursor = Some(poll_result.cursor);
-                save_cursor(&self.config.home, &poll_result.cursor)?;
+                yield Ok(block);
             }
+
+            warn!("zone-sdk follow stream ended");
         }
     }
-}
-
-fn load_cursor(home: &Path) -> Result<Option<Cursor>> {
-    let path = home.join(CURSOR_FILE_NAME);
-    if path.exists() {
-        let data = std::fs::read(&path).context("Failed to read indexer cursor file")?;
-        let cursor: Cursor =
-            serde_json::from_slice(&data).context("Failed to deserialize indexer cursor")?;
-        info!("Loaded zone-sdk indexer cursor from {}", path.display());
-        Ok(Some(cursor))
-    } else {
-        Ok(None)
-    }
-}
-
-fn save_cursor(home: &Path, cursor: &Cursor) -> Result<()> {
-    let path = home.join(CURSOR_FILE_NAME);
-    let data = serde_json::to_vec(cursor).context("Failed to serialize indexer cursor")?;
-    std::fs::write(&path, data).context("Failed to write indexer cursor file")?;
-    Ok(())
 }
