@@ -91,7 +91,12 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> JsonHandler<BC, IC>
 
     async fn process_send_tx(&self, request: Request) -> Result<Value, RpcErr> {
         let send_tx_req = SendTxRequest::parse(Some(request.params))?;
-        let tx = borsh::from_slice::<NSSATransaction>(&send_tx_req.transaction).unwrap();
+        let tx = borsh::from_slice::<NSSATransaction>(&send_tx_req.transaction)
+            .map_err(|e| {
+                RpcErr(RpcError::invalid_params(format!(
+                    "Failed to deserialize transaction: {e}"
+                )))
+            })?;
         let tx_hash = tx.hash();
 
         // Check transaction size against block size limit
@@ -120,7 +125,12 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> JsonHandler<BC, IC>
         self.mempool_handle
             .push(authenticated_tx)
             .await
-            .expect("Mempool is closed, this is a bug");
+            .map_err(|_| {
+                RpcErr(RpcError::new_internal_error(
+                    None,
+                    "Mempool is closed, cannot accept transactions",
+                ))
+            })?;
 
         let response = SendTxResponse {
             status: TRANSACTION_SUBMITTED.to_string(),
