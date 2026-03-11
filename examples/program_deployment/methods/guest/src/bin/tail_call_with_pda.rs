@@ -34,14 +34,13 @@ fn main() {
     let (
         ProgramInput {
             pre_states,
-            instruction: _,
+            instruction: (),
         },
         instruction_data,
     ) = read_nssa_inputs::<()>();
 
     // Unpack the input account pre state
     let [pre_state] = pre_states
-        .clone()
         .try_into()
         .unwrap_or_else(|_| panic!("Input pre states should consist of a single account"));
 

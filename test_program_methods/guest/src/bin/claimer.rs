@@ -1,3 +1,5 @@
+#![expect(clippy::manual_let_else, reason = "Looks much better")]
+
 use nssa_core::program::{AccountPostState, ProgramInput, read_nssa_inputs, write_nssa_outputs};
 
 type Instruction = ();
@@ -6,7 +8,7 @@ fn main() {
     let (
         ProgramInput {
             pre_states,
-            instruction: _,
+            instruction: (),
         },
         instruction_words,
     ) = read_nssa_inputs::<Instruction>();

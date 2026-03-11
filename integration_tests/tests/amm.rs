@@ -1,3 +1,9 @@
+#![expect(
+    clippy::shadow_unrelated,
+    clippy::tests_outside_test_module,
+    reason = "We don't care about these in tests"
+)]
+
 use std::time::Duration;
 
 use anyhow::Result;
@@ -108,7 +114,7 @@ async fn amm_public() -> Result<()> {
     let subcommand = TokenProgramAgnosticSubcommand::New {
         definition_account_id: format_public_account_id(definition_account_id_1),
         supply_account_id: format_public_account_id(supply_account_id_1),
-        name: "A NAM1".to_string(),
+        name: "A NAM1".to_owned(),
         total_supply: 37,
     };
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
@@ -132,7 +138,7 @@ async fn amm_public() -> Result<()> {
     let subcommand = TokenProgramAgnosticSubcommand::New {
         definition_account_id: format_public_account_id(definition_account_id_2),
         supply_account_id: format_public_account_id(supply_account_id_2),
-        name: "A NAM2".to_string(),
+        name: "A NAM2".to_owned(),
         total_supply: 37,
     };
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;

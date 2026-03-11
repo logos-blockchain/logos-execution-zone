@@ -1,9 +1,5 @@
 use crate::{PrivateKey, PublicKey, Signature};
 
-fn hex_to_bytes<const N: usize>(hex: &str) -> [u8; N] {
-    hex::decode(hex).unwrap().try_into().unwrap()
-}
-
 pub struct TestVector {
     pub seckey: Option<PrivateKey>,
     pub pubkey: PublicKey,
@@ -14,7 +10,7 @@ pub struct TestVector {
 }
 
 /// Test vectors from
-/// https://github.com/bitcoin/bips/blob/master/bip-0340/test-vectors.csv
+/// <https://github.com/bitcoin/bips/blob/master/bip-0340/test-vectors.csv>.
 //
 pub fn test_vectors() -> Vec<TestVector> {
     vec![
@@ -364,4 +360,8 @@ pub fn test_vectors() -> Vec<TestVector> {
             verification_result: true,
         },
     ]
+}
+
+fn hex_to_bytes<const N: usize>(hex: &str) -> [u8; N] {
+    hex::decode(hex).unwrap().try_into().unwrap()
 }

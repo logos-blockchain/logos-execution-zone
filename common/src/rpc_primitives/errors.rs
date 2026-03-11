@@ -5,25 +5,25 @@ use serde_json::{Value, to_value};
 #[derive(serde::Serialize)]
 pub struct RpcParseError(pub String);
 
-#[allow(clippy::too_long_first_doc_paragraph)]
-/// This struct may be returned from JSON RPC server in case of error
+/// This struct may be returned from JSON RPC server in case of error.
+///
 /// It is expected that that this struct has impls From<_> all other RPC errors
-/// like [`RpcBlockError`](crate::types::blocks::RpcBlockError)
-#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq)]
+/// like [`RpcBlockError`](crate::types::blocks::RpcBlockError).
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct RpcError {
     #[serde(flatten)]
     pub error_struct: Option<RpcErrorKind>,
-    /// Deprecated please use the `error_struct` instead
+    /// Deprecated please use the `error_struct` instead.
     pub code: i64,
-    /// Deprecated please use the `error_struct` instead
+    /// Deprecated please use the `error_struct` instead.
     pub message: String,
-    /// Deprecated please use the `error_struct` instead
+    /// Deprecated please use the `error_struct` instead.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub data: Option<Value>,
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq)]
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
 #[serde(tag = "name", content = "cause", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum RpcErrorKind {
     RequestValidationError(RpcRequestValidationErrorKind),
@@ -31,14 +31,14 @@ pub enum RpcErrorKind {
     InternalError(Value),
 }
 
-#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq)]
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
 #[serde(tag = "name", content = "info", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum RpcRequestValidationErrorKind {
     MethodNotFound { method_name: String },
     ParseError { error_message: String },
 }
 
-/// A general Server Error
+/// A general Server Error.
 #[derive(serde::Serialize, serde::Deserialize, Debug, PartialEq, Eq, Clone)]
 pub enum ServerError {
     Timeout,
@@ -49,8 +49,9 @@ impl RpcError {
     /// A generic constructor.
     ///
     /// Mostly for completeness, doesn't do anything but filling in the corresponding fields.
-    pub fn new(code: i64, message: String, data: Option<Value>) -> Self {
-        RpcError {
+    #[must_use]
+    pub const fn new(code: i64, message: String, data: Option<Value>) -> Self {
+        Self {
             code,
             message,
             data,
@@ -69,12 +70,12 @@ impl RpcError {
                 )));
             }
         };
-        RpcError::new(-32_602, "Invalid params".to_owned(), Some(value))
+        Self::new(-32_602, "Invalid params".to_owned(), Some(value))
     }
 
     /// Create a server error.
     pub fn server_error<E: serde::Serialize>(e: Option<E>) -> Self {
-        RpcError::new(
+        Self::new(
             -32_000,
             "Server error".to_owned(),
             e.map(|v| to_value(v).expect("Must be representable in JSON")),
@@ -82,8 +83,9 @@ impl RpcError {
     }
 
     /// Create a parse error.
+    #[must_use]
     pub fn parse_error(e: String) -> Self {
-        RpcError {
+        Self {
             code: -32_700,
             message: "Parse error".to_owned(),
             data: Some(Value::String(e.clone())),
@@ -93,12 +95,14 @@ impl RpcError {
         }
     }
 
+    #[must_use]
     pub fn serialization_error(e: &str) -> Self {
-        RpcError::new_internal_error(Some(Value::String(e.to_owned())), e)
+        Self::new_internal_error(Some(Value::String(e.to_owned())), e)
     }
 
     /// Helper method to define extract `INTERNAL_ERROR` in separate `RpcErrorKind`
-    /// Returns `HANDLER_ERROR` if the error is not internal one
+    /// Returns `HANDLER_ERROR` if the error is not internal one.
+    #[must_use]
     pub fn new_internal_or_handler_error(error_data: Option<Value>, error_struct: Value) -> Self {
         if error_struct["name"] == "INTERNAL_ERROR" {
             let error_message = match error_struct["info"].get("error_message") {
@@ -111,8 +115,9 @@ impl RpcError {
         }
     }
 
+    #[must_use]
     pub fn new_internal_error(error_data: Option<Value>, info: &str) -> Self {
-        RpcError {
+        Self {
             code: -32_000,
             message: "Server error".to_owned(),
             data: error_data,
@@ -124,7 +129,7 @@ impl RpcError {
     }
 
     fn new_handler_error(error_data: Option<Value>, error_struct: Value) -> Self {
-        RpcError {
+        Self {
             code: -32_000,
             message: "Server error".to_owned(),
             data: error_data,
@@ -133,8 +138,9 @@ impl RpcError {
     }
 
     /// Create a method not found error.
+    #[must_use]
     pub fn method_not_found(method: String) -> Self {
-        RpcError {
+        Self {
             code: -32_601,
             message: "Method not found".to_owned(),
             data: Some(Value::String(method.clone())),
@@ -161,6 +167,7 @@ impl From<RpcParseError> for RpcError {
 
 impl From<std::convert::Infallible> for RpcError {
     fn from(_: std::convert::Infallible) -> Self {
+        // SAFETY: Infallible error can never be constructed, so this code can never be reached.
         unsafe { core::hint::unreachable_unchecked() }
     }
 }
@@ -168,20 +175,20 @@ impl From<std::convert::Infallible> for RpcError {
 impl fmt::Display for ServerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            ServerError::Timeout => write!(f, "ServerError: Timeout"),
-            ServerError::Closed => write!(f, "ServerError: Closed"),
+            Self::Timeout => write!(f, "ServerError: Timeout"),
+            Self::Closed => write!(f, "ServerError: Closed"),
         }
     }
 }
 
 impl From<ServerError> for RpcError {
-    fn from(e: ServerError) -> RpcError {
+    fn from(e: ServerError) -> Self {
         let error_data = match to_value(&e) {
             Ok(value) => value,
             Err(_err) => {
-                return RpcError::new_internal_error(None, "Failed to serialize ServerError");
+                return Self::new_internal_error(None, "Failed to serialize ServerError");
             }
         };
-        RpcError::new_internal_error(Some(error_data), e.to_string().as_str())
+        Self::new_internal_error(Some(error_data), e.to_string().as_str())
     }
 }

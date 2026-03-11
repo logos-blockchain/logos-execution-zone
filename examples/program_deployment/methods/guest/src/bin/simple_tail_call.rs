@@ -29,7 +29,7 @@ fn main() {
     let (
         ProgramInput {
             pre_states,
-            instruction: _,
+            instruction: (),
         },
         instruction_data,
     ) = read_nssa_inputs::<()>();

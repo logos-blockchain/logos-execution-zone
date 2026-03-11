@@ -1,4 +1,7 @@
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    hash::Hash,
+};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use nssa_core::{
@@ -21,7 +24,8 @@ pub struct PrivacyPreservingTransaction {
 }
 
 impl PrivacyPreservingTransaction {
-    pub fn new(message: Message, witness_set: WitnessSet) -> Self {
+    #[must_use]
+    pub const fn new(message: Message, witness_set: WitnessSet) -> Self {
         Self {
             message,
             witness_set,
@@ -119,19 +123,22 @@ impl PrivacyPreservingTransaction {
         Ok(message
             .public_account_ids
             .iter()
-            .cloned()
+            .copied()
             .zip(message.public_post_states.clone())
             .collect())
     }
 
-    pub fn message(&self) -> &Message {
+    #[must_use]
+    pub const fn message(&self) -> &Message {
         &self.message
     }
 
-    pub fn witness_set(&self) -> &WitnessSet {
+    #[must_use]
+    pub const fn witness_set(&self) -> &WitnessSet {
         &self.witness_set
     }
 
+    #[must_use]
     pub fn hash(&self) -> [u8; 32] {
         let bytes = self.to_bytes();
         let mut hasher = sha2::Sha256::new();
@@ -147,6 +154,7 @@ impl PrivacyPreservingTransaction {
             .collect()
     }
 
+    #[must_use]
     pub fn affected_public_account_ids(&self) -> Vec<AccountId> {
         let mut acc_set = self
             .signer_account_ids()
@@ -183,7 +191,6 @@ fn check_privacy_preserving_circuit_proof_is_valid(
         .ok_or(NssaError::InvalidPrivacyPreservingProof)
 }
 
-use std::hash::Hash;
 fn n_unique<T: Eq + Hash>(data: &[T]) -> usize {
     let set: HashSet<&T> = data.iter().collect();
     set.len()
@@ -220,7 +227,7 @@ mod tests {
     }
 
     #[test]
-    fn test_privacy_preserving_transaction_encoding_bytes_roundtrip() {
+    fn privacy_preserving_transaction_encoding_bytes_roundtrip() {
         let tx = transaction_for_tests();
         let bytes = tx.to_bytes();
         let tx_from_bytes = PrivacyPreservingTransaction::from_bytes(&bytes).unwrap();

@@ -4,6 +4,7 @@ use nssa_core::{
 };
 use token_core::{TokenDefinition, TokenHolding};
 
+#[must_use]
 pub fn burn(
     definition_account: AccountWithMetadata,
     user_holding_account: AccountWithMetadata,

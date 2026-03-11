@@ -5,17 +5,17 @@ use serde::{Deserialize, Serialize};
 
 use crate::account::{Account, AccountId, AccountWithMetadata};
 
-pub type ProgramId = [u32; 8];
-pub type InstructionData = Vec<u32>;
 pub const DEFAULT_PROGRAM_ID: ProgramId = [0; 8];
 pub const MAX_NUMBER_CHAINED_CALLS: usize = 10;
 
+pub type ProgramId = [u32; 8];
+pub type InstructionData = Vec<u32>;
 pub struct ProgramInput<T> {
     pub pre_states: Vec<AccountWithMetadata>,
     pub instruction: T,
 }
 
-/// A 32-byte seed used to compute a *Program-Derived AccountId* (PDA).
+/// A 32-byte seed used to compute a *Program-Derived `AccountId`* (PDA).
 ///
 /// Each program can derive up to `2^256` unique account IDs by choosing different
 /// seeds. PDAs allow programs to control namespaced account identifiers without
@@ -24,28 +24,15 @@ pub struct ProgramInput<T> {
 pub struct PdaSeed([u8; 32]);
 
 impl PdaSeed {
+    #[must_use]
     pub const fn new(value: [u8; 32]) -> Self {
         Self(value)
     }
 }
 
-pub fn compute_authorized_pdas(
-    caller_program_id: Option<ProgramId>,
-    pda_seeds: &[PdaSeed],
-) -> HashSet<AccountId> {
-    caller_program_id
-        .map(|caller_program_id| {
-            pda_seeds
-                .iter()
-                .map(|pda_seed| AccountId::from((&caller_program_id, pda_seed)))
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 impl From<(&ProgramId, &PdaSeed)> for AccountId {
     fn from(value: (&ProgramId, &PdaSeed)) -> Self {
-        use risc0_zkvm::sha::{Impl, Sha256};
+        use risc0_zkvm::sha::{Impl, Sha256 as _};
         const PROGRAM_DERIVED_ACCOUNT_ID_PREFIX: &[u8; 32] =
             b"/NSSA/v0.2/AccountId/PDA/\x00\x00\x00\x00\x00\x00\x00";
 
@@ -55,7 +42,7 @@ impl From<(&ProgramId, &PdaSeed)> for AccountId {
             bytemuck::try_cast_slice(value.0).expect("ProgramId should be castable to &[u8]");
         bytes[32..64].copy_from_slice(program_id_bytes);
         bytes[64..].copy_from_slice(&value.1.0);
-        AccountId::new(
+        Self::new(
             Impl::hash_bytes(&bytes)
                 .as_bytes()
                 .try_into()
@@ -66,10 +53,10 @@ impl From<(&ProgramId, &PdaSeed)> for AccountId {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct ChainedCall {
-    /// The program ID of the program to execute
+    /// The program ID of the program to execute.
     pub program_id: ProgramId,
     pub pre_states: Vec<AccountWithMetadata>,
-    /// The instruction data to pass
+    /// The instruction data to pass.
     pub instruction_data: InstructionData,
     pub pda_seeds: Vec<PdaSeed>,
 }
@@ -90,6 +77,7 @@ impl ChainedCall {
         }
     }
 
+    #[must_use]
     pub fn with_pda_seeds(mut self, pda_seeds: Vec<PdaSeed>) -> Self {
         self.pda_seeds = pda_seeds;
         self
@@ -97,6 +85,7 @@ impl ChainedCall {
 }
 
 /// Represents the final state of an `Account` after a program execution.
+///
 /// A post state may optionally request that the executing program
 /// becomes the owner of the account (a “claim”). This is used to signal
 /// that the program intends to take ownership of the account.
@@ -110,7 +99,8 @@ pub struct AccountPostState {
 impl AccountPostState {
     /// Creates a post state without a claim request.
     /// The executing program is not requesting ownership of the account.
-    pub fn new(account: Account) -> Self {
+    #[must_use]
+    pub const fn new(account: Account) -> Self {
         Self {
             account,
             claim: false,
@@ -120,7 +110,8 @@ impl AccountPostState {
     /// Creates a post state that requests ownership of the account.
     /// This indicates that the executing program intends to claim the
     /// account as its own and is allowed to mutate it.
-    pub fn new_claimed(account: Account) -> Self {
+    #[must_use]
+    pub const fn new_claimed(account: Account) -> Self {
         Self {
             account,
             claim: true,
@@ -129,6 +120,7 @@ impl AccountPostState {
 
     /// Creates a post state that requests ownership of the account
     /// if the account's program owner is the default program ID.
+    #[must_use]
     pub fn new_claimed_if_default(account: Account) -> Self {
         let claim = account.program_owner == DEFAULT_PROGRAM_ID;
         Self { account, claim }
@@ -136,21 +128,24 @@ impl AccountPostState {
 
     /// Returns `true` if this post state requests that the account
     /// be claimed (owned) by the executing program.
-    pub fn requires_claim(&self) -> bool {
+    #[must_use]
+    pub const fn requires_claim(&self) -> bool {
         self.claim
     }
 
-    /// Returns the underlying account
-    pub fn account(&self) -> &Account {
+    /// Returns the underlying account.
+    #[must_use]
+    pub const fn account(&self) -> &Account {
         &self.account
     }
 
-    /// Returns the underlying account
-    pub fn account_mut(&mut self) -> &mut Account {
+    /// Returns the underlying account.
+    pub const fn account_mut(&mut self) -> &mut Account {
         &mut self.account
     }
 
-    /// Consumes the post state and returns the underlying account
+    /// Consumes the post state and returns the underlying account.
+    #[must_use]
     pub fn into_account(self) -> Account {
         self.account
     }
@@ -159,14 +154,58 @@ impl AccountPostState {
 #[derive(Serialize, Deserialize, Clone)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
 pub struct ProgramOutput {
-    /// The instruction data the program received to produce this output
+    /// The instruction data the program received to produce this output.
     pub instruction_data: InstructionData,
-    /// The account pre states the program received to produce this output
+    /// The account pre states the program received to produce this output.
     pub pre_states: Vec<AccountWithMetadata>,
     pub post_states: Vec<AccountPostState>,
     pub chained_calls: Vec<ChainedCall>,
 }
 
+/// Representation of a number as `lo + hi * 2^128`.
+#[derive(PartialEq, Eq)]
+struct WrappedBalanceSum {
+    lo: u128,
+    hi: u128,
+}
+
+impl WrappedBalanceSum {
+    /// Constructs a [`WrappedBalanceSum`] from an iterator of balances.
+    ///
+    /// Returns [`None`] if balance sum overflows `lo + hi * 2^128` representation, which is not
+    /// expected in practical scenarios.
+    fn from_balances(balances: impl Iterator<Item = u128>) -> Option<Self> {
+        let mut wrapped = Self { lo: 0, hi: 0 };
+
+        for balance in balances {
+            let (new_sum, did_overflow) = wrapped.lo.overflowing_add(balance);
+            if did_overflow {
+                wrapped.hi = wrapped.hi.checked_add(1)?;
+            }
+            wrapped.lo = new_sum;
+        }
+
+        Some(wrapped)
+    }
+}
+
+#[must_use]
+pub fn compute_authorized_pdas(
+    caller_program_id: Option<ProgramId>,
+    pda_seeds: &[PdaSeed],
+) -> HashSet<AccountId> {
+    caller_program_id
+        .map(|caller_program_id| {
+            pda_seeds
+                .iter()
+                .map(|pda_seed| AccountId::from((&caller_program_id, pda_seed)))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Reads the NSSA inputs from the guest environment.
+#[must_use]
 pub fn read_nssa_inputs<T: DeserializeOwned>() -> (ProgramInput<T>, InstructionData) {
     let pre_states: Vec<AccountWithMetadata> = env::read();
     let instruction_words: InstructionData = env::read();
@@ -209,12 +248,13 @@ pub fn write_nssa_outputs_with_chained_call(
     env::commit(&output);
 }
 
-/// Validates well-behaved program execution
+/// Validates well-behaved program execution.
 ///
 /// # Parameters
 /// - `pre_states`: The list of input accounts, each annotated with authorization metadata.
 /// - `post_states`: The list of resulting accounts after executing the program logic.
 /// - `executing_program_id`: The identifier of the program that was executed.
+#[must_use]
 pub fn validate_execution(
     pre_states: &[AccountWithMetadata],
     post_states: &[AccountPostState],
@@ -298,39 +338,12 @@ fn validate_uniqueness_of_account_ids(pre_states: &[AccountWithMetadata]) -> boo
     number_of_accounts == number_of_account_ids
 }
 
-/// Representation of a number as `lo + hi * 2^128`.
-#[derive(PartialEq, Eq)]
-struct WrappedBalanceSum {
-    lo: u128,
-    hi: u128,
-}
-
-impl WrappedBalanceSum {
-    /// Constructs a [`WrappedBalanceSum`] from an iterator of balances.
-    ///
-    /// Returns [`None`] if balance sum overflows `lo + hi * 2^128` representation, which is not
-    /// expected in practical scenarios.
-    fn from_balances(balances: impl Iterator<Item = u128>) -> Option<Self> {
-        let mut wrapped = WrappedBalanceSum { lo: 0, hi: 0 };
-
-        for balance in balances {
-            let (new_sum, did_overflow) = wrapped.lo.overflowing_add(balance);
-            if did_overflow {
-                wrapped.hi = wrapped.hi.checked_add(1)?;
-            }
-            wrapped.lo = new_sum;
-        }
-
-        Some(wrapped)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_post_state_new_with_claim_constructor() {
+    fn post_state_new_with_claim_constructor() {
         let account = Account {
             program_owner: [1, 2, 3, 4, 5, 6, 7, 8],
             balance: 1337,
@@ -345,7 +358,7 @@ mod tests {
     }
 
     #[test]
-    fn test_post_state_new_without_claim_constructor() {
+    fn post_state_new_without_claim_constructor() {
         let account = Account {
             program_owner: [1, 2, 3, 4, 5, 6, 7, 8],
             balance: 1337,
@@ -360,7 +373,7 @@ mod tests {
     }
 
     #[test]
-    fn test_post_state_account_getter() {
+    fn post_state_account_getter() {
         let mut account = Account {
             program_owner: [1, 2, 3, 4, 5, 6, 7, 8],
             balance: 1337,

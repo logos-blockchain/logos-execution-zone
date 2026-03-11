@@ -41,9 +41,9 @@ impl FromStr for HashType {
     type Err = hex::FromHexError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let mut bytes = [0u8; 32];
+        let mut bytes = [0_u8; 32];
         hex::decode_to_slice(s, &mut bytes)?;
-        Ok(HashType(bytes))
+        Ok(Self(bytes))
     }
 }
 
@@ -61,7 +61,7 @@ impl From<HashType> for [u8; 32] {
 
 impl From<[u8; 32]> for HashType {
     fn from(bytes: [u8; 32]) -> Self {
-        HashType(bytes)
+        Self(bytes)
     }
 }
 
@@ -69,7 +69,7 @@ impl TryFrom<Vec<u8>> for HashType {
     type Error = <[u8; 32] as TryFrom<Vec<u8>>>::Error;
 
     fn try_from(value: Vec<u8>) -> Result<Self, Self::Error> {
-        Ok(HashType(value.try_into()?))
+        Ok(Self(value.try_into()?))
     }
 }
 
@@ -85,7 +85,7 @@ mod tests {
 
     #[test]
     fn serialization_roundtrip() {
-        let original = HashType([1u8; 32]);
+        let original = HashType([1_u8; 32]);
         let serialized = original.to_string();
         let deserialized = HashType::from_str(&serialized).unwrap();
         assert_eq!(original, deserialized);

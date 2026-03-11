@@ -38,7 +38,7 @@ pub fn BlockPage() -> impl IntoView {
                 Some(BlockIdOrHash::BlockId(id)) => api::get_block_by_id(id).await,
                 Some(BlockIdOrHash::Hash(hash)) => api::get_block_by_hash(hash).await,
                 None => Err(leptos::prelude::ServerFnError::ServerError(
-                    "Invalid block ID or hash".to_string(),
+                    "Invalid block ID or hash".to_owned(),
                 )),
             }
         },
@@ -144,7 +144,7 @@ pub fn BlockPage() -> impl IntoView {
                                 view! {
                                     <div class="error-page">
                                         <h1>"Error"</h1>
-                                        <p>{format!("Failed to load block: {}", e)}</p>
+                                        <p>{format!("Failed to load block: {e}")}</p>
                                     </div>
                                 }
                                     .into_any()

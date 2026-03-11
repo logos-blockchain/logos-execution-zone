@@ -12,7 +12,7 @@ use crate::{
 };
 
 /// Maximum number of cycles for a public execution.
-/// TODO: Make this variable when fees are implemented
+/// TODO: Make this variable when fees are implemented.
 const MAX_NUM_CYCLES_PUBLIC_EXECUTION: u64 = 1024 * 1024 * 32; // 32M cycles
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -24,18 +24,20 @@ pub struct Program {
 impl Program {
     pub fn new(bytecode: Vec<u8>) -> Result<Self, NssaError> {
         let binary = risc0_binfmt::ProgramBinary::decode(&bytecode)
-            .map_err(|_| NssaError::InvalidProgramBytecode)?;
+            .map_err(NssaError::InvalidProgramBytecode)?;
         let id = binary
             .compute_image_id()
-            .map_err(|_| NssaError::InvalidProgramBytecode)?
+            .map_err(NssaError::InvalidProgramBytecode)?
             .into();
         Ok(Self { elf: bytecode, id })
     }
 
-    pub fn id(&self) -> ProgramId {
+    #[must_use]
+    pub const fn id(&self) -> ProgramId {
         self.id
     }
 
+    #[must_use]
     pub fn elf(&self) -> &[u8] {
         &self.elf
     }
@@ -72,7 +74,7 @@ impl Program {
         Ok(program_output)
     }
 
-    /// Writes inputs to `env_builder` in the order expected by the programs
+    /// Writes inputs to `env_builder` in the order expected by the programs.
     pub(crate) fn write_inputs(
         pre_states: &[AccountWithMetadata],
         instruction_data: &[u32],
@@ -85,18 +87,21 @@ impl Program {
         Ok(())
     }
 
+    #[must_use]
     pub fn authenticated_transfer_program() -> Self {
         // This unwrap won't panic since the `AUTHENTICATED_TRANSFER_ELF` comes from risc0 build of
         // `program_methods`
         Self::new(AUTHENTICATED_TRANSFER_ELF.to_vec()).unwrap()
     }
 
+    #[must_use]
     pub fn token() -> Self {
         // This unwrap won't panic since the `TOKEN_ELF` comes from risc0 build of
         // `program_methods`
         Self::new(TOKEN_ELF.to_vec()).unwrap()
     }
 
+    #[must_use]
     pub fn amm() -> Self {
         Self::new(AMM_ELF.to_vec()).expect("The AMM program must be a valid Risc0 program")
     }
@@ -104,12 +109,15 @@ impl Program {
 
 // TODO: Testnet only. Refactor to prevent compilation on mainnet.
 impl Program {
+    #[must_use]
     pub fn pinata() -> Self {
         // This unwrap won't panic since the `PINATA_ELF` comes from risc0 build of
         // `program_methods`
         Self::new(PINATA_ELF.to_vec()).unwrap()
     }
 
+    #[must_use]
+    #[expect(clippy::non_ascii_literal, reason = "More readable")]
     pub fn pinata_token() -> Self {
         use crate::program_methods::PINATA_TOKEN_ELF;
         Self::new(PINATA_TOKEN_ELF.to_vec()).expect("Piñata program must be a valid R0BF file")
@@ -129,133 +137,147 @@ mod tests {
     };
 
     impl Program {
-        /// A program that changes the nonce of an account
+        /// A program that changes the nonce of an account.
+        #[must_use]
         pub fn nonce_changer_program() -> Self {
             use test_program_methods::{NONCE_CHANGER_ELF, NONCE_CHANGER_ID};
 
-            Program {
+            Self {
                 id: NONCE_CHANGER_ID,
                 elf: NONCE_CHANGER_ELF.to_vec(),
             }
         }
 
-        /// A program that produces more output accounts than the inputs it received
+        /// A program that produces more output accounts than the inputs it received.
+        #[must_use]
         pub fn extra_output_program() -> Self {
             use test_program_methods::{EXTRA_OUTPUT_ELF, EXTRA_OUTPUT_ID};
 
-            Program {
+            Self {
                 id: EXTRA_OUTPUT_ID,
                 elf: EXTRA_OUTPUT_ELF.to_vec(),
             }
         }
 
-        /// A program that produces less output accounts than the inputs it received
+        /// A program that produces less output accounts than the inputs it received.
+        #[must_use]
         pub fn missing_output_program() -> Self {
             use test_program_methods::{MISSING_OUTPUT_ELF, MISSING_OUTPUT_ID};
 
-            Program {
+            Self {
                 id: MISSING_OUTPUT_ID,
                 elf: MISSING_OUTPUT_ELF.to_vec(),
             }
         }
 
-        /// A program that changes the program owner of an account to [0, 1, 2, 3, 4, 5, 6, 7]
+        /// A program that changes the program owner of an account to [0, 1, 2, 3, 4, 5, 6, 7].
+        #[must_use]
         pub fn program_owner_changer() -> Self {
             use test_program_methods::{PROGRAM_OWNER_CHANGER_ELF, PROGRAM_OWNER_CHANGER_ID};
 
-            Program {
+            Self {
                 id: PROGRAM_OWNER_CHANGER_ID,
                 elf: PROGRAM_OWNER_CHANGER_ELF.to_vec(),
             }
         }
 
-        /// A program that transfers balance without caring about authorizations
+        /// A program that transfers balance without caring about authorizations.
+        #[must_use]
         pub fn simple_balance_transfer() -> Self {
             use test_program_methods::{SIMPLE_BALANCE_TRANSFER_ELF, SIMPLE_BALANCE_TRANSFER_ID};
 
-            Program {
+            Self {
                 id: SIMPLE_BALANCE_TRANSFER_ID,
                 elf: SIMPLE_BALANCE_TRANSFER_ELF.to_vec(),
             }
         }
 
-        /// A program that modifies the data of an account
+        /// A program that modifies the data of an account.
+        #[must_use]
         pub fn data_changer() -> Self {
             use test_program_methods::{DATA_CHANGER_ELF, DATA_CHANGER_ID};
 
-            Program {
+            Self {
                 id: DATA_CHANGER_ID,
                 elf: DATA_CHANGER_ELF.to_vec(),
             }
         }
 
-        /// A program that mints balance
+        /// A program that mints balance.
+        #[must_use]
         pub fn minter() -> Self {
             use test_program_methods::{MINTER_ELF, MINTER_ID};
 
-            Program {
+            Self {
                 id: MINTER_ID,
                 elf: MINTER_ELF.to_vec(),
             }
         }
 
-        /// A program that burns balance
+        /// A program that burns balance.
+        #[must_use]
         pub fn burner() -> Self {
             use test_program_methods::{BURNER_ELF, BURNER_ID};
 
-            Program {
+            Self {
                 id: BURNER_ID,
                 elf: BURNER_ELF.to_vec(),
             }
         }
 
+        #[must_use]
         pub fn chain_caller() -> Self {
             use test_program_methods::{CHAIN_CALLER_ELF, CHAIN_CALLER_ID};
 
-            Program {
+            Self {
                 id: CHAIN_CALLER_ID,
                 elf: CHAIN_CALLER_ELF.to_vec(),
             }
         }
 
+        #[must_use]
         pub fn claimer() -> Self {
             use test_program_methods::{CLAIMER_ELF, CLAIMER_ID};
 
-            Program {
+            Self {
                 id: CLAIMER_ID,
                 elf: CLAIMER_ELF.to_vec(),
             }
         }
 
+        #[must_use]
         pub fn changer_claimer() -> Self {
             use test_program_methods::{CHANGER_CLAIMER_ELF, CHANGER_CLAIMER_ID};
 
-            Program {
+            Self {
                 id: CHANGER_CLAIMER_ID,
                 elf: CHANGER_CLAIMER_ELF.to_vec(),
             }
         }
 
+        #[must_use]
         pub fn noop() -> Self {
             use test_program_methods::{NOOP_ELF, NOOP_ID};
 
-            Program {
+            Self {
                 id: NOOP_ID,
                 elf: NOOP_ELF.to_vec(),
             }
         }
 
+        #[must_use]
         pub fn malicious_authorization_changer() -> Self {
             use test_program_methods::{
                 MALICIOUS_AUTHORIZATION_CHANGER_ELF, MALICIOUS_AUTHORIZATION_CHANGER_ID,
             };
 
-            Program {
+            Self {
                 id: MALICIOUS_AUTHORIZATION_CHANGER_ID,
                 elf: MALICIOUS_AUTHORIZATION_CHANGER_ELF.to_vec(),
             }
         }
 
+        #[must_use]
         pub fn modified_transfer_program() -> Self {
             use test_program_methods::MODIFIED_TRANSFER_ELF;
             // This unwrap won't panic since the `MODIFIED_TRANSFER_ELF` comes from risc0 build of
@@ -265,13 +287,13 @@ mod tests {
     }
 
     #[test]
-    fn test_program_execution() {
+    fn program_execution() {
         let program = Program::simple_balance_transfer();
-        let balance_to_move: u128 = 11223344556677;
+        let balance_to_move: u128 = 11_223_344_556_677;
         let instruction_data = Program::serialize_instruction(balance_to_move).unwrap();
         let sender = AccountWithMetadata::new(
             Account {
-                balance: 77665544332211,
+                balance: 77_665_544_332_211,
                 ..Account::default()
             },
             true,
@@ -281,7 +303,7 @@ mod tests {
             AccountWithMetadata::new(Account::default(), false, AccountId::new([1; 32]));
 
         let expected_sender_post = Account {
-            balance: 77665544332211 - balance_to_move,
+            balance: 77_665_544_332_211 - balance_to_move,
             ..Account::default()
         };
         let expected_recipient_post = Account {
@@ -299,7 +321,7 @@ mod tests {
     }
 
     #[test]
-    fn test_builtin_programs() {
+    fn builtin_programs() {
         let auth_transfer_program = Program::authenticated_transfer_program();
         let token_program = Program::token();
         let pinata_program = Program::pinata();

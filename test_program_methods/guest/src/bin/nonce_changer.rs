@@ -1,3 +1,5 @@
+#![expect(clippy::manual_let_else, reason = "Looks much better")]
+
 use nssa_core::program::{AccountPostState, ProgramInput, read_nssa_inputs, write_nssa_outputs};
 
 type Instruction = ();
@@ -12,7 +14,7 @@ fn main() {
 
     let account_pre = &pre.account;
     let mut account_post = account_pre.clone();
-    account_post.nonce += 1;
+    account_post.nonce = account_post.nonce.overflowing_add(1).0;
 
     write_nssa_outputs(
         instruction_words,

@@ -19,10 +19,10 @@ pub struct MockBlockSettlementClient {
 }
 
 impl BlockSettlementClientTrait for MockBlockSettlementClient {
-    fn new(config: &BedrockConfig, bedrock_signing_key: Ed25519Key) -> Result<Self> {
+    fn new(config: &BedrockConfig, signing_key: Ed25519Key) -> Result<Self> {
         Ok(Self {
             bedrock_channel_id: config.channel_id,
-            bedrock_signing_key,
+            bedrock_signing_key: signing_key,
         })
     }
 
@@ -46,10 +46,10 @@ pub struct MockBlockSettlementClientWithError {
 }
 
 impl BlockSettlementClientTrait for MockBlockSettlementClientWithError {
-    fn new(config: &BedrockConfig, bedrock_signing_key: Ed25519Key) -> Result<Self> {
+    fn new(config: &BedrockConfig, signing_key: Ed25519Key) -> Result<Self> {
         Ok(Self {
             bedrock_channel_id: config.channel_id,
-            bedrock_signing_key,
+            bedrock_signing_key: signing_key,
         })
     }
 

@@ -8,19 +8,21 @@ use crate::{
 
 // Helpers
 
+#[must_use]
 pub fn sequencer_sign_key_for_testing() -> nssa::PrivateKey {
     nssa::PrivateKey::try_new([37; 32]).unwrap()
 }
 
 // Dummy producers
 
-/// Produce dummy block with
+/// Produce dummy block with.
 ///
-/// `id` - block id, provide zero for genesis
+/// `id` - block id, provide zero for genesis.
 ///
-/// `prev_hash` - hash of previous block, provide None for genesis
+/// `prev_hash` - hash of previous block, provide None for genesis.
 ///
-/// `transactions` - vector of `EncodedTransaction` objects
+/// `transactions` - vector of `EncodedTransaction` objects.
+#[must_use]
 pub fn produce_dummy_block(
     id: u64,
     prev_hash: Option<HashType>,
@@ -29,13 +31,14 @@ pub fn produce_dummy_block(
     let block_data = HashableBlockData {
         block_id: id,
         prev_block_hash: prev_hash.unwrap_or_default(),
-        timestamp: id * 100,
+        timestamp: id.saturating_mul(100),
         transactions,
     };
 
     block_data.into_pending_block(&sequencer_sign_key_for_testing(), [0; 32])
 }
 
+#[must_use]
 pub fn produce_dummy_empty_transaction() -> NSSATransaction {
     let program_id = nssa::program::Program::authenticated_transfer_program().id();
     let account_ids = vec![];
@@ -56,12 +59,13 @@ pub fn produce_dummy_empty_transaction() -> NSSATransaction {
     NSSATransaction::Public(nssa_tx)
 }
 
+#[must_use]
 pub fn create_transaction_native_token_transfer(
     from: AccountId,
     nonce: u128,
     to: AccountId,
     balance_to_move: u128,
-    signing_key: nssa::PrivateKey,
+    signing_key: &nssa::PrivateKey,
 ) -> NSSATransaction {
     let account_ids = vec![from, to];
     let nonces = vec![nonce];
@@ -73,7 +77,7 @@ pub fn create_transaction_native_token_transfer(
         balance_to_move,
     )
     .unwrap();
-    let witness_set = nssa::public_transaction::WitnessSet::for_message(&message, &[&signing_key]);
+    let witness_set = nssa::public_transaction::WitnessSet::for_message(&message, &[signing_key]);
 
     let nssa_tx = nssa::PublicTransaction::new(message, witness_set);
 

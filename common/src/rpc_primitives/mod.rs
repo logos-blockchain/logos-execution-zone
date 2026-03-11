@@ -30,7 +30,7 @@ pub struct RpcConfig {
 
 impl Default for RpcConfig {
     fn default() -> Self {
-        RpcConfig {
+        Self {
             addr: "0.0.0.0:3040".to_owned(),
             cors_allowed_origins: vec!["*".to_owned()],
             limits_config: RpcLimitsConfig::default(),
@@ -39,15 +39,17 @@ impl Default for RpcConfig {
 }
 
 impl RpcConfig {
+    #[must_use]
     pub fn new(addr: &str) -> Self {
-        RpcConfig {
+        Self {
             addr: addr.to_owned(),
             ..Default::default()
         }
     }
 
+    #[must_use]
     pub fn with_port(port: u16) -> Self {
-        RpcConfig {
+        Self {
             addr: format!("0.0.0.0:{port}"),
             ..Default::default()
         }

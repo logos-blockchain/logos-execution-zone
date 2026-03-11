@@ -9,22 +9,22 @@ use crate::{
     program_facades::amm::Amm,
 };
 
-/// Represents generic CLI subcommand for a wallet working with amm program
+/// Represents generic CLI subcommand for a wallet working with amm program.
 #[derive(Subcommand, Debug, Clone)]
 pub enum AmmProgramAgnosticSubcommand {
-    /// Produce a new pool
+    /// Produce a new pool.
     ///
-    /// user_holding_a and user_holding_b must be owned.
+    /// `user_holding_a` and `user_holding_b` must be owned.
     ///
-    /// Only public execution allowed
+    /// Only public execution allowed.
     New {
-        /// user_holding_a - valid 32 byte base58 string with privacy prefix
+        /// `user_holding_a` - valid 32 byte base58 string with privacy prefix.
         #[arg(long)]
         user_holding_a: String,
-        /// user_holding_b - valid 32 byte base58 string with privacy prefix
+        /// `user_holding_b` - valid 32 byte base58 string with privacy prefix.
         #[arg(long)]
         user_holding_b: String,
-        /// user_holding_lp - valid 32 byte base58 string with privacy prefix
+        /// `user_holding_lp` - valid 32 byte base58 string with privacy prefix.
         #[arg(long)]
         user_holding_lp: String,
         #[arg(long)]
@@ -32,39 +32,39 @@ pub enum AmmProgramAgnosticSubcommand {
         #[arg(long)]
         balance_b: u128,
     },
-    /// Swap
+    /// Swap.
     ///
-    /// The account associated with swapping token must be owned
+    /// The account associated with swapping token must be owned.
     ///
-    /// Only public execution allowed
+    /// Only public execution allowed.
     Swap {
-        /// user_holding_a - valid 32 byte base58 string with privacy prefix
+        /// `user_holding_a` - valid 32 byte base58 string with privacy prefix.
         #[arg(long)]
         user_holding_a: String,
-        /// user_holding_b - valid 32 byte base58 string with privacy prefix
+        /// `user_holding_b` - valid 32 byte base58 string with privacy prefix.
         #[arg(long)]
         user_holding_b: String,
         #[arg(long)]
         amount_in: u128,
         #[arg(long)]
         min_amount_out: u128,
-        /// token_definition - valid 32 byte base58 string WITHOUT privacy prefix
+        /// `token_definition` - valid 32 byte base58 string WITHOUT privacy prefix.
         #[arg(long)]
         token_definition: String,
     },
-    /// Add liquidity
+    /// Add liquidity.
     ///
-    /// user_holding_a and user_holding_b must be owned.
+    /// `user_holding_a` and `user_holding_b` must be owned.
     ///
-    /// Only public execution allowed
+    /// Only public execution allowed.
     AddLiquidity {
-        /// user_holding_a - valid 32 byte base58 string with privacy prefix
+        /// `user_holding_a` - valid 32 byte base58 string with privacy prefix.
         #[arg(long)]
         user_holding_a: String,
-        /// user_holding_b - valid 32 byte base58 string with privacy prefix
+        /// `user_holding_b` - valid 32 byte base58 string with privacy prefix.
         #[arg(long)]
         user_holding_b: String,
-        /// user_holding_lp - valid 32 byte base58 string with privacy prefix
+        /// `user_holding_lp` - valid 32 byte base58 string with privacy prefix.
         #[arg(long)]
         user_holding_lp: String,
         #[arg(long)]
@@ -74,19 +74,19 @@ pub enum AmmProgramAgnosticSubcommand {
         #[arg(long)]
         max_amount_b: u128,
     },
-    /// Remove liquidity
+    /// Remove liquidity.
     ///
-    /// user_holding_lp must be owned.
+    /// `user_holding_lp` must be owned.
     ///
-    /// Only public execution allowed
+    /// Only public execution allowed.
     RemoveLiquidity {
-        /// user_holding_a - valid 32 byte base58 string with privacy prefix
+        /// `user_holding_a` - valid 32 byte base58 string with privacy prefix.
         #[arg(long)]
         user_holding_a: String,
-        /// user_holding_b - valid 32 byte base58 string with privacy prefix
+        /// `user_holding_b` - valid 32 byte base58 string with privacy prefix.
         #[arg(long)]
         user_holding_b: String,
-        /// user_holding_lp - valid 32 byte base58 string with privacy prefix
+        /// `user_holding_lp` - valid 32 byte base58 string with privacy prefix.
         #[arg(long)]
         user_holding_lp: String,
         #[arg(long)]
@@ -104,7 +104,7 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         match self {
-            AmmProgramAgnosticSubcommand::New {
+            Self::New {
                 user_holding_a,
                 user_holding_b,
                 user_holding_lp,
@@ -150,7 +150,7 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
                     }
                 }
             }
-            AmmProgramAgnosticSubcommand::Swap {
+            Self::Swap {
                 user_holding_a,
                 user_holding_b,
                 amount_in,
@@ -185,7 +185,7 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
                     }
                 }
             }
-            AmmProgramAgnosticSubcommand::AddLiquidity {
+            Self::AddLiquidity {
                 user_holding_a,
                 user_holding_b,
                 user_holding_lp,
@@ -233,7 +233,7 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
                     }
                 }
             }
-            AmmProgramAgnosticSubcommand::RemoveLiquidity {
+            Self::RemoveLiquidity {
                 user_holding_a,
                 user_holding_b,
                 user_holding_lp,

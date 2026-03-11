@@ -20,6 +20,10 @@ pub struct WalletChainStore {
 }
 
 impl WalletChainStore {
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "We perform search for specific variants only"
+    )]
     pub fn new(
         config: WalletConfig,
         persistent_accounts: Vec<PersistentAccountData>,
@@ -158,7 +162,7 @@ impl WalletChainStore {
 #[cfg(test)]
 mod tests {
     use key_protocol::key_management::key_tree::{
-        keys_private::ChildKeysPrivate, keys_public::ChildKeysPublic, traits::KeyNode,
+        keys_private::ChildKeysPrivate, keys_public::ChildKeysPublic, traits::KeyNode as _,
     };
 
     use super::*;
@@ -281,19 +285,19 @@ mod tests {
                 chain_index: ChainIndex::root(),
                 data: public_data,
             }),
-            PersistentAccountData::Private(PersistentAccountDataPrivate {
+            PersistentAccountData::Private(Box::new(PersistentAccountDataPrivate {
                 account_id: private_data.account_id(),
                 chain_index: ChainIndex::root(),
                 data: private_data,
-            }),
+            })),
         ]
     }
 
     #[test]
-    fn test_new_initializes_correctly() {
+    fn new_initializes_correctly() {
         let config = create_sample_wallet_config();
         let accs = create_sample_persistent_accounts();
 
-        let _ = WalletChainStore::new(config.clone(), accs, HashMap::new()).unwrap();
+        let _ = WalletChainStore::new(config, accs, HashMap::new()).unwrap();
     }
 }

@@ -4,8 +4,8 @@ use leptos_router::components::A;
 
 use crate::format_utils;
 
-/// Get CSS class for bedrock status
-fn status_class(status: &BedrockStatus) -> &'static str {
+/// Get CSS class for bedrock status.
+const fn status_class(status: &BedrockStatus) -> &'static str {
     match status {
         BedrockStatus::Pending => "status-pending",
         BedrockStatus::Safe => "status-safe",

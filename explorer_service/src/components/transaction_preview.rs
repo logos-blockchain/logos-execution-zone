@@ -2,8 +2,8 @@ use indexer_service_protocol::Transaction;
 use leptos::prelude::*;
 use leptos_router::components::A;
 
-/// Get transaction type name and CSS class
-fn transaction_type_info(tx: &Transaction) -> (&'static str, &'static str) {
+/// Get transaction type name and CSS class.
+const fn transaction_type_info(tx: &Transaction) -> (&'static str, &'static str) {
     match tx {
         Transaction::Public(_) => ("Public", "tx-type-public"),
         Transaction::PrivacyPreserving(_) => ("Privacy-Preserving", "tx-type-private"),
@@ -13,6 +13,10 @@ fn transaction_type_info(tx: &Transaction) -> (&'static str, &'static str) {
 
 /// Transaction preview component
 #[component]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Leptos component props are passed by value by framework convention"
+)]
 pub fn TransactionPreview(transaction: Transaction) -> impl IntoView {
     let hash = transaction.hash();
     let hash_str = hash.to_string();

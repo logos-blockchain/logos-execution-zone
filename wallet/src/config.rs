@@ -48,21 +48,19 @@ pub struct PersistentAccountDataPrivate {
 // Big difference in enum variants sizes
 // however it is improbable, that we will have that much accounts, that it will substantialy affect
 // memory
-#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum InitialAccountData {
     Public(InitialAccountDataPublic),
-    Private(InitialAccountDataPrivate),
+    Private(Box<InitialAccountDataPrivate>),
 }
 
 // Big difference in enum variants sizes
 // however it is improbable, that we will have that much accounts, that it will substantialy affect
 // memory
-#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PersistentAccountData {
     Public(PersistentAccountDataPublic),
-    Private(PersistentAccountDataPrivate),
+    Private(Box<PersistentAccountDataPrivate>),
     Preconfigured(InitialAccountData),
 }
 
@@ -71,7 +69,8 @@ pub enum PersistentAccountData {
 pub struct Label(String);
 
 impl Label {
-    pub fn new(label: String) -> Self {
+    #[must_use]
+    pub const fn new(label: String) -> Self {
         Self(label)
     }
 }
@@ -87,13 +86,17 @@ pub struct PersistentStorage {
     pub accounts: Vec<PersistentAccountData>,
     pub last_synced_block: u64,
     /// Account labels keyed by account ID string (e.g.,
-    /// "2rnKprXqWGWJTkDZKsQbFXa4ctKRbapsdoTKQFnaVGG8")
+    /// "2rnKprXqWGWJTkDZKsQbFXa4ctKRbapsdoTKQFnaVGG8").
     #[serde(default)]
     pub labels: HashMap<String, Label>,
 }
 
 impl PersistentStorage {
     pub fn from_path(path: &Path) -> Result<Self> {
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "We want to provide a specific error message for not found case"
+        )]
         match std::fs::File::open(path) {
             Ok(file) => {
                 let storage_content = BufReader::new(file);
@@ -112,6 +115,7 @@ impl PersistentStorage {
 }
 
 impl InitialAccountData {
+    #[must_use]
     pub fn account_id(&self) -> nssa::AccountId {
         match &self {
             Self::Public(acc) => acc.account_id,
@@ -121,6 +125,7 @@ impl InitialAccountData {
 }
 
 impl PersistentAccountData {
+    #[must_use]
     pub fn account_id(&self) -> nssa::AccountId {
         match &self {
             Self::Public(acc) => acc.account_id,
@@ -138,7 +143,7 @@ impl From<InitialAccountDataPublic> for InitialAccountData {
 
 impl From<InitialAccountDataPrivate> for InitialAccountData {
     fn from(value: InitialAccountDataPrivate) -> Self {
-        Self::Private(value)
+        Self::Private(Box::new(value))
     }
 }
 
@@ -150,7 +155,7 @@ impl From<PersistentAccountDataPublic> for PersistentAccountData {
 
 impl From<PersistentAccountDataPrivate> for PersistentAccountData {
     fn from(value: PersistentAccountDataPrivate) -> Self {
-        Self::Private(value)
+        Self::Private(Box::new(value))
     }
 }
 
@@ -162,42 +167,42 @@ impl From<InitialAccountData> for PersistentAccountData {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GasConfig {
-    /// Gas spent per deploying one byte of data
+    /// Gas spent per deploying one byte of data.
     pub gas_fee_per_byte_deploy: u64,
-    /// Gas spent per reading one byte of data in VM
+    /// Gas spent per reading one byte of data in VM.
     pub gas_fee_per_input_buffer_runtime: u64,
-    /// Gas spent per one byte of contract data in runtime
+    /// Gas spent per one byte of contract data in runtime.
     pub gas_fee_per_byte_runtime: u64,
-    /// Cost of one gas of runtime in public balance
+    /// Cost of one gas of runtime in public balance.
     pub gas_cost_runtime: u64,
-    /// Cost of one gas of deployment in public balance
+    /// Cost of one gas of deployment in public balance.
     pub gas_cost_deploy: u64,
-    /// Gas limit for deployment
+    /// Gas limit for deployment.
     pub gas_limit_deploy: u64,
-    /// Gas limit for runtime
+    /// Gas limit for runtime.
     pub gas_limit_runtime: u64,
 }
 
 #[optfield::optfield(pub WalletConfigOverrides, rewrap, attrs = (derive(Debug, Default, Clone)))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WalletConfig {
-    /// Override rust log (env var logging level)
+    /// Override rust log (env var logging level).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub override_rust_log: Option<String>,
-    /// Sequencer URL
+    /// Sequencer URL.
     pub sequencer_addr: Url,
-    /// Sequencer polling duration for new blocks
+    /// Sequencer polling duration for new blocks.
     #[serde(with = "humantime_serde")]
     pub seq_poll_timeout: Duration,
-    /// Sequencer polling max number of blocks to find transaction
+    /// Sequencer polling max number of blocks to find transaction.
     pub seq_tx_poll_max_blocks: usize,
-    /// Sequencer polling max number error retries
+    /// Sequencer polling max number error retries.
     pub seq_poll_max_retries: u64,
-    /// Max amount of blocks to poll in one request
+    /// Max amount of blocks to poll in one request.
     pub seq_block_poll_max_amount: u64,
-    /// Initial accounts for wallet
+    /// Initial accounts for wallet.
     pub initial_accounts: Vec<InitialAccountData>,
-    /// Basic authentication credentials
+    /// Basic authentication credentials.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub basic_auth: Option<BasicAuth>,
 }
@@ -502,7 +507,7 @@ impl Default for WalletConfig {
 }
 
 impl WalletConfig {
-    pub fn from_path_or_initialize_default(config_path: &Path) -> Result<WalletConfig> {
+    pub fn from_path_or_initialize_default(config_path: &Path) -> Result<Self> {
         match std::fs::File::open(config_path) {
             Ok(file) => {
                 let reader = std::io::BufReader::new(file);
@@ -513,12 +518,13 @@ impl WalletConfig {
 
                 let config_home = config_path.parent().ok_or_else(|| {
                     anyhow::anyhow!(
-                        "Could not get parent directory of config file at {config_path:#?}"
+                        "Could not get parent directory of config file at {}",
+                        config_path.display()
                     )
                 })?;
                 std::fs::create_dir_all(config_home)?;
 
-                println!("Created configs dir at path {config_home:#?}");
+                println!("Created configs dir at path {}", config_home.display());
 
                 let mut file = std::fs::OpenOptions::new()
                     .write(true)
@@ -526,7 +532,7 @@ impl WalletConfig {
                     .truncate(true)
                     .open(config_path)?;
 
-                let config = WalletConfig::default();
+                let config = Self::default();
                 let default_config_serialized = serde_json::to_vec_pretty(&config).unwrap();
 
                 file.write_all(&default_config_serialized)?;
@@ -539,7 +545,7 @@ impl WalletConfig {
     }
 
     pub fn apply_overrides(&mut self, overrides: WalletConfigOverrides) {
-        let WalletConfig {
+        let Self {
             override_rust_log,
             sequencer_addr,
             seq_poll_timeout,

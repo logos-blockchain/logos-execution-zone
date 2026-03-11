@@ -47,19 +47,16 @@ pub unsafe extern "C" fn wallet_ffi_get_public_account_key(
     let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
-            print_error(format!("Failed to lock wallet: {}", e));
+            print_error(format!("Failed to lock wallet: {e}"));
             return WalletFfiError::InternalError;
         }
     };
 
     let account_id = AccountId::new(unsafe { (*account_id).data });
 
-    let private_key = match wallet.get_account_public_signing_key(account_id) {
-        Some(k) => k,
-        None => {
-            print_error("Public account key not found in wallet");
-            return WalletFfiError::KeyNotFound;
-        }
+    let Some(private_key) = wallet.get_account_public_signing_key(account_id) else {
+        print_error("Public account key not found in wallet");
+        return WalletFfiError::KeyNotFound;
     };
 
     let public_key = PublicKey::new_from_private_key(private_key);
@@ -112,19 +109,17 @@ pub unsafe extern "C" fn wallet_ffi_get_private_account_keys(
     let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
-            print_error(format!("Failed to lock wallet: {}", e));
+            print_error(format!("Failed to lock wallet: {e}"));
             return WalletFfiError::InternalError;
         }
     };
 
     let account_id = AccountId::new(unsafe { (*account_id).data });
 
-    let (key_chain, _account) = match wallet.storage().user_data.get_private_account(account_id) {
-        Some(k) => k,
-        None => {
-            print_error("Private account not found in wallet");
-            return WalletFfiError::AccountNotFound;
-        }
+    let Some((key_chain, _account)) = wallet.storage().user_data.get_private_account(account_id)
+    else {
+        print_error("Private account not found in wallet");
+        return WalletFfiError::AccountNotFound;
     };
 
     // NPK is a 32-byte array
@@ -135,6 +130,10 @@ pub unsafe extern "C" fn wallet_ffi_get_private_account_keys(
     let vpk_len = vpk_bytes.len();
     let vpk_vec = vpk_bytes.to_vec();
     let vpk_boxed = vpk_vec.into_boxed_slice();
+    #[expect(
+        clippy::as_conversions,
+        reason = "We need to convert the boxed slice into a raw pointer for FFI"
+    )]
     let vpk_ptr = Box::into_raw(vpk_boxed) as *const u8;
 
     unsafe {
@@ -161,10 +160,10 @@ pub unsafe extern "C" fn wallet_ffi_free_private_account_keys(keys: *mut FfiPriv
         let keys = &*keys;
         if !keys.viewing_public_key.is_null() && keys.viewing_public_key_len > 0 {
             let slice = std::slice::from_raw_parts_mut(
-                keys.viewing_public_key as *mut u8,
+                keys.viewing_public_key.cast_mut(),
                 keys.viewing_public_key_len,
             );
-            drop(Box::from_raw(slice as *mut [u8]));
+            drop(Box::from_raw(std::ptr::from_mut::<[u8]>(slice)));
         }
     }
 }
@@ -198,7 +197,7 @@ pub unsafe extern "C" fn wallet_ffi_account_id_to_base58(
     match std::ffi::CString::new(base58_str) {
         Ok(s) => s.into_raw(),
         Err(e) => {
-            print_error(format!("Failed to create C string: {}", e));
+            print_error(format!("Failed to create C string: {e}"));
             ptr::null_mut()
         }
     }
@@ -232,7 +231,7 @@ pub unsafe extern "C" fn wallet_ffi_account_id_from_base58(
     let str_slice = match c_str.to_str() {
         Ok(s) => s,
         Err(e) => {
-            print_error(format!("Invalid UTF-8: {}", e));
+            print_error(format!("Invalid UTF-8: {e}"));
             return WalletFfiError::InvalidUtf8;
         }
     };
@@ -240,7 +239,7 @@ pub unsafe extern "C" fn wallet_ffi_account_id_from_base58(
     let account_id: AccountId = match str_slice.parse() {
         Ok(id) => id,
         Err(e) => {
-            print_error(format!("Invalid Base58 account ID: {}", e));
+            print_error(format!("Invalid Base58 account ID: {e}"));
             return WalletFfiError::InvalidAccountId;
         }
     };

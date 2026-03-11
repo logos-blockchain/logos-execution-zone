@@ -86,7 +86,7 @@ async fn private_transfer_to_foreign_account() -> Result<()> {
     assert_eq!(tx.message.new_commitments[0], new_commitment1);
 
     assert_eq!(tx.message.new_commitments.len(), 2);
-    for commitment in tx.message.new_commitments.into_iter() {
+    for commitment in tx.message.new_commitments {
         assert!(verify_commitment_is_in_state(commitment, ctx.sequencer_client()).await);
     }
 
@@ -198,7 +198,7 @@ async fn private_transfer_to_owned_account_using_claiming_path() -> Result<()> {
     assert_eq!(tx.message.new_commitments[0], new_commitment1);
 
     assert_eq!(tx.message.new_commitments.len(), 2);
-    for commitment in tx.message.new_commitments.into_iter() {
+    for commitment in tx.message.new_commitments {
         assert!(verify_commitment_is_in_state(commitment, ctx.sequencer_client()).await);
     }
 
@@ -353,7 +353,7 @@ async fn private_transfer_to_owned_account_continuous_run_path() -> Result<()> {
 
     // Verify commitments are in state
     assert_eq!(tx.message.new_commitments.len(), 2);
-    for commitment in tx.message.new_commitments.into_iter() {
+    for commitment in tx.message.new_commitments {
         assert!(verify_commitment_is_in_state(commitment, ctx.sequencer_client()).await);
     }
 

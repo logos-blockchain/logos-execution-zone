@@ -22,14 +22,14 @@ pub enum SequencerClientError {
 
 impl From<SequencerRpcError> for SequencerClientError {
     fn from(value: SequencerRpcError) -> Self {
-        SequencerClientError::InternalError(value)
+        Self::InternalError(value)
     }
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum ExecutionFailureKind {
-    #[error("Failed to get account data from sequencer")]
-    SequencerError,
+    #[error("Failed to get data from sequencer")]
+    SequencerError(#[source] anyhow::Error),
     #[error("Inputs amounts does not match outputs")]
     AmountMismatchError,
     #[error("Accounts key not found")]

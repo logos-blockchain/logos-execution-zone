@@ -6,6 +6,7 @@ use token_core::{
     NewTokenDefinition, NewTokenMetadata, TokenDefinition, TokenHolding, TokenMetadata,
 };
 
+#[must_use]
 pub fn new_fungible_definition(
     definition_target_account: AccountWithMetadata,
     holding_target_account: AccountWithMetadata,
@@ -46,6 +47,7 @@ pub fn new_fungible_definition(
     ]
 }
 
+#[must_use]
 pub fn new_definition_with_metadata(
     definition_target_account: AccountWithMetadata,
     holding_target_account: AccountWithMetadata,
@@ -104,16 +106,16 @@ pub fn new_definition_with_metadata(
         standard: metadata.standard,
         uri: metadata.uri,
         creators: metadata.creators,
-        primary_sale_date: 0u64, // TODO #261: future works to implement this
+        primary_sale_date: 0_u64, // TODO #261: future works to implement this
     };
 
-    let mut definition_target_account_post = definition_target_account.account.clone();
+    let mut definition_target_account_post = definition_target_account.account;
     definition_target_account_post.data = Data::from(&token_definition);
 
-    let mut holding_target_account_post = holding_target_account.account.clone();
+    let mut holding_target_account_post = holding_target_account.account;
     holding_target_account_post.data = Data::from(&token_holding);
 
-    let mut metadata_target_account_post = metadata_target_account.account.clone();
+    let mut metadata_target_account_post = metadata_target_account.account;
     metadata_target_account_post.data = Data::from(&token_metadata);
 
     vec![

@@ -11,8 +11,62 @@ use super::{
 };
 use crate::{HashType, parse_request};
 
+mod base64_deser {
+    use base64::{Engine as _, engine::general_purpose};
+    use serde::{self, Deserialize, Deserializer, Serializer, ser::SerializeSeq as _};
+
+    pub mod vec {
+        use super::*;
+
+        pub fn serialize<S>(bytes_vec: &[Vec<u8>], serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            let mut seq = serializer.serialize_seq(Some(bytes_vec.len()))?;
+            for bytes in bytes_vec {
+                let s = general_purpose::STANDARD.encode(bytes);
+                seq.serialize_element(&s)?;
+            }
+            seq.end()
+        }
+
+        pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<Vec<u8>>, D::Error>
+        where
+            D: Deserializer<'de>,
+        {
+            let base64_strings: Vec<String> = Deserialize::deserialize(deserializer)?;
+            base64_strings
+                .into_iter()
+                .map(|s| {
+                    general_purpose::STANDARD
+                        .decode(&s)
+                        .map_err(serde::de::Error::custom)
+                })
+                .collect()
+        }
+    }
+
+    pub fn serialize<S>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let base64_string = general_purpose::STANDARD.encode(bytes);
+        serializer.serialize_str(&base64_string)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let base64_string: String = Deserialize::deserialize(deserializer)?;
+        general_purpose::STANDARD
+            .decode(&base64_string)
+            .map_err(serde::de::Error::custom)
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug)]
-pub struct HelloRequest {}
+pub struct HelloRequest;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct RegisterAccountRequest {
@@ -30,7 +84,7 @@ pub struct GetBlockDataRequest {
     pub block_id: u64,
 }
 
-/// Get a range of blocks from `start_block_id` to `end_block_id` (inclusive)
+/// Get a range of blocks from `start_block_id` to `end_block_id` (inclusive).
 #[derive(Serialize, Deserialize, Debug)]
 pub struct GetBlockRangeDataRequest {
     pub start_block_id: u64,
@@ -38,13 +92,13 @@ pub struct GetBlockRangeDataRequest {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct GetGenesisIdRequest {}
+pub struct GetGenesisIdRequest;
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct GetLastBlockRequest {}
+pub struct GetLastBlockRequest;
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct GetInitialTestnetAccountsRequest {}
+pub struct GetInitialTestnetAccountsRequest;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct GetAccountBalanceRequest {
@@ -72,7 +126,7 @@ pub struct GetProofForCommitmentRequest {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub struct GetProgramIdsRequest {}
+pub struct GetProgramIdsRequest;
 
 parse_request!(HelloRequest);
 parse_request!(RegisterAccountRequest);
@@ -117,60 +171,6 @@ pub struct GetBlockRangeDataResponse {
     pub blocks: Vec<Vec<u8>>,
 }
 
-mod base64_deser {
-    use base64::{Engine as _, engine::general_purpose};
-    use serde::{self, Deserialize, Deserializer, Serializer, ser::SerializeSeq as _};
-
-    pub fn serialize<S>(bytes: &[u8], serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let base64_string = general_purpose::STANDARD.encode(bytes);
-        serializer.serialize_str(&base64_string)
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<u8>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let base64_string: String = Deserialize::deserialize(deserializer)?;
-        general_purpose::STANDARD
-            .decode(&base64_string)
-            .map_err(serde::de::Error::custom)
-    }
-
-    pub mod vec {
-        use super::*;
-
-        pub fn serialize<S>(bytes_vec: &[Vec<u8>], serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: Serializer,
-        {
-            let mut seq = serializer.serialize_seq(Some(bytes_vec.len()))?;
-            for bytes in bytes_vec {
-                let s = general_purpose::STANDARD.encode(bytes);
-                seq.serialize_element(&s)?;
-            }
-            seq.end()
-        }
-
-        pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<Vec<u8>>, D::Error>
-        where
-            D: Deserializer<'de>,
-        {
-            let base64_strings: Vec<String> = Deserialize::deserialize(deserializer)?;
-            base64_strings
-                .into_iter()
-                .map(|s| {
-                    general_purpose::STANDARD
-                        .decode(&s)
-                        .map_err(serde::de::Error::custom)
-                })
-                .collect()
-        }
-    }
-}
-
 #[derive(Serialize, Deserialize, Debug)]
 pub struct GetGenesisIdResponse {
     pub genesis_id: u64,
@@ -213,7 +213,7 @@ pub struct GetProgramIdsResponse {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct GetInitialTestnetAccountsResponse {
-    /// Hex encoded account id
+    /// Hex encoded account id.
     pub account_id: String,
     pub balance: u64,
 }

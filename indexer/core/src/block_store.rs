@@ -3,7 +3,7 @@ use std::{path::Path, sync::Arc};
 use anyhow::Result;
 use bedrock_client::HeaderId;
 use common::{
-    block::{BedrockStatus, Block},
+    block::{BedrockStatus, Block, BlockId},
     transaction::NSSATransaction,
 };
 use nssa::{Account, AccountId, V02State};
@@ -21,18 +21,14 @@ impl IndexerStore {
     /// ATTENTION: Will overwrite genesis block.
     pub fn open_db_with_genesis(
         location: &Path,
-        start_data: Option<(Block, V02State)>,
+        genesis_block: &Block,
+        initial_state: &V02State,
     ) -> Result<Self> {
-        let dbio = RocksDBIO::open_or_create(location, start_data)?;
+        let dbio = RocksDBIO::open_or_create(location, genesis_block, initial_state)?;
 
         Ok(Self {
             dbio: Arc::new(dbio),
         })
-    }
-
-    /// Reopening existing database
-    pub fn open_db_restart(location: &Path) -> Result<Self> {
-        Self::open_db_with_genesis(location, None)
     }
 
     pub fn last_observed_l1_lib_header(&self) -> Result<Option<HeaderId>> {
@@ -50,7 +46,7 @@ impl IndexerStore {
         Ok(self.dbio.get_block(id)?)
     }
 
-    pub fn get_block_batch(&self, before: Option<u64>, limit: u64) -> Result<Vec<Block>> {
+    pub fn get_block_batch(&self, before: Option<BlockId>, limit: u64) -> Result<Vec<Block>> {
         Ok(self.dbio.get_block_batch(before, limit)?)
     }
 
@@ -79,12 +75,14 @@ impl IndexerStore {
         Ok(self.dbio.get_acc_transactions(acc_id, offset, limit)?)
     }
 
+    #[must_use]
     pub fn genesis_id(&self) -> u64 {
         self.dbio
             .get_meta_first_block_in_db()
             .expect("Must be set at the DB startup")
     }
 
+    #[must_use]
     pub fn last_block(&self) -> u64 {
         self.dbio
             .get_meta_last_block_in_db()
@@ -118,6 +116,6 @@ impl IndexerStore {
         // to represent correct block finality
         block.bedrock_status = BedrockStatus::Finalized;
 
-        Ok(self.dbio.put_block(block, l1_header.into())?)
+        Ok(self.dbio.put_block(&block, l1_header.into())?)
     }
 }

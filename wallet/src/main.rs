@@ -1,3 +1,8 @@
+#![expect(
+    clippy::print_stdout,
+    reason = "This is a CLI application, printing to stdout is expected and convenient"
+)]
+
 use anyhow::{Context as _, Result};
 use clap::{CommandFactory as _, Parser as _};
 use wallet::{
@@ -33,7 +38,9 @@ async fn main() -> Result<()> {
     };
 
     if let Some(command) = command {
-        let mut wallet = if !storage_path.exists() {
+        let mut wallet = if storage_path.exists() {
+            WalletCore::new_update_chain(config_path, storage_path, Some(config_overrides))?
+        } else {
             // TODO: Maybe move to `WalletCore::from_env()` or similar?
 
             println!("Persistent storage not found, need to execute setup");
@@ -48,8 +55,6 @@ async fn main() -> Result<()> {
 
             wallet.store_persistent_data().await?;
             wallet
-        } else {
-            WalletCore::new_update_chain(config_path, storage_path, Some(config_overrides))?
         };
         let _output = execute_subcommand(&mut wallet, command).await?;
         Ok(())

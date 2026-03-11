@@ -36,75 +36,75 @@
  */
 typedef enum WalletFfiError {
   /**
-   * Operation completed successfully
+   * Operation completed successfully.
    */
   SUCCESS = 0,
   /**
-   * A null pointer was passed where a valid pointer was expected
+   * A null pointer was passed where a valid pointer was expected.
    */
   NULL_POINTER = 1,
   /**
-   * Invalid UTF-8 string
+   * Invalid UTF-8 string.
    */
   INVALID_UTF8 = 2,
   /**
-   * Wallet handle is not initialized
+   * Wallet handle is not initialized.
    */
   WALLET_NOT_INITIALIZED = 3,
   /**
-   * Configuration error
+   * Configuration error.
    */
   CONFIG_ERROR = 4,
   /**
-   * Storage/persistence error
+   * Storage/persistence error.
    */
   STORAGE_ERROR = 5,
   /**
-   * Network/RPC error
+   * Network/RPC error.
    */
   NETWORK_ERROR = 6,
   /**
-   * Account not found
+   * Account not found.
    */
   ACCOUNT_NOT_FOUND = 7,
   /**
-   * Key not found for account
+   * Key not found for account.
    */
   KEY_NOT_FOUND = 8,
   /**
-   * Insufficient funds for operation
+   * Insufficient funds for operation.
    */
   INSUFFICIENT_FUNDS = 9,
   /**
-   * Invalid account ID format
+   * Invalid account ID format.
    */
   INVALID_ACCOUNT_ID = 10,
   /**
-   * Tokio runtime error
+   * Tokio runtime error.
    */
   RUNTIME_ERROR = 11,
   /**
-   * Password required but not provided
+   * Password required but not provided.
    */
   PASSWORD_REQUIRED = 12,
   /**
-   * Block synchronization error
+   * Block synchronization error.
    */
   SYNC_ERROR = 13,
   /**
-   * Serialization/deserialization error
+   * Serialization/deserialization error.
    */
   SERIALIZATION_ERROR = 14,
   /**
-   * Invalid conversion from FFI types to NSSA types
+   * Invalid conversion from FFI types to NSSA types.
    */
   INVALID_TYPE_CONVERSION = 15,
   /**
-   * Invalid Key value
+   * Invalid Key value.
    */
   INVALID_KEY_VALUE = 16,
   /**
-   * Internal error (catch-all)
+   * Internal error (catch-all).
    */
   INTERNAL_ERROR = 99,
 } WalletFfiError;
@@ -120,7 +120,7 @@ typedef struct WalletHandle {
 } WalletHandle;
 
 /**
- * 32-byte array type for AccountId, keys, hashes, etc.
+ * 32-byte array type for `AccountId`, keys, hashes, etc.
  */
 typedef struct FfiBytes32 {
   uint8_t data[32];
@@ -135,7 +135,7 @@ typedef struct FfiAccountListEntry {
 } FfiAccountListEntry;
 
 /**
- * List of accounts returned by wallet_ffi_list_accounts.
+ * List of accounts returned by `wallet_ffi_list_accounts`.
  */
 typedef struct FfiAccountList {
   struct FfiAccountListEntry *entries;
@@ -150,7 +150,7 @@ typedef struct FfiProgramId {
 } FfiProgramId;
 
 /**
- * U128 - 16 bytes little endian
+ * U128 - 16 bytes little endian.
  */
 typedef struct FfiU128 {
   uint8_t data[16];
@@ -165,19 +165,19 @@ typedef struct FfiU128 {
 typedef struct FfiAccount {
   struct FfiProgramId program_owner;
   /**
-   * Balance as little-endian [u8; 16]
+   * Balance as little-endian [u8; 16].
    */
   struct FfiU128 balance;
   /**
-   * Pointer to account data bytes
+   * Pointer to account data bytes.
    */
   const uint8_t *data;
   /**
-   * Length of account data
+   * Length of account data.
    */
   uintptr_t data_len;
   /**
-   * Nonce as little-endian [u8; 16]
+   * Nonce as little-endian [u8; 16].
    */
   struct FfiU128 nonce;
 } FfiAccount;
@@ -194,15 +194,15 @@ typedef struct FfiPublicAccountKey {
  */
 typedef struct FfiPrivateAccountKeys {
   /**
-   * Nullifier public key (32 bytes)
+   * Nullifier public key (32 bytes).
    */
   struct FfiBytes32 nullifier_public_key;
   /**
-   * viewing public key (compressed secp256k1 point)
+   * viewing public key (compressed secp256k1 point).
    */
   const uint8_t *viewing_public_key;
   /**
-   * Length of viewing public key (typically 33 bytes)
+   * Length of viewing public key (typically 33 bytes).
    */
   uintptr_t viewing_public_key_len;
 } FfiPrivateAccountKeys;
@@ -212,11 +212,11 @@ typedef struct FfiPrivateAccountKeys {
  */
 typedef struct FfiTransferResult {
   /**
-   * Transaction hash (null-terminated string, or null on failure)
+   * Transaction hash (null-terminated string, or null on failure).
    */
   char *tx_hash;
   /**
-   * Whether the transfer succeeded
+   * Whether the transfer succeeded.
    */
   bool success;
 } FfiTransferResult;

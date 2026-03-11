@@ -1,4 +1,4 @@
-use std::{env, fs, path::PathBuf};
+use std::{env, fmt::Write as _, fs, path::PathBuf};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR")?);
@@ -15,7 +15,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .collect::<Vec<_>>();
 
     if bins.is_empty() {
-        return Err(format!("No .bin files found in {:?}", program_methods_dir).into());
+        return Err(format!("No .bin files found in {}", program_methods_dir.display()).into());
     }
 
     fs::create_dir_all(&mod_dir)?;
@@ -25,14 +25,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let name = path.file_stem().unwrap().to_string_lossy();
         let bytecode = fs::read(&path)?;
         let image_id: [u32; 8] = risc0_binfmt::compute_image_id(&bytecode)?.into();
-        src.push_str(&format!(
+        write!(
+            src,
             "pub const {}_ELF: &[u8] = include_bytes!(r#\"{}\"#);\n\
+             #[expect(clippy::unreadable_literal, reason = \"Generated image IDs from risc0 are cryptographic hashes represented as u32 arrays\")]\n\
              pub const {}_ID: [u32; 8] = {:?};\n",
             name.to_uppercase(),
             path.display(),
             name.to_uppercase(),
             image_id
-        ));
+        )?;
     }
     fs::write(&mod_file, src)?;
     println!("cargo:warning=Generated module at {}", mod_file.display());

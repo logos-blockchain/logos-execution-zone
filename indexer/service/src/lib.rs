@@ -16,14 +16,15 @@ pub struct IndexerHandle {
     server_handle: Option<jsonrpsee::server::ServerHandle>,
 }
 impl IndexerHandle {
-    fn new(addr: SocketAddr, server_handle: jsonrpsee::server::ServerHandle) -> Self {
+    const fn new(addr: SocketAddr, server_handle: jsonrpsee::server::ServerHandle) -> Self {
         Self {
             addr,
             server_handle: Some(server_handle),
         }
     }
 
-    pub fn addr(&self) -> SocketAddr {
+    #[must_use]
+    pub const fn addr(&self) -> SocketAddr {
         self.addr
     }
 
@@ -33,9 +34,14 @@ impl IndexerHandle {
             .take()
             .expect("Indexer server handle is set");
 
-        handle.stopped().await
+        handle.stopped().await;
     }
 
+    #[expect(
+        clippy::redundant_closure_for_method_calls,
+        reason = "Clippy suggested path jsonrpsee::jsonrpsee_server::ServerHandle is not accessible"
+    )]
+    #[must_use]
     pub fn is_stopped(&self) -> bool {
         self.server_handle
             .as_ref()

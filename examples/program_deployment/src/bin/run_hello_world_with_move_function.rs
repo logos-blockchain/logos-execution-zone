@@ -19,13 +19,14 @@ use wallet::{PrivacyPreservingAccount, WalletCore};
 //     methods/guest/target/riscv32im-risc0-zkvm-elf/docker/hello_world_with_move_function.bin \
 //     write-public Ds8q5PjLcKwwV97Zi7duhRVF9uwA2PuYMoLL7FwCzsXE Hola
 
-type Instruction = (u8, Vec<u8>);
 const WRITE_FUNCTION_ID: u8 = 0;
 const MOVE_DATA_FUNCTION_ID: u8 = 1;
 
+type Instruction = (u8, Vec<u8>);
+
 #[derive(Parser, Debug)]
 struct Cli {
-    /// Path to program binary
+    /// Path to program binary.
     program_path: String,
 
     #[command(subcommand)]
@@ -34,7 +35,7 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Write instruction into one account
+    /// Write instruction into one account.
     WritePublic {
         account_id: String,
         greeting: String,
@@ -43,7 +44,7 @@ enum Command {
         account_id: String,
         greeting: String,
     },
-    /// Move data between two accounts
+    /// Move data between two accounts.
     MoveDataPublicToPublic {
         from: String,
         to: String,
@@ -148,5 +149,5 @@ async fn main() {
                 .await
                 .unwrap();
         }
-    };
+    }
 }

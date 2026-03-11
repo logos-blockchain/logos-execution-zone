@@ -7,18 +7,17 @@ use nssa_core::{
 
 /// Initializes a default account under the ownership of this program.
 fn initialize_account(pre_state: AccountWithMetadata) -> AccountPostState {
-    let account_to_claim = AccountPostState::new_claimed(pre_state.account.clone());
+    let account_to_claim = AccountPostState::new_claimed(pre_state.account);
     let is_authorized = pre_state.is_authorized;
 
     // Continue only if the account to claim has default values
-    if account_to_claim.account() != &Account::default() {
-        panic!("Account must be uninitialized");
-    }
+    assert!(
+        account_to_claim.account() == &Account::default(),
+        "Account must be uninitialized"
+    );
 
     // Continue only if the owner authorized this operation
-    if !is_authorized {
-        panic!("Account must be authorized");
-    }
+    assert!(is_authorized, "Account must be authorized");
 
     account_to_claim
 }
@@ -30,27 +29,26 @@ fn transfer(
     balance_to_move: u128,
 ) -> Vec<AccountPostState> {
     // Continue only if the sender has authorized this operation
-    if !sender.is_authorized {
-        panic!("Sender must be authorized");
-    }
-
-    // Continue only if the sender has enough balance
-    if sender.account.balance < balance_to_move {
-        panic!("Sender has insufficient balance");
-    }
+    assert!(sender.is_authorized, "Sender must be authorized");
 
     // Create accounts post states, with updated balances
     let sender_post = {
         // Modify sender's balance
-        let mut sender_post_account = sender.account.clone();
-        sender_post_account.balance -= balance_to_move;
+        let mut sender_post_account = sender.account;
+        sender_post_account.balance = sender_post_account
+            .balance
+            .checked_sub(balance_to_move)
+            .expect("Sender has insufficient balance");
         AccountPostState::new(sender_post_account)
     };
 
     let recipient_post = {
         // Modify recipient's balance
-        let mut recipient_post_account = recipient.account.clone();
-        recipient_post_account.balance += balance_to_move;
+        let mut recipient_post_account = recipient.account;
+        recipient_post_account.balance = recipient_post_account
+            .balance
+            .checked_add(balance_to_move)
+            .expect("Recipient balance overflow");
 
         // Claim recipient account if it has default program owner
         if recipient_post_account.program_owner == DEFAULT_PROGRAM_ID {

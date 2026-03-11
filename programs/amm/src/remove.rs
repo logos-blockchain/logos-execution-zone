@@ -7,6 +7,7 @@ use nssa_core::{
 };
 
 #[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
+#[must_use]
 pub fn remove_liquidity(
     pool: AccountWithMetadata,
     vault_a: AccountWithMetadata,
@@ -101,13 +102,13 @@ pub fn remove_liquidity(
     let active: bool = pool_def_data.liquidity_pool_supply - delta_lp != 0;
 
     // 5. Update pool account
-    let mut pool_post = pool.account.clone();
+    let mut pool_post = pool.account;
     let pool_post_definition = PoolDefinition {
         liquidity_pool_supply: pool_def_data.liquidity_pool_supply - delta_lp,
         reserve_a: pool_def_data.reserve_a - withdraw_amount_a,
         reserve_b: pool_def_data.reserve_b - withdraw_amount_b,
         active,
-        ..pool_def_data.clone()
+        ..pool_def_data
     };
 
     pool_post.data = Data::from(&pool_post_definition);
@@ -153,13 +154,13 @@ pub fn remove_liquidity(
     let chained_calls = vec![call_token_lp, call_token_b, call_token_a];
 
     let post_states = vec![
-        AccountPostState::new(pool_post.clone()),
-        AccountPostState::new(vault_a.account.clone()),
-        AccountPostState::new(vault_b.account.clone()),
-        AccountPostState::new(pool_definition_lp.account.clone()),
-        AccountPostState::new(user_holding_a.account.clone()),
-        AccountPostState::new(user_holding_b.account.clone()),
-        AccountPostState::new(user_holding_lp.account.clone()),
+        AccountPostState::new(pool_post),
+        AccountPostState::new(vault_a.account),
+        AccountPostState::new(vault_b.account),
+        AccountPostState::new(pool_definition_lp.account),
+        AccountPostState::new(user_holding_a.account),
+        AccountPostState::new(user_holding_b.account),
+        AccountPostState::new(user_holding_lp.account),
     ];
 
     (post_states, chained_calls)

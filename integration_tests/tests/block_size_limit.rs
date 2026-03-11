@@ -1,3 +1,9 @@
+#![expect(
+    clippy::as_conversions,
+    clippy::tests_outside_test_module,
+    reason = "We don't care about these in tests"
+)]
+
 use std::time::Duration;
 
 use anyhow::Result;
@@ -24,7 +30,7 @@ async fn reject_oversized_transaction() -> Result<()> {
     // Create a transaction that's definitely too large
     // Block size is 1 MiB (1,048,576 bytes), minus ~200 bytes for header = ~1,048,376 bytes max tx
     // Create a 1.1 MiB binary to ensure it exceeds the limit
-    let oversized_binary = vec![0u8; 1100 * 1024]; // 1.1 MiB binary
+    let oversized_binary = vec![0_u8; 1100 * 1024]; // 1.1 MiB binary
 
     let message = nssa::program_deployment_transaction::Message::new(oversized_binary);
     let tx = nssa::ProgramDeploymentTransaction::new(message);
@@ -38,13 +44,12 @@ async fn reject_oversized_transaction() -> Result<()> {
     );
 
     let err = result.unwrap_err();
-    let err_str = format!("{:?}", err);
+    let err_str = format!("{err:?}");
 
     // Check if the error contains information about transaction being too large
     assert!(
         err_str.contains("TransactionTooLarge") || err_str.contains("too large"),
-        "Expected TransactionTooLarge error, got: {}",
-        err_str
+        "Expected TransactionTooLarge error, got: {err_str}"
     );
 
     Ok(())
@@ -63,7 +68,7 @@ async fn accept_transaction_within_limit() -> Result<()> {
         .await?;
 
     // Create a small program deployment that should fit
-    let small_binary = vec![0u8; 1024]; // 1 KiB binary
+    let small_binary = vec![0_u8; 1024]; // 1 KiB binary
 
     let message = nssa::program_deployment_transaction::Message::new(small_binary);
     let tx = nssa::ProgramDeploymentTransaction::new(message);

@@ -1,3 +1,5 @@
+#![expect(clippy::manual_let_else, reason = "Looks much better")]
+
 use nssa_core::{
     account::Data,
     program::{
@@ -5,7 +7,7 @@ use nssa_core::{
         write_nssa_outputs_with_chained_call,
     },
 };
-use risc0_zkvm::sha::{Impl, Sha256};
+use risc0_zkvm::sha::{Impl, Sha256 as _};
 
 const PRIZE: u128 = 150;
 
@@ -34,7 +36,7 @@ impl Challenge {
         bytes[..32].copy_from_slice(&self.seed);
         bytes[32..].copy_from_slice(&solution.to_le_bytes());
         let digest: [u8; 32] = Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap();
-        let difficulty = self.difficulty as usize;
+        let difficulty = usize::from(self.difficulty);
         digest[..difficulty].iter().all(|&b| b == 0)
     }
 
@@ -46,7 +48,7 @@ impl Challenge {
     }
 }
 
-/// A pinata program
+/// A pinata program.
 fn main() {
     // Read input accounts.
     // It is expected to receive three accounts: [pinata_definition, pinata_token_holding,

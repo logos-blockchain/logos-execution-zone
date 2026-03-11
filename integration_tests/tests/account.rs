@@ -1,3 +1,8 @@
+#![expect(
+    clippy::tests_outside_test_module,
+    reason = "We don't care about these in tests"
+)]
+
 use anyhow::Result;
 use integration_tests::TestContext;
 use log::info;
@@ -36,7 +41,7 @@ async fn get_existing_account() -> Result<()> {
 async fn new_public_account_with_label() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
-    let label = "my-test-public-account".to_string();
+    let label = "my-test-public-account".to_owned();
     let command = Command::Account(AccountSubcommand::New(NewSubcommand::Public {
         cci: None,
         label: Some(label.clone()),
@@ -45,9 +50,8 @@ async fn new_public_account_with_label() -> Result<()> {
     let result = execute_subcommand(ctx.wallet_mut(), command).await?;
 
     // Extract the account_id from the result
-    let account_id = match result {
-        wallet::cli::SubcommandReturnValue::RegisterAccount { account_id } => account_id,
-        _ => panic!("Expected RegisterAccount return value"),
+    let wallet::cli::SubcommandReturnValue::RegisterAccount { account_id } = result else {
+        panic!("Expected RegisterAccount return value")
     };
 
     // Verify the label was stored
@@ -69,7 +73,7 @@ async fn new_public_account_with_label() -> Result<()> {
 async fn new_private_account_with_label() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
-    let label = "my-test-private-account".to_string();
+    let label = "my-test-private-account".to_owned();
     let command = Command::Account(AccountSubcommand::New(NewSubcommand::Private {
         cci: None,
         label: Some(label.clone()),
@@ -78,9 +82,9 @@ async fn new_private_account_with_label() -> Result<()> {
     let result = execute_subcommand(ctx.wallet_mut(), command).await?;
 
     // Extract the account_id from the result
-    let account_id = match result {
-        wallet::cli::SubcommandReturnValue::RegisterAccount { account_id } => account_id,
-        _ => panic!("Expected RegisterAccount return value"),
+
+    let wallet::cli::SubcommandReturnValue::RegisterAccount { account_id } = result else {
+        panic!("Expected RegisterAccount return value")
     };
 
     // Verify the label was stored
@@ -110,9 +114,9 @@ async fn new_public_account_without_label() -> Result<()> {
     let result = execute_subcommand(ctx.wallet_mut(), command).await?;
 
     // Extract the account_id from the result
-    let account_id = match result {
-        wallet::cli::SubcommandReturnValue::RegisterAccount { account_id } => account_id,
-        _ => panic!("Expected RegisterAccount return value"),
+
+    let wallet::cli::SubcommandReturnValue::RegisterAccount { account_id } = result else {
+        panic!("Expected RegisterAccount return value")
     };
 
     // Verify no label was stored

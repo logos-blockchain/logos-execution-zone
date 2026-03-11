@@ -1,3 +1,8 @@
+#![expect(
+    clippy::print_stdout,
+    reason = "This is an example program, it's fine to print to stdout"
+)]
+
 use nssa::{
     AccountId, PublicTransaction,
     program::Program,

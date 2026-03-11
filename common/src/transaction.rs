@@ -13,19 +13,21 @@ pub enum NSSATransaction {
 }
 
 impl NSSATransaction {
+    #[must_use]
     pub fn hash(&self) -> HashType {
         HashType(match self {
-            NSSATransaction::Public(tx) => tx.hash(),
-            NSSATransaction::PrivacyPreserving(tx) => tx.hash(),
-            NSSATransaction::ProgramDeployment(tx) => tx.hash(),
+            Self::Public(tx) => tx.hash(),
+            Self::PrivacyPreserving(tx) => tx.hash(),
+            Self::ProgramDeployment(tx) => tx.hash(),
         })
     }
 
+    #[must_use]
     pub fn affected_public_account_ids(&self) -> Vec<AccountId> {
         match self {
-            NSSATransaction::ProgramDeployment(tx) => tx.affected_public_account_ids(),
-            NSSATransaction::Public(tx) => tx.affected_public_account_ids(),
-            NSSATransaction::PrivacyPreserving(tx) => tx.affected_public_account_ids(),
+            Self::ProgramDeployment(tx) => tx.affected_public_account_ids(),
+            Self::Public(tx) => tx.affected_public_account_ids(),
+            Self::PrivacyPreserving(tx) => tx.affected_public_account_ids(),
         }
     }
 
@@ -33,21 +35,21 @@ impl NSSATransaction {
     pub fn transaction_stateless_check(self) -> Result<Self, TransactionMalformationError> {
         // Stateless checks here
         match self {
-            NSSATransaction::Public(tx) => {
+            Self::Public(tx) => {
                 if tx.witness_set().is_valid_for(tx.message()) {
-                    Ok(NSSATransaction::Public(tx))
+                    Ok(Self::Public(tx))
                 } else {
                     Err(TransactionMalformationError::InvalidSignature)
                 }
             }
-            NSSATransaction::PrivacyPreserving(tx) => {
+            Self::PrivacyPreserving(tx) => {
                 if tx.witness_set().signatures_are_valid_for(tx.message()) {
-                    Ok(NSSATransaction::PrivacyPreserving(tx))
+                    Ok(Self::PrivacyPreserving(tx))
                 } else {
                     Err(TransactionMalformationError::InvalidSignature)
                 }
             }
-            NSSATransaction::ProgramDeployment(tx) => Ok(NSSATransaction::ProgramDeployment(tx)),
+            Self::ProgramDeployment(tx) => Ok(Self::ProgramDeployment(tx)),
         }
     }
 
@@ -56,13 +58,9 @@ impl NSSATransaction {
         state: &mut V02State,
     ) -> Result<Self, nssa::error::NssaError> {
         match &self {
-            NSSATransaction::Public(tx) => state.transition_from_public_transaction(tx),
-            NSSATransaction::PrivacyPreserving(tx) => {
-                state.transition_from_privacy_preserving_transaction(tx)
-            }
-            NSSATransaction::ProgramDeployment(tx) => {
-                state.transition_from_program_deployment_transaction(tx)
-            }
+            Self::Public(tx) => state.transition_from_public_transaction(tx),
+            Self::PrivacyPreserving(tx) => state.transition_from_privacy_preserving_transaction(tx),
+            Self::ProgramDeployment(tx) => state.transition_from_program_deployment_transaction(tx),
         }
         .inspect_err(|err| warn!("Error at transition {err:#?}"))?;
 
@@ -97,7 +95,7 @@ pub enum TxKind {
     ProgramDeployment,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, thiserror::Error)]
 pub enum TransactionMalformationError {
     #[error("Invalid signature(-s)")]
     InvalidSignature,

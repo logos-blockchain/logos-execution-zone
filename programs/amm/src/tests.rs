@@ -107,7 +107,7 @@ impl BalanceForTests {
 
     fn lp_supply_init() -> u128 {
         // sqrt(vault_a_reserve_init * vault_b_reserve_init) = sqrt(1000 * 500) = 707
-        (BalanceForTests::vault_a_reserve_init() * BalanceForTests::vault_b_reserve_init()).isqrt()
+        (Self::vault_a_reserve_init() * Self::vault_b_reserve_init()).isqrt()
     }
 
     fn vault_a_swap_test_1() -> u128 {
@@ -365,7 +365,7 @@ impl IdForTests {
     }
 
     fn token_lp_definition_id() -> AccountId {
-        compute_liquidity_token_pda(AMM_PROGRAM_ID, IdForTests::pool_definition_id())
+        compute_liquidity_token_pda(AMM_PROGRAM_ID, Self::pool_definition_id())
     }
 
     fn user_token_a_id() -> AccountId {
@@ -383,24 +383,24 @@ impl IdForTests {
     fn pool_definition_id() -> AccountId {
         compute_pool_pda(
             AMM_PROGRAM_ID,
-            IdForTests::token_a_definition_id(),
-            IdForTests::token_b_definition_id(),
+            Self::token_a_definition_id(),
+            Self::token_b_definition_id(),
         )
     }
 
     fn vault_a_id() -> AccountId {
         compute_vault_pda(
             AMM_PROGRAM_ID,
-            IdForTests::pool_definition_id(),
-            IdForTests::token_a_definition_id(),
+            Self::pool_definition_id(),
+            Self::token_a_definition_id(),
         )
     }
 
     fn vault_b_id() -> AccountId {
         compute_vault_pda(
             AMM_PROGRAM_ID,
-            IdForTests::pool_definition_id(),
-            IdForTests::token_b_definition_id(),
+            Self::pool_definition_id(),
+            Self::token_b_definition_id(),
         )
     }
 }
@@ -410,7 +410,7 @@ impl AccountForTests {
         AccountWithMetadata {
             account: Account {
                 program_owner: TOKEN_PROGRAM_ID,
-                balance: 0u128,
+                balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::token_a_definition_id(),
                     balance: BalanceForTests::user_token_a_balance(),
@@ -426,7 +426,7 @@ impl AccountForTests {
         AccountWithMetadata {
             account: Account {
                 program_owner: TOKEN_PROGRAM_ID,
-                balance: 0u128,
+                balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::token_b_definition_id(),
                     balance: BalanceForTests::user_token_b_balance(),
@@ -442,7 +442,7 @@ impl AccountForTests {
         AccountWithMetadata {
             account: Account {
                 program_owner: TOKEN_PROGRAM_ID,
-                balance: 0u128,
+                balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::token_a_definition_id(),
                     balance: BalanceForTests::vault_a_reserve_init(),
@@ -458,7 +458,7 @@ impl AccountForTests {
         AccountWithMetadata {
             account: Account {
                 program_owner: TOKEN_PROGRAM_ID,
-                balance: 0u128,
+                balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::token_b_definition_id(),
                     balance: BalanceForTests::vault_b_reserve_init(),
@@ -474,7 +474,7 @@ impl AccountForTests {
         AccountWithMetadata {
             account: Account {
                 program_owner: TOKEN_PROGRAM_ID,
-                balance: 0u128,
+                balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::token_a_definition_id(),
                     balance: BalanceForTests::vault_a_reserve_high(),
@@ -490,7 +490,7 @@ impl AccountForTests {
         AccountWithMetadata {
             account: Account {
                 program_owner: TOKEN_PROGRAM_ID,
-                balance: 0u128,
+                balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::token_b_definition_id(),
                     balance: BalanceForTests::vault_b_reserve_high(),
@@ -506,7 +506,7 @@ impl AccountForTests {
         AccountWithMetadata {
             account: Account {
                 program_owner: TOKEN_PROGRAM_ID,
-                balance: 0u128,
+                balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::token_a_definition_id(),
                     balance: BalanceForTests::vault_a_reserve_low(),
@@ -522,7 +522,7 @@ impl AccountForTests {
         AccountWithMetadata {
             account: Account {
                 program_owner: TOKEN_PROGRAM_ID,
-                balance: 0u128,
+                balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::token_b_definition_id(),
                     balance: BalanceForTests::vault_b_reserve_low(),
@@ -538,7 +538,7 @@ impl AccountForTests {
         AccountWithMetadata {
             account: Account {
                 program_owner: TOKEN_PROGRAM_ID,
-                balance: 0u128,
+                balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::token_a_definition_id(),
                     balance: 0,
@@ -554,7 +554,7 @@ impl AccountForTests {
         AccountWithMetadata {
             account: Account {
                 program_owner: TOKEN_PROGRAM_ID,
-                balance: 0u128,
+                balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::token_b_definition_id(),
                     balance: 0,
@@ -570,7 +570,7 @@ impl AccountForTests {
         AccountWithMetadata {
             account: Account {
                 program_owner: TOKEN_PROGRAM_ID,
-                balance: 0u128,
+                balance: 0_u128,
                 data: Data::from(&TokenDefinition::Fungible {
                     name: String::from("test"),
                     total_supply: BalanceForTests::lp_supply_init(),
@@ -587,7 +587,7 @@ impl AccountForTests {
         AccountWithMetadata {
             account: Account {
                 program_owner: TOKEN_PROGRAM_ID,
-                balance: 0u128,
+                balance: 0_u128,
                 data: Data::from(&TokenDefinition::Fungible {
                     name: String::from("test"),
                     total_supply: BalanceForTests::lp_supply_init(),
@@ -604,7 +604,7 @@ impl AccountForTests {
         AccountWithMetadata {
             account: Account {
                 program_owner: TOKEN_PROGRAM_ID,
-                balance: 0u128,
+                balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::token_lp_definition_id(),
                     balance: 0,
@@ -620,7 +620,7 @@ impl AccountForTests {
         AccountWithMetadata {
             account: Account {
                 program_owner: TOKEN_PROGRAM_ID,
-                balance: 0u128,
+                balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::token_lp_definition_id(),
                     balance: BalanceForTests::user_token_lp_balance(),
@@ -636,7 +636,7 @@ impl AccountForTests {
         AccountWithMetadata {
             account: Account {
                 program_owner: ProgramId::default(),
-                balance: 0u128,
+                balance: 0_u128,
                 data: Data::from(&PoolDefinition {
                     definition_token_a_id: IdForTests::token_a_definition_id(),
                     definition_token_b_id: IdForTests::token_b_definition_id(),
@@ -646,7 +646,7 @@ impl AccountForTests {
                     liquidity_pool_supply: BalanceForTests::lp_supply_init(),
                     reserve_a: BalanceForTests::vault_a_reserve_init(),
                     reserve_b: BalanceForTests::vault_b_reserve_init(),
-                    fees: 0u128,
+                    fees: 0_u128,
                     active: true,
                 }),
                 nonce: 0,
@@ -660,7 +660,7 @@ impl AccountForTests {
         AccountWithMetadata {
             account: Account {
                 program_owner: ProgramId::default(),
-                balance: 0u128,
+                balance: 0_u128,
                 data: Data::from(&PoolDefinition {
                     definition_token_a_id: IdForTests::token_a_definition_id(),
                     definition_token_b_id: IdForTests::token_b_definition_id(),
@@ -670,7 +670,7 @@ impl AccountForTests {
                     liquidity_pool_supply: BalanceForTests::lp_supply_init(),
                     reserve_a: 0,
                     reserve_b: BalanceForTests::vault_b_reserve_init(),
-                    fees: 0u128,
+                    fees: 0_u128,
                     active: true,
                 }),
                 nonce: 0,
@@ -684,7 +684,7 @@ impl AccountForTests {
         AccountWithMetadata {
             account: Account {
                 program_owner: ProgramId::default(),
-                balance: 0u128,
+                balance: 0_u128,
                 data: Data::from(&PoolDefinition {
                     definition_token_a_id: IdForTests::token_a_definition_id(),
                     definition_token_b_id: IdForTests::token_b_definition_id(),
@@ -694,7 +694,7 @@ impl AccountForTests {
                     liquidity_pool_supply: BalanceForTests::lp_supply_init(),
                     reserve_a: BalanceForTests::vault_a_reserve_init(),
                     reserve_b: 0,
-                    fees: 0u128,
+                    fees: 0_u128,
                     active: true,
                 }),
                 nonce: 0,
@@ -708,7 +708,7 @@ impl AccountForTests {
         AccountWithMetadata {
             account: Account {
                 program_owner: ProgramId::default(),
-                balance: 0u128,
+                balance: 0_u128,
                 data: Data::from(&PoolDefinition {
                     definition_token_a_id: IdForTests::token_a_definition_id(),
                     definition_token_b_id: IdForTests::token_b_definition_id(),
@@ -718,7 +718,7 @@ impl AccountForTests {
                     liquidity_pool_supply: BalanceForTests::vault_a_reserve_low(),
                     reserve_a: BalanceForTests::vault_a_reserve_low(),
                     reserve_b: BalanceForTests::vault_b_reserve_high(),
-                    fees: 0u128,
+                    fees: 0_u128,
                     active: true,
                 }),
                 nonce: 0,
@@ -732,7 +732,7 @@ impl AccountForTests {
         AccountWithMetadata {
             account: Account {
                 program_owner: ProgramId::default(),
-                balance: 0u128,
+                balance: 0_u128,
                 data: Data::from(&PoolDefinition {
                     definition_token_a_id: IdForTests::token_a_definition_id(),
                     definition_token_b_id: IdForTests::token_b_definition_id(),
@@ -742,7 +742,7 @@ impl AccountForTests {
                     liquidity_pool_supply: BalanceForTests::vault_a_reserve_high(),
                     reserve_a: BalanceForTests::vault_a_reserve_high(),
                     reserve_b: BalanceForTests::vault_b_reserve_low(),
-                    fees: 0u128,
+                    fees: 0_u128,
                     active: true,
                 }),
                 nonce: 0,
@@ -756,7 +756,7 @@ impl AccountForTests {
         AccountWithMetadata {
             account: Account {
                 program_owner: ProgramId::default(),
-                balance: 0u128,
+                balance: 0_u128,
                 data: Data::from(&PoolDefinition {
                     definition_token_a_id: IdForTests::token_a_definition_id(),
                     definition_token_b_id: IdForTests::token_b_definition_id(),
@@ -766,7 +766,7 @@ impl AccountForTests {
                     liquidity_pool_supply: BalanceForTests::lp_supply_init(),
                     reserve_a: BalanceForTests::vault_a_swap_test_1(),
                     reserve_b: BalanceForTests::vault_b_swap_test_1(),
-                    fees: 0u128,
+                    fees: 0_u128,
                     active: true,
                 }),
                 nonce: 0,
@@ -780,7 +780,7 @@ impl AccountForTests {
         AccountWithMetadata {
             account: Account {
                 program_owner: ProgramId::default(),
-                balance: 0u128,
+                balance: 0_u128,
                 data: Data::from(&PoolDefinition {
                     definition_token_a_id: IdForTests::token_a_definition_id(),
                     definition_token_b_id: IdForTests::token_b_definition_id(),
@@ -790,7 +790,7 @@ impl AccountForTests {
                     liquidity_pool_supply: BalanceForTests::lp_supply_init(),
                     reserve_a: BalanceForTests::vault_a_swap_test_2(),
                     reserve_b: BalanceForTests::vault_b_swap_test_2(),
-                    fees: 0u128,
+                    fees: 0_u128,
                     active: true,
                 }),
                 nonce: 0,
@@ -804,7 +804,7 @@ impl AccountForTests {
         AccountWithMetadata {
             account: Account {
                 program_owner: ProgramId::default(),
-                balance: 0u128,
+                balance: 0_u128,
                 data: Data::from(&PoolDefinition {
                     definition_token_a_id: IdForTests::token_a_definition_id(),
                     definition_token_b_id: IdForTests::token_b_definition_id(),
@@ -814,7 +814,7 @@ impl AccountForTests {
                     liquidity_pool_supply: BalanceForTests::vault_a_reserve_low(),
                     reserve_a: BalanceForTests::vault_a_reserve_init(),
                     reserve_b: BalanceForTests::vault_b_reserve_init(),
-                    fees: 0u128,
+                    fees: 0_u128,
                     active: true,
                 }),
                 nonce: 0,
@@ -828,7 +828,7 @@ impl AccountForTests {
         AccountWithMetadata {
             account: Account {
                 program_owner: ProgramId::default(),
-                balance: 0u128,
+                balance: 0_u128,
                 data: Data::from(&PoolDefinition {
                     definition_token_a_id: IdForTests::token_a_definition_id(),
                     definition_token_b_id: IdForTests::token_b_definition_id(),
@@ -838,7 +838,7 @@ impl AccountForTests {
                     liquidity_pool_supply: 989,
                     reserve_a: BalanceForTests::vault_a_add_successful(),
                     reserve_b: BalanceForTests::vault_b_add_successful(),
-                    fees: 0u128,
+                    fees: 0_u128,
                     active: true,
                 }),
                 nonce: 0,
@@ -852,7 +852,7 @@ impl AccountForTests {
         AccountWithMetadata {
             account: Account {
                 program_owner: ProgramId::default(),
-                balance: 0u128,
+                balance: 0_u128,
                 data: Data::from(&PoolDefinition {
                     definition_token_a_id: IdForTests::token_a_definition_id(),
                     definition_token_b_id: IdForTests::token_b_definition_id(),
@@ -862,7 +862,7 @@ impl AccountForTests {
                     liquidity_pool_supply: 607,
                     reserve_a: BalanceForTests::vault_a_remove_successful(),
                     reserve_b: BalanceForTests::vault_b_remove_successful(),
-                    fees: 0u128,
+                    fees: 0_u128,
                     active: true,
                 }),
                 nonce: 0,
@@ -876,7 +876,7 @@ impl AccountForTests {
         AccountWithMetadata {
             account: Account {
                 program_owner: ProgramId::default(),
-                balance: 0u128,
+                balance: 0_u128,
                 data: Data::from(&PoolDefinition {
                     definition_token_a_id: IdForTests::token_a_definition_id(),
                     definition_token_b_id: IdForTests::token_b_definition_id(),
@@ -886,7 +886,7 @@ impl AccountForTests {
                     liquidity_pool_supply: BalanceForTests::lp_supply_init(),
                     reserve_a: BalanceForTests::vault_a_reserve_init(),
                     reserve_b: BalanceForTests::vault_b_reserve_init(),
-                    fees: 0u128,
+                    fees: 0_u128,
                     active: false,
                 }),
                 nonce: 0,
@@ -900,7 +900,7 @@ impl AccountForTests {
         AccountWithMetadata {
             account: Account {
                 program_owner: ProgramId::default(),
-                balance: 0u128,
+                balance: 0_u128,
                 data: Data::from(&PoolDefinition {
                     definition_token_a_id: IdForTests::token_a_definition_id(),
                     definition_token_b_id: IdForTests::token_b_definition_id(),
@@ -910,7 +910,7 @@ impl AccountForTests {
                     liquidity_pool_supply: BalanceForTests::lp_supply_init(),
                     reserve_a: BalanceForTests::vault_a_reserve_init(),
                     reserve_b: BalanceForTests::vault_b_reserve_init(),
-                    fees: 0u128,
+                    fees: 0_u128,
                     active: false,
                 }),
                 nonce: 0,
@@ -924,7 +924,7 @@ impl AccountForTests {
         AccountWithMetadata {
             account: Account {
                 program_owner: TOKEN_PROGRAM_ID,
-                balance: 0u128,
+                balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::token_a_definition_id(),
                     balance: BalanceForTests::vault_a_reserve_init(),
@@ -940,7 +940,7 @@ impl AccountForTests {
         AccountWithMetadata {
             account: Account {
                 program_owner: TOKEN_PROGRAM_ID,
-                balance: 0u128,
+                balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::token_b_definition_id(),
                     balance: BalanceForTests::vault_b_reserve_init(),
@@ -956,7 +956,7 @@ impl AccountForTests {
         AccountWithMetadata {
             account: Account {
                 program_owner: ProgramId::default(),
-                balance: 0u128,
+                balance: 0_u128,
                 data: Data::from(&PoolDefinition {
                     definition_token_a_id: IdForTests::token_a_definition_id(),
                     definition_token_b_id: IdForTests::token_b_definition_id(),
@@ -966,7 +966,7 @@ impl AccountForTests {
                     liquidity_pool_supply: BalanceForTests::lp_supply_init(),
                     reserve_a: BalanceForTests::vault_a_reserve_init(),
                     reserve_b: BalanceForTests::vault_b_reserve_init(),
-                    fees: 0u128,
+                    fees: 0_u128,
                     active: true,
                 }),
                 nonce: 0,
@@ -978,7 +978,7 @@ impl AccountForTests {
 }
 
 #[test]
-fn test_pool_pda_produces_unique_id_for_token_pair() {
+fn pool_pda_produces_unique_id_for_token_pair() {
     assert!(
         amm_core::compute_pool_pda(
             AMM_PROGRAM_ID,
@@ -994,7 +994,7 @@ fn test_pool_pda_produces_unique_id_for_token_pair() {
 
 #[should_panic(expected = "Vault A was not provided")]
 #[test]
-fn test_call_add_liquidity_vault_a_omitted() {
+fn call_add_liquidity_vault_a_omitted() {
     let _post_states = add_liquidity(
         AccountForTests::pool_definition_init(),
         AccountForTests::vault_a_with_wrong_id(),
@@ -1011,7 +1011,7 @@ fn test_call_add_liquidity_vault_a_omitted() {
 
 #[should_panic(expected = "Vault B was not provided")]
 #[test]
-fn test_call_add_liquidity_vault_b_omitted() {
+fn call_add_liquidity_vault_b_omitted() {
     let _post_states = add_liquidity(
         AccountForTests::pool_definition_init(),
         AccountForTests::vault_a_init(),
@@ -1028,7 +1028,7 @@ fn test_call_add_liquidity_vault_b_omitted() {
 
 #[should_panic(expected = "LP definition mismatch")]
 #[test]
-fn test_call_add_liquidity_lp_definition_mismatch() {
+fn call_add_liquidity_lp_definition_mismatch() {
     let _post_states = add_liquidity(
         AccountForTests::pool_definition_init(),
         AccountForTests::vault_a_init(),
@@ -1045,7 +1045,7 @@ fn test_call_add_liquidity_lp_definition_mismatch() {
 
 #[should_panic(expected = "Both max-balances must be nonzero")]
 #[test]
-fn test_call_add_liquidity_zero_balance_1() {
+fn call_add_liquidity_zero_balance_1() {
     let _post_states = add_liquidity(
         AccountForTests::pool_definition_init(),
         AccountForTests::vault_a_init(),
@@ -1062,7 +1062,7 @@ fn test_call_add_liquidity_zero_balance_1() {
 
 #[should_panic(expected = "Both max-balances must be nonzero")]
 #[test]
-fn test_call_add_liquidity_zero_balance_2() {
+fn call_add_liquidity_zero_balance_2() {
     let _post_states = add_liquidity(
         AccountForTests::pool_definition_init(),
         AccountForTests::vault_a_init(),
@@ -1079,7 +1079,7 @@ fn test_call_add_liquidity_zero_balance_2() {
 
 #[should_panic(expected = "Vaults' balances must be at least the reserve amounts")]
 #[test]
-fn test_call_add_liquidity_vault_insufficient_balance_1() {
+fn call_add_liquidity_vault_insufficient_balance_1() {
     let _post_states = add_liquidity(
         AccountForTests::pool_definition_init(),
         AccountForTests::vault_a_init_zero(),
@@ -1096,7 +1096,7 @@ fn test_call_add_liquidity_vault_insufficient_balance_1() {
 
 #[should_panic(expected = "Vaults' balances must be at least the reserve amounts")]
 #[test]
-fn test_call_add_liquidity_vault_insufficient_balance_2() {
+fn call_add_liquidity_vault_insufficient_balance_2() {
     let _post_states = add_liquidity(
         AccountForTests::pool_definition_init(),
         AccountForTests::vault_a_init(),
@@ -1113,7 +1113,7 @@ fn test_call_add_liquidity_vault_insufficient_balance_2() {
 
 #[should_panic(expected = "A trade amount is 0")]
 #[test]
-fn test_call_add_liquidity_actual_amount_zero_1() {
+fn call_add_liquidity_actual_amount_zero_1() {
     let _post_states = add_liquidity(
         AccountForTests::pool_definition_init_reserve_a_low(),
         AccountForTests::vault_a_init_low(),
@@ -1130,7 +1130,7 @@ fn test_call_add_liquidity_actual_amount_zero_1() {
 
 #[should_panic(expected = "A trade amount is 0")]
 #[test]
-fn test_call_add_liquidity_actual_amount_zero_2() {
+fn call_add_liquidity_actual_amount_zero_2() {
     let _post_states = add_liquidity(
         AccountForTests::pool_definition_init_reserve_b_low(),
         AccountForTests::vault_a_init_high(),
@@ -1147,7 +1147,7 @@ fn test_call_add_liquidity_actual_amount_zero_2() {
 
 #[should_panic(expected = "Reserves must be nonzero")]
 #[test]
-fn test_call_add_liquidity_reserves_zero_1() {
+fn call_add_liquidity_reserves_zero_1() {
     let _post_states = add_liquidity(
         AccountForTests::pool_definition_init_reserve_a_zero(),
         AccountForTests::vault_a_init(),
@@ -1164,7 +1164,7 @@ fn test_call_add_liquidity_reserves_zero_1() {
 
 #[should_panic(expected = "Reserves must be nonzero")]
 #[test]
-fn test_call_add_liquidity_reserves_zero_2() {
+fn call_add_liquidity_reserves_zero_2() {
     let _post_states = add_liquidity(
         AccountForTests::pool_definition_init_reserve_b_zero(),
         AccountForTests::vault_a_init(),
@@ -1181,7 +1181,7 @@ fn test_call_add_liquidity_reserves_zero_2() {
 
 #[should_panic(expected = "Payable LP must be nonzero")]
 #[test]
-fn test_call_add_liquidity_payable_lp_zero() {
+fn call_add_liquidity_payable_lp_zero() {
     let _post_states = add_liquidity(
         AccountForTests::pool_definition_add_zero_lp(),
         AccountForTests::vault_a_init(),
@@ -1197,7 +1197,7 @@ fn test_call_add_liquidity_payable_lp_zero() {
 }
 
 #[test]
-fn test_call_add_liquidity_chained_call_successsful() {
+fn call_add_liquidity_chained_call_successsful() {
     let (post_states, chained_calls) = add_liquidity(
         AccountForTests::pool_definition_init(),
         AccountForTests::vault_a_init(),
@@ -1226,7 +1226,7 @@ fn test_call_add_liquidity_chained_call_successsful() {
 
 #[should_panic(expected = "Vault A was not provided")]
 #[test]
-fn test_call_remove_liquidity_vault_a_omitted() {
+fn call_remove_liquidity_vault_a_omitted() {
     let _post_states = remove_liquidity(
         AccountForTests::pool_definition_init(),
         AccountForTests::vault_a_with_wrong_id(),
@@ -1243,7 +1243,7 @@ fn test_call_remove_liquidity_vault_a_omitted() {
 
 #[should_panic(expected = "Vault B was not provided")]
 #[test]
-fn test_call_remove_liquidity_vault_b_omitted() {
+fn call_remove_liquidity_vault_b_omitted() {
     let _post_states = remove_liquidity(
         AccountForTests::pool_definition_init(),
         AccountForTests::vault_a_init(),
@@ -1260,7 +1260,7 @@ fn test_call_remove_liquidity_vault_b_omitted() {
 
 #[should_panic(expected = "LP definition mismatch")]
 #[test]
-fn test_call_remove_liquidity_lp_def_mismatch() {
+fn call_remove_liquidity_lp_def_mismatch() {
     let _post_states = remove_liquidity(
         AccountForTests::pool_definition_init(),
         AccountForTests::vault_a_init(),
@@ -1277,7 +1277,7 @@ fn test_call_remove_liquidity_lp_def_mismatch() {
 
 #[should_panic(expected = "Invalid liquidity account provided")]
 #[test]
-fn test_call_remove_liquidity_insufficient_liquidity_amount() {
+fn call_remove_liquidity_insufficient_liquidity_amount() {
     let _post_states = remove_liquidity(
         AccountForTests::pool_definition_init(),
         AccountForTests::vault_a_init(),
@@ -1297,7 +1297,7 @@ fn test_call_remove_liquidity_insufficient_liquidity_amount() {
     expected = "Insufficient minimal withdraw amount (Token A) provided for liquidity amount"
 )]
 #[test]
-fn test_call_remove_liquidity_insufficient_balance_1() {
+fn call_remove_liquidity_insufficient_balance_1() {
     let _post_states = remove_liquidity(
         AccountForTests::pool_definition_init(),
         AccountForTests::vault_a_init(),
@@ -1316,7 +1316,7 @@ fn test_call_remove_liquidity_insufficient_balance_1() {
     expected = "Insufficient minimal withdraw amount (Token B) provided for liquidity amount"
 )]
 #[test]
-fn test_call_remove_liquidity_insufficient_balance_2() {
+fn call_remove_liquidity_insufficient_balance_2() {
     let _post_states = remove_liquidity(
         AccountForTests::pool_definition_init(),
         AccountForTests::vault_a_init(),
@@ -1333,7 +1333,7 @@ fn test_call_remove_liquidity_insufficient_balance_2() {
 
 #[should_panic(expected = "Minimum withdraw amount must be nonzero")]
 #[test]
-fn test_call_remove_liquidity_min_bal_zero_1() {
+fn call_remove_liquidity_min_bal_zero_1() {
     let _post_states = remove_liquidity(
         AccountForTests::pool_definition_init(),
         AccountForTests::vault_a_init(),
@@ -1350,7 +1350,7 @@ fn test_call_remove_liquidity_min_bal_zero_1() {
 
 #[should_panic(expected = "Minimum withdraw amount must be nonzero")]
 #[test]
-fn test_call_remove_liquidity_min_bal_zero_2() {
+fn call_remove_liquidity_min_bal_zero_2() {
     let _post_states = remove_liquidity(
         AccountForTests::pool_definition_init(),
         AccountForTests::vault_a_init(),
@@ -1366,7 +1366,7 @@ fn test_call_remove_liquidity_min_bal_zero_2() {
 }
 
 #[test]
-fn test_call_remove_liquidity_chained_call_successful() {
+fn call_remove_liquidity_chained_call_successful() {
     let (post_states, chained_calls) = remove_liquidity(
         AccountForTests::pool_definition_init(),
         AccountForTests::vault_a_init(),
@@ -1395,7 +1395,7 @@ fn test_call_remove_liquidity_chained_call_successful() {
 
 #[should_panic(expected = "Balances must be nonzero")]
 #[test]
-fn test_call_new_definition_with_zero_balance_1() {
+fn call_new_definition_with_zero_balance_1() {
     let _post_states = new_definition(
         AccountForTests::pool_definition_init(),
         AccountForTests::vault_a_init(),
@@ -1412,7 +1412,7 @@ fn test_call_new_definition_with_zero_balance_1() {
 
 #[should_panic(expected = "Balances must be nonzero")]
 #[test]
-fn test_call_new_definition_with_zero_balance_2() {
+fn call_new_definition_with_zero_balance_2() {
     let _post_states = new_definition(
         AccountForTests::pool_definition_init(),
         AccountForTests::vault_a_init(),
@@ -1429,7 +1429,7 @@ fn test_call_new_definition_with_zero_balance_2() {
 
 #[should_panic(expected = "Cannot set up a swap for a token with itself")]
 #[test]
-fn test_call_new_definition_same_token_definition() {
+fn call_new_definition_same_token_definition() {
     let _post_states = new_definition(
         AccountForTests::pool_definition_init(),
         AccountForTests::vault_a_init(),
@@ -1446,7 +1446,7 @@ fn test_call_new_definition_same_token_definition() {
 
 #[should_panic(expected = "Liquidity pool Token Definition Account ID does not match PDA")]
 #[test]
-fn test_call_new_definition_wrong_liquidity_id() {
+fn call_new_definition_wrong_liquidity_id() {
     let _post_states = new_definition(
         AccountForTests::pool_definition_init(),
         AccountForTests::vault_a_init(),
@@ -1463,7 +1463,7 @@ fn test_call_new_definition_wrong_liquidity_id() {
 
 #[should_panic(expected = "Pool Definition Account ID does not match PDA")]
 #[test]
-fn test_call_new_definition_wrong_pool_id() {
+fn call_new_definition_wrong_pool_id() {
     let _post_states = new_definition(
         AccountForTests::pool_definition_with_wrong_id(),
         AccountForTests::vault_a_init(),
@@ -1480,7 +1480,7 @@ fn test_call_new_definition_wrong_pool_id() {
 
 #[should_panic(expected = "Vault ID does not match PDA")]
 #[test]
-fn test_call_new_definition_wrong_vault_id_1() {
+fn call_new_definition_wrong_vault_id_1() {
     let _post_states = new_definition(
         AccountForTests::pool_definition_init(),
         AccountForTests::vault_a_with_wrong_id(),
@@ -1497,7 +1497,7 @@ fn test_call_new_definition_wrong_vault_id_1() {
 
 #[should_panic(expected = "Vault ID does not match PDA")]
 #[test]
-fn test_call_new_definition_wrong_vault_id_2() {
+fn call_new_definition_wrong_vault_id_2() {
     let _post_states = new_definition(
         AccountForTests::pool_definition_init(),
         AccountForTests::vault_a_init(),
@@ -1514,7 +1514,7 @@ fn test_call_new_definition_wrong_vault_id_2() {
 
 #[should_panic(expected = "Cannot initialize an active Pool Definition")]
 #[test]
-fn test_call_new_definition_cannot_initialize_active_pool() {
+fn call_new_definition_cannot_initialize_active_pool() {
     let _post_states = new_definition(
         AccountForTests::pool_definition_active(),
         AccountForTests::vault_a_init(),
@@ -1531,7 +1531,7 @@ fn test_call_new_definition_cannot_initialize_active_pool() {
 
 #[should_panic(expected = "Cannot initialize an active Pool Definition")]
 #[test]
-fn test_call_new_definition_chained_call_successful() {
+fn call_new_definition_chained_call_successful() {
     let (post_states, chained_calls) = new_definition(
         AccountForTests::pool_definition_active(),
         AccountForTests::vault_a_init(),
@@ -1560,7 +1560,7 @@ fn test_call_new_definition_chained_call_successful() {
 
 #[should_panic(expected = "AccountId is not a token type for the pool")]
 #[test]
-fn test_call_swap_incorrect_token_type() {
+fn call_swap_incorrect_token_type() {
     let _post_states = swap(
         AccountForTests::pool_definition_init(),
         AccountForTests::vault_a_init(),
@@ -1575,7 +1575,7 @@ fn test_call_swap_incorrect_token_type() {
 
 #[should_panic(expected = "Vault A was not provided")]
 #[test]
-fn test_call_swap_vault_a_omitted() {
+fn call_swap_vault_a_omitted() {
     let _post_states = swap(
         AccountForTests::pool_definition_init(),
         AccountForTests::vault_a_with_wrong_id(),
@@ -1590,7 +1590,7 @@ fn test_call_swap_vault_a_omitted() {
 
 #[should_panic(expected = "Vault B was not provided")]
 #[test]
-fn test_call_swap_vault_b_omitted() {
+fn call_swap_vault_b_omitted() {
     let _post_states = swap(
         AccountForTests::pool_definition_init(),
         AccountForTests::vault_a_init(),
@@ -1605,7 +1605,7 @@ fn test_call_swap_vault_b_omitted() {
 
 #[should_panic(expected = "Reserve for Token A exceeds vault balance")]
 #[test]
-fn test_call_swap_reserves_vault_mismatch_1() {
+fn call_swap_reserves_vault_mismatch_1() {
     let _post_states = swap(
         AccountForTests::pool_definition_init(),
         AccountForTests::vault_a_init_low(),
@@ -1620,7 +1620,7 @@ fn test_call_swap_reserves_vault_mismatch_1() {
 
 #[should_panic(expected = "Reserve for Token B exceeds vault balance")]
 #[test]
-fn test_call_swap_reserves_vault_mismatch_2() {
+fn call_swap_reserves_vault_mismatch_2() {
     let _post_states = swap(
         AccountForTests::pool_definition_init(),
         AccountForTests::vault_a_init(),
@@ -1635,7 +1635,7 @@ fn test_call_swap_reserves_vault_mismatch_2() {
 
 #[should_panic(expected = "Pool is inactive")]
 #[test]
-fn test_call_swap_ianctive() {
+fn call_swap_ianctive() {
     let _post_states = swap(
         AccountForTests::pool_definition_inactive(),
         AccountForTests::vault_a_init(),
@@ -1650,7 +1650,7 @@ fn test_call_swap_ianctive() {
 
 #[should_panic(expected = "Withdraw amount is less than minimal amount out")]
 #[test]
-fn test_call_swap_below_min_out() {
+fn call_swap_below_min_out() {
     let _post_states = swap(
         AccountForTests::pool_definition_init(),
         AccountForTests::vault_a_init(),
@@ -1664,7 +1664,7 @@ fn test_call_swap_below_min_out() {
 }
 
 #[test]
-fn test_call_swap_chained_call_successful_1() {
+fn call_swap_chained_call_successful_1() {
     let (post_states, chained_calls) = swap(
         AccountForTests::pool_definition_init(),
         AccountForTests::vault_a_init(),
@@ -1694,7 +1694,7 @@ fn test_call_swap_chained_call_successful_1() {
 }
 
 #[test]
-fn test_call_swap_chained_call_successful_2() {
+fn call_swap_chained_call_successful_2() {
     let (post_states, chained_calls) = swap(
         AccountForTests::pool_definition_init(),
         AccountForTests::vault_a_init(),
@@ -1724,7 +1724,7 @@ fn test_call_swap_chained_call_successful_2() {
 }
 
 #[test]
-fn test_new_definition_lp_asymmetric_amounts() {
+fn new_definition_lp_asymmetric_amounts() {
     let (post_states, chained_calls) = new_definition(
         AccountForTests::pool_definition_inactive(),
         AccountForTests::vault_a_init(),
@@ -1751,10 +1751,10 @@ fn test_new_definition_lp_asymmetric_amounts() {
 }
 
 #[test]
-fn test_new_definition_lp_symmetric_amounts() {
+fn new_definition_lp_symmetric_amounts() {
     // token_a=100, token_b=100 → LP=sqrt(10_000)=100
-    let token_a_amount = 100u128;
-    let token_b_amount = 100u128;
+    let token_a_amount = 100_u128;
+    let token_b_amount = 100_u128;
     let expected_lp = (token_a_amount * token_b_amount).isqrt();
     assert_eq!(expected_lp, 100);
 

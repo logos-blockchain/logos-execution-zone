@@ -1,18 +1,16 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use chacha20::{
     ChaCha20,
-    cipher::{KeyIvInit, StreamCipher},
+    cipher::{KeyIvInit as _, StreamCipher as _},
 };
-use risc0_zkvm::sha::{Impl, Sha256};
+use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde::{Deserialize, Serialize};
-
-#[cfg(feature = "host")]
-pub mod shared_key_derivation;
-
 #[cfg(feature = "host")]
 pub use shared_key_derivation::{EphemeralPublicKey, EphemeralSecretKey, ViewingPublicKey};
 
 use crate::{Commitment, account::Account};
+#[cfg(feature = "host")]
+pub mod shared_key_derivation;
 
 pub type Scalar = [u8; 32];
 
@@ -26,13 +24,14 @@ pub struct EncryptionScheme;
 pub struct Ciphertext(pub(crate) Vec<u8>);
 
 impl EncryptionScheme {
+    #[must_use]
     pub fn encrypt(
         account: &Account,
         shared_secret: &SharedSecretKey,
         commitment: &Commitment,
         output_index: u32,
     ) -> Ciphertext {
-        let mut buffer = account.to_bytes().to_vec();
+        let mut buffer = account.to_bytes();
         Self::symmetric_transform(&mut buffer, shared_secret, commitment, output_index);
         Ciphertext(buffer)
     }
@@ -64,6 +63,11 @@ impl EncryptionScheme {
     }
 
     #[cfg(feature = "host")]
+    #[expect(
+        clippy::print_stdout,
+        reason = "This is the current way to debug things. TODO: fix later"
+    )]
+    #[must_use]
     pub fn decrypt(
         ciphertext: &Ciphertext,
         shared_secret: &SharedSecretKey,
@@ -71,7 +75,7 @@ impl EncryptionScheme {
         output_index: u32,
     ) -> Option<Account> {
         use std::io::Cursor;
-        let mut buffer = ciphertext.0.to_owned();
+        let mut buffer = ciphertext.0.clone();
         Self::symmetric_transform(&mut buffer, shared_secret, commitment, output_index);
 
         let mut cursor = Cursor::new(buffer.as_slice());
@@ -79,12 +83,12 @@ impl EncryptionScheme {
             .inspect_err(|err| {
                 println!(
                     "Failed to decode {ciphertext:?} \n
-                      with secret {:?} ,\n 
+                      with secret {:?} ,\n
                       commitment {commitment:?} ,\n
                       and output_index {output_index} ,\n
                       with error {err:?}",
                     shared_secret.0
-                )
+                );
             })
             .ok()
     }

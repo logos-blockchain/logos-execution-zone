@@ -1,3 +1,5 @@
+#![expect(clippy::manual_let_else, reason = "Looks much better")]
+
 use nssa_core::{
     account::AccountWithMetadata,
     program::{
@@ -37,7 +39,7 @@ fn main() {
     let chained_call = ChainedCall {
         program_id: transfer_program_id,
         instruction_data,
-        pre_states: vec![authorised_sender.clone(), receiver.clone()],
+        pre_states: vec![authorised_sender, receiver.clone()],
         pda_seeds: vec![],
     };
 

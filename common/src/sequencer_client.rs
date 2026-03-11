@@ -30,6 +30,15 @@ use crate::{
     transaction::NSSATransaction,
 };
 
+#[derive(Debug, Clone, Deserialize)]
+struct SequencerRpcResponse {
+    #[serde(rename = "jsonrpc")]
+    _jsonrpc: String,
+    result: serde_json::Value,
+    #[serde(rename = "id")]
+    _id: u64,
+}
+
 #[derive(Clone)]
 pub struct SequencerClient {
     pub client: reqwest::Client,
@@ -61,7 +70,7 @@ impl SequencerClient {
         payload: Value,
     ) -> Result<Value, SequencerClientError> {
         let request =
-            rpc_primitives::message::Request::from_payload_version_2_0(method.to_string(), payload);
+            rpc_primitives::message::Request::from_payload_version_2_0(method.to_owned(), payload);
 
         log::debug!(
             "Calling method {method} with payload {request:?} to sequencer at {}",
@@ -86,14 +95,6 @@ impl SequencerClient {
         })
         .await?;
 
-        #[derive(Debug, Clone, Deserialize)]
-        #[allow(dead_code)]
-        pub struct SequencerRpcResponse {
-            pub jsonrpc: String,
-            pub result: serde_json::Value,
-            pub id: u64,
-        }
-
         if let Ok(response) = serde_json::from_value::<SequencerRpcResponse>(response_vall.clone())
         {
             Ok(response.result)
@@ -104,7 +105,7 @@ impl SequencerClient {
         }
     }
 
-    /// Get block data at `block_id` from sequencer
+    /// Get block data at `block_id` from sequencer.
     pub async fn get_block(
         &self,
         block_id: u64,
@@ -140,7 +141,7 @@ impl SequencerClient {
         Ok(resp_deser)
     }
 
-    /// Get last known `blokc_id` from sequencer
+    /// Get last known `blokc_id` from sequencer.
     pub async fn get_last_block(&self) -> Result<GetLastBlockResponse, SequencerClientError> {
         let block_req = GetLastBlockRequest {};
 
@@ -224,7 +225,7 @@ impl SequencerClient {
         Ok(resp_deser)
     }
 
-    /// Send transaction to sequencer
+    /// Send transaction to sequencer.
     pub async fn send_tx_public(
         &self,
         transaction: nssa::PublicTransaction,
@@ -244,7 +245,7 @@ impl SequencerClient {
         Ok(resp_deser)
     }
 
-    /// Send transaction to sequencer
+    /// Send transaction to sequencer.
     pub async fn send_tx_private(
         &self,
         transaction: nssa::PrivacyPreservingTransaction,
@@ -264,7 +265,7 @@ impl SequencerClient {
         Ok(resp_deser)
     }
 
-    /// Get genesis id from sequencer
+    /// Get genesis id from sequencer.
     pub async fn get_genesis_id(&self) -> Result<GetGenesisIdResponse, SequencerClientError> {
         let genesis_req = GetGenesisIdRequest {};
 
@@ -280,7 +281,7 @@ impl SequencerClient {
         Ok(resp_deser)
     }
 
-    /// Get initial testnet accounts from sequencer
+    /// Get initial testnet accounts from sequencer.
     pub async fn get_initial_testnet_accounts(
         &self,
     ) -> Result<Vec<GetInitialTestnetAccountsResponse>, SequencerClientError> {
@@ -298,7 +299,7 @@ impl SequencerClient {
         Ok(resp_deser)
     }
 
-    /// Get proof for commitment
+    /// Get proof for commitment.
     pub async fn get_proof_for_commitment(
         &self,
         commitment: nssa_core::Commitment,
@@ -338,7 +339,7 @@ impl SequencerClient {
         Ok(resp_deser)
     }
 
-    /// Get Ids of the programs used by the node
+    /// Get Ids of the programs used by the node.
     pub async fn get_program_ids(
         &self,
     ) -> Result<HashMap<String, ProgramId>, SequencerClientError> {

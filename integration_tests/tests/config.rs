@@ -1,3 +1,9 @@
+#![expect(
+    clippy::shadow_unrelated,
+    clippy::tests_outside_test_module,
+    reason = "We don't care about these in tests"
+)]
+
 use anyhow::Result;
 use integration_tests::TestContext;
 use log::info;
@@ -12,8 +18,8 @@ async fn modify_config_field() -> Result<()> {
 
     // Change config field
     let command = Command::Config(ConfigSubcommand::Set {
-        key: "seq_poll_timeout".to_string(),
-        value: "1s".to_string(),
+        key: "seq_poll_timeout".to_owned(),
+        value: "1s".to_owned(),
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
@@ -22,8 +28,8 @@ async fn modify_config_field() -> Result<()> {
 
     // Return how it was at the beginning
     let command = Command::Config(ConfigSubcommand::Set {
-        key: "seq_poll_timeout".to_string(),
-        value: format!("{:?}", old_seq_poll_timeout),
+        key: "seq_poll_timeout".to_owned(),
+        value: format!("{old_seq_poll_timeout:?}"),
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 

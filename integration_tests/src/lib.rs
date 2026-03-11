@@ -2,15 +2,15 @@
 
 use std::{net::SocketAddr, path::PathBuf, sync::LazyLock};
 
-use anyhow::{Context, Result, bail};
-use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
+use anyhow::{Context as _, Result, bail};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use common::{HashType, sequencer_client::SequencerClient, transaction::NSSATransaction};
 use futures::FutureExt as _;
 use indexer_service::IndexerHandle;
 use log::{debug, error, warn};
 use nssa::{AccountId, PrivacyPreservingTransaction};
 use nssa_core::Commitment;
-use sequencer_core::indexer_client::{IndexerClient, IndexerClientTrait};
+use sequencer_core::indexer_client::{IndexerClient, IndexerClientTrait as _};
 use sequencer_runner::SequencerHandle;
 use tempfile::TempDir;
 use testcontainers::compose::DockerCompose;
@@ -52,7 +52,8 @@ impl TestContext {
         Self::builder().build().await
     }
 
-    pub fn builder() -> TestContextBuilder {
+    #[must_use]
+    pub const fn builder() -> TestContextBuilder {
         TestContextBuilder::new()
     }
 
@@ -120,6 +121,10 @@ impl TestContext {
             // Setting port to 0 to avoid conflicts between parallel tests, actual port will be retrieved after container is up
             .with_env("PORT", "0");
 
+        #[expect(
+            clippy::items_after_statements,
+            reason = "This is more readable is this function used just after its definition"
+        )]
         async fn up_and_retrieve_port(compose: &mut DockerCompose) -> Result<u16> {
             compose
                 .up()
@@ -151,10 +156,12 @@ impl TestContext {
         }
 
         let mut port = None;
-        let mut attempt = 0;
-        let max_attempts = 5;
+        let mut attempt = 0_u32;
+        let max_attempts = 5_u32;
         while port.is_none() && attempt < max_attempts {
-            attempt += 1;
+            attempt = attempt
+                .checked_add(1)
+                .expect("We check that attempt < max_attempts, so this won't overflow");
             match up_and_retrieve_port(&mut compose).await {
                 Ok(p) => {
                     port = Some(p);
@@ -181,7 +188,10 @@ impl TestContext {
         let temp_indexer_dir =
             tempfile::tempdir().context("Failed to create temp dir for indexer home")?;
 
-        debug!("Using temp indexer home at {:?}", temp_indexer_dir.path());
+        debug!(
+            "Using temp indexer home at {}",
+            temp_indexer_dir.path().display()
+        );
 
         let indexer_config = config::indexer_config(
             bedrock_addr,
@@ -206,8 +216,8 @@ impl TestContext {
             tempfile::tempdir().context("Failed to create temp dir for sequencer home")?;
 
         debug!(
-            "Using temp sequencer home at {:?}",
-            temp_sequencer_dir.path()
+            "Using temp sequencer home at {}",
+            temp_sequencer_dir.path().display()
         );
 
         let config = config::sequencer_config(
@@ -260,30 +270,35 @@ impl TestContext {
     }
 
     /// Get reference to the wallet.
-    pub fn wallet(&self) -> &WalletCore {
+    #[must_use]
+    pub const fn wallet(&self) -> &WalletCore {
         &self.wallet
     }
 
+    #[must_use]
     pub fn wallet_password(&self) -> &str {
         &self.wallet_password
     }
 
     /// Get mutable reference to the wallet.
-    pub fn wallet_mut(&mut self) -> &mut WalletCore {
+    pub const fn wallet_mut(&mut self) -> &mut WalletCore {
         &mut self.wallet
     }
 
     /// Get reference to the sequencer client.
-    pub fn sequencer_client(&self) -> &SequencerClient {
+    #[must_use]
+    pub const fn sequencer_client(&self) -> &SequencerClient {
         &self.sequencer_client
     }
 
     /// Get reference to the indexer client.
-    pub fn indexer_client(&self) -> &IndexerClient {
+    #[must_use]
+    pub const fn indexer_client(&self) -> &IndexerClient {
         &self.indexer_client
     }
 
     /// Get existing public account IDs in the wallet.
+    #[must_use]
     pub fn existing_public_accounts(&self) -> Vec<AccountId> {
         self.wallet
             .storage()
@@ -293,6 +308,7 @@ impl TestContext {
     }
 
     /// Get existing private account IDs in the wallet.
+    #[must_use]
     pub fn existing_private_accounts(&self) -> Vec<AccountId> {
         self.wallet
             .storage()
@@ -352,7 +368,7 @@ impl Drop for TestContext {
     }
 }
 
-/// A test context to be used in normal #[test] tests
+/// A test context to be used in normal #[test] tests.
 pub struct BlockingTestContext {
     ctx: Option<TestContext>,
     runtime: tokio::runtime::Runtime,
@@ -368,7 +384,7 @@ impl BlockingTestContext {
         })
     }
 
-    pub fn ctx(&self) -> &TestContext {
+    pub const fn ctx(&self) -> &TestContext {
         self.ctx.as_ref().expect("TestContext is set")
     }
 }
@@ -379,19 +395,21 @@ pub struct TestContextBuilder {
 }
 
 impl TestContextBuilder {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self {
             initial_data: None,
             sequencer_partial_config: None,
         }
     }
 
+    #[must_use]
     pub fn with_initial_data(mut self, initial_data: config::InitialData) -> Self {
         self.initial_data = Some(initial_data);
         self
     }
 
-    pub fn with_sequencer_partial_config(
+    #[must_use]
+    pub const fn with_sequencer_partial_config(
         mut self,
         sequencer_partial_config: config::SequencerPartialConfig,
     ) -> Self {
@@ -419,18 +437,24 @@ impl Drop for BlockingTestContext {
             if let Some(ctx) = ctx.take() {
                 drop(ctx);
             }
-        })
+        });
     }
 }
 
+#[must_use]
 pub fn format_public_account_id(account_id: AccountId) -> String {
     format!("Public/{account_id}")
 }
 
+#[must_use]
 pub fn format_private_account_id(account_id: AccountId) -> String {
     format!("Private/{account_id}")
 }
 
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "We want the code to panic if the transaction type is not PrivacyPreserving"
+)]
 pub async fn fetch_privacy_preserving_tx(
     seq_client: &SequencerClient,
     tx_hash: HashType,

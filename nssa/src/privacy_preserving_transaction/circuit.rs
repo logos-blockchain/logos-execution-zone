@@ -16,17 +16,25 @@ use crate::{
     state::MAX_NUMBER_CHAINED_CALLS,
 };
 
-/// Proof of the privacy preserving execution circuit
+/// Proof of the privacy preserving execution circuit.
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Proof(pub(crate) Vec<u8>);
 
 impl Proof {
+    #[must_use]
     pub fn into_inner(self) -> Vec<u8> {
         self.0
     }
 
-    pub fn from_inner(inner: Vec<u8>) -> Self {
+    #[must_use]
+    pub const fn from_inner(inner: Vec<u8>) -> Self {
         Self(inner)
+    }
+
+    pub(crate) fn is_valid_for(&self, circuit_output: &PrivacyPreservingCircuitOutput) -> bool {
+        let inner: InnerReceipt = borsh::from_slice(&self.0).unwrap();
+        let receipt = Receipt::new(inner, circuit_output.to_bytes());
+        receipt.verify(PRIVACY_PRESERVING_CIRCUIT_ID).is_ok()
     }
 }
 
@@ -38,7 +46,8 @@ pub struct ProgramWithDependencies {
 }
 
 impl ProgramWithDependencies {
-    pub fn new(program: Program, dependencies: HashMap<ProgramId, Program>) -> Self {
+    #[must_use]
+    pub const fn new(program: Program, dependencies: HashMap<ProgramId, Program>) -> Self {
         Self {
             program,
             dependencies,
@@ -48,7 +57,7 @@ impl ProgramWithDependencies {
 
 impl From<Program> for ProgramWithDependencies {
     fn from(program: Program) -> Self {
-        ProgramWithDependencies::new(program, HashMap::new())
+        Self::new(program, HashMap::new())
     }
 }
 
@@ -66,20 +75,20 @@ pub fn execute_and_prove(
     program_with_dependencies: &ProgramWithDependencies,
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), NssaError> {
     let ProgramWithDependencies {
-        program,
+        program: initial_program,
         dependencies,
     } = program_with_dependencies;
     let mut env_builder = ExecutorEnv::builder();
     let mut program_outputs = Vec::new();
 
     let initial_call = ChainedCall {
-        program_id: program.id(),
-        instruction_data: instruction_data.clone(),
+        program_id: initial_program.id(),
+        instruction_data,
         pre_states,
         pda_seeds: vec![],
     };
 
-    let mut chained_calls = VecDeque::from_iter([(initial_call, program)]);
+    let mut chained_calls = VecDeque::from_iter([(initial_call, initial_program)]);
     let mut chain_calls_counter = 0;
     while let Some((chained_call, program)) = chained_calls.pop_front() {
         if chain_calls_counter >= MAX_NUMBER_CHAINED_CALLS {
@@ -110,7 +119,9 @@ pub fn execute_and_prove(
             chained_calls.push_front((new_call, next_program));
         }
 
-        chain_calls_counter += 1;
+        chain_calls_counter = chain_calls_counter
+            .checked_add(1)
+            .expect("we check the max depth at the beginning of the loop");
     }
 
     let circuit_input = PrivacyPreservingCircuitInput {
@@ -160,16 +171,10 @@ fn execute_and_prove_program(
         .receipt)
 }
 
-impl Proof {
-    pub(crate) fn is_valid_for(&self, circuit_output: &PrivacyPreservingCircuitOutput) -> bool {
-        let inner: InnerReceipt = borsh::from_slice(&self.0).unwrap();
-        let receipt = Receipt::new(inner, circuit_output.to_bytes());
-        receipt.verify(PRIVACY_PRESERVING_CIRCUIT_ID).is_ok()
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    #![expect(clippy::shadow_unrelated, reason = "We don't care about it in tests")]
+
     use nssa_core::{
         Commitment, DUMMY_COMMITMENT_HASH, EncryptionScheme, Nullifier,
         account::{Account, AccountId, AccountWithMetadata, data::Data},
@@ -217,7 +222,7 @@ mod tests {
         let expected_recipient_post = Account {
             program_owner: program.id(),
             balance: balance_to_move,
-            nonce: 0xdeadbeef,
+            nonce: 0xdead_beef,
             data: Data::default(),
         };
 
@@ -230,7 +235,7 @@ mod tests {
             vec![sender, recipient],
             Program::serialize_instruction(balance_to_move).unwrap(),
             vec![0, 2],
-            vec![0xdeadbeef],
+            vec![0xdead_beef],
             vec![(recipient_keys.npk(), shared_secret)],
             vec![],
             vec![None],
@@ -267,7 +272,7 @@ mod tests {
         let sender_pre = AccountWithMetadata::new(
             Account {
                 balance: 100,
-                nonce: 0xdeadbeef,
+                nonce: 0xdead_beef,
                 program_owner: program.id(),
                 data: Data::default(),
             },
@@ -302,13 +307,13 @@ mod tests {
         let expected_private_account_1 = Account {
             program_owner: program.id(),
             balance: 100 - balance_to_move,
-            nonce: 0xdeadbeef1,
+            nonce: 0xdead_beef1,
             ..Default::default()
         };
         let expected_private_account_2 = Account {
             program_owner: program.id(),
             balance: balance_to_move,
-            nonce: 0xdeadbeef2,
+            nonce: 0xdead_beef2,
             ..Default::default()
         };
         let expected_new_commitments = vec![
@@ -323,10 +328,10 @@ mod tests {
         let shared_secret_2 = SharedSecretKey::new(&esk_2, &recipient_keys.vpk());
 
         let (output, proof) = execute_and_prove(
-            vec![sender_pre.clone(), recipient],
+            vec![sender_pre, recipient],
             Program::serialize_instruction(balance_to_move).unwrap(),
             vec![1, 2],
-            vec![0xdeadbeef1, 0xdeadbeef2],
+            vec![0xdead_beef1, 0xdead_beef2],
             vec![
                 (sender_keys.npk(), shared_secret_1),
                 (recipient_keys.npk(), shared_secret_2),

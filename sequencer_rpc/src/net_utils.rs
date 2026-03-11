@@ -6,27 +6,25 @@ use common::{
     rpc_primitives::{RpcConfig, message::Message},
     transaction::NSSATransaction,
 };
-use futures::{Future, FutureExt};
+use futures::{Future, FutureExt as _};
 use log::info;
 use mempool::MemPoolHandle;
 #[cfg(not(feature = "standalone"))]
 use sequencer_core::SequencerCore;
 #[cfg(feature = "standalone")]
 use sequencer_core::SequencerCoreWithMockClients as SequencerCore;
+use tokio::sync::Mutex;
 
 #[cfg(not(feature = "standalone"))]
 use super::JsonHandler;
-
-#[cfg(feature = "standalone")]
-type JsonHandler = super::JsonHandlerWithMockClients;
-
-use tokio::sync::Mutex;
-
 use crate::process::Process;
 
 pub const SHUTDOWN_TIMEOUT_SECS: u64 = 10;
 
 pub const NETWORK: &str = "network";
+
+#[cfg(feature = "standalone")]
+type JsonHandler = super::JsonHandlerWithMockClients;
 
 pub(crate) fn rpc_handler<P: Process>(
     message: web::Json<Message>,
@@ -41,7 +39,7 @@ pub(crate) fn rpc_handler<P: Process>(
 
 fn get_cors(cors_allowed_origins: &[String]) -> Cors {
     let mut cors = Cors::permissive();
-    if cors_allowed_origins != ["*".to_string()] {
+    if cors_allowed_origins != ["*".to_owned()] {
         for origin in cors_allowed_origins {
             cors = cors.allowed_origin(origin);
         }
@@ -68,22 +66,26 @@ pub async fn new_http_server(
         .await
         .sequencer_config()
         .max_block_size
-        .as_u64() as usize;
+        .as_u64()
+        .try_into()
+        .expect("`max_block_size` is expected to fit into usize");
     let handler = web::Data::new(JsonHandler {
-        sequencer_state: seuquencer_core.clone(),
+        sequencer_state: Arc::clone(&seuquencer_core),
         mempool_handle,
         max_block_size,
     });
 
     // HTTP server
     let http_server = HttpServer::new(move || {
+        let json_limit = limits_config
+            .json_payload_max_size
+            .as_u64()
+            .try_into()
+            .expect("`json_payload_max_size` is expected to fit into usize");
         App::new()
             .wrap(get_cors(&cors_allowed_origins))
             .app_data(handler.clone())
-            .app_data(
-                web::JsonConfig::default()
-                    .limit(limits_config.json_payload_max_size.as_u64() as usize),
-            )
+            .app_data(web::JsonConfig::default().limit(json_limit))
             .wrap(middleware::Logger::default())
             .service(web::resource("/").route(web::post().to(rpc_handler::<JsonHandler>)))
     })
@@ -91,12 +93,12 @@ pub async fn new_http_server(
     .shutdown_timeout(SHUTDOWN_TIMEOUT_SECS)
     .disable_signals();
 
-    let [addr] = http_server
+    let [final_addr] = http_server
         .addrs()
         .try_into()
         .expect("Exactly one address bound is expected for sequencer HTTP server");
 
-    info!(target:NETWORK, "HTTP server started at {addr}");
+    info!(target:NETWORK, "HTTP server started at {final_addr}");
 
-    Ok((http_server.run(), addr))
+    Ok((http_server.run(), final_addr))
 }

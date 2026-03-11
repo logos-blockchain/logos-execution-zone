@@ -1,5 +1,5 @@
 # Chef stage - uses pre-built cargo-chef image
-FROM lukemathwalker/cargo-chef:latest-rust-1.91.1-slim-trixie AS chef
+FROM lukemathwalker/cargo-chef:latest-rust-1.94.0-slim-trixie AS chef
 
 # Install dependencies
 RUN apt-get update && apt-get install -y \
@@ -26,7 +26,7 @@ RUN ARCH=$(uname -m); \
     else \
         echo "Using manual build for $ARCH"; \
         git clone --depth 1 --branch release-3.0 https://github.com/risc0/risc0.git; \
-        git clone --depth 1 --branch r0.1.91.1 https://github.com/risc0/rust.git; \
+        git clone --depth 1 --branch r0.1.94.0 https://github.com/risc0/rust.git; \
         cd /risc0; \
         cargo install --path rzup; \
         rzup build --path /rust rust --verbose; \
