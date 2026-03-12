@@ -27,6 +27,8 @@ pub mod block_store;
 pub mod config;
 pub mod indexer_client;
 
+pub use storage::error::DbError;
+
 #[cfg(feature = "mock")]
 pub mod mock;
 
@@ -394,7 +396,6 @@ mod tests {
             max_block_size: bytesize::ByteSize::mib(1),
             mempool_max_size: 10000,
             block_create_timeout: Duration::from_secs(1),
-            port: 8080,
             initial_accounts,
             initial_commitments: vec![],
             signing_key: *sequencer_sign_key_for_testing().value(),

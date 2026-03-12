@@ -6,7 +6,7 @@ use sha2::{Digest as _, Sha256};
 use crate::{PrivateKey, error::NssaError};
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, Serialize, Deserialize)]
-pub struct PublicKey([u8; 32]);
+pub struct PublicKey(#[serde(with = "crate::base64::arr")] [u8; 32]);
 
 impl BorshDeserialize for PublicKey {
     fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {

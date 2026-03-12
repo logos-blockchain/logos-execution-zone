@@ -5,9 +5,6 @@ use serde_with::{DeserializeFromStr, SerializeDisplay};
 
 pub mod block;
 pub mod config;
-pub mod error;
-pub mod rpc_primitives;
-pub mod sequencer_client;
 pub mod transaction;
 
 // Module for tests utility functions

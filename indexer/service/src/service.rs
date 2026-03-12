@@ -7,7 +7,7 @@ use indexer_core::{IndexerCore, config::IndexerConfig};
 use indexer_service_protocol::{Account, AccountId, Block, BlockId, HashType, Transaction};
 use jsonrpsee::{
     SubscriptionSink,
-    core::{Serialize, SubscriptionResult},
+    core::{Serialize, SubscriptionResult, async_trait},
     types::{ErrorCode, ErrorObject, ErrorObjectOwned},
 };
 use log::{debug, error, info, warn};
@@ -30,7 +30,7 @@ impl IndexerService {
     }
 }
 
-#[async_trait::async_trait]
+#[async_trait]
 impl indexer_service_rpc::RpcServer for IndexerService {
     async fn subscribe_to_finalized_blocks(
         &self,

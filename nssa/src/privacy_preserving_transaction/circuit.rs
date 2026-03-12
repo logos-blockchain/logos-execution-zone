@@ -8,6 +8,7 @@ use nssa_core::{
     program::{ChainedCall, InstructionData, ProgramId, ProgramOutput},
 };
 use risc0_zkvm::{ExecutorEnv, InnerReceipt, ProverOpts, Receipt, default_prover};
+use serde::{Deserialize, Serialize};
 
 use crate::{
     error::NssaError,
@@ -17,8 +18,8 @@ use crate::{
 };
 
 /// Proof of the privacy preserving execution circuit.
-#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct Proof(pub(crate) Vec<u8>);
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct Proof(#[serde(with = "crate::base64")] pub(crate) Vec<u8>);
 
 impl Proof {
     #[must_use]

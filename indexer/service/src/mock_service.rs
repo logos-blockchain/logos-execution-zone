@@ -15,7 +15,10 @@ use indexer_service_protocol::{
     ProgramDeploymentTransaction, ProgramId, PublicMessage, PublicTransaction, Signature,
     Transaction, WitnessSet,
 };
-use jsonrpsee::{core::SubscriptionResult, types::ErrorObjectOwned};
+use jsonrpsee::{
+    core::{SubscriptionResult, async_trait},
+    types::ErrorObjectOwned,
+};
 
 /// A mock implementation of the `IndexerService` RPC for testing purposes.
 pub struct MockIndexerService {
@@ -92,7 +95,7 @@ impl MockIndexerService {
                         },
                         witness_set: WitnessSet {
                             signatures_and_public_keys: vec![],
-                            proof: indexer_service_protocol::Proof(vec![0; 32]),
+                            proof: None,
                         },
                     }),
                     // PrivacyPreserving transactions
@@ -124,7 +127,7 @@ impl MockIndexerService {
                         },
                         witness_set: WitnessSet {
                             signatures_and_public_keys: vec![],
-                            proof: indexer_service_protocol::Proof(vec![0; 32]),
+                            proof: Some(indexer_service_protocol::Proof(vec![0; 32])),
                         },
                     }),
                     // ProgramDeployment transactions (rare)
@@ -171,7 +174,7 @@ impl MockIndexerService {
     }
 }
 
-#[async_trait::async_trait]
+#[async_trait]
 impl indexer_service_rpc::RpcServer for MockIndexerService {
     async fn subscribe_to_finalized_blocks(
         &self,

@@ -14,6 +14,8 @@ pub enum DbError {
     },
     #[error("Logic Error: {additional_info}")]
     DbInteractionError { additional_info: String },
+    #[error("{entity} not found")]
+    NotFound { entity: String },
 }
 
 impl DbError {
@@ -38,5 +40,10 @@ impl DbError {
         Self::DbInteractionError {
             additional_info: message,
         }
+    }
+
+    #[must_use]
+    pub const fn not_found(entity: String) -> Self {
+        Self::NotFound { entity }
     }
 }

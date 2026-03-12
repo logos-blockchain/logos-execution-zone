@@ -1,11 +1,12 @@
 use borsh::{BorshDeserialize, BorshSerialize};
+use serde::{Deserialize, Serialize};
 
 use crate::{
     PrivateKey, PublicKey, Signature,
     privacy_preserving_transaction::{circuit::Proof, message::Message},
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct WitnessSet {
     pub(crate) signatures_and_public_keys: Vec<(Signature, PublicKey)>,
     pub(crate) proof: Proof,

@@ -180,9 +180,7 @@ impl RocksDBIO {
                 )
             })?)
         } else {
-            Err(DbError::db_interaction_error(
-                "First block not found".to_owned(),
-            ))
+            Err(DbError::not_found("First block".to_owned()))
         }
     }
 
@@ -209,9 +207,7 @@ impl RocksDBIO {
                 )
             })?)
         } else {
-            Err(DbError::db_interaction_error(
-                "Last block not found".to_owned(),
-            ))
+            Err(DbError::not_found("Last block".to_owned()))
         }
     }
 
@@ -286,9 +282,7 @@ impl RocksDBIO {
                 )
             })?)
         } else {
-            Err(DbError::db_interaction_error(
-                "Last breakpoint id not found".to_owned(),
-            ))
+            Err(DbError::not_found("Last breakpoint id".to_owned()))
         }
     }
 
@@ -537,9 +531,7 @@ impl RocksDBIO {
                 )
             })?)
         } else {
-            Err(DbError::db_interaction_error(
-                "Block on this id not found".to_owned(),
-            ))
+            Err(DbError::not_found(format!("Block with id {block_id}")))
         }
     }
 
@@ -618,7 +610,7 @@ impl RocksDBIO {
             .map_err(|rerr| DbError::rocksdb_cast_message(rerr, None))
     }
 
-    pub fn get_breakpoint(&self, br_id: u64) -> DbResult<V02State> {
+    fn get_breakpoint(&self, br_id: u64) -> DbResult<V02State> {
         let cf_br = self.breakpoint_column();
         let res = self
             .db
@@ -641,6 +633,8 @@ impl RocksDBIO {
                 )
             })?)
         } else {
+            // Note: this is not a `DbError::NotFound` case, because we expect that all searched
+            // breakpoints will be present in db as this is an internal method.
             Err(DbError::db_interaction_error(
                 "Breakpoint on this id not found".to_owned(),
             ))
@@ -686,9 +680,7 @@ impl RocksDBIO {
 
             Ok(breakpoint)
         } else {
-            Err(DbError::db_interaction_error(
-                "Block on this id not found".to_owned(),
-            ))
+            Err(DbError::not_found(format!("Block with id {block_id}")))
         }
     }
 
@@ -740,9 +732,7 @@ impl RocksDBIO {
                 DbError::borsh_cast_message(serr, Some("Failed to deserialize block id".to_owned()))
             })?)
         } else {
-            Err(DbError::db_interaction_error(
-                "Block on this hash not found".to_owned(),
-            ))
+            Err(DbError::not_found("Block with given hash".to_owned()))
         }
     }
 
@@ -766,9 +756,7 @@ impl RocksDBIO {
                 DbError::borsh_cast_message(serr, Some("Failed to deserialize block id".to_owned()))
             })?)
         } else {
-            Err(DbError::db_interaction_error(
-                "Block for this tx hash not found".to_owned(),
-            ))
+            Err(DbError::not_found("Block for given tx hash".to_owned()))
         }
     }
 

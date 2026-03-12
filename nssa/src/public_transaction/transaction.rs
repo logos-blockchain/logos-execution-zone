@@ -6,6 +6,7 @@ use nssa_core::{
     account::{Account, AccountId, AccountWithMetadata},
     program::{ChainedCall, DEFAULT_PROGRAM_ID, validate_execution},
 };
+use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, digest::FixedOutput as _};
 
 use crate::{
@@ -15,7 +16,7 @@ use crate::{
     state::MAX_NUMBER_CHAINED_CALLS,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct PublicTransaction {
     pub message: Message,
     pub witness_set: WitnessSet,

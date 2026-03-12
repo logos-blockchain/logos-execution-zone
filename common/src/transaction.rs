@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::HashType;
 
-#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub enum NSSATransaction {
     Public(nssa::PublicTransaction),
     PrivacyPreserving(nssa::PrivacyPreservingTransaction),
@@ -87,7 +87,7 @@ impl From<nssa::ProgramDeploymentTransaction> for NSSATransaction {
 }
 
 #[derive(
-    Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize,
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
 )]
 pub enum TxKind {
     Public,

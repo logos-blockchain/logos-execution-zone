@@ -13,6 +13,7 @@ pub mod mock_service;
 
 pub struct IndexerHandle {
     addr: SocketAddr,
+    /// Option because of `Drop` which forbids to simply move out of `self` in `stopped()`.
     server_handle: Option<jsonrpsee::server::ServerHandle>,
 }
 impl IndexerHandle {
@@ -28,6 +29,7 @@ impl IndexerHandle {
         self.addr
     }
 
+    /// Wait for all Indexer tasks to stop.
     pub async fn stopped(mut self) {
         let handle = self
             .server_handle
@@ -37,15 +39,11 @@ impl IndexerHandle {
         handle.stopped().await;
     }
 
-    #[expect(
-        clippy::redundant_closure_for_method_calls,
-        reason = "Clippy suggested path jsonrpsee::jsonrpsee_server::ServerHandle is not accessible"
-    )]
     #[must_use]
     pub fn is_stopped(&self) -> bool {
         self.server_handle
             .as_ref()
-            .is_none_or(|handle| handle.is_stopped())
+            .is_none_or(ServerHandle::is_stopped)
     }
 }
 

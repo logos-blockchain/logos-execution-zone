@@ -1,55 +1,74 @@
-use std::sync::Arc;
+use std::collections::BTreeMap;
 
 use common::{
-    rpc_primitives::errors::{RpcError, RpcErrorKind},
+    HashType,
+    block::{Block, BlockId},
     transaction::NSSATransaction,
 };
-use mempool::MemPoolHandle;
-pub use net_utils::*;
-#[cfg(feature = "standalone")]
-use sequencer_core::mock::{MockBlockSettlementClient, MockIndexerClient};
-use sequencer_core::{
-    SequencerCore,
-    block_settlement_client::{BlockSettlementClient, BlockSettlementClientTrait},
-    indexer_client::{IndexerClient, IndexerClientTrait},
-};
-use serde::Serialize;
-use serde_json::Value;
-use tokio::sync::Mutex;
+use jsonrpsee::proc_macros::rpc;
+#[cfg(feature = "server")]
+use jsonrpsee::types::ErrorObjectOwned;
+use nssa::{Account, AccountId, ProgramId};
+use nssa_core::{Commitment, MembershipProof, account::Nonce};
 
-use self::types::err_rpc::RpcErr;
+#[cfg(all(not(feature = "server"), not(feature = "client")))]
+compile_error!("At least one of `server` or `client` features must be enabled.");
 
-pub mod net_utils;
-pub mod process;
-pub mod types;
+#[cfg_attr(all(feature = "server", not(feature = "client")), rpc(server))]
+#[cfg_attr(all(feature = "client", not(feature = "server")), rpc(client))]
+#[cfg_attr(all(feature = "server", feature = "client"), rpc(server, client))]
+pub trait Rpc {
+    #[method(name = "sendTransaction")]
+    async fn send_transaction(&self, tx: NSSATransaction) -> Result<HashType, ErrorObjectOwned>;
 
-#[cfg(feature = "standalone")]
-pub type JsonHandlerWithMockClients = JsonHandler<MockBlockSettlementClient, MockIndexerClient>;
+    // TODO: expand healthcheck response into some kind of report
+    #[method(name = "checkHealth")]
+    async fn check_health(&self) -> Result<(), ErrorObjectOwned>;
 
-// ToDo: Add necessary fields
-pub struct JsonHandler<
-    BC: BlockSettlementClientTrait = BlockSettlementClient,
-    IC: IndexerClientTrait = IndexerClient,
-> {
-    sequencer_state: Arc<Mutex<SequencerCore<BC, IC>>>,
-    mempool_handle: MemPoolHandle<NSSATransaction>,
-    max_block_size: usize,
-}
+    // TODO: These functions should be removed after wallet starts using indexer
+    // for this type of queries.
+    //
+    // =============================================================================================
 
-fn respond<T: Serialize>(val: T) -> Result<Value, RpcErr> {
-    Ok(serde_json::to_value(val)?)
-}
+    #[method(name = "getBlockData")]
+    async fn get_block_data(&self, block_id: BlockId) -> Result<Block, ErrorObjectOwned>;
 
-#[must_use]
-pub fn rpc_error_responce_inverter(err: RpcError) -> RpcError {
-    let content = err.error_struct.map(|error| match error {
-        RpcErrorKind::HandlerError(val) | RpcErrorKind::InternalError(val) => val,
-        RpcErrorKind::RequestValidationError(vall) => serde_json::to_value(vall).unwrap(),
-    });
-    RpcError {
-        error_struct: None,
-        code: err.code,
-        message: err.message,
-        data: content,
-    }
+    #[method(name = "getBlockRangeData")]
+    async fn get_block_range_data(
+        &self,
+        start_block_id: BlockId,
+        end_block_id: BlockId,
+    ) -> Result<Vec<Block>, ErrorObjectOwned>;
+
+    #[method(name = "getLastBlockId")]
+    async fn get_last_block_id(&self) -> Result<BlockId, ErrorObjectOwned>;
+
+    #[method(name = "getAccountBalance")]
+    async fn get_account_balance(&self, account_id: AccountId) -> Result<u128, ErrorObjectOwned>;
+
+    #[method(name = "getTransactionByHash")]
+    async fn get_transaction_by_hash(
+        &self,
+        hash: HashType,
+    ) -> Result<NSSATransaction, ErrorObjectOwned>;
+
+    #[method(name = "getAccountsNonces")]
+    async fn get_accounts_nonces(
+        &self,
+        account_ids: Vec<AccountId>,
+    ) -> Result<Vec<Nonce>, ErrorObjectOwned>;
+
+    #[method(name = "getProofForCommitment")]
+    async fn get_proof_for_commitment(
+        &self,
+        commitment: Commitment,
+    ) -> Result<MembershipProof, ErrorObjectOwned>;
+
+    #[method(name = "getAccount")]
+    async fn get_account(&self, account_id: AccountId) -> Result<Account, ErrorObjectOwned>;
+
+    #[method(name = "getProgramIds")]
+    async fn get_program_ids(&self) -> Result<BTreeMap<String, ProgramId>, ErrorObjectOwned>;
+
+    // =============================================================================================
 }

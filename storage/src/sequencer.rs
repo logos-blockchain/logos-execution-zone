@@ -142,9 +142,7 @@ impl RocksDBIO {
                 )
             })?)
         } else {
-            Err(DbError::db_interaction_error(
-                "First block not found".to_owned(),
-            ))
+            Err(DbError::not_found("First block".to_owned()))
         }
     }
 
@@ -171,9 +169,7 @@ impl RocksDBIO {
                 )
             })?)
         } else {
-            Err(DbError::db_interaction_error(
-                "Last block not found".to_owned(),
-            ))
+            Err(DbError::not_found("Last block".to_owned()))
         }
     }
 
@@ -399,9 +395,7 @@ impl RocksDBIO {
                 )
             })?)
         } else {
-            Err(DbError::db_interaction_error(
-                "Latest block meta not found".to_owned(),
-            ))
+            Err(DbError::not_found("Latest block meta".to_owned()))
         }
     }
 
@@ -465,9 +459,7 @@ impl RocksDBIO {
                 )
             })?)
         } else {
-            Err(DbError::db_interaction_error(
-                "Block on this id not found".to_owned(),
-            ))
+            Err(DbError::not_found(format!("Block with id {block_id}")))
         }
     }
 
@@ -494,9 +486,7 @@ impl RocksDBIO {
                 )
             })?)
         } else {
-            Err(DbError::db_interaction_error(
-                "Block on this id not found".to_owned(),
-            ))
+            Err(DbError::not_found("NSSA state".to_owned()))
         }
     }
 
@@ -512,9 +502,7 @@ impl RocksDBIO {
             .map_err(|rerr| DbError::rocksdb_cast_message(rerr, None))?
             .is_none()
         {
-            return Err(DbError::db_interaction_error(
-                "Block on this id not found".to_owned(),
-            ));
+            return Err(DbError::not_found(format!("Block with id {block_id}")));
         }
 
         self.db

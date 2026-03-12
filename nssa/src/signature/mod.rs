@@ -1,12 +1,24 @@
+use std::{fmt::Display, str::FromStr};
+
 use borsh::{BorshDeserialize, BorshSerialize};
 pub use private_key::PrivateKey;
 pub use public_key::PublicKey;
 use rand::{RngCore as _, rngs::OsRng};
+use serde_with::{DeserializeFromStr, SerializeDisplay};
 
 mod private_key;
 mod public_key;
 
-#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    SerializeDisplay,
+    DeserializeFromStr,
+    BorshSerialize,
+    BorshDeserialize,
+)]
 pub struct Signature {
     pub value: [u8; 64],
 }
@@ -40,6 +52,22 @@ impl Signature {
         let secp = secp256k1::Secp256k1::new();
         let sig = secp256k1::schnorr::Signature::from_byte_array(self.value);
         secp.verify_schnorr(&sig, bytes, &pk).is_ok()
+    }
+}
+
+impl Display for Signature {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", hex::encode(self.value))
+    }
+}
+
+impl FromStr for Signature {
+    type Err = hex::FromHexError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut bytes = [0_u8; 64];
+        hex::decode_to_slice(s, &mut bytes)?;
+        Ok(Self { value: bytes })
     }
 }
 

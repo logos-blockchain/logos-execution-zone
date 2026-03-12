@@ -6,7 +6,7 @@ use crate::error::NssaError;
 // TODO: Remove Debug, Clone, Serialize, Deserialize, PartialEq and Eq for security reasons
 // TODO: Implement Zeroize
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PrivateKey([u8; 32]);
+pub struct PrivateKey(#[serde(with = "crate::base64::arr")] [u8; 32]);
 
 impl PrivateKey {
     #[must_use]

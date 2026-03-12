@@ -240,7 +240,7 @@ pub struct PrivacyPreservingMessage {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct WitnessSet {
     pub signatures_and_public_keys: Vec<(Signature, PublicKey)>,
-    pub proof: Proof,
+    pub proof: Option<Proof>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]

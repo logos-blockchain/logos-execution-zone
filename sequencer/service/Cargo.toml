@@ -9,20 +9,25 @@ workspace = true
 
 [dependencies]
 common.workspace = true
+nssa.workspace = true
+nssa_core.workspace = true
+mempool.workspace = true
+borsh.workspace = true
 sequencer_core = { workspace = true, features = ["testnet"] }
-sequencer_rpc.workspace = true
+sequencer_service_rpc = { workspace = true, features = ["server"] }
 indexer_service_rpc = { workspace = true, features = ["client"] }
 
 clap = { workspace = true, features = ["derive", "env"] }
 anyhow.workspace = true
 env_logger.workspace = true
 log.workspace = true
-actix.workspace = true
-actix-web.workspace = true
 tokio.workspace = true
+tokio-util.workspace = true
+jsonrpsee.workspace = true
 futures.workspace = true
+bytesize.workspace = true
 
 [features]
 default = []
 # Runs the sequencer in standalone mode without depending on Bedrock and Indexer services.
-standalone = ["sequencer_core/mock", "sequencer_rpc/standalone"]
+standalone = ["sequencer_core/mock"]

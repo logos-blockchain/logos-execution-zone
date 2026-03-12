@@ -51,6 +51,22 @@ pub enum AccDecodeData {
     Decode(nssa_core::SharedSecretKey, AccountId),
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum ExecutionFailureKind {
+    #[error("Failed to get data from sequencer")]
+    SequencerError(#[source] anyhow::Error),
+    #[error("Inputs amounts does not match outputs")]
+    AmountMismatchError,
+    #[error("Accounts key not found")]
+    KeyNotFoundError,
+    #[error("Sequencer client error: {0:?}")]
+    SequencerClientError(#[from] SequencerClientError),
+    #[error("Can not pay for operation")]
+    InsufficientFundsError,
+    #[error("Account {0} data is invalid")]
+    AccountDataError(AccountId),
+}
+
 #[expect(clippy::partial_pub_fields, reason = "TODO: make all fields private")]
 pub struct WalletCore {
     config_path: PathBuf,

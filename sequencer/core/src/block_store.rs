@@ -7,7 +7,7 @@ use common::{
     transaction::NSSATransaction,
 };
 use nssa::V02State;
-use storage::sequencer::RocksDBIO;
+use storage::{error::DbError, sequencer::RocksDBIO};
 
 pub struct SequencerStore {
     dbio: RocksDBIO,
@@ -42,8 +42,8 @@ impl SequencerStore {
         })
     }
 
-    pub fn get_block_at_id(&self, id: u64) -> Result<Block> {
-        Ok(self.dbio.get_block(id)?)
+    pub fn get_block_at_id(&self, id: u64) -> Result<Block, DbError> {
+        self.dbio.get_block(id)
     }
 
     pub fn delete_block_at_id(&mut self, block_id: u64) -> Result<()> {

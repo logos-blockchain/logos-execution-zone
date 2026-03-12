@@ -22,8 +22,6 @@ use url::Url;
 pub struct SequencerConfig {
     /// Home dir of sequencer storage.
     pub home: PathBuf,
-    /// Override rust log (env var logging level).
-    pub override_rust_log: Option<String>,
     /// Genesis id.
     pub genesis_id: u64,
     /// If `True`, then adds random sequence of bytes to genesis block.
@@ -41,8 +39,6 @@ pub struct SequencerConfig {
     /// Interval in which pending blocks are retried.
     #[serde(with = "humantime_serde")]
     pub retry_pending_blocks_timeout: Duration,
-    /// Port to listen.
-    pub port: u16,
     /// List of initial accounts data.
     pub initial_accounts: Vec<AccountInitialData>,
     /// List of initial commitments.
