@@ -90,12 +90,15 @@ _wallet_auth_transfer() {
             case $line[1] in
                 init)
                     _arguments \
-                        '--account-id[Account ID to initialize]:account_id:_wallet_account_ids'
+                        '--account-id[Account ID to initialize]:account_id:_wallet_account_ids' \
+                        '--account-label[Account label (alternative to --account-id)]:label:_wallet_account_labels'
                     ;;
                 send)
                     _arguments \
                         '--from[Source account ID]:from_account:_wallet_account_ids' \
+                        '--from-label[Source account label (alternative to --from)]:label:_wallet_account_labels' \
                         '--to[Destination account ID (for owned accounts)]:to_account:_wallet_account_ids' \
+                        '--to-label[Destination account label (alternative to --to)]:label:_wallet_account_labels' \
                         '--to-npk[Destination nullifier public key (for foreign private accounts)]:npk:' \
                         '--to-vpk[Destination viewing public key (for foreign private accounts)]:vpk:' \
                         '--amount[Amount of native tokens to send]:amount:'
@@ -165,7 +168,8 @@ _wallet_account() {
                     _arguments \
                         '(-r --raw)'{-r,--raw}'[Get raw account data]' \
                         '(-k --keys)'{-k,--keys}'[Display keys (pk for public accounts, npk/vpk for private accounts)]' \
-                        '(-a --account-id)'{-a,--account-id}'[Account ID to query]:account_id:_wallet_account_ids'
+                        '(-a --account-id)'{-a,--account-id}'[Account ID to query]:account_id:_wallet_account_ids' \
+                        '--account-label[Account label (alternative to --account-id)]:label:_wallet_account_labels'
                     ;;
                 list|ls)
                     _arguments \
@@ -189,6 +193,7 @@ _wallet_account() {
                 label)
                     _arguments \
                         '(-a --account-id)'{-a,--account-id}'[Account ID to label]:account_id:_wallet_account_ids' \
+                        '--account-label[Account label (alternative to --account-id)]:label:_wallet_account_labels' \
                         '(-l --label)'{-l,--label}'[The label to assign to the account]:label:'
                     ;;
             esac
@@ -216,7 +221,8 @@ _wallet_pinata() {
             case $line[1] in
                 claim)
                     _arguments \
-                        '--to[Destination account ID to receive claimed tokens]:to_account:_wallet_account_ids'
+                        '--to[Destination account ID to receive claimed tokens]:to_account:_wallet_account_ids' \
+                        '--to-label[Destination account label (alternative to --to)]:label:_wallet_account_labels'
                     ;;
             esac
             ;;
@@ -249,12 +255,16 @@ _wallet_token() {
                         '--name[Token name]:name:' \
                         '--total-supply[Total supply of tokens to mint]:total_supply:' \
                         '--definition-account-id[Account ID for token definition]:definition_account:_wallet_account_ids' \
-                        '--supply-account-id[Account ID to receive initial supply]:supply_account:_wallet_account_ids'
+                        '--definition-account-label[Definition account label (alternative to --definition-account-id)]:label:_wallet_account_labels' \
+                        '--supply-account-id[Account ID to receive initial supply]:supply_account:_wallet_account_ids' \
+                        '--supply-account-label[Supply account label (alternative to --supply-account-id)]:label:_wallet_account_labels'
                     ;;
                 send)
                     _arguments \
                         '--from[Source holding account ID]:from_account:_wallet_account_ids' \
+                        '--from-label[Source account label (alternative to --from)]:label:_wallet_account_labels' \
                         '--to[Destination holding account ID (for owned accounts)]:to_account:_wallet_account_ids' \
+                        '--to-label[Destination account label (alternative to --to)]:label:_wallet_account_labels' \
                         '--to-npk[Destination nullifier public key (for foreign private accounts)]:npk:' \
                         '--to-vpk[Destination viewing public key (for foreign private accounts)]:vpk:' \
                         '--amount[Amount of tokens to send]:amount:'
@@ -262,13 +272,17 @@ _wallet_token() {
                 burn)
                     _arguments \
                         '--definition[Definition account ID]:definition_account:_wallet_account_ids' \
+                        '--definition-label[Definition account label (alternative to --definition)]:label:_wallet_account_labels' \
                         '--holder[Holder account ID]:holder_account:_wallet_account_ids' \
+                        '--holder-label[Holder account label (alternative to --holder)]:label:_wallet_account_labels' \
                         '--amount[Amount of tokens to burn]:amount:'
                     ;;
                 mint)
                     _arguments \
                         '--definition[Definition account ID]:definition_account:_wallet_account_ids' \
+                        '--definition-label[Definition account label (alternative to --definition)]:label:_wallet_account_labels' \
                         '--holder[Holder account ID (for owned accounts)]:holder_account:_wallet_account_ids' \
+                        '--holder-label[Holder account label (alternative to --holder)]:label:_wallet_account_labels' \
                         '--holder-npk[Holder nullifier public key (for foreign private accounts)]:npk:' \
                         '--holder-vpk[Holder viewing public key (for foreign private accounts)]:vpk:' \
                         '--amount[Amount of tokens to mint]:amount:'
@@ -302,15 +316,20 @@ _wallet_amm() {
                 new)
                     _arguments \
                         '--user-holding-a[User token A holding account ID]:holding_a:_wallet_account_ids' \
+                        '--user-holding-a-label[User holding A account label (alternative to --user-holding-a)]:label:_wallet_account_labels' \
                         '--user-holding-b[User token B holding account ID]:holding_b:_wallet_account_ids' \
+                        '--user-holding-b-label[User holding B account label (alternative to --user-holding-b)]:label:_wallet_account_labels' \
                         '--user-holding-lp[User LP token holding account ID]:holding_lp:_wallet_account_ids' \
+                        '--user-holding-lp-label[User holding LP account label (alternative to --user-holding-lp)]:label:_wallet_account_labels' \
                         '--balance-a[Amount of token A to deposit]:balance_a:' \
                         '--balance-b[Amount of token B to deposit]:balance_b:'
                     ;;
                 swap)
                     _arguments \
                         '--user-holding-a[User token A holding account ID]:holding_a:_wallet_account_ids' \
+                        '--user-holding-a-label[User holding A account label (alternative to --user-holding-a)]:label:_wallet_account_labels' \
                         '--user-holding-b[User token B holding account ID]:holding_b:_wallet_account_ids' \
+                        '--user-holding-b-label[User holding B account label (alternative to --user-holding-b)]:label:_wallet_account_labels' \
                         '--amount-in[Amount of tokens to swap]:amount_in:' \
                         '--min-amount-out[Minimum tokens expected in return]:min_amount_out:' \
                         '--token-definition[Definition ID of the token being provided]:token_def:'
@@ -318,8 +337,11 @@ _wallet_amm() {
                 add-liquidity)
                     _arguments \
                         '--user-holding-a[User token A holding account ID]:holding_a:_wallet_account_ids' \
+                        '--user-holding-a-label[User holding A account label (alternative to --user-holding-a)]:label:_wallet_account_labels' \
                         '--user-holding-b[User token B holding account ID]:holding_b:_wallet_account_ids' \
+                        '--user-holding-b-label[User holding B account label (alternative to --user-holding-b)]:label:_wallet_account_labels' \
                         '--user-holding-lp[User LP token holding account ID]:holding_lp:_wallet_account_ids' \
+                        '--user-holding-lp-label[User holding LP account label (alternative to --user-holding-lp)]:label:_wallet_account_labels' \
                         '--max-amount-a[Maximum amount of token A to deposit]:max_amount_a:' \
                         '--max-amount-b[Maximum amount of token B to deposit]:max_amount_b:' \
                         '--min-amount-lp[Minimum LP tokens to receive]:min_amount_lp:'
@@ -327,8 +349,11 @@ _wallet_amm() {
                 remove-liquidity)
                     _arguments \
                         '--user-holding-a[User token A holding account ID]:holding_a:_wallet_account_ids' \
+                        '--user-holding-a-label[User holding A account label (alternative to --user-holding-a)]:label:_wallet_account_labels' \
                         '--user-holding-b[User token B holding account ID]:holding_b:_wallet_account_ids' \
+                        '--user-holding-b-label[User holding B account label (alternative to --user-holding-b)]:label:_wallet_account_labels' \
                         '--user-holding-lp[User LP token holding account ID]:holding_lp:_wallet_account_ids' \
+                        '--user-holding-lp-label[User holding LP account label (alternative to --user-holding-lp)]:label:_wallet_account_labels' \
                         '--balance-lp[Amount of LP tokens to burn]:balance_lp:' \
                         '--min-amount-a[Minimum token A to receive]:min_amount_a:' \
                         '--min-amount-b[Minimum token B to receive]:min_amount_b:'
@@ -424,7 +449,7 @@ _wallet_help() {
 _wallet_account_ids() {
     local -a accounts
     local line
-    
+
     # Try to get accounts from wallet account list command
     # Filter to lines starting with /N (numbered accounts) and extract the account ID
     if command -v wallet &>/dev/null; then
@@ -433,14 +458,35 @@ _wallet_account_ids() {
             [[ -n "$line" ]] && accounts+=("${line%,}")
         done < <(wallet account list 2>/dev/null | grep '^/[0-9]' | awk '{print $2}')
     fi
-    
+
     # Provide type prefixes as fallback if command fails or returns nothing
     if (( ${#accounts} == 0 )); then
         compadd -S '' -- 'Public/' 'Private/'
         return
     fi
-    
+
     _multi_parts / accounts
+}
+
+# Helper function to complete account labels
+# Uses `wallet account list` to get available labels
+_wallet_account_labels() {
+    local -a labels
+    local line
+
+    if command -v wallet &>/dev/null; then
+        while IFS= read -r line; do
+            local label
+            # Extract label from [...] at end of line
+            label="${line##*\[}"
+            label="${label%\]}"
+            [[ -n "$label" && "$label" != "$line" ]] && labels+=("$label")
+        done < <(wallet account list 2>/dev/null)
+    fi
+
+    if (( ${#labels} > 0 )); then
+        compadd -a labels
+    fi
 }
 
 _wallet "$@"

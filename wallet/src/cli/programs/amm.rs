@@ -5,7 +5,7 @@ use nssa::AccountId;
 use crate::{
     WalletCore,
     cli::{SubcommandReturnValue, WalletSubcommand},
-    helperfunctions::{AccountPrivacyKind, parse_addr_with_privacy_prefix},
+    helperfunctions::{AccountPrivacyKind, parse_addr_with_privacy_prefix, resolve_account_label},
     program_facades::amm::Amm,
 };
 
@@ -19,14 +19,23 @@ pub enum AmmProgramAgnosticSubcommand {
     /// Only public execution allowed
     New {
         /// user_holding_a - valid 32 byte base58 string with privacy prefix
-        #[arg(long)]
-        user_holding_a: String,
+        #[arg(long, conflicts_with = "user_holding_a_label", required_unless_present = "user_holding_a_label")]
+        user_holding_a: Option<String>,
+        /// User holding A account label (alternative to --user-holding-a)
+        #[arg(long, conflicts_with = "user_holding_a")]
+        user_holding_a_label: Option<String>,
         /// user_holding_b - valid 32 byte base58 string with privacy prefix
-        #[arg(long)]
-        user_holding_b: String,
+        #[arg(long, conflicts_with = "user_holding_b_label", required_unless_present = "user_holding_b_label")]
+        user_holding_b: Option<String>,
+        /// User holding B account label (alternative to --user-holding-b)
+        #[arg(long, conflicts_with = "user_holding_b")]
+        user_holding_b_label: Option<String>,
         /// user_holding_lp - valid 32 byte base58 string with privacy prefix
-        #[arg(long)]
-        user_holding_lp: String,
+        #[arg(long, conflicts_with = "user_holding_lp_label", required_unless_present = "user_holding_lp_label")]
+        user_holding_lp: Option<String>,
+        /// User holding LP account label (alternative to --user-holding-lp)
+        #[arg(long, conflicts_with = "user_holding_lp")]
+        user_holding_lp_label: Option<String>,
         #[arg(long)]
         balance_a: u128,
         #[arg(long)]
@@ -39,11 +48,17 @@ pub enum AmmProgramAgnosticSubcommand {
     /// Only public execution allowed
     Swap {
         /// user_holding_a - valid 32 byte base58 string with privacy prefix
-        #[arg(long)]
-        user_holding_a: String,
+        #[arg(long, conflicts_with = "user_holding_a_label", required_unless_present = "user_holding_a_label")]
+        user_holding_a: Option<String>,
+        /// User holding A account label (alternative to --user-holding-a)
+        #[arg(long, conflicts_with = "user_holding_a")]
+        user_holding_a_label: Option<String>,
         /// user_holding_b - valid 32 byte base58 string with privacy prefix
-        #[arg(long)]
-        user_holding_b: String,
+        #[arg(long, conflicts_with = "user_holding_b_label", required_unless_present = "user_holding_b_label")]
+        user_holding_b: Option<String>,
+        /// User holding B account label (alternative to --user-holding-b)
+        #[arg(long, conflicts_with = "user_holding_b")]
+        user_holding_b_label: Option<String>,
         #[arg(long)]
         amount_in: u128,
         #[arg(long)]
@@ -59,14 +74,23 @@ pub enum AmmProgramAgnosticSubcommand {
     /// Only public execution allowed
     AddLiquidity {
         /// user_holding_a - valid 32 byte base58 string with privacy prefix
-        #[arg(long)]
-        user_holding_a: String,
+        #[arg(long, conflicts_with = "user_holding_a_label", required_unless_present = "user_holding_a_label")]
+        user_holding_a: Option<String>,
+        /// User holding A account label (alternative to --user-holding-a)
+        #[arg(long, conflicts_with = "user_holding_a")]
+        user_holding_a_label: Option<String>,
         /// user_holding_b - valid 32 byte base58 string with privacy prefix
-        #[arg(long)]
-        user_holding_b: String,
+        #[arg(long, conflicts_with = "user_holding_b_label", required_unless_present = "user_holding_b_label")]
+        user_holding_b: Option<String>,
+        /// User holding B account label (alternative to --user-holding-b)
+        #[arg(long, conflicts_with = "user_holding_b")]
+        user_holding_b_label: Option<String>,
         /// user_holding_lp - valid 32 byte base58 string with privacy prefix
-        #[arg(long)]
-        user_holding_lp: String,
+        #[arg(long, conflicts_with = "user_holding_lp_label", required_unless_present = "user_holding_lp_label")]
+        user_holding_lp: Option<String>,
+        /// User holding LP account label (alternative to --user-holding-lp)
+        #[arg(long, conflicts_with = "user_holding_lp")]
+        user_holding_lp_label: Option<String>,
         #[arg(long)]
         min_amount_lp: u128,
         #[arg(long)]
@@ -81,14 +105,23 @@ pub enum AmmProgramAgnosticSubcommand {
     /// Only public execution allowed
     RemoveLiquidity {
         /// user_holding_a - valid 32 byte base58 string with privacy prefix
-        #[arg(long)]
-        user_holding_a: String,
+        #[arg(long, conflicts_with = "user_holding_a_label", required_unless_present = "user_holding_a_label")]
+        user_holding_a: Option<String>,
+        /// User holding A account label (alternative to --user-holding-a)
+        #[arg(long, conflicts_with = "user_holding_a")]
+        user_holding_a_label: Option<String>,
         /// user_holding_b - valid 32 byte base58 string with privacy prefix
-        #[arg(long)]
-        user_holding_b: String,
+        #[arg(long, conflicts_with = "user_holding_b_label", required_unless_present = "user_holding_b_label")]
+        user_holding_b: Option<String>,
+        /// User holding B account label (alternative to --user-holding-b)
+        #[arg(long, conflicts_with = "user_holding_b")]
+        user_holding_b_label: Option<String>,
         /// user_holding_lp - valid 32 byte base58 string with privacy prefix
-        #[arg(long)]
-        user_holding_lp: String,
+        #[arg(long, conflicts_with = "user_holding_lp_label", required_unless_present = "user_holding_lp_label")]
+        user_holding_lp: Option<String>,
+        /// User holding LP account label (alternative to --user-holding-lp)
+        #[arg(long, conflicts_with = "user_holding_lp")]
+        user_holding_lp_label: Option<String>,
         #[arg(long)]
         balance_lp: u128,
         #[arg(long)]
@@ -106,11 +139,41 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
         match self {
             AmmProgramAgnosticSubcommand::New {
                 user_holding_a,
+                user_holding_a_label,
                 user_holding_b,
+                user_holding_b_label,
                 user_holding_lp,
+                user_holding_lp_label,
                 balance_a,
                 balance_b,
             } => {
+                let user_holding_a = match (user_holding_a, user_holding_a_label) {
+                    (Some(id), None) => id,
+                    (None, Some(label)) => resolve_account_label(
+                        &label,
+                        &wallet_core.storage.labels,
+                        &wallet_core.storage.user_data,
+                    )?,
+                    _ => unreachable!(),
+                };
+                let user_holding_b = match (user_holding_b, user_holding_b_label) {
+                    (Some(id), None) => id,
+                    (None, Some(label)) => resolve_account_label(
+                        &label,
+                        &wallet_core.storage.labels,
+                        &wallet_core.storage.user_data,
+                    )?,
+                    _ => unreachable!(),
+                };
+                let user_holding_lp = match (user_holding_lp, user_holding_lp_label) {
+                    (Some(id), None) => id,
+                    (None, Some(label)) => resolve_account_label(
+                        &label,
+                        &wallet_core.storage.labels,
+                        &wallet_core.storage.user_data,
+                    )?,
+                    _ => unreachable!(),
+                };
                 let (user_holding_a, user_holding_a_privacy) =
                     parse_addr_with_privacy_prefix(&user_holding_a)?;
                 let (user_holding_b, user_holding_b_privacy) =
@@ -152,11 +215,31 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
             }
             AmmProgramAgnosticSubcommand::Swap {
                 user_holding_a,
+                user_holding_a_label,
                 user_holding_b,
+                user_holding_b_label,
                 amount_in,
                 min_amount_out,
                 token_definition,
             } => {
+                let user_holding_a = match (user_holding_a, user_holding_a_label) {
+                    (Some(id), None) => id,
+                    (None, Some(label)) => resolve_account_label(
+                        &label,
+                        &wallet_core.storage.labels,
+                        &wallet_core.storage.user_data,
+                    )?,
+                    _ => unreachable!(),
+                };
+                let user_holding_b = match (user_holding_b, user_holding_b_label) {
+                    (Some(id), None) => id,
+                    (None, Some(label)) => resolve_account_label(
+                        &label,
+                        &wallet_core.storage.labels,
+                        &wallet_core.storage.user_data,
+                    )?,
+                    _ => unreachable!(),
+                };
                 let (user_holding_a, user_holding_a_privacy) =
                     parse_addr_with_privacy_prefix(&user_holding_a)?;
                 let (user_holding_b, user_holding_b_privacy) =
@@ -187,12 +270,42 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
             }
             AmmProgramAgnosticSubcommand::AddLiquidity {
                 user_holding_a,
+                user_holding_a_label,
                 user_holding_b,
+                user_holding_b_label,
                 user_holding_lp,
+                user_holding_lp_label,
                 min_amount_lp,
                 max_amount_a,
                 max_amount_b,
             } => {
+                let user_holding_a = match (user_holding_a, user_holding_a_label) {
+                    (Some(id), None) => id,
+                    (None, Some(label)) => resolve_account_label(
+                        &label,
+                        &wallet_core.storage.labels,
+                        &wallet_core.storage.user_data,
+                    )?,
+                    _ => unreachable!(),
+                };
+                let user_holding_b = match (user_holding_b, user_holding_b_label) {
+                    (Some(id), None) => id,
+                    (None, Some(label)) => resolve_account_label(
+                        &label,
+                        &wallet_core.storage.labels,
+                        &wallet_core.storage.user_data,
+                    )?,
+                    _ => unreachable!(),
+                };
+                let user_holding_lp = match (user_holding_lp, user_holding_lp_label) {
+                    (Some(id), None) => id,
+                    (None, Some(label)) => resolve_account_label(
+                        &label,
+                        &wallet_core.storage.labels,
+                        &wallet_core.storage.user_data,
+                    )?,
+                    _ => unreachable!(),
+                };
                 let (user_holding_a, user_holding_a_privacy) =
                     parse_addr_with_privacy_prefix(&user_holding_a)?;
                 let (user_holding_b, user_holding_b_privacy) =
@@ -235,12 +348,42 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
             }
             AmmProgramAgnosticSubcommand::RemoveLiquidity {
                 user_holding_a,
+                user_holding_a_label,
                 user_holding_b,
+                user_holding_b_label,
                 user_holding_lp,
+                user_holding_lp_label,
                 balance_lp,
                 min_amount_a,
                 min_amount_b,
             } => {
+                let user_holding_a = match (user_holding_a, user_holding_a_label) {
+                    (Some(id), None) => id,
+                    (None, Some(label)) => resolve_account_label(
+                        &label,
+                        &wallet_core.storage.labels,
+                        &wallet_core.storage.user_data,
+                    )?,
+                    _ => unreachable!(),
+                };
+                let user_holding_b = match (user_holding_b, user_holding_b_label) {
+                    (Some(id), None) => id,
+                    (None, Some(label)) => resolve_account_label(
+                        &label,
+                        &wallet_core.storage.labels,
+                        &wallet_core.storage.user_data,
+                    )?,
+                    _ => unreachable!(),
+                };
+                let user_holding_lp = match (user_holding_lp, user_holding_lp_label) {
+                    (Some(id), None) => id,
+                    (None, Some(label)) => resolve_account_label(
+                        &label,
+                        &wallet_core.storage.labels,
+                        &wallet_core.storage.user_data,
+                    )?,
+                    _ => unreachable!(),
+                };
                 let (user_holding_a, user_holding_a_privacy) =
                     parse_addr_with_privacy_prefix(&user_holding_a)?;
                 let (user_holding_b, user_holding_b_privacy) =

@@ -7,7 +7,7 @@ use crate::{
     AccDecodeData::Decode,
     WalletCore,
     cli::{SubcommandReturnValue, WalletSubcommand},
-    helperfunctions::{AccountPrivacyKind, parse_addr_with_privacy_prefix},
+    helperfunctions::{AccountPrivacyKind, parse_addr_with_privacy_prefix, resolve_account_label},
     program_facades::native_token_transfer::NativeTokenTransfer,
 };
 
@@ -17,8 +17,11 @@ pub enum AuthTransferSubcommand {
     /// Initialize account under authenticated transfer program
     Init {
         /// account_id - valid 32 byte base58 string with privacy prefix
-        #[arg(long)]
-        account_id: String,
+        #[arg(long, conflicts_with = "account_label", required_unless_present = "account_label")]
+        account_id: Option<String>,
+        /// Account label (alternative to --account-id)
+        #[arg(long, conflicts_with = "account_id")]
+        account_label: Option<String>,
     },
     /// Send native tokens from one account to another with variable privacy
     ///
@@ -28,11 +31,17 @@ pub enum AuthTransferSubcommand {
     /// First is used for owned accounts, second otherwise.
     Send {
         /// from - valid 32 byte base58 string with privacy prefix
-        #[arg(long)]
-        from: String,
+        #[arg(long, conflicts_with = "from_label", required_unless_present = "from_label")]
+        from: Option<String>,
+        /// From account label (alternative to --from)
+        #[arg(long, conflicts_with = "from")]
+        from_label: Option<String>,
         /// to - valid 32 byte base58 string with privacy prefix
-        #[arg(long)]
+        #[arg(long, conflicts_with = "to_label")]
         to: Option<String>,
+        /// To account label (alternative to --to)
+        #[arg(long, conflicts_with = "to")]
+        to_label: Option<String>,
         /// to_npk - valid 32 byte hex string
         #[arg(long)]
         to_npk: Option<String>,
@@ -51,8 +60,17 @@ impl WalletSubcommand for AuthTransferSubcommand {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         match self {
-            AuthTransferSubcommand::Init { account_id } => {
-                let (account_id, addr_privacy) = parse_addr_with_privacy_prefix(&account_id)?;
+            AuthTransferSubcommand::Init { account_id, account_label } => {
+                let resolved = match (account_id, account_label) {
+                    (Some(id), None) => id,
+                    (None, Some(label)) => resolve_account_label(
+                        &label,
+                        &wallet_core.storage.labels,
+                        &wallet_core.storage.user_data,
+                    )?,
+                    _ => unreachable!(),
+                };
+                let (account_id, addr_privacy) = parse_addr_with_privacy_prefix(&resolved)?;
 
                 match addr_privacy {
                     AccountPrivacyKind::Public => {
@@ -100,11 +118,33 @@ impl WalletSubcommand for AuthTransferSubcommand {
             }
             AuthTransferSubcommand::Send {
                 from,
+                from_label,
                 to,
+                to_label,
                 to_npk,
                 to_vpk,
                 amount,
             } => {
+                let from = match (from, from_label) {
+                    (Some(id), None) => id,
+                    (None, Some(label)) => resolve_account_label(
+                        &label,
+                        &wallet_core.storage.labels,
+                        &wallet_core.storage.user_data,
+                    )?,
+                    _ => unreachable!(),
+                };
+                let to = match (to, to_label) {
+                    (v, None) => v,
+                    (None, Some(label)) => Some(resolve_account_label(
+                        &label,
+                        &wallet_core.storage.labels,
+                        &wallet_core.storage.user_data,
+                    )?),
+                    (Some(_), Some(_)) => {
+                        anyhow::bail!("Provide only one of --to or --to-label")
+                    }
+                };
                 let underlying_subcommand = match (to, to_npk, to_vpk) {
                     (None, None, None) => {
                         anyhow::bail!(
