@@ -3571,6 +3571,7 @@ dependencies = [
  "nssa_core",
  "sequencer_core",
  "sequencer_service",
+ "sequencer_service_rpc",
  "serde_json",
  "tempfile",
  "testcontainers",
@@ -5868,8 +5869,10 @@ name = "program_deployment"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "common",
  "nssa",
  "nssa_core",
+ "sequencer_service_rpc",
  "tokio",
  "wallet",
 ]
@@ -7197,7 +7200,6 @@ dependencies = [
  "jsonrpsee",
  "nssa",
  "nssa_core",
- "schemars 1.2.1",
  "serde_json",
 ]
 
@@ -8667,9 +8669,11 @@ dependencies = [
  "nssa_core",
  "optfield",
  "rand 0.8.5",
+ "sequencer_service_rpc",
  "serde",
  "serde_json",
  "sha2",
+ "thiserror 2.0.18",
  "token_core",
  "tokio",
  "url",
@@ -8683,6 +8687,7 @@ dependencies = [
  "common",
  "nssa",
  "nssa_core",
+ "sequencer_service_rpc",
  "tempfile",
  "tokio",
  "wallet",

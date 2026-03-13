@@ -204,7 +204,6 @@ pub fn sequencer_config(
 
     Ok(SequencerConfig {
         home,
-        override_rust_log: None,
         genesis_id: 1,
         is_genesis_random: true,
         max_num_tx_in_block,
@@ -212,7 +211,6 @@ pub fn sequencer_config(
         mempool_max_size,
         block_create_timeout,
         retry_pending_blocks_timeout: Duration::from_secs(120),
-        port: 0,
         initial_accounts: initial_data.sequencer_initial_accounts(),
         initial_commitments: initial_data.sequencer_initial_commitments(),
         signing_key: [37; 32],

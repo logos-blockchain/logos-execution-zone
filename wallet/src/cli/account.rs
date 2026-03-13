@@ -3,6 +3,7 @@ use clap::Subcommand;
 use itertools::Itertools as _;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use nssa::{Account, PublicKey, program::Program};
+use sequencer_service_rpc::RpcClient;
 use token_core::{TokenDefinition, TokenHolding};
 
 use crate::{
@@ -244,11 +245,7 @@ impl WalletSubcommand for AccountSubcommand {
             }
             Self::New(new_subcommand) => new_subcommand.handle_subcommand(wallet_core).await,
             Self::SyncPrivate => {
-                let curr_last_block = wallet_core
-                    .sequencer_client
-                    .get_last_block()
-                    .await?
-                    .last_block;
+                let curr_last_block = wallet_core.sequencer_client.get_last_block_id().await?;
 
                 if wallet_core
                     .storage

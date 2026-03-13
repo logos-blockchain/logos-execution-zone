@@ -201,26 +201,23 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
             })
     }
 
-    async fn get_block_by_id(&self, block_id: BlockId) -> Result<Block, ErrorObjectOwned> {
-        self.blocks
+    async fn get_block_by_id(&self, block_id: BlockId) -> Result<Option<Block>, ErrorObjectOwned> {
+        Ok(self
+            .blocks
             .iter()
             .find(|b| b.header.block_id == block_id)
-            .cloned()
-            .ok_or_else(|| {
-                ErrorObjectOwned::owned(
-                    -32001,
-                    format!("Block with ID {block_id} not found"),
-                    None::<()>,
-                )
-            })
+            .cloned())
     }
 
-    async fn get_block_by_hash(&self, block_hash: HashType) -> Result<Block, ErrorObjectOwned> {
-        self.blocks
+    async fn get_block_by_hash(
+        &self,
+        block_hash: HashType,
+    ) -> Result<Option<Block>, ErrorObjectOwned> {
+        Ok(self
+            .blocks
             .iter()
             .find(|b| b.header.hash == block_hash)
-            .cloned()
-            .ok_or_else(|| ErrorObjectOwned::owned(-32001, "Block with hash not found", None::<()>))
+            .cloned())
     }
 
     async fn get_account(&self, account_id: AccountId) -> Result<Account, ErrorObjectOwned> {
@@ -230,11 +227,11 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
             .ok_or_else(|| ErrorObjectOwned::owned(-32001, "Account not found", None::<()>))
     }
 
-    async fn get_transaction(&self, tx_hash: HashType) -> Result<Transaction, ErrorObjectOwned> {
-        self.transactions
-            .get(&tx_hash)
-            .map(|(tx, _)| tx.clone())
-            .ok_or_else(|| ErrorObjectOwned::owned(-32001, "Transaction not found", None::<()>))
+    async fn get_transaction(
+        &self,
+        tx_hash: HashType,
+    ) -> Result<Option<Transaction>, ErrorObjectOwned> {
+        Ok(self.transactions.get(&tx_hash).map(|(tx, _)| tx.clone()))
     }
 
     async fn get_blocks(

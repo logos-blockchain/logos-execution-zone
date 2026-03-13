@@ -8,8 +8,10 @@ license = { workspace = true }
 workspace = true
 
 [dependencies]
+common.workspace = true
 nssa.workspace = true
 nssa_core.workspace = true
+sequencer_service_rpc = { workspace = true, features = ["client"] }
 wallet.workspace = true
 
 tokio = { workspace = true, features = ["macros"] }

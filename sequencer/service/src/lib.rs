@@ -89,10 +89,19 @@ impl SequencerHandle {
     }
 
     #[must_use]
-    pub fn is_finished(&self) -> bool {
-        self.main_loop_handle.is_finished()
-            || self.retry_pending_blocks_loop_handle.is_finished()
-            || self.listen_for_bedrock_blocks_loop_handle.is_finished()
+    pub fn is_stopped(&self) -> bool {
+        let Self {
+            addr: _,
+            server_handle,
+            main_loop_handle,
+            retry_pending_blocks_loop_handle,
+            listen_for_bedrock_blocks_loop_handle,
+        } = self;
+
+        server_handle.as_ref().is_none_or(ServerHandle::is_stopped)
+            || main_loop_handle.is_finished()
+            || retry_pending_blocks_loop_handle.is_finished()
+            || listen_for_bedrock_blocks_loop_handle.is_finished()
     }
 
     #[must_use]

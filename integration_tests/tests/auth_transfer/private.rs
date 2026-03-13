@@ -8,6 +8,7 @@ use integration_tests::{
 use log::info;
 use nssa::{AccountId, program::Program};
 use nssa_core::{NullifierPublicKey, encryption::shared_key_derivation::Secp256k1Point};
+use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 use wallet::cli::{
     Command, SubcommandReturnValue,
@@ -135,7 +136,7 @@ async fn deshielded_transfer_to_public_account() -> Result<()> {
     let acc_2_balance = ctx.sequencer_client().get_account_balance(to).await?;
 
     assert_eq!(from_acc.balance, 9900);
-    assert_eq!(acc_2_balance.balance, 20100);
+    assert_eq!(acc_2_balance, 20100);
 
     info!("Successfully deshielded transfer to public account");
 
@@ -245,7 +246,7 @@ async fn shielded_transfer_to_owned_private_account() -> Result<()> {
 
     let acc_from_balance = ctx.sequencer_client().get_account_balance(from).await?;
 
-    assert_eq!(acc_from_balance.balance, 9900);
+    assert_eq!(acc_from_balance, 9900);
     assert_eq!(acc_to.balance, 20100);
 
     info!("Successfully shielded transfer to owned private account");
@@ -290,7 +291,7 @@ async fn shielded_transfer_to_foreign_account() -> Result<()> {
         .await
     );
 
-    assert_eq!(acc_1_balance.balance, 9900);
+    assert_eq!(acc_1_balance, 9900);
 
     info!("Successfully shielded transfer to foreign account");
 

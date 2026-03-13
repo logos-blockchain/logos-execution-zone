@@ -8,11 +8,28 @@ use common::{
 use jsonrpsee::proc_macros::rpc;
 #[cfg(feature = "server")]
 use jsonrpsee::types::ErrorObjectOwned;
+#[cfg(feature = "client")]
+pub use jsonrpsee::{core::ClientError, http_client::HttpClientBuilder as SequencerClientBuilder};
 use nssa::{Account, AccountId, ProgramId};
 use nssa_core::{Commitment, MembershipProof, account::Nonce};
 
 #[cfg(all(not(feature = "server"), not(feature = "client")))]
 compile_error!("At least one of `server` or `client` features must be enabled.");
+
+/// Type alias for RPC client. Only available when `client` feature is enabled.
+///
+/// It's cheap to clone this client, so it can be cloned and shared across the application.
+///
+/// # Example
+///
+/// ```ignore
+/// use sequencer_service_rpc::{SequencerClientBuilder, RpcClient as _};
+///
+/// let client = SequencerClientBuilder::default().build(url)?;
+/// let tx_hash = client.send_transaction(tx).await?;
+/// ```
+#[cfg(feature = "client")]
+pub type SequencerClient = jsonrpsee::http_client::HttpClient;
 
 #[cfg_attr(all(feature = "server", not(feature = "client")), rpc(server))]
 #[cfg_attr(all(feature = "client", not(feature = "server")), rpc(client))]
@@ -30,11 +47,11 @@ pub trait Rpc {
     //
     // =============================================================================================
 
-    #[method(name = "getBlockData")]
-    async fn get_block_data(&self, block_id: BlockId) -> Result<Block, ErrorObjectOwned>;
+    #[method(name = "getBlock")]
+    async fn get_block(&self, block_id: BlockId) -> Result<Option<Block>, ErrorObjectOwned>;
 
-    #[method(name = "getBlockRangeData")]
-    async fn get_block_range_data(
+    #[method(name = "getBlockRange")]
+    async fn get_block_range(
         &self,
         start_block_id: BlockId,
         end_block_id: BlockId,
@@ -46,11 +63,11 @@ pub trait Rpc {
     #[method(name = "getAccountBalance")]
     async fn get_account_balance(&self, account_id: AccountId) -> Result<u128, ErrorObjectOwned>;
 
-    #[method(name = "getTransactionByHash")]
-    async fn get_transaction_by_hash(
+    #[method(name = "getTransaction")]
+    async fn get_transaction(
         &self,
-        hash: HashType,
-    ) -> Result<NSSATransaction, ErrorObjectOwned>;
+        tx_hash: HashType,
+    ) -> Result<Option<NSSATransaction>, ErrorObjectOwned>;
 
     #[method(name = "getAccountsNonces")]
     async fn get_accounts_nonces(
