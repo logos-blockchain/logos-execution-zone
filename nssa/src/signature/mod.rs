@@ -6,9 +6,15 @@ pub use private_key::PrivateKey;
 pub use public_key::PublicKey;
 use rand::{RngCore, rngs::OsRng};
 
-#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Signature {
     pub value: [u8; 64],
+}
+
+impl std::fmt::Debug for Signature {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", hex::encode(self.value))
+    }
 }
 
 impl Signature {

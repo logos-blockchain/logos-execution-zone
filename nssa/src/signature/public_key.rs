@@ -5,8 +5,14 @@ use sha2::{Digest, Sha256};
 
 use crate::{PrivateKey, error::NssaError};
 
-#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, BorshSerialize, Serialize, Deserialize)]
 pub struct PublicKey([u8; 32]);
+
+impl std::fmt::Debug for PublicKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", hex::encode(self.0))
+    }
+}
 
 impl BorshDeserialize for PublicKey {
     fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {

@@ -45,9 +45,17 @@ pub type NullifierSecretKey = [u8; 32];
 #[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(
     any(feature = "host", test),
-    derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)
+    derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)
 )]
 pub struct Nullifier(pub(super) [u8; 32]);
+
+#[cfg(any(feature = "host", test))]
+impl std::fmt::Debug for Nullifier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let hex: String = self.0.iter().map(|b| format!("{b:02x}")).collect();
+        write!(f, "Nullifier({hex})")
+    }
+}
 
 impl Nullifier {
     pub fn for_account_update(commitment: &Commitment, nsk: &NullifierSecretKey) -> Self {
