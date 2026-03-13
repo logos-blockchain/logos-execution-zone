@@ -17,7 +17,11 @@ pub enum AuthTransferSubcommand {
     /// Initialize account under authenticated transfer program
     Init {
         /// account_id - valid 32 byte base58 string with privacy prefix
-        #[arg(long, conflicts_with = "account_label", required_unless_present = "account_label")]
+        #[arg(
+            long,
+            conflicts_with = "account_label",
+            required_unless_present = "account_label"
+        )]
         account_id: Option<String>,
         /// Account label (alternative to --account-id)
         #[arg(long, conflicts_with = "account_id")]
@@ -31,7 +35,11 @@ pub enum AuthTransferSubcommand {
     /// First is used for owned accounts, second otherwise.
     Send {
         /// from - valid 32 byte base58 string with privacy prefix
-        #[arg(long, conflicts_with = "from_label", required_unless_present = "from_label")]
+        #[arg(
+            long,
+            conflicts_with = "from_label",
+            required_unless_present = "from_label"
+        )]
         from: Option<String>,
         /// From account label (alternative to --from)
         #[arg(long, conflicts_with = "from")]
@@ -60,7 +68,10 @@ impl WalletSubcommand for AuthTransferSubcommand {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         match self {
-            AuthTransferSubcommand::Init { account_id, account_label } => {
+            AuthTransferSubcommand::Init {
+                account_id,
+                account_label,
+            } => {
                 let resolved = match (account_id, account_label) {
                     (Some(id), None) => id,
                     (None, Some(label)) => resolve_account_label(

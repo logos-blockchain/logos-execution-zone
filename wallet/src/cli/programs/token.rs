@@ -17,13 +17,21 @@ pub enum TokenProgramAgnosticSubcommand {
     /// Produce a new token
     New {
         /// definition_account_id - valid 32 byte base58 string with privacy prefix
-        #[arg(long, conflicts_with = "definition_account_label", required_unless_present = "definition_account_label")]
+        #[arg(
+            long,
+            conflicts_with = "definition_account_label",
+            required_unless_present = "definition_account_label"
+        )]
         definition_account_id: Option<String>,
         /// Definition account label (alternative to --definition-account-id)
         #[arg(long, conflicts_with = "definition_account_id")]
         definition_account_label: Option<String>,
         /// supply_account_id - valid 32 byte base58 string with privacy prefix
-        #[arg(long, conflicts_with = "supply_account_label", required_unless_present = "supply_account_label")]
+        #[arg(
+            long,
+            conflicts_with = "supply_account_label",
+            required_unless_present = "supply_account_label"
+        )]
         supply_account_id: Option<String>,
         /// Supply account label (alternative to --supply-account-id)
         #[arg(long, conflicts_with = "supply_account_id")]
@@ -41,7 +49,11 @@ pub enum TokenProgramAgnosticSubcommand {
     /// First is used for owned accounts, second otherwise.
     Send {
         /// from - valid 32 byte base58 string with privacy prefix
-        #[arg(long, conflicts_with = "from_label", required_unless_present = "from_label")]
+        #[arg(
+            long,
+            conflicts_with = "from_label",
+            required_unless_present = "from_label"
+        )]
         from: Option<String>,
         /// From account label (alternative to --from)
         #[arg(long, conflicts_with = "from")]
@@ -70,13 +82,21 @@ pub enum TokenProgramAgnosticSubcommand {
     /// we can not modify foreign accounts.
     Burn {
         /// definition - valid 32 byte base58 string with privacy prefix
-        #[arg(long, conflicts_with = "definition_label", required_unless_present = "definition_label")]
+        #[arg(
+            long,
+            conflicts_with = "definition_label",
+            required_unless_present = "definition_label"
+        )]
         definition: Option<String>,
         /// Definition account label (alternative to --definition)
         #[arg(long, conflicts_with = "definition")]
         definition_label: Option<String>,
         /// holder - valid 32 byte base58 string with privacy prefix
-        #[arg(long, conflicts_with = "holder_label", required_unless_present = "holder_label")]
+        #[arg(
+            long,
+            conflicts_with = "holder_label",
+            required_unless_present = "holder_label"
+        )]
         holder: Option<String>,
         /// Holder account label (alternative to --holder)
         #[arg(long, conflicts_with = "holder")]
@@ -95,7 +115,11 @@ pub enum TokenProgramAgnosticSubcommand {
     /// First is used for owned accounts, second otherwise.
     Mint {
         /// definition - valid 32 byte base58 string with privacy prefix
-        #[arg(long, conflicts_with = "definition_label", required_unless_present = "definition_label")]
+        #[arg(
+            long,
+            conflicts_with = "definition_label",
+            required_unless_present = "definition_label"
+        )]
         definition: Option<String>,
         /// Definition account label (alternative to --definition)
         #[arg(long, conflicts_with = "definition")]
@@ -132,7 +156,8 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                 name,
                 total_supply,
             } => {
-                let definition_account_id = match (definition_account_id, definition_account_label) {
+                let definition_account_id = match (definition_account_id, definition_account_label)
+                {
                     (Some(id), None) => id,
                     (None, Some(label)) => resolve_account_label(
                         &label,

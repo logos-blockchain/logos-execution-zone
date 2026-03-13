@@ -17,7 +17,11 @@ pub enum PinataProgramAgnosticSubcommand {
     /// Claim pinata
     Claim {
         /// to - valid 32 byte base58 string with privacy prefix
-        #[arg(long, conflicts_with = "to_label", required_unless_present = "to_label")]
+        #[arg(
+            long,
+            conflicts_with = "to_label",
+            required_unless_present = "to_label"
+        )]
         to: Option<String>,
         /// To account label (alternative to --to)
         #[arg(long, conflicts_with = "to")]

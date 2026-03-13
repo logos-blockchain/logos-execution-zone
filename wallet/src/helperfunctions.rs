@@ -33,12 +33,22 @@ pub fn resolve_account_label(
 
     let account_id: nssa::AccountId = account_id_str.parse()?;
 
-    let privacy = if user_data.public_key_tree.account_id_map.contains_key(&account_id)
-        || user_data.default_pub_account_signing_keys.contains_key(&account_id)
+    let privacy = if user_data
+        .public_key_tree
+        .account_id_map
+        .contains_key(&account_id)
+        || user_data
+            .default_pub_account_signing_keys
+            .contains_key(&account_id)
     {
         "Public"
-    } else if user_data.private_key_tree.account_id_map.contains_key(&account_id)
-        || user_data.default_user_private_accounts.contains_key(&account_id)
+    } else if user_data
+        .private_key_tree
+        .account_id_map
+        .contains_key(&account_id)
+        || user_data
+            .default_user_private_accounts
+            .contains_key(&account_id)
     {
         "Private"
     } else {

@@ -27,7 +27,12 @@ pub enum AccountSubcommand {
         #[arg(short, long)]
         keys: bool,
         /// Valid 32 byte base58 string with privacy prefix
-        #[arg(short, long, conflicts_with = "account_label", required_unless_present = "account_label")]
+        #[arg(
+            short,
+            long,
+            conflicts_with = "account_label",
+            required_unless_present = "account_label"
+        )]
         account_id: Option<String>,
         /// Account label (alternative to --account-id)
         #[arg(long, conflicts_with = "account_id")]
@@ -48,7 +53,12 @@ pub enum AccountSubcommand {
     /// Set a label for an account
     Label {
         /// Valid 32 byte base58 string with privacy prefix
-        #[arg(short, long, conflicts_with = "account_label", required_unless_present = "account_label")]
+        #[arg(
+            short,
+            long,
+            conflicts_with = "account_label",
+            required_unless_present = "account_label"
+        )]
         account_id: Option<String>,
         /// Account label (alternative to --account-id)
         #[arg(long = "account-label", conflicts_with = "account_id")]
@@ -435,7 +445,11 @@ impl WalletSubcommand for AccountSubcommand {
 
                 Ok(SubcommandReturnValue::Empty)
             }
-            AccountSubcommand::Label { account_id, account_label, label } => {
+            AccountSubcommand::Label {
+                account_id,
+                account_label,
+                label,
+            } => {
                 let resolved = match (account_id, account_label) {
                     (Some(id), None) => id,
                     (None, Some(lbl)) => resolve_account_label(

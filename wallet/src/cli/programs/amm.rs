@@ -19,19 +19,31 @@ pub enum AmmProgramAgnosticSubcommand {
     /// Only public execution allowed
     New {
         /// user_holding_a - valid 32 byte base58 string with privacy prefix
-        #[arg(long, conflicts_with = "user_holding_a_label", required_unless_present = "user_holding_a_label")]
+        #[arg(
+            long,
+            conflicts_with = "user_holding_a_label",
+            required_unless_present = "user_holding_a_label"
+        )]
         user_holding_a: Option<String>,
         /// User holding A account label (alternative to --user-holding-a)
         #[arg(long, conflicts_with = "user_holding_a")]
         user_holding_a_label: Option<String>,
         /// user_holding_b - valid 32 byte base58 string with privacy prefix
-        #[arg(long, conflicts_with = "user_holding_b_label", required_unless_present = "user_holding_b_label")]
+        #[arg(
+            long,
+            conflicts_with = "user_holding_b_label",
+            required_unless_present = "user_holding_b_label"
+        )]
         user_holding_b: Option<String>,
         /// User holding B account label (alternative to --user-holding-b)
         #[arg(long, conflicts_with = "user_holding_b")]
         user_holding_b_label: Option<String>,
         /// user_holding_lp - valid 32 byte base58 string with privacy prefix
-        #[arg(long, conflicts_with = "user_holding_lp_label", required_unless_present = "user_holding_lp_label")]
+        #[arg(
+            long,
+            conflicts_with = "user_holding_lp_label",
+            required_unless_present = "user_holding_lp_label"
+        )]
         user_holding_lp: Option<String>,
         /// User holding LP account label (alternative to --user-holding-lp)
         #[arg(long, conflicts_with = "user_holding_lp")]
@@ -48,13 +60,21 @@ pub enum AmmProgramAgnosticSubcommand {
     /// Only public execution allowed
     Swap {
         /// user_holding_a - valid 32 byte base58 string with privacy prefix
-        #[arg(long, conflicts_with = "user_holding_a_label", required_unless_present = "user_holding_a_label")]
+        #[arg(
+            long,
+            conflicts_with = "user_holding_a_label",
+            required_unless_present = "user_holding_a_label"
+        )]
         user_holding_a: Option<String>,
         /// User holding A account label (alternative to --user-holding-a)
         #[arg(long, conflicts_with = "user_holding_a")]
         user_holding_a_label: Option<String>,
         /// user_holding_b - valid 32 byte base58 string with privacy prefix
-        #[arg(long, conflicts_with = "user_holding_b_label", required_unless_present = "user_holding_b_label")]
+        #[arg(
+            long,
+            conflicts_with = "user_holding_b_label",
+            required_unless_present = "user_holding_b_label"
+        )]
         user_holding_b: Option<String>,
         /// User holding B account label (alternative to --user-holding-b)
         #[arg(long, conflicts_with = "user_holding_b")]
@@ -74,19 +94,31 @@ pub enum AmmProgramAgnosticSubcommand {
     /// Only public execution allowed
     AddLiquidity {
         /// user_holding_a - valid 32 byte base58 string with privacy prefix
-        #[arg(long, conflicts_with = "user_holding_a_label", required_unless_present = "user_holding_a_label")]
+        #[arg(
+            long,
+            conflicts_with = "user_holding_a_label",
+            required_unless_present = "user_holding_a_label"
+        )]
         user_holding_a: Option<String>,
         /// User holding A account label (alternative to --user-holding-a)
         #[arg(long, conflicts_with = "user_holding_a")]
         user_holding_a_label: Option<String>,
         /// user_holding_b - valid 32 byte base58 string with privacy prefix
-        #[arg(long, conflicts_with = "user_holding_b_label", required_unless_present = "user_holding_b_label")]
+        #[arg(
+            long,
+            conflicts_with = "user_holding_b_label",
+            required_unless_present = "user_holding_b_label"
+        )]
         user_holding_b: Option<String>,
         /// User holding B account label (alternative to --user-holding-b)
         #[arg(long, conflicts_with = "user_holding_b")]
         user_holding_b_label: Option<String>,
         /// user_holding_lp - valid 32 byte base58 string with privacy prefix
-        #[arg(long, conflicts_with = "user_holding_lp_label", required_unless_present = "user_holding_lp_label")]
+        #[arg(
+            long,
+            conflicts_with = "user_holding_lp_label",
+            required_unless_present = "user_holding_lp_label"
+        )]
         user_holding_lp: Option<String>,
         /// User holding LP account label (alternative to --user-holding-lp)
         #[arg(long, conflicts_with = "user_holding_lp")]
@@ -105,19 +137,31 @@ pub enum AmmProgramAgnosticSubcommand {
     /// Only public execution allowed
     RemoveLiquidity {
         /// user_holding_a - valid 32 byte base58 string with privacy prefix
-        #[arg(long, conflicts_with = "user_holding_a_label", required_unless_present = "user_holding_a_label")]
+        #[arg(
+            long,
+            conflicts_with = "user_holding_a_label",
+            required_unless_present = "user_holding_a_label"
+        )]
         user_holding_a: Option<String>,
         /// User holding A account label (alternative to --user-holding-a)
         #[arg(long, conflicts_with = "user_holding_a")]
         user_holding_a_label: Option<String>,
         /// user_holding_b - valid 32 byte base58 string with privacy prefix
-        #[arg(long, conflicts_with = "user_holding_b_label", required_unless_present = "user_holding_b_label")]
+        #[arg(
+            long,
+            conflicts_with = "user_holding_b_label",
+            required_unless_present = "user_holding_b_label"
+        )]
         user_holding_b: Option<String>,
         /// User holding B account label (alternative to --user-holding-b)
         #[arg(long, conflicts_with = "user_holding_b")]
         user_holding_b_label: Option<String>,
         /// user_holding_lp - valid 32 byte base58 string with privacy prefix
-        #[arg(long, conflicts_with = "user_holding_lp_label", required_unless_present = "user_holding_lp_label")]
+        #[arg(
+            long,
+            conflicts_with = "user_holding_lp_label",
+            required_unless_present = "user_holding_lp_label"
+        )]
         user_holding_lp: Option<String>,
         /// User holding LP account label (alternative to --user-holding-lp)
         #[arg(long, conflicts_with = "user_holding_lp")]
