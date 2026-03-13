@@ -7,7 +7,7 @@ use crate::{
     AccDecodeData::Decode,
     WalletCore,
     cli::{SubcommandReturnValue, WalletSubcommand},
-    helperfunctions::{AccountPrivacyKind, parse_addr_with_privacy_prefix},
+    helperfunctions::{AccountPrivacyKind, parse_addr_with_privacy_prefix, resolve_account_label},
     program_facades::token::Token,
 };
 
@@ -17,11 +17,25 @@ pub enum TokenProgramAgnosticSubcommand {
     /// Produce a new token
     New {
         /// definition_account_id - valid 32 byte base58 string with privacy prefix
-        #[arg(long)]
-        definition_account_id: String,
+        #[arg(
+            long,
+            conflicts_with = "definition_account_label",
+            required_unless_present = "definition_account_label"
+        )]
+        definition_account_id: Option<String>,
+        /// Definition account label (alternative to --definition-account-id)
+        #[arg(long, conflicts_with = "definition_account_id")]
+        definition_account_label: Option<String>,
         /// supply_account_id - valid 32 byte base58 string with privacy prefix
-        #[arg(long)]
-        supply_account_id: String,
+        #[arg(
+            long,
+            conflicts_with = "supply_account_label",
+            required_unless_present = "supply_account_label"
+        )]
+        supply_account_id: Option<String>,
+        /// Supply account label (alternative to --supply-account-id)
+        #[arg(long, conflicts_with = "supply_account_id")]
+        supply_account_label: Option<String>,
         #[arg(short, long)]
         name: String,
         #[arg(short, long)]
@@ -35,11 +49,21 @@ pub enum TokenProgramAgnosticSubcommand {
     /// First is used for owned accounts, second otherwise.
     Send {
         /// from - valid 32 byte base58 string with privacy prefix
-        #[arg(long)]
-        from: String,
+        #[arg(
+            long,
+            conflicts_with = "from_label",
+            required_unless_present = "from_label"
+        )]
+        from: Option<String>,
+        /// From account label (alternative to --from)
+        #[arg(long, conflicts_with = "from")]
+        from_label: Option<String>,
         /// to - valid 32 byte base58 string with privacy prefix
-        #[arg(long)]
+        #[arg(long, conflicts_with = "to_label")]
         to: Option<String>,
+        /// To account label (alternative to --to)
+        #[arg(long, conflicts_with = "to")]
+        to_label: Option<String>,
         /// to_npk - valid 32 byte hex string
         #[arg(long)]
         to_npk: Option<String>,
@@ -58,11 +82,25 @@ pub enum TokenProgramAgnosticSubcommand {
     /// we can not modify foreign accounts.
     Burn {
         /// definition - valid 32 byte base58 string with privacy prefix
-        #[arg(long)]
-        definition: String,
+        #[arg(
+            long,
+            conflicts_with = "definition_label",
+            required_unless_present = "definition_label"
+        )]
+        definition: Option<String>,
+        /// Definition account label (alternative to --definition)
+        #[arg(long, conflicts_with = "definition")]
+        definition_label: Option<String>,
         /// holder - valid 32 byte base58 string with privacy prefix
-        #[arg(long)]
-        holder: String,
+        #[arg(
+            long,
+            conflicts_with = "holder_label",
+            required_unless_present = "holder_label"
+        )]
+        holder: Option<String>,
+        /// Holder account label (alternative to --holder)
+        #[arg(long, conflicts_with = "holder")]
+        holder_label: Option<String>,
         /// amount - amount of balance to burn
         #[arg(long)]
         amount: u128,
@@ -77,11 +115,21 @@ pub enum TokenProgramAgnosticSubcommand {
     /// First is used for owned accounts, second otherwise.
     Mint {
         /// definition - valid 32 byte base58 string with privacy prefix
-        #[arg(long)]
-        definition: String,
+        #[arg(
+            long,
+            conflicts_with = "definition_label",
+            required_unless_present = "definition_label"
+        )]
+        definition: Option<String>,
+        /// Definition account label (alternative to --definition)
+        #[arg(long, conflicts_with = "definition")]
+        definition_label: Option<String>,
         /// holder - valid 32 byte base58 string with privacy prefix
-        #[arg(long)]
+        #[arg(long, conflicts_with = "holder_label")]
         holder: Option<String>,
+        /// Holder account label (alternative to --holder)
+        #[arg(long, conflicts_with = "holder")]
+        holder_label: Option<String>,
         /// holder_npk - valid 32 byte hex string
         #[arg(long)]
         holder_npk: Option<String>,
@@ -102,10 +150,31 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
         match self {
             TokenProgramAgnosticSubcommand::New {
                 definition_account_id,
+                definition_account_label,
                 supply_account_id,
+                supply_account_label,
                 name,
                 total_supply,
             } => {
+                let definition_account_id = match (definition_account_id, definition_account_label)
+                {
+                    (Some(id), None) => id,
+                    (None, Some(label)) => resolve_account_label(
+                        &label,
+                        &wallet_core.storage.labels,
+                        &wallet_core.storage.user_data,
+                    )?,
+                    _ => unreachable!(),
+                };
+                let supply_account_id = match (supply_account_id, supply_account_label) {
+                    (Some(id), None) => id,
+                    (None, Some(label)) => resolve_account_label(
+                        &label,
+                        &wallet_core.storage.labels,
+                        &wallet_core.storage.user_data,
+                    )?,
+                    _ => unreachable!(),
+                };
                 let (definition_account_id, definition_addr_privacy) =
                     parse_addr_with_privacy_prefix(&definition_account_id)?;
                 let (supply_account_id, supply_addr_privacy) =
@@ -158,11 +227,33 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
             }
             TokenProgramAgnosticSubcommand::Send {
                 from,
+                from_label,
                 to,
+                to_label,
                 to_npk,
                 to_vpk,
                 amount,
             } => {
+                let from = match (from, from_label) {
+                    (Some(id), None) => id,
+                    (None, Some(label)) => resolve_account_label(
+                        &label,
+                        &wallet_core.storage.labels,
+                        &wallet_core.storage.user_data,
+                    )?,
+                    _ => unreachable!(),
+                };
+                let to = match (to, to_label) {
+                    (v, None) => v,
+                    (None, Some(label)) => Some(resolve_account_label(
+                        &label,
+                        &wallet_core.storage.labels,
+                        &wallet_core.storage.user_data,
+                    )?),
+                    (Some(_), Some(_)) => {
+                        anyhow::bail!("Provide only one of --to or --to-label")
+                    }
+                };
                 let underlying_subcommand = match (to, to_npk, to_vpk) {
                     (None, None, None) => {
                         anyhow::bail!(
@@ -248,9 +339,29 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
             }
             TokenProgramAgnosticSubcommand::Burn {
                 definition,
+                definition_label,
                 holder,
+                holder_label,
                 amount,
             } => {
+                let definition = match (definition, definition_label) {
+                    (Some(id), None) => id,
+                    (None, Some(label)) => resolve_account_label(
+                        &label,
+                        &wallet_core.storage.labels,
+                        &wallet_core.storage.user_data,
+                    )?,
+                    _ => unreachable!(),
+                };
+                let holder = match (holder, holder_label) {
+                    (Some(id), None) => id,
+                    (None, Some(label)) => resolve_account_label(
+                        &label,
+                        &wallet_core.storage.labels,
+                        &wallet_core.storage.user_data,
+                    )?,
+                    _ => unreachable!(),
+                };
                 let underlying_subcommand = {
                     let (definition, definition_privacy) =
                         parse_addr_with_privacy_prefix(&definition)?;
@@ -300,11 +411,33 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
             }
             TokenProgramAgnosticSubcommand::Mint {
                 definition,
+                definition_label,
                 holder,
+                holder_label,
                 holder_npk,
                 holder_vpk,
                 amount,
             } => {
+                let definition = match (definition, definition_label) {
+                    (Some(id), None) => id,
+                    (None, Some(label)) => resolve_account_label(
+                        &label,
+                        &wallet_core.storage.labels,
+                        &wallet_core.storage.user_data,
+                    )?,
+                    _ => unreachable!(),
+                };
+                let holder = match (holder, holder_label) {
+                    (v, None) => v,
+                    (None, Some(label)) => Some(resolve_account_label(
+                        &label,
+                        &wallet_core.storage.labels,
+                        &wallet_core.storage.user_data,
+                    )?),
+                    (Some(_), Some(_)) => {
+                        anyhow::bail!("Provide only one of --holder or --holder-label")
+                    }
+                };
                 let underlying_subcommand = match (holder, holder_npk, holder_vpk) {
                     (None, None, None) => {
                         anyhow::bail!(

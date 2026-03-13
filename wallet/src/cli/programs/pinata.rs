@@ -7,7 +7,7 @@ use crate::{
     AccDecodeData::Decode,
     WalletCore,
     cli::{SubcommandReturnValue, WalletSubcommand},
-    helperfunctions::{AccountPrivacyKind, parse_addr_with_privacy_prefix},
+    helperfunctions::{AccountPrivacyKind, parse_addr_with_privacy_prefix, resolve_account_label},
     program_facades::pinata::Pinata,
 };
 
@@ -17,8 +17,15 @@ pub enum PinataProgramAgnosticSubcommand {
     /// Claim pinata
     Claim {
         /// to - valid 32 byte base58 string with privacy prefix
-        #[arg(long)]
-        to: String,
+        #[arg(
+            long,
+            conflicts_with = "to_label",
+            required_unless_present = "to_label"
+        )]
+        to: Option<String>,
+        /// To account label (alternative to --to)
+        #[arg(long, conflicts_with = "to")]
+        to_label: Option<String>,
     },
 }
 
@@ -28,7 +35,16 @@ impl WalletSubcommand for PinataProgramAgnosticSubcommand {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let underlying_subcommand = match self {
-            PinataProgramAgnosticSubcommand::Claim { to } => {
+            PinataProgramAgnosticSubcommand::Claim { to, to_label } => {
+                let to = match (to, to_label) {
+                    (Some(id), None) => id,
+                    (None, Some(label)) => resolve_account_label(
+                        &label,
+                        &wallet_core.storage.labels,
+                        &wallet_core.storage.user_data,
+                    )?,
+                    _ => unreachable!(),
+                };
                 let (to, to_addr_privacy) = parse_addr_with_privacy_prefix(&to)?;
 
                 match to_addr_privacy {
