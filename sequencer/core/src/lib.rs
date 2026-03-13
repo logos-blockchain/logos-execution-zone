@@ -389,7 +389,6 @@ mod tests {
 
         SequencerConfig {
             home,
-            override_rust_log: Some("info".to_owned()),
             genesis_id: 1,
             is_genesis_random: false,
             max_num_tx_in_block: 10,
@@ -476,7 +475,6 @@ mod tests {
 
         assert_eq!(sequencer.chain_height, config.genesis_id);
         assert_eq!(sequencer.sequencer_config.max_num_tx_in_block, 10);
-        assert_eq!(sequencer.sequencer_config.port, 8080);
 
         let acc1_account_id = config.initial_accounts[0].account_id;
         let acc2_account_id = config.initial_accounts[1].account_id;
@@ -694,6 +692,7 @@ mod tests {
         let block = sequencer
             .store
             .get_block_at_id(sequencer.chain_height)
+            .unwrap()
             .unwrap();
 
         // Only one should be included in the block
@@ -721,6 +720,7 @@ mod tests {
         let block = sequencer
             .store
             .get_block_at_id(sequencer.chain_height)
+            .unwrap()
             .unwrap();
         assert_eq!(block.body.transactions, vec![tx.clone()]);
 
@@ -732,6 +732,7 @@ mod tests {
         let block = sequencer
             .store
             .get_block_at_id(sequencer.chain_height)
+            .unwrap()
             .unwrap();
         assert!(block.body.transactions.is_empty());
     }
@@ -766,6 +767,7 @@ mod tests {
             let block = sequencer
                 .store
                 .get_block_at_id(sequencer.chain_height)
+                .unwrap()
                 .unwrap();
             assert_eq!(block.body.transactions, vec![tx.clone()]);
         }
@@ -884,6 +886,7 @@ mod tests {
         let new_block = sequencer
             .store
             .get_block_at_id(sequencer.chain_height)
+            .unwrap()
             .unwrap();
 
         assert_eq!(

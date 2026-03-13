@@ -93,24 +93,37 @@ impl<BC: BlockSettlementClientTrait + Send + 'static, IC: IndexerClientTrait + S
         Ok(())
     }
 
-    async fn get_block_data(&self, block_id: BlockId) -> Result<Block, ErrorObjectOwned> {
+    async fn get_block(&self, block_id: BlockId) -> Result<Option<Block>, ErrorObjectOwned> {
         let sequencer = self.sequencer.lock().await;
         sequencer
             .block_store()
             .get_block_at_id(block_id)
-            .map_err(|err| db_error_to_rpc_error(&err))
+            .map_err(|err| internal_error(&err))
     }
 
-    async fn get_block_range_data(
+    async fn get_block_range(
         &self,
         start_block_id: BlockId,
         end_block_id: BlockId,
     ) -> Result<Vec<Block>, ErrorObjectOwned> {
         let sequencer = self.sequencer.lock().await;
         (start_block_id..=end_block_id)
-            .map(|block_id| sequencer.block_store().get_block_at_id(block_id))
+            .map(|block_id| {
+                sequencer
+                    .block_store()
+                    .get_block_at_id(block_id)
+                    .map_err(|err| internal_error(&err))
+                    .and_then(|opt| {
+                        opt.ok_or_else(|| {
+                            ErrorObjectOwned::owned(
+                                NOT_FOUND_ERROR_CODE,
+                                format!("Block with id {block_id} not found"),
+                                None::<()>,
+                            )
+                        })
+                    })
+            })
             .collect::<Result<Vec<_>, _>>()
-            .map_err(|err| db_error_to_rpc_error(&err))
     }
 
     async fn get_last_block_id(&self) -> Result<BlockId, ErrorObjectOwned> {
@@ -124,17 +137,12 @@ impl<BC: BlockSettlementClientTrait + Send + 'static, IC: IndexerClientTrait + S
         Ok(account.balance)
     }
 
-    async fn get_transaction_by_hash(
+    async fn get_transaction(
         &self,
         hash: HashType,
-    ) -> Result<NSSATransaction, ErrorObjectOwned> {
+    ) -> Result<Option<NSSATransaction>, ErrorObjectOwned> {
         let sequencer = self.sequencer.lock().await;
-        sequencer
-            .block_store()
-            .get_transaction_by_hash(hash)
-            .ok_or_else(|| {
-                ErrorObjectOwned::owned(NOT_FOUND_ERROR_CODE, "Transaction not found", None::<()>)
-            })
+        Ok(sequencer.block_store().get_transaction_by_hash(hash))
     }
 
     async fn get_accounts_nonces(
@@ -190,13 +198,6 @@ impl<BC: BlockSettlementClientTrait + Send + 'static, IC: IndexerClientTrait + S
 
 const NOT_FOUND_ERROR_CODE: i32 = -31999;
 
-fn db_error_to_rpc_error(err: &DbError) -> ErrorObjectOwned {
-    match err {
-        DbError::NotFound { entity } => ErrorObjectOwned::owned(
-            NOT_FOUND_ERROR_CODE,
-            format!("{entity} not found"),
-            None::<()>,
-        ),
-        _ => ErrorObjectOwned::owned(ErrorCode::InternalError.code(), err.to_string(), None::<()>),
-    }
+fn internal_error(err: &DbError) -> ErrorObjectOwned {
+    ErrorObjectOwned::owned(ErrorCode::InternalError.code(), err.to_string(), None::<()>)
 }

@@ -1,8 +1,7 @@
-use common::error::ExecutionFailureKind;
 use nssa::{Account, program::Program};
 use nssa_core::program::InstructionData;
 
-use crate::WalletCore;
+use crate::{ExecutionFailureKind, WalletCore};
 
 pub mod deshielded;
 pub mod private;

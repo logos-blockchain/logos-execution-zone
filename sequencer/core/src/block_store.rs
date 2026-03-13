@@ -42,7 +42,7 @@ impl SequencerStore {
         })
     }
 
-    pub fn get_block_at_id(&self, id: u64) -> Result<Block, DbError> {
+    pub fn get_block_at_id(&self, id: u64) -> Result<Option<Block>, DbError> {
         self.dbio.get_block(id)
     }
 
@@ -56,16 +56,20 @@ impl SequencerStore {
 
     /// Returns the transaction corresponding to the given hash, if it exists in the blockchain.
     pub fn get_transaction_by_hash(&self, hash: HashType) -> Option<NSSATransaction> {
-        let block_id = self.tx_hash_to_block_map.get(&hash);
-        let block = block_id.map(|&id| self.get_block_at_id(id));
-        if let Some(Ok(block)) = block {
-            for transaction in block.body.transactions {
-                if transaction.hash() == hash {
-                    return Some(transaction);
-                }
+        let block_id = *self.tx_hash_to_block_map.get(&hash)?;
+        let block = self
+            .get_block_at_id(block_id)
+            .ok()
+            .flatten()
+            .expect("Block should be present since the hash is in the map");
+        for transaction in block.body.transactions {
+            if transaction.hash() == hash {
+                return Some(transaction);
             }
         }
-        None
+        panic!(
+            "Transaction hash was in the map but transaction was not found in the block. This should never happen."
+        );
     }
 
     pub fn latest_block_meta(&self) -> Result<BlockMeta> {
@@ -244,7 +248,7 @@ mod tests {
         node_store.update(&block, [1; 32], &dummy_state).unwrap();
 
         // Verify initial status is Pending
-        let retrieved_block = node_store.get_block_at_id(block_id).unwrap();
+        let retrieved_block = node_store.get_block_at_id(block_id).unwrap().unwrap();
         assert!(matches!(
             retrieved_block.bedrock_status,
             common::block::BedrockStatus::Pending
@@ -254,7 +258,7 @@ mod tests {
         node_store.mark_block_as_finalized(block_id).unwrap();
 
         // Verify status is now Finalized
-        let finalized_block = node_store.get_block_at_id(block_id).unwrap();
+        let finalized_block = node_store.get_block_at_id(block_id).unwrap().unwrap();
         assert!(matches!(
             finalized_block.bedrock_status,
             common::block::BedrockStatus::Finalized

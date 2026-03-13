@@ -1,5 +1,4 @@
 use anyhow::Result;
-use common::error::ExecutionFailureKind;
 use key_protocol::key_management::ephemeral_key_holder::EphemeralKeyHolder;
 use nssa::{AccountId, PrivateKey};
 use nssa_core::{
@@ -8,7 +7,7 @@ use nssa_core::{
     encryption::{EphemeralPublicKey, ViewingPublicKey},
 };
 
-use crate::WalletCore;
+use crate::{ExecutionFailureKind, WalletCore};
 
 #[derive(Clone)]
 pub enum PrivacyPreservingAccount {

@@ -52,22 +52,25 @@ impl indexer_service_rpc::RpcServer for IndexerService {
         self.indexer.store.get_last_block_id().map_err(db_error)
     }
 
-    async fn get_block_by_id(&self, block_id: BlockId) -> Result<Block, ErrorObjectOwned> {
+    async fn get_block_by_id(&self, block_id: BlockId) -> Result<Option<Block>, ErrorObjectOwned> {
         Ok(self
             .indexer
             .store
             .get_block_at_id(block_id)
             .map_err(db_error)?
-            .into())
+            .map(Into::into))
     }
 
-    async fn get_block_by_hash(&self, block_hash: HashType) -> Result<Block, ErrorObjectOwned> {
+    async fn get_block_by_hash(
+        &self,
+        block_hash: HashType,
+    ) -> Result<Option<Block>, ErrorObjectOwned> {
         Ok(self
             .indexer
             .store
             .get_block_by_hash(block_hash.0)
             .map_err(db_error)?
-            .into())
+            .map(Into::into))
     }
 
     async fn get_account(&self, account_id: AccountId) -> Result<Account, ErrorObjectOwned> {
@@ -79,13 +82,16 @@ impl indexer_service_rpc::RpcServer for IndexerService {
             .into())
     }
 
-    async fn get_transaction(&self, tx_hash: HashType) -> Result<Transaction, ErrorObjectOwned> {
+    async fn get_transaction(
+        &self,
+        tx_hash: HashType,
+    ) -> Result<Option<Transaction>, ErrorObjectOwned> {
         Ok(self
             .indexer
             .store
             .get_transaction_by_hash(tx_hash.0)
             .map_err(db_error)?
-            .into())
+            .map(Into::into))
     }
 
     async fn get_blocks(

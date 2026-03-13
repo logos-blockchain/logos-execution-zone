@@ -7,6 +7,7 @@ use anyhow::Result;
 use integration_tests::TestContext;
 use log::info;
 use nssa::program::Program;
+use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 use wallet::cli::{
     Command,
@@ -21,8 +22,7 @@ async fn get_existing_account() -> Result<()> {
     let account = ctx
         .sequencer_client()
         .get_account(ctx.existing_public_accounts()[0])
-        .await?
-        .account;
+        .await?;
 
     assert_eq!(
         account.program_owner,

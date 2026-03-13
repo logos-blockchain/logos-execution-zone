@@ -1,9 +1,10 @@
-use common::{error::ExecutionFailureKind, rpc_primitives::requests::SendTxResponse};
+use common::{HashType, transaction::NSSATransaction};
 use nssa::{AccountId, program::Program};
 use nssa_core::{NullifierPublicKey, SharedSecretKey, encryption::ViewingPublicKey};
+use sequencer_service_rpc::RpcClient as _;
 use token_core::Instruction;
 
-use crate::{PrivacyPreservingAccount, WalletCore};
+use crate::{ExecutionFailureKind, PrivacyPreservingAccount, WalletCore};
 
 pub struct Token<'wallet>(pub &'wallet WalletCore);
 
@@ -14,7 +15,7 @@ impl Token<'_> {
         supply_account_id: AccountId,
         name: String,
         total_supply: u128,
-    ) -> Result<SendTxResponse, ExecutionFailureKind> {
+    ) -> Result<HashType, ExecutionFailureKind> {
         let account_ids = vec![definition_account_id, supply_account_id];
         let program_id = nssa::program::Program::token().id();
         let instruction = Instruction::NewFungibleDefinition { name, total_supply };
@@ -30,7 +31,11 @@ impl Token<'_> {
 
         let tx = nssa::PublicTransaction::new(message, witness_set);
 
-        Ok(self.0.sequencer_client.send_tx_public(tx).await?)
+        Ok(self
+            .0
+            .sequencer_client
+            .send_transaction(NSSATransaction::Public(tx))
+            .await?)
     }
 
     pub async fn send_new_definition_private_owned_supply(
@@ -39,7 +44,7 @@ impl Token<'_> {
         supply_account_id: AccountId,
         name: String,
         total_supply: u128,
-    ) -> Result<(SendTxResponse, SharedSecretKey), ExecutionFailureKind> {
+    ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
         let instruction = Instruction::NewFungibleDefinition { name, total_supply };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
@@ -69,7 +74,7 @@ impl Token<'_> {
         supply_account_id: AccountId,
         name: String,
         total_supply: u128,
-    ) -> Result<(SendTxResponse, SharedSecretKey), ExecutionFailureKind> {
+    ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
         let instruction = Instruction::NewFungibleDefinition { name, total_supply };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
@@ -99,7 +104,7 @@ impl Token<'_> {
         supply_account_id: AccountId,
         name: String,
         total_supply: u128,
-    ) -> Result<(SendTxResponse, [SharedSecretKey; 2]), ExecutionFailureKind> {
+    ) -> Result<(HashType, [SharedSecretKey; 2]), ExecutionFailureKind> {
         let instruction = Instruction::NewFungibleDefinition { name, total_supply };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
@@ -127,7 +132,7 @@ impl Token<'_> {
         sender_account_id: AccountId,
         recipient_account_id: AccountId,
         amount: u128,
-    ) -> Result<SendTxResponse, ExecutionFailureKind> {
+    ) -> Result<HashType, ExecutionFailureKind> {
         let account_ids = vec![sender_account_id, recipient_account_id];
         let program_id = nssa::program::Program::token().id();
         let instruction = Instruction::Transfer {
@@ -159,7 +164,11 @@ impl Token<'_> {
 
         let tx = nssa::PublicTransaction::new(message, witness_set);
 
-        Ok(self.0.sequencer_client.send_tx_public(tx).await?)
+        Ok(self
+            .0
+            .sequencer_client
+            .send_transaction(NSSATransaction::Public(tx))
+            .await?)
     }
 
     pub async fn send_transfer_transaction_private_owned_account(
@@ -167,7 +176,7 @@ impl Token<'_> {
         sender_account_id: AccountId,
         recipient_account_id: AccountId,
         amount: u128,
-    ) -> Result<(SendTxResponse, [SharedSecretKey; 2]), ExecutionFailureKind> {
+    ) -> Result<(HashType, [SharedSecretKey; 2]), ExecutionFailureKind> {
         let instruction = Instruction::Transfer {
             amount_to_transfer: amount,
         };
@@ -198,7 +207,7 @@ impl Token<'_> {
         recipient_npk: NullifierPublicKey,
         recipient_vpk: ViewingPublicKey,
         amount: u128,
-    ) -> Result<(SendTxResponse, [SharedSecretKey; 2]), ExecutionFailureKind> {
+    ) -> Result<(HashType, [SharedSecretKey; 2]), ExecutionFailureKind> {
         let instruction = Instruction::Transfer {
             amount_to_transfer: amount,
         };
@@ -231,7 +240,7 @@ impl Token<'_> {
         sender_account_id: AccountId,
         recipient_account_id: AccountId,
         amount: u128,
-    ) -> Result<(SendTxResponse, SharedSecretKey), ExecutionFailureKind> {
+    ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
         let instruction = Instruction::Transfer {
             amount_to_transfer: amount,
         };
@@ -262,7 +271,7 @@ impl Token<'_> {
         sender_account_id: AccountId,
         recipient_account_id: AccountId,
         amount: u128,
-    ) -> Result<(SendTxResponse, SharedSecretKey), ExecutionFailureKind> {
+    ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
         let instruction = Instruction::Transfer {
             amount_to_transfer: amount,
         };
@@ -294,7 +303,7 @@ impl Token<'_> {
         recipient_npk: NullifierPublicKey,
         recipient_vpk: ViewingPublicKey,
         amount: u128,
-    ) -> Result<(SendTxResponse, SharedSecretKey), ExecutionFailureKind> {
+    ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
         let instruction = Instruction::Transfer {
             amount_to_transfer: amount,
         };
@@ -328,7 +337,7 @@ impl Token<'_> {
         definition_account_id: AccountId,
         holder_account_id: AccountId,
         amount: u128,
-    ) -> Result<SendTxResponse, ExecutionFailureKind> {
+    ) -> Result<HashType, ExecutionFailureKind> {
         let account_ids = vec![definition_account_id, holder_account_id];
         let instruction = Instruction::Burn {
             amount_to_burn: amount,
@@ -358,7 +367,11 @@ impl Token<'_> {
 
         let tx = nssa::PublicTransaction::new(message, witness_set);
 
-        Ok(self.0.sequencer_client.send_tx_public(tx).await?)
+        Ok(self
+            .0
+            .sequencer_client
+            .send_transaction(NSSATransaction::Public(tx))
+            .await?)
     }
 
     pub async fn send_burn_transaction_private_owned_account(
@@ -366,7 +379,7 @@ impl Token<'_> {
         definition_account_id: AccountId,
         holder_account_id: AccountId,
         amount: u128,
-    ) -> Result<(SendTxResponse, [SharedSecretKey; 2]), ExecutionFailureKind> {
+    ) -> Result<(HashType, [SharedSecretKey; 2]), ExecutionFailureKind> {
         let instruction = Instruction::Burn {
             amount_to_burn: amount,
         };
@@ -396,7 +409,7 @@ impl Token<'_> {
         definition_account_id: AccountId,
         holder_account_id: AccountId,
         amount: u128,
-    ) -> Result<(SendTxResponse, SharedSecretKey), ExecutionFailureKind> {
+    ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
         let instruction = Instruction::Burn {
             amount_to_burn: amount,
         };
@@ -427,7 +440,7 @@ impl Token<'_> {
         definition_account_id: AccountId,
         holder_account_id: AccountId,
         amount: u128,
-    ) -> Result<(SendTxResponse, SharedSecretKey), ExecutionFailureKind> {
+    ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
         let instruction = Instruction::Burn {
             amount_to_burn: amount,
         };
@@ -458,7 +471,7 @@ impl Token<'_> {
         definition_account_id: AccountId,
         holder_account_id: AccountId,
         amount: u128,
-    ) -> Result<SendTxResponse, ExecutionFailureKind> {
+    ) -> Result<HashType, ExecutionFailureKind> {
         let account_ids = vec![definition_account_id, holder_account_id];
         let instruction = Instruction::Mint {
             amount_to_mint: amount,
@@ -490,7 +503,11 @@ impl Token<'_> {
 
         let tx = nssa::PublicTransaction::new(message, witness_set);
 
-        Ok(self.0.sequencer_client.send_tx_public(tx).await?)
+        Ok(self
+            .0
+            .sequencer_client
+            .send_transaction(NSSATransaction::Public(tx))
+            .await?)
     }
 
     pub async fn send_mint_transaction_private_owned_account(
@@ -498,7 +515,7 @@ impl Token<'_> {
         definition_account_id: AccountId,
         holder_account_id: AccountId,
         amount: u128,
-    ) -> Result<(SendTxResponse, [SharedSecretKey; 2]), ExecutionFailureKind> {
+    ) -> Result<(HashType, [SharedSecretKey; 2]), ExecutionFailureKind> {
         let instruction = Instruction::Mint {
             amount_to_mint: amount,
         };
@@ -529,7 +546,7 @@ impl Token<'_> {
         holder_npk: NullifierPublicKey,
         holder_vpk: ViewingPublicKey,
         amount: u128,
-    ) -> Result<(SendTxResponse, [SharedSecretKey; 2]), ExecutionFailureKind> {
+    ) -> Result<(HashType, [SharedSecretKey; 2]), ExecutionFailureKind> {
         let instruction = Instruction::Mint {
             amount_to_mint: amount,
         };
@@ -562,7 +579,7 @@ impl Token<'_> {
         definition_account_id: AccountId,
         holder_account_id: AccountId,
         amount: u128,
-    ) -> Result<(SendTxResponse, SharedSecretKey), ExecutionFailureKind> {
+    ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
         let instruction = Instruction::Mint {
             amount_to_mint: amount,
         };
@@ -593,7 +610,7 @@ impl Token<'_> {
         definition_account_id: AccountId,
         holder_account_id: AccountId,
         amount: u128,
-    ) -> Result<(SendTxResponse, SharedSecretKey), ExecutionFailureKind> {
+    ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
         let instruction = Instruction::Mint {
             amount_to_mint: amount,
         };
@@ -625,7 +642,7 @@ impl Token<'_> {
         holder_npk: NullifierPublicKey,
         holder_vpk: ViewingPublicKey,
         amount: u128,
-    ) -> Result<(SendTxResponse, SharedSecretKey), ExecutionFailureKind> {
+    ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
         let instruction = Instruction::Mint {
             amount_to_mint: amount,
         };

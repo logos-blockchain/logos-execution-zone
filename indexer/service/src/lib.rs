@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use anyhow::{Context as _, Result};
 pub use indexer_core::config::*;
 use indexer_service_rpc::RpcServer as _;
-use jsonrpsee::server::Server;
+use jsonrpsee::server::{Server, ServerHandle};
 use log::{error, info};
 
 pub mod service;
@@ -14,10 +14,10 @@ pub mod mock_service;
 pub struct IndexerHandle {
     addr: SocketAddr,
     /// Option because of `Drop` which forbids to simply move out of `self` in `stopped()`.
-    server_handle: Option<jsonrpsee::server::ServerHandle>,
+    server_handle: Option<ServerHandle>,
 }
 impl IndexerHandle {
-    const fn new(addr: SocketAddr, server_handle: jsonrpsee::server::ServerHandle) -> Self {
+    const fn new(addr: SocketAddr, server_handle: ServerHandle) -> Self {
         Self {
             addr,
             server_handle: Some(server_handle),
