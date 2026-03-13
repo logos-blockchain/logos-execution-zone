@@ -98,7 +98,9 @@ impl IndexerCore {
         })
     }
 
-    pub async fn subscribe_parse_block_stream(&self) -> impl futures::Stream<Item = Result<Block>> {
+    pub async fn subscribe_parse_block_stream(
+        &mut self,
+    ) -> impl futures::Stream<Item = Result<Block>> {
         async_stream::stream! {
             info!("Searching for initial header");
 
@@ -127,7 +129,7 @@ impl IndexerCore {
                         info!("Parsed {} L2 blocks with ids {:?}", l2_block_vec.len(), l2_blocks_parsed_ids);
 
                         for l2_block in l2_block_vec {
-                            self.store.put_block(l2_block.clone(), l1_header)?;
+                            self.store.put_block(l2_block.clone(), l1_header).await?;
 
                             yield Ok(l2_block);
                         }
@@ -161,7 +163,7 @@ impl IndexerCore {
                     info!("Parsed {} L2 blocks with ids {:?}", l2_block_vec.len(), l2_blocks_parsed_ids);
 
                     for l2_block in l2_block_vec {
-                        self.store.put_block(l2_block.clone(), header)?;
+                        self.store.put_block(l2_block.clone(), header).await?;
 
                         yield Ok(l2_block);
                     }

@@ -126,6 +126,7 @@ version = "2.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92589714878ca59a7626ea19734f0e07a6a875197eec751bb5d3f99e64998c63"
 dependencies = [
+ "actix-macros",
  "futures-core",
  "tokio",
 ]
@@ -3742,6 +3743,7 @@ checksum = "4ee796ad498c8d9a1d68e477df8f754ed784ef875de1414ebdaf169f70a6a784"
 name = "indexer_core"
 version = "0.1.0"
 dependencies = [
+ "actix-rt",
  "anyhow",
  "async-stream",
  "bedrock_client",
@@ -3756,6 +3758,7 @@ dependencies = [
  "serde",
  "serde_json",
  "storage",
+ "tempfile",
  "tokio",
  "url",
 ]

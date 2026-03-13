@@ -22,3 +22,5 @@ url.workspace = true
 logos-blockchain-core.workspace = true
 serde_json.workspace = true
 async-stream.workspace = true
+tempfile.workspace = true
+actix-rt.workspace = true
