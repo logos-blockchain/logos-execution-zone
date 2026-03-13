@@ -12,8 +12,9 @@ use crate::{
         chain::ChainSubcommand,
         config::ConfigSubcommand,
         programs::{
-            amm::AmmProgramAgnosticSubcommand, native_token_transfer::AuthTransferSubcommand,
-            pinata::PinataProgramAgnosticSubcommand, token::TokenProgramAgnosticSubcommand,
+            amm::AmmProgramAgnosticSubcommand, ata::AtaSubcommand,
+            native_token_transfer::AuthTransferSubcommand, pinata::PinataProgramAgnosticSubcommand,
+            token::TokenProgramAgnosticSubcommand,
         },
     },
 };
@@ -50,6 +51,9 @@ pub enum Command {
     /// AMM program interaction subcommand
     #[command(subcommand)]
     AMM(AmmProgramAgnosticSubcommand),
+    /// Associated Token Account program interaction subcommand
+    #[command(subcommand)]
+    Ata(AtaSubcommand),
     /// Check the wallet can connect to the node and builtin local programs
     /// match the remote versions
     CheckHealth {},
@@ -152,6 +156,7 @@ pub async fn execute_subcommand(
         }
         Command::Token(token_subcommand) => token_subcommand.handle_subcommand(wallet_core).await?,
         Command::AMM(amm_subcommand) => amm_subcommand.handle_subcommand(wallet_core).await?,
+        Command::Ata(ata_subcommand) => ata_subcommand.handle_subcommand(wallet_core).await?,
         Command::Config(config_subcommand) => {
             config_subcommand.handle_subcommand(wallet_core).await?
         }
