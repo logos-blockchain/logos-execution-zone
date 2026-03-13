@@ -2,7 +2,10 @@ use std::{collections::HashMap, path::PathBuf, str::FromStr};
 
 use anyhow::Result;
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
-use key_protocol::key_protocol_core::NSSAUserData;
+use key_protocol::{
+    initial_state::{PrivateAccountPrivateInitialData, PublicAccountPrivateInitialData},
+    key_protocol_core::NSSAUserData,
+};
 use nssa::Account;
 use nssa_core::account::Nonce;
 use rand::{RngCore, rngs::OsRng};
@@ -11,8 +14,8 @@ use serde::Serialize;
 use crate::{
     HOME_DIR_ENV_VAR,
     config::{
-        InitialAccountData, InitialAccountDataPrivate, InitialAccountDataPublic, Label,
-        PersistentAccountDataPrivate, PersistentAccountDataPublic, PersistentStorage,
+        InitialAccountData, Label, PersistentAccountDataPrivate, PersistentAccountDataPublic,
+        PersistentStorage,
     },
 };
 
@@ -89,7 +92,7 @@ pub fn produce_data_for_storage(
 
     for (account_id, key) in &user_data.default_pub_account_signing_keys {
         vec_for_storage.push(
-            InitialAccountData::Public(InitialAccountDataPublic {
+            InitialAccountData::Public(PublicAccountPrivateInitialData {
                 account_id: *account_id,
                 pub_sign_key: key.clone(),
             })
@@ -99,7 +102,7 @@ pub fn produce_data_for_storage(
 
     for (account_id, (key_chain, account)) in &user_data.default_user_private_accounts {
         vec_for_storage.push(
-            InitialAccountData::Private(InitialAccountDataPrivate {
+            InitialAccountData::Private(PrivateAccountPrivateInitialData {
                 account_id: *account_id,
                 account: account.clone(),
                 key_chain: key_chain.clone(),

@@ -8,10 +8,7 @@ use std::{
 use anyhow::Result;
 use bedrock_client::BackoffConfig;
 use bytesize::ByteSize;
-use common::{
-    block::{AccountInitialData, CommitmentsInitialData},
-    config::BasicAuth,
-};
+use common::config::BasicAuth;
 use humantime_serde;
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use serde::{Deserialize, Serialize};
@@ -43,10 +40,6 @@ pub struct SequencerConfig {
     pub retry_pending_blocks_timeout: Duration,
     /// Port to listen
     pub port: u16,
-    /// List of initial accounts data
-    pub initial_accounts: Vec<AccountInitialData>,
-    /// List of initial commitments
-    pub initial_commitments: Vec<CommitmentsInitialData>,
     /// Sequencer own signing key
     pub signing_key: [u8; 32],
     /// Bedrock configuration options

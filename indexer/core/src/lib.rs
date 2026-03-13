@@ -2,9 +2,11 @@ use std::collections::VecDeque;
 
 use anyhow::Result;
 use bedrock_client::{BedrockClient, HeaderId};
-use common::block::{Block, HashableBlockData};
-// ToDo: Remove after testnet
-use common::{HashType, PINATA_BASE58};
+use common::{
+    HashType,
+    block::{Block, HashableBlockData},
+};
+use key_protocol::initial_state::initial_state_testnet;
 use log::{debug, error, info};
 use logos_blockchain_core::mantle::{
     Op, SignedMantleTx,
@@ -54,36 +56,8 @@ impl IndexerCore {
         let channel_genesis_msg_id = [0; 32];
         let start_block = hashable_data.into_pending_block(&signing_key, channel_genesis_msg_id);
 
-        // This is a troubling moment, because changes in key protocol can
-        // affect this. And indexer can not reliably ask this data from sequencer
-        // because indexer must be independent from it.
-        // ToDo: move initial state generation into common and use the same method
-        // for indexer and sequencer. This way both services buit at same version
-        // could be in sync.
-        let initial_commitments: Vec<nssa_core::Commitment> = config
-            .initial_commitments
-            .iter()
-            .map(|init_comm_data| {
-                let npk = &init_comm_data.npk;
-
-                let mut acc = init_comm_data.account.clone();
-
-                acc.program_owner = nssa::program::Program::authenticated_transfer_program().id();
-
-                nssa_core::Commitment::new(npk, &acc)
-            })
-            .collect();
-
-        let init_accs: Vec<(nssa::AccountId, u128)> = config
-            .initial_accounts
-            .iter()
-            .map(|acc_data| (acc_data.account_id, acc_data.balance))
-            .collect();
-
-        let mut state = nssa::V02State::new_with_genesis_accounts(&init_accs, &initial_commitments);
-
-        // ToDo: Remove after testnet
-        state.add_pinata_program(PINATA_BASE58.parse().unwrap());
+        // ToDo: replace with `initial_state()` after testnet
+        let state = initial_state_testnet();
 
         let home = config.home.join("rocksdb");
 

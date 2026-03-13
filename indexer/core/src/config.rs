@@ -7,10 +7,7 @@ use std::{
 
 use anyhow::{Context as _, Result};
 pub use bedrock_client::BackoffConfig;
-use common::{
-    block::{AccountInitialData, CommitmentsInitialData},
-    config::BasicAuth,
-};
+use common::config::BasicAuth;
 use humantime_serde;
 pub use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use serde::{Deserialize, Serialize};
@@ -29,10 +26,6 @@ pub struct ClientConfig {
 pub struct IndexerConfig {
     /// Home dir of sequencer storage
     pub home: PathBuf,
-    /// List of initial accounts data
-    pub initial_accounts: Vec<AccountInitialData>,
-    /// List of initial commitments
-    pub initial_commitments: Vec<CommitmentsInitialData>,
     /// Sequencers signing key
     pub signing_key: [u8; 32],
     #[serde(with = "humantime_serde")]

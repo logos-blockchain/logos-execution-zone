@@ -95,7 +95,7 @@ impl WalletChainStore {
         let mut public_init_acc_map = BTreeMap::new();
         let mut private_init_acc_map = BTreeMap::new();
 
-        for init_acc_data in config.initial_accounts.clone() {
+        for init_acc_data in InitialAccountData::create_initial_accounts_data() {
             match init_acc_data {
                 InitialAccountData::Public(data) => {
                     public_init_acc_map.insert(data.account_id, data.pub_sign_key);
@@ -162,101 +162,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::config::{
-        InitialAccountData, PersistentAccountDataPrivate, PersistentAccountDataPublic,
-    };
-
-    fn create_initial_accounts() -> Vec<InitialAccountData> {
-        let initial_acc1 = serde_json::from_str(
-            r#"{
-            "Public": {
-                "account_id": "6iArKUXxhUJqS7kCaPNhwMWt3ro71PDyBj7jwAyE2VQV",
-                "pub_sign_key": [
-                    16,
-                    162,
-                    106,
-                    154,
-                    236,
-                    125,
-                    52,
-                    184,
-                    35,
-                    100,
-                    238,
-                    174,
-                    69,
-                    197,
-                    41,
-                    77,
-                    187,
-                    10,
-                    118,
-                    75,
-                    0,
-                    11,
-                    148,
-                    238,
-                    185,
-                    181,
-                    133,
-                    17,
-                    220,
-                    72,
-                    124,
-                    77
-                ]
-            }
-        }"#,
-        )
-        .unwrap();
-
-        let initial_acc2 = serde_json::from_str(
-            r#"{
-            "Public": {
-                "account_id": "7wHg9sbJwc6h3NP1S9bekfAzB8CHifEcxKswCKUt3YQo",
-                "pub_sign_key": [
-                    113,
-                    121,
-                    64,
-                    177,
-                    204,
-                    85,
-                    229,
-                    214,
-                    178,
-                    6,
-                    109,
-                    191,
-                    29,
-                    154,
-                    63,
-                    38,
-                    242,
-                    18,
-                    244,
-                    219,
-                    8,
-                    208,
-                    35,
-                    136,
-                    23,
-                    127,
-                    207,
-                    237,
-                    216,
-                    169,
-                    190,
-                    27
-                ]
-            }
-        }"#,
-        )
-        .unwrap();
-
-        let initial_accounts = vec![initial_acc1, initial_acc2];
-
-        initial_accounts
-    }
+    use crate::config::{PersistentAccountDataPrivate, PersistentAccountDataPublic};
 
     fn create_sample_wallet_config() -> WalletConfig {
         WalletConfig {
@@ -266,7 +172,6 @@ mod tests {
             seq_tx_poll_max_blocks: 5,
             seq_poll_max_retries: 10,
             seq_block_poll_max_amount: 100,
-            initial_accounts: create_initial_accounts(),
             basic_auth: None,
         }
     }

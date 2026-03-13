@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use actix_web::Error as HttpError;
 use base64::{Engine, engine::general_purpose};
 use common::{
-    block::{AccountInitialData, HashableBlockData},
+    block::HashableBlockData,
     rpc_primitives::{
         errors::RpcError,
         message::{Message, Request},
@@ -23,6 +23,7 @@ use common::{
     transaction::{NSSATransaction, TransactionMalformationError},
 };
 use itertools::Itertools as _;
+use key_protocol::initial_state::initial_accounts;
 use log::warn;
 use nssa::{self, program::Program};
 use sequencer_core::{
@@ -201,13 +202,7 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> JsonHandler<BC, IC>
         let _get_initial_testnet_accounts_request =
             GetInitialTestnetAccountsRequest::parse(Some(request.params))?;
 
-        let initial_accounts: Vec<AccountInitialData> = {
-            let state = self.sequencer_state.lock().await;
-
-            state.sequencer_config().initial_accounts.clone()
-        };
-
-        respond(initial_accounts)
+        respond(initial_accounts())
     }
 
     /// Returns the balance of the account at the given account_id.
@@ -340,16 +335,14 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> JsonHandler<BC, IC>
 
 #[cfg(test)]
 mod tests {
-    use std::{str::FromStr as _, sync::Arc, time::Duration};
+    use std::{sync::Arc, time::Duration};
 
-    use base58::ToBase58;
     use base64::{Engine, engine::general_purpose};
     use bedrock_client::BackoffConfig;
     use common::{
-        block::AccountInitialData, config::BasicAuth, test_utils::sequencer_sign_key_for_testing,
-        transaction::NSSATransaction,
+        config::BasicAuth, test_utils::sequencer_sign_key_for_testing, transaction::NSSATransaction,
     };
-    use nssa::AccountId;
+    use key_protocol::initial_state::{initial_accounts, initial_pub_accounts_private_keys};
     use sequencer_core::{
         config::{BedrockConfig, SequencerConfig},
         mock::{MockBlockSettlementClient, MockIndexerClient, SequencerCoreWithMockClients},
@@ -366,27 +359,6 @@ mod tests {
     fn sequencer_config_for_tests() -> SequencerConfig {
         let tempdir = tempdir().unwrap();
         let home = tempdir.path().to_path_buf();
-        let acc1_id: Vec<u8> = vec![
-            148, 179, 206, 253, 199, 51, 82, 86, 232, 2, 152, 122, 80, 243, 54, 207, 237, 112, 83,
-            153, 44, 59, 204, 49, 128, 84, 160, 227, 216, 149, 97, 102,
-        ];
-
-        let acc2_id: Vec<u8> = vec![
-            30, 145, 107, 3, 207, 73, 192, 230, 160, 63, 238, 207, 18, 69, 54, 216, 103, 244, 92,
-            94, 124, 248, 42, 16, 141, 19, 119, 18, 14, 226, 140, 204,
-        ];
-
-        let initial_acc1 = AccountInitialData {
-            account_id: AccountId::from_str(&acc1_id.to_base58()).unwrap(),
-            balance: 10000,
-        };
-
-        let initial_acc2 = AccountInitialData {
-            account_id: AccountId::from_str(&acc2_id.to_base58()).unwrap(),
-            balance: 20000,
-        };
-
-        let initial_accounts = vec![initial_acc1, initial_acc2];
 
         SequencerConfig {
             home,
@@ -398,8 +370,6 @@ mod tests {
             mempool_max_size: 1000,
             block_create_timeout: Duration::from_secs(1),
             port: 8080,
-            initial_accounts,
-            initial_commitments: vec![],
             signing_key: *sequencer_sign_key_for_testing().value(),
             retry_pending_blocks_timeout: Duration::from_secs(60 * 4),
             bedrock_config: BedrockConfig {
@@ -418,30 +388,18 @@ mod tests {
         }
     }
 
-    async fn components_for_tests() -> (
-        JsonHandlerWithMockClients,
-        Vec<AccountInitialData>,
-        NSSATransaction,
-    ) {
+    async fn components_for_tests() -> (JsonHandlerWithMockClients, NSSATransaction) {
         let config = sequencer_config_for_tests();
 
         let (mut sequencer_core, mempool_handle) =
             SequencerCoreWithMockClients::start_from_config(config).await;
-        let initial_accounts = sequencer_core.sequencer_config().initial_accounts.clone();
 
-        let signing_key = nssa::PrivateKey::try_new([1; 32]).unwrap();
+        let signing_key = initial_pub_accounts_private_keys()[0].pub_sign_key.clone();
         let balance_to_move = 10;
         let tx = common::test_utils::create_transaction_native_token_transfer(
-            AccountId::from_str(
-                &[
-                    148, 179, 206, 253, 199, 51, 82, 86, 232, 2, 152, 122, 80, 243, 54, 207, 237,
-                    112, 83, 153, 44, 59, 204, 49, 128, 84, 160, 227, 216, 149, 97, 102,
-                ]
-                .to_base58(),
-            )
-            .unwrap(),
+            initial_accounts()[0].account_id,
             0,
-            AccountId::from_str(&[2; 32].to_base58()).unwrap(),
+            initial_accounts()[1].account_id,
             balance_to_move,
             signing_key,
         );
@@ -464,7 +422,6 @@ mod tests {
                 mempool_handle,
                 max_block_size,
             },
-            initial_accounts,
             tx,
         )
     }
@@ -494,7 +451,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_get_account_balance_for_non_existent_account() {
-        let (json_handler, _, _) = components_for_tests().await;
+        let (json_handler, _) = components_for_tests().await;
         let request = serde_json::json!({
             "jsonrpc": "2.0",
             "method": "get_account_balance",
@@ -516,7 +473,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_get_account_balance_for_invalid_base58() {
-        let (json_handler, _, _) = components_for_tests().await;
+        let (json_handler, _) = components_for_tests().await;
         let request = serde_json::json!({
             "jsonrpc": "2.0",
             "method": "get_account_balance",
@@ -546,7 +503,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_get_account_balance_for_invalid_length() {
-        let (json_handler, _, _) = components_for_tests().await;
+        let (json_handler, _) = components_for_tests().await;
         let request = serde_json::json!({
             "jsonrpc": "2.0",
             "method": "get_account_balance",
@@ -576,9 +533,9 @@ mod tests {
 
     #[actix_web::test]
     async fn test_get_account_balance_for_existing_account() {
-        let (json_handler, initial_accounts, _) = components_for_tests().await;
+        let (json_handler, _) = components_for_tests().await;
 
-        let acc1_id = initial_accounts[0].account_id;
+        let acc1_id = initial_accounts()[0].account_id;
 
         let request = serde_json::json!({
             "jsonrpc": "2.0",
@@ -601,7 +558,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_get_accounts_nonces_for_non_existent_account() {
-        let (json_handler, _, _) = components_for_tests().await;
+        let (json_handler, _) = components_for_tests().await;
         let request = serde_json::json!({
             "jsonrpc": "2.0",
             "method": "get_accounts_nonces",
@@ -623,10 +580,10 @@ mod tests {
 
     #[actix_web::test]
     async fn test_get_accounts_nonces_for_existent_account() {
-        let (json_handler, initial_accounts, _) = components_for_tests().await;
+        let (json_handler, _) = components_for_tests().await;
 
-        let acc1_id = initial_accounts[0].account_id;
-        let acc2_id = initial_accounts[1].account_id;
+        let acc1_id = initial_accounts()[0].account_id;
+        let acc2_id = initial_accounts()[1].account_id;
 
         let request = serde_json::json!({
             "jsonrpc": "2.0",
@@ -649,7 +606,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_get_account_data_for_non_existent_account() {
-        let (json_handler, _, _) = components_for_tests().await;
+        let (json_handler, _) = components_for_tests().await;
         let request = serde_json::json!({
             "jsonrpc": "2.0",
             "method": "get_account",
@@ -676,7 +633,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_get_transaction_by_hash_for_non_existent_hash() {
-        let (json_handler, _, _) = components_for_tests().await;
+        let (json_handler, _) = components_for_tests().await;
         let request = serde_json::json!({
             "jsonrpc": "2.0",
             "method": "get_transaction_by_hash",
@@ -698,7 +655,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_get_transaction_by_hash_for_invalid_hex() {
-        let (json_handler, _, _) = components_for_tests().await;
+        let (json_handler, _) = components_for_tests().await;
         let request = serde_json::json!({
             "jsonrpc": "2.0",
             "method": "get_transaction_by_hash",
@@ -729,7 +686,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_get_transaction_by_hash_for_invalid_length() {
-        let (json_handler, _, _) = components_for_tests().await;
+        let (json_handler, _) = components_for_tests().await;
         let request = serde_json::json!({
             "jsonrpc": "2.0",
             "method": "get_transaction_by_hash",
@@ -760,7 +717,7 @@ mod tests {
 
     #[actix_web::test]
     async fn test_get_transaction_by_hash_for_existing_transaction() {
-        let (json_handler, _, tx) = components_for_tests().await;
+        let (json_handler, tx) = components_for_tests().await;
         let tx_hash_hex = hex::encode(tx.hash());
         let expected_base64_encoded = general_purpose::STANDARD.encode(borsh::to_vec(&tx).unwrap());
 
