@@ -15,6 +15,7 @@ use logos_blockchain_key_management_system_service::keys::{ED25519_SECRET_KEY_SI
 use mempool::{MemPool, MemPoolHandle};
 #[cfg(feature = "mock")]
 pub use mock::SequencerCoreWithMockClients;
+pub use storage::error::DbError;
 
 use crate::{
     block_settlement_client::{BlockSettlementClient, BlockSettlementClientTrait, MsgId},
@@ -26,8 +27,6 @@ pub mod block_settlement_client;
 pub mod block_store;
 pub mod config;
 pub mod indexer_client;
-
-pub use storage::error::DbError;
 
 #[cfg(feature = "mock")]
 pub mod mock;

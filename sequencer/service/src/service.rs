@@ -23,6 +23,8 @@ use sequencer_core::{
 };
 use tokio::sync::Mutex;
 
+const NOT_FOUND_ERROR_CODE: i32 = -31999;
+
 pub struct SequencerService<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> {
     sequencer: Arc<Mutex<SequencerCore<BC, IC>>>,
     mempool_handle: MemPoolHandle<NSSATransaction>,
@@ -30,7 +32,7 @@ pub struct SequencerService<BC: BlockSettlementClientTrait, IC: IndexerClientTra
 }
 
 impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerService<BC, IC> {
-    pub fn new(
+    pub const fn new(
         sequencer: Arc<Mutex<SequencerCore<BC, IC>>>,
         mempool_handle: MemPoolHandle<NSSATransaction>,
         max_block_size: u64,
@@ -109,19 +111,17 @@ impl<BC: BlockSettlementClientTrait + Send + 'static, IC: IndexerClientTrait + S
         let sequencer = self.sequencer.lock().await;
         (start_block_id..=end_block_id)
             .map(|block_id| {
-                sequencer
+                let block = sequencer
                     .block_store()
                     .get_block_at_id(block_id)
-                    .map_err(|err| internal_error(&err))
-                    .and_then(|opt| {
-                        opt.ok_or_else(|| {
-                            ErrorObjectOwned::owned(
-                                NOT_FOUND_ERROR_CODE,
-                                format!("Block with id {block_id} not found"),
-                                None::<()>,
-                            )
-                        })
-                    })
+                    .map_err(|err| internal_error(&err))?;
+                block.ok_or_else(|| {
+                    ErrorObjectOwned::owned(
+                        NOT_FOUND_ERROR_CODE,
+                        format!("Block with id {block_id} not found"),
+                        None::<()>,
+                    )
+                })
             })
             .collect::<Result<Vec<_>, _>>()
     }
@@ -139,10 +139,10 @@ impl<BC: BlockSettlementClientTrait + Send + 'static, IC: IndexerClientTrait + S
 
     async fn get_transaction(
         &self,
-        hash: HashType,
+        tx_hash: HashType,
     ) -> Result<Option<NSSATransaction>, ErrorObjectOwned> {
         let sequencer = self.sequencer.lock().await;
-        Ok(sequencer.block_store().get_transaction_by_hash(hash))
+        Ok(sequencer.block_store().get_transaction_by_hash(tx_hash))
     }
 
     async fn get_accounts_nonces(
@@ -195,8 +195,6 @@ impl<BC: BlockSettlementClientTrait + Send + 'static, IC: IndexerClientTrait + S
         Ok(program_ids)
     }
 }
-
-const NOT_FOUND_ERROR_CODE: i32 = -31999;
 
 fn internal_error(err: &DbError) -> ErrorObjectOwned {
     ErrorObjectOwned::owned(ErrorCode::InternalError.code(), err.to_string(), None::<()>)

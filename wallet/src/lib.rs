@@ -146,13 +146,12 @@ impl WalletCore {
             let mut builder = SequencerClientBuilder::default();
             if let Some(basic_auth) = &config.basic_auth {
                 builder = builder.set_headers(
-                    [(
+                    std::iter::once((
                         "Authorization".parse().expect("Header name is valid"),
-                        format!("Basic {}", basic_auth)
+                        format!("Basic {basic_auth}")
                             .parse()
                             .context("Invalid basic auth format")?,
-                    )]
-                    .into_iter()
+                    ))
                     .collect(),
                 );
             }
@@ -341,11 +340,6 @@ impl WalletCore {
         Ok(())
     }
 
-    // TODO: handle large Err-variant properly
-    #[expect(
-        clippy::result_large_err,
-        reason = "ExecutionFailureKind is large, tracked by TODO"
-    )]
     pub async fn send_privacy_preserving_tx(
         &self,
         accounts: Vec<PrivacyPreservingAccount>,

@@ -34,7 +34,7 @@ pub struct SequencerHandle {
 }
 
 impl SequencerHandle {
-    fn new(
+    const fn new(
         addr: SocketAddr,
         server_handle: ServerHandle,
         main_loop_handle: JoinHandle<Result<Never>>,
@@ -67,7 +67,7 @@ impl SequencerHandle {
         let server_handle = server_handle.take().expect("Server handle is set");
 
         tokio::select! {
-            _ = server_handle.stopped() => {
+            () = server_handle.stopped() => {
                 Err(anyhow!("RPC Server stopped"))
             }
             res = main_loop_handle => {

@@ -3,7 +3,7 @@ use std::{io::Write as _, path::PathBuf};
 use anyhow::{Context as _, Result};
 use clap::{Parser, Subcommand};
 use common::{HashType, transaction::NSSATransaction};
-use futures::TryFutureExt;
+use futures::TryFutureExt as _;
 use nssa::{ProgramDeploymentTransaction, program::Program};
 use sequencer_service_rpc::RpcClient as _;
 

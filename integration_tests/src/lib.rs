@@ -38,7 +38,7 @@ pub struct TestContext {
     indexer_client: IndexerClient,
     wallet: WalletCore,
     wallet_password: String,
-    /// Optional to move out value in Drop
+    /// Optional to move out value in Drop.
     sequencer_handle: Option<SequencerHandle>,
     indexer_handle: IndexerHandle,
     bedrock_compose: DockerCompose,

@@ -394,7 +394,7 @@ impl TryFrom<WitnessSet> for nssa::privacy_preserving_transaction::witness_set::
             signatures_and_public_keys,
             proof
                 .map(Into::into)
-                .ok_or_else(|| nssa::error::NssaError::InvalidInput("Missing proof".to_string()))?,
+                .ok_or_else(|| nssa::error::NssaError::InvalidInput("Missing proof".to_owned()))?,
         ))
     }
 }

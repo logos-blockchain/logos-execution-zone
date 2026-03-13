@@ -14,11 +14,6 @@ pub mod shielded;
 )]
 pub struct NativeTokenTransfer<'wallet>(pub &'wallet WalletCore);
 
-// TODO: handle large Err-variant properly
-#[expect(
-    clippy::result_large_err,
-    reason = "ExecutionFailureKind is large, tracked by TODO"
-)]
 fn auth_transfer_preparation(
     balance_to_move: u128,
 ) -> (
