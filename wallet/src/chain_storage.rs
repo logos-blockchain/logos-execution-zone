@@ -161,105 +161,44 @@ impl WalletChainStore {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr as _;
+
     use key_protocol::key_management::key_tree::{
         keys_private::ChildKeysPrivate, keys_public::ChildKeysPublic, traits::KeyNode as _,
     };
+    use nssa::PrivateKey;
 
     use super::*;
     use crate::config::{
-        InitialAccountData, PersistentAccountDataPrivate, PersistentAccountDataPublic,
+        InitialAccountData, InitialAccountDataPublic, PersistentAccountDataPrivate,
+        PersistentAccountDataPublic,
     };
 
     fn create_initial_accounts() -> Vec<InitialAccountData> {
-        let initial_acc1 = serde_json::from_str(
-            r#"{
-            "Public": {
-                "account_id": "6iArKUXxhUJqS7kCaPNhwMWt3ro71PDyBj7jwAyE2VQV",
-                "pub_sign_key": [
-                    16,
-                    162,
-                    106,
-                    154,
-                    236,
-                    125,
-                    52,
-                    184,
-                    35,
-                    100,
-                    238,
-                    174,
-                    69,
-                    197,
-                    41,
-                    77,
-                    187,
-                    10,
-                    118,
-                    75,
-                    0,
-                    11,
-                    148,
-                    238,
-                    185,
-                    181,
-                    133,
-                    17,
-                    220,
-                    72,
-                    124,
-                    77
-                ]
-            }
-        }"#,
-        )
-        .unwrap();
-
-        let initial_acc2 = serde_json::from_str(
-            r#"{
-            "Public": {
-                "account_id": "7wHg9sbJwc6h3NP1S9bekfAzB8CHifEcxKswCKUt3YQo",
-                "pub_sign_key": [
-                    113,
-                    121,
-                    64,
-                    177,
-                    204,
-                    85,
-                    229,
-                    214,
-                    178,
-                    6,
-                    109,
-                    191,
-                    29,
-                    154,
-                    63,
-                    38,
-                    242,
-                    18,
-                    244,
-                    219,
-                    8,
-                    208,
-                    35,
-                    136,
-                    23,
-                    127,
-                    207,
-                    237,
-                    216,
-                    169,
-                    190,
-                    27
-                ]
-            }
-        }"#,
-        )
-        .unwrap();
-
-        let initial_accounts = vec![initial_acc1, initial_acc2];
-
-        initial_accounts
+        vec![
+            InitialAccountData::Public(InitialAccountDataPublic {
+                account_id: nssa::AccountId::from_str(
+                    "6iArKUXxhUJqS7kCaPNhwMWt3ro71PDyBj7jwAyE2VQV",
+                )
+                .unwrap(),
+                pub_sign_key: PrivateKey::try_new([
+                    16, 162, 106, 154, 236, 125, 52, 184, 35, 100, 238, 174, 69, 197, 41, 77, 187,
+                    10, 118, 75, 0, 11, 148, 238, 185, 181, 133, 17, 220, 72, 124, 77,
+                ])
+                .unwrap(),
+            }),
+            InitialAccountData::Public(InitialAccountDataPublic {
+                account_id: nssa::AccountId::from_str(
+                    "7wHg9sbJwc6h3NP1S9bekfAzB8CHifEcxKswCKUt3YQo",
+                )
+                .unwrap(),
+                pub_sign_key: PrivateKey::try_new([
+                    113, 121, 64, 177, 204, 85, 229, 214, 178, 6, 109, 191, 29, 154, 63, 38, 242,
+                    18, 244, 219, 8, 208, 35, 136, 23, 127, 207, 237, 216, 169, 190, 27,
+                ])
+                .unwrap(),
+            }),
+        ]
     }
 
     fn create_sample_wallet_config() -> WalletConfig {

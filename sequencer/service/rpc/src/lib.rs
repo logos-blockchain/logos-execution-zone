@@ -79,7 +79,7 @@ pub trait Rpc {
     async fn get_proof_for_commitment(
         &self,
         commitment: Commitment,
-    ) -> Result<MembershipProof, ErrorObjectOwned>;
+    ) -> Result<Option<MembershipProof>, ErrorObjectOwned>;
 
     #[method(name = "getAccount")]
     async fn get_account(&self, account_id: AccountId) -> Result<Account, ErrorObjectOwned>;

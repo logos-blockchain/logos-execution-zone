@@ -62,7 +62,7 @@ impl WalletSubcommand for AuthTransferSubcommand {
                             .register_account(account_id)
                             .await?;
 
-                        println!("Results of tx send are {tx_hash:#?}");
+                        println!("Transaction hash is {tx_hash}");
 
                         let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
@@ -77,7 +77,7 @@ impl WalletSubcommand for AuthTransferSubcommand {
                             .register_account_private(account_id)
                             .await?;
 
-                        println!("Results of tx send are {tx_hash:#?}");
+                        println!("Transaction hash is {tx_hash}");
 
                         let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
@@ -313,7 +313,7 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandPrivate {
                     .send_private_transfer_to_owned_account(from, to, amount)
                     .await?;
 
-                println!("Transaction hash is {tx_hash:#?}");
+                println!("Transaction hash is {tx_hash}");
 
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
@@ -352,7 +352,7 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandPrivate {
                     .send_private_transfer_to_outer_account(from, to_npk, to_vpk, amount)
                     .await?;
 
-                println!("Transaction hash is {tx_hash:#?}");
+                println!("Transaction hash is {tx_hash}");
 
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
@@ -387,7 +387,7 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandShielded {
                     .send_shielded_transfer(from, to, amount)
                     .await?;
 
-                println!("Transaction hash is {tx_hash:#?}");
+                println!("Transaction hash is {tx_hash}");
 
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
@@ -427,7 +427,7 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandShielded {
                     .send_shielded_transfer_to_outer_account(from, to_npk, to_vpk, amount)
                     .await?;
 
-                println!("Transaction hash is {tx_hash:#?}");
+                println!("Transaction hash is {tx_hash}");
 
                 wallet_core.store_persistent_data().await?;
 
@@ -457,7 +457,7 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommand {
                     .send_deshielded_transfer(from, to, amount)
                     .await?;
 
-                println!("Transaction hash is {tx_hash:#?}");
+                println!("Transaction hash is {tx_hash}");
 
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
@@ -482,7 +482,7 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommand {
                     .send_public_transfer(from, to, amount)
                     .await?;
 
-                println!("Transaction hash is {tx_hash:#?}");
+                println!("Transaction hash is {tx_hash}");
 
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 

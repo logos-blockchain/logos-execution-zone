@@ -160,18 +160,9 @@ impl<BC: BlockSettlementClientTrait + Send + 'static, IC: IndexerClientTrait + S
     async fn get_proof_for_commitment(
         &self,
         commitment: Commitment,
-    ) -> Result<MembershipProof, ErrorObjectOwned> {
+    ) -> Result<Option<MembershipProof>, ErrorObjectOwned> {
         let sequencer = self.sequencer.lock().await;
-        sequencer
-            .state()
-            .get_proof_for_commitment(&commitment)
-            .ok_or_else(|| {
-                ErrorObjectOwned::owned(
-                    NOT_FOUND_ERROR_CODE,
-                    "Proof for commitment not found",
-                    None::<()>,
-                )
-            })
+        Ok(sequencer.state().get_proof_for_commitment(&commitment))
     }
 
     async fn get_account(&self, account_id: AccountId) -> Result<Account, ErrorObjectOwned> {

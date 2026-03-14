@@ -9,79 +9,13 @@
     {
       "Public": {
         "account_id": "6iArKUXxhUJqS7kCaPNhwMWt3ro71PDyBj7jwAyE2VQV",
-        "pub_sign_key": [
-          16,
-          162,
-          106,
-          154,
-          236,
-          125,
-          52,
-          184,
-          35,
-          100,
-          238,
-          174,
-          69,
-          197,
-          41,
-          77,
-          187,
-          10,
-          118,
-          75,
-          0,
-          11,
-          148,
-          238,
-          185,
-          181,
-          133,
-          17,
-          220,
-          72,
-          124,
-          77
-        ]
+        "pub_sign_key": "EKJqmux9NLgjZO6uRcUpTbsKdksAC5TuubWFEdxIfE0="
       }
     },
     {
       "Public": {
         "account_id": "7wHg9sbJwc6h3NP1S9bekfAzB8CHifEcxKswCKUt3YQo",
-        "pub_sign_key": [
-          113,
-          121,
-          64,
-          177,
-          204,
-          85,
-          229,
-          214,
-          178,
-          6,
-          109,
-          191,
-          29,
-          154,
-          63,
-          38,
-          242,
-          18,
-          244,
-          219,
-          8,
-          208,
-          35,
-          136,
-          23,
-          127,
-          207,
-          237,
-          216,
-          169,
-          190,
-          27
-        ]
+        "pub_sign_key": "cXlAscxV5dayBm2/HZo/JvIS9NsI0COIF3/P7dipvhs="
       }
     },
         {

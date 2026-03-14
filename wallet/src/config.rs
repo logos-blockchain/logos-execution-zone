@@ -2,6 +2,7 @@ use std::{
     collections::HashMap,
     io::{BufReader, Write as _},
     path::Path,
+    str::FromStr as _,
     time::Duration,
 };
 
@@ -217,291 +218,52 @@ impl Default for WalletConfig {
             seq_poll_max_retries: 5,
             seq_block_poll_max_amount: 100,
             basic_auth: None,
-            initial_accounts: {
-                let init_acc_json = r#"
-                [
-        {
-            "Public": {
-                "account_id": "6iArKUXxhUJqS7kCaPNhwMWt3ro71PDyBj7jwAyE2VQV",
-                "pub_sign_key": [
-                    16,
-                    162,
-                    106,
-                    154,
-                    236,
-                    125,
-                    52,
-                    184,
-                    35,
-                    100,
-                    238,
-                    174,
-                    69,
-                    197,
-                    41,
-                    77,
-                    187,
-                    10,
-                    118,
-                    75,
-                    0,
-                    11,
-                    148,
-                    238,
-                    185,
-                    181,
-                    133,
-                    17,
-                    220,
-                    72,
-                    124,
-                    77
-                ]
-            }
-        },
-        {
-            "Public": {
-                "account_id": "7wHg9sbJwc6h3NP1S9bekfAzB8CHifEcxKswCKUt3YQo",
-                "pub_sign_key": [
-                    113,
-                    121,
-                    64,
-                    177,
-                    204,
-                    85,
-                    229,
-                    214,
-                    178,
-                    6,
-                    109,
-                    191,
-                    29,
-                    154,
-                    63,
-                    38,
-                    242,
-                    18,
-                    244,
-                    219,
-                    8,
-                    208,
-                    35,
-                    136,
-                    23,
-                    127,
-                    207,
-                    237,
-                    216,
-                    169,
-                    190,
-                    27
-                ]
-            }
-        },
-        {
-            "Private": {
-                "account_id": "FpdcxBrMkHWqXCBQ6FG98eYfWGY6jWZRsKNSi1FwDMxy",
-                "account": {
-                    "program_owner": [
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0
-                    ],
-                    "balance": 10000,
-                    "data": [],
-                    "nonce": 0
-                },
-                "key_chain": {
-                    "secret_spending_key": [
-                        239,
-                        27,
-                        159,
-                        83,
-                        199,
-                        194,
-                        132,
-                        33,
-                        20,
-                        28,
-                        217,
-                        103,
-                        101,
-                        57,
-                        27,
-                        125,
-                        84,
-                        57,
-                        19,
-                        86,
-                        98,
-                        135,
-                        161,
-                        221,
-                        108,
-                        125,
-                        152,
-                        174,
-                        161,
-                        64,
-                        16,
-                        200
-                    ],
-                    "private_key_holder": {
-                        "nullifier_secret_key": [
-                            71,
-                            195,
-                            16,
-                            119,
-                            0,
-                            98,
-                            35,
-                            106,
-                            139,
-                            82,
-                            145,
-                            50,
-                            27,
-                            140,
-                            206,
-                            19,
-                            53,
-                            122,
-                            166,
-                            76,
-                            195,
-                            0,
-                            16,
-                            19,
-                            21,
-                            143,
-                            155,
-                            119,
-                            9,
-                            200,
-                            81,
-                            105
-                        ],
-                        "viewing_secret_key": [
-                            5,
-                            117,
-                            221,
-                            27,
-                            236,
-                            199,
-                            53,
-                            22,
-                            249,
-                            231,
-                            98,
-                            147,
-                            213,
-                            116,
-                            191,
-                            82,
-                            188,
-                            148,
-                            175,
-                            98,
-                            139,
-                            52,
-                            232,
-                            249,
-                            220,
-                            217,
-                            83,
-                            58,
-                            112,
-                            155,
-                            197,
-                            196
-                        ]
+            initial_accounts: vec![
+                InitialAccountData::Public(InitialAccountDataPublic {
+                    account_id: nssa::AccountId::from_str(
+                        "6iArKUXxhUJqS7kCaPNhwMWt3ro71PDyBj7jwAyE2VQV",
+                    )
+                    .unwrap(),
+                    pub_sign_key: nssa::PrivateKey::try_new([
+                        16, 162, 106, 154, 236, 125, 52, 184, 35, 100, 238, 174, 69, 197, 41, 77,
+                        187, 10, 118, 75, 0, 11, 148, 238, 185, 181, 133, 17, 220, 72, 124, 77,
+                    ])
+                    .unwrap(),
+                }),
+                InitialAccountData::Public(InitialAccountDataPublic {
+                    account_id: nssa::AccountId::from_str(
+                        "7wHg9sbJwc6h3NP1S9bekfAzB8CHifEcxKswCKUt3YQo",
+                    )
+                    .unwrap(),
+                    pub_sign_key: nssa::PrivateKey::try_new([
+                        113, 121, 64, 177, 204, 85, 229, 214, 178, 6, 109, 191, 29, 154, 63, 38,
+                        242, 18, 244, 219, 8, 208, 35, 136, 23, 127, 207, 237, 216, 169, 190, 27,
+                    ])
+                    .unwrap(),
+                }),
+                InitialAccountData::Private(Box::new(InitialAccountDataPrivate {
+                    account_id: nssa::AccountId::from_str(
+                        "9DGDXnrNo4QhUUb2F8WDuDrPESja3eYDkZG5HkzvAvMC",
+                    )
+                    .unwrap(),
+                    account: nssa::Account {
+                        balance: 10_000,
+                        ..Default::default()
                     },
-                    "nullifer_public_key": [
-                        177,
-                        64,
-                        1,
-                        11,
-                        87,
-                        38,
-                        254,
-                        159,
-                        231,
-                        165,
-                        1,
-                        94,
-                        64,
-                        137,
-                        243,
-                        76,
-                        249,
-                        101,
-                        251,
-                        129,
-                        33,
-                        101,
-                        189,
-                        30,
-                        42,
-                        11,
-                        191,
-                        34,
-                        103,
-                        186,
-                        227,
-                        230
-                    ],
-                    "viewing_public_key": [
-                        2, 69, 126, 43, 158, 209, 172, 144, 23, 185, 208, 25, 163, 166, 176, 200, 225, 251, 106, 211, 4, 199, 112, 243, 207, 144, 135, 56, 157, 167, 32, 219, 38]
-                }
-            }
-        },
-        {
-            "Private": {
-                "account_id": "E8HwiTyQe4H9HK7icTvn95HQMnzx49mP9A2ddtMLpNaN",
-                "account": {
-                    "program_owner": [
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0,
-                        0
-                    ],
-                    "balance": 20000,
-                    "data": [],
-                    "nonce": 0
-                },
-                "key_chain": {
-                    "secret_spending_key": [
-                        48, 175, 124, 10, 230, 240, 166, 14, 249, 254, 157, 226, 208, 124, 122, 177, 203, 139, 192, 180, 43, 120, 55, 151, 50, 21, 113, 22, 254, 83, 148, 56],
-                    "private_key_holder": {
-                        "nullifier_secret_key": [
-                            99, 82, 190, 140, 234, 10, 61, 163, 15, 211, 179, 54, 70, 166, 87, 5, 182, 68, 117, 244, 217, 23, 99, 9, 4, 177, 230, 125, 109, 91, 160, 30
-                        ],
-                        "viewing_secret_key": [
-                            205, 32, 76, 251, 255, 236, 96, 119, 61, 111, 65, 100, 75, 218, 12, 22, 17, 170, 55, 226, 21, 154, 161, 34, 208, 74, 27, 1, 119, 13, 88, 128
-                        ]
+                    key_chain: KeyChain::new_mnemonic("default_private_account_1".to_owned()),
+                })),
+                InitialAccountData::Private(Box::new(InitialAccountDataPrivate {
+                    account_id: nssa::AccountId::from_str(
+                        "A6AT9UvsgitUi8w4BH43n6DyX1bK37DtSCfjEWXQQUrQ",
+                    )
+                    .unwrap(),
+                    account: nssa::Account {
+                        balance: 20_000,
+                        ..Default::default()
                     },
-                    "nullifer_public_key": [
-                        32, 67, 72, 164, 106, 53, 66, 239, 141, 15, 52, 230, 136, 177, 2, 236, 207, 243, 134, 135, 210, 143, 87, 232, 215, 128, 194, 120, 113, 224, 4, 165
-                    ],
-                    "viewing_public_key": [
-                        2, 79, 110, 46, 203, 29, 206, 205, 18, 86, 27, 189, 104, 103, 113, 181, 110, 53, 78, 172, 11, 171, 190, 18, 126, 214, 81, 77, 192, 154, 58, 195, 238
-                    ]
-                }
-            }
-        }
-    ]
-                "#;
-                serde_json::from_str(init_acc_json).unwrap()
-            },
+                    key_chain: KeyChain::new_mnemonic("default_private_account_2".to_owned()),
+                })),
+            ],
         }
     }
 }

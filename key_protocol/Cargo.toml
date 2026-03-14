@@ -19,10 +19,12 @@ serde.workspace = true
 k256.workspace = true
 sha2.workspace = true
 rand.workspace = true
-base58.workspace = true
 hex.workspace = true
 aes-gcm.workspace = true
 bip39.workspace = true
 hmac-sha512.workspace = true
 thiserror.workspace = true
 itertools.workspace = true
+
+[dev-dependencies]
+base58.workspace = true

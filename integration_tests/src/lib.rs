@@ -480,5 +480,7 @@ pub async fn verify_commitment_is_in_state(
     seq_client
         .get_proof_for_commitment(commitment)
         .await
-        .is_ok()
+        .ok()
+        .flatten()
+        .is_some()
 }

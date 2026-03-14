@@ -33,7 +33,7 @@ run-bedrock:
 [working-directory: 'sequencer/service']
 run-sequencer:
     @echo "🧠 Running sequencer"
-    RUST_LOG=info RISC0_DEV_MODE=1 cargo run --release -p sequencer_service configs/debug
+    RUST_LOG=info RISC0_DEV_MODE=1 cargo run --release -p sequencer_service configs/debug/sequencer_config.json
 
 # Run Indexer
 [working-directory: 'indexer/service']

@@ -115,7 +115,7 @@ impl WalletSubcommand for PinataProgramSubcommandPublic {
                     )
                     .await?;
 
-                println!("Transaction hash is {tx_hash:#?}");
+                println!("Transaction hash is {tx_hash}");
 
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
@@ -147,7 +147,7 @@ impl WalletSubcommand for PinataProgramSubcommandPrivate {
                     .claim_private_owned_account(pinata_account_id, winner_account_id, solution)
                     .await?;
 
-                println!("Transaction hash is {tx_hash:#?}");
+                println!("Transaction hash is {tx_hash}");
 
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 

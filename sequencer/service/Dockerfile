@@ -97,7 +97,7 @@ COPY --from=builder --chown=sequencer_user:sequencer_user /usr/local/bin/r0vm /u
 COPY --from=builder --chown=sequencer_user:sequencer_user /root/.logos-blockchain-circuits /home/sequencer_user/.logos-blockchain-circuits
 
 # Copy entrypoint script
-COPY sequencer_service/docker-entrypoint.sh /docker-entrypoint.sh
+COPY sequencer/service/docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh
 
 # Expose default port
@@ -125,4 +125,4 @@ USER root
 ENTRYPOINT ["/docker-entrypoint.sh"]
 
 WORKDIR /sequencer_service
-CMD ["sequencer_service", "/etc/sequencer_service"]
+CMD ["sequencer_service", "/etc/sequencer_service/sequencer_config.json"]

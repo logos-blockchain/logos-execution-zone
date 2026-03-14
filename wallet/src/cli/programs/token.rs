@@ -721,7 +721,7 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                     )
                     .await?;
 
-                println!("Transaction hash is {tx_hash:#?}");
+                println!("Transaction hash is {tx_hash}");
 
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
@@ -769,7 +769,7 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                     )
                     .await?;
 
-                println!("Transaction hash is {tx_hash:#?}");
+                println!("Transaction hash is {tx_hash}");
 
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
@@ -802,7 +802,7 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                     )
                     .await?;
 
-                println!("Transaction hash is {tx_hash:#?}");
+                println!("Transaction hash is {tx_hash}");
 
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
@@ -838,7 +838,7 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                     )
                     .await?;
 
-                println!("Transaction hash is {tx_hash:#?}");
+                println!("Transaction hash is {tx_hash}");
 
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
@@ -887,7 +887,7 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                     )
                     .await?;
 
-                println!("Transaction hash is {tx_hash:#?}");
+                println!("Transaction hash is {tx_hash}");
 
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
@@ -930,7 +930,7 @@ impl WalletSubcommand for TokenProgramSubcommandDeshielded {
                     )
                     .await?;
 
-                println!("Transaction hash is {tx_hash:#?}");
+                println!("Transaction hash is {tx_hash}");
 
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
@@ -963,7 +963,7 @@ impl WalletSubcommand for TokenProgramSubcommandDeshielded {
                     )
                     .await?;
 
-                println!("Transaction hash is {tx_hash:#?}");
+                println!("Transaction hash is {tx_hash}");
 
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
@@ -996,7 +996,7 @@ impl WalletSubcommand for TokenProgramSubcommandDeshielded {
                     )
                     .await?;
 
-                println!("Transaction hash is {tx_hash:#?}");
+                println!("Transaction hash is {tx_hash}");
 
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
@@ -1051,7 +1051,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                     )
                     .await?;
 
-                println!("Transaction hash is {tx_hash:#?}");
+                println!("Transaction hash is {tx_hash}");
 
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
@@ -1079,7 +1079,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                     )
                     .await?;
 
-                println!("Transaction hash is {tx_hash:#?}");
+                println!("Transaction hash is {tx_hash}");
 
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
@@ -1112,7 +1112,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                     )
                     .await?;
 
-                println!("Transaction hash is {tx_hash:#?}");
+                println!("Transaction hash is {tx_hash}");
 
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
@@ -1145,7 +1145,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                     )
                     .await?;
 
-                println!("Transaction hash is {tx_hash:#?}");
+                println!("Transaction hash is {tx_hash}");
 
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
@@ -1191,7 +1191,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                     )
                     .await?;
 
-                println!("Transaction hash is {tx_hash:#?}");
+                println!("Transaction hash is {tx_hash}");
 
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
@@ -1231,7 +1231,7 @@ impl WalletSubcommand for CreateNewTokenProgramSubcommand {
                     )
                     .await?;
 
-                println!("Transaction hash is {tx_hash:#?}");
+                println!("Transaction hash is {tx_hash}");
 
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
@@ -1269,7 +1269,7 @@ impl WalletSubcommand for CreateNewTokenProgramSubcommand {
                     )
                     .await?;
 
-                println!("Transaction hash is {tx_hash:#?}");
+                println!("Transaction hash is {tx_hash}");
 
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
@@ -1304,7 +1304,7 @@ impl WalletSubcommand for CreateNewTokenProgramSubcommand {
                     )
                     .await?;
 
-                println!("Transaction hash is {tx_hash:#?}");
+                println!("Transaction hash is {tx_hash}");
 
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 

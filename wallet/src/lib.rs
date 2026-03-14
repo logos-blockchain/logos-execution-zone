@@ -299,8 +299,7 @@ impl WalletCore {
             self.sequencer_client
                 .get_proof_for_commitment(acc_comm)
                 .await
-                .map(Some)
-                .map_err(anyhow::Error::from)
+                .map_err(Into::into)
         } else {
             Ok(None)
         }
