@@ -5,7 +5,7 @@ edition = "2024"
 license = { workspace = true }
 
 [dependencies]
-indexer_service_protocol = { workspace = true, features = ["convert"] }
+indexer_service_protocol.workspace = true
 
 jsonrpsee = { workspace = true, features = ["macros"] }
 serde_json.workspace = true

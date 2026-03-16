@@ -71,6 +71,7 @@ This design keeps public transactions as fast as any RISC-V–based VM and makes
 
 ---
 ---
+---
 
 # Install dependencies
 ### Install build dependencies
@@ -130,29 +131,31 @@ RUST_LOG=info RISC0_DEV_MODE=1 cargo run $(pwd)/configs/debug all
 ```
 
 # Run the sequencer and node
-
-
 ## Running Manually
 ### Normal mode
 The sequencer and logos blockchain node can be run locally:
  1. On one terminal go to the `logos-blockchain/logos-blockchain` repo and run a local logos blockchain node:
-      - `git checkout master; git pull`
-      - `cargo clean`
-      - `rm -r ~/.logos-blockchain-circuits`
-      - `./scripts/setup-logos-blockchain-circuits.sh`
-      - `cargo build --all-features`
-      - `./target/debug/logos-blockchain-node --deployment nodes/node/standalone-deployment-config.yaml nodes/node/standalone-node-config.yaml`
-
- 2. Alternatively (WARNING: This node is outdated) go to ``logos-blockchain/lssa/` repo and run the node from docker:
-      - `cd bedrock`
-      - Change line 14 of `docker-compose.yml` from `"0:18080/tcp"` into `"8080:18080/tcp"`
-      - `docker compose up`
-
- 3. On another terminal go to the `logos-blockchain/lssa` repo and run indexer service:
+    - `git checkout master; git pull`
+    - `cargo clean`
+    - `rm -r ~/.logos-blockchain-circuits`
+    - `./scripts/setup-logos-blockchain-circuits.sh`
+    - `cargo build --all-features`
+    - `./target/debug/logos-blockchain-node --deployment nodes/node/standalone-deployment-config.yaml nodes/node/standalone-node-config.yaml`
+    
+ - Alternatively (WARNING: This node is outdated) go to `logos-blockchain/lssa/` repo and run the node from docker:
+    - `cd bedrock`
+    - Change line 14 of `docker-compose.yml` from `"0:18080/tcp"` into `"8080:18080/tcp"`
+    - `docker compose up`
+     
+ 2. On another terminal go to the `logos-blockchain/lssa` repo and run indexer service:
       - `RUST_LOG=info cargo run -p indexer_service indexer/service/configs/indexer_config.json`
 
- 4. On another terminal go to the `logos-blockchain/lssa` repo and run the sequencer:
+ 3. On another terminal go to the `logos-blockchain/lssa` repo and run the sequencer:
       - `RUST_LOG=info cargo run -p sequencer_runner sequencer_runner/configs/debug`
+ 4. (To run the explorer): on another terminal go to `logos-blockchain/lssa/explorer_service` and run the following:
+      - `cargo install cargo-leptos`
+      - `cargo leptos build --release`
+      - `cargo leptos serve --release`
 
 ### Notes on cleanup
 

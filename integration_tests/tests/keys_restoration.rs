@@ -1,9 +1,9 @@
 use std::{str::FromStr, time::Duration};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, format_private_account_id,
-    format_public_account_id, verify_commitment_is_in_state,
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, fetch_privacy_preserving_tx,
+    format_private_account_id, format_public_account_id, verify_commitment_is_in_state,
 };
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use log::info;
@@ -14,6 +14,93 @@ use wallet::cli::{
     account::{AccountSubcommand, NewSubcommand},
     programs::native_token_transfer::AuthTransferSubcommand,
 };
+
+#[test]
+async fn sync_private_account_with_non_zero_chain_index() -> Result<()> {
+    let mut ctx = TestContext::new().await?;
+
+    let from: AccountId = ctx.existing_private_accounts()[0];
+
+    // Create a new private account
+    let command = Command::Account(AccountSubcommand::New(NewSubcommand::Private {
+        cci: None,
+        label: None,
+    }));
+
+    for _ in 0..3 {
+        // Key Tree shift
+        // This way we have account with child index > 0.
+        let result = wallet::cli::execute_subcommand(
+            ctx.wallet_mut(),
+            Command::Account(AccountSubcommand::New(NewSubcommand::Private {
+                cci: None,
+                label: None,
+            })),
+        )
+        .await?;
+        let SubcommandReturnValue::RegisterAccount { account_id: _ } = result else {
+            anyhow::bail!("Expected RegisterAccount return value");
+        };
+    }
+
+    let sub_ret = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
+    let SubcommandReturnValue::RegisterAccount {
+        account_id: to_account_id,
+    } = sub_ret
+    else {
+        anyhow::bail!("Expected RegisterAccount return value");
+    };
+
+    // Get the keys for the newly created account
+    let (to_keys, _) = ctx
+        .wallet()
+        .storage()
+        .user_data
+        .get_private_account(to_account_id)
+        .cloned()
+        .context("Failed to get private account")?;
+
+    // Send to this account using claiming path (using npk and vpk instead of account ID)
+    let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
+        from: format_private_account_id(from),
+        to: None,
+        to_npk: Some(hex::encode(to_keys.nullifer_public_key.0)),
+        to_vpk: Some(hex::encode(to_keys.viewing_public_key.0)),
+        amount: 100,
+    });
+
+    let sub_ret = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
+    let SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash } = sub_ret else {
+        anyhow::bail!("Expected PrivacyPreservingTransfer return value");
+    };
+
+    let tx = fetch_privacy_preserving_tx(ctx.sequencer_client(), tx_hash).await;
+
+    // Sync the wallet to claim the new account
+    let command = Command::Account(AccountSubcommand::SyncPrivate {});
+    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
+
+    let new_commitment1 = ctx
+        .wallet()
+        .get_private_account_commitment(from)
+        .context("Failed to get private account commitment for sender")?;
+    assert_eq!(tx.message.new_commitments[0], new_commitment1);
+
+    assert_eq!(tx.message.new_commitments.len(), 2);
+    for commitment in tx.message.new_commitments.into_iter() {
+        assert!(verify_commitment_is_in_state(commitment, ctx.sequencer_client()).await);
+    }
+
+    let to_res_acc = ctx
+        .wallet()
+        .get_account_private(to_account_id)
+        .context("Failed to get recipient's private account")?;
+    assert_eq!(to_res_acc.balance, 100);
+
+    info!("Successfully transferred using claiming path");
+
+    Ok(())
+}
 
 #[test]
 async fn restore_keys_from_seed() -> Result<()> {

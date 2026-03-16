@@ -50,8 +50,8 @@ impl IndexerStore {
         Ok(self.dbio.get_block(id)?)
     }
 
-    pub fn get_block_batch(&self, offset: u64, limit: u64) -> Result<Vec<Block>> {
-        Ok(self.dbio.get_block_batch(offset, limit)?)
+    pub fn get_block_batch(&self, before: Option<u64>, limit: u64) -> Result<Vec<Block>> {
+        Ok(self.dbio.get_block_batch(before, limit)?)
     }
 
     pub fn get_transaction_by_hash(&self, tx_hash: [u8; 32]) -> Result<NSSATransaction> {

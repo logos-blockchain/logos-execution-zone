@@ -363,7 +363,7 @@ impl WalletCore {
             );
         let tx = PrivacyPreservingTransaction::new(message, witness_set);
 
-        let shared_secrets = private_account_keys
+        let shared_secrets: Vec<_> = private_account_keys
             .into_iter()
             .map(|keys| keys.ssk)
             .collect();
@@ -419,18 +419,19 @@ impl WalletCore {
             .user_data
             .default_user_private_accounts
             .iter()
-            .map(|(acc_account_id, (key_chain, _))| (*acc_account_id, key_chain))
-            .chain(
-                self.storage
-                    .user_data
-                    .private_key_tree
-                    .key_map
-                    .values()
-                    .map(|keys_node| (keys_node.account_id(), &keys_node.value.0)),
-            );
+            .map(|(acc_account_id, (key_chain, _))| (*acc_account_id, key_chain, None))
+            .chain(self.storage.user_data.private_key_tree.key_map.iter().map(
+                |(chain_index, keys_node)| {
+                    (
+                        keys_node.account_id(),
+                        &keys_node.value.0,
+                        chain_index.index(),
+                    )
+                },
+            ));
 
         let affected_accounts = private_account_key_chains
-            .flat_map(|(acc_account_id, key_chain)| {
+            .flat_map(|(acc_account_id, key_chain, index)| {
                 let view_tag = EncryptedAccountData::compute_view_tag(
                     key_chain.nullifer_public_key.clone(),
                     key_chain.viewing_public_key.clone(),
@@ -444,8 +445,8 @@ impl WalletCore {
                     .filter_map(|(ciph_id, encrypted_data)| {
                         let ciphertext = &encrypted_data.ciphertext;
                         let commitment = &tx.message.new_commitments[ciph_id];
-                        let shared_secret =
-                            key_chain.calculate_shared_secret_receiver(encrypted_data.epk.clone());
+                        let shared_secret = key_chain
+                            .calculate_shared_secret_receiver(encrypted_data.epk.clone(), index);
 
                         nssa_core::EncryptionScheme::decrypt(
                             ciphertext,
@@ -455,6 +456,7 @@ impl WalletCore {
                         )
                     })
                     .map(move |res_acc| (acc_account_id, res_acc))
+                    .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
 

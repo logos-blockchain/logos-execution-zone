@@ -284,7 +284,7 @@ impl V02State {
             account_id,
             Account {
                 program_owner: Program::pinata().id(),
-                balance: 1500,
+                balance: 1500000,
                 // Difficulty: 3
                 data: vec![3; 33].try_into().expect("should fit"),
                 nonce: 0,

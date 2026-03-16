@@ -68,6 +68,10 @@ impl ChainIndex {
         &self.0
     }
 
+    pub fn index(&self) -> Option<u32> {
+        self.chain().last().copied()
+    }
+
     pub fn next_in_line(&self) -> ChainIndex {
         let mut chain = self.0.clone();
         // ToDo: Add overflow check

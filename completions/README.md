@@ -1,6 +1,6 @@
 # Wallet CLI Completion
 
-Completion scripts for the LSSA `wallet` command. 
+Completion scripts for the LSSA `wallet` command.
 
 ## ZSH
 
@@ -19,9 +19,9 @@ Preconfigured accounts and accounts only with `/` (no number) are not completed.
 e.g.:
 
 ```
-▶ wallet account list 
-Preconfigured Public/Gj1mJy5W7J5pfmLRujmQaLfLMWidNxQ6uwnhb666ZwHw,
-Preconfigured Public/BLgCRDXYdQPMMWVHYRFGQZbgeHx9frkipa8GtpG2Syqy,
+▶ wallet account list
+Preconfigured Public/7wHg9sbJwc6h3NP1S9bekfAzB8CHifEcxKswCKUt3YQo,
+Preconfigured Public/6iArKUXxhUJqS7kCaPNhwMWt3ro71PDyBj7jwAyE2VQV,
 Preconfigured Private/3oCG8gqdKLMegw4rRfyaMQvuPHpcASt7xwttsmnZLSkw,
 Preconfigured Private/AKTcXgJ1xoynta1Ec7y6Jso1z1JQtHqd7aPQ1h9er6xX,
 / Public/8DstRgMQrB2N9a7ymv98RDDbt8nctrP9ZzaNRSpKDZSu,
@@ -118,9 +118,80 @@ wallet account get --account-id <TAB>
 # Shows: Public/...  Private/...
 ```
 
+## Bash
+
+Works with bash 4+. The `bash-completion` package is required for auto-sourcing from
+`/etc/bash_completion.d/`; without it, source the file directly from `~/.bashrc` instead.
+
+### Features
+
+- Full completion for all wallet subcommands
+- Contextual option completion for each command
+- Dynamic account ID completion via `wallet account list`
+- Falls back to `Public/` / `Private/` prefixes when no accounts are available
+
+Note that only accounts created by the user auto-complete (same filtering as zsh — see above).
+
+### Installation
+
+#### Option A — source directly from `~/.bashrc` (works everywhere)
+
+```sh
+echo "source $(pwd)/completions/bash/wallet" >> ~/.bashrc
+exec bash
+```
+
+#### Option B — system-wide via `bash-completion`
+
+1. Copy the file:
+
+   ```sh
+   cp ./bash/wallet /etc/bash_completion.d/wallet
+   ```
+
+2. Ensure `bash-completion` is initialised in every interactive shell. On many Linux
+   distributions (e.g. Fedora) it is only sourced for **login** shells via
+   `/etc/profile.d/bash_completion.sh`. For non-login shells (e.g. a bash session started
+   inside zsh), add this to `~/.bashrc`:
+
+   ```sh
+   [[ -f /usr/share/bash-completion/bash_completion ]] && source /usr/share/bash-completion/bash_completion
+   ```
+
+3. Reload your shell:
+
+   ```sh
+   exec bash
+   ```
+
+### Requirements
+
+The completion script calls `wallet account list` to dynamically fetch account IDs. Ensure the `wallet` command is in your `$PATH`.
+
+### Usage
+
+```sh
+# Main commands
+wallet <TAB>
+
+# Account subcommands
+wallet account <TAB>
+
+# Options for auth-transfer send
+wallet auth-transfer send --<TAB>
+
+# Account types when creating
+wallet account new <TAB>
+# Shows: public  private
+
+# Account IDs (fetched dynamically)
+wallet account get --account-id <TAB>
+# Shows: Public/...  Private/...
+```
+
 ## Troubleshooting
 
-### Completions not appearing
+### Zsh completions not appearing
 
 1. Check that `compinit` is called in your `.zshrc`
 2. Rebuild the completion cache:

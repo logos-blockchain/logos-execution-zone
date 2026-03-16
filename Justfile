@@ -37,9 +37,15 @@ run-sequencer:
 
 # Run Indexer
 [working-directory: 'indexer/service']
-run-indexer:
+run-indexer mock="":
     @echo "🔍 Running indexer"
-    RUST_LOG=info RISC0_DEV_MODE=1 cargo run --release -p indexer_service configs/indexer_config.json
+    @if [ "{{mock}}" = "mock" ]; then \
+        echo "🧪 Using mock data"; \
+        RUST_LOG=info RISC0_DEV_MODE=1 cargo run --release --features mock-responses -p indexer_service configs/indexer_config.json; \
+    else \
+        echo "🚀 Using real data"; \
+        RUST_LOG=info RISC0_DEV_MODE=1 cargo run --release -p indexer_service configs/indexer_config.json; \
+    fi
 
 # Run Explorer
 [working-directory: 'explorer_service']
@@ -58,4 +64,6 @@ clean:
     @echo "🧹 Cleaning run artifacts"
     rm -rf sequencer_runner/bedrock_signing_key
     rm -rf sequencer_runner/rocksdb
+    rm -rf indexer/service/rocksdb
     rm -rf wallet/configs/debug/storage.json
+    cd bedrock && docker compose down -v

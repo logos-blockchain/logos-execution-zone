@@ -22,8 +22,16 @@ pub struct SharedSecretKey(pub [u8; 32]);
 pub struct EncryptionScheme;
 
 #[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
-#[cfg_attr(any(feature = "host", test), derive(Debug, Clone, PartialEq, Eq))]
+#[cfg_attr(any(feature = "host", test), derive(Clone, PartialEq, Eq))]
 pub struct Ciphertext(pub(crate) Vec<u8>);
+
+#[cfg(any(feature = "host", test))]
+impl std::fmt::Debug for Ciphertext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let hex: String = self.0.iter().map(|b| format!("{b:02x}")).collect();
+        write!(f, "Ciphertext({hex})")
+    }
+}
 
 impl EncryptionScheme {
     pub fn encrypt(
@@ -75,6 +83,17 @@ impl EncryptionScheme {
         Self::symmetric_transform(&mut buffer, shared_secret, commitment, output_index);
 
         let mut cursor = Cursor::new(buffer.as_slice());
-        Account::from_cursor(&mut cursor).ok()
+        Account::from_cursor(&mut cursor)
+            .inspect_err(|err| {
+                println!(
+                    "Failed to decode {ciphertext:?} \n
+                      with secret {:?} ,\n 
+                      commitment {commitment:?} ,\n
+                      and output_index {output_index} ,\n
+                      with error {err:?}",
+                    shared_secret.0
+                )
+            })
+            .ok()
     }
 }

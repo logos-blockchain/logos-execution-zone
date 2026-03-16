@@ -10,8 +10,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::{SharedSecretKey, encryption::Scalar};
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Secp256k1Point(pub Vec<u8>);
+
+impl std::fmt::Debug for Secp256k1Point {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let hex: String = self.0.iter().map(|b| format!("{b:02x}")).collect();
+        write!(f, "Secp256k1Point({hex})")
+    }
+}
 
 impl Secp256k1Point {
     pub fn from_scalar(value: Scalar) -> Secp256k1Point {

@@ -21,8 +21,8 @@ humantime-serde.workspace = true
 humantime.workspace = true
 tokio = { workspace = true, features = ["macros"] }
 clap.workspace = true
+base58.workspace = true
 base64.workspace = true
-bytemuck.workspace = true
 borsh.workspace = true
 hex.workspace = true
 rand.workspace = true

@@ -1766,6 +1766,7 @@ dependencies = [
  "serde_with",
  "sha2",
  "thiserror 2.0.18",
+ "tokio-retry",
  "url",
 ]
 
@@ -8988,9 +8989,9 @@ dependencies = [
  "amm_core",
  "anyhow",
  "async-stream",
+ "base58",
  "base64 0.22.1",
  "borsh",
- "bytemuck",
  "clap",
  "common",
  "env_logger",

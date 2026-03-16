@@ -62,9 +62,10 @@ impl KeyChain {
     pub fn calculate_shared_secret_receiver(
         &self,
         ephemeral_public_key_sender: EphemeralPublicKey,
+        index: Option<u32>,
     ) -> SharedSecretKey {
         SharedSecretKey::new(
-            &self.secret_spending_key.generate_viewing_secret_key(None),
+            &self.secret_spending_key.generate_viewing_secret_key(index),
             &ephemeral_public_key_sender,
         )
     }
@@ -78,6 +79,9 @@ mod tests {
     use rand::RngCore;
 
     use super::*;
+    use crate::key_management::{
+        ephemeral_key_holder::EphemeralKeyHolder, key_tree::KeyTreePrivate,
+    };
 
     #[test]
     fn test_new_os_random() {
@@ -101,8 +105,8 @@ mod tests {
         let ephemeral_public_key_sender = EphemeralPublicKey::from_scalar(scalar);
 
         // Calculate shared secret
-        let _shared_secret =
-            account_id_key_holder.calculate_shared_secret_receiver(ephemeral_public_key_sender);
+        let _shared_secret = account_id_key_holder
+            .calculate_shared_secret_receiver(ephemeral_public_key_sender, None);
     }
 
     #[test]
@@ -149,5 +153,41 @@ mod tests {
             "Viewing public key {:?}",
             hex::encode(viewing_public_key.to_bytes())
         );
+    }
+
+    fn account_with_chain_index_2_for_tests() -> KeyChain {
+        let seed = SeedHolder::new_os_random();
+        let mut key_tree_private = KeyTreePrivate::new(&seed);
+
+        // /0
+        key_tree_private.generate_new_node_layered().unwrap();
+        // /1
+        key_tree_private.generate_new_node_layered().unwrap();
+        // /0/0
+        key_tree_private.generate_new_node_layered().unwrap();
+        // /2
+        let (second_child_id, _) = key_tree_private.generate_new_node_layered().unwrap();
+
+        key_tree_private
+            .get_node(second_child_id)
+            .unwrap()
+            .value
+            .0
+            .clone()
+    }
+
+    #[test]
+    fn test_non_trivial_chain_index() {
+        let keys = account_with_chain_index_2_for_tests();
+
+        let eph_key_holder = EphemeralKeyHolder::new(&keys.nullifer_public_key);
+
+        let key_sender = eph_key_holder.calculate_shared_secret_sender(&keys.viewing_public_key);
+        let key_receiver = keys.calculate_shared_secret_receiver(
+            eph_key_holder.generate_ephemeral_public_key(),
+            Some(2),
+        );
+
+        assert_eq!(key_sender.0, key_receiver.0);
     }
 }

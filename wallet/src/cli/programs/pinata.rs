@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use clap::Subcommand;
 use common::{PINATA_BASE58, transaction::NSSATransaction};
+use nssa::{Account, AccountId};
 
 use crate::{
     AccDecodeData::Decode,
@@ -102,17 +103,17 @@ impl WalletSubcommand for PinataProgramSubcommandPublic {
                 pinata_account_id,
                 winner_account_id,
             } => {
-                let pinata_account_id = pinata_account_id.parse().unwrap();
+                let pinata_account_id = pinata_account_id.parse()?;
+                let winner_account_id: AccountId = winner_account_id.parse()?;
+
+                ensure_public_recipient_initialized(wallet_core, winner_account_id).await?;
+
                 let solution = find_solution(wallet_core, pinata_account_id)
                     .await
                     .context("failed to compute solution")?;
 
                 let res = Pinata(wallet_core)
-                    .claim(
-                        pinata_account_id,
-                        winner_account_id.parse().unwrap(),
-                        solution,
-                    )
+                    .claim(pinata_account_id, winner_account_id, solution)
                     .await?;
 
                 println!("Results of tx send are {res:#?}");
@@ -138,8 +139,11 @@ impl WalletSubcommand for PinataProgramSubcommandPrivate {
                 pinata_account_id,
                 winner_account_id,
             } => {
-                let pinata_account_id = pinata_account_id.parse().unwrap();
-                let winner_account_id = winner_account_id.parse().unwrap();
+                let pinata_account_id = pinata_account_id.parse()?;
+                let winner_account_id: AccountId = winner_account_id.parse()?;
+
+                ensure_private_owned_recipient_initialized(wallet_core, winner_account_id)?;
+
                 let solution = find_solution(wallet_core, pinata_account_id)
                     .await
                     .context("failed to compute solution")?;
@@ -188,7 +192,51 @@ impl WalletSubcommand for PinataProgramSubcommand {
     }
 }
 
-async fn find_solution(wallet: &WalletCore, pinata_account_id: nssa::AccountId) -> Result<u128> {
+async fn ensure_public_recipient_initialized(
+    wallet_core: &WalletCore,
+    winner_account_id: AccountId,
+) -> Result<()> {
+    let account = wallet_core
+        .get_account_public(winner_account_id)
+        .await
+        .with_context(|| format!("failed to fetch recipient account Public/{winner_account_id}"))?;
+
+    if account == Account::default() {
+        anyhow::bail!(
+            "Recipient account Public/{winner_account_id} is uninitialized.\n\
+             Initialize it first:\n  \
+             wallet auth-transfer init --account-id Public/{winner_account_id}"
+        );
+    }
+
+    Ok(())
+}
+
+fn ensure_private_owned_recipient_initialized(
+    wallet_core: &WalletCore,
+    winner_account_id: AccountId,
+) -> Result<()> {
+    let Some(account) = wallet_core.get_account_private(winner_account_id) else {
+        anyhow::bail!(
+            "Recipient account Private/{winner_account_id} is not found in this wallet.\n\
+             `wallet pinata claim --to Private/...` supports owned private accounts only."
+        );
+    };
+
+    if account == Account::default() {
+        anyhow::bail!(
+            "Recipient account Private/{winner_account_id} is uninitialized.\n\
+             Initialize it first:\n  \
+             wallet auth-transfer init --account-id Private/{winner_account_id}\n\
+             Then sync private state:\n  \
+             wallet account sync-private"
+        );
+    }
+
+    Ok(())
+}
+
+async fn find_solution(wallet: &WalletCore, pinata_account_id: AccountId) -> Result<u128> {
     let account = wallet.get_account_public(pinata_account_id).await?;
     let data: [u8; 33] = account
         .data
