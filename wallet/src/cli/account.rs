@@ -3,6 +3,7 @@ use clap::Subcommand;
 use itertools::Itertools as _;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use nssa::{Account, PublicKey, program::Program};
+use serde::Serialize;
 use token_core::{TokenDefinition, TokenHolding};
 
 use crate::{
@@ -159,41 +160,88 @@ impl WalletSubcommand for NewSubcommand {
     }
 }
 
-/// Formats account details for display, returning (description, json_view)
-fn format_account_details(account: &Account) -> (String, String) {
+#[derive(Debug, Serialize)]
+pub struct TokenDefinitionAccountView {
+    pub account_type: String,
+    pub name: String,
+    pub total_supply: u128,
+}
+
+impl From<TokenDefinition> for TokenDefinitionAccountView {
+    fn from(value: TokenDefinition) -> Self {
+        let (sub_type, name, total_supply) = match value {
+            TokenDefinition::Fungible {
+                name, total_supply, ..
+            } => ("fungible", name, total_supply),
+            TokenDefinition::NonFungible {
+                name,
+                printable_supply,
+                ..
+            } => ("non-fungible", name, printable_supply),
+        };
+        Self {
+            account_type: format!("Token definition ({sub_type})"),
+            name,
+            total_supply,
+        }
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct TokenHoldingAccountView {
+    pub account_type: String,
+    pub definition_id: String,
+    pub balance: u128,
+}
+
+impl From<TokenHolding> for TokenHoldingAccountView {
+    fn from(value: TokenHolding) -> Self {
+        let (sub_type, balance) = match &value {
+            TokenHolding::Fungible { balance, .. } => ("fungible", *balance),
+            TokenHolding::NftMaster { print_balance, .. } => ("NFT master", *print_balance),
+            TokenHolding::NftPrintedCopy { owned, .. } => {
+                ("NFT printed copy", if *owned { 1 } else { 0 })
+            }
+        };
+        Self {
+            account_type: format!("Token holding ({sub_type})"),
+            definition_id: value.definition_id().to_string(),
+            balance,
+        }
+    }
+}
+
+/// Formats program-specific account details for display.
+/// Returns Some((description, json_view)) for program-specific info, or None if no extra info.
+fn format_program_details(account: &Account) -> Option<(String, String)> {
     let auth_tr_prog_id = Program::authenticated_transfer_program().id();
     let token_prog_id = Program::token().id();
 
     match &account.program_owner {
-        o if *o == auth_tr_prog_id => (
-            "Account owned by authenticated transfer program".to_string(),
-            serde_json::to_string(&account).unwrap(),
-        ),
-        o if *o == token_prog_id => {
+        _ if account.program_owner == auth_tr_prog_id => None,
+        _ if account.program_owner == token_prog_id => {
             if let Ok(token_def) = TokenDefinition::try_from(&account.data) {
-                (
-                    "Definition account owned by token program".to_string(),
-                    serde_json::to_string(&token_def).unwrap(),
-                )
+                let acc_view: TokenDefinitionAccountView = token_def.into();
+                Some((
+                    "Token definition".to_string(),
+                    serde_json::to_string(&acc_view).unwrap(),
+                ))
             } else if let Ok(token_hold) = TokenHolding::try_from(&account.data) {
-                (
-                    "Holding account owned by token program".to_string(),
-                    serde_json::to_string(&token_hold).unwrap(),
-                )
+                let acc_view: TokenHoldingAccountView = token_hold.into();
+                Some((
+                    "Token holding".to_string(),
+                    serde_json::to_string(&acc_view).unwrap(),
+                ))
             } else {
-                let account_hr: HumanReadableAccount = account.clone().into();
-                (
-                    "Unknown token program account".to_string(),
-                    serde_json::to_string(&account_hr).unwrap(),
-                )
+                None
             }
         }
         _ => {
             let account_hr: HumanReadableAccount = account.clone().into();
-            (
-                "Account".to_string(),
+            Some((
+                "Account data".to_string(),
                 serde_json::to_string(&account_hr).unwrap(),
-            )
+            ))
         }
     }
 }
@@ -270,9 +318,13 @@ impl WalletSubcommand for AccountSubcommand {
                     return Ok(SubcommandReturnValue::Empty);
                 }
 
-                let (description, json_view) = format_account_details(&account);
-                println!("{description}");
-                println!("{json_view}");
+                // Always show native balance first
+                println!("Native balance: {}", account.balance);
+
+                // Then show program-specific details if any
+                if let Some((description, json_view)) = format_program_details(&account) {
+                    println!("{description}: {json_view}");
+                }
 
                 if keys {
                     display_keys(wallet_core)?;
@@ -345,6 +397,14 @@ impl WalletSubcommand for AccountSubcommand {
                     return Ok(SubcommandReturnValue::Empty);
                 }
 
+                // Helper to print account details
+                let print_account_details = |account: &Account| {
+                    println!("  Native balance: {}", account.balance);
+                    if let Some((description, json_view)) = format_program_details(account) {
+                        println!("  {description}: {json_view}");
+                    }
+                };
+
                 // Detailed listing with --long flag
                 // Preconfigured public accounts
                 for id in user_data.default_pub_account_signing_keys.keys().copied() {
@@ -354,9 +414,7 @@ impl WalletSubcommand for AccountSubcommand {
                     );
                     match wallet_core.get_account_public(id).await {
                         Ok(account) if account != Account::default() => {
-                            let (description, json_view) = format_account_details(&account);
-                            println!("  {description}");
-                            println!("  {json_view}");
+                            print_account_details(&account);
                         }
                         Ok(_) => println!("  Uninitialized"),
                         Err(e) => println!("  Error fetching account: {e}"),
@@ -371,9 +429,7 @@ impl WalletSubcommand for AccountSubcommand {
                     );
                     match wallet_core.get_account_private(id) {
                         Some(account) if account != Account::default() => {
-                            let (description, json_view) = format_account_details(&account);
-                            println!("  {description}");
-                            println!("  {json_view}");
+                            print_account_details(&account);
                         }
                         Some(_) => println!("  Uninitialized"),
                         None => println!("  Not found in local storage"),
@@ -388,9 +444,7 @@ impl WalletSubcommand for AccountSubcommand {
                     );
                     match wallet_core.get_account_public(*id).await {
                         Ok(account) if account != Account::default() => {
-                            let (description, json_view) = format_account_details(&account);
-                            println!("  {description}");
-                            println!("  {json_view}");
+                            print_account_details(&account);
                         }
                         Ok(_) => println!("  Uninitialized"),
                         Err(e) => println!("  Error fetching account: {e}"),
@@ -405,9 +459,7 @@ impl WalletSubcommand for AccountSubcommand {
                     );
                     match wallet_core.get_account_private(*id) {
                         Some(account) if account != Account::default() => {
-                            let (description, json_view) = format_account_details(&account);
-                            println!("  {description}");
-                            println!("  {json_view}");
+                            print_account_details(&account);
                         }
                         Some(_) => println!("  Uninitialized"),
                         None => println!("  Not found in local storage"),
