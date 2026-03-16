@@ -1,12 +1,6 @@
-#![expect(
-    clippy::shadow_unrelated,
-    clippy::tests_outside_test_module,
-    reason = "We don't care about these in tests"
-)]
+use std::{str::FromStr, time::Duration};
 
-use std::{str::FromStr as _, time::Duration};
-
-use anyhow::{Context as _, Result};
+use anyhow::{Context, Result};
 use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, fetch_privacy_preserving_tx,
     format_private_account_id, format_public_account_id, verify_commitment_is_in_state,
@@ -14,7 +8,6 @@ use integration_tests::{
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use log::info;
 use nssa::{AccountId, program::Program};
-use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 use wallet::cli::{
     Command, SubcommandReturnValue,
@@ -69,8 +62,10 @@ async fn sync_private_account_with_non_zero_chain_index() -> Result<()> {
 
     // Send to this account using claiming path (using npk and vpk instead of account ID)
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: format_private_account_id(from),
+        from: Some(format_private_account_id(from)),
+        from_label: None,
         to: None,
+        to_label: None,
         to_npk: Some(hex::encode(to_keys.nullifier_public_key.0)),
         to_vpk: Some(hex::encode(to_keys.viewing_public_key.0)),
         amount: 100,
@@ -94,7 +89,7 @@ async fn sync_private_account_with_non_zero_chain_index() -> Result<()> {
     assert_eq!(tx.message.new_commitments[0], new_commitment1);
 
     assert_eq!(tx.message.new_commitments.len(), 2);
-    for commitment in tx.message.new_commitments {
+    for commitment in tx.message.new_commitments.into_iter() {
         assert!(verify_commitment_is_in_state(commitment, ctx.sequencer_client()).await);
     }
 
@@ -143,8 +138,10 @@ async fn restore_keys_from_seed() -> Result<()> {
 
     // Send to first private account
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: format_private_account_id(from),
+        from: Some(format_private_account_id(from)),
+        from_label: None,
         to: Some(format_private_account_id(to_account_id1)),
+        to_label: None,
         to_npk: None,
         to_vpk: None,
         amount: 100,
@@ -153,8 +150,10 @@ async fn restore_keys_from_seed() -> Result<()> {
 
     // Send to second private account
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: format_private_account_id(from),
+        from: Some(format_private_account_id(from)),
+        from_label: None,
         to: Some(format_private_account_id(to_account_id2)),
+        to_label: None,
         to_npk: None,
         to_vpk: None,
         amount: 101,
@@ -191,8 +190,10 @@ async fn restore_keys_from_seed() -> Result<()> {
 
     // Send to first public account
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: format_public_account_id(from),
+        from: Some(format_public_account_id(from)),
+        from_label: None,
         to: Some(format_public_account_id(to_account_id3)),
+        to_label: None,
         to_npk: None,
         to_vpk: None,
         amount: 102,
@@ -201,8 +202,10 @@ async fn restore_keys_from_seed() -> Result<()> {
 
     // Send to second public account
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: format_public_account_id(from),
+        from: Some(format_public_account_id(from)),
+        from_label: None,
         to: Some(format_public_account_id(to_account_id4)),
+        to_label: None,
         to_npk: None,
         to_vpk: None,
         amount: 103,
@@ -264,8 +267,10 @@ async fn restore_keys_from_seed() -> Result<()> {
 
     // Test that restored accounts can send transactions
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: format_private_account_id(to_account_id1),
+        from: Some(format_private_account_id(to_account_id1)),
+        from_label: None,
         to: Some(format_private_account_id(to_account_id2)),
+        to_label: None,
         to_npk: None,
         to_vpk: None,
         amount: 10,
@@ -273,8 +278,10 @@ async fn restore_keys_from_seed() -> Result<()> {
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: format_public_account_id(to_account_id3),
+        from: Some(format_public_account_id(to_account_id3)),
+        from_label: None,
         to: Some(format_public_account_id(to_account_id4)),
+        to_label: None,
         to_npk: None,
         to_vpk: None,
         amount: 11,
@@ -306,8 +313,8 @@ async fn restore_keys_from_seed() -> Result<()> {
         .get_account_balance(to_account_id4)
         .await?;
 
-    assert_eq!(acc3, 91); // 102 - 11
-    assert_eq!(acc4, 114); // 103 + 11
+    assert_eq!(acc3.balance, 91); // 102 - 11
+    assert_eq!(acc4.balance, 114); // 103 + 11
 
     info!("Successfully restored keys and verified transactions");
 

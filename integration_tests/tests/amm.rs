@@ -113,9 +113,12 @@ async fn amm_public() -> Result<()> {
 
     // Create new token
     let subcommand = TokenProgramAgnosticSubcommand::New {
-        definition_account_id: format_public_account_id(definition_account_id_1),
-        supply_account_id: format_public_account_id(supply_account_id_1),
-        name: "A NAM1".to_owned(),
+        definition_account_id: Some(format_public_account_id(definition_account_id_1)),
+        definition_account_label: None,
+        supply_account_id: Some(format_public_account_id(supply_account_id_1)),
+        supply_account_label: None,
+        name: "A NAM1".to_string(),
+
         total_supply: 37,
     };
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
@@ -124,8 +127,10 @@ async fn amm_public() -> Result<()> {
 
     // Transfer 7 tokens from `supply_acc` to the account at account_id `recipient_account_id_1`
     let subcommand = TokenProgramAgnosticSubcommand::Send {
-        from: format_public_account_id(supply_account_id_1),
+        from: Some(format_public_account_id(supply_account_id_1)),
+        from_label: None,
         to: Some(format_public_account_id(recipient_account_id_1)),
+        to_label: None,
         to_npk: None,
         to_vpk: None,
         amount: 7,
@@ -137,9 +142,12 @@ async fn amm_public() -> Result<()> {
 
     // Create new token
     let subcommand = TokenProgramAgnosticSubcommand::New {
-        definition_account_id: format_public_account_id(definition_account_id_2),
-        supply_account_id: format_public_account_id(supply_account_id_2),
-        name: "A NAM2".to_owned(),
+        definition_account_id: Some(format_public_account_id(definition_account_id_2)),
+        definition_account_label: None,
+        supply_account_id: Some(format_public_account_id(supply_account_id_2)),
+        supply_account_label: None,
+        name: "A NAM2".to_string(),
+
         total_supply: 37,
     };
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
@@ -148,8 +156,10 @@ async fn amm_public() -> Result<()> {
 
     // Transfer 7 tokens from `supply_acc` to the account at account_id `recipient_account_id_2`
     let subcommand = TokenProgramAgnosticSubcommand::Send {
-        from: format_public_account_id(supply_account_id_2),
+        from: Some(format_public_account_id(supply_account_id_2)),
+        from_label: None,
         to: Some(format_public_account_id(recipient_account_id_2)),
+        to_label: None,
         to_npk: None,
         to_vpk: None,
         amount: 7,
@@ -181,9 +191,12 @@ async fn amm_public() -> Result<()> {
 
     // Send creation tx
     let subcommand = AmmProgramAgnosticSubcommand::New {
-        user_holding_a: format_public_account_id(recipient_account_id_1),
-        user_holding_b: format_public_account_id(recipient_account_id_2),
-        user_holding_lp: format_public_account_id(user_holding_lp),
+        user_holding_a: Some(format_public_account_id(recipient_account_id_1)),
+        user_holding_a_label: None,
+        user_holding_b: Some(format_public_account_id(recipient_account_id_2)),
+        user_holding_b_label: None,
+        user_holding_lp: Some(format_public_account_id(user_holding_lp)),
+        user_holding_lp_label: None,
         balance_a: 3,
         balance_b: 3,
     };
@@ -224,8 +237,10 @@ async fn amm_public() -> Result<()> {
     // Make swap
 
     let subcommand = AmmProgramAgnosticSubcommand::SwapExactInput {
-        user_holding_a: format_public_account_id(recipient_account_id_1),
-        user_holding_b: format_public_account_id(recipient_account_id_2),
+        user_holding_a: Some(format_public_account_id(recipient_account_id_1)),
+        user_holding_a_label: None,
+        user_holding_b: Some(format_public_account_id(recipient_account_id_2)),
+        user_holding_b_label: None,
         amount_in: 2,
         min_amount_out: 1,
         token_definition: definition_account_id_1.to_string(),
@@ -267,8 +282,10 @@ async fn amm_public() -> Result<()> {
     // Make swap
 
     let subcommand = AmmProgramAgnosticSubcommand::SwapExactInput {
-        user_holding_a: format_public_account_id(recipient_account_id_1),
-        user_holding_b: format_public_account_id(recipient_account_id_2),
+        user_holding_a: Some(format_public_account_id(recipient_account_id_1)),
+        user_holding_a_label: None,
+        user_holding_b: Some(format_public_account_id(recipient_account_id_2)),
+        user_holding_b_label: None,
         amount_in: 2,
         min_amount_out: 1,
         token_definition: definition_account_id_2.to_string(),
@@ -310,9 +327,12 @@ async fn amm_public() -> Result<()> {
     // Add liquidity
 
     let subcommand = AmmProgramAgnosticSubcommand::AddLiquidity {
-        user_holding_a: format_public_account_id(recipient_account_id_1),
-        user_holding_b: format_public_account_id(recipient_account_id_2),
-        user_holding_lp: format_public_account_id(user_holding_lp),
+        user_holding_a: Some(format_public_account_id(recipient_account_id_1)),
+        user_holding_a_label: None,
+        user_holding_b: Some(format_public_account_id(recipient_account_id_2)),
+        user_holding_b_label: None,
+        user_holding_lp: Some(format_public_account_id(user_holding_lp)),
+        user_holding_lp_label: None,
         min_amount_lp: 1,
         max_amount_a: 2,
         max_amount_b: 2,
@@ -354,9 +374,12 @@ async fn amm_public() -> Result<()> {
     // Remove liquidity
 
     let subcommand = AmmProgramAgnosticSubcommand::RemoveLiquidity {
-        user_holding_a: format_public_account_id(recipient_account_id_1),
-        user_holding_b: format_public_account_id(recipient_account_id_2),
-        user_holding_lp: format_public_account_id(user_holding_lp),
+        user_holding_a: Some(format_public_account_id(recipient_account_id_1)),
+        user_holding_a_label: None,
+        user_holding_b: Some(format_public_account_id(recipient_account_id_2)),
+        user_holding_b_label: None,
+        user_holding_lp: Some(format_public_account_id(user_holding_lp)),
+        user_holding_lp_label: None,
         balance_lp: 2,
         min_amount_a: 1,
         min_amount_b: 1,

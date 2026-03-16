@@ -8,7 +8,6 @@ use integration_tests::{
 use log::info;
 use nssa::{AccountId, program::Program};
 use nssa_core::{NullifierPublicKey, encryption::shared_key_derivation::Secp256k1Point};
-use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 use wallet::cli::{
     Command, SubcommandReturnValue,
@@ -24,8 +23,10 @@ async fn private_transfer_to_owned_account() -> Result<()> {
     let to: AccountId = ctx.existing_private_accounts()[1];
 
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: format_private_account_id(from),
+        from: Some(format_private_account_id(from)),
+        from_label: None,
         to: Some(format_private_account_id(to)),
+        to_label: None,
         to_npk: None,
         to_vpk: None,
         amount: 100,
@@ -63,8 +64,10 @@ async fn private_transfer_to_foreign_account() -> Result<()> {
     let to_vpk = Secp256k1Point::from_scalar(to_npk.0);
 
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: format_private_account_id(from),
+        from: Some(format_private_account_id(from)),
+        from_label: None,
         to: None,
+        to_label: None,
         to_npk: Some(to_npk_string),
         to_vpk: Some(hex::encode(to_vpk.0)),
         amount: 100,
@@ -87,7 +90,7 @@ async fn private_transfer_to_foreign_account() -> Result<()> {
     assert_eq!(tx.message.new_commitments[0], new_commitment1);
 
     assert_eq!(tx.message.new_commitments.len(), 2);
-    for commitment in tx.message.new_commitments {
+    for commitment in tx.message.new_commitments.into_iter() {
         assert!(verify_commitment_is_in_state(commitment, ctx.sequencer_client()).await);
     }
 
@@ -111,8 +114,10 @@ async fn deshielded_transfer_to_public_account() -> Result<()> {
     assert_eq!(from_acc.balance, 10000);
 
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: format_private_account_id(from),
+        from: Some(format_private_account_id(from)),
+        from_label: None,
         to: Some(format_public_account_id(to)),
+        to_label: None,
         to_npk: None,
         to_vpk: None,
         amount: 100,
@@ -136,7 +141,7 @@ async fn deshielded_transfer_to_public_account() -> Result<()> {
     let acc_2_balance = ctx.sequencer_client().get_account_balance(to).await?;
 
     assert_eq!(from_acc.balance, 9900);
-    assert_eq!(acc_2_balance, 20100);
+    assert_eq!(acc_2_balance.balance, 20100);
 
     info!("Successfully deshielded transfer to public account");
 
@@ -174,8 +179,10 @@ async fn private_transfer_to_owned_account_using_claiming_path() -> Result<()> {
 
     // Send to this account using claiming path (using npk and vpk instead of account ID)
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: format_private_account_id(from),
+        from: Some(format_private_account_id(from)),
+        from_label: None,
         to: None,
+        to_label: None,
         to_npk: Some(hex::encode(to_keys.nullifier_public_key.0)),
         to_vpk: Some(hex::encode(to_keys.viewing_public_key.0)),
         amount: 100,
@@ -199,7 +206,7 @@ async fn private_transfer_to_owned_account_using_claiming_path() -> Result<()> {
     assert_eq!(tx.message.new_commitments[0], new_commitment1);
 
     assert_eq!(tx.message.new_commitments.len(), 2);
-    for commitment in tx.message.new_commitments {
+    for commitment in tx.message.new_commitments.into_iter() {
         assert!(verify_commitment_is_in_state(commitment, ctx.sequencer_client()).await);
     }
 
@@ -222,8 +229,10 @@ async fn shielded_transfer_to_owned_private_account() -> Result<()> {
     let to: AccountId = ctx.existing_private_accounts()[1];
 
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: format_public_account_id(from),
+        from: Some(format_public_account_id(from)),
+        from_label: None,
         to: Some(format_private_account_id(to)),
+        to_label: None,
         to_npk: None,
         to_vpk: None,
         amount: 100,
@@ -246,7 +255,7 @@ async fn shielded_transfer_to_owned_private_account() -> Result<()> {
 
     let acc_from_balance = ctx.sequencer_client().get_account_balance(from).await?;
 
-    assert_eq!(acc_from_balance, 9900);
+    assert_eq!(acc_from_balance.balance, 9900);
     assert_eq!(acc_to.balance, 20100);
 
     info!("Successfully shielded transfer to owned private account");
@@ -264,8 +273,10 @@ async fn shielded_transfer_to_foreign_account() -> Result<()> {
     let from: AccountId = ctx.existing_public_accounts()[0];
 
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: format_public_account_id(from),
+        from: Some(format_public_account_id(from)),
+        from_label: None,
         to: None,
+        to_label: None,
         to_npk: Some(to_npk_string),
         to_vpk: Some(hex::encode(to_vpk.0)),
         amount: 100,
@@ -291,7 +302,7 @@ async fn shielded_transfer_to_foreign_account() -> Result<()> {
         .await
     );
 
-    assert_eq!(acc_1_balance, 9900);
+    assert_eq!(acc_1_balance.balance, 9900);
 
     info!("Successfully shielded transfer to foreign account");
 
@@ -334,8 +345,10 @@ async fn private_transfer_to_owned_account_continuous_run_path() -> Result<()> {
 
     // Send transfer using nullifier and  viewing public keys
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: format_private_account_id(from),
+        from: Some(format_private_account_id(from)),
+        from_label: None,
         to: None,
+        to_label: None,
         to_npk: Some(hex::encode(to_keys.nullifier_public_key.0)),
         to_vpk: Some(hex::encode(to_keys.viewing_public_key.0)),
         amount: 100,
@@ -354,7 +367,7 @@ async fn private_transfer_to_owned_account_continuous_run_path() -> Result<()> {
 
     // Verify commitments are in state
     assert_eq!(tx.message.new_commitments.len(), 2);
-    for commitment in tx.message.new_commitments {
+    for commitment in tx.message.new_commitments.into_iter() {
         assert!(verify_commitment_is_in_state(commitment, ctx.sequencer_client()).await);
     }
 
@@ -383,7 +396,8 @@ async fn initialize_private_account() -> Result<()> {
     };
 
     let command = Command::AuthTransfer(AuthTransferSubcommand::Init {
-        account_id: format_private_account_id(account_id),
+        account_id: Some(format_private_account_id(account_id)),
+        account_label: None,
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 

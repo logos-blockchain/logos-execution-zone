@@ -17,8 +17,10 @@ async fn successful_transfer_to_existing_account() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: format_public_account_id(ctx.existing_public_accounts()[0]),
+        from: Some(format_public_account_id(ctx.existing_public_accounts()[0])),
+        from_label: None,
         to: Some(format_public_account_id(ctx.existing_public_accounts()[1])),
+        to_label: None,
         to_npk: None,
         to_vpk: None,
         amount: 100,
@@ -73,8 +75,10 @@ pub async fn successful_transfer_to_new_account() -> Result<()> {
         .expect("Failed to find newly created account in the wallet storage");
 
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: format_public_account_id(ctx.existing_public_accounts()[0]),
+        from: Some(format_public_account_id(ctx.existing_public_accounts()[0])),
+        from_label: None,
         to: Some(format_public_account_id(new_persistent_account_id)),
+        to_label: None,
         to_npk: None,
         to_vpk: None,
         amount: 100,
@@ -109,8 +113,10 @@ async fn failed_transfer_with_insufficient_balance() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: format_public_account_id(ctx.existing_public_accounts()[0]),
+        from: Some(format_public_account_id(ctx.existing_public_accounts()[0])),
+        from_label: None,
         to: Some(format_public_account_id(ctx.existing_public_accounts()[1])),
+        to_label: None,
         to_npk: None,
         to_vpk: None,
         amount: 1_000_000,
@@ -147,8 +153,10 @@ async fn two_consecutive_successful_transfers() -> Result<()> {
 
     // First transfer
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: format_public_account_id(ctx.existing_public_accounts()[0]),
+        from: Some(format_public_account_id(ctx.existing_public_accounts()[0])),
+        from_label: None,
         to: Some(format_public_account_id(ctx.existing_public_accounts()[1])),
+        to_label: None,
         to_npk: None,
         to_vpk: None,
         amount: 100,
@@ -179,8 +187,10 @@ async fn two_consecutive_successful_transfers() -> Result<()> {
 
     // Second transfer
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: format_public_account_id(ctx.existing_public_accounts()[0]),
+        from: Some(format_public_account_id(ctx.existing_public_accounts()[0])),
+        from_label: None,
         to: Some(format_public_account_id(ctx.existing_public_accounts()[1])),
+        to_label: None,
         to_npk: None,
         to_vpk: None,
         amount: 100,
@@ -226,7 +236,8 @@ async fn initialize_public_account() -> Result<()> {
     };
 
     let command = Command::AuthTransfer(AuthTransferSubcommand::Init {
-        account_id: format_public_account_id(account_id),
+        account_id: Some(format_public_account_id(account_id)),
+        account_label: None,
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
