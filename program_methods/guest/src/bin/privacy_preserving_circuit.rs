@@ -327,7 +327,7 @@ fn compute_circuit_output(
 
                     let nullifier = Nullifier::for_account_initialization(npk);
 
-                    let new_nonce = Nonce::default().private_account_nonce_init(npk);
+                    let new_nonce = Nonce::private_account_nonce_init(npk);
 
                     ((nullifier, DUMMY_COMMITMENT_HASH), new_nonce)
                 };

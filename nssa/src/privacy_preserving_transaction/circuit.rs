@@ -215,7 +215,7 @@ mod tests {
         let expected_recipient_post = Account {
             program_owner: program.id(),
             balance: balance_to_move,
-            nonce: Nonce::default().private_account_nonce_init(&recipient_keys.npk()),
+            nonce: Nonce::private_account_nonce_init(&recipient_keys.npk()),
             data: Data::default(),
         };
 
@@ -306,7 +306,7 @@ mod tests {
         let expected_private_account_2 = Account {
             program_owner: program.id(),
             balance: balance_to_move,
-            nonce: Nonce::default().private_account_nonce_init(&recipient_keys.npk()),
+            nonce: Nonce::private_account_nonce_init(&recipient_keys.npk()),
             ..Default::default()
         };
         let expected_new_commitments = vec![

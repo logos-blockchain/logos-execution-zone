@@ -1116,7 +1116,7 @@ pub mod tests {
             &recipient_keys.npk(),
             &Account {
                 program_owner: Program::authenticated_transfer_program().id(),
-                nonce: Nonce::default().private_account_nonce_init(&recipient_keys.npk()),
+                nonce: Nonce::private_account_nonce_init(&recipient_keys.npk()),
                 balance: balance_to_move,
                 ..Account::default()
             },
