@@ -139,7 +139,7 @@ impl RocksDBIO {
             )
             .map_err(|rerr| DbError::rocksdb_cast_message(rerr, None))?;
 
-        self.put_block_batch(block, [0; 32])?;
+        self.put_block(block, [0; 32])?;
         Ok(())
     }
 
@@ -235,7 +235,7 @@ impl RocksDBIO {
 
     // Block
 
-    pub fn put_block_batch(&self, block: Block, l1_lib_header: [u8; 32]) -> DbResult<()> {
+    pub fn put_block(&self, block: Block, l1_lib_header: [u8; 32]) -> DbResult<()> {
         let cf_block = self.block_column();
         let cf_hti = self.hash_to_id_column();
         let cf_tti: Arc<BoundColumnFamily<'_>> = self.tx_hash_to_id_column();

@@ -118,6 +118,6 @@ impl IndexerStore {
         // to represent correct block finality
         block.bedrock_status = BedrockStatus::Finalized;
 
-        Ok(self.dbio.put_block_batch(block, l1_header.into())?)
+        Ok(self.dbio.put_block(block, l1_header.into())?)
     }
 }
