@@ -99,7 +99,10 @@ impl IndexerStore {
         Ok(self.dbio.calculate_state_for_id(block_id)?)
     }
 
-    pub fn final_state_db(&self) -> Result<V02State> {
+    /// Recalculation of final state directly from DB
+    ///
+    /// Used for indexer healthcheck
+    pub fn recalculate_final_state(&self) -> Result<V02State> {
         Ok(self.dbio.final_state()?)
     }
 
