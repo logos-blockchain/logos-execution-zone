@@ -4,7 +4,7 @@ use amm_core::{
     PoolDefinition, compute_liquidity_token_pda, compute_liquidity_token_pda_seed,
     compute_pool_pda, compute_vault_pda, compute_vault_pda_seed,
 };
-#[cfg(feature = "with-nssa")]
+#[cfg(feature = "nssa")]
 use nssa::{
     PrivateKey, PublicKey, PublicTransaction, V02State, program::Program, public_transaction,
 };
@@ -25,16 +25,16 @@ struct BalanceForTests;
 struct ChainedCallForTests;
 struct IdForTests;
 struct AccountWithMetadataForTests;
-#[cfg(feature = "with-nssa")]
+#[cfg(feature = "nssa")]
 struct PrivateKeysForTests;
-#[cfg(feature = "with-nssa")]
+#[cfg(feature = "nssa")]
 struct IdForExeTests;
-#[cfg(feature = "with-nssa")]
+#[cfg(feature = "nssa")]
 struct BalanceForExeTests;
-#[cfg(feature = "with-nssa")]
+#[cfg(feature = "nssa")]
 struct AccountsForExeTests;
 
-#[cfg(feature = "with-nssa")]
+#[cfg(feature = "nssa")]
 impl PrivateKeysForTests {
     fn user_token_a_key() -> PrivateKey {
         PrivateKey::try_new([31; 32]).expect("Keys constructor expects valid private key")
@@ -1008,7 +1008,7 @@ impl AccountWithMetadataForTests {
     }
 }
 
-#[cfg(feature = "with-nssa")]
+#[cfg(feature = "nssa")]
 impl BalanceForExeTests {
     fn user_token_a_holding_init() -> u128 {
         10_000
@@ -1173,7 +1173,7 @@ impl BalanceForExeTests {
     }
 }
 
-#[cfg(feature = "with-nssa")]
+#[cfg(feature = "nssa")]
 impl IdForExeTests {
     fn pool_definition_id() -> AccountId {
         amm_core::compute_pool_pda(
@@ -1233,7 +1233,7 @@ impl IdForExeTests {
     }
 }
 
-#[cfg(feature = "with-nssa")]
+#[cfg(feature = "nssa")]
 impl AccountsForExeTests {
     fn user_token_a_holding() -> Account {
         Account {
@@ -2645,7 +2645,7 @@ fn new_definition_lp_symmetric_amounts() {
     assert_eq!(chained_call_lp, expected_lp_call);
 }
 
-#[cfg(feature = "with-nssa")]
+#[cfg(feature = "nssa")]
 fn state_for_amm_tests() -> V02State {
     let initial_data = [];
     let mut state = V02State::new_with_genesis_accounts(&initial_data, &[]);
@@ -2689,7 +2689,7 @@ fn state_for_amm_tests() -> V02State {
     state
 }
 
-#[cfg(feature = "with-nssa")]
+#[cfg(feature = "nssa")]
 fn state_for_amm_tests_with_new_def() -> V02State {
     let initial_data = [];
     let mut state = V02State::new_with_genesis_accounts(&initial_data, &[]);
@@ -2712,7 +2712,7 @@ fn state_for_amm_tests_with_new_def() -> V02State {
     state
 }
 
-#[cfg(feature = "with-nssa")]
+#[cfg(feature = "nssa")]
 #[test]
 fn test_simple_amm_remove() {
     let mut state = state_for_amm_tests();
@@ -2772,7 +2772,7 @@ fn test_simple_amm_remove() {
     assert_eq!(user_token_lp_post, expected_user_token_lp);
 }
 
-#[cfg(feature = "with-nssa")]
+#[cfg(feature = "nssa")]
 #[test]
 fn test_simple_amm_new_definition_inactive_initialized_pool_and_uninit_user_lp() {
     let mut state = state_for_amm_tests_with_new_def();
@@ -2853,7 +2853,7 @@ fn test_simple_amm_new_definition_inactive_initialized_pool_and_uninit_user_lp()
     assert_eq!(user_token_lp_post, expected_user_token_lp);
 }
 
-#[cfg(feature = "with-nssa")]
+#[cfg(feature = "nssa")]
 #[test]
 fn test_simple_amm_new_definition_inactive_initialized_pool_init_user_lp() {
     let mut state = state_for_amm_tests_with_new_def();
@@ -2938,7 +2938,7 @@ fn test_simple_amm_new_definition_inactive_initialized_pool_init_user_lp() {
     assert_eq!(user_token_lp_post, expected_user_token_lp);
 }
 
-#[cfg(feature = "with-nssa")]
+#[cfg(feature = "nssa")]
 #[test]
 fn test_simple_amm_new_definition_uninitialized_pool() {
     let mut state = state_for_amm_tests_with_new_def();
@@ -3011,7 +3011,7 @@ fn test_simple_amm_new_definition_uninitialized_pool() {
     assert_eq!(user_token_lp_post, expected_user_token_lp);
 }
 
-#[cfg(feature = "with-nssa")]
+#[cfg(feature = "nssa")]
 #[test]
 fn test_simple_amm_add() {
     let mut state = state_for_amm_tests();
@@ -3074,7 +3074,7 @@ fn test_simple_amm_add() {
     assert_eq!(user_token_lp_post, expected_user_token_lp);
 }
 
-#[cfg(feature = "with-nssa")]
+#[cfg(feature = "nssa")]
 #[test]
 fn test_simple_amm_swap_1() {
     let mut state = state_for_amm_tests();
@@ -3126,7 +3126,7 @@ fn test_simple_amm_swap_1() {
     assert_eq!(user_token_b_post, expected_user_token_b);
 }
 
-#[cfg(feature = "with-nssa")]
+#[cfg(feature = "nssa")]
 #[test]
 fn test_simple_amm_swap_2() {
     let mut state = state_for_amm_tests();

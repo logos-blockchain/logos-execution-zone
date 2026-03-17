@@ -14,4 +14,4 @@ token_core.workspace = true
 amm_core.workspace = true
 
 [features]
-with-nssa = ["nssa"]
+nssa = ["dep:nssa"]
