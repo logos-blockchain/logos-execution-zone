@@ -12,10 +12,12 @@ pub struct ProgramDeploymentTransaction {
 }
 
 impl ProgramDeploymentTransaction {
-    pub fn new(message: Message) -> Self {
+    #[must_use]
+    pub const fn new(message: Message) -> Self {
         Self { message }
     }
 
+    #[must_use]
     pub fn into_message(self) -> Message {
         self.message
     }
@@ -33,6 +35,7 @@ impl ProgramDeploymentTransaction {
         }
     }
 
+    #[must_use]
     pub fn hash(&self) -> [u8; 32] {
         let bytes = self.to_bytes();
         let mut hasher = sha2::Sha256::new();
@@ -40,7 +43,8 @@ impl ProgramDeploymentTransaction {
         hasher.finalize_fixed().into()
     }
 
-    pub fn affected_public_account_ids(&self) -> Vec<AccountId> {
+    #[must_use]
+    pub const fn affected_public_account_ids(&self) -> Vec<AccountId> {
         vec![]
     }
 }

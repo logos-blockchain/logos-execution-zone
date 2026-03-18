@@ -1,5 +1,5 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use risc0_zkvm::sha::{Impl, Sha256};
+use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde::{Deserialize, Serialize};
 
 use crate::{Commitment, account::AccountId};
@@ -16,7 +16,12 @@ impl From<&NullifierPublicKey> for AccountId {
         let mut bytes = [0; 64];
         bytes[0..32].copy_from_slice(PRIVATE_ACCOUNT_ID_PREFIX);
         bytes[32..].copy_from_slice(&value.0);
-        AccountId::new(Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap())
+        Self::new(
+            Impl::hash_bytes(&bytes)
+                .as_bytes()
+                .try_into()
+                .expect("Conversion should not fail"),
+        )
     }
 }
 
@@ -28,15 +33,20 @@ impl AsRef<[u8]> for NullifierPublicKey {
 
 impl From<&NullifierSecretKey> for NullifierPublicKey {
     fn from(value: &NullifierSecretKey) -> Self {
-        let mut bytes = Vec::new();
         const PREFIX: &[u8; 8] = b"LEE/keys";
         const SUFFIX_1: &[u8; 1] = &[7];
         const SUFFIX_2: &[u8; 23] = &[0; 23];
+        let mut bytes = Vec::new();
         bytes.extend_from_slice(PREFIX);
         bytes.extend_from_slice(value);
         bytes.extend_from_slice(SUFFIX_1);
         bytes.extend_from_slice(SUFFIX_2);
-        Self(Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap())
+        Self(
+            Impl::hash_bytes(&bytes)
+                .as_bytes()
+                .try_into()
+                .expect("hash should be exactly 32 bytes long"),
+        )
     }
 }
 
@@ -45,11 +55,26 @@ pub type NullifierSecretKey = [u8; 32];
 #[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(
     any(feature = "host", test),
-    derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)
+    derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)
 )]
 pub struct Nullifier(pub(super) [u8; 32]);
 
+#[cfg(any(feature = "host", test))]
+impl std::fmt::Debug for Nullifier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use std::fmt::Write as _;
+
+        let hex: String = self.0.iter().fold(String::new(), |mut acc, b| {
+            write!(acc, "{b:02x}").expect("writing to string should not fail");
+            acc
+        });
+        write!(f, "Nullifier({hex})")
+    }
+}
+
 impl Nullifier {
+    /// Computes a nullifier for an account update.
+    #[must_use]
     pub fn for_account_update(commitment: &Commitment, nsk: &NullifierSecretKey) -> Self {
         const UPDATE_PREFIX: &[u8; 32] = b"/NSSA/v0.2/Nullifier/Update/\x00\x00\x00\x00";
         let mut bytes = UPDATE_PREFIX.to_vec();
@@ -58,6 +83,8 @@ impl Nullifier {
         Self(Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap())
     }
 
+    /// Computes a nullifier for an account initialization.
+    #[must_use]
     pub fn for_account_initialization(npk: &NullifierPublicKey) -> Self {
         const INIT_PREFIX: &[u8; 32] = b"/NSSA/v0.2/Nullifier/Initialize/";
         let mut bytes = INIT_PREFIX.to_vec();
@@ -71,8 +98,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_constructor_for_account_update() {
-        let commitment = Commitment((0..32u8).collect::<Vec<_>>().try_into().unwrap());
+    fn constructor_for_account_update() {
+        let commitment = Commitment((0..32_u8).collect::<Vec<_>>().try_into().unwrap());
         let nsk = [0x42; 32];
         let expected_nullifier = Nullifier([
             148, 243, 116, 209, 140, 231, 211, 61, 35, 62, 114, 110, 143, 224, 82, 201, 221, 34,
@@ -83,7 +110,7 @@ mod tests {
     }
 
     #[test]
-    fn test_constructor_for_account_initialization() {
+    fn constructor_for_account_initialization() {
         let npk = NullifierPublicKey([
             112, 188, 193, 129, 150, 55, 228, 67, 88, 168, 29, 151, 5, 92, 23, 190, 17, 162, 164,
             255, 29, 105, 42, 186, 43, 11, 157, 168, 132, 225, 17, 163,
@@ -97,7 +124,7 @@ mod tests {
     }
 
     #[test]
-    fn test_from_secret_key() {
+    fn from_secret_key() {
         let nsk = [
             57, 5, 64, 115, 153, 56, 184, 51, 207, 238, 99, 165, 147, 214, 213, 151, 30, 251, 30,
             196, 134, 22, 224, 211, 237, 120, 136, 225, 188, 220, 249, 28,
@@ -111,7 +138,7 @@ mod tests {
     }
 
     #[test]
-    fn test_account_id_from_nullifier_public_key() {
+    fn account_id_from_nullifier_public_key() {
         let nsk = [
             57, 5, 64, 115, 153, 56, 184, 51, 207, 238, 99, 165, 147, 214, 213, 151, 30, 251, 30,
             196, 134, 22, 224, 211, 237, 120, 136, 225, 188, 220, 249, 28,

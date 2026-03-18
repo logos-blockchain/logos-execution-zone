@@ -15,7 +15,7 @@ use crate::{
     types::WalletHandle,
 };
 
-/// Internal wrapper around WalletCore with mutex for thread safety.
+/// Internal wrapper around `WalletCore` with mutex for thread safety.
 pub(crate) struct WalletWrapper {
     pub core: Mutex<WalletCore>,
 }
@@ -28,11 +28,11 @@ pub(crate) fn get_wallet(
         print_error("Null wallet handle");
         return Err(WalletFfiError::NullPointer);
     }
-    Ok(unsafe { &*(handle as *mut WalletWrapper) })
+    Ok(unsafe { &*handle.cast::<WalletWrapper>() })
 }
 
 /// Helper to get a mutable reference to the wallet wrapper.
-#[allow(dead_code)]
+#[expect(dead_code, reason = "Maybe used later")]
 pub(crate) fn get_wallet_mut(
     handle: *mut WalletHandle,
 ) -> Result<&'static mut WalletWrapper, WalletFfiError> {
@@ -40,13 +40,13 @@ pub(crate) fn get_wallet_mut(
         print_error("Null wallet handle");
         return Err(WalletFfiError::NullPointer);
     }
-    Ok(unsafe { &mut *(handle as *mut WalletWrapper) })
+    Ok(unsafe { &mut *handle.cast::<WalletWrapper>() })
 }
 
-/// Helper to convert a C string to a Rust PathBuf.
+/// Helper to convert a C string to a Rust `PathBuf`.
 fn c_str_to_path(ptr: *const c_char, name: &str) -> Result<PathBuf, WalletFfiError> {
     if ptr.is_null() {
-        print_error(format!("Null pointer for {}", name));
+        print_error(format!("Null pointer for {name}"));
         return Err(WalletFfiError::NullPointer);
     }
 
@@ -54,7 +54,7 @@ fn c_str_to_path(ptr: *const c_char, name: &str) -> Result<PathBuf, WalletFfiErr
     match c_str.to_str() {
         Ok(s) => Ok(PathBuf::from(s)),
         Err(e) => {
-            print_error(format!("Invalid UTF-8 in {}: {}", name, e));
+            print_error(format!("Invalid UTF-8 in {name}: {e}"));
             Err(WalletFfiError::InvalidUtf8)
         }
     }
@@ -63,15 +63,15 @@ fn c_str_to_path(ptr: *const c_char, name: &str) -> Result<PathBuf, WalletFfiErr
 /// Helper to convert a C string to a Rust String.
 fn c_str_to_string(ptr: *const c_char, name: &str) -> Result<String, WalletFfiError> {
     if ptr.is_null() {
-        print_error(format!("Null pointer for {}", name));
+        print_error(format!("Null pointer for {name}"));
         return Err(WalletFfiError::NullPointer);
     }
 
     let c_str = unsafe { CStr::from_ptr(ptr) };
     match c_str.to_str() {
-        Ok(s) => Ok(s.to_string()),
+        Ok(s) => Ok(s.to_owned()),
         Err(e) => {
-            print_error(format!("Invalid UTF-8 in {}: {}", name, e));
+            print_error(format!("Invalid UTF-8 in {name}: {e}"));
             Err(WalletFfiError::InvalidUtf8)
         }
     }
@@ -99,19 +99,16 @@ pub unsafe extern "C" fn wallet_ffi_create_new(
     storage_path: *const c_char,
     password: *const c_char,
 ) -> *mut WalletHandle {
-    let config_path = match c_str_to_path(config_path, "config_path") {
-        Ok(p) => p,
-        Err(_) => return ptr::null_mut(),
+    let Ok(config_path) = c_str_to_path(config_path, "config_path") else {
+        return ptr::null_mut();
     };
 
-    let storage_path = match c_str_to_path(storage_path, "storage_path") {
-        Ok(p) => p,
-        Err(_) => return ptr::null_mut(),
+    let Ok(storage_path) = c_str_to_path(storage_path, "storage_path") else {
+        return ptr::null_mut();
     };
 
-    let password = match c_str_to_string(password, "password") {
-        Ok(s) => s,
-        Err(_) => return ptr::null_mut(),
+    let Ok(password) = c_str_to_string(password, "password") else {
+        return ptr::null_mut();
     };
 
     match WalletCore::new_init_storage(config_path, storage_path, None, password) {
@@ -119,10 +116,10 @@ pub unsafe extern "C" fn wallet_ffi_create_new(
             let wrapper = Box::new(WalletWrapper {
                 core: Mutex::new(core),
             });
-            Box::into_raw(wrapper) as *mut WalletHandle
+            Box::into_raw(wrapper).cast::<WalletHandle>()
         }
         Err(e) => {
-            print_error(format!("Failed to create wallet: {}", e));
+            print_error(format!("Failed to create wallet: {e}"));
             ptr::null_mut()
         }
     }
@@ -147,14 +144,12 @@ pub unsafe extern "C" fn wallet_ffi_open(
     config_path: *const c_char,
     storage_path: *const c_char,
 ) -> *mut WalletHandle {
-    let config_path = match c_str_to_path(config_path, "config_path") {
-        Ok(p) => p,
-        Err(_) => return ptr::null_mut(),
+    let Ok(config_path) = c_str_to_path(config_path, "config_path") else {
+        return ptr::null_mut();
     };
 
-    let storage_path = match c_str_to_path(storage_path, "storage_path") {
-        Ok(p) => p,
-        Err(_) => return ptr::null_mut(),
+    let Ok(storage_path) = c_str_to_path(storage_path, "storage_path") else {
+        return ptr::null_mut();
     };
 
     match WalletCore::new_update_chain(config_path, storage_path, None) {
@@ -162,10 +157,10 @@ pub unsafe extern "C" fn wallet_ffi_open(
             let wrapper = Box::new(WalletWrapper {
                 core: Mutex::new(core),
             });
-            Box::into_raw(wrapper) as *mut WalletHandle
+            Box::into_raw(wrapper).cast::<WalletHandle>()
         }
         Err(e) => {
-            print_error(format!("Failed to open wallet: {}", e));
+            print_error(format!("Failed to open wallet: {e}"));
             ptr::null_mut()
         }
     }
@@ -183,7 +178,7 @@ pub unsafe extern "C" fn wallet_ffi_open(
 pub unsafe extern "C" fn wallet_ffi_destroy(handle: *mut WalletHandle) {
     if !handle.is_null() {
         unsafe {
-            drop(Box::from_raw(handle as *mut WalletWrapper));
+            drop(Box::from_raw(handle.cast::<WalletWrapper>()));
         }
     }
 }
@@ -212,18 +207,17 @@ pub unsafe extern "C" fn wallet_ffi_save(handle: *mut WalletHandle) -> WalletFfi
     let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
-            print_error(format!("Failed to lock wallet: {}", e));
+            print_error(format!("Failed to lock wallet: {e}"));
             return WalletFfiError::InternalError;
         }
     };
 
     match block_on(wallet.store_persistent_data()) {
-        Ok(Ok(())) => WalletFfiError::Success,
-        Ok(Err(e)) => {
-            print_error(format!("Failed to save wallet: {}", e));
+        Ok(()) => WalletFfiError::Success,
+        Err(e) => {
+            print_error(format!("Failed to save wallet: {e}"));
             WalletFfiError::StorageError
         }
-        Err(e) => e,
     }
 }
 
@@ -241,15 +235,14 @@ pub unsafe extern "C" fn wallet_ffi_save(handle: *mut WalletHandle) -> WalletFfi
 /// - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
 #[no_mangle]
 pub unsafe extern "C" fn wallet_ffi_get_sequencer_addr(handle: *mut WalletHandle) -> *mut c_char {
-    let wrapper = match get_wallet(handle) {
-        Ok(w) => w,
-        Err(_) => return ptr::null_mut(),
+    let Ok(wrapper) = get_wallet(handle) else {
+        return ptr::null_mut();
     };
 
     let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
-            print_error(format!("Failed to lock wallet: {}", e));
+            print_error(format!("Failed to lock wallet: {e}"));
             return ptr::null_mut();
         }
     };
@@ -259,7 +252,7 @@ pub unsafe extern "C" fn wallet_ffi_get_sequencer_addr(handle: *mut WalletHandle
     match std::ffi::CString::new(addr) {
         Ok(s) => s.into_raw(),
         Err(e) => {
-            print_error(format!("Invalid sequencer address: {}", e));
+            print_error(format!("Invalid sequencer address: {e}"));
             ptr::null_mut()
         }
     }

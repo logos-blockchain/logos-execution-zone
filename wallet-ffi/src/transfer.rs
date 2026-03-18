@@ -2,13 +2,13 @@
 
 use std::{ffi::CString, ptr};
 
-use common::error::ExecutionFailureKind;
 use nssa::AccountId;
 use wallet::program_facades::native_token_transfer::NativeTokenTransfer;
 
 use crate::{
     block_on,
     error::{print_error, WalletFfiError},
+    map_execution_error,
     types::{FfiBytes32, FfiTransferResult, WalletHandle},
     wallet::get_wallet,
     FfiPrivateAccountKeys,
@@ -61,7 +61,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_public(
     let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
-            print_error(format!("Failed to lock wallet: {}", e));
+            print_error(format!("Failed to lock wallet: {e}"));
             return WalletFfiError::InternalError;
         }
     };
@@ -73,9 +73,9 @@ pub unsafe extern "C" fn wallet_ffi_transfer_public(
     let transfer = NativeTokenTransfer(&wallet);
 
     match block_on(transfer.send_public_transfer(from_id, to_id, amount)) {
-        Ok(Ok(response)) => {
+        Ok(response) => {
             let tx_hash = CString::new(response.tx_hash.to_string())
-                .map(|s| s.into_raw())
+                .map(std::ffi::CString::into_raw)
                 .unwrap_or(ptr::null_mut());
 
             unsafe {
@@ -84,15 +84,14 @@ pub unsafe extern "C" fn wallet_ffi_transfer_public(
             }
             WalletFfiError::Success
         }
-        Ok(Err(e)) => {
-            print_error(format!("Transfer failed: {:?}", e));
+        Err(e) => {
+            print_error(format!("Transfer failed: {e:?}"));
             unsafe {
                 (*out_result).tx_hash = ptr::null_mut();
                 (*out_result).success = false;
             }
             map_execution_error(e)
         }
-        Err(e) => e,
     }
 }
 
@@ -143,7 +142,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded(
     let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
-            print_error(format!("Failed to lock wallet: {}", e));
+            print_error(format!("Failed to lock wallet: {e}"));
             return WalletFfiError::InternalError;
         }
     };
@@ -164,9 +163,9 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded(
     match block_on(
         transfer.send_shielded_transfer_to_outer_account(from_id, to_npk, to_vpk, amount),
     ) {
-        Ok(Ok((response, _shared_key))) => {
+        Ok((response, _shared_key)) => {
             let tx_hash = CString::new(response.tx_hash)
-                .map(|s| s.into_raw())
+                .map(std::ffi::CString::into_raw)
                 .unwrap_or(ptr::null_mut());
 
             unsafe {
@@ -175,15 +174,14 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded(
             }
             WalletFfiError::Success
         }
-        Ok(Err(e)) => {
-            print_error(format!("Transfer failed: {:?}", e));
+        Err(e) => {
+            print_error(format!("Transfer failed: {e:?}"));
             unsafe {
                 (*out_result).tx_hash = ptr::null_mut();
                 (*out_result).success = false;
             }
             map_execution_error(e)
         }
-        Err(e) => e,
     }
 }
 
@@ -234,7 +232,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_deshielded(
     let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
-            print_error(format!("Failed to lock wallet: {}", e));
+            print_error(format!("Failed to lock wallet: {e}"));
             return WalletFfiError::InternalError;
         }
     };
@@ -246,9 +244,9 @@ pub unsafe extern "C" fn wallet_ffi_transfer_deshielded(
     let transfer = NativeTokenTransfer(&wallet);
 
     match block_on(transfer.send_deshielded_transfer(from_id, to_id, amount)) {
-        Ok(Ok((response, _shared_key))) => {
+        Ok((response, _shared_key)) => {
             let tx_hash = CString::new(response.tx_hash)
-                .map(|s| s.into_raw())
+                .map(std::ffi::CString::into_raw)
                 .unwrap_or(ptr::null_mut());
 
             unsafe {
@@ -257,15 +255,14 @@ pub unsafe extern "C" fn wallet_ffi_transfer_deshielded(
             }
             WalletFfiError::Success
         }
-        Ok(Err(e)) => {
-            print_error(format!("Transfer failed: {:?}", e));
+        Err(e) => {
+            print_error(format!("Transfer failed: {e:?}"));
             unsafe {
                 (*out_result).tx_hash = ptr::null_mut();
                 (*out_result).success = false;
             }
             map_execution_error(e)
         }
-        Err(e) => e,
     }
 }
 
@@ -316,7 +313,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private(
     let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
-            print_error(format!("Failed to lock wallet: {}", e));
+            print_error(format!("Failed to lock wallet: {e}"));
             return WalletFfiError::InternalError;
         }
     };
@@ -336,9 +333,9 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private(
 
     match block_on(transfer.send_private_transfer_to_outer_account(from_id, to_npk, to_vpk, amount))
     {
-        Ok(Ok((response, _shared_key))) => {
+        Ok((response, _shared_key)) => {
             let tx_hash = CString::new(response.tx_hash)
-                .map(|s| s.into_raw())
+                .map(std::ffi::CString::into_raw)
                 .unwrap_or(ptr::null_mut());
 
             unsafe {
@@ -347,15 +344,14 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private(
             }
             WalletFfiError::Success
         }
-        Ok(Err(e)) => {
-            print_error(format!("Transfer failed: {:?}", e));
+        Err(e) => {
+            print_error(format!("Transfer failed: {e:?}"));
             unsafe {
                 (*out_result).tx_hash = ptr::null_mut();
                 (*out_result).success = false;
             }
             map_execution_error(e)
         }
-        Err(e) => e,
     }
 }
 
@@ -409,7 +405,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded_owned(
     let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
-            print_error(format!("Failed to lock wallet: {}", e));
+            print_error(format!("Failed to lock wallet: {e}"));
             return WalletFfiError::InternalError;
         }
     };
@@ -421,9 +417,9 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded_owned(
     let transfer = NativeTokenTransfer(&wallet);
 
     match block_on(transfer.send_shielded_transfer(from_id, to_id, amount)) {
-        Ok(Ok((response, _shared_key))) => {
+        Ok((response, _shared_key)) => {
             let tx_hash = CString::new(response.tx_hash)
-                .map(|s| s.into_raw())
+                .map(std::ffi::CString::into_raw)
                 .unwrap_or(ptr::null_mut());
 
             unsafe {
@@ -432,15 +428,14 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded_owned(
             }
             WalletFfiError::Success
         }
-        Ok(Err(e)) => {
-            print_error(format!("Transfer failed: {:?}", e));
+        Err(e) => {
+            print_error(format!("Transfer failed: {e:?}"));
             unsafe {
                 (*out_result).tx_hash = ptr::null_mut();
                 (*out_result).success = false;
             }
             map_execution_error(e)
         }
-        Err(e) => e,
     }
 }
 
@@ -494,7 +489,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private_owned(
     let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
-            print_error(format!("Failed to lock wallet: {}", e));
+            print_error(format!("Failed to lock wallet: {e}"));
             return WalletFfiError::InternalError;
         }
     };
@@ -506,9 +501,9 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private_owned(
     let transfer = NativeTokenTransfer(&wallet);
 
     match block_on(transfer.send_private_transfer_to_owned_account(from_id, to_id, amount)) {
-        Ok(Ok((response, _shared_keys))) => {
+        Ok((response, _shared_keys)) => {
             let tx_hash = CString::new(response.tx_hash)
-                .map(|s| s.into_raw())
+                .map(std::ffi::CString::into_raw)
                 .unwrap_or(ptr::null_mut());
 
             unsafe {
@@ -517,15 +512,14 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private_owned(
             }
             WalletFfiError::Success
         }
-        Ok(Err(e)) => {
-            print_error(format!("Transfer failed: {:?}", e));
+        Err(e) => {
+            print_error(format!("Transfer failed: {e:?}"));
             unsafe {
                 (*out_result).tx_hash = ptr::null_mut();
                 (*out_result).success = false;
             }
             map_execution_error(e)
         }
-        Err(e) => e,
     }
 }
 
@@ -569,7 +563,7 @@ pub unsafe extern "C" fn wallet_ffi_register_public_account(
     let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
-            print_error(format!("Failed to lock wallet: {}", e));
+            print_error(format!("Failed to lock wallet: {e}"));
             return WalletFfiError::InternalError;
         }
     };
@@ -579,9 +573,9 @@ pub unsafe extern "C" fn wallet_ffi_register_public_account(
     let transfer = NativeTokenTransfer(&wallet);
 
     match block_on(transfer.register_account(account_id)) {
-        Ok(Ok(response)) => {
+        Ok(response) => {
             let tx_hash = CString::new(response.tx_hash.to_string())
-                .map(|s| s.into_raw())
+                .map(std::ffi::CString::into_raw)
                 .unwrap_or(ptr::null_mut());
 
             unsafe {
@@ -590,15 +584,14 @@ pub unsafe extern "C" fn wallet_ffi_register_public_account(
             }
             WalletFfiError::Success
         }
-        Ok(Err(e)) => {
-            print_error(format!("Registration failed: {:?}", e));
+        Err(e) => {
+            print_error(format!("Registration failed: {e:?}"));
             unsafe {
                 (*out_result).tx_hash = ptr::null_mut();
                 (*out_result).success = false;
             }
             map_execution_error(e)
         }
-        Err(e) => e,
     }
 }
 
@@ -642,7 +635,7 @@ pub unsafe extern "C" fn wallet_ffi_register_private_account(
     let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
-            print_error(format!("Failed to lock wallet: {}", e));
+            print_error(format!("Failed to lock wallet: {e}"));
             return WalletFfiError::InternalError;
         }
     };
@@ -652,9 +645,9 @@ pub unsafe extern "C" fn wallet_ffi_register_private_account(
     let transfer = NativeTokenTransfer(&wallet);
 
     match block_on(transfer.register_account_private(account_id)) {
-        Ok(Ok((res, _secret))) => {
+        Ok((res, _secret)) => {
             let tx_hash = CString::new(res.tx_hash)
-                .map(|s| s.into_raw())
+                .map(std::ffi::CString::into_raw)
                 .unwrap_or(ptr::null_mut());
 
             unsafe {
@@ -663,15 +656,14 @@ pub unsafe extern "C" fn wallet_ffi_register_private_account(
             }
             WalletFfiError::Success
         }
-        Ok(Err(e)) => {
-            print_error(format!("Registration failed: {:?}", e));
+        Err(e) => {
+            print_error(format!("Registration failed: {e:?}"));
             unsafe {
                 (*out_result).tx_hash = ptr::null_mut();
                 (*out_result).success = false;
             }
             map_execution_error(e)
         }
-        Err(e) => e,
     }
 }
 
@@ -691,15 +683,5 @@ pub unsafe extern "C" fn wallet_ffi_free_transfer_result(result: *mut FfiTransfe
         if !result.tx_hash.is_null() {
             drop(CString::from_raw(result.tx_hash));
         }
-    }
-}
-
-fn map_execution_error(e: ExecutionFailureKind) -> WalletFfiError {
-    match e {
-        ExecutionFailureKind::InsufficientFundsError => WalletFfiError::InsufficientFunds,
-        ExecutionFailureKind::KeyNotFoundError => WalletFfiError::KeyNotFound,
-        ExecutionFailureKind::SequencerError => WalletFfiError::NetworkError,
-        ExecutionFailureKind::SequencerClientError(_) => WalletFfiError::NetworkError,
-        _ => WalletFfiError::InternalError,
     }
 }

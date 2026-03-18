@@ -16,31 +16,6 @@ use nssa_core::{
 };
 use risc0_zkvm::{guest::env, serde::to_vec};
 
-fn main() {
-    let PrivacyPreservingCircuitInput {
-        program_outputs,
-        visibility_mask,
-        private_account_nonces,
-        private_account_keys,
-        private_account_nsks,
-        private_account_membership_proofs,
-        program_id,
-    } = env::read();
-
-    let execution_state = ExecutionState::derive_from_outputs(program_id, program_outputs);
-
-    let output = compute_circuit_output(
-        execution_state,
-        &visibility_mask,
-        &private_account_nonces,
-        &private_account_keys,
-        &private_account_nsks,
-        &private_account_membership_proofs,
-    );
-
-    env::commit(&output);
-}
-
 /// State of the involved accounts before and after program execution.
 struct ExecutionState {
     pre_states: Vec<AccountWithMetadata>,
@@ -62,7 +37,7 @@ impl ExecutionState {
         };
         let mut chained_calls = VecDeque::from_iter([(initial_call, None)]);
 
-        let mut execution_state = ExecutionState {
+        let mut execution_state = Self {
             pre_states: Vec::new(),
             post_states: HashMap::new(),
         };
@@ -113,11 +88,13 @@ impl ExecutionState {
             );
             execution_state.validate_and_sync_states(
                 chained_call.program_id,
-                authorized_pdas,
+                &authorized_pdas,
                 program_output.pre_states,
                 program_output.post_states,
             );
-            chain_calls_counter += 1;
+            chain_calls_counter = chain_calls_counter.checked_add(1).expect(
+                "Chain calls counter should not overflow as it checked before incrementing",
+            );
         }
 
         assert!(
@@ -153,7 +130,7 @@ impl ExecutionState {
     fn validate_and_sync_states(
         &mut self,
         program_id: ProgramId,
-        authorized_pdas: HashSet<AccountId>,
+        authorized_pdas: &HashSet<AccountId>,
         pre_states: Vec<AccountWithMetadata>,
         post_states: Vec<AccountPostState>,
     ) {
@@ -173,12 +150,12 @@ impl ExecutionState {
                         .pre_states
                         .iter()
                         .find(|acc| acc.account_id == pre_account_id)
-                        .map(|acc| acc.is_authorized)
-                        .unwrap_or_else(|| {
-                            panic!(
+                        .map_or_else(
+                            || panic!(
                                 "Pre state must exist in execution state for account {pre_account_id:?}",
-                            )
-                        });
+                            ),
+                            |acc| acc.is_authorized
+                        );
 
                     let is_authorized =
                         previous_is_authorized || authorized_pdas.contains(&pre_account_id);
@@ -249,10 +226,10 @@ fn compute_circuit_output(
     let mut private_membership_proofs_iter = private_account_membership_proofs.iter();
 
     let mut output_index = 0;
-    for (visibility_mask, (pre_state, post_state)) in
+    for (account_visibility_mask, (pre_state, post_state)) in
         visibility_mask.iter().copied().zip(states_iter)
     {
-        match visibility_mask {
+        match account_visibility_mask {
             0 => {
                 // Public account
                 output.public_pre_states.push(pre_state);
@@ -269,7 +246,7 @@ fn compute_circuit_output(
                     "AccountId mismatch"
                 );
 
-                let new_nullifier = if visibility_mask == 1 {
+                let new_nullifier = if account_visibility_mask == 1 {
                     // Private account with authentication
 
                     let Some(nsk) = private_nsks_iter.next() else {
@@ -347,7 +324,9 @@ fn compute_circuit_output(
 
                 output.new_commitments.push(commitment_post);
                 output.ciphertexts.push(encrypted_account);
-                output_index += 1;
+                output_index = output_index
+                    .checked_add(1)
+                    .unwrap_or_else(|| panic!("Too many private accounts, output index overflow"));
             }
             _ => panic!("Invalid visibility mask value"),
         }
@@ -379,18 +358,8 @@ fn compute_nullifier_and_set_digest(
     npk: &NullifierPublicKey,
     nsk: &NullifierSecretKey,
 ) -> (Nullifier, CommitmentSetDigest) {
-    membership_proof_opt
-        .as_ref()
-        .map(|membership_proof| {
-            // Compute commitment set digest associated with provided auth path
-            let commitment_pre = Commitment::new(npk, pre_account);
-            let set_digest = compute_digest_for_path(&commitment_pre, membership_proof);
-
-            // Compute update nullifier
-            let nullifier = Nullifier::for_account_update(&commitment_pre, nsk);
-            (nullifier, set_digest)
-        })
-        .unwrap_or_else(|| {
+    membership_proof_opt.as_ref().map_or_else(
+        || {
             assert_eq!(
                 *pre_account,
                 Account::default(),
@@ -400,5 +369,40 @@ fn compute_nullifier_and_set_digest(
             // Compute initialization nullifier
             let nullifier = Nullifier::for_account_initialization(npk);
             (nullifier, DUMMY_COMMITMENT_HASH)
-        })
+        },
+        |membership_proof| {
+            // Compute commitment set digest associated with provided auth path
+            let commitment_pre = Commitment::new(npk, pre_account);
+            let set_digest = compute_digest_for_path(&commitment_pre, membership_proof);
+
+            // Compute update nullifier
+            let nullifier = Nullifier::for_account_update(&commitment_pre, nsk);
+            (nullifier, set_digest)
+        },
+    )
+}
+
+fn main() {
+    let PrivacyPreservingCircuitInput {
+        program_outputs,
+        visibility_mask,
+        private_account_nonces,
+        private_account_keys,
+        private_account_nsks,
+        private_account_membership_proofs,
+        program_id,
+    } = env::read();
+
+    let execution_state = ExecutionState::derive_from_outputs(program_id, program_outputs);
+
+    let output = compute_circuit_output(
+        execution_state,
+        &visibility_mask,
+        &private_account_nonces,
+        &private_account_keys,
+        &private_account_nsks,
+        &private_account_membership_proofs,
+    );
+
+    env::commit(&output);
 }

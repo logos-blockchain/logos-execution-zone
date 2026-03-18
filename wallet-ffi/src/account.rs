@@ -45,7 +45,7 @@ pub unsafe extern "C" fn wallet_ffi_create_account_public(
     let mut wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
-            print_error(format!("Failed to lock wallet: {}", e));
+            print_error(format!("Failed to lock wallet: {e}"));
             return WalletFfiError::InternalError;
         }
     };
@@ -93,7 +93,7 @@ pub unsafe extern "C" fn wallet_ffi_create_account_private(
     let mut wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
-            print_error(format!("Failed to lock wallet: {}", e));
+            print_error(format!("Failed to lock wallet: {e}"));
             return WalletFfiError::InternalError;
         }
     };
@@ -143,7 +143,7 @@ pub unsafe extern "C" fn wallet_ffi_list_accounts(
     let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
-            print_error(format!("Failed to lock wallet: {}", e));
+            print_error(format!("Failed to lock wallet: {e}"));
             return WalletFfiError::InternalError;
         }
     };
@@ -192,7 +192,7 @@ pub unsafe extern "C" fn wallet_ffi_list_accounts(
         }
     } else {
         let entries_boxed = entries.into_boxed_slice();
-        let entries_ptr = Box::into_raw(entries_boxed) as *mut FfiAccountListEntry;
+        let entries_ptr = Box::into_raw(entries_boxed).cast::<FfiAccountListEntry>();
 
         unsafe {
             (*out_list).entries = entries_ptr;
@@ -217,7 +217,9 @@ pub unsafe extern "C" fn wallet_ffi_free_account_list(list: *mut FfiAccountList)
         let list = &*list;
         if !list.entries.is_null() && list.count > 0 {
             let slice = std::slice::from_raw_parts_mut(list.entries, list.count);
-            drop(Box::from_raw(slice as *mut [FfiAccountListEntry]));
+            drop(Box::from_raw(std::ptr::from_mut::<[FfiAccountListEntry]>(
+                slice,
+            )));
         }
     }
 }
@@ -261,7 +263,7 @@ pub unsafe extern "C" fn wallet_ffi_get_balance(
     let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
-            print_error(format!("Failed to lock wallet: {}", e));
+            print_error(format!("Failed to lock wallet: {e}"));
             return WalletFfiError::InternalError;
         }
     };
@@ -270,21 +272,17 @@ pub unsafe extern "C" fn wallet_ffi_get_balance(
 
     let balance = if is_public {
         match block_on(wallet.get_account_balance(account_id)) {
-            Ok(Ok(b)) => b,
-            Ok(Err(e)) => {
-                print_error(format!("Failed to get balance: {}", e));
+            Ok(b) => b,
+            Err(e) => {
+                print_error(format!("Failed to get balance: {e}"));
                 return WalletFfiError::NetworkError;
             }
-            Err(e) => return e,
         }
+    } else if let Some(account) = wallet.get_account_private(account_id) {
+        account.balance
     } else {
-        match wallet.get_account_private(account_id) {
-            Some(account) => account.balance,
-            None => {
-                print_error("Private account not found");
-                return WalletFfiError::AccountNotFound;
-            }
-        }
+        print_error("Private account not found");
+        return WalletFfiError::AccountNotFound;
     };
 
     unsafe {
@@ -331,7 +329,7 @@ pub unsafe extern "C" fn wallet_ffi_get_account_public(
     let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
-            print_error(format!("Failed to lock wallet: {}", e));
+            print_error(format!("Failed to lock wallet: {e}"));
             return WalletFfiError::InternalError;
         }
     };
@@ -339,12 +337,11 @@ pub unsafe extern "C" fn wallet_ffi_get_account_public(
     let account_id = AccountId::new(unsafe { (*account_id).data });
 
     let account = match block_on(wallet.get_account_public(account_id)) {
-        Ok(Ok(a)) => a,
-        Ok(Err(e)) => {
-            print_error(format!("Failed to get account: {}", e));
+        Ok(a) => a,
+        Err(e) => {
+            print_error(format!("Failed to get account: {e}"));
             return WalletFfiError::NetworkError;
         }
-        Err(e) => return e,
     };
 
     unsafe {
@@ -391,7 +388,7 @@ pub unsafe extern "C" fn wallet_ffi_get_account_private(
     let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
-            print_error(format!("Failed to lock wallet: {}", e));
+            print_error(format!("Failed to lock wallet: {e}"));
             return WalletFfiError::InternalError;
         }
     };
@@ -423,8 +420,8 @@ pub unsafe extern "C" fn wallet_ffi_free_account_data(account: *mut FfiAccount) 
     unsafe {
         let account = &*account;
         if !account.data.is_null() && account.data_len > 0 {
-            let slice = std::slice::from_raw_parts_mut(account.data as *mut u8, account.data_len);
-            drop(Box::from_raw(slice as *mut [u8]));
+            let slice = std::slice::from_raw_parts_mut(account.data.cast_mut(), account.data_len);
+            drop(Box::from_raw(std::ptr::from_mut::<[u8]>(slice)));
         }
     }
 }

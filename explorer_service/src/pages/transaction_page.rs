@@ -4,7 +4,7 @@ use indexer_service_protocol::{
     HashType, PrivacyPreservingMessage, PrivacyPreservingTransaction, ProgramDeploymentMessage,
     ProgramDeploymentTransaction, PublicMessage, PublicTransaction, Transaction, WitnessSet,
 };
-use itertools::{EitherOrBoth, Itertools};
+use itertools::{EitherOrBoth, Itertools as _};
 use leptos::prelude::*;
 use leptos_router::{components::A, hooks::use_params_map};
 
@@ -17,16 +17,14 @@ pub fn TransactionPage() -> impl IntoView {
 
     let transaction_resource = Resource::new(
         move || {
-            params
-                .read()
-                .get("hash")
-                .and_then(|s| HashType::from_str(&s).ok())
+            let s = params.read().get("hash")?;
+            HashType::from_str(&s).ok()
         },
         |hash_opt| async move {
             match hash_opt {
                 Some(hash) => api::get_transaction(hash).await,
                 None => Err(leptos::prelude::ServerFnError::ServerError(
-                    "Invalid transaction hash".to_string(),
+                    "Invalid transaction hash".to_owned(),
                 )),
             }
         },
@@ -105,7 +103,7 @@ pub fn TransactionPage() -> impl IntoView {
                                                 </div>
                                                 <div class="info-row">
                                                     <span class="info-label">"Proof Size:"</span>
-                                                    <span class="info-value">{format!("{} bytes", proof_len)}</span>
+                                                    <span class="info-value">{format!("{proof_len} bytes")}</span>
                                                 </div>
                                                 <div class="info-row">
                                                     <span class="info-label">"Signatures:"</span>
@@ -141,7 +139,7 @@ pub fn TransactionPage() -> impl IntoView {
                                                                     <span class="hash">{account_id_str}</span>
                                                                 </A>
                                                                 <span class="nonce">
-                                                                    " (nonce: "{"Not affected by this transaction".to_string()}" )"
+                                                                    " (nonce: "{"Not affected by this transaction".to_owned()}" )"
                                                                 </span>
                                                             </div>
                                                         }
@@ -153,7 +151,7 @@ pub fn TransactionPage() -> impl IntoView {
                                                                     <span class="hash">{"Account not found"}</span>
                                                                 </A>
                                                                 <span class="nonce">
-                                                                    " (nonce: "{"Account not found".to_string()}" )"
+                                                                    " (nonce: "{"Account not found".to_owned()}" )"
                                                                 </span>
                                                             </div>
                                                         }
@@ -212,7 +210,7 @@ pub fn TransactionPage() -> impl IntoView {
                                                 </div>
                                                 <div class="info-row">
                                                     <span class="info-label">"Proof Size:"</span>
-                                                    <span class="info-value">{format!("{} bytes", proof_len)}</span>
+                                                    <span class="info-value">{format!("{proof_len} bytes")}</span>
                                                 </div>
                                             </div>
 
@@ -244,7 +242,7 @@ pub fn TransactionPage() -> impl IntoView {
                                                                     <span class="hash">{account_id_str}</span>
                                                                 </A>
                                                                 <span class="nonce">
-                                                                    " (nonce: "{"Not affected by this transaction".to_string()}" )"
+                                                                    " (nonce: "{"Not affected by this transaction".to_owned()}" )"
                                                                 </span>
                                                             </div>
                                                         }
@@ -256,7 +254,7 @@ pub fn TransactionPage() -> impl IntoView {
                                                                     <span class="hash">{"Account not found"}</span>
                                                                 </A>
                                                                 <span class="nonce">
-                                                                    " (nonce: "{"Account not found".to_string()}" )"
+                                                                    " (nonce: "{"Account not found".to_owned()}" )"
                                                                 </span>
                                                             </div>
                                                         }
@@ -284,7 +282,7 @@ pub fn TransactionPage() -> impl IntoView {
                                                 <div class="info-row">
                                                     <span class="info-label">"Bytecode Size:"</span>
                                                     <span class="info-value">
-                                                        {format!("{} bytes", bytecode_len)}
+                                                        {format!("{bytecode_len} bytes")}
                                                     </span>
                                                 </div>
                                             </div>
@@ -302,7 +300,7 @@ pub fn TransactionPage() -> impl IntoView {
                                 view! {
                                     <div class="error-page">
                                         <h1>"Error"</h1>
-                                        <p>{format!("Failed to load transaction: {}", e)}</p>
+                                        <p>{format!("Failed to load transaction: {e}")}</p>
                                     </div>
                                 }
                                     .into_any()

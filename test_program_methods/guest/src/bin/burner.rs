@@ -11,14 +11,13 @@ fn main() {
         instruction_words,
     ) = read_nssa_inputs::<Instruction>();
 
-    let [pre] = match pre_states.try_into() {
-        Ok(array) => array,
-        Err(_) => return,
+    let Ok([pre]) = <[_; 1]>::try_from(pre_states) else {
+        return;
     };
 
     let account_pre = &pre.account;
     let mut account_post = account_pre.clone();
-    account_post.balance -= balance_to_burn;
+    account_post.balance = account_post.balance.saturating_sub(balance_to_burn);
 
     write_nssa_outputs(
         instruction_words,

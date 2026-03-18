@@ -18,7 +18,7 @@ pub const MAX_NUMBER_CHAINED_CALLS: usize = 10;
 
 #[derive(Clone, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(test, derive(Debug, PartialEq, Eq))]
-pub(crate) struct CommitmentSet {
+pub struct CommitmentSet {
     merkle_tree: MerkleTree,
     commitments: HashMap<Commitment, usize>,
     root_history: HashSet<CommitmentSetDigest>,
@@ -29,7 +29,7 @@ impl CommitmentSet {
         self.merkle_tree.root()
     }
 
-    /// Queries the `CommitmentSet` for a membership proof of commitment
+    /// Queries the `CommitmentSet` for a membership proof of commitment.
     pub fn get_proof_for(&self, commitment: &Commitment) -> Option<MembershipProof> {
         let index = *self.commitments.get(commitment)?;
 
@@ -52,9 +52,9 @@ impl CommitmentSet {
     }
 
     /// Initializes an empty `CommitmentSet` with a given capacity.
-    /// If the capacity is not a power_of_two, then capacity is taken
-    /// to be the next power_of_two.
-    pub(crate) fn with_capacity(capacity: usize) -> CommitmentSet {
+    /// If the capacity is not a `power_of_two`, then capacity is taken
+    /// to be the next `power_of_two`.
+    pub(crate) fn with_capacity(capacity: usize) -> Self {
         Self {
             merkle_tree: MerkleTree::with_capacity(capacity),
             commitments: HashMap::new(),
@@ -68,7 +68,7 @@ impl CommitmentSet {
 struct NullifierSet(BTreeSet<Nullifier>);
 
 impl NullifierSet {
-    fn new() -> Self {
+    const fn new() -> Self {
         Self(BTreeSet::new())
     }
 
@@ -114,6 +114,7 @@ pub struct V02State {
 }
 
 impl V02State {
+    #[must_use]
     pub fn new_with_genesis_accounts(
         initial_data: &[(AccountId, u128)],
         initial_commitments: &[nssa_core::Commitment],
@@ -159,7 +160,11 @@ impl V02State {
     ) -> Result<(), NssaError> {
         let state_diff = tx.validate_and_produce_public_state_diff(self)?;
 
-        for (account_id, post) in state_diff.into_iter() {
+        #[expect(
+            clippy::iter_over_hash_type,
+            reason = "Iteration order doesn't matter here"
+        )]
+        for (account_id, post) in state_diff {
             let current_account = self.get_account_by_id_mut(account_id);
 
             *current_account = post;
@@ -167,7 +172,10 @@ impl V02State {
 
         for account_id in tx.signer_account_ids() {
             let current_account = self.get_account_by_id_mut(account_id);
-            current_account.nonce += 1;
+            current_account.nonce = current_account
+                .nonce
+                .checked_add(1)
+                .ok_or(NssaError::MaxAccountNonceReached)?;
         }
 
         Ok(())
@@ -195,7 +203,11 @@ impl V02State {
         self.private_state.1.extend(new_nullifiers);
 
         // 4. Update public accounts
-        for (account_id, post) in public_state_diff.into_iter() {
+        #[expect(
+            clippy::iter_over_hash_type,
+            reason = "Iteration order doesn't matter here"
+        )]
+        for (account_id, post) in public_state_diff {
             let current_account = self.get_account_by_id_mut(account_id);
             *current_account = post;
         }
@@ -203,7 +215,10 @@ impl V02State {
         // 5. Increment nonces for public signers
         for account_id in tx.signer_account_ids() {
             let current_account = self.get_account_by_id_mut(account_id);
-            current_account.nonce += 1;
+            current_account.nonce = current_account
+                .nonce
+                .checked_add(1)
+                .ok_or(NssaError::MaxAccountNonceReached)?;
         }
 
         Ok(())
@@ -222,21 +237,24 @@ impl V02State {
         self.public_state.entry(account_id).or_default()
     }
 
+    #[must_use]
     pub fn get_account_by_id(&self, account_id: AccountId) -> Account {
         self.public_state
             .get(&account_id)
             .cloned()
-            .unwrap_or(Account::default())
+            .unwrap_or_else(Account::default)
     }
 
+    #[must_use]
     pub fn get_proof_for_commitment(&self, commitment: &Commitment) -> Option<MembershipProof> {
         self.private_state.0.get_proof_for(commitment)
     }
 
-    pub(crate) fn programs(&self) -> &HashMap<ProgramId, Program> {
+    pub(crate) const fn programs(&self) -> &HashMap<ProgramId, Program> {
         &self.programs
     }
 
+    #[must_use]
     pub fn commitment_set_digest(&self) -> CommitmentSetDigest {
         self.private_state.0.digest()
     }
@@ -245,10 +263,10 @@ impl V02State {
         &self,
         new_commitments: &[Commitment],
     ) -> Result<(), NssaError> {
-        for commitment in new_commitments.iter() {
+        for commitment in new_commitments {
             if self.private_state.0.contains(commitment) {
                 return Err(NssaError::InvalidInput(
-                    "Commitment already seen".to_string(),
+                    "Commitment already seen".to_owned(),
                 ));
             }
         }
@@ -259,15 +277,13 @@ impl V02State {
         &self,
         new_nullifiers: &[(Nullifier, CommitmentSetDigest)],
     ) -> Result<(), NssaError> {
-        for (nullifier, digest) in new_nullifiers.iter() {
+        for (nullifier, digest) in new_nullifiers {
             if self.private_state.1.contains(nullifier) {
-                return Err(NssaError::InvalidInput(
-                    "Nullifier already seen".to_string(),
-                ));
+                return Err(NssaError::InvalidInput("Nullifier already seen".to_owned()));
             }
             if !self.private_state.0.root_history.contains(digest) {
                 return Err(NssaError::InvalidInput(
-                    "Unrecognized commitment set digest".to_string(),
+                    "Unrecognized commitment set digest".to_owned(),
                 ));
             }
         }
@@ -284,7 +300,7 @@ impl V02State {
             account_id,
             Account {
                 program_owner: Program::pinata().id(),
-                balance: 1500000,
+                balance: 1_500_000,
                 // Difficulty: 3
                 data: vec![3; 33].try_into().expect("should fit"),
                 nonce: 0,
@@ -307,19 +323,29 @@ impl V02State {
     }
 }
 
+#[cfg(any(test, feature = "test-utils"))]
+impl V02State {
+    pub fn force_insert_account(&mut self, account_id: AccountId, account: Account) {
+        self.public_state.insert(account_id, account);
+    }
+}
+
 #[cfg(test)]
 pub mod tests {
+    #![expect(
+        clippy::arithmetic_side_effects,
+        clippy::shadow_unrelated,
+        reason = "We don't care about it in tests"
+    )]
 
     use std::collections::HashMap;
 
-    use amm_core::PoolDefinition;
     use nssa_core::{
         Commitment, Nullifier, NullifierPublicKey, NullifierSecretKey, SharedSecretKey,
         account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
         encryption::{EphemeralPublicKey, Scalar, ViewingPublicKey},
         program::{PdaSeed, ProgramId},
     };
-    use token_core::{TokenDefinition, TokenHolding};
 
     use crate::{
         PublicKey, PublicTransaction, V02State,
@@ -337,9 +363,101 @@ pub mod tests {
         state::MAX_NUMBER_CHAINED_CALLS,
     };
 
+    impl V02State {
+        /// Include test programs in the builtin programs map.
+        #[must_use]
+        pub fn with_test_programs(mut self) -> Self {
+            self.insert_program(Program::nonce_changer_program());
+            self.insert_program(Program::extra_output_program());
+            self.insert_program(Program::missing_output_program());
+            self.insert_program(Program::program_owner_changer());
+            self.insert_program(Program::simple_balance_transfer());
+            self.insert_program(Program::data_changer());
+            self.insert_program(Program::minter());
+            self.insert_program(Program::burner());
+            self.insert_program(Program::chain_caller());
+            self.insert_program(Program::amm());
+            self.insert_program(Program::claimer());
+            self.insert_program(Program::changer_claimer());
+            self
+        }
+
+        #[must_use]
+        pub fn with_non_default_accounts_but_default_program_owners(mut self) -> Self {
+            let account_with_default_values_except_balance = Account {
+                balance: 100,
+                ..Account::default()
+            };
+            let account_with_default_values_except_nonce = Account {
+                nonce: 37,
+                ..Account::default()
+            };
+            let account_with_default_values_except_data = Account {
+                data: vec![0xca, 0xfe].try_into().unwrap(),
+                ..Account::default()
+            };
+            self.force_insert_account(
+                AccountId::new([255; 32]),
+                account_with_default_values_except_balance,
+            );
+            self.force_insert_account(
+                AccountId::new([254; 32]),
+                account_with_default_values_except_nonce,
+            );
+            self.force_insert_account(
+                AccountId::new([253; 32]),
+                account_with_default_values_except_data,
+            );
+            self
+        }
+
+        #[must_use]
+        pub fn with_account_owned_by_burner_program(mut self) -> Self {
+            let account = Account {
+                program_owner: Program::burner().id(),
+                balance: 100,
+                ..Default::default()
+            };
+            self.force_insert_account(AccountId::new([252; 32]), account);
+            self
+        }
+
+        #[must_use]
+        pub fn with_private_account(mut self, keys: &TestPrivateKeys, account: &Account) -> Self {
+            let commitment = Commitment::new(&keys.npk(), account);
+            self.private_state.0.extend(&[commitment]);
+            self
+        }
+    }
+
+    pub struct TestPublicKeys {
+        pub signing_key: PrivateKey,
+    }
+
+    impl TestPublicKeys {
+        pub fn account_id(&self) -> AccountId {
+            AccountId::from(&PublicKey::new_from_private_key(&self.signing_key))
+        }
+    }
+
+    pub struct TestPrivateKeys {
+        pub nsk: NullifierSecretKey,
+        pub vsk: Scalar,
+    }
+
+    impl TestPrivateKeys {
+        pub fn npk(&self) -> NullifierPublicKey {
+            NullifierPublicKey::from(&self.nsk)
+        }
+
+        pub fn vpk(&self) -> ViewingPublicKey {
+            ViewingPublicKey::from_scalar(self.vsk)
+        }
+    }
+
     fn transfer_transaction(
         from: AccountId,
-        from_key: PrivateKey,
+        from_key: &PrivateKey,
         nonce: u128,
         to: AccountId,
         balance: u128,
@@ -349,17 +467,17 @@ pub mod tests {
         let program_id = Program::authenticated_transfer_program().id();
         let message =
             public_transaction::Message::try_new(program_id, account_ids, nonces, balance).unwrap();
-        let witness_set = public_transaction::WitnessSet::for_message(&message, &[&from_key]);
+        let witness_set = public_transaction::WitnessSet::for_message(&message, &[from_key]);
         PublicTransaction::new(message, witness_set)
     }
 
     #[test]
-    fn test_new_with_genesis() {
+    fn new_with_genesis() {
         let key1 = PrivateKey::try_new([1; 32]).unwrap();
         let key2 = PrivateKey::try_new([2; 32]).unwrap();
         let addr1 = AccountId::from(&PublicKey::new_from_private_key(&key1));
         let addr2 = AccountId::from(&PublicKey::new_from_private_key(&key2));
-        let initial_data = [(addr1, 100u128), (addr2, 151u128)];
+        let initial_data = [(addr1, 100_u128), (addr2, 151_u128)];
         let authenticated_transfers_program = Program::authenticated_transfer_program();
         let expected_public_state = {
             let mut this = HashMap::new();
@@ -399,7 +517,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_insert_program() {
+    fn insert_program() {
         let mut state = V02State::new_with_genesis_accounts(&[], &[]);
         let program_to_insert = Program::simple_balance_transfer();
         let program_id = program_to_insert.id();
@@ -411,12 +529,12 @@ pub mod tests {
     }
 
     #[test]
-    fn test_get_account_by_account_id_non_default_account() {
+    fn get_account_by_account_id_non_default_account() {
         let key = PrivateKey::try_new([1; 32]).unwrap();
         let account_id = AccountId::from(&PublicKey::new_from_private_key(&key));
-        let initial_data = [(account_id, 100u128)];
+        let initial_data = [(account_id, 100_u128)];
         let state = V02State::new_with_genesis_accounts(&initial_data, &[]);
-        let expected_account = state.public_state.get(&account_id).unwrap();
+        let expected_account = &state.public_state[&account_id];
 
         let account = state.get_account_by_id(account_id);
 
@@ -424,7 +542,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_get_account_by_account_id_default_account() {
+    fn get_account_by_account_id_default_account() {
         let addr2 = AccountId::new([0; 32]);
         let state = V02State::new_with_genesis_accounts(&[], &[]);
         let expected_account = Account::default();
@@ -435,7 +553,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_builtin_programs_getter() {
+    fn builtin_programs_getter() {
         let state = V02State::new_with_genesis_accounts(&[], &[]);
 
         let builtin_programs = state.programs();
@@ -454,7 +572,7 @@ pub mod tests {
         assert_eq!(state.get_account_by_id(to), Account::default());
         let balance_to_move = 5;
 
-        let tx = transfer_transaction(from, key, 0, to, balance_to_move);
+        let tx = transfer_transaction(from, &key, 0, to, balance_to_move);
         state.transition_from_public_transaction(&tx).unwrap();
 
         assert_eq!(state.get_account_by_id(from).balance, 95);
@@ -475,7 +593,7 @@ pub mod tests {
         let balance_to_move = 101;
         assert!(state.get_account_by_id(from).balance < balance_to_move);
 
-        let tx = transfer_transaction(from, from_key, 0, to, balance_to_move);
+        let tx = transfer_transaction(from, &from_key, 0, to, balance_to_move);
         let result = state.transition_from_public_transaction(&tx);
 
         assert!(matches!(result, Err(NssaError::ProgramExecutionFailed(_))));
@@ -499,7 +617,7 @@ pub mod tests {
         assert_ne!(state.get_account_by_id(to), Account::default());
         let balance_to_move = 8;
 
-        let tx = transfer_transaction(from, from_key, 0, to, balance_to_move);
+        let tx = transfer_transaction(from, &from_key, 0, to, balance_to_move);
         state.transition_from_public_transaction(&tx).unwrap();
 
         assert_eq!(state.get_account_by_id(from).balance, 192);
@@ -519,10 +637,10 @@ pub mod tests {
         let account_id3 = AccountId::new([3; 32]);
         let balance_to_move = 5;
 
-        let tx = transfer_transaction(account_id1, key1, 0, account_id2, balance_to_move);
+        let tx = transfer_transaction(account_id1, &key1, 0, account_id2, balance_to_move);
         state.transition_from_public_transaction(&tx).unwrap();
         let balance_to_move = 3;
-        let tx = transfer_transaction(account_id2, key2, 0, account_id3, balance_to_move);
+        let tx = transfer_transaction(account_id2, &key2, 0, account_id3, balance_to_move);
         state.transition_from_public_transaction(&tx).unwrap();
 
         assert_eq!(state.get_account_by_id(account_id1).balance, 95);
@@ -533,75 +651,8 @@ pub mod tests {
         assert_eq!(state.get_account_by_id(account_id3).nonce, 0);
     }
 
-    impl V02State {
-        pub fn force_insert_account(&mut self, account_id: AccountId, account: Account) {
-            self.public_state.insert(account_id, account);
-        }
-
-        /// Include test programs in the builtin programs map
-        pub fn with_test_programs(mut self) -> Self {
-            self.insert_program(Program::nonce_changer_program());
-            self.insert_program(Program::extra_output_program());
-            self.insert_program(Program::missing_output_program());
-            self.insert_program(Program::program_owner_changer());
-            self.insert_program(Program::simple_balance_transfer());
-            self.insert_program(Program::data_changer());
-            self.insert_program(Program::minter());
-            self.insert_program(Program::burner());
-            self.insert_program(Program::chain_caller());
-            self.insert_program(Program::amm());
-            self.insert_program(Program::claimer());
-            self.insert_program(Program::changer_claimer());
-            self
-        }
-
-        pub fn with_non_default_accounts_but_default_program_owners(mut self) -> Self {
-            let account_with_default_values_except_balance = Account {
-                balance: 100,
-                ..Account::default()
-            };
-            let account_with_default_values_except_nonce = Account {
-                nonce: 37,
-                ..Account::default()
-            };
-            let account_with_default_values_except_data = Account {
-                data: vec![0xca, 0xfe].try_into().unwrap(),
-                ..Account::default()
-            };
-            self.force_insert_account(
-                AccountId::new([255; 32]),
-                account_with_default_values_except_balance,
-            );
-            self.force_insert_account(
-                AccountId::new([254; 32]),
-                account_with_default_values_except_nonce,
-            );
-            self.force_insert_account(
-                AccountId::new([253; 32]),
-                account_with_default_values_except_data,
-            );
-            self
-        }
-
-        pub fn with_account_owned_by_burner_program(mut self) -> Self {
-            let account = Account {
-                program_owner: Program::burner().id(),
-                balance: 100,
-                ..Default::default()
-            };
-            self.force_insert_account(AccountId::new([252; 32]), account);
-            self
-        }
-
-        pub fn with_private_account(mut self, keys: &TestPrivateKeys, account: &Account) -> Self {
-            let commitment = Commitment::new(&keys.npk(), account);
-            self.private_state.0.extend(&[commitment]);
-            self
-        }
-    }
-
     #[test]
-    fn test_program_should_fail_if_modifies_nonces() {
+    fn program_should_fail_if_modifies_nonces() {
         let initial_data = [(AccountId::new([1; 32]), 100)];
         let mut state =
             V02State::new_with_genesis_accounts(&initial_data, &[]).with_test_programs();
@@ -618,7 +669,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_program_should_fail_if_output_accounts_exceed_inputs() {
+    fn program_should_fail_if_output_accounts_exceed_inputs() {
         let initial_data = [(AccountId::new([1; 32]), 100)];
         let mut state =
             V02State::new_with_genesis_accounts(&initial_data, &[]).with_test_programs();
@@ -635,7 +686,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_program_should_fail_with_missing_output_accounts() {
+    fn program_should_fail_with_missing_output_accounts() {
         let initial_data = [(AccountId::new([1; 32]), 100)];
         let mut state =
             V02State::new_with_genesis_accounts(&initial_data, &[]).with_test_programs();
@@ -652,7 +703,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_program_should_fail_if_modifies_program_owner_with_only_non_default_program_owner() {
+    fn program_should_fail_if_modifies_program_owner_with_only_non_default_program_owner() {
         let initial_data = [(AccountId::new([1; 32]), 0)];
         let mut state =
             V02State::new_with_genesis_accounts(&initial_data, &[]).with_test_programs();
@@ -676,7 +727,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_program_should_fail_if_modifies_program_owner_with_only_non_default_balance() {
+    fn program_should_fail_if_modifies_program_owner_with_only_non_default_balance() {
         let initial_data = [];
         let mut state = V02State::new_with_genesis_accounts(&initial_data, &[])
             .with_test_programs()
@@ -700,7 +751,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_program_should_fail_if_modifies_program_owner_with_only_non_default_nonce() {
+    fn program_should_fail_if_modifies_program_owner_with_only_non_default_nonce() {
         let initial_data = [];
         let mut state = V02State::new_with_genesis_accounts(&initial_data, &[])
             .with_test_programs()
@@ -724,7 +775,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_program_should_fail_if_modifies_program_owner_with_only_non_default_data() {
+    fn program_should_fail_if_modifies_program_owner_with_only_non_default_data() {
         let initial_data = [];
         let mut state = V02State::new_with_genesis_accounts(&initial_data, &[])
             .with_test_programs()
@@ -748,7 +799,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_program_should_fail_if_transfers_balance_from_non_owned_account() {
+    fn program_should_fail_if_transfers_balance_from_non_owned_account() {
         let initial_data = [(AccountId::new([1; 32]), 100)];
         let mut state =
             V02State::new_with_genesis_accounts(&initial_data, &[]).with_test_programs();
@@ -776,7 +827,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_program_should_fail_if_modifies_data_of_non_owned_account() {
+    fn program_should_fail_if_modifies_data_of_non_owned_account() {
         let initial_data = [];
         let mut state = V02State::new_with_genesis_accounts(&initial_data, &[])
             .with_test_programs()
@@ -801,7 +852,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_program_should_fail_if_does_not_preserve_total_balance_by_minting() {
+    fn program_should_fail_if_does_not_preserve_total_balance_by_minting() {
         let initial_data = [];
         let mut state =
             V02State::new_with_genesis_accounts(&initial_data, &[]).with_test_programs();
@@ -819,7 +870,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_program_should_fail_if_does_not_preserve_total_balance_by_burning() {
+    fn program_should_fail_if_does_not_preserve_total_balance_by_burning() {
         let initial_data = [];
         let mut state = V02State::new_with_genesis_accounts(&initial_data, &[])
             .with_test_programs()
@@ -847,34 +898,9 @@ pub mod tests {
         assert!(matches!(result, Err(NssaError::InvalidProgramBehavior)));
     }
 
-    pub struct TestPublicKeys {
-        pub signing_key: PrivateKey,
-    }
-
-    impl TestPublicKeys {
-        pub fn account_id(&self) -> AccountId {
-            AccountId::from(&PublicKey::new_from_private_key(&self.signing_key))
-        }
-    }
-
     fn test_public_account_keys_1() -> TestPublicKeys {
         TestPublicKeys {
             signing_key: PrivateKey::try_new([37; 32]).unwrap(),
-        }
-    }
-
-    pub struct TestPrivateKeys {
-        pub nsk: NullifierSecretKey,
-        pub vsk: Scalar,
-    }
-
-    impl TestPrivateKeys {
-        pub fn npk(&self) -> NullifierPublicKey {
-            NullifierPublicKey::from(&self.nsk)
-        }
-
-        pub fn vpk(&self) -> ViewingPublicKey {
-            ViewingPublicKey::from_scalar(self.vsk)
         }
     }
 
@@ -916,7 +942,7 @@ pub mod tests {
             vec![sender, recipient],
             Program::serialize_instruction(balance_to_move).unwrap(),
             vec![0, 2],
-            vec![0xdeadbeef],
+            vec![0xdead_beef],
             vec![(recipient_keys.npk(), shared_secret)],
             vec![],
             vec![None],
@@ -1038,7 +1064,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_transition_from_privacy_preserving_transaction_shielded() {
+    fn transition_from_privacy_preserving_transaction_shielded() {
         let sender_keys = test_public_account_keys_1();
         let recipient_keys = test_private_account_keys_1();
 
@@ -1079,12 +1105,12 @@ pub mod tests {
     }
 
     #[test]
-    fn test_transition_from_privacy_preserving_transaction_private() {
+    fn transition_from_privacy_preserving_transaction_private() {
         let sender_keys = test_private_account_keys_1();
         let sender_private_account = Account {
             program_owner: Program::authenticated_transfer_program().id(),
             balance: 100,
-            nonce: 0xdeadbeef,
+            nonce: 0xdead_beef,
             data: Data::default(),
         };
         let recipient_keys = test_private_account_keys_2();
@@ -1099,7 +1125,7 @@ pub mod tests {
             &sender_private_account,
             &recipient_keys,
             balance_to_move,
-            [0xcafecafe, 0xfecafeca],
+            [0xcafe_cafe, 0xfeca_feca],
             &state,
         );
 
@@ -1107,7 +1133,7 @@ pub mod tests {
             &sender_keys.npk(),
             &Account {
                 program_owner: Program::authenticated_transfer_program().id(),
-                nonce: 0xcafecafe,
+                nonce: 0xcafe_cafe,
                 balance: sender_private_account.balance - balance_to_move,
                 data: Data::default(),
             },
@@ -1121,7 +1147,7 @@ pub mod tests {
             &recipient_keys.npk(),
             &Account {
                 program_owner: Program::authenticated_transfer_program().id(),
-                nonce: 0xfecafeca,
+                nonce: 0xfeca_feca,
                 balance: balance_to_move,
                 ..Account::default()
             },
@@ -1145,12 +1171,12 @@ pub mod tests {
     }
 
     #[test]
-    fn test_transition_from_privacy_preserving_transaction_deshielded() {
+    fn transition_from_privacy_preserving_transaction_deshielded() {
         let sender_keys = test_private_account_keys_1();
         let sender_private_account = Account {
             program_owner: Program::authenticated_transfer_program().id(),
             balance: 100,
-            nonce: 0xdeadbeef,
+            nonce: 0xdead_beef,
             data: Data::default(),
         };
         let recipient_keys = test_public_account_keys_1();
@@ -1174,7 +1200,7 @@ pub mod tests {
             &sender_private_account,
             &recipient_keys.account_id(),
             balance_to_move,
-            0xcafecafe,
+            0xcafe_cafe,
             &state,
         );
 
@@ -1182,7 +1208,7 @@ pub mod tests {
             &sender_keys.npk(),
             &Account {
                 program_owner: Program::authenticated_transfer_program().id(),
-                nonce: 0xcafecafe,
+                nonce: 0xcafe_cafe,
                 balance: sender_private_account.balance - balance_to_move,
                 data: Data::default(),
             },
@@ -1212,7 +1238,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_burner_program_should_fail_in_privacy_preserving_circuit() {
+    fn burner_program_should_fail_in_privacy_preserving_circuit() {
         let program = Program::burner();
         let public_account = AccountWithMetadata::new(
             Account {
@@ -1226,7 +1252,7 @@ pub mod tests {
 
         let result = execute_and_prove(
             vec![public_account],
-            Program::serialize_instruction(10u128).unwrap(),
+            Program::serialize_instruction(10_u128).unwrap(),
             vec![0],
             vec![],
             vec![],
@@ -1239,7 +1265,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_minter_program_should_fail_in_privacy_preserving_circuit() {
+    fn minter_program_should_fail_in_privacy_preserving_circuit() {
         let program = Program::minter();
         let public_account = AccountWithMetadata::new(
             Account {
@@ -1253,7 +1279,7 @@ pub mod tests {
 
         let result = execute_and_prove(
             vec![public_account],
-            Program::serialize_instruction(10u128).unwrap(),
+            Program::serialize_instruction(10_u128).unwrap(),
             vec![0],
             vec![],
             vec![],
@@ -1266,7 +1292,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_nonce_changer_program_should_fail_in_privacy_preserving_circuit() {
+    fn nonce_changer_program_should_fail_in_privacy_preserving_circuit() {
         let program = Program::nonce_changer_program();
         let public_account = AccountWithMetadata::new(
             Account {
@@ -1293,7 +1319,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_data_changer_program_should_fail_for_non_owned_account_in_privacy_preserving_circuit() {
+    fn data_changer_program_should_fail_for_non_owned_account_in_privacy_preserving_circuit() {
         let program = Program::data_changer();
         let public_account = AccountWithMetadata::new(
             Account {
@@ -1320,7 +1346,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_data_changer_program_should_fail_for_too_large_data_in_privacy_preserving_circuit() {
+    fn data_changer_program_should_fail_for_too_large_data_in_privacy_preserving_circuit() {
         let program = Program::data_changer();
         let public_account = AccountWithMetadata::new(
             Account {
@@ -1333,7 +1359,12 @@ pub mod tests {
         );
 
         let large_data: Vec<u8> =
-            vec![0; nssa_core::account::data::DATA_MAX_LENGTH.as_u64() as usize + 1];
+            vec![
+                0;
+                usize::try_from(nssa_core::account::data::DATA_MAX_LENGTH.as_u64())
+                    .expect("DATA_MAX_LENGTH fits in usize")
+                    + 1
+            ];
 
         let result = execute_and_prove(
             vec![public_account],
@@ -1343,14 +1374,14 @@ pub mod tests {
             vec![],
             vec![],
             vec![],
-            &program.to_owned().into(),
+            &program.into(),
         );
 
         assert!(matches!(result, Err(NssaError::ProgramProveFailed(_))));
     }
 
     #[test]
-    fn test_extra_output_program_should_fail_in_privacy_preserving_circuit() {
+    fn extra_output_program_should_fail_in_privacy_preserving_circuit() {
         let program = Program::extra_output_program();
         let public_account = AccountWithMetadata::new(
             Account {
@@ -1377,7 +1408,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_missing_output_program_should_fail_in_privacy_preserving_circuit() {
+    fn missing_output_program_should_fail_in_privacy_preserving_circuit() {
         let program = Program::missing_output_program();
         let public_account_1 = AccountWithMetadata::new(
             Account {
@@ -1413,7 +1444,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_program_owner_changer_should_fail_in_privacy_preserving_circuit() {
+    fn program_owner_changer_should_fail_in_privacy_preserving_circuit() {
         let program = Program::program_owner_changer();
         let public_account = AccountWithMetadata::new(
             Account {
@@ -1440,7 +1471,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_transfer_from_non_owned_account_should_fail_in_privacy_preserving_circuit() {
+    fn transfer_from_non_owned_account_should_fail_in_privacy_preserving_circuit() {
         let program = Program::simple_balance_transfer();
         let public_account_1 = AccountWithMetadata::new(
             Account {
@@ -1463,7 +1494,7 @@ pub mod tests {
 
         let result = execute_and_prove(
             vec![public_account_1, public_account_2],
-            Program::serialize_instruction(10u128).unwrap(),
+            Program::serialize_instruction(10_u128).unwrap(),
             vec![0, 0],
             vec![],
             vec![],
@@ -1476,7 +1507,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_circuit_fails_if_visibility_masks_have_incorrect_lenght() {
+    fn circuit_fails_if_visibility_masks_have_incorrect_lenght() {
         let program = Program::simple_balance_transfer();
         let public_account_1 = AccountWithMetadata::new(
             Account {
@@ -1501,7 +1532,7 @@ pub mod tests {
         let visibility_mask = [0];
         let result = execute_and_prove(
             vec![public_account_1, public_account_2],
-            Program::serialize_instruction(10u128).unwrap(),
+            Program::serialize_instruction(10_u128).unwrap(),
             visibility_mask.to_vec(),
             vec![],
             vec![],
@@ -1514,7 +1545,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_circuit_fails_if_insufficient_nonces_are_provided() {
+    fn circuit_fails_if_insufficient_nonces_are_provided() {
         let program = Program::simple_balance_transfer();
         let sender_keys = test_private_account_keys_1();
         let recipient_keys = test_private_account_keys_2();
@@ -1531,10 +1562,10 @@ pub mod tests {
             AccountWithMetadata::new(Account::default(), false, &recipient_keys.npk());
 
         // Setting only one nonce for an execution with two private accounts.
-        let private_account_nonces = [0xdeadbeef1];
+        let private_account_nonces = [0xdead_beef1];
         let result = execute_and_prove(
             vec![private_account_1, private_account_2],
-            Program::serialize_instruction(10u128).unwrap(),
+            Program::serialize_instruction(10_u128).unwrap(),
             vec![1, 2],
             private_account_nonces.to_vec(),
             vec![
@@ -1556,7 +1587,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_circuit_fails_if_insufficient_keys_are_provided() {
+    fn circuit_fails_if_insufficient_keys_are_provided() {
         let program = Program::simple_balance_transfer();
         let sender_keys = test_private_account_keys_1();
         let private_account_1 = AccountWithMetadata::new(
@@ -1578,9 +1609,9 @@ pub mod tests {
         )];
         let result = execute_and_prove(
             vec![private_account_1, private_account_2],
-            Program::serialize_instruction(10u128).unwrap(),
+            Program::serialize_instruction(10_u128).unwrap(),
             vec![1, 2],
-            vec![0xdeadbeef1, 0xdeadbeef2],
+            vec![0xdead_beef1, 0xdead_beef2],
             private_account_keys.to_vec(),
             vec![sender_keys.nsk],
             vec![Some((0, vec![]))],
@@ -1591,7 +1622,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_circuit_fails_if_insufficient_commitment_proofs_are_provided() {
+    fn circuit_fails_if_insufficient_commitment_proofs_are_provided() {
         let program = Program::simple_balance_transfer();
         let sender_keys = test_private_account_keys_1();
         let recipient_keys = test_private_account_keys_2();
@@ -1611,9 +1642,9 @@ pub mod tests {
         let private_account_membership_proofs = [Some((0, vec![]))];
         let result = execute_and_prove(
             vec![private_account_1, private_account_2],
-            Program::serialize_instruction(10u128).unwrap(),
+            Program::serialize_instruction(10_u128).unwrap(),
             vec![1, 2],
-            vec![0xdeadbeef1, 0xdeadbeef2],
+            vec![0xdead_beef1, 0xdead_beef2],
             vec![
                 (
                     sender_keys.npk(),
@@ -1633,7 +1664,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_circuit_fails_if_insufficient_auth_keys_are_provided() {
+    fn circuit_fails_if_insufficient_auth_keys_are_provided() {
         let program = Program::simple_balance_transfer();
         let sender_keys = test_private_account_keys_1();
         let recipient_keys = test_private_account_keys_2();
@@ -1653,9 +1684,9 @@ pub mod tests {
         let private_account_nsks = [];
         let result = execute_and_prove(
             vec![private_account_1, private_account_2],
-            Program::serialize_instruction(10u128).unwrap(),
+            Program::serialize_instruction(10_u128).unwrap(),
             vec![1, 2],
-            vec![0xdeadbeef1, 0xdeadbeef2],
+            vec![0xdead_beef1, 0xdead_beef2],
             vec![
                 (
                     sender_keys.npk(),
@@ -1675,7 +1706,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_circuit_fails_if_invalid_auth_keys_are_provided() {
+    fn circuit_fails_if_invalid_auth_keys_are_provided() {
         let program = Program::simple_balance_transfer();
         let sender_keys = test_private_account_keys_1();
         let recipient_keys = test_private_account_keys_2();
@@ -1711,9 +1742,9 @@ pub mod tests {
         let private_account_membership_proofs = [Some((0, vec![]))];
         let result = execute_and_prove(
             vec![private_account_1, private_account_2],
-            Program::serialize_instruction(10u128).unwrap(),
+            Program::serialize_instruction(10_u128).unwrap(),
             vec![1, 2],
-            vec![0xdeadbeef1, 0xdeadbeef2],
+            vec![0xdead_beef1, 0xdead_beef2],
             private_account_keys.to_vec(),
             private_account_nsks.to_vec(),
             private_account_membership_proofs.to_vec(),
@@ -1724,7 +1755,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_circuit_should_fail_if_new_private_account_with_non_default_balance_is_provided() {
+    fn circuit_should_fail_if_new_private_account_with_non_default_balance_is_provided() {
         let program = Program::simple_balance_transfer();
         let sender_keys = test_private_account_keys_1();
         let recipient_keys = test_private_account_keys_2();
@@ -1749,9 +1780,9 @@ pub mod tests {
 
         let result = execute_and_prove(
             vec![private_account_1, private_account_2],
-            Program::serialize_instruction(10u128).unwrap(),
+            Program::serialize_instruction(10_u128).unwrap(),
             vec![1, 2],
-            vec![0xdeadbeef1, 0xdeadbeef2],
+            vec![0xdead_beef1, 0xdead_beef2],
             vec![
                 (
                     sender_keys.npk(),
@@ -1771,8 +1802,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_circuit_should_fail_if_new_private_account_with_non_default_program_owner_is_provided()
-    {
+    fn circuit_should_fail_if_new_private_account_with_non_default_program_owner_is_provided() {
         let program = Program::simple_balance_transfer();
         let sender_keys = test_private_account_keys_1();
         let recipient_keys = test_private_account_keys_2();
@@ -1797,9 +1827,9 @@ pub mod tests {
 
         let result = execute_and_prove(
             vec![private_account_1, private_account_2],
-            Program::serialize_instruction(10u128).unwrap(),
+            Program::serialize_instruction(10_u128).unwrap(),
             vec![1, 2],
-            vec![0xdeadbeef1, 0xdeadbeef2],
+            vec![0xdead_beef1, 0xdead_beef2],
             vec![
                 (
                     sender_keys.npk(),
@@ -1819,7 +1849,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_circuit_should_fail_if_new_private_account_with_non_default_data_is_provided() {
+    fn circuit_should_fail_if_new_private_account_with_non_default_data_is_provided() {
         let program = Program::simple_balance_transfer();
         let sender_keys = test_private_account_keys_1();
         let recipient_keys = test_private_account_keys_2();
@@ -1844,9 +1874,9 @@ pub mod tests {
 
         let result = execute_and_prove(
             vec![private_account_1, private_account_2],
-            Program::serialize_instruction(10u128).unwrap(),
+            Program::serialize_instruction(10_u128).unwrap(),
             vec![1, 2],
-            vec![0xdeadbeef1, 0xdeadbeef2],
+            vec![0xdead_beef1, 0xdead_beef2],
             vec![
                 (
                     sender_keys.npk(),
@@ -1866,7 +1896,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_circuit_should_fail_if_new_private_account_with_non_default_nonce_is_provided() {
+    fn circuit_should_fail_if_new_private_account_with_non_default_nonce_is_provided() {
         let program = Program::simple_balance_transfer();
         let sender_keys = test_private_account_keys_1();
         let recipient_keys = test_private_account_keys_2();
@@ -1882,7 +1912,7 @@ pub mod tests {
         let private_account_2 = AccountWithMetadata::new(
             Account {
                 // Non default nonce
-                nonce: 0xdeadbeef,
+                nonce: 0xdead_beef,
                 ..Account::default()
             },
             false,
@@ -1891,9 +1921,9 @@ pub mod tests {
 
         let result = execute_and_prove(
             vec![private_account_1, private_account_2],
-            Program::serialize_instruction(10u128).unwrap(),
+            Program::serialize_instruction(10_u128).unwrap(),
             vec![1, 2],
-            vec![0xdeadbeef1, 0xdeadbeef2],
+            vec![0xdead_beef1, 0xdead_beef2],
             vec![
                 (
                     sender_keys.npk(),
@@ -1913,7 +1943,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_circuit_should_fail_if_new_private_account_is_provided_with_default_values_but_marked_as_authorized()
+    fn circuit_should_fail_if_new_private_account_is_provided_with_default_values_but_marked_as_authorized()
      {
         let program = Program::simple_balance_transfer();
         let sender_keys = test_private_account_keys_1();
@@ -1936,9 +1966,9 @@ pub mod tests {
 
         let result = execute_and_prove(
             vec![private_account_1, private_account_2],
-            Program::serialize_instruction(10u128).unwrap(),
+            Program::serialize_instruction(10_u128).unwrap(),
             vec![1, 2],
-            vec![0xdeadbeef1, 0xdeadbeef2],
+            vec![0xdead_beef1, 0xdead_beef2],
             vec![
                 (
                     sender_keys.npk(),
@@ -1958,7 +1988,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_circuit_should_fail_with_invalid_visibility_mask_value() {
+    fn circuit_should_fail_with_invalid_visibility_mask_value() {
         let program = Program::simple_balance_transfer();
         let public_account_1 = AccountWithMetadata::new(
             Account {
@@ -1975,7 +2005,7 @@ pub mod tests {
         let visibility_mask = [0, 3];
         let result = execute_and_prove(
             vec![public_account_1, public_account_2],
-            Program::serialize_instruction(10u128).unwrap(),
+            Program::serialize_instruction(10_u128).unwrap(),
             visibility_mask.to_vec(),
             vec![],
             vec![],
@@ -1988,7 +2018,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_circuit_should_fail_with_too_many_nonces() {
+    fn circuit_should_fail_with_too_many_nonces() {
         let program = Program::simple_balance_transfer();
         let sender_keys = test_private_account_keys_1();
         let recipient_keys = test_private_account_keys_2();
@@ -2006,10 +2036,10 @@ pub mod tests {
 
         // Setting three new private account nonces for a circuit execution with only two private
         // accounts.
-        let private_account_nonces = [0xdeadbeef1, 0xdeadbeef2, 0xdeadbeef3];
+        let private_account_nonces = [0xdead_beef1, 0xdead_beef2, 0xdead_beef3];
         let result = execute_and_prove(
             vec![private_account_1, private_account_2],
-            Program::serialize_instruction(10u128).unwrap(),
+            Program::serialize_instruction(10_u128).unwrap(),
             vec![1, 2],
             private_account_nonces.to_vec(),
             vec![
@@ -2031,7 +2061,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_circuit_should_fail_with_too_many_private_account_keys() {
+    fn circuit_should_fail_with_too_many_private_account_keys() {
         let program = Program::simple_balance_transfer();
         let sender_keys = test_private_account_keys_1();
         let recipient_keys = test_private_account_keys_2();
@@ -2065,9 +2095,9 @@ pub mod tests {
         ];
         let result = execute_and_prove(
             vec![private_account_1, private_account_2],
-            Program::serialize_instruction(10u128).unwrap(),
+            Program::serialize_instruction(10_u128).unwrap(),
             vec![1, 2],
-            vec![0xdeadbeef1, 0xdeadbeef2],
+            vec![0xdead_beef1, 0xdead_beef2],
             private_account_keys.to_vec(),
             vec![sender_keys.nsk],
             vec![Some((0, vec![]))],
@@ -2078,7 +2108,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_circuit_should_fail_with_too_many_private_account_auth_keys() {
+    fn circuit_should_fail_with_too_many_private_account_auth_keys() {
         let program = Program::simple_balance_transfer();
         let sender_keys = test_private_account_keys_1();
         let recipient_keys = test_private_account_keys_2();
@@ -2101,9 +2131,9 @@ pub mod tests {
         let private_account_membership_proofs = [Some((0, vec![])), Some((1, vec![]))];
         let result = execute_and_prove(
             vec![private_account_1, private_account_2],
-            Program::serialize_instruction(10u128).unwrap(),
+            Program::serialize_instruction(10_u128).unwrap(),
             visibility_mask.to_vec(),
-            vec![0xdeadbeef1, 0xdeadbeef2],
+            vec![0xdead_beef1, 0xdead_beef2],
             vec![
                 (
                     sender_keys.npk(),
@@ -2123,12 +2153,12 @@ pub mod tests {
     }
 
     #[test]
-    fn test_private_accounts_can_only_be_initialized_once() {
+    fn private_accounts_can_only_be_initialized_once() {
         let sender_keys = test_private_account_keys_1();
         let sender_private_account = Account {
             program_owner: Program::authenticated_transfer_program().id(),
             balance: 100,
-            nonce: 0xdeadbeef,
+            nonce: 0xdead_beef,
             data: Data::default(),
         };
         let recipient_keys = test_private_account_keys_2();
@@ -2143,7 +2173,7 @@ pub mod tests {
             &sender_private_account,
             &recipient_keys,
             balance_to_move,
-            [0xcafecafe, 0xfecafeca],
+            [0xcafe_cafe, 0xfeca_feca],
             &state,
         );
 
@@ -2154,7 +2184,7 @@ pub mod tests {
         let sender_private_account = Account {
             program_owner: Program::authenticated_transfer_program().id(),
             balance: 100 - balance_to_move,
-            nonce: 0xcafecafe,
+            nonce: 0xcafe_cafe,
             data: Data::default(),
         };
 
@@ -2173,12 +2203,12 @@ pub mod tests {
         let NssaError::InvalidInput(error_message) = result.err().unwrap() else {
             panic!("Incorrect message error");
         };
-        let expected_error_message = "Nullifier already seen".to_string();
+        let expected_error_message = "Nullifier already seen".to_owned();
         assert_eq!(error_message, expected_error_message);
     }
 
     #[test]
-    fn test_circuit_should_fail_if_there_are_repeated_ids() {
+    fn circuit_should_fail_if_there_are_repeated_ids() {
         let program = Program::simple_balance_transfer();
         let sender_keys = test_private_account_keys_1();
         let private_account_1 = AccountWithMetadata::new(
@@ -2197,9 +2227,9 @@ pub mod tests {
         let shared_secret = SharedSecretKey::new(&[55; 32], &sender_keys.vpk());
         let result = execute_and_prove(
             vec![private_account_1.clone(), private_account_1],
-            Program::serialize_instruction(100u128).unwrap(),
+            Program::serialize_instruction(100_u128).unwrap(),
             visibility_mask.to_vec(),
-            vec![0xdeadbeef1, 0xdeadbeef2],
+            vec![0xdead_beef1, 0xdead_beef2],
             vec![
                 (sender_keys.npk(), shared_secret),
                 (sender_keys.npk(), shared_secret),
@@ -2213,7 +2243,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_claiming_mechanism() {
+    fn claiming_mechanism() {
         let program = Program::authenticated_transfer_program();
         let key = PrivateKey::try_new([1; 32]).unwrap();
         let account_id = AccountId::from(&PublicKey::new_from_private_key(&key));
@@ -2249,7 +2279,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_public_chained_call() {
+    fn public_chained_call() {
         let program = Program::chain_caller();
         let key = PrivateKey::try_new([1; 32]).unwrap();
         let from = AccountId::from(&PublicKey::new_from_private_key(&key));
@@ -2294,7 +2324,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_execution_fails_if_chained_calls_exceeds_depth() {
+    fn execution_fails_if_chained_calls_exceeds_depth() {
         let program = Program::chain_caller();
         let key = PrivateKey::try_new([1; 32]).unwrap();
         let from = AccountId::from(&PublicKey::new_from_private_key(&key));
@@ -2308,7 +2338,8 @@ pub mod tests {
         let instruction: (u128, ProgramId, u32, Option<PdaSeed>) = (
             amount,
             Program::authenticated_transfer_program().id(),
-            MAX_NUMBER_CHAINED_CALLS as u32 + 1,
+            u32::try_from(MAX_NUMBER_CHAINED_CALLS).expect("MAX_NUMBER_CHAINED_CALLS fits in u32")
+                + 1,
             None,
         );
 
@@ -2330,1354 +2361,8 @@ pub mod tests {
         ));
     }
 
-    struct PrivateKeysForTests;
-
-    impl PrivateKeysForTests {
-        fn user_token_a_key() -> PrivateKey {
-            PrivateKey::try_new([31; 32]).expect("Keys constructor expects valid private key")
-        }
-
-        fn user_token_b_key() -> PrivateKey {
-            PrivateKey::try_new([32; 32]).expect("Keys constructor expects valid private key")
-        }
-
-        fn user_token_lp_key() -> PrivateKey {
-            PrivateKey::try_new([33; 32]).expect("Keys constructor expects valid private key")
-        }
-    }
-
-    struct BalanceForTests;
-
-    impl BalanceForTests {
-        fn user_token_a_holding_init() -> u128 {
-            10_000
-        }
-
-        fn user_token_b_holding_init() -> u128 {
-            10_000
-        }
-
-        fn user_token_lp_holding_init() -> u128 {
-            2_000
-        }
-
-        fn vault_a_balance_init() -> u128 {
-            5_000
-        }
-
-        fn vault_b_balance_init() -> u128 {
-            2_500
-        }
-
-        fn pool_lp_supply_init() -> u128 {
-            5_000
-        }
-
-        fn token_a_supply() -> u128 {
-            100_000
-        }
-
-        fn token_b_supply() -> u128 {
-            100_000
-        }
-
-        fn token_lp_supply() -> u128 {
-            5_000
-        }
-
-        fn remove_lp() -> u128 {
-            1_000
-        }
-
-        fn remove_min_amount_a() -> u128 {
-            500
-        }
-
-        fn remove_min_amount_b() -> u128 {
-            500
-        }
-
-        fn add_min_amount_lp() -> u128 {
-            1_000
-        }
-
-        fn add_max_amount_a() -> u128 {
-            2_000
-        }
-
-        fn add_max_amount_b() -> u128 {
-            1_000
-        }
-
-        fn swap_amount_in() -> u128 {
-            1_000
-        }
-
-        fn swap_min_amount_out() -> u128 {
-            200
-        }
-
-        fn vault_a_balance_swap_1() -> u128 {
-            3_572
-        }
-
-        fn vault_b_balance_swap_1() -> u128 {
-            3_500
-        }
-
-        fn user_token_a_holding_swap_1() -> u128 {
-            11_428
-        }
-
-        fn user_token_b_holding_swap_1() -> u128 {
-            9_000
-        }
-
-        fn vault_a_balance_swap_2() -> u128 {
-            6_000
-        }
-
-        fn vault_b_balance_swap_2() -> u128 {
-            2_084
-        }
-
-        fn user_token_a_holding_swap_2() -> u128 {
-            9_000
-        }
-
-        fn user_token_b_holding_swap_2() -> u128 {
-            10_416
-        }
-
-        fn vault_a_balance_add() -> u128 {
-            7_000
-        }
-
-        fn vault_b_balance_add() -> u128 {
-            3_500
-        }
-
-        fn user_token_a_holding_add() -> u128 {
-            8_000
-        }
-
-        fn user_token_b_holding_add() -> u128 {
-            9_000
-        }
-
-        fn user_token_lp_holding_add() -> u128 {
-            4_000
-        }
-
-        fn token_lp_supply_add() -> u128 {
-            7_000
-        }
-
-        fn vault_a_balance_remove() -> u128 {
-            4_000
-        }
-
-        fn vault_b_balance_remove() -> u128 {
-            2_000
-        }
-
-        fn user_token_a_holding_remove() -> u128 {
-            11_000
-        }
-
-        fn user_token_b_holding_remove() -> u128 {
-            10_500
-        }
-
-        fn user_token_lp_holding_remove() -> u128 {
-            1_000
-        }
-
-        fn token_lp_supply_remove() -> u128 {
-            4_000
-        }
-
-        fn user_token_a_holding_new_definition() -> u128 {
-            5_000
-        }
-
-        fn user_token_b_holding_new_definition() -> u128 {
-            7_500
-        }
-
-        fn lp_supply_init() -> u128 {
-            // isqrt(vault_a_balance_init * vault_b_balance_init) = isqrt(5_000 * 2_500) = 3535
-            (BalanceForTests::vault_a_balance_init() * BalanceForTests::vault_b_balance_init())
-                .isqrt()
-        }
-    }
-
-    struct IdForTests;
-
-    impl IdForTests {
-        fn pool_definition_id() -> AccountId {
-            amm_core::compute_pool_pda(
-                Program::amm().id(),
-                IdForTests::token_a_definition_id(),
-                IdForTests::token_b_definition_id(),
-            )
-        }
-
-        fn token_lp_definition_id() -> AccountId {
-            amm_core::compute_liquidity_token_pda(
-                Program::amm().id(),
-                IdForTests::pool_definition_id(),
-            )
-        }
-
-        fn token_a_definition_id() -> AccountId {
-            AccountId::new([3; 32])
-        }
-
-        fn token_b_definition_id() -> AccountId {
-            AccountId::new([4; 32])
-        }
-
-        fn user_token_a_id() -> AccountId {
-            AccountId::from(&PublicKey::new_from_private_key(
-                &PrivateKeysForTests::user_token_a_key(),
-            ))
-        }
-
-        fn user_token_b_id() -> AccountId {
-            AccountId::from(&PublicKey::new_from_private_key(
-                &PrivateKeysForTests::user_token_b_key(),
-            ))
-        }
-
-        fn user_token_lp_id() -> AccountId {
-            AccountId::from(&PublicKey::new_from_private_key(
-                &PrivateKeysForTests::user_token_lp_key(),
-            ))
-        }
-
-        fn vault_a_id() -> AccountId {
-            amm_core::compute_vault_pda(
-                Program::amm().id(),
-                IdForTests::pool_definition_id(),
-                IdForTests::token_a_definition_id(),
-            )
-        }
-
-        fn vault_b_id() -> AccountId {
-            amm_core::compute_vault_pda(
-                Program::amm().id(),
-                IdForTests::pool_definition_id(),
-                IdForTests::token_b_definition_id(),
-            )
-        }
-    }
-
-    struct AccountForTests;
-
-    impl AccountForTests {
-        fn user_token_a_holding() -> Account {
-            Account {
-                program_owner: Program::token().id(),
-                balance: 0u128,
-                data: Data::from(&TokenHolding::Fungible {
-                    definition_id: IdForTests::token_a_definition_id(),
-                    balance: BalanceForTests::user_token_a_holding_init(),
-                }),
-                nonce: 0,
-            }
-        }
-
-        fn user_token_b_holding() -> Account {
-            Account {
-                program_owner: Program::token().id(),
-                balance: 0u128,
-                data: Data::from(&TokenHolding::Fungible {
-                    definition_id: IdForTests::token_b_definition_id(),
-                    balance: BalanceForTests::user_token_b_holding_init(),
-                }),
-                nonce: 0,
-            }
-        }
-
-        fn pool_definition_init() -> Account {
-            Account {
-                program_owner: Program::amm().id(),
-                balance: 0u128,
-                data: Data::from(&PoolDefinition {
-                    definition_token_a_id: IdForTests::token_a_definition_id(),
-                    definition_token_b_id: IdForTests::token_b_definition_id(),
-                    vault_a_id: IdForTests::vault_a_id(),
-                    vault_b_id: IdForTests::vault_b_id(),
-                    liquidity_pool_id: IdForTests::token_lp_definition_id(),
-                    liquidity_pool_supply: BalanceForTests::pool_lp_supply_init(),
-                    reserve_a: BalanceForTests::vault_a_balance_init(),
-                    reserve_b: BalanceForTests::vault_b_balance_init(),
-                    fees: 0u128,
-                    active: true,
-                }),
-                nonce: 0,
-            }
-        }
-
-        fn token_a_definition_account() -> Account {
-            Account {
-                program_owner: Program::token().id(),
-                balance: 0u128,
-                data: Data::from(&TokenDefinition::Fungible {
-                    name: String::from("test"),
-                    total_supply: BalanceForTests::token_a_supply(),
-                    metadata_id: None,
-                }),
-                nonce: 0,
-            }
-        }
-
-        fn token_b_definition_acc() -> Account {
-            Account {
-                program_owner: Program::token().id(),
-                balance: 0u128,
-                data: Data::from(&TokenDefinition::Fungible {
-                    name: String::from("test"),
-                    total_supply: BalanceForTests::token_b_supply(),
-                    metadata_id: None,
-                }),
-                nonce: 0,
-            }
-        }
-
-        fn token_lp_definition_acc() -> Account {
-            Account {
-                program_owner: Program::token().id(),
-                balance: 0u128,
-                data: Data::from(&TokenDefinition::Fungible {
-                    name: String::from("LP Token"),
-                    total_supply: BalanceForTests::token_lp_supply(),
-                    metadata_id: None,
-                }),
-                nonce: 0,
-            }
-        }
-
-        fn vault_a_init() -> Account {
-            Account {
-                program_owner: Program::token().id(),
-                balance: 0u128,
-                data: Data::from(&TokenHolding::Fungible {
-                    definition_id: IdForTests::token_a_definition_id(),
-                    balance: BalanceForTests::vault_a_balance_init(),
-                }),
-                nonce: 0,
-            }
-        }
-
-        fn vault_b_init() -> Account {
-            Account {
-                program_owner: Program::token().id(),
-                balance: 0u128,
-                data: Data::from(&TokenHolding::Fungible {
-                    definition_id: IdForTests::token_b_definition_id(),
-                    balance: BalanceForTests::vault_b_balance_init(),
-                }),
-                nonce: 0,
-            }
-        }
-
-        fn user_token_lp_holding() -> Account {
-            Account {
-                program_owner: Program::token().id(),
-                balance: 0u128,
-                data: Data::from(&TokenHolding::Fungible {
-                    definition_id: IdForTests::token_lp_definition_id(),
-                    balance: BalanceForTests::user_token_lp_holding_init(),
-                }),
-                nonce: 0,
-            }
-        }
-
-        fn vault_a_swap_1() -> Account {
-            Account {
-                program_owner: Program::token().id(),
-                balance: 0u128,
-                data: Data::from(&TokenHolding::Fungible {
-                    definition_id: IdForTests::token_a_definition_id(),
-                    balance: BalanceForTests::vault_a_balance_swap_1(),
-                }),
-                nonce: 0,
-            }
-        }
-
-        fn vault_b_swap_1() -> Account {
-            Account {
-                program_owner: Program::token().id(),
-                balance: 0u128,
-                data: Data::from(&TokenHolding::Fungible {
-                    definition_id: IdForTests::token_b_definition_id(),
-                    balance: BalanceForTests::vault_b_balance_swap_1(),
-                }),
-                nonce: 0,
-            }
-        }
-
-        fn pool_definition_swap_1() -> Account {
-            Account {
-                program_owner: Program::amm().id(),
-                balance: 0u128,
-                data: Data::from(&PoolDefinition {
-                    definition_token_a_id: IdForTests::token_a_definition_id(),
-                    definition_token_b_id: IdForTests::token_b_definition_id(),
-                    vault_a_id: IdForTests::vault_a_id(),
-                    vault_b_id: IdForTests::vault_b_id(),
-                    liquidity_pool_id: IdForTests::token_lp_definition_id(),
-                    liquidity_pool_supply: BalanceForTests::pool_lp_supply_init(),
-                    reserve_a: BalanceForTests::vault_a_balance_swap_1(),
-                    reserve_b: BalanceForTests::vault_b_balance_swap_1(),
-                    fees: 0u128,
-                    active: true,
-                }),
-                nonce: 0,
-            }
-        }
-
-        fn user_token_a_holding_swap_1() -> Account {
-            Account {
-                program_owner: Program::token().id(),
-                balance: 0u128,
-                data: Data::from(&TokenHolding::Fungible {
-                    definition_id: IdForTests::token_a_definition_id(),
-                    balance: BalanceForTests::user_token_a_holding_swap_1(),
-                }),
-                nonce: 0,
-            }
-        }
-
-        fn user_token_b_holding_swap_1() -> Account {
-            Account {
-                program_owner: Program::token().id(),
-                balance: 0u128,
-                data: Data::from(&TokenHolding::Fungible {
-                    definition_id: IdForTests::token_b_definition_id(),
-                    balance: BalanceForTests::user_token_b_holding_swap_1(),
-                }),
-                nonce: 1,
-            }
-        }
-
-        fn vault_a_swap_2() -> Account {
-            Account {
-                program_owner: Program::token().id(),
-                balance: 0u128,
-                data: Data::from(&TokenHolding::Fungible {
-                    definition_id: IdForTests::token_a_definition_id(),
-                    balance: BalanceForTests::vault_a_balance_swap_2(),
-                }),
-                nonce: 0,
-            }
-        }
-
-        fn vault_b_swap_2() -> Account {
-            Account {
-                program_owner: Program::token().id(),
-                balance: 0u128,
-                data: Data::from(&TokenHolding::Fungible {
-                    definition_id: IdForTests::token_b_definition_id(),
-                    balance: BalanceForTests::vault_b_balance_swap_2(),
-                }),
-                nonce: 0,
-            }
-        }
-
-        fn pool_definition_swap_2() -> Account {
-            Account {
-                program_owner: Program::amm().id(),
-                balance: 0u128,
-                data: Data::from(&PoolDefinition {
-                    definition_token_a_id: IdForTests::token_a_definition_id(),
-                    definition_token_b_id: IdForTests::token_b_definition_id(),
-                    vault_a_id: IdForTests::vault_a_id(),
-                    vault_b_id: IdForTests::vault_b_id(),
-                    liquidity_pool_id: IdForTests::token_lp_definition_id(),
-                    liquidity_pool_supply: BalanceForTests::pool_lp_supply_init(),
-                    reserve_a: BalanceForTests::vault_a_balance_swap_2(),
-                    reserve_b: BalanceForTests::vault_b_balance_swap_2(),
-                    fees: 0u128,
-                    active: true,
-                }),
-                nonce: 0,
-            }
-        }
-
-        fn user_token_a_holding_swap_2() -> Account {
-            Account {
-                program_owner: Program::token().id(),
-                balance: 0u128,
-                data: Data::from(&TokenHolding::Fungible {
-                    definition_id: IdForTests::token_a_definition_id(),
-                    balance: BalanceForTests::user_token_a_holding_swap_2(),
-                }),
-                nonce: 1,
-            }
-        }
-
-        fn user_token_b_holding_swap_2() -> Account {
-            Account {
-                program_owner: Program::token().id(),
-                balance: 0u128,
-                data: Data::from(&TokenHolding::Fungible {
-                    definition_id: IdForTests::token_b_definition_id(),
-                    balance: BalanceForTests::user_token_b_holding_swap_2(),
-                }),
-                nonce: 0,
-            }
-        }
-
-        fn vault_a_add() -> Account {
-            Account {
-                program_owner: Program::token().id(),
-                balance: 0u128,
-                data: Data::from(&TokenHolding::Fungible {
-                    definition_id: IdForTests::token_a_definition_id(),
-                    balance: BalanceForTests::vault_a_balance_add(),
-                }),
-                nonce: 0,
-            }
-        }
-
-        fn vault_b_add() -> Account {
-            Account {
-                program_owner: Program::token().id(),
-                balance: 0u128,
-                data: Data::from(&TokenHolding::Fungible {
-                    definition_id: IdForTests::token_b_definition_id(),
-                    balance: BalanceForTests::vault_b_balance_add(),
-                }),
-                nonce: 0,
-            }
-        }
-
-        fn pool_definition_add() -> Account {
-            Account {
-                program_owner: Program::amm().id(),
-                balance: 0u128,
-                data: Data::from(&PoolDefinition {
-                    definition_token_a_id: IdForTests::token_a_definition_id(),
-                    definition_token_b_id: IdForTests::token_b_definition_id(),
-                    vault_a_id: IdForTests::vault_a_id(),
-                    vault_b_id: IdForTests::vault_b_id(),
-                    liquidity_pool_id: IdForTests::token_lp_definition_id(),
-                    liquidity_pool_supply: BalanceForTests::token_lp_supply_add(),
-                    reserve_a: BalanceForTests::vault_a_balance_add(),
-                    reserve_b: BalanceForTests::vault_b_balance_add(),
-                    fees: 0u128,
-                    active: true,
-                }),
-                nonce: 0,
-            }
-        }
-
-        fn user_token_a_holding_add() -> Account {
-            Account {
-                program_owner: Program::token().id(),
-                balance: 0u128,
-                data: Data::from(&TokenHolding::Fungible {
-                    definition_id: IdForTests::token_a_definition_id(),
-                    balance: BalanceForTests::user_token_a_holding_add(),
-                }),
-                nonce: 1,
-            }
-        }
-
-        fn user_token_b_holding_add() -> Account {
-            Account {
-                program_owner: Program::token().id(),
-                balance: 0u128,
-                data: Data::from(&TokenHolding::Fungible {
-                    definition_id: IdForTests::token_b_definition_id(),
-                    balance: BalanceForTests::user_token_b_holding_add(),
-                }),
-                nonce: 1,
-            }
-        }
-
-        fn user_token_lp_holding_add() -> Account {
-            Account {
-                program_owner: Program::token().id(),
-                balance: 0u128,
-                data: Data::from(&TokenHolding::Fungible {
-                    definition_id: IdForTests::token_lp_definition_id(),
-                    balance: BalanceForTests::user_token_lp_holding_add(),
-                }),
-                nonce: 0,
-            }
-        }
-
-        fn token_lp_definition_add() -> Account {
-            Account {
-                program_owner: Program::token().id(),
-                balance: 0u128,
-                data: Data::from(&TokenDefinition::Fungible {
-                    name: String::from("LP Token"),
-                    total_supply: BalanceForTests::token_lp_supply_add(),
-                    metadata_id: None,
-                }),
-                nonce: 0,
-            }
-        }
-
-        fn vault_a_remove() -> Account {
-            Account {
-                program_owner: Program::token().id(),
-                balance: 0u128,
-                data: Data::from(&TokenHolding::Fungible {
-                    definition_id: IdForTests::token_a_definition_id(),
-                    balance: BalanceForTests::vault_a_balance_remove(),
-                }),
-                nonce: 0,
-            }
-        }
-
-        fn vault_b_remove() -> Account {
-            Account {
-                program_owner: Program::token().id(),
-                balance: 0u128,
-                data: Data::from(&TokenHolding::Fungible {
-                    definition_id: IdForTests::token_b_definition_id(),
-                    balance: BalanceForTests::vault_b_balance_remove(),
-                }),
-                nonce: 0,
-            }
-        }
-
-        fn pool_definition_remove() -> Account {
-            Account {
-                program_owner: Program::amm().id(),
-                balance: 0u128,
-                data: Data::from(&PoolDefinition {
-                    definition_token_a_id: IdForTests::token_a_definition_id(),
-                    definition_token_b_id: IdForTests::token_b_definition_id(),
-                    vault_a_id: IdForTests::vault_a_id(),
-                    vault_b_id: IdForTests::vault_b_id(),
-                    liquidity_pool_id: IdForTests::token_lp_definition_id(),
-                    liquidity_pool_supply: BalanceForTests::token_lp_supply_remove(),
-                    reserve_a: BalanceForTests::vault_a_balance_remove(),
-                    reserve_b: BalanceForTests::vault_b_balance_remove(),
-                    fees: 0u128,
-                    active: true,
-                }),
-                nonce: 0,
-            }
-        }
-
-        fn user_token_a_holding_remove() -> Account {
-            Account {
-                program_owner: Program::token().id(),
-                balance: 0u128,
-                data: Data::from(&TokenHolding::Fungible {
-                    definition_id: IdForTests::token_a_definition_id(),
-                    balance: BalanceForTests::user_token_a_holding_remove(),
-                }),
-                nonce: 0,
-            }
-        }
-
-        fn user_token_b_holding_remove() -> Account {
-            Account {
-                program_owner: Program::token().id(),
-                balance: 0u128,
-                data: Data::from(&TokenHolding::Fungible {
-                    definition_id: IdForTests::token_b_definition_id(),
-                    balance: BalanceForTests::user_token_b_holding_remove(),
-                }),
-                nonce: 0,
-            }
-        }
-
-        fn user_token_lp_holding_remove() -> Account {
-            Account {
-                program_owner: Program::token().id(),
-                balance: 0u128,
-                data: Data::from(&TokenHolding::Fungible {
-                    definition_id: IdForTests::token_lp_definition_id(),
-                    balance: BalanceForTests::user_token_lp_holding_remove(),
-                }),
-                nonce: 1,
-            }
-        }
-
-        fn token_lp_definition_remove() -> Account {
-            Account {
-                program_owner: Program::token().id(),
-                balance: 0u128,
-                data: Data::from(&TokenDefinition::Fungible {
-                    name: String::from("LP Token"),
-                    total_supply: BalanceForTests::token_lp_supply_remove(),
-                    metadata_id: None,
-                }),
-                nonce: 0,
-            }
-        }
-
-        fn token_lp_definition_init_inactive() -> Account {
-            Account {
-                program_owner: Program::token().id(),
-                balance: 0u128,
-                data: Data::from(&TokenDefinition::Fungible {
-                    name: String::from("LP Token"),
-                    total_supply: 0,
-                    metadata_id: None,
-                }),
-                nonce: 0,
-            }
-        }
-
-        fn vault_a_init_inactive() -> Account {
-            Account {
-                program_owner: Program::token().id(),
-                balance: 0u128,
-                data: Data::from(&TokenHolding::Fungible {
-                    definition_id: IdForTests::token_a_definition_id(),
-                    balance: 0,
-                }),
-                nonce: 0,
-            }
-        }
-
-        fn vault_b_init_inactive() -> Account {
-            Account {
-                program_owner: Program::token().id(),
-                balance: 0u128,
-                data: Data::from(&TokenHolding::Fungible {
-                    definition_id: IdForTests::token_b_definition_id(),
-                    balance: 0,
-                }),
-                nonce: 0,
-            }
-        }
-
-        fn pool_definition_inactive() -> Account {
-            Account {
-                program_owner: Program::amm().id(),
-                balance: 0u128,
-                data: Data::from(&PoolDefinition {
-                    definition_token_a_id: IdForTests::token_a_definition_id(),
-                    definition_token_b_id: IdForTests::token_b_definition_id(),
-                    vault_a_id: IdForTests::vault_a_id(),
-                    vault_b_id: IdForTests::vault_b_id(),
-                    liquidity_pool_id: IdForTests::token_lp_definition_id(),
-                    liquidity_pool_supply: 0,
-                    reserve_a: 0,
-                    reserve_b: 0,
-                    fees: 0u128,
-                    active: false,
-                }),
-                nonce: 0,
-            }
-        }
-
-        fn user_token_a_holding_new_init() -> Account {
-            Account {
-                program_owner: Program::token().id(),
-                balance: 0u128,
-                data: Data::from(&TokenHolding::Fungible {
-                    definition_id: IdForTests::token_a_definition_id(),
-                    balance: BalanceForTests::user_token_a_holding_new_definition(),
-                }),
-                nonce: 1,
-            }
-        }
-
-        fn user_token_b_holding_new_init() -> Account {
-            Account {
-                program_owner: Program::token().id(),
-                balance: 0u128,
-                data: Data::from(&TokenHolding::Fungible {
-                    definition_id: IdForTests::token_b_definition_id(),
-                    balance: BalanceForTests::user_token_b_holding_new_definition(),
-                }),
-                nonce: 1,
-            }
-        }
-
-        fn user_token_lp_holding_new_init() -> Account {
-            Account {
-                program_owner: Program::token().id(),
-                balance: 0u128,
-                data: Data::from(&TokenHolding::Fungible {
-                    definition_id: IdForTests::token_lp_definition_id(),
-                    balance: BalanceForTests::lp_supply_init(),
-                }),
-                nonce: 0,
-            }
-        }
-
-        fn token_lp_definition_new_init() -> Account {
-            Account {
-                program_owner: Program::token().id(),
-                balance: 0u128,
-                data: Data::from(&TokenDefinition::Fungible {
-                    name: String::from("LP Token"),
-                    total_supply: BalanceForTests::lp_supply_init(),
-                    metadata_id: None,
-                }),
-                nonce: 0,
-            }
-        }
-
-        fn pool_definition_new_init() -> Account {
-            Account {
-                program_owner: Program::amm().id(),
-                balance: 0u128,
-                data: Data::from(&PoolDefinition {
-                    definition_token_a_id: IdForTests::token_a_definition_id(),
-                    definition_token_b_id: IdForTests::token_b_definition_id(),
-                    vault_a_id: IdForTests::vault_a_id(),
-                    vault_b_id: IdForTests::vault_b_id(),
-                    liquidity_pool_id: IdForTests::token_lp_definition_id(),
-                    liquidity_pool_supply: BalanceForTests::lp_supply_init(),
-                    reserve_a: BalanceForTests::vault_a_balance_init(),
-                    reserve_b: BalanceForTests::vault_b_balance_init(),
-                    fees: 0u128,
-                    active: true,
-                }),
-                nonce: 0,
-            }
-        }
-
-        fn user_token_lp_holding_init_zero() -> Account {
-            Account {
-                program_owner: Program::token().id(),
-                balance: 0u128,
-                data: Data::from(&TokenHolding::Fungible {
-                    definition_id: IdForTests::token_lp_definition_id(),
-                    balance: 0,
-                }),
-                nonce: 0,
-            }
-        }
-    }
-
-    fn state_for_amm_tests() -> V02State {
-        let initial_data = [];
-        let mut state =
-            V02State::new_with_genesis_accounts(&initial_data, &[]).with_test_programs();
-        state.force_insert_account(
-            IdForTests::pool_definition_id(),
-            AccountForTests::pool_definition_init(),
-        );
-        state.force_insert_account(
-            IdForTests::token_a_definition_id(),
-            AccountForTests::token_a_definition_account(),
-        );
-        state.force_insert_account(
-            IdForTests::token_b_definition_id(),
-            AccountForTests::token_b_definition_acc(),
-        );
-        state.force_insert_account(
-            IdForTests::token_lp_definition_id(),
-            AccountForTests::token_lp_definition_acc(),
-        );
-        state.force_insert_account(
-            IdForTests::user_token_a_id(),
-            AccountForTests::user_token_a_holding(),
-        );
-        state.force_insert_account(
-            IdForTests::user_token_b_id(),
-            AccountForTests::user_token_b_holding(),
-        );
-        state.force_insert_account(
-            IdForTests::user_token_lp_id(),
-            AccountForTests::user_token_lp_holding(),
-        );
-        state.force_insert_account(IdForTests::vault_a_id(), AccountForTests::vault_a_init());
-        state.force_insert_account(IdForTests::vault_b_id(), AccountForTests::vault_b_init());
-
-        state
-    }
-
-    fn state_for_amm_tests_with_new_def() -> V02State {
-        let initial_data = [];
-        let mut state =
-            V02State::new_with_genesis_accounts(&initial_data, &[]).with_test_programs();
-        state.force_insert_account(
-            IdForTests::token_a_definition_id(),
-            AccountForTests::token_a_definition_account(),
-        );
-        state.force_insert_account(
-            IdForTests::token_b_definition_id(),
-            AccountForTests::token_b_definition_acc(),
-        );
-        state.force_insert_account(
-            IdForTests::user_token_a_id(),
-            AccountForTests::user_token_a_holding(),
-        );
-        state.force_insert_account(
-            IdForTests::user_token_b_id(),
-            AccountForTests::user_token_b_holding(),
-        );
-        state
-    }
-
     #[test]
-    fn test_simple_amm_remove() {
-        let mut state = state_for_amm_tests();
-
-        let instruction = amm_core::Instruction::RemoveLiquidity {
-            remove_liquidity_amount: BalanceForTests::remove_lp(),
-            min_amount_to_remove_token_a: BalanceForTests::remove_min_amount_a(),
-            min_amount_to_remove_token_b: BalanceForTests::remove_min_amount_b(),
-        };
-
-        let message = public_transaction::Message::try_new(
-            Program::amm().id(),
-            vec![
-                IdForTests::pool_definition_id(),
-                IdForTests::vault_a_id(),
-                IdForTests::vault_b_id(),
-                IdForTests::token_lp_definition_id(),
-                IdForTests::user_token_a_id(),
-                IdForTests::user_token_b_id(),
-                IdForTests::user_token_lp_id(),
-            ],
-            vec![0],
-            instruction,
-        )
-        .unwrap();
-
-        let witness_set = public_transaction::WitnessSet::for_message(
-            &message,
-            &[&PrivateKeysForTests::user_token_lp_key()],
-        );
-
-        let tx = PublicTransaction::new(message, witness_set);
-        state.transition_from_public_transaction(&tx).unwrap();
-
-        let pool_post = state.get_account_by_id(IdForTests::pool_definition_id());
-        let vault_a_post = state.get_account_by_id(IdForTests::vault_a_id());
-        let vault_b_post = state.get_account_by_id(IdForTests::vault_b_id());
-        let token_lp_post = state.get_account_by_id(IdForTests::token_lp_definition_id());
-        let user_token_a_post = state.get_account_by_id(IdForTests::user_token_a_id());
-        let user_token_b_post = state.get_account_by_id(IdForTests::user_token_b_id());
-        let user_token_lp_post = state.get_account_by_id(IdForTests::user_token_lp_id());
-
-        let expected_pool = AccountForTests::pool_definition_remove();
-        let expected_vault_a = AccountForTests::vault_a_remove();
-        let expected_vault_b = AccountForTests::vault_b_remove();
-        let expected_token_lp = AccountForTests::token_lp_definition_remove();
-        let expected_user_token_a = AccountForTests::user_token_a_holding_remove();
-        let expected_user_token_b = AccountForTests::user_token_b_holding_remove();
-        let expected_user_token_lp = AccountForTests::user_token_lp_holding_remove();
-
-        assert_eq!(pool_post, expected_pool);
-        assert_eq!(vault_a_post, expected_vault_a);
-        assert_eq!(vault_b_post, expected_vault_b);
-        assert_eq!(token_lp_post, expected_token_lp);
-        assert_eq!(user_token_a_post, expected_user_token_a);
-        assert_eq!(user_token_b_post, expected_user_token_b);
-        assert_eq!(user_token_lp_post, expected_user_token_lp);
-    }
-
-    #[test]
-    fn test_simple_amm_new_definition_inactive_initialized_pool_and_uninit_user_lp() {
-        let mut state = state_for_amm_tests_with_new_def();
-
-        // Uninitialized in constructor
-        state.force_insert_account(
-            IdForTests::vault_a_id(),
-            AccountForTests::vault_a_init_inactive(),
-        );
-        state.force_insert_account(
-            IdForTests::vault_b_id(),
-            AccountForTests::vault_b_init_inactive(),
-        );
-        state.force_insert_account(
-            IdForTests::pool_definition_id(),
-            AccountForTests::pool_definition_inactive(),
-        );
-        state.force_insert_account(
-            IdForTests::token_lp_definition_id(),
-            AccountForTests::token_lp_definition_init_inactive(),
-        );
-
-        let instruction = amm_core::Instruction::NewDefinition {
-            token_a_amount: BalanceForTests::vault_a_balance_init(),
-            token_b_amount: BalanceForTests::vault_b_balance_init(),
-            amm_program_id: Program::amm().id(),
-        };
-
-        let message = public_transaction::Message::try_new(
-            Program::amm().id(),
-            vec![
-                IdForTests::pool_definition_id(),
-                IdForTests::vault_a_id(),
-                IdForTests::vault_b_id(),
-                IdForTests::token_lp_definition_id(),
-                IdForTests::user_token_a_id(),
-                IdForTests::user_token_b_id(),
-                IdForTests::user_token_lp_id(),
-            ],
-            vec![0, 0],
-            instruction,
-        )
-        .unwrap();
-
-        let witness_set = public_transaction::WitnessSet::for_message(
-            &message,
-            &[
-                &PrivateKeysForTests::user_token_a_key(),
-                &PrivateKeysForTests::user_token_b_key(),
-            ],
-        );
-
-        let tx = PublicTransaction::new(message, witness_set);
-        state.transition_from_public_transaction(&tx).unwrap();
-
-        let pool_post = state.get_account_by_id(IdForTests::pool_definition_id());
-        let vault_a_post = state.get_account_by_id(IdForTests::vault_a_id());
-        let vault_b_post = state.get_account_by_id(IdForTests::vault_b_id());
-        let token_lp_post = state.get_account_by_id(IdForTests::token_lp_definition_id());
-        let user_token_a_post = state.get_account_by_id(IdForTests::user_token_a_id());
-        let user_token_b_post = state.get_account_by_id(IdForTests::user_token_b_id());
-        let user_token_lp_post = state.get_account_by_id(IdForTests::user_token_lp_id());
-
-        let expected_pool = AccountForTests::pool_definition_new_init();
-        let expected_vault_a = AccountForTests::vault_a_init();
-        let expected_vault_b = AccountForTests::vault_b_init();
-        let expected_token_lp = AccountForTests::token_lp_definition_new_init();
-        let expected_user_token_a = AccountForTests::user_token_a_holding_new_init();
-        let expected_user_token_b = AccountForTests::user_token_b_holding_new_init();
-        let expected_user_token_lp = AccountForTests::user_token_lp_holding_new_init();
-
-        assert_eq!(pool_post, expected_pool);
-        assert_eq!(vault_a_post, expected_vault_a);
-        assert_eq!(vault_b_post, expected_vault_b);
-        assert_eq!(token_lp_post, expected_token_lp);
-        assert_eq!(user_token_a_post, expected_user_token_a);
-        assert_eq!(user_token_b_post, expected_user_token_b);
-        assert_eq!(user_token_lp_post, expected_user_token_lp);
-    }
-
-    #[test]
-    fn test_simple_amm_new_definition_inactive_initialized_pool_init_user_lp() {
-        let mut state = state_for_amm_tests_with_new_def();
-
-        // Uninitialized in constructor
-        state.force_insert_account(
-            IdForTests::vault_a_id(),
-            AccountForTests::vault_a_init_inactive(),
-        );
-        state.force_insert_account(
-            IdForTests::vault_b_id(),
-            AccountForTests::vault_b_init_inactive(),
-        );
-        state.force_insert_account(
-            IdForTests::pool_definition_id(),
-            AccountForTests::pool_definition_inactive(),
-        );
-        state.force_insert_account(
-            IdForTests::token_lp_definition_id(),
-            AccountForTests::token_lp_definition_init_inactive(),
-        );
-        state.force_insert_account(
-            IdForTests::user_token_lp_id(),
-            AccountForTests::user_token_lp_holding_init_zero(),
-        );
-
-        let instruction = amm_core::Instruction::NewDefinition {
-            token_a_amount: BalanceForTests::vault_a_balance_init(),
-            token_b_amount: BalanceForTests::vault_b_balance_init(),
-            amm_program_id: Program::amm().id(),
-        };
-
-        let message = public_transaction::Message::try_new(
-            Program::amm().id(),
-            vec![
-                IdForTests::pool_definition_id(),
-                IdForTests::vault_a_id(),
-                IdForTests::vault_b_id(),
-                IdForTests::token_lp_definition_id(),
-                IdForTests::user_token_a_id(),
-                IdForTests::user_token_b_id(),
-                IdForTests::user_token_lp_id(),
-            ],
-            vec![0, 0],
-            instruction,
-        )
-        .unwrap();
-
-        let witness_set = public_transaction::WitnessSet::for_message(
-            &message,
-            &[
-                &PrivateKeysForTests::user_token_a_key(),
-                &PrivateKeysForTests::user_token_b_key(),
-            ],
-        );
-
-        let tx = PublicTransaction::new(message, witness_set);
-        state.transition_from_public_transaction(&tx).unwrap();
-
-        let pool_post = state.get_account_by_id(IdForTests::pool_definition_id());
-        let vault_a_post = state.get_account_by_id(IdForTests::vault_a_id());
-        let vault_b_post = state.get_account_by_id(IdForTests::vault_b_id());
-        let token_lp_post = state.get_account_by_id(IdForTests::token_lp_definition_id());
-        let user_token_a_post = state.get_account_by_id(IdForTests::user_token_a_id());
-        let user_token_b_post = state.get_account_by_id(IdForTests::user_token_b_id());
-        let user_token_lp_post = state.get_account_by_id(IdForTests::user_token_lp_id());
-
-        let expected_pool = AccountForTests::pool_definition_new_init();
-        let expected_vault_a = AccountForTests::vault_a_init();
-        let expected_vault_b = AccountForTests::vault_b_init();
-        let expected_token_lp = AccountForTests::token_lp_definition_new_init();
-        let expected_user_token_a = AccountForTests::user_token_a_holding_new_init();
-        let expected_user_token_b = AccountForTests::user_token_b_holding_new_init();
-        let expected_user_token_lp = AccountForTests::user_token_lp_holding_new_init();
-
-        assert_eq!(pool_post, expected_pool);
-        assert_eq!(vault_a_post, expected_vault_a);
-        assert_eq!(vault_b_post, expected_vault_b);
-        assert_eq!(token_lp_post, expected_token_lp);
-        assert_eq!(user_token_a_post, expected_user_token_a);
-        assert_eq!(user_token_b_post, expected_user_token_b);
-        assert_eq!(user_token_lp_post, expected_user_token_lp);
-    }
-
-    #[test]
-    fn test_simple_amm_new_definition_uninitialized_pool() {
-        let mut state = state_for_amm_tests_with_new_def();
-
-        // Uninitialized in constructor
-        state.force_insert_account(
-            IdForTests::vault_a_id(),
-            AccountForTests::vault_a_init_inactive(),
-        );
-        state.force_insert_account(
-            IdForTests::vault_b_id(),
-            AccountForTests::vault_b_init_inactive(),
-        );
-
-        let instruction = amm_core::Instruction::NewDefinition {
-            token_a_amount: BalanceForTests::vault_a_balance_init(),
-            token_b_amount: BalanceForTests::vault_b_balance_init(),
-            amm_program_id: Program::amm().id(),
-        };
-
-        let message = public_transaction::Message::try_new(
-            Program::amm().id(),
-            vec![
-                IdForTests::pool_definition_id(),
-                IdForTests::vault_a_id(),
-                IdForTests::vault_b_id(),
-                IdForTests::token_lp_definition_id(),
-                IdForTests::user_token_a_id(),
-                IdForTests::user_token_b_id(),
-                IdForTests::user_token_lp_id(),
-            ],
-            vec![0, 0],
-            instruction,
-        )
-        .unwrap();
-
-        let witness_set = public_transaction::WitnessSet::for_message(
-            &message,
-            &[
-                &PrivateKeysForTests::user_token_a_key(),
-                &PrivateKeysForTests::user_token_b_key(),
-            ],
-        );
-
-        let tx = PublicTransaction::new(message, witness_set);
-        state.transition_from_public_transaction(&tx).unwrap();
-
-        let pool_post = state.get_account_by_id(IdForTests::pool_definition_id());
-        let vault_a_post = state.get_account_by_id(IdForTests::vault_a_id());
-        let vault_b_post = state.get_account_by_id(IdForTests::vault_b_id());
-        let token_lp_post = state.get_account_by_id(IdForTests::token_lp_definition_id());
-        let user_token_a_post = state.get_account_by_id(IdForTests::user_token_a_id());
-        let user_token_b_post = state.get_account_by_id(IdForTests::user_token_b_id());
-        let user_token_lp_post = state.get_account_by_id(IdForTests::user_token_lp_id());
-
-        let expected_pool = AccountForTests::pool_definition_new_init();
-        let expected_vault_a = AccountForTests::vault_a_init();
-        let expected_vault_b = AccountForTests::vault_b_init();
-        let expected_token_lp = AccountForTests::token_lp_definition_new_init();
-        let expected_user_token_a = AccountForTests::user_token_a_holding_new_init();
-        let expected_user_token_b = AccountForTests::user_token_b_holding_new_init();
-        let expected_user_token_lp = AccountForTests::user_token_lp_holding_new_init();
-
-        assert_eq!(pool_post, expected_pool);
-        assert_eq!(vault_a_post, expected_vault_a);
-        assert_eq!(vault_b_post, expected_vault_b);
-        assert_eq!(token_lp_post, expected_token_lp);
-        assert_eq!(user_token_a_post, expected_user_token_a);
-        assert_eq!(user_token_b_post, expected_user_token_b);
-        assert_eq!(user_token_lp_post, expected_user_token_lp);
-    }
-
-    #[test]
-    fn test_simple_amm_add() {
-        env_logger::init();
-        let mut state = state_for_amm_tests();
-
-        let instruction = amm_core::Instruction::AddLiquidity {
-            min_amount_liquidity: BalanceForTests::add_min_amount_lp(),
-            max_amount_to_add_token_a: BalanceForTests::add_max_amount_a(),
-            max_amount_to_add_token_b: BalanceForTests::add_max_amount_b(),
-        };
-
-        let message = public_transaction::Message::try_new(
-            Program::amm().id(),
-            vec![
-                IdForTests::pool_definition_id(),
-                IdForTests::vault_a_id(),
-                IdForTests::vault_b_id(),
-                IdForTests::token_lp_definition_id(),
-                IdForTests::user_token_a_id(),
-                IdForTests::user_token_b_id(),
-                IdForTests::user_token_lp_id(),
-            ],
-            vec![0, 0],
-            instruction,
-        )
-        .unwrap();
-
-        let witness_set = public_transaction::WitnessSet::for_message(
-            &message,
-            &[
-                &PrivateKeysForTests::user_token_a_key(),
-                &PrivateKeysForTests::user_token_b_key(),
-            ],
-        );
-
-        let tx = PublicTransaction::new(message, witness_set);
-        state.transition_from_public_transaction(&tx).unwrap();
-
-        let pool_post = state.get_account_by_id(IdForTests::pool_definition_id());
-        let vault_a_post = state.get_account_by_id(IdForTests::vault_a_id());
-        let vault_b_post = state.get_account_by_id(IdForTests::vault_b_id());
-        let token_lp_post = state.get_account_by_id(IdForTests::token_lp_definition_id());
-        let user_token_a_post = state.get_account_by_id(IdForTests::user_token_a_id());
-        let user_token_b_post = state.get_account_by_id(IdForTests::user_token_b_id());
-        let user_token_lp_post = state.get_account_by_id(IdForTests::user_token_lp_id());
-
-        let expected_pool = AccountForTests::pool_definition_add();
-        let expected_vault_a = AccountForTests::vault_a_add();
-        let expected_vault_b = AccountForTests::vault_b_add();
-        let expected_token_lp = AccountForTests::token_lp_definition_add();
-        let expected_user_token_a = AccountForTests::user_token_a_holding_add();
-        let expected_user_token_b = AccountForTests::user_token_b_holding_add();
-        let expected_user_token_lp = AccountForTests::user_token_lp_holding_add();
-
-        assert_eq!(pool_post, expected_pool);
-        assert_eq!(vault_a_post, expected_vault_a);
-        assert_eq!(vault_b_post, expected_vault_b);
-        assert_eq!(token_lp_post, expected_token_lp);
-        assert_eq!(user_token_a_post, expected_user_token_a);
-        assert_eq!(user_token_b_post, expected_user_token_b);
-        assert_eq!(user_token_lp_post, expected_user_token_lp);
-    }
-
-    #[test]
-    fn test_simple_amm_swap_1() {
-        let mut state = state_for_amm_tests();
-
-        let instruction = amm_core::Instruction::Swap {
-            swap_amount_in: BalanceForTests::swap_amount_in(),
-            min_amount_out: BalanceForTests::swap_min_amount_out(),
-            token_definition_id_in: IdForTests::token_b_definition_id(),
-        };
-
-        let message = public_transaction::Message::try_new(
-            Program::amm().id(),
-            vec![
-                IdForTests::pool_definition_id(),
-                IdForTests::vault_a_id(),
-                IdForTests::vault_b_id(),
-                IdForTests::user_token_a_id(),
-                IdForTests::user_token_b_id(),
-            ],
-            vec![0],
-            instruction,
-        )
-        .unwrap();
-
-        let witness_set = public_transaction::WitnessSet::for_message(
-            &message,
-            &[&PrivateKeysForTests::user_token_b_key()],
-        );
-
-        let tx = PublicTransaction::new(message, witness_set);
-        state.transition_from_public_transaction(&tx).unwrap();
-
-        let pool_post = state.get_account_by_id(IdForTests::pool_definition_id());
-        let vault_a_post = state.get_account_by_id(IdForTests::vault_a_id());
-        let vault_b_post = state.get_account_by_id(IdForTests::vault_b_id());
-        let user_token_a_post = state.get_account_by_id(IdForTests::user_token_a_id());
-        let user_token_b_post = state.get_account_by_id(IdForTests::user_token_b_id());
-
-        let expected_pool = AccountForTests::pool_definition_swap_1();
-        let expected_vault_a = AccountForTests::vault_a_swap_1();
-        let expected_vault_b = AccountForTests::vault_b_swap_1();
-        let expected_user_token_a = AccountForTests::user_token_a_holding_swap_1();
-        let expected_user_token_b = AccountForTests::user_token_b_holding_swap_1();
-
-        assert_eq!(pool_post, expected_pool);
-        assert_eq!(vault_a_post, expected_vault_a);
-        assert_eq!(vault_b_post, expected_vault_b);
-        assert_eq!(user_token_a_post, expected_user_token_a);
-        assert_eq!(user_token_b_post, expected_user_token_b);
-    }
-
-    #[test]
-    fn test_simple_amm_swap_2() {
-        let mut state = state_for_amm_tests();
-
-        let instruction = amm_core::Instruction::Swap {
-            swap_amount_in: BalanceForTests::swap_amount_in(),
-            min_amount_out: BalanceForTests::swap_min_amount_out(),
-            token_definition_id_in: IdForTests::token_a_definition_id(),
-        };
-        let message = public_transaction::Message::try_new(
-            Program::amm().id(),
-            vec![
-                IdForTests::pool_definition_id(),
-                IdForTests::vault_a_id(),
-                IdForTests::vault_b_id(),
-                IdForTests::user_token_a_id(),
-                IdForTests::user_token_b_id(),
-            ],
-            vec![0],
-            instruction,
-        )
-        .unwrap();
-
-        let witness_set = public_transaction::WitnessSet::for_message(
-            &message,
-            &[&PrivateKeysForTests::user_token_a_key()],
-        );
-
-        let tx = PublicTransaction::new(message, witness_set);
-        state.transition_from_public_transaction(&tx).unwrap();
-
-        let pool_post = state.get_account_by_id(IdForTests::pool_definition_id());
-        let vault_a_post = state.get_account_by_id(IdForTests::vault_a_id());
-        let vault_b_post = state.get_account_by_id(IdForTests::vault_b_id());
-        let user_token_a_post = state.get_account_by_id(IdForTests::user_token_a_id());
-        let user_token_b_post = state.get_account_by_id(IdForTests::user_token_b_id());
-
-        let expected_pool = AccountForTests::pool_definition_swap_2();
-        let expected_vault_a = AccountForTests::vault_a_swap_2();
-        let expected_vault_b = AccountForTests::vault_b_swap_2();
-        let expected_user_token_a = AccountForTests::user_token_a_holding_swap_2();
-        let expected_user_token_b = AccountForTests::user_token_b_holding_swap_2();
-
-        assert_eq!(pool_post, expected_pool);
-        assert_eq!(vault_a_post, expected_vault_a);
-        assert_eq!(vault_b_post, expected_vault_b);
-        assert_eq!(user_token_a_post, expected_user_token_a);
-        assert_eq!(user_token_b_post, expected_user_token_b);
-    }
-
-    #[test]
-    fn test_execution_that_requires_authentication_of_a_program_derived_account_id_succeeds() {
+    fn execution_that_requires_authentication_of_a_program_derived_account_id_succeeds() {
         let chain_caller = Program::chain_caller();
         let pda_seed = PdaSeed::new([37; 32]);
         let from = AccountId::from((&chain_caller.id(), &pda_seed));
@@ -3719,7 +2404,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_claiming_mechanism_within_chain_call() {
+    fn claiming_mechanism_within_chain_call() {
         // This test calls the authenticated transfer program through the chain_caller program.
         // The transfer is made from an initialized sender to an uninitialized recipient. And
         // it is expected that the recipient account is claimed by the authenticated transfer
@@ -3776,7 +2461,7 @@ pub mod tests {
 
     #[test_case::test_case(1; "single call")]
     #[test_case::test_case(2; "two calls")]
-    fn test_private_chained_call(number_of_calls: u32) {
+    fn private_chained_call(number_of_calls: u32) {
         // Arrange
         let chain_caller = Program::chain_caller();
         let auth_transfers = Program::authenticated_transfer_program();
@@ -3829,18 +2514,18 @@ pub mod tests {
         dependencies.insert(auth_transfers.id(), auth_transfers);
         let program_with_deps = ProgramWithDependencies::new(chain_caller, dependencies);
 
-        let from_new_nonce = 0xdeadbeef1;
-        let to_new_nonce = 0xdeadbeef2;
+        let from_new_nonce = 0xdead_beef1;
+        let to_new_nonce = 0xdead_beef2;
 
         let from_expected_post = Account {
-            balance: initial_balance - number_of_calls as u128 * amount,
+            balance: initial_balance - u128::from(number_of_calls) * amount,
             nonce: from_new_nonce,
             ..from_account.account.clone()
         };
         let from_expected_commitment = Commitment::new(&from_keys.npk(), &from_expected_post);
 
         let to_expected_post = Account {
-            balance: number_of_calls as u128 * amount,
+            balance: u128::from(number_of_calls) * amount,
             nonce: to_new_nonce,
             ..to_account.account.clone()
         };
@@ -3893,7 +2578,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_pda_mechanism_with_pinata_token_program() {
+    fn pda_mechanism_with_pinata_token_program() {
         let pinata_token = Program::pinata_token();
         let token = Program::token();
 
@@ -3948,7 +2633,7 @@ pub mod tests {
         state.transition_from_public_transaction(&tx).unwrap();
 
         // Submit a solution to the pinata program to claim the prize
-        let solution: u128 = 989106;
+        let solution: u128 = 989_106;
         let message = public_transaction::Message::try_new(
             pinata_token.id(),
             vec![
@@ -3972,7 +2657,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_claiming_mechanism_cannot_claim_initialied_accounts() {
+    fn claiming_mechanism_cannot_claim_initialied_accounts() {
         let claimer = Program::claimer();
         let mut state = V02State::new_with_genesis_accounts(&[], &[]).with_test_programs();
         let account_id = AccountId::new([2; 32]);
@@ -3994,13 +2679,13 @@ pub mod tests {
 
         let result = state.transition_from_public_transaction(&tx);
 
-        assert!(matches!(result, Err(NssaError::InvalidProgramBehavior)))
+        assert!(matches!(result, Err(NssaError::InvalidProgramBehavior)));
     }
 
     /// This test ensures that even if a malicious program tries to perform overflow of balances
     /// it will not be able to break the balance validation.
     #[test]
-    fn test_malicious_program_cannot_break_balance_validation() {
+    fn malicious_program_cannot_break_balance_validation() {
         let sender_key = PrivateKey::try_new([37; 32]).unwrap();
         let sender_id = AccountId::from(&PublicKey::new_from_private_key(&sender_key));
         let sender_init_balance: u128 = 10;
@@ -4063,7 +2748,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_private_authorized_uninitialized_account() {
+    fn private_authorized_uninitialized_account() {
         let mut state = V02State::new_with_genesis_accounts(&[], &[]);
 
         // Set up keys for the authorized private account
@@ -4083,7 +2768,7 @@ pub mod tests {
         // Balance to initialize the account with (0 for a new account)
         let balance: u128 = 0;
 
-        let nonce = 0xdeadbeef1;
+        let nonce = 0xdead_beef1;
 
         // Execute and prove the circuit with the authorized account but no commitment proof
         let (output, proof) = execute_and_prove(
@@ -4118,7 +2803,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_private_account_claimed_then_used_without_init_flag_should_fail() {
+    fn private_account_claimed_then_used_without_init_flag_should_fail() {
         let mut state = V02State::new_with_genesis_accounts(&[], &[]).with_test_programs();
 
         // Set up keys for the private account
@@ -4136,7 +2821,7 @@ pub mod tests {
         let epk = EphemeralPublicKey::from_scalar(esk);
 
         let balance: u128 = 0;
-        let nonce = 0xdeadbeef1;
+        let nonce = 0xdead_beef1;
 
         // Step 2: Execute claimer program to claim the account with authentication
         let (output, proof) = execute_and_prove(
@@ -4175,7 +2860,7 @@ pub mod tests {
 
         // Prepare new state of account
         let account_metadata = {
-            let mut acc = authorized_account.clone();
+            let mut acc = authorized_account;
             acc.account.program_owner = Program::claimer().id();
             acc
         };
@@ -4184,7 +2869,7 @@ pub mod tests {
         let esk2 = [4; 32];
         let shared_secret2 = SharedSecretKey::new(&esk2, &private_keys.vpk());
 
-        let nonce2 = 0xdeadbeef2;
+        let nonce2 = 0xdead_beef2;
 
         // Step 3: Try to execute noop program with authentication but without initialization
         let res = execute_and_prove(
@@ -4202,7 +2887,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_public_changer_claimer_no_data_change_no_claim_succeeds() {
+    fn public_changer_claimer_no_data_change_no_claim_succeeds() {
         let initial_data = [];
         let mut state =
             V02State::new_with_genesis_accounts(&initial_data, &[]).with_test_programs();
@@ -4226,7 +2911,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_public_changer_claimer_data_change_no_claim_fails() {
+    fn public_changer_claimer_data_change_no_claim_fails() {
         let initial_data = [];
         let mut state =
             V02State::new_with_genesis_accounts(&initial_data, &[]).with_test_programs();
@@ -4249,7 +2934,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_private_changer_claimer_no_data_change_no_claim_succeeds() {
+    fn private_changer_claimer_no_data_change_no_claim_succeeds() {
         let program = Program::changer_claimer();
         let sender_keys = test_private_account_keys_1();
         let private_account =
@@ -4276,7 +2961,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_private_changer_claimer_data_change_no_claim_fails() {
+    fn private_changer_claimer_data_change_no_claim_fails() {
         let program = Program::changer_claimer();
         let sender_keys = test_private_account_keys_1();
         let private_account =
@@ -4304,7 +2989,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_malicious_authorization_changer_should_fail_in_privacy_preserving_circuit() {
+    fn malicious_authorization_changer_should_fail_in_privacy_preserving_circuit() {
         // Arrange
         let malicious_program = Program::malicious_authorization_changer();
         let auth_transfers = Program::authenticated_transfer_program();
@@ -4331,7 +3016,7 @@ pub mod tests {
         )
         .with_test_programs();
 
-        let balance_to_transfer = 10u128;
+        let balance_to_transfer = 10_u128;
         let instruction = (balance_to_transfer, auth_transfers.id());
 
         let recipient_esk = [3; 32];
@@ -4341,7 +3026,7 @@ pub mod tests {
         dependencies.insert(auth_transfers.id(), auth_transfers);
         let program_with_deps = ProgramWithDependencies::new(malicious_program, dependencies);
 
-        let recipient_new_nonce = 0xdeadbeef1;
+        let recipient_new_nonce = 0xdead_beef1;
 
         // Act - execute the malicious program - this should fail during proving
         let result = execute_and_prove(
@@ -4360,10 +3045,10 @@ pub mod tests {
     }
 
     #[test]
-    fn test_state_serialization_roundtrip() {
+    fn state_serialization_roundtrip() {
         let account_id_1 = AccountId::new([1; 32]);
         let account_id_2 = AccountId::new([2; 32]);
-        let initial_data = [(account_id_1, 100u128), (account_id_2, 151u128)];
+        let initial_data = [(account_id_1, 100_u128), (account_id_2, 151_u128)];
         let state = V02State::new_with_genesis_accounts(&initial_data, &[]).with_test_programs();
         let bytes = borsh::to_vec(&state).unwrap();
         let state_from_bytes: V02State = borsh::from_slice(&bytes).unwrap();

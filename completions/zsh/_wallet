@@ -181,7 +181,8 @@ _wallet_account() {
                             ;;
                         new_args)
                             _arguments \
-                                '--cci[Chain index of a parent node]:chain_index:'
+                                '--cci[Chain index of a parent node]:chain_index:' \
+                                '(-l --label)'{-l,--label}'[Label to assign to the new account]:label:'
                             ;;
                     esac
                     ;;
@@ -343,7 +344,6 @@ _wallet_config() {
     local -a config_keys
 
     config_keys=(
-        'all'
         'override_rust_log'
         'sequencer_addr'
         'seq_poll_timeout'
@@ -370,7 +370,12 @@ _wallet_config() {
             ;;
         args)
             case $line[1] in
-                get|description)
+                get)
+                    _arguments \
+                        '(-a --all)'{-a,--all}'[Print all config fields]' \
+                        '::key:compadd -a config_keys'
+                    ;;
+                description)
                     compadd -a config_keys
                     ;;
                 set)

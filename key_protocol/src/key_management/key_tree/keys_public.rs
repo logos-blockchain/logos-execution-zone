@@ -8,7 +8,7 @@ pub struct ChildKeysPublic {
     pub csk: nssa::PrivateKey,
     pub cpk: nssa::PublicKey,
     pub ccc: [u8; 32],
-    /// Can be [`None`] if root
+    /// Can be [`None`] if root.
     pub cci: Option<u32>,
 }
 
@@ -16,22 +16,16 @@ impl ChildKeysPublic {
     fn compute_hash_value(&self, cci: u32) -> [u8; 64] {
         let mut hash_input = vec![];
 
-        match ((2u32).pow(31)).cmp(&cci) {
+        if 2_u32.pow(31) > cci {
             // Non-harden
-            std::cmp::Ordering::Greater => {
-                hash_input.extend_from_slice(self.cpk.value());
-                hash_input.extend_from_slice(&cci.to_le_bytes());
-
-                hmac_sha512::HMAC::mac(hash_input, self.ccc)
-            }
+            hash_input.extend_from_slice(self.cpk.value());
+        } else {
             // Harden
-            _ => {
-                hash_input.extend_from_slice(self.csk.value());
-                hash_input.extend_from_slice(&(cci).to_le_bytes());
-
-                hmac_sha512::HMAC::mac(hash_input, self.ccc)
-            }
+            hash_input.extend_from_slice(self.csk.value());
         }
+        hash_input.extend_from_slice(&cci.to_le_bytes());
+
+        hmac_sha512::HMAC::mac(hash_input, self.ccc)
     }
 }
 
@@ -68,9 +62,10 @@ impl KeyNode for ChildKeysPublic {
         )
         .unwrap();
 
-        if secp256k1::constants::CURVE_ORDER < *csk.value() {
-            panic!("Secret key cannot exceed curve order");
-        }
+        assert!(
+            secp256k1::constants::CURVE_ORDER >= *csk.value(),
+            "Secret key cannot exceed curve order"
+        );
 
         let ccc = *hash_value
             .last_chunk::<32>()
@@ -99,8 +94,8 @@ impl KeyNode for ChildKeysPublic {
     }
 }
 
-impl<'a> From<&'a ChildKeysPublic> for &'a nssa::PrivateKey {
-    fn from(value: &'a ChildKeysPublic) -> Self {
+impl<'keys> From<&'keys ChildKeysPublic> for &'keys nssa::PrivateKey {
+    fn from(value: &'keys ChildKeysPublic) -> Self {
         &value.csk
     }
 }
@@ -112,7 +107,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_master_keys_generation() {
+    fn master_keys_generation() {
         let seed = [
             88, 189, 37, 237, 199, 125, 151, 226, 69, 153, 165, 113, 191, 69, 188, 221, 9, 34, 173,
             134, 61, 109, 34, 103, 121, 39, 237, 14, 107, 194, 24, 194, 191, 14, 237, 185, 12, 87,
@@ -143,7 +138,7 @@ mod tests {
     }
 
     #[test]
-    fn test_harden_child_keys_generation() {
+    fn harden_child_keys_generation() {
         let seed = [
             88, 189, 37, 237, 199, 125, 151, 226, 69, 153, 165, 113, 191, 69, 188, 221, 9, 34, 173,
             134, 61, 109, 34, 103, 121, 39, 237, 14, 107, 194, 24, 194, 191, 14, 237, 185, 12, 87,
@@ -151,7 +146,7 @@ mod tests {
             187, 148, 92, 44, 253, 210, 37,
         ];
         let root_keys = ChildKeysPublic::root(seed);
-        let cci = (2u32).pow(31) + 13;
+        let cci = (2_u32).pow(31) + 13;
         let child_keys = ChildKeysPublic::nth_child(&root_keys, cci);
 
         print!(
@@ -183,7 +178,7 @@ mod tests {
     }
 
     #[test]
-    fn test_nonharden_child_keys_generation() {
+    fn nonharden_child_keys_generation() {
         let seed = [
             88, 189, 37, 237, 199, 125, 151, 226, 69, 153, 165, 113, 191, 69, 188, 221, 9, 34, 173,
             134, 61, 109, 34, 103, 121, 39, 237, 14, 107, 194, 24, 194, 191, 14, 237, 185, 12, 87,
@@ -223,7 +218,7 @@ mod tests {
     }
 
     #[test]
-    fn test_edge_case_child_keys_generation_2_power_31() {
+    fn edge_case_child_keys_generation_2_power_31() {
         let seed = [
             88, 189, 37, 237, 199, 125, 151, 226, 69, 153, 165, 113, 191, 69, 188, 221, 9, 34, 173,
             134, 61, 109, 34, 103, 121, 39, 237, 14, 107, 194, 24, 194, 191, 14, 237, 185, 12, 87,
@@ -231,7 +226,7 @@ mod tests {
             187, 148, 92, 44, 253, 210, 37,
         ];
         let root_keys = ChildKeysPublic::root(seed);
-        let cci = (2u32).pow(31); //equivant to 0, thus non-harden.
+        let cci = (2_u32).pow(31); //equivant to 0, thus non-harden.
         let child_keys = ChildKeysPublic::nth_child(&root_keys, cci);
 
         let expected_ccc = [

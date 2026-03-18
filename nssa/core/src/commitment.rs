@@ -1,15 +1,8 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use risc0_zkvm::sha::{Impl, Sha256};
+use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde::{Deserialize, Serialize};
 
 use crate::{NullifierPublicKey, account::Account};
-
-#[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
-#[cfg_attr(
-    any(feature = "host", test),
-    derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)
-)]
-pub struct Commitment(pub(super) [u8; 32]);
 
 /// A commitment to all zero data.
 /// ```python
@@ -23,7 +16,7 @@ pub const DUMMY_COMMITMENT: Commitment = Commitment([
     165, 33, 34, 172, 227, 30, 215, 20, 85, 47, 230, 29,
 ]);
 
-/// The hash of the dummy commitment
+/// The hash of the dummy commitment.
 /// ```python
 /// from hashlib import sha256
 /// hasher = sha256()
@@ -35,9 +28,30 @@ pub const DUMMY_COMMITMENT_HASH: [u8; 32] = [
     194, 216, 67, 56, 251, 208, 226, 0, 117, 149, 39,
 ];
 
+#[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[cfg_attr(
+    any(feature = "host", test),
+    derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)
+)]
+pub struct Commitment(pub(super) [u8; 32]);
+
+#[cfg(any(feature = "host", test))]
+impl std::fmt::Debug for Commitment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use std::fmt::Write as _;
+
+        let hex: String = self.0.iter().fold(String::new(), |mut acc, b| {
+            write!(acc, "{b:02x}").expect("writing to string should not fail");
+            acc
+        });
+        write!(f, "Commitment({hex})")
+    }
+}
+
 impl Commitment {
     /// Generates the commitment to a private account owned by user for npk:
-    /// SHA256(npk || program_owner || balance || nonce || SHA256(data))
+    /// SHA256(npk || `program_owner` || balance || nonce || SHA256(data)).
+    #[must_use]
     pub fn new(npk: &NullifierPublicKey, account: &Account) -> Self {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&npk.to_byte_array());
@@ -64,7 +78,8 @@ pub type CommitmentSetDigest = [u8; 32];
 
 pub type MembershipProof = (usize, Vec<[u8; 32]>);
 
-/// Computes the resulting digest for the given membership proof and corresponding commitment
+/// Computes the resulting digest for the given membership proof and corresponding commitment.
+#[must_use]
 pub fn compute_digest_for_path(
     commitment: &Commitment,
     proof: &MembershipProof,
@@ -76,18 +91,16 @@ pub fn compute_digest_for_path(
         .unwrap();
     let mut level_index = proof.0;
     for node in &proof.1 {
+        let mut bytes = [0_u8; 64];
         let is_left_child = level_index & 1 == 0;
         if is_left_child {
-            let mut bytes = [0u8; 64];
             bytes[..32].copy_from_slice(&result);
             bytes[32..].copy_from_slice(node);
-            result = Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap();
         } else {
-            let mut bytes = [0u8; 64];
             bytes[..32].copy_from_slice(node);
             bytes[32..].copy_from_slice(&result);
-            result = Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap();
         }
+        result = Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap();
         level_index >>= 1;
     }
     result
@@ -95,14 +108,14 @@ pub fn compute_digest_for_path(
 
 #[cfg(test)]
 mod tests {
-    use risc0_zkvm::sha::{Impl, Sha256};
+    use risc0_zkvm::sha::{Impl, Sha256 as _};
 
     use crate::{
         Commitment, DUMMY_COMMITMENT, DUMMY_COMMITMENT_HASH, NullifierPublicKey, account::Account,
     };
 
     #[test]
-    fn test_nothing_up_my_sleeve_dummy_commitment() {
+    fn nothing_up_my_sleeve_dummy_commitment() {
         let default_account = Account::default();
         let npk_null = NullifierPublicKey([0; 32]);
         let expected_dummy_commitment = Commitment::new(&npk_null, &default_account);
@@ -110,7 +123,7 @@ mod tests {
     }
 
     #[test]
-    fn test_nothing_up_my_sleeve_dummy_commitment_hash() {
+    fn nothing_up_my_sleeve_dummy_commitment_hash() {
         let expected_dummy_commitment_hash: [u8; 32] =
             Impl::hash_bytes(&DUMMY_COMMITMENT.to_byte_array())
                 .as_bytes()

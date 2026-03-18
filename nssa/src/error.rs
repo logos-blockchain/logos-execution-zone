@@ -2,6 +2,15 @@ use std::io;
 
 use thiserror::Error;
 
+#[macro_export]
+macro_rules! ensure {
+    ($cond:expr, $err:expr) => {
+        if !$cond {
+            return Err($err);
+        }
+    };
+}
+
 #[derive(Error, Debug)]
 pub enum NssaError {
     #[error("Invalid input: {0}")]
@@ -20,7 +29,7 @@ pub enum NssaError {
     Io(#[from] io::Error),
 
     #[error("Invalid Public Key")]
-    InvalidPublicKey,
+    InvalidPublicKey(#[source] secp256k1::Error),
 
     #[error("Risc0 error: {0}")]
     ProgramWriteInputFailed(String),
@@ -50,11 +59,35 @@ pub enum NssaError {
     CircuitProvingError(String),
 
     #[error("Invalid program bytecode")]
-    InvalidProgramBytecode,
+    InvalidProgramBytecode(#[source] anyhow::Error),
 
     #[error("Program already exists")]
     ProgramAlreadyExists,
 
     #[error("Chain of calls is too long")]
     MaxChainedCallsDepthExceeded,
+
+    #[error("Max account nonce reached")]
+    MaxAccountNonceReached,
+}
+
+#[cfg(test)]
+mod tests {
+
+    #[derive(Debug)]
+    enum TestError {
+        TestErr,
+    }
+
+    fn test_function_ensure(cond: bool) -> Result<(), TestError> {
+        ensure!(cond, TestError::TestErr);
+
+        Ok(())
+    }
+
+    #[test]
+    fn ensure_works() {
+        assert!(test_function_ensure(true).is_ok());
+        assert!(test_function_ensure(false).is_err());
+    }
 }

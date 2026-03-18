@@ -6,20 +6,20 @@ use crate::{
     cli::{SubcommandReturnValue, WalletSubcommand},
 };
 
-/// Represents generic config CLI subcommand
+/// Represents generic config CLI subcommand.
 #[derive(Subcommand, Debug, Clone)]
 pub enum ConfigSubcommand {
-    /// Getter of config fields
+    /// Getter of config fields.
     Get {
-        /// Print all config fields
+        /// Print all config fields.
         #[arg(short, long)]
         all: bool,
-        /// Config field key to get
+        /// Config field key to get.
         key: Option<String>,
     },
-    /// Setter of config fields
+    /// Setter of config fields.
     Set { key: String, value: String },
-    /// Prints description of corresponding field
+    /// Prints description of corresponding field.
     Description { key: String },
 }
 
@@ -29,7 +29,7 @@ impl WalletSubcommand for ConfigSubcommand {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         match self {
-            ConfigSubcommand::Get { all, key } => {
+            Self::Get { all, key } => {
                 if all {
                     let config_str =
                         serde_json::to_string_pretty(&wallet_core.storage.wallet_config)?;
@@ -86,7 +86,7 @@ impl WalletSubcommand for ConfigSubcommand {
                     println!("Please provide a key or use --all flag");
                 }
             }
-            ConfigSubcommand::Set { key, value } => {
+            Self::Set { key, value } => {
                 match key.as_str() {
                     "override_rust_log" => {
                         wallet_core.storage.wallet_config.override_rust_log = Some(value);
@@ -97,7 +97,7 @@ impl WalletSubcommand for ConfigSubcommand {
                     "seq_poll_timeout" => {
                         wallet_core.storage.wallet_config.seq_poll_timeout =
                             humantime::parse_duration(&value)
-                                .map_err(|e| anyhow::anyhow!("Invalid duration: {}", e))?;
+                                .map_err(|e| anyhow::anyhow!("Invalid duration: {e}"))?;
                     }
                     "seq_tx_poll_max_blocks" => {
                         wallet_core.storage.wallet_config.seq_tx_poll_max_blocks = value.parse()?;
@@ -120,9 +120,9 @@ impl WalletSubcommand for ConfigSubcommand {
                     }
                 }
 
-                wallet_core.store_config_changes().await?
+                wallet_core.store_config_changes().await?;
             }
-            ConfigSubcommand::Description { key } => match key.as_str() {
+            Self::Description { key } => match key.as_str() {
                 "override_rust_log" => {
                     println!("Value of variable RUST_LOG to override, affects logging");
                 }

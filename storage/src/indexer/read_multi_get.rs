@@ -1,3 +1,5 @@
+use common::transaction::NSSATransaction;
+
 use super::*;
 
 impl RocksDBIO {
@@ -39,7 +41,7 @@ impl RocksDBIO {
                 borsh::to_vec(&block_id).map_err(|err| {
                     DbError::borsh_cast_message(
                         err,
-                        Some("Failed to serialize block id".to_string()),
+                        Some("Failed to serialize block id".to_owned()),
                     )
                 })?,
             ));
@@ -56,7 +58,7 @@ impl RocksDBIO {
                 Ok(borsh::from_slice::<Block>(&data).map_err(|serr| {
                     DbError::borsh_cast_message(
                         serr,
-                        Some("Failed to deserialize block data".to_string()),
+                        Some("Failed to deserialize block data".to_owned()),
                     )
                 })?)
             } else {
@@ -86,10 +88,7 @@ impl RocksDBIO {
             keys.push((
                 &cf_tti,
                 borsh::to_vec(tx_hash).map_err(|err| {
-                    DbError::borsh_cast_message(
-                        err,
-                        Some("Failed to serialize tx_hash".to_string()),
-                    )
+                    DbError::borsh_cast_message(err, Some("Failed to serialize tx_hash".to_owned()))
                 })?,
             ));
         }
@@ -105,7 +104,7 @@ impl RocksDBIO {
                 Ok(borsh::from_slice::<u64>(&data).map_err(|serr| {
                     DbError::borsh_cast_message(
                         serr,
-                        Some("Failed to deserialize block id".to_string()),
+                        Some("Failed to deserialize block id".to_owned()),
                     )
                 })?)
             } else {
@@ -134,13 +133,10 @@ impl RocksDBIO {
         let mut keys = vec![];
         for tx_id in offset..(offset + limit) {
             let mut prefix = borsh::to_vec(&acc_id).map_err(|berr| {
-                DbError::borsh_cast_message(
-                    berr,
-                    Some("Failed to serialize account id".to_string()),
-                )
+                DbError::borsh_cast_message(berr, Some("Failed to serialize account id".to_owned()))
             })?;
             let suffix = borsh::to_vec(&tx_id).map_err(|berr| {
-                DbError::borsh_cast_message(berr, Some("Failed to serialize tx id".to_string()))
+                DbError::borsh_cast_message(berr, Some("Failed to serialize tx id".to_owned()))
             })?;
 
             prefix.extend_from_slice(&suffix);
@@ -157,7 +153,7 @@ impl RocksDBIO {
                 Ok(borsh::from_slice::<[u8; 32]>(&data).map_err(|serr| {
                     DbError::borsh_cast_message(
                         serr,
-                        Some("Failed to deserialize tx_hash".to_string()),
+                        Some("Failed to deserialize tx_hash".to_owned()),
                     )
                 })?)
             } else {

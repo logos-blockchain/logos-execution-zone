@@ -1,24 +1,12 @@
+#![expect(clippy::arithmetic_side_effects, reason = "TODO: fix later")]
+
 use borsh::{BorshDeserialize, BorshSerialize};
-use sha2::{Digest, Sha256};
+use sha2::{Digest as _, Sha256};
 
 mod default_values;
 
 type Value = [u8; 32];
 type Node = [u8; 32];
-
-/// Compute parent as the hash of two child nodes
-fn hash_two(left: &Node, right: &Node) -> Node {
-    let mut hasher = Sha256::new();
-    hasher.update(left);
-    hasher.update(right);
-    hasher.finalize().into()
-}
-
-fn hash_value(value: &Value) -> Node {
-    let mut hasher = Sha256::new();
-    hasher.update(value);
-    hasher.finalize().into()
-}
 
 #[cfg_attr(test, derive(Debug, PartialEq, Eq))]
 #[derive(Clone, BorshSerialize, BorshDeserialize)]
@@ -36,7 +24,8 @@ impl MerkleTree {
 
     fn root_index(&self) -> usize {
         let tree_depth = self.depth();
-        let capacity_depth = self.capacity.trailing_zeros() as usize;
+        let capacity_depth =
+            usize::try_from(self.capacity.trailing_zeros()).expect("u32 fits in usize");
 
         if tree_depth == capacity_depth {
             0
@@ -46,9 +35,10 @@ impl MerkleTree {
         }
     }
 
-    /// Number of levels required to hold all nodes
+    /// Number of levels required to hold all nodes.
     fn depth(&self) -> usize {
-        self.length.next_power_of_two().trailing_zeros() as usize
+        usize::try_from(self.length.next_power_of_two().trailing_zeros())
+            .expect("u32 fits in usize")
     }
 
     fn get_node(&self, index: usize) -> &Node {
@@ -62,14 +52,14 @@ impl MerkleTree {
     pub fn with_capacity(capacity: usize) -> Self {
         // Adjust capacity to ensure power of two
         let capacity = capacity.next_power_of_two();
-        let total_depth = capacity.trailing_zeros() as usize;
+        let total_depth = usize::try_from(capacity.trailing_zeros()).expect("u32 fits in usize");
 
-        let nodes = default_values::DEFAULT_VALUES[..(total_depth + 1)]
+        let nodes = default_values::DEFAULT_VALUES[..=total_depth]
             .iter()
             .rev()
             .enumerate()
             .flat_map(|(level, default_value)| std::iter::repeat_n(default_value, 1 << level))
-            .cloned()
+            .copied()
             .collect();
 
         Self {
@@ -80,7 +70,7 @@ impl MerkleTree {
     }
 
     /// Reallocates storage of Merkle tree for double capacity.
-    /// The current tree is embedded into the new tree as a subtree
+    /// The current tree is embedded into the new tree as a subtree.
     fn reallocate_to_double_capacity(&mut self) {
         let old_capacity = self.capacity;
         let new_capacity = old_capacity << 1;
@@ -152,30 +142,45 @@ impl MerkleTree {
     }
 }
 
-fn prev_power_of_two(x: usize) -> usize {
+/// Compute parent as the hash of two child nodes.
+fn hash_two(left: &Node, right: &Node) -> Node {
+    let mut hasher = Sha256::new();
+    hasher.update(left);
+    hasher.update(right);
+    hasher.finalize().into()
+}
+
+fn hash_value(value: &Value) -> Node {
+    let mut hasher = Sha256::new();
+    hasher.update(value);
+    hasher.finalize().into()
+}
+
+const fn prev_power_of_two(x: usize) -> usize {
     if x == 0 {
         return 0;
     }
-    1 << (usize::BITS as usize - x.leading_zeros() as usize - 1)
+    1 << (usize::BITS - x.leading_zeros() - 1)
 }
 
 #[cfg(test)]
 mod tests {
+    use hex_literal::hex;
+
+    use super::*;
+
     impl MerkleTree {
         pub fn new(values: &[Value]) -> Self {
             let mut this = Self::with_capacity(values.len());
-            for value in values.iter().cloned() {
+            for value in values.iter().copied() {
                 this.insert(value);
             }
             this
         }
     }
 
-    use hex_literal::hex;
-
-    use super::*;
     #[test]
-    fn test_empty_merkle_tree() {
+    fn empty_merkle_tree() {
         let tree = MerkleTree::with_capacity(4);
         let expected_root =
             hex!("0000000000000000000000000000000000000000000000000000000000000000");
@@ -185,7 +190,7 @@ mod tests {
     }
 
     #[test]
-    fn test_merkle_tree_0() {
+    fn merkle_tree_0() {
         let values = [[0; 32]];
         let tree = MerkleTree::new(&values);
         assert_eq!(tree.root(), hash_value(&[0; 32]));
@@ -194,18 +199,18 @@ mod tests {
     }
 
     #[test]
-    fn test_merkle_tree_1() {
+    fn merkle_tree_1() {
         let values = [[1; 32], [2; 32], [3; 32], [4; 32]];
         let tree = MerkleTree::new(&values);
         let expected_root =
             hex!("48c73f7821a58a8d2a703e5b39c571c0aa20cf14abcd0af8f2b955bc202998de");
         assert_eq!(tree.root(), expected_root);
         assert_eq!(tree.capacity, 4);
-        assert_eq!(tree.length, 4)
+        assert_eq!(tree.length, 4);
     }
 
     #[test]
-    fn test_merkle_tree_2() {
+    fn merkle_tree_2() {
         let values = [[1; 32], [2; 32], [3; 32], [0; 32]];
         let tree = MerkleTree::new(&values);
         let expected_root =
@@ -216,7 +221,7 @@ mod tests {
     }
 
     #[test]
-    fn test_merkle_tree_3() {
+    fn merkle_tree_3() {
         let values = [[1; 32], [2; 32], [3; 32]];
         let tree = MerkleTree::new(&values);
         let expected_root =
@@ -227,7 +232,7 @@ mod tests {
     }
 
     #[test]
-    fn test_merkle_tree_4() {
+    fn merkle_tree_4() {
         let values = [[11; 32], [12; 32], [13; 32], [14; 32], [15; 32]];
         let tree = MerkleTree::new(&values);
         let expected_root =
@@ -239,7 +244,7 @@ mod tests {
     }
 
     #[test]
-    fn test_merkle_tree_5() {
+    fn merkle_tree_5() {
         let values = [
             [11; 32], [12; 32], [12; 32], [13; 32], [14; 32], [15; 32], [15; 32], [13; 32],
             [13; 32], [15; 32], [11; 32],
@@ -253,7 +258,7 @@ mod tests {
     }
 
     #[test]
-    fn test_merkle_tree_6() {
+    fn merkle_tree_6() {
         let values = [[1; 32], [2; 32], [3; 32], [4; 32], [5; 32]];
         let tree = MerkleTree::new(&values);
         let expected_root =
@@ -262,7 +267,7 @@ mod tests {
     }
 
     #[test]
-    fn test_with_capacity_4() {
+    fn with_capacity_4() {
         let tree = MerkleTree::with_capacity(4);
 
         assert_eq!(tree.length, 0);
@@ -277,25 +282,25 @@ mod tests {
     }
 
     #[test]
-    fn test_with_capacity_5() {
+    fn with_capacity_5() {
         let tree = MerkleTree::with_capacity(5);
 
         assert_eq!(tree.length, 0);
         assert_eq!(tree.nodes.len(), 15);
         for i in 7..15 {
-            assert_eq!(*tree.get_node(i), default_values::DEFAULT_VALUES[0])
+            assert_eq!(*tree.get_node(i), default_values::DEFAULT_VALUES[0]);
         }
         for i in 3..7 {
-            assert_eq!(*tree.get_node(i), default_values::DEFAULT_VALUES[1])
+            assert_eq!(*tree.get_node(i), default_values::DEFAULT_VALUES[1]);
         }
         for i in 1..3 {
-            assert_eq!(*tree.get_node(i), default_values::DEFAULT_VALUES[2])
+            assert_eq!(*tree.get_node(i), default_values::DEFAULT_VALUES[2]);
         }
-        assert_eq!(*tree.get_node(0), default_values::DEFAULT_VALUES[3])
+        assert_eq!(*tree.get_node(0), default_values::DEFAULT_VALUES[3]);
     }
 
     #[test]
-    fn test_with_capacity_6() {
+    fn with_capacity_6() {
         let mut tree = MerkleTree::with_capacity(100);
 
         let values = [[1; 32], [2; 32], [3; 32], [4; 32]];
@@ -312,7 +317,7 @@ mod tests {
     }
 
     #[test]
-    fn test_with_capacity_7() {
+    fn with_capacity_7() {
         let mut tree = MerkleTree::with_capacity(599);
 
         let values = [[1; 32], [2; 32], [3; 32]];
@@ -328,7 +333,7 @@ mod tests {
     }
 
     #[test]
-    fn test_with_capacity_8() {
+    fn with_capacity_8() {
         let mut tree = MerkleTree::with_capacity(1);
 
         let values = [[1; 32], [2; 32], [3; 32]];
@@ -344,7 +349,7 @@ mod tests {
     }
 
     #[test]
-    fn test_insert_value_1() {
+    fn insert_value_1() {
         let mut tree = MerkleTree::with_capacity(1);
 
         let values = [[1; 32], [2; 32], [3; 32]];
@@ -358,7 +363,7 @@ mod tests {
     }
 
     #[test]
-    fn test_insert_value_2() {
+    fn insert_value_2() {
         let mut tree = MerkleTree::with_capacity(1);
 
         let values = [[1; 32], [2; 32], [3; 32], [4; 32]];
@@ -373,7 +378,7 @@ mod tests {
     }
 
     #[test]
-    fn test_insert_value_3() {
+    fn insert_value_3() {
         let mut tree = MerkleTree::with_capacity(1);
 
         let values = [[11; 32], [12; 32], [13; 32], [14; 32], [15; 32]];
@@ -405,7 +410,7 @@ mod tests {
     }
 
     #[test]
-    fn test_authentication_path_1() {
+    fn authentication_path_1() {
         let values = [[1; 32], [2; 32], [3; 32], [4; 32]];
         let tree = MerkleTree::new(&values);
         let expected_authentication_path = vec![
@@ -418,7 +423,7 @@ mod tests {
     }
 
     #[test]
-    fn test_authentication_path_2() {
+    fn authentication_path_2() {
         let values = [[1; 32], [2; 32], [3; 32]];
         let tree = MerkleTree::new(&values);
         let expected_authentication_path = vec![
@@ -431,7 +436,7 @@ mod tests {
     }
 
     #[test]
-    fn test_authentication_path_3() {
+    fn authentication_path_3() {
         let values = [[1; 32], [2; 32], [3; 32], [4; 32], [5; 32]];
         let tree = MerkleTree::new(&values);
         let expected_authentication_path = vec![
@@ -445,14 +450,14 @@ mod tests {
     }
 
     #[test]
-    fn test_authentication_path_4() {
+    fn authentication_path_4() {
         let values = [[1; 32], [2; 32], [3; 32], [4; 32], [5; 32]];
         let tree = MerkleTree::new(&values);
         assert!(tree.get_authentication_path_for(5).is_none());
     }
 
     #[test]
-    fn test_authentication_path_5() {
+    fn authentication_path_5() {
         let values = [[1; 32], [2; 32], [3; 32], [4; 32], [5; 32]];
         let tree = MerkleTree::new(&values);
         let index = 4;
@@ -467,7 +472,7 @@ mod tests {
     }
 
     #[test]
-    fn test_tree_with_63_insertions() {
+    fn tree_with_63_insertions() {
         let values = [
             hex!("cd00acab0f45736e6c6311f1953becc0b69a062e7c2a7310875d28bdf9ef9c5b"),
             hex!("0df5a6afbcc7bf126caf7084acfc593593ab512e6ca433c61c1a922be40a04ea"),

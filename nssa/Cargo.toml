@@ -4,9 +4,13 @@ version = "0.1.0"
 edition = "2024"
 license = { workspace = true }
 
+[lints]
+workspace = true
+
 [dependencies]
 nssa_core = { workspace = true, features = ["host"] }
 
+anyhow.workspace = true
 thiserror.workspace = true
 risc0-zkvm.workspace = true
 serde.workspace = true
@@ -24,7 +28,6 @@ risc0-binfmt = "3.0.2"
 
 [dev-dependencies]
 token_core.workspace = true
-amm_core.workspace = true
 test_program_methods.workspace = true
 
 env_logger.workspace = true
@@ -34,3 +37,4 @@ test-case = "3.3.1"
 [features]
 default = []
 prove = ["risc0-zkvm/prove"]
+test-utils = []

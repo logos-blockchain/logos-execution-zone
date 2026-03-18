@@ -4,6 +4,7 @@ use nssa_core::{
 };
 use token_core::TokenHolding;
 
+#[must_use]
 pub fn transfer(
     sender: AccountWithMetadata,
     recipient: AccountWithMetadata,
@@ -95,7 +96,7 @@ pub fn transfer(
         _ => {
             panic!("Mismatched token holding types for transfer");
         }
-    };
+    }
 
     let mut sender_post = sender.account;
     sender_post.data = Data::from(&sender_holding);

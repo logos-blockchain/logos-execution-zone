@@ -4,6 +4,7 @@ use nssa_core::{
 };
 use token_core::{TokenDefinition, TokenHolding};
 
+#[must_use]
 pub fn initialize_account(
     definition_account: AccountWithMetadata,
     account_to_initialize: AccountWithMetadata,

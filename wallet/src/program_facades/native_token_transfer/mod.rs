@@ -9,8 +9,17 @@ pub mod private;
 pub mod public;
 pub mod shielded;
 
-pub struct NativeTokenTransfer<'w>(pub &'w WalletCore);
+#[expect(
+    clippy::multiple_inherent_impl,
+    reason = "impl blocks split across multiple files for organization"
+)]
+pub struct NativeTokenTransfer<'wallet>(pub &'wallet WalletCore);
 
+// TODO: handle large Err-variant properly
+#[expect(
+    clippy::result_large_err,
+    reason = "ExecutionFailureKind is large, tracked by TODO"
+)]
 fn auth_transfer_preparation(
     balance_to_move: u128,
 ) -> (
@@ -22,7 +31,6 @@ fn auth_transfer_preparation(
     let program = Program::authenticated_transfer_program();
 
     // TODO: handle large Err-variant properly
-    #[allow(clippy::result_large_err)]
     let tx_pre_check = move |accounts: &[&Account]| {
         let from = accounts[0];
         if from.balance >= balance_to_move {

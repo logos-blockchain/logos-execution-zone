@@ -29,7 +29,7 @@ pub enum Instruction {
     /// - Token Metadata account (uninitialized).
     NewDefinitionWithMetadata {
         new_definition: NewTokenDefinition,
-        /// Boxed to avoid large enum variant size
+        /// Boxed to avoid large enum variant size.
         metadata: Box<NewTokenMetadata>,
     },
 
@@ -92,7 +92,7 @@ impl TryFrom<&Data> for TokenDefinition {
     type Error = std::io::Error;
 
     fn try_from(data: &Data) -> Result<Self, Self::Error> {
-        TokenDefinition::try_from_slice(data.as_ref())
+        Self::try_from_slice(data.as_ref())
     }
 }
 
@@ -104,7 +104,7 @@ impl From<&TokenDefinition> for Data {
         BorshSerialize::serialize(definition, &mut data)
             .expect("Serialization to Vec should not fail");
 
-        Data::try_from(data).expect("Token definition encoded data should fit into Data")
+        Self::try_from(data).expect("Token definition encoded data should fit into Data")
     }
 }
 
@@ -127,44 +127,47 @@ pub enum TokenHolding {
 }
 
 impl TokenHolding {
-    pub fn zeroized_clone_from(other: &Self) -> Self {
+    #[must_use]
+    pub const fn zeroized_clone_from(other: &Self) -> Self {
         match other {
-            TokenHolding::Fungible { definition_id, .. } => TokenHolding::Fungible {
+            Self::Fungible { definition_id, .. } => Self::Fungible {
                 definition_id: *definition_id,
                 balance: 0,
             },
-            TokenHolding::NftMaster { definition_id, .. } => TokenHolding::NftMaster {
+            Self::NftMaster { definition_id, .. } => Self::NftMaster {
                 definition_id: *definition_id,
                 print_balance: 0,
             },
-            TokenHolding::NftPrintedCopy { definition_id, .. } => TokenHolding::NftPrintedCopy {
+            Self::NftPrintedCopy { definition_id, .. } => Self::NftPrintedCopy {
                 definition_id: *definition_id,
                 owned: false,
             },
         }
     }
 
-    pub fn zeroized_from_definition(
+    #[must_use]
+    pub const fn zeroized_from_definition(
         definition_id: AccountId,
         definition: &TokenDefinition,
     ) -> Self {
         match definition {
-            TokenDefinition::Fungible { .. } => TokenHolding::Fungible {
+            TokenDefinition::Fungible { .. } => Self::Fungible {
                 definition_id,
                 balance: 0,
             },
-            TokenDefinition::NonFungible { .. } => TokenHolding::NftPrintedCopy {
+            TokenDefinition::NonFungible { .. } => Self::NftPrintedCopy {
                 definition_id,
                 owned: false,
             },
         }
     }
 
-    pub fn definition_id(&self) -> AccountId {
+    #[must_use]
+    pub const fn definition_id(&self) -> AccountId {
         match self {
-            TokenHolding::Fungible { definition_id, .. } => *definition_id,
-            TokenHolding::NftMaster { definition_id, .. } => *definition_id,
-            TokenHolding::NftPrintedCopy { definition_id, .. } => *definition_id,
+            Self::Fungible { definition_id, .. }
+            | Self::NftMaster { definition_id, .. }
+            | Self::NftPrintedCopy { definition_id, .. } => *definition_id,
         }
     }
 }
@@ -173,7 +176,7 @@ impl TryFrom<&Data> for TokenHolding {
     type Error = std::io::Error;
 
     fn try_from(data: &Data) -> Result<Self, Self::Error> {
-        TokenHolding::try_from_slice(data.as_ref())
+        Self::try_from_slice(data.as_ref())
     }
 }
 
@@ -185,7 +188,7 @@ impl From<&TokenHolding> for Data {
         BorshSerialize::serialize(holding, &mut data)
             .expect("Serialization to Vec should not fail");
 
-        Data::try_from(data).expect("Token holding encoded data should fit into Data")
+        Self::try_from(data).expect("Token holding encoded data should fit into Data")
     }
 }
 
@@ -193,7 +196,7 @@ impl From<&TokenHolding> for Data {
 pub struct NewTokenMetadata {
     /// Metadata standard.
     pub standard: MetadataStandard,
-    /// Pointer to off-chain metadata
+    /// Pointer to off-chain metadata.
     pub uri: String,
     /// Creators of the token.
     pub creators: String,
@@ -224,7 +227,7 @@ impl TryFrom<&Data> for TokenMetadata {
     type Error = std::io::Error;
 
     fn try_from(data: &Data) -> Result<Self, Self::Error> {
-        TokenMetadata::try_from_slice(data.as_ref())
+        Self::try_from_slice(data.as_ref())
     }
 }
 
@@ -236,6 +239,6 @@ impl From<&TokenMetadata> for Data {
         BorshSerialize::serialize(metadata, &mut data)
             .expect("Serialization to Vec should not fail");
 
-        Data::try_from(data).expect("Token metadata encoded data should fit into Data")
+        Self::try_from(data).expect("Token metadata encoded data should fit into Data")
     }
 }

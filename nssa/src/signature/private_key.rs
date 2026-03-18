@@ -1,4 +1,4 @@
-use rand::{Rng, rngs::OsRng};
+use rand::{Rng as _, rngs::OsRng};
 use serde::{Deserialize, Serialize};
 
 use crate::error::NssaError;
@@ -9,14 +9,14 @@ use crate::error::NssaError;
 pub struct PrivateKey([u8; 32]);
 
 impl PrivateKey {
+    #[must_use]
     pub fn new_os_random() -> Self {
         let mut rng = OsRng;
 
         loop {
-            match Self::try_new(rng.r#gen()) {
-                Ok(key) => break key,
-                Err(_) => continue,
-            };
+            if let Ok(key) = Self::try_new(rng.r#gen()) {
+                break key;
+            }
         }
     }
 
@@ -32,7 +32,8 @@ impl PrivateKey {
         }
     }
 
-    pub fn value(&self) -> &[u8; 32] {
+    #[must_use]
+    pub const fn value(&self) -> &[u8; 32] {
         &self.0
     }
 }
@@ -41,13 +42,13 @@ impl PrivateKey {
 mod tests {
     use super::*;
     #[test]
-    fn test_value_getter() {
+    fn value_getter() {
         let key = PrivateKey::try_new([1; 32]).unwrap();
         assert_eq!(key.value(), &key.0);
     }
 
     #[test]
-    fn test_produce_key() {
+    fn produce_key() {
         let _key = PrivateKey::new_os_random();
     }
 }

@@ -13,6 +13,8 @@ use config::SequencerConfig;
 use log::{error, info, warn};
 use logos_blockchain_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
 use mempool::{MemPool, MemPoolHandle};
+#[cfg(feature = "mock")]
+pub use mock::SequencerCoreWithMockClients;
 
 use crate::{
     block_settlement_client::{BlockSettlementClient, BlockSettlementClientTrait, MsgId},
@@ -24,11 +26,9 @@ pub mod block_settlement_client;
 pub mod block_store;
 pub mod config;
 pub mod indexer_client;
-#[cfg(feature = "mock")]
-pub mod mock;
 
 #[cfg(feature = "mock")]
-pub use mock::SequencerCoreWithMockClients;
+pub mod mock;
 
 pub struct SequencerCore<
     BC: BlockSettlementClientTrait = BlockSettlementClient,
@@ -82,7 +82,8 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
         // as fixing this issue may require actions non-native to program scope
         let store = SequencerStore::open_db_with_genesis(
             &config.home.join("rocksdb"),
-            Some((&genesis_block, genesis_msg_id.into())),
+            &genesis_block,
+            genesis_msg_id.into(),
             signing_key,
         )
         .unwrap();
@@ -91,38 +92,35 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
             .expect("Failed to read latest block meta from store");
 
         #[cfg_attr(not(feature = "testnet"), allow(unused_mut))]
-        let mut state = match store.get_nssa_state() {
-            Some(state) => {
-                info!("Found local database. Loading state and pending blocks from it.");
-                state
-            }
-            None => {
-                info!(
-                    "No database found when starting the sequencer. Creating a fresh new with the initial data in config"
-                );
-                let initial_commitments: Vec<nssa_core::Commitment> = config
-                    .initial_commitments
-                    .iter()
-                    .map(|init_comm_data| {
-                        let npk = &init_comm_data.npk;
+        let mut state = if let Some(state) = store.get_nssa_state() {
+            info!("Found local database. Loading state and pending blocks from it.");
+            state
+        } else {
+            info!(
+                "No database found when starting the sequencer. Creating a fresh new with the initial data in config"
+            );
+            let initial_commitments: Vec<nssa_core::Commitment> = config
+                .initial_commitments
+                .iter()
+                .map(|init_comm_data| {
+                    let npk = &init_comm_data.npk;
 
-                        let mut acc = init_comm_data.account.clone();
+                    let mut acc = init_comm_data.account.clone();
 
-                        acc.program_owner =
-                            nssa::program::Program::authenticated_transfer_program().id();
+                    acc.program_owner =
+                        nssa::program::Program::authenticated_transfer_program().id();
 
-                        nssa_core::Commitment::new(npk, &acc)
-                    })
-                    .collect();
+                    nssa_core::Commitment::new(npk, &acc)
+                })
+                .collect();
 
-                let init_accs: Vec<(nssa::AccountId, u128)> = config
-                    .initial_accounts
-                    .iter()
-                    .map(|acc_data| (acc_data.account_id, acc_data.balance))
-                    .collect();
+            let init_accs: Vec<(nssa::AccountId, u128)> = config
+                .initial_accounts
+                .iter()
+                .map(|acc_data| (acc_data.account_id, acc_data.balance))
+                .collect();
 
-                nssa::V02State::new_with_genesis_accounts(&init_accs, &initial_commitments)
-            }
+            nssa::V02State::new_with_genesis_accounts(&init_accs, &initial_commitments)
         };
 
         #[cfg(feature = "testnet")]
@@ -179,24 +177,29 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
         Ok(self.chain_height)
     }
 
-    /// Produces new block from transactions in mempool and packs it into a SignedMantleTx.
+    /// Produces new block from transactions in mempool and packs it into a `SignedMantleTx`.
     pub fn produce_new_block_with_mempool_transactions(
         &mut self,
     ) -> Result<(SignedMantleTx, MsgId)> {
         let now = Instant::now();
 
-        let new_block_height = self.chain_height + 1;
+        let new_block_height = self
+            .chain_height
+            .checked_add(1)
+            .with_context(|| format!("Max block height reached: {}", self.chain_height))?;
 
         let mut valid_transactions = vec![];
 
-        let max_block_size = self.sequencer_config.max_block_size.as_u64() as usize;
+        let max_block_size = usize::try_from(self.sequencer_config.max_block_size.as_u64())
+            .expect("`max_block_size` should fit into usize");
 
         let latest_block_meta = self
             .store
             .latest_block_meta()
             .context("Failed to get latest block meta from store")?;
 
-        let curr_time = chrono::Utc::now().timestamp_millis() as u64;
+        let curr_time = u64::try_from(chrono::Utc::now().timestamp_millis())
+            .expect("Timestamp must be positive");
 
         while let Some(tx) = self.mempool.pop() {
             let tx_hash = tx.hash();
@@ -278,19 +281,19 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
         Ok((tx, msg_id))
     }
 
-    pub fn state(&self) -> &nssa::V02State {
+    pub const fn state(&self) -> &nssa::V02State {
         &self.state
     }
 
-    pub fn block_store(&self) -> &SequencerStore {
+    pub const fn block_store(&self) -> &SequencerStore {
         &self.store
     }
 
-    pub fn chain_height(&self) -> u64 {
+    pub const fn chain_height(&self) -> u64 {
         self.chain_height
     }
 
-    pub fn sequencer_config(&self) -> &SequencerConfig {
+    pub const fn sequencer_config(&self) -> &SequencerConfig {
         &self.sequencer_config
     }
 
@@ -299,23 +302,17 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
     /// All pending blocks with an ID less than or equal to `last_finalized_block_id`
     /// are removed from the database.
     pub fn clean_finalized_blocks_from_db(&mut self, last_finalized_block_id: u64) -> Result<()> {
-        if let Some(first_pending_block_id) = self
-            .get_pending_blocks()?
+        self.get_pending_blocks()?
             .iter()
             .map(|block| block.header.block_id)
             .min()
-        {
-            info!(
-                "Clearing pending blocks up to id: {}",
-                last_finalized_block_id
-            );
-            // TODO: Delete blocks instead of marking them as finalized.
-            // Current approach is used because we still have `GetBlockDataRequest`.
-            (first_pending_block_id..=last_finalized_block_id)
-                .try_for_each(|id| self.store.mark_block_as_finalized(id))
-        } else {
-            Ok(())
-        }
+            .map_or(Ok(()), |first_pending_block_id| {
+                info!("Clearing pending blocks up to id: {last_finalized_block_id}");
+                // TODO: Delete blocks instead of marking them as finalized.
+                // Current approach is used because we still have `GetBlockDataRequest`.
+                (first_pending_block_id..=last_finalized_block_id)
+                    .try_for_each(|id| self.store.mark_block_as_finalized(id))
+            })
     }
 
     /// Returns the list of stored pending blocks.
@@ -338,16 +335,18 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
     }
 }
 
-/// Load signing key from file or generate a new one if it doesn't exist
+/// Load signing key from file or generate a new one if it doesn't exist.
 fn load_or_create_signing_key(path: &Path) -> Result<Ed25519Key> {
     if path.exists() {
         let key_bytes = std::fs::read(path)?;
+
         let key_array: [u8; ED25519_SECRET_KEY_SIZE] = key_bytes
             .try_into()
-            .map_err(|_| anyhow!("Found key with incorrect length"))?;
+            .map_err(|_bytes| anyhow!("Found key with incorrect length"))?;
+
         Ok(Ed25519Key::from_bytes(&key_array))
     } else {
-        let mut key_bytes = [0u8; ED25519_SECRET_KEY_SIZE];
+        let mut key_bytes = [0_u8; ED25519_SECRET_KEY_SIZE];
         rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut key_bytes);
         // Create parent directory if it doesn't exist
         if let Some(parent) = path.parent() {
@@ -358,11 +357,14 @@ fn load_or_create_signing_key(path: &Path) -> Result<Ed25519Key> {
     }
 }
 
-#[cfg(all(test, feature = "mock"))]
+#[cfg(test)]
+#[cfg(feature = "mock")]
 mod tests {
+    #![expect(clippy::shadow_unrelated, reason = "We don't care about it in tests")]
+
     use std::{pin::pin, str::FromStr as _, time::Duration};
 
-    use base58::ToBase58;
+    use base58::ToBase58 as _;
     use bedrock_client::BackoffConfig;
     use common::{
         block::AccountInitialData, test_utils::sequencer_sign_key_for_testing,
@@ -385,7 +387,7 @@ mod tests {
 
         SequencerConfig {
             home,
-            override_rust_log: Some("info".to_string()),
+            override_rust_log: Some("info".to_owned()),
             genesis_id: 1,
             is_genesis_random: false,
             max_num_tx_in_block: 10,
@@ -466,7 +468,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_start_from_config() {
+    async fn start_from_config() {
         let config = setup_sequencer_config();
         let (sequencer, _mempool_handle) =
             SequencerCoreWithMockClients::start_from_config(config.clone()).await;
@@ -486,7 +488,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_start_different_intial_accounts_balances() {
+    async fn start_different_intial_accounts_balances() {
         let acc1_account_id: Vec<u8> = vec![
             27, 132, 197, 86, 123, 18, 100, 64, 153, 93, 62, 213, 170, 186, 5, 101, 215, 30, 24,
             52, 96, 72, 25, 255, 156, 23, 245, 233, 213, 221, 7, 143,
@@ -527,7 +529,7 @@ mod tests {
     }
 
     #[test]
-    fn test_transaction_pre_check_pass() {
+    fn transaction_pre_check_pass() {
         let tx = common::test_utils::produce_dummy_empty_transaction();
         let result = tx.transaction_stateless_check();
 
@@ -535,7 +537,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_transaction_pre_check_native_transfer_valid() {
+    async fn transaction_pre_check_native_transfer_valid() {
         let (sequencer, _mempool_handle) = common_setup().await;
 
         let acc1 = sequencer.sequencer_config.initial_accounts[0].account_id;
@@ -544,7 +546,7 @@ mod tests {
         let sign_key1 = create_signing_key_for_account1();
 
         let tx = common::test_utils::create_transaction_native_token_transfer(
-            acc1, 0, acc2, 10, sign_key1,
+            acc1, 0, acc2, 10, &sign_key1,
         );
         let result = tx.transaction_stateless_check();
 
@@ -552,7 +554,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_transaction_pre_check_native_transfer_other_signature() {
+    async fn transaction_pre_check_native_transfer_other_signature() {
         let (mut sequencer, _mempool_handle) = common_setup().await;
 
         let acc1 = sequencer.sequencer_config.initial_accounts[0].account_id;
@@ -561,7 +563,7 @@ mod tests {
         let sign_key2 = create_signing_key_for_account2();
 
         let tx = common::test_utils::create_transaction_native_token_transfer(
-            acc1, 0, acc2, 10, sign_key2,
+            acc1, 0, acc2, 10, &sign_key2,
         );
 
         // Signature is valid, stateless check pass
@@ -577,7 +579,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_transaction_pre_check_native_transfer_sent_too_much() {
+    async fn transaction_pre_check_native_transfer_sent_too_much() {
         let (mut sequencer, _mempool_handle) = common_setup().await;
 
         let acc1 = sequencer.sequencer_config.initial_accounts[0].account_id;
@@ -586,7 +588,7 @@ mod tests {
         let sign_key1 = create_signing_key_for_account1();
 
         let tx = common::test_utils::create_transaction_native_token_transfer(
-            acc1, 0, acc2, 10000000, sign_key1,
+            acc1, 0, acc2, 10_000_000, &sign_key1,
         );
 
         let result = tx.transaction_stateless_check();
@@ -604,7 +606,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_transaction_execute_native_transfer() {
+    async fn transaction_execute_native_transfer() {
         let (mut sequencer, _mempool_handle) = common_setup().await;
 
         let acc1 = sequencer.sequencer_config.initial_accounts[0].account_id;
@@ -613,7 +615,7 @@ mod tests {
         let sign_key1 = create_signing_key_for_account1();
 
         let tx = common::test_utils::create_transaction_native_token_transfer(
-            acc1, 0, acc2, 100, sign_key1,
+            acc1, 0, acc2, 100, &sign_key1,
         );
 
         sequencer.execute_check_transaction_on_state(tx).unwrap();
@@ -626,7 +628,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_push_tx_into_mempool_blocks_until_mempool_is_full() {
+    async fn push_tx_into_mempool_blocks_until_mempool_is_full() {
         let config = SequencerConfig {
             mempool_max_size: 1,
             ..setup_sequencer_config()
@@ -653,7 +655,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_produce_new_block_with_mempool_transactions() {
+    async fn produce_new_block_with_mempool_transactions() {
         let (mut sequencer, mempool_handle) = common_setup().await;
         let genesis_height = sequencer.chain_height;
 
@@ -666,7 +668,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_replay_transactions_are_rejected_in_the_same_block() {
+    async fn replay_transactions_are_rejected_in_the_same_block() {
         let (mut sequencer, mempool_handle) = common_setup().await;
 
         let acc1 = sequencer.sequencer_config.initial_accounts[0].account_id;
@@ -675,7 +677,7 @@ mod tests {
         let sign_key1 = create_signing_key_for_account1();
 
         let tx = common::test_utils::create_transaction_native_token_transfer(
-            acc1, 0, acc2, 100, sign_key1,
+            acc1, 0, acc2, 100, &sign_key1,
         );
 
         let tx_original = tx.clone();
@@ -698,7 +700,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_replay_transactions_are_rejected_in_different_blocks() {
+    async fn replay_transactions_are_rejected_in_different_blocks() {
         let (mut sequencer, mempool_handle) = common_setup().await;
 
         let acc1 = sequencer.sequencer_config.initial_accounts[0].account_id;
@@ -707,7 +709,7 @@ mod tests {
         let sign_key1 = create_signing_key_for_account1();
 
         let tx = common::test_utils::create_transaction_native_token_transfer(
-            acc1, 0, acc2, 100, sign_key1,
+            acc1, 0, acc2, 100, &sign_key1,
         );
 
         // The transaction should be included the first time
@@ -734,7 +736,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_restart_from_storage() {
+    async fn restart_from_storage() {
         let config = setup_sequencer_config();
         let acc1_account_id = config.initial_accounts[0].account_id;
         let acc2_account_id = config.initial_accounts[1].account_id;
@@ -753,7 +755,7 @@ mod tests {
                 0,
                 acc2_account_id,
                 balance_to_move,
-                signing_key,
+                &signing_key,
             );
 
             mempool_handle.push(tx.clone()).await.unwrap();
@@ -786,7 +788,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_pending_blocks() {
+    async fn get_pending_blocks() {
         let config = setup_sequencer_config();
         let (mut sequencer, _mempool_handle) =
             SequencerCoreWithMockClients::start_from_config(config).await;
@@ -803,7 +805,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_delete_blocks() {
+    async fn delete_blocks() {
         let config = setup_sequencer_config();
         let (mut sequencer, _mempool_handle) =
             SequencerCoreWithMockClients::start_from_config(config).await;
@@ -826,7 +828,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_produce_block_with_correct_prev_meta_after_restart() {
+    async fn produce_block_with_correct_prev_meta_after_restart() {
         let config = setup_sequencer_config();
         let acc1_account_id = config.initial_accounts[0].account_id;
         let acc2_account_id = config.initial_accounts[1].account_id;
@@ -844,7 +846,7 @@ mod tests {
                 0,
                 acc2_account_id,
                 100,
-                signing_key,
+                &signing_key,
             );
 
             mempool_handle.push(tx).await.unwrap();
@@ -867,7 +869,7 @@ mod tests {
             1, // Next nonce
             acc2_account_id,
             50,
-            signing_key,
+            &signing_key,
         );
 
         mempool_handle.push(tx.clone()).await.unwrap();
@@ -899,7 +901,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_start_from_config_uses_db_height_not_config_genesis() {
+    async fn start_from_config_uses_db_height_not_config_genesis() {
         let mut config = setup_sequencer_config();
         let original_genesis_id = config.genesis_id;
 

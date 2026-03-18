@@ -58,7 +58,7 @@ amm_program = { path = "programs/amm" }
 test_program_methods = { path = "test_program_methods" }
 bedrock_client = { path = "bedrock_client" }
 
-tokio = { version = "1.28.2", features = [
+tokio = { version = "1.50", features = [
   "net",
   "rt-multi-thread",
   "sync",
@@ -75,15 +75,15 @@ serde = { version = "1.0.60", default-features = false, features = ["derive"] }
 serde_json = "1.0.81"
 serde_with = "3.16.1"
 actix = "0.13.0"
-actix-cors = "0.6.1"
+actix-cors = "0.7.1"
 jsonrpsee = "0.26.0"
 futures = "0.3"
 actix-rt = "*"
 lazy_static = "1.5.0"
-env_logger = "0.10"
+env_logger = "0.11"
 log = "0.4.28"
-lru = "0.7.8"
-thiserror = "2.0.12"
+lru = "0.16.3"
+thiserror = "2.0"
 sha2 = "0.10.8"
 hex = "0.4.3"
 bytemuck = "1.24.0"
@@ -91,7 +91,7 @@ bytesize = { version = "2.3.1", features = ["serde"] }
 humantime-serde = "1.1"
 humantime = "2.1"
 aes-gcm = "0.10.3"
-toml = "0.7.4"
+toml = "0.9.8"
 bincode = "1.3.3"
 tempfile = "3.14.0"
 light-poseidon = "0.3.0"
@@ -107,7 +107,7 @@ base58 = "0.2.0"
 itertools = "0.14.0"
 url = { version = "2.5.4", features = ["serde"] }
 tokio-retry = "0.3.0"
-schemars = "1.2.0"
+schemars = "1.2"
 async-stream = "0.3.6"
 
 logos-blockchain-common-http-client = { git = "https://github.com/logos-blockchain/logos-blockchain.git" }
@@ -129,7 +129,7 @@ k256 = { version = "0.13.3", features = [
   "pem",
 ] }
 elliptic-curve = { version = "0.13.8", features = ["arithmetic"] }
-actix-web = { version = "=4.1.0", default-features = false, features = [
+actix-web = { version = "4.13.0", default-features = false, features = [
   "macros",
 ] }
 clap = { version = "4.5.42", features = ["derive", "env"] }
@@ -141,3 +141,142 @@ inherits = "release"
 opt-level = 'z'
 lto = true
 codegen-units = 1
+
+[workspace.lints.rust]
+warnings = "deny"
+
+[workspace.lints]
+clippy.all = { level = "deny", priority = -1 }
+
+# Pedantic
+clippy.pedantic = { level = "deny", priority = -1 }
+
+# Reason: documenting every function returning Result is too verbose and doesn't add much value when you have good error types.
+clippy.missing-errors-doc = "allow"
+# Reason: most of the panics are internal and not part of the public API, so documenting them is not necessary.
+clippy.missing-panics-doc = "allow"
+# Reason: this isn't always bad and actually works well for our financial and cryptography code.
+clippy.similar-names = "allow"
+# Reason: this lint is too strict and hard to fix.
+clippy.too-many-lines = "allow"
+# Reason: std hasher is fine for us in public functions.
+clippy.implicit-hasher = "allow"
+
+# Restriction
+clippy.restriction = { level = "deny", priority = -1 }
+
+# Reason: we deny the whole `restriction` group but we allow things that don't make sense for us.
+# That way we can still benefit from new lints added to the `restriction` group without having to
+# explicitly allow them.
+# As a downside our contributors don't know if some lint was enabled intentionally or just no one
+# else faced it before to allow it but we can handle this during code reviews.
+clippy.blanket-clippy-restriction-lints = "allow"
+# Reason: we can't avoid using unwrap for now.
+clippy.unwrap-used = "allow"
+# Reason: we can't avoid using expect for now.
+clippy.expect-used = "allow"
+# Reason: unreachable is good in many cases.
+clippy.unreachable = "allow"
+# Reason: this is ridiculous strict in our codebase and doesn't add any value.
+clippy.single-call-fn = "allow"
+# Reason: we use panic in some places and it's okay.
+clippy.panic = "allow"
+# Reason: shadowing is good most of the times.
+clippy.shadow-reuse = "allow"
+# Reason: implicit return is good.
+clippy.implicit-return = "allow"
+# Reason: std is fine for us, we don't need to use core.
+clippy.std-instead-of-core = "allow"
+# Reason: std is fine for us, we don't need to use alloc.
+clippy.std-instead-of-alloc = "allow"
+# Reason: default methods are good most of the time.
+clippy.missing-trait-methods = "allow"
+# Reason: this is too verbose and doesn't help much if you have rust analyzer.
+clippy.pattern-type-mismatch = "allow"
+# Reason: decreases readability.
+clippy.assertions-on-result-states = "allow"
+# Reason: documenting every assert is too verbose.
+clippy.missing-assert-message = "allow"
+# Reason: documenting private items is too verbose and doesn't add much value.
+clippy.missing-docs-in-private-items = "allow"
+# Reason: we use separated suffix style.
+clippy.separated_literal_suffix = "allow"
+# Reason: sometimes absolute paths are more readable.
+clippy.absolute-paths = "allow"
+# Reason: sometimes it's as readable as full variable naming.
+clippy.min-ident-chars = "allow"
+# Reason: it's very common and handy.
+clippy.indexing-slicing = "allow"
+# Reason: we use little endian style.
+clippy.little-endian-bytes = "allow"
+# Reason: we use this style of pub visibility.
+clippy.pub-with-shorthand = "allow"
+# Reason: question mark operator is very cool.
+clippy.question-mark-used = "allow"
+# Reason: it's fine to panic in tests and some functions where it makes sense.
+clippy.panic-in-result-fn = "allow"
+# Reason: we don't care that much about inlining and LTO should take care of it.
+clippy.missing_inline_in_public_items = "allow"
+# Reason: it's okay for us.
+clippy.default-numeric-fallback = "allow"
+# Reason: this is fine for us.
+clippy.exhaustive-enums = "allow"
+# Reason: this is fine for us.
+clippy.exhaustive-structs = "allow"
+# Reason: this helps readability when item is imported in other modules.
+clippy.module-name-repetitions = "allow"
+# Reason: mostly historical reasons, maybe we'll address this in future.
+clippy.mod-module-files = "allow"
+# Reason: named module files is our preferred way.
+clippy.self-named-module-files = "allow"
+# Reason: this is actually quite handy.
+clippy.impl-trait-in-params = "allow"
+# Reason: this is often useful.
+clippy.use-debug = "allow"
+# Reason: this is sometimes useful.
+clippy.field-scoped-visibility-modifiers = "allow"
+# Reason: `pub use` is good for re-exports and hiding unnecessary details.
+clippy.pub-use = "allow"
+# Reason: we prefer semicolons inside blocks.
+clippy.semicolon-outside-block = "allow"
+# Reason: we don't do it blindly, this is mostly internal constraints checks.
+clippy.unwrap-in-result = "allow"
+# Reason: we don't see any problems with that.
+clippy.shadow-same = "allow"
+# Reason: this lint is too verbose.
+clippy.let-underscore-untyped = "allow"
+# Reason: this lint is actually bad as it forces to use wildcard `..` instead of
+# field-by-field `_` which may lead to subtle bugs when new fields are added to the struct.
+clippy.unneeded-field-pattern = "allow"
+
+# Nursery
+clippy.nursery = { level = "deny", priority = -1 }
+
+# Reason: this is okay if it compiles.
+clippy.future-not-send = "allow"
+# Reason: this is actually a good lint, but currently it gives a lot of false-positives.
+clippy.significant-drop-tightening = "allow"
+
+# Correctness
+clippy.correctness = { level = "deny", priority = -1 }
+
+# Complexity
+clippy.complexity = { level = "deny", priority = -1 }
+
+# Perf
+clippy.perf = { level = "deny", priority = -1 }
+
+# Suspicious
+clippy.suspicious = { level = "deny", priority = -1 }
+
+# Style
+clippy.style = { level = "deny", priority = -1 }
+
+# Cargo
+clippy.cargo = { level = "deny", priority = -1 }
+
+# Reason: we're not at this stage yet and it will be a pain to create a new crate.
+clippy.cargo-common-metadata = "allow"
+# Reason: hard to address right now and mostly comes from dependencies
+# so the fix would be just a long list of exceptions.
+clippy.multiple-crate-versions = "allow"

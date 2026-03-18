@@ -36,9 +36,7 @@ fn main() {
     // Fail if the input account is not authorized
     // The `is_authorized` field will be correctly populated or verified by the system if
     // authorization is provided.
-    if !pre_state.is_authorized {
-        panic!("Missing required authorization");
-    }
+    assert!(pre_state.is_authorized, "Missing required authorization");
     // ####
 
     // Construct the post state account values

@@ -21,9 +21,8 @@ fn main() {
         instruction_words,
     ) = read_nssa_inputs::<Instruction>();
 
-    let [sender, receiver] = match pre_states.try_into() {
-        Ok(array) => array,
-        Err(_) => return,
+    let Ok([sender, receiver]) = <[_; 2]>::try_from(pre_states) else {
+        return;
     };
 
     // Maliciously set is_authorized to true for the first account
@@ -37,7 +36,7 @@ fn main() {
     let chained_call = ChainedCall {
         program_id: transfer_program_id,
         instruction_data,
-        pre_states: vec![authorised_sender.clone(), receiver.clone()],
+        pre_states: vec![authorised_sender, receiver.clone()],
         pda_seeds: vec![],
     };
 

@@ -6,10 +6,12 @@ pub struct Message {
 }
 
 impl Message {
-    pub fn new(bytecode: Vec<u8>) -> Self {
+    #[must_use]
+    pub const fn new(bytecode: Vec<u8>) -> Self {
         Self { bytecode }
     }
 
+    #[must_use]
     pub fn into_bytecode(self) -> Vec<u8> {
         self.bytecode
     }

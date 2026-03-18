@@ -5,9 +5,8 @@ type Instruction = ();
 fn main() {
     let (ProgramInput { pre_states, .. }, instruction_words) = read_nssa_inputs::<Instruction>();
 
-    let [pre1, pre2] = match pre_states.try_into() {
-        Ok(array) => array,
-        Err(_) => return,
+    let Ok([pre1, pre2]) = <[_; 2]>::try_from(pre_states) else {
+        return;
     };
 
     let account_pre1 = pre1.account.clone();

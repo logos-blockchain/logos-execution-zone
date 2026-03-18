@@ -42,14 +42,14 @@ impl FromStr for BasicAuth {
         })?;
 
         Ok(Self {
-            username: username.to_string(),
-            password: password.map(|p| p.to_string()),
+            username: username.to_owned(),
+            password: password.map(std::string::ToString::to_string),
         })
     }
 }
 
 impl From<BasicAuth> for BasicAuthCredentials {
     fn from(value: BasicAuth) -> Self {
-        BasicAuthCredentials::new(value.username, value.password)
+        Self::new(value.username, value.password)
     }
 }

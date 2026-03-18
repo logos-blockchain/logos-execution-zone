@@ -24,14 +24,14 @@ pub struct IndexerCore {
 }
 
 #[derive(Clone)]
-/// This struct represents one L1 block data fetched from backfilling
+/// This struct represents one L1 block data fetched from backfilling.
 pub struct BackfillBlockData {
     l2_blocks: Vec<Block>,
     l1_header: HeaderId,
 }
 
 #[derive(Clone)]
-/// This struct represents data fetched fom backfilling in one iteration
+/// This struct represents data fetched fom backfilling in one iteration.
 pub struct BackfillData {
     block_data: VecDeque<BackfillBlockData>,
     curr_fin_l1_lib_header: HeaderId,
@@ -52,7 +52,7 @@ impl IndexerCore {
         // ToDo: remove key from indexer config, use some default.
         let signing_key = nssa::PrivateKey::try_new(config.signing_key).unwrap();
         let channel_genesis_msg_id = [0; 32];
-        let start_block = hashable_data.into_pending_block(&signing_key, channel_genesis_msg_id);
+        let genesis_block = hashable_data.into_pending_block(&signing_key, channel_genesis_msg_id);
 
         // This is a troubling moment, because changes in key protocol can
         // affect this. And indexer can not reliably ask this data from sequencer
@@ -94,47 +94,44 @@ impl IndexerCore {
                 config.bedrock_client_config.auth.clone(),
             )?,
             config,
-            store: IndexerStore::open_db_with_genesis(&home, Some((start_block, state)))?,
+            store: IndexerStore::open_db_with_genesis(&home, &genesis_block, &state)?,
         })
     }
 
-    pub async fn subscribe_parse_block_stream(&self) -> impl futures::Stream<Item = Result<Block>> {
+    pub fn subscribe_parse_block_stream(&self) -> impl futures::Stream<Item = Result<Block>> {
         async_stream::stream! {
             info!("Searching for initial header");
 
-            let last_l1_lib_header = self.store.last_observed_l1_lib_header()?;
+            let last_stored_l1_lib_header = self.store.last_observed_l1_lib_header()?;
 
-            let mut prev_last_l1_lib_header = match last_l1_lib_header {
-                Some(last_l1_lib_header) => {
-                    info!("Last l1 lib header found: {last_l1_lib_header}");
-                    last_l1_lib_header
-                },
-                None => {
-                    info!("Last l1 lib header not found in DB");
-                    info!("Searching for the start of a channel");
+            let mut prev_last_l1_lib_header = if let Some(last_l1_lib_header) = last_stored_l1_lib_header {
+                info!("Last l1 lib header found: {last_l1_lib_header}");
+                last_l1_lib_header
+            } else {
+                info!("Last l1 lib header not found in DB");
+                info!("Searching for the start of a channel");
 
-                    let BackfillData {
-                        block_data: start_buff,
-                        curr_fin_l1_lib_header: last_l1_lib_header,
-                    } = self.search_for_channel_start().await?;
+                let BackfillData {
+                    block_data: start_buff,
+                    curr_fin_l1_lib_header: last_l1_lib_header,
+                } = self.search_for_channel_start().await?;
 
-                    for BackfillBlockData {
-                        l2_blocks: l2_block_vec,
-                        l1_header,
-                    } in start_buff {
-                        let mut l2_blocks_parsed_ids: Vec<_> = l2_block_vec.iter().map(|block| block.header.block_id).collect();
-                        l2_blocks_parsed_ids.sort();
-                        info!("Parsed {} L2 blocks with ids {:?}", l2_block_vec.len(), l2_blocks_parsed_ids);
+                for BackfillBlockData {
+                    l2_blocks: l2_block_vec,
+                    l1_header,
+                } in start_buff {
+                    let mut l2_blocks_parsed_ids: Vec<_> = l2_block_vec.iter().map(|block| block.header.block_id).collect();
+                    l2_blocks_parsed_ids.sort_unstable();
+                    info!("Parsed {} L2 blocks with ids {:?}", l2_block_vec.len(), l2_blocks_parsed_ids);
 
                         for l2_block in l2_block_vec {
-                            self.store.put_block(l2_block.clone(), l1_header)?;
+                            self.store.put_block(l2_block.clone(), l1_header).await?;
 
-                            yield Ok(l2_block);
-                        }
+                        yield Ok(l2_block);
                     }
+                }
 
-                    last_l1_lib_header
-                },
+                last_l1_lib_header
             };
 
             info!("Searching for initial header finished");
@@ -157,11 +154,11 @@ impl IndexerCore {
                     l1_header: header,
                 } in buff {
                     let mut l2_blocks_parsed_ids: Vec<_> = l2_block_vec.iter().map(|block| block.header.block_id).collect();
-                    l2_blocks_parsed_ids.sort();
+                    l2_blocks_parsed_ids.sort_unstable();
                     info!("Parsed {} L2 blocks with ids {:?}", l2_block_vec.len(), l2_blocks_parsed_ids);
 
                     for l2_block in l2_block_vec {
-                        self.store.put_block(l2_block.clone(), header)?;
+                        self.store.put_block(l2_block.clone(), header).await?;
 
                         yield Ok(l2_block);
                     }
@@ -177,20 +174,20 @@ impl IndexerCore {
     async fn get_next_lib(&self, prev_lib: HeaderId) -> Result<HeaderId> {
         loop {
             let next_lib = self.get_lib().await?;
-            if next_lib != prev_lib {
-                break Ok(next_lib);
-            } else {
+            if next_lib == prev_lib {
                 info!(
                     "Wait {:?} to not spam the node",
                     self.config.consensus_info_polling_interval
                 );
                 tokio::time::sleep(self.config.consensus_info_polling_interval).await;
+            } else {
+                break Ok(next_lib);
             }
         }
     }
 
     /// WARNING: depending on channel state,
-    /// may take indefinite amount of time
+    /// may take indefinite amount of time.
     pub async fn search_for_channel_start(&self) -> Result<BackfillData> {
         let mut curr_last_l1_lib_header = self.get_lib().await?;
         let mut backfill_start = curr_last_l1_lib_header;
@@ -204,15 +201,13 @@ impl IndexerCore {
             let mut cycle_header = curr_last_l1_lib_header;
 
             loop {
-                let cycle_block =
-                    if let Some(block) = self.bedrock_client.get_block_by_id(cycle_header).await? {
-                        block
-                    } else {
-                        // First run can reach root easily
-                        // so here we are optimistic about L1
-                        // failing to get parent.
-                        break;
-                    };
+                let Some(cycle_block) = self.bedrock_client.get_block_by_id(cycle_header).await?
+                else {
+                    // First run can reach root easily
+                    // so here we are optimistic about L1
+                    // failing to get parent.
+                    break;
+                };
 
                 // It would be better to have id, but block does not have it, so slot will do.
                 info!(
@@ -289,10 +284,9 @@ impl IndexerCore {
 
             if cycle_block.header().id() == last_fin_l1_lib_header {
                 break;
-            } else {
-                // Step back to parent
-                cycle_header = cycle_block.header().parent();
             }
+            // Step back to parent
+            cycle_header = cycle_block.header().parent();
 
             // It would be better to have id, but block does not have it, so slot will do.
             info!(
@@ -324,6 +318,10 @@ fn parse_block_owned(
     decoded_channel_id: &ChannelId,
 ) -> (Vec<Block>, HeaderId) {
     (
+        #[expect(
+            clippy::wildcard_enum_match_arm,
+            reason = "We are only interested in channel inscription ops, so it's fine to ignore the rest"
+        )]
         l1_block
             .transactions()
             .flat_map(|tx| {
@@ -335,7 +333,7 @@ fn parse_block_owned(
                     }) if channel_id == decoded_channel_id => {
                         borsh::from_slice::<Block>(inscription)
                             .inspect_err(|err| {
-                                error!("Failed to deserialize our inscription with err: {err:#?}")
+                                error!("Failed to deserialize our inscription with err: {err:#?}");
                             })
                             .ok()
                     }

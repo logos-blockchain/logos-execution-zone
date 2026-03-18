@@ -5,6 +5,7 @@ use nssa_core::{
 };
 
 #[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
+#[must_use]
 pub fn swap(
     pool: AccountWithMetadata,
     vault_a: AccountWithMetadata,
@@ -95,7 +96,7 @@ pub fn swap(
         };
 
     // Update pool account
-    let mut pool_post = pool.account.clone();
+    let mut pool_post = pool.account;
     let pool_post_definition = PoolDefinition {
         reserve_a: pool_def_data.reserve_a + deposit_a - withdraw_a,
         reserve_b: pool_def_data.reserve_b + deposit_b - withdraw_b,
@@ -105,11 +106,11 @@ pub fn swap(
     pool_post.data = Data::from(&pool_post_definition);
 
     let post_states = vec![
-        AccountPostState::new(pool_post.clone()),
-        AccountPostState::new(vault_a.account.clone()),
-        AccountPostState::new(vault_b.account.clone()),
-        AccountPostState::new(user_holding_a.account.clone()),
-        AccountPostState::new(user_holding_b.account.clone()),
+        AccountPostState::new(pool_post),
+        AccountPostState::new(vault_a.account),
+        AccountPostState::new(vault_b.account),
+        AccountPostState::new(user_holding_a.account),
+        AccountPostState::new(user_holding_b.account),
     ];
 
     (post_states, chained_calls)
@@ -151,7 +152,7 @@ fn swap_logic(
         },
     ));
 
-    let mut vault_withdraw = vault_withdraw.clone();
+    let mut vault_withdraw = vault_withdraw;
     vault_withdraw.is_authorized = true;
 
     let pda_seed = compute_vault_pda_seed(

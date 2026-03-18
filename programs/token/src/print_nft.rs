@@ -4,6 +4,7 @@ use nssa_core::{
 };
 use token_core::TokenHolding;
 
+#[must_use]
 pub fn print_nft(
     master_account: AccountWithMetadata,
     printed_account: AccountWithMetadata,
@@ -36,7 +37,7 @@ pub fn print_nft(
         *print_balance > 1,
         "Insufficient balance to print another NFT copy"
     );
-    *print_balance -= 1;
+    *print_balance = print_balance.checked_sub(1).expect("Checked above");
 
     let mut master_account_post = master_account.account;
     master_account_post.data = Data::from(&master_account_data);

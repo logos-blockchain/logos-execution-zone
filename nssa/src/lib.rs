@@ -1,16 +1,7 @@
-pub mod program_methods {
-    include!(concat!(env!("OUT_DIR"), "/program_methods/mod.rs"));
-}
-
-pub mod encoding;
-pub mod error;
-mod merkle_tree;
-pub mod privacy_preserving_transaction;
-pub mod program;
-pub mod program_deployment_transaction;
-pub mod public_transaction;
-mod signature;
-mod state;
+#![expect(
+    clippy::multiple_inherent_impl,
+    reason = "We prefer to group methods by functionality rather than by type for encoding"
+)]
 
 pub use nssa_core::{
     SharedSecretKey,
@@ -26,3 +17,17 @@ pub use program_methods::PRIVACY_PRESERVING_CIRCUIT_ID;
 pub use public_transaction::PublicTransaction;
 pub use signature::{PrivateKey, PublicKey, Signature};
 pub use state::V02State;
+
+pub mod encoding;
+pub mod error;
+mod merkle_tree;
+pub mod privacy_preserving_transaction;
+pub mod program;
+pub mod program_deployment_transaction;
+pub mod public_transaction;
+mod signature;
+mod state;
+
+pub mod program_methods {
+    include!(concat!(env!("OUT_DIR"), "/program_methods/mod.rs"));
+}

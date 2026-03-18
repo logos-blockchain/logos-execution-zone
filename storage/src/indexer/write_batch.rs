@@ -1,3 +1,7 @@
+use std::collections::HashMap;
+
+use rocksdb::WriteBatch;
+
 use super::*;
 
 impl RocksDBIO {
@@ -14,12 +18,12 @@ impl RocksDBIO {
         write_batch.put_cf(
             &cf_ameta,
             borsh::to_vec(&acc_id).map_err(|err| {
-                DbError::borsh_cast_message(err, Some("Failed to serialize account id".to_string()))
+                DbError::borsh_cast_message(err, Some("Failed to serialize account id".to_owned()))
             })?,
             borsh::to_vec(&num_tx).map_err(|err| {
                 DbError::borsh_cast_message(
                     err,
-                    Some("Failed to serialize acc metadata".to_string()),
+                    Some("Failed to serialize acc metadata".to_owned()),
                 )
             })?,
         );
@@ -42,13 +46,10 @@ impl RocksDBIO {
             let put_id = acc_num_tx + tx_id as u64;
 
             let mut prefix = borsh::to_vec(&acc_id).map_err(|berr| {
-                DbError::borsh_cast_message(
-                    berr,
-                    Some("Failed to serialize account id".to_string()),
-                )
+                DbError::borsh_cast_message(berr, Some("Failed to serialize account id".to_owned()))
             })?;
             let suffix = borsh::to_vec(&put_id).map_err(|berr| {
-                DbError::borsh_cast_message(berr, Some("Failed to serialize tx id".to_string()))
+                DbError::borsh_cast_message(berr, Some("Failed to serialize tx id".to_owned()))
             })?;
 
             prefix.extend_from_slice(&suffix);
@@ -59,7 +60,7 @@ impl RocksDBIO {
                 borsh::to_vec(tx_hash).map_err(|berr| {
                     DbError::borsh_cast_message(
                         berr,
-                        Some("Failed to serialize tx hash".to_string()),
+                        Some("Failed to serialize tx hash".to_owned()),
                     )
                 })?,
             );
@@ -72,7 +73,7 @@ impl RocksDBIO {
         )?;
 
         self.db.write(write_batch).map_err(|rerr| {
-            DbError::rocksdb_cast_message(rerr, Some("Failed to write batch".to_string()))
+            DbError::rocksdb_cast_message(rerr, Some("Failed to write batch".to_owned()))
         })
     }
 
@@ -89,13 +90,10 @@ impl RocksDBIO {
             let put_id = acc_num_tx + tx_id as u64;
 
             let mut prefix = borsh::to_vec(&acc_id).map_err(|berr| {
-                DbError::borsh_cast_message(
-                    berr,
-                    Some("Failed to serialize account id".to_string()),
-                )
+                DbError::borsh_cast_message(berr, Some("Failed to serialize account id".to_owned()))
             })?;
             let suffix = borsh::to_vec(&put_id).map_err(|berr| {
-                DbError::borsh_cast_message(berr, Some("Failed to serialize tx id".to_string()))
+                DbError::borsh_cast_message(berr, Some("Failed to serialize tx id".to_owned()))
             })?;
 
             prefix.extend_from_slice(&suffix);
@@ -106,7 +104,7 @@ impl RocksDBIO {
                 borsh::to_vec(tx_hash).map_err(|berr| {
                     DbError::borsh_cast_message(
                         berr,
-                        Some("Failed to serialize tx hash".to_string()),
+                        Some("Failed to serialize tx hash".to_owned()),
                     )
                 })?,
             );
@@ -119,7 +117,7 @@ impl RocksDBIO {
 
     // Meta
 
-    pub fn put_meta_first_block_in_db_batch(&self, block: Block) -> DbResult<()> {
+    pub fn put_meta_first_block_in_db_batch(&self, block: &Block) -> DbResult<()> {
         let cf_meta = self.meta_column();
         self.db
             .put_cf(
@@ -127,13 +125,13 @@ impl RocksDBIO {
                 borsh::to_vec(&DB_META_FIRST_BLOCK_IN_DB_KEY).map_err(|err| {
                     DbError::borsh_cast_message(
                         err,
-                        Some("Failed to serialize DB_META_FIRST_BLOCK_IN_DB_KEY".to_string()),
+                        Some("Failed to serialize DB_META_FIRST_BLOCK_IN_DB_KEY".to_owned()),
                     )
                 })?,
                 borsh::to_vec(&block.header.block_id).map_err(|err| {
                     DbError::borsh_cast_message(
                         err,
-                        Some("Failed to serialize first block id".to_string()),
+                        Some("Failed to serialize first block id".to_owned()),
                     )
                 })?,
             )
@@ -154,13 +152,13 @@ impl RocksDBIO {
             borsh::to_vec(&DB_META_LAST_BLOCK_IN_DB_KEY).map_err(|err| {
                 DbError::borsh_cast_message(
                     err,
-                    Some("Failed to serialize DB_META_LAST_BLOCK_IN_DB_KEY".to_string()),
+                    Some("Failed to serialize DB_META_LAST_BLOCK_IN_DB_KEY".to_owned()),
                 )
             })?,
             borsh::to_vec(&block_id).map_err(|err| {
                 DbError::borsh_cast_message(
                     err,
-                    Some("Failed to serialize last block id".to_string()),
+                    Some("Failed to serialize last block id".to_owned()),
                 )
             })?,
         );
@@ -180,14 +178,14 @@ impl RocksDBIO {
                     err,
                     Some(
                         "Failed to serialize DB_META_LAST_OBSERVED_L1_LIB_HEADER_ID_IN_DB_KEY"
-                            .to_string(),
+                            .to_owned(),
                     ),
                 )
             })?,
             borsh::to_vec(&l1_lib_header).map_err(|err| {
                 DbError::borsh_cast_message(
                     err,
-                    Some("Failed to serialize last l1 block header".to_string()),
+                    Some("Failed to serialize last l1 block header".to_owned()),
                 )
             })?,
         );
@@ -205,13 +203,13 @@ impl RocksDBIO {
             borsh::to_vec(&DB_META_LAST_BREAKPOINT_ID).map_err(|err| {
                 DbError::borsh_cast_message(
                     err,
-                    Some("Failed to serialize DB_META_LAST_BREAKPOINT_ID".to_string()),
+                    Some("Failed to serialize DB_META_LAST_BREAKPOINT_ID".to_owned()),
                 )
             })?,
             borsh::to_vec(&br_id).map_err(|err| {
                 DbError::borsh_cast_message(
                     err,
-                    Some("Failed to serialize last block id".to_string()),
+                    Some("Failed to serialize last block id".to_owned()),
                 )
             })?,
         );
@@ -225,7 +223,7 @@ impl RocksDBIO {
             borsh::to_vec(&DB_META_FIRST_BLOCK_SET_KEY).map_err(|err| {
                 DbError::borsh_cast_message(
                     err,
-                    Some("Failed to serialize DB_META_FIRST_BLOCK_SET_KEY".to_string()),
+                    Some("Failed to serialize DB_META_FIRST_BLOCK_SET_KEY".to_owned()),
                 )
             })?,
             [1u8; 1],
@@ -235,7 +233,7 @@ impl RocksDBIO {
 
     // Block
 
-    pub fn put_block(&self, block: Block, l1_lib_header: [u8; 32]) -> DbResult<()> {
+    pub fn put_block(&self, block: &Block, l1_lib_header: [u8; 32]) -> DbResult<()> {
         let cf_block = self.block_column();
         let cf_hti = self.hash_to_id_column();
         let cf_tti: Arc<BoundColumnFamily<'_>> = self.tx_hash_to_id_column();
@@ -245,10 +243,10 @@ impl RocksDBIO {
         write_batch.put_cf(
             &cf_block,
             borsh::to_vec(&block.header.block_id).map_err(|err| {
-                DbError::borsh_cast_message(err, Some("Failed to serialize block id".to_string()))
+                DbError::borsh_cast_message(err, Some("Failed to serialize block id".to_owned()))
             })?,
-            borsh::to_vec(&block).map_err(|err| {
-                DbError::borsh_cast_message(err, Some("Failed to serialize block data".to_string()))
+            borsh::to_vec(block).map_err(|err| {
+                DbError::borsh_cast_message(err, Some("Failed to serialize block data".to_owned()))
             })?,
         );
 
@@ -260,30 +258,27 @@ impl RocksDBIO {
         write_batch.put_cf(
             &cf_hti,
             borsh::to_vec(&block.header.hash).map_err(|err| {
-                DbError::borsh_cast_message(err, Some("Failed to serialize block hash".to_string()))
+                DbError::borsh_cast_message(err, Some("Failed to serialize block hash".to_owned()))
             })?,
             borsh::to_vec(&block.header.block_id).map_err(|err| {
-                DbError::borsh_cast_message(err, Some("Failed to serialize block id".to_string()))
+                DbError::borsh_cast_message(err, Some("Failed to serialize block id".to_owned()))
             })?,
         );
 
         let mut acc_to_tx_map: HashMap<[u8; 32], Vec<[u8; 32]>> = HashMap::new();
 
-        for tx in block.body.transactions {
+        for tx in &block.body.transactions {
             let tx_hash = tx.hash();
 
             write_batch.put_cf(
                 &cf_tti,
                 borsh::to_vec(&tx_hash).map_err(|err| {
-                    DbError::borsh_cast_message(
-                        err,
-                        Some("Failed to serialize tx hash".to_string()),
-                    )
+                    DbError::borsh_cast_message(err, Some("Failed to serialize tx hash".to_owned()))
                 })?,
                 borsh::to_vec(&block.header.block_id).map_err(|err| {
                     DbError::borsh_cast_message(
                         err,
-                        Some("Failed to serialize block id".to_string()),
+                        Some("Failed to serialize block id".to_owned()),
                     )
                 })?,
             );
@@ -302,15 +297,23 @@ impl RocksDBIO {
             }
         }
 
+        #[expect(
+            clippy::iter_over_hash_type,
+            reason = "RocksDB will keep ordering persistent"
+        )]
         for (acc_id, tx_hashes) in acc_to_tx_map {
             self.put_account_transactions_dependant(acc_id, tx_hashes, &mut write_batch)?;
         }
 
         self.db.write(write_batch).map_err(|rerr| {
-            DbError::rocksdb_cast_message(rerr, Some("Failed to write batch".to_string()))
+            DbError::rocksdb_cast_message(rerr, Some("Failed to write batch".to_owned()))
         })?;
 
-        if block.header.block_id.is_multiple_of(BREAKPOINT_INTERVAL) {
+        if block
+            .header
+            .block_id
+            .is_multiple_of(BREAKPOINT_INTERVAL.into())
+        {
             self.put_next_breakpoint()?;
         }
 

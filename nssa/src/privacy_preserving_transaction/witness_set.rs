@@ -12,6 +12,7 @@ pub struct WitnessSet {
 }
 
 impl WitnessSet {
+    #[must_use]
     pub fn for_message(message: &Message, proof: Proof, private_keys: &[&PrivateKey]) -> Self {
         let message_bytes = message.to_bytes();
         let signatures_and_public_keys = private_keys
@@ -24,11 +25,12 @@ impl WitnessSet {
             })
             .collect();
         Self {
-            proof,
             signatures_and_public_keys,
+            proof,
         }
     }
 
+    #[must_use]
     pub fn signatures_are_valid_for(&self, message: &Message) -> bool {
         let message_bytes = message.to_bytes();
         for (signature, public_key) in self.signatures_and_public_keys() {
@@ -39,19 +41,23 @@ impl WitnessSet {
         true
     }
 
+    #[must_use]
     pub fn signatures_and_public_keys(&self) -> &[(Signature, PublicKey)] {
         &self.signatures_and_public_keys
     }
 
-    pub fn proof(&self) -> &Proof {
+    #[must_use]
+    pub const fn proof(&self) -> &Proof {
         &self.proof
     }
 
+    #[must_use]
     pub fn into_raw_parts(self) -> (Vec<(Signature, PublicKey)>, Proof) {
         (self.signatures_and_public_keys, self.proof)
     }
 
-    pub fn from_raw_parts(
+    #[must_use]
+    pub const fn from_raw_parts(
         signatures_and_public_keys: Vec<(Signature, PublicKey)>,
         proof: Proof,
     ) -> Self {

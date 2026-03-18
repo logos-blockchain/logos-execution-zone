@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2024"
 license = { workspace = true }
 
+[lints]
+workspace = true
+
 [dependencies]
 nssa_core.workspace = true
 nssa.workspace = true
@@ -21,8 +24,8 @@ humantime-serde.workspace = true
 humantime.workspace = true
 tokio = { workspace = true, features = ["macros"] }
 clap.workspace = true
+base58.workspace = true
 base64.workspace = true
-bytemuck.workspace = true
 borsh.workspace = true
 hex.workspace = true
 rand.workspace = true

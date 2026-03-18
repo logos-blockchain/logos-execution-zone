@@ -1,9 +1,9 @@
-use std::{collections::HashMap, ops::Div, path::Path, sync::Arc};
+use std::{path::Path, sync::Arc};
 
-use common::{block::Block, transaction::NSSATransaction};
+use common::block::Block;
 use nssa::V02State;
 use rocksdb::{
-    BoundColumnFamily, ColumnFamilyDescriptor, DBWithThreadMode, MultiThreaded, Options, WriteBatch,
+    BoundColumnFamily, ColumnFamilyDescriptor, DBWithThreadMode, MultiThreaded, Options,
 };
 
 use crate::error::DbError;
@@ -13,52 +13,55 @@ pub mod read_once;
 pub mod write_batch;
 pub mod write_once;
 
-/// Maximal size of stored blocks in base
+/// Maximal size of stored blocks in base.
 ///
-/// Used to control db size
+/// Used to control db size.
 ///
 /// Currently effectively unbounded.
 pub const BUFF_SIZE_ROCKSDB: usize = usize::MAX;
 
-/// Size of stored blocks cache in memory
+/// Size of stored blocks cache in memory.
 ///
-/// Keeping small to not run out of memory
+/// Keeping small to not run out of memory.
 pub const CACHE_SIZE: usize = 1000;
 
-/// Key base for storing metainformation about id of first block in db
+/// Key base for storing metainformation about id of first block in db.
 pub const DB_META_FIRST_BLOCK_IN_DB_KEY: &str = "first_block_in_db";
-/// Key base for storing metainformation about id of last current block in db
+/// Key base for storing metainformation about id of last current block in db.
 pub const DB_META_LAST_BLOCK_IN_DB_KEY: &str = "last_block_in_db";
-/// Key base for storing metainformation about id of last observed L1 lib header in db
+/// Key base for storing metainformation about id of last observed L1 lib header in db.
 pub const DB_META_LAST_OBSERVED_L1_LIB_HEADER_ID_IN_DB_KEY: &str =
     "last_observed_l1_lib_header_in_db";
-/// Key base for storing metainformation which describe if first block has been set
+/// Key base for storing metainformation which describe if first block has been set.
 pub const DB_META_FIRST_BLOCK_SET_KEY: &str = "first_block_set";
-/// Key base for storing metainformation about the last breakpoint
+/// Key base for storing metainformation about the last breakpoint.
 pub const DB_META_LAST_BREAKPOINT_ID: &str = "last_breakpoint_id";
 
-/// Interval between state breakpoints
-pub const BREAKPOINT_INTERVAL: u64 = 100;
+/// Interval between state breakpoints.
+pub const BREAKPOINT_INTERVAL: u8 = 100;
 
-/// Name of block column family
+/// Name of block column family.
 pub const CF_BLOCK_NAME: &str = "cf_block";
-/// Name of meta column family
+/// Name of meta column family.
 pub const CF_META_NAME: &str = "cf_meta";
-/// Name of breakpoint column family
+/// Name of breakpoint column family.
 pub const CF_BREAKPOINT_NAME: &str = "cf_breakpoint";
-/// Name of hash to id map column family
+/// Name of hash to id map column family.
 pub const CF_HASH_TO_ID: &str = "cf_hash_to_id";
-/// Name of tx hash to id map column family
+/// Name of tx hash to id map column family.
 pub const CF_TX_TO_ID: &str = "cf_tx_to_id";
-/// Name of account meta column family
+/// Name of account meta column family.
 pub const CF_ACC_META: &str = "cf_acc_meta";
-/// Name of account id to tx hash map column family
+/// Name of account id to tx hash map column family.
 pub const CF_ACC_TO_TX: &str = "cf_acc_to_tx";
 
 pub type DbResult<T> = Result<T, DbError>;
 
 fn closest_breakpoint_id(block_id: u64) -> u64 {
-    block_id.saturating_sub(1).div(BREAKPOINT_INTERVAL)
+    block_id
+        .saturating_sub(1)
+        .checked_div(u64::from(BREAKPOINT_INTERVAL))
+        .expect("Breakpoint interval is not zero")
 }
 
 pub struct RocksDBIO {
@@ -66,7 +69,11 @@ pub struct RocksDBIO {
 }
 
 impl RocksDBIO {
-    pub fn open_or_create(path: &Path, start_data: Option<(Block, V02State)>) -> DbResult<Self> {
+    pub fn open_or_create(
+        path: &Path,
+        genesis_block: &Block,
+        initial_state: &V02State,
+    ) -> DbResult<Self> {
         let mut cf_opts = Options::default();
         cf_opts.set_max_write_buffer_number(16);
         // ToDo: Add more column families for different data
@@ -85,49 +92,31 @@ impl RocksDBIO {
             &db_opts,
             path,
             vec![cfb, cfmeta, cfbreakpoint, cfhti, cftti, cfameta, cfatt],
-        );
+        )
+        .map_err(|err| DbError::RocksDbError {
+            error: err,
+            additional_info: Some("Failed to open or create DB".to_owned()),
+        })?;
 
-        let dbio = Self {
-            // There is no point in handling this from runner code
-            db: db.expect("We should have permissions to open DB"),
-        };
+        let dbio = Self { db };
 
         let is_start_set = dbio.get_meta_is_first_block_set()?;
-
-        if is_start_set {
-            Ok(dbio)
-        } else if let Some((block, initial_state)) = start_data {
-            let block_id = block.header.block_id;
+        if !is_start_set {
+            let block_id = genesis_block.header.block_id;
             dbio.put_meta_last_block_in_db(block_id)?;
-            dbio.put_meta_first_block_in_db_batch(block)?;
+            dbio.put_meta_first_block_in_db_batch(genesis_block)?;
             dbio.put_meta_is_first_block_set()?;
 
             // First breakpoint setup
             dbio.put_breakpoint(0, initial_state)?;
             dbio.put_meta_last_breakpoint_id(0)?;
-
-            Ok(dbio)
-        } else {
-            // Here we are trying to start a DB without a block, one should not do it.
-            unreachable!()
         }
+
+        Ok(dbio)
     }
 
     pub fn destroy(path: &Path) -> DbResult<()> {
-        let mut cf_opts = Options::default();
-        cf_opts.set_max_write_buffer_number(16);
-        // ToDo: Add more column families for different data
-        let _cfb = ColumnFamilyDescriptor::new(CF_BLOCK_NAME, cf_opts.clone());
-        let _cfmeta = ColumnFamilyDescriptor::new(CF_META_NAME, cf_opts.clone());
-        let _cfsnapshot = ColumnFamilyDescriptor::new(CF_BREAKPOINT_NAME, cf_opts.clone());
-        let _cfhti = ColumnFamilyDescriptor::new(CF_HASH_TO_ID, cf_opts.clone());
-        let _cftti = ColumnFamilyDescriptor::new(CF_TX_TO_ID, cf_opts.clone());
-        let _cfameta = ColumnFamilyDescriptor::new(CF_ACC_META, cf_opts.clone());
-        let _cfatt = ColumnFamilyDescriptor::new(CF_ACC_TO_TX, cf_opts.clone());
-
-        let mut db_opts = Options::default();
-        db_opts.create_missing_column_families(true);
-        db_opts.create_if_missing(true);
+        let db_opts = Options::default();
         DBWithThreadMode::<MultiThreaded>::destroy(&db_opts, path)
             .map_err(|rerr| DbError::rocksdb_cast_message(rerr, None))
     }
@@ -188,7 +177,9 @@ impl RocksDBIO {
             // ToDo: update it to handle any genesis id
             // right now works correctly only if genesis_id < BREAKPOINT_INTERVAL
             let start = if br_id != 0 {
-                BREAKPOINT_INTERVAL * br_id
+                u64::from(BREAKPOINT_INTERVAL)
+                    .checked_mul(br_id)
+                    .expect("Reached maximum breakpoint id")
             } else {
                 self.get_meta_first_block_in_db()?
             };
@@ -214,7 +205,7 @@ impl RocksDBIO {
             Ok(breakpoint)
         } else {
             Err(DbError::db_interaction_error(
-                "Block on this id not found".to_string(),
+                "Block on this id not found".to_owned(),
             ))
         }
     }
@@ -224,8 +215,10 @@ impl RocksDBIO {
     }
 }
 
+#[allow(clippy::shadow_unrelated)]
 #[cfg(test)]
 mod tests {
+    use common::transaction::NSSATransaction;
     use nssa::AccountId;
     use tempfile::tempdir;
 
@@ -277,17 +270,17 @@ mod tests {
         }
 
         common::test_utils::create_transaction_native_token_transfer(
-            from, nonce, to, amount, sign_key,
+            from, nonce, to, amount, &sign_key,
         )
     }
 
     #[test]
-    fn test_start_db() {
+    fn start_db() {
         let temp_dir = tempdir().unwrap();
         let temdir_path = temp_dir.path();
 
-        let dbio = RocksDBIO::open_or_create(temdir_path, Some((genesis_block(), initial_state())))
-            .unwrap();
+        let dbio =
+            RocksDBIO::open_or_create(temdir_path, &genesis_block(), &initial_state()).unwrap();
 
         let last_id = dbio.get_meta_last_block_in_db().unwrap();
         let first_id = dbio.get_meta_first_block_in_db().unwrap();
@@ -315,18 +308,18 @@ mod tests {
     }
 
     #[test]
-    fn test_one_block_insertion() {
+    fn one_block_insertion() {
         let temp_dir = tempdir().unwrap();
         let temdir_path = temp_dir.path();
 
-        let dbio = RocksDBIO::open_or_create(temdir_path, Some((genesis_block(), initial_state())))
-            .unwrap();
+        let dbio =
+            RocksDBIO::open_or_create(temdir_path, &genesis_block(), &initial_state()).unwrap();
 
         let prev_hash = genesis_block().header.hash;
         let transfer_tx = transfer(1, 0, true);
         let block = common::test_utils::produce_dummy_block(2, Some(prev_hash), vec![transfer_tx]);
 
-        dbio.put_block(block, [1; 32]).unwrap();
+        dbio.put_block(&block, [1; 32]).unwrap();
 
         let last_id = dbio.get_meta_last_block_in_db().unwrap();
         let first_id = dbio.get_meta_first_block_in_db().unwrap();
@@ -359,22 +352,25 @@ mod tests {
     }
 
     #[test]
-    fn test_new_breakpoint() {
+    fn new_breakpoint() {
         let temp_dir = tempdir().unwrap();
         let temdir_path = temp_dir.path();
 
-        let dbio = RocksDBIO::open_or_create(temdir_path, Some((genesis_block(), initial_state())))
-            .unwrap();
+        let dbio =
+            RocksDBIO::open_or_create(temdir_path, &genesis_block(), &initial_state()).unwrap();
 
-        for i in 1..(BREAKPOINT_INTERVAL + 1) {
+        for i in 1..=BREAKPOINT_INTERVAL {
             let last_id = dbio.get_meta_last_block_in_db().unwrap();
             let last_block = dbio.get_block(last_id).unwrap();
 
             let prev_hash = last_block.header.hash;
-            let transfer_tx = transfer(1, (i - 1) as u128, true);
-            let block =
-                common::test_utils::produce_dummy_block(i + 1, Some(prev_hash), vec![transfer_tx]);
-            dbio.put_block(block, [i as u8; 32]).unwrap();
+            let transfer_tx = transfer(1, (i - 1).into(), true);
+            let block = common::test_utils::produce_dummy_block(
+                (i + 1).into(),
+                Some(prev_hash),
+                vec![transfer_tx],
+            );
+            dbio.put_block(&block, [i; 32]).unwrap();
         }
 
         let last_id = dbio.get_meta_last_block_in_db().unwrap();
@@ -414,12 +410,12 @@ mod tests {
     }
 
     #[test]
-    fn test_simple_maps() {
+    fn simple_maps() {
         let temp_dir = tempdir().unwrap();
         let temdir_path = temp_dir.path();
 
-        let dbio = RocksDBIO::open_or_create(temdir_path, Some((genesis_block(), initial_state())))
-            .unwrap();
+        let dbio =
+            RocksDBIO::open_or_create(temdir_path, &genesis_block(), &initial_state()).unwrap();
 
         let last_id = dbio.get_meta_last_block_in_db().unwrap();
         let last_block = dbio.get_block(last_id).unwrap();
@@ -430,7 +426,7 @@ mod tests {
 
         let control_hash1 = block.header.hash;
 
-        dbio.put_block(block, [1; 32]).unwrap();
+        dbio.put_block(&block, [1; 32]).unwrap();
 
         let last_id = dbio.get_meta_last_block_in_db().unwrap();
         let last_block = dbio.get_block(last_id).unwrap();
@@ -441,7 +437,7 @@ mod tests {
 
         let control_hash2 = block.header.hash;
 
-        dbio.put_block(block, [2; 32]).unwrap();
+        dbio.put_block(&block, [2; 32]).unwrap();
 
         let last_id = dbio.get_meta_last_block_in_db().unwrap();
         let last_block = dbio.get_block(last_id).unwrap();
@@ -452,7 +448,7 @@ mod tests {
         let control_tx_hash1 = transfer_tx.hash();
 
         let block = common::test_utils::produce_dummy_block(4, Some(prev_hash), vec![transfer_tx]);
-        dbio.put_block(block, [3; 32]).unwrap();
+        dbio.put_block(&block, [3; 32]).unwrap();
 
         let last_id = dbio.get_meta_last_block_in_db().unwrap();
         let last_block = dbio.get_block(last_id).unwrap();
@@ -463,7 +459,7 @@ mod tests {
         let control_tx_hash2 = transfer_tx.hash();
 
         let block = common::test_utils::produce_dummy_block(5, Some(prev_hash), vec![transfer_tx]);
-        dbio.put_block(block, [4; 32]).unwrap();
+        dbio.put_block(&block, [4; 32]).unwrap();
 
         let control_block_id1 = dbio.get_block_id_by_hash(control_hash1.0).unwrap();
         let control_block_id2 = dbio.get_block_id_by_hash(control_hash2.0).unwrap();
@@ -477,14 +473,14 @@ mod tests {
     }
 
     #[test]
-    fn test_block_batch() {
+    fn block_batch() {
         let temp_dir = tempdir().unwrap();
         let temdir_path = temp_dir.path();
 
         let mut block_res = vec![];
 
-        let dbio = RocksDBIO::open_or_create(temdir_path, Some((genesis_block(), initial_state())))
-            .unwrap();
+        let dbio =
+            RocksDBIO::open_or_create(temdir_path, &genesis_block(), &initial_state()).unwrap();
 
         let last_id = dbio.get_meta_last_block_in_db().unwrap();
         let last_block = dbio.get_block(last_id).unwrap();
@@ -494,7 +490,7 @@ mod tests {
         let block = common::test_utils::produce_dummy_block(2, Some(prev_hash), vec![transfer_tx]);
 
         block_res.push(block.clone());
-        dbio.put_block(block, [1; 32]).unwrap();
+        dbio.put_block(&block, [1; 32]).unwrap();
 
         let last_id = dbio.get_meta_last_block_in_db().unwrap();
         let last_block = dbio.get_block(last_id).unwrap();
@@ -504,7 +500,7 @@ mod tests {
         let block = common::test_utils::produce_dummy_block(3, Some(prev_hash), vec![transfer_tx]);
 
         block_res.push(block.clone());
-        dbio.put_block(block, [2; 32]).unwrap();
+        dbio.put_block(&block, [2; 32]).unwrap();
 
         let last_id = dbio.get_meta_last_block_in_db().unwrap();
         let last_block = dbio.get_block(last_id).unwrap();
@@ -514,7 +510,7 @@ mod tests {
 
         let block = common::test_utils::produce_dummy_block(4, Some(prev_hash), vec![transfer_tx]);
         block_res.push(block.clone());
-        dbio.put_block(block, [3; 32]).unwrap();
+        dbio.put_block(&block, [3; 32]).unwrap();
 
         let last_id = dbio.get_meta_last_block_in_db().unwrap();
         let last_block = dbio.get_block(last_id).unwrap();
@@ -524,7 +520,7 @@ mod tests {
 
         let block = common::test_utils::produce_dummy_block(5, Some(prev_hash), vec![transfer_tx]);
         block_res.push(block.clone());
-        dbio.put_block(block, [4; 32]).unwrap();
+        dbio.put_block(&block, [4; 32]).unwrap();
 
         let block_hashes_mem: Vec<[u8; 32]> =
             block_res.into_iter().map(|bl| bl.header.hash.0).collect();
@@ -563,12 +559,12 @@ mod tests {
     }
 
     #[test]
-    fn test_account_map() {
+    fn account_map() {
         let temp_dir = tempdir().unwrap();
         let temdir_path = temp_dir.path();
 
-        let dbio = RocksDBIO::open_or_create(temdir_path, Some((genesis_block(), initial_state())))
-            .unwrap();
+        let dbio =
+            RocksDBIO::open_or_create(temdir_path, &genesis_block(), &initial_state()).unwrap();
 
         let mut tx_hash_res = vec![];
 
@@ -587,7 +583,7 @@ mod tests {
             vec![transfer_tx1, transfer_tx2],
         );
 
-        dbio.put_block(block, [1; 32]).unwrap();
+        dbio.put_block(&block, [1; 32]).unwrap();
 
         let last_id = dbio.get_meta_last_block_in_db().unwrap();
         let last_block = dbio.get_block(last_id).unwrap();
@@ -604,7 +600,7 @@ mod tests {
             vec![transfer_tx1, transfer_tx2],
         );
 
-        dbio.put_block(block, [2; 32]).unwrap();
+        dbio.put_block(&block, [2; 32]).unwrap();
 
         let last_id = dbio.get_meta_last_block_in_db().unwrap();
         let last_block = dbio.get_block(last_id).unwrap();
@@ -621,7 +617,7 @@ mod tests {
             vec![transfer_tx1, transfer_tx2],
         );
 
-        dbio.put_block(block, [3; 32]).unwrap();
+        dbio.put_block(&block, [3; 32]).unwrap();
 
         let last_id = dbio.get_meta_last_block_in_db().unwrap();
         let last_block = dbio.get_block(last_id).unwrap();
@@ -632,7 +628,7 @@ mod tests {
 
         let block = common::test_utils::produce_dummy_block(5, Some(prev_hash), vec![transfer_tx]);
 
-        dbio.put_block(block, [4; 32]).unwrap();
+        dbio.put_block(&block, [4; 32]).unwrap();
 
         let acc1_tx = dbio.get_acc_transactions(*acc1().value(), 0, 7).unwrap();
         let acc1_tx_hashes: Vec<[u8; 32]> = acc1_tx.into_iter().map(|tx| tx.hash().0).collect();
@@ -643,6 +639,6 @@ mod tests {
         let acc1_tx_limited_hashes: Vec<[u8; 32]> =
             acc1_tx_limited.into_iter().map(|tx| tx.hash().0).collect();
 
-        assert_eq!(acc1_tx_limited_hashes.as_slice(), &tx_hash_res[1..5])
+        assert_eq!(acc1_tx_limited_hashes.as_slice(), &tx_hash_res[1..5]);
     }
 }

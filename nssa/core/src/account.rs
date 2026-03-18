@@ -1,6 +1,9 @@
-use std::{fmt::Display, str::FromStr};
+use std::{
+    fmt::{Display, Write as _},
+    str::FromStr,
+};
 
-use base58::{FromBase58, ToBase58};
+use base58::{FromBase58 as _, ToBase58 as _};
 use borsh::{BorshDeserialize, BorshSerialize};
 pub use data::Data;
 use serde::{Deserialize, Serialize};
@@ -11,16 +14,36 @@ use crate::program::ProgramId;
 pub mod data;
 
 pub type Nonce = u128;
+pub type Balance = u128;
 
-/// Account to be used both in public and private contexts
+/// Account to be used both in public and private contexts.
 #[derive(
-    Debug, Default, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
+    Default, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
 )]
 pub struct Account {
     pub program_owner: ProgramId,
-    pub balance: u128,
+    pub balance: Balance,
     pub data: Data,
     pub nonce: Nonce,
+}
+
+impl std::fmt::Debug for Account {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let program_owner_hex = self
+            .program_owner
+            .iter()
+            .flat_map(|n| n.to_le_bytes())
+            .fold(String::new(), |mut acc, bytes| {
+                write!(acc, "{bytes:02x}").expect("writing to string should not fail");
+                acc
+            });
+        f.debug_struct("Account")
+            .field("program_owner", &program_owner_hex)
+            .field("balance", &self.balance)
+            .field("data", &self.data)
+            .field("nonce", &self.nonce)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -42,7 +65,6 @@ impl AccountWithMetadata {
 }
 
 #[derive(
-    Debug,
     Default,
     Copy,
     Clone,
@@ -59,16 +81,25 @@ pub struct AccountId {
     value: [u8; 32],
 }
 
+impl std::fmt::Debug for AccountId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.value.to_base58())
+    }
+}
+
 impl AccountId {
-    pub fn new(value: [u8; 32]) -> Self {
+    #[must_use]
+    pub const fn new(value: [u8; 32]) -> Self {
         Self { value }
     }
 
-    pub fn value(&self) -> &[u8; 32] {
+    #[must_use]
+    pub const fn value(&self) -> &[u8; 32] {
         &self.value
     }
 
-    pub fn into_value(self) -> [u8; 32] {
+    #[must_use]
+    pub const fn into_value(self) -> [u8; 32] {
         self.value
     }
 }
@@ -95,9 +126,9 @@ impl FromStr for AccountId {
         if bytes.len() != 32 {
             return Err(AccountIdError::InvalidLength(bytes.len()));
         }
-        let mut value = [0u8; 32];
+        let mut value = [0_u8; 32];
         value.copy_from_slice(&bytes);
-        Ok(AccountId { value })
+        Ok(Self { value })
     }
 }
 
@@ -113,28 +144,28 @@ mod tests {
     use crate::program::DEFAULT_PROGRAM_ID;
 
     #[test]
-    fn test_zero_balance_account_data_creation() {
+    fn zero_balance_account_data_creation() {
         let new_acc = Account::default();
 
         assert_eq!(new_acc.balance, 0);
     }
 
     #[test]
-    fn test_zero_nonce_account_data_creation() {
+    fn zero_nonce_account_data_creation() {
         let new_acc = Account::default();
 
         assert_eq!(new_acc.nonce, 0);
     }
 
     #[test]
-    fn test_empty_data_account_data_creation() {
+    fn empty_data_account_data_creation() {
         let new_acc = Account::default();
 
         assert!(new_acc.data.is_empty());
     }
 
     #[test]
-    fn test_default_program_owner_account_data_creation() {
+    fn default_program_owner_account_data_creation() {
         let new_acc = Account::default();
 
         assert_eq!(new_acc.program_owner, DEFAULT_PROGRAM_ID);
@@ -142,7 +173,7 @@ mod tests {
 
     #[cfg(feature = "host")]
     #[test]
-    fn test_account_with_metadata_constructor() {
+    fn account_with_metadata_constructor() {
         let account = Account {
             program_owner: [1, 2, 3, 4, 5, 6, 7, 8],
             balance: 1337,
@@ -150,7 +181,7 @@ mod tests {
                 .to_vec()
                 .try_into()
                 .unwrap(),
-            nonce: 0xdeadbeef,
+            nonce: 0xdead_beef,
         };
         let fingerprint = AccountId::new([8; 32]);
         let new_acc_with_metadata = AccountWithMetadata::new(account.clone(), true, fingerprint);
@@ -164,7 +195,7 @@ mod tests {
     fn parse_valid_account_id() {
         let base58_str = "11111111111111111111111111111111";
         let account_id: AccountId = base58_str.parse().unwrap();
-        assert_eq!(account_id.value, [0u8; 32]);
+        assert_eq!(account_id.value, [0_u8; 32]);
     }
 
     #[cfg(feature = "host")]

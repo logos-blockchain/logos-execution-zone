@@ -6,6 +6,7 @@ pub struct MemPool<T> {
 }
 
 impl<T> MemPool<T> {
+    #[must_use]
     pub fn new(max_size: usize) -> (Self, MemPoolHandle<T>) {
         let (sender, receiver) = tokio::sync::mpsc::channel(max_size);
 
@@ -17,6 +18,7 @@ impl<T> MemPool<T> {
         (mem_pool, sender)
     }
 
+    /// Pop an item from the mempool first checking the front buffer (LIFO) then the channel (FIFO).
     pub fn pop(&mut self) -> Option<T> {
         use tokio::sync::mpsc::error::TryRecvError;
 
@@ -36,7 +38,7 @@ impl<T> MemPool<T> {
         }
     }
 
-    /// Push an item to the front of the mempool (will be popped first)
+    /// Push an item to the front of the mempool (will be popped first).
     pub fn push_front(&mut self, item: T) {
         self.front_buffer.push(item);
     }
@@ -47,11 +49,11 @@ pub struct MemPoolHandle<T> {
 }
 
 impl<T> MemPoolHandle<T> {
-    fn new(sender: Sender<T>) -> Self {
+    const fn new(sender: Sender<T>) -> Self {
         Self { sender }
     }
 
-    /// Send an item to the mempool blocking if max size is reached
+    /// Send an item to the mempool blocking if max size is reached.
     pub async fn push(&self, item: T) -> Result<(), tokio::sync::mpsc::error::SendError<T>> {
         self.sender.send(item).await
     }
@@ -64,13 +66,13 @@ mod tests {
     use super::*;
 
     #[test]
-    async fn test_mempool_new() {
+    async fn mempool_new() {
         let (mut pool, _handle): (MemPool<u64>, _) = MemPool::new(10);
         assert_eq!(pool.pop(), None);
     }
 
     #[test]
-    async fn test_push_and_pop() {
+    async fn push_and_pop() {
         let (mut pool, handle) = MemPool::new(10);
 
         handle.push(1).await.unwrap();
@@ -81,7 +83,7 @@ mod tests {
     }
 
     #[test]
-    async fn test_multiple_push_pop() {
+    async fn multiple_push_pop() {
         let (mut pool, handle) = MemPool::new(10);
 
         handle.push(1).await.unwrap();
@@ -95,13 +97,13 @@ mod tests {
     }
 
     #[test]
-    async fn test_pop_empty() {
+    async fn pop_empty() {
         let (mut pool, _handle): (MemPool<u64>, _) = MemPool::new(10);
         assert_eq!(pool.pop(), None);
     }
 
     #[test]
-    async fn test_max_size() {
+    async fn max_size() {
         let (mut pool, handle) = MemPool::new(2);
 
         handle.push(1).await.unwrap();
@@ -114,7 +116,7 @@ mod tests {
     }
 
     #[test]
-    async fn test_push_front() {
+    async fn push_front() {
         let (mut pool, handle) = MemPool::new(10);
 
         handle.push(1).await.unwrap();

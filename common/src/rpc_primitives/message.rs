@@ -13,11 +13,13 @@ use std::fmt::{Formatter, Result as FmtResult};
 
 use serde::{
     de::{Deserializer, Error, Unexpected, Visitor},
-    ser::{SerializeStruct, Serializer},
+    ser::{SerializeStruct as _, Serializer},
 };
 use serde_json::{Result as JsonResult, Value};
 
 use super::errors::RpcError;
+
+pub type Parsed = Result<Message, Broken>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct Version;
@@ -29,10 +31,13 @@ impl serde::Serialize for Version {
 }
 
 impl<'de> serde::Deserialize<'de> for Version {
+    #[expect(
+        clippy::renamed_function_params,
+        reason = "More readable than original serde parameter names"
+    )]
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         struct VersionVisitor;
-        #[allow(clippy::needless_lifetimes)]
-        impl<'de> Visitor<'de> for VersionVisitor {
+        impl Visitor<'_> for VersionVisitor {
             type Value = Version;
 
             fn expecting(&self, formatter: &mut Formatter<'_>) -> FmtResult {
@@ -51,8 +56,12 @@ impl<'de> serde::Deserialize<'de> for Version {
 }
 
 /// An RPC request.
-#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq)]
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
+#[expect(
+    clippy::partial_pub_fields,
+    reason = "We don't want to allow access to the version, but the others are public for ease of use"
+)]
 pub struct Request {
     jsonrpc: Version,
     pub method: String,
@@ -62,6 +71,7 @@ pub struct Request {
 }
 
 impl Request {
+    #[must_use]
     pub fn from_payload_version_2_0(method: String, payload: serde_json::Value) -> Self {
         Self {
             jsonrpc: Version,
@@ -75,6 +85,7 @@ impl Request {
     /// Answer the request with a (positive) reply.
     ///
     /// The ID is taken from the request.
+    #[must_use]
     pub fn reply(&self, reply: Value) -> Message {
         Message::Response(Response {
             jsonrpc: Version,
@@ -84,6 +95,7 @@ impl Request {
     }
 
     /// Answer the request with an error.
+    #[must_use]
     pub fn error(&self, error: RpcError) -> Message {
         Message::Response(Response {
             jsonrpc: Version,
@@ -96,7 +108,11 @@ impl Request {
 /// A response to an RPC.
 ///
 /// It is created by the methods on [Request](struct.Request.html).
-#[derive(Debug, Clone, PartialEq)]
+#[expect(
+    clippy::partial_pub_fields,
+    reason = "We don't want to allow access to the version, but the others are public for ease of use"
+)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Response {
     jsonrpc: Version,
     pub result: Result<Value, RpcError>,
@@ -107,21 +123,13 @@ impl serde::Serialize for Response {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut sub = serializer.serialize_struct("Response", 3)?;
         sub.serialize_field("jsonrpc", &self.jsonrpc)?;
-        match self.result {
-            Ok(ref value) => sub.serialize_field("result", value),
-            Err(ref err) => sub.serialize_field("error", err),
+        match &self.result {
+            Ok(value) => sub.serialize_field("result", value),
+            Err(err) => sub.serialize_field("error", err),
         }?;
         sub.serialize_field("id", &self.id)?;
         sub.end()
     }
-}
-
-/// Deserializer for `Option<Value>` that produces `Some(Value::Null)`.
-///
-/// The usual one produces None in that case. But we need to know the difference between
-/// `{x: null}` and `{}`.
-fn some_value<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Value>, D::Error> {
-    serde::Deserialize::deserialize(deserializer).map(Some)
 }
 
 /// A helper trick for deserialization.
@@ -129,8 +137,8 @@ fn some_value<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Value
 #[serde(deny_unknown_fields)]
 struct WireResponse {
     // It is actually used to eat and sanity check the deserialized text
-    #[allow(dead_code)]
-    jsonrpc: Version,
+    #[serde(rename = "jsonrpc")]
+    _jsonrpc: Version,
     // Make sure we accept null as Some(Value::Null), instead of going to None
     #[serde(default, deserialize_with = "some_value")]
     result: Option<Value>,
@@ -152,7 +160,7 @@ impl<'de> serde::Deserialize<'de> for Response {
                 return Err(err);
             }
         };
-        Ok(Response {
+        Ok(Self {
             jsonrpc: Version,
             result,
             id: wr.id,
@@ -161,7 +169,11 @@ impl<'de> serde::Deserialize<'de> for Response {
 }
 
 /// A notification (doesn't expect an answer).
-#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq)]
+#[expect(
+    clippy::partial_pub_fields,
+    reason = "We don't want to allow access to the version, but the others are public for ease of use"
+)]
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Notification {
     jsonrpc: Version,
@@ -198,7 +210,7 @@ pub enum Message {
     /// message.
     ///
     /// This variant has no direct constructor and is expected to be constructed manually.
-    Batch(Vec<Message>),
+    Batch(Vec<Self>),
     /// An unmatched sub entry in a `Batch`.
     ///
     /// When there's a `Batch` and an element doesn't comform to the JSONRPC 2.0 format, that one
@@ -212,9 +224,10 @@ impl Message {
     /// A constructor for a request.
     ///
     /// The ID is auto-set to dontcare.
+    #[must_use]
     pub fn request(method: String, params: Value) -> Self {
         let id = Value::from("dontcare");
-        Message::Request(Request {
+        Self::Request(Request {
             jsonrpc: Version,
             method,
             params,
@@ -223,8 +236,9 @@ impl Message {
     }
 
     /// Create a top-level error (without an ID).
-    pub fn error(error: RpcError) -> Self {
-        Message::Response(Response {
+    #[must_use]
+    pub const fn error(error: RpcError) -> Self {
+        Self::Response(Response {
             jsonrpc: Version,
             result: Err(error),
             id: Value::Null,
@@ -232,8 +246,9 @@ impl Message {
     }
 
     /// A constructor for a notification.
-    pub fn notification(method: String, params: Value) -> Self {
-        Message::Notification(Notification {
+    #[must_use]
+    pub const fn notification(method: String, params: Value) -> Self {
+        Self::Notification(Notification {
             jsonrpc: Version,
             method,
             params,
@@ -241,8 +256,9 @@ impl Message {
     }
 
     /// A constructor for a response.
-    pub fn response(id: Value, result: Result<Value, RpcError>) -> Self {
-        Message::Response(Response {
+    #[must_use]
+    pub const fn response(id: Value, result: Result<Value, RpcError>) -> Self {
+        Self::Response(Response {
             jsonrpc: Version,
             result,
             id,
@@ -250,18 +266,33 @@ impl Message {
     }
 
     /// Returns id or Null if there is no id.
+    #[must_use]
     pub fn id(&self) -> Value {
         match self {
-            Message::Request(req) => req.id.clone(),
-            _ => Value::Null,
+            Self::Request(req) => req.id.clone(),
+            Self::Response(response) => response.id.clone(),
+            Self::Notification(_) | Self::Batch(_) | Self::UnmatchedSub(_) => Value::Null,
         }
+    }
+}
+
+impl From<Message> for String {
+    fn from(val: Message) -> Self {
+        ::serde_json::ser::to_string(&val).expect("message serialization to json should not fail")
+    }
+}
+
+impl From<Message> for Vec<u8> {
+    fn from(val: Message) -> Self {
+        ::serde_json::ser::to_vec(&val)
+            .expect("message serialization to json bytes should not fail")
     }
 }
 
 /// A broken message.
 ///
 /// Protocol-level errors.
-#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 #[serde(untagged)]
 pub enum Broken {
     /// It was valid JSON, but doesn't match the form of a JSONRPC 2.0 message.
@@ -276,12 +307,13 @@ impl Broken {
     ///
     /// The error message for these things are specified in the RFC, so this just creates an error
     /// with the right values.
+    #[must_use]
     pub fn reply(&self) -> Message {
-        match *self {
-            Broken::Unmatched(_) => Message::error(RpcError::parse_error(
+        match self {
+            Self::Unmatched(_) => Message::error(RpcError::parse_error(
                 "JSON RPC Request format was expected".to_owned(),
             )),
-            Broken::SyntaxError(ref e) => Message::error(RpcError::parse_error(e.clone())),
+            Self::SyntaxError(e) => Message::error(RpcError::parse_error(e.clone())),
         }
     }
 }
@@ -303,8 +335,6 @@ pub fn decoded_to_parsed(res: JsonResult<WireMessage>) -> Parsed {
     }
 }
 
-pub type Parsed = Result<Message, Broken>;
-
 /// Read a [Message](enum.Message.html) from a slice.
 ///
 /// Invalid JSON or JSONRPC messages are reported as [Broken](enum.Broken.html).
@@ -319,16 +349,12 @@ pub fn from_str(s: &str) -> Parsed {
     from_slice(s.as_bytes())
 }
 
-impl From<Message> for String {
-    fn from(val: Message) -> Self {
-        ::serde_json::ser::to_string(&val).unwrap()
-    }
-}
-
-impl From<Message> for Vec<u8> {
-    fn from(val: Message) -> Self {
-        ::serde_json::ser::to_vec(&val).unwrap()
-    }
+/// Deserializer for `Option<Value>` that produces `Some(Value::Null)`.
+///
+/// The usual one produces None in that case. But we need to know the difference between
+/// `{x: null}` and `{}`.
+fn some_value<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Value>, D::Error> {
+    serde::Deserialize::deserialize(deserializer).map(Some)
 }
 
 #[cfg(test)]
@@ -337,13 +363,12 @@ mod tests {
 
     use super::*;
 
-    /// Test serialization and deserialization of the Message
+    /// Test serialization and deserialization of the Message.
     ///
     /// We first deserialize it from a string. That way we check deserialization works.
     /// But since serialization doesn't have to produce the exact same result (order, spaces, …),
     /// we then serialize and deserialize the thing again and check it matches.
     #[test]
-    #[allow(clippy::too_many_lines)]
     fn message_serde() {
         // A helper for running one message test
         fn one(input: &str, expected: &Message) {
@@ -463,11 +488,10 @@ mod tests {
     ///
     /// Check that the given JSON string parses, but is not recognized as a valid RPC message.
     ///
-    /// Test things that are almost but not entirely JSONRPC are rejected
+    /// Test things that are almost but not entirely JSONRPC are rejected.
     ///
     /// The reject is done by returning it as Unmatched.
     #[test]
-    #[allow(clippy::panic)]
     fn broken() {
         // A helper with one test
         fn one(input: &str) {
@@ -491,19 +515,18 @@ mod tests {
         // Something completely different
         one(r#"{"x": [1, 2, 3]}"#);
 
-        match from_str(r#"{]"#) {
+        match from_str("{]") {
             Err(Broken::SyntaxError(_)) => (),
             other => panic!("Something unexpected: {other:?}"),
-        };
+        }
     }
 
-    /// Test some non-trivial aspects of the constructors
+    /// Test some non-trivial aspects of the constructors.
     ///
     /// This doesn't have a full coverage, because there's not much to actually test there.
     /// Most of it is related to the ids.
     #[test]
-    #[allow(clippy::panic)]
-    #[ignore]
+    #[ignore = "Not a full coverage test"]
     fn constructors() {
         let msg1 = Message::request("call".to_owned(), json!([1, 2, 3]));
         let msg2 = Message::request("call".to_owned(), json!([1, 2, 3]));
@@ -520,9 +543,9 @@ mod tests {
         };
         let id1 = req1.id.clone();
         // When we answer a message, we get the same ID
-        if let Message::Response(ref resp) = req1.reply(json!([1, 2, 3])) {
+        if let Message::Response(resp) = req1.reply(json!([1, 2, 3])) {
             assert_eq!(
-                *resp,
+                resp,
                 Response {
                     jsonrpc: Version,
                     result: Ok(json!([1, 2, 3])),
@@ -534,11 +557,9 @@ mod tests {
         }
         let id2 = req2.id.clone();
         // The same with an error
-        if let Message::Response(ref resp) =
-            req2.error(RpcError::new(42, "Wrong!".to_owned(), None))
-        {
+        if let Message::Response(resp) = req2.error(RpcError::new(42, "Wrong!".to_owned(), None)) {
             assert_eq!(
-                *resp,
+                resp,
                 Response {
                     jsonrpc: Version,
                     result: Err(RpcError::new(42, "Wrong!".to_owned(), None)),
@@ -549,11 +570,11 @@ mod tests {
             panic!("Not a response");
         }
         // When we have unmatched, we generate a top-level error with Null id.
-        if let Message::Response(ref resp) =
+        if let Message::Response(resp) =
             Message::error(RpcError::new(43, "Also wrong!".to_owned(), None))
         {
             assert_eq!(
-                *resp,
+                resp,
                 Response {
                     jsonrpc: Version,
                     result: Err(RpcError::new(43, "Also wrong!".to_owned(), None)),

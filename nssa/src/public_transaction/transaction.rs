@@ -6,10 +6,10 @@ use nssa_core::{
     account::{Account, AccountId, AccountWithMetadata},
     program::{ChainedCall, DEFAULT_PROGRAM_ID, validate_execution},
 };
-use sha2::{Digest, digest::FixedOutput};
+use sha2::{Digest as _, digest::FixedOutput as _};
 
 use crate::{
-    V02State,
+    V02State, ensure,
     error::NssaError,
     public_transaction::{Message, WitnessSet},
     state::MAX_NUMBER_CHAINED_CALLS,
@@ -22,18 +22,21 @@ pub struct PublicTransaction {
 }
 
 impl PublicTransaction {
-    pub fn new(message: Message, witness_set: WitnessSet) -> Self {
+    #[must_use]
+    pub const fn new(message: Message, witness_set: WitnessSet) -> Self {
         Self {
             message,
             witness_set,
         }
     }
 
-    pub fn message(&self) -> &Message {
+    #[must_use]
+    pub const fn message(&self) -> &Message {
         &self.message
     }
 
-    pub fn witness_set(&self) -> &WitnessSet {
+    #[must_use]
+    pub const fn witness_set(&self) -> &WitnessSet {
         &self.witness_set
     }
 
@@ -45,6 +48,7 @@ impl PublicTransaction {
             .collect()
     }
 
+    #[must_use]
     pub fn affected_public_account_ids(&self) -> Vec<AccountId> {
         let mut acc_set = self
             .signer_account_ids()
@@ -55,6 +59,7 @@ impl PublicTransaction {
         acc_set.into_iter().collect()
     }
 
+    #[must_use]
     pub fn hash(&self) -> [u8; 32] {
         let bytes = self.to_bytes();
         let mut hasher = sha2::Sha256::new();
@@ -70,33 +75,33 @@ impl PublicTransaction {
         let witness_set = self.witness_set();
 
         // All account_ids must be different
-        if message.account_ids.iter().collect::<HashSet<_>>().len() != message.account_ids.len() {
-            return Err(NssaError::InvalidInput(
-                "Duplicate account_ids found in message".into(),
-            ));
-        }
+        ensure!(
+            message.account_ids.iter().collect::<HashSet<_>>().len() == message.account_ids.len(),
+            NssaError::InvalidInput("Duplicate account_ids found in message".into(),)
+        );
 
         // Check exactly one nonce is provided for each signature
-        if message.nonces.len() != witness_set.signatures_and_public_keys.len() {
-            return Err(NssaError::InvalidInput(
+        ensure!(
+            message.nonces.len() == witness_set.signatures_and_public_keys.len(),
+            NssaError::InvalidInput(
                 "Mismatch between number of nonces and signatures/public keys".into(),
-            ));
-        }
+            )
+        );
 
         // Check the signatures are valid
-        if !witness_set.is_valid_for(message) {
-            return Err(NssaError::InvalidInput(
-                "Invalid signature for given message and public key".into(),
-            ));
-        }
+        ensure!(
+            witness_set.is_valid_for(message),
+            NssaError::InvalidInput("Invalid signature for given message and public key".into())
+        );
 
         let signer_account_ids = self.signer_account_ids();
         // Check nonces corresponds to the current nonces on the public state.
         for (account_id, nonce) in signer_account_ids.iter().zip(&message.nonces) {
             let current_nonce = state.get_account_by_id(*account_id).nonce;
-            if current_nonce != *nonce {
-                return Err(NssaError::InvalidInput("Nonce mismatch".into()));
-            }
+            ensure!(
+                current_nonce == *nonce,
+                NssaError::InvalidInput("Nonce mismatch".into())
+            );
         }
 
         // Build pre_states for execution
@@ -125,9 +130,10 @@ impl PublicTransaction {
         let mut chain_calls_counter = 0;
 
         while let Some((chained_call, caller_program_id)) = chained_calls.pop_front() {
-            if chain_calls_counter > MAX_NUMBER_CHAINED_CALLS {
-                return Err(NssaError::MaxChainedCallsDepthExceeded);
-            }
+            ensure!(
+                chain_calls_counter <= MAX_NUMBER_CHAINED_CALLS,
+                NssaError::MaxChainedCallsDepthExceeded
+            );
 
             // Check that the `program_id` corresponds to a deployed program
             let Some(program) = state.programs().get(&chained_call.program_id) else {
@@ -158,28 +164,31 @@ impl PublicTransaction {
                     .get(&account_id)
                     .cloned()
                     .unwrap_or_else(|| state.get_account_by_id(account_id));
-                if pre.account != expected_pre {
-                    return Err(NssaError::InvalidProgramBehavior);
-                }
+                ensure!(
+                    pre.account == expected_pre,
+                    NssaError::InvalidProgramBehavior
+                );
 
                 // Check that authorization flags are consistent with the provided ones or
                 // authorized by program through the PDA mechanism
                 let is_authorized = signer_account_ids.contains(&account_id)
                     || authorized_pdas.contains(&account_id);
-                if pre.is_authorized != is_authorized {
-                    return Err(NssaError::InvalidProgramBehavior);
-                }
+                ensure!(
+                    pre.is_authorized == is_authorized,
+                    NssaError::InvalidProgramBehavior
+                );
             }
 
             // Verify execution corresponds to a well-behaved program.
             // See the # Programs section for the definition of the `validate_execution` method.
-            if !validate_execution(
-                &program_output.pre_states,
-                &program_output.post_states,
-                chained_call.program_id,
-            ) {
-                return Err(NssaError::InvalidProgramBehavior);
-            }
+            ensure!(
+                validate_execution(
+                    &program_output.pre_states,
+                    &program_output.post_states,
+                    chained_call.program_id,
+                ),
+                NssaError::InvalidProgramBehavior
+            );
 
             for post in program_output
                 .post_states
@@ -207,7 +216,9 @@ impl PublicTransaction {
                 chained_calls.push_front((new_call, Some(chained_call.program_id)));
             }
 
-            chain_calls_counter += 1;
+            chain_calls_counter = chain_calls_counter
+                .checked_add(1)
+                .expect("we check the max depth at the beginning of the loop");
         }
 
         // Check that all modified uninitialized accounts where claimed
@@ -221,9 +232,10 @@ impl PublicTransaction {
             }
             Some(post)
         }) {
-            if post.program_owner == DEFAULT_PROGRAM_ID {
-                return Err(NssaError::InvalidProgramBehavior);
-            }
+            ensure!(
+                post.program_owner != DEFAULT_PROGRAM_ID,
+                NssaError::InvalidProgramBehavior
+            );
         }
 
         Ok(state_diff)
@@ -232,7 +244,7 @@ impl PublicTransaction {
 
 #[cfg(test)]
 pub mod tests {
-    use sha2::{Digest, digest::FixedOutput};
+    use sha2::{Digest as _, digest::FixedOutput as _};
 
     use crate::{
         AccountId, PrivateKey, PublicKey, PublicTransaction, Signature, V02State,
@@ -272,7 +284,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_new_constructor() {
+    fn new_constructor() {
         let tx = transaction_for_tests();
         let message = tx.message().clone();
         let witness_set = tx.witness_set().clone();
@@ -282,19 +294,19 @@ pub mod tests {
     }
 
     #[test]
-    fn test_message_getter() {
+    fn message_getter() {
         let tx = transaction_for_tests();
         assert_eq!(&tx.message, tx.message());
     }
 
     #[test]
-    fn test_witness_set_getter() {
+    fn witness_set_getter() {
         let tx = transaction_for_tests();
         assert_eq!(&tx.witness_set, tx.witness_set());
     }
 
     #[test]
-    fn test_signer_account_ids() {
+    fn signer_account_ids() {
         let tx = transaction_for_tests();
         let expected_signer_account_ids = vec![
             AccountId::new([
@@ -311,7 +323,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_public_transaction_encoding_bytes_roundtrip() {
+    fn public_transaction_encoding_bytes_roundtrip() {
         let tx = transaction_for_tests();
         let bytes = tx.to_bytes();
         let tx_from_bytes = PublicTransaction::from_bytes(&bytes).unwrap();
@@ -319,7 +331,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_hash_is_sha256_of_transaction_bytes() {
+    fn hash_is_sha256_of_transaction_bytes() {
         let tx = transaction_for_tests();
         let hash = tx.hash();
         let expected_hash: [u8; 32] = {
@@ -332,7 +344,7 @@ pub mod tests {
     }
 
     #[test]
-    fn test_account_id_list_cant_have_duplicates() {
+    fn account_id_list_cant_have_duplicates() {
         let (key1, _, addr1, _) = keys_for_tests();
         let state = state_for_tests();
         let nonces = vec![0, 0];
@@ -348,11 +360,11 @@ pub mod tests {
         let witness_set = WitnessSet::for_message(&message, &[&key1, &key1]);
         let tx = PublicTransaction::new(message, witness_set);
         let result = tx.validate_and_produce_public_state_diff(&state);
-        assert!(matches!(result, Err(NssaError::InvalidInput(_))))
+        assert!(matches!(result, Err(NssaError::InvalidInput(_))));
     }
 
     #[test]
-    fn test_number_of_nonces_must_match_number_of_signatures() {
+    fn number_of_nonces_must_match_number_of_signatures() {
         let (key1, key2, addr1, addr2) = keys_for_tests();
         let state = state_for_tests();
         let nonces = vec![0];
@@ -368,11 +380,11 @@ pub mod tests {
         let witness_set = WitnessSet::for_message(&message, &[&key1, &key2]);
         let tx = PublicTransaction::new(message, witness_set);
         let result = tx.validate_and_produce_public_state_diff(&state);
-        assert!(matches!(result, Err(NssaError::InvalidInput(_))))
+        assert!(matches!(result, Err(NssaError::InvalidInput(_))));
     }
 
     #[test]
-    fn test_all_signatures_must_be_valid() {
+    fn all_signatures_must_be_valid() {
         let (key1, key2, addr1, addr2) = keys_for_tests();
         let state = state_for_tests();
         let nonces = vec![0, 0];
@@ -389,11 +401,11 @@ pub mod tests {
         witness_set.signatures_and_public_keys[0].0 = Signature::new_for_tests([1; 64]);
         let tx = PublicTransaction::new(message, witness_set);
         let result = tx.validate_and_produce_public_state_diff(&state);
-        assert!(matches!(result, Err(NssaError::InvalidInput(_))))
+        assert!(matches!(result, Err(NssaError::InvalidInput(_))));
     }
 
     #[test]
-    fn test_nonces_must_match_the_state_current_nonces() {
+    fn nonces_must_match_the_state_current_nonces() {
         let (key1, key2, addr1, addr2) = keys_for_tests();
         let state = state_for_tests();
         let nonces = vec![0, 1];
@@ -409,22 +421,22 @@ pub mod tests {
         let witness_set = WitnessSet::for_message(&message, &[&key1, &key2]);
         let tx = PublicTransaction::new(message, witness_set);
         let result = tx.validate_and_produce_public_state_diff(&state);
-        assert!(matches!(result, Err(NssaError::InvalidInput(_))))
+        assert!(matches!(result, Err(NssaError::InvalidInput(_))));
     }
 
     #[test]
-    fn test_program_id_must_belong_to_bulitin_program_ids() {
+    fn program_id_must_belong_to_bulitin_program_ids() {
         let (key1, key2, addr1, addr2) = keys_for_tests();
         let state = state_for_tests();
         let nonces = vec![0, 0];
         let instruction = 1337;
-        let unknown_program_id = [0xdeadbeef; 8];
+        let unknown_program_id = [0xdead_beef; 8];
         let message =
             Message::try_new(unknown_program_id, vec![addr1, addr2], nonces, instruction).unwrap();
 
         let witness_set = WitnessSet::for_message(&message, &[&key1, &key2]);
         let tx = PublicTransaction::new(message, witness_set);
         let result = tx.validate_and_produce_public_state_diff(&state);
-        assert!(matches!(result, Err(NssaError::InvalidInput(_))))
+        assert!(matches!(result, Err(NssaError::InvalidInput(_))));
     }
 }

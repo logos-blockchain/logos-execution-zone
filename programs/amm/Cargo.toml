@@ -4,7 +4,14 @@ version = "0.1.0"
 edition = "2024"
 license = { workspace = true }
 
+[lints]
+workspace = true
+
 [dependencies]
+nssa = { workspace = true, optional = true, features = ["test-utils"], default-features = true }
 nssa_core.workspace = true
 token_core.workspace = true
 amm_core.workspace = true
+
+[features]
+nssa = ["dep:nssa"]

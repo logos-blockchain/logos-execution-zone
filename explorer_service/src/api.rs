@@ -2,7 +2,7 @@ use indexer_service_protocol::{Account, AccountId, Block, BlockId, HashType, Tra
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
-/// Search results structure
+/// Search results structure.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SearchResults {
     pub blocks: Vec<Block>,
@@ -10,7 +10,7 @@ pub struct SearchResults {
     pub accounts: Vec<(AccountId, Account)>,
 }
 
-/// RPC client type
+/// RPC client type.
 #[cfg(feature = "ssr")]
 pub type IndexerRpcClient = jsonrpsee::http_client::HttpClient;
 
@@ -22,7 +22,7 @@ pub async fn get_account(account_id: AccountId) -> Result<Account, ServerFnError
     client
         .get_account(account_id)
         .await
-        .map_err(|e| ServerFnError::ServerError(format!("RPC error: {}", e)))
+        .map_err(|e| ServerFnError::ServerError(format!("RPC error: {e}")))
 }
 
 /// Search for a block, transaction, or account by query string
@@ -80,7 +80,7 @@ pub async fn get_block_by_id(block_id: BlockId) -> Result<Block, ServerFnError> 
     client
         .get_block_by_id(block_id)
         .await
-        .map_err(|e| ServerFnError::ServerError(format!("RPC error: {}", e)))
+        .map_err(|e| ServerFnError::ServerError(format!("RPC error: {e}")))
 }
 
 /// Get latest block ID
@@ -91,7 +91,7 @@ pub async fn get_latest_block_id() -> Result<BlockId, ServerFnError> {
     client
         .get_last_finalized_block_id()
         .await
-        .map_err(|e| ServerFnError::ServerError(format!("RPC error: {}", e)))
+        .map_err(|e| ServerFnError::ServerError(format!("RPC error: {e}")))
 }
 
 /// Get block by hash
@@ -102,7 +102,7 @@ pub async fn get_block_by_hash(block_hash: HashType) -> Result<Block, ServerFnEr
     client
         .get_block_by_hash(block_hash)
         .await
-        .map_err(|e| ServerFnError::ServerError(format!("RPC error: {}", e)))
+        .map_err(|e| ServerFnError::ServerError(format!("RPC error: {e}")))
 }
 
 /// Get transaction by hash
@@ -113,36 +113,36 @@ pub async fn get_transaction(tx_hash: HashType) -> Result<Transaction, ServerFnE
     client
         .get_transaction(tx_hash)
         .await
-        .map_err(|e| ServerFnError::ServerError(format!("RPC error: {}", e)))
+        .map_err(|e| ServerFnError::ServerError(format!("RPC error: {e}")))
 }
 
 /// Get blocks with pagination
 #[server]
-pub async fn get_blocks(before: Option<u64>, limit: u32) -> Result<Vec<Block>, ServerFnError> {
+pub async fn get_blocks(before: Option<BlockId>, limit: u64) -> Result<Vec<Block>, ServerFnError> {
     use indexer_service_rpc::RpcClient as _;
     let client = expect_context::<IndexerRpcClient>();
     client
         .get_blocks(before, limit)
         .await
-        .map_err(|e| ServerFnError::ServerError(format!("RPC error: {}", e)))
+        .map_err(|e| ServerFnError::ServerError(format!("RPC error: {e}")))
 }
 
 /// Get transactions by account
 #[server]
 pub async fn get_transactions_by_account(
     account_id: AccountId,
-    limit: u32,
-    offset: u32,
+    offset: u64,
+    limit: u64,
 ) -> Result<Vec<Transaction>, ServerFnError> {
     use indexer_service_rpc::RpcClient as _;
     let client = expect_context::<IndexerRpcClient>();
     client
-        .get_transactions_by_account(account_id, limit, offset)
+        .get_transactions_by_account(account_id, offset, limit)
         .await
-        .map_err(|e| ServerFnError::ServerError(format!("RPC error: {}", e)))
+        .map_err(|e| ServerFnError::ServerError(format!("RPC error: {e}")))
 }
 
-/// Create the RPC client for the indexer service (server-side only)
+/// Create the RPC client for the indexer service (server-side only).
 #[cfg(feature = "ssr")]
 pub fn create_indexer_rpc_client(url: &url::Url) -> Result<IndexerRpcClient, String> {
     use jsonrpsee::http_client::HttpClientBuilder;

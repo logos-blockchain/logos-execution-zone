@@ -1,7 +1,7 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use nssa::AccountId;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256, digest::FixedOutput};
+use sha2::{Digest as _, Sha256, digest::FixedOutput as _};
 
 use crate::{HashType, transaction::NSSATransaction};
 
@@ -20,7 +20,7 @@ pub struct BlockMeta {
 #[derive(Debug, Clone)]
 /// Our own hasher.
 /// Currently it is SHA256 hasher wrapper. May change in a future.
-pub struct OwnHasher {}
+pub struct OwnHasher;
 
 impl OwnHasher {
     fn hash(data: &[u8]) -> HashType {
@@ -69,6 +69,7 @@ pub struct HashableBlockData {
 }
 
 impl HashableBlockData {
+    #[must_use]
     pub fn into_pending_block(
         self,
         signing_key: &nssa::PrivateKey,
@@ -93,6 +94,7 @@ impl HashableBlockData {
         }
     }
 
+    #[must_use]
     pub fn block_hash(&self) -> BlockHash {
         OwnHasher::hash(&borsh::to_vec(&self).unwrap())
     }
@@ -109,14 +111,14 @@ impl From<Block> for HashableBlockData {
     }
 }
 
-/// Helper struct for account (de-)serialization
+/// Helper struct for account (de-)serialization.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccountInitialData {
     pub account_id: AccountId,
     pub balance: u128,
 }
 
-/// Helper struct to (de-)serialize initial commitments
+/// Helper struct to (de-)serialize initial commitments.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommitmentsInitialData {
     pub npk: nssa_core::NullifierPublicKey,
@@ -128,7 +130,7 @@ mod tests {
     use crate::{HashType, block::HashableBlockData, test_utils};
 
     #[test]
-    fn test_encoding_roundtrip() {
+    fn encoding_roundtrip() {
         let transactions = vec![test_utils::produce_dummy_empty_transaction()];
         let block = test_utils::produce_dummy_block(1, Some(HashType([1; 32])), transactions);
         let hashable = HashableBlockData::from(block);

@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2024"
 license = { workspace = true }
 
+[lints]
+workspace = true
+
 [dependencies]
 common.workspace = true
 bedrock_client.workspace = true
@@ -22,3 +25,7 @@ url.workspace = true
 logos-blockchain-core.workspace = true
 serde_json.workspace = true
 async-stream.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+

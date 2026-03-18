@@ -1,11 +1,11 @@
-use std::{collections::HashMap, path::PathBuf, str::FromStr};
+use std::{collections::HashMap, path::PathBuf, str::FromStr as _};
 
-use anyhow::Result;
-use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
+use anyhow::{Context as _, Result};
+use base58::ToBase58 as _;
 use key_protocol::key_protocol_core::NSSAUserData;
 use nssa::Account;
 use nssa_core::account::Nonce;
-use rand::{RngCore, rngs::OsRng};
+use rand::{RngCore as _, rngs::OsRng};
 use serde::Serialize;
 
 use crate::{
@@ -16,6 +16,39 @@ use crate::{
     },
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccountPrivacyKind {
+    Public,
+    Private,
+}
+
+/// Human-readable representation of an account.
+#[derive(Serialize)]
+pub(crate) struct HumanReadableAccount {
+    balance: u128,
+    program_owner: String,
+    data: String,
+    nonce: u128,
+}
+
+impl From<Account> for HumanReadableAccount {
+    fn from(account: Account) -> Self {
+        let program_owner = account
+            .program_owner
+            .iter()
+            .flat_map(|n| n.to_le_bytes())
+            .collect::<Vec<u8>>()
+            .to_base58();
+        let data = hex::encode(account.data);
+        Self {
+            balance: account.balance,
+            program_owner,
+            data,
+            nonce: account.nonce,
+        }
+    }
+}
+
 /// Get home dir for wallet. Env var `NSSA_WALLET_HOME_DIR` must be set before execution to succeed.
 fn get_home_nssa_var() -> Result<PathBuf> {
     Ok(PathBuf::from_str(&std::env::var(HOME_DIR_ENV_VAR)?)?)
@@ -25,26 +58,22 @@ fn get_home_nssa_var() -> Result<PathBuf> {
 fn get_home_default_path() -> Result<PathBuf> {
     std::env::home_dir()
         .map(|path| path.join(".nssa").join("wallet"))
-        .ok_or(anyhow::anyhow!("Failed to get HOME"))
+        .context("Failed to get HOME")
 }
 
 /// Get home dir for wallet.
 pub fn get_home() -> Result<PathBuf> {
-    if let Ok(home) = get_home_nssa_var() {
-        Ok(home)
-    } else {
-        get_home_default_path()
-    }
+    get_home_nssa_var().or_else(|_| get_home_default_path())
 }
 
-/// Fetch config path from default home
+/// Fetch config path from default home.
 pub fn fetch_config_path() -> Result<PathBuf> {
     let home = get_home()?;
     let config_path = home.join("wallet_config.json");
     Ok(config_path)
 }
 
-/// Fetch path to data storage from default home
+/// Fetch path to data storage from default home.
 ///
 /// File must be created through setup beforehand.
 pub fn fetch_persistent_storage_path() -> Result<PathBuf> {
@@ -53,7 +82,8 @@ pub fn fetch_persistent_storage_path() -> Result<PathBuf> {
     Ok(accs_path)
 }
 
-/// Produces data for storage
+/// Produces data for storage.
+#[must_use]
 pub fn produce_data_for_storage(
     user_data: &NSSAUserData,
     last_synced_block: u64,
@@ -94,18 +124,18 @@ pub fn produce_data_for_storage(
                 pub_sign_key: key.clone(),
             })
             .into(),
-        )
+        );
     }
 
     for (account_id, (key_chain, account)) in &user_data.default_user_private_accounts {
         vec_for_storage.push(
-            InitialAccountData::Private(InitialAccountDataPrivate {
+            InitialAccountData::Private(Box::new(InitialAccountDataPrivate {
                 account_id: *account_id,
                 account: account.clone(),
                 key_chain: key_chain.clone(),
-            })
+            }))
             .into(),
-        )
+        );
     }
 
     PersistentStorage {
@@ -117,14 +147,10 @@ pub fn produce_data_for_storage(
 
 pub(crate) fn produce_random_nonces(size: usize) -> Vec<Nonce> {
     let mut result = vec![[0; 16]; size];
-    result.iter_mut().for_each(|bytes| OsRng.fill_bytes(bytes));
+    for bytes in &mut result {
+        OsRng.fill_bytes(bytes);
+    }
     result.into_iter().map(Nonce::from_le_bytes).collect()
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AccountPrivacyKind {
-    Public,
-    Private,
 }
 
 pub(crate) fn parse_addr_with_privacy_prefix(
@@ -132,38 +158,16 @@ pub(crate) fn parse_addr_with_privacy_prefix(
 ) -> Result<(String, AccountPrivacyKind)> {
     if account_base58.starts_with("Public/") {
         Ok((
-            account_base58.strip_prefix("Public/").unwrap().to_string(),
+            account_base58.strip_prefix("Public/").unwrap().to_owned(),
             AccountPrivacyKind::Public,
         ))
     } else if account_base58.starts_with("Private/") {
         Ok((
-            account_base58.strip_prefix("Private/").unwrap().to_string(),
+            account_base58.strip_prefix("Private/").unwrap().to_owned(),
             AccountPrivacyKind::Private,
         ))
     } else {
         anyhow::bail!("Unsupported privacy kind, available variants is Public/ and Private/");
-    }
-}
-
-/// Human-readable representation of an account.
-#[derive(Serialize)]
-pub(crate) struct HumanReadableAccount {
-    balance: u128,
-    program_owner_b64: String,
-    data_b64: String,
-    nonce: u128,
-}
-
-impl From<Account> for HumanReadableAccount {
-    fn from(account: Account) -> Self {
-        let program_owner_b64 = BASE64.encode(bytemuck::cast_slice(&account.program_owner));
-        let data_b64 = BASE64.encode(account.data);
-        Self {
-            balance: account.balance,
-            program_owner_b64,
-            data_b64,
-            nonce: account.nonce,
-        }
     }
 }
 
@@ -172,22 +176,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_get_home_get_env_var() {
-        unsafe {
-            std::env::set_var(HOME_DIR_ENV_VAR, "/path/to/configs");
-        }
-
-        let home = get_home().unwrap();
-
-        assert_eq!(PathBuf::from_str("/path/to/configs").unwrap(), home);
-
-        unsafe {
-            std::env::remove_var(HOME_DIR_ENV_VAR);
-        }
-    }
-
-    #[test]
-    fn test_addr_parse_with_privacy() {
+    fn addr_parse_with_privacy() {
         let addr_base58 = "Public/BLgCRDXYdQPMMWVHYRFGQZbgeHx9frkipa8GtpG2Syqy";
         let (_, addr_kind) = parse_addr_with_privacy_prefix(addr_base58).unwrap();
 

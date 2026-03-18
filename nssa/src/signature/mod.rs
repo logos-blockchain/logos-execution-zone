@@ -1,19 +1,26 @@
-mod private_key;
-mod public_key;
-
 use borsh::{BorshDeserialize, BorshSerialize};
 pub use private_key::PrivateKey;
 pub use public_key::PublicKey;
-use rand::{RngCore, rngs::OsRng};
+use rand::{RngCore as _, rngs::OsRng};
 
-#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+mod private_key;
+mod public_key;
+
+#[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Signature {
     pub value: [u8; 64],
 }
 
+impl std::fmt::Debug for Signature {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", hex::encode(self.value))
+    }
+}
+
 impl Signature {
+    #[must_use]
     pub fn new(key: &PrivateKey, message: &[u8]) -> Self {
-        let mut aux_random = [0u8; 32];
+        let mut aux_random = [0_u8; 32];
         OsRng.fill_bytes(&mut aux_random);
         Self::new_with_aux_random(key, message, aux_random)
     }
@@ -33,6 +40,7 @@ impl Signature {
         Self { value }
     }
 
+    #[must_use]
     pub fn is_valid_for(&self, bytes: &[u8], public_key: &PublicKey) -> bool {
         let pk = secp256k1::XOnlyPublicKey::from_byte_array(*public_key.value()).unwrap();
         let secp = secp256k1::Secp256k1::new();
@@ -56,7 +64,7 @@ mod tests {
     }
 
     #[test]
-    fn test_signature_generation_from_bip340_test_vectors() {
+    fn signature_generation_from_bip340_test_vectors() {
         for (i, test_vector) in bip340_test_vectors::test_vectors().into_iter().enumerate() {
             let Some(private_key) = test_vector.seckey else {
                 continue;
@@ -79,7 +87,7 @@ mod tests {
     }
 
     #[test]
-    fn test_signature_verification_from_bip340_test_vectors() {
+    fn signature_verification_from_bip340_test_vectors() {
         for (i, test_vector) in bip340_test_vectors::test_vectors().into_iter().enumerate() {
             let message = test_vector.message.unwrap_or(vec![]);
             let expected_result = test_vector.verification_result;

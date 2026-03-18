@@ -40,18 +40,17 @@ pub unsafe extern "C" fn wallet_ffi_sync_to_block(
     let mut wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
-            print_error(format!("Failed to lock wallet: {}", e));
+            print_error(format!("Failed to lock wallet: {e}"));
             return WalletFfiError::InternalError;
         }
     };
 
     match block_on(wallet.sync_to_block(block_id)) {
-        Ok(Ok(())) => WalletFfiError::Success,
-        Ok(Err(e)) => {
-            print_error(format!("Sync failed: {}", e));
+        Ok(()) => WalletFfiError::Success,
+        Err(e) => {
+            print_error(format!("Sync failed: {e}"));
             WalletFfiError::SyncError
         }
-        Err(e) => e,
     }
 }
 
@@ -86,7 +85,7 @@ pub unsafe extern "C" fn wallet_ffi_get_last_synced_block(
     let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
-            print_error(format!("Failed to lock wallet: {}", e));
+            print_error(format!("Failed to lock wallet: {e}"));
             return WalletFfiError::InternalError;
         }
     };
@@ -130,22 +129,21 @@ pub unsafe extern "C" fn wallet_ffi_get_current_block_height(
     let wallet = match wrapper.core.lock() {
         Ok(w) => w,
         Err(e) => {
-            print_error(format!("Failed to lock wallet: {}", e));
+            print_error(format!("Failed to lock wallet: {e}"));
             return WalletFfiError::InternalError;
         }
     };
 
     match block_on(wallet.sequencer_client.get_last_block()) {
-        Ok(Ok(response)) => {
+        Ok(response) => {
             unsafe {
                 *out_block_height = response.last_block;
             }
             WalletFfiError::Success
         }
-        Ok(Err(e)) => {
-            print_error(format!("Failed to get block height: {:?}", e));
+        Err(e) => {
+            print_error(format!("Failed to get block height: {e:?}"));
             WalletFfiError::NetworkError
         }
-        Err(e) => e,
     }
 }

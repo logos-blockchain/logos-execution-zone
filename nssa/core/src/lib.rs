@@ -1,10 +1,7 @@
-pub mod account;
-mod circuit_io;
-mod commitment;
-mod encoding;
-pub mod encryption;
-mod nullifier;
-pub mod program;
+#![expect(
+    clippy::multiple_inherent_impl,
+    reason = "We prefer to group methods by functionality rather than by type for encoding"
+)]
 
 pub use circuit_io::{PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput};
 pub use commitment::{
@@ -13,6 +10,14 @@ pub use commitment::{
 };
 pub use encryption::{EncryptionScheme, SharedSecretKey};
 pub use nullifier::{Nullifier, NullifierPublicKey, NullifierSecretKey};
+
+pub mod account;
+mod circuit_io;
+mod commitment;
+mod encoding;
+pub mod encryption;
+mod nullifier;
+pub mod program;
 
 #[cfg(feature = "host")]
 pub mod error;

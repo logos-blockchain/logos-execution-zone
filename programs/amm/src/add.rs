@@ -7,6 +7,7 @@ use nssa_core::{
 };
 
 #[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
+#[must_use]
 pub fn add_liquidity(
     pool: AccountWithMetadata,
     vault_a: AccountWithMetadata,
@@ -123,7 +124,7 @@ pub fn add_liquidity(
     );
 
     // 5. Update pool account
-    let mut pool_post = pool.account.clone();
+    let mut pool_post = pool.account;
     let pool_post_definition = PoolDefinition {
         liquidity_pool_supply: pool_def_data.liquidity_pool_supply + delta_lp,
         reserve_a: pool_def_data.reserve_a + actual_amount_a,
@@ -155,7 +156,7 @@ pub fn add_liquidity(
     pool_definition_lp_auth.is_authorized = true;
     let call_token_lp = ChainedCall::new(
         token_program_id,
-        vec![pool_definition_lp_auth.clone(), user_holding_lp.clone()],
+        vec![pool_definition_lp_auth, user_holding_lp.clone()],
         &token_core::Instruction::Mint {
             amount_to_mint: delta_lp,
         },
@@ -166,12 +167,12 @@ pub fn add_liquidity(
 
     let post_states = vec![
         AccountPostState::new(pool_post),
-        AccountPostState::new(vault_a.account.clone()),
-        AccountPostState::new(vault_b.account.clone()),
-        AccountPostState::new(pool_definition_lp.account.clone()),
-        AccountPostState::new(user_holding_a.account.clone()),
-        AccountPostState::new(user_holding_b.account.clone()),
-        AccountPostState::new(user_holding_lp.account.clone()),
+        AccountPostState::new(vault_a.account),
+        AccountPostState::new(vault_b.account),
+        AccountPostState::new(pool_definition_lp.account),
+        AccountPostState::new(user_holding_a.account),
+        AccountPostState::new(user_holding_b.account),
+        AccountPostState::new(user_holding_lp.account),
     ];
 
     (post_states, chained_calls)

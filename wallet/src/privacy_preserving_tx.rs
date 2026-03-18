@@ -21,11 +21,13 @@ pub enum PrivacyPreservingAccount {
 }
 
 impl PrivacyPreservingAccount {
-    pub fn is_public(&self) -> bool {
+    #[must_use]
+    pub const fn is_public(&self) -> bool {
         matches!(&self, Self::Public(_))
     }
 
-    pub fn is_private(&self) -> bool {
+    #[must_use]
+    pub const fn is_private(&self) -> bool {
         matches!(
             &self,
             Self::PrivateOwned(_) | Self::PrivateForeign { npk: _, vpk: _ }
@@ -67,7 +69,7 @@ impl AccountManager {
                     let acc = wallet
                         .get_account_public(account_id)
                         .await
-                        .map_err(|_| ExecutionFailureKind::KeyNotFoundError)?;
+                        .map_err(ExecutionFailureKind::SequencerError)?;
 
                     let sk = wallet.get_account_public_signing_key(account_id).cloned();
                     let account = AccountWithMetadata::new(acc.clone(), sk.is_some(), account_id);
@@ -124,7 +126,7 @@ impl AccountManager {
             .iter()
             .filter_map(|state| match state {
                 State::Public { account, sk } => sk.as_ref().map(|_| account.account.nonce),
-                _ => None,
+                State::Private(_) => None,
             })
             .collect()
     }
@@ -143,7 +145,7 @@ impl AccountManager {
                         epk: eph_holder.generate_ephemeral_public_key(),
                     })
                 }
-                _ => None,
+                State::Public { .. } => None,
             })
             .collect()
     }
@@ -153,7 +155,7 @@ impl AccountManager {
             .iter()
             .filter_map(|state| match state {
                 State::Private(pre) => pre.nsk,
-                _ => None,
+                State::Public { .. } => None,
             })
             .collect()
     }
@@ -163,7 +165,7 @@ impl AccountManager {
             .iter()
             .filter_map(|state| match state {
                 State::Private(pre) => Some(pre.proof.clone()),
-                _ => None,
+                State::Public { .. } => None,
             })
             .collect()
     }
@@ -173,7 +175,7 @@ impl AccountManager {
             .iter()
             .filter_map(|state| match state {
                 State::Public { account, .. } => Some(account.account_id),
-                _ => None,
+                State::Private(_) => None,
             })
             .collect()
     }
@@ -183,7 +185,7 @@ impl AccountManager {
             .iter()
             .filter_map(|state| match state {
                 State::Public { sk, .. } => sk.as_ref(),
-                _ => None,
+                State::Private(_) => None,
             })
             .collect()
     }

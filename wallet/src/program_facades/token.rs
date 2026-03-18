@@ -5,7 +5,7 @@ use token_core::Instruction;
 
 use crate::{PrivacyPreservingAccount, WalletCore};
 
-pub struct Token<'w>(pub &'w WalletCore);
+pub struct Token<'wallet>(pub &'wallet WalletCore);
 
 impl Token<'_> {
     pub async fn send_new_definition(
@@ -133,9 +133,11 @@ impl Token<'_> {
         let instruction = Instruction::Transfer {
             amount_to_transfer: amount,
         };
-        let Ok(nonces) = self.0.get_accounts_nonces(vec![sender_account_id]).await else {
-            return Err(ExecutionFailureKind::SequencerError);
-        };
+        let nonces = self
+            .0
+            .get_accounts_nonces(vec![sender_account_id])
+            .await
+            .map_err(ExecutionFailureKind::SequencerError)?;
         let message = nssa::public_transaction::Message::try_new(
             program_id,
             account_ids,
@@ -332,9 +334,11 @@ impl Token<'_> {
             amount_to_burn: amount,
         };
 
-        let Ok(nonces) = self.0.get_accounts_nonces(vec![holder_account_id]).await else {
-            return Err(ExecutionFailureKind::SequencerError);
-        };
+        let nonces = self
+            .0
+            .get_accounts_nonces(vec![holder_account_id])
+            .await
+            .map_err(ExecutionFailureKind::SequencerError)?;
         let message = nssa::public_transaction::Message::try_new(
             Program::token().id(),
             account_ids,
@@ -460,13 +464,11 @@ impl Token<'_> {
             amount_to_mint: amount,
         };
 
-        let Ok(nonces) = self
+        let nonces = self
             .0
             .get_accounts_nonces(vec![definition_account_id])
             .await
-        else {
-            return Err(ExecutionFailureKind::SequencerError);
-        };
+            .map_err(ExecutionFailureKind::SequencerError)?;
         let message = nssa::public_transaction::Message::try_new(
             Program::token().id(),
             account_ids,

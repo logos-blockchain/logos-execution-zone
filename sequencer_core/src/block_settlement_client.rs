@@ -1,9 +1,9 @@
-use anyhow::{Context, Result};
+use anyhow::{Context as _, Result};
 use bedrock_client::BedrockClient;
 pub use common::block::Block;
 pub use logos_blockchain_core::mantle::{MantleTx, SignedMantleTx, ops::channel::MsgId};
 use logos_blockchain_core::mantle::{
-    Op, OpProof, Transaction, TxHash, ledger,
+    Op, OpProof, Transaction as _, TxHash, ledger,
     ops::channel::{ChannelId, inscribe::InscriptionOp},
 };
 pub use logos_blockchain_key_management_system_service::keys::Ed25519Key;
@@ -14,7 +14,7 @@ use crate::config::BedrockConfig;
 #[expect(async_fn_in_trait, reason = "We don't care about Send/Sync here")]
 pub trait BlockSettlementClientTrait: Clone {
     //// Create a new client.
-    fn new(config: &BedrockConfig, bedrock_signing_key: Ed25519Key) -> Result<Self>;
+    fn new(config: &BedrockConfig, signing_key: Ed25519Key) -> Result<Self>;
 
     /// Get the bedrock channel ID used by this client.
     fn bedrock_channel_id(&self) -> ChannelId;
@@ -74,23 +74,23 @@ pub trait BlockSettlementClientTrait: Clone {
     }
 }
 
-/// A component that posts block data to logos blockchain
+/// A component that posts block data to logos blockchain.
 #[derive(Clone)]
 pub struct BlockSettlementClient {
-    bedrock_client: BedrockClient,
-    bedrock_signing_key: Ed25519Key,
-    bedrock_channel_id: ChannelId,
+    client: BedrockClient,
+    signing_key: Ed25519Key,
+    channel_id: ChannelId,
 }
 
 impl BlockSettlementClientTrait for BlockSettlementClient {
-    fn new(config: &BedrockConfig, bedrock_signing_key: Ed25519Key) -> Result<Self> {
-        let bedrock_client =
+    fn new(config: &BedrockConfig, signing_key: Ed25519Key) -> Result<Self> {
+        let client =
             BedrockClient::new(config.backoff, config.node_url.clone(), config.auth.clone())
                 .context("Failed to initialize bedrock client")?;
         Ok(Self {
-            bedrock_client,
-            bedrock_signing_key,
-            bedrock_channel_id: config.channel_id,
+            client,
+            signing_key,
+            channel_id: config.channel_id,
         })
     }
 
@@ -99,10 +99,11 @@ impl BlockSettlementClientTrait for BlockSettlementClient {
             Some(Op::ChannelInscribe(inscribe)) => (inscribe.parent, inscribe.id()),
             _ => panic!("Expected ChannelInscribe op"),
         };
-        self.bedrock_client
+        self.client
             .post_transaction(tx)
             .await
-            .context("Failed to post transaction to Bedrock")?;
+            .context("Failed to post transaction to Bedrock after retries")?
+            .context("Failed to post transaction to Bedrock with non-retryable error")?;
 
         log::debug!("Posted block to Bedrock with parent id {parent_id:?} and msg id: {msg_id:?}");
 
@@ -110,11 +111,11 @@ impl BlockSettlementClientTrait for BlockSettlementClient {
     }
 
     fn bedrock_channel_id(&self) -> ChannelId {
-        self.bedrock_channel_id
+        self.channel_id
     }
 
     fn bedrock_signing_key(&self) -> &Ed25519Key {
-        &self.bedrock_signing_key
+        &self.signing_key
     }
 }
 

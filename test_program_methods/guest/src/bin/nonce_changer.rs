@@ -5,14 +5,13 @@ type Instruction = ();
 fn main() {
     let (ProgramInput { pre_states, .. }, instruction_words) = read_nssa_inputs::<Instruction>();
 
-    let [pre] = match pre_states.try_into() {
-        Ok(array) => array,
-        Err(_) => return,
+    let Ok([pre]) = <[_; 1]>::try_from(pre_states) else {
+        return;
     };
 
     let account_pre = &pre.account;
     let mut account_post = account_pre.clone();
-    account_post.nonce += 1;
+    account_post.nonce = account_post.nonce.overflowing_add(1).0;
 
     write_nssa_outputs(
         instruction_words,

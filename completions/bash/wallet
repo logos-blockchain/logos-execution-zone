@@ -1,0 +1,382 @@
+#!/usr/bin/env bash
+
+# Bash completion script for the wallet CLI
+# See instructions in ../README.md
+
+# Helper function to complete account IDs
+# Uses `wallet account list` to get available accounts
+# Only includes accounts with /N prefix (where N is a number)
+_wallet_complete_account_id() {
+    local cur="$1"
+    local accounts
+
+    if command -v wallet &>/dev/null; then
+        accounts=$(wallet account list 2>/dev/null | grep '^/[0-9]' | awk '{print $2}' | tr -d ',')
+    fi
+
+    if [[ -n "$accounts" ]]; then
+        COMPREPLY=($(compgen -W "$accounts" -- "$cur"))
+    else
+        COMPREPLY=($(compgen -W "Public/ Private/" -- "$cur"))
+        compopt -o nospace 2>/dev/null
+    fi
+}
+
+_wallet() {
+    local cur prev words cword
+    _init_completion 2>/dev/null || {
+        COMPREPLY=()
+        cur="${COMP_WORDS[COMP_CWORD]}"
+        prev="${COMP_WORDS[COMP_CWORD-1]}"
+        words=("${COMP_WORDS[@]}")
+        cword=$COMP_CWORD
+    }
+
+    local commands="auth-transfer chain-info account pinata token amm check-health config restore-keys deploy-program help"
+
+    # Find the main command and subcommand by scanning words before the cursor.
+    # Global options that take a value are skipped along with their argument.
+    local cmd="" subcmd=""
+    local cmd_idx=0 subcmd_idx=0
+    local i
+    for ((i = 1; i < cword; i++)); do
+        local w="${words[$i]}"
+        case "$w" in
+            --auth)
+                ((i++)) # skip the auth value
+                ;;
+            -c | --continuous-run)
+                # boolean flag, no value
+                ;;
+            -*)
+                # unrecognised option, skip
+                ;;
+            *)
+                if [[ -z "$cmd" ]]; then
+                    cmd="$w"
+                    cmd_idx=$i
+                elif [[ -z "$subcmd" ]]; then
+                    subcmd="$w"
+                    subcmd_idx=$i
+                fi
+                ;;
+        esac
+    done
+
+    local config_keys="override_rust_log sequencer_addr seq_poll_timeout seq_tx_poll_max_blocks seq_poll_max_retries seq_block_poll_max_amount initial_accounts basic_auth"
+
+    case "$cmd" in
+        "")
+            # Completing the main command or a global option
+            if [[ "$prev" == "--auth" ]]; then
+                return # completing the --auth value; no suggestions
+            fi
+            case "$cur" in
+                -*)
+                    COMPREPLY=($(compgen -W "-c --continuous-run --auth" -- "$cur"))
+                    ;;
+                *)
+                    COMPREPLY=($(compgen -W "$commands" -- "$cur"))
+                    ;;
+            esac
+            ;;
+
+        auth-transfer)
+            case "$subcmd" in
+                "")
+                    COMPREPLY=($(compgen -W "init send help" -- "$cur"))
+                    ;;
+                init)
+                    case "$prev" in
+                        --account-id)
+                            _wallet_complete_account_id "$cur"
+                            ;;
+                        *)
+                            COMPREPLY=($(compgen -W "--account-id" -- "$cur"))
+                            ;;
+                    esac
+                    ;;
+                send)
+                    case "$prev" in
+                        --from | --to)
+                            _wallet_complete_account_id "$cur"
+                            ;;
+                        --to-npk | --to-vpk | --amount)
+                            ;; # no specific completion
+                        *)
+                            COMPREPLY=($(compgen -W "--from --to --to-npk --to-vpk --amount" -- "$cur"))
+                            ;;
+                    esac
+                    ;;
+            esac
+            ;;
+
+        chain-info)
+            case "$subcmd" in
+                "")
+                    COMPREPLY=($(compgen -W "current-block-id block transaction help" -- "$cur"))
+                    ;;
+                block)
+                    case "$prev" in
+                        -i | --id)
+                            ;; # no specific completion for block ID
+                        *)
+                            COMPREPLY=($(compgen -W "-i --id" -- "$cur"))
+                            ;;
+                    esac
+                    ;;
+                transaction)
+                    case "$prev" in
+                        -t | --hash)
+                            ;; # no specific completion for tx hash
+                        *)
+                            COMPREPLY=($(compgen -W "-t --hash" -- "$cur"))
+                            ;;
+                    esac
+                    ;;
+            esac
+            ;;
+
+        account)
+            case "$subcmd" in
+                "")
+                    COMPREPLY=($(compgen -W "get new sync-private list ls label help" -- "$cur"))
+                    ;;
+                get)
+                    case "$prev" in
+                        -a | --account-id)
+                            _wallet_complete_account_id "$cur"
+                            ;;
+                        *)
+                            COMPREPLY=($(compgen -W "-r --raw -k --keys -a --account-id" -- "$cur"))
+                            ;;
+                    esac
+                    ;;
+                list | ls)
+                    COMPREPLY=($(compgen -W "-l --long" -- "$cur"))
+                    ;;
+                sync-private)
+                    ;; # no options
+                new)
+                    # `account new` is itself a subcommand: public | private
+                    local new_subcmd=""
+                    for ((i = subcmd_idx + 1; i < cword; i++)); do
+                        case "${words[$i]}" in
+                            public | private)
+                                new_subcmd="${words[$i]}"
+                                break
+                                ;;
+                        esac
+                    done
+
+                    if [[ -z "$new_subcmd" ]]; then
+                        COMPREPLY=($(compgen -W "public private" -- "$cur"))
+                    else
+                        case "$prev" in
+                            --cci | -l | --label)
+                                ;; # no specific completion
+                            *)
+                                COMPREPLY=($(compgen -W "--cci -l --label" -- "$cur"))
+                                ;;
+                        esac
+                    fi
+                    ;;
+                label)
+                    case "$prev" in
+                        -a | --account-id)
+                            _wallet_complete_account_id "$cur"
+                            ;;
+                        -l | --label)
+                            ;; # no specific completion for label value
+                        *)
+                            COMPREPLY=($(compgen -W "-a --account-id -l --label" -- "$cur"))
+                            ;;
+                    esac
+                    ;;
+            esac
+            ;;
+
+        pinata)
+            case "$subcmd" in
+                "")
+                    COMPREPLY=($(compgen -W "claim help" -- "$cur"))
+                    ;;
+                claim)
+                    case "$prev" in
+                        --to)
+                            _wallet_complete_account_id "$cur"
+                            ;;
+                        *)
+                            COMPREPLY=($(compgen -W "--to" -- "$cur"))
+                            ;;
+                    esac
+                    ;;
+            esac
+            ;;
+
+        token)
+            case "$subcmd" in
+                "")
+                    COMPREPLY=($(compgen -W "new send burn mint help" -- "$cur"))
+                    ;;
+                new)
+                    case "$prev" in
+                        --definition-account-id | --supply-account-id)
+                            _wallet_complete_account_id "$cur"
+                            ;;
+                        -n | --name | -t | --total-supply)
+                            ;; # no specific completion
+                        *)
+                            COMPREPLY=($(compgen -W "--definition-account-id --supply-account-id -n --name -t --total-supply" -- "$cur"))
+                            ;;
+                    esac
+                    ;;
+                send)
+                    case "$prev" in
+                        --from | --to)
+                            _wallet_complete_account_id "$cur"
+                            ;;
+                        --to-npk | --to-vpk | --amount)
+                            ;; # no specific completion
+                        *)
+                            COMPREPLY=($(compgen -W "--from --to --to-npk --to-vpk --amount" -- "$cur"))
+                            ;;
+                    esac
+                    ;;
+                burn)
+                    case "$prev" in
+                        --definition | --holder)
+                            _wallet_complete_account_id "$cur"
+                            ;;
+                        --amount)
+                            ;; # no specific completion
+                        *)
+                            COMPREPLY=($(compgen -W "--definition --holder --amount" -- "$cur"))
+                            ;;
+                    esac
+                    ;;
+                mint)
+                    case "$prev" in
+                        --definition | --holder)
+                            _wallet_complete_account_id "$cur"
+                            ;;
+                        --holder-npk | --holder-vpk | --amount)
+                            ;; # no specific completion
+                        *)
+                            COMPREPLY=($(compgen -W "--definition --holder --holder-npk --holder-vpk --amount" -- "$cur"))
+                            ;;
+                    esac
+                    ;;
+            esac
+            ;;
+
+        amm)
+            case "$subcmd" in
+                "")
+                    COMPREPLY=($(compgen -W "new swap add-liquidity remove-liquidity help" -- "$cur"))
+                    ;;
+                new)
+                    case "$prev" in
+                        --user-holding-a | --user-holding-b | --user-holding-lp)
+                            _wallet_complete_account_id "$cur"
+                            ;;
+                        --balance-a | --balance-b)
+                            ;; # no specific completion
+                        *)
+                            COMPREPLY=($(compgen -W "--user-holding-a --user-holding-b --user-holding-lp --balance-a --balance-b" -- "$cur"))
+                            ;;
+                    esac
+                    ;;
+                swap)
+                    case "$prev" in
+                        --user-holding-a | --user-holding-b)
+                            _wallet_complete_account_id "$cur"
+                            ;;
+                        --amount-in | --min-amount-out | --token-definition)
+                            ;; # no specific completion
+                        *)
+                            COMPREPLY=($(compgen -W "--user-holding-a --user-holding-b --amount-in --min-amount-out --token-definition" -- "$cur"))
+                            ;;
+                    esac
+                    ;;
+                add-liquidity)
+                    case "$prev" in
+                        --user-holding-a | --user-holding-b | --user-holding-lp)
+                            _wallet_complete_account_id "$cur"
+                            ;;
+                        --max-amount-a | --max-amount-b | --min-amount-lp)
+                            ;; # no specific completion
+                        *)
+                            COMPREPLY=($(compgen -W "--user-holding-a --user-holding-b --user-holding-lp --max-amount-a --max-amount-b --min-amount-lp" -- "$cur"))
+                            ;;
+                    esac
+                    ;;
+                remove-liquidity)
+                    case "$prev" in
+                        --user-holding-a | --user-holding-b | --user-holding-lp)
+                            _wallet_complete_account_id "$cur"
+                            ;;
+                        --balance-lp | --min-amount-a | --min-amount-b)
+                            ;; # no specific completion
+                        *)
+                            COMPREPLY=($(compgen -W "--user-holding-a --user-holding-b --user-holding-lp --balance-lp --min-amount-a --min-amount-b" -- "$cur"))
+                            ;;
+                    esac
+                    ;;
+            esac
+            ;;
+
+        config)
+            case "$subcmd" in
+                "")
+                    COMPREPLY=($(compgen -W "get set description help" -- "$cur"))
+                    ;;
+                get)
+                    # Accepts optional -a/--all flag and an optional positional key
+                    COMPREPLY=($(compgen -W "--all -a $config_keys" -- "$cur"))
+                    ;;
+                set)
+                    # set <key> <value> — only complete the key; no completion for the value
+                    local set_args=0
+                    for ((i = subcmd_idx + 1; i < cword; i++)); do
+                        [[ "${words[$i]}" != -* ]] && ((set_args++))
+                    done
+                    if [[ $set_args -eq 0 ]]; then
+                        COMPREPLY=($(compgen -W "$config_keys" -- "$cur"))
+                    fi
+                    ;;
+                description)
+                    # description <key> — only complete if no key provided yet
+                    local has_key=false
+                    for ((i = subcmd_idx + 1; i < cword; i++)); do
+                        [[ "${words[$i]}" != -* ]] && has_key=true && break
+                    done
+                    if ! $has_key; then
+                        COMPREPLY=($(compgen -W "$config_keys" -- "$cur"))
+                    fi
+                    ;;
+            esac
+            ;;
+
+        restore-keys)
+            case "$prev" in
+                -d | --depth)
+                    ;; # no specific completion for depth value
+                *)
+                    COMPREPLY=($(compgen -W "-d --depth" -- "$cur"))
+                    ;;
+            esac
+            ;;
+
+        deploy-program)
+            COMPREPLY=($(compgen -f -- "$cur"))
+            compopt -o filenames 2>/dev/null
+            ;;
+
+        help)
+            COMPREPLY=($(compgen -W "$commands" -- "$cur"))
+            ;;
+    esac
+}
+
+complete -F _wallet wallet
