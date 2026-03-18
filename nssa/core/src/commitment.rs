@@ -50,7 +50,7 @@ impl std::fmt::Debug for Commitment {
 
 impl Commitment {
     /// Generates the commitment to a private account owned by user for npk:
-    /// SHA256(Comm_DS || npk || `program_owner` || balance || nonce || SHA256(data)).
+    /// SHA256( `Comm_DS` || npk || `program_owner` || balance || nonce || SHA256(data)).
     #[must_use]
     pub fn new(npk: &NullifierPublicKey, account: &Account) -> Self {
         const COMMITMENT_PREFIX: &[u8; 32] =
