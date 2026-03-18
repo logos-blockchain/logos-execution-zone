@@ -1,7 +1,7 @@
 use std::{collections::HashMap, path::PathBuf, str::FromStr as _};
 
-use anyhow::{Context, Result};
-use base58::ToBase58;
+use anyhow::{Context as _, Result};
+use base58::ToBase58 as _;
 use key_protocol::{
     initial_state::{PrivateAccountPrivateInitialData, PublicAccountPrivateInitialData},
     key_protocol_core::NSSAUserData,
@@ -132,11 +132,11 @@ pub fn produce_data_for_storage(
 
     for (account_id, (key_chain, account)) in &user_data.default_user_private_accounts {
         vec_for_storage.push(
-            InitialAccountData::Private(PrivateAccountPrivateInitialData {
+            InitialAccountData::Private(Box::new(PrivateAccountPrivateInitialData {
                 account_id: *account_id,
                 account: account.clone(),
                 key_chain: key_chain.clone(),
-            })
+            }))
             .into(),
         );
     }

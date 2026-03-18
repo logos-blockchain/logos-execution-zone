@@ -43,7 +43,7 @@ pub struct SequencerConfig {
     pub retry_pending_blocks_timeout: Duration,
     /// Port to listen.
     pub port: u16,
-    /// Sequencer own signing key
+    /// Sequencer own signing key.
     pub signing_key: [u8; 32],
     /// Bedrock configuration options.
     pub bedrock_config: BedrockConfig,

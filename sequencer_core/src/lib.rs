@@ -94,53 +94,50 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
             .expect("Failed to read latest block meta from store");
 
         #[cfg_attr(not(feature = "testnet"), allow(unused_mut))]
-        let mut state = match store.get_nssa_state() {
-            Some(state) => {
-                info!("Found local database. Loading state and pending blocks from it.");
-                state
-            }
-            None => {
-                info!(
-                    "No database found when starting the sequencer. Creating a fresh new with the initial data"
-                );
+        let mut state = if let Some(state) = store.get_nssa_state() {
+            info!("Found local database. Loading state and pending blocks from it.");
+            state
+        } else {
+            info!(
+                "No database found when starting the sequencer. Creating a fresh new with the initial data"
+            );
 
-                let initial_commitments: Option<Vec<nssa_core::Commitment>> = config
-                    .initial_commitments
-                    .clone()
-                    .map(|initial_commitments| {
-                        initial_commitments
-                            .iter()
-                            .map(|init_comm_data| {
-                                let npk = &init_comm_data.npk;
+            let initial_commitments: Option<Vec<nssa_core::Commitment>> = config
+                .initial_commitments
+                .clone()
+                .map(|initial_commitments| {
+                    initial_commitments
+                        .iter()
+                        .map(|init_comm_data| {
+                            let npk = &init_comm_data.npk;
 
-                                let mut acc = init_comm_data.account.clone();
+                            let mut acc = init_comm_data.account.clone();
 
-                                acc.program_owner =
-                                    nssa::program::Program::authenticated_transfer_program().id();
+                            acc.program_owner =
+                                nssa::program::Program::authenticated_transfer_program().id();
 
-                                nssa_core::Commitment::new(npk, &acc)
-                            })
-                            .collect()
-                    });
+                            nssa_core::Commitment::new(npk, &acc)
+                        })
+                        .collect()
+                });
 
-                let init_accs: Option<Vec<(nssa::AccountId, u128)>> =
-                    config.initial_accounts.clone().map(|initial_accounts| {
-                        initial_accounts
-                            .iter()
-                            .map(|acc_data| (acc_data.account_id, acc_data.balance))
-                            .collect()
-                    });
+            let init_accs: Option<Vec<(nssa::AccountId, u128)>> =
+                config.initial_accounts.clone().map(|initial_accounts| {
+                    initial_accounts
+                        .iter()
+                        .map(|acc_data| (acc_data.account_id, acc_data.balance))
+                        .collect()
+                });
 
-                // If initial commitments or accounts are present in config, need to construct state
-                // from them
-                if initial_commitments.is_some() || init_accs.is_some() {
-                    V02State::new_with_genesis_accounts(
-                        &init_accs.unwrap_or_default(),
-                        &initial_commitments.unwrap_or_default(),
-                    )
-                } else {
-                    initial_state()
-                }
+            // If initial commitments or accounts are present in config, need to construct state
+            // from them
+            if initial_commitments.is_some() || init_accs.is_some() {
+                V02State::new_with_genesis_accounts(
+                    &init_accs.unwrap_or_default(),
+                    &initial_commitments.unwrap_or_default(),
+                )
+            } else {
+                initial_state()
             }
         };
 
@@ -485,7 +482,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_transaction_pre_check_native_transfer_valid() {
+    async fn transaction_pre_check_native_transfer_valid() {
         let (_sequencer, _mempool_handle) = common_setup().await;
 
         let acc1 = initial_accounts()[0].account_id;

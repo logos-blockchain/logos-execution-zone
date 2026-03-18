@@ -101,6 +101,7 @@ pub struct PrivateAccountPrivateInitialData {
     pub key_chain: KeyChain,
 }
 
+#[must_use]
 pub fn initial_pub_accounts_private_keys() -> Vec<PublicAccountPrivateInitialData> {
     let acc1_pub_sign_key = PrivateKey::try_new(PRIVATE_KEY_PUB_ACC_A).unwrap();
 
@@ -118,6 +119,7 @@ pub fn initial_pub_accounts_private_keys() -> Vec<PublicAccountPrivateInitialDat
     ]
 }
 
+#[must_use]
 pub fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialData> {
     let key_chain_1 = KeyChain {
         secret_spending_key: SecretSpendingKey(SSK_PRIV_ACC_A),
@@ -163,16 +165,18 @@ pub fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialD
     ]
 }
 
+#[must_use]
 pub fn initial_commitments() -> Vec<PrivateAccountPublicInitialData> {
     initial_priv_accounts_private_keys()
         .into_iter()
         .map(|data| PrivateAccountPublicInitialData {
             npk: data.key_chain.nullifer_public_key.clone(),
-            account: data.account.clone(),
+            account: data.account,
         })
         .collect()
 }
 
+#[must_use]
 pub fn initial_accounts() -> Vec<PublicAccountPublicInitialData> {
     let initial_account_ids = initial_pub_accounts_private_keys()
         .into_iter()
@@ -191,6 +195,7 @@ pub fn initial_accounts() -> Vec<PublicAccountPublicInitialData> {
     ]
 }
 
+#[must_use]
 pub fn initial_state() -> V02State {
     let initial_commitments: Vec<nssa_core::Commitment> = initial_commitments()
         .iter()
@@ -213,6 +218,7 @@ pub fn initial_state() -> V02State {
     nssa::V02State::new_with_genesis_accounts(&init_accs, &initial_commitments)
 }
 
+#[must_use]
 pub fn initial_state_testnet() -> V02State {
     let mut state = initial_state();
 
@@ -223,7 +229,7 @@ pub fn initial_state_testnet() -> V02State {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
+    use std::str::FromStr as _;
 
     use super::*;
 
@@ -234,7 +240,7 @@ mod tests {
     const PRIV_ACC_B_TEXT_ADDR: &str = "E8HwiTyQe4H9HK7icTvn95HQMnzx49mP9A2ddtMLpNaN";
 
     #[test]
-    fn test_pub_state_consistency() {
+    fn pub_state_consistency() {
         let init_accs_private_data = initial_pub_accounts_private_keys();
         let init_accs_pub_data = initial_accounts();
 
@@ -262,11 +268,11 @@ mod tests {
                 account_id: AccountId::from_str(PUB_ACC_B_TEXT_ADDR).unwrap(),
                 balance: PUB_ACC_B_INITIAL_BALANCE,
             }
-        )
+        );
     }
 
     #[test]
-    fn test_private_state_consistency() {
+    fn private_state_consistency() {
         let init_private_accs_keys = initial_priv_accounts_private_keys();
         let init_comms = initial_commitments();
 
@@ -386,6 +392,6 @@ mod tests {
                     nonce: 0,
                 },
             }
-        )
+        );
     }
 }

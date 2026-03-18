@@ -142,11 +142,11 @@ impl InitialData {
             })
             .chain(self.private_accounts.iter().map(|(key_chain, account)| {
                 let account_id = AccountId::from(&key_chain.nullifer_public_key);
-                InitialAccountData::Private(PrivateAccountPrivateInitialData {
+                InitialAccountData::Private(Box::new(PrivateAccountPrivateInitialData {
                     account_id,
                     account: account.clone(),
                     key_chain: key_chain.clone(),
-                })
+                }))
             }))
             .collect()
     }

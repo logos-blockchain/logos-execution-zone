@@ -197,7 +197,8 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> JsonHandler<BC, IC>
 
     /// Returns the initial accounts for testnet.
     /// `ToDo`: Useful only for testnet and needs to be removed later.
-    async fn get_initial_testnet_accounts(&self, request: Request) -> Result<Value, RpcErr> {
+    #[expect(clippy::unused_self, reason = "Let all methods be uniform")]
+    fn get_initial_testnet_accounts(&self, request: Request) -> Result<Value, RpcErr> {
         let _get_initial_testnet_accounts_request =
             GetInitialTestnetAccountsRequest::parse(Some(request.params))?;
 
@@ -320,7 +321,7 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> JsonHandler<BC, IC>
             GET_BLOCK_RANGE => self.process_get_block_range_data(request).await,
             GET_GENESIS => self.process_get_genesis(request).await,
             GET_LAST_BLOCK => self.process_get_last_block(request).await,
-            GET_INITIAL_TESTNET_ACCOUNTS => self.get_initial_testnet_accounts(request).await,
+            GET_INITIAL_TESTNET_ACCOUNTS => self.get_initial_testnet_accounts(request),
             GET_ACCOUNT_BALANCE => self.process_get_account_balance(request).await,
             GET_ACCOUNTS_NONCES => self.process_get_accounts_nonces(request).await,
             GET_ACCOUNT => self.process_get_account(request).await,

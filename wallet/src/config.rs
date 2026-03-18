@@ -41,10 +41,18 @@ pub struct PersistentAccountDataPrivate {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum InitialAccountData {
     Public(PublicAccountPrivateInitialData),
-    Private(PrivateAccountPrivateInitialData),
+    Private(Box<PrivateAccountPrivateInitialData>),
 }
 
 impl InitialAccountData {
+    #[must_use]
+    pub const fn account_id(&self) -> nssa::AccountId {
+        match &self {
+            Self::Public(acc) => acc.account_id,
+            Self::Private(acc) => acc.account_id,
+        }
+    }
+
     pub(crate) fn create_initial_accounts_data() -> Vec<Self> {
         let pub_data = initial_pub_accounts_private_keys();
         let priv_data = initial_priv_accounts_private_keys();
@@ -117,16 +125,6 @@ impl PersistentStorage {
     }
 }
 
-impl InitialAccountData {
-    #[must_use]
-    pub fn account_id(&self) -> nssa::AccountId {
-        match &self {
-            Self::Public(acc) => acc.account_id,
-            Self::Private(acc) => acc.account_id,
-        }
-    }
-}
-
 impl PersistentAccountData {
     #[must_use]
     pub fn account_id(&self) -> nssa::AccountId {
@@ -146,7 +144,7 @@ impl From<PublicAccountPrivateInitialData> for InitialAccountData {
 
 impl From<PrivateAccountPrivateInitialData> for InitialAccountData {
     fn from(value: PrivateAccountPrivateInitialData) -> Self {
-        Self::Private(value)
+        Self::Private(Box::new(value))
     }
 }
 

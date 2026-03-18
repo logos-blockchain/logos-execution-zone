@@ -29,7 +29,7 @@ pub struct ClientConfig {
 pub struct IndexerConfig {
     /// Home dir of sequencer storage.
     pub home: PathBuf,
-    /// Sequencers signing key
+    /// Sequencers signing key.
     pub signing_key: [u8; 32],
     #[serde(with = "humantime_serde")]
     pub consensus_info_polling_interval: Duration,
