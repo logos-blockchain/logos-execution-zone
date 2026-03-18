@@ -5,11 +5,23 @@ use serde::{Deserialize, Serialize};
 
 use crate::HashType;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum NSSATransaction {
     Public(nssa::PublicTransaction),
     PrivacyPreserving(nssa::PrivacyPreservingTransaction),
     ProgramDeployment(nssa::ProgramDeploymentTransaction),
+}
+
+impl Serialize for NSSATransaction {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        crate::borsh_base64::serialize(self, serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for NSSATransaction {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        crate::borsh_base64::deserialize(deserializer)
+    }
 }
 
 impl NSSATransaction {

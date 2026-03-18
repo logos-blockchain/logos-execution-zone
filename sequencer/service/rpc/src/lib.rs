@@ -1,17 +1,14 @@
 use std::collections::BTreeMap;
 
-use common::{
-    HashType,
-    block::{Block, BlockId},
-    transaction::NSSATransaction,
-};
 use jsonrpsee::proc_macros::rpc;
 #[cfg(feature = "server")]
 use jsonrpsee::types::ErrorObjectOwned;
 #[cfg(feature = "client")]
 pub use jsonrpsee::{core::ClientError, http_client::HttpClientBuilder as SequencerClientBuilder};
-use nssa::{Account, AccountId, ProgramId};
-use nssa_core::{Commitment, MembershipProof, account::Nonce};
+use sequencer_service_protocol::{
+    Account, AccountId, Block, BlockId, Commitment, HashType, MembershipProof, NSSATransaction,
+    Nonce, ProgramId,
+};
 
 #[cfg(all(not(feature = "server"), not(feature = "client")))]
 compile_error!("At least one of `server` or `client` features must be enabled.");
@@ -22,10 +19,14 @@ compile_error!("At least one of `server` or `client` features must be enabled.")
 ///
 /// # Example
 ///
-/// ```ignore
-/// use sequencer_service_rpc::{SequencerClientBuilder, RpcClient as _};
+/// ```no_run
+/// use common::transaction::NSSATransaction;
+/// use sequencer_service_rpc::{RpcClient as _, SequencerClientBuilder};
 ///
+/// let url = "http://localhost:3040".parse()?;
 /// let client = SequencerClientBuilder::default().build(url)?;
+///
+/// let tx: NSSATransaction = unimplemented!("Construct your transaction here");
 /// let tx_hash = client.send_transaction(tx).await?;
 /// ```
 #[cfg(feature = "client")]

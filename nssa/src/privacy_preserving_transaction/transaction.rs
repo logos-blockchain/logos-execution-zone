@@ -8,7 +8,6 @@ use nssa_core::{
     Commitment, CommitmentSetDigest, Nullifier, PrivacyPreservingCircuitOutput,
     account::{Account, AccountWithMetadata},
 };
-use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, digest::FixedOutput as _};
 
 use super::{message::Message, witness_set::WitnessSet};
@@ -18,7 +17,7 @@ use crate::{
     privacy_preserving_transaction::{circuit::Proof, message::EncryptedAccountData},
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PrivacyPreservingTransaction {
     pub message: Message,
     pub witness_set: WitnessSet,

@@ -1498,6 +1498,7 @@ name = "common"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "borsh",
  "hex",
  "log",
@@ -5244,7 +5245,6 @@ name = "nssa"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "base64 0.22.1",
  "borsh",
  "env_logger",
  "hex",
@@ -7177,21 +7177,28 @@ dependencies = [
  "log",
  "mempool",
  "nssa",
- "nssa_core",
  "sequencer_core",
+ "sequencer_service_protocol",
  "sequencer_service_rpc",
  "tokio",
  "tokio-util",
 ]
 
 [[package]]
-name = "sequencer_service_rpc"
+name = "sequencer_service_protocol"
 version = "0.1.0"
 dependencies = [
  "common",
- "jsonrpsee",
  "nssa",
  "nssa_core",
+]
+
+[[package]]
+name = "sequencer_service_rpc"
+version = "0.1.0"
+dependencies = [
+ "jsonrpsee",
+ "sequencer_service_protocol",
 ]
 
 [[package]]

@@ -25,7 +25,7 @@ impl WalletCore {
         let witness_set = nssa::public_transaction::WitnessSet::for_message(&message, &[]);
         let tx = nssa::PublicTransaction::new(message, witness_set);
 
-        Ok(self.sequencer_client.send_transaction(NSSATransaction::Public(tx)).await?)
+        Ok(self.sequencer_client.send_transaction(NSSATransaction::Public(tx).into()).await?)
     }
 
     pub async fn claim_pinata_private_owned_account_already_initialized(
@@ -91,7 +91,7 @@ impl WalletCore {
         );
 
         Ok((
-            self.sequencer_client.send_transaction(NSSATransaction::PrivacyPreserving(tx)).await?,
+            self.sequencer_client.send_transaction(NSSATransaction::PrivacyPreserving(tx).into()).await?,
             [shared_secret_winner],
         ))
     }
@@ -158,7 +158,7 @@ impl WalletCore {
         );
 
         Ok((
-            self.sequencer_client.send_transaction(NSSATransaction::PrivacyPreserving(tx)).await?,
+            self.sequencer_client.send_transaction(NSSATransaction::PrivacyPreserving(tx).into()).await?,
             [shared_secret_winner],
         ))
     }

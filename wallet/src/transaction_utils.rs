@@ -142,7 +142,7 @@ impl WalletCore {
         let tx = PrivacyPreservingTransaction::new(message, witness_set);
 
         Ok((
-            self.sequencer_client.send_transaction(NSSATransaction::PrivacyPreserving(tx)).await?,
+            self.sequencer_client.send_transaction(NSSATransaction::PrivacyPreserving(tx).into()).await?,
             [shared_secret_from, shared_secret_to],
         ))
     }
@@ -216,7 +216,7 @@ impl WalletCore {
         let tx = PrivacyPreservingTransaction::new(message, witness_set);
 
         Ok((
-            self.sequencer_client.send_transaction(NSSATransaction::PrivacyPreserving(tx)).await?,
+            self.sequencer_client.send_transaction(NSSATransaction::PrivacyPreserving(tx).into()).await?,
             [shared_secret_from, shared_secret_to],
         ))
     }
@@ -287,7 +287,7 @@ impl WalletCore {
         let tx = PrivacyPreservingTransaction::new(message, witness_set);
 
         Ok((
-            self.sequencer_client.send_transaction(NSSATransaction::PrivacyPreserving(tx)).await?,
+            self.sequencer_client.send_transaction(NSSATransaction::PrivacyPreserving(tx).into()).await?,
             [shared_secret_from, shared_secret_to],
         ))
     }
@@ -347,7 +347,7 @@ impl WalletCore {
         let tx = PrivacyPreservingTransaction::new(message, witness_set);
 
         Ok((
-            self.sequencer_client.send_transaction(NSSATransaction::PrivacyPreserving(tx)).await?,
+            self.sequencer_client.send_transaction(NSSATransaction::PrivacyPreserving(tx).into()).await?,
             [shared_secret],
         ))
     }
@@ -414,7 +414,7 @@ impl WalletCore {
         let tx = PrivacyPreservingTransaction::new(message, witness_set);
 
         Ok((
-            self.sequencer_client.send_transaction(NSSATransaction::PrivacyPreserving(tx)).await?,
+            self.sequencer_client.send_transaction(NSSATransaction::PrivacyPreserving(tx).into()).await?,
             [shared_secret],
         ))
     }
@@ -480,7 +480,7 @@ impl WalletCore {
         let tx = PrivacyPreservingTransaction::new(message, witness_set);
 
         Ok((
-            self.sequencer_client.send_transaction(NSSATransaction::PrivacyPreserving(tx)).await?,
+            self.sequencer_client.send_transaction(NSSATransaction::PrivacyPreserving(tx).into()).await?,
             [shared_secret],
         ))
     }
@@ -540,7 +540,7 @@ impl WalletCore {
         let witness_set = WitnessSet::for_message(&message, proof, &[signing_key]);
         let tx = PrivacyPreservingTransaction::new(message, witness_set);
 
-        Ok(self.sequencer_client.send_transaction(NSSATransaction::PrivacyPreserving(tx)).await?)
+        Ok(self.sequencer_client.send_transaction(NSSATransaction::PrivacyPreserving(tx).into()).await?)
     }
 
     pub async fn register_account_under_authenticated_transfers_programs_private(
@@ -587,7 +587,7 @@ impl WalletCore {
         let tx = PrivacyPreservingTransaction::new(message, witness_set);
 
         Ok((
-            self.sequencer_client.send_transaction(NSSATransaction::PrivacyPreserving(tx)).await?,
+            self.sequencer_client.send_transaction(NSSATransaction::PrivacyPreserving(tx).into()).await?,
             [shared_secret_from],
         ))
     }

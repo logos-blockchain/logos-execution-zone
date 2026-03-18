@@ -4,14 +4,11 @@ use borsh::{BorshDeserialize, BorshSerialize};
 pub use private_key::PrivateKey;
 pub use public_key::PublicKey;
 use rand::{RngCore as _, rngs::OsRng};
-use serde_with::{DeserializeFromStr, SerializeDisplay};
 
 mod private_key;
 mod public_key;
 
-#[derive(
-    Clone, PartialEq, Eq, SerializeDisplay, DeserializeFromStr, BorshSerialize, BorshDeserialize,
-)]
+#[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Signature {
     pub value: [u8; 64],
 }

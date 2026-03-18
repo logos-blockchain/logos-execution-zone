@@ -10,10 +10,9 @@ workspace = true
 [dependencies]
 common.workspace = true
 nssa.workspace = true
-nssa_core.workspace = true
 mempool.workspace = true
-borsh.workspace = true
 sequencer_core = { workspace = true, features = ["testnet"] }
+sequencer_service_protocol.workspace = true
 sequencer_service_rpc = { workspace = true, features = ["server"] }
 indexer_service_rpc = { workspace = true, features = ["client"] }
 
@@ -26,6 +25,7 @@ tokio-util.workspace = true
 jsonrpsee.workspace = true
 futures.workspace = true
 bytesize.workspace = true
+borsh.workspace = true
 
 [features]
 default = []

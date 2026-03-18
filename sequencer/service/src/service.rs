@@ -1,10 +1,6 @@
 use std::{collections::BTreeMap, sync::Arc};
 
-use common::{
-    HashType,
-    block::{Block, BlockId},
-    transaction::NSSATransaction,
-};
+use common::transaction::NSSATransaction;
 use jsonrpsee::{
     core::async_trait,
     types::{ErrorCode, ErrorObjectOwned},
@@ -12,14 +8,12 @@ use jsonrpsee::{
 use log::warn;
 use mempool::MemPoolHandle;
 use nssa::{self, program::Program};
-use nssa_core::{
-    Commitment, MembershipProof,
-    account::{Account, AccountId, Nonce},
-    program::ProgramId,
-};
 use sequencer_core::{
     DbError, SequencerCore, block_settlement_client::BlockSettlementClientTrait,
     indexer_client::IndexerClientTrait,
+};
+use sequencer_service_protocol::{
+    Account, AccountId, Block, BlockId, Commitment, HashType, MembershipProof, Nonce, ProgramId,
 };
 use tokio::sync::Mutex;
 
@@ -55,12 +49,9 @@ impl<BC: BlockSettlementClientTrait + Send + 'static, IC: IndexerClientTrait + S
 
         let tx_hash = tx.hash();
 
-        let tx_size = u64::try_from(
-            borsh::to_vec(&tx)
-                .expect("NSSATransaction BorshSerialize should never fail")
-                .len(),
-        )
-        .expect("Transaction size should fit in u64");
+        let encoded_tx =
+            borsh::to_vec(&tx).expect("Transaction borsh serialization should not fail");
+        let tx_size = u64::try_from(encoded_tx.len()).expect("Transaction size should fit in u64");
 
         let max_tx_size = self.max_block_size.saturating_sub(BLOCK_HEADER_OVERHEAD);
 

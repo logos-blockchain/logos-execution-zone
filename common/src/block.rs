@@ -10,7 +10,7 @@ pub type BlockHash = HashType;
 pub type BlockId = u64;
 pub type TimeStamp = u64;
 
-#[derive(Debug, Clone, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[derive(Debug, Clone, BorshSerialize, BorshDeserialize)]
 pub struct BlockMeta {
     pub id: BlockId,
     pub hash: BlockHash,
@@ -31,7 +31,7 @@ impl OwnHasher {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[derive(Debug, Clone, BorshSerialize, BorshDeserialize)]
 pub struct BlockHeader {
     pub block_id: BlockId,
     pub prev_block_hash: BlockHash,
@@ -40,19 +40,19 @@ pub struct BlockHeader {
     pub signature: nssa::Signature,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[derive(Debug, Clone, BorshSerialize, BorshDeserialize)]
 pub struct BlockBody {
     pub transactions: Vec<NSSATransaction>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[derive(Debug, Clone, BorshSerialize, BorshDeserialize)]
 pub enum BedrockStatus {
     Pending,
     Safe,
     Finalized,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[derive(Debug, Clone, BorshSerialize, BorshDeserialize)]
 pub struct Block {
     pub header: BlockHeader,
     pub body: BlockBody,
@@ -60,7 +60,19 @@ pub struct Block {
     pub bedrock_parent_id: MantleMsgId,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+impl Serialize for Block {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        crate::borsh_base64::serialize(self, serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Block {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        crate::borsh_base64::deserialize(deserializer)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct HashableBlockData {
     pub block_id: BlockId,
     pub prev_block_hash: BlockHash,

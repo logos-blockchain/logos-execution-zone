@@ -18,7 +18,6 @@ pub use public_transaction::PublicTransaction;
 pub use signature::{PrivateKey, PublicKey, Signature};
 pub use state::V02State;
 
-mod base64;
 pub mod encoding;
 pub mod error;
 mod merkle_tree;

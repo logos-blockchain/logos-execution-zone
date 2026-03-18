@@ -3,11 +3,11 @@ use nssa_core::{
     account::Nonce,
     program::{InstructionData, ProgramId},
 };
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
 use crate::{AccountId, error::NssaError, program::Program};
 
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Message {
     pub program_id: ProgramId,
     pub account_ids: Vec<AccountId>,

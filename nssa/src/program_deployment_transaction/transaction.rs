@@ -1,13 +1,12 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use nssa_core::account::AccountId;
-use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, digest::FixedOutput as _};
 
 use crate::{
     V02State, error::NssaError, program::Program, program_deployment_transaction::message::Message,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ProgramDeploymentTransaction {
     pub message: Message,
 }

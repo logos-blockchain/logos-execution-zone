@@ -1,9 +1,8 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use serde::{Deserialize, Serialize};
 
 use crate::{PrivateKey, PublicKey, Signature, public_transaction::Message};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct WitnessSet {
     pub(crate) signatures_and_public_keys: Vec<(Signature, PublicKey)>,
 }

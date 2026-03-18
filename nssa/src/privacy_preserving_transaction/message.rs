@@ -4,14 +4,13 @@ use nssa_core::{
     account::{Account, Nonce},
     encryption::{Ciphertext, EphemeralPublicKey, ViewingPublicKey},
 };
-use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
 use crate::{AccountId, error::NssaError};
 
 pub type ViewTag = u8;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct EncryptedAccountData {
     pub ciphertext: Ciphertext,
     pub epk: EphemeralPublicKey,
@@ -45,7 +44,7 @@ impl EncryptedAccountData {
     }
 }
 
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Message {
     pub public_account_ids: Vec<AccountId>,
     pub nonces: Vec<Nonce>,
