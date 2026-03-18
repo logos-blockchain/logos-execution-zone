@@ -176,7 +176,7 @@ mod tests {
         )
         .unwrap();
 
-        let block = storage.get_block_at_id(1).unwrap();
+        let block = storage.get_block_at_id(1).unwrap().unwrap();
         let final_id = storage.get_last_block_id().unwrap();
 
         assert_eq!(block.header.hash, genesis_block().header.hash);

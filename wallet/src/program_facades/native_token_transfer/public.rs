@@ -31,16 +31,8 @@ impl NativeTokenTransfer<'_> {
 
             let account_ids = vec![from, to];
             let program_id = Program::authenticated_transfer_program().id();
-            let message = Message::try_new(
-                program_id,
-                account_ids,
-                nonces
-                    .iter()
-                    .map(|x| nssa_core::account::Nonce(*x))
-                    .collect(),
-                balance_to_move,
-            )
-            .unwrap();
+            let message =
+                Message::try_new(program_id, account_ids, nonces, balance_to_move).unwrap();
 
             let signing_key = self.0.storage.user_data.get_pub_account_signing_key(from);
 
@@ -75,16 +67,7 @@ impl NativeTokenTransfer<'_> {
         let instruction: u128 = 0;
         let account_ids = vec![from];
         let program_id = Program::authenticated_transfer_program().id();
-        let message = Message::try_new(
-            program_id,
-            account_ids,
-            nonces
-                .iter()
-                .map(|x| nssa_core::account::Nonce(*x))
-                .collect(),
-            instruction,
-        )
-        .unwrap();
+        let message = Message::try_new(program_id, account_ids, nonces, instruction).unwrap();
 
         let signing_key = self.0.storage.user_data.get_pub_account_signing_key(from);
 

@@ -33,8 +33,8 @@ async fn main() -> Result<()> {
         () = cancellation_token.cancelled() => {
             info!("Shutting down sequencer...");
         }
-        Err(err) = sequencer_handle.stopped() => {
-            error!("Sequencer stopped unexpectedly: {err}");
+        Err(err) = sequencer_handle.failed() => {
+            error!("Sequencer failed unexpectedly: {err}");
         }
     }
 

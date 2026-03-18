@@ -22,7 +22,9 @@ use nssa::{
         circuit::ProgramWithDependencies, message::EncryptedAccountData,
     },
 };
-use nssa_core::{Commitment, MembershipProof, SharedSecretKey, program::InstructionData};
+use nssa_core::{
+    Commitment, MembershipProof, SharedSecretKey, account::Nonce, program::InstructionData,
+};
 pub use privacy_preserving_tx::PrivacyPreservingAccount;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
 use tokio::io::AsyncWriteExt as _;
@@ -253,7 +255,7 @@ impl WalletCore {
     }
 
     /// Get accounts nonces.
-    pub async fn get_accounts_nonces(&self, accs: Vec<AccountId>) -> Result<Vec<u128>> {
+    pub async fn get_accounts_nonces(&self, accs: Vec<AccountId>) -> Result<Vec<Nonce>> {
         Ok(self.sequencer_client.get_accounts_nonces(accs).await?)
     }
 

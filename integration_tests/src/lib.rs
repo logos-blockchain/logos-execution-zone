@@ -338,17 +338,17 @@ impl Drop for TestContext {
         let sequencer_handle = sequencer_handle
             .take()
             .expect("Sequencer handle should be present in TestContext drop");
-        if sequencer_handle.is_stopped() {
+        if !sequencer_handle.is_healthy() {
             let Err(err) = sequencer_handle
-                .stopped()
+                .failed()
                 .now_or_never()
-                .expect("Sequencer handle should be stopped");
+                .expect("Sequencer handle should not be running");
             error!(
                 "Sequencer handle has unexpectedly stopped before TestContext drop with error: {err:#}"
             );
         }
 
-        if indexer_handle.is_stopped() {
+        if !indexer_handle.is_healthy() {
             error!("Indexer handle has unexpectedly stopped before TestContext drop");
         }
 

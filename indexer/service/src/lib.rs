@@ -40,10 +40,10 @@ impl IndexerHandle {
     }
 
     #[must_use]
-    pub fn is_stopped(&self) -> bool {
+    pub fn is_healthy(&self) -> bool {
         self.server_handle
             .as_ref()
-            .is_none_or(ServerHandle::is_stopped)
+            .is_some_and(|handle| !handle.is_stopped())
     }
 }
 
