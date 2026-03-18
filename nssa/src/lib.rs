@@ -16,7 +16,7 @@ pub use program_deployment_transaction::ProgramDeploymentTransaction;
 pub use program_methods::PRIVACY_PRESERVING_CIRCUIT_ID;
 pub use public_transaction::PublicTransaction;
 pub use signature::{PrivateKey, PublicKey, Signature};
-pub use state::V02State;
+pub use state::V03State;
 
 pub mod encoding;
 pub mod error;

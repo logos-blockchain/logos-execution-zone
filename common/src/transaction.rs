@@ -1,6 +1,6 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use log::warn;
-use nssa::{AccountId, V02State};
+use nssa::{AccountId, V03State};
 use serde::{Deserialize, Serialize};
 
 use crate::HashType;
@@ -55,7 +55,7 @@ impl NSSATransaction {
 
     pub fn execute_check_on_state(
         self,
-        state: &mut V02State,
+        state: &mut V03State,
     ) -> Result<Self, nssa::error::NssaError> {
         match &self {
             Self::Public(tx) => state.transition_from_public_transaction(tx),

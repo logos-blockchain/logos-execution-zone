@@ -4,7 +4,7 @@ use common::{
     block::{Block, BlockId},
     transaction::NSSATransaction,
 };
-use nssa::V02State;
+use nssa::V03State;
 use rocksdb::{
     BoundColumnFamily, ColumnFamilyDescriptor, DBWithThreadMode, MultiThreaded, Options, WriteBatch,
 };
@@ -63,7 +63,7 @@ impl RocksDBIO {
     pub fn open_or_create(
         path: &Path,
         genesis_block: &Block,
-        initial_state: &V02State,
+        initial_state: &V03State,
     ) -> DbResult<Self> {
         let mut cf_opts = Options::default();
         cf_opts.set_max_write_buffer_number(16);
@@ -596,7 +596,7 @@ impl RocksDBIO {
 
     // State
 
-    pub fn put_breakpoint(&self, br_id: u64, breakpoint: &V02State) -> DbResult<()> {
+    pub fn put_breakpoint(&self, br_id: u64, breakpoint: &V03State) -> DbResult<()> {
         let cf_br = self.breakpoint_column();
 
         self.db
@@ -618,7 +618,7 @@ impl RocksDBIO {
             .map_err(|rerr| DbError::rocksdb_cast_message(rerr, None))
     }
 
-    pub fn get_breakpoint(&self, br_id: u64) -> DbResult<V02State> {
+    pub fn get_breakpoint(&self, br_id: u64) -> DbResult<V03State> {
         let cf_br = self.breakpoint_column();
         let res = self
             .db
@@ -634,7 +634,7 @@ impl RocksDBIO {
             .map_err(|rerr| DbError::rocksdb_cast_message(rerr, None))?;
 
         if let Some(data) = res {
-            Ok(borsh::from_slice::<V02State>(&data).map_err(|serr| {
+            Ok(borsh::from_slice::<V03State>(&data).map_err(|serr| {
                 DbError::borsh_cast_message(
                     serr,
                     Some("Failed to deserialize breakpoint data".to_owned()),
@@ -647,7 +647,7 @@ impl RocksDBIO {
         }
     }
 
-    pub fn calculate_state_for_id(&self, block_id: u64) -> DbResult<V02State> {
+    pub fn calculate_state_for_id(&self, block_id: u64) -> DbResult<V03State> {
         let last_block = self.get_meta_last_block_in_db()?;
 
         if block_id <= last_block {
@@ -692,7 +692,7 @@ impl RocksDBIO {
         }
     }
 
-    pub fn final_state(&self) -> DbResult<V02State> {
+    pub fn final_state(&self) -> DbResult<V03State> {
         self.calculate_state_for_id(self.get_meta_last_block_in_db()?)
     }
 
@@ -985,8 +985,8 @@ mod tests {
         nssa::PrivateKey::try_new([2; 32]).unwrap()
     }
 
-    fn initial_state() -> V02State {
-        nssa::V02State::new_with_genesis_accounts(&[(acc1(), 10000), (acc2(), 20000)], &[])
+    fn initial_state() -> V03State {
+        nssa::V03State::new_with_genesis_accounts(&[(acc1(), 10000), (acc2(), 20000)], &[])
     }
 
     fn transfer(amount: u128, nonce: u128, direction: bool) -> NSSATransaction {

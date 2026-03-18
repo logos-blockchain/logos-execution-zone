@@ -9,7 +9,7 @@ use nssa_core::{
 use sha2::{Digest as _, digest::FixedOutput as _};
 
 use crate::{
-    V02State, ensure,
+    V03State, ensure,
     error::NssaError,
     public_transaction::{Message, WitnessSet},
     state::MAX_NUMBER_CHAINED_CALLS,
@@ -69,7 +69,7 @@ impl PublicTransaction {
 
     pub(crate) fn validate_and_produce_public_state_diff(
         &self,
-        state: &V02State,
+        state: &V03State,
     ) -> Result<HashMap<AccountId, Account>, NssaError> {
         let message = self.message();
         let witness_set = self.witness_set();
@@ -247,7 +247,7 @@ pub mod tests {
     use sha2::{Digest as _, digest::FixedOutput as _};
 
     use crate::{
-        AccountId, PrivateKey, PublicKey, PublicTransaction, Signature, V02State,
+        AccountId, PrivateKey, PublicKey, PublicTransaction, Signature, V03State,
         error::NssaError,
         program::Program,
         public_transaction::{Message, WitnessSet},
@@ -261,10 +261,10 @@ pub mod tests {
         (key1, key2, addr1, addr2)
     }
 
-    fn state_for_tests() -> V02State {
+    fn state_for_tests() -> V03State {
         let (_, _, addr1, addr2) = keys_for_tests();
         let initial_data = [(addr1, 10000), (addr2, 20000)];
-        V02State::new_with_genesis_accounts(&initial_data, &[])
+        V03State::new_with_genesis_accounts(&initial_data, &[])
     }
 
     fn transaction_for_tests() -> PublicTransaction {
