@@ -152,7 +152,7 @@ impl AccountPostState {
 }
 
 pub type BlockId = u64;
-pub type ValidityRange = (Option<BlockId> , Option<BlockId>);
+pub type ValidityWindow = (Option<BlockId>, Option<BlockId>);
 
 #[derive(Serialize, Deserialize, Clone)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
@@ -163,23 +163,47 @@ pub struct ProgramOutput {
     pub pre_states: Vec<AccountWithMetadata>,
     pub post_states: Vec<AccountPostState>,
     pub chained_calls: Vec<ChainedCall>,
-    pub validity_range: ValidityRange,
+    pub validity_window: ValidityWindow,
 }
 
 impl ProgramOutput {
     #[must_use]
+    pub const fn new(
+        instruction_data: InstructionData,
+        pre_states: Vec<AccountWithMetadata>,
+        post_states: Vec<AccountPostState>,
+    ) -> Self {
+        Self {
+            instruction_data,
+            pre_states,
+            post_states,
+            chained_calls: Vec::new(),
+            validity_window: (None, None),
+        }
+    }
+
+    pub fn write(self) {
+        env::commit(&self);
+    }
+
+    #[must_use]
+    pub fn with_chained_calls(mut self, chained_calls: Vec<ChainedCall>) -> Self {
+        self.chained_calls = chained_calls;
+        self
+    }
+
+    #[must_use]
     pub const fn valid_from_id(mut self, id: BlockId) -> Self {
-        self.validity_range.0 = Some(id);
+        self.validity_window.0 = Some(id);
         self
     }
 
     #[must_use]
     pub const fn valid_until_id(mut self, id: BlockId) -> Self {
-        self.validity_range.1 = Some(id);
+        self.validity_window.1 = Some(id);
         self
     }
 }
-
 
 /// Representation of a number as `lo + hi * 2^128`.
 #[derive(PartialEq, Eq)]
@@ -243,14 +267,7 @@ pub fn write_nssa_outputs(
     pre_states: Vec<AccountWithMetadata>,
     post_states: Vec<AccountPostState>,
 ) {
-    let output = ProgramOutput {
-        instruction_data,
-        pre_states,
-        post_states,
-        chained_calls: Vec::new(),
-        validity_range: (None, None)
-    };
-    env::commit(&output);
+    ProgramOutput::new(instruction_data, pre_states, post_states).write();
 }
 
 pub fn write_nssa_outputs_with_chained_call(
@@ -259,14 +276,9 @@ pub fn write_nssa_outputs_with_chained_call(
     post_states: Vec<AccountPostState>,
     chained_calls: Vec<ChainedCall>,
 ) {
-    let output = ProgramOutput {
-        instruction_data,
-        pre_states,
-        post_states,
-        chained_calls,
-        validity_range: (None, None)
-    };
-    env::commit(&output);
+    ProgramOutput::new(instruction_data, pre_states, post_states)
+        .with_chained_calls(chained_calls)
+        .write();
 }
 
 /// Validates well-behaved program execution.

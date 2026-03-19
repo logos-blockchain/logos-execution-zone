@@ -2,7 +2,9 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use nssa_core::{
-    account::{Account, AccountId, Nonce}, program::{BlockId, ProgramId}, Commitment, CommitmentSetDigest, MembershipProof, Nullifier, DUMMY_COMMITMENT
+    Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, MembershipProof, Nullifier,
+    account::{Account, AccountId, Nonce},
+    program::{BlockId, ProgramId},
 };
 
 use crate::{
@@ -155,9 +157,9 @@ impl V02State {
     pub fn transition_from_public_transaction(
         &mut self,
         tx: &PublicTransaction,
-        _block_id: BlockId,
+        block_id: BlockId,
     ) -> Result<(), NssaError> {
-        let state_diff = tx.validate_and_produce_public_state_diff(self)?;
+        let state_diff = tx.validate_and_produce_public_state_diff(self, block_id)?;
 
         #[expect(
             clippy::iter_over_hash_type,
@@ -338,7 +340,7 @@ pub mod tests {
         Commitment, Nullifier, NullifierPublicKey, NullifierSecretKey, SharedSecretKey,
         account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
         encryption::{EphemeralPublicKey, Scalar, ViewingPublicKey},
-        program::{PdaSeed, ProgramId},
+        program::{BlockId, PdaSeed, ProgramId, ValidityWindow},
     };
 
     use crate::{
@@ -373,6 +375,7 @@ pub mod tests {
             self.insert_program(Program::amm());
             self.insert_program(Program::claimer());
             self.insert_program(Program::changer_claimer());
+            self.insert_program(Program::validity_window());
             self
         }
 
@@ -2994,6 +2997,53 @@ pub mod tests {
 
         // Assert - should fail because the malicious program tries to manipulate is_authorized
         assert!(matches!(result, Err(NssaError::CircuitProvingError(_))));
+    }
+
+    #[test_case::test_case((Some(1), Some(3)), 3; "at upper bound")]
+    #[test_case::test_case((Some(1), Some(3)), 2; "inside range")]
+    #[test_case::test_case((Some(1), Some(3)), 0; "below range")]
+    #[test_case::test_case((Some(1), Some(3)), 1; "at lower bound")]
+    #[test_case::test_case((Some(1), Some(3)), 4; "above range")]
+    #[test_case::test_case((Some(1), None), 1; "lower bound only - at bound")]
+    #[test_case::test_case((Some(1), None), 10; "lower bound only - above")]
+    #[test_case::test_case((Some(1), None), 0; "lower bound only - below")]
+    #[test_case::test_case((None, Some(3)), 3; "upper bound only - at bound")]
+    #[test_case::test_case((None, Some(3)), 0; "upper bound only - below")]
+    #[test_case::test_case((None, Some(3)), 4; "upper bound only - above")]
+    #[test_case::test_case((None, None), 0; "no bounds - always valid")]
+    #[test_case::test_case((None, None), 100; "no bounds - always valid 2")]
+    fn validity_window_works(validity_window: ValidityWindow, block_id: BlockId) {
+        let validity_window_program = Program::validity_window();
+        let account_keys = test_public_account_keys_1();
+        let pre = AccountWithMetadata::new(Account::default(), false, account_keys.account_id());
+        let mut state =
+            V02State::new_with_genesis_accounts(&[], &[]).with_test_programs();
+        let tx = {
+            let account_ids = vec![pre.account_id];
+            let nonces = vec![];
+            let program_id = validity_window_program.id();
+            let message = public_transaction::Message::try_new(
+                program_id,
+                account_ids,
+                nonces,
+                validity_window,
+            )
+            .unwrap();
+            let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+            PublicTransaction::new(message, witness_set)
+        };
+        let result = state.transition_from_public_transaction(&tx, block_id);
+        let is_inside_validity_window = match (validity_window.0, validity_window.1) {
+            (Some(s), Some(e)) => s <= block_id && block_id <= e,
+            (Some(s), None) => s <= block_id,
+            (None, Some(e)) => block_id <= e,
+            (None, None) => true,
+        };
+        if is_inside_validity_window {
+            assert!(result.is_ok());
+        } else {
+            assert!(matches!(result, Err(NssaError::OutOfValidityWindow)))
+        }
     }
 
     #[test]

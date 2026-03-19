@@ -284,6 +284,14 @@ mod tests {
             // `program_methods`
             Self::new(MODIFIED_TRANSFER_ELF.to_vec()).unwrap()
         }
+
+        #[must_use]
+        pub fn validity_window() -> Self {
+            use test_program_methods::VALIDITY_WINDOW_ELF;
+            // This unwrap won't panic since the `VALIDITY_WINDOW_ELF` comes from risc0 build of
+            // `program_methods`
+            Self::new(VALIDITY_WINDOW_ELF.to_vec()).unwrap()
+        }
     }
 
     #[test]
