@@ -182,7 +182,7 @@ jobs:
         env:
           RISC0_DEV_MODE: "1"
           RUST_LOG: "info"
-        run: cargo nextest run -p integration_tests -j 1 indexer -- --skip tps_test
+        run: cargo nextest run -p integration_tests indexer -- --skip tps_test
 
   valid-proof-test:
     runs-on: ubuntu-latest
