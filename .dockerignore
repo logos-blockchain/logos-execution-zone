@@ -26,11 +26,20 @@ Thumbs.db
 ci_scripts/
 
 # Documentation
+docs/
 *.md
 !README.md
 
-# Configs (copy selectively if needed)
+# Non-build project files
+completions/
 configs/
-
-# License
+Justfile
+clippy.toml
+rustfmt.toml
+flake.nix
+flake.lock
 LICENSE
+
+# Docker compose files (not needed inside build)
+docker-compose*.yml
+**/docker-compose*.yml

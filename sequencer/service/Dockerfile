@@ -55,7 +55,11 @@ FROM chef AS builder
 ARG STANDALONE
 COPY --from=planner /sequencer_service/recipe.json recipe.json
 # Build dependencies only (this layer will be cached)
-RUN if [ "$STANDALONE" = "true" ]; then \
+RUN --mount=type=cache,target=/usr/local/cargo/registry/index \
+    --mount=type=cache,target=/usr/local/cargo/registry/cache \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/sequencer_service/target \
+    if [ "$STANDALONE" = "true" ]; then \
       cargo chef cook --bin sequencer_service --features standalone --release --recipe-path recipe.json; \
     else \
       cargo chef cook --bin sequencer_service --release --recipe-path recipe.json; \
@@ -64,15 +68,18 @@ RUN if [ "$STANDALONE" = "true" ]; then \
 # Copy source code
 COPY . .
 
-# Build the actual application
-RUN if [ "$STANDALONE" = "true" ]; then \
+# Build the actual application and copy the binary out of the cache mount
+RUN --mount=type=cache,target=/usr/local/cargo/registry/index \
+    --mount=type=cache,target=/usr/local/cargo/registry/cache \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/sequencer_service/target \
+    if [ "$STANDALONE" = "true" ]; then \
       cargo build --release --features standalone --bin sequencer_service; \
     else \
       cargo build --release --bin sequencer_service; \
-    fi
-
-# Strip debug symbols to reduce binary size
-RUN strip /sequencer_service/target/release/sequencer_service
+    fi \
+    && strip /sequencer_service/target/release/sequencer_service \
+    && cp /sequencer_service/target/release/sequencer_service /usr/local/bin/sequencer_service
 
 # Runtime stage - minimal image
 FROM debian:trixie-slim
@@ -83,7 +90,7 @@ RUN useradd -m -u 1000 -s /bin/bash sequencer_user && \
     chown -R sequencer_user:sequencer_user /sequencer_service /etc/sequencer_service /var/lib/sequencer_service
 
 # Copy binary from builder
-COPY --from=builder --chown=sequencer_user:sequencer_user /sequencer_service/target/release/sequencer_service /usr/local/bin/sequencer_service
+COPY --from=builder --chown=sequencer_user:sequencer_user /usr/local/bin/sequencer_service /usr/local/bin/sequencer_service
 
 # Copy r0vm binary from builder
 COPY --from=builder --chown=sequencer_user:sequencer_user /usr/local/bin/r0vm /usr/local/bin/r0vm
