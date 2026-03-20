@@ -66,7 +66,7 @@ impl PrivateKey {
     pub fn tweak(value: &[u8; 32]) -> Result<Self, LeeError> {
         assert!(Self::is_valid_key(*value));
 
-        let sk = k256::SecretKey::from_bytes(value.into()).unwrap();
+        let sk = k256::SecretKey::from_bytes(value.into()).expect("Expect a valid secret key");
 
         let mut bytes = vec![];
         let pk = sk.public_key();
@@ -75,10 +75,11 @@ impl PrivateKey {
 
         Self::try_new(
             k256::Scalar::from_repr((*value).into())
-                .unwrap()
-                .add(&k256::Scalar::from_repr(hashed.into()).unwrap())
+                .expect("Expect a valid k256 scalar")
+                .add(&k256::Scalar::from_repr(hashed.into()).expect("Expect a valid k256 scalar"))
                 .to_bytes()
                 .into(),
+>>>>>>> b2e99c4a (clippy fixes):nssa/src/signature/private_key.rs
         )
     }
 }
