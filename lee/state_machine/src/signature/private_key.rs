@@ -79,7 +79,6 @@ impl PrivateKey {
                 .add(&k256::Scalar::from_repr(hashed.into()).expect("Expect a valid k256 scalar"))
                 .to_bytes()
                 .into(),
->>>>>>> b2e99c4a (clippy fixes):nssa/src/signature/private_key.rs
         )
     }
 }
