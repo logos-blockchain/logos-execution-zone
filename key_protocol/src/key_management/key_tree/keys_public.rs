@@ -66,7 +66,7 @@ impl KeyNode for ChildKeysPublic {
         )
         .unwrap();
 
-        let cssk = nssa::PrivateKey::try_new(
+        let cssk = nssa::PrivateKey::try_new({
             cssk.add_tweak(&Scalar::from_be_bytes(*self.cssk.value()).unwrap())
                 .expect("Expect a valid Scalar")
                 .secret_bytes()
