@@ -1,7 +1,7 @@
 use std::str::FromStr;
 
-use risc0_zkvm::sha::{Impl, Sha256 as _};
 use rand::{Rng as _, rngs::OsRng};
+use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
 
 use crate::error::NssaError;
@@ -70,12 +70,17 @@ impl PrivateKey {
         let mut bytes = vec![];
         let pk = secp256k1::PublicKey::from_secret_key(&secp256k1::Secp256k1::new(), &sk);
         bytes.extend_from_slice(&secp256k1::PublicKey::serialize(&pk));
-        let hashed: [u8; 32] = Impl::hash_bytes(&bytes).as_bytes().try_into().expect("Sha256 outputs a 32-byte array");
+        let hashed: [u8; 32] = Impl::hash_bytes(&bytes)
+            .as_bytes()
+            .try_into()
+            .expect("Sha256 outputs a 32-byte array");
 
         Self::try_new(
-            sk.add_tweak(&secp256k1::Scalar::from_be_bytes(hashed).expect("Expect a valid secp256k1 Scalar"))
-                .expect("Expect a valid Scalar")
-                .secret_bytes(),
+            sk.add_tweak(
+                &secp256k1::Scalar::from_be_bytes(hashed).expect("Expect a valid secp256k1 Scalar"),
+            )
+            .expect("Expect a valid Scalar")
+            .secret_bytes(),
         )
     }
 }
