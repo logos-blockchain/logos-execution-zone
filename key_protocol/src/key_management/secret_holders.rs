@@ -10,16 +10,16 @@ use sha2::{Digest as _, digest::FixedOutput as _};
 
 const NSSA_ENTROPY_BYTES: [u8; 32] = [0; 32];
 
-#[derive(Debug)]
 /// Seed holder. Non-clonable to ensure that different holders use different seeds.
 /// Produces `TopSecretKeyHolder` objects.
+#[derive(Debug)]
 pub struct SeedHolder {
     // ToDo: Needs to be vec as serde derives is not implemented for [u8; 64]
     pub(crate) seed: Vec<u8>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 /// Secret spending key object. Can produce `PrivateKeyHolder` objects.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct SecretSpendingKey(pub [u8; 32]);
 
 pub type ViewingSecretKey = Scalar;

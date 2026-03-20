@@ -359,12 +359,16 @@ impl From<ProgramDeploymentMessage> for nssa::program_deployment_transaction::Me
 // WitnessSet conversions
 // ============================================================================
 
-impl TryFrom<nssa::public_transaction::WitnessSet> for WitnessSet {
-    type Error = ();
-
-    fn try_from(_value: nssa::public_transaction::WitnessSet) -> Result<Self, Self::Error> {
-        // Public transaction witness sets don't have proofs, so we can't convert them directly
-        Err(())
+impl From<nssa::public_transaction::WitnessSet> for WitnessSet {
+    fn from(value: nssa::public_transaction::WitnessSet) -> Self {
+        Self {
+            signatures_and_public_keys: value
+                .signatures_and_public_keys()
+                .iter()
+                .map(|(sig, pk)| (sig.clone().into(), pk.clone().into()))
+                .collect(),
+            proof: None,
+        }
     }
 }
 
@@ -376,7 +380,7 @@ impl From<nssa::privacy_preserving_transaction::witness_set::WitnessSet> for Wit
                 .into_iter()
                 .map(|(sig, pk)| (sig.into(), pk.into()))
                 .collect(),
-            proof: proof.into(),
+            proof: Some(proof.into()),
         }
     }
 }
@@ -396,7 +400,9 @@ impl TryFrom<WitnessSet> for nssa::privacy_preserving_transaction::witness_set::
 
         Ok(Self::from_raw_parts(
             signatures_and_public_keys,
-            proof.into(),
+            proof
+                .map(Into::into)
+                .ok_or_else(|| nssa::error::NssaError::InvalidInput("Missing proof".to_owned()))?,
         ))
     }
 }
@@ -416,14 +422,7 @@ impl From<nssa::PublicTransaction> for PublicTransaction {
         Self {
             hash,
             message: message.into(),
-            witness_set: WitnessSet {
-                signatures_and_public_keys: witness_set
-                    .signatures_and_public_keys()
-                    .iter()
-                    .map(|(sig, pk)| (sig.clone().into(), pk.clone().into()))
-                    .collect(),
-                proof: Proof(vec![]), // Public transactions don't have proofs
-            },
+            witness_set: witness_set.into(),
         }
     }
 }

@@ -12,6 +12,18 @@ pub enum NSSATransaction {
     ProgramDeployment(nssa::ProgramDeploymentTransaction),
 }
 
+impl Serialize for NSSATransaction {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        crate::borsh_base64::serialize(self, serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for NSSATransaction {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        crate::borsh_base64::deserialize(deserializer)
+    }
+}
+
 impl NSSATransaction {
     #[must_use]
     pub fn hash(&self) -> HashType {
@@ -87,7 +99,7 @@ impl From<nssa::ProgramDeploymentTransaction> for NSSATransaction {
 }
 
 #[derive(
-    Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize,
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
 )]
 pub enum TxKind {
     Public,

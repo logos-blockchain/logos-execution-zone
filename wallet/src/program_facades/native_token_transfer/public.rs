@@ -1,11 +1,13 @@
-use common::{error::ExecutionFailureKind, rpc_primitives::requests::SendTxResponse};
+use common::{HashType, transaction::NSSATransaction};
 use nssa::{
     AccountId, PublicTransaction,
     program::Program,
     public_transaction::{Message, WitnessSet},
 };
+use sequencer_service_rpc::RpcClient as _;
 
 use super::NativeTokenTransfer;
+use crate::ExecutionFailureKind;
 
 impl NativeTokenTransfer<'_> {
     pub async fn send_public_transfer(
@@ -13,7 +15,7 @@ impl NativeTokenTransfer<'_> {
         from: AccountId,
         to: AccountId,
         balance_to_move: u128,
-    ) -> Result<SendTxResponse, ExecutionFailureKind> {
+    ) -> Result<HashType, ExecutionFailureKind> {
         let balance = self
             .0
             .get_account_balance(from)
@@ -29,16 +31,8 @@ impl NativeTokenTransfer<'_> {
 
             let account_ids = vec![from, to];
             let program_id = Program::authenticated_transfer_program().id();
-            let message = Message::try_new(
-                program_id,
-                account_ids,
-                nonces
-                    .iter()
-                    .map(|x| nssa_core::account::Nonce(*x))
-                    .collect(),
-                balance_to_move,
-            )
-            .unwrap();
+            let message =
+                Message::try_new(program_id, account_ids, nonces, balance_to_move).unwrap();
 
             let signing_key = self.0.storage.user_data.get_pub_account_signing_key(from);
 
@@ -50,7 +44,11 @@ impl NativeTokenTransfer<'_> {
 
             let tx = PublicTransaction::new(message, witness_set);
 
-            Ok(self.0.sequencer_client.send_tx_public(tx).await?)
+            Ok(self
+                .0
+                .sequencer_client
+                .send_transaction(NSSATransaction::Public(tx))
+                .await?)
         } else {
             Err(ExecutionFailureKind::InsufficientFundsError)
         }
@@ -59,7 +57,7 @@ impl NativeTokenTransfer<'_> {
     pub async fn register_account(
         &self,
         from: AccountId,
-    ) -> Result<SendTxResponse, ExecutionFailureKind> {
+    ) -> Result<HashType, ExecutionFailureKind> {
         let nonces = self
             .0
             .get_accounts_nonces(vec![from])
@@ -69,16 +67,7 @@ impl NativeTokenTransfer<'_> {
         let instruction: u128 = 0;
         let account_ids = vec![from];
         let program_id = Program::authenticated_transfer_program().id();
-        let message = Message::try_new(
-            program_id,
-            account_ids,
-            nonces
-                .iter()
-                .map(|x| nssa_core::account::Nonce(*x))
-                .collect(),
-            instruction,
-        )
-        .unwrap();
+        let message = Message::try_new(program_id, account_ids, nonces, instruction).unwrap();
 
         let signing_key = self.0.storage.user_data.get_pub_account_signing_key(from);
 
@@ -90,6 +79,10 @@ impl NativeTokenTransfer<'_> {
 
         let tx = PublicTransaction::new(message, witness_set);
 
-        Ok(self.0.sequencer_client.send_tx_public(tx).await?)
+        Ok(self
+            .0
+            .sequencer_client
+            .send_transaction(NSSATransaction::Public(tx))
+            .await?)
     }
 }

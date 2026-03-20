@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 use borsh::{BorshDeserialize, BorshSerialize};
 pub use private_key::PrivateKey;
 pub use public_key::PublicKey;
@@ -13,7 +15,23 @@ pub struct Signature {
 
 impl std::fmt::Debug for Signature {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
+}
+
+impl std::fmt::Display for Signature {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", hex::encode(self.value))
+    }
+}
+
+impl FromStr for Signature {
+    type Err = hex::FromHexError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut bytes = [0_u8; 64];
+        hex::decode_to_slice(s, &mut bytes)?;
+        Ok(Self { value: bytes })
     }
 }
 

@@ -1,8 +1,8 @@
-use common::{error::ExecutionFailureKind, rpc_primitives::requests::SendTxResponse};
+use common::HashType;
 use nssa::AccountId;
 
 use super::{NativeTokenTransfer, auth_transfer_preparation};
-use crate::PrivacyPreservingAccount;
+use crate::{ExecutionFailureKind, PrivacyPreservingAccount};
 
 impl NativeTokenTransfer<'_> {
     pub async fn send_deshielded_transfer(
@@ -10,7 +10,7 @@ impl NativeTokenTransfer<'_> {
         from: AccountId,
         to: AccountId,
         balance_to_move: u128,
-    ) -> Result<(SendTxResponse, nssa_core::SharedSecretKey), ExecutionFailureKind> {
+    ) -> Result<(HashType, nssa_core::SharedSecretKey), ExecutionFailureKind> {
         let (instruction_data, program, tx_pre_check) = auth_transfer_preparation(balance_to_move);
 
         self.0

@@ -1,6 +1,5 @@
 {
-    "home": "/var/lib/sequencer_runner",
-    "override_rust_log": null,
+    "home": "/var/lib/sequencer_service",
     "genesis_id": 1,
     "is_genesis_random": true,
     "max_num_tx_in_block": 20,
@@ -8,7 +7,6 @@
     "mempool_max_size": 10000,
     "block_create_timeout": "10s",
     "retry_pending_blocks_timeout": "7s",
-    "port": 3040,
     "bedrock_config": {
         "backoff": {
             "start_delay": "100ms",

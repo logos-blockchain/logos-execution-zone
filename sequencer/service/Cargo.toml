@@ -1,0 +1,33 @@
+[package]
+name = "sequencer_service"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+common.workspace = true
+nssa.workspace = true
+mempool.workspace = true
+sequencer_core = { workspace = true, features = ["testnet"] }
+sequencer_service_protocol.workspace = true
+sequencer_service_rpc = { workspace = true, features = ["server"] }
+indexer_service_rpc = { workspace = true, features = ["client"] }
+
+clap = { workspace = true, features = ["derive", "env"] }
+anyhow.workspace = true
+env_logger.workspace = true
+log.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+jsonrpsee.workspace = true
+futures.workspace = true
+bytesize.workspace = true
+borsh.workspace = true
+
+[features]
+default = []
+# Runs the sequencer in standalone mode without depending on Bedrock and Indexer services.
+standalone = ["sequencer_core/mock"]

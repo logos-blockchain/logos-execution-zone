@@ -176,7 +176,6 @@ mod tests {
 
     fn create_sample_wallet_config() -> WalletConfig {
         WalletConfig {
-            override_rust_log: None,
             sequencer_addr: "http://127.0.0.1".parse().unwrap(),
             seq_poll_timeout: std::time::Duration::from_secs(12),
             seq_tx_poll_max_blocks: 5,

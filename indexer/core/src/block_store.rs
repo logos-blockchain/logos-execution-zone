@@ -46,7 +46,7 @@ impl IndexerStore {
         Ok(self.dbio.get_meta_last_block_in_db()?)
     }
 
-    pub fn get_block_at_id(&self, id: u64) -> Result<Block> {
+    pub fn get_block_at_id(&self, id: u64) -> Result<Option<Block>> {
         Ok(self.dbio.get_block(id)?)
     }
 
@@ -54,20 +54,25 @@ impl IndexerStore {
         Ok(self.dbio.get_block_batch(before, limit)?)
     }
 
-    pub fn get_transaction_by_hash(&self, tx_hash: [u8; 32]) -> Result<NSSATransaction> {
-        let block = self.get_block_at_id(self.dbio.get_block_id_by_tx_hash(tx_hash)?)?;
-        let transaction = block
+    pub fn get_transaction_by_hash(&self, tx_hash: [u8; 32]) -> Result<Option<NSSATransaction>> {
+        let Some(block_id) = self.dbio.get_block_id_by_tx_hash(tx_hash)? else {
+            return Ok(None);
+        };
+        let Some(block) = self.get_block_at_id(block_id)? else {
+            return Ok(None);
+        };
+        Ok(block
             .body
             .transactions
-            .iter()
-            .find(|enc_tx| enc_tx.hash().0 == tx_hash)
-            .ok_or_else(|| anyhow::anyhow!("Transaction not found in DB"))?;
-
-        Ok(transaction.clone())
+            .into_iter()
+            .find(|enc_tx| enc_tx.hash().0 == tx_hash))
     }
 
-    pub fn get_block_by_hash(&self, hash: [u8; 32]) -> Result<Block> {
-        self.get_block_at_id(self.dbio.get_block_id_by_hash(hash)?)
+    pub fn get_block_by_hash(&self, hash: [u8; 32]) -> Result<Option<Block>> {
+        let Some(id) = self.dbio.get_block_id_by_hash(hash)? else {
+            return Ok(None);
+        };
+        self.get_block_at_id(id)
     }
 
     pub fn get_transactions_by_account(
@@ -171,7 +176,7 @@ mod tests {
         )
         .unwrap();
 
-        let block = storage.get_block_at_id(1).unwrap();
+        let block = storage.get_block_at_id(1).unwrap().unwrap();
         let final_id = storage.get_last_block_id().unwrap();
 
         assert_eq!(block.header.hash, genesis_block().header.hash);

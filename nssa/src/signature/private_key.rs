@@ -1,12 +1,36 @@
+use std::str::FromStr;
+
 use rand::{Rng as _, rngs::OsRng};
-use serde::{Deserialize, Serialize};
+use serde_with::{DeserializeFromStr, SerializeDisplay};
 
 use crate::error::NssaError;
 
 // TODO: Remove Debug, Clone, Serialize, Deserialize, PartialEq and Eq for security reasons
 // TODO: Implement Zeroize
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, SerializeDisplay, DeserializeFromStr, PartialEq, Eq)]
 pub struct PrivateKey([u8; 32]);
+
+impl std::fmt::Debug for PrivateKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
+}
+
+impl std::fmt::Display for PrivateKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", hex::encode(self.0))
+    }
+}
+
+impl FromStr for PrivateKey {
+    type Err = NssaError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut bytes = [0_u8; 32];
+        hex::decode_to_slice(s, &mut bytes).map_err(|_err| NssaError::InvalidPrivateKey)?;
+        Self::try_new(bytes)
+    }
+}
 
 impl PrivateKey {
     #[must_use]

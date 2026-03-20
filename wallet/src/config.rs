@@ -185,9 +185,6 @@ pub struct GasConfig {
 #[optfield::optfield(pub WalletConfigOverrides, rewrap, attrs = (derive(Debug, Default, Clone)))]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WalletConfig {
-    /// Override rust log (env var logging level).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub override_rust_log: Option<String>,
     /// Sequencer URL.
     pub sequencer_addr: Url,
     /// Sequencer polling duration for new blocks.
@@ -209,7 +206,6 @@ pub struct WalletConfig {
 impl Default for WalletConfig {
     fn default() -> Self {
         Self {
-            override_rust_log: None,
             sequencer_addr: "http://127.0.0.1:3040".parse().unwrap(),
             seq_poll_timeout: Duration::from_secs(12),
             seq_tx_poll_max_blocks: 5,
@@ -261,7 +257,6 @@ impl WalletConfig {
 
     pub fn apply_overrides(&mut self, overrides: WalletConfigOverrides) {
         let Self {
-            override_rust_log,
             sequencer_addr,
             seq_poll_timeout,
             seq_tx_poll_max_blocks,
@@ -272,7 +267,6 @@ impl WalletConfig {
         } = self;
 
         let WalletConfigOverrides {
-            override_rust_log: o_override_rust_log,
             sequencer_addr: o_sequencer_addr,
             seq_poll_timeout: o_seq_poll_timeout,
             seq_tx_poll_max_blocks: o_seq_tx_poll_max_blocks,
@@ -282,10 +276,6 @@ impl WalletConfig {
             initial_accounts: o_initial_accounts,
         } = overrides;
 
-        if let Some(v) = o_override_rust_log {
-            warn!("Overriding wallet config 'override_rust_log' to {v:#?}");
-            *override_rust_log = v;
-        }
         if let Some(v) = o_sequencer_addr {
             warn!("Overriding wallet config 'sequencer_addr' to {v}");
             *sequencer_addr = v;

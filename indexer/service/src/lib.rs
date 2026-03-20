@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use anyhow::{Context as _, Result};
 pub use indexer_core::config::*;
 use indexer_service_rpc::RpcServer as _;
-use jsonrpsee::server::Server;
+use jsonrpsee::server::{Server, ServerHandle};
 use log::{error, info};
 
 pub mod service;
@@ -13,10 +13,11 @@ pub mod mock_service;
 
 pub struct IndexerHandle {
     addr: SocketAddr,
-    server_handle: Option<jsonrpsee::server::ServerHandle>,
+    /// Option because of `Drop` which forbids to simply move out of `self` in `stopped()`.
+    server_handle: Option<ServerHandle>,
 }
 impl IndexerHandle {
-    const fn new(addr: SocketAddr, server_handle: jsonrpsee::server::ServerHandle) -> Self {
+    const fn new(addr: SocketAddr, server_handle: ServerHandle) -> Self {
         Self {
             addr,
             server_handle: Some(server_handle),
@@ -28,6 +29,7 @@ impl IndexerHandle {
         self.addr
     }
 
+    /// Wait for all Indexer tasks to stop.
     pub async fn stopped(mut self) {
         let handle = self
             .server_handle
@@ -37,15 +39,11 @@ impl IndexerHandle {
         handle.stopped().await;
     }
 
-    #[expect(
-        clippy::redundant_closure_for_method_calls,
-        reason = "Clippy suggested path jsonrpsee::jsonrpsee_server::ServerHandle is not accessible"
-    )]
     #[must_use]
-    pub fn is_stopped(&self) -> bool {
+    pub fn is_healthy(&self) -> bool {
         self.server_handle
             .as_ref()
-            .is_none_or(|handle| handle.is_stopped())
+            .is_some_and(|handle| !handle.is_stopped())
     }
 }
 

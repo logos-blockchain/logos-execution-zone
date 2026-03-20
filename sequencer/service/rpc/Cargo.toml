@@ -1,0 +1,17 @@
+[package]
+name = "sequencer_service_rpc"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+sequencer_service_protocol.workspace = true
+
+jsonrpsee = { workspace = true, features = ["macros"] }
+
+[features]
+client = ["jsonrpsee/client"]
+server = ["jsonrpsee/server"]

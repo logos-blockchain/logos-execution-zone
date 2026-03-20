@@ -14,6 +14,7 @@ anyhow.workspace = true
 thiserror.workspace = true
 risc0-zkvm.workspace = true
 serde.workspace = true
+serde_with.workspace = true
 sha2.workspace = true
 rand.workspace = true
 borsh.workspace = true

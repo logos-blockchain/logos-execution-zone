@@ -442,7 +442,7 @@ impl RocksDBIO {
         Ok(())
     }
 
-    pub fn get_block(&self, block_id: u64) -> DbResult<Block> {
+    pub fn get_block(&self, block_id: u64) -> DbResult<Option<Block>> {
         let cf_block = self.block_column();
         let res = self
             .db
@@ -458,16 +458,14 @@ impl RocksDBIO {
             .map_err(|rerr| DbError::rocksdb_cast_message(rerr, None))?;
 
         if let Some(data) = res {
-            Ok(borsh::from_slice::<Block>(&data).map_err(|serr| {
+            Ok(Some(borsh::from_slice::<Block>(&data).map_err(|serr| {
                 DbError::borsh_cast_message(
                     serr,
                     Some("Failed to deserialize block data".to_owned()),
                 )
-            })?)
+            })?))
         } else {
-            Err(DbError::db_interaction_error(
-                "Block on this id not found".to_owned(),
-            ))
+            Ok(None)
         }
     }
 
@@ -495,7 +493,7 @@ impl RocksDBIO {
             })?)
         } else {
             Err(DbError::db_interaction_error(
-                "Block on this id not found".to_owned(),
+                "NSSA state not found".to_owned(),
             ))
         }
     }
@@ -512,9 +510,9 @@ impl RocksDBIO {
             .map_err(|rerr| DbError::rocksdb_cast_message(rerr, None))?
             .is_none()
         {
-            return Err(DbError::db_interaction_error(
-                "Block on this id not found".to_owned(),
-            ));
+            return Err(DbError::db_interaction_error(format!(
+                "Block with id {block_id} not found"
+            )));
         }
 
         self.db
@@ -525,7 +523,9 @@ impl RocksDBIO {
     }
 
     pub fn mark_block_as_finalized(&self, block_id: u64) -> DbResult<()> {
-        let mut block = self.get_block(block_id)?;
+        let mut block = self.get_block(block_id)?.ok_or_else(|| {
+            DbError::db_interaction_error(format!("Block with id {block_id} not found"))
+        })?;
         block.bedrock_status = BedrockStatus::Finalized;
 
         let cf_block = self.block_column();

@@ -1,7 +1,7 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::collections::BTreeMap;
 
 use anyhow::Result;
-use common::sequencer_client::SequencerClient;
+use nssa::{Account, AccountId};
 use serde::{Deserialize, Serialize};
 
 use crate::key_management::{
@@ -197,40 +197,6 @@ impl<N: KeyNode> KeyTree<N> {
 }
 
 impl KeyTree<ChildKeysPrivate> {
-    /// Cleanup of all non-initialized accounts in a private tree.
-    ///
-    /// For given `depth` checks children to a tree such that their `ChainIndex::depth(&self) <
-    /// depth`.
-    ///
-    /// If account is default, removes them.
-    ///
-    /// Chain must be parsed for accounts beforehand.
-    ///
-    /// Fast, leaves gaps between accounts.
-    pub fn cleanup_tree_remove_uninit_for_depth(&mut self, depth: u32) {
-        let mut id_stack = vec![ChainIndex::root()];
-
-        while let Some(curr_id) = id_stack.pop() {
-            if let Some(node) = self.key_map.get(&curr_id)
-                && node.value.1 == nssa::Account::default()
-                && curr_id != ChainIndex::root()
-            {
-                let addr = node.account_id();
-                self.remove(addr);
-            }
-
-            let mut next_id = curr_id.nth_child(0);
-
-            while (next_id.depth()) < depth {
-                id_stack.push(next_id.clone());
-                next_id = match next_id.next_in_line() {
-                    Some(id) => id,
-                    None => break,
-                };
-            }
-        }
-    }
-
     /// Cleanup of non-initialized accounts in a private tree.
     ///
     /// If account is default, removes them, stops at first non-default account.
@@ -259,56 +225,17 @@ impl KeyTree<ChildKeysPrivate> {
 }
 
 impl KeyTree<ChildKeysPublic> {
-    /// Cleanup of all non-initialized accounts in a public tree.
-    ///
-    /// For given `depth` checks children to a tree such that their `ChainIndex::depth(&self) <
-    /// depth`.
-    ///
-    /// If account is default, removes them.
-    ///
-    /// Fast, leaves gaps between accounts.
-    pub async fn cleanup_tree_remove_ininit_for_depth(
-        &mut self,
-        depth: u32,
-        client: Arc<SequencerClient>,
-    ) -> Result<()> {
-        let mut id_stack = vec![ChainIndex::root()];
-
-        while let Some(curr_id) = id_stack.pop() {
-            if let Some(node) = self.key_map.get(&curr_id) {
-                let address = node.account_id();
-                let node_acc = client.get_account(address).await?.account;
-
-                if node_acc == nssa::Account::default() && curr_id != ChainIndex::root() {
-                    self.remove(address);
-                }
-            }
-
-            let mut next_id = curr_id.nth_child(0);
-
-            while (next_id.depth()) < depth {
-                id_stack.push(next_id.clone());
-                next_id = match next_id.next_in_line() {
-                    Some(id) => id,
-                    None => break,
-                };
-            }
-        }
-
-        Ok(())
-    }
-
     /// Cleanup of non-initialized accounts in a public tree.
     ///
     /// If account is default, removes them, stops at first non-default account.
     ///
-    /// Walks through tree in lairs of same depth using `ChainIndex::chain_ids_at_depth()`.
+    /// Walks through tree in layers of same depth using `ChainIndex::chain_ids_at_depth()`.
     ///
     /// Slow, maintains tree consistency.
-    pub async fn cleanup_tree_remove_uninit_layered(
+    pub async fn cleanup_tree_remove_uninit_layered<F: Future<Output = Result<Account>>>(
         &mut self,
         depth: u32,
-        client: Arc<SequencerClient>,
+        get_account: impl Fn(AccountId) -> F,
     ) -> Result<()> {
         let depth = usize::try_from(depth).expect("Depth is expected to fit in usize");
         'outer: for i in (1..depth).rev() {
@@ -316,7 +243,7 @@ impl KeyTree<ChildKeysPublic> {
             for id in ChainIndex::chain_ids_at_depth(i) {
                 if let Some(node) = self.key_map.get(&id) {
                     let address = node.account_id();
-                    let node_acc = client.get_account(address).await?.account;
+                    let node_acc = get_account(address).await?;
 
                     if node_acc == nssa::Account::default() {
                         let addr = node.account_id();

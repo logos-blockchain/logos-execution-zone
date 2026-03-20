@@ -1,10 +1,12 @@
-use common::{error::ExecutionFailureKind, sequencer_client::json::SendTxResponse};
+use common::{HashType, transaction::NSSATransaction};
+use sequencer_service_rpc::RpcClient as _;
 use key_protocol::key_management::ephemeral_key_holder::EphemeralKeyHolder;
 use nssa::{AccountId, privacy_preserving_transaction::circuit};
 use nssa_core::{MembershipProof, SharedSecretKey, account::AccountWithMetadata};
 
 use crate::{
-    WalletCore, helperfunctions::produce_random_nonces, transaction_utils::AccountPreparedData,
+    ExecutionFailureKind, WalletCore, helperfunctions::produce_random_nonces,
+    transaction_utils::AccountPreparedData,
 };
 
 impl WalletCore {
@@ -13,7 +15,7 @@ impl WalletCore {
         pinata_account_id: AccountId,
         winner_account_id: AccountId,
         solution: u128,
-    ) -> Result<SendTxResponse, ExecutionFailureKind> {
+    ) -> Result<HashType, ExecutionFailureKind> {
         let account_ids = vec![pinata_account_id, winner_account_id];
         let program_id = nssa::program::Program::pinata().id();
         let message =
@@ -23,7 +25,7 @@ impl WalletCore {
         let witness_set = nssa::public_transaction::WitnessSet::for_message(&message, &[]);
         let tx = nssa::PublicTransaction::new(message, witness_set);
 
-        Ok(self.sequencer_client.send_tx_public(tx).await?)
+        Ok(self.sequencer_client.send_transaction(NSSATransaction::Public(tx).into()).await?)
     }
 
     pub async fn claim_pinata_private_owned_account_already_initialized(
@@ -32,7 +34,7 @@ impl WalletCore {
         winner_account_id: AccountId,
         solution: u128,
         winner_proof: MembershipProof,
-    ) -> Result<(SendTxResponse, [SharedSecretKey; 1]), ExecutionFailureKind> {
+    ) -> Result<(HashType, [SharedSecretKey; 1]), ExecutionFailureKind> {
         let AccountPreparedData {
             nsk: winner_nsk,
             npk: winner_npk,
@@ -89,7 +91,7 @@ impl WalletCore {
         );
 
         Ok((
-            self.sequencer_client.send_tx_private(tx).await?,
+            self.sequencer_client.send_transaction(NSSATransaction::PrivacyPreserving(tx).into()).await?,
             [shared_secret_winner],
         ))
     }
@@ -99,7 +101,7 @@ impl WalletCore {
         pinata_account_id: AccountId,
         winner_account_id: AccountId,
         solution: u128,
-    ) -> Result<(SendTxResponse, [SharedSecretKey; 1]), ExecutionFailureKind> {
+    ) -> Result<(HashType, [SharedSecretKey; 1]), ExecutionFailureKind> {
         let AccountPreparedData {
             nsk: _,
             npk: winner_npk,
@@ -156,7 +158,7 @@ impl WalletCore {
         );
 
         Ok((
-            self.sequencer_client.send_tx_private(tx).await?,
+            self.sequencer_client.send_transaction(NSSATransaction::PrivacyPreserving(tx).into()).await?,
             [shared_secret_winner],
         ))
     }

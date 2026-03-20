@@ -1,16 +1,35 @@
+use std::str::FromStr;
+
 use borsh::{BorshDeserialize, BorshSerialize};
 use nssa_core::account::AccountId;
-use serde::{Deserialize, Serialize};
+use serde_with::{DeserializeFromStr, SerializeDisplay};
 use sha2::{Digest as _, Sha256};
 
 use crate::{PrivateKey, error::NssaError};
 
-#[derive(Clone, PartialEq, Eq, BorshSerialize, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, BorshSerialize, SerializeDisplay, DeserializeFromStr)]
 pub struct PublicKey([u8; 32]);
 
 impl std::fmt::Debug for PublicKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
+}
+
+impl std::fmt::Display for PublicKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", hex::encode(self.0))
+    }
+}
+
+impl FromStr for PublicKey {
+    type Err = NssaError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut bytes = [0_u8; 32];
+        hex::decode_to_slice(s, &mut bytes)
+            .map_err(|_err| NssaError::InvalidPublicKey(secp256k1::Error::InvalidPublicKey))?;
+        Self::try_new(bytes)
     }
 }
 
