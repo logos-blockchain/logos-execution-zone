@@ -12,12 +12,12 @@ jobs:
     strategy:
       matrix:
         include:
-          - name: sequencer_runner
-            dockerfile: ./sequencer_runner/Dockerfile
+          - name: sequencer_service
+            dockerfile: ./sequencer/service/Dockerfile
             build_args: |
               STANDALONE=false
-          - name: sequencer_runner-standalone
-            dockerfile: ./sequencer_runner/Dockerfile
+          - name: sequencer_service-standalone
+            dockerfile: ./sequencer/service/Dockerfile
             build_args: |
               STANDALONE=true
           - name: indexer_service

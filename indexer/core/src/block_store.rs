@@ -6,14 +6,14 @@ use common::{
     block::{BedrockStatus, Block, BlockId},
     transaction::NSSATransaction,
 };
-use nssa::{Account, AccountId, V02State};
+use nssa::{Account, AccountId, V03State};
 use storage::indexer::RocksDBIO;
 use tokio::sync::RwLock;
 
 #[derive(Clone)]
 pub struct IndexerStore {
     dbio: Arc<RocksDBIO>,
-    current_state: Arc<RwLock<V02State>>,
+    current_state: Arc<RwLock<V03State>>,
 }
 
 impl IndexerStore {
@@ -24,7 +24,7 @@ impl IndexerStore {
     pub fn open_db_with_genesis(
         location: &Path,
         genesis_block: &Block,
-        initial_state: &V02State,
+        initial_state: &V03State,
     ) -> Result<Self> {
         let dbio = RocksDBIO::open_or_create(location, genesis_block, initial_state)?;
         let current_state = dbio.final_state()?;
@@ -46,7 +46,7 @@ impl IndexerStore {
         Ok(self.dbio.get_meta_last_block_in_db()?)
     }
 
-    pub fn get_block_at_id(&self, id: u64) -> Result<Block> {
+    pub fn get_block_at_id(&self, id: u64) -> Result<Option<Block>> {
         Ok(self.dbio.get_block(id)?)
     }
 
@@ -54,20 +54,25 @@ impl IndexerStore {
         Ok(self.dbio.get_block_batch(before, limit)?)
     }
 
-    pub fn get_transaction_by_hash(&self, tx_hash: [u8; 32]) -> Result<NSSATransaction> {
-        let block = self.get_block_at_id(self.dbio.get_block_id_by_tx_hash(tx_hash)?)?;
-        let transaction = block
+    pub fn get_transaction_by_hash(&self, tx_hash: [u8; 32]) -> Result<Option<NSSATransaction>> {
+        let Some(block_id) = self.dbio.get_block_id_by_tx_hash(tx_hash)? else {
+            return Ok(None);
+        };
+        let Some(block) = self.get_block_at_id(block_id)? else {
+            return Ok(None);
+        };
+        Ok(block
             .body
             .transactions
-            .iter()
-            .find(|enc_tx| enc_tx.hash().0 == tx_hash)
-            .ok_or_else(|| anyhow::anyhow!("Transaction not found in DB"))?;
-
-        Ok(transaction.clone())
+            .into_iter()
+            .find(|enc_tx| enc_tx.hash().0 == tx_hash))
     }
 
-    pub fn get_block_by_hash(&self, hash: [u8; 32]) -> Result<Block> {
-        self.get_block_at_id(self.dbio.get_block_id_by_hash(hash)?)
+    pub fn get_block_by_hash(&self, hash: [u8; 32]) -> Result<Option<Block>> {
+        let Some(id) = self.dbio.get_block_id_by_hash(hash)? else {
+            return Ok(None);
+        };
+        self.get_block_at_id(id)
     }
 
     pub fn get_transactions_by_account(
@@ -93,14 +98,14 @@ impl IndexerStore {
             .expect("Must be set at the DB startup")
     }
 
-    pub fn get_state_at_block(&self, block_id: u64) -> Result<V02State> {
+    pub fn get_state_at_block(&self, block_id: u64) -> Result<V03State> {
         Ok(self.dbio.calculate_state_for_id(block_id)?)
     }
 
     /// Recalculation of final state directly from DB.
     ///
     /// Used for indexer healthcheck.
-    pub fn recalculate_final_state(&self) -> Result<V02State> {
+    pub fn recalculate_final_state(&self) -> Result<V03State> {
         Ok(self.dbio.final_state()?)
     }
 
@@ -167,11 +172,11 @@ mod tests {
         let storage = IndexerStore::open_db_with_genesis(
             home.as_ref(),
             &genesis_block(),
-            &nssa::V02State::new_with_genesis_accounts(&[(acc1(), 10000), (acc2(), 20000)], &[]),
+            &nssa::V03State::new_with_genesis_accounts(&[(acc1(), 10000), (acc2(), 20000)], &[]),
         )
         .unwrap();
 
-        let block = storage.get_block_at_id(1).unwrap();
+        let block = storage.get_block_at_id(1).unwrap().unwrap();
         let final_id = storage.get_last_block_id().unwrap();
 
         assert_eq!(block.header.hash, genesis_block().header.hash);
@@ -185,7 +190,7 @@ mod tests {
         let storage = IndexerStore::open_db_with_genesis(
             home.as_ref(),
             &genesis_block(),
-            &nssa::V02State::new_with_genesis_accounts(&[(acc1(), 10000), (acc2(), 20000)], &[]),
+            &nssa::V03State::new_with_genesis_accounts(&[(acc1(), 10000), (acc2(), 20000)], &[]),
         )
         .unwrap();
 

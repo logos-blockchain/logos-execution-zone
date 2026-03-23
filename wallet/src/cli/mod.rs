@@ -1,9 +1,11 @@
-use std::{io::Write as _, path::PathBuf, sync::Arc};
+use std::{io::Write as _, path::PathBuf};
 
 use anyhow::{Context as _, Result};
 use clap::{Parser, Subcommand};
-use common::HashType;
+use common::{HashType, transaction::NSSATransaction};
+use futures::TryFutureExt as _;
 use nssa::{ProgramDeploymentTransaction, program::Program};
+use sequencer_service_rpc::RpcClient as _;
 
 use crate::{
     WalletCore,
@@ -175,7 +177,7 @@ pub async fn execute_subcommand(
             let transaction = ProgramDeploymentTransaction::new(message);
             let _response = wallet_core
                 .sequencer_client
-                .send_tx_program(transaction)
+                .send_transaction(NSSATransaction::ProgramDeployment(transaction))
                 .await
                 .context("Transaction submission error")?;
 
@@ -188,11 +190,7 @@ pub async fn execute_subcommand(
 
 pub async fn execute_continuous_run(wallet_core: &mut WalletCore) -> Result<()> {
     loop {
-        let latest_block_num = wallet_core
-            .sequencer_client
-            .get_last_block()
-            .await?
-            .last_block;
+        let latest_block_num = wallet_core.sequencer_client.get_last_block_id().await?;
         wallet_core.sync_to_block(latest_block_num).await?;
 
         tokio::time::sleep(wallet_core.config().seq_poll_timeout).await;
@@ -230,16 +228,17 @@ pub async fn execute_keys_restoration(wallet_core: &mut WalletCore, depth: u32) 
         .storage
         .user_data
         .public_key_tree
-        .cleanup_tree_remove_uninit_layered(depth, Arc::clone(&wallet_core.sequencer_client))
+        .cleanup_tree_remove_uninit_layered(depth, |account_id| {
+            wallet_core
+                .sequencer_client
+                .get_account(account_id)
+                .map_err(Into::into)
+        })
         .await?;
 
     println!("Public tree cleaned up");
 
-    let last_block = wallet_core
-        .sequencer_client
-        .get_last_block()
-        .await?
-        .last_block;
+    let last_block = wallet_core.sequencer_client.get_last_block_id().await?;
 
     println!("Last block is {last_block}");
 

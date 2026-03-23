@@ -1,6 +1,6 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use log::warn;
-use nssa::{AccountId, V02State};
+use nssa::{AccountId, V03State};
 use serde::{Deserialize, Serialize};
 
 use crate::HashType;
@@ -10,6 +10,18 @@ pub enum NSSATransaction {
     Public(nssa::PublicTransaction),
     PrivacyPreserving(nssa::PrivacyPreservingTransaction),
     ProgramDeployment(nssa::ProgramDeploymentTransaction),
+}
+
+impl Serialize for NSSATransaction {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        crate::borsh_base64::serialize(self, serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for NSSATransaction {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        crate::borsh_base64::deserialize(deserializer)
+    }
 }
 
 impl NSSATransaction {
@@ -55,7 +67,7 @@ impl NSSATransaction {
 
     pub fn execute_check_on_state(
         self,
-        state: &mut V02State,
+        state: &mut V03State,
     ) -> Result<Self, nssa::error::NssaError> {
         match &self {
             Self::Public(tx) => state.transition_from_public_transaction(tx),
@@ -87,7 +99,7 @@ impl From<nssa::ProgramDeploymentTransaction> for NSSATransaction {
 }
 
 #[derive(
-    Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize,
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
 )]
 pub enum TxKind {
     Public,

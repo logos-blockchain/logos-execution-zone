@@ -6,11 +6,13 @@
 use std::{path::PathBuf, time::Duration};
 
 use anyhow::Result;
+use common::transaction::NSSATransaction;
 use integration_tests::{
     NSSA_PROGRAM_FOR_TEST_DATA_CHANGER, TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext,
 };
 use log::info;
 use nssa::{AccountId, program::Program};
+use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 use wallet::cli::Command;
 
@@ -47,18 +49,17 @@ async fn deploy_and_execute_program() -> Result<()> {
     )?;
     let witness_set = nssa::public_transaction::WitnessSet::for_message(&message, &[]);
     let transaction = nssa::PublicTransaction::new(message, witness_set);
-    let _response = ctx.sequencer_client().send_tx_public(transaction).await?;
+    let _response = ctx
+        .sequencer_client()
+        .send_transaction(NSSATransaction::Public(transaction))
+        .await?;
 
     info!("Waiting for next block creation");
     // Waiting for long time as it may take some time for such a big transaction to be included in a
     // block
     tokio::time::sleep(Duration::from_secs(2 * TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
-    let post_state_account = ctx
-        .sequencer_client()
-        .get_account(account_id)
-        .await?
-        .account;
+    let post_state_account = ctx.sequencer_client().get_account(account_id).await?;
 
     assert_eq!(post_state_account.program_owner, data_changer.id());
     assert_eq!(post_state_account.balance, 0);

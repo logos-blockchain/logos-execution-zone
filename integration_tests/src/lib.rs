@@ -3,15 +3,15 @@
 use std::{net::SocketAddr, path::PathBuf, sync::LazyLock};
 
 use anyhow::{Context as _, Result, bail};
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use common::{HashType, sequencer_client::SequencerClient, transaction::NSSATransaction};
+use common::{HashType, transaction::NSSATransaction};
 use futures::FutureExt as _;
 use indexer_service::IndexerHandle;
 use log::{debug, error, warn};
 use nssa::{AccountId, PrivacyPreservingTransaction};
 use nssa_core::Commitment;
 use sequencer_core::indexer_client::{IndexerClient, IndexerClientTrait as _};
-use sequencer_runner::SequencerHandle;
+use sequencer_service::SequencerHandle;
+use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
 use tempfile::TempDir;
 use testcontainers::compose::DockerCompose;
 use wallet::{WalletCore, config::WalletConfigOverrides};
@@ -38,7 +38,8 @@ pub struct TestContext {
     indexer_client: IndexerClient,
     wallet: WalletCore,
     wallet_password: String,
-    sequencer_handle: SequencerHandle,
+    /// Optional to move out value in Drop.
+    sequencer_handle: Option<SequencerHandle>,
     indexer_handle: IndexerHandle,
     bedrock_compose: DockerCompose,
     _temp_indexer_dir: TempDir,
@@ -90,8 +91,9 @@ impl TestContext {
             .context("Failed to convert sequencer addr to URL")?;
         let indexer_url = config::addr_to_url(config::UrlProtocol::Ws, indexer_handle.addr())
             .context("Failed to convert indexer addr to URL")?;
-        let sequencer_client =
-            SequencerClient::new(sequencer_url).context("Failed to create sequencer client")?;
+        let sequencer_client = SequencerClientBuilder::default()
+            .build(sequencer_url)
+            .context("Failed to create sequencer client")?;
         let indexer_client = IndexerClient::new(&indexer_url)
             .await
             .context("Failed to create indexer client")?;
@@ -102,7 +104,7 @@ impl TestContext {
             wallet,
             wallet_password,
             bedrock_compose,
-            sequencer_handle,
+            sequencer_handle: Some(sequencer_handle),
             indexer_handle,
             _temp_indexer_dir: temp_indexer_dir,
             _temp_sequencer_dir: temp_sequencer_dir,
@@ -229,7 +231,7 @@ impl TestContext {
         )
         .context("Failed to create Sequencer config")?;
 
-        let sequencer_handle = sequencer_runner::startup_sequencer(config).await?;
+        let sequencer_handle = sequencer_service::run(config, 0).await?;
 
         Ok((sequencer_handle, temp_sequencer_dir))
     }
@@ -333,18 +335,20 @@ impl Drop for TestContext {
             wallet_password: _,
         } = self;
 
-        if sequencer_handle.is_finished() {
-            let Err(err) = self
-                .sequencer_handle
-                .run_forever()
+        let sequencer_handle = sequencer_handle
+            .take()
+            .expect("Sequencer handle should be present in TestContext drop");
+        if !sequencer_handle.is_healthy() {
+            let Err(err) = sequencer_handle
+                .failed()
                 .now_or_never()
-                .expect("Future is finished and should be ready");
+                .expect("Sequencer handle should not be running");
             error!(
-                "Sequencer handle has unexpectedly finished before TestContext drop with error: {err:#}"
+                "Sequencer handle has unexpectedly stopped before TestContext drop with error: {err:#}"
             );
         }
 
-        if indexer_handle.is_stopped() {
+        if !indexer_handle.is_healthy() {
             error!("Indexer handle has unexpectedly stopped before TestContext drop");
         }
 
@@ -459,15 +463,8 @@ pub async fn fetch_privacy_preserving_tx(
     seq_client: &SequencerClient,
     tx_hash: HashType,
 ) -> PrivacyPreservingTransaction {
-    let transaction_encoded = seq_client
-        .get_transaction_by_hash(tx_hash)
-        .await
-        .unwrap()
-        .transaction
-        .unwrap();
+    let tx = seq_client.get_transaction(tx_hash).await.unwrap().unwrap();
 
-    let tx_bytes = BASE64.decode(transaction_encoded).unwrap();
-    let tx = borsh::from_slice(&tx_bytes).unwrap();
     match tx {
         NSSATransaction::PrivacyPreserving(privacy_preserving_transaction) => {
             privacy_preserving_transaction
@@ -480,8 +477,10 @@ pub async fn verify_commitment_is_in_state(
     commitment: Commitment,
     seq_client: &SequencerClient,
 ) -> bool {
-    matches!(
-        seq_client.get_proof_for_commitment(commitment).await,
-        Ok(Some(_))
-    )
+    seq_client
+        .get_proof_for_commitment(commitment)
+        .await
+        .ok()
+        .flatten()
+        .is_some()
 }

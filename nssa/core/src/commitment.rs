@@ -12,8 +12,8 @@ use crate::{NullifierPublicKey, account::Account};
 /// DUMMY_COMMITMENT = hasher.digest()
 /// ```
 pub const DUMMY_COMMITMENT: Commitment = Commitment([
-    130, 75, 48, 230, 171, 101, 121, 141, 159, 118, 21, 74, 135, 248, 16, 255, 238, 156, 61, 24,
-    165, 33, 34, 172, 227, 30, 215, 20, 85, 47, 230, 29,
+    55, 228, 215, 207, 112, 221, 239, 49, 238, 79, 71, 135, 155, 15, 184, 45, 104, 74, 51, 211,
+    238, 42, 160, 243, 15, 124, 253, 62, 3, 229, 90, 27,
 ]);
 
 /// The hash of the dummy commitment.
@@ -24,8 +24,8 @@ pub const DUMMY_COMMITMENT: Commitment = Commitment([
 /// DUMMY_COMMITMENT_HASH = hasher.digest()
 /// ```
 pub const DUMMY_COMMITMENT_HASH: [u8; 32] = [
-    170, 10, 217, 228, 20, 35, 189, 177, 238, 235, 97, 129, 132, 89, 96, 247, 86, 91, 222, 214, 38,
-    194, 216, 67, 56, 251, 208, 226, 0, 117, 149, 39,
+    250, 237, 192, 113, 155, 101, 119, 30, 235, 183, 20, 84, 26, 32, 196, 229, 154, 74, 254, 249,
+    129, 241, 118, 39, 41, 253, 141, 171, 184, 71, 8, 41,
 ];
 
 #[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
@@ -50,10 +50,14 @@ impl std::fmt::Debug for Commitment {
 
 impl Commitment {
     /// Generates the commitment to a private account owned by user for npk:
-    /// SHA256(npk || `program_owner` || balance || nonce || SHA256(data)).
+    /// SHA256( `Comm_DS` || npk || `program_owner` || balance || nonce || SHA256(data)).
     #[must_use]
     pub fn new(npk: &NullifierPublicKey, account: &Account) -> Self {
+        const COMMITMENT_PREFIX: &[u8; 32] =
+            b"/LEE/v0.3/Commitment/\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
+
         let mut bytes = Vec::new();
+        bytes.extend_from_slice(COMMITMENT_PREFIX);
         bytes.extend_from_slice(&npk.to_byte_array());
         let account_bytes_with_hashed_data = {
             let mut this = Vec::new();

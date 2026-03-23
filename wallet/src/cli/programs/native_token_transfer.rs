@@ -58,14 +58,13 @@ impl WalletSubcommand for AuthTransferSubcommand {
                     AccountPrivacyKind::Public => {
                         let account_id = account_id.parse()?;
 
-                        let res = NativeTokenTransfer(wallet_core)
+                        let tx_hash = NativeTokenTransfer(wallet_core)
                             .register_account(account_id)
                             .await?;
 
-                        println!("Results of tx send are {res:#?}");
+                        println!("Transaction hash is {tx_hash}");
 
-                        let transfer_tx =
-                            wallet_core.poll_native_token_transfer(res.tx_hash).await?;
+                        let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
                         println!("Transaction data is {transfer_tx:?}");
 
@@ -74,13 +73,12 @@ impl WalletSubcommand for AuthTransferSubcommand {
                     AccountPrivacyKind::Private => {
                         let account_id = account_id.parse()?;
 
-                        let (res, secret) = NativeTokenTransfer(wallet_core)
+                        let (tx_hash, secret) = NativeTokenTransfer(wallet_core)
                             .register_account_private(account_id)
                             .await?;
 
-                        println!("Results of tx send are {res:#?}");
+                        println!("Transaction hash is {tx_hash}");
 
-                        let tx_hash = res.tx_hash;
                         let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
                         if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
@@ -311,13 +309,12 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandPrivate {
                 let from: AccountId = from.parse().unwrap();
                 let to: AccountId = to.parse().unwrap();
 
-                let (res, [secret_from, secret_to]) = NativeTokenTransfer(wallet_core)
+                let (tx_hash, [secret_from, secret_to]) = NativeTokenTransfer(wallet_core)
                     .send_private_transfer_to_owned_account(from, to, amount)
                     .await?;
 
-                println!("Results of tx send are {res:#?}");
+                println!("Transaction hash is {tx_hash}");
 
-                let tx_hash = res.tx_hash;
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
                 if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
@@ -351,13 +348,12 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandPrivate {
                 let to_vpk =
                     nssa_core::encryption::shared_key_derivation::Secp256k1Point(to_vpk.to_vec());
 
-                let (res, [secret_from, _]) = NativeTokenTransfer(wallet_core)
+                let (tx_hash, [secret_from, _]) = NativeTokenTransfer(wallet_core)
                     .send_private_transfer_to_outer_account(from, to_npk, to_vpk, amount)
                     .await?;
 
-                println!("Results of tx send are {res:#?}");
+                println!("Transaction hash is {tx_hash}");
 
-                let tx_hash = res.tx_hash;
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
                 if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
@@ -387,13 +383,12 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandShielded {
                 let from: AccountId = from.parse().unwrap();
                 let to: AccountId = to.parse().unwrap();
 
-                let (res, secret) = NativeTokenTransfer(wallet_core)
+                let (tx_hash, secret) = NativeTokenTransfer(wallet_core)
                     .send_shielded_transfer(from, to, amount)
                     .await?;
 
-                println!("Results of tx send are {res:#?}");
+                println!("Transaction hash is {tx_hash}");
 
-                let tx_hash = res.tx_hash;
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
                 if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
@@ -428,13 +423,11 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandShielded {
                 let to_vpk =
                     nssa_core::encryption::shared_key_derivation::Secp256k1Point(to_vpk.to_vec());
 
-                let (res, _) = NativeTokenTransfer(wallet_core)
+                let (tx_hash, _) = NativeTokenTransfer(wallet_core)
                     .send_shielded_transfer_to_outer_account(from, to_npk, to_vpk, amount)
                     .await?;
 
-                println!("Results of tx send are {res:#?}");
-
-                let tx_hash = res.tx_hash;
+                println!("Transaction hash is {tx_hash}");
 
                 wallet_core.store_persistent_data().await?;
 
@@ -460,13 +453,12 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommand {
                 let from: AccountId = from.parse().unwrap();
                 let to: AccountId = to.parse().unwrap();
 
-                let (res, secret) = NativeTokenTransfer(wallet_core)
+                let (tx_hash, secret) = NativeTokenTransfer(wallet_core)
                     .send_deshielded_transfer(from, to, amount)
                     .await?;
 
-                println!("Results of tx send are {res:#?}");
+                println!("Transaction hash is {tx_hash}");
 
-                let tx_hash = res.tx_hash;
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
                 if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
@@ -486,13 +478,13 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommand {
                 let from: AccountId = from.parse().unwrap();
                 let to: AccountId = to.parse().unwrap();
 
-                let res = NativeTokenTransfer(wallet_core)
+                let tx_hash = NativeTokenTransfer(wallet_core)
                     .send_public_transfer(from, to, amount)
                     .await?;
 
-                println!("Results of tx send are {res:#?}");
+                println!("Transaction hash is {tx_hash}");
 
-                let transfer_tx = wallet_core.poll_native_token_transfer(res.tx_hash).await?;
+                let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
                 println!("Transaction data is {transfer_tx:?}");
 

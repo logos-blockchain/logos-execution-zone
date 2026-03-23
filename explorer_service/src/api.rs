@@ -41,12 +41,12 @@ pub async fn search(query: String) -> Result<SearchResults, ServerFnError> {
     // Try as hash
     if let Ok(hash) = HashType::from_str(&query) {
         // Try as block hash
-        if let Ok(block) = client.get_block_by_hash(hash).await {
+        if let Ok(Some(block)) = client.get_block_by_hash(hash).await {
             blocks.push(block);
         }
 
         // Try as transaction hash
-        if let Ok(tx) = client.get_transaction(hash).await {
+        if let Ok(Some(tx)) = client.get_transaction(hash).await {
             transactions.push(tx);
         }
     }
@@ -60,7 +60,7 @@ pub async fn search(query: String) -> Result<SearchResults, ServerFnError> {
 
     // Try as block ID
     if let Ok(block_id) = query.parse::<u64>()
-        && let Ok(block) = client.get_block_by_id(block_id).await
+        && let Ok(Some(block)) = client.get_block_by_id(block_id).await
     {
         blocks.push(block);
     }
@@ -81,6 +81,7 @@ pub async fn get_block_by_id(block_id: BlockId) -> Result<Block, ServerFnError> 
         .get_block_by_id(block_id)
         .await
         .map_err(|e| ServerFnError::ServerError(format!("RPC error: {e}")))
+        .and_then(|opt| opt.ok_or_else(|| ServerFnError::ServerError("Block not found".to_owned())))
 }
 
 /// Get latest block ID
@@ -103,6 +104,7 @@ pub async fn get_block_by_hash(block_hash: HashType) -> Result<Block, ServerFnEr
         .get_block_by_hash(block_hash)
         .await
         .map_err(|e| ServerFnError::ServerError(format!("RPC error: {e}")))
+        .and_then(|opt| opt.ok_or_else(|| ServerFnError::ServerError("Block not found".to_owned())))
 }
 
 /// Get transaction by hash
@@ -114,6 +116,9 @@ pub async fn get_transaction(tx_hash: HashType) -> Result<Transaction, ServerFnE
         .get_transaction(tx_hash)
         .await
         .map_err(|e| ServerFnError::ServerError(format!("RPC error: {e}")))
+        .and_then(|opt| {
+            opt.ok_or_else(|| ServerFnError::ServerError("Transaction not found".to_owned()))
+        })
 }
 
 /// Get blocks with pagination

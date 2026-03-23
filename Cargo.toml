@@ -17,9 +17,10 @@ members = [
   "programs/amm",
   "programs/token/core",
   "programs/token",
-  "sequencer_core",
-  "sequencer_rpc",
-  "sequencer_runner",
+  "sequencer/core",
+  "sequencer/service",
+  "sequencer/service/protocol",
+  "sequencer/service/rpc",
   "indexer/core",
   "indexer/service",
   "indexer/service/protocol",
@@ -42,9 +43,10 @@ common = { path = "common" }
 mempool = { path = "mempool" }
 storage = { path = "storage" }
 key_protocol = { path = "key_protocol" }
-sequencer_core = { path = "sequencer_core" }
-sequencer_rpc = { path = "sequencer_rpc" }
-sequencer_runner = { path = "sequencer_runner" }
+sequencer_core = { path = "sequencer/core" }
+sequencer_service_protocol = { path = "sequencer/service/protocol" }
+sequencer_service_rpc = { path = "sequencer/service/rpc" }
+sequencer_service = { path = "sequencer/service" }
 indexer_core = { path = "indexer/core" }
 indexer_service = { path = "indexer/service" }
 indexer_service_protocol = { path = "indexer/service/protocol" }

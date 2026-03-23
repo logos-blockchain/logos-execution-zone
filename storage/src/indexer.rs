@@ -4,7 +4,7 @@ use common::{
     block::{Block, BlockId},
     transaction::NSSATransaction,
 };
-use nssa::V02State;
+use nssa::V03State;
 use rocksdb::{
     BoundColumnFamily, ColumnFamilyDescriptor, DBWithThreadMode, MultiThreaded, Options, WriteBatch,
 };
@@ -63,7 +63,7 @@ impl RocksDBIO {
     pub fn open_or_create(
         path: &Path,
         genesis_block: &Block,
-        initial_state: &V02State,
+        initial_state: &V03State,
     ) -> DbResult<Self> {
         let mut cf_opts = Options::default();
         cf_opts.set_max_write_buffer_number(16);
@@ -514,7 +514,7 @@ impl RocksDBIO {
         Ok(())
     }
 
-    pub fn get_block(&self, block_id: u64) -> DbResult<Block> {
+    pub fn get_block(&self, block_id: u64) -> DbResult<Option<Block>> {
         let cf_block = self.block_column();
         let res = self
             .db
@@ -530,16 +530,14 @@ impl RocksDBIO {
             .map_err(|rerr| DbError::rocksdb_cast_message(rerr, None))?;
 
         if let Some(data) = res {
-            Ok(borsh::from_slice::<Block>(&data).map_err(|serr| {
+            Ok(Some(borsh::from_slice::<Block>(&data).map_err(|serr| {
                 DbError::borsh_cast_message(
                     serr,
                     Some("Failed to deserialize block data".to_owned()),
                 )
-            })?)
+            })?))
         } else {
-            Err(DbError::db_interaction_error(
-                "Block on this id not found".to_owned(),
-            ))
+            Ok(None)
         }
     }
 
@@ -596,7 +594,7 @@ impl RocksDBIO {
 
     // State
 
-    pub fn put_breakpoint(&self, br_id: u64, breakpoint: &V02State) -> DbResult<()> {
+    pub fn put_breakpoint(&self, br_id: u64, breakpoint: &V03State) -> DbResult<()> {
         let cf_br = self.breakpoint_column();
 
         self.db
@@ -618,7 +616,7 @@ impl RocksDBIO {
             .map_err(|rerr| DbError::rocksdb_cast_message(rerr, None))
     }
 
-    pub fn get_breakpoint(&self, br_id: u64) -> DbResult<V02State> {
+    pub fn get_breakpoint(&self, br_id: u64) -> DbResult<V03State> {
         let cf_br = self.breakpoint_column();
         let res = self
             .db
@@ -634,20 +632,22 @@ impl RocksDBIO {
             .map_err(|rerr| DbError::rocksdb_cast_message(rerr, None))?;
 
         if let Some(data) = res {
-            Ok(borsh::from_slice::<V02State>(&data).map_err(|serr| {
+            Ok(borsh::from_slice::<V03State>(&data).map_err(|serr| {
                 DbError::borsh_cast_message(
                     serr,
                     Some("Failed to deserialize breakpoint data".to_owned()),
                 )
             })?)
         } else {
+            // Note: this is not a `DbError::NotFound` case, because we expect that all searched
+            // breakpoints will be present in db as this is an internal method.
             Err(DbError::db_interaction_error(
                 "Breakpoint on this id not found".to_owned(),
             ))
         }
     }
 
-    pub fn calculate_state_for_id(&self, block_id: u64) -> DbResult<V02State> {
+    pub fn calculate_state_for_id(&self, block_id: u64) -> DbResult<V03State> {
         let last_block = self.get_meta_last_block_in_db()?;
 
         if block_id <= last_block {
@@ -665,7 +665,9 @@ impl RocksDBIO {
             };
 
             for id in start..=block_id {
-                let block = self.get_block(id)?;
+                let block = self.get_block(id)?.ok_or_else(|| {
+                    DbError::db_interaction_error(format!("Block with id {id} not found"))
+                })?;
 
                 for transaction in block.body.transactions {
                     transaction
@@ -686,13 +688,13 @@ impl RocksDBIO {
 
             Ok(breakpoint)
         } else {
-            Err(DbError::db_interaction_error(
-                "Block on this id not found".to_owned(),
-            ))
+            Err(DbError::db_interaction_error(format!(
+                "Block with id {block_id} not found"
+            )))
         }
     }
 
-    pub fn final_state(&self) -> DbResult<V02State> {
+    pub fn final_state(&self) -> DbResult<V03State> {
         self.calculate_state_for_id(self.get_meta_last_block_in_db()?)
     }
 
@@ -720,7 +722,7 @@ impl RocksDBIO {
 
     // Mappings
 
-    pub fn get_block_id_by_hash(&self, hash: [u8; 32]) -> DbResult<u64> {
+    pub fn get_block_id_by_hash(&self, hash: [u8; 32]) -> DbResult<Option<u64>> {
         let cf_hti = self.hash_to_id_column();
         let res = self
             .db
@@ -736,17 +738,15 @@ impl RocksDBIO {
             .map_err(|rerr| DbError::rocksdb_cast_message(rerr, None))?;
 
         if let Some(data) = res {
-            Ok(borsh::from_slice::<u64>(&data).map_err(|serr| {
+            Ok(Some(borsh::from_slice::<u64>(&data).map_err(|serr| {
                 DbError::borsh_cast_message(serr, Some("Failed to deserialize block id".to_owned()))
-            })?)
+            })?))
         } else {
-            Err(DbError::db_interaction_error(
-                "Block on this hash not found".to_owned(),
-            ))
+            Ok(None)
         }
     }
 
-    pub fn get_block_id_by_tx_hash(&self, tx_hash: [u8; 32]) -> DbResult<u64> {
+    pub fn get_block_id_by_tx_hash(&self, tx_hash: [u8; 32]) -> DbResult<Option<u64>> {
         let cf_tti = self.tx_hash_to_id_column();
         let res = self
             .db
@@ -762,13 +762,11 @@ impl RocksDBIO {
             .map_err(|rerr| DbError::rocksdb_cast_message(rerr, None))?;
 
         if let Some(data) = res {
-            Ok(borsh::from_slice::<u64>(&data).map_err(|serr| {
+            Ok(Some(borsh::from_slice::<u64>(&data).map_err(|serr| {
                 DbError::borsh_cast_message(serr, Some("Failed to deserialize block id".to_owned()))
-            })?)
+            })?))
         } else {
-            Err(DbError::db_interaction_error(
-                "Block for this tx hash not found".to_owned(),
-            ))
+            Ok(None)
         }
     }
 
@@ -921,8 +919,14 @@ impl RocksDBIO {
         let mut tx_batch = vec![];
 
         for tx_hash in self.get_acc_transaction_hashes(acc_id, offset, limit)? {
-            let block_id = self.get_block_id_by_tx_hash(tx_hash)?;
-            let block = self.get_block(block_id)?;
+            let block_id = self.get_block_id_by_tx_hash(tx_hash)?.ok_or_else(|| {
+                DbError::db_interaction_error(format!(
+                    "Block id not found for tx hash {tx_hash:#?}"
+                ))
+            })?;
+            let block = self.get_block(block_id)?.ok_or_else(|| {
+                DbError::db_interaction_error(format!("Block with id {block_id} not found"))
+            })?;
 
             let transaction = block
                 .body
@@ -985,8 +989,8 @@ mod tests {
         nssa::PrivateKey::try_new([2; 32]).unwrap()
     }
 
-    fn initial_state() -> V02State {
-        nssa::V02State::new_with_genesis_accounts(&[(acc1(), 10000), (acc2(), 20000)], &[])
+    fn initial_state() -> V03State {
+        nssa::V03State::new_with_genesis_accounts(&[(acc1(), 10000), (acc2(), 20000)], &[])
     }
 
     fn transfer(amount: u128, nonce: u128, direction: bool) -> NSSATransaction {
@@ -1019,7 +1023,7 @@ mod tests {
         let first_id = dbio.get_meta_first_block_in_db().unwrap();
         let is_first_set = dbio.get_meta_is_first_block_set().unwrap();
         let last_br_id = dbio.get_meta_last_breakpoint_id().unwrap();
-        let last_block = dbio.get_block(1).unwrap();
+        let last_block = dbio.get_block(1).unwrap().unwrap();
         let breakpoint = dbio.get_breakpoint(0).unwrap();
         let final_state = dbio.final_state().unwrap();
 
@@ -1056,7 +1060,7 @@ mod tests {
         let first_id = dbio.get_meta_first_block_in_db().unwrap();
         let is_first_set = dbio.get_meta_is_first_block_set().unwrap();
         let last_br_id = dbio.get_meta_last_breakpoint_id().unwrap();
-        let last_block = dbio.get_block(last_id).unwrap();
+        let last_block = dbio.get_block(last_id).unwrap().unwrap();
         let breakpoint = dbio.get_breakpoint(0).unwrap();
         let final_state = dbio.final_state().unwrap();
 
@@ -1087,7 +1091,7 @@ mod tests {
 
         for i in 1..BREAKPOINT_INTERVAL {
             let last_id = dbio.get_meta_last_block_in_db().unwrap();
-            let last_block = dbio.get_block(last_id).unwrap();
+            let last_block = dbio.get_block(last_id).unwrap().unwrap();
 
             let prev_hash = last_block.header.hash;
             let transfer_tx = transfer(1, u128::from(i - 1), true);
@@ -1103,7 +1107,7 @@ mod tests {
         let first_id = dbio.get_meta_first_block_in_db().unwrap();
         let is_first_set = dbio.get_meta_is_first_block_set().unwrap();
         let last_br_id = dbio.get_meta_last_breakpoint_id().unwrap();
-        let last_block = dbio.get_block(last_id).unwrap();
+        let last_block = dbio.get_block(last_id).unwrap().unwrap();
         let prev_breakpoint = dbio.get_breakpoint(0).unwrap();
         let breakpoint = dbio.get_breakpoint(1).unwrap();
         let final_state = dbio.final_state().unwrap();
@@ -1142,7 +1146,7 @@ mod tests {
             RocksDBIO::open_or_create(temdir_path, &genesis_block(), &initial_state()).unwrap();
 
         let last_id = dbio.get_meta_last_block_in_db().unwrap();
-        let last_block = dbio.get_block(last_id).unwrap();
+        let last_block = dbio.get_block(last_id).unwrap().unwrap();
 
         let prev_hash = last_block.header.hash;
         let transfer_tx = transfer(1, 0, true);
@@ -1153,7 +1157,7 @@ mod tests {
         dbio.put_block(&block, [1; 32]).unwrap();
 
         let last_id = dbio.get_meta_last_block_in_db().unwrap();
-        let last_block = dbio.get_block(last_id).unwrap();
+        let last_block = dbio.get_block(last_id).unwrap().unwrap();
 
         let prev_hash = last_block.header.hash;
         let transfer_tx = transfer(1, 1, true);
@@ -1164,7 +1168,7 @@ mod tests {
         dbio.put_block(&block, [2; 32]).unwrap();
 
         let last_id = dbio.get_meta_last_block_in_db().unwrap();
-        let last_block = dbio.get_block(last_id).unwrap();
+        let last_block = dbio.get_block(last_id).unwrap().unwrap();
 
         let prev_hash = last_block.header.hash;
         let transfer_tx = transfer(1, 2, true);
@@ -1175,7 +1179,7 @@ mod tests {
         dbio.put_block(&block, [3; 32]).unwrap();
 
         let last_id = dbio.get_meta_last_block_in_db().unwrap();
-        let last_block = dbio.get_block(last_id).unwrap();
+        let last_block = dbio.get_block(last_id).unwrap().unwrap();
 
         let prev_hash = last_block.header.hash;
         let transfer_tx = transfer(1, 3, true);
@@ -1185,10 +1189,16 @@ mod tests {
         let block = common::test_utils::produce_dummy_block(5, Some(prev_hash), vec![transfer_tx]);
         dbio.put_block(&block, [4; 32]).unwrap();
 
-        let control_block_id1 = dbio.get_block_id_by_hash(control_hash1.0).unwrap();
-        let control_block_id2 = dbio.get_block_id_by_hash(control_hash2.0).unwrap();
-        let control_block_id3 = dbio.get_block_id_by_tx_hash(control_tx_hash1.0).unwrap();
-        let control_block_id4 = dbio.get_block_id_by_tx_hash(control_tx_hash2.0).unwrap();
+        let control_block_id1 = dbio.get_block_id_by_hash(control_hash1.0).unwrap().unwrap();
+        let control_block_id2 = dbio.get_block_id_by_hash(control_hash2.0).unwrap().unwrap();
+        let control_block_id3 = dbio
+            .get_block_id_by_tx_hash(control_tx_hash1.0)
+            .unwrap()
+            .unwrap();
+        let control_block_id4 = dbio
+            .get_block_id_by_tx_hash(control_tx_hash2.0)
+            .unwrap()
+            .unwrap();
 
         assert_eq!(control_block_id1, 2);
         assert_eq!(control_block_id2, 3);
@@ -1207,7 +1217,7 @@ mod tests {
             RocksDBIO::open_or_create(temdir_path, &genesis_block(), &initial_state()).unwrap();
 
         let last_id = dbio.get_meta_last_block_in_db().unwrap();
-        let last_block = dbio.get_block(last_id).unwrap();
+        let last_block = dbio.get_block(last_id).unwrap().unwrap();
 
         let prev_hash = last_block.header.hash;
         let transfer_tx = transfer(1, 0, true);
@@ -1217,7 +1227,7 @@ mod tests {
         dbio.put_block(&block, [1; 32]).unwrap();
 
         let last_id = dbio.get_meta_last_block_in_db().unwrap();
-        let last_block = dbio.get_block(last_id).unwrap();
+        let last_block = dbio.get_block(last_id).unwrap().unwrap();
 
         let prev_hash = last_block.header.hash;
         let transfer_tx = transfer(1, 1, true);
@@ -1227,7 +1237,7 @@ mod tests {
         dbio.put_block(&block, [2; 32]).unwrap();
 
         let last_id = dbio.get_meta_last_block_in_db().unwrap();
-        let last_block = dbio.get_block(last_id).unwrap();
+        let last_block = dbio.get_block(last_id).unwrap().unwrap();
 
         let prev_hash = last_block.header.hash;
         let transfer_tx = transfer(1, 2, true);
@@ -1237,7 +1247,7 @@ mod tests {
         dbio.put_block(&block, [3; 32]).unwrap();
 
         let last_id = dbio.get_meta_last_block_in_db().unwrap();
-        let last_block = dbio.get_block(last_id).unwrap();
+        let last_block = dbio.get_block(last_id).unwrap().unwrap();
 
         let prev_hash = last_block.header.hash;
         let transfer_tx = transfer(1, 3, true);
@@ -1285,7 +1295,7 @@ mod tests {
             RocksDBIO::open_or_create(temdir_path, &genesis_block(), &initial_state()).unwrap();
 
         let last_id = dbio.get_meta_last_block_in_db().unwrap();
-        let last_block = dbio.get_block(last_id).unwrap();
+        let last_block = dbio.get_block(last_id).unwrap().unwrap();
 
         let prev_hash = last_block.header.hash;
         let transfer_tx = transfer(1, 0, true);
@@ -1297,7 +1307,7 @@ mod tests {
         dbio.put_block(&block, [1; 32]).unwrap();
 
         let last_id = dbio.get_meta_last_block_in_db().unwrap();
-        let last_block = dbio.get_block(last_id).unwrap();
+        let last_block = dbio.get_block(last_id).unwrap().unwrap();
 
         let prev_hash = last_block.header.hash;
         let transfer_tx = transfer(1, 1, true);
@@ -1309,7 +1319,7 @@ mod tests {
         dbio.put_block(&block, [2; 32]).unwrap();
 
         let last_id = dbio.get_meta_last_block_in_db().unwrap();
-        let last_block = dbio.get_block(last_id).unwrap();
+        let last_block = dbio.get_block(last_id).unwrap().unwrap();
 
         let prev_hash = last_block.header.hash;
         let transfer_tx = transfer(1, 2, true);
@@ -1321,7 +1331,7 @@ mod tests {
         dbio.put_block(&block, [3; 32]).unwrap();
 
         let last_id = dbio.get_meta_last_block_in_db().unwrap();
-        let last_block = dbio.get_block(last_id).unwrap();
+        let last_block = dbio.get_block(last_id).unwrap().unwrap();
 
         let prev_hash = last_block.header.hash;
         let transfer_tx = transfer(1, 3, true);

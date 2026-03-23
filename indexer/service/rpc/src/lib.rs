@@ -30,16 +30,22 @@ pub trait Rpc {
     async fn get_last_finalized_block_id(&self) -> Result<BlockId, ErrorObjectOwned>;
 
     #[method(name = "getBlockById")]
-    async fn get_block_by_id(&self, block_id: BlockId) -> Result<Block, ErrorObjectOwned>;
+    async fn get_block_by_id(&self, block_id: BlockId) -> Result<Option<Block>, ErrorObjectOwned>;
 
     #[method(name = "getBlockByHash")]
-    async fn get_block_by_hash(&self, block_hash: HashType) -> Result<Block, ErrorObjectOwned>;
+    async fn get_block_by_hash(
+        &self,
+        block_hash: HashType,
+    ) -> Result<Option<Block>, ErrorObjectOwned>;
 
     #[method(name = "getAccount")]
     async fn get_account(&self, account_id: AccountId) -> Result<Account, ErrorObjectOwned>;
 
     #[method(name = "getTransaction")]
-    async fn get_transaction(&self, tx_hash: HashType) -> Result<Transaction, ErrorObjectOwned>;
+    async fn get_transaction(
+        &self,
+        tx_hash: HashType,
+    ) -> Result<Option<Transaction>, ErrorObjectOwned>;
 
     #[method(name = "getBlocks")]
     async fn get_blocks(

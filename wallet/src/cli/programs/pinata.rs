@@ -112,13 +112,12 @@ impl WalletSubcommand for PinataProgramSubcommandPublic {
                     .await
                     .context("failed to compute solution")?;
 
-                let res = Pinata(wallet_core)
+                let tx_hash = Pinata(wallet_core)
                     .claim(pinata_account_id, winner_account_id, solution)
                     .await?;
 
-                println!("Results of tx send are {res:#?}");
+                println!("Transaction hash is {tx_hash}");
 
-                let tx_hash = res.tx_hash;
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
                 println!("Transaction data is {transfer_tx:?}");
@@ -148,13 +147,12 @@ impl WalletSubcommand for PinataProgramSubcommandPrivate {
                     .await
                     .context("failed to compute solution")?;
 
-                let (res, secret_winner) = Pinata(wallet_core)
+                let (tx_hash, secret_winner) = Pinata(wallet_core)
                     .claim_private_owned_account(pinata_account_id, winner_account_id, solution)
                     .await?;
 
-                println!("Results of tx send are {res:#?}");
+                println!("Transaction hash is {tx_hash}");
 
-                let tx_hash = res.tx_hash;
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
                 println!("Transaction data is {transfer_tx:?}");

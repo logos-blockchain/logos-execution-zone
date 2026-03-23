@@ -1,5 +1,7 @@
 use clap::{Parser, Subcommand};
+use common::transaction::NSSATransaction;
 use nssa::{PublicTransaction, program::Program, public_transaction};
+use sequencer_service_rpc::RpcClient as _;
 use wallet::{PrivacyPreservingAccount, WalletCore};
 
 // Before running this example, compile the `hello_world_with_move_function.rs` guest program with:
@@ -87,7 +89,7 @@ async fn main() {
             // Submit the transaction
             let _response = wallet_core
                 .sequencer_client
-                .send_tx_public(tx)
+                .send_transaction(NSSATransaction::Public(tx))
                 .await
                 .unwrap();
         }
@@ -126,7 +128,7 @@ async fn main() {
             // Submit the transaction
             let _response = wallet_core
                 .sequencer_client
-                .send_tx_public(tx)
+                .send_transaction(NSSATransaction::Public(tx))
                 .await
                 .unwrap();
         }

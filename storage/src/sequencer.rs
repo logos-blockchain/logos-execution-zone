@@ -1,7 +1,7 @@
 use std::{path::Path, sync::Arc};
 
 use common::block::{BedrockStatus, Block, BlockMeta, MantleMsgId};
-use nssa::V02State;
+use nssa::V03State;
 use rocksdb::{
     BoundColumnFamily, ColumnFamilyDescriptor, DBWithThreadMode, MultiThreaded, Options, WriteBatch,
 };
@@ -195,7 +195,7 @@ impl RocksDBIO {
         Ok(res.is_some())
     }
 
-    pub fn put_nssa_state_in_db(&self, state: &V02State, batch: &mut WriteBatch) -> DbResult<()> {
+    pub fn put_nssa_state_in_db(&self, state: &V03State, batch: &mut WriteBatch) -> DbResult<()> {
         let cf_nssa_state = self.nssa_state_column();
         batch.put_cf(
             &cf_nssa_state,
@@ -442,7 +442,7 @@ impl RocksDBIO {
         Ok(())
     }
 
-    pub fn get_block(&self, block_id: u64) -> DbResult<Block> {
+    pub fn get_block(&self, block_id: u64) -> DbResult<Option<Block>> {
         let cf_block = self.block_column();
         let res = self
             .db
@@ -458,20 +458,18 @@ impl RocksDBIO {
             .map_err(|rerr| DbError::rocksdb_cast_message(rerr, None))?;
 
         if let Some(data) = res {
-            Ok(borsh::from_slice::<Block>(&data).map_err(|serr| {
+            Ok(Some(borsh::from_slice::<Block>(&data).map_err(|serr| {
                 DbError::borsh_cast_message(
                     serr,
                     Some("Failed to deserialize block data".to_owned()),
                 )
-            })?)
+            })?))
         } else {
-            Err(DbError::db_interaction_error(
-                "Block on this id not found".to_owned(),
-            ))
+            Ok(None)
         }
     }
 
-    pub fn get_nssa_state(&self) -> DbResult<V02State> {
+    pub fn get_nssa_state(&self) -> DbResult<V03State> {
         let cf_nssa_state = self.nssa_state_column();
         let res = self
             .db
@@ -487,7 +485,7 @@ impl RocksDBIO {
             .map_err(|rerr| DbError::rocksdb_cast_message(rerr, None))?;
 
         if let Some(data) = res {
-            Ok(borsh::from_slice::<V02State>(&data).map_err(|serr| {
+            Ok(borsh::from_slice::<V03State>(&data).map_err(|serr| {
                 DbError::borsh_cast_message(
                     serr,
                     Some("Failed to deserialize block data".to_owned()),
@@ -495,7 +493,7 @@ impl RocksDBIO {
             })?)
         } else {
             Err(DbError::db_interaction_error(
-                "Block on this id not found".to_owned(),
+                "NSSA state not found".to_owned(),
             ))
         }
     }
@@ -512,9 +510,9 @@ impl RocksDBIO {
             .map_err(|rerr| DbError::rocksdb_cast_message(rerr, None))?
             .is_none()
         {
-            return Err(DbError::db_interaction_error(
-                "Block on this id not found".to_owned(),
-            ));
+            return Err(DbError::db_interaction_error(format!(
+                "Block with id {block_id} not found"
+            )));
         }
 
         self.db
@@ -525,7 +523,9 @@ impl RocksDBIO {
     }
 
     pub fn mark_block_as_finalized(&self, block_id: u64) -> DbResult<()> {
-        let mut block = self.get_block(block_id)?;
+        let mut block = self.get_block(block_id)?.ok_or_else(|| {
+            DbError::db_interaction_error(format!("Block with id {block_id} not found"))
+        })?;
         block.bedrock_status = BedrockStatus::Finalized;
 
         let cf_block = self.block_column();
@@ -580,7 +580,7 @@ impl RocksDBIO {
         &self,
         block: &Block,
         msg_id: MantleMsgId,
-        state: &V02State,
+        state: &V03State,
     ) -> DbResult<()> {
         let block_id = block.header.block_id;
         let mut batch = WriteBatch::default();

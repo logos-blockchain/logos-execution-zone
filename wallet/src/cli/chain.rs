@@ -1,6 +1,7 @@
 use anyhow::Result;
 use clap::Subcommand;
 use common::HashType;
+use sequencer_service_rpc::RpcClient as _;
 
 use crate::{
     WalletCore,
@@ -32,22 +33,19 @@ impl WalletSubcommand for ChainSubcommand {
     ) -> Result<SubcommandReturnValue> {
         match self {
             Self::CurrentBlockId => {
-                let latest_block_res = wallet_core.sequencer_client.get_last_block().await?;
+                let latest_block_id = wallet_core.sequencer_client.get_last_block_id().await?;
 
-                println!("Last block id is {}", latest_block_res.last_block);
+                println!("Last block id is {latest_block_id}");
             }
             Self::Block { id } => {
-                let block_res = wallet_core.sequencer_client.get_block(id).await?;
+                let block = wallet_core.sequencer_client.get_block(id).await?;
 
-                println!("Last block id is {:#?}", block_res.block);
+                println!("Last block id is {block:#?}");
             }
             Self::Transaction { hash } => {
-                let tx_res = wallet_core
-                    .sequencer_client
-                    .get_transaction_by_hash(hash)
-                    .await?;
+                let tx = wallet_core.sequencer_client.get_transaction(hash).await?;
 
-                println!("Last block id is {:#?}", tx_res.transaction);
+                println!("Transaction is {tx:#?}");
             }
         }
         Ok(SubcommandReturnValue::Empty)

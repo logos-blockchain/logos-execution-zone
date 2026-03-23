@@ -8,15 +8,11 @@
     reason = "Most of the shadows come from args parsing which is ok"
 )]
 
-use std::{path::PathBuf, sync::Arc};
+use std::path::PathBuf;
 
 use anyhow::{Context as _, Result};
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use chain_storage::WalletChainStore;
-use common::{
-    HashType, error::ExecutionFailureKind, rpc_primitives::requests::SendTxResponse,
-    sequencer_client::SequencerClient, transaction::NSSATransaction,
-};
+use common::{HashType, transaction::NSSATransaction};
 use config::WalletConfig;
 use key_protocol::key_management::key_tree::{chain_index::ChainIndex, traits::KeyNode as _};
 use log::info;
@@ -26,8 +22,11 @@ use nssa::{
         circuit::ProgramWithDependencies, message::EncryptedAccountData,
     },
 };
-use nssa_core::{Commitment, MembershipProof, SharedSecretKey, program::InstructionData};
+use nssa_core::{
+    Commitment, MembershipProof, SharedSecretKey, account::Nonce, program::InstructionData,
+};
 pub use privacy_preserving_tx::PrivacyPreservingAccount;
+use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
 use tokio::io::AsyncWriteExt as _;
 
 use crate::{
@@ -51,6 +50,22 @@ pub enum AccDecodeData {
     Decode(nssa_core::SharedSecretKey, AccountId),
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum ExecutionFailureKind {
+    #[error("Failed to get data from sequencer")]
+    SequencerError(#[source] anyhow::Error),
+    #[error("Inputs amounts does not match outputs")]
+    AmountMismatchError,
+    #[error("Accounts key not found")]
+    KeyNotFoundError,
+    #[error("Sequencer client error")]
+    SequencerClientError(#[from] sequencer_service_rpc::ClientError),
+    #[error("Can not pay for operation")]
+    InsufficientFundsError,
+    #[error("Account {0} data is invalid")]
+    AccountDataError(AccountId),
+}
+
 #[expect(clippy::partial_pub_fields, reason = "TODO: make all fields private")]
 pub struct WalletCore {
     config_path: PathBuf,
@@ -58,7 +73,7 @@ pub struct WalletCore {
     storage: WalletChainStore,
     storage_path: PathBuf,
     poller: TxPoller,
-    pub sequencer_client: Arc<SequencerClient>,
+    pub sequencer_client: SequencerClient,
     pub last_synced_block: u64,
 }
 
@@ -129,11 +144,25 @@ impl WalletCore {
             config.apply_overrides(config_overrides);
         }
 
-        let sequencer_client = Arc::new(SequencerClient::new_with_auth(
-            config.sequencer_addr.clone(),
-            config.basic_auth.clone(),
-        )?);
-        let tx_poller = TxPoller::new(&config, Arc::clone(&sequencer_client));
+        let sequencer_client = {
+            let mut builder = SequencerClientBuilder::default();
+            if let Some(basic_auth) = &config.basic_auth {
+                builder = builder.set_headers(
+                    std::iter::once((
+                        "Authorization".parse().expect("Header name is valid"),
+                        format!("Basic {basic_auth}")
+                            .parse()
+                            .context("Invalid basic auth format")?,
+                    ))
+                    .collect(),
+                );
+            }
+            builder
+                .build(config.sequencer_addr.clone())
+                .context("Failed to create sequencer client")?
+        };
+
+        let tx_poller = TxPoller::new(&config, sequencer_client.clone());
 
         let storage = storage_ctor(config)?;
 
@@ -222,26 +251,17 @@ impl WalletCore {
 
     /// Get account balance.
     pub async fn get_account_balance(&self, acc: AccountId) -> Result<u128> {
-        Ok(self
-            .sequencer_client
-            .get_account_balance(acc)
-            .await?
-            .balance)
+        Ok(self.sequencer_client.get_account_balance(acc).await?)
     }
 
     /// Get accounts nonces.
-    pub async fn get_accounts_nonces(&self, accs: Vec<AccountId>) -> Result<Vec<u128>> {
-        Ok(self
-            .sequencer_client
-            .get_accounts_nonces(accs)
-            .await?
-            .nonces)
+    pub async fn get_accounts_nonces(&self, accs: Vec<AccountId>) -> Result<Vec<Nonce>> {
+        Ok(self.sequencer_client.get_accounts_nonces(accs).await?)
     }
 
     /// Get account.
     pub async fn get_account_public(&self, account_id: AccountId) -> Result<Account> {
-        let response = self.sequencer_client.get_account(account_id).await?;
-        Ok(response.account)
+        Ok(self.sequencer_client.get_account(account_id).await?)
     }
 
     #[must_use]
@@ -265,16 +285,12 @@ impl WalletCore {
     #[must_use]
     pub fn get_private_account_commitment(&self, account_id: AccountId) -> Option<Commitment> {
         let (keys, account) = self.storage.user_data.get_private_account(account_id)?;
-        Some(Commitment::new(&keys.nullifer_public_key, account))
+        Some(Commitment::new(&keys.nullifier_public_key, account))
     }
 
     /// Poll transactions.
     pub async fn poll_native_token_transfer(&self, hash: HashType) -> Result<NSSATransaction> {
-        let transaction_encoded = self.poller.poll_tx(hash).await?;
-        let tx_base64_decode = BASE64.decode(transaction_encoded)?;
-        let pub_tx = borsh::from_slice::<NSSATransaction>(&tx_base64_decode).unwrap();
-
-        Ok(pub_tx)
+        self.poller.poll_tx(hash).await
     }
 
     pub async fn check_private_account_initialized(
@@ -285,7 +301,7 @@ impl WalletCore {
             self.sequencer_client
                 .get_proof_for_commitment(acc_comm)
                 .await
-                .map_err(anyhow::Error::from)
+                .map_err(Into::into)
         } else {
             Ok(None)
         }
@@ -325,17 +341,12 @@ impl WalletCore {
         Ok(())
     }
 
-    // TODO: handle large Err-variant properly
-    #[expect(
-        clippy::result_large_err,
-        reason = "ExecutionFailureKind is large, tracked by TODO"
-    )]
     pub async fn send_privacy_preserving_tx(
         &self,
         accounts: Vec<PrivacyPreservingAccount>,
         instruction_data: InstructionData,
         program: &ProgramWithDependencies,
-    ) -> Result<(SendTxResponse, Vec<SharedSecretKey>), ExecutionFailureKind> {
+    ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         self.send_privacy_preserving_tx_with_pre_check(accounts, instruction_data, program, |_| {
             Ok(())
         })
@@ -348,7 +359,7 @@ impl WalletCore {
         instruction_data: InstructionData,
         program: &ProgramWithDependencies,
         tx_pre_check: impl FnOnce(&[&Account]) -> Result<(), ExecutionFailureKind>,
-    ) -> Result<(SendTxResponse, Vec<SharedSecretKey>), ExecutionFailureKind> {
+    ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         let acc_manager = privacy_preserving_tx::AccountManager::new(self, accounts).await?;
 
         let pre_states = acc_manager.pre_states();
@@ -400,7 +411,9 @@ impl WalletCore {
             .collect();
 
         Ok((
-            self.sequencer_client.send_tx_private(tx).await?,
+            self.sequencer_client
+                .send_transaction(NSSATransaction::PrivacyPreserving(tx))
+                .await?,
             shared_secrets,
         ))
     }
@@ -427,11 +440,11 @@ impl WalletCore {
 
         let bar = indicatif::ProgressBar::new(num_of_blocks);
         while let Some(block) = blocks.try_next().await? {
-            for tx in block.transactions {
+            for tx in block.body.transactions {
                 self.sync_private_accounts_with_tx(tx);
             }
 
-            self.last_synced_block = block.block_id;
+            self.last_synced_block = block.header.block_id;
             self.store_persistent_data().await?;
             bar.inc(1);
         }
@@ -469,7 +482,7 @@ impl WalletCore {
         let affected_accounts = private_account_key_chains
             .flat_map(|(acc_account_id, key_chain, index)| {
                 let view_tag = EncryptedAccountData::compute_view_tag(
-                    &key_chain.nullifer_public_key,
+                    &key_chain.nullifier_public_key,
                     &key_chain.viewing_public_key,
                 );
 

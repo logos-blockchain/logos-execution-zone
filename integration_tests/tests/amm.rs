@@ -9,6 +9,7 @@ use std::time::Duration;
 use anyhow::Result;
 use integration_tests::{TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, format_public_account_id};
 use log::info;
+use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 use wallet::cli::{
     Command, SubcommandReturnValue,
@@ -194,20 +195,14 @@ async fn amm_public() -> Result<()> {
     let user_holding_a_acc = ctx
         .sequencer_client()
         .get_account(recipient_account_id_1)
-        .await?
-        .account;
+        .await?;
 
     let user_holding_b_acc = ctx
         .sequencer_client()
         .get_account(recipient_account_id_2)
-        .await?
-        .account;
+        .await?;
 
-    let user_holding_lp_acc = ctx
-        .sequencer_client()
-        .get_account(user_holding_lp)
-        .await?
-        .account;
+    let user_holding_lp_acc = ctx.sequencer_client().get_account(user_holding_lp).await?;
 
     assert_eq!(
         u128::from_le_bytes(user_holding_a_acc.data[33..].try_into().unwrap()),
@@ -243,20 +238,14 @@ async fn amm_public() -> Result<()> {
     let user_holding_a_acc = ctx
         .sequencer_client()
         .get_account(recipient_account_id_1)
-        .await?
-        .account;
+        .await?;
 
     let user_holding_b_acc = ctx
         .sequencer_client()
         .get_account(recipient_account_id_2)
-        .await?
-        .account;
+        .await?;
 
-    let user_holding_lp_acc = ctx
-        .sequencer_client()
-        .get_account(user_holding_lp)
-        .await?
-        .account;
+    let user_holding_lp_acc = ctx.sequencer_client().get_account(user_holding_lp).await?;
 
     assert_eq!(
         u128::from_le_bytes(user_holding_a_acc.data[33..].try_into().unwrap()),
@@ -292,20 +281,14 @@ async fn amm_public() -> Result<()> {
     let user_holding_a_acc = ctx
         .sequencer_client()
         .get_account(recipient_account_id_1)
-        .await?
-        .account;
+        .await?;
 
     let user_holding_b_acc = ctx
         .sequencer_client()
         .get_account(recipient_account_id_2)
-        .await?
-        .account;
+        .await?;
 
-    let user_holding_lp_acc = ctx
-        .sequencer_client()
-        .get_account(user_holding_lp)
-        .await?
-        .account;
+    let user_holding_lp_acc = ctx.sequencer_client().get_account(user_holding_lp).await?;
 
     assert_eq!(
         u128::from_le_bytes(user_holding_a_acc.data[33..].try_into().unwrap()),
@@ -342,20 +325,14 @@ async fn amm_public() -> Result<()> {
     let user_holding_a_acc = ctx
         .sequencer_client()
         .get_account(recipient_account_id_1)
-        .await?
-        .account;
+        .await?;
 
     let user_holding_b_acc = ctx
         .sequencer_client()
         .get_account(recipient_account_id_2)
-        .await?
-        .account;
+        .await?;
 
-    let user_holding_lp_acc = ctx
-        .sequencer_client()
-        .get_account(user_holding_lp)
-        .await?
-        .account;
+    let user_holding_lp_acc = ctx.sequencer_client().get_account(user_holding_lp).await?;
 
     assert_eq!(
         u128::from_le_bytes(user_holding_a_acc.data[33..].try_into().unwrap()),
@@ -392,20 +369,14 @@ async fn amm_public() -> Result<()> {
     let user_holding_a_acc = ctx
         .sequencer_client()
         .get_account(recipient_account_id_1)
-        .await?
-        .account;
+        .await?;
 
     let user_holding_b_acc = ctx
         .sequencer_client()
         .get_account(recipient_account_id_2)
-        .await?
-        .account;
+        .await?;
 
-    let user_holding_lp_acc = ctx
-        .sequencer_client()
-        .get_account(user_holding_lp)
-        .await?
-        .account;
+    let user_holding_lp_acc = ctx.sequencer_client().get_account(user_holding_lp).await?;
 
     assert_eq!(
         u128::from_le_bytes(user_holding_a_acc.data[33..].try_into().unwrap()),

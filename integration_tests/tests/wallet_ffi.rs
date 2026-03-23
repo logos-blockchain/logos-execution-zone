@@ -606,7 +606,7 @@ fn test_wallet_ffi_get_private_account_keys() -> Result<()> {
         .unwrap()
         .0;
 
-    let expected_npk = &key_chain.nullifer_public_key;
+    let expected_npk = &key_chain.nullifier_public_key;
     let expected_vpk = &key_chain.viewing_public_key;
 
     assert_eq!(&keys.npk(), expected_npk);

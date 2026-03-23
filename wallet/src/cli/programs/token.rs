@@ -713,7 +713,7 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                 let sender_account_id: AccountId = sender_account_id.parse().unwrap();
                 let recipient_account_id: AccountId = recipient_account_id.parse().unwrap();
 
-                let (res, [secret_sender, secret_recipient]) = Token(wallet_core)
+                let (tx_hash, [secret_sender, secret_recipient]) = Token(wallet_core)
                     .send_transfer_transaction_private_owned_account(
                         sender_account_id,
                         recipient_account_id,
@@ -721,9 +721,8 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                     )
                     .await?;
 
-                println!("Results of tx send are {res:#?}");
+                println!("Transaction hash is {tx_hash}");
 
-                let tx_hash = res.tx_hash;
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
                 if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
@@ -761,7 +760,7 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                     recipient_vpk.to_vec(),
                 );
 
-                let (res, [secret_sender, _]) = Token(wallet_core)
+                let (tx_hash, [secret_sender, _]) = Token(wallet_core)
                     .send_transfer_transaction_private_foreign_account(
                         sender_account_id,
                         recipient_npk,
@@ -770,9 +769,8 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                     )
                     .await?;
 
-                println!("Results of tx send are {res:#?}");
+                println!("Transaction hash is {tx_hash}");
 
-                let tx_hash = res.tx_hash;
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
                 if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
@@ -796,7 +794,7 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                 let definition_account_id: AccountId = definition_account_id.parse().unwrap();
                 let holder_account_id: AccountId = holder_account_id.parse().unwrap();
 
-                let (res, [secret_definition, secret_holder]) = Token(wallet_core)
+                let (tx_hash, [secret_definition, secret_holder]) = Token(wallet_core)
                     .send_burn_transaction_private_owned_account(
                         definition_account_id,
                         holder_account_id,
@@ -804,9 +802,8 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                     )
                     .await?;
 
-                println!("Results of tx send are {res:#?}");
+                println!("Transaction hash is {tx_hash}");
 
-                let tx_hash = res.tx_hash;
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
                 if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
@@ -833,7 +830,7 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                 let definition_account_id: AccountId = definition_account_id.parse().unwrap();
                 let holder_account_id: AccountId = holder_account_id.parse().unwrap();
 
-                let (res, [secret_definition, secret_holder]) = Token(wallet_core)
+                let (tx_hash, [secret_definition, secret_holder]) = Token(wallet_core)
                     .send_mint_transaction_private_owned_account(
                         definition_account_id,
                         holder_account_id,
@@ -841,9 +838,8 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                     )
                     .await?;
 
-                println!("Results of tx send are {res:#?}");
+                println!("Transaction hash is {tx_hash}");
 
-                let tx_hash = res.tx_hash;
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
                 if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
@@ -882,7 +878,7 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                     holder_vpk.to_vec(),
                 );
 
-                let (res, [secret_definition, _]) = Token(wallet_core)
+                let (tx_hash, [secret_definition, _]) = Token(wallet_core)
                     .send_mint_transaction_private_foreign_account(
                         definition_account_id,
                         holder_npk,
@@ -891,9 +887,8 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                     )
                     .await?;
 
-                println!("Results of tx send are {res:#?}");
+                println!("Transaction hash is {tx_hash}");
 
-                let tx_hash = res.tx_hash;
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
                 if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
@@ -927,7 +922,7 @@ impl WalletSubcommand for TokenProgramSubcommandDeshielded {
                 let sender_account_id: AccountId = sender_account_id.parse().unwrap();
                 let recipient_account_id: AccountId = recipient_account_id.parse().unwrap();
 
-                let (res, secret_sender) = Token(wallet_core)
+                let (tx_hash, secret_sender) = Token(wallet_core)
                     .send_transfer_transaction_deshielded(
                         sender_account_id,
                         recipient_account_id,
@@ -935,9 +930,8 @@ impl WalletSubcommand for TokenProgramSubcommandDeshielded {
                     )
                     .await?;
 
-                println!("Results of tx send are {res:#?}");
+                println!("Transaction hash is {tx_hash}");
 
-                let tx_hash = res.tx_hash;
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
                 if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
@@ -961,7 +955,7 @@ impl WalletSubcommand for TokenProgramSubcommandDeshielded {
                 let definition_account_id: AccountId = definition_account_id.parse().unwrap();
                 let holder_account_id: AccountId = holder_account_id.parse().unwrap();
 
-                let (res, secret_definition) = Token(wallet_core)
+                let (tx_hash, secret_definition) = Token(wallet_core)
                     .send_burn_transaction_deshielded_owned_account(
                         definition_account_id,
                         holder_account_id,
@@ -969,9 +963,8 @@ impl WalletSubcommand for TokenProgramSubcommandDeshielded {
                     )
                     .await?;
 
-                println!("Results of tx send are {res:#?}");
+                println!("Transaction hash is {tx_hash}");
 
-                let tx_hash = res.tx_hash;
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
                 if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
@@ -995,7 +988,7 @@ impl WalletSubcommand for TokenProgramSubcommandDeshielded {
                 let definition_account_id: AccountId = definition_account_id.parse().unwrap();
                 let holder_account_id: AccountId = holder_account_id.parse().unwrap();
 
-                let (res, secret_definition) = Token(wallet_core)
+                let (tx_hash, secret_definition) = Token(wallet_core)
                     .send_mint_transaction_deshielded(
                         definition_account_id,
                         holder_account_id,
@@ -1003,9 +996,8 @@ impl WalletSubcommand for TokenProgramSubcommandDeshielded {
                     )
                     .await?;
 
-                println!("Results of tx send are {res:#?}");
+                println!("Transaction hash is {tx_hash}");
 
-                let tx_hash = res.tx_hash;
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
                 if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
@@ -1050,7 +1042,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                     recipient_vpk.to_vec(),
                 );
 
-                let (res, _) = Token(wallet_core)
+                let (tx_hash, _) = Token(wallet_core)
                     .send_transfer_transaction_shielded_foreign_account(
                         sender_account_id,
                         recipient_npk,
@@ -1059,9 +1051,8 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                     )
                     .await?;
 
-                println!("Results of tx send are {res:#?}");
+                println!("Transaction hash is {tx_hash}");
 
-                let tx_hash = res.tx_hash;
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
                 if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
@@ -1080,7 +1071,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                 let sender_account_id: AccountId = sender_account_id.parse().unwrap();
                 let recipient_account_id: AccountId = recipient_account_id.parse().unwrap();
 
-                let (res, secret_recipient) = Token(wallet_core)
+                let (tx_hash, secret_recipient) = Token(wallet_core)
                     .send_transfer_transaction_shielded_owned_account(
                         sender_account_id,
                         recipient_account_id,
@@ -1088,9 +1079,8 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                     )
                     .await?;
 
-                println!("Results of tx send are {res:#?}");
+                println!("Transaction hash is {tx_hash}");
 
-                let tx_hash = res.tx_hash;
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
                 if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
@@ -1114,7 +1104,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                 let definition_account_id: AccountId = definition_account_id.parse().unwrap();
                 let holder_account_id: AccountId = holder_account_id.parse().unwrap();
 
-                let (res, secret_holder) = Token(wallet_core)
+                let (tx_hash, secret_holder) = Token(wallet_core)
                     .send_burn_transaction_shielded(
                         definition_account_id,
                         holder_account_id,
@@ -1122,9 +1112,8 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                     )
                     .await?;
 
-                println!("Results of tx send are {res:#?}");
+                println!("Transaction hash is {tx_hash}");
 
-                let tx_hash = res.tx_hash;
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
                 if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
@@ -1148,7 +1137,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                 let definition_account_id: AccountId = definition_account_id.parse().unwrap();
                 let holder_account_id: AccountId = holder_account_id.parse().unwrap();
 
-                let (res, secret_holder) = Token(wallet_core)
+                let (tx_hash, secret_holder) = Token(wallet_core)
                     .send_mint_transaction_shielded_owned_account(
                         definition_account_id,
                         holder_account_id,
@@ -1156,9 +1145,8 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                     )
                     .await?;
 
-                println!("Results of tx send are {res:#?}");
+                println!("Transaction hash is {tx_hash}");
 
-                let tx_hash = res.tx_hash;
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
                 if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
@@ -1194,7 +1182,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                     holder_vpk.to_vec(),
                 );
 
-                let (res, _) = Token(wallet_core)
+                let (tx_hash, _) = Token(wallet_core)
                     .send_mint_transaction_shielded_foreign_account(
                         definition_account_id,
                         holder_npk,
@@ -1203,9 +1191,8 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                     )
                     .await?;
 
-                println!("Results of tx send are {res:#?}");
+                println!("Transaction hash is {tx_hash}");
 
-                let tx_hash = res.tx_hash;
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
                 if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
@@ -1235,7 +1222,7 @@ impl WalletSubcommand for CreateNewTokenProgramSubcommand {
                 let definition_account_id: AccountId = definition_account_id.parse().unwrap();
                 let supply_account_id: AccountId = supply_account_id.parse().unwrap();
 
-                let (res, [secret_definition, secret_supply]) = Token(wallet_core)
+                let (tx_hash, [secret_definition, secret_supply]) = Token(wallet_core)
                     .send_new_definition_private_owned_definiton_and_supply(
                         definition_account_id,
                         supply_account_id,
@@ -1244,9 +1231,8 @@ impl WalletSubcommand for CreateNewTokenProgramSubcommand {
                     )
                     .await?;
 
-                println!("Results of tx send are {res:#?}");
+                println!("Transaction hash is {tx_hash}");
 
-                let tx_hash = res.tx_hash;
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
                 if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
@@ -1274,7 +1260,7 @@ impl WalletSubcommand for CreateNewTokenProgramSubcommand {
                 let definition_account_id: AccountId = definition_account_id.parse().unwrap();
                 let supply_account_id: AccountId = supply_account_id.parse().unwrap();
 
-                let (res, secret_definition) = Token(wallet_core)
+                let (tx_hash, secret_definition) = Token(wallet_core)
                     .send_new_definition_private_owned_definiton(
                         definition_account_id,
                         supply_account_id,
@@ -1283,9 +1269,8 @@ impl WalletSubcommand for CreateNewTokenProgramSubcommand {
                     )
                     .await?;
 
-                println!("Results of tx send are {res:#?}");
+                println!("Transaction hash is {tx_hash}");
 
-                let tx_hash = res.tx_hash;
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
                 if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
@@ -1310,7 +1295,7 @@ impl WalletSubcommand for CreateNewTokenProgramSubcommand {
                 let definition_account_id: AccountId = definition_account_id.parse().unwrap();
                 let supply_account_id: AccountId = supply_account_id.parse().unwrap();
 
-                let (res, secret_supply) = Token(wallet_core)
+                let (tx_hash, secret_supply) = Token(wallet_core)
                     .send_new_definition_private_owned_supply(
                         definition_account_id,
                         supply_account_id,
@@ -1319,9 +1304,8 @@ impl WalletSubcommand for CreateNewTokenProgramSubcommand {
                     )
                     .await?;
 
-                println!("Results of tx send are {res:#?}");
+                println!("Transaction hash is {tx_hash}");
 
-                let tx_hash = res.tx_hash;
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
                 if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {

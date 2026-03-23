@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use bytesize::ByteSize;
+use common::transaction::NSSATransaction;
 use integration_tests::{
     TestContext,
     config::{InitialData, SequencerPartialConfig},
@@ -30,6 +31,7 @@ use nssa_core::{
     account::{AccountWithMetadata, Nonce, data::Data},
     encryption::ViewingPublicKey,
 };
+use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 
 pub(crate) struct TpsTestManager {
@@ -153,10 +155,9 @@ pub async fn tps_test() -> Result<()> {
     for (i, tx) in txs.into_iter().enumerate() {
         let tx_hash = ctx
             .sequencer_client()
-            .send_tx_public(tx)
+            .send_transaction(NSSATransaction::Public(tx))
             .await
-            .unwrap()
-            .tx_hash;
+            .unwrap();
         info!("Sent tx {i}");
         tx_hashes.push(tx_hash);
     }
@@ -170,15 +171,13 @@ pub async fn tps_test() -> Result<()> {
 
             let tx_obj = ctx
                 .sequencer_client()
-                .get_transaction_by_hash(*tx_hash)
+                .get_transaction(*tx_hash)
                 .await
                 .inspect_err(|err| {
                     log::warn!("Failed to get transaction by hash {tx_hash} with error: {err:#?}");
                 });
 
-            if let Ok(tx_obj) = tx_obj
-                && tx_obj.transaction.is_some()
-            {
+            if tx_obj.is_ok_and(|opt| opt.is_some()) {
                 info!("Found tx {i} with hash {tx_hash}");
                 break;
             }

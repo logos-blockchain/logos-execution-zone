@@ -66,13 +66,13 @@ impl NSSAUserData {
     ) -> Result<Self> {
         if !Self::valid_public_key_transaction_pairing_check(&default_accounts_keys) {
             anyhow::bail!(
-                "Key transaction pairing check not satisfied, there is account_ids, which is not derived from keys"
+                "Key transaction pairing check not satisfied, there are public account_ids, which are not derived from keys"
             );
         }
 
         if !Self::valid_private_key_transaction_pairing_check(&default_accounts_key_chains) {
             anyhow::bail!(
-                "Key transaction pairing check not satisfied, there is account_ids, which is not derived from keys"
+                "Key transaction pairing check not satisfied, there are private account_ids, which are not derived from keys"
             );
         }
 

@@ -161,110 +161,48 @@ impl WalletChainStore {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr as _;
+
     use key_protocol::key_management::key_tree::{
         keys_private::ChildKeysPrivate, keys_public::ChildKeysPublic, traits::KeyNode as _,
     };
+    use nssa::PrivateKey;
 
     use super::*;
     use crate::config::{
-        InitialAccountData, PersistentAccountDataPrivate, PersistentAccountDataPublic,
+        InitialAccountData, InitialAccountDataPublic, PersistentAccountDataPrivate,
+        PersistentAccountDataPublic,
     };
 
     fn create_initial_accounts() -> Vec<InitialAccountData> {
-        let initial_acc1 = serde_json::from_str(
-            r#"{
-            "Public": {
-                "account_id": "6iArKUXxhUJqS7kCaPNhwMWt3ro71PDyBj7jwAyE2VQV",
-                "pub_sign_key": [
-                    16,
-                    162,
-                    106,
-                    154,
-                    236,
-                    125,
-                    52,
-                    184,
-                    35,
-                    100,
-                    238,
-                    174,
-                    69,
-                    197,
-                    41,
-                    77,
-                    187,
-                    10,
-                    118,
-                    75,
-                    0,
-                    11,
-                    148,
-                    238,
-                    185,
-                    181,
-                    133,
-                    17,
-                    220,
-                    72,
-                    124,
-                    77
-                ]
-            }
-        }"#,
-        )
-        .unwrap();
-
-        let initial_acc2 = serde_json::from_str(
-            r#"{
-            "Public": {
-                "account_id": "7wHg9sbJwc6h3NP1S9bekfAzB8CHifEcxKswCKUt3YQo",
-                "pub_sign_key": [
-                    113,
-                    121,
-                    64,
-                    177,
-                    204,
-                    85,
-                    229,
-                    214,
-                    178,
-                    6,
-                    109,
-                    191,
-                    29,
-                    154,
-                    63,
-                    38,
-                    242,
-                    18,
-                    244,
-                    219,
-                    8,
-                    208,
-                    35,
-                    136,
-                    23,
-                    127,
-                    207,
-                    237,
-                    216,
-                    169,
-                    190,
-                    27
-                ]
-            }
-        }"#,
-        )
-        .unwrap();
-
-        let initial_accounts = vec![initial_acc1, initial_acc2];
-
-        initial_accounts
+        vec![
+            InitialAccountData::Public(InitialAccountDataPublic {
+                account_id: nssa::AccountId::from_str(
+                    "CbgR6tj5kWx5oziiFptM7jMvrQeYY3Mzaao6ciuhSr2r",
+                )
+                .unwrap(),
+                pub_sign_key: PrivateKey::try_new([
+                    127, 39, 48, 152, 242, 91, 113, 230, 192, 5, 169, 81, 159, 38, 120, 218, 141,
+                    28, 127, 1, 246, 162, 119, 120, 226, 217, 148, 138, 189, 249, 1, 251,
+                ])
+                .unwrap(),
+            }),
+            InitialAccountData::Public(InitialAccountDataPublic {
+                account_id: nssa::AccountId::from_str(
+                    "2RHZhw9h534Zr3eq2RGhQete2Hh667foECzXPmSkGni2",
+                )
+                .unwrap(),
+                pub_sign_key: PrivateKey::try_new([
+                    244, 52, 248, 116, 23, 32, 1, 69, 134, 174, 67, 53, 109, 42, 236, 98, 87, 218,
+                    8, 98, 34, 246, 4, 221, 183, 93, 105, 115, 59, 134, 252, 76,
+                ])
+                .unwrap(),
+            }),
+        ]
     }
 
     fn create_sample_wallet_config() -> WalletConfig {
         WalletConfig {
-            override_rust_log: None,
             sequencer_addr: "http://127.0.0.1".parse().unwrap(),
             seq_poll_timeout: std::time::Duration::from_secs(12),
             seq_tx_poll_max_blocks: 5,

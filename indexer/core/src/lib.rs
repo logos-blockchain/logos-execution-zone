@@ -80,7 +80,7 @@ impl IndexerCore {
             .map(|acc_data| (acc_data.account_id, acc_data.balance))
             .collect();
 
-        let mut state = nssa::V02State::new_with_genesis_accounts(&init_accs, &initial_commitments);
+        let mut state = nssa::V03State::new_with_genesis_accounts(&init_accs, &initial_commitments);
 
         // ToDo: Remove after testnet
         state.add_pinata_program(PINATA_BASE58.parse().unwrap());
