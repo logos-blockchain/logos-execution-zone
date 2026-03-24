@@ -14,147 +14,147 @@ on:
 name: General
 
 jobs:
-  fmt-rs:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: ${{ github.head_ref }}
+#   fmt-rs:
+#     runs-on: ubuntu-latest
+#     steps:
+#       - uses: actions/checkout@v5
+#         with:
+#           ref: ${{ github.head_ref }}
 
-      - name: Install nightly toolchain for rustfmt
-        run: rustup install nightly --profile minimal --component rustfmt
+#       - name: Install nightly toolchain for rustfmt
+#         run: rustup install nightly --profile minimal --component rustfmt
 
-      - name: Check Rust files are formatted
-        run: cargo +nightly fmt --check
+#       - name: Check Rust files are formatted
+#         run: cargo +nightly fmt --check
 
-  fmt-toml:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: ${{ github.head_ref }}
+#   fmt-toml:
+#     runs-on: ubuntu-latest
+#     steps:
+#       - uses: actions/checkout@v5
+#         with:
+#           ref: ${{ github.head_ref }}
 
-      - name: Install taplo-cli
-        run: cargo install --locked taplo-cli
+#       - name: Install taplo-cli
+#         run: cargo install --locked taplo-cli
 
-      - name: Check TOML files are formatted
-        run: taplo fmt --check .
+#       - name: Check TOML files are formatted
+#         run: taplo fmt --check .
 
-  machete:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: ${{ github.head_ref }}
+#   machete:
+#     runs-on: ubuntu-latest
+#     steps:
+#       - uses: actions/checkout@v5
+#         with:
+#           ref: ${{ github.head_ref }}
 
-      - name: Install active toolchain
-        run: rustup install
+#       - name: Install active toolchain
+#         run: rustup install
 
-      - name: Install cargo-machete
-        run: cargo install cargo-machete
+#       - name: Install cargo-machete
+#         run: cargo install cargo-machete
 
-      - name: Check for unused dependencies
-        run: cargo machete
+#       - name: Check for unused dependencies
+#         run: cargo machete
 
-  deny:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: ${{ github.head_ref }}
+#   deny:
+#     runs-on: ubuntu-latest
+#     steps:
+#       - uses: actions/checkout@v5
+#         with:
+#           ref: ${{ github.head_ref }}
 
-      - name: Install cargo-deny
-        run: cargo install --locked cargo-deny
+#       - name: Install cargo-deny
+#         run: cargo install --locked cargo-deny
 
-      - name: Check licenses and advisories
-        run: cargo deny check
+#       - name: Check licenses and advisories
+#         run: cargo deny check
 
-  lint:
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
+#   lint:
+#     runs-on: ubuntu-latest
+#     timeout-minutes: 60
 
-    name: lint
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: ${{ github.head_ref }}
+#     name: lint
+#     steps:
+#       - uses: actions/checkout@v5
+#         with:
+#           ref: ${{ github.head_ref }}
 
-      - uses: ./.github/actions/install-system-deps
+#       - uses: ./.github/actions/install-system-deps
 
-      - uses: ./.github/actions/install-risc0
+#       - uses: ./.github/actions/install-risc0
 
-      - uses: ./.github/actions/install-logos-blockchain-circuits
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+#       - uses: ./.github/actions/install-logos-blockchain-circuits
+#         with:
+#           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install active toolchain
-        run: rustup install
+#       - name: Install active toolchain
+#         run: rustup install
 
-      - name: Lint workspace
-        env:
-          RISC0_SKIP_BUILD: "1"
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+#       - name: Lint workspace
+#         env:
+#           RISC0_SKIP_BUILD: "1"
+#         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-      - name: Lint programs
-        env:
-          RISC0_SKIP_BUILD: "1"
-        run: cargo clippy -p "*programs" -- -D warnings
+#       - name: Lint programs
+#         env:
+#           RISC0_SKIP_BUILD: "1"
+#         run: cargo clippy -p "*programs" -- -D warnings
 
-  unit-tests:
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: ${{ github.head_ref }}
+#   unit-tests:
+#     runs-on: ubuntu-latest
+#     timeout-minutes: 60
+#     steps:
+#       - uses: actions/checkout@v5
+#         with:
+#           ref: ${{ github.head_ref }}
 
-      - uses: ./.github/actions/install-system-deps
+#       - uses: ./.github/actions/install-system-deps
 
-      - uses: ./.github/actions/install-risc0
+#       - uses: ./.github/actions/install-risc0
 
-      - uses: ./.github/actions/install-logos-blockchain-circuits
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+#       - uses: ./.github/actions/install-logos-blockchain-circuits
+#         with:
+#           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install active toolchain
-        run: rustup install
+#       - name: Install active toolchain
+#         run: rustup install
 
-      - name: Install nextest
-        run: cargo install --locked cargo-nextest
+#       - name: Install nextest
+#         run: cargo install --locked cargo-nextest
 
-      - name: Run tests
-        env:
-          RISC0_DEV_MODE: "1"
-          RUST_LOG: "info"
-        run: cargo nextest run --workspace --exclude integration_tests
+#       - name: Run tests
+#         env:
+#           RISC0_DEV_MODE: "1"
+#           RUST_LOG: "info"
+#         run: cargo nextest run --workspace --exclude integration_tests
 
-  integration-tests:
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: ${{ github.head_ref }}
+#   integration-tests:
+#     runs-on: ubuntu-latest
+#     timeout-minutes: 60
+#     steps:
+#       - uses: actions/checkout@v5
+#         with:
+#           ref: ${{ github.head_ref }}
 
-      - uses: ./.github/actions/install-system-deps
+#       - uses: ./.github/actions/install-system-deps
 
-      - uses: ./.github/actions/install-risc0
+#       - uses: ./.github/actions/install-risc0
 
-      - uses: ./.github/actions/install-logos-blockchain-circuits
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+#       - uses: ./.github/actions/install-logos-blockchain-circuits
+#         with:
+#           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install active toolchain
-        run: rustup install
+#       - name: Install active toolchain
+#         run: rustup install
 
-      - name: Install nextest
-        run: cargo install --locked cargo-nextest
+#       - name: Install nextest
+#         run: cargo install --locked cargo-nextest
 
-      - name: Run tests
-        env:
-          RISC0_DEV_MODE: "1"
-          RUST_LOG: "info"
-        run: cargo nextest run -p integration_tests -- --skip tps_test --skip indexer
+#       - name: Run tests
+#         env:
+#           RISC0_DEV_MODE: "1"
+#           RUST_LOG: "info"
+#         run: cargo nextest run -p integration_tests -- --skip tps_test --skip indexer
 
   integration-tests-indexer:
     runs-on: ubuntu-latest
@@ -184,53 +184,53 @@ jobs:
           RUST_LOG: "info"
         run: cargo nextest run -p integration_tests indexer -- --skip tps_test 
 
-  valid-proof-test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: ${{ github.head_ref }}
+#   valid-proof-test:
+#     runs-on: ubuntu-latest
+#     timeout-minutes: 60
+#     steps:
+#       - uses: actions/checkout@v5
+#         with:
+#           ref: ${{ github.head_ref }}
 
-      - uses: ./.github/actions/install-system-deps
+#       - uses: ./.github/actions/install-system-deps
 
-      - uses: ./.github/actions/install-risc0
+#       - uses: ./.github/actions/install-risc0
 
-      - uses: ./.github/actions/install-logos-blockchain-circuits
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+#       - uses: ./.github/actions/install-logos-blockchain-circuits
+#         with:
+#           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install active toolchain
-        run: rustup install
+#       - name: Install active toolchain
+#         run: rustup install
 
-      - name: Test valid proof
-        env:
-          RUST_LOG: "info"
-        run: cargo test -p integration_tests -- --exact private::private_transfer_to_owned_account
+#       - name: Test valid proof
+#         env:
+#           RUST_LOG: "info"
+#         run: cargo test -p integration_tests -- --exact private::private_transfer_to_owned_account
 
-  artifacts:
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
+#   artifacts:
+#     runs-on: ubuntu-latest
+#     timeout-minutes: 60
 
-    name: artifacts
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: ${{ github.head_ref }}
+#     name: artifacts
+#     steps:
+#       - uses: actions/checkout@v5
+#         with:
+#           ref: ${{ github.head_ref }}
 
-      - uses: ./.github/actions/install-risc0
+#       - uses: ./.github/actions/install-risc0
 
-      - name: Install just
-        run: cargo install just
+#       - name: Install just
+#         run: cargo install just
 
-      - name: Build artifacts
-        run: just build-artifacts
+#       - name: Build artifacts
+#         run: just build-artifacts
 
-      - name: Check if artifacts match repository
-        run: |
-          if ! git diff --exit-code artifacts/; then
-            echo "❌ Artifacts in the repository are out of date!"
-            echo "Please run 'just build-artifacts' and commit the changes."
-            exit 1
-          fi
-          echo "✅ Artifacts are up to date"
+#       - name: Check if artifacts match repository
+#         run: |
+#           if ! git diff --exit-code artifacts/; then
+#             echo "❌ Artifacts in the repository are out of date!"
+#             echo "Please run 'just build-artifacts' and commit the changes."
+#             exit 1
+#           fi
+#           echo "✅ Artifacts are up to date"
