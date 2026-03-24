@@ -125,7 +125,11 @@ impl IndexerStore {
                 transaction
                     .clone()
                     .transaction_stateless_check()?
-                    .execute_check_on_state(&mut state_guard, block.header.block_id, block.header.timestamp)?;
+                    .execute_check_on_state(
+                        &mut state_guard,
+                        block.header.block_id,
+                        block.header.timestamp,
+                    )?;
             }
         }
 

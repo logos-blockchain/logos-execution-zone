@@ -188,7 +188,8 @@ impl V03State {
         timestamp_ms: Timestamp,
     ) -> Result<(), NssaError> {
         // 1. Verify the transaction satisfies acceptance criteria
-        let public_state_diff = tx.validate_and_produce_public_state_diff(self, block_id, timestamp_ms)?;
+        let public_state_diff =
+            tx.validate_and_produce_public_state_diff(self, block_id, timestamp_ms)?;
 
         let message = tx.message();
 
@@ -3235,14 +3236,15 @@ pub mod tests {
             let account_ids = vec![pre.account_id];
             let nonces = vec![];
             let program_id = validity_window_program.id();
-            let instruction = (validity_window.0, validity_window.1, None::<Timestamp>, None::<Timestamp>);
-            let message = public_transaction::Message::try_new(
-                program_id,
-                account_ids,
-                nonces,
-                instruction,
-            )
-            .unwrap();
+            let instruction = (
+                validity_window.0,
+                validity_window.1,
+                None::<Timestamp>,
+                None::<Timestamp>,
+            );
+            let message =
+                public_transaction::Message::try_new(program_id, account_ids, nonces, instruction)
+                    .unwrap();
             let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
             PublicTransaction::new(message, witness_set)
         };
@@ -3287,7 +3289,12 @@ pub mod tests {
             let shared_secret = SharedSecretKey::new(&esk, &account_keys.vpk());
             let epk = EphemeralPublicKey::from_scalar(esk);
 
-            let instruction = (validity_window.0, validity_window.1, None::<Timestamp>, None::<Timestamp>);
+            let instruction = (
+                validity_window.0,
+                validity_window.1,
+                None::<Timestamp>,
+                None::<Timestamp>,
+            );
             let (output, proof) = circuit::execute_and_prove(
                 vec![pre],
                 Program::serialize_instruction(instruction).unwrap(),

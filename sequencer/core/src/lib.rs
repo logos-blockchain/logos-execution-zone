@@ -163,8 +163,7 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
     }
 
     fn next_block_timestamp_ms(&self) -> nssa_core::program::Timestamp {
-        u64::try_from(chrono::Utc::now().timestamp_millis())
-            .expect("Timestamp must be positive")
+        u64::try_from(chrono::Utc::now().timestamp_millis()).expect("Timestamp must be positive")
     }
 
     fn execute_check_transaction_on_state(
@@ -174,9 +173,10 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
         let block_id = self.next_block_id();
         let timestamp_ms = self.next_block_timestamp_ms();
         match &tx {
-            NSSATransaction::Public(tx) => self
-                .state
-                .transition_from_public_transaction(tx, block_id, timestamp_ms),
+            NSSATransaction::Public(tx) => {
+                self.state
+                    .transition_from_public_transaction(tx, block_id, timestamp_ms)
+            }
             NSSATransaction::PrivacyPreserving(tx) => self
                 .state
                 .transition_from_privacy_preserving_transaction(tx, block_id, timestamp_ms),

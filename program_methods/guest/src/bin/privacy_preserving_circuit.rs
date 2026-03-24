@@ -47,12 +47,11 @@ impl ExecutionState {
             .filter_map(|output| output.validity_window.to_timestamp())
             .min();
 
-        let validity_window =
-            (valid_from_id, valid_until_id, valid_from_ts, valid_until_ts)
-                .try_into()
-                .expect(
-                    "There should be non empty intersection in the program output validity windows",
-                );
+        let validity_window = (valid_from_id, valid_until_id, valid_from_ts, valid_until_ts)
+            .try_into()
+            .expect(
+                "There should be non empty intersection in the program output validity windows",
+            );
 
         let mut execution_state = Self {
             pre_states: Vec::new(),
