@@ -199,8 +199,8 @@ impl ValidityWindow {
         }
     }
 
-    /// Valid for block IDs in the range [from, to) and timestamps in [from_timestamp,
-    /// to_timestamp).
+    /// Valid for block IDs in the range [from, to) and timestamps in [`from_timestamp`,
+    /// `to_timestamp`).
     /// A `None` bound on either side is treated as unbounded in that direction.
     #[must_use]
     pub fn is_valid_for(&self, block_id: BlockId, timestamp_ms: Timestamp) -> bool {
