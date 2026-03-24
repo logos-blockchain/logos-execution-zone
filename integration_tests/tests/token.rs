@@ -76,7 +76,7 @@ async fn create_and_transfer_public_token() -> Result<()> {
     };
 
     // Create new token
-    let name = "A NAME".to_string();
+    let name = "A NAME".to_owned();
     let total_supply = 37;
     let subcommand = TokenProgramAgnosticSubcommand::New {
         definition_account_id: Some(format_public_account_id(definition_account_id)),
@@ -324,7 +324,7 @@ async fn create_and_transfer_token_with_private_supply() -> Result<()> {
     };
 
     // Create new token
-    let name = "A NAME".to_string();
+    let name = "A NAME".to_owned();
     let total_supply = 37;
     let subcommand = TokenProgramAgnosticSubcommand::New {
         definition_account_id: Some(format_public_account_id(definition_account_id)),
@@ -486,7 +486,7 @@ async fn create_token_with_private_definition() -> Result<()> {
     };
 
     // Create token with private definition
-    let name = "A NAME".to_string();
+    let name = "A NAME".to_owned();
     let total_supply = 37;
     let subcommand = TokenProgramAgnosticSubcommand::New {
         definition_account_id: Some(format_private_account_id(definition_account_id)),
@@ -686,7 +686,7 @@ async fn create_token_with_private_definition_and_supply() -> Result<()> {
     };
 
     // Create token with both private definition and supply
-    let name = "A NAME".to_string();
+    let name = "A NAME".to_owned();
     let total_supply = 37;
     let subcommand = TokenProgramAgnosticSubcommand::New {
         definition_account_id: Some(format_private_account_id(definition_account_id)),
@@ -862,7 +862,7 @@ async fn shielded_token_transfer() -> Result<()> {
     };
 
     // Create token
-    let name = "A NAME".to_string();
+    let name = "A NAME".to_owned();
     let total_supply = 37;
     let subcommand = TokenProgramAgnosticSubcommand::New {
         definition_account_id: Some(format_public_account_id(definition_account_id)),
@@ -988,7 +988,7 @@ async fn deshielded_token_transfer() -> Result<()> {
     };
 
     // Create token with private supply
-    let name = "A NAME".to_string();
+    let name = "A NAME".to_owned();
     let total_supply = 37;
     let subcommand = TokenProgramAgnosticSubcommand::New {
         definition_account_id: Some(format_public_account_id(definition_account_id)),
@@ -1098,7 +1098,7 @@ async fn token_claiming_path_with_private_accounts() -> Result<()> {
     };
 
     // Create token
-    let name = "A NAME".to_string();
+    let name = "A NAME".to_owned();
     let total_supply = 37;
     let subcommand = TokenProgramAgnosticSubcommand::New {
         definition_account_id: Some(format_private_account_id(definition_account_id)),
@@ -1225,7 +1225,7 @@ async fn create_token_using_labels() -> Result<()> {
     };
 
     // Create token using account labels instead of IDs
-    let name = "LABELED TOKEN".to_string();
+    let name = "LABELED TOKEN".to_owned();
     let total_supply = 100;
     let subcommand = TokenProgramAgnosticSubcommand::New {
         definition_account_id: None,
@@ -1334,7 +1334,7 @@ async fn transfer_token_using_from_label() -> Result<()> {
         definition_account_label: None,
         supply_account_id: Some(format_public_account_id(supply_account_id)),
         supply_account_label: None,
-        name: "LABEL TEST TOKEN".to_string(),
+        name: "LABEL TEST TOKEN".to_owned(),
         total_supply,
     };
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
