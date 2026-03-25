@@ -380,25 +380,6 @@ pub fn read_nssa_inputs<T: DeserializeOwned>() -> (ProgramInput<T>, InstructionD
     )
 }
 
-pub fn write_nssa_outputs(
-    instruction_data: InstructionData,
-    pre_states: Vec<AccountWithMetadata>,
-    post_states: Vec<AccountPostState>,
-) {
-    ProgramOutput::new(instruction_data, pre_states, post_states).write();
-}
-
-pub fn write_nssa_outputs_with_chained_call(
-    instruction_data: InstructionData,
-    pre_states: Vec<AccountWithMetadata>,
-    post_states: Vec<AccountPostState>,
-    chained_calls: Vec<ChainedCall>,
-) {
-    ProgramOutput::new(instruction_data, pre_states, post_states)
-        .with_chained_calls(chained_calls)
-        .write();
-}
-
 /// Validates well-behaved program execution.
 ///
 /// # Parameters
