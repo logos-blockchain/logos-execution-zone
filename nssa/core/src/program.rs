@@ -270,6 +270,7 @@ pub struct InvalidWindow;
 
 #[derive(Serialize, Deserialize, Clone)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
+#[must_use = "ProgramOutput does nothing unless written"]
 pub struct ProgramOutput {
     /// The instruction data the program received to produce this output.
     pub instruction_data: InstructionData,

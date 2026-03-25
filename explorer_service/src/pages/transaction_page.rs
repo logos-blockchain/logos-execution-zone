@@ -184,10 +184,10 @@ pub fn TransactionPage() -> impl IntoView {
                                         proof,
                                     } = witness_set;
                                     let validity_window_formatted = match validity_window.0 {
-                                        (Some(start), Some(end)) => format!("from {start} to {end}"),
-                                        (Some(start), None) => format!("from {start}"),
-                                        (None, Some(end)) => format!("until {end}"),
-                                        (None, None) => "unbounded".to_owned(),
+                                        (Some(start), Some(end)) => format!("Blocks {start} (included) – {end} (excluded)"),
+                                        (Some(start), None) => format!("Block {start} onwards"),
+                                        (None, Some(end)) => format!("Before block {end}"),
+                                        (None, None) => "Unbounded".to_owned(),
                                     };
 
                                     let proof_len = proof.map_or(0, |p| p.0.len());
