@@ -75,7 +75,7 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
             .await
             .expect("Failed to create Indexer Client");
 
-        let (_tx, genesis_msg_id) = block_settlement_client
+        let (genesis_tx, genesis_msg_id) = block_settlement_client
             .create_inscribe_tx(&genesis_block)
             .expect("Failed to create inscribe tx for genesis block");
 
@@ -100,6 +100,16 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
             info!(
                 "No database found when starting the sequencer. Creating a fresh new with the initial data in config"
             );
+
+            // Post the genesis block to Bedrock so the indexer can locate the channel
+            // start via `search_for_channel_start`, which scans backward for block_id == 1.
+            if let Err(err) = block_settlement_client
+                .submit_inscribe_tx_to_bedrock(genesis_tx)
+                .await
+            {
+                error!("Failed to post genesis block to Bedrock with error: {err:#}");
+            }
+
             let initial_commitments: Vec<nssa_core::Commitment> = config
                 .initial_commitments
                 .iter()
