@@ -239,7 +239,7 @@ fn compute_circuit_output(
                 };
 
                 assert_eq!(
-                    AccountId::from(npk),
+                    AccountId::generate_account_id(npk, None),
                     pre_state.account_id,
                     "AccountId mismatch"
                 );
@@ -314,7 +314,7 @@ fn compute_circuit_output(
                 post_with_updated_nonce.nonce = new_nonce;
 
                 // Compute commitment
-                let commitment_post = Commitment::new(npk, &post_with_updated_nonce);
+                let commitment_post = Commitment::new(&pre_state.account_id, &post_with_updated_nonce);
 
                 // Encrypt and push post state
                 let encrypted_account = EncryptionScheme::encrypt(
@@ -358,6 +358,9 @@ fn compute_nullifier_and_set_digest(
     npk: &NullifierPublicKey,
     nsk: &NullifierSecretKey,
 ) -> (Nullifier, CommitmentSetDigest) {
+    // TODO: consider rewriting the function to receive account id instead of npk.
+    // NOTE: this does not use the identifier at all.
+    let account_id = AccountId::generate_account_id(npk, None);
     membership_proof_opt.as_ref().map_or_else(
         || {
             assert_eq!(
@@ -372,7 +375,7 @@ fn compute_nullifier_and_set_digest(
         },
         |membership_proof| {
             // Compute commitment set digest associated with provided auth path
-            let commitment_pre = Commitment::new(npk, pre_account);
+            let commitment_pre = Commitment::new(&account_id, pre_account);
             let set_digest = compute_digest_for_path(&commitment_pre, membership_proof);
 
             // Compute update nullifier

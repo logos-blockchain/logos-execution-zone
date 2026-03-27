@@ -15,7 +15,7 @@ use logos_blockchain_key_management_system_service::keys::{ED25519_SECRET_KEY_SI
 use mempool::{MemPool, MemPoolHandle};
 #[cfg(feature = "mock")]
 pub use mock::SequencerCoreWithMockClients;
-use nssa::V03State;
+use nssa::{AccountId, V03State};
 pub use storage::error::DbError;
 use testnet_initial_state::initial_state;
 
@@ -113,11 +113,11 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
                             let npk = &init_comm_data.npk;
 
                             let mut acc = init_comm_data.account.clone();
-
+                            let acc_id = &AccountId::generate_account_id(npk, None);
                             acc.program_owner =
                                 nssa::program::Program::authenticated_transfer_program().id();
 
-                            nssa_core::Commitment::new(npk, &acc)
+                            nssa_core::Commitment::new(acc_id, &acc)
                         })
                         .collect()
                 });

@@ -130,11 +130,11 @@ pub struct AccountWithMetadata {
 
 #[cfg(feature = "host")]
 impl AccountWithMetadata {
-    pub fn new(account: Account, is_authorized: bool, account_id: impl Into<AccountId>) -> Self {
+    pub fn new(account: Account, is_authorized: bool, account_id: AccountId) -> Self {
         Self {
             account,
             is_authorized,
-            account_id: account_id.into(),
+            account_id: account_id,
         }
     }
 }

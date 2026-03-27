@@ -138,7 +138,9 @@ pub mod tests {
         let npk1 = NullifierPublicKey::from(&nsk1);
         let npk2 = NullifierPublicKey::from(&nsk2);
 
-        let public_account_ids = vec![AccountId::new([1; 32])];
+        let account_id1 = AccountId::generate_account_id(&npk1, None);
+        let account_id2 = AccountId::generate_account_id(&npk2, None);
+        let public_account_ids = vec![account_id1, account_id2];
 
         let nonces = vec![1_u128.into(), 2_u128.into(), 3_u128.into()];
 
@@ -146,9 +148,9 @@ pub mod tests {
 
         let encrypted_private_post_states = Vec::new();
 
-        let new_commitments = vec![Commitment::new(&npk2, &account2)];
+        let new_commitments = vec![Commitment::new(&account_id1, &account2)];
 
-        let old_commitment = Commitment::new(&npk1, &account1);
+        let old_commitment = Commitment::new(&account_id2, &account1);
         let new_nullifiers = vec![(
             Nullifier::for_account_update(&old_commitment, &nsk1),
             [0; 32],
@@ -168,8 +170,9 @@ pub mod tests {
     fn encrypted_account_data_constructor() {
         let npk = NullifierPublicKey::from(&[1; 32]);
         let vpk = ViewingPublicKey::from_scalar([2; 32]);
+        let account_id = AccountId::generate_account_id(&npk, None);
         let account = Account::default();
-        let commitment = Commitment::new(&npk, &account);
+        let commitment = Commitment::new(&account_id, &account);
         let esk = [3; 32];
         let shared_secret = SharedSecretKey::new(&esk, &vpk);
         let epk = EphemeralPublicKey::from_scalar(esk);

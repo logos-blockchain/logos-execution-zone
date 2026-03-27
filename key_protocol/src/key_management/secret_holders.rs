@@ -20,7 +20,7 @@ pub struct SeedHolder {
 
 /// Secret spending key object. Can produce `PrivateKeyHolder` objects.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
-pub struct SecretSpendingKey(pub(crate) [u8; 32]);
+pub struct SecretSpendingKey(pub [u8; 32]);
 
 pub type ViewingSecretKey = Scalar;
 
@@ -30,7 +30,7 @@ pub type ViewingSecretKey = Scalar;
 #[expect(clippy::partial_pub_fields, reason = "TODO: fix later")]
 pub struct PrivateKeyHolder {
     pub nullifier_secret_key: NullifierSecretKey,
-    pub(crate) viewing_secret_key: ViewingSecretKey,
+    pub viewing_secret_key: ViewingSecretKey,
 }
 
 impl SeedHolder {

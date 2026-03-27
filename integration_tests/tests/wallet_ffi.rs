@@ -338,7 +338,7 @@ fn wallet_ffi_save_and_load_persistent_storage() -> Result<()> {
     };
 
     assert_eq!(
-        nssa::AccountId::from(&private_account_keys.npk()),
+        nssa::AccountId::account_id_without_identifier(&private_account_keys.npk()),
         out_private_account_id.into()
     );
 

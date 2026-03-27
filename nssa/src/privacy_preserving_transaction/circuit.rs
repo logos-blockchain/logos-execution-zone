@@ -277,7 +277,7 @@ mod tests {
             true,
             AccountId::account_id_without_identifier(&sender_keys.npk()),
         );
-        let commitment_sender = Commitment::new(&sender_keys.npk(), &sender_pre.account);
+        let commitment_sender = Commitment::new(&sender_pre.account_id, &sender_pre.account);
 
         let recipient = AccountWithMetadata::new(
             Account::default(),
@@ -315,8 +315,8 @@ mod tests {
             ..Default::default()
         };
         let expected_new_commitments = vec![
-            Commitment::new(&sender_keys.npk(), &expected_private_account_1),
-            Commitment::new(&recipient_keys.npk(), &expected_private_account_2),
+            Commitment::new(&sender_pre.account_id, &expected_private_account_1),
+            Commitment::new(&recipient.account_id, &expected_private_account_2),
         ];
 
         let esk_1 = [3; 32];

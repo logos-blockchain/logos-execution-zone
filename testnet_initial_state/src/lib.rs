@@ -142,7 +142,7 @@ pub fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialD
 
     vec![
         PrivateAccountPrivateInitialData {
-            account_id: AccountId::from(&key_chain_1.nullifier_public_key),
+            account_id: AccountId::generate_account_id(&key_chain_1.nullifier_public_key, None),
             account: Account {
                 program_owner: DEFAULT_PROGRAM_OWNER,
                 balance: PRIV_ACC_A_INITIAL_BALANCE,
@@ -152,7 +152,7 @@ pub fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialD
             key_chain: key_chain_1,
         },
         PrivateAccountPrivateInitialData {
-            account_id: AccountId::from(&key_chain_2.nullifier_public_key),
+            account_id: AccountId::generate_account_id(&key_chain_2.nullifier_public_key, None),
             account: Account {
                 program_owner: DEFAULT_PROGRAM_OWNER,
                 balance: PRIV_ACC_B_INITIAL_BALANCE,
@@ -200,12 +200,13 @@ pub fn initial_state() -> V03State {
         .iter()
         .map(|init_comm_data| {
             let npk = &init_comm_data.npk;
+            let acc_id = &AccountId::generate_account_id(npk, None);
 
             let mut acc = init_comm_data.account.clone();
 
             acc.program_owner = nssa::program::Program::authenticated_transfer_program().id();
 
-            nssa_core::Commitment::new(npk, &acc)
+            nssa_core::Commitment::new(acc_id, &acc)
         })
         .collect();
 

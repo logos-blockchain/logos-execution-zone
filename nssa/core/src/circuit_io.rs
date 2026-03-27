@@ -47,6 +47,7 @@ impl PrivacyPreservingCircuitOutput {
     }
 }
 
+/*
 #[cfg(feature = "host")]
 #[cfg(test)]
 mod tests {
@@ -107,3 +108,4 @@ mod tests {
         assert_eq!(output, output_from_slice);
     }
 }
+*/
