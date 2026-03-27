@@ -109,11 +109,20 @@ impl PublicTransaction {
             .account_ids
             .iter()
             .map(|account_id| {
+                let account = state.get_account_by_id(*account_id);
+                let owner_program_id = account.program_owner;
+                let is_default_owner = owner_program_id == nssa_core::program::DEFAULT_PROGRAM_ID;
                 AccountWithMetadata::new(
-                    state.get_account_by_id(*account_id),
+                    account,
                     signer_account_ids.contains(account_id),
                     *account_id,
                 )
+                .with_owner_program_id(if is_default_owner {
+                    // Uninitialized accounts have no meaningful owner
+                    nssa_core::program::DEFAULT_PROGRAM_ID
+                } else {
+                    owner_program_id
+                })
             })
             .collect();
 
