@@ -126,6 +126,11 @@ pub struct AccountWithMetadata {
     pub account: Account,
     pub is_authorized: bool,
     pub account_id: AccountId,
+    /// The program that owns this account. Programs can use this to verify
+    /// that an input account is owned by themselves, preventing spoofing attacks.
+    /// See: https://github.com/logos-blockchain/logos-execution-zone/issues/347
+    #[serde(default)]
+    pub owner_program_id: Option<crate::program::ProgramId>,
 }
 
 #[cfg(feature = "host")]
@@ -135,7 +140,13 @@ impl AccountWithMetadata {
             account,
             is_authorized,
             account_id: account_id.into(),
+            owner_program_id: None,
         }
+    }
+
+    pub fn with_owner_program_id(mut self, program_id: crate::program::ProgramId) -> Self {
+        self.owner_program_id = Some(program_id);
+        self
     }
 }
 
