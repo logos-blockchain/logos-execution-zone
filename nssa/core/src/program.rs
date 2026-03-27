@@ -300,8 +300,14 @@ pub fn validate_execution(
         }
 
         // 7. If a post state has default program owner, the pre state must have been a default
-        //    account
-        if post.account.program_owner == DEFAULT_PROGRAM_ID && pre.account != Account::default() {
+        //    account. Exception: if the account is completely unchanged (passthrough signer),
+        //    allow it — this enables programs to verify external signers via is_authorized
+        //    without claiming or modifying the signer's account.
+        //    See: https://github.com/logos-blockchain/logos-execution-zone/issues/339
+        if post.account.program_owner == DEFAULT_PROGRAM_ID
+            && pre.account != Account::default()
+            && pre.account != post.account
+        {
             return false;
         }
     }
@@ -372,6 +378,52 @@ mod tests {
         assert!(!account_post_state.requires_claim());
     }
 
+
+    #[test]
+    fn passthrough_signer_account_allowed_in_rule_7() {
+        // Regression test for https://github.com/logos-blockchain/logos-execution-zone/issues/339
+        // Programs should be able to include external signer accounts (nonce > 0) in pre/post
+        // states unchanged, enabling is_authorized checks for multisig/governance programs.
+        use crate::account::{Account, AccountId, AccountWithMetadata, Data};
+
+        let signer_account = Account {
+            program_owner: DEFAULT_PROGRAM_ID,
+            balance: 0,
+            data: Data::default(),
+            nonce: 1u128.into(), // nonce > 0: previously used account
+        };
+
+        let program_id = [1u32; 8];
+        let account_id: AccountId = "11111111111111111111111111111111".parse().unwrap();
+
+        let pre = AccountWithMetadata {
+            account: signer_account.clone(),
+            is_authorized: true,
+            account_id: account_id.clone(),
+        };
+
+        let post = AccountPostState::new(signer_account.clone()); // unchanged
+
+        // Should pass: account is completely unchanged (passthrough signer)
+        let result = validate_execution(
+            &[pre.clone()],
+            &[post],
+            program_id,
+        );
+        assert!(result, "passthrough signer account should be allowed");
+
+        // Should fail: account is modified while still having DEFAULT_PROGRAM_ID owner
+        let mut modified_account = signer_account.clone();
+        modified_account.balance = 100;
+        let post_modified = AccountPostState::new(modified_account);
+
+        let result_modified = validate_execution(
+            &[pre],
+            &[post_modified],
+            program_id,
+        );
+        assert!(!result_modified, "modified default-owner account should be rejected");
+    }
     #[test]
     fn post_state_account_getter() {
         let mut account = Account {
