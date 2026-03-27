@@ -1,7 +1,7 @@
 use nssa_core::{
     account::{Account, AccountWithMetadata},
     program::{
-        AccountPostState, DEFAULT_PROGRAM_ID, ProgramInput, read_nssa_inputs, write_nssa_outputs,
+        AccountPostState, DEFAULT_PROGRAM_ID, ProgramInput, ProgramOutput, read_nssa_inputs,
     },
 };
 
@@ -84,5 +84,5 @@ fn main() {
         _ => panic!("invalid params"),
     };
 
-    write_nssa_outputs(instruction_words, pre_states, post_states);
+    ProgramOutput::new(instruction_words, pre_states, post_states).write();
 }

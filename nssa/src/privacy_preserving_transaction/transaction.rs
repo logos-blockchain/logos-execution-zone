@@ -7,6 +7,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use nssa_core::{
     Commitment, CommitmentSetDigest, Nullifier, PrivacyPreservingCircuitOutput,
     account::{Account, AccountWithMetadata},
+    program::{BlockId, ValidityWindow},
 };
 use sha2::{Digest as _, digest::FixedOutput as _};
 
@@ -35,6 +36,7 @@ impl PrivacyPreservingTransaction {
     pub(crate) fn validate_and_produce_public_state_diff(
         &self,
         state: &V03State,
+        block_id: BlockId,
     ) -> Result<HashMap<AccountId, Account>, NssaError> {
         let message = &self.message;
         let witness_set = &self.witness_set;
@@ -91,6 +93,11 @@ impl PrivacyPreservingTransaction {
             }
         }
 
+        // Verify validity window
+        if !message.validity_window.is_valid_for_block_id(block_id) {
+            return Err(NssaError::OutOfValidityWindow);
+        }
+
         // Build pre_states for proof verification
         let public_pre_states: Vec<_> = message
             .public_account_ids
@@ -112,6 +119,7 @@ impl PrivacyPreservingTransaction {
             &message.encrypted_private_post_states,
             &message.new_commitments,
             &message.new_nullifiers,
+            &message.validity_window,
         )?;
 
         // 5. Commitment freshness
@@ -173,6 +181,7 @@ fn check_privacy_preserving_circuit_proof_is_valid(
     encrypted_private_post_states: &[EncryptedAccountData],
     new_commitments: &[Commitment],
     new_nullifiers: &[(Nullifier, CommitmentSetDigest)],
+    validity_window: &ValidityWindow,
 ) -> Result<(), NssaError> {
     let output = PrivacyPreservingCircuitOutput {
         public_pre_states: public_pre_states.to_vec(),
@@ -184,6 +193,7 @@ fn check_privacy_preserving_circuit_proof_is_valid(
             .collect(),
         new_commitments: new_commitments.to_vec(),
         new_nullifiers: new_nullifiers.to_vec(),
+        validity_window: validity_window.to_owned(),
     };
     proof
         .is_valid_for(&output)

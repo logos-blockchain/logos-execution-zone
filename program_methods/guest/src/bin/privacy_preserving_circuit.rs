@@ -11,7 +11,7 @@ use nssa_core::{
     compute_digest_for_path,
     program::{
         AccountPostState, ChainedCall, DEFAULT_PROGRAM_ID, MAX_NUMBER_CHAINED_CALLS, ProgramId,
-        ProgramOutput, validate_execution,
+        ProgramOutput, ValidityWindow, validate_execution,
     },
 };
 use risc0_zkvm::{guest::env, serde::to_vec};
@@ -20,11 +20,31 @@ use risc0_zkvm::{guest::env, serde::to_vec};
 struct ExecutionState {
     pre_states: Vec<AccountWithMetadata>,
     post_states: HashMap<AccountId, Account>,
+    validity_window: ValidityWindow,
 }
 
 impl ExecutionState {
     /// Validate program outputs and derive the overall execution state.
     pub fn derive_from_outputs(program_id: ProgramId, program_outputs: Vec<ProgramOutput>) -> Self {
+        let valid_from_id = program_outputs
+            .iter()
+            .filter_map(|output| output.validity_window.start())
+            .max();
+        let valid_until_id = program_outputs
+            .iter()
+            .filter_map(|output| output.validity_window.end())
+            .min();
+
+        let validity_window = (valid_from_id, valid_until_id).try_into().expect(
+            "There should be non empty intersection in the program output validity windows",
+        );
+
+        let mut execution_state = Self {
+            pre_states: Vec::new(),
+            post_states: HashMap::new(),
+            validity_window,
+        };
+
         let Some(first_output) = program_outputs.first() else {
             panic!("No program outputs provided");
         };
@@ -36,11 +56,6 @@ impl ExecutionState {
             pda_seeds: Vec::new(),
         };
         let mut chained_calls = VecDeque::from_iter([(initial_call, None)]);
-
-        let mut execution_state = Self {
-            pre_states: Vec::new(),
-            post_states: HashMap::new(),
-        };
 
         let mut program_outputs_iter = program_outputs.into_iter();
         let mut chain_calls_counter = 0;
@@ -210,6 +225,7 @@ fn compute_circuit_output(
         ciphertexts: Vec::new(),
         new_commitments: Vec::new(),
         new_nullifiers: Vec::new(),
+        validity_window: execution_state.validity_window,
     };
 
     let states_iter = execution_state.into_states_iter();

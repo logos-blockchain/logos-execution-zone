@@ -167,10 +167,12 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
         tx: NSSATransaction,
     ) -> Result<NSSATransaction, nssa::error::NssaError> {
         match &tx {
-            NSSATransaction::Public(tx) => self.state.transition_from_public_transaction(tx),
+            NSSATransaction::Public(tx) => self
+                .state
+                .transition_from_public_transaction(tx, self.next_block_id()),
             NSSATransaction::PrivacyPreserving(tx) => self
                 .state
-                .transition_from_privacy_preserving_transaction(tx),
+                .transition_from_privacy_preserving_transaction(tx, self.next_block_id()),
             NSSATransaction::ProgramDeployment(tx) => self
                 .state
                 .transition_from_program_deployment_transaction(tx),
@@ -204,10 +206,7 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
     ) -> Result<(SignedMantleTx, MsgId)> {
         let now = Instant::now();
 
-        let new_block_height = self
-            .chain_height
-            .checked_add(1)
-            .with_context(|| format!("Max block height reached: {}", self.chain_height))?;
+        let new_block_height = self.next_block_id();
 
         let mut valid_transactions = vec![];
 
@@ -354,6 +353,12 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
     pub fn indexer_client(&self) -> IC {
         self.indexer_client.clone()
     }
+
+    fn next_block_id(&self) -> u64 {
+        self.chain_height
+            .checked_add(1)
+            .unwrap_or_else(|| panic!("Max block height reached: {}", self.chain_height))
+    }
 }
 
 /// Load signing key from file or generate a new one if it doesn't exist.
@@ -418,7 +423,7 @@ mod tests {
                 node_url: "http://not-used-in-unit-tests".parse().unwrap(),
                 auth: None,
             },
-            retry_pending_blocks_timeout: Duration::from_secs(60 * 4),
+            retry_pending_blocks_timeout: Duration::from_mins(4),
             indexer_rpc_url: "ws://localhost:8779".parse().unwrap(),
             initial_public_accounts: None,
             initial_private_accounts: None,

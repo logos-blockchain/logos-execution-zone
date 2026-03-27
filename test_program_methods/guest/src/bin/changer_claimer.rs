@@ -1,4 +1,4 @@
-use nssa_core::program::{AccountPostState, ProgramInput, read_nssa_inputs, write_nssa_outputs};
+use nssa_core::program::{AccountPostState, ProgramInput, ProgramOutput, read_nssa_inputs};
 
 type Instruction = (Option<Vec<u8>>, bool);
 
@@ -33,5 +33,5 @@ fn main() {
         AccountPostState::new(account_post)
     };
 
-    write_nssa_outputs(instruction_words, vec![pre], vec![post_state]);
+    ProgramOutput::new(instruction_words, vec![pre], vec![post_state]).write();
 }

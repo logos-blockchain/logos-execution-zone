@@ -7,7 +7,7 @@ use crate::{
     CommitmentSetDigest, Data, EncryptedAccountData, EphemeralPublicKey, HashType, MantleMsgId,
     Nullifier, PrivacyPreservingMessage, PrivacyPreservingTransaction, ProgramDeploymentMessage,
     ProgramDeploymentTransaction, ProgramId, Proof, PublicKey, PublicMessage, PublicTransaction,
-    Signature, Transaction, WitnessSet,
+    Signature, Transaction, ValidityWindow, WitnessSet,
 };
 
 // ============================================================================
@@ -287,6 +287,7 @@ impl From<nssa::privacy_preserving_transaction::message::Message> for PrivacyPre
             encrypted_private_post_states,
             new_commitments,
             new_nullifiers,
+            validity_window,
         } = value;
         Self {
             public_account_ids: public_account_ids.into_iter().map(Into::into).collect(),
@@ -301,12 +302,13 @@ impl From<nssa::privacy_preserving_transaction::message::Message> for PrivacyPre
                 .into_iter()
                 .map(|(n, d)| (n.into(), d.into()))
                 .collect(),
+            validity_window: validity_window.into(),
         }
     }
 }
 
 impl TryFrom<PrivacyPreservingMessage> for nssa::privacy_preserving_transaction::message::Message {
-    type Error = nssa_core::account::data::DataTooBigError;
+    type Error = nssa::error::NssaError;
 
     fn try_from(value: PrivacyPreservingMessage) -> Result<Self, Self::Error> {
         let PrivacyPreservingMessage {
@@ -316,6 +318,7 @@ impl TryFrom<PrivacyPreservingMessage> for nssa::privacy_preserving_transaction:
             encrypted_private_post_states,
             new_commitments,
             new_nullifiers,
+            validity_window,
         } = value;
         Ok(Self {
             public_account_ids: public_account_ids.into_iter().map(Into::into).collect(),
@@ -326,7 +329,8 @@ impl TryFrom<PrivacyPreservingMessage> for nssa::privacy_preserving_transaction:
             public_post_states: public_post_states
                 .into_iter()
                 .map(TryInto::try_into)
-                .collect::<Result<Vec<_>, _>>()?,
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| nssa::error::NssaError::InvalidInput(format!("{e}")))?,
             encrypted_private_post_states: encrypted_private_post_states
                 .into_iter()
                 .map(Into::into)
@@ -336,6 +340,9 @@ impl TryFrom<PrivacyPreservingMessage> for nssa::privacy_preserving_transaction:
                 .into_iter()
                 .map(|(n, d)| (n.into(), d.into()))
                 .collect(),
+            validity_window: validity_window
+                .try_into()
+                .map_err(|e| nssa::error::NssaError::InvalidInput(format!("{e}")))?,
         })
     }
 }
@@ -479,14 +486,7 @@ impl TryFrom<PrivacyPreservingTransaction> for nssa::PrivacyPreservingTransactio
             witness_set,
         } = value;
 
-        Ok(Self::new(
-            message
-                .try_into()
-                .map_err(|err: nssa_core::account::data::DataTooBigError| {
-                    nssa::error::NssaError::InvalidInput(err.to_string())
-                })?,
-            witness_set.try_into()?,
-        ))
+        Ok(Self::new(message.try_into()?, witness_set.try_into()?))
     }
 }
 
@@ -685,5 +685,23 @@ impl From<common::HashType> for HashType {
 impl From<HashType> for common::HashType {
     fn from(value: HashType) -> Self {
         Self(value.0)
+    }
+}
+
+// ============================================================================
+// ValidityWindow conversions
+// ============================================================================
+
+impl From<nssa_core::program::ValidityWindow> for ValidityWindow {
+    fn from(value: nssa_core::program::ValidityWindow) -> Self {
+        Self((value.start(), value.end()))
+    }
+}
+
+impl TryFrom<ValidityWindow> for nssa_core::program::ValidityWindow {
+    type Error = nssa_core::program::InvalidWindow;
+
+    fn try_from(value: ValidityWindow) -> Result<Self, Self::Error> {
+        value.0.try_into()
     }
 }

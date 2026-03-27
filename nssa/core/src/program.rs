@@ -1,5 +1,7 @@
 use std::collections::HashSet;
 
+#[cfg(any(feature = "host", test))]
+use borsh::{BorshDeserialize, BorshSerialize};
 use risc0_zkvm::{DeserializeOwned, guest::env, serde::Deserializer};
 use serde::{Deserialize, Serialize};
 
@@ -151,15 +153,163 @@ impl AccountPostState {
     }
 }
 
+pub type BlockId = u64;
+
+#[derive(Clone, Copy, Serialize, Deserialize)]
+#[cfg_attr(
+    any(feature = "host", test),
+    derive(Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)
+)]
+pub struct ValidityWindow {
+    from: Option<BlockId>,
+    to: Option<BlockId>,
+}
+
+impl ValidityWindow {
+    /// Creates a window with no bounds, valid for every block ID.
+    #[must_use]
+    pub const fn new_unbounded() -> Self {
+        Self {
+            from: None,
+            to: None,
+        }
+    }
+
+    /// Returns `true` if `id` falls within the half-open range `[from, to)`.
+    /// A `None` bound on either side is treated as unbounded in that direction.
+    #[must_use]
+    pub fn is_valid_for_block_id(&self, id: BlockId) -> bool {
+        self.from.is_none_or(|start| id >= start) && self.to.is_none_or(|end| id < end)
+    }
+
+    /// Returns `Err(InvalidWindow)` if both bounds are set and `from >= to`.
+    const fn check_window(&self) -> Result<(), InvalidWindow> {
+        if let (Some(from_id), Some(until_id)) = (self.from, self.to)
+            && from_id >= until_id
+        {
+            Err(InvalidWindow)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Inclusive lower bound. `None` means the window starts at the beginning of the chain.
+    #[must_use]
+    pub const fn start(&self) -> Option<BlockId> {
+        self.from
+    }
+
+    /// Exclusive upper bound. `None` means the window has no expiry.
+    #[must_use]
+    pub const fn end(&self) -> Option<BlockId> {
+        self.to
+    }
+}
+
+impl TryFrom<(Option<BlockId>, Option<BlockId>)> for ValidityWindow {
+    type Error = InvalidWindow;
+
+    fn try_from(value: (Option<BlockId>, Option<BlockId>)) -> Result<Self, Self::Error> {
+        let this = Self {
+            from: value.0,
+            to: value.1,
+        };
+        this.check_window()?;
+        Ok(this)
+    }
+}
+
+impl TryFrom<std::ops::Range<BlockId>> for ValidityWindow {
+    type Error = InvalidWindow;
+
+    fn try_from(value: std::ops::Range<BlockId>) -> Result<Self, Self::Error> {
+        (Some(value.start), Some(value.end)).try_into()
+    }
+}
+
+impl From<std::ops::RangeFrom<BlockId>> for ValidityWindow {
+    fn from(value: std::ops::RangeFrom<BlockId>) -> Self {
+        Self {
+            from: Some(value.start),
+            to: None,
+        }
+    }
+}
+
+impl From<std::ops::RangeTo<BlockId>> for ValidityWindow {
+    fn from(value: std::ops::RangeTo<BlockId>) -> Self {
+        Self {
+            from: None,
+            to: Some(value.end),
+        }
+    }
+}
+
+impl From<std::ops::RangeFull> for ValidityWindow {
+    fn from(_: std::ops::RangeFull) -> Self {
+        Self::new_unbounded()
+    }
+}
+
+#[derive(Debug, thiserror::Error, Clone, Copy, PartialEq, Eq)]
+#[error("Invalid window")]
+pub struct InvalidWindow;
+
 #[derive(Serialize, Deserialize, Clone)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
+#[must_use = "ProgramOutput does nothing unless written"]
 pub struct ProgramOutput {
     /// The instruction data the program received to produce this output.
     pub instruction_data: InstructionData,
     /// The account pre states the program received to produce this output.
     pub pre_states: Vec<AccountWithMetadata>,
+    /// The account post states the program execution produced.
     pub post_states: Vec<AccountPostState>,
+    /// The list of chained calls to other programs.
     pub chained_calls: Vec<ChainedCall>,
+    /// The window where the program output is valid.
+    pub validity_window: ValidityWindow,
+}
+
+impl ProgramOutput {
+    pub const fn new(
+        instruction_data: InstructionData,
+        pre_states: Vec<AccountWithMetadata>,
+        post_states: Vec<AccountPostState>,
+    ) -> Self {
+        Self {
+            instruction_data,
+            pre_states,
+            post_states,
+            chained_calls: Vec::new(),
+            validity_window: ValidityWindow::new_unbounded(),
+        }
+    }
+
+    pub fn write(self) {
+        env::commit(&self);
+    }
+
+    pub fn with_chained_calls(mut self, chained_calls: Vec<ChainedCall>) -> Self {
+        self.chained_calls = chained_calls;
+        self
+    }
+
+    /// Sets the validity window from an infallible range conversion (`1..`, `..5`, `..`).
+    pub fn with_validity_window<W: Into<ValidityWindow>>(mut self, window: W) -> Self {
+        self.validity_window = window.into();
+        self
+    }
+
+    /// Sets the validity window from a fallible range conversion (`1..5`).
+    /// Returns `Err` if the range is empty.
+    pub fn try_with_validity_window<W: TryInto<ValidityWindow, Error = InvalidWindow>>(
+        mut self,
+        window: W,
+    ) -> Result<Self, InvalidWindow> {
+        self.validity_window = window.try_into()?;
+        Ok(self)
+    }
 }
 
 /// Representation of a number as `lo + hi * 2^128`.
@@ -217,35 +367,6 @@ pub fn read_nssa_inputs<T: DeserializeOwned>() -> (ProgramInput<T>, InstructionD
         },
         instruction_words,
     )
-}
-
-pub fn write_nssa_outputs(
-    instruction_data: InstructionData,
-    pre_states: Vec<AccountWithMetadata>,
-    post_states: Vec<AccountPostState>,
-) {
-    let output = ProgramOutput {
-        instruction_data,
-        pre_states,
-        post_states,
-        chained_calls: Vec::new(),
-    };
-    env::commit(&output);
-}
-
-pub fn write_nssa_outputs_with_chained_call(
-    instruction_data: InstructionData,
-    pre_states: Vec<AccountWithMetadata>,
-    post_states: Vec<AccountPostState>,
-    chained_calls: Vec<ChainedCall>,
-) {
-    let output = ProgramOutput {
-        instruction_data,
-        pre_states,
-        post_states,
-        chained_calls,
-    };
-    env::commit(&output);
 }
 
 /// Validates well-behaved program execution.
@@ -341,6 +462,132 @@ fn validate_uniqueness_of_account_ids(pre_states: &[AccountWithMetadata]) -> boo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn validity_window_unbounded_accepts_any_block() {
+        let w = ValidityWindow::new_unbounded();
+        assert!(w.is_valid_for_block_id(0));
+        assert!(w.is_valid_for_block_id(u64::MAX));
+    }
+
+    #[test]
+    fn validity_window_bounded_range_includes_from_excludes_to() {
+        let w: ValidityWindow = (Some(5), Some(10)).try_into().unwrap();
+        assert!(!w.is_valid_for_block_id(4));
+        assert!(w.is_valid_for_block_id(5));
+        assert!(w.is_valid_for_block_id(9));
+        assert!(!w.is_valid_for_block_id(10));
+    }
+
+    #[test]
+    fn validity_window_only_from_bound() {
+        let w: ValidityWindow = (Some(5), None).try_into().unwrap();
+        assert!(!w.is_valid_for_block_id(4));
+        assert!(w.is_valid_for_block_id(5));
+        assert!(w.is_valid_for_block_id(u64::MAX));
+    }
+
+    #[test]
+    fn validity_window_only_to_bound() {
+        let w: ValidityWindow = (None, Some(5)).try_into().unwrap();
+        assert!(w.is_valid_for_block_id(0));
+        assert!(w.is_valid_for_block_id(4));
+        assert!(!w.is_valid_for_block_id(5));
+    }
+
+    #[test]
+    fn validity_window_adjacent_bounds_are_invalid() {
+        // [5, 5) is an empty range — from == to
+        assert!(ValidityWindow::try_from((Some(5), Some(5))).is_err());
+    }
+
+    #[test]
+    fn validity_window_inverted_bounds_are_invalid() {
+        assert!(ValidityWindow::try_from((Some(10), Some(5))).is_err());
+    }
+
+    #[test]
+    fn validity_window_getters_match_construction() {
+        let w: ValidityWindow = (Some(3), Some(7)).try_into().unwrap();
+        assert_eq!(w.start(), Some(3));
+        assert_eq!(w.end(), Some(7));
+    }
+
+    #[test]
+    fn validity_window_getters_for_unbounded() {
+        let w = ValidityWindow::new_unbounded();
+        assert_eq!(w.start(), None);
+        assert_eq!(w.end(), None);
+    }
+
+    #[test]
+    fn validity_window_from_range() {
+        let w = ValidityWindow::try_from(5_u64..10).unwrap();
+        assert_eq!(w.start(), Some(5));
+        assert_eq!(w.end(), Some(10));
+    }
+
+    #[test]
+    fn validity_window_from_range_empty_is_invalid() {
+        assert!(ValidityWindow::try_from(5_u64..5).is_err());
+    }
+
+    #[test]
+    fn validity_window_from_range_inverted_is_invalid() {
+        let from = 10_u64;
+        let to = 5_u64;
+        assert!(ValidityWindow::try_from(from..to).is_err());
+    }
+
+    #[test]
+    fn validity_window_from_range_from() {
+        let w: ValidityWindow = (5_u64..).into();
+        assert_eq!(w.start(), Some(5));
+        assert_eq!(w.end(), None);
+    }
+
+    #[test]
+    fn validity_window_from_range_to() {
+        let w: ValidityWindow = (..10_u64).into();
+        assert_eq!(w.start(), None);
+        assert_eq!(w.end(), Some(10));
+    }
+
+    #[test]
+    fn validity_window_from_range_full() {
+        let w: ValidityWindow = (..).into();
+        assert_eq!(w.start(), None);
+        assert_eq!(w.end(), None);
+    }
+
+    #[test]
+    fn program_output_try_with_validity_window_range() {
+        let output = ProgramOutput::new(vec![], vec![], vec![])
+            .try_with_validity_window(10_u64..100)
+            .unwrap();
+        assert_eq!(output.validity_window.start(), Some(10));
+        assert_eq!(output.validity_window.end(), Some(100));
+    }
+
+    #[test]
+    fn program_output_with_validity_window_range_from() {
+        let output = ProgramOutput::new(vec![], vec![], vec![]).with_validity_window(10_u64..);
+        assert_eq!(output.validity_window.start(), Some(10));
+        assert_eq!(output.validity_window.end(), None);
+    }
+
+    #[test]
+    fn program_output_with_validity_window_range_to() {
+        let output = ProgramOutput::new(vec![], vec![], vec![]).with_validity_window(..100_u64);
+        assert_eq!(output.validity_window.start(), None);
+        assert_eq!(output.validity_window.end(), Some(100));
+    }
+
+    #[test]
+    fn program_output_try_with_validity_window_empty_range_fails() {
+        let result = ProgramOutput::new(vec![], vec![], vec![]).try_with_validity_window(5_u64..5);
+        assert!(result.is_err());
+    }
 
     #[test]
     fn post_state_new_with_claim_constructor() {
