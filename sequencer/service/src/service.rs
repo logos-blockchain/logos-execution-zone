@@ -82,8 +82,9 @@ impl<BC: BlockSettlementClientTrait + Send + 'static, IC: IndexerClientTrait + S
         Ok(tx_hash)
     }
 
-    async fn check_health(&self) -> Result<(), ErrorObjectOwned> {
-        Ok(())
+    async fn check_health(&self) -> Result<BlockId, ErrorObjectOwned> {
+        let sequencer = self.sequencer.lock().await;
+        Ok(sequencer.chain_height())
     }
 
     async fn get_block(&self, block_id: BlockId) -> Result<Option<Block>, ErrorObjectOwned> {

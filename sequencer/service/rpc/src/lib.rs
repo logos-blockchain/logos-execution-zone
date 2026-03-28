@@ -39,9 +39,10 @@ pub trait Rpc {
     #[method(name = "sendTransaction")]
     async fn send_transaction(&self, tx: NSSATransaction) -> Result<HashType, ErrorObjectOwned>;
 
-    // TODO: expand healthcheck response into some kind of report
+    /// Returns the current chain height (block count).
+    /// A sequencer is healthy if this value increases over time.
     #[method(name = "checkHealth")]
-    async fn check_health(&self) -> Result<(), ErrorObjectOwned>;
+    async fn check_health(&self) -> Result<BlockId, ErrorObjectOwned>;
 
     // TODO: These functions should be removed after wallet starts using indexer
     // for this type of queries.
