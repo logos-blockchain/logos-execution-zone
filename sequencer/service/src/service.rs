@@ -15,6 +15,7 @@ use sequencer_core::{
 use sequencer_service_protocol::{
     Account, AccountId, Block, BlockId, Commitment, HashType, MembershipProof, Nonce, ProgramId,
 };
+use sequencer_service_rpc::HealthStatus;
 use tokio::sync::Mutex;
 
 const NOT_FOUND_ERROR_CODE: i32 = -31999;
@@ -82,9 +83,13 @@ impl<BC: BlockSettlementClientTrait + Send + 'static, IC: IndexerClientTrait + S
         Ok(tx_hash)
     }
 
-    async fn check_health(&self) -> Result<BlockId, ErrorObjectOwned> {
+    async fn check_health(&self) -> Result<HealthStatus, ErrorObjectOwned> {
         let sequencer = self.sequencer.lock().await;
-        Ok(sequencer.chain_height())
+        let chain_height = sequencer.chain_height();
+        Ok(HealthStatus {
+            chain_height,
+            is_healthy: true,
+        })
     }
 
     async fn get_block(&self, block_id: BlockId) -> Result<Option<Block>, ErrorObjectOwned> {
