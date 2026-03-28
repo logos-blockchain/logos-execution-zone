@@ -11,8 +11,6 @@ on:
       - "**.md"
       - "!.github/workflows/*.yml"
 
-# Explicit permissions to allow CI to run on fork PRs
-# See: https://github.com/logos-blockchain/logos-execution-zone/issues/278
 permissions:
   contents: read
   pull-requests: read
