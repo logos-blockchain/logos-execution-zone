@@ -16,7 +16,7 @@ use mempool::{MemPool, MemPoolHandle};
 #[cfg(feature = "mock")]
 pub use mock::SequencerCoreWithMockClients;
 use nssa::V03State;
-use nssa_core::Timestamp;
+use nssa_core::{BlockId, Timestamp};
 pub use storage::error::DbError;
 use testnet_initial_state::initial_state;
 
@@ -166,17 +166,17 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
     fn execute_check_transaction_on_state(
         &mut self,
         tx: NSSATransaction,
-        block_id: u64,
-        curr_time: Timestamp,
+        block_id: BlockId,
+        timestamp: Timestamp,
     ) -> Result<NSSATransaction, nssa::error::NssaError> {
         match &tx {
             NSSATransaction::Public(tx) => {
                 self.state
-                    .transition_from_public_transaction(tx, block_id, curr_time)
+                    .transition_from_public_transaction(tx, block_id, timestamp)
             }
             NSSATransaction::PrivacyPreserving(tx) => self
                 .state
-                .transition_from_privacy_preserving_transaction(tx, block_id, curr_time),
+                .transition_from_privacy_preserving_transaction(tx, block_id, timestamp),
             NSSATransaction::ProgramDeployment(tx) => self
                 .state
                 .transition_from_program_deployment_transaction(tx),
@@ -222,7 +222,7 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
             .latest_block_meta()
             .context("Failed to get latest block meta from store")?;
 
-        let curr_time = u64::try_from(chrono::Utc::now().timestamp_millis())
+        let new_block_timestamp = u64::try_from(chrono::Utc::now().timestamp_millis())
             .expect("Timestamp must be positive");
 
         while let Some(tx) = self.mempool.pop() {
@@ -235,7 +235,7 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
                 block_id: new_block_height,
                 transactions: temp_valid_transactions,
                 prev_block_hash: latest_block_meta.hash,
-                timestamp: curr_time,
+                timestamp: new_block_timestamp,
             };
 
             let block_size = borsh::to_vec(&temp_hashable_data)
@@ -253,7 +253,7 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
                 break;
             }
 
-            match self.execute_check_transaction_on_state(tx, new_block_height, curr_time) {
+            match self.execute_check_transaction_on_state(tx, new_block_height, new_block_timestamp) {
                 Ok(valid_tx) => {
                     valid_transactions.push(valid_tx);
 
@@ -276,7 +276,7 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
             block_id: new_block_height,
             transactions: valid_transactions,
             prev_block_hash: latest_block_meta.hash,
-            timestamp: curr_time,
+            timestamp: new_block_timestamp,
         };
 
         let block = hashable_data
