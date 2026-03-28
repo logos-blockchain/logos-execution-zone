@@ -1,14 +1,15 @@
 use nssa_core::program::{
-    AccountPostState, BlockId, ProgramInput, ProgramOutput, ValidityWindow, read_nssa_inputs,
+    AccountPostState, BlockId, ProgramInput, ProgramOutput, Timestamp, ValidityWindow,
+    read_nssa_inputs,
 };
 
-type Instruction = ValidityWindow<BlockId>;
+type Instruction = (ValidityWindow<BlockId>, ValidityWindow<Timestamp>);
 
 fn main() {
     let (
         ProgramInput {
             pre_states,
-            instruction: block_validity_window,
+            instruction: (block_validity_window, timestamp_validity_window),
         },
         instruction_words,
     ) = read_nssa_inputs::<Instruction>();
@@ -25,5 +26,6 @@ fn main() {
         vec![AccountPostState::new(post)],
     )
     .with_block_validity_window(block_validity_window)
+    .with_timestamp_validity_window(timestamp_validity_window)
     .write();
 }
