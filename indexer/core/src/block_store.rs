@@ -6,8 +6,8 @@ use common::{
     block::{BedrockStatus, Block},
     transaction::NSSATransaction,
 };
-use nssa_core::BlockId;
 use nssa::{Account, AccountId, V03State};
+use nssa_core::BlockId;
 use storage::indexer::RocksDBIO;
 use tokio::sync::RwLock;
 

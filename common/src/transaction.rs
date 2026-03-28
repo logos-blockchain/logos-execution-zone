@@ -73,9 +73,7 @@ impl NSSATransaction {
         timestamp: Timestamp,
     ) -> Result<Self, nssa::error::NssaError> {
         match &self {
-            Self::Public(tx) => {
-                state.transition_from_public_transaction(tx, block_id, timestamp)
-            }
+            Self::Public(tx) => state.transition_from_public_transaction(tx, block_id, timestamp),
             Self::PrivacyPreserving(tx) => {
                 state.transition_from_privacy_preserving_transaction(tx, block_id, timestamp)
             }

@@ -1,8 +1,7 @@
 use borsh::{BorshDeserialize, BorshSerialize};
+use nssa_core::{BlockId, Timestamp};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256, digest::FixedOutput as _};
-
-use nssa_core::{BlockId, Timestamp};
 
 use crate::{HashType, transaction::NSSATransaction};
 

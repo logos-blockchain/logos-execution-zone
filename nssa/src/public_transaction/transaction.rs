@@ -198,7 +198,9 @@ impl PublicTransaction {
             // Verify validity window
             ensure!(
                 program_output.block_validity_window.is_valid_for(block_id)
-                    && program_output.timestamp_validity_window.is_valid_for(timestamp),
+                    && program_output
+                        .timestamp_validity_window
+                        .is_valid_for(timestamp),
                 NssaError::OutOfValidityWindow
             );
 

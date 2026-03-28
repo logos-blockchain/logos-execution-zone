@@ -188,7 +188,11 @@ impl RocksDBIO {
                                 "transaction pre check failed with err {err:?}"
                             ))
                         })?
-                        .execute_check_on_state(&mut breakpoint, block.header.block_id)
+                        .execute_check_on_state(
+                            &mut breakpoint,
+                            block.header.block_id,
+                            block.header.timestamp,
+                        )
                         .map_err(|err| {
                             DbError::db_interaction_error(format!(
                                 "transaction execution failed with err {err:?}"

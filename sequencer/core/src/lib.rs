@@ -170,10 +170,9 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
         timestamp: Timestamp,
     ) -> Result<NSSATransaction, nssa::error::NssaError> {
         match &tx {
-            NSSATransaction::Public(tx) => {
-                self.state
-                    .transition_from_public_transaction(tx, block_id, timestamp)
-            }
+            NSSATransaction::Public(tx) => self
+                .state
+                .transition_from_public_transaction(tx, block_id, timestamp),
             NSSATransaction::PrivacyPreserving(tx) => self
                 .state
                 .transition_from_privacy_preserving_transaction(tx, block_id, timestamp),
@@ -253,7 +252,8 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
                 break;
             }
 
-            match self.execute_check_transaction_on_state(tx, new_block_height, new_block_timestamp) {
+            match self.execute_check_transaction_on_state(tx, new_block_height, new_block_timestamp)
+            {
                 Ok(valid_tx) => {
                     valid_transactions.push(valid_tx);
 

@@ -201,8 +201,7 @@ impl<T: Copy + PartialOrd> ValidityWindow<T> {
     /// Valid for values in the range [from, to), where `from` is included and `to` is excluded.
     #[must_use]
     pub fn is_valid_for(&self, value: T) -> bool {
-        self.from.is_none_or(|start| value >= start)
-            && self.to.is_none_or(|end| value < end)
+        self.from.is_none_or(|start| value >= start) && self.to.is_none_or(|end| value < end)
     }
 
     /// Returns `Err(InvalidWindow)` if both bounds are set and `from >= to`.
@@ -328,7 +327,9 @@ impl ProgramOutput {
 
     /// Sets the block ID validity window from a fallible range conversion (`1..5`).
     /// Returns `Err` if the range is empty.
-    pub fn try_with_block_validity_window<W: TryInto<BlockValidityWindow, Error = InvalidWindow>>(
+    pub fn try_with_block_validity_window<
+        W: TryInto<BlockValidityWindow, Error = InvalidWindow>,
+    >(
         mut self,
         window: W,
     ) -> Result<Self, InvalidWindow> {
@@ -337,14 +338,19 @@ impl ProgramOutput {
     }
 
     /// Sets the timestamp validity window from an infallible range conversion.
-    pub fn with_timestamp_validity_window<W: Into<TimestampValidityWindow>>(mut self, window: W) -> Self {
+    pub fn with_timestamp_validity_window<W: Into<TimestampValidityWindow>>(
+        mut self,
+        window: W,
+    ) -> Self {
         self.timestamp_validity_window = window.into();
         self
     }
 
     /// Sets the timestamp validity window from a fallible range conversion.
     /// Returns `Err` if the range is empty.
-    pub fn try_with_timestamp_validity_window<W: TryInto<TimestampValidityWindow, Error = InvalidWindow>>(
+    pub fn try_with_timestamp_validity_window<
+        W: TryInto<TimestampValidityWindow, Error = InvalidWindow>,
+    >(
         mut self,
         window: W,
     ) -> Result<Self, InvalidWindow> {
