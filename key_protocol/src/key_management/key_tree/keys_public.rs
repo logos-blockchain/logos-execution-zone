@@ -13,7 +13,6 @@ pub struct ChildKeysPublic {
 }
 
 impl ChildKeysPublic {
-    #[allow(clippy::big_endian_bytes)]
     fn compute_hash_value(&self, cci: u32) -> [u8; 64] {
         let mut hash_input = vec![];
 
@@ -31,6 +30,7 @@ impl ChildKeysPublic {
             hash_input.extend_from_slice(self.csk.value());
         }
 
+        #[expect(clippy::big_endian_bytes, reason = "BIP-032 uses big endian")]
         hash_input.extend_from_slice(&cci.to_be_bytes());
 
         hmac_sha512::HMAC::mac(hash_input, self.ccc)
