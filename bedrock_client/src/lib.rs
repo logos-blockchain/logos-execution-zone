@@ -46,7 +46,7 @@ impl BedrockClient {
         info!("Creating Bedrock client with node URL {node_url}");
         let client = Client::builder()
                 //Add more fields if needed
-                .timeout(std::time::Duration::from_secs(60))
+                .timeout(std::time::Duration::from_mins(1))
                 .build()
                 .context("Failed to build HTTP client")?;
 

@@ -13,7 +13,7 @@ use indexer_service_protocol::{
     CommitmentSetDigest, Data, EncryptedAccountData, HashType, MantleMsgId,
     PrivacyPreservingMessage, PrivacyPreservingTransaction, ProgramDeploymentMessage,
     ProgramDeploymentTransaction, ProgramId, PublicMessage, PublicTransaction, Signature,
-    Transaction, WitnessSet,
+    Transaction, ValidityWindow, WitnessSet,
 };
 use jsonrpsee::{
     core::{SubscriptionResult, async_trait},
@@ -124,6 +124,7 @@ impl MockIndexerService {
                                 indexer_service_protocol::Nullifier([tx_idx as u8; 32]),
                                 CommitmentSetDigest([0xff; 32]),
                             )],
+                            validity_window: ValidityWindow((None, None)),
                         },
                         witness_set: WitnessSet {
                             signatures_and_public_keys: vec![],

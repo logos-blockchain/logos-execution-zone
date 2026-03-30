@@ -1,4 +1,4 @@
-use nssa_core::program::{AccountPostState, ProgramInput, read_nssa_inputs, write_nssa_outputs};
+use nssa_core::program::{AccountPostState, ProgramInput, ProgramOutput, read_nssa_inputs};
 
 type Instruction = ();
 
@@ -13,9 +13,10 @@ fn main() {
     let mut account_post = account_pre.clone();
     account_post.program_owner = [0, 1, 2, 3, 4, 5, 6, 7];
 
-    write_nssa_outputs(
+    ProgramOutput::new(
         instruction_words,
         vec![pre],
         vec![AccountPostState::new(account_post)],
-    );
+    )
+    .write();
 }

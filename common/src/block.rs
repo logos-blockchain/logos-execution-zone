@@ -1,5 +1,4 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use nssa::AccountId;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256, digest::FixedOutput as _};
 
@@ -121,20 +120,6 @@ impl From<Block> for HashableBlockData {
             transactions: value.body.transactions,
         }
     }
-}
-
-/// Helper struct for account (de-)serialization.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AccountInitialData {
-    pub account_id: AccountId,
-    pub balance: u128,
-}
-
-/// Helper struct to (de-)serialize initial commitments.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CommitmentsInitialData {
-    pub npk: nssa_core::NullifierPublicKey,
-    pub account: nssa_core::account::Account,
 }
 
 #[cfg(test)]

@@ -235,6 +235,7 @@ pub struct PrivacyPreservingMessage {
     pub encrypted_private_post_states: Vec<EncryptedAccountData>,
     pub new_commitments: Vec<Commitment>,
     pub new_nullifiers: Vec<(Nullifier, CommitmentSetDigest)>,
+    pub validity_window: ValidityWindow,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -299,6 +300,20 @@ pub struct Nullifier(
     #[schemars(with = "String", description = "base64-encoded nullifier")]
     pub [u8; 32],
 );
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct ValidityWindow(pub (Option<BlockId>, Option<BlockId>));
+
+impl Display for ValidityWindow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            (Some(start), Some(end)) => write!(f, "[{start}, {end})"),
+            (Some(start), None) => write!(f, "[{start}, \u{221e})"),
+            (None, Some(end)) => write!(f, "(-\u{221e}, {end})"),
+            (None, None) => write!(f, "(-\u{221e}, \u{221e})"),
+        }
+    }
+}
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct CommitmentSetDigest(

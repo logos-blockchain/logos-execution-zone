@@ -14,8 +14,8 @@ common.workspace = true
 storage.workspace = true
 mempool.workspace = true
 bedrock_client.workspace = true
+testnet_initial_state.workspace = true
 
-base58.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true

@@ -75,8 +75,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_public(
     match block_on(transfer.send_public_transfer(from_id, to_id, amount)) {
         Ok(tx_hash) => {
             let tx_hash = CString::new(tx_hash.to_string())
-                .map(std::ffi::CString::into_raw)
-                .unwrap_or(ptr::null_mut());
+                .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
 
             unsafe {
                 (*out_result).tx_hash = tx_hash;
@@ -165,8 +164,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded(
     ) {
         Ok((tx_hash, _shared_key)) => {
             let tx_hash = CString::new(tx_hash.to_string())
-                .map(std::ffi::CString::into_raw)
-                .unwrap_or(ptr::null_mut());
+                .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
 
             unsafe {
                 (*out_result).tx_hash = tx_hash;
@@ -246,8 +244,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_deshielded(
     match block_on(transfer.send_deshielded_transfer(from_id, to_id, amount)) {
         Ok((tx_hash, _shared_key)) => {
             let tx_hash = CString::new(tx_hash.to_string())
-                .map(std::ffi::CString::into_raw)
-                .unwrap_or(ptr::null_mut());
+                .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
 
             unsafe {
                 (*out_result).tx_hash = tx_hash;
@@ -335,8 +332,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private(
     {
         Ok((tx_hash, _shared_key)) => {
             let tx_hash = CString::new(tx_hash.to_string())
-                .map(std::ffi::CString::into_raw)
-                .unwrap_or(ptr::null_mut());
+                .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
 
             unsafe {
                 (*out_result).tx_hash = tx_hash;
@@ -419,8 +415,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded_owned(
     match block_on(transfer.send_shielded_transfer(from_id, to_id, amount)) {
         Ok((tx_hash, _shared_key)) => {
             let tx_hash = CString::new(tx_hash.to_string())
-                .map(std::ffi::CString::into_raw)
-                .unwrap_or(ptr::null_mut());
+                .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
 
             unsafe {
                 (*out_result).tx_hash = tx_hash;
@@ -503,8 +498,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private_owned(
     match block_on(transfer.send_private_transfer_to_owned_account(from_id, to_id, amount)) {
         Ok((tx_hash, _shared_keys)) => {
             let tx_hash = CString::new(tx_hash.to_string())
-                .map(std::ffi::CString::into_raw)
-                .unwrap_or(ptr::null_mut());
+                .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
 
             unsafe {
                 (*out_result).tx_hash = tx_hash;
@@ -575,8 +569,7 @@ pub unsafe extern "C" fn wallet_ffi_register_public_account(
     match block_on(transfer.register_account(account_id)) {
         Ok(tx_hash) => {
             let tx_hash = CString::new(tx_hash.to_string())
-                .map(std::ffi::CString::into_raw)
-                .unwrap_or(ptr::null_mut());
+                .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
 
             unsafe {
                 (*out_result).tx_hash = tx_hash;
@@ -647,8 +640,7 @@ pub unsafe extern "C" fn wallet_ffi_register_private_account(
     match block_on(transfer.register_account_private(account_id)) {
         Ok((tx_hash, _secret)) => {
             let tx_hash = CString::new(tx_hash.to_string())
-                .map(std::ffi::CString::into_raw)
-                .unwrap_or(ptr::null_mut());
+                .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
 
             unsafe {
                 (*out_result).tx_hash = tx_hash;

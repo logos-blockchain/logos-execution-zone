@@ -1,4 +1,4 @@
-use nssa_core::program::{AccountPostState, ProgramInput, read_nssa_inputs, write_nssa_outputs};
+use nssa_core::program::{AccountPostState, ProgramInput, ProgramOutput, read_nssa_inputs};
 
 type Instruction = u128;
 
@@ -26,12 +26,13 @@ fn main() {
         .checked_add(balance)
         .expect("Overflow when adding balance");
 
-    write_nssa_outputs(
+    ProgramOutput::new(
         instruction_words,
         vec![sender_pre, receiver_pre],
         vec![
             AccountPostState::new(sender_post),
             AccountPostState::new(receiver_post),
         ],
-    );
+    )
+    .write();
 }
