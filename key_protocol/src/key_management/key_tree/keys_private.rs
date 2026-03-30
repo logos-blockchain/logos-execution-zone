@@ -143,7 +143,7 @@ mod tests {
     use crate::key_management::{self, secret_holders::ViewingSecretKey};
 
     #[test]
-    fn test_master_key_generation() {
+    fn master_key_generation() {
         let seed: [u8; 64] = [
             252, 56, 204, 83, 232, 123, 209, 188, 187, 167, 39, 213, 71, 39, 58, 65, 125, 134, 255,
             49, 43, 108, 92, 53, 173, 164, 94, 142, 150, 74, 21, 163, 43, 144, 226, 87, 199, 18,
@@ -191,7 +191,7 @@ mod tests {
     }
 
     #[test]
-    fn test_child_keys_generation() {
+    fn child_keys_generation() {
         let seed: [u8; 64] = [
             252, 56, 204, 83, 232, 123, 209, 188, 187, 167, 39, 213, 71, 39, 58, 65, 125, 134, 255,
             49, 43, 108, 92, 53, 173, 164, 94, 142, 150, 74, 21, 163, 43, 144, 226, 87, 199, 18,

@@ -46,7 +46,7 @@ impl KeyNode for ChildKeysPublic {
                 .first_chunk::<32>()
                 .expect("hash_value is 64 bytes, must be safe to get first 32"),
         )
-        .unwrap();
+        .expect("Expect a valid Private Key");
         let ccc = *hash_value.last_chunk::<32>().unwrap();
         let cpk = nssa::PublicKey::new_from_private_key(&csk);
 
@@ -120,7 +120,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_master_keys_generation() {
+    fn master_keys_generation() {
         let seed = [
             88, 189, 37, 237, 199, 125, 151, 226, 69, 153, 165, 113, 191, 69, 188, 221, 9, 34, 173,
             134, 61, 109, 34, 103, 121, 39, 237, 14, 107, 194, 24, 194, 191, 14, 237, 185, 12, 87,
@@ -152,7 +152,7 @@ mod tests {
     }
 
     #[test]
-    fn test_harden_child_keys_generation() {
+    fn harden_child_keys_generation() {
         let seed = [
             88, 189, 37, 237, 199, 125, 151, 226, 69, 153, 165, 113, 191, 69, 188, 221, 9, 34, 173,
             134, 61, 109, 34, 103, 121, 39, 237, 14, 107, 194, 24, 194, 191, 14, 237, 185, 12, 87,
@@ -186,7 +186,7 @@ mod tests {
     }
 
     #[test]
-    fn test_nonharden_child_keys_generation() {
+    fn nonharden_child_keys_generation() {
         let seed = [
             88, 189, 37, 237, 199, 125, 151, 226, 69, 153, 165, 113, 191, 69, 188, 221, 9, 34, 173,
             134, 61, 109, 34, 103, 121, 39, 237, 14, 107, 194, 24, 194, 191, 14, 237, 185, 12, 87,
@@ -220,7 +220,7 @@ mod tests {
     }
 
     #[test]
-    fn test_edge_case_child_keys_generation_2_power_31() {
+    fn edge_case_child_keys_generation_2_power_31() {
         let seed = [
             88, 189, 37, 237, 199, 125, 151, 226, 69, 153, 165, 113, 191, 69, 188, 221, 9, 34, 173,
             134, 61, 109, 34, 103, 121, 39, 237, 14, 107, 194, 24, 194, 191, 14, 237, 185, 12, 87,
