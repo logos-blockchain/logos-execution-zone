@@ -4,12 +4,12 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use log::debug;
 use nssa_core::{
     account::{Account, AccountId, AccountWithMetadata},
-    program::{ChainedCall, DEFAULT_PROGRAM_ID, validate_execution},
+    program::{BlockId, ChainedCall, DEFAULT_PROGRAM_ID, validate_execution},
 };
 use sha2::{Digest as _, digest::FixedOutput as _};
 
 use crate::{
-    V02State, ensure,
+    V03State, ensure,
     error::NssaError,
     public_transaction::{Message, WitnessSet},
     state::MAX_NUMBER_CHAINED_CALLS,
@@ -69,7 +69,8 @@ impl PublicTransaction {
 
     pub(crate) fn validate_and_produce_public_state_diff(
         &self,
-        state: &V02State,
+        state: &V03State,
+        block_id: BlockId,
     ) -> Result<HashMap<AccountId, Account>, NssaError> {
         let message = self.message();
         let witness_set = self.witness_set();
@@ -190,6 +191,14 @@ impl PublicTransaction {
                 NssaError::InvalidProgramBehavior
             );
 
+            // Verify validity window
+            ensure!(
+                program_output
+                    .validity_window
+                    .is_valid_for_block_id(block_id),
+                NssaError::OutOfValidityWindow
+            );
+
             for post in program_output
                 .post_states
                 .iter_mut()
@@ -247,7 +256,7 @@ pub mod tests {
     use sha2::{Digest as _, digest::FixedOutput as _};
 
     use crate::{
-        AccountId, PrivateKey, PublicKey, PublicTransaction, Signature, V02State,
+        AccountId, PrivateKey, PublicKey, PublicTransaction, Signature, V03State,
         error::NssaError,
         program::Program,
         public_transaction::{Message, WitnessSet},
@@ -261,10 +270,10 @@ pub mod tests {
         (key1, key2, addr1, addr2)
     }
 
-    fn state_for_tests() -> V02State {
+    fn state_for_tests() -> V03State {
         let (_, _, addr1, addr2) = keys_for_tests();
         let initial_data = [(addr1, 10000), (addr2, 20000)];
-        V02State::new_with_genesis_accounts(&initial_data, &[])
+        V03State::new_with_genesis_accounts(&initial_data, &[])
     }
 
     fn transaction_for_tests() -> PublicTransaction {
@@ -359,7 +368,7 @@ pub mod tests {
 
         let witness_set = WitnessSet::for_message(&message, &[&key1, &key1]);
         let tx = PublicTransaction::new(message, witness_set);
-        let result = tx.validate_and_produce_public_state_diff(&state);
+        let result = tx.validate_and_produce_public_state_diff(&state, 1);
         assert!(matches!(result, Err(NssaError::InvalidInput(_))));
     }
 
@@ -379,7 +388,7 @@ pub mod tests {
 
         let witness_set = WitnessSet::for_message(&message, &[&key1, &key2]);
         let tx = PublicTransaction::new(message, witness_set);
-        let result = tx.validate_and_produce_public_state_diff(&state);
+        let result = tx.validate_and_produce_public_state_diff(&state, 1);
         assert!(matches!(result, Err(NssaError::InvalidInput(_))));
     }
 
@@ -400,7 +409,7 @@ pub mod tests {
         let mut witness_set = WitnessSet::for_message(&message, &[&key1, &key2]);
         witness_set.signatures_and_public_keys[0].0 = Signature::new_for_tests([1; 64]);
         let tx = PublicTransaction::new(message, witness_set);
-        let result = tx.validate_and_produce_public_state_diff(&state);
+        let result = tx.validate_and_produce_public_state_diff(&state, 1);
         assert!(matches!(result, Err(NssaError::InvalidInput(_))));
     }
 
@@ -420,7 +429,7 @@ pub mod tests {
 
         let witness_set = WitnessSet::for_message(&message, &[&key1, &key2]);
         let tx = PublicTransaction::new(message, witness_set);
-        let result = tx.validate_and_produce_public_state_diff(&state);
+        let result = tx.validate_and_produce_public_state_diff(&state, 1);
         assert!(matches!(result, Err(NssaError::InvalidInput(_))));
     }
 
@@ -436,7 +445,7 @@ pub mod tests {
 
         let witness_set = WitnessSet::for_message(&message, &[&key1, &key2]);
         let tx = PublicTransaction::new(message, witness_set);
-        let result = tx.validate_and_produce_public_state_diff(&state);
+        let result = tx.validate_and_produce_public_state_diff(&state, 1);
         assert!(matches!(result, Err(NssaError::InvalidInput(_))));
     }
 }

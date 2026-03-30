@@ -1,4 +1,4 @@
-use nssa_core::program::{AccountPostState, ProgramInput, read_nssa_inputs, write_nssa_outputs};
+use nssa_core::program::{AccountPostState, ProgramInput, ProgramOutput, read_nssa_inputs};
 
 type Instruction = ();
 
@@ -9,5 +9,5 @@ fn main() {
         .iter()
         .map(|account| AccountPostState::new(account.account.clone()))
         .collect();
-    write_nssa_outputs(instruction_words, pre_states, post_states);
+    ProgramOutput::new(instruction_words, pre_states, post_states).write();
 }

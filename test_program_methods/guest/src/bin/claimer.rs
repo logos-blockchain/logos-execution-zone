@@ -1,4 +1,4 @@
-use nssa_core::program::{AccountPostState, ProgramInput, read_nssa_inputs, write_nssa_outputs};
+use nssa_core::program::{AccountPostState, ProgramInput, ProgramOutput, read_nssa_inputs};
 
 type Instruction = ();
 
@@ -17,5 +17,5 @@ fn main() {
 
     let account_post = AccountPostState::new_claimed(pre.account.clone());
 
-    write_nssa_outputs(instruction_words, vec![pre], vec![account_post]);
+    ProgramOutput::new(instruction_words, vec![pre], vec![account_post]).write();
 }

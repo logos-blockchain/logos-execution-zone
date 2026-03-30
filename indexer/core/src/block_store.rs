@@ -6,14 +6,14 @@ use common::{
     block::{BedrockStatus, Block, BlockId},
     transaction::NSSATransaction,
 };
-use nssa::{Account, AccountId, V02State};
+use nssa::{Account, AccountId, V03State};
 use storage::indexer::RocksDBIO;
 use tokio::sync::RwLock;
 
 #[derive(Clone)]
 pub struct IndexerStore {
     dbio: Arc<RocksDBIO>,
-    current_state: Arc<RwLock<V02State>>,
+    current_state: Arc<RwLock<V03State>>,
 }
 
 impl IndexerStore {
@@ -24,7 +24,7 @@ impl IndexerStore {
     pub fn open_db_with_genesis(
         location: &Path,
         genesis_block: &Block,
-        initial_state: &V02State,
+        initial_state: &V03State,
     ) -> Result<Self> {
         let dbio = RocksDBIO::open_or_create(location, genesis_block, initial_state)?;
         let current_state = dbio.final_state()?;
@@ -98,14 +98,14 @@ impl IndexerStore {
             .expect("Must be set at the DB startup")
     }
 
-    pub fn get_state_at_block(&self, block_id: u64) -> Result<V02State> {
+    pub fn get_state_at_block(&self, block_id: u64) -> Result<V03State> {
         Ok(self.dbio.calculate_state_for_id(block_id)?)
     }
 
     /// Recalculation of final state directly from DB.
     ///
     /// Used for indexer healthcheck.
-    pub fn recalculate_final_state(&self) -> Result<V02State> {
+    pub fn recalculate_final_state(&self) -> Result<V03State> {
         Ok(self.dbio.final_state()?)
     }
 
@@ -125,7 +125,7 @@ impl IndexerStore {
                 transaction
                     .clone()
                     .transaction_stateless_check()?
-                    .execute_check_on_state(&mut state_guard)?;
+                    .execute_check_on_state(&mut state_guard, block.header.block_id)?;
             }
         }
 
@@ -172,7 +172,7 @@ mod tests {
         let storage = IndexerStore::open_db_with_genesis(
             home.as_ref(),
             &genesis_block(),
-            &nssa::V02State::new_with_genesis_accounts(&[(acc1(), 10000), (acc2(), 20000)], &[]),
+            &nssa::V03State::new_with_genesis_accounts(&[(acc1(), 10000), (acc2(), 20000)], &[]),
         )
         .unwrap();
 
@@ -190,7 +190,7 @@ mod tests {
         let storage = IndexerStore::open_db_with_genesis(
             home.as_ref(),
             &genesis_block(),
-            &nssa::V02State::new_with_genesis_accounts(&[(acc1(), 10000), (acc2(), 20000)], &[]),
+            &nssa::V03State::new_with_genesis_accounts(&[(acc1(), 10000), (acc2(), 20000)], &[]),
         )
         .unwrap();
 

@@ -9,7 +9,7 @@
 use std::num::NonZero;
 
 use amm_core::Instruction;
-use nssa_core::program::{ProgramInput, read_nssa_inputs, write_nssa_outputs_with_chained_call};
+use nssa_core::program::{ProgramInput, ProgramOutput, read_nssa_inputs};
 
 fn main() {
     let (
@@ -133,10 +133,7 @@ fn main() {
         }
     };
 
-    write_nssa_outputs_with_chained_call(
-        instruction_words,
-        pre_states_clone,
-        post_states,
-        chained_calls,
-    );
+    ProgramOutput::new(instruction_words, pre_states_clone, post_states)
+        .with_chained_calls(chained_calls)
+        .write();
 }

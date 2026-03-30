@@ -9,7 +9,6 @@ workspace = true
 
 [dependencies]
 nssa.workspace = true
-nssa_core.workspace = true
 
 anyhow.workspace = true
 thiserror.workspace = true

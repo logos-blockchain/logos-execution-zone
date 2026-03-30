@@ -11,14 +11,14 @@ services:
     depends_on:
       - logos-blockchain-node-0
       - indexer_service
-    volumes: !override
-      - ./configs/docker-all-in-one/sequencer:/etc/sequencer_service
+    volumes:
+      - ./configs/docker-all-in-one/sequencer_config.json:/etc/sequencer_service/sequencer_config.json
 
   indexer_service:
     depends_on:
       - logos-blockchain-node-0
     volumes:
-      - ./configs/docker-all-in-one/indexer/indexer_config.json:/etc/indexer_service/indexer_config.json
+      - ./configs/docker-all-in-one/indexer_config.json:/etc/indexer_service/indexer_config.json
 
   explorer_service:
     depends_on:

@@ -6,7 +6,7 @@ use common::{
     block::{Block, BlockMeta, MantleMsgId},
     transaction::NSSATransaction,
 };
-use nssa::V02State;
+use nssa::V03State;
 use storage::{error::DbError, sequencer::RocksDBIO};
 
 pub struct SequencerStore {
@@ -92,7 +92,7 @@ impl SequencerStore {
         &mut self,
         block: &Block,
         msg_id: MantleMsgId,
-        state: &V02State,
+        state: &V03State,
     ) -> Result<()> {
         let new_transactions_map = block_to_transactions_map(block);
         self.dbio.atomic_update(block, msg_id, state)?;
@@ -100,7 +100,7 @@ impl SequencerStore {
         Ok(())
     }
 
-    pub fn get_nssa_state(&self) -> Option<V02State> {
+    pub fn get_nssa_state(&self) -> Option<V03State> {
         self.dbio.get_nssa_state().ok()
     }
 }
@@ -150,7 +150,7 @@ mod tests {
         let retrieved_tx = node_store.get_transaction_by_hash(tx.hash());
         assert_eq!(None, retrieved_tx);
         // Add the block with the transaction
-        let dummy_state = V02State::new_with_genesis_accounts(&[], &[]);
+        let dummy_state = V03State::new_with_genesis_accounts(&[], &[]);
         node_store.update(&block, [1; 32], &dummy_state).unwrap();
         // Try again
         let retrieved_tx = node_store.get_transaction_by_hash(tx.hash());
@@ -209,7 +209,7 @@ mod tests {
         let block_hash = block.header.hash;
         let block_msg_id = [1; 32];
 
-        let dummy_state = V02State::new_with_genesis_accounts(&[], &[]);
+        let dummy_state = V03State::new_with_genesis_accounts(&[], &[]);
         node_store
             .update(&block, block_msg_id, &dummy_state)
             .unwrap();
@@ -244,7 +244,7 @@ mod tests {
         let block = common::test_utils::produce_dummy_block(1, None, vec![tx]);
         let block_id = block.header.block_id;
 
-        let dummy_state = V02State::new_with_genesis_accounts(&[], &[]);
+        let dummy_state = V03State::new_with_genesis_accounts(&[], &[]);
         node_store.update(&block, [1; 32], &dummy_state).unwrap();
 
         // Verify initial status is Pending

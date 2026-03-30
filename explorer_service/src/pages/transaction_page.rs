@@ -177,6 +177,7 @@ pub fn TransactionPage() -> impl IntoView {
                                         encrypted_private_post_states,
                                         new_commitments,
                                         new_nullifiers,
+                                        validity_window
                                     } = message;
                                     let WitnessSet {
                                         signatures_and_public_keys: _,
@@ -211,6 +212,10 @@ pub fn TransactionPage() -> impl IntoView {
                                                 <div class="info-row">
                                                     <span class="info-label">"Proof Size:"</span>
                                                     <span class="info-value">{format!("{proof_len} bytes")}</span>
+                                                </div>
+                                                <div class="info-row">
+                                                    <span class="info-label">"Validity Window:"</span>
+                                                    <span class="info-value">{validity_window.to_string()}</span>
                                                 </div>
                                             </div>
 

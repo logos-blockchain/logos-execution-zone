@@ -69,6 +69,9 @@ pub enum NssaError {
 
     #[error("Max account nonce reached")]
     MaxAccountNonceReached,
+
+    #[error("Execution outside of the validity window")]
+    OutOfValidityWindow,
 }
 
 #[cfg(test)]

@@ -1,5 +1,5 @@
 use nssa_core::program::{
-    AccountPostState, DEFAULT_PROGRAM_ID, ProgramInput, read_nssa_inputs, write_nssa_outputs,
+    AccountPostState, DEFAULT_PROGRAM_ID, ProgramInput, ProgramOutput, read_nssa_inputs,
 };
 
 // Hello-world example program.
@@ -56,5 +56,7 @@ fn main() {
     // The output is a proposed state difference. It will only succeed if the pre states coincide
     // with the previous values of the accounts, and the transition to the post states conforms
     // with the NSSA program rules.
-    write_nssa_outputs(instruction_data, vec![pre_state], vec![post_state]);
+    // WARNING: constructing a `ProgramOutput` has no effect on its own. `.write()` must be
+    // called to commit the output.
+    ProgramOutput::new(instruction_data, vec![pre_state], vec![post_state]).write();
 }

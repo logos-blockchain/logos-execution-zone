@@ -3,7 +3,7 @@ use nssa_core::account::AccountId;
 use sha2::{Digest as _, digest::FixedOutput as _};
 
 use crate::{
-    V02State, error::NssaError, program::Program, program_deployment_transaction::message::Message,
+    V03State, error::NssaError, program::Program, program_deployment_transaction::message::Message,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -24,7 +24,7 @@ impl ProgramDeploymentTransaction {
 
     pub(crate) fn validate_and_produce_public_state_diff(
         &self,
-        state: &V02State,
+        state: &V03State,
     ) -> Result<Program, NssaError> {
         // TODO: remove clone
         let program = Program::new(self.message.bytecode.clone())?;

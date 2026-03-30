@@ -5,7 +5,7 @@
 
 use nssa_core::{
     account::{Account, AccountWithMetadata},
-    program::{AccountPostState, ProgramInput, read_nssa_inputs, write_nssa_outputs},
+    program::{AccountPostState, ProgramInput, ProgramOutput, read_nssa_inputs},
 };
 
 /// Initializes a default account under the ownership of this program.
@@ -80,5 +80,5 @@ fn main() {
         }
         _ => panic!("invalid params"),
     };
-    write_nssa_outputs(instruction_data, pre_states, post_states);
+    ProgramOutput::new(instruction_data, pre_states, post_states).write();
 }
