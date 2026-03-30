@@ -2,7 +2,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde::{Deserialize, Serialize};
 
-use crate::{account::{Account, AccountId}};
+use crate::account::{Account, AccountId};
 
 /// A commitment to all zero data.
 /// ```python
@@ -50,7 +50,7 @@ impl std::fmt::Debug for Commitment {
 
 impl Commitment {
     /// Generates the commitment to a private account owned by user for npk:
-    /// SHA256( `Comm_DS` || account_id || `program_owner` || balance || nonce || SHA256(data)).
+    /// SHA256( `Comm_DS` || `account_id` || `program_owner` || balance || nonce || SHA256(data)).
     #[must_use]
     pub fn new(account_id: &AccountId, account: &Account) -> Self {
         const COMMITMENT_PREFIX: &[u8; 32] =
@@ -115,7 +115,8 @@ mod tests {
     use risc0_zkvm::sha::{Impl, Sha256 as _};
 
     use crate::{
-        Commitment, DUMMY_COMMITMENT, DUMMY_COMMITMENT_HASH, account::{Account, AccountId},
+        Commitment, DUMMY_COMMITMENT, DUMMY_COMMITMENT_HASH,
+        account::{Account, AccountId},
     };
 
     #[test]

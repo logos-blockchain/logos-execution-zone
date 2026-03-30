@@ -11,7 +11,7 @@ use logos_blockchain_core::mantle::{
     Op, SignedMantleTx,
     ops::channel::{ChannelId, inscribe::InscriptionOp},
 };
-use nssa::V03State;
+use nssa::{AccountId, V03State};
 use testnet_initial_state::initial_state_testnet;
 
 use crate::{block_store::IndexerStore, config::IndexerConfig};
@@ -71,7 +71,10 @@ impl IndexerCore {
                         acc.program_owner =
                             nssa::program::Program::authenticated_transfer_program().id();
 
-                        nssa_core::Commitment::new(npk, &acc)
+                        nssa_core::Commitment::new(
+                            &AccountId::account_id_without_identifier(npk),
+                            &acc,
+                        )
                     })
                     .collect()
             });

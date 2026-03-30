@@ -372,7 +372,7 @@ mod tests {
         let pre = AccountWithMetadata::new(
             Account::default(),
             false,
-            AccountId::from(&account_keys.npk()),
+            AccountId::account_id_without_identifier(&account_keys.npk()),
         );
 
         let validity_window_chain_caller = Program::validity_window_chain_caller();

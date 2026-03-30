@@ -130,11 +130,12 @@ pub struct AccountWithMetadata {
 
 #[cfg(feature = "host")]
 impl AccountWithMetadata {
-    pub fn new(account: Account, is_authorized: bool, account_id: AccountId) -> Self {
+    #[must_use]
+    pub const fn new(account: Account, is_authorized: bool, account_id: AccountId) -> Self {
         Self {
             account,
             is_authorized,
-            account_id: account_id,
+            account_id,
         }
     }
 }
@@ -188,7 +189,7 @@ impl AccountId {
         bytes.extend_from_slice(&value.0);
 
         match identifier {
-            None => {},
+            None => {}
             Some(identifier) => bytes.extend_from_slice(&identifier.to_le_bytes()),
         }
 
@@ -209,7 +210,6 @@ impl AccountId {
     pub fn account_id_without_identifier(value: &NullifierPublicKey) -> Self {
         Self::generate_account_id(value, None)
     }
-
 }
 
 impl AsRef<[u8]> for AccountId {
@@ -384,7 +384,6 @@ mod tests {
 
         assert_eq!(nonce, nonce_restored);
     }
-
 
     #[test]
     fn account_id_from_nullifier_public_key() {
