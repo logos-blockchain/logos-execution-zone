@@ -13,6 +13,7 @@ pub struct ChildKeysPublic {
 }
 
 impl ChildKeysPublic {
+    #[allow(clippy::big_endian_bytes)]
     fn compute_hash_value(&self, cci: u32) -> [u8; 64] {
         let mut hash_input = vec![];
 
@@ -23,7 +24,7 @@ impl ChildKeysPublic {
             let sk = k256::SecretKey::from_bytes(self.csk.value().into())
                 .expect("32 bytes, within curve order");
             let pk = sk.public_key();
-            hash_input.extend_from_slice(&pk.to_encoded_point(true).as_bytes());
+            hash_input.extend_from_slice(pk.to_encoded_point(true).as_bytes());
         } else {
             // Harden.
             hash_input.extend_from_slice(&[0_u8]);
