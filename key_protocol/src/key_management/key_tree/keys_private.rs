@@ -142,6 +142,7 @@ mod tests {
     use super::*;
     use crate::key_management::{self, secret_holders::ViewingSecretKey};
 
+    #[expect(clippy::redundant_type_annotations, reason = "TODO: clippy requires")]
     #[test]
     fn master_key_generation() {
         let seed: [u8; 64] = [
