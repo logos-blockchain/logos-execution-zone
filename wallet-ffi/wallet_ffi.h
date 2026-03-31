@@ -104,6 +104,10 @@ typedef enum WalletFfiError {
    */
   INVALID_KEY_VALUE = 16,
   /**
+   * Invalid argument value.
+   */
+  INVALID_ARGUMENT = 17,
+  /**
    * Internal error (catch-all).
    */
   INTERNAL_ERROR = 99,
@@ -675,6 +679,34 @@ enum WalletFfiError wallet_ffi_transfer_public(struct WalletHandle *handle,
                                                const struct FfiBytes32 *to,
                                                const uint8_t (*amount)[16],
                                                struct FfiTransferResult *out_result);
+
+/**
+ * Send an arbitrary public transaction to a program.
+ *
+ * Builds a `PublicTransaction` from the given program, accounts, and instruction data,
+ * signs it with the signer's key, and submits to the sequencer.
+ *
+ * # Parameters
+ * - `handle`: Valid wallet handle
+ * - `program_id`: 32-byte program ID
+ * - `accounts`: Pointer to array of 32-byte account IDs
+ * - `num_accounts`: Number of accounts in the array
+ * - `instruction_data`: Pointer to raw instruction bytes (Vec<u32> serialized as LE bytes)
+ * - `instruction_len`: Length of instruction data in bytes (must be multiple of 4)
+ * - `signer`: Signer account ID (must be owned by this wallet)
+ * - `out_result`: Output pointer for transfer result
+ *
+ * # Safety
+ * All pointers must be valid. `instruction_len` must be a multiple of 4.
+ */
+enum WalletFfiError wallet_ffi_send_public_transaction(struct WalletHandle *handle,
+                                                       const struct FfiBytes32 *program_id,
+                                                       const struct FfiBytes32 *accounts,
+                                                       uintptr_t num_accounts,
+                                                       const uint8_t *instruction_data,
+                                                       uintptr_t instruction_len,
+                                                       const struct FfiBytes32 *signer,
+                                                       struct FfiTransferResult *out_result);
 
 /**
  * Send a shielded token transfer.

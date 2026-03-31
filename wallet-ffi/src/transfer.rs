@@ -94,6 +94,107 @@ pub unsafe extern "C" fn wallet_ffi_transfer_public(
     }
 }
 
+/// Send an arbitrary public transaction to a program.
+///
+/// Builds a `PublicTransaction` from the given program, accounts, and instruction data,
+/// signs it with the signer's key, and submits to the sequencer.
+///
+/// # Parameters
+/// - `handle`: Valid wallet handle
+/// - `program_id`: 32-byte program ID
+/// - `accounts`: Pointer to array of 32-byte account IDs
+/// - `num_accounts`: Number of accounts in the array
+/// - `instruction_data`: Pointer to raw instruction bytes (Vec<u32> serialized as LE bytes)
+/// - `instruction_len`: Length of instruction data in bytes (must be multiple of 4)
+/// - `signer`: Signer account ID (must be owned by this wallet)
+/// - `out_result`: Output pointer for transfer result
+///
+/// # Safety
+/// All pointers must be valid. `instruction_len` must be a multiple of 4.
+#[no_mangle]
+pub unsafe extern "C" fn wallet_ffi_send_public_transaction(
+    handle: *mut WalletHandle,
+    program_id: *const FfiBytes32,
+    accounts: *const FfiBytes32,
+    num_accounts: usize,
+    instruction_data: *const u8,
+    instruction_len: usize,
+    signer: *const FfiBytes32,
+    out_result: *mut FfiTransferResult,
+) -> WalletFfiError {
+    let wrapper = match get_wallet(handle) {
+        Ok(w) => w,
+        Err(e) => return e,
+    };
+
+    if program_id.is_null()
+        || accounts.is_null()
+        || instruction_data.is_null()
+        || signer.is_null()
+        || out_result.is_null()
+    {
+        print_error("Null pointer argument");
+        return WalletFfiError::NullPointer;
+    }
+
+    if instruction_len % 4 != 0 {
+        print_error("instruction_len must be a multiple of 4");
+        return WalletFfiError::InvalidArgument;
+    }
+
+    let wallet = match wrapper.core.lock() {
+        Ok(w) => w,
+        Err(e) => {
+            print_error(format!("Failed to lock wallet: {e}"));
+            return WalletFfiError::InternalError;
+        }
+    };
+
+    let pid_bytes = unsafe { (*program_id).data };
+    let mut pid: nssa_core::program::ProgramId = [0u32; 8];
+    for i in 0..8 {
+        pid[i] = u32::from_le_bytes([
+            pid_bytes[i * 4],
+            pid_bytes[i * 4 + 1],
+            pid_bytes[i * 4 + 2],
+            pid_bytes[i * 4 + 3],
+        ]);
+    }
+    let signer_id = AccountId::new(unsafe { (*signer).data });
+
+    let account_ids: Vec<AccountId> = (0..num_accounts)
+        .map(|i| AccountId::new(unsafe { (*accounts.add(i)).data }))
+        .collect();
+
+    // Convert raw bytes to Vec<u32> (LE)
+    let instr_slice = unsafe { std::slice::from_raw_parts(instruction_data, instruction_len) };
+    let instr_u32: Vec<u32> = instr_slice
+        .chunks_exact(4)
+        .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
+
+    match block_on(wallet.send_public_transaction(pid, account_ids, instr_u32, signer_id)) {
+        Ok(tx_hash) => {
+            let tx_hash = CString::new(tx_hash.to_string())
+                .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
+
+            unsafe {
+                (*out_result).tx_hash = tx_hash;
+                (*out_result).success = true;
+            }
+            WalletFfiError::Success
+        }
+        Err(e) => {
+            print_error(format!("Transaction failed: {e:?}"));
+            unsafe {
+                (*out_result).tx_hash = ptr::null_mut();
+                (*out_result).success = false;
+            }
+            map_execution_error(e)
+        }
+    }
+}
+
 /// Send a shielded token transfer.
 ///
 /// Transfers tokens from a public account to a private account.
