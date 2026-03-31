@@ -64,14 +64,14 @@ impl PrivateKey {
     }
 
     pub fn tweak(value: &[u8; 32]) -> Result<Self, LeeError> {
-        assert!(Self::is_valid_key(*value));
+        if !Self::is_valid_key(*value) {
+            return Err(LeeError::InvalidPrivateKey);
+        }
 
         let sk = k256::SecretKey::from_bytes(value.into()).expect("Expect a valid secret key");
-
-        let mut bytes = vec![];
         let pk = sk.public_key();
-        bytes.extend_from_slice(pk.to_encoded_point(true).as_bytes());
-        let hashed: [u8; 32] = Sha256::digest(&bytes).into();
+
+        let hashed: [u8; 32] = Sha256::digest(pk.to_encoded_point(true).as_bytes()).into();
 
         Self::try_new(
             k256::Scalar::from_repr((*value).into())
