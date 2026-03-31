@@ -3,7 +3,7 @@ use nssa_core::{
     Commitment, CommitmentSetDigest, Nullifier, NullifierPublicKey, PrivacyPreservingCircuitOutput,
     account::{Account, Nonce},
     encryption::{Ciphertext, EphemeralPublicKey, ViewingPublicKey},
-    program::ValidityWindow,
+    program::{BlockValidityWindow, TimestampValidityWindow},
 };
 use sha2::{Digest as _, Sha256};
 
@@ -53,7 +53,8 @@ pub struct Message {
     pub encrypted_private_post_states: Vec<EncryptedAccountData>,
     pub new_commitments: Vec<Commitment>,
     pub new_nullifiers: Vec<(Nullifier, CommitmentSetDigest)>,
-    pub validity_window: ValidityWindow,
+    pub block_validity_window: BlockValidityWindow,
+    pub timestamp_validity_window: TimestampValidityWindow,
 }
 
 impl std::fmt::Debug for Message {
@@ -79,7 +80,8 @@ impl std::fmt::Debug for Message {
             )
             .field("new_commitments", &self.new_commitments)
             .field("new_nullifiers", &nullifiers)
-            .field("validity_window", &self.validity_window)
+            .field("block_validity_window", &self.block_validity_window)
+            .field("timestamp_validity_window", &self.timestamp_validity_window)
             .finish()
     }
 }
@@ -112,7 +114,8 @@ impl Message {
             encrypted_private_post_states,
             new_commitments: output.new_commitments,
             new_nullifiers: output.new_nullifiers,
-            validity_window: output.validity_window,
+            block_validity_window: output.block_validity_window,
+            timestamp_validity_window: output.timestamp_validity_window,
         })
     }
 }
@@ -123,6 +126,7 @@ pub mod tests {
         Commitment, EncryptionScheme, Nullifier, NullifierPublicKey, SharedSecretKey,
         account::Account,
         encryption::{EphemeralPublicKey, ViewingPublicKey},
+        program::{BlockValidityWindow, TimestampValidityWindow},
     };
     use sha2::{Digest as _, Sha256};
 
@@ -165,7 +169,8 @@ pub mod tests {
             encrypted_private_post_states,
             new_commitments,
             new_nullifiers,
-            validity_window: (None, None).try_into().unwrap(),
+            block_validity_window: BlockValidityWindow::new_unbounded(),
+            timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
         }
     }
 

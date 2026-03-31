@@ -137,11 +137,12 @@ impl<'a> From<&'a mut ChildKeysPrivate> for &'a mut (KeyChain, nssa::Account) {
 
 #[cfg(test)]
 mod tests {
-    use nssa_core::NullifierSecretKey;
+    use nssa_core::{NullifierPublicKey, NullifierSecretKey};
 
     use super::*;
     use crate::key_management::{self, secret_holders::ViewingSecretKey};
 
+    #[expect(clippy::redundant_type_annotations, reason = "TODO: clippy requires")]
     #[test]
     fn master_key_generation() {
         let seed: [u8; 64] = [
@@ -153,7 +154,7 @@ mod tests {
 
         let keys = ChildKeysPrivate::root(seed);
 
-        let expected_ssk = key_management::secret_holders::SecretSpendingKey([
+        let expected_ssk: SecretSpendingKey = key_management::secret_holders::SecretSpendingKey([
             246, 79, 26, 124, 135, 95, 52, 51, 201, 27, 48, 194, 2, 144, 51, 219, 245, 128, 139,
             222, 42, 195, 105, 33, 115, 97, 186, 0, 97, 14, 218, 191,
         ]);
@@ -168,7 +169,7 @@ mod tests {
             34, 234, 19, 222, 2, 22, 12, 163, 252, 88, 11, 0, 163,
         ];
 
-        let expected_npk = nssa_core::NullifierPublicKey([
+        let expected_npk: NullifierPublicKey = nssa_core::NullifierPublicKey([
             7, 123, 125, 191, 233, 183, 201, 4, 20, 214, 155, 210, 45, 234, 27, 240, 194, 111, 97,
             247, 155, 113, 122, 246, 192, 0, 70, 61, 76, 71, 70, 2,
         ]);

@@ -58,11 +58,13 @@ impl Amm<'_> {
             user_holding_lp,
         ];
 
-        let nonces = self
+        let mut nonces = self
             .0
             .get_accounts_nonces(vec![user_holding_a, user_holding_b])
             .await
             .map_err(ExecutionFailureKind::SequencerError)?;
+
+        let mut private_keys = Vec::new();
 
         let signing_key_a = self
             .0
@@ -70,6 +72,7 @@ impl Amm<'_> {
             .user_data
             .get_pub_account_signing_key(user_holding_a)
             .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
+        private_keys.push(signing_key_a);
 
         let signing_key_b = self
             .0
@@ -77,6 +80,26 @@ impl Amm<'_> {
             .user_data
             .get_pub_account_signing_key(user_holding_b)
             .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
+        private_keys.push(signing_key_b);
+
+        if let Some(signing_key_lp) = self
+            .0
+            .storage
+            .user_data
+            .get_pub_account_signing_key(user_holding_lp)
+        {
+            private_keys.push(signing_key_lp);
+            let lp_nonces = self
+                .0
+                .get_accounts_nonces(vec![user_holding_lp])
+                .await
+                .map_err(ExecutionFailureKind::SequencerError)?;
+            nonces.extend(lp_nonces);
+        } else {
+            println!(
+                "Liquidity pool tokens receiver's account ({user_holding_lp}) private key not found in wallet. Proceeding with only liquidity provider's keys."
+            );
+        }
 
         let message = nssa::public_transaction::Message::try_new(
             program.id(),
@@ -86,10 +109,8 @@ impl Amm<'_> {
         )
         .unwrap();
 
-        let witness_set = nssa::public_transaction::WitnessSet::for_message(
-            &message,
-            &[signing_key_a, signing_key_b],
-        );
+        let witness_set =
+            nssa::public_transaction::WitnessSet::for_message(&message, &private_keys);
 
         let tx = nssa::PublicTransaction::new(message, witness_set);
 

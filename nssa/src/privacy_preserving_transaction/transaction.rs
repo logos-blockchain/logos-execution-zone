@@ -5,17 +5,14 @@ use std::{
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use nssa_core::{
-    Commitment, CommitmentSetDigest, Nullifier, PrivacyPreservingCircuitOutput,
+    BlockId, PrivacyPreservingCircuitOutput, Timestamp,
     account::{Account, AccountWithMetadata},
-    program::{BlockId, ValidityWindow},
 };
 use sha2::{Digest as _, digest::FixedOutput as _};
 
 use super::{message::Message, witness_set::WitnessSet};
 use crate::{
-    AccountId, V03State,
-    error::NssaError,
-    privacy_preserving_transaction::{circuit::Proof, message::EncryptedAccountData},
+    AccountId, V03State, error::NssaError, privacy_preserving_transaction::circuit::Proof,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -37,6 +34,7 @@ impl PrivacyPreservingTransaction {
         &self,
         state: &V03State,
         block_id: BlockId,
+        timestamp: Timestamp,
     ) -> Result<HashMap<AccountId, Account>, NssaError> {
         let message = &self.message;
         let witness_set = &self.witness_set;
@@ -94,7 +92,9 @@ impl PrivacyPreservingTransaction {
         }
 
         // Verify validity window
-        if !message.validity_window.is_valid_for_block_id(block_id) {
+        if !message.block_validity_window.is_valid_for(block_id)
+            || !message.timestamp_validity_window.is_valid_for(timestamp)
+        {
             return Err(NssaError::OutOfValidityWindow);
         }
 
@@ -115,11 +115,7 @@ impl PrivacyPreservingTransaction {
         check_privacy_preserving_circuit_proof_is_valid(
             &witness_set.proof,
             &public_pre_states,
-            &message.public_post_states,
-            &message.encrypted_private_post_states,
-            &message.new_commitments,
-            &message.new_nullifiers,
-            &message.validity_window,
+            message,
         )?;
 
         // 5. Commitment freshness
@@ -177,23 +173,21 @@ impl PrivacyPreservingTransaction {
 fn check_privacy_preserving_circuit_proof_is_valid(
     proof: &Proof,
     public_pre_states: &[AccountWithMetadata],
-    public_post_states: &[Account],
-    encrypted_private_post_states: &[EncryptedAccountData],
-    new_commitments: &[Commitment],
-    new_nullifiers: &[(Nullifier, CommitmentSetDigest)],
-    validity_window: &ValidityWindow,
+    message: &Message,
 ) -> Result<(), NssaError> {
     let output = PrivacyPreservingCircuitOutput {
         public_pre_states: public_pre_states.to_vec(),
-        public_post_states: public_post_states.to_vec(),
-        ciphertexts: encrypted_private_post_states
+        public_post_states: message.public_post_states.clone(),
+        ciphertexts: message
+            .encrypted_private_post_states
             .iter()
             .cloned()
             .map(|value| value.ciphertext)
             .collect(),
-        new_commitments: new_commitments.to_vec(),
-        new_nullifiers: new_nullifiers.to_vec(),
-        validity_window: validity_window.to_owned(),
+        new_commitments: message.new_commitments.clone(),
+        new_nullifiers: message.new_nullifiers.clone(),
+        block_validity_window: message.block_validity_window,
+        timestamp_validity_window: message.timestamp_validity_window,
     };
     proof
         .is_valid_for(&output)
