@@ -45,7 +45,7 @@ impl PrivateKey {
     }
 
     fn is_valid_key(value: [u8; 32]) -> bool {
-        secp256k1::SecretKey::from_byte_array(value).is_ok()
+        k256::SecretKey::from_bytes(&value.into()).is_ok()
     }
 
     pub fn try_new(value: [u8; 32]) -> Result<Self, NssaError> {

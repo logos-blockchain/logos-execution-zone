@@ -1,6 +1,6 @@
 use nssa_core::{
     account::{Account, AccountWithMetadata, Data},
-    program::AccountPostState,
+    program::{AccountPostState, Claim},
 };
 use token_core::{
     NewTokenDefinition, NewTokenMetadata, TokenDefinition, TokenHolding, TokenMetadata,
@@ -42,8 +42,8 @@ pub fn new_fungible_definition(
     holding_target_account_post.data = Data::from(&token_holding);
 
     vec![
-        AccountPostState::new_claimed(definition_target_account_post),
-        AccountPostState::new_claimed(holding_target_account_post),
+        AccountPostState::new_claimed(definition_target_account_post, Claim::Authorized),
+        AccountPostState::new_claimed(holding_target_account_post, Claim::Authorized),
     ]
 }
 
@@ -119,8 +119,8 @@ pub fn new_definition_with_metadata(
     metadata_target_account_post.data = Data::from(&token_metadata);
 
     vec![
-        AccountPostState::new_claimed(definition_target_account_post),
-        AccountPostState::new_claimed(holding_target_account_post),
-        AccountPostState::new_claimed(metadata_target_account_post),
+        AccountPostState::new_claimed(definition_target_account_post, Claim::Authorized),
+        AccountPostState::new_claimed(holding_target_account_post, Claim::Authorized),
+        AccountPostState::new_claimed(metadata_target_account_post, Claim::Authorized),
     ]
 }

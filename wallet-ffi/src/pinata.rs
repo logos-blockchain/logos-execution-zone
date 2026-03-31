@@ -78,7 +78,6 @@ pub unsafe extern "C" fn wallet_ffi_claim_pinata(
         Ok(tx_hash) => {
             let tx_hash = CString::new(tx_hash.to_string())
                 .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
-
             unsafe {
                 (*out_result).tx_hash = tx_hash;
                 (*out_result).success = true;

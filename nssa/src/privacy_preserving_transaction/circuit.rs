@@ -174,12 +174,13 @@ mod tests {
     #![expect(clippy::shadow_unrelated, reason = "We don't care about it in tests")]
 
     use nssa_core::{
-        Commitment, DUMMY_COMMITMENT_HASH, EncryptionScheme, Nullifier,
+        Commitment, DUMMY_COMMITMENT_HASH, EncryptionScheme, Nullifier, SharedSecretKey,
         account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
     };
 
     use super::*;
     use crate::{
+        error::NssaError,
         privacy_preserving_transaction::circuit::execute_and_prove,
         program::Program,
         state::{
@@ -363,5 +364,47 @@ mod tests {
         )
         .unwrap();
         assert_eq!(recipient_post, expected_private_account_2);
+    }
+
+    #[test]
+    fn circuit_fails_when_chained_validity_windows_have_empty_intersection() {
+        let account_keys = test_private_account_keys_1();
+        let pre = AccountWithMetadata::new(
+            Account::default(),
+            false,
+            AccountId::from(&account_keys.npk()),
+        );
+
+        let validity_window_chain_caller = Program::validity_window_chain_caller();
+        let validity_window = Program::validity_window();
+
+        let instruction = Program::serialize_instruction((
+            Some(1_u64),
+            Some(4_u64),
+            validity_window.id(),
+            Some(4_u64),
+            Some(7_u64),
+        ))
+        .unwrap();
+
+        let esk = [3; 32];
+        let shared_secret = SharedSecretKey::new(&esk, &account_keys.vpk());
+
+        let program_with_deps = ProgramWithDependencies::new(
+            validity_window_chain_caller,
+            [(validity_window.id(), validity_window)].into(),
+        );
+
+        let result = execute_and_prove(
+            vec![pre],
+            instruction,
+            vec![2],
+            vec![(account_keys.npk(), shared_secret)],
+            vec![],
+            vec![None],
+            &program_with_deps,
+        );
+
+        assert!(matches!(result, Err(NssaError::CircuitProvingError(_))));
     }
 }

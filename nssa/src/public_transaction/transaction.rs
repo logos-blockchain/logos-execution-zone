@@ -3,8 +3,9 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use borsh::{BorshDeserialize, BorshSerialize};
 use log::debug;
 use nssa_core::{
+    BlockId, Timestamp,
     account::{Account, AccountId, AccountWithMetadata},
-    program::{ChainedCall, DEFAULT_PROGRAM_ID, validate_execution},
+    program::{ChainedCall, Claim, DEFAULT_PROGRAM_ID, validate_execution},
 };
 use sha2::{Digest as _, digest::FixedOutput as _};
 
@@ -70,6 +71,8 @@ impl PublicTransaction {
     pub(crate) fn validate_and_produce_public_state_diff(
         &self,
         state: &V03State,
+        block_id: BlockId,
+        timestamp: Timestamp,
     ) -> Result<HashMap<AccountId, Account>, NssaError> {
         let message = self.message();
         let witness_set = self.witness_set();
@@ -156,6 +159,10 @@ impl PublicTransaction {
                 &chained_call.pda_seeds,
             );
 
+            let is_authorized = |account_id: &AccountId| {
+                signer_account_ids.contains(account_id) || authorized_pdas.contains(account_id)
+            };
+
             for pre in &program_output.pre_states {
                 let account_id = pre.account_id;
                 // Check that the program output pre_states coincide with the values in the public
@@ -171,10 +178,8 @@ impl PublicTransaction {
 
                 // Check that authorization flags are consistent with the provided ones or
                 // authorized by program through the PDA mechanism
-                let is_authorized = signer_account_ids.contains(&account_id)
-                    || authorized_pdas.contains(&account_id);
                 ensure!(
-                    pre.is_authorized == is_authorized,
+                    pre.is_authorized == is_authorized(&account_id),
                     NssaError::InvalidProgramBehavior
                 );
             }
@@ -190,17 +195,44 @@ impl PublicTransaction {
                 NssaError::InvalidProgramBehavior
             );
 
-            for post in program_output
-                .post_states
-                .iter_mut()
-                .filter(|post| post.requires_claim())
-            {
+            // Verify validity window
+            ensure!(
+                program_output.block_validity_window.is_valid_for(block_id)
+                    && program_output
+                        .timestamp_validity_window
+                        .is_valid_for(timestamp),
+                NssaError::OutOfValidityWindow
+            );
+
+            for (i, post) in program_output.post_states.iter_mut().enumerate() {
+                let Some(claim) = post.required_claim() else {
+                    continue;
+                };
                 // The invoked program can only claim accounts with default program id.
-                if post.account().program_owner == DEFAULT_PROGRAM_ID {
-                    post.account_mut().program_owner = chained_call.program_id;
-                } else {
-                    return Err(NssaError::InvalidProgramBehavior);
+                ensure!(
+                    post.account().program_owner == DEFAULT_PROGRAM_ID,
+                    NssaError::InvalidProgramBehavior
+                );
+
+                let account_id = program_output.pre_states[i].account_id;
+
+                match claim {
+                    Claim::Authorized => {
+                        // The program can only claim accounts that were authorized by the signer.
+                        ensure!(
+                            is_authorized(&account_id),
+                            NssaError::InvalidProgramBehavior
+                        );
+                    }
+                    Claim::Pda(seed) => {
+                        // The program can only claim accounts that correspond to the PDAs it is
+                        // authorized to claim.
+                        let pda = AccountId::from((&chained_call.program_id, &seed));
+                        ensure!(account_id == pda, NssaError::InvalidProgramBehavior);
+                    }
                 }
+
+                post.account_mut().program_owner = chained_call.program_id;
             }
 
             // Update the state diff
@@ -359,7 +391,7 @@ pub mod tests {
 
         let witness_set = WitnessSet::for_message(&message, &[&key1, &key1]);
         let tx = PublicTransaction::new(message, witness_set);
-        let result = tx.validate_and_produce_public_state_diff(&state);
+        let result = tx.validate_and_produce_public_state_diff(&state, 1, 0);
         assert!(matches!(result, Err(NssaError::InvalidInput(_))));
     }
 
@@ -379,7 +411,7 @@ pub mod tests {
 
         let witness_set = WitnessSet::for_message(&message, &[&key1, &key2]);
         let tx = PublicTransaction::new(message, witness_set);
-        let result = tx.validate_and_produce_public_state_diff(&state);
+        let result = tx.validate_and_produce_public_state_diff(&state, 1, 0);
         assert!(matches!(result, Err(NssaError::InvalidInput(_))));
     }
 
@@ -400,7 +432,7 @@ pub mod tests {
         let mut witness_set = WitnessSet::for_message(&message, &[&key1, &key2]);
         witness_set.signatures_and_public_keys[0].0 = Signature::new_for_tests([1; 64]);
         let tx = PublicTransaction::new(message, witness_set);
-        let result = tx.validate_and_produce_public_state_diff(&state);
+        let result = tx.validate_and_produce_public_state_diff(&state, 1, 0);
         assert!(matches!(result, Err(NssaError::InvalidInput(_))));
     }
 
@@ -420,7 +452,7 @@ pub mod tests {
 
         let witness_set = WitnessSet::for_message(&message, &[&key1, &key2]);
         let tx = PublicTransaction::new(message, witness_set);
-        let result = tx.validate_and_produce_public_state_diff(&state);
+        let result = tx.validate_and_produce_public_state_diff(&state, 1, 0);
         assert!(matches!(result, Err(NssaError::InvalidInput(_))));
     }
 
@@ -436,7 +468,7 @@ pub mod tests {
 
         let witness_set = WitnessSet::for_message(&message, &[&key1, &key2]);
         let tx = PublicTransaction::new(message, witness_set);
-        let result = tx.validate_and_produce_public_state_diff(&state);
+        let result = tx.validate_and_produce_public_state_diff(&state, 1, 0);
         assert!(matches!(result, Err(NssaError::InvalidInput(_))));
     }
 }

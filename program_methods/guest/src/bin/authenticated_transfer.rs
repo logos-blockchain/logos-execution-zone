@@ -1,13 +1,13 @@
 use nssa_core::{
     account::{Account, AccountWithMetadata},
     program::{
-        AccountPostState, DEFAULT_PROGRAM_ID, ProgramInput, read_nssa_inputs, write_nssa_outputs,
+        AccountPostState, Claim, DEFAULT_PROGRAM_ID, ProgramInput, ProgramOutput, read_nssa_inputs,
     },
 };
 
 /// Initializes a default account under the ownership of this program.
 fn initialize_account(pre_state: AccountWithMetadata) -> AccountPostState {
-    let account_to_claim = AccountPostState::new_claimed(pre_state.account);
+    let account_to_claim = AccountPostState::new_claimed(pre_state.account, Claim::Authorized);
     let is_authorized = pre_state.is_authorized;
 
     // Continue only if the account to claim has default values
@@ -52,7 +52,7 @@ fn transfer(
 
         // Claim recipient account if it has default program owner
         if recipient_post_account.program_owner == DEFAULT_PROGRAM_ID {
-            AccountPostState::new_claimed(recipient_post_account)
+            AccountPostState::new_claimed(recipient_post_account, Claim::Authorized)
         } else {
             AccountPostState::new(recipient_post_account)
         }
@@ -84,5 +84,5 @@ fn main() {
         _ => panic!("invalid params"),
     };
 
-    write_nssa_outputs(instruction_words, pre_states, post_states);
+    ProgramOutput::new(instruction_words, pre_states, post_states).write();
 }

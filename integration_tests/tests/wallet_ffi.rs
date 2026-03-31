@@ -924,7 +924,7 @@ fn test_wallet_ffi_transfer_deshielded() -> Result<()> {
     let home = tempfile::tempdir()?;
     let wallet_ffi_handle = new_wallet_ffi_with_test_context_config(&ctx, home.path())?;
     let from: FfiBytes32 = (&ctx.ctx().existing_private_accounts()[0]).into();
-    let to = FfiBytes32::from_bytes([37; 32]);
+    let to: FfiBytes32 = (&ctx.ctx().existing_public_accounts()[0]).into();
     let amount: [u8; 16] = 100_u128.to_le_bytes();
 
     let mut transfer_result = FfiTransferResult::default();
@@ -967,7 +967,7 @@ fn test_wallet_ffi_transfer_deshielded() -> Result<()> {
     };
 
     assert_eq!(from_balance, 9900);
-    assert_eq!(to_balance, 100);
+    assert_eq!(to_balance, 10100);
 
     unsafe {
         wallet_ffi_free_transfer_result(&raw mut transfer_result);

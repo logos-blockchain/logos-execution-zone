@@ -3,10 +3,11 @@ use std::{path::Path, sync::Arc};
 use anyhow::Result;
 use bedrock_client::HeaderId;
 use common::{
-    block::{BedrockStatus, Block, BlockId},
+    block::{BedrockStatus, Block},
     transaction::NSSATransaction,
 };
 use nssa::{Account, AccountId, V03State};
+use nssa_core::BlockId;
 use storage::indexer::RocksDBIO;
 use tokio::sync::RwLock;
 
@@ -148,7 +149,11 @@ impl IndexerStore {
                 transaction
                     .clone()
                     .transaction_stateless_check()?
-                    .execute_check_on_state(&mut state_guard)?;
+                    .execute_check_on_state(
+                        &mut state_guard,
+                        block.header.block_id,
+                        block.header.timestamp,
+                    )?;
             }
         }
 

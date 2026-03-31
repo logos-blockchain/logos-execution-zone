@@ -1,6 +1,6 @@
 use nssa_core::{
     account::AccountWithMetadata,
-    program::{AccountPostState, ProgramInput, read_nssa_inputs, write_nssa_outputs},
+    program::{AccountPostState, ProgramInput, ProgramOutput, read_nssa_inputs},
 };
 
 type Instruction = nssa_core::Timestamp;
@@ -57,9 +57,9 @@ fn main() {
     let (pre_10, post_10) = update_if_multiple(pre_10, 10, current_block_id, updated_data);
     let (pre_50, post_50) = update_if_multiple(pre_50, 50, current_block_id, updated_data);
 
-    write_nssa_outputs(
+    ProgramOutput::new(
         instruction_words,
         vec![pre_01, pre_10, pre_50],
         vec![post_01, post_10, post_50],
-    );
+    ).write();
 }

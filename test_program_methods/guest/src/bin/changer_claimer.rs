@@ -1,4 +1,4 @@
-use nssa_core::program::{AccountPostState, ProgramInput, read_nssa_inputs, write_nssa_outputs};
+use nssa_core::program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_nssa_inputs};
 
 type Instruction = (Option<Vec<u8>>, bool);
 
@@ -28,10 +28,10 @@ fn main() {
 
     // Claim or not based on the boolean flag
     let post_state = if should_claim {
-        AccountPostState::new_claimed(account_post)
+        AccountPostState::new_claimed(account_post, Claim::Authorized)
     } else {
         AccountPostState::new(account_post)
     };
 
-    write_nssa_outputs(instruction_words, vec![pre], vec![post_state]);
+    ProgramOutput::new(instruction_words, vec![pre], vec![post_state]).write();
 }

@@ -1,8 +1,6 @@
 use nssa_core::{
-    account::{Account, AccountWithMetadata, Data},
-    program::{
-        AccountPostState, DEFAULT_PROGRAM_ID, ProgramInput, read_nssa_inputs, write_nssa_outputs,
-    },
+    account::{AccountWithMetadata, Data},
+    program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_nssa_inputs},
 };
 
 // Hello-world with write + move_data example program.
@@ -26,16 +24,6 @@ const MOVE_DATA_FUNCTION_ID: u8 = 1;
 
 type Instruction = (u8, Vec<u8>);
 
-fn build_post_state(post_account: Account) -> AccountPostState {
-    if post_account.program_owner == DEFAULT_PROGRAM_ID {
-        // This produces a claim request
-        AccountPostState::new_claimed(post_account)
-    } else {
-        // This doesn't produce a claim request
-        AccountPostState::new(post_account)
-    }
-}
-
 fn write(pre_state: AccountWithMetadata, greeting: &[u8]) -> AccountPostState {
     // Construct the post state account values
     let post_account = {
@@ -48,7 +36,7 @@ fn write(pre_state: AccountWithMetadata, greeting: &[u8]) -> AccountPostState {
         this
     };
 
-    build_post_state(post_account)
+    AccountPostState::new_claimed_if_default(post_account, Claim::Authorized)
 }
 
 fn move_data(from_pre: AccountWithMetadata, to_pre: AccountWithMetadata) -> Vec<AccountPostState> {
@@ -58,7 +46,7 @@ fn move_data(from_pre: AccountWithMetadata, to_pre: AccountWithMetadata) -> Vec<
     let from_post = {
         let mut this = from_pre.account;
         this.data = Data::default();
-        build_post_state(this)
+        AccountPostState::new_claimed_if_default(this, Claim::Authorized)
     };
 
     let to_post = {
@@ -68,7 +56,7 @@ fn move_data(from_pre: AccountWithMetadata, to_pre: AccountWithMetadata) -> Vec<
         this.data = bytes
             .try_into()
             .expect("Data should fit within the allowed limits");
-        build_post_state(this)
+        AccountPostState::new_claimed_if_default(this, Claim::Authorized)
     };
 
     vec![from_post, to_post]
@@ -95,5 +83,7 @@ fn main() {
         _ => panic!("invalid params"),
     };
 
-    write_nssa_outputs(instruction_words, pre_states, post_states);
+    // WARNING: constructing a `ProgramOutput` has no effect on its own. `.write()` must be
+    // called to commit the output.
+    ProgramOutput::new(instruction_words, pre_states, post_states).write();
 }

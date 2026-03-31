@@ -1,6 +1,6 @@
 use nssa_core::program::{
-    AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, read_nssa_inputs,
-    write_nssa_outputs_with_chained_call,
+    AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput,
+    read_nssa_inputs,
 };
 use risc0_zkvm::serde::to_vec;
 
@@ -38,7 +38,7 @@ fn main() {
             program_id: auth_transfer_id,
             instruction_data: instruction_data.clone(),
             pre_states: vec![running_sender_pre.clone(), running_recipient_pre.clone()], /* <- Account order permutation here */
-            pda_seeds: pda_seed.iter().cloned().collect(),
+            pda_seeds: pda_seed.iter().copied().collect(),
         };
         chained_calls.push(new_chained_call);
 
@@ -54,13 +54,14 @@ fn main() {
             };
     }
 
-    write_nssa_outputs_with_chained_call(
+    ProgramOutput::new(
         instruction_words,
         vec![sender_pre.clone(), recipient_pre.clone()],
         vec![
             AccountPostState::new(sender_pre.account),
             AccountPostState::new(recipient_pre.account),
         ],
-        chained_calls,
-    );
+    )
+    .with_chained_calls(chained_calls)
+    .write();
 }

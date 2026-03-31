@@ -1,4 +1,4 @@
-use nssa_core::program::{AccountPostState, ProgramInput, read_nssa_inputs, write_nssa_outputs};
+use nssa_core::program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_nssa_inputs};
 
 type Instruction = Vec<u8>;
 
@@ -22,9 +22,13 @@ fn main() {
         .try_into()
         .expect("provided data should fit into data limit");
 
-    write_nssa_outputs(
+    ProgramOutput::new(
         instruction_words,
         vec![pre],
-        vec![AccountPostState::new_claimed(account_post)],
-    );
+        vec![AccountPostState::new_claimed(
+            account_post,
+            Claim::Authorized,
+        )],
+    )
+    .write();
 }

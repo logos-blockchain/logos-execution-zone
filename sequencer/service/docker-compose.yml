@@ -10,5 +10,8 @@ services:
     volumes:
       # Mount configuration file
       - ./configs/docker/sequencer_config.json:/etc/sequencer_service/sequencer_config.json
-      # Mount data folder
-      - ./data:/var/lib/sequencer_service
+      # Mount data volume
+      - sequencer_data:/var/lib/sequencer_service
+
+volumes:
+  sequencer_data:
