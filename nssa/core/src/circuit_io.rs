@@ -102,7 +102,7 @@ mod tests {
                 ),
                 [0xab; 32],
             )],
-            validity_window: (Some(1), None).try_into().unwrap(),
+            validity_window: (1..).into(),
         };
         let bytes = output.to_bytes();
         let output_from_slice: PrivacyPreservingCircuitOutput = from_slice(&bytes).unwrap();
