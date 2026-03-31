@@ -5,10 +5,10 @@ use sha2::{Digest as _, Sha256, digest::FixedOutput as _};
 
 use crate::{HashType, transaction::NSSATransaction};
 
+pub use nssa_core::Timestamp;
 pub type MantleMsgId = [u8; 32];
 pub type BlockHash = HashType;
 pub type BlockId = u64;
-pub use nssa_core::Timestamp;
 
 #[derive(Debug, Clone, BorshSerialize, BorshDeserialize)]
 pub struct BlockMeta {

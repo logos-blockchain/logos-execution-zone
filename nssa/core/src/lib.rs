@@ -3,7 +3,6 @@
     reason = "We prefer to group methods by functionality rather than by type for encoding"
 )]
 
-pub type Timestamp = u64;
 
 pub use circuit_io::{PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput};
 pub use commitment::{
@@ -23,3 +22,5 @@ pub mod program;
 
 #[cfg(feature = "host")]
 pub mod error;
+
+pub type Timestamp = u64;

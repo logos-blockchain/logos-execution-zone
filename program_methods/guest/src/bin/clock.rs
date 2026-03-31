@@ -11,7 +11,7 @@ fn update_if_multiple(
     current_block_id: u64,
     updated_data: [u8; 16],
 ) -> (AccountWithMetadata, AccountPostState) {
-    if current_block_id % divisor == 0 {
+    if current_block_id.is_multiple_of(divisor) {
         let mut post_account = pre.account.clone();
         post_account.data = updated_data
             .to_vec()
@@ -47,7 +47,7 @@ fn main() {
         .expect("Next block id should be within u64 boundaries");
 
     let updated_data = {
-        let mut data = [0u8; 16];
+        let mut data = [0_u8; 16];
         data[..8].copy_from_slice(&current_block_id.to_le_bytes());
         data[8..].copy_from_slice(&timestamp.to_le_bytes());
         data

@@ -8,7 +8,7 @@ use serde::Serialize;
 
 use crate::{
     error::NssaError,
-    program_methods::{AMM_ELF, AUTHENTICATED_TRANSFER_ELF, PINATA_ELF, TOKEN_ELF, CLOCK_ELF},
+    program_methods::{AMM_ELF, AUTHENTICATED_TRANSFER_ELF, CLOCK_ELF, PINATA_ELF, TOKEN_ELF},
 };
 
 /// Maximum number of cycles for a public execution.
