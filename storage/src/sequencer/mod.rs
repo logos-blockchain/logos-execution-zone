@@ -7,21 +7,30 @@ use rocksdb::{
 };
 
 use crate::{
-    CF_BLOCK_NAME, CF_META_NAME, CF_NSSA_STATE_NAME, DB_META_FIRST_BLOCK_IN_DB_KEY,
+    CF_BLOCK_NAME, CF_META_NAME, DB_META_FIRST_BLOCK_IN_DB_KEY, DbResult,
     error::DbError,
+    sequencer::sequencer_cells::{
+        LastFinalizedBlockIdCell, LatestBlockMetaCellOwned, LatestBlockMetaCellRef,
+        NSSAStateCellOwned, NSSAStateCellRef,
+    },
     storable_cell::{
         SimpleReadableCell, SimpleWritableCell,
-        cells::{
-            meta_sequencer::{
-                LastFinalizedBlockIdCell, LatestBlockMetaCellOwned, LatestBlockMetaCellRef,
-                NSSAStateCellOwned, NSSAStateCellRef,
-            },
-            meta_shared::{BlockCell, FirstBlockCell, FirstBlockSetCell, LastBlockCell},
-        },
+        cells::shared_cells::{BlockCell, FirstBlockCell, FirstBlockSetCell, LastBlockCell},
     },
 };
 
-pub type DbResult<T> = Result<T, DbError>;
+pub mod sequencer_cells;
+
+/// Key base for storing metainformation about the last finalized block on Bedrock.
+pub const DB_META_LAST_FINALIZED_BLOCK_ID: &str = "last_finalized_block_id";
+/// Key base for storing metainformation about the latest block meta.
+pub const DB_META_LATEST_BLOCK_META_KEY: &str = "latest_block_meta";
+
+/// Key base for storing the NSSA state.
+pub const DB_NSSA_STATE_KEY: &str = "nssa_state";
+
+/// Name of state column family.
+pub const CF_NSSA_STATE_NAME: &str = "cf_nssa_state";
 
 pub struct RocksDBIO {
     pub db: DBWithThreadMode<MultiThreaded>,

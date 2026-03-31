@@ -1,7 +1,9 @@
 use super::{BREAKPOINT_INTERVAL, DbError, DbResult, RocksDBIO, V03State};
-use crate::storable_cell::cells::{
-    meta_indexer::{BreakpointCellRef, LastBreakpointIdCell, LastObservedL1LibHeaderCell},
-    meta_shared::{FirstBlockSetCell, LastBlockCell},
+use crate::{
+    indexer::indexer_cells::{
+        BreakpointCellRef, LastBreakpointIdCell, LastObservedL1LibHeaderCell,
+    },
+    storable_cell::cells::shared_cells::{FirstBlockSetCell, LastBlockCell},
 };
 
 #[expect(clippy::multiple_inherent_impl, reason = "Readability")]

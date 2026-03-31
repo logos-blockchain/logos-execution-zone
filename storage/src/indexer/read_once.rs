@@ -1,10 +1,12 @@
 use super::{Block, DbResult, RocksDBIO, V03State};
-use crate::storable_cell::cells::{
-    meta_indexer::{
+use crate::{
+    indexer::indexer_cells::{
         AccNumTxCell, BlockHashToBlockIdMapCell, BreakpointCellOwned, LastBreakpointIdCell,
         LastObservedL1LibHeaderCell, TxHashToBlockIdMapCell,
     },
-    meta_shared::{BlockCell, FirstBlockCell, FirstBlockSetCell, LastBlockCell},
+    storable_cell::cells::shared_cells::{
+        BlockCell, FirstBlockCell, FirstBlockSetCell, LastBlockCell,
+    },
 };
 
 #[expect(clippy::multiple_inherent_impl, reason = "Readability")]

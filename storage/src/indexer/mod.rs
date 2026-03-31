@@ -7,16 +7,42 @@ use rocksdb::{
 };
 
 use crate::{
-    BREAKPOINT_INTERVAL, CF_ACC_META, CF_ACC_TO_TX, CF_BLOCK_NAME, CF_BREAKPOINT_NAME,
-    CF_HASH_TO_ID, CF_META_NAME, CF_TX_TO_ID, DbResult,
+    BREAKPOINT_INTERVAL, CF_BLOCK_NAME, CF_META_NAME, DbResult,
     error::DbError,
     storable_cell::{SimpleReadableCell, SimpleWritableCell},
 };
 
+pub mod indexer_cells;
 pub mod read_multiple;
 pub mod read_once;
 pub mod write_atomic;
 pub mod write_non_atomic;
+
+/// Key base for storing metainformation about id of last observed L1 lib header in db.
+pub const DB_META_LAST_OBSERVED_L1_LIB_HEADER_ID_IN_DB_KEY: &str =
+    "last_observed_l1_lib_header_in_db";
+/// Key base for storing metainformation about the last breakpoint.
+pub const DB_META_LAST_BREAKPOINT_ID: &str = "last_breakpoint_id";
+
+/// Cell name for a breakpoint.
+pub const BREAKPOINT_CELL_NAME: &str = "breakpoint";
+/// Cell name for a block hash to block id map.
+pub const BLOCK_HASH_CELL_NAME: &str = "block hash";
+/// Cell name for a tx hash to block id map.
+pub const TX_HASH_CELL_NAME: &str = "tx hash";
+/// Cell name for a account number of transactions.
+pub const ACC_NUM_CELL_NAME: &str = "acc id";
+
+/// Name of breakpoint column family.
+pub const CF_BREAKPOINT_NAME: &str = "cf_breakpoint";
+/// Name of hash to id map column family.
+pub const CF_HASH_TO_ID: &str = "cf_hash_to_id";
+/// Name of tx hash to id map column family.
+pub const CF_TX_TO_ID: &str = "cf_tx_to_id";
+/// Name of account meta column family.
+pub const CF_ACC_META: &str = "cf_acc_meta";
+/// Name of account id to tx hash map column family.
+pub const CF_ACC_TO_TX: &str = "cf_acc_to_tx";
 
 pub struct RocksDBIO {
     pub db: DBWithThreadMode<MultiThreaded>,

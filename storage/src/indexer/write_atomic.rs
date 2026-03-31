@@ -5,13 +5,11 @@ use rocksdb::WriteBatch;
 use super::{BREAKPOINT_INTERVAL, Block, DbError, DbResult, RocksDBIO};
 use crate::{
     DB_META_FIRST_BLOCK_IN_DB_KEY,
-    storable_cell::cells::{
-        meta_indexer::{
-            AccNumTxCell, BlockHashToBlockIdMapCell, LastBreakpointIdCell,
-            LastObservedL1LibHeaderCell, TxHashToBlockIdMapCell,
-        },
-        meta_shared::{FirstBlockSetCell, LastBlockCell},
+    indexer::indexer_cells::{
+        AccNumTxCell, BlockHashToBlockIdMapCell, LastBreakpointIdCell, LastObservedL1LibHeaderCell,
+        TxHashToBlockIdMapCell,
     },
+    storable_cell::cells::shared_cells::{FirstBlockSetCell, LastBlockCell},
 };
 
 #[expect(clippy::multiple_inherent_impl, reason = "Readability")]
