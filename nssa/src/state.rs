@@ -2735,36 +2735,47 @@ pub mod tests {
         let mut state = V03State::new_with_genesis_accounts(&[], &[]);
         state.add_pinata_token_program(pinata_definition_id);
 
-        // Execution of the token program to create new token for the pinata token
-        // definition and supply accounts
+        // Set up the token accounts directly (bypassing public transactions which
+        // would require signers for Claim::Authorized). The focus of this test is
+        // the PDA mechanism in the pinata program's chained call, not token creation.
         let total_supply: u128 = 10_000_000;
-        let instruction = token_core::Instruction::NewFungibleDefinition {
+        let token_definition = token_core::TokenDefinition::Fungible {
             name: String::from("PINATA"),
             total_supply,
+            metadata_id: None,
         };
-        let message = public_transaction::Message::try_new(
-            token.id(),
-            vec![pinata_token_definition_id, pinata_token_holding_id],
-            vec![],
-            instruction,
-        )
-        .unwrap();
-        let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
-        let tx = PublicTransaction::new(message, witness_set);
-        state.transition_from_public_transaction(&tx, 1, 0).unwrap();
-
-        // Execution of winner's token holding account initialization
-        let instruction = token_core::Instruction::InitializeAccount;
-        let message = public_transaction::Message::try_new(
-            token.id(),
-            vec![pinata_token_definition_id, winner_token_holding_id],
-            vec![],
-            instruction,
-        )
-        .unwrap();
-        let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
-        let tx = PublicTransaction::new(message, witness_set);
-        state.transition_from_public_transaction(&tx, 1, 0).unwrap();
+        let token_holding = token_core::TokenHolding::Fungible {
+            definition_id: pinata_token_definition_id,
+            balance: total_supply,
+        };
+        let winner_holding = token_core::TokenHolding::Fungible {
+            definition_id: pinata_token_definition_id,
+            balance: 0,
+        };
+        state.force_insert_account(
+            pinata_token_definition_id,
+            Account {
+                program_owner: token.id(),
+                data: Data::from(&token_definition),
+                ..Account::default()
+            },
+        );
+        state.force_insert_account(
+            pinata_token_holding_id,
+            Account {
+                program_owner: token.id(),
+                data: Data::from(&token_holding),
+                ..Account::default()
+            },
+        );
+        state.force_insert_account(
+            winner_token_holding_id,
+            Account {
+                program_owner: token.id(),
+                data: Data::from(&winner_holding),
+                ..Account::default()
+            },
+        );
 
         // Submit a solution to the pinata program to claim the prize
         let solution: u128 = 989_106;
