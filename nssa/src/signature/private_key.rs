@@ -63,14 +63,14 @@ impl PrivateKey {
     }
 
     pub fn tweak(value: &[u8; 32]) -> Result<Self, NssaError> {
-        assert!(Self::is_valid_key(*value));
+        if !Self::is_valid_key(*value) {
+            return Err(NssaError::InvalidPrivateKey)
+        }
 
         let sk = secp256k1::SecretKey::from_byte_array(*value).expect("Expect a valid secret key");
-
-        let mut bytes = vec![];
         let pk = secp256k1::PublicKey::from_secret_key(&secp256k1::Secp256k1::new(), &sk);
-        bytes.extend_from_slice(&secp256k1::PublicKey::serialize(&pk));
-        let hashed: [u8; 32] = Impl::hash_bytes(&bytes)
+
+        let hashed: [u8; 32] = Impl::hash_bytes(&secp256k1::PublicKey::serialize(&pk))
             .as_bytes()
             .try_into()
             .expect("Sha256 outputs a 32-byte array");
