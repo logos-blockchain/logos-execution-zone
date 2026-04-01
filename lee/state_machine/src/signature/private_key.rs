@@ -68,15 +68,14 @@ impl PrivateKey {
             return Err(LeeError::InvalidPrivateKey);
         }
 
-        let sk = k256::SecretKey::from_bytes(value.into()).expect("Expect a valid secret key");
-        let pk = sk.public_key();
+        let sk = k256::SecretKey::from_slice(value).expect("Expect a valid secret key");
 
-        let hashed: [u8; 32] = Sha256::digest(pk.to_encoded_point(true).as_bytes()).into();
+        let hashed: [u8; 32] = Sha256::digest(sk.public_key().to_encoded_point(true).as_bytes()).into();
+
+        let sk = sk.to_nonzero_scalar();
 
         Self::try_new(
-            k256::Scalar::from_repr((*value).into())
-                .expect("Expect a valid k256 scalar")
-                .add(&k256::Scalar::from_repr(hashed.into()).expect("Expect a valid k256 scalar"))
+            sk.add(&k256::Scalar::from_repr(hashed.into()).expect("Expect a valid k256 scalar"))
                 .to_bytes()
                 .into(),
         )
