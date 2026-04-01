@@ -21,7 +21,7 @@ impl ChildKeysPublic {
             // Non-harden.
             // BIP-032 compatibility requires 1-byte header from the public_key;
             // Not stored in `self.cpk.value()`.
-            let sk = k256::SecretKey::from_bytes(self.csk.value().into())
+            let sk = k256::SecretKey::from_bytes(self.cssk.value().into())
                 .expect("32 bytes, within curve order");
             let pk = sk.public_key();
             hash_input.extend_from_slice(pk.to_encoded_point(true).as_bytes());
@@ -65,41 +65,24 @@ impl KeyNode for ChildKeysPublic {
     fn nth_child(&self, cci: u32) -> Self {
         let hash_value = self.compute_hash_value(cci);
 
-        let cssk = secp256k1::SecretKey::from_byte_array(
-            *hash_value
-                .first_chunk::<32>()
-                .expect("hash_value is 64 bytes, must be safe to get first 32"),
+        let cssk = nssa::PrivateKey::try_new(
+            (k256::Scalar::from_repr(
+                (*hash_value
+                    .first_chunk::<32>()
+                    .expect("hash_value is 64 bytes, must be safe to get first 32"))
+                .into(),
+            )
+            .expect("Expect a valid k256 scalar"))
+            .add(
+                &k256::Scalar::from_repr((*self.cssk.value()).into())
+                    .expect("Expect a valid k256 scalar"),
+            )
+            .to_bytes()
+            .into(),
         )
-        .unwrap();
-/*
-        let cssk = nssa::PrivateKey::try_new({
-            cssk.add_tweak(&Scalar::from_be_bytes(*self.cssk.value()).unwrap())
-                .expect("Expect a valid Scalar")
-                .secret_bytes()
-        })
-        .unwrap();
-
-        let csk = nssa::PrivateKey::tweak(cssk.value()).unwrap();
-
-        assert!(
-            secp256k1::constants::CURVE_ORDER >= *csk.value(),
-            "Secret key cannot exceed curve order"
-        );
-        */
-        let csk = nssa::PrivateKey::try_new({
-            let hash_value = hash_value
-                .first_chunk::<32>()
-                .expect("hash_value is 64 bytes, must be safe to get first 32");
-
-            let value_1 =
-                k256::Scalar::from_repr((*hash_value).into()).expect("Expect a valid k256 scalar");
-            let value_2 = k256::Scalar::from_repr((*self.csk.value()).into())
-                .expect("Expect a valid k256 scalar");
-
-            let sum = value_1.add(&value_2);
-            sum.to_bytes().into()
-        })
         .expect("Expect a valid private key");
+
+        let csk = nssa::PrivateKey::tweak(cssk.value()).expect("Expect a valid Private Key");
 
         let ccc = *hash_value
             .last_chunk::<32>()
