@@ -1,5 +1,6 @@
 use std::str::FromStr;
 
+use k256::elliptic_curve::PrimeField as _;
 use rand::{Rng as _, rngs::OsRng};
 use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
@@ -67,20 +68,26 @@ impl PrivateKey {
             return Err(NssaError::InvalidPrivateKey);
         }
 
-        let sk = secp256k1::SecretKey::from_byte_array(*value).expect("Expect a valid secret key");
-        let pk = secp256k1::PublicKey::from_secret_key(&secp256k1::Secp256k1::new(), &sk);
-
-        let hashed: [u8; 32] = Impl::hash_bytes(&secp256k1::PublicKey::serialize(&pk))
-            .as_bytes()
-            .try_into()
-            .expect("Sha256 outputs a 32-byte array");
+        let hashed: [u8; 32] = Impl::hash_bytes(
+            crate::PublicKey::try_new(*value)
+                .expect("Expect a valid private key")
+                .value(),
+        )
+        .as_bytes()
+        .try_into()
+        .expect("Sha256 outputs a 32-byte array");
 
         Self::try_new(
-            sk.add_tweak(
-                &secp256k1::Scalar::from_be_bytes(hashed).expect("Expect a valid secp256k1 Scalar"),
+            (k256::Scalar::from_repr(
+                (*value
+                    .first_chunk::<32>()
+                    .expect("hash_value is 64 bytes, must be safe to get first 32"))
+                .into(),
             )
-            .expect("Expect a valid Scalar")
-            .secret_bytes(),
+            .expect("Expect a valid k256 scalar"))
+            .add(&k256::Scalar::from_repr((hashed).into()).expect("Expect a valid k256 scalar"))
+            .to_bytes()
+            .into(),
         )
     }
 }
