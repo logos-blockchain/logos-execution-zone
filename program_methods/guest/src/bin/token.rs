@@ -11,8 +11,7 @@ use token_program::core::Instruction;
 
 fn main() {
     let (
-        ProgramInput {
-            self_program_id: _,
+        ProgramInput { self_program_id,
             pre_states,
             instruction,
         },
@@ -82,5 +81,5 @@ fn main() {
         }
     };
 
-    ProgramOutput::new(instruction_words, pre_states_clone, post_states).write();
+    ProgramOutput::new(self_program_id, instruction_words, pre_states_clone, post_states).write();
 }

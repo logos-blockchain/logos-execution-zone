@@ -51,8 +51,7 @@ fn main() {
     // It is expected to receive three accounts: [pinata_definition, pinata_token_holding,
     // winner_token_holding]
     let (
-        ProgramInput {
-            self_program_id: _,
+        ProgramInput { self_program_id,
             pre_states,
             instruction: solution,
         },
@@ -98,6 +97,7 @@ fn main() {
     .with_pda_seeds(vec![PdaSeed::new([0; 32])]);
 
     ProgramOutput::new(
+        self_program_id,
         instruction_words,
         vec![
             pinata_definition,
