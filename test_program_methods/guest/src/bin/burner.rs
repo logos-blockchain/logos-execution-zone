@@ -4,8 +4,7 @@ type Instruction = u128;
 
 fn main() {
     let (
-        ProgramInput {
-            self_program_id: _,
+        ProgramInput { self_program_id,
             pre_states,
             instruction: balance_to_burn,
         },
@@ -21,6 +20,7 @@ fn main() {
     account_post.balance = account_post.balance.saturating_sub(balance_to_burn);
 
     ProgramOutput::new(
+        self_program_id,
         instruction_words,
         vec![pre],
         vec![AccountPostState::new(account_post)],

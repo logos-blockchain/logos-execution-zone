@@ -3,7 +3,7 @@ use nssa_core::program::{AccountPostState, ProgramInput, ProgramOutput, read_nss
 type Instruction = ();
 
 fn main() {
-    let (ProgramInput { pre_states, .. }, instruction_words) = read_nssa_inputs::<Instruction>();
+    let (ProgramInput { self_program_id, pre_states, .. }, instruction_words) = read_nssa_inputs::<Instruction>();
 
     let Ok([pre]) = <[_; 1]>::try_from(pre_states) else {
         return;
@@ -17,6 +17,7 @@ fn main() {
         .expect("Balance overflow");
 
     ProgramOutput::new(
+        self_program_id,
         instruction_words,
         vec![pre],
         vec![AccountPostState::new(account_post)],

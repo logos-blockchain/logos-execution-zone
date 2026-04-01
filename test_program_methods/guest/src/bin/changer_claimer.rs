@@ -5,8 +5,7 @@ type Instruction = (Option<Vec<u8>>, bool);
 /// A program that optionally modifies the account data and optionally claims it.
 fn main() {
     let (
-        ProgramInput {
-            self_program_id: _,
+        ProgramInput { self_program_id,
             pre_states,
             instruction: (data_opt, should_claim),
         },
@@ -34,5 +33,5 @@ fn main() {
         AccountPostState::new(account_post)
     };
 
-    ProgramOutput::new(instruction_words, vec![pre], vec![post_state]).write();
+    ProgramOutput::new(self_program_id, instruction_words, vec![pre], vec![post_state]).write();
 }
