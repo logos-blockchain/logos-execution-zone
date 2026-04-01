@@ -282,6 +282,8 @@ pub struct InvalidWindow;
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
 #[must_use = "ProgramOutput does nothing unless written"]
 pub struct ProgramOutput {
+    /// The program ID of the program that produced this output.
+    pub self_program_id: ProgramId,
     /// The instruction data the program received to produce this output.
     pub instruction_data: InstructionData,
     /// The account pre states the program received to produce this output.
@@ -298,11 +300,13 @@ pub struct ProgramOutput {
 
 impl ProgramOutput {
     pub const fn new(
+        self_program_id: ProgramId,
         instruction_data: InstructionData,
         pre_states: Vec<AccountWithMetadata>,
         post_states: Vec<AccountPostState>,
     ) -> Self {
         Self {
+            self_program_id,
             instruction_data,
             pre_states,
             post_states,
@@ -623,7 +627,7 @@ mod tests {
 
     #[test]
     fn program_output_try_with_block_validity_window_range() {
-        let output = ProgramOutput::new(vec![], vec![], vec![])
+        let output = ProgramOutput::new(DEFAULT_PROGRAM_ID, vec![], vec![], vec![])
             .try_with_block_validity_window(10_u64..100)
             .unwrap();
         assert_eq!(output.block_validity_window.start(), Some(10));
@@ -633,7 +637,7 @@ mod tests {
     #[test]
     fn program_output_with_block_validity_window_range_from() {
         let output =
-            ProgramOutput::new(vec![], vec![], vec![]).with_block_validity_window(10_u64..);
+            ProgramOutput::new(DEFAULT_PROGRAM_ID, vec![], vec![], vec![]).with_block_validity_window(10_u64..);
         assert_eq!(output.block_validity_window.start(), Some(10));
         assert_eq!(output.block_validity_window.end(), None);
     }
@@ -641,7 +645,7 @@ mod tests {
     #[test]
     fn program_output_with_block_validity_window_range_to() {
         let output =
-            ProgramOutput::new(vec![], vec![], vec![]).with_block_validity_window(..100_u64);
+            ProgramOutput::new(DEFAULT_PROGRAM_ID, vec![], vec![], vec![]).with_block_validity_window(..100_u64);
         assert_eq!(output.block_validity_window.start(), None);
         assert_eq!(output.block_validity_window.end(), Some(100));
     }
@@ -649,7 +653,7 @@ mod tests {
     #[test]
     fn program_output_try_with_block_validity_window_empty_range_fails() {
         let result =
-            ProgramOutput::new(vec![], vec![], vec![]).try_with_block_validity_window(5_u64..5);
+            ProgramOutput::new(DEFAULT_PROGRAM_ID, vec![], vec![], vec![]).try_with_block_validity_window(5_u64..5);
         assert!(result.is_err());
     }
 
