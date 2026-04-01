@@ -33,6 +33,7 @@ fn main() {
     // Read inputs
     let (
         ProgramInput {
+            self_program_id: _,
             pre_states,
             instruction: (),
         },

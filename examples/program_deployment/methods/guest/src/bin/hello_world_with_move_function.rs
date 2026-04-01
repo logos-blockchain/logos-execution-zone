@@ -66,6 +66,7 @@ fn main() {
     // Read input accounts.
     let (
         ProgramInput {
+            self_program_id: _,
             pre_states,
             instruction: (function_id, data),
         },

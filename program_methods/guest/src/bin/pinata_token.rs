@@ -51,7 +51,8 @@ fn main() {
     // It is expected to receive three accounts: [pinata_definition, pinata_token_holding,
     // winner_token_holding]
     let (
-        ProgramInput { self_program_id: _,
+        ProgramInput {
+            self_program_id: _,
             pre_states,
             instruction: solution,
         },

@@ -88,7 +88,10 @@ impl Program {
             .map_err(|e| NssaError::ProgramWriteInputFailed(e.to_string()))?;
         let pre_states = pre_states.to_vec();
         env_builder
-            .write(&(pre_states, instruction_data))
+            .write(&pre_states)
+            .map_err(|e| NssaError::ProgramWriteInputFailed(e.to_string()))?;
+        env_builder
+            .write(&instruction_data)
             .map_err(|e| NssaError::ProgramWriteInputFailed(e.to_string()))?;
         Ok(())
     }

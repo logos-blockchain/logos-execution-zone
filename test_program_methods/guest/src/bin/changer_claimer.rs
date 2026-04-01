@@ -5,7 +5,8 @@ type Instruction = (Option<Vec<u8>>, bool);
 /// A program that optionally modifies the account data and optionally claims it.
 fn main() {
     let (
-        ProgramInput { self_program_id: _,
+        ProgramInput {
+            self_program_id: _,
             pre_states,
             instruction: (data_opt, should_claim),
         },
