@@ -11,7 +11,7 @@ use token_program::core::Instruction;
 
 fn main() {
     let (
-        ProgramInput {
+        ProgramInput { self_program_id: _,
             pre_states,
             instruction,
         },

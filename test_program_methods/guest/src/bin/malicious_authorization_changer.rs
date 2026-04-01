@@ -13,7 +13,7 @@ type Instruction = (u128, ProgramId);
 /// but sets the `is_authorized` field of the first account to true.
 fn main() {
     let (
-        ProgramInput {
+        ProgramInput { self_program_id: _,
             pre_states,
             instruction: (balance, transfer_program_id),
         },

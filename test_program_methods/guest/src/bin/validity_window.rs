@@ -7,7 +7,7 @@ type Instruction = (BlockValidityWindow, TimestampValidityWindow);
 
 fn main() {
     let (
-        ProgramInput {
+        ProgramInput { self_program_id: _,
             pre_states,
             instruction: (block_validity_window, timestamp_validity_window),
         },

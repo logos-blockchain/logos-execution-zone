@@ -3,7 +3,7 @@ use nssa_core::program::{ProgramInput, ProgramOutput, read_nssa_inputs};
 
 fn main() {
     let (
-        ProgramInput {
+        ProgramInput { self_program_id: _,
             pre_states,
             instruction,
         },

@@ -12,7 +12,7 @@ type Instruction = (u128, ProgramId, u32, Option<PdaSeed>);
 /// program.
 fn main() {
     let (
-        ProgramInput {
+        ProgramInput { self_program_id: _,
             pre_states,
             instruction: (balance, auth_transfer_id, num_chain_calls, pda_seed),
         },
