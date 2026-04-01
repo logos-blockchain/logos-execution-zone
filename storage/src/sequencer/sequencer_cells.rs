@@ -94,3 +94,39 @@ impl SimpleWritableCell for LatestBlockMetaCellRef<'_> {
         })
     }
 }
+
+#[cfg(test)]
+mod uniform_tests {
+    use crate::{
+        sequencer::sequencer_cells::{
+            LatestBlockMetaCellOwned, LatestBlockMetaCellRef, NSSAStateCellOwned, NSSAStateCellRef,
+        },
+        storable_cell::SimpleStorableCell as _,
+    };
+
+    #[test]
+    fn state_ref_and_owned_is_aligned() {
+        assert_eq!(NSSAStateCellRef::CELL_NAME, NSSAStateCellOwned::CELL_NAME);
+        assert_eq!(NSSAStateCellRef::CF_NAME, NSSAStateCellOwned::CF_NAME);
+        assert_eq!(
+            NSSAStateCellRef::key_constructor(()).unwrap(),
+            NSSAStateCellOwned::key_constructor(()).unwrap()
+        );
+    }
+
+    #[test]
+    fn block_meta_ref_and_owned_is_aligned() {
+        assert_eq!(
+            LatestBlockMetaCellRef::CELL_NAME,
+            LatestBlockMetaCellOwned::CELL_NAME
+        );
+        assert_eq!(
+            LatestBlockMetaCellRef::CF_NAME,
+            LatestBlockMetaCellOwned::CF_NAME
+        );
+        assert_eq!(
+            LatestBlockMetaCellRef::key_constructor(()).unwrap(),
+            LatestBlockMetaCellOwned::key_constructor(()).unwrap()
+        );
+    }
+}

@@ -1,5 +1,6 @@
 use super::{Block, DbResult, RocksDBIO, V03State};
 use crate::{
+    DBIO as _,
     indexer::indexer_cells::{
         AccNumTxCell, BlockHashToBlockIdMapCell, BreakpointCellOwned, LastBreakpointIdCell,
         LastObservedL1LibHeaderCell, TxHashToBlockIdMapCell,

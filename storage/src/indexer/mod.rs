@@ -3,14 +3,10 @@ use std::{path::Path, sync::Arc};
 use common::block::Block;
 use nssa::V03State;
 use rocksdb::{
-    BoundColumnFamily, ColumnFamilyDescriptor, DBWithThreadMode, MultiThreaded, Options, WriteBatch,
+    BoundColumnFamily, ColumnFamilyDescriptor, DBWithThreadMode, MultiThreaded, Options,
 };
 
-use crate::{
-    BREAKPOINT_INTERVAL, CF_BLOCK_NAME, CF_META_NAME, DbResult,
-    error::DbError,
-    storable_cell::{SimpleReadableCell, SimpleWritableCell},
-};
+use crate::{BREAKPOINT_INTERVAL, CF_BLOCK_NAME, CF_META_NAME, DBIO, DbResult, error::DbError};
 
 pub mod indexer_cells;
 pub mod read_multiple;
@@ -46,6 +42,12 @@ pub const CF_ACC_TO_TX: &str = "cf_acc_to_tx";
 
 pub struct RocksDBIO {
     pub db: DBWithThreadMode<MultiThreaded>,
+}
+
+impl DBIO for RocksDBIO {
+    fn db(&self) -> &DBWithThreadMode<MultiThreaded> {
+        &self.db
+    }
 }
 
 impl RocksDBIO {
@@ -143,29 +145,6 @@ impl RocksDBIO {
         self.db
             .cf_handle(CF_ACC_META)
             .expect("Account meta column should exist")
-    }
-
-    // Generics
-
-    fn get<T: SimpleReadableCell>(&self, params: T::KeyParams) -> DbResult<T> {
-        T::get(&self.db, params)
-    }
-
-    fn get_opt<T: SimpleReadableCell>(&self, params: T::KeyParams) -> DbResult<Option<T>> {
-        T::get_opt(&self.db, params)
-    }
-
-    fn put<T: SimpleWritableCell>(&self, cell: &T, params: T::KeyParams) -> DbResult<()> {
-        cell.put(&self.db, params)
-    }
-
-    fn put_batch<T: SimpleWritableCell>(
-        &self,
-        cell: &T,
-        params: T::KeyParams,
-        write_batch: &mut WriteBatch,
-    ) -> DbResult<()> {
-        cell.put_batch(&self.db, params, write_batch)
     }
 
     // State

@@ -31,15 +31,7 @@ pub trait SimpleReadableCell: SimpleStorableCell + BorshDeserialize {
     fn get(db: &DBWithThreadMode<MultiThreaded>, params: Self::KeyParams) -> DbResult<Self> {
         let res = Self::get_opt(db, params)?;
 
-        res.map_or_else(
-            || {
-                Err(DbError::db_interaction_error(format!(
-                    "{:?} not found",
-                    Self::CELL_NAME
-                )))
-            },
-            |data| Ok(data),
-        )
+        res.ok_or_else(|| DbError::db_interaction_error(format!("{:?} not found", Self::CELL_NAME)))
     }
 
     fn get_opt(

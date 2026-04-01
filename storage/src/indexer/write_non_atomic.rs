@@ -1,5 +1,6 @@
 use super::{BREAKPOINT_INTERVAL, DbError, DbResult, RocksDBIO, V03State};
 use crate::{
+    DBIO as _,
     indexer::indexer_cells::{
         BreakpointCellRef, LastBreakpointIdCell, LastObservedL1LibHeaderCell,
     },

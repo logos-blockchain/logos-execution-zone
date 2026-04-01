@@ -4,7 +4,7 @@ use rocksdb::WriteBatch;
 
 use super::{BREAKPOINT_INTERVAL, Block, DbError, DbResult, RocksDBIO};
 use crate::{
-    DB_META_FIRST_BLOCK_IN_DB_KEY,
+    DB_META_FIRST_BLOCK_IN_DB_KEY, DBIO as _,
     indexer::indexer_cells::{
         AccNumTxCell, BlockHashToBlockIdMapCell, LastBreakpointIdCell, LastObservedL1LibHeaderCell,
         TxHashToBlockIdMapCell,

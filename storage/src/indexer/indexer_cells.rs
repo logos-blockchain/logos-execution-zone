@@ -210,3 +210,21 @@ impl SimpleWritableCell for AccNumTxCell {
         })
     }
 }
+
+#[cfg(test)]
+mod uniform_tests {
+    use crate::{
+        indexer::indexer_cells::{BreakpointCellOwned, BreakpointCellRef},
+        storable_cell::SimpleStorableCell as _,
+    };
+
+    #[test]
+    fn breakpoint_ref_and_owned_is_aligned() {
+        assert_eq!(BreakpointCellRef::CELL_NAME, BreakpointCellOwned::CELL_NAME);
+        assert_eq!(BreakpointCellRef::CF_NAME, BreakpointCellOwned::CF_NAME);
+        assert_eq!(
+            BreakpointCellRef::key_constructor(1000).unwrap(),
+            BreakpointCellOwned::key_constructor(1000).unwrap()
+        );
+    }
+}

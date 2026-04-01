@@ -1,4 +1,9 @@
-use crate::error::DbError;
+use rocksdb::{DBWithThreadMode, MultiThreaded, WriteBatch};
+
+use crate::{
+    error::DbError,
+    storable_cell::{SimpleReadableCell, SimpleWritableCell},
+};
 
 pub mod error;
 pub mod indexer;
@@ -36,3 +41,29 @@ pub const CF_BLOCK_NAME: &str = "cf_block";
 pub const CF_META_NAME: &str = "cf_meta";
 
 pub type DbResult<T> = Result<T, DbError>;
+
+/// Minimal requirements for DB IO.
+pub trait DBIO {
+    fn db(&self) -> &DBWithThreadMode<MultiThreaded>;
+
+    fn get<T: SimpleReadableCell>(&self, params: T::KeyParams) -> DbResult<T> {
+        T::get(self.db(), params)
+    }
+
+    fn get_opt<T: SimpleReadableCell>(&self, params: T::KeyParams) -> DbResult<Option<T>> {
+        T::get_opt(self.db(), params)
+    }
+
+    fn put<T: SimpleWritableCell>(&self, cell: &T, params: T::KeyParams) -> DbResult<()> {
+        cell.put(self.db(), params)
+    }
+
+    fn put_batch<T: SimpleWritableCell>(
+        &self,
+        cell: &T,
+        params: T::KeyParams,
+        write_batch: &mut WriteBatch,
+    ) -> DbResult<()> {
+        cell.put_batch(self.db(), params, write_batch)
+    }
+}

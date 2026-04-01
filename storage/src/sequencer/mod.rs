@@ -7,15 +7,14 @@ use rocksdb::{
 };
 
 use crate::{
-    CF_BLOCK_NAME, CF_META_NAME, DB_META_FIRST_BLOCK_IN_DB_KEY, DbResult,
+    CF_BLOCK_NAME, CF_META_NAME, DB_META_FIRST_BLOCK_IN_DB_KEY, DBIO, DbResult,
     error::DbError,
     sequencer::sequencer_cells::{
         LastFinalizedBlockIdCell, LatestBlockMetaCellOwned, LatestBlockMetaCellRef,
         NSSAStateCellOwned, NSSAStateCellRef,
     },
-    storable_cell::{
-        SimpleReadableCell, SimpleWritableCell,
-        cells::shared_cells::{BlockCell, FirstBlockCell, FirstBlockSetCell, LastBlockCell},
+    storable_cell::cells::shared_cells::{
+        BlockCell, FirstBlockCell, FirstBlockSetCell, LastBlockCell,
     },
 };
 
@@ -34,6 +33,12 @@ pub const CF_NSSA_STATE_NAME: &str = "cf_nssa_state";
 
 pub struct RocksDBIO {
     pub db: DBWithThreadMode<MultiThreaded>,
+}
+
+impl DBIO for RocksDBIO {
+    fn db(&self) -> &DBWithThreadMode<MultiThreaded> {
+        &self.db
+    }
 }
 
 impl RocksDBIO {
@@ -114,29 +119,6 @@ impl RocksDBIO {
         self.db
             .cf_handle(CF_NSSA_STATE_NAME)
             .expect("State should exist")
-    }
-
-    // Generics
-
-    fn get<T: SimpleReadableCell>(&self, params: T::KeyParams) -> DbResult<T> {
-        T::get(&self.db, params)
-    }
-
-    fn get_opt<T: SimpleReadableCell>(&self, params: T::KeyParams) -> DbResult<Option<T>> {
-        T::get_opt(&self.db, params)
-    }
-
-    fn put<T: SimpleWritableCell>(&self, cell: &T, params: T::KeyParams) -> DbResult<()> {
-        cell.put(&self.db, params)
-    }
-
-    fn put_batch<T: SimpleWritableCell>(
-        &self,
-        cell: &T,
-        params: T::KeyParams,
-        write_batch: &mut WriteBatch,
-    ) -> DbResult<()> {
-        cell.put_batch(&self.db, params, write_batch)
     }
 
     // Meta
