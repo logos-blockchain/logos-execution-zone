@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use k256::elliptic_curve::PrimeField as _;
+use k256::elliptic_curve::{PrimeField as _, sec1::ToEncodedPoint as _};
 use rand::{Rng as _, rngs::OsRng};
 use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
@@ -68,26 +68,19 @@ impl PrivateKey {
             return Err(NssaError::InvalidPrivateKey);
         }
 
-        let hashed: [u8; 32] = Impl::hash_bytes(
-            crate::PublicKey::try_new(*value)
-                .expect("Expect a valid private key")
-                .value(),
-        )
-        .as_bytes()
-        .try_into()
-        .expect("Sha256 outputs a 32-byte array");
+        let sk = k256::SecretKey::from_slice(value).expect("Expect a valid secret key");
+
+        let hashed: [u8; 32] = Impl::hash_bytes(sk.public_key().to_encoded_point(true).as_bytes())
+            .as_bytes()
+            .try_into()
+            .expect("Sha256 outputs a 32-byte array");
+
+        let sk = sk.to_nonzero_scalar();
 
         Self::try_new(
-            (k256::Scalar::from_repr(
-                (*value
-                    .first_chunk::<32>()
-                    .expect("hash_value is 64 bytes, must be safe to get first 32"))
+            sk.add(&k256::Scalar::from_repr((hashed).into()).expect("Expect a valid k256 scalar"))
+                .to_bytes()
                 .into(),
-            )
-            .expect("Expect a valid k256 scalar"))
-            .add(&k256::Scalar::from_repr((hashed).into()).expect("Expect a valid k256 scalar"))
-            .to_bytes()
-            .into(),
         )
     }
 }
