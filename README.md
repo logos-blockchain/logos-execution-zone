@@ -220,7 +220,7 @@ This will use a wallet binary built from this repo and not the one installed in 
 ### Standalone mode
 The sequencer can be run in standalone mode with:
 ```bash
-RUST_LOG=info cargo run --features standalone -p sequencer_service sequencer/service/configs/debug
+RUST_LOG=info cargo run --features standalone -p sequencer_service -- sequencer/service/configs/debug/sequencer_config.json
 ```
 
 ## Running with Docker
