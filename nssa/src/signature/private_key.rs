@@ -64,7 +64,7 @@ impl PrivateKey {
 
     pub fn tweak(value: &[u8; 32]) -> Result<Self, NssaError> {
         if !Self::is_valid_key(*value) {
-            return Err(NssaError::InvalidPrivateKey)
+            return Err(NssaError::InvalidPrivateKey);
         }
 
         let sk = secp256k1::SecretKey::from_byte_array(*value).expect("Expect a valid secret key");
