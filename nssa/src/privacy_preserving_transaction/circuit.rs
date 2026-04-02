@@ -158,7 +158,7 @@ fn execute_and_prove_program(
 ) -> Result<Receipt, NssaError> {
     // Write inputs to the program
     let mut env_builder = ExecutorEnv::builder();
-    Program::write_inputs(pre_states, instruction_data, &mut env_builder)?;
+    Program::write_inputs(program.id(), pre_states, instruction_data, &mut env_builder)?;
     let env = env_builder.build().unwrap();
 
     // Prove the program
