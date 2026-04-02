@@ -10,6 +10,7 @@ pub use commitment::{
 };
 pub use encryption::{EncryptionScheme, SharedSecretKey};
 pub use nullifier::{Nullifier, NullifierPublicKey, NullifierSecretKey};
+pub use signature::{PrivateKey, PublicKey, Signature};
 
 pub mod account;
 mod circuit_io;
@@ -18,8 +19,9 @@ mod encoding;
 pub mod encryption;
 mod nullifier;
 pub mod program;
+pub mod signature;
 
-#[cfg(feature = "host")]
+// TODO: temp#[cfg(feature = "host")]
 pub mod error;
 
 pub type BlockId = u64;

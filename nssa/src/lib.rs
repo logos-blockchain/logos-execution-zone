@@ -15,7 +15,6 @@ pub use privacy_preserving_transaction::{
 pub use program_deployment_transaction::ProgramDeploymentTransaction;
 pub use program_methods::PRIVACY_PRESERVING_CIRCUIT_ID;
 pub use public_transaction::PublicTransaction;
-pub use signature::{PrivateKey, PublicKey, Signature};
 pub use state::V03State;
 
 pub mod encoding;
@@ -25,7 +24,6 @@ pub mod privacy_preserving_transaction;
 pub mod program;
 pub mod program_deployment_transaction;
 pub mod public_transaction;
-mod signature;
 mod state;
 
 pub mod program_methods {

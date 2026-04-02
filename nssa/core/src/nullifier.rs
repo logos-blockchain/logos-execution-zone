@@ -99,7 +99,7 @@ mod tests {
             255, 29, 105, 42, 186, 43, 11, 157, 168, 132, 225, 17, 163,
         ]);
 
-        let account_id = AccountId::account_id_with_identifier(&npk, 0_u128);
+        let account_id = AccountId::private_account_id(&npk, Some(0_u128));
 
         let expected_nullifier = Nullifier([
             63, 58, 51, 159, 15, 100, 240, 243, 60, 143, 151, 108, 116, 144, 101, 6, 134, 72, 198,

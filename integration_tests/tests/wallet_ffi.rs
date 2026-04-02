@@ -21,8 +21,8 @@ use std::{
 use anyhow::Result;
 use integration_tests::{BlockingTestContext, TIME_TO_WAIT_FOR_BLOCK_SECONDS};
 use log::info;
-use nssa::{Account, AccountId, PrivateKey, PublicKey, program::Program};
-use nssa_core::program::DEFAULT_PROGRAM_ID;
+use nssa::{Account, AccountId, program::Program};
+use nssa_core::{PrivateKey, PublicKey, program::DEFAULT_PROGRAM_ID};
 use tempfile::tempdir;
 use wallet_ffi::{
     FfiAccount, FfiAccountList, FfiBytes32, FfiPrivateAccountKeys, FfiPublicAccountKey,
@@ -332,7 +332,7 @@ fn wallet_ffi_save_and_load_persistent_storage() -> Result<()> {
     };
 
     assert_eq!(
-        nssa::AccountId::account_id_without_identifier(&private_account_keys.npk()),
+        nssa::AccountId::private_account_id(&private_account_keys.npk(), None),
         out_private_account_id.into()
     );
 
@@ -607,7 +607,7 @@ fn test_wallet_ffi_get_private_account_keys() -> Result<()> {
 fn test_wallet_ffi_account_id_to_base58() -> Result<()> {
     let private_key = PrivateKey::new_os_random();
     let public_key = PublicKey::new_from_private_key(&private_key);
-    let account_id = AccountId::from(&public_key);
+    let account_id = AccountId::public_account_id(&public_key, None);
     let ffi_bytes: FfiBytes32 = (&account_id).into();
     let ptr = unsafe { wallet_ffi_account_id_to_base58(&raw const ffi_bytes) };
 
@@ -626,7 +626,7 @@ fn test_wallet_ffi_account_id_to_base58() -> Result<()> {
 fn wallet_ffi_base58_to_account_id() -> Result<()> {
     let private_key = PrivateKey::new_os_random();
     let public_key = PublicKey::new_from_private_key(&private_key);
-    let account_id = AccountId::from(&public_key);
+    let account_id = AccountId::public_account_id(&public_key, None);
     let account_id_str = account_id.to_string();
     let account_id_c_str = CString::new(account_id_str.clone())?;
     let account_id: AccountId = unsafe {

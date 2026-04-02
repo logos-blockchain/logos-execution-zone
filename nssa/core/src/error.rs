@@ -9,4 +9,13 @@ pub enum NssaCoreError {
 
     #[error("IO error: {0}")]
     Io(#[from] io::Error),
+
+    #[error("Invalid Public Key")]
+    InvalidPublicKey(#[source] k256::schnorr::Error),
+
+    #[error("Invalid hex for public key")]
+    InvalidHexPublicKey(hex::FromHexError),
+
+    #[error("Invalid private key")]
+    InvalidPrivateKey,
 }

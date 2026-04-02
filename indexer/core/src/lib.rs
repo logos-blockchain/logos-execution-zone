@@ -53,7 +53,7 @@ impl IndexerCore {
         // because it will be overwritten by sequencer.
         // Therefore:
         // ToDo: remove key from indexer config, use some default.
-        let signing_key = nssa::PrivateKey::try_new(config.signing_key).unwrap();
+        let signing_key = nssa_core::PrivateKey::try_new(config.signing_key).unwrap();
         let channel_genesis_msg_id = [0; 32];
         let genesis_block = hashable_data.into_pending_block(&signing_key, channel_genesis_msg_id);
 
@@ -71,10 +71,7 @@ impl IndexerCore {
                         acc.program_owner =
                             nssa::program::Program::authenticated_transfer_program().id();
 
-                        nssa_core::Commitment::new(
-                            &AccountId::account_id_without_identifier(npk),
-                            &acc,
-                        )
+                        nssa_core::Commitment::new(&AccountId::private_account_id(npk, None), &acc)
                     })
                     .collect()
             });

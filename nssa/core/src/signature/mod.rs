@@ -1,0 +1,127 @@
+use std::str::FromStr;
+
+use borsh::{BorshDeserialize, BorshSerialize};
+pub use private_key::PrivateKey;
+pub use public_key::PublicKey;
+use rand::{RngCore as _, rngs::OsRng};
+
+mod private_key;
+mod public_key;
+
+#[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct Signature {
+    pub value: [u8; 64],
+}
+
+impl std::fmt::Debug for Signature {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
+}
+
+impl std::fmt::Display for Signature {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", hex::encode(self.value))
+    }
+}
+
+impl FromStr for Signature {
+    type Err = hex::FromHexError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut bytes = [0_u8; 64];
+        hex::decode_to_slice(s, &mut bytes)?;
+        Ok(Self { value: bytes })
+    }
+}
+
+impl Signature {
+    #[must_use]
+    pub fn new(key: &PrivateKey, message: &[u8]) -> Self {
+        let mut aux_random = [0_u8; 32];
+        OsRng.fill_bytes(&mut aux_random);
+        Self::new_with_aux_random(key, message, aux_random)
+    }
+
+    pub(crate) fn new_with_aux_random(
+        key: &PrivateKey,
+        message: &[u8],
+        aux_random: [u8; 32],
+    ) -> Self {
+        let value = {
+            let signing_key = k256::schnorr::SigningKey::from_bytes(key.value())
+                .expect("Expect valid signing key");
+            signing_key
+                .sign_raw(message, &aux_random)
+                .expect("Expect to produce a valid signature")
+                .to_bytes()
+        };
+
+        Self { value }
+    }
+
+    #[must_use]
+    pub fn is_valid_for(&self, bytes: &[u8], public_key: &PublicKey) -> bool {
+        let Ok(pk) = k256::schnorr::VerifyingKey::from_bytes(public_key.value()) else {
+            return false;
+        };
+
+        let Ok(sig) = k256::schnorr::Signature::try_from(self.value.as_slice()) else {
+            return false;
+        };
+
+        pk.verify_raw(bytes, &sig).is_ok()
+    }
+}
+
+#[cfg(test)]
+mod bip340_test_vectors;
+
+#[cfg(test)]
+mod tests {
+
+    use crate::{Signature, signature::bip340_test_vectors};
+
+    impl Signature {
+        pub(crate) fn _new_for_tests(value: [u8; 64]) -> Self {
+            Self { value }
+        }
+    }
+
+    #[test]
+    fn signature_generation_from_bip340_test_vectors() {
+        for (i, test_vector) in bip340_test_vectors::test_vectors().into_iter().enumerate() {
+            let Some(private_key) = test_vector.seckey else {
+                continue;
+            };
+            let Some(aux_random) = test_vector.aux_rand else {
+                continue;
+            };
+            let Some(message) = test_vector.message else {
+                continue;
+            };
+            if !test_vector.verification_result {
+                continue;
+            }
+            let expected_signature = &test_vector.signature;
+
+            let signature = Signature::new_with_aux_random(&private_key, &message, aux_random);
+
+            assert_eq!(&signature, expected_signature, "Failed test vector {i}");
+        }
+    }
+
+    #[test]
+    fn signature_verification_from_bip340_test_vectors() {
+        for (i, test_vector) in bip340_test_vectors::test_vectors().into_iter().enumerate() {
+            let message = test_vector.message.unwrap_or(vec![]);
+            let expected_result = test_vector.verification_result;
+
+            let result = test_vector
+                .signature
+                .is_valid_for(&message, &test_vector.pubkey);
+
+            assert_eq!(result, expected_result, "Failed test vector {i}");
+        }
+    }
+}

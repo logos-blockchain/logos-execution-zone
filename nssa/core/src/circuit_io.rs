@@ -93,15 +93,16 @@ mod tests {
             }],
             ciphertexts: vec![Ciphertext(vec![255, 255, 1, 1, 2, 2])],
             new_commitments: vec![Commitment::new(
-                &AccountId::account_id_without_identifier(&NullifierPublicKey::from(&[1_u8; 32])),
+                &AccountId::private_account_id(&NullifierPublicKey::from(&[1_u8; 32]), None),
                 &Account::default(),
             )],
             new_nullifiers: vec![(
                 Nullifier::for_account_update(
                     &Commitment::new(
-                        &AccountId::account_id_without_identifier(&NullifierPublicKey::from(
-                            &[2_u8; 32],
-                        )),
+                        &AccountId::private_account_id(
+                            &NullifierPublicKey::from(&[2_u8; 32]),
+                            None,
+                        ),
                         &Account::default(),
                     ),
                     &[1; 32],

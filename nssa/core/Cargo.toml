@@ -12,10 +12,13 @@ risc0-zkvm.workspace = true
 borsh.workspace = true
 serde.workspace = true
 serde_with.workspace = true
+sha2.workspace = true
+rand.workspace = true
 thiserror.workspace = true
 bytemuck.workspace = true
 bytesize.workspace = true
 base58.workspace = true
+hex.workspace = true
 k256 = { workspace = true, optional = true }
 chacha20 = { version = "0.10" }
 
@@ -23,5 +26,5 @@ chacha20 = { version = "0.10" }
 serde_json.workspace = true
 
 [features]
-default = []
+default = ["dep:k256"]
 host = ["dep:k256"]

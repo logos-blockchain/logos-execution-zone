@@ -2,7 +2,8 @@ use anyhow::{Context as _, Result};
 use clap::Subcommand;
 use itertools::Itertools as _;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
-use nssa::{Account, PublicKey, program::Program};
+use nssa::{Account, program::Program};
+use nssa_core::PublicKey;
 use sequencer_service_rpc::RpcClient as _;
 use token_core::{TokenDefinition, TokenHolding};
 

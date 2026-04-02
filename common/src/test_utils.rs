@@ -9,8 +9,8 @@ use crate::{
 // Helpers
 
 #[must_use]
-pub fn sequencer_sign_key_for_testing() -> nssa::PrivateKey {
-    nssa::PrivateKey::try_new([37; 32]).unwrap()
+pub fn sequencer_sign_key_for_testing() -> nssa_core::PrivateKey {
+    nssa_core::PrivateKey::try_new([37; 32]).unwrap()
 }
 
 // Dummy producers
@@ -51,7 +51,7 @@ pub fn produce_dummy_empty_transaction() -> NSSATransaction {
         instruction_data,
     )
     .unwrap();
-    let private_key = nssa::PrivateKey::try_new([1; 32]).unwrap();
+    let private_key = nssa_core::PrivateKey::try_new([1; 32]).unwrap();
     let witness_set = nssa::public_transaction::WitnessSet::for_message(&message, &[&private_key]);
 
     let nssa_tx = nssa::PublicTransaction::new(message, witness_set);
@@ -65,7 +65,7 @@ pub fn create_transaction_native_token_transfer(
     nonce: u128,
     to: AccountId,
     balance_to_move: u128,
-    signing_key: &nssa::PrivateKey,
+    signing_key: &nssa_core::PrivateKey,
 ) -> NSSATransaction {
     let account_ids = vec![from, to];
     let nonces = vec![nonce.into()];

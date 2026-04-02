@@ -165,28 +165,28 @@ impl From<EphemeralPublicKey> for nssa_core::encryption::EphemeralPublicKey {
 // Signature and PublicKey conversions
 // ============================================================================
 
-impl From<nssa::Signature> for Signature {
-    fn from(value: nssa::Signature) -> Self {
-        let nssa::Signature { value } = value;
+impl From<nssa_core::Signature> for Signature {
+    fn from(value: nssa_core::Signature) -> Self {
+        let nssa_core::Signature { value } = value;
         Self(value)
     }
 }
 
-impl From<Signature> for nssa::Signature {
+impl From<Signature> for nssa_core::Signature {
     fn from(value: Signature) -> Self {
         let Signature(sig_value) = value;
         Self { value: sig_value }
     }
 }
 
-impl From<nssa::PublicKey> for PublicKey {
-    fn from(value: nssa::PublicKey) -> Self {
+impl From<nssa_core::PublicKey> for PublicKey {
+    fn from(value: nssa_core::PublicKey) -> Self {
         Self(*value.value())
     }
 }
 
-impl TryFrom<PublicKey> for nssa::PublicKey {
-    type Error = nssa::error::NssaError;
+impl TryFrom<PublicKey> for nssa_core::PublicKey {
+    type Error = nssa_core::error::NssaCoreError;
 
     fn try_from(value: PublicKey) -> Result<Self, Self::Error> {
         Self::try_new(value.0)

@@ -4,10 +4,9 @@ use amm_core::{
     PoolDefinition, compute_liquidity_token_pda, compute_liquidity_token_pda_seed,
     compute_pool_pda, compute_vault_pda, compute_vault_pda_seed,
 };
-use nssa::{
-    PrivateKey, PublicKey, PublicTransaction, V03State, program::Program, public_transaction,
-};
+use nssa::{PublicTransaction, V03State, program::Program, public_transaction};
 use nssa_core::{
+    PrivateKey, PublicKey,
     account::{Account, AccountId, AccountWithMetadata, Data},
     program::{ChainedCall, ProgramId},
 };
@@ -1314,21 +1313,24 @@ impl IdForExeTests {
     }
 
     fn user_token_a_id() -> AccountId {
-        AccountId::from(&PublicKey::new_from_private_key(
-            &PrivateKeysForTests::user_token_a_key(),
-        ))
+        AccountId::public_account_id(
+            &PublicKey::new_from_private_key(&PrivateKeysForTests::user_token_a_key()),
+            None,
+        )
     }
 
     fn user_token_b_id() -> AccountId {
-        AccountId::from(&PublicKey::new_from_private_key(
-            &PrivateKeysForTests::user_token_b_key(),
-        ))
+        AccountId::public_account_id(
+            &PublicKey::new_from_private_key(&PrivateKeysForTests::user_token_b_key()),
+            None,
+        )
     }
 
     fn user_token_lp_id() -> AccountId {
-        AccountId::from(&PublicKey::new_from_private_key(
-            &PrivateKeysForTests::user_token_lp_key(),
-        ))
+        AccountId::public_account_id(
+            &PublicKey::new_from_private_key(&PrivateKeysForTests::user_token_lp_key()),
+            None,
+        )
     }
 
     fn vault_a_id() -> AccountId {

@@ -10,7 +10,7 @@ use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde::{Deserialize, Serialize};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
 
-use crate::{NullifierPublicKey, NullifierSecretKey, program::ProgramId};
+use crate::{NullifierPublicKey, NullifierSecretKey, PublicKey, program::ProgramId};
 
 pub mod data;
 
@@ -180,7 +180,7 @@ impl AccountId {
     }
 
     #[must_use]
-    pub fn generate_account_id(value: &NullifierPublicKey, identifier: Option<u128>) -> Self {
+    pub fn private_account_id(value: &NullifierPublicKey, identifier: Option<u128>) -> Self {
         const PRIVATE_ACCOUNT_ID_PREFIX: &[u8; 32] =
             b"/LEE/v0.3/AccountId/Private/\x00\x00\x00\x00";
 
@@ -202,13 +202,25 @@ impl AccountId {
     }
 
     #[must_use]
-    pub fn account_id_with_identifier(value: &NullifierPublicKey, identifier: u128) -> Self {
-        Self::generate_account_id(value, Some(identifier))
-    }
+    pub fn public_account_id(value: &PublicKey, identifier: Option<u128>) -> Self {
+        const PUBLIC_ACCOUNT_ID_PREFIX: &[u8; 32] =
+            b"/LEE/v0.3/AccountId/Public/\x00\x00\x00\x00\x00";
 
-    #[must_use]
-    pub fn account_id_without_identifier(value: &NullifierPublicKey) -> Self {
-        Self::generate_account_id(value, None)
+        let mut bytes = Vec::<u8>::new();
+        bytes.extend_from_slice(PUBLIC_ACCOUNT_ID_PREFIX);
+        bytes.extend_from_slice(value.value());
+
+        match identifier {
+            None => {}
+            Some(identifier) => bytes.extend_from_slice(&identifier.to_le_bytes()),
+        }
+
+        Self::new(
+            Impl::hash_bytes(&bytes)
+                .as_bytes()
+                .try_into()
+                .expect("Conversion should not fail"),
+        )
     }
 }
 
@@ -393,11 +405,25 @@ mod tests {
         ];
         let npk = NullifierPublicKey::from(&nsk);
         let expected_account_id = AccountId::new([
-            139, 72, 194, 222, 215, 187, 147, 56, 55, 35, 222, 205, 156, 12, 204, 227, 166, 44, 30,
-            81, 186, 14, 167, 234, 28, 236, 32, 213, 125, 251, 193, 233,
+            48, 66, 236, 142, 62, 81, 247, 114, 151, 55, 109, 108, 34, 132, 216, 182, 239, 250,
+            126, 85, 106, 222, 127, 193, 125, 168, 62, 150, 129, 194, 135, 114,
         ]);
 
-        let account_id = AccountId::account_id_without_identifier(&npk);
+        let account_id = AccountId::private_account_id(&npk, Some(13_u128));
+
+        assert_eq!(account_id, expected_account_id);
+    }
+
+    #[test]
+    fn account_id_from_public_key() {
+        let pub_key = PublicKey::try_new([42_u8; 32]).expect("Expect valid Public Key");
+
+        let expected_account_id = AccountId::new([
+            75, 60, 223, 47, 170, 89, 187, 173, 89, 16, 96, 18, 76, 101, 203, 128, 241, 4, 253, 18,
+            61, 201, 37, 226, 199, 119, 9, 1, 239, 131, 221, 142,
+        ]);
+
+        let account_id = AccountId::public_account_id(&pub_key, Some(13_u128));
 
         assert_eq!(account_id, expected_account_id);
     }

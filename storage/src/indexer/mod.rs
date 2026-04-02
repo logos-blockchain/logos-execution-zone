@@ -224,7 +224,8 @@ fn closest_breakpoint_id(block_id: u64) -> u64 {
 #[expect(clippy::shadow_unrelated, reason = "Fine for tests")]
 #[cfg(test)]
 mod tests {
-    use nssa::{AccountId, PublicKey};
+    use nssa::AccountId;
+    use nssa_core::PublicKey;
     use tempfile::tempdir;
 
     use super::*;
@@ -233,20 +234,20 @@ mod tests {
         common::test_utils::produce_dummy_block(1, None, vec![])
     }
 
-    fn acc1_sign_key() -> nssa::PrivateKey {
-        nssa::PrivateKey::try_new([1; 32]).unwrap()
+    fn acc1_sign_key() -> nssa_core::PrivateKey {
+        nssa_core::PrivateKey::try_new([1; 32]).unwrap()
     }
 
-    fn acc2_sign_key() -> nssa::PrivateKey {
-        nssa::PrivateKey::try_new([2; 32]).unwrap()
+    fn acc2_sign_key() -> nssa_core::PrivateKey {
+        nssa_core::PrivateKey::try_new([2; 32]).unwrap()
     }
 
     fn acc1() -> AccountId {
-        AccountId::from(&PublicKey::new_from_private_key(&acc1_sign_key()))
+        AccountId::public_account_id(&PublicKey::new_from_private_key(&acc1_sign_key()), None)
     }
 
     fn acc2() -> AccountId {
-        AccountId::from(&PublicKey::new_from_private_key(&acc2_sign_key()))
+        AccountId::public_account_id(&PublicKey::new_from_private_key(&acc2_sign_key()), None)
     }
 
     #[test]

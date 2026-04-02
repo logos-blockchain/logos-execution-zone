@@ -206,7 +206,7 @@ mod tests {
         let recipient = AccountWithMetadata::new(
             Account::default(),
             false,
-            AccountId::account_id_without_identifier(&recipient_keys.npk()),
+            AccountId::private_account_id(&recipient_keys.npk(), None),
         );
 
         let balance_to_move: u128 = 37;
@@ -267,7 +267,7 @@ mod tests {
         let sender_keys = test_private_account_keys_1();
         let recipient_keys = test_private_account_keys_2();
         let recipient_id =
-            AccountId::account_id_without_identifier(&test_private_account_keys_2().npk());
+            AccountId::private_account_id(&test_private_account_keys_2().npk(), None);
 
         let sender_nonce = Nonce(0xdead_beef);
         let sender_pre = AccountWithMetadata::new(
@@ -278,14 +278,14 @@ mod tests {
                 data: Data::default(),
             },
             true,
-            AccountId::account_id_without_identifier(&sender_keys.npk()),
+            AccountId::private_account_id(&sender_keys.npk(), None),
         );
         let commitment_sender = Commitment::new(&sender_pre.account_id, &sender_pre.account);
 
         let recipient = AccountWithMetadata::new(
             Account::default(),
             false,
-            AccountId::account_id_without_identifier(&recipient_keys.npk()),
+            AccountId::private_account_id(&recipient_keys.npk(), None),
         );
         let balance_to_move: u128 = 37;
 
@@ -374,7 +374,7 @@ mod tests {
         let pre = AccountWithMetadata::new(
             Account::default(),
             false,
-            AccountId::account_id_without_identifier(&account_keys.npk()),
+            AccountId::private_account_id(&account_keys.npk(), None),
         );
 
         let validity_window_chain_caller = Program::validity_window_chain_caller();

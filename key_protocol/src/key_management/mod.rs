@@ -125,11 +125,11 @@ mod tests {
         let nullifier_public_key = utxo_secret_key_holder.generate_nullifier_public_key();
         let viewing_public_key = utxo_secret_key_holder.generate_viewing_public_key();
 
-        let pub_account_signing_key = nssa::PrivateKey::new_os_random();
+        let pub_account_signing_key = nssa_core::PrivateKey::new_os_random();
 
-        let public_key = nssa::PublicKey::new_from_private_key(&pub_account_signing_key);
+        let public_key = nssa_core::PublicKey::new_from_private_key(&pub_account_signing_key);
 
-        let account = nssa::AccountId::from(&public_key);
+        let account = nssa::AccountId::public_account_id(&public_key, None);
 
         println!("======Prerequisites======");
         println!();

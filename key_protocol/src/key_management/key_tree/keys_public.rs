@@ -5,8 +5,8 @@ use crate::key_management::key_tree::traits::KeyNode;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ChildKeysPublic {
-    pub csk: nssa::PrivateKey,
-    pub cpk: nssa::PublicKey,
+    pub csk: nssa_core::PrivateKey,
+    pub cpk: nssa_core::PublicKey,
     pub ccc: [u8; 32],
     /// Can be [`None`] if root.
     pub cci: Option<u32>,
@@ -41,14 +41,14 @@ impl KeyNode for ChildKeysPublic {
     fn root(seed: [u8; 64]) -> Self {
         let hash_value = hmac_sha512::HMAC::mac(seed, "LEE_master_pub");
 
-        let csk = nssa::PrivateKey::try_new(
+        let csk = nssa_core::PrivateKey::try_new(
             *hash_value
                 .first_chunk::<32>()
                 .expect("hash_value is 64 bytes, must be safe to get first 32"),
         )
         .expect("Expect a valid Private Key");
         let ccc = *hash_value.last_chunk::<32>().unwrap();
-        let cpk = nssa::PublicKey::new_from_private_key(&csk);
+        let cpk = nssa_core::PublicKey::new_from_private_key(&csk);
 
         Self {
             csk,
@@ -61,7 +61,7 @@ impl KeyNode for ChildKeysPublic {
     fn nth_child(&self, cci: u32) -> Self {
         let hash_value = self.compute_hash_value(cci);
 
-        let csk = nssa::PrivateKey::try_new({
+        let csk = nssa_core::PrivateKey::try_new({
             let hash_value = hash_value
                 .first_chunk::<32>()
                 .expect("hash_value is 64 bytes, must be safe to get first 32");
@@ -80,7 +80,7 @@ impl KeyNode for ChildKeysPublic {
             .last_chunk::<32>()
             .expect("hash_value is 64 bytes, must be safe to get last 32");
 
-        let cpk = nssa::PublicKey::new_from_private_key(&csk);
+        let cpk = nssa_core::PublicKey::new_from_private_key(&csk);
 
         Self {
             csk,
@@ -99,7 +99,7 @@ impl KeyNode for ChildKeysPublic {
     }
 
     fn account_id(&self) -> nssa::AccountId {
-        nssa::AccountId::from(&self.cpk)
+        nssa::AccountId::public_account_id(&self.cpk, None)
     }
 }
 
@@ -107,7 +107,7 @@ impl KeyNode for ChildKeysPublic {
     clippy::single_char_lifetime_names,
     reason = "TODO add meaningful name"
 )]
-impl<'a> From<&'a ChildKeysPublic> for &'a nssa::PrivateKey {
+impl<'a> From<&'a ChildKeysPublic> for &'a nssa_core::PrivateKey {
     fn from(value: &'a ChildKeysPublic) -> Self {
         &value.csk
     }
@@ -115,7 +115,7 @@ impl<'a> From<&'a ChildKeysPublic> for &'a nssa::PrivateKey {
 
 #[cfg(test)]
 mod tests {
-    use nssa::{PrivateKey, PublicKey};
+    use nssa_core::{PrivateKey, PublicKey};
 
     use super::*;
 

@@ -249,15 +249,15 @@ impl TryFrom<&FfiAccount> for nssa::Account {
     }
 }
 
-impl From<nssa::PublicKey> for FfiPublicAccountKey {
-    fn from(value: nssa::PublicKey) -> Self {
+impl From<nssa_core::PublicKey> for FfiPublicAccountKey {
+    fn from(value: nssa_core::PublicKey) -> Self {
         Self {
             public_key: FfiBytes32::from_bytes(*value.value()),
         }
     }
 }
 
-impl TryFrom<&FfiPublicAccountKey> for nssa::PublicKey {
+impl TryFrom<&FfiPublicAccountKey> for nssa_core::PublicKey {
     type Error = WalletFfiError;
 
     fn try_from(value: &FfiPublicAccountKey) -> Result<Self, Self::Error> {

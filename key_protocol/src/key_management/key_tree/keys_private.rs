@@ -111,7 +111,7 @@ impl KeyNode for ChildKeysPrivate {
     }
 
     fn account_id(&self) -> nssa::AccountId {
-        nssa::AccountId::account_id_without_identifier(&self.value.0.nullifier_public_key)
+        nssa::AccountId::private_account_id(&self.value.0.nullifier_public_key, None)
     }
 }
 

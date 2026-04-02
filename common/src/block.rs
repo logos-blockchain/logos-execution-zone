@@ -35,7 +35,7 @@ pub struct BlockHeader {
     pub prev_block_hash: BlockHash,
     pub hash: BlockHash,
     pub timestamp: Timestamp,
-    pub signature: nssa::Signature,
+    pub signature: nssa_core::Signature,
 }
 
 #[derive(Debug, Clone, BorshSerialize, BorshDeserialize)]
@@ -82,11 +82,11 @@ impl HashableBlockData {
     #[must_use]
     pub fn into_pending_block(
         self,
-        signing_key: &nssa::PrivateKey,
+        signing_key: &nssa_core::PrivateKey,
         bedrock_parent_id: MantleMsgId,
     ) -> Block {
         let data_bytes = borsh::to_vec(&self).unwrap();
-        let signature = nssa::Signature::new(signing_key, &data_bytes);
+        let signature = nssa_core::Signature::new(signing_key, &data_bytes);
         let hash = OwnHasher::hash(&data_bytes);
         Block {
             header: BlockHeader {

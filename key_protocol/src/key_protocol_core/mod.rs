@@ -15,7 +15,7 @@ pub type PublicKey = AffinePoint;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NSSAUserData {
     /// Default public accounts.
-    pub default_pub_account_signing_keys: BTreeMap<nssa::AccountId, nssa::PrivateKey>,
+    pub default_pub_account_signing_keys: BTreeMap<nssa::AccountId, nssa_core::PrivateKey>,
     /// Default private accounts.
     pub default_user_private_accounts:
         BTreeMap<nssa::AccountId, (KeyChain, nssa_core::account::Account)>,
@@ -27,12 +27,14 @@ pub struct NSSAUserData {
 
 impl NSSAUserData {
     fn valid_public_key_transaction_pairing_check(
-        accounts_keys_map: &BTreeMap<nssa::AccountId, nssa::PrivateKey>,
+        accounts_keys_map: &BTreeMap<nssa::AccountId, nssa_core::PrivateKey>,
     ) -> bool {
         let mut check_res = true;
         for (account_id, key) in accounts_keys_map {
-            let expected_account_id =
-                nssa::AccountId::from(&nssa::PublicKey::new_from_private_key(key));
+            let expected_account_id = nssa::AccountId::public_account_id(
+                &nssa_core::PublicKey::new_from_private_key(key),
+                None,
+            );
             if &expected_account_id != account_id {
                 println!("{expected_account_id}, {account_id}");
                 check_res = false;
@@ -47,7 +49,7 @@ impl NSSAUserData {
         let mut check_res = true;
         for (account_id, (key, _)) in accounts_keys_map {
             let expected_account_id =
-                nssa::AccountId::account_id_without_identifier(&key.nullifier_public_key);
+                nssa::AccountId::private_account_id(&key.nullifier_public_key, None);
             if expected_account_id != *account_id {
                 println!("{expected_account_id}, {account_id}");
                 check_res = false;
@@ -57,7 +59,7 @@ impl NSSAUserData {
     }
 
     pub fn new_with_accounts(
-        default_accounts_keys: BTreeMap<nssa::AccountId, nssa::PrivateKey>,
+        default_accounts_keys: BTreeMap<nssa::AccountId, nssa_core::PrivateKey>,
         default_accounts_key_chains: BTreeMap<
             nssa::AccountId,
             (KeyChain, nssa_core::account::Account),
@@ -109,7 +111,7 @@ impl NSSAUserData {
     pub fn get_pub_account_signing_key(
         &self,
         account_id: nssa::AccountId,
-    ) -> Option<&nssa::PrivateKey> {
+    ) -> Option<&nssa_core::PrivateKey> {
         self.default_pub_account_signing_keys
             .get(&account_id)
             .or_else(|| self.public_key_tree.get_node(account_id).map(Into::into))

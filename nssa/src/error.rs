@@ -22,17 +22,8 @@ pub enum NssaError {
     #[error("Serialization error: {0}")]
     InstructionSerializationError(String),
 
-    #[error("Invalid private key")]
-    InvalidPrivateKey,
-
     #[error("IO error: {0}")]
     Io(#[from] io::Error),
-
-    #[error("Invalid Public Key")]
-    InvalidPublicKey(#[source] k256::schnorr::Error),
-
-    #[error("Invalid hex for public key")]
-    InvalidHexPublicKey(hex::FromHexError),
 
     #[error("Risc0 error: {0}")]
     ProgramWriteInputFailed(String),

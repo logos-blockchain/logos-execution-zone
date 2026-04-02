@@ -14,7 +14,7 @@ pub struct SequencerStore {
     // TODO: Consider adding the hashmap to the database for faster recovery.
     tx_hash_to_block_map: HashMap<HashType, u64>,
     genesis_id: u64,
-    signing_key: nssa::PrivateKey,
+    signing_key: nssa_core::PrivateKey,
 }
 
 impl SequencerStore {
@@ -26,7 +26,7 @@ impl SequencerStore {
         location: &Path,
         genesis_block: &Block,
         genesis_msg_id: MantleMsgId,
-        signing_key: nssa::PrivateKey,
+        signing_key: nssa_core::PrivateKey,
     ) -> Result<Self> {
         let tx_hash_to_block_map = block_to_transactions_map(genesis_block);
 
@@ -80,7 +80,7 @@ impl SequencerStore {
         self.genesis_id
     }
 
-    pub const fn signing_key(&self) -> &nssa::PrivateKey {
+    pub const fn signing_key(&self) -> &nssa_core::PrivateKey {
         &self.signing_key
     }
 

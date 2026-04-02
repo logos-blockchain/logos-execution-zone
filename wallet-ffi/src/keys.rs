@@ -2,7 +2,8 @@
 
 use std::ptr;
 
-use nssa::{AccountId, PublicKey};
+use nssa::AccountId;
+use nssa_core::PublicKey;
 
 use crate::{
     error::{print_error, WalletFfiError},

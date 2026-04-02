@@ -63,7 +63,7 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
             timestamp: 0,
         };
 
-        let signing_key = nssa::PrivateKey::try_new(config.signing_key).unwrap();
+        let signing_key = nssa_core::PrivateKey::try_new(config.signing_key).unwrap();
         let genesis_parent_msg_id = [0; 32];
         let genesis_block = hashable_data.into_pending_block(&signing_key, genesis_parent_msg_id);
 
@@ -114,7 +114,7 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
                             let npk = &init_comm_data.npk;
 
                             let mut acc = init_comm_data.account.clone();
-                            let acc_id = &AccountId::generate_account_id(npk, None);
+                            let acc_id = &AccountId::private_account_id(npk, None);
                             acc.program_owner =
                                 nssa::program::Program::authenticated_transfer_program().id();
 
@@ -434,11 +434,11 @@ mod tests {
         }
     }
 
-    fn create_signing_key_for_account1() -> nssa::PrivateKey {
+    fn create_signing_key_for_account1() -> nssa_core::PrivateKey {
         initial_pub_accounts_private_keys()[0].pub_sign_key.clone()
     }
 
-    fn create_signing_key_for_account2() -> nssa::PrivateKey {
+    fn create_signing_key_for_account2() -> nssa_core::PrivateKey {
         initial_pub_accounts_private_keys()[1].pub_sign_key.clone()
     }
 

@@ -326,8 +326,10 @@ fn compute_circuit_output(
                     panic!("Missing private account key");
                 };
 
+                // TODO: (Marvin) identifier used here)
+                // Relevant here as this applies for both cases (authenicated and not authenicated).
                 assert_eq!(
-                    AccountId::generate_account_id(npk, None),
+                    AccountId::private_account_id(npk, None),
                     pre_state.account_id,
                     "AccountId mismatch"
                 );
@@ -389,7 +391,10 @@ fn compute_circuit_output(
                         "Membership proof must be None for unauthorized accounts"
                     );
 
-                    let account_id = AccountId::account_id_without_identifier(npk);
+
+                    // TODO: (Marvin) need to add a Vec<identifier> as input.
+                    // TODO: use here
+                    let account_id = AccountId::private_account_id(npk, None);
                     let nullifier = Nullifier::for_account_initialization(&account_id);
 
                     let new_nonce = Nonce::private_account_nonce_init(npk);
@@ -450,7 +455,7 @@ fn compute_nullifier_and_set_digest(
 ) -> (Nullifier, CommitmentSetDigest) {
     // TODO: consider rewriting the function to receive account id instead of npk.
     // NOTE: this does not use the identifier at all.
-    let account_id = AccountId::generate_account_id(npk, None);
+    let account_id = AccountId::private_account_id(npk, None);
     membership_proof_opt.as_ref().map_or_else(
         || {
             assert_eq!(

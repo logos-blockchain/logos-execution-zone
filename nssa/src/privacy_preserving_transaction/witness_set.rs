@@ -1,9 +1,7 @@
 use borsh::{BorshDeserialize, BorshSerialize};
+use nssa_core::{PrivateKey, PublicKey, Signature};
 
-use crate::{
-    PrivateKey, PublicKey, Signature,
-    privacy_preserving_transaction::{circuit::Proof, message::Message},
-};
+use crate::privacy_preserving_transaction::{circuit::Proof, message::Message};
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct WitnessSet {

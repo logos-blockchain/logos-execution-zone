@@ -5287,11 +5287,14 @@ dependencies = [
  "bytemuck",
  "bytesize",
  "chacha20",
+ "hex",
  "k256",
+ "rand 0.8.5",
  "risc0-zkvm",
  "serde",
  "serde_json",
  "serde_with",
+ "sha2",
  "thiserror 2.0.18",
 ]
 
@@ -7600,6 +7603,7 @@ dependencies = [
  "borsh",
  "common",
  "nssa",
+ "nssa_core",
  "rocksdb",
  "tempfile",
  "thiserror 2.0.18",

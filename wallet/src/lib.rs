@@ -284,7 +284,7 @@ impl WalletCore {
     pub fn get_account_public_signing_key(
         &self,
         account_id: AccountId,
-    ) -> Option<&nssa::PrivateKey> {
+    ) -> Option<&nssa_core::PrivateKey> {
         self.storage
             .user_data
             .get_pub_account_signing_key(account_id)
@@ -409,7 +409,7 @@ impl WalletCore {
                     .iter()
                     .map(|keys| {
                         (
-                            AccountId::account_id_without_identifier(&keys.npk.clone()),
+                            AccountId::private_account_id(&keys.npk.clone(), None),
                             keys.vpk.clone(),
                             keys.epk.clone(),
                         )
@@ -504,7 +504,7 @@ impl WalletCore {
         let affected_accounts = private_account_key_chains
             .flat_map(|(acc_account_id, key_chain, index)| {
                 let view_tag = EncryptedAccountData::compute_view_tag(
-                    &AccountId::account_id_without_identifier(&key_chain.nullifier_public_key),
+                    &AccountId::private_account_id(&key_chain.nullifier_public_key, None),
                     &key_chain.viewing_public_key,
                 );
 
