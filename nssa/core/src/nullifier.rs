@@ -100,8 +100,11 @@ mod tests {
         ]);
 
         let account_id = AccountId::account_id_with_identifier(&npk, 0_u128);
-    
-        let expected_nullifier = Nullifier([63, 58, 51, 159, 15, 100, 240, 243, 60, 143, 151, 108, 116, 144, 101, 6, 134, 72, 198, 249, 108, 80, 237, 194, 143, 66, 225, 191, 111, 49, 66, 54]);
+
+        let expected_nullifier = Nullifier([
+            63, 58, 51, 159, 15, 100, 240, 243, 60, 143, 151, 108, 116, 144, 101, 6, 134, 72, 198,
+            249, 108, 80, 237, 194, 143, 66, 225, 191, 111, 49, 66, 54,
+        ]);
         let nullifier = Nullifier::for_account_initialization(&account_id);
         assert_eq!(nullifier, expected_nullifier);
     }
@@ -119,5 +122,4 @@ mod tests {
         let npk = NullifierPublicKey::from(&nsk);
         assert_eq!(npk, expected_npk);
     }
-
 }

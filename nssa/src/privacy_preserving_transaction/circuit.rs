@@ -266,7 +266,8 @@ mod tests {
         let program = Program::authenticated_transfer_program();
         let sender_keys = test_private_account_keys_1();
         let recipient_keys = test_private_account_keys_2();
-        let recipient_id = AccountId::account_id_without_identifier(&test_private_account_keys_2().npk());
+        let recipient_id =
+            AccountId::account_id_without_identifier(&test_private_account_keys_2().npk());
 
         let sender_nonce = Nonce(0xdead_beef);
         let sender_pre = AccountWithMetadata::new(

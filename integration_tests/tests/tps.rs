@@ -228,8 +228,11 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
     let recipient_vpk = ViewingPublicKey::from_scalar(recipient_vsk);
     let recipient_npk = NullifierPublicKey::from(&recipient_nsk);
     let recipient_id = AccountId::account_id_without_identifier(&recipient_npk);
-    let recipient_pre =
-        AccountWithMetadata::new(Account::default(), false, AccountId::account_id_without_identifier(&recipient_npk));
+    let recipient_pre = AccountWithMetadata::new(
+        Account::default(),
+        false,
+        AccountId::account_id_without_identifier(&recipient_npk),
+    );
 
     let eph_holder_from = EphemeralKeyHolder::new(&sender_npk);
     let sender_ss = eph_holder_from.calculate_shared_secret_sender(&sender_vpk);
@@ -251,10 +254,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
         vec![sender_pre, recipient_pre],
         Program::serialize_instruction(balance_to_move).unwrap(),
         vec![1, 2],
-        vec![
-            (sender_npk, sender_ss),
-            (recipient_npk, recipient_ss),
-        ],
+        vec![(sender_npk, sender_ss), (recipient_npk, recipient_ss)],
         vec![sender_nsk],
         vec![Some(proof)],
         &program.into(),

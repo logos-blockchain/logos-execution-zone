@@ -407,7 +407,13 @@ impl WalletCore {
                 Vec::from_iter(acc_manager.public_account_nonces()),
                 private_account_keys
                     .iter()
-                    .map(|keys| (AccountId::account_id_without_identifier(&keys.npk.clone()), keys.vpk.clone(), keys.epk.clone()))
+                    .map(|keys| {
+                        (
+                            AccountId::account_id_without_identifier(&keys.npk.clone()),
+                            keys.vpk.clone(),
+                            keys.epk.clone(),
+                        )
+                    })
                     .collect(),
                 output,
             )

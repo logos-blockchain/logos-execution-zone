@@ -1001,10 +1001,8 @@ pub mod tests {
         let sender_id = AccountId::generate_account_id(&sender_keys.npk(), None);
         let recipient_id = AccountId::generate_account_id(&recipient_keys.npk(), None);
         let sender_commitment = Commitment::new(&sender_id, sender_private_account);
-        let sender_pre =
-            AccountWithMetadata::new(sender_private_account.clone(), true, sender_id);
-        let recipient_pre =
-            AccountWithMetadata::new(Account::default(), false, recipient_id);
+        let sender_pre = AccountWithMetadata::new(sender_private_account.clone(), true, sender_id);
+        let recipient_pre = AccountWithMetadata::new(Account::default(), false, recipient_id);
 
         let esk_1 = [3; 32];
         let shared_secret_1 = SharedSecretKey::new(&esk_1, &sender_keys.vpk());
@@ -1054,8 +1052,7 @@ pub mod tests {
         let program = Program::authenticated_transfer_program();
         let sender_id = AccountId::generate_account_id(&sender_keys.npk(), None);
         let sender_commitment = Commitment::new(&sender_id, sender_private_account);
-        let sender_pre =
-            AccountWithMetadata::new(sender_private_account.clone(), true, sender_id);
+        let sender_pre = AccountWithMetadata::new(sender_private_account.clone(), true, sender_id);
         let recipient_pre = AccountWithMetadata::new(
             state.get_account_by_id(*recipient_account_id),
             false,
@@ -1262,7 +1259,7 @@ pub mod tests {
         let recipient_post = state.get_account_by_id(recipient_keys.account_id());
         assert_eq!(recipient_post, expected_recipient_post);
         assert!(state.private_state.0.contains(&sender_pre_commitment));
-       // assert!(state.private_state.0.contains(&expected_new_commitment));
+        // assert!(state.private_state.0.contains(&expected_new_commitment));
         assert!(state.private_state.1.contains(&expected_new_nullifier));
         assert_eq!(
             state.get_account_by_id(recipient_keys.account_id()).balance,
@@ -1781,7 +1778,8 @@ pub mod tests {
 
     #[test]
     fn circuit_should_fail_if_new_private_account_with_non_default_balance_is_provided() {
-        let program = Program::simple_balance_transfer();        let sender_keys = test_private_account_keys_1();
+        let program = Program::simple_balance_transfer();
+        let sender_keys = test_private_account_keys_1();
         let sender_account_id = AccountId::account_id_without_identifier(&sender_keys.npk());
         let recipient_keys = test_private_account_keys_2();
         let recipient_account_id = AccountId::account_id_without_identifier(&recipient_keys.npk());
@@ -2570,15 +2568,16 @@ pub mod tests {
         let program = Program::authenticated_transfer_program();
         let program_id = program.id();
         let sender_keys = test_private_account_keys_1();
+        let sender_id = AccountId::account_id_without_identifier(&sender_keys.npk());
         let sender_private_account = Account {
             program_owner: program_id,
             balance: 100,
             ..Account::default()
         };
-        let sender_commitment = Commitment::new(&sender_keys.npk(), &sender_private_account);
+        let sender_commitment = Commitment::new(&sender_id, &sender_private_account);
         let mut state =
             V03State::new_with_genesis_accounts(&[], std::slice::from_ref(&sender_commitment));
-        let sender_pre = AccountWithMetadata::new(sender_private_account, true, &sender_keys.npk());
+        let sender_pre = AccountWithMetadata::new(sender_private_account, true, sender_id);
         let recipient_private_key = PrivateKey::try_new([2; 32]).unwrap();
         let recipient_account_id =
             AccountId::from(&PublicKey::new_from_private_key(&recipient_private_key));
@@ -2602,7 +2601,7 @@ pub mod tests {
         let message = Message::try_from_circuit_output(
             vec![recipient_account_id],
             vec![Nonce(0)],
-            vec![(sender_keys.npk(), sender_keys.vpk(), epk)],
+            vec![(sender_id, sender_keys.vpk(), epk)],
             output,
         )
         .unwrap();
@@ -2937,8 +2936,7 @@ pub mod tests {
         let account_id = AccountId::generate_account_id(&private_keys.npk(), None);
 
         // Create an authorized private account with default values (new account being initialized)
-        let authorized_account =
-            AccountWithMetadata::new(Account::default(), true, account_id);
+        let authorized_account = AccountWithMetadata::new(Account::default(), true, account_id);
 
         let program = Program::authenticated_transfer_program();
 
@@ -2986,12 +2984,13 @@ pub mod tests {
         let mut state = V03State::new_with_genesis_accounts(&[], &[]).with_test_programs();
 
         let private_keys = test_private_account_keys_1();
+        let account_id = AccountId::account_id_without_identifier(&private_keys.npk());
         // This is intentional: claim authorization was introduced to protect public accounts,
         // especially PDAs. Private PDAs are not useful in practice because there is no way to
         // operate them without the corresponding private keys, so unauthorized private claiming
         // remains allowed.
         let unauthorized_account =
-            AccountWithMetadata::new(Account::default(), false, &private_keys.npk());
+            AccountWithMetadata::new(Account::default(), false, account_id);
 
         let program = Program::claimer();
         let esk = [5; 32];
@@ -3012,7 +3011,7 @@ pub mod tests {
         let message = Message::try_from_circuit_output(
             vec![],
             vec![],
-            vec![(private_keys.npk(), private_keys.vpk(), epk)],
+            vec![(account_id, private_keys.vpk(), epk)],
             output,
         )
         .unwrap();
@@ -3024,7 +3023,7 @@ pub mod tests {
             .transition_from_privacy_preserving_transaction(&tx, 1, 0)
             .unwrap();
 
-        let nullifier = Nullifier::for_account_initialization(&private_keys.npk());
+        let nullifier = Nullifier::for_account_initialization(&account_id);
         assert!(state.private_state.1.contains(&nullifier));
     }
 
@@ -3037,8 +3036,7 @@ pub mod tests {
         let account_id = AccountId::generate_account_id(&private_keys.npk(), None);
 
         // Step 1: Create a new private account with authorization
-        let authorized_account =
-            AccountWithMetadata::new(Account::default(), true, account_id);
+        let authorized_account = AccountWithMetadata::new(Account::default(), true, account_id);
 
         let claimer_program = Program::claimer();
 
@@ -3160,8 +3158,7 @@ pub mod tests {
         let program = Program::changer_claimer();
         let sender_keys = test_private_account_keys_1();
         let sender_id = AccountId::generate_account_id(&sender_keys.npk(), None);
-        let private_account =
-            AccountWithMetadata::new(Account::default(), true, sender_id);
+        let private_account = AccountWithMetadata::new(Account::default(), true, sender_id);
         // Don't change data (None) and don't claim (false)
         let instruction: (Option<Vec<u8>>, bool) = (None, false);
 
@@ -3187,8 +3184,7 @@ pub mod tests {
         let program = Program::changer_claimer();
         let sender_keys = test_private_account_keys_1();
         let sender_id = AccountId::generate_account_id(&sender_keys.npk(), None);
-        let private_account =
-            AccountWithMetadata::new(Account::default(), true, sender_id);
+        let private_account = AccountWithMetadata::new(Account::default(), true, sender_id);
         // Change data but don't claim (false) - should fail
         let new_data = vec![1, 2, 3, 4, 5];
         let instruction: (Option<Vec<u8>>, bool) = (Some(new_data), false);
@@ -3458,7 +3454,8 @@ pub mod tests {
             validity_window.try_into().unwrap();
         let validity_window_program = Program::validity_window();
         let account_keys = test_private_account_keys_1();
-        let pre = AccountWithMetadata::new(Account::default(), false, &account_keys.npk());
+        let account_id = AccountId::account_id_without_identifier(&account_keys.npk());
+        let pre = AccountWithMetadata::new(Account::default(), false, account_id);
         let mut state = V03State::new_with_genesis_accounts(&[], &[]).with_test_programs();
         let tx = {
             let esk = [3; 32];
@@ -3483,7 +3480,7 @@ pub mod tests {
             let message = Message::try_from_circuit_output(
                 vec![],
                 vec![],
-                vec![(account_keys.npk(), account_keys.vpk(), epk)],
+                vec![(account_id, account_keys.vpk(), epk)],
                 output,
             )
             .unwrap();

@@ -403,7 +403,8 @@ fn compute_circuit_output(
                 post_with_updated_nonce.nonce = new_nonce;
 
                 // Compute commitment
-                let commitment_post = Commitment::new(&pre_state.account_id, &post_with_updated_nonce);
+                let commitment_post =
+                    Commitment::new(&pre_state.account_id, &post_with_updated_nonce);
 
                 // Encrypt and push post state
                 let encrypted_account = EncryptionScheme::encrypt(
