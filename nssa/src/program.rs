@@ -318,6 +318,20 @@ mod tests {
             use test_program_methods::VALIDITY_WINDOW_CHAIN_CALLER_ELF;
             Self::new(VALIDITY_WINDOW_CHAIN_CALLER_ELF.to_vec()).unwrap()
         }
+
+        #[must_use]
+        pub fn flash_swap_initiator() -> Self {
+            use test_program_methods::FLASH_SWAP_INITIATOR_ELF;
+            Self::new(FLASH_SWAP_INITIATOR_ELF.to_vec())
+                .expect("flash_swap_initiator must be a valid Risc0 program")
+        }
+
+        #[must_use]
+        pub fn flash_swap_callback() -> Self {
+            use test_program_methods::FLASH_SWAP_CALLBACK_ELF;
+            Self::new(FLASH_SWAP_CALLBACK_ELF.to_vec())
+                .expect("flash_swap_callback must be a valid Risc0 program")
+        }
     }
 
     #[test]

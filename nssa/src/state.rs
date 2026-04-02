@@ -382,6 +382,8 @@ pub mod tests {
             self.insert_program(Program::claimer());
             self.insert_program(Program::changer_claimer());
             self.insert_program(Program::validity_window());
+            self.insert_program(Program::flash_swap_initiator());
+            self.insert_program(Program::flash_swap_callback());
             self
         }
 
