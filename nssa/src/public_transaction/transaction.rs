@@ -184,6 +184,12 @@ impl PublicTransaction {
                 );
             }
 
+            // Verify that the program output's self_program_id matches the expected program ID.
+            ensure!(
+                program_output.self_program_id == chained_call.program_id,
+                NssaError::InvalidProgramBehavior
+            );
+
             // Verify execution corresponds to a well-behaved program.
             // See the # Programs section for the definition of the `validate_execution` method.
             ensure!(

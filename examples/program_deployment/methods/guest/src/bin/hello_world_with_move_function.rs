@@ -66,6 +66,7 @@ fn main() {
     // Read input accounts.
     let (
         ProgramInput {
+            self_program_id,
             pre_states,
             instruction: (function_id, data),
         },
@@ -85,5 +86,5 @@ fn main() {
 
     // WARNING: constructing a `ProgramOutput` has no effect on its own. `.write()` must be
     // called to commit the output.
-    ProgramOutput::new(instruction_words, pre_states, post_states).write();
+    ProgramOutput::new(self_program_id, instruction_words, pre_states, post_states).write();
 }
