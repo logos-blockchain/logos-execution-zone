@@ -63,13 +63,14 @@ impl From<Program> for ProgramWithDependencies {
 
 /// Generates a proof of the execution of a NSSA program inside the privacy preserving execution
 /// circuit.
-/// TODO: too many parameters.
+#[expect(clippy::too_many_arguments, reason = "TODO: fix this later")]
 pub fn execute_and_prove(
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: InstructionData,
     visibility_mask: Vec<u8>,
     private_account_keys: Vec<(NullifierPublicKey, SharedSecretKey)>,
     private_account_nsks: Vec<NullifierSecretKey>,
+    private_account_identifiers: Vec<u128>,
     private_account_membership_proofs: Vec<Option<MembershipProof>>,
     program_with_dependencies: &ProgramWithDependencies,
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), NssaError> {
@@ -128,6 +129,7 @@ pub fn execute_and_prove(
         visibility_mask,
         private_account_keys,
         private_account_nsks,
+        private_account_identifiers,
         private_account_membership_proofs,
         program_id: program_with_dependencies.program.id(),
     };
@@ -236,6 +238,7 @@ mod tests {
             vec![0, 2],
             vec![(recipient_keys.npk(), shared_secret)],
             vec![],
+            vec![], // TODO check (Marvin)
             vec![None],
             &Program::authenticated_transfer_program().into(),
         )
@@ -337,6 +340,7 @@ mod tests {
                 (recipient_keys.npk(), shared_secret_2),
             ],
             vec![sender_keys.nsk],
+            vec![], // TODO check (Marvin)
             vec![commitment_set.get_proof_for(&commitment_sender), None],
             &program.into(),
         )
@@ -403,6 +407,7 @@ mod tests {
             vec![2],
             vec![(account_keys.npk(), shared_secret)],
             vec![],
+            vec![], // TODO check (Marvin)
             vec![None],
             &program_with_deps,
         );

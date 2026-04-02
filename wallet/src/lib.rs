@@ -396,6 +396,7 @@ impl WalletCore {
                 .map(|keys| (keys.npk.clone(), keys.ssk))
                 .collect::<Vec<_>>(),
             acc_manager.private_account_auth(),
+            vec![], // TODO check (Marvin)
             acc_manager.private_account_membership_proofs(),
             &program.to_owned(),
         )

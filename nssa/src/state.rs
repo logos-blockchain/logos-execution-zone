@@ -978,6 +978,7 @@ pub mod tests {
             vec![0, 2],
             vec![(recipient_keys.npk(), shared_secret)],
             vec![],
+            vec![], // TODO check (Marvin)
             vec![None],
             &Program::authenticated_transfer_program().into(),
         )
@@ -1026,6 +1027,7 @@ pub mod tests {
                 (recipient_keys.npk(), shared_secret_2),
             ],
             vec![sender_keys.nsk],
+            vec![], // TODO check (Marvin)
             vec![state.get_proof_for_commitment(&sender_commitment), None],
             &program.into(),
         )
@@ -1074,6 +1076,7 @@ pub mod tests {
             vec![1, 0],
             vec![(sender_keys.npk(), shared_secret)],
             vec![sender_keys.nsk],
+            vec![], // TODO check (Marvin)
             vec![state.get_proof_for_commitment(&sender_commitment)],
             &program.into(),
         )
@@ -1291,6 +1294,7 @@ pub mod tests {
             vec![0],
             vec![],
             vec![],
+            vec![], // TODO check (Marvin)
             vec![],
             &program.into(),
         );
@@ -1317,6 +1321,7 @@ pub mod tests {
             vec![0],
             vec![],
             vec![],
+            vec![], // TODO check (Marvin)
             vec![],
             &program.into(),
         );
@@ -1343,6 +1348,7 @@ pub mod tests {
             vec![0],
             vec![],
             vec![],
+            vec![], // TODO check (Marvin)
             vec![],
             &program.into(),
         );
@@ -1369,6 +1375,7 @@ pub mod tests {
             vec![0],
             vec![],
             vec![],
+            vec![], // TODO check (Marvin)
             vec![],
             &program.into(),
         );
@@ -1403,6 +1410,7 @@ pub mod tests {
             vec![0],
             vec![],
             vec![],
+            vec![], // TODO check (Marvin)
             vec![],
             &program.into(),
         );
@@ -1429,6 +1437,7 @@ pub mod tests {
             vec![0],
             vec![],
             vec![],
+            vec![], // TODO check (Marvin)
             vec![],
             &program.into(),
         );
@@ -1464,6 +1473,7 @@ pub mod tests {
             vec![0, 0],
             vec![],
             vec![],
+            vec![], // TODO check (Marvin)
             vec![],
             &program.into(),
         );
@@ -1490,6 +1500,7 @@ pub mod tests {
             vec![0],
             vec![],
             vec![],
+            vec![], // TODO check (Marvin)
             vec![],
             &program.into(),
         );
@@ -1526,6 +1537,7 @@ pub mod tests {
             vec![],
             vec![],
             vec![],
+            vec![], // TODO check (Marvin)
             &program.into(),
         );
 
@@ -1562,6 +1574,7 @@ pub mod tests {
             visibility_mask.to_vec(),
             vec![],
             vec![],
+            vec![], // TODO check (Marvin)
             vec![],
             &program.into(),
         );
@@ -1603,6 +1616,7 @@ pub mod tests {
                 ),
             ],
             vec![sender_keys.nsk],
+            vec![], // TODO check (Marvin)
             vec![Some((0, vec![]))],
             &program.into(),
         );
@@ -1638,6 +1652,7 @@ pub mod tests {
             vec![1, 2],
             private_account_keys.to_vec(),
             vec![sender_keys.nsk],
+            vec![], // TODO check (Marvin)
             vec![Some((0, vec![]))],
             &program.into(),
         );
@@ -1681,6 +1696,7 @@ pub mod tests {
                 ),
             ],
             vec![sender_keys.nsk],
+            vec![], // TODO check (Marvin)
             private_account_membership_proofs.to_vec(),
             &program.into(),
         );
@@ -1724,6 +1740,7 @@ pub mod tests {
                 ),
             ],
             private_account_nsks.to_vec(),
+            vec![], // TODO check (Marvin)
             vec![],
             &program.into(),
         );
@@ -1774,6 +1791,7 @@ pub mod tests {
             vec![1, 2],
             private_account_keys.to_vec(),
             private_account_nsks.to_vec(),
+            vec![], // TODO check (Marvin)
             private_account_membership_proofs.to_vec(),
             &program.into(),
         );
@@ -1822,6 +1840,7 @@ pub mod tests {
                 ),
             ],
             vec![sender_keys.nsk],
+            vec![], // TODO check (Marvin)
             vec![Some((0, vec![]))],
             &program.into(),
         );
@@ -1870,6 +1889,7 @@ pub mod tests {
                 ),
             ],
             vec![sender_keys.nsk],
+            vec![], // TODO check (Marvin)
             vec![Some((0, vec![]))],
             &program.into(),
         );
@@ -1918,6 +1938,7 @@ pub mod tests {
                 ),
             ],
             vec![sender_keys.nsk],
+            vec![], // TODO check (Marvin)
             vec![Some((0, vec![]))],
             &program.into(),
         );
@@ -1966,6 +1987,7 @@ pub mod tests {
                 ),
             ],
             vec![sender_keys.nsk],
+            vec![], // TODO check (Marvin)
             vec![Some((0, vec![]))],
             &program.into(),
         );
@@ -2012,6 +2034,7 @@ pub mod tests {
                 ),
             ],
             vec![sender_keys.nsk],
+            vec![], // TODO check (Marvin)
             vec![Some((0, vec![]))],
             &program.into(),
         );
@@ -2042,6 +2065,7 @@ pub mod tests {
             vec![],
             vec![],
             vec![],
+            vec![], // TODO check (Marvin)
             &program.into(),
         );
 
@@ -2082,6 +2106,7 @@ pub mod tests {
                 ),
             ],
             vec![sender_keys.nsk],
+            vec![], // TODO check (Marvin)
             vec![Some((0, vec![]))],
             &program.into(),
         );
@@ -2130,6 +2155,7 @@ pub mod tests {
             vec![1, 2],
             private_account_keys.to_vec(),
             vec![sender_keys.nsk],
+            vec![], // TODO check (Marvin)
             vec![Some((0, vec![]))],
             &program.into(),
         );
@@ -2176,6 +2202,7 @@ pub mod tests {
                 ),
             ],
             private_account_nsks.to_vec(),
+            vec![], // TODO check (Marvin)
             private_account_membership_proofs.to_vec(),
             &program.into(),
         );
@@ -2267,6 +2294,7 @@ pub mod tests {
                 (sender_keys.npk(), shared_secret),
             ],
             private_account_nsks.to_vec(),
+            vec![], // TODO check (Marvin)
             private_account_membership_proofs.to_vec(),
             &program.into(),
         );
@@ -2563,6 +2591,7 @@ pub mod tests {
             vec![0],
             vec![],
             vec![],
+            vec![], // TODO check (Marvin)
             vec![],
             &program.into(),
         );
@@ -2602,6 +2631,7 @@ pub mod tests {
             vec![1, 0],
             vec![(sender_keys.npk(), shared_secret)],
             vec![sender_keys.nsk],
+            vec![], // TODO check (Marvin)
             vec![state.get_proof_for_commitment(&sender_commitment)],
             &program.into(),
         )
@@ -2966,6 +2996,7 @@ pub mod tests {
             vec![1],
             vec![(private_keys.npk(), shared_secret)],
             vec![private_keys.nsk],
+            vec![], // TODO check (Marvin)
             vec![None],
             &program.into(),
         )
@@ -3013,6 +3044,7 @@ pub mod tests {
             vec![2],
             vec![(private_keys.npk(), shared_secret)],
             vec![],
+            vec![], // TODO check (Marvin)
             vec![None],
             &program.into(),
         )
@@ -3064,6 +3096,7 @@ pub mod tests {
             vec![1],
             vec![(private_keys.npk(), shared_secret)],
             vec![private_keys.nsk],
+            vec![], // TODO check (Marvin)
             vec![None],
             &claimer_program.into(),
         )
@@ -3109,6 +3142,7 @@ pub mod tests {
             vec![1],
             vec![(private_keys.npk(), shared_secret2)],
             vec![private_keys.nsk],
+            vec![], // TODO check (Marvin)
             vec![None],
             &noop_program.into(),
         );
@@ -3181,6 +3215,7 @@ pub mod tests {
                 SharedSecretKey::new(&[3; 32], &sender_keys.vpk()),
             )],
             vec![sender_keys.nsk],
+            vec![], // TODO check (Marvin)
             vec![Some((0, vec![]))],
             &program.into(),
         );
@@ -3208,6 +3243,7 @@ pub mod tests {
                 SharedSecretKey::new(&[3; 32], &sender_keys.vpk()),
             )],
             vec![sender_keys.nsk],
+            vec![], // TODO check (Marvin)
             vec![Some((0, vec![]))],
             &program.into(),
         );
@@ -3261,6 +3297,7 @@ pub mod tests {
             vec![0, 1],
             vec![(recipient_keys.npk(), recipient)],
             vec![recipient_keys.nsk],
+            vec![], // TODO check (Marvin)
             vec![state.get_proof_for_commitment(&recipient_commitment)],
             &program_with_deps,
         );

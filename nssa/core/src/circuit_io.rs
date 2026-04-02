@@ -22,6 +22,8 @@ pub struct PrivacyPreservingCircuitInput {
     pub private_account_keys: Vec<(NullifierPublicKey, SharedSecretKey)>,
     /// Nullifier secret keys for authorized private accounts.
     pub private_account_nsks: Vec<NullifierSecretKey>,
+    /// Identifiers used to generate `AccountId` (TODO: marvin double check logic).
+    pub private_account_identifiers: Vec<u128>,
     /// Membership proofs for private accounts. Can be [`None`] for uninitialized accounts.
     pub private_account_membership_proofs: Vec<Option<MembershipProof>>,
     /// Program ID.

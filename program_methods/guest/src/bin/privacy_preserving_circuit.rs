@@ -295,6 +295,7 @@ fn compute_circuit_output(
     visibility_mask: &[u8],
     private_account_keys: &[(NullifierPublicKey, SharedSecretKey)],
     private_account_nsks: &[NullifierSecretKey],
+    private_account_identifiers: &[u128],
     private_account_membership_proofs: &[Option<MembershipProof>],
 ) -> PrivacyPreservingCircuitOutput {
     let mut output = PrivacyPreservingCircuitOutput {
@@ -317,6 +318,7 @@ fn compute_circuit_output(
     let mut private_keys_iter = private_account_keys.iter();
     let mut private_nsks_iter = private_account_nsks.iter();
     let mut private_membership_proofs_iter = private_account_membership_proofs.iter();
+    let mut private_identifiers_iter = private_account_identifiers.iter();
 
     let mut output_index = 0;
     for (account_visibility_mask, (pre_state, post_state)) in
@@ -333,10 +335,15 @@ fn compute_circuit_output(
                     panic!("Missing private account key");
                 };
 
+                // TODO: (Marvin) double check
+                let Some(identifier) = private_identifiers_iter.next() else {
+                    panic!("Missing private account identifier");
+                };
+
                 // TODO: (Marvin) identifier used here)
                 // Relevant here as this applies for both cases (authenicated and not authenicated).
                 assert_eq!(
-                    AccountId::private_account_id(npk, None),
+                    AccountId::private_account_id(npk, Some(*identifier)),
                     pre_state.account_id,
                     "AccountId mismatch"
                 );
@@ -398,10 +405,9 @@ fn compute_circuit_output(
                         "Membership proof must be None for unauthorized accounts"
                     );
 
-
                     // TODO: (Marvin) need to add a Vec<identifier> as input.
                     // TODO: use here
-                    let account_id = AccountId::private_account_id(npk, None);
+                    let account_id = AccountId::private_account_id(npk, Some(*identifier));
                     let nullifier = Nullifier::for_account_initialization(&account_id);
 
                     let new_nonce = Nonce::private_account_nonce_init(npk);
@@ -493,6 +499,7 @@ fn main() {
         visibility_mask,
         private_account_keys,
         private_account_nsks,
+        private_account_identifiers,
         private_account_membership_proofs,
         program_id,
     } = env::read();
@@ -505,6 +512,7 @@ fn main() {
         &visibility_mask,
         &private_account_keys,
         &private_account_nsks,
+        &private_account_identifiers,
         &private_account_membership_proofs,
     );
 
