@@ -57,7 +57,11 @@ fn main() {
         .checked_add(1)
         .expect("Next block id should be within u64 boundaries");
 
-    let updated_data = ClockAccountData { block_id: current_block_id, timestamp }.to_bytes();
+    let updated_data = ClockAccountData {
+        block_id: current_block_id,
+        timestamp,
+    }
+    .to_bytes();
 
     let (pre_01, post_01) = update_if_multiple(pre_01, 1, current_block_id, updated_data);
     let (pre_10, post_10) = update_if_multiple(pre_10, 10, current_block_id, updated_data);

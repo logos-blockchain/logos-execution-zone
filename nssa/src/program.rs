@@ -9,7 +9,8 @@ use serde::Serialize;
 use crate::{
     error::NssaError,
     program_methods::{
-        AMM_ELF, ASSOCIATED_TOKEN_ACCOUNT_ELF, AUTHENTICATED_TRANSFER_ELF, CLOCK_ELF, PINATA_ELF, TOKEN_ELF,
+        AMM_ELF, ASSOCIATED_TOKEN_ACCOUNT_ELF, AUTHENTICATED_TRANSFER_ELF, CLOCK_ELF, PINATA_ELF,
+        TOKEN_ELF,
     },
 };
 

@@ -7,16 +7,16 @@ use log::debug;
 use nssa_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, Timestamp,
     account::{Account, AccountId, AccountWithMetadata},
-    program::{ChainedCall, Claim, DEFAULT_PROGRAM_ID, compute_authorized_pdas, validate_execution},
+    program::{
+        ChainedCall, Claim, DEFAULT_PROGRAM_ID, compute_authorized_pdas, validate_execution,
+    },
 };
 
 use crate::{
     V03State, ensure,
     error::NssaError,
     privacy_preserving_transaction::{
-        PrivacyPreservingTransaction,
-        circuit::Proof,
-        message::Message,
+        PrivacyPreservingTransaction, circuit::Proof, message::Message,
     },
     program::Program,
     program_deployment_transaction::ProgramDeploymentTransaction,
@@ -349,7 +349,7 @@ impl ValidatedStateDiff {
         let new_nullifiers = message
             .new_nullifiers
             .iter()
-            .cloned()
+            .copied()
             .map(|(nullifier, _)| nullifier)
             .collect();
 
@@ -389,15 +389,23 @@ impl ValidatedStateDiff {
         self.public_diff.clone()
     }
 
-    pub(crate) fn into_parts(self) -> (
-      Vec<AccountId>,
-      HashMap<AccountId, Account>,
-      Vec<Commitment>,
-      Vec<Nullifier>,
-      Option<Program>,
-  ) {
-      (self.signer_account_ids, self.public_diff, self.new_commitments, self.new_nullifiers, self.program)
-  }
+    pub(crate) fn into_parts(
+        self,
+    ) -> (
+        Vec<AccountId>,
+        HashMap<AccountId, Account>,
+        Vec<Commitment>,
+        Vec<Nullifier>,
+        Option<Program>,
+    ) {
+        (
+            self.signer_account_ids,
+            self.public_diff,
+            self.new_commitments,
+            self.new_nullifiers,
+            self.program,
+        )
+    }
 }
 
 fn check_privacy_preserving_circuit_proof_is_valid(

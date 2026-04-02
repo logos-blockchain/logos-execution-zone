@@ -1,6 +1,11 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use borsh::{BorshDeserialize, BorshSerialize};
+use clock_core::ClockAccountData;
+pub use clock_core::{
+    CLOCK_01_PROGRAM_ACCOUNT_ID, CLOCK_10_PROGRAM_ACCOUNT_ID, CLOCK_50_PROGRAM_ACCOUNT_ID,
+    CLOCK_PROGRAM_ACCOUNT_IDS,
+};
 use nssa_core::{
     BlockId, Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, MembershipProof, Nullifier,
     Timestamp,
@@ -8,18 +13,11 @@ use nssa_core::{
     program::ProgramId,
 };
 
-pub use clock_core::{
-    CLOCK_01_PROGRAM_ACCOUNT_ID, CLOCK_10_PROGRAM_ACCOUNT_ID, CLOCK_50_PROGRAM_ACCOUNT_ID,
-    CLOCK_PROGRAM_ACCOUNT_IDS,
-};
-use clock_core::ClockAccountData;
-
 use crate::{
     error::NssaError, merkle_tree::MerkleTree,
     privacy_preserving_transaction::PrivacyPreservingTransaction, program::Program,
     program_deployment_transaction::ProgramDeploymentTransaction,
-    public_transaction::PublicTransaction,
-    validated_state_diff::ValidatedStateDiff,
+    public_transaction::PublicTransaction, validated_state_diff::ValidatedStateDiff,
 };
 
 pub const MAX_NUMBER_CHAINED_CALLS: usize = 10;
@@ -164,7 +162,11 @@ impl V03State {
     }
 
     fn insert_clock_accounts(&mut self, genesis_timestamp: nssa_core::Timestamp) {
-        let data = ClockAccountData { block_id: 0, timestamp: genesis_timestamp }.to_bytes();
+        let data = ClockAccountData {
+            block_id: 0,
+            timestamp: genesis_timestamp,
+        }
+        .to_bytes();
         let clock_program_id = Program::clock().id();
         for account_id in CLOCK_PROGRAM_ACCOUNT_IDS {
             self.public_state.insert(
@@ -186,7 +188,8 @@ impl V03State {
     }
 
     pub fn apply_state_diff(&mut self, diff: ValidatedStateDiff) {
-        let (signer_account_ids, public_diff, new_commitments, new_nullifiers, program) = diff.into_parts();
+        let (signer_account_ids, public_diff, new_commitments, new_nullifiers, program) =
+            diff.into_parts();
         #[expect(
             clippy::iter_over_hash_type,
             reason = "Iteration order doesn't matter here"
@@ -195,11 +198,13 @@ impl V03State {
             *self.get_account_by_id_mut(account_id) = account;
         }
         for account_id in signer_account_ids {
-            self.get_account_by_id_mut(account_id).nonce.public_account_nonce_increment();
+            self.get_account_by_id_mut(account_id)
+                .nonce
+                .public_account_nonce_increment();
         }
         self.private_state.0.extend(&new_commitments);
         self.private_state.1.extend(&new_nullifiers);
-        if let Some(program) =program {
+        if let Some(program) = program {
             self.insert_program(program);
         }
     }

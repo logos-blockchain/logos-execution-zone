@@ -1,11 +1,10 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use nssa_core::BlockId;
+pub use nssa_core::Timestamp;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256, digest::FixedOutput as _};
 
 use crate::{HashType, transaction::NSSATransaction};
-
-pub use nssa_core::Timestamp;
 pub type MantleMsgId = [u8; 32];
 pub type BlockHash = HashType;
 

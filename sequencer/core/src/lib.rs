@@ -259,11 +259,15 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
         while let Some(tx) = self.mempool.pop() {
             let tx_hash = tx.hash();
 
-            let validated_diff = match self.validate_transaction_and_produce_state_diff(&tx, new_block_height, new_block_timestamp) {
+            let validated_diff = match self.validate_transaction_and_produce_state_diff(
+                &tx,
+                new_block_height,
+                new_block_timestamp,
+            ) {
                 Ok(diff) => {
-                    let touches_system = clock_accounts_pre
-                        .iter()
-                        .any(|(id, pre)| diff.public_diff().get(id).is_some_and(|post| post != pre));
+                    let touches_system = clock_accounts_pre.iter().any(|(id, pre)| {
+                        diff.public_diff().get(id).is_some_and(|post| post != pre)
+                    });
                     if touches_system {
                         warn!(
                             "Dropping transaction from mempool: user transactions may not modify the system clock account"
@@ -321,7 +325,7 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
                 new_block_height,
                 new_block_timestamp,
             )
-            .context("Clock transaction failed — aborting block production")?;
+            .context("Clock transaction failed \u{2014} aborting block production")?;
         valid_transactions.push(clock_nssa_tx);
 
         let hashable_data = HashableBlockData {
@@ -450,8 +454,8 @@ mod tests {
     use common::{test_utils::sequencer_sign_key_for_testing, transaction::NSSATransaction};
     use logos_blockchain_core::mantle::ops::channel::ChannelId;
     use mempool::MemPoolHandle;
-    use nssa::{execute_and_prove, program::Program};
-    use nssa_core::account::AccountWithMetadata;
+    
+    
     use testnet_initial_state::{initial_accounts, initial_pub_accounts_private_keys};
 
     use crate::{
@@ -1035,11 +1039,12 @@ mod tests {
         let (mut sequencer, mempool_handle) = common_setup().await;
 
         // Deploy the clock_chain_caller test program.
-        let deploy_tx = NSSATransaction::ProgramDeployment(nssa::ProgramDeploymentTransaction::new(
-            nssa::program_deployment_transaction::Message::new(
-                test_program_methods::CLOCK_CHAIN_CALLER_ELF.to_vec(),
-            ),
-        ));
+        let deploy_tx =
+            NSSATransaction::ProgramDeployment(nssa::ProgramDeploymentTransaction::new(
+                nssa::program_deployment_transaction::Message::new(
+                    test_program_methods::CLOCK_CHAIN_CALLER_ELF.to_vec(),
+                ),
+            ));
         mempool_handle.push(deploy_tx).await.unwrap();
         sequencer
             .produce_new_block_with_mempool_transactions()
