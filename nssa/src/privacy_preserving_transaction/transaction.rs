@@ -47,17 +47,6 @@ impl PrivacyPreservingTransaction {
             .collect()
     }
 
-    /// Returns the post-state the transaction declares for `account_id`, or `None` if the account
-    /// is not part of this transaction's public execution.
-    #[must_use]
-    pub fn public_post_state_for(&self, account_id: &AccountId) -> Option<&Account> {
-        self.message
-            .public_account_ids
-            .iter()
-            .position(|id| id == account_id)
-            .map(|i| &self.message.public_post_states[i])
-    }
-
     #[must_use]
     pub fn affected_public_account_ids(&self) -> Vec<AccountId> {
         let mut acc_set = self

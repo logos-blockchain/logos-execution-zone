@@ -29,11 +29,11 @@ use crate::{
 /// Can only be constructed by the transaction validation functions inside this crate, ensuring the
 /// diff has been cryptographically checked before any state mutation occurs.
 pub struct ValidatedStateDiff {
-    pub(crate) signer_account_ids: Vec<AccountId>,
-    pub(crate) public_diff: HashMap<AccountId, Account>,
-    pub(crate) new_commitments: Vec<Commitment>,
-    pub(crate) new_nullifiers: Vec<Nullifier>,
-    pub(crate) program: Option<Program>,
+    signer_account_ids: Vec<AccountId>,
+    public_diff: HashMap<AccountId, Account>,
+    new_commitments: Vec<Commitment>,
+    new_nullifiers: Vec<Nullifier>,
+    program: Option<Program>,
 }
 
 impl ValidatedStateDiff {
@@ -385,9 +385,19 @@ impl ValidatedStateDiff {
     /// Used by callers (e.g. the sequencer) to inspect the diff before committing it, for example
     /// to enforce that system accounts are not modified by user transactions.
     #[must_use]
-    pub fn public_diff(&self) -> &HashMap<AccountId, Account> {
-        &self.public_diff
+    pub fn public_diff(&self) -> HashMap<AccountId, Account> {
+        self.public_diff.clone()
     }
+
+    pub(crate) fn into_parts(self) -> (
+      Vec<AccountId>,
+      HashMap<AccountId, Account>,
+      Vec<Commitment>,
+      Vec<Nullifier>,
+      Option<Program>,
+  ) {
+      (self.signer_account_ids, self.public_diff, self.new_commitments, self.new_nullifiers, self.program)
+  }
 }
 
 fn check_privacy_preserving_circuit_proof_is_valid(

@@ -7146,6 +7146,7 @@ dependencies = [
  "borsh",
  "bytesize",
  "chrono",
+ "clock_core",
  "common",
  "futures",
  "humantime-serde",

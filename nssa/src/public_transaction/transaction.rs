@@ -68,7 +68,7 @@ pub mod tests {
         error::NssaError,
         program::Program,
         public_transaction::{Message, WitnessSet},
-        state_diff::ValidatedStateDiff,
+        validated_state_diff::ValidatedStateDiff,
     };
 
     fn keys_for_tests() -> (PrivateKey, PrivateKey, AccountId, AccountId) {

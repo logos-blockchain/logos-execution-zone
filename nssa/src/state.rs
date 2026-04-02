@@ -186,19 +186,20 @@ impl V03State {
     }
 
     pub fn apply_state_diff(&mut self, diff: ValidatedStateDiff) {
+        let (signer_account_ids, public_diff, new_commitments, new_nullifiers, program) = diff.into_parts();
         #[expect(
             clippy::iter_over_hash_type,
             reason = "Iteration order doesn't matter here"
         )]
-        for (account_id, account) in diff.public_diff {
+        for (account_id, account) in public_diff {
             *self.get_account_by_id_mut(account_id) = account;
         }
-        for account_id in diff.signer_account_ids {
+        for account_id in signer_account_ids {
             self.get_account_by_id_mut(account_id).nonce.public_account_nonce_increment();
         }
-        self.private_state.0.extend(&diff.new_commitments);
-        self.private_state.1.extend(&diff.new_nullifiers);
-        if let Some(program) = diff.program {
+        self.private_state.0.extend(&new_commitments);
+        self.private_state.1.extend(&new_nullifiers);
+        if let Some(program) =program {
             self.insert_program(program);
         }
     }

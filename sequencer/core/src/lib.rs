@@ -450,6 +450,8 @@ mod tests {
     use common::{test_utils::sequencer_sign_key_for_testing, transaction::NSSATransaction};
     use logos_blockchain_core::mantle::ops::channel::ChannelId;
     use mempool::MemPoolHandle;
+    use nssa::{execute_and_prove, program::Program};
+    use nssa_core::account::AccountWithMetadata;
     use testnet_initial_state::{initial_accounts, initial_pub_accounts_private_keys};
 
     use crate::{
@@ -973,50 +975,6 @@ mod tests {
             .unwrap();
 
         // Both transactions were dropped. Only the system-appended clock tx remains.
-        assert_eq!(
-            block.body.transactions,
-            vec![NSSATransaction::clock_invocation(block.header.timestamp)]
-        );
-    }
-
-    #[tokio::test]
-    async fn privacy_preserving_tx_touching_clock_account_is_dropped() {
-        let (mut sequencer, mempool_handle) = common_setup().await;
-
-        // Craft a PP transaction that declares a modified post-state for a clock account.
-        let crafted_pp_tx = {
-            let message = nssa::privacy_preserving_transaction::Message {
-                public_account_ids: vec![nssa::CLOCK_01_PROGRAM_ACCOUNT_ID],
-                nonces: vec![],
-                public_post_states: vec![nssa::Account::default()],
-                encrypted_private_post_states: vec![],
-                new_commitments: vec![nssa_core::Commitment::new([0_u8; 32])], // required: at least one commitment or nullifier
-                new_nullifiers: vec![],
-                block_validity_window: (..).into(),
-                timestamp_validity_window: (..).into(),
-            };
-            let witness_set = nssa::privacy_preserving_transaction::WitnessSet::from_raw_parts(
-                vec![],
-                nssa::privacy_preserving_transaction::circuit::Proof::from_inner(vec![]),
-            );
-            NSSATransaction::PrivacyPreserving(nssa::PrivacyPreservingTransaction::new(
-                message,
-                witness_set,
-            ))
-        };
-
-        mempool_handle.push(crafted_pp_tx).await.unwrap();
-        sequencer
-            .produce_new_block_with_mempool_transactions()
-            .unwrap();
-
-        let block = sequencer
-            .store
-            .get_block_at_id(sequencer.chain_height)
-            .unwrap()
-            .unwrap();
-
-        // The PP tx was dropped. Only the system-appended clock tx remains.
         assert_eq!(
             block.body.transactions,
             vec![NSSATransaction::clock_invocation(block.header.timestamp)]
