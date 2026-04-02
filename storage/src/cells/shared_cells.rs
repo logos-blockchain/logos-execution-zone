@@ -4,8 +4,8 @@ use common::block::Block;
 use crate::{
     BLOCK_CELL_NAME, CF_BLOCK_NAME, CF_META_NAME, DB_META_FIRST_BLOCK_IN_DB_KEY,
     DB_META_FIRST_BLOCK_SET_KEY, DB_META_LAST_BLOCK_IN_DB_KEY, DbResult,
+    cells::{SimpleReadableCell, SimpleStorableCell, SimpleWritableCell},
     error::DbError,
-    storable_cell::{SimpleReadableCell, SimpleStorableCell, SimpleWritableCell},
 };
 
 #[derive(Debug, BorshSerialize, BorshDeserialize)]

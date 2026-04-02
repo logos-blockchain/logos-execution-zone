@@ -8,13 +8,11 @@ use rocksdb::{
 
 use crate::{
     CF_BLOCK_NAME, CF_META_NAME, DB_META_FIRST_BLOCK_IN_DB_KEY, DBIO, DbResult,
+    cells::shared_cells::{BlockCell, FirstBlockCell, FirstBlockSetCell, LastBlockCell},
     error::DbError,
     sequencer::sequencer_cells::{
         LastFinalizedBlockIdCell, LatestBlockMetaCellOwned, LatestBlockMetaCellRef,
         NSSAStateCellOwned, NSSAStateCellRef,
-    },
-    storable_cell::cells::shared_cells::{
-        BlockCell, FirstBlockCell, FirstBlockSetCell, LastBlockCell,
     },
 };
 

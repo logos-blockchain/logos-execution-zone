@@ -5,7 +5,7 @@ use rocksdb::{BoundColumnFamily, DBWithThreadMode, MultiThreaded, WriteBatch};
 
 use crate::{DbResult, error::DbError};
 
-pub mod cells;
+pub mod shared_cells;
 
 pub trait SimpleStorableCell {
     const CF_NAME: &'static str;

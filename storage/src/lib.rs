@@ -1,14 +1,14 @@
 use rocksdb::{DBWithThreadMode, MultiThreaded, WriteBatch};
 
 use crate::{
+    cells::{SimpleReadableCell, SimpleWritableCell},
     error::DbError,
-    storable_cell::{SimpleReadableCell, SimpleWritableCell},
 };
 
+pub mod cells;
 pub mod error;
 pub mod indexer;
 pub mod sequencer;
-pub mod storable_cell;
 
 /// Maximal size of stored blocks in base.
 ///
