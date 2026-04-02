@@ -1,0 +1,26 @@
+[package]
+edition = "2024"
+license = { workspace = true }
+name = "indexer_ffi"
+version = "0.1.0"
+
+[dependencies]
+indexer_service.workspace = true
+log = { workspace = true }
+serde_json = { workspace = true }
+tokio = { features = ["rt-multi-thread"], workspace = true }
+
+[build-dependencies]
+cbindgen = "0.29"
+
+[lib]
+crate-type = ["cdylib"]
+name = "indexer_ffi"
+
+[lints]
+workspace = true
+
+[package.metadata.cargo-machete]
+ignored = [
+  "cbindgen",
+] # machete does not recognize this for build dep and complains.

@@ -37,6 +37,7 @@ members = [
   "examples/program_deployment/methods/guest",
   "bedrock_client",
   "testnet_initial_state",
+  "indexer_ffi",
 ]
 
 [workspace.dependencies]
