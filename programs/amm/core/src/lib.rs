@@ -68,7 +68,7 @@ pub enum Instruction {
     /// - User Holding Account for Token A
     /// - User Holding Account for Token B Either User Holding Account for Token A or Token B is
     ///   authorized.
-    Swap {
+    SwapExactInput {
         swap_amount_in: u128,
         min_amount_out: u128,
         token_definition_id_in: AccountId,

@@ -121,7 +121,7 @@ impl Amm<'_> {
             .await?)
     }
 
-    pub async fn send_swap(
+    pub async fn send_swap_exact_input(
         &self,
         user_holding_a: AccountId,
         user_holding_b: AccountId,
@@ -129,7 +129,7 @@ impl Amm<'_> {
         min_amount_out: u128,
         token_definition_id_in: AccountId,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let instruction = amm_core::Instruction::Swap {
+        let instruction = amm_core::Instruction::SwapExactInput {
             swap_amount_in,
             min_amount_out,
             token_definition_id_in,

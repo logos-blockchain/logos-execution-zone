@@ -223,7 +223,7 @@ async fn amm_public() -> Result<()> {
 
     // Make swap
 
-    let subcommand = AmmProgramAgnosticSubcommand::Swap {
+    let subcommand = AmmProgramAgnosticSubcommand::SwapExactInput {
         user_holding_a: format_public_account_id(recipient_account_id_1),
         user_holding_b: format_public_account_id(recipient_account_id_2),
         amount_in: 2,
@@ -266,7 +266,7 @@ async fn amm_public() -> Result<()> {
 
     // Make swap
 
-    let subcommand = AmmProgramAgnosticSubcommand::Swap {
+    let subcommand = AmmProgramAgnosticSubcommand::SwapExactInput {
         user_holding_a: format_public_account_id(recipient_account_id_1),
         user_holding_b: format_public_account_id(recipient_account_id_2),
         amount_in: 2,

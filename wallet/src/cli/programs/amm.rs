@@ -32,12 +32,12 @@ pub enum AmmProgramAgnosticSubcommand {
         #[arg(long)]
         balance_b: u128,
     },
-    /// Swap.
+    /// Swap specifying exact input amount.
     ///
     /// The account associated with swapping token must be owned.
     ///
     /// Only public execution allowed.
-    Swap {
+    SwapExactInput {
         /// `user_holding_a` - valid 32 byte base58 string with privacy prefix.
         #[arg(long)]
         user_holding_a: String,
@@ -170,7 +170,7 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
                     }
                 }
             }
-            Self::Swap {
+            Self::SwapExactInput {
                 user_holding_a,
                 user_holding_b,
                 amount_in,
@@ -188,7 +188,7 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
                 match (user_holding_a_privacy, user_holding_b_privacy) {
                     (AccountPrivacyKind::Public, AccountPrivacyKind::Public) => {
                         Amm(wallet_core)
-                            .send_swap(
+                            .send_swap_exact_input(
                                 user_holding_a,
                                 user_holding_b,
                                 amount_in,

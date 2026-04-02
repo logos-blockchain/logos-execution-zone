@@ -17,7 +17,7 @@ use crate::{
     add::add_liquidity,
     new_definition::new_definition,
     remove::remove_liquidity,
-    swap::{swap, swap_exact_output},
+    swap::{swap_exact_input, swap_exact_output},
 };
 
 const TOKEN_PROGRAM_ID: ProgramId = [15; 8];
@@ -2523,7 +2523,7 @@ fn call_new_definition_chained_call_successful() {
 #[should_panic(expected = "AccountId is not a token type for the pool")]
 #[test]
 fn call_swap_incorrect_token_type() {
-    let _post_states = swap(
+    let _post_states = swap_exact_input(
         AccountWithMetadataForTests::pool_definition_init(),
         AccountWithMetadataForTests::vault_a_init(),
         AccountWithMetadataForTests::vault_b_init(),
@@ -2538,7 +2538,7 @@ fn call_swap_incorrect_token_type() {
 #[should_panic(expected = "Vault A was not provided")]
 #[test]
 fn call_swap_vault_a_omitted() {
-    let _post_states = swap(
+    let _post_states = swap_exact_input(
         AccountWithMetadataForTests::pool_definition_init(),
         AccountWithMetadataForTests::vault_a_with_wrong_id(),
         AccountWithMetadataForTests::vault_b_init(),
@@ -2553,7 +2553,7 @@ fn call_swap_vault_a_omitted() {
 #[should_panic(expected = "Vault B was not provided")]
 #[test]
 fn call_swap_vault_b_omitted() {
-    let _post_states = swap(
+    let _post_states = swap_exact_input(
         AccountWithMetadataForTests::pool_definition_init(),
         AccountWithMetadataForTests::vault_a_init(),
         AccountWithMetadataForTests::vault_b_with_wrong_id(),
@@ -2568,7 +2568,7 @@ fn call_swap_vault_b_omitted() {
 #[should_panic(expected = "Reserve for Token A exceeds vault balance")]
 #[test]
 fn call_swap_reserves_vault_mismatch_1() {
-    let _post_states = swap(
+    let _post_states = swap_exact_input(
         AccountWithMetadataForTests::pool_definition_init(),
         AccountWithMetadataForTests::vault_a_init_low(),
         AccountWithMetadataForTests::vault_b_init(),
@@ -2583,7 +2583,7 @@ fn call_swap_reserves_vault_mismatch_1() {
 #[should_panic(expected = "Reserve for Token B exceeds vault balance")]
 #[test]
 fn call_swap_reserves_vault_mismatch_2() {
-    let _post_states = swap(
+    let _post_states = swap_exact_input(
         AccountWithMetadataForTests::pool_definition_init(),
         AccountWithMetadataForTests::vault_a_init(),
         AccountWithMetadataForTests::vault_b_init_low(),
@@ -2598,7 +2598,7 @@ fn call_swap_reserves_vault_mismatch_2() {
 #[should_panic(expected = "Pool is inactive")]
 #[test]
 fn call_swap_ianctive() {
-    let _post_states = swap(
+    let _post_states = swap_exact_input(
         AccountWithMetadataForTests::pool_definition_inactive(),
         AccountWithMetadataForTests::vault_a_init(),
         AccountWithMetadataForTests::vault_b_init(),
@@ -2613,7 +2613,7 @@ fn call_swap_ianctive() {
 #[should_panic(expected = "Withdraw amount is less than minimal amount out")]
 #[test]
 fn call_swap_below_min_out() {
-    let _post_states = swap(
+    let _post_states = swap_exact_input(
         AccountWithMetadataForTests::pool_definition_init(),
         AccountWithMetadataForTests::vault_a_init(),
         AccountWithMetadataForTests::vault_b_init(),
@@ -2627,7 +2627,7 @@ fn call_swap_below_min_out() {
 
 #[test]
 fn call_swap_chained_call_successful_1() {
-    let (post_states, chained_calls) = swap(
+    let (post_states, chained_calls) = swap_exact_input(
         AccountWithMetadataForTests::pool_definition_init(),
         AccountWithMetadataForTests::vault_a_init(),
         AccountWithMetadataForTests::vault_b_init(),
@@ -2659,7 +2659,7 @@ fn call_swap_chained_call_successful_1() {
 
 #[test]
 fn call_swap_chained_call_successful_2() {
-    let (post_states, chained_calls) = swap(
+    let (post_states, chained_calls) = swap_exact_input(
         AccountWithMetadataForTests::pool_definition_init(),
         AccountWithMetadataForTests::vault_a_init(),
         AccountWithMetadataForTests::vault_b_init(),
@@ -3462,7 +3462,7 @@ fn simple_amm_add() {
 fn simple_amm_swap_1() {
     let mut state = state_for_amm_tests();
 
-    let instruction = amm_core::Instruction::Swap {
+    let instruction = amm_core::Instruction::SwapExactInput {
         swap_amount_in: BalanceForExeTests::swap_amount_in(),
         min_amount_out: BalanceForExeTests::swap_min_amount_out(),
         token_definition_id_in: IdForExeTests::token_b_definition_id(),
@@ -3513,7 +3513,7 @@ fn simple_amm_swap_1() {
 fn simple_amm_swap_2() {
     let mut state = state_for_amm_tests();
 
-    let instruction = amm_core::Instruction::Swap {
+    let instruction = amm_core::Instruction::SwapExactInput {
         swap_amount_in: BalanceForExeTests::swap_amount_in(),
         min_amount_out: BalanceForExeTests::swap_min_amount_out(),
         token_definition_id_in: IdForExeTests::token_a_definition_id(),

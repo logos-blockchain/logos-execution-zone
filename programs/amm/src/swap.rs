@@ -94,7 +94,7 @@ fn create_swap_post_states(
 
 #[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
 #[must_use]
-pub fn swap(
+pub fn swap_exact_input(
     pool: AccountWithMetadata,
     vault_a: AccountWithMetadata,
     vault_b: AccountWithMetadata,
