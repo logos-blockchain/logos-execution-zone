@@ -19,6 +19,7 @@ use crate::{
     privacy_preserving_transaction::PrivacyPreservingTransaction, program::Program,
     program_deployment_transaction::ProgramDeploymentTransaction,
     public_transaction::PublicTransaction,
+    state_diff::ValidatedStateDiff,
 };
 
 pub const MAX_NUMBER_CHAINED_CALLS: usize = 10;
@@ -79,7 +80,7 @@ impl NullifierSet {
         Self(BTreeSet::new())
     }
 
-    fn extend(&mut self, new_nullifiers: Vec<Nullifier>) {
+    fn extend(&mut self, new_nullifiers: &[Nullifier]) {
         self.0.extend(new_nullifiers);
     }
 
@@ -184,29 +185,29 @@ impl V03State {
         self.programs.insert(program.id(), program);
     }
 
+    pub fn apply_state_diff(&mut self, diff: ValidatedStateDiff) {
+        #[expect(
+            clippy::iter_over_hash_type,
+            reason = "Iteration order doesn't matter here"
+        )]
+        for (account_id, account) in diff.public_diff {
+            *self.get_account_by_id_mut(account_id) = account;
+        }
+        for account_id in diff.signer_account_ids {
+            self.get_account_by_id_mut(account_id).nonce.public_account_nonce_increment();
+        }
+        self.private_state.0.extend(&diff.new_commitments);
+        self.private_state.1.extend(&diff.new_nullifiers);
+    }
+
     pub fn transition_from_public_transaction(
         &mut self,
         tx: &PublicTransaction,
         block_id: BlockId,
         timestamp: Timestamp,
     ) -> Result<(), NssaError> {
-        let state_diff = tx.validate_and_produce_public_state_diff(self, block_id, timestamp)?;
-
-        #[expect(
-            clippy::iter_over_hash_type,
-            reason = "Iteration order doesn't matter here"
-        )]
-        for (account_id, post) in state_diff {
-            let current_account = self.get_account_by_id_mut(account_id);
-
-            *current_account = post;
-        }
-
-        for account_id in tx.signer_account_ids() {
-            let current_account = self.get_account_by_id_mut(account_id);
-            current_account.nonce.public_account_nonce_increment();
-        }
-
+        let diff = tx.validate_and_produce_public_state_diff(self, block_id, timestamp)?;
+        self.apply_state_diff(diff);
         Ok(())
     }
 
@@ -216,40 +217,8 @@ impl V03State {
         block_id: BlockId,
         timestamp: Timestamp,
     ) -> Result<(), NssaError> {
-        // 1. Verify the transaction satisfies acceptance criteria
-        let public_state_diff =
-            tx.validate_and_produce_public_state_diff(self, block_id, timestamp)?;
-
-        let message = tx.message();
-
-        // 2. Add new commitments
-        self.private_state.0.extend(&message.new_commitments);
-
-        // 3. Add new nullifiers
-        let new_nullifiers = message
-            .new_nullifiers
-            .iter()
-            .cloned()
-            .map(|(nullifier, _)| nullifier)
-            .collect::<Vec<Nullifier>>();
-        self.private_state.1.extend(new_nullifiers);
-
-        // 4. Update public accounts
-        #[expect(
-            clippy::iter_over_hash_type,
-            reason = "Iteration order doesn't matter here"
-        )]
-        for (account_id, post) in public_state_diff {
-            let current_account = self.get_account_by_id_mut(account_id);
-            *current_account = post;
-        }
-
-        // 5. Increment nonces for public signers
-        for account_id in tx.signer_account_ids() {
-            let current_account = self.get_account_by_id_mut(account_id);
-            current_account.nonce.public_account_nonce_increment();
-        }
-
+        let diff = tx.validate_and_produce_public_state_diff(self, block_id, timestamp)?;
+        self.apply_state_diff(diff);
         Ok(())
     }
 

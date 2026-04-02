@@ -14,6 +14,7 @@ use crate::{
     error::NssaError,
     public_transaction::{Message, WitnessSet},
     state::MAX_NUMBER_CHAINED_CALLS,
+    state_diff::ValidatedStateDiff,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -68,12 +69,12 @@ impl PublicTransaction {
         hasher.finalize_fixed().into()
     }
 
-    pub(crate) fn validate_and_produce_public_state_diff(
+    pub fn validate_and_produce_public_state_diff(
         &self,
         state: &V03State,
         block_id: BlockId,
         timestamp: Timestamp,
-    ) -> Result<HashMap<AccountId, Account>, NssaError> {
+    ) -> Result<ValidatedStateDiff, NssaError> {
         let message = self.message();
         let witness_set = self.witness_set();
 
@@ -270,7 +271,7 @@ impl PublicTransaction {
             );
         }
 
-        Ok(state_diff)
+        Ok(ValidatedStateDiff::new(signer_account_ids, state_diff, vec![], vec![]))
     }
 }
 

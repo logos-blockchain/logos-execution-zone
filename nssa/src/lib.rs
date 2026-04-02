@@ -20,6 +20,7 @@ pub use state::{
     CLOCK_01_PROGRAM_ACCOUNT_ID, CLOCK_10_PROGRAM_ACCOUNT_ID, CLOCK_50_PROGRAM_ACCOUNT_ID,
     CLOCK_PROGRAM_ACCOUNT_IDS, V03State,
 };
+pub use state_diff::ValidatedStateDiff;
 
 pub mod encoding;
 pub mod error;
@@ -30,6 +31,7 @@ pub mod program_deployment_transaction;
 pub mod public_transaction;
 mod signature;
 mod state;
+mod state_diff;
 
 pub mod program_methods {
     include!(concat!(env!("OUT_DIR"), "/program_methods/mod.rs"));

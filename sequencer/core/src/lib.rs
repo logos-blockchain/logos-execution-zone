@@ -15,7 +15,7 @@ use logos_blockchain_key_management_system_service::keys::{ED25519_SECRET_KEY_SI
 use mempool::{MemPool, MemPoolHandle};
 #[cfg(feature = "mock")]
 pub use mock::SequencerCoreWithMockClients;
-use nssa::V03State;
+use nssa::{V03State, ValidatedStateDiff};
 use nssa_core::{BlockId, Timestamp};
 pub use storage::error::DbError;
 use testnet_initial_state::initial_state;
@@ -204,6 +204,23 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
         Ok(self.chain_height)
     }
 
+    fn validate_transaction_and_produce_state_diff(
+        &self,
+        transaction: &NSSATransaction,
+        block_id: BlockId,
+        timestamp: Timestamp,
+    ) -> Option<Result<ValidatedStateDiff, nssa::error::NssaError>> {
+        match transaction {
+            NSSATransaction::Public(public_transaction) => Some(
+                public_transaction.validate_and_produce_public_state_diff(&self.state, block_id, timestamp),
+            ),
+            NSSATransaction::PrivacyPreserving(privacy_preserving_transaction) => Some(
+                privacy_preserving_transaction.validate_and_produce_public_state_diff(&self.state, block_id, timestamp),
+            ),
+            NSSATransaction::ProgramDeployment(_) => None,
+        }
+    }
+
     /// Produces new block from transactions in mempool and packs it into a `SignedMantleTx`.
     pub fn produce_new_block_with_mempool_transactions(
         &mut self,
@@ -235,16 +252,27 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
         while let Some(tx) = self.mempool.pop() {
             let tx_hash = tx.hash();
 
-            // The Block Context Program is system-only. Reject:
-            // - any public tx that invokes the clock program, and
-            // - any PP tx that declares a modified post-state for a clock account.
-            let touches_system = tx.is_invocation_of_clock_program(&clock_accounts_pre);
-            if touches_system {
-                warn!(
-                    "Dropping transaction from mempool: user transactions may not modify the system clock account"
-                );
-                continue;
-            }
+            let validated_diff = match self.validate_transaction_and_produce_state_diff(&tx, new_block_height, new_block_timestamp) {
+                Some(Ok(diff)) => {
+                    let touches_system = clock_accounts_pre
+                        .iter()
+                        .any(|(id, pre)| diff.public_diff().get(id).is_some_and(|post| post != pre));
+                    if touches_system {
+                        warn!(
+                            "Dropping transaction from mempool: user transactions may not modify the system clock account"
+                        );
+                        continue;
+                    }
+                    Some(diff)
+                }
+                Some(Err(err)) => {
+                    error!(
+                        "Transaction with hash {tx_hash} failed execution check with error: {err:#?}, skipping it",
+                    );
+                    continue;
+                }
+                None => None,
+            };
 
             // Check if block size exceeds limit
             let temp_valid_transactions =
@@ -271,23 +299,25 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
                 break;
             }
 
-            match self.execute_check_transaction_on_state(tx, new_block_height, new_block_timestamp)
-            {
-                Ok(valid_tx) => {
-                    valid_transactions.push(valid_tx);
-
-                    info!("Validated transaction with hash {tx_hash}, including it in block");
-
-                    if valid_transactions.len() >= self.sequencer_config.max_num_tx_in_block {
-                        break;
+            match validated_diff {
+                Some(diff) => self.state.apply_state_diff(diff),
+                None => {
+                    if let NSSATransaction::ProgramDeployment(deploy_tx) = &tx {
+                        if let Err(err) = self.state.transition_from_program_deployment_transaction(deploy_tx) {
+                            error!(
+                                "Transaction with hash {tx_hash} failed execution check with error: {err:#?}, skipping it",
+                            );
+                            // TODO: Probably need to handle unsuccessful transaction execution?
+                            continue;
+                        }
                     }
                 }
-                Err(err) => {
-                    error!(
-                        "Transaction with hash {tx_hash} failed execution check with error: {err:#?}, skipping it",
-                    );
-                    // TODO: Probably need to handle unsuccessful transaction execution?
-                }
+            }
+
+            valid_transactions.push(tx);
+            info!("Validated transaction with hash {tx_hash}, including it in block");
+            if valid_transactions.len() >= self.sequencer_config.max_num_tx_in_block {
+                break;
             }
         }
 

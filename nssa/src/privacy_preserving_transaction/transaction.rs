@@ -1,6 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
-    hash::Hash,
+    collections::HashSet, hash::Hash,
 };
 
 use borsh::{BorshDeserialize, BorshSerialize};
@@ -13,6 +12,7 @@ use sha2::{Digest as _, digest::FixedOutput as _};
 use super::{message::Message, witness_set::WitnessSet};
 use crate::{
     AccountId, V03State, error::NssaError, privacy_preserving_transaction::circuit::Proof,
+    state_diff::ValidatedStateDiff,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -30,12 +30,12 @@ impl PrivacyPreservingTransaction {
         }
     }
 
-    pub(crate) fn validate_and_produce_public_state_diff(
+    pub fn validate_and_produce_public_state_diff(
         &self,
         state: &V03State,
         block_id: BlockId,
         timestamp: Timestamp,
-    ) -> Result<HashMap<AccountId, Account>, NssaError> {
+    ) -> Result<ValidatedStateDiff, NssaError> {
         let message = &self.message;
         let witness_set = &self.witness_set;
 
@@ -124,12 +124,24 @@ impl PrivacyPreservingTransaction {
         // 6. Nullifier uniqueness
         state.check_nullifiers_are_valid(&message.new_nullifiers)?;
 
-        Ok(message
+        let public_diff = message
             .public_account_ids
             .iter()
             .copied()
             .zip(message.public_post_states.clone())
-            .collect())
+            .collect();
+        let new_nullifiers = message
+            .new_nullifiers
+            .iter()
+            .cloned()
+            .map(|(nullifier, _)| nullifier)
+            .collect();
+        Ok(ValidatedStateDiff::new(
+            self.signer_account_ids(),
+            public_diff,
+            message.new_commitments.clone(),
+            new_nullifiers,
+        ))
     }
 
     #[must_use]
