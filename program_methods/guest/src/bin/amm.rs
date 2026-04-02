@@ -112,15 +112,15 @@ fn main() {
                 min_amount_to_remove_token_b,
             )
         }
-        Instruction::Swap {
+        Instruction::SwapExactInput {
             swap_amount_in,
             min_amount_out,
             token_definition_id_in,
         } => {
             let [pool, vault_a, vault_b, user_holding_a, user_holding_b] = pre_states
                 .try_into()
-                .expect("Transfer instruction requires exactly five accounts");
-            amm_program::swap::swap(
+                .expect("SwapExactInput instruction requires exactly five accounts");
+            amm_program::swap::swap_exact_input(
                 pool,
                 vault_a,
                 vault_b,
@@ -128,6 +128,25 @@ fn main() {
                 user_holding_b,
                 swap_amount_in,
                 min_amount_out,
+                token_definition_id_in,
+            )
+        }
+        Instruction::SwapExactOutput {
+            exact_amount_out,
+            max_amount_in,
+            token_definition_id_in,
+        } => {
+            let [pool, vault_a, vault_b, user_holding_a, user_holding_b] = pre_states
+                .try_into()
+                .expect("SwapExactOutput instruction requires exactly five accounts");
+            amm_program::swap::swap_exact_output(
+                pool,
+                vault_a,
+                vault_b,
+                user_holding_a,
+                user_holding_b,
+                exact_amount_out,
+                max_amount_in,
                 token_definition_id_in,
             )
         }

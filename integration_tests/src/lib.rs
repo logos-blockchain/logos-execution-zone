@@ -256,11 +256,11 @@ impl TestContext {
         let config_overrides = WalletConfigOverrides::default();
 
         let wallet_password = "test_pass".to_owned();
-        let wallet = WalletCore::new_init_storage(
+        let (wallet, _mnemonic) = WalletCore::new_init_storage(
             config_path,
             storage_path,
             Some(config_overrides),
-            wallet_password.clone(),
+            &wallet_password,
         )
         .context("Failed to init wallet")?;
         wallet

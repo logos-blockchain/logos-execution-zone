@@ -287,7 +287,8 @@ impl From<nssa::privacy_preserving_transaction::message::Message> for PrivacyPre
             encrypted_private_post_states,
             new_commitments,
             new_nullifiers,
-            validity_window,
+            block_validity_window,
+            timestamp_validity_window,
         } = value;
         Self {
             public_account_ids: public_account_ids.into_iter().map(Into::into).collect(),
@@ -302,7 +303,8 @@ impl From<nssa::privacy_preserving_transaction::message::Message> for PrivacyPre
                 .into_iter()
                 .map(|(n, d)| (n.into(), d.into()))
                 .collect(),
-            validity_window: validity_window.into(),
+            block_validity_window: block_validity_window.into(),
+            timestamp_validity_window: timestamp_validity_window.into(),
         }
     }
 }
@@ -318,7 +320,8 @@ impl TryFrom<PrivacyPreservingMessage> for nssa::privacy_preserving_transaction:
             encrypted_private_post_states,
             new_commitments,
             new_nullifiers,
-            validity_window,
+            block_validity_window,
+            timestamp_validity_window,
         } = value;
         Ok(Self {
             public_account_ids: public_account_ids.into_iter().map(Into::into).collect(),
@@ -340,7 +343,10 @@ impl TryFrom<PrivacyPreservingMessage> for nssa::privacy_preserving_transaction:
                 .into_iter()
                 .map(|(n, d)| (n.into(), d.into()))
                 .collect(),
-            validity_window: validity_window
+            block_validity_window: block_validity_window
+                .try_into()
+                .map_err(|e| nssa::error::NssaError::InvalidInput(format!("{e}")))?,
+            timestamp_validity_window: timestamp_validity_window
                 .try_into()
                 .map_err(|e| nssa::error::NssaError::InvalidInput(format!("{e}")))?,
         })
@@ -692,13 +698,13 @@ impl From<HashType> for common::HashType {
 // ValidityWindow conversions
 // ============================================================================
 
-impl From<nssa_core::program::ValidityWindow> for ValidityWindow {
-    fn from(value: nssa_core::program::ValidityWindow) -> Self {
+impl From<nssa_core::program::ValidityWindow<u64>> for ValidityWindow {
+    fn from(value: nssa_core::program::ValidityWindow<u64>) -> Self {
         Self((value.start(), value.end()))
     }
 }
 
-impl TryFrom<ValidityWindow> for nssa_core::program::ValidityWindow {
+impl TryFrom<ValidityWindow> for nssa_core::program::ValidityWindow<u64> {
     type Error = nssa_core::program::InvalidWindow;
 
     fn try_from(value: ValidityWindow) -> Result<Self, Self::Error> {

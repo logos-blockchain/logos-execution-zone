@@ -1,4 +1,4 @@
-use nssa_core::program::{AccountPostState, ProgramInput, ProgramOutput, read_nssa_inputs};
+use nssa_core::program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_nssa_inputs};
 
 type Instruction = Vec<u8>;
 
@@ -25,7 +25,10 @@ fn main() {
     ProgramOutput::new(
         instruction_words,
         vec![pre],
-        vec![AccountPostState::new_claimed(account_post)],
+        vec![AccountPostState::new_claimed(
+            account_post,
+            Claim::Authorized,
+        )],
     )
     .write();
 }

@@ -235,7 +235,8 @@ pub struct PrivacyPreservingMessage {
     pub encrypted_private_post_states: Vec<EncryptedAccountData>,
     pub new_commitments: Vec<Commitment>,
     pub new_nullifiers: Vec<(Nullifier, CommitmentSetDigest)>,
-    pub validity_window: ValidityWindow,
+    pub block_validity_window: ValidityWindow,
+    pub timestamp_validity_window: ValidityWindow,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]

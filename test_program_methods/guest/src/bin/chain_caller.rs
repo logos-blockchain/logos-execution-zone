@@ -38,7 +38,7 @@ fn main() {
             program_id: auth_transfer_id,
             instruction_data: instruction_data.clone(),
             pre_states: vec![running_sender_pre.clone(), running_recipient_pre.clone()], /* <- Account order permutation here */
-            pda_seeds: pda_seed.iter().cloned().collect(),
+            pda_seeds: pda_seed.iter().copied().collect(),
         };
         chained_calls.push(new_chained_call);
 

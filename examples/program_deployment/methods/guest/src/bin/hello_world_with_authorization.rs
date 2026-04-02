@@ -1,6 +1,4 @@
-use nssa_core::program::{
-    AccountPostState, DEFAULT_PROGRAM_ID, ProgramInput, ProgramOutput, read_nssa_inputs,
-};
+use nssa_core::program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_nssa_inputs};
 
 // Hello-world with authorization example program.
 //
@@ -52,13 +50,7 @@ fn main() {
 
     // Wrap the post state account values inside a `AccountPostState` instance.
     // This is used to forward the account claiming request if any
-    let post_state = if post_account.program_owner == DEFAULT_PROGRAM_ID {
-        // This produces a claim request
-        AccountPostState::new_claimed(post_account)
-    } else {
-        // This doesn't produce a claim request
-        AccountPostState::new(post_account)
-    };
+    let post_state = AccountPostState::new_claimed_if_default(post_account, Claim::Authorized);
 
     // The output is a proposed state difference. It will only succeed if the pre states coincide
     // with the previous values of the accounts, and the transition to the post states conforms

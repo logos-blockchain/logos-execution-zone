@@ -29,7 +29,10 @@ pub enum NssaError {
     Io(#[from] io::Error),
 
     #[error("Invalid Public Key")]
-    InvalidPublicKey(#[source] secp256k1::Error),
+    InvalidPublicKey(#[source] k256::schnorr::Error),
+
+    #[error("Invalid hex for public key")]
+    InvalidHexPublicKey(hex::FromHexError),
 
     #[error("Risc0 error: {0}")]
     ProgramWriteInputFailed(String),

@@ -181,11 +181,12 @@ impl NSSAUserData {
 
 impl Default for NSSAUserData {
     fn default() -> Self {
+        let (seed_holder, _mnemonic) = SeedHolder::new_mnemonic("");
         Self::new_with_accounts(
             BTreeMap::new(),
             BTreeMap::new(),
-            KeyTreePublic::new(&SeedHolder::new_mnemonic("default".to_owned())),
-            KeyTreePrivate::new(&SeedHolder::new_mnemonic("default".to_owned())),
+            KeyTreePublic::new(&seed_holder),
+            KeyTreePrivate::new(&seed_holder),
         )
         .unwrap()
     }
