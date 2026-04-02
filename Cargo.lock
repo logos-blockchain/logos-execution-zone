@@ -3465,7 +3465,6 @@ dependencies = [
  "cbindgen",
  "indexer_service",
  "log",
- "serde_json",
  "tokio",
 ]
 
