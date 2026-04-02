@@ -212,6 +212,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
     let sender_vsk = [99; 32];
     let sender_vpk = ViewingPublicKey::from_scalar(sender_vsk);
     let sender_npk = NullifierPublicKey::from(&sender_nsk);
+    let sender_id = AccountId::account_id_without_identifier(&sender_npk);
     let sender_pre = AccountWithMetadata::new(
         Account {
             balance: 100,
@@ -226,6 +227,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
     let recipient_vsk = [99; 32];
     let recipient_vpk = ViewingPublicKey::from_scalar(recipient_vsk);
     let recipient_npk = NullifierPublicKey::from(&recipient_nsk);
+    let recipient_id = AccountId::account_id_without_identifier(&recipient_npk);
     let recipient_pre =
         AccountWithMetadata::new(Account::default(), false, AccountId::account_id_without_identifier(&recipient_npk));
 
@@ -250,8 +252,8 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
         Program::serialize_instruction(balance_to_move).unwrap(),
         vec![1, 2],
         vec![
-            (sender_npk.clone(), sender_ss),
-            (recipient_npk.clone(), recipient_ss),
+            (sender_npk, sender_ss),
+            (recipient_npk, recipient_ss),
         ],
         vec![sender_nsk],
         vec![Some(proof)],
@@ -262,8 +264,8 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
         vec![],
         vec![],
         vec![
-            (sender_npk, sender_vpk, sender_epk),
-            (recipient_npk, recipient_vpk, recipient_epk),
+            (sender_id, sender_vpk, sender_epk),
+            (recipient_id, recipient_vpk, recipient_epk),
         ],
         output,
     )

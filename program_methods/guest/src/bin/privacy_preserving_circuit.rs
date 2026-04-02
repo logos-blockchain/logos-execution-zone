@@ -317,7 +317,8 @@ fn compute_circuit_output(
                         "Membership proof must be None for unauthorized accounts"
                     );
 
-                    let nullifier = Nullifier::for_account_initialization(npk);
+                    let account_id = AccountId::account_id_without_identifier(npk);
+                    let nullifier = Nullifier::for_account_initialization(&account_id);
 
                     let new_nonce = Nonce::private_account_nonce_init(npk);
 
@@ -386,7 +387,7 @@ fn compute_nullifier_and_set_digest(
             );
 
             // Compute initialization nullifier
-            let nullifier = Nullifier::for_account_initialization(npk);
+            let nullifier = Nullifier::for_account_initialization(&account_id);
             (nullifier, DUMMY_COMMITMENT_HASH)
         },
         |membership_proof| {

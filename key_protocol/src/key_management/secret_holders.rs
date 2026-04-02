@@ -27,7 +27,6 @@ pub type ViewingSecretKey = Scalar;
 #[derive(Serialize, Deserialize, Debug, Clone)]
 /// Private key holder. Produces public keys. Can produce `account_id`. Can produce shared secret
 /// for recepient.
-#[expect(clippy::partial_pub_fields, reason = "TODO: fix later")]
 pub struct PrivateKeyHolder {
     pub nullifier_secret_key: NullifierSecretKey,
     pub viewing_secret_key: ViewingSecretKey,

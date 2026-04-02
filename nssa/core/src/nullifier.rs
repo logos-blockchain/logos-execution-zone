@@ -2,7 +2,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde::{Deserialize, Serialize};
 
-use crate::{Commitment};
+use crate::{Commitment, account::AccountId};
 
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(any(feature = "host", test), derive(Clone, Hash))]
@@ -68,10 +68,10 @@ impl Nullifier {
 
     /// Computes a nullifier for an account initialization.
     #[must_use]
-    pub fn for_account_initialization(npk: &NullifierPublicKey) -> Self {
+    pub fn for_account_initialization(account_id: &AccountId) -> Self {
         const INIT_PREFIX: &[u8; 32] = b"/LEE/v0.3/Nullifier/Initialize/\x00";
         let mut bytes = INIT_PREFIX.to_vec();
-        bytes.extend_from_slice(&npk.to_byte_array());
+        bytes.extend_from_slice(account_id.value());
         Self(Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap())
     }
 }
@@ -98,11 +98,11 @@ mod tests {
             112, 188, 193, 129, 150, 55, 228, 67, 88, 168, 29, 151, 5, 92, 23, 190, 17, 162, 164,
             255, 29, 105, 42, 186, 43, 11, 157, 168, 132, 225, 17, 163,
         ]);
-        let expected_nullifier = Nullifier([
-            149, 59, 95, 181, 2, 194, 20, 143, 72, 233, 104, 243, 59, 70, 67, 243, 110, 77, 109,
-            132, 139, 111, 51, 125, 128, 92, 107, 46, 252, 4, 20, 149,
-        ]);
-        let nullifier = Nullifier::for_account_initialization(&npk);
+
+        let account_id = AccountId::account_id_with_identifier(&npk, 0_u128);
+    
+        let expected_nullifier = Nullifier([63, 58, 51, 159, 15, 100, 240, 243, 60, 143, 151, 108, 116, 144, 101, 6, 134, 72, 198, 249, 108, 80, 237, 194, 143, 66, 225, 191, 111, 49, 66, 54]);
+        let nullifier = Nullifier::for_account_initialization(&account_id);
         assert_eq!(nullifier, expected_nullifier);
     }
 

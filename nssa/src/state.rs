@@ -953,7 +953,7 @@ pub mod tests {
         let message = Message::try_from_circuit_output(
             vec![sender_keys.account_id()],
             vec![sender_nonce],
-            vec![(recipient_keys.npk(), recipient_keys.vpk(), epk)],
+            vec![(recipient_id, recipient_keys.vpk(), epk)],
             output,
         )
         .unwrap();
@@ -1004,8 +1004,8 @@ pub mod tests {
             vec![],
             vec![],
             vec![
-                (sender_keys.npk(), sender_keys.vpk(), epk_1),
-                (recipient_keys.npk(), recipient_keys.vpk(), epk_2),
+                (sender_id, sender_keys.vpk(), epk_1),
+                (recipient_id, recipient_keys.vpk(), epk_2),
             ],
             output,
         )
@@ -1052,7 +1052,7 @@ pub mod tests {
         let message = Message::try_from_circuit_output(
             vec![*recipient_account_id],
             vec![],
-            vec![(sender_keys.npk(), sender_keys.vpk(), epk)],
+            vec![(sender_id, sender_keys.vpk(), epk)],
             output,
         )
         .unwrap();
@@ -2557,8 +2557,8 @@ pub mod tests {
             vec![],
             vec![],
             vec![
-                (to_keys.npk(), to_keys.vpk(), to_epk),
-                (from_keys.npk(), from_keys.vpk(), from_epk),
+                (to_account_id, to_keys.vpk(), to_epk),
+                (from_account_id, from_keys.vpk(), from_epk),
             ],
             output,
         )
@@ -2791,7 +2791,7 @@ pub mod tests {
         let message = Message::try_from_circuit_output(
             vec![],
             vec![],
-            vec![(private_keys.npk(), private_keys.vpk(), epk)],
+            vec![(account_id, private_keys.vpk(), epk)],
             output,
         )
         .unwrap();
@@ -2802,7 +2802,7 @@ pub mod tests {
         let result = state.transition_from_privacy_preserving_transaction(&tx, 1);
         assert!(result.is_ok());
 
-        let nullifier = Nullifier::for_account_initialization(&private_keys.npk());
+        let nullifier = Nullifier::for_account_initialization(&account_id);
         assert!(state.private_state.1.contains(&nullifier));
     }
 
@@ -2842,7 +2842,7 @@ pub mod tests {
         let message = Message::try_from_circuit_output(
             vec![],
             vec![],
-            vec![(private_keys.npk(), private_keys.vpk(), epk)],
+            vec![(account_id, private_keys.vpk(), epk)],
             output,
         )
         .unwrap();
@@ -2858,7 +2858,7 @@ pub mod tests {
         );
 
         // Verify the account is now initialized (nullifier exists)
-        let nullifier = Nullifier::for_account_initialization(&private_keys.npk());
+        let nullifier = Nullifier::for_account_initialization(&account_id);
         assert!(state.private_state.1.contains(&nullifier));
 
         // Prepare new state of account
@@ -3111,7 +3111,8 @@ pub mod tests {
         let validity_window: ValidityWindow = validity_window.try_into().unwrap();
         let validity_window_program = Program::validity_window();
         let account_keys = test_private_account_keys_1();
-        let pre = AccountWithMetadata::new(Account::default(), false, &account_keys.npk());
+        let account_id = AccountId::account_id_without_identifier(&account_keys.npk());
+        let pre = AccountWithMetadata::new(Account::default(), false, account_id);
         let mut state = V03State::new_with_genesis_accounts(&[], &[]).with_test_programs();
         let tx = {
             let esk = [3; 32];
@@ -3132,7 +3133,7 @@ pub mod tests {
             let message = Message::try_from_circuit_output(
                 vec![],
                 vec![],
-                vec![(account_keys.npk(), account_keys.vpk(), epk)],
+                vec![(account_id, account_keys.vpk(), epk)],
                 output,
             )
             .unwrap();
