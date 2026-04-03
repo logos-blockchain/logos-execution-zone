@@ -24,8 +24,8 @@
 //!
 //! - `self_program_id`: enables a program to chain back to itself (step 3 above)
 //! - `caller_program_id`: enables a program to restrict which callers can invoke an instruction
-//! - Pre-simulated intermediate states: the initiator must compute expected intermediate account
-//!   states and embed them in the instruction. The node validates them deterministically.
+//! - Computed intermediate states: the initiator computes expected intermediate account
+//!   states from the pre_states and amount, keeping the instruction minimal.
 //! - Atomic rollback: if the callback doesn't return funds, the invariant check fails, and all
 //!   state changes from steps 1 and 2 are rolled back automatically.
 //!
@@ -37,12 +37,9 @@
 //! - `flash_swap_self_call_targets_correct_program`: zero-amount self-call isolation test
 //! - `flash_swap_standalone_invariant_check_rejected`: `caller_program_id` access control
 
-use nssa_core::{
-    account::AccountWithMetadata,
-    program::{
-        AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput,
-        read_nssa_inputs,
-    },
+use nssa_core::program::{
+    AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput,
+    read_nssa_inputs,
 };
 use serde::{Deserialize, Serialize};
 
@@ -59,20 +56,12 @@ pub enum FlashSwapInstruction {
     /// 2. Callback (user logic, e.g. arbitrage)
     /// 3. Self-call `InvariantCheck` (verify vault balance did not decrease)
     ///
-    /// The caller must pre-simulate the entire call graph and provide the expected
-    /// intermediate account states. The node validates them deterministically at each step.
+    /// Intermediate account states are computed inside the program from pre_states and amount_out.
     Initiate {
         token_program_id: ProgramId,
         callback_program_id: ProgramId,
         amount_out: u128,
         callback_instruction_data: Vec<u32>,
-        /// Expected vault state after the token transfer (vault balance -= `amount_out`).
-        vault_after_transfer: AccountWithMetadata,
-        /// Expected receiver state after the token transfer (receiver balance += `amount_out`).
-        receiver_after_transfer: AccountWithMetadata,
-        /// Expected vault state after the callback completes (should match initial balance
-        /// if the callback correctly returns funds).
-        vault_after_callback: AccountWithMetadata,
     },
     /// Internal: verify the vault invariant holds after callback execution.
     ///
@@ -100,9 +89,6 @@ fn main() {
             callback_program_id,
             amount_out,
             callback_instruction_data,
-            vault_after_transfer,
-            receiver_after_transfer,
-            vault_after_callback,
         } => {
             let Ok([vault_pre, receiver_pre]) = <[_; 2]>::try_from(pre_states) else {
                 panic!("Initiate requires exactly 2 accounts: vault, receiver");
@@ -110,6 +96,28 @@ fn main() {
 
             // Capture initial vault balance, the invariant check will verify it is restored.
             let min_vault_balance = vault_pre.account.balance;
+
+            // Compute intermediate account states from pre_states and amount_out.
+            let mut vault_after_transfer = vault_pre.clone();
+            vault_after_transfer.account.balance = vault_pre
+                .account
+                .balance
+                .checked_sub(amount_out)
+                .expect("vault has insufficient balance for flash swap");
+
+            let mut receiver_after_transfer = receiver_pre.clone();
+            receiver_after_transfer.account.balance = receiver_pre
+                .account
+                .balance
+                .checked_add(amount_out)
+                .expect("receiver balance overflow");
+
+            let mut vault_after_callback = vault_after_transfer.clone();
+            vault_after_callback.account.balance = vault_after_transfer
+                .account
+                .balance
+                .checked_add(amount_out)
+                .expect("vault balance overflow after callback");
 
             // Chained call 1: Token transfer (vault → receiver).
             // The vault is a PDA of this initiator program (seed = [0_u8; 32]), so we provide
@@ -175,10 +183,11 @@ fn main() {
             // When called as a top-level transaction, `caller_program_id` is `None` → panics.
             // When called as a chained call from `Initiate`, `caller_program_id` is
             // `Some(self_program_id)` → passes.
-            assert!(
-                caller_program_id == Some(self_program_id),
+            assert_eq!(
+                caller_program_id,
+                Some(self_program_id),
                 "InvariantCheck is an internal instruction: must be called by flash_swap_initiator \
-                 via a chained call, got caller_program_id: {caller_program_id:?}",
+                 via a chained call",
             );
 
             let Ok([vault]) = <[_; 1]>::try_from(pre_states) else {

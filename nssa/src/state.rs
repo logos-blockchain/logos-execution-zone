@@ -467,24 +467,15 @@ pub mod tests {
         return_funds: bool,
         token_program_id: ProgramId,
         amount: u128,
-        vault_after_return: Option<AccountWithMetadata>,
-        receiver_after_return: Option<AccountWithMetadata>,
     }
 
     #[derive(serde::Serialize, serde::Deserialize)]
-    #[expect(
-        clippy::large_enum_variant,
-        reason = "test-only mirror of guest enum, boxing unnecessary"
-    )]
     enum FlashSwapInstruction {
         Initiate {
             token_program_id: ProgramId,
             callback_program_id: ProgramId,
             amount_out: u128,
             callback_instruction_data: Vec<u32>,
-            vault_after_transfer: AccountWithMetadata,
-            receiver_after_transfer: AccountWithMetadata,
-            vault_after_callback: AccountWithMetadata,
         },
         InvariantCheck {
             min_vault_balance: u128,
@@ -3555,61 +3546,11 @@ pub mod tests {
         state.force_insert_account(vault_id, vault_account);
         state.force_insert_account(receiver_id, receiver_account);
 
-        // Pre-simulated intermediate states:
-        // After transfer (vault→receiver, amount_out):
-        let vault_after_transfer = AccountWithMetadata::new(
-            Account {
-                program_owner: token.id(),
-                balance: initial_balance - amount_out,
-                ..Account::default()
-            },
-            false,
-            vault_id,
-        );
-        let receiver_after_transfer = AccountWithMetadata::new(
-            Account {
-                program_owner: token.id(),
-                balance: amount_out,
-                ..Account::default()
-            },
-            false,
-            receiver_id,
-        );
-
-        // After callback returns funds (receiver→vault, amount_out):
-        let vault_after_callback = AccountWithMetadata::new(
-            Account {
-                program_owner: token.id(),
-                balance: initial_balance,
-                ..Account::default()
-            },
-            false,
-            vault_id,
-        );
-
         // Callback instruction: return funds
         let cb_instruction = CallbackInstruction {
             return_funds: true,
             token_program_id: token.id(),
             amount: amount_out,
-            vault_after_return: Some(AccountWithMetadata::new(
-                Account {
-                    program_owner: token.id(),
-                    balance: initial_balance,
-                    ..Account::default()
-                },
-                false,
-                vault_id,
-            )),
-            receiver_after_return: Some(AccountWithMetadata::new(
-                Account {
-                    program_owner: token.id(),
-                    balance: 0,
-                    ..Account::default()
-                },
-                false,
-                receiver_id,
-            )),
         };
         let cb_data = Program::serialize_instruction(cb_instruction).unwrap();
 
@@ -3618,9 +3559,6 @@ pub mod tests {
             callback_program_id: callback.id(),
             amount_out,
             callback_instruction_data: cb_data,
-            vault_after_transfer,
-            receiver_after_transfer,
-            vault_after_callback,
         };
 
         let tx = build_flash_swap_tx(&initiator, vault_id, receiver_id, instruction);
@@ -3659,44 +3597,11 @@ pub mod tests {
         state.force_insert_account(vault_id, vault_account);
         state.force_insert_account(receiver_id, receiver_account);
 
-        // Pre-simulated intermediate states (same as successful case for steps 1-2):
-        let vault_after_transfer = AccountWithMetadata::new(
-            Account {
-                program_owner: token.id(),
-                balance: initial_balance - amount_out,
-                ..Account::default()
-            },
-            false,
-            vault_id,
-        );
-        let receiver_after_transfer = AccountWithMetadata::new(
-            Account {
-                program_owner: token.id(),
-                balance: amount_out,
-                ..Account::default()
-            },
-            false,
-            receiver_id,
-        );
-
-        // After callback that does NOT return funds — vault stays drained:
-        let vault_after_callback = AccountWithMetadata::new(
-            Account {
-                program_owner: token.id(),
-                balance: initial_balance - amount_out,
-                ..Account::default()
-            },
-            false,
-            vault_id,
-        );
-
         // Callback instruction: do NOT return funds
         let cb_instruction = CallbackInstruction {
             return_funds: false,
             token_program_id: token.id(),
             amount: amount_out,
-            vault_after_return: None,
-            receiver_after_return: None,
         };
         let cb_data = Program::serialize_instruction(cb_instruction).unwrap();
 
@@ -3705,9 +3610,6 @@ pub mod tests {
             callback_program_id: callback.id(),
             amount_out,
             callback_instruction_data: cb_data,
-            vault_after_transfer,
-            receiver_after_transfer,
-            vault_after_callback,
         };
 
         let tx = build_flash_swap_tx(&initiator, vault_id, receiver_id, instruction);
@@ -3752,58 +3654,10 @@ pub mod tests {
         state.force_insert_account(vault_id, vault_account);
         state.force_insert_account(receiver_id, receiver_account);
 
-        // Zero-amount transfer: states remain unchanged after transfer
-        let vault_after_transfer = AccountWithMetadata::new(
-            Account {
-                program_owner: token.id(),
-                balance: initial_balance,
-                ..Account::default()
-            },
-            false,
-            vault_id,
-        );
-        let receiver_after_transfer = AccountWithMetadata::new(
-            Account {
-                program_owner: token.id(),
-                balance: 0,
-                ..Account::default()
-            },
-            false,
-            receiver_id,
-        );
-        // Callback with zero amount, return_funds=true (no-op effectively)
-        let vault_after_callback = AccountWithMetadata::new(
-            Account {
-                program_owner: token.id(),
-                balance: initial_balance,
-                ..Account::default()
-            },
-            false,
-            vault_id,
-        );
-
         let cb_instruction = CallbackInstruction {
             return_funds: true,
             token_program_id: token.id(),
             amount: 0,
-            vault_after_return: Some(AccountWithMetadata::new(
-                Account {
-                    program_owner: token.id(),
-                    balance: initial_balance,
-                    ..Account::default()
-                },
-                false,
-                vault_id,
-            )),
-            receiver_after_return: Some(AccountWithMetadata::new(
-                Account {
-                    program_owner: token.id(),
-                    balance: 0,
-                    ..Account::default()
-                },
-                false,
-                receiver_id,
-            )),
         };
         let cb_data = Program::serialize_instruction(cb_instruction).unwrap();
 
@@ -3812,9 +3666,6 @@ pub mod tests {
             callback_program_id: callback.id(),
             amount_out: 0,
             callback_instruction_data: cb_data,
-            vault_after_transfer,
-            receiver_after_transfer,
-            vault_after_callback,
         };
 
         let tx = build_flash_swap_tx(&initiator, vault_id, receiver_id, instruction);

@@ -24,12 +24,9 @@
 //! called by any program. In production, a callback would typically verify the caller
 //! if it needs to trust the context it is called from.
 
-use nssa_core::{
-    account::AccountWithMetadata,
-    program::{
-        AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput,
-        read_nssa_inputs,
-    },
+use nssa_core::program::{
+    AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput,
+    read_nssa_inputs,
 };
 use serde::{Deserialize, Serialize};
 
@@ -40,10 +37,6 @@ pub struct CallbackInstruction {
     pub return_funds: bool,
     pub token_program_id: ProgramId,
     pub amount: u128,
-    /// Pre-simulated vault state after the return transfer (required if `return_funds = true`).
-    pub vault_after_return: Option<AccountWithMetadata>,
-    /// Pre-simulated receiver state after the return transfer (required if `return_funds = true`).
-    pub receiver_after_return: Option<AccountWithMetadata>,
 }
 
 fn main() {
