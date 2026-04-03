@@ -12,7 +12,7 @@ pub const CLOCK_10_PROGRAM_ACCOUNT_ID: AccountId =
 pub const CLOCK_50_PROGRAM_ACCOUNT_ID: AccountId =
     AccountId::new(*b"/LEZ/ClockProgramAccount/0000050");
 
-/// All clock program account ID int the order expected by the clock program.
+/// All clock program account ID in the order expected by the clock program.
 pub const CLOCK_PROGRAM_ACCOUNT_IDS: [AccountId; 3] = [
     CLOCK_01_PROGRAM_ACCOUNT_ID,
     CLOCK_10_PROGRAM_ACCOUNT_ID,
