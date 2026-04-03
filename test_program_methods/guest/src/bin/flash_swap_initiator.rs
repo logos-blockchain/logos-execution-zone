@@ -35,7 +35,7 @@
 //! - `flash_swap_successful`: full round-trip, funds returned, state unchanged
 //! - `flash_swap_callback_keeps_funds_rollback`: callback keeps funds, full rollback
 //! - `flash_swap_self_call_targets_correct_program`: zero-amount self-call isolation test
-//! - `flash_swap_standalone_invariant_check_rejected`: caller_program_id access control
+//! - `flash_swap_standalone_invariant_check_rejected`: `caller_program_id` access control
 
 use nssa_core::{
     account::AccountWithMetadata,
@@ -47,11 +47,15 @@ use nssa_core::{
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "guest program enum, boxing adds unnecessary complexity"
+)]
 pub enum FlashSwapInstruction {
     /// External entrypoint: initiate a flash swap.
     ///
     /// Emits 3 chained calls:
-    /// 1. Token transfer (vault → receiver, amount_out)
+    /// 1. Token transfer (vault → receiver, `amount_out`)
     /// 2. Callback (user logic, e.g. arbitrage)
     /// 3. Self-call `InvariantCheck` (verify vault balance did not decrease)
     ///
@@ -62,9 +66,9 @@ pub enum FlashSwapInstruction {
         callback_program_id: ProgramId,
         amount_out: u128,
         callback_instruction_data: Vec<u32>,
-        /// Expected vault state after the token transfer (vault balance -= amount_out).
+        /// Expected vault state after the token transfer (vault balance -= `amount_out`).
         vault_after_transfer: AccountWithMetadata,
-        /// Expected receiver state after the token transfer (receiver balance += amount_out).
+        /// Expected receiver state after the token transfer (receiver balance += `amount_out`).
         receiver_after_transfer: AccountWithMetadata,
         /// Expected vault state after the callback completes (should match initial balance
         /// if the callback correctly returns funds).
@@ -108,7 +112,7 @@ fn main() {
             let min_vault_balance = vault_pre.account.balance;
 
             // Chained call 1: Token transfer (vault → receiver).
-            // The vault is a PDA of this initiator program (seed = [0u8; 32]), so we provide
+            // The vault is a PDA of this initiator program (seed = [0_u8; 32]), so we provide
             // the PDA seed to authorize the token program to debit the vault on our behalf.
             // Mark the vault as authorized since it will be PDA-authorized in this chained call.
             let mut vault_authorized = vault_pre.clone();
@@ -119,7 +123,7 @@ fn main() {
                 program_id: token_program_id,
                 pre_states: vec![vault_authorized, receiver_pre.clone()],
                 instruction_data: transfer_instruction,
-                pda_seeds: vec![PdaSeed::new([0u8; 32])],
+                pda_seeds: vec![PdaSeed::new([0_u8; 32])],
             };
 
             // Chained call 2: User callback.
@@ -174,8 +178,7 @@ fn main() {
             assert!(
                 caller_program_id == Some(self_program_id),
                 "InvariantCheck is an internal instruction: must be called by flash_swap_initiator \
-                 via a chained call, got caller_program_id: {:?}",
-                caller_program_id
+                 via a chained call, got caller_program_id: {caller_program_id:?}",
             );
 
             let Ok([vault]) = <[_; 1]>::try_from(pre_states) else {

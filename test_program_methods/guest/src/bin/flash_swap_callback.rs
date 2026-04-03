@@ -66,7 +66,7 @@ fn main() {
 
     if instruction.return_funds {
         // Happy path: return the borrowed funds via a token transfer (receiver → vault).
-        // The receiver is a PDA of this callback program (seed = [1u8; 32]).
+        // The receiver is a PDA of this callback program (seed = [1_u8; 32]).
         // Mark the receiver as authorized since it will be PDA-authorized in this chained call.
         let mut receiver_authorized = receiver_pre.clone();
         receiver_authorized.is_authorized = true;
@@ -77,7 +77,7 @@ fn main() {
             program_id: instruction.token_program_id,
             pre_states: vec![receiver_authorized, vault_pre.clone()],
             instruction_data: transfer_instruction,
-            pda_seeds: vec![PdaSeed::new([1u8; 32])],
+            pda_seeds: vec![PdaSeed::new([1_u8; 32])],
         });
     }
     // Malicious path (return_funds = false): emit no chained calls.
