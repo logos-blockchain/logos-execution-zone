@@ -110,11 +110,14 @@ fn main() {
             // Chained call 1: Token transfer (vault → receiver).
             // The vault is a PDA of this initiator program (seed = [0u8; 32]), so we provide
             // the PDA seed to authorize the token program to debit the vault on our behalf.
+            // Mark the vault as authorized since it will be PDA-authorized in this chained call.
+            let mut vault_authorized = vault_pre.clone();
+            vault_authorized.is_authorized = true;
             let transfer_instruction =
                 risc0_zkvm::serde::to_vec(&amount_out).expect("transfer instruction serialization");
             let call_1 = ChainedCall {
                 program_id: token_program_id,
-                pre_states: vec![vault_pre.clone(), receiver_pre.clone()],
+                pre_states: vec![vault_authorized, receiver_pre.clone()],
                 instruction_data: transfer_instruction,
                 pda_seeds: vec![PdaSeed::new([0u8; 32])],
             };

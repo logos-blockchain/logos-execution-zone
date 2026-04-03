@@ -3537,8 +3537,8 @@ pub mod tests {
         let callback = Program::flash_swap_callback();
         let token = Program::authenticated_transfer_program();
 
-        let vault_id = AccountId::from((&initiator.id(), &PdaSeed::new([0u8; 32])));
-        let receiver_id = AccountId::from((&callback.id(), &PdaSeed::new([1u8; 32])));
+        let vault_id = AccountId::from((&initiator.id(), &PdaSeed::new([0_u8; 32])));
+        let receiver_id = AccountId::from((&callback.id(), &PdaSeed::new([1_u8; 32])));
 
         let initial_balance: u128 = 1000;
         let amount_out: u128 = 100;
@@ -3641,8 +3641,8 @@ pub mod tests {
         let callback = Program::flash_swap_callback();
         let token = Program::authenticated_transfer_program();
 
-        let vault_id = AccountId::from((&initiator.id(), &PdaSeed::new([0u8; 32])));
-        let receiver_id = AccountId::from((&callback.id(), &PdaSeed::new([1u8; 32])));
+        let vault_id = AccountId::from((&initiator.id(), &PdaSeed::new([0_u8; 32])));
+        let receiver_id = AccountId::from((&callback.id(), &PdaSeed::new([1_u8; 32])));
 
         let initial_balance: u128 = 1000;
         let amount_out: u128 = 100;
@@ -3735,8 +3735,8 @@ pub mod tests {
         let callback = Program::flash_swap_callback();
         let token = Program::authenticated_transfer_program();
 
-        let vault_id = AccountId::from((&initiator.id(), &PdaSeed::new([0u8; 32])));
-        let receiver_id = AccountId::from((&callback.id(), &PdaSeed::new([1u8; 32])));
+        let vault_id = AccountId::from((&initiator.id(), &PdaSeed::new([0_u8; 32])));
+        let receiver_id = AccountId::from((&callback.id(), &PdaSeed::new([1_u8; 32])));
 
         let initial_balance: u128 = 1000;
 
@@ -3835,7 +3835,7 @@ pub mod tests {
         let initiator = Program::flash_swap_initiator();
         let token = Program::authenticated_transfer_program();
 
-        let vault_id = AccountId::from((&initiator.id(), &PdaSeed::new([0u8; 32])));
+        let vault_id = AccountId::from((&initiator.id(), &PdaSeed::new([0_u8; 32])));
 
         let vault_account = Account {
             program_owner: token.id(),
