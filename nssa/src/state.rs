@@ -400,6 +400,8 @@ pub mod tests {
             self.insert_program(Program::claimer());
             self.insert_program(Program::changer_claimer());
             self.insert_program(Program::validity_window());
+            self.insert_program(Program::time_locked_transfer());
+            self.insert_program(Program::pinata_cooldown());
             self
         }
 
@@ -3642,6 +3644,227 @@ pub mod tests {
         } else {
             assert!(matches!(result, Err(NssaError::OutOfValidityWindow)));
         }
+    }
+
+    fn time_locked_transfer_transaction(
+        from: AccountId,
+        from_key: &PrivateKey,
+        from_nonce: u128,
+        to: AccountId,
+        clock_account_id: AccountId,
+        amount: u128,
+        deadline: u64,
+    ) -> PublicTransaction {
+        let program_id = Program::time_locked_transfer().id();
+        let message = public_transaction::Message::try_new(
+            program_id,
+            vec![from, to, clock_account_id],
+            vec![Nonce(from_nonce)],
+            (amount, deadline),
+        )
+        .unwrap();
+        let witness_set = public_transaction::WitnessSet::for_message(&message, &[from_key]);
+        PublicTransaction::new(message, witness_set)
+    }
+
+    #[test]
+    fn time_locked_transfer_succeeds_when_deadline_has_passed() {
+        let recipient_id = AccountId::new([42; 32]);
+        let genesis_timestamp = 500_u64;
+        let mut state =
+            V03State::new_with_genesis_accounts(&[(recipient_id, 0)], &[], genesis_timestamp)
+                .with_test_programs();
+        let key1 = PrivateKey::try_new([1; 32]).unwrap();
+        let sender_id = AccountId::from(&PublicKey::new_from_private_key(&key1));
+        state.force_insert_account(
+            sender_id,
+            Account {
+                program_owner: Program::time_locked_transfer().id(),
+                balance: 100,
+                ..Account::default()
+            },
+        );
+
+        let amount = 100_u128;
+        // Deadline in the past: transfer should succeed.
+        let deadline = 0_u64;
+
+        let tx = time_locked_transfer_transaction(
+            sender_id,
+            &key1,
+            0,
+            recipient_id,
+            CLOCK_01_PROGRAM_ACCOUNT_ID,
+            amount,
+            deadline,
+        );
+
+        let block_id = 1;
+        let timestamp = genesis_timestamp + 100;
+        state
+            .transition_from_public_transaction(&tx, block_id, timestamp)
+            .unwrap();
+
+        // Balances changed.
+        assert_eq!(state.get_account_by_id(sender_id).balance, 0);
+        assert_eq!(state.get_account_by_id(recipient_id).balance, 100);
+    }
+
+    #[test]
+    fn time_locked_transfer_fails_when_deadline_is_in_the_future() {
+        let recipient_id = AccountId::new([42; 32]);
+        let genesis_timestamp = 500_u64;
+        let mut state =
+            V03State::new_with_genesis_accounts(&[(recipient_id, 0)], &[], genesis_timestamp)
+                .with_test_programs();
+        let key1 = PrivateKey::try_new([1; 32]).unwrap();
+        let sender_id = AccountId::from(&PublicKey::new_from_private_key(&key1));
+        state.force_insert_account(
+            sender_id,
+            Account {
+                program_owner: Program::time_locked_transfer().id(),
+                balance: 100,
+                ..Account::default()
+            },
+        );
+
+        let amount = 100_u128;
+        // Far-future deadline: program should panic.
+        let deadline = u64::MAX;
+
+        let tx = time_locked_transfer_transaction(
+            sender_id,
+            &key1,
+            0,
+            recipient_id,
+            CLOCK_01_PROGRAM_ACCOUNT_ID,
+            amount,
+            deadline,
+        );
+
+        let block_id = 1;
+        let timestamp = genesis_timestamp + 100;
+        let result = state.transition_from_public_transaction(&tx, block_id, timestamp);
+
+        assert!(
+            result.is_err(),
+            "Transfer should fail when deadline is in the future"
+        );
+        // Balances unchanged.
+        assert_eq!(state.get_account_by_id(sender_id).balance, 100);
+        assert_eq!(state.get_account_by_id(recipient_id).balance, 0);
+    }
+
+    fn pinata_cooldown_data(prize: u128, cooldown_ms: u64, last_claim_timestamp: u64) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(32);
+        buf.extend_from_slice(&prize.to_le_bytes());
+        buf.extend_from_slice(&cooldown_ms.to_le_bytes());
+        buf.extend_from_slice(&last_claim_timestamp.to_le_bytes());
+        buf
+    }
+
+    fn pinata_cooldown_transaction(
+        pinata_id: AccountId,
+        winner_id: AccountId,
+        clock_account_id: AccountId,
+    ) -> PublicTransaction {
+        let program_id = Program::pinata_cooldown().id();
+        let message = public_transaction::Message::try_new(
+            program_id,
+            vec![pinata_id, winner_id, clock_account_id],
+            vec![],
+            (),
+        )
+        .unwrap();
+        let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+        PublicTransaction::new(message, witness_set)
+    }
+
+    #[test]
+    fn pinata_cooldown_claim_succeeds_after_cooldown() {
+        let winner_id = AccountId::new([11; 32]);
+        let pinata_id = AccountId::new([99; 32]);
+
+        let genesis_timestamp = 1000_u64;
+        let mut state =
+            V03State::new_with_genesis_accounts(&[(winner_id, 0)], &[], genesis_timestamp)
+                .with_test_programs();
+
+        let prize = 50_u128;
+        let cooldown_ms = 500_u64;
+        // Last claim was at genesis, so any timestamp >= genesis + cooldown should work.
+        let last_claim_timestamp = genesis_timestamp;
+
+        state.force_insert_account(
+            pinata_id,
+            Account {
+                program_owner: Program::pinata_cooldown().id(),
+                balance: 1000,
+                data: pinata_cooldown_data(prize, cooldown_ms, last_claim_timestamp)
+                    .try_into()
+                    .unwrap(),
+                ..Account::default()
+            },
+        );
+
+        let tx = pinata_cooldown_transaction(pinata_id, winner_id, CLOCK_01_PROGRAM_ACCOUNT_ID);
+
+        let block_id = 1;
+        let block_timestamp = genesis_timestamp + cooldown_ms;
+        // Advance clock so the cooldown check reads an updated timestamp.
+        let clock_tx = clock_transaction(block_timestamp);
+        state
+            .transition_from_public_transaction(&clock_tx, block_id, block_timestamp)
+            .unwrap();
+
+        state
+            .transition_from_public_transaction(&tx, block_id, block_timestamp)
+            .unwrap();
+
+        assert_eq!(state.get_account_by_id(pinata_id).balance, 1000 - prize);
+        assert_eq!(state.get_account_by_id(winner_id).balance, prize);
+    }
+
+    #[test]
+    fn pinata_cooldown_claim_fails_during_cooldown() {
+        let winner_id = AccountId::new([11; 32]);
+        let pinata_id = AccountId::new([99; 32]);
+
+        let genesis_timestamp = 1000_u64;
+        let mut state =
+            V03State::new_with_genesis_accounts(&[(winner_id, 0)], &[], genesis_timestamp)
+                .with_test_programs();
+
+        let prize = 50_u128;
+        let cooldown_ms = 500_u64;
+        let last_claim_timestamp = genesis_timestamp;
+
+        state.force_insert_account(
+            pinata_id,
+            Account {
+                balance: 1000,
+                data: pinata_cooldown_data(prize, cooldown_ms, last_claim_timestamp)
+                    .try_into()
+                    .unwrap(),
+                ..Account::default()
+            },
+        );
+
+        let tx = pinata_cooldown_transaction(pinata_id, winner_id, CLOCK_01_PROGRAM_ACCOUNT_ID);
+
+        let block_id = 1;
+        // Timestamp is only 100ms after last claim, well within the 500ms cooldown.
+        let block_timestamp = genesis_timestamp + 100;
+        let clock_tx = clock_transaction(block_timestamp);
+        state
+            .transition_from_public_transaction(&clock_tx, block_id, block_timestamp)
+            .unwrap();
+
+        let result = state.transition_from_public_transaction(&tx, block_id, block_timestamp);
+
+        assert!(result.is_err(), "Claim should fail during cooldown period");
+        assert_eq!(state.get_account_by_id(pinata_id).balance, 1000);
+        assert_eq!(state.get_account_by_id(winner_id).balance, 0);
     }
 
     #[test]

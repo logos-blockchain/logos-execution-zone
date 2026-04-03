@@ -7843,6 +7843,7 @@ dependencies = [
 name = "test_programs"
 version = "0.1.0"
 dependencies = [
+ "clock_core",
  "nssa_core",
  "risc0-zkvm",
 ]

@@ -9,5 +9,6 @@ workspace = true
 
 [dependencies]
 nssa_core.workspace = true
+clock_core.workspace = true
 
 risc0-zkvm.workspace = true
