@@ -427,7 +427,7 @@ pub mod tests {
 
         #[must_use]
         pub fn with_private_account(mut self, keys: &TestPrivateKeys, account: &Account) -> Self {
-            let account_id = &AccountId::private_account_id(&keys.npk(), None);
+            let account_id = &AccountId::private_account_id(&keys.npk(), Some(keys.identifier));
             let commitment = Commitment::new(account_id, account);
             self.private_state.0.extend(&[commitment]);
             self
@@ -447,6 +447,7 @@ pub mod tests {
     pub struct TestPrivateKeys {
         pub nsk: NullifierSecretKey,
         pub vsk: Scalar,
+        pub identifier: u128,
     }
 
     impl TestPrivateKeys {
@@ -941,6 +942,7 @@ pub mod tests {
         TestPrivateKeys {
             nsk: [13; 32],
             vsk: [31; 32],
+            identifier: 12_u128,
         }
     }
 
@@ -948,6 +950,7 @@ pub mod tests {
         TestPrivateKeys {
             nsk: [38; 32],
             vsk: [83; 32],
+            identifier: 42_u128,
         }
     }
 
@@ -965,7 +968,8 @@ pub mod tests {
 
         let sender_nonce = sender.account.nonce;
 
-        let recipient_id = AccountId::private_account_id(&recipient_keys.npk(), None);
+        let recipient_id =
+            AccountId::private_account_id(&recipient_keys.npk(), Some(recipient_keys.identifier));
         let recipient = AccountWithMetadata::new(Account::default(), false, recipient_id);
 
         let esk = [3; 32];
@@ -978,7 +982,7 @@ pub mod tests {
             vec![0, 2],
             vec![(recipient_keys.npk(), shared_secret)],
             vec![],
-            vec![], // TODO check (Marvin)
+            vec![recipient_keys.identifier], // TODO check (Marvin)
             vec![None],
             &Program::authenticated_transfer_program().into(),
         )
@@ -1004,8 +1008,10 @@ pub mod tests {
         state: &V03State,
     ) -> PrivacyPreservingTransaction {
         let program = Program::authenticated_transfer_program();
-        let sender_id = AccountId::private_account_id(&sender_keys.npk(), None);
-        let recipient_id = AccountId::private_account_id(&recipient_keys.npk(), None);
+        let sender_id =
+            AccountId::private_account_id(&sender_keys.npk(), Some(sender_keys.identifier));
+        let recipient_id =
+            AccountId::private_account_id(&recipient_keys.npk(), Some(recipient_keys.identifier));
         let sender_commitment = Commitment::new(&sender_id, sender_private_account);
         let sender_pre = AccountWithMetadata::new(sender_private_account.clone(), true, sender_id);
         let recipient_pre = AccountWithMetadata::new(Account::default(), false, recipient_id);
@@ -1027,7 +1033,7 @@ pub mod tests {
                 (recipient_keys.npk(), shared_secret_2),
             ],
             vec![sender_keys.nsk],
-            vec![], // TODO check (Marvin)
+            vec![sender_keys.identifier, recipient_keys.identifier], // TODO check (Marvin)
             vec![state.get_proof_for_commitment(&sender_commitment), None],
             &program.into(),
         )
@@ -1044,7 +1050,7 @@ pub mod tests {
         )
         .unwrap();
 
-        let witness_set = WitnessSet::for_message(&message, proof, &[]);
+        let witness_set = WitnessSet::for_message(&message, proof, &[]); //TODO: (Marvin) why no private keys?
 
         PrivacyPreservingTransaction::new(message, witness_set)
     }
@@ -1057,7 +1063,8 @@ pub mod tests {
         state: &V03State,
     ) -> PrivacyPreservingTransaction {
         let program = Program::authenticated_transfer_program();
-        let sender_id = AccountId::private_account_id(&sender_keys.npk(), None);
+        let sender_id =
+            AccountId::private_account_id(&sender_keys.npk(), Some(sender_keys.identifier));
         let sender_commitment = Commitment::new(&sender_id, sender_private_account);
         let sender_pre = AccountWithMetadata::new(sender_private_account.clone(), true, sender_id);
         let recipient_pre = AccountWithMetadata::new(
@@ -1076,7 +1083,7 @@ pub mod tests {
             vec![1, 0],
             vec![(sender_keys.npk(), shared_secret)],
             vec![sender_keys.nsk],
-            vec![], // TODO check (Marvin)
+            vec![sender_keys.identifier], // TODO check (Marvin)
             vec![state.get_proof_for_commitment(&sender_commitment)],
             &program.into(),
         )
@@ -1162,8 +1169,10 @@ pub mod tests {
             &state,
         );
 
-        let sender_id = AccountId::private_account_id(&sender_keys.npk(), None);
-        let recipient_id = AccountId::private_account_id(&recipient_keys.npk(), None);
+        let sender_id =
+            AccountId::private_account_id(&sender_keys.npk(), Some(sender_keys.identifier));
+        let recipient_id =
+            AccountId::private_account_id(&recipient_keys.npk(), Some(recipient_keys.identifier));
 
         let expected_new_commitment_1 = Commitment::new(
             &sender_id,
@@ -1209,7 +1218,8 @@ pub mod tests {
     #[test]
     fn transition_from_privacy_preserving_transaction_deshielded() {
         let sender_keys = test_private_account_keys_1();
-        let sender_id = AccountId::private_account_id(&sender_keys.npk(), None);
+        let sender_id =
+            AccountId::private_account_id(&sender_keys.npk(), Some(sender_keys.identifier));
         let sender_nonce = Nonce(0xdead_beef);
 
         let sender_private_account = Account {
@@ -1267,7 +1277,7 @@ pub mod tests {
         let recipient_post = state.get_account_by_id(recipient_keys.account_id());
         assert_eq!(recipient_post, expected_recipient_post);
         assert!(state.private_state.0.contains(&sender_pre_commitment));
-        // assert!(state.private_state.0.contains(&expected_new_commitment));
+        assert!(state.private_state.0.contains(&expected_new_commitment));
         assert!(state.private_state.1.contains(&expected_new_nullifier));
         assert_eq!(
             state.get_account_by_id(recipient_keys.account_id()).balance,
@@ -1995,14 +2005,16 @@ pub mod tests {
         assert!(matches!(result, Err(NssaError::CircuitProvingError(_))));
     }
 
+    // TODO: (Marvin) this test does not seem to do what it's supposed to.
     #[test]
     fn circuit_should_fail_if_new_private_account_is_provided_with_default_values_but_marked_as_authorized()
      {
         let program = Program::simple_balance_transfer();
         let sender_keys = test_private_account_keys_1();
-        let sender_account_id = AccountId::private_account_id(&sender_keys.npk(), None);
+        let sender_account_id = AccountId::private_account_id(&sender_keys.npk(), Some(0_u128));
         let recipient_keys = test_private_account_keys_2();
-        let recipient_account_id = AccountId::private_account_id(&recipient_keys.npk(), None);
+        let recipient_account_id =
+            AccountId::private_account_id(&recipient_keys.npk(), Some(1_u128));
         let private_account_1 = AccountWithMetadata::new(
             Account {
                 program_owner: program.id(),
@@ -2034,7 +2046,7 @@ pub mod tests {
                 ),
             ],
             vec![sender_keys.nsk],
-            vec![], // TODO check (Marvin)
+            vec![0_u128, 1_u128], // TODO check (Marvin)
             vec![Some((0, vec![]))],
             &program.into(),
         );
@@ -2042,6 +2054,7 @@ pub mod tests {
         assert!(matches!(result, Err(NssaError::CircuitProvingError(_))));
     }
 
+    // TODO: (Marvin) this test does not seem to do what it's supposed to.
     #[test]
     fn circuit_should_fail_with_invalid_visibility_mask_value() {
         let program = Program::simple_balance_transfer();
@@ -2241,7 +2254,7 @@ pub mod tests {
             .transition_from_privacy_preserving_transaction(&tx, 1, 0)
             .unwrap();
 
-        let sender_private_account = Account {
+        let _sender_private_account = Account {
             program_owner: Program::authenticated_transfer_program().id(),
             balance: 100,
             nonce: sender_nonce,
@@ -2604,16 +2617,17 @@ pub mod tests {
         let program = Program::authenticated_transfer_program();
         let program_id = program.id();
         let sender_keys = test_private_account_keys_1();
-        let sender_id = AccountId::private_account_id(&sender_keys.npk(), None);
+        let sender_account_id =
+            AccountId::private_account_id(&sender_keys.npk(), Some(sender_keys.identifier));
         let sender_private_account = Account {
             program_owner: program_id,
             balance: 100,
             ..Account::default()
         };
-        let sender_commitment = Commitment::new(&sender_id, &sender_private_account);
+        let sender_commitment = Commitment::new(&sender_account_id, &sender_private_account);
         let mut state =
             V03State::new_with_genesis_accounts(&[], std::slice::from_ref(&sender_commitment));
-        let sender_pre = AccountWithMetadata::new(sender_private_account, true, sender_id);
+        let sender_pre = AccountWithMetadata::new(sender_private_account, true, sender_account_id);
         let recipient_private_key = PrivateKey::try_new([2; 32]).unwrap();
         let recipient_account_id = AccountId::public_account_id(
             &PublicKey::new_from_private_key(&recipient_private_key),
@@ -2621,6 +2635,7 @@ pub mod tests {
         );
         let recipient_pre =
             AccountWithMetadata::new(Account::default(), true, recipient_account_id);
+
         let esk = [5; 32];
         let shared_secret = SharedSecretKey::new(&esk, &sender_keys.vpk());
         let epk = EphemeralPublicKey::from_scalar(esk);
@@ -2631,7 +2646,7 @@ pub mod tests {
             vec![1, 0],
             vec![(sender_keys.npk(), shared_secret)],
             vec![sender_keys.nsk],
-            vec![], // TODO check (Marvin)
+            vec![sender_keys.identifier], // TODO check (Marvin)
             vec![state.get_proof_for_commitment(&sender_commitment)],
             &program.into(),
         )
@@ -2640,7 +2655,7 @@ pub mod tests {
         let message = Message::try_from_circuit_output(
             vec![recipient_account_id],
             vec![Nonce(0)],
-            vec![(sender_id, sender_keys.vpk(), epk)],
+            vec![(sender_account_id, sender_keys.vpk(), epk)],
             output,
         )
         .unwrap();
@@ -2974,7 +2989,8 @@ pub mod tests {
 
         // Set up keys for the authorized private account
         let private_keys = test_private_account_keys_1();
-        let account_id = AccountId::private_account_id(&private_keys.npk(), None);
+        let account_id =
+            AccountId::private_account_id(&private_keys.npk(), Some(private_keys.identifier));
 
         // Create an authorized private account with default values (new account being initialized)
         let authorized_account = AccountWithMetadata::new(Account::default(), true, account_id);
@@ -2996,7 +3012,7 @@ pub mod tests {
             vec![1],
             vec![(private_keys.npk(), shared_secret)],
             vec![private_keys.nsk],
-            vec![], // TODO check (Marvin)
+            vec![private_keys.identifier], // TODO check (Marvin)
             vec![None],
             &program.into(),
         )
@@ -3026,7 +3042,8 @@ pub mod tests {
         let mut state = V03State::new_with_genesis_accounts(&[], &[]).with_test_programs();
 
         let private_keys = test_private_account_keys_1();
-        let account_id = AccountId::private_account_id(&private_keys.npk(), None);
+        let account_id =
+            AccountId::private_account_id(&private_keys.npk(), Some(private_keys.identifier));
         // This is intentional: claim authorization was introduced to protect public accounts,
         // especially PDAs. Private PDAs are not useful in practice because there is no way to
         // operate them without the corresponding private keys, so unauthorized private claiming
@@ -3044,7 +3061,7 @@ pub mod tests {
             vec![2],
             vec![(private_keys.npk(), shared_secret)],
             vec![],
-            vec![], // TODO check (Marvin)
+            vec![private_keys.identifier], // TODO check (Marvin)
             vec![None],
             &program.into(),
         )
@@ -3075,7 +3092,8 @@ pub mod tests {
 
         // Set up keys for the private account
         let private_keys = test_private_account_keys_1();
-        let account_id = AccountId::private_account_id(&private_keys.npk(), None);
+        let account_id =
+            AccountId::private_account_id(&private_keys.npk(), Some(private_keys.identifier));
 
         // Step 1: Create a new private account with authorization
         let authorized_account = AccountWithMetadata::new(Account::default(), true, account_id);
@@ -3096,7 +3114,7 @@ pub mod tests {
             vec![1],
             vec![(private_keys.npk(), shared_secret)],
             vec![private_keys.nsk],
-            vec![], // TODO check (Marvin)
+            vec![private_keys.identifier], // TODO check (Marvin)
             vec![None],
             &claimer_program.into(),
         )
@@ -3201,7 +3219,8 @@ pub mod tests {
     fn private_changer_claimer_no_data_change_no_claim_succeeds() {
         let program = Program::changer_claimer();
         let sender_keys = test_private_account_keys_1();
-        let sender_id = AccountId::private_account_id(&sender_keys.npk(), None);
+        let sender_id =
+            AccountId::private_account_id(&sender_keys.npk(), Some(sender_keys.identifier));
         let private_account = AccountWithMetadata::new(Account::default(), true, sender_id);
         // Don't change data (None) and don't claim (false)
         let instruction: (Option<Vec<u8>>, bool) = (None, false);
@@ -3215,7 +3234,7 @@ pub mod tests {
                 SharedSecretKey::new(&[3; 32], &sender_keys.vpk()),
             )],
             vec![sender_keys.nsk],
-            vec![], // TODO check (Marvin)
+            vec![sender_keys.identifier], // TODO check (Marvin)
             vec![Some((0, vec![]))],
             &program.into(),
         );
@@ -3305,252 +3324,254 @@ pub mod tests {
         // Assert - should fail because the malicious program tries to manipulate is_authorized
         assert!(matches!(result, Err(NssaError::CircuitProvingError(_))));
     }
-    // TODO: marvin fix
-    // #[test_case::test_case((Some(1), Some(3)), 3; "at upper bound")]
-    // #[test_case::test_case((Some(1), Some(3)), 2; "inside range")]
-    // #[test_case::test_case((Some(1), Some(3)), 0; "below range")]
-    // #[test_case::test_case((Some(1), Some(3)), 1; "at lower bound")]
-    // #[test_case::test_case((Some(1), Some(3)), 4; "above range")]
-    // #[test_case::test_case((Some(1), None), 1; "lower bound only - at bound")]
-    // #[test_case::test_case((Some(1), None), 10; "lower bound only - above")]
-    // #[test_case::test_case((Some(1), None), 0; "lower bound only - below")]
-    // #[test_case::test_case((None, Some(3)), 3; "upper bound only - at bound")]
-    // #[test_case::test_case((None, Some(3)), 0; "upper bound only - below")]
-    // #[test_case::test_case((None, Some(3)), 4; "upper bound only - above")]
-    // #[test_case::test_case((None, None), 0; "no bounds - always valid")]
-    // #[test_case::test_case((None, None), 100; "no bounds - always valid 2")]
-    // fn validity_window_works_in_public_transactions(
-    // validity_window: (Option<BlockId>, Option<BlockId>),
-    // block_id: BlockId,
-    // ) {
-    // let block_validity_window: BlockValidityWindow = validity_window.try_into().unwrap();
-    // let validity_window_program = Program::validity_window();
-    // let account_keys = test_public_account_keys_1();
-    // let pre = AccountWithMetadata::new(Account::default(), false, account_keys.account_id());
-    // let mut state = V03State::new_with_genesis_accounts(&[], &[]).with_test_programs();
-    // let tx = {
-    // let account_ids = vec![pre.account_id];
-    // let nonces = vec![];
-    // let program_id = validity_window_program.id();
-    // let instruction = (
-    // block_validity_window,
-    // TimestampValidityWindow::new_unbounded(),
-    // );
-    // let message =
-    // public_transaction::Message::try_new(program_id, account_ids, nonces, instruction)
-    // .unwrap();
-    // let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
-    // PublicTransaction::new(message, witness_set)
-    // };
-    // let result = state.transition_from_public_transaction(&tx, block_id, 0);
-    // let is_inside_validity_window =
-    // match (block_validity_window.start(), block_validity_window.end()) {
-    // (Some(s), Some(e)) => s <= block_id && block_id < e,
-    // (Some(s), None) => s <= block_id,
-    // (None, Some(e)) => block_id < e,
-    // (None, None) => true,
-    // };
-    // if is_inside_validity_window {
-    // assert!(result.is_ok());
-    // } else {
-    // assert!(matches!(result, Err(NssaError::OutOfValidityWindow)));
-    // }
-    // }
-    //
-    // #[test_case::test_case((Some(1), Some(3)), 3; "at upper bound")]
-    // #[test_case::test_case((Some(1), Some(3)), 2; "inside range")]
-    // #[test_case::test_case((Some(1), Some(3)), 0; "below range")]
-    // #[test_case::test_case((Some(1), Some(3)), 1; "at lower bound")]
-    // #[test_case::test_case((Some(1), Some(3)), 4; "above range")]
-    // #[test_case::test_case((Some(1), None), 1; "lower bound only - at bound")]
-    // #[test_case::test_case((Some(1), None), 10; "lower bound only - above")]
-    // #[test_case::test_case((Some(1), None), 0; "lower bound only - below")]
-    // #[test_case::test_case((None, Some(3)), 3; "upper bound only - at bound")]
-    // #[test_case::test_case((None, Some(3)), 0; "upper bound only - below")]
-    // #[test_case::test_case((None, Some(3)), 4; "upper bound only - above")]
-    // #[test_case::test_case((None, None), 0; "no bounds - always valid")]
-    // #[test_case::test_case((None, None), 100; "no bounds - always valid 2")]
-    // fn timestamp_validity_window_works_in_public_transactions(
-    // validity_window: (Option<Timestamp>, Option<Timestamp>),
-    // timestamp: Timestamp,
-    // ) {
-    // let timestamp_validity_window: TimestampValidityWindow =
-    // validity_window.try_into().unwrap();
-    // let validity_window_program = Program::validity_window();
-    // let account_keys = test_public_account_keys_1();
-    // let pre = AccountWithMetadata::new(Account::default(), false, account_keys.account_id());
-    // let mut state = V03State::new_with_genesis_accounts(&[], &[]).with_test_programs();
-    // let tx = {
-    // let account_ids = vec![pre.account_id];
-    // let nonces = vec![];
-    // let program_id = validity_window_program.id();
-    // let instruction = (
-    // BlockValidityWindow::new_unbounded(),
-    // timestamp_validity_window,
-    // );
-    // let message =
-    // public_transaction::Message::try_new(program_id, account_ids, nonces, instruction)
-    // .unwrap();
-    // let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
-    // PublicTransaction::new(message, witness_set)
-    // };
-    // let result = state.transition_from_public_transaction(&tx, 1, timestamp);
-    // let is_inside_validity_window = match (
-    // timestamp_validity_window.start(),
-    // timestamp_validity_window.end(),
-    // ) {
-    // (Some(s), Some(e)) => s <= timestamp && timestamp < e,
-    // (Some(s), None) => s <= timestamp,
-    // (None, Some(e)) => timestamp < e,
-    // (None, None) => true,
-    // };
-    // if is_inside_validity_window {
-    // assert!(result.is_ok());
-    // } else {
-    // assert!(matches!(result, Err(NssaError::OutOfValidityWindow)));
-    // }
-    // }
-    //
-    // #[test_case::test_case((Some(1), Some(3)), 3; "at upper bound")]
-    // #[test_case::test_case((Some(1), Some(3)), 2; "inside range")]
-    // #[test_case::test_case((Some(1), Some(3)), 0; "below range")]
-    // #[test_case::test_case((Some(1), Some(3)), 1; "at lower bound")]
-    // #[test_case::test_case((Some(1), Some(3)), 4; "above range")]
-    // #[test_case::test_case((Some(1), None), 1; "lower bound only - at bound")]
-    // #[test_case::test_case((Some(1), None), 10; "lower bound only - above")]
-    // #[test_case::test_case((Some(1), None), 0; "lower bound only - below")]
-    // #[test_case::test_case((None, Some(3)), 3; "upper bound only - at bound")]
-    // #[test_case::test_case((None, Some(3)), 0; "upper bound only - below")]
-    // #[test_case::test_case((None, Some(3)), 4; "upper bound only - above")]
-    // #[test_case::test_case((None, None), 0; "no bounds - always valid")]
-    // #[test_case::test_case((None, None), 100; "no bounds - always valid 2")]
-    // fn validity_window_works_in_privacy_preserving_transactions(
-    // validity_window: (Option<BlockId>, Option<BlockId>),
-    // block_id: BlockId,
-    // ) {
-    // let block_validity_window: BlockValidityWindow = validity_window.try_into().unwrap();
-    // let validity_window_program = Program::validity_window();
-    // let account_keys = test_private_account_keys_1();
-    // let account_id = AccountId::private_account_id(&account_keys.npk());
-    // let pre = AccountWithMetadata::new(Account::default(), false, account_id);
-    // let mut state = V03State::new_with_genesis_accounts(&[], &[]).with_test_programs();
-    // let tx = {
-    // let esk = [3; 32];
-    // let shared_secret = SharedSecretKey::new(&esk, &account_keys.vpk());
-    // let epk = EphemeralPublicKey::from_scalar(esk);
-    //
-    // let instruction = (
-    // block_validity_window,
-    // TimestampValidityWindow::new_unbounded(),
-    // );
-    // let (output, proof) = circuit::execute_and_prove(
-    // vec![pre],
-    // Program::serialize_instruction(instruction).unwrap(),
-    // vec![2],
-    // vec![(account_keys.npk(), shared_secret)],
-    // vec![],
-    // vec![None],
-    // &validity_window_program.into(),
-    // )
-    // .unwrap();
-    //
-    // let message = Message::try_from_circuit_output(
-    // vec![],
-    // vec![],
-    // vec![(account_id, account_keys.vpk(), epk)],
-    // output,
-    // )
-    // .unwrap();
-    //
-    // let witness_set = WitnessSet::for_message(&message, proof, &[]);
-    // PrivacyPreservingTransaction::new(message, witness_set)
-    // };
-    // let result = state.transition_from_privacy_preserving_transaction(&tx, block_id, 0);
-    // let is_inside_validity_window =
-    // match (block_validity_window.start(), block_validity_window.end()) {
-    // (Some(s), Some(e)) => s <= block_id && block_id < e,
-    // (Some(s), None) => s <= block_id,
-    // (None, Some(e)) => block_id < e,
-    // (None, None) => true,
-    // };
-    // if is_inside_validity_window {
-    // assert!(result.is_ok());
-    // } else {
-    // assert!(matches!(result, Err(NssaError::OutOfValidityWindow)));
-    // }
-    // }
-    //
-    // #[test_case::test_case((Some(1), Some(3)), 3; "at upper bound")]
-    // #[test_case::test_case((Some(1), Some(3)), 2; "inside range")]
-    // #[test_case::test_case((Some(1), Some(3)), 0; "below range")]
-    // #[test_case::test_case((Some(1), Some(3)), 1; "at lower bound")]
-    // #[test_case::test_case((Some(1), Some(3)), 4; "above range")]
-    // #[test_case::test_case((Some(1), None), 1; "lower bound only - at bound")]
-    // #[test_case::test_case((Some(1), None), 10; "lower bound only - above")]
-    // #[test_case::test_case((Some(1), None), 0; "lower bound only - below")]
-    // #[test_case::test_case((None, Some(3)), 3; "upper bound only - at bound")]
-    // #[test_case::test_case((None, Some(3)), 0; "upper bound only - below")]
-    // #[test_case::test_case((None, Some(3)), 4; "upper bound only - above")]
-    // #[test_case::test_case((None, None), 0; "no bounds - always valid")]
-    // #[test_case::test_case((None, None), 100; "no bounds - always valid 2")]
-    // fn timestamp_validity_window_works_in_privacy_preserving_transactions(
-    // validity_window: (Option<Timestamp>, Option<Timestamp>),
-    // timestamp: Timestamp,
-    // ) {
-    // let timestamp_validity_window: TimestampValidityWindow =
-    // validity_window.try_into().unwrap();
-    // let validity_window_program = Program::validity_window();
-    // let account_keys = test_private_account_keys_1();
-    // let account_id = AccountId::private_account_id(&account_keys.npk());
-    // let pre = AccountWithMetadata::new(Account::default(), false, account_id);
-    // let mut state = V03State::new_with_genesis_accounts(&[], &[]).with_test_programs();
-    // let tx = {
-    // let esk = [3; 32];
-    // let shared_secret = SharedSecretKey::new(&esk, &account_keys.vpk());
-    // let epk = EphemeralPublicKey::from_scalar(esk);
-    //
-    // let instruction = (
-    // BlockValidityWindow::new_unbounded(),
-    // timestamp_validity_window,
-    // );
-    // let (output, proof) = circuit::execute_and_prove(
-    // vec![pre],
-    // Program::serialize_instruction(instruction).unwrap(),
-    // vec![2],
-    // vec![(account_keys.npk(), shared_secret)],
-    // vec![],
-    // vec![None],
-    // &validity_window_program.into(),
-    // )
-    // .unwrap();
-    //
-    // let message = Message::try_from_circuit_output(
-    // vec![],
-    // vec![],
-    // vec![(account_id, account_keys.vpk(), epk)],
-    // output,
-    // )
-    // .unwrap();
-    //
-    // let witness_set = WitnessSet::for_message(&message, proof, &[]);
-    // PrivacyPreservingTransaction::new(message, witness_set)
-    // };
-    // let result = state.transition_from_privacy_preserving_transaction(&tx, 1, timestamp);
-    // let is_inside_validity_window = match (
-    // timestamp_validity_window.start(),
-    // timestamp_validity_window.end(),
-    // ) {
-    // (Some(s), Some(e)) => s <= timestamp && timestamp < e,
-    // (Some(s), None) => s <= timestamp,
-    // (None, Some(e)) => timestamp < e,
-    // (None, None) => true,
-    // };
-    // if is_inside_validity_window {
-    // assert!(result.is_ok());
-    // } else {
-    // assert!(matches!(result, Err(NssaError::OutOfValidityWindow)));
-    // }
-    // }
+
+    #[test_case::test_case((Some(1), Some(3)), 3; "at upper bound")]
+    #[test_case::test_case((Some(1), Some(3)), 2; "inside range")]
+    #[test_case::test_case((Some(1), Some(3)), 0; "below range")]
+    #[test_case::test_case((Some(1), Some(3)), 1; "at lower bound")]
+    #[test_case::test_case((Some(1), Some(3)), 4; "above range")]
+    #[test_case::test_case((Some(1), None), 1; "lower bound only - at bound")]
+    #[test_case::test_case((Some(1), None), 10; "lower bound only - above")]
+    #[test_case::test_case((Some(1), None), 0; "lower bound only - below")]
+    #[test_case::test_case((None, Some(3)), 3; "upper bound only - at bound")]
+    #[test_case::test_case((None, Some(3)), 0; "upper bound only - below")]
+    #[test_case::test_case((None, Some(3)), 4; "upper bound only - above")]
+    #[test_case::test_case((None, None), 0; "no bounds - always valid")]
+    #[test_case::test_case((None, None), 100; "no bounds - always valid 2")]
+    fn validity_window_works_in_public_transactions(
+        validity_window: (Option<BlockId>, Option<BlockId>),
+        block_id: BlockId,
+    ) {
+        let block_validity_window: BlockValidityWindow = validity_window.try_into().unwrap();
+        let validity_window_program = Program::validity_window();
+        let account_keys = test_public_account_keys_1();
+        let pre = AccountWithMetadata::new(Account::default(), false, account_keys.account_id());
+        let mut state = V03State::new_with_genesis_accounts(&[], &[]).with_test_programs();
+        let tx = {
+            let account_ids = vec![pre.account_id];
+            let nonces = vec![];
+            let program_id = validity_window_program.id();
+            let instruction = (
+                block_validity_window,
+                TimestampValidityWindow::new_unbounded(),
+            );
+            let message =
+                public_transaction::Message::try_new(program_id, account_ids, nonces, instruction)
+                    .unwrap();
+            let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+            PublicTransaction::new(message, witness_set)
+        };
+        let result = state.transition_from_public_transaction(&tx, block_id, 0);
+        let is_inside_validity_window =
+            match (block_validity_window.start(), block_validity_window.end()) {
+                (Some(s), Some(e)) => s <= block_id && block_id < e,
+                (Some(s), None) => s <= block_id,
+                (None, Some(e)) => block_id < e,
+                (None, None) => true,
+            };
+        if is_inside_validity_window {
+            assert!(result.is_ok());
+        } else {
+            assert!(matches!(result, Err(NssaError::OutOfValidityWindow)));
+        }
+    }
+
+    #[test_case::test_case((Some(1), Some(3)), 3; "at upper bound")]
+    #[test_case::test_case((Some(1), Some(3)), 2; "inside range")]
+    #[test_case::test_case((Some(1), Some(3)), 0; "below range")]
+    #[test_case::test_case((Some(1), Some(3)), 1; "at lower bound")]
+    #[test_case::test_case((Some(1), Some(3)), 4; "above range")]
+    #[test_case::test_case((Some(1), None), 1; "lower bound only - at bound")]
+    #[test_case::test_case((Some(1), None), 10; "lower bound only - above")]
+    #[test_case::test_case((Some(1), None), 0; "lower bound only - below")]
+    #[test_case::test_case((None, Some(3)), 3; "upper bound only - at bound")]
+    #[test_case::test_case((None, Some(3)), 0; "upper bound only - below")]
+    #[test_case::test_case((None, Some(3)), 4; "upper bound only - above")]
+    #[test_case::test_case((None, None), 0; "no bounds - always valid")]
+    #[test_case::test_case((None, None), 100; "no bounds - always valid 2")]
+    fn timestamp_validity_window_works_in_public_transactions(
+        validity_window: (Option<Timestamp>, Option<Timestamp>),
+        timestamp: Timestamp,
+    ) {
+        let timestamp_validity_window: TimestampValidityWindow =
+            validity_window.try_into().unwrap();
+        let validity_window_program = Program::validity_window();
+        let account_keys = test_public_account_keys_1();
+        let pre = AccountWithMetadata::new(Account::default(), false, account_keys.account_id());
+        let mut state = V03State::new_with_genesis_accounts(&[], &[]).with_test_programs();
+        let tx = {
+            let account_ids = vec![pre.account_id];
+            let nonces = vec![];
+            let program_id = validity_window_program.id();
+            let instruction = (
+                BlockValidityWindow::new_unbounded(),
+                timestamp_validity_window,
+            );
+            let message =
+                public_transaction::Message::try_new(program_id, account_ids, nonces, instruction)
+                    .unwrap();
+            let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+            PublicTransaction::new(message, witness_set)
+        };
+        let result = state.transition_from_public_transaction(&tx, 1, timestamp);
+        let is_inside_validity_window = match (
+            timestamp_validity_window.start(),
+            timestamp_validity_window.end(),
+        ) {
+            (Some(s), Some(e)) => s <= timestamp && timestamp < e,
+            (Some(s), None) => s <= timestamp,
+            (None, Some(e)) => timestamp < e,
+            (None, None) => true,
+        };
+        if is_inside_validity_window {
+            assert!(result.is_ok());
+        } else {
+            assert!(matches!(result, Err(NssaError::OutOfValidityWindow)));
+        }
+    }
+
+    #[test_case::test_case((Some(1), Some(3)), 3; "at upper bound")]
+    #[test_case::test_case((Some(1), Some(3)), 2; "inside range")]
+    #[test_case::test_case((Some(1), Some(3)), 0; "below range")]
+    #[test_case::test_case((Some(1), Some(3)), 1; "at lower bound")]
+    #[test_case::test_case((Some(1), Some(3)), 4; "above range")]
+    #[test_case::test_case((Some(1), None), 1; "lower bound only - at bound")]
+    #[test_case::test_case((Some(1), None), 10; "lower bound only - above")]
+    #[test_case::test_case((Some(1), None), 0; "lower bound only - below")]
+    #[test_case::test_case((None, Some(3)), 3; "upper bound only - at bound")]
+    #[test_case::test_case((None, Some(3)), 0; "upper bound only - below")]
+    #[test_case::test_case((None, Some(3)), 4; "upper bound only - above")]
+    #[test_case::test_case((None, None), 0; "no bounds - always valid")]
+    #[test_case::test_case((None, None), 100; "no bounds - always valid 2")]
+    fn validity_window_works_in_privacy_preserving_transactions(
+        validity_window: (Option<BlockId>, Option<BlockId>),
+        block_id: BlockId,
+    ) {
+        let block_validity_window: BlockValidityWindow = validity_window.try_into().unwrap();
+        let validity_window_program = Program::validity_window();
+        let account_keys = test_private_account_keys_1();
+        let account_id = AccountId::private_account_id(&account_keys.npk(), Some(account_keys.identifier));
+        let pre = AccountWithMetadata::new(Account::default(), false, account_id);
+        let mut state = V03State::new_with_genesis_accounts(&[], &[]).with_test_programs();
+        let tx = {
+            let esk = [3; 32];
+            let shared_secret = SharedSecretKey::new(&esk, &account_keys.vpk());
+            let epk = EphemeralPublicKey::from_scalar(esk);
+
+            let instruction = (
+                block_validity_window,
+                TimestampValidityWindow::new_unbounded(),
+            );
+            let (output, proof) = circuit::execute_and_prove(
+                vec![pre],
+                Program::serialize_instruction(instruction).unwrap(),
+                vec![2],
+                vec![(account_keys.npk(), shared_secret)],
+                vec![],
+                vec![account_keys.identifier],
+                vec![None],
+                &validity_window_program.into(),
+            )
+            .unwrap();
+            
+            let message = Message::try_from_circuit_output(
+                vec![],
+                vec![],
+                vec![(account_id, account_keys.vpk(), epk)],
+                output,
+            )
+            .unwrap();
+            //
+            let witness_set = WitnessSet::for_message(&message, proof, &[]);
+            PrivacyPreservingTransaction::new(message, witness_set)
+        };
+        let result = state.transition_from_privacy_preserving_transaction(&tx, block_id, 0);
+        let is_inside_validity_window =
+            match (block_validity_window.start(), block_validity_window.end()) {
+                (Some(s), Some(e)) => s <= block_id && block_id < e,
+                (Some(s), None) => s <= block_id,
+                (None, Some(e)) => block_id < e,
+                (None, None) => true,
+            };
+        if is_inside_validity_window {
+            assert!(result.is_ok());
+        } else {
+            assert!(matches!(result, Err(NssaError::OutOfValidityWindow)));
+        }
+    }
+
+    #[test_case::test_case((Some(1), Some(3)), 3; "at upper bound")]
+    #[test_case::test_case((Some(1), Some(3)), 2; "inside range")]
+    #[test_case::test_case((Some(1), Some(3)), 0; "below range")]
+    #[test_case::test_case((Some(1), Some(3)), 1; "at lower bound")]
+    #[test_case::test_case((Some(1), Some(3)), 4; "above range")]
+    #[test_case::test_case((Some(1), None), 1; "lower bound only - at bound")]
+    #[test_case::test_case((Some(1), None), 10; "lower bound only - above")]
+    #[test_case::test_case((Some(1), None), 0; "lower bound only - below")]
+    #[test_case::test_case((None, Some(3)), 3; "upper bound only - at bound")]
+    #[test_case::test_case((None, Some(3)), 0; "upper bound only - below")]
+    #[test_case::test_case((None, Some(3)), 4; "upper bound only - above")]
+    #[test_case::test_case((None, None), 0; "no bounds - always valid")]
+    #[test_case::test_case((None, None), 100; "no bounds - always valid 2")]
+    fn timestamp_validity_window_works_in_privacy_preserving_transactions(
+        validity_window: (Option<Timestamp>, Option<Timestamp>),
+        timestamp: Timestamp,
+    ) {
+        let timestamp_validity_window: TimestampValidityWindow =
+            validity_window.try_into().unwrap();
+        let validity_window_program = Program::validity_window();
+        let account_keys = test_private_account_keys_1();
+        let account_id = AccountId::private_account_id(&account_keys.npk(), Some(account_keys.identifier));
+        let pre = AccountWithMetadata::new(Account::default(), false, account_id);
+        let mut state = V03State::new_with_genesis_accounts(&[], &[]).with_test_programs();
+        let tx = {
+            let esk = [3; 32];
+            let shared_secret = SharedSecretKey::new(&esk, &account_keys.vpk());
+            let epk = EphemeralPublicKey::from_scalar(esk);
+
+            let instruction = (
+                BlockValidityWindow::new_unbounded(),
+                timestamp_validity_window,
+            );
+            let (output, proof) = circuit::execute_and_prove(
+                vec![pre],
+                Program::serialize_instruction(instruction).unwrap(),
+                vec![2],
+                vec![(account_keys.npk(), shared_secret)],
+                vec![],
+                vec![account_keys.identifier],
+                vec![None],
+                &validity_window_program.into(),
+            )
+            .unwrap();
+
+            let message = Message::try_from_circuit_output(
+                vec![],
+                vec![],
+                vec![(account_id, account_keys.vpk(), epk)],
+                output,
+            )
+            .unwrap();
+
+            let witness_set = WitnessSet::for_message(&message, proof, &[]);
+            PrivacyPreservingTransaction::new(message, witness_set)
+        };
+        let result = state.transition_from_privacy_preserving_transaction(&tx, 1, timestamp);
+        let is_inside_validity_window = match (
+            timestamp_validity_window.start(),
+            timestamp_validity_window.end(),
+        ) {
+            (Some(s), Some(e)) => s <= timestamp && timestamp < e,
+            (Some(s), None) => s <= timestamp,
+            (None, Some(e)) => timestamp < e,
+            (None, None) => true,
+        };
+        if is_inside_validity_window {
+            assert!(result.is_ok());
+        } else {
+            assert!(matches!(result, Err(NssaError::OutOfValidityWindow)));
+        }
+    }
     #[test]
     fn state_serialization_roundtrip() {
         let account_id_1 = AccountId::new([1; 32]);

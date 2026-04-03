@@ -256,7 +256,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
         vec![1, 2],
         vec![(sender_npk, sender_ss), (recipient_npk, recipient_ss)],
         vec![sender_nsk],
-        vec![], //TODO: marvin fix
+        vec![], // TODO: marvin fix
         vec![Some(proof)],
         &program.into(),
     )

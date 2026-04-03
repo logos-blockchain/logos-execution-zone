@@ -377,6 +377,7 @@ fn compute_circuit_output(
                         &pre_state.account,
                         npk,
                         nsk,
+                        *identifier,
                     );
 
                     let new_nonce = pre_state.account.nonce.private_account_nonce_increment(nsk);
@@ -465,10 +466,11 @@ fn compute_nullifier_and_set_digest(
     pre_account: &Account,
     npk: &NullifierPublicKey,
     nsk: &NullifierSecretKey,
+    identifier: u128,
 ) -> (Nullifier, CommitmentSetDigest) {
     // TODO: consider rewriting the function to receive account id instead of npk.
     // NOTE: this does not use the identifier at all.
-    let account_id = AccountId::private_account_id(npk, None);
+    let account_id = AccountId::private_account_id(npk, Some(identifier));
     membership_proof_opt.as_ref().map_or_else(
         || {
             assert_eq!(
