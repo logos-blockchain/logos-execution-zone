@@ -1,4 +1,4 @@
-#[derive(Default, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq, Eq)]
 #[repr(C)]
 pub enum OperationStatus {
     #[default]

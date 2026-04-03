@@ -1,0 +1,17 @@
+[package]
+name = "indexer_service_ffi"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[dependencies]
+indexer_ffi.workspace = true
+
+log.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
+env_logger.workspace = true
+
+[lints]
+workspace = true

@@ -1,4 +1,4 @@
-use std::ffi::c_void;
+use std::{ffi::c_void, net::SocketAddr};
 
 use indexer_service::IndexerHandle;
 use tokio::runtime::Runtime;
@@ -21,9 +21,33 @@ impl IndexerServiceFFI {
     // Helper to safely take ownership back
     #[must_use]
     pub fn into_parts(self) -> (Box<IndexerHandle>, Box<Runtime>) {
-        let overwatch = unsafe { Box::from_raw(self.indexer_handle.cast::<IndexerHandle>()) };
+        let indexer_handle = unsafe { Box::from_raw(self.indexer_handle.cast::<IndexerHandle>()) };
         let runtime = unsafe { Box::from_raw(self.runtime.cast::<Runtime>()) };
-        (overwatch, runtime)
+        (indexer_handle, runtime)
+    }
+
+    // Helper to get indexer handle addr
+    pub unsafe fn addr(&self) -> SocketAddr {
+        let indexer_handle = unsafe {
+            self.indexer_handle
+                .cast::<IndexerHandle>()
+                .as_ref()
+                .expect("Indexr Handle must be non-null pointer")
+        };
+
+        indexer_handle.addr()
+    }
+
+    // Helper to get indexer handle addr
+    pub unsafe fn handle(&self) -> &IndexerHandle {
+        let indexer_handle = unsafe {
+            self.indexer_handle
+                .cast::<IndexerHandle>()
+                .as_ref()
+                .expect("Indexr Handle must be non-null pointer")
+        };
+
+        indexer_handle
     }
 }
 

@@ -3,6 +3,6 @@
 pub use errors::OperationStatus;
 pub use indexer::IndexerServiceFFI;
 
-mod api;
+pub mod api;
 mod errors;
 mod indexer;

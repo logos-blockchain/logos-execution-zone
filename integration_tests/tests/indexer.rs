@@ -7,15 +7,14 @@ use std::time::Duration;
 
 use anyhow::Result;
 use indexer_service_rpc::RpcClient as _;
-use integration_tests::{TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, format_public_account_id};
+use integration_tests::{TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, format_public_account_id, test_context_ffi::TestContextFFI};
 use log::info;
-use tokio::test;
 use wallet::cli::{Command, programs::native_token_transfer::AuthTransferSubcommand};
 
 /// Timeout in milliseconds to reliably await for block finalization.
-const L2_TO_L1_TIMEOUT_MILLIS: u64 = 600_000;
+const L2_TO_L1_TIMEOUT_MILLIS: u64 = 100_000;
 
-#[test]
+#[tokio::test]
 async fn indexer_test_run() -> Result<()> {
     let ctx = TestContext::new().await?;
 
@@ -40,7 +39,7 @@ async fn indexer_test_run() -> Result<()> {
     Ok(())
 }
 
-#[test]
+#[tokio::test]
 async fn indexer_block_batching() -> Result<()> {
     let ctx = TestContext::new().await?;
 
@@ -78,7 +77,7 @@ async fn indexer_block_batching() -> Result<()> {
     Ok(())
 }
 
-#[test]
+#[tokio::test]
 async fn indexer_state_consistency() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
@@ -144,6 +143,29 @@ async fn indexer_state_consistency() -> Result<()> {
     assert_eq!(acc2_ind_state, acc2_seq_state.into());
 
     // ToDo: Check private state transition
+
+    Ok(())
+}
+
+#[test]
+fn indexer_test_run_ffi() -> Result<()> {
+    println!("Hello 1");
+    let runtime = tokio::runtime::Runtime::new()?;
+    println!("Hello 2");
+    let _ctx = TestContextFFI::new(runtime)?;
+
+    log::info!("Hello 3");
+
+    // RUN OBSERVATION
+    std::thread::sleep(std::time::Duration::from_millis(L2_TO_L1_TIMEOUT_MILLIS));
+
+    let last_block_seq = _ctx.get_last_block_sequencer()?;
+    let last_block_indexer = _ctx.get_last_block_indexer()?;
+
+    println!("Last block on ind now is {last_block_indexer}");
+    println!("Last block on seq now is {last_block_seq}");
+
+    assert!(last_block_indexer > 1);
 
     Ok(())
 }
