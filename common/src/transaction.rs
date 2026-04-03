@@ -44,7 +44,7 @@ impl NSSATransaction {
         }
     }
 
-    /// Returns the canonical Block Context Program invocation transaction for the given block
+    /// Returns the canonical Clock Program invocation transaction for the given block
     /// timestamp. Every valid block must end with exactly one occurrence of this transaction.
     #[must_use]
     pub fn clock_invocation(timestamp: clock_core::Instruction) -> Self {

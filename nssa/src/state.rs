@@ -177,9 +177,9 @@ impl V03State {
                 Account {
                     program_owner: clock_program_id,
                     data: data
-                        .to_vec()
+                        .clone()
                         .try_into()
-                        .expect("16 bytes should fit within accounts data"),
+                        .expect("Clock account data should fit within accounts data"),
                     ..Account::default()
                 },
             );
@@ -724,7 +724,7 @@ pub mod tests {
 
     fn clock_account_data(state: &V03State, account_id: AccountId) -> (u64, nssa_core::Timestamp) {
         let data = state.get_account_by_id(account_id).data.into_inner();
-        let parsed = clock_core::ClockAccountData::from_bytes(data[..16].try_into().unwrap());
+        let parsed = clock_core::ClockAccountData::from_bytes(&data);
         (parsed.block_id, parsed.timestamp)
     }
 

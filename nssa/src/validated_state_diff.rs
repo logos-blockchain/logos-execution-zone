@@ -35,7 +35,7 @@ pub struct StateDiff {
 /// The validated output of executing or verifying a transaction, ready to be applied to the state.
 ///
 /// Can only be constructed by the transaction validation functions inside this crate, ensuring the
-/// diff has been cryptographically checked before any state mutation occurs.
+/// diff has been checked before any state mutation occurs.
 pub struct ValidatedStateDiff(StateDiff);
 
 impl ValidatedStateDiff {

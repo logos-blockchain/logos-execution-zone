@@ -9,3 +9,4 @@ workspace = true
 
 [dependencies]
 nssa_core.workspace = true
+borsh.workspace = true

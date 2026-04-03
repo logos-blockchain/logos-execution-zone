@@ -1,5 +1,6 @@
 //! Core data structures and constants for the Clock Program.
 
+use borsh::{BorshDeserialize, BorshSerialize};
 use nssa_core::{Timestamp, account::AccountId};
 
 pub const CLOCK_01_PROGRAM_ACCOUNT_ID: AccountId =
@@ -22,7 +23,7 @@ pub const CLOCK_PROGRAM_ACCOUNT_IDS: [AccountId; 3] = [
 pub type Instruction = Timestamp;
 
 /// The data stored in a clock account: `[block_id: u64 LE | timestamp: u64 LE]`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ClockAccountData {
     pub block_id: u64,
     pub timestamp: Timestamp,
@@ -30,20 +31,12 @@ pub struct ClockAccountData {
 
 impl ClockAccountData {
     #[must_use]
-    pub fn to_bytes(self) -> [u8; 16] {
-        let mut data = [0_u8; 16];
-        data[..8].copy_from_slice(&self.block_id.to_le_bytes());
-        data[8..].copy_from_slice(&self.timestamp.to_le_bytes());
-        data
+    pub fn to_bytes(self) -> Vec<u8> {
+        borsh::to_vec(&self).expect("ClockAccountData serialization should not fail")
     }
 
     #[must_use]
-    pub fn from_bytes(bytes: &[u8; 16]) -> Self {
-        let block_id = u64::from_le_bytes(bytes[..8].try_into().unwrap());
-        let timestamp = u64::from_le_bytes(bytes[8..].try_into().unwrap());
-        Self {
-            block_id,
-            timestamp,
-        }
+    pub fn from_bytes(bytes: &[u8]) -> Self {
+        borsh::from_slice(bytes).expect("ClockAccountData deserialization should not fail")
     }
 }
