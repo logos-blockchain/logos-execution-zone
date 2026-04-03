@@ -1030,4 +1030,28 @@ mod tests {
             vec![NSSATransaction::clock_invocation(block.header.timestamp)]
         );
     }
+
+    #[tokio::test]
+    async fn block_production_aborts_when_clock_account_data_is_corrupted() {
+        let (mut sequencer, mempool_handle) = common_setup().await;
+
+        // Corrupt the clock 01 account data so the clock program panics on deserialization.
+        let clock_account_id = nssa::CLOCK_01_PROGRAM_ACCOUNT_ID;
+        let mut corrupted = sequencer.state.get_account_by_id(clock_account_id);
+        corrupted.data = vec![0xff; 3].try_into().unwrap();
+        sequencer
+            .state
+            .force_insert_account(clock_account_id, corrupted);
+
+        // Push a dummy transaction so the mempool is non-empty.
+        let tx = common::test_utils::produce_dummy_empty_transaction();
+        mempool_handle.push(tx).await.unwrap();
+
+        // Block production must fail because the appended clock tx cannot execute.
+        let result = sequencer.produce_new_block_with_mempool_transactions();
+        assert!(
+            result.is_err(),
+            "Block production should abort when clock account data is corrupted"
+        );
+    }
 }
