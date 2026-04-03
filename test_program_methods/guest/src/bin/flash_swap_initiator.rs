@@ -25,7 +25,7 @@
 //! - `self_program_id`: enables a program to chain back to itself (step 3 above)
 //! - `caller_program_id`: enables a program to restrict which callers can invoke an instruction
 //! - Computed intermediate states: the initiator computes expected intermediate account states from
-//!   the pre_states and amount, keeping the instruction minimal.
+//!   the `pre_states` and amount, keeping the instruction minimal.
 //! - Atomic rollback: if the callback doesn't return funds, the invariant check fails, and all
 //!   state changes from steps 1 and 2 are rolled back automatically.
 //!
@@ -44,10 +44,6 @@ use nssa_core::program::{
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "guest program enum, boxing adds unnecessary complexity"
-)]
 pub enum FlashSwapInstruction {
     /// External entrypoint: initiate a flash swap.
     ///
@@ -56,7 +52,8 @@ pub enum FlashSwapInstruction {
     /// 2. Callback (user logic, e.g. arbitrage)
     /// 3. Self-call `InvariantCheck` (verify vault balance did not decrease)
     ///
-    /// Intermediate account states are computed inside the program from pre_states and amount_out.
+    /// Intermediate account states are computed inside the program from `pre_states` and
+    /// `amount_out`.
     Initiate {
         token_program_id: ProgramId,
         callback_program_id: ProgramId,
