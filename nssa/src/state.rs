@@ -460,25 +460,6 @@ pub mod tests {
         }
     }
 
-    fn transfer_transaction(
-        from: AccountId,
-        from_key: &PrivateKey,
-        from_nonce: u128,
-        to: AccountId,
-        to_key: &PrivateKey,
-        to_nonce: u128,
-        balance: u128,
-    ) -> PublicTransaction {
-        let account_ids = vec![from, to];
-        let nonces = vec![Nonce(from_nonce), Nonce(to_nonce)];
-        let program_id = Program::authenticated_transfer_program().id();
-        let message =
-            public_transaction::Message::try_new(program_id, account_ids, nonces, balance).unwrap();
-        let witness_set =
-            public_transaction::WitnessSet::for_message(&message, &[from_key, to_key]);
-        PublicTransaction::new(message, witness_set)
-    }
-
     // ── Flash Swap types (mirrors of guest types for host-side serialisation) ──
 
     #[derive(serde::Serialize, serde::Deserialize)]
@@ -508,6 +489,25 @@ pub mod tests {
         InvariantCheck {
             min_vault_balance: u128,
         },
+    }
+
+    fn transfer_transaction(
+        from: AccountId,
+        from_key: &PrivateKey,
+        from_nonce: u128,
+        to: AccountId,
+        to_key: &PrivateKey,
+        to_nonce: u128,
+        balance: u128,
+    ) -> PublicTransaction {
+        let account_ids = vec![from, to];
+        let nonces = vec![Nonce(from_nonce), Nonce(to_nonce)];
+        let program_id = Program::authenticated_transfer_program().id();
+        let message =
+            public_transaction::Message::try_new(program_id, account_ids, nonces, balance).unwrap();
+        let witness_set =
+            public_transaction::WitnessSet::for_message(&message, &[from_key, to_key]);
+        PublicTransaction::new(message, witness_set)
     }
 
     fn build_flash_swap_tx(
