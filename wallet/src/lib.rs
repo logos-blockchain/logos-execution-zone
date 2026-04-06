@@ -15,7 +15,7 @@ use bip39::Mnemonic;
 use chain_storage::WalletChainStore;
 use common::{HashType, transaction::NSSATransaction};
 use config::WalletConfig;
-use key_protocol::key_management::key_tree::{chain_index::ChainIndex, traits::KeyNode as _};
+use key_protocol::{key_management::key_tree::{chain_index::ChainIndex, traits::KeyNode as _}, key_protocol_core::PrivateBundle};
 use log::info;
 use nssa::{
     Account, AccountId, PrivacyPreservingTransaction,
@@ -295,13 +295,13 @@ impl WalletCore {
         self.storage
             .user_data
             .get_private_account(account_id)
-            .map(|value| value.1.clone())
+            .map(|bundle| bundle.account.clone())
     }
 
     #[must_use]
     pub fn get_private_account_commitment(&self, account_id: AccountId) -> Option<Commitment> {
-        let (keys, account) = self.storage.user_data.get_private_account(account_id)?;
-        Some(Commitment::new(&keys.nullifier_public_key, account))
+        let bundle= self.storage.user_data.get_private_account(account_id)?;
+        Some(Commitment::new(&bundle.key_chain.nullifier_public_key, &bundle.account))
     }
 
     /// Poll transactions.
@@ -484,7 +484,7 @@ impl WalletCore {
             .user_data
             .default_user_private_accounts
             .iter()
-            .map(|(acc_account_id, (key_chain, _))| (*acc_account_id, key_chain, None))
+            .map(|(acc_account_id, PrivateBundle{key_chain,account: _ })| (*acc_account_id, key_chain, None))
             .chain(self.storage.user_data.private_key_tree.key_map.iter().map(
                 |(chain_index, keys_node)| {
                     (

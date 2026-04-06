@@ -118,22 +118,22 @@ pub fn produce_data_for_storage(
         }
     }
 
-    for (account_id, key) in &user_data.default_pub_account_signing_keys {
+    for (account_id, bundle) in &user_data.default_pub_account_signing_keys {
         vec_for_storage.push(
             InitialAccountData::Public(PublicAccountPrivateInitialData {
                 account_id: *account_id,
-                pub_sign_key: key.clone(),
+                pub_sign_key: bundle.sign_key.clone(),
             })
             .into(),
         );
     }
 
-    for (account_id, (key_chain, account)) in &user_data.default_user_private_accounts {
+    for (account_id, bundle) in &user_data.default_user_private_accounts {
         vec_for_storage.push(
             InitialAccountData::Private(Box::new(PrivateAccountPrivateInitialData {
                 account_id: *account_id,
-                account: account.clone(),
-                key_chain: key_chain.clone(),
+                account: bundle.account.clone(),
+                key_chain: bundle.key_chain.clone(),
             }))
             .into(),
         );

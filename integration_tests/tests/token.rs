@@ -1102,7 +1102,8 @@ async fn token_claiming_path_with_private_accounts() -> Result<()> {
         .storage()
         .user_data
         .get_private_account(recipient_account_id)
-        .cloned()
+        .unwrap()
+        .key_chain
         .context("Failed to get private account keys")?;
 
     // Mint using claiming path (foreign account)

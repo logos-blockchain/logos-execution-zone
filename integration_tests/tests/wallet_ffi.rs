@@ -585,7 +585,7 @@ fn test_wallet_ffi_get_private_account_keys() -> Result<()> {
         .user_data
         .get_private_account(account_id)
         .unwrap()
-        .0;
+        .key_chain;
 
     let expected_npk = &key_chain.nullifier_public_key;
     let expected_vpk = &key_chain.viewing_public_key;

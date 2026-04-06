@@ -15,24 +15,36 @@ pub type PublicKey = AffinePoint;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NSSAUserData {
     /// Default public accounts.
-    pub default_pub_account_signing_keys: BTreeMap<nssa::AccountId, nssa::PrivateKey>,
+    pub default_pub_account_signing_keys: BTreeMap<nssa::AccountId, PublicBundle>,
     /// Default private accounts.
-    pub default_user_private_accounts:
-        BTreeMap<nssa::AccountId, (KeyChain, nssa_core::account::Account)>,
+    pub default_user_private_accounts: BTreeMap<nssa::AccountId, PrivateBundle>,
     /// Tree of public keys.
     pub public_key_tree: KeyTreePublic,
     /// Tree of private keys.
     pub private_key_tree: KeyTreePrivate,
 }
 
+/// TODO: eventually, this should have `sign_key: Option<PrivateKey>` and `pub_key: PublicKey`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PublicBundle {
+    pub sign_key: nssa::PrivateKey,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PrivateBundle {
+    pub key_chain: KeyChain,
+    pub account: nssa_core::account::Account,
+}
+
 impl NSSAUserData {
     fn valid_public_key_transaction_pairing_check(
-        accounts_keys_map: &BTreeMap<nssa::AccountId, nssa::PrivateKey>,
+        accounts_keys_map: &BTreeMap<nssa::AccountId, PublicBundle>,
     ) -> bool {
         let mut check_res = true;
-        for (account_id, key) in accounts_keys_map {
-            let expected_account_id =
-                nssa::AccountId::from(&nssa::PublicKey::new_from_private_key(key));
+        for (account_id, public_bundle) in accounts_keys_map {
+            let expected_account_id = nssa::AccountId::from(
+                &nssa::PublicKey::new_from_private_key(&public_bundle.sign_key),
+            );
             if &expected_account_id != account_id {
                 println!("{expected_account_id}, {account_id}");
                 check_res = false;
@@ -42,11 +54,11 @@ impl NSSAUserData {
     }
 
     fn valid_private_key_transaction_pairing_check(
-        accounts_keys_map: &BTreeMap<nssa::AccountId, (KeyChain, nssa_core::account::Account)>,
+        accounts_keys_map: &BTreeMap<nssa::AccountId, PrivateBundle>,
     ) -> bool {
         let mut check_res = true;
-        for (account_id, (key, _)) in accounts_keys_map {
-            let expected_account_id = nssa::AccountId::from(&key.nullifier_public_key);
+        for (account_id, bundle) in accounts_keys_map {
+            let expected_account_id = nssa::AccountId::from(&bundle.key_chain.nullifier_public_key);
             if expected_account_id != *account_id {
                 println!("{expected_account_id}, {account_id}");
                 check_res = false;
@@ -56,10 +68,10 @@ impl NSSAUserData {
     }
 
     pub fn new_with_accounts(
-        default_accounts_keys: BTreeMap<nssa::AccountId, nssa::PrivateKey>,
+        default_accounts_keys: BTreeMap<nssa::AccountId, PublicBundle>,
         default_accounts_key_chains: BTreeMap<
             nssa::AccountId,
-            (KeyChain, nssa_core::account::Account),
+            PrivateBundle,
         >,
         public_key_tree: KeyTreePublic,
         private_key_tree: KeyTreePrivate,
@@ -111,6 +123,7 @@ impl NSSAUserData {
     ) -> Option<&nssa::PrivateKey> {
         self.default_pub_account_signing_keys
             .get(&account_id)
+            .map(|bundle| &bundle.sign_key)
             .or_else(|| self.public_key_tree.get_node(account_id).map(Into::into))
     }
 
@@ -134,24 +147,33 @@ impl NSSAUserData {
     }
 
     /// Returns the signing key for public transaction signatures.
-    #[must_use]
-    pub fn get_private_account(
-        &self,
-        account_id: nssa::AccountId,
-    ) -> Option<&(KeyChain, nssa_core::account::Account)> {
+    #[must_use] //Marvin: double check TODO
+    pub fn get_private_account(&self, account_id: nssa::AccountId) -> Option<PrivateBundle> {
+        // self.default_user_private_accounts
+        // .get(&account_id)
+        // .or_else(|| self.private_key_tree.get_node(account_id).map(Into::into))
         self.default_user_private_accounts
             .get(&account_id)
-            .or_else(|| self.private_key_tree.get_node(account_id).map(Into::into))
+            .cloned()
+            .or_else(|| {
+                self.private_key_tree
+                    .get_node(account_id)
+                    .map(|child_keys_private| PrivateBundle {
+                        key_chain: child_keys_private.value.0.clone(),
+                        account: child_keys_private.value.1.clone(),
+                    })
+            })
     }
 
     /// Returns the signing key for public transaction signatures.
+    /// TODO: fix this comment (Marvin)
     pub fn get_private_account_mut(
         &mut self,
         account_id: &nssa::AccountId,
-    ) -> Option<&mut (KeyChain, nssa_core::account::Account)> {
+    ) -> Option<PrivateBundle> {
         // First seek in defaults
-        if let Some(key) = self.default_user_private_accounts.get_mut(account_id) {
-            Some(key)
+        if let Some(bundle) = self.default_user_private_accounts.get(account_id) {
+            Some(bundle).cloned()
         // Then seek in tree
         } else {
             self.private_key_tree
@@ -209,7 +231,7 @@ mod tests {
 
         let account_id_private_str = account_id_private.to_string();
         println!("{account_id_private_str:#?}");
-        let key_chain = &user_data.get_private_account(account_id_private).unwrap().0;
+        let key_chain = &user_data.get_private_account(account_id_private).unwrap().key_chain;
         println!("{key_chain:#?}");
     }
 }

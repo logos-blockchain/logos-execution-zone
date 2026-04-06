@@ -137,7 +137,7 @@ impl WalletSubcommand for NewSubcommand {
                         .insert(account_id.to_string(), Label::new(label));
                 }
 
-                let (key, _) = wallet_core
+                let bundle= wallet_core
                     .storage
                     .user_data
                     .get_private_account(account_id)
@@ -146,10 +146,10 @@ impl WalletSubcommand for NewSubcommand {
                 println!(
                     "Generated new account with account_id Private/{account_id} at path {chain_index}",
                 );
-                println!("With npk {}", hex::encode(key.nullifier_public_key.0));
+                println!("With npk {}", hex::encode(bundle.key_chain.nullifier_public_key.0));
                 println!(
                     "With vpk {}",
-                    hex::encode(key.viewing_public_key.to_bytes())
+                    hex::encode(bundle.key_chain.viewing_public_key.to_bytes())
                 );
 
                 wallet_core.store_persistent_data().await?;
@@ -203,14 +203,14 @@ impl WalletSubcommand for AccountSubcommand {
                             println!("pk {}", hex::encode(public_key.value()));
                         }
                         AccountPrivacyKind::Private => {
-                            let (key, _) = wallet_core
+                            let bundle= wallet_core
                                 .storage
                                 .user_data
                                 .get_private_account(account_id)
                                 .context("Private account not found in storage")?;
 
-                            println!("npk {}", hex::encode(key.nullifier_public_key.0));
-                            println!("vpk {}", hex::encode(key.viewing_public_key.to_bytes()));
+                            println!("npk {}", hex::encode(bundle.key_chain.nullifier_public_key.0));
+                            println!("vpk {}", hex::encode(bundle.key_chain.viewing_public_key.to_bytes()));
                         }
                     }
                     Ok(())

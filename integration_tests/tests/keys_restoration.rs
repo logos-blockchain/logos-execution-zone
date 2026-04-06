@@ -64,7 +64,8 @@ async fn sync_private_account_with_non_zero_chain_index() -> Result<()> {
         .storage()
         .user_data
         .get_private_account(to_account_id)
-        .cloned()
+        .unwrap()
+        .key_chain
         .context("Failed to get private account")?;
 
     // Send to this account using claiming path (using npk and vpk instead of account ID)
