@@ -57,11 +57,9 @@ impl IndexerCore {
         let channel_genesis_msg_id = [0; 32];
         let genesis_block = hashable_data.into_pending_block(&signing_key, channel_genesis_msg_id);
 
-        let initial_commitments: Option<Vec<nssa_core::Commitment>> = config
-            .initial_private_accounts
-            .as_ref()
-            .map(|initial_commitments| {
-                initial_commitments
+        let initial_private_accounts: Option<Vec<(nssa_core::Nullifier, nssa_core::Commitment)>> =
+            config.initial_private_accounts.as_ref().map(|accounts| {
+                accounts
                     .iter()
                     .map(|init_comm_data| {
                         let npk = &init_comm_data.npk;
@@ -71,7 +69,10 @@ impl IndexerCore {
                         acc.program_owner =
                             nssa::program::Program::authenticated_transfer_program().id();
 
-                        nssa_core::Commitment::new(npk, &acc)
+                        (
+                            nssa_core::Nullifier::for_account_initialization(npk),
+                            nssa_core::Commitment::new(npk, &acc),
+                        )
                     })
                     .collect()
             });
@@ -88,10 +89,10 @@ impl IndexerCore {
 
         // If initial commitments or accounts are present in config, need to construct state from
         // them
-        let state = if initial_commitments.is_some() || init_accs.is_some() {
+        let state = if initial_private_accounts.is_some() || init_accs.is_some() {
             let mut state = V03State::new_with_genesis_accounts(
                 &init_accs.unwrap_or_default(),
-                &initial_commitments.unwrap_or_default(),
+                &initial_private_accounts.unwrap_or_default(),
             );
 
             // ToDo: Remove after testnet

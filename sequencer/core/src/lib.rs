@@ -104,24 +104,26 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
                 "No database found when starting the sequencer. Creating a fresh new with the initial data"
             );
 
-            let initial_commitments: Option<Vec<nssa_core::Commitment>> = config
-                .initial_private_accounts
-                .clone()
-                .map(|initial_commitments| {
-                    initial_commitments
-                        .iter()
-                        .map(|init_comm_data| {
-                            let npk = &init_comm_data.npk;
+            let initial_private_accounts: Option<
+                Vec<(nssa_core::Nullifier, nssa_core::Commitment)>,
+            > = config.initial_private_accounts.clone().map(|accounts| {
+                accounts
+                    .iter()
+                    .map(|init_comm_data| {
+                        let npk = &init_comm_data.npk;
 
-                            let mut acc = init_comm_data.account.clone();
+                        let mut acc = init_comm_data.account.clone();
 
-                            acc.program_owner =
-                                nssa::program::Program::authenticated_transfer_program().id();
+                        acc.program_owner =
+                            nssa::program::Program::authenticated_transfer_program().id();
 
-                            nssa_core::Commitment::new(npk, &acc)
-                        })
-                        .collect()
-                });
+                        (
+                            nssa_core::Nullifier::for_account_initialization(npk),
+                            nssa_core::Commitment::new(npk, &acc),
+                        )
+                    })
+                    .collect()
+            });
 
             let init_accs: Option<Vec<(nssa::AccountId, u128)>> = config
                 .initial_public_accounts
@@ -135,10 +137,10 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
 
             // If initial commitments or accounts are present in config, need to construct state
             // from them
-            if initial_commitments.is_some() || init_accs.is_some() {
+            if initial_private_accounts.is_some() || init_accs.is_some() {
                 V03State::new_with_genesis_accounts(
                     &init_accs.unwrap_or_default(),
-                    &initial_commitments.unwrap_or_default(),
+                    &initial_private_accounts.unwrap_or_default(),
                 )
             } else {
                 initial_state()

@@ -118,7 +118,7 @@ impl V03State {
     #[must_use]
     pub fn new_with_genesis_accounts(
         initial_data: &[(AccountId, u128)],
-        initial_commitments: &[nssa_core::Commitment],
+        initial_private_accounts: &[(Nullifier, Commitment)],
     ) -> Self {
         let authenticated_transfer_program = Program::authenticated_transfer_program();
         let public_state = initial_data
@@ -134,13 +134,24 @@ impl V03State {
             })
             .collect();
 
+        let initial_commitments: Vec<Commitment> = initial_private_accounts
+            .iter()
+            .map(|(_, c)| c.clone())
+            .collect();
         let mut private_state = CommitmentSet::with_capacity(32);
         private_state.extend(&[DUMMY_COMMITMENT]);
-        private_state.extend(initial_commitments);
+        private_state.extend(&initial_commitments);
+
+        let init_nullifiers: Vec<Nullifier> = initial_private_accounts
+            .iter()
+            .map(|(n, _)| n.clone())
+            .collect();
+        let mut nullifier_set = NullifierSet::new();
+        nullifier_set.extend(init_nullifiers);
 
         let mut this = Self {
             public_state,
-            private_state: (private_state, NullifierSet::new()),
+            private_state: (private_state, nullifier_set),
             programs: HashMap::new(),
         };
 
@@ -521,6 +532,34 @@ pub mod tests {
 
         assert_eq!(state.public_state, expected_public_state);
         assert_eq!(state.programs, expected_builtin_programs);
+    }
+
+    #[test]
+    fn new_with_genesis_includes_nullifiers_for_private_accounts() {
+        let keys1 = test_private_account_keys_1();
+        let keys2 = test_private_account_keys_2();
+
+        let account = Account {
+            balance: 100,
+            program_owner: Program::authenticated_transfer_program().id(),
+            ..Account::default()
+        };
+
+        let npk1 = keys1.npk();
+        let npk2 = keys2.npk();
+
+        let init_nullifier1 = Nullifier::for_account_initialization(&npk1);
+        let init_nullifier2 = Nullifier::for_account_initialization(&npk2);
+
+        let initial_private_accounts = vec![
+            (init_nullifier1.clone(), Commitment::new(&npk1, &account)),
+            (init_nullifier2.clone(), Commitment::new(&npk2, &account)),
+        ];
+
+        let state = V03State::new_with_genesis_accounts(&[], &initial_private_accounts);
+
+        assert!(state.private_state.1.contains(&init_nullifier1));
+        assert!(state.private_state.1.contains(&init_nullifier2));
     }
 
     #[test]
@@ -2542,8 +2581,11 @@ pub mod tests {
             ..Account::default()
         };
         let sender_commitment = Commitment::new(&sender_keys.npk(), &sender_private_account);
-        let mut state =
-            V03State::new_with_genesis_accounts(&[], std::slice::from_ref(&sender_commitment));
+        let sender_init_nullifier = Nullifier::for_account_initialization(&sender_keys.npk());
+        let mut state = V03State::new_with_genesis_accounts(
+            &[],
+            &[(sender_init_nullifier, sender_commitment.clone())],
+        );
         let sender_pre = AccountWithMetadata::new(sender_private_account, true, &sender_keys.npk());
         let recipient_private_key = PrivateKey::try_new([2; 32]).unwrap();
         let recipient_account_id =
@@ -2623,9 +2665,14 @@ pub mod tests {
 
         let from_commitment = Commitment::new(&from_keys.npk(), &from_account.account);
         let to_commitment = Commitment::new(&to_keys.npk(), &to_account.account);
+        let from_init_nullifier = Nullifier::for_account_initialization(&from_keys.npk());
+        let to_init_nullifier = Nullifier::for_account_initialization(&to_keys.npk());
         let mut state = V03State::new_with_genesis_accounts(
             &[],
-            &[from_commitment.clone(), to_commitment.clone()],
+            &[
+                (from_init_nullifier, from_commitment.clone()),
+                (to_init_nullifier, to_commitment.clone()),
+            ],
         )
         .with_test_programs();
         let amount: u128 = 37;
@@ -3192,9 +3239,10 @@ pub mod tests {
 
         let recipient_commitment =
             Commitment::new(&recipient_keys.npk(), &recipient_account.account);
+        let recipient_init_nullifier = Nullifier::for_account_initialization(&recipient_keys.npk());
         let state = V03State::new_with_genesis_accounts(
             &[(sender_account.account_id, sender_account.account.balance)],
-            std::slice::from_ref(&recipient_commitment),
+            &[(recipient_init_nullifier, recipient_commitment.clone())],
         )
         .with_test_programs();
 
