@@ -161,7 +161,7 @@ jobs:
         run: cargo nextest run -p integration_tests -- --skip tps_test --skip indexer
 
   integration-tests-indexer:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
@@ -186,7 +186,22 @@ jobs:
         env:
           RISC0_DEV_MODE: "1"
           RUST_LOG: "info"
-        run: cargo nextest run -p integration_tests indexer
+        run: cargo nextest run -p integration_tests indexer --test-threads=1
+
+      - name: Debug Docker state on failure
+        if: failure()
+        run: |
+          echo "=== docker ps -a ==="
+          docker ps -a || true
+
+          echo "=== docker network ls ==="
+          docker network ls || true
+
+          echo "=== logs: bedrock/cfgsync containers ==="
+          for c in $(docker ps -a --format '{{.Names}}' | grep -E 'logos-blockchain|cfgsync' | tail -n 40); do
+            echo "----- ${c} -----"
+            docker logs --tail 300 "$c" || true
+          done
 
   valid-proof-test:
     runs-on: ubuntu-latest
