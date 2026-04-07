@@ -1104,7 +1104,6 @@ async fn token_claiming_path_with_private_accounts() -> Result<()> {
         .get_private_account(recipient_account_id)
         .unwrap()
         .key_chain;
-    // .context("Failed to get private account keys")?;
 
     // Mint using claiming path (foreign account)
     let mint_amount = 9;
