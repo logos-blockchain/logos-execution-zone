@@ -105,7 +105,7 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
             );
 
             let initial_private_accounts: Option<
-                Vec<(nssa_core::Nullifier, nssa_core::Commitment)>,
+                Vec<(nssa_core::Commitment, nssa_core::Nullifier)>,
             > = config.initial_private_accounts.clone().map(|accounts| {
                 accounts
                     .iter()
@@ -118,8 +118,8 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
                             nssa::program::Program::authenticated_transfer_program().id();
 
                         (
-                            nssa_core::Nullifier::for_account_initialization(npk),
                             nssa_core::Commitment::new(npk, &acc),
+                            nssa_core::Nullifier::for_account_initialization(npk),
                         )
                     })
                     .collect()
@@ -140,7 +140,7 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
             if initial_private_accounts.is_some() || init_accs.is_some() {
                 V03State::new_with_genesis_accounts(
                     &init_accs.unwrap_or_default(),
-                    &initial_private_accounts.unwrap_or_default(),
+                    initial_private_accounts.unwrap_or_default(),
                 )
             } else {
                 initial_state()

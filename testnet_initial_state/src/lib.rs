@@ -196,7 +196,7 @@ pub fn initial_accounts() -> Vec<PublicAccountPublicInitialData> {
 
 #[must_use]
 pub fn initial_state() -> V03State {
-    let initial_private_accounts: Vec<(nssa_core::Nullifier, nssa_core::Commitment)> =
+    let initial_private_accounts: Vec<(nssa_core::Commitment, nssa_core::Nullifier)> =
         initial_commitments()
             .iter()
             .map(|init_comm_data| {
@@ -207,8 +207,8 @@ pub fn initial_state() -> V03State {
                 acc.program_owner = nssa::program::Program::authenticated_transfer_program().id();
 
                 (
-                    nssa_core::Nullifier::for_account_initialization(npk),
                     nssa_core::Commitment::new(npk, &acc),
+                    nssa_core::Nullifier::for_account_initialization(npk),
                 )
             })
             .collect();
@@ -218,7 +218,7 @@ pub fn initial_state() -> V03State {
         .map(|acc_data| (acc_data.account_id, acc_data.balance))
         .collect();
 
-    nssa::V03State::new_with_genesis_accounts(&init_accs, &initial_private_accounts)
+    nssa::V03State::new_with_genesis_accounts(&init_accs, initial_private_accounts)
 }
 
 #[must_use]

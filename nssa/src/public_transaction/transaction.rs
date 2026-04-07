@@ -302,7 +302,7 @@ pub mod tests {
     fn state_for_tests() -> V03State {
         let (_, _, addr1, addr2) = keys_for_tests();
         let initial_data = [(addr1, 10000), (addr2, 20000)];
-        V03State::new_with_genesis_accounts(&initial_data, &[])
+        V03State::new_with_genesis_accounts(&initial_data, vec![])
     }
 
     fn transaction_for_tests() -> PublicTransaction {
