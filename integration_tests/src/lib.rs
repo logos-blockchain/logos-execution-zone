@@ -187,11 +187,14 @@ impl TestContext {
 
         let addr = SocketAddr::from(([127, 0, 0, 1], port));
 
-        // Wait for Bedrock consensus to stabilize after startup
-        // The cfgsync server coordinates all 4 nodes; we give them time to reach consensus
-        debug!("Bedrock services are up, waiting for consensus stabilization...");
-        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-        debug!("Bedrock consensus stabilization complete");
+        // Wait for Bedrock consensus to stabilize and finalization to begin
+        // The cfgsync server coordinates all 4 nodes; finalization requires multiple rounds
+        // Extended timeout to ensure blocks can achieve finalized status
+        info!(
+            "Bedrock services are up at {addr}, waiting for consensus stabilization and finalization..."
+        );
+        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        info!("Bedrock stabilization complete, proceeding with test");
 
         Ok((compose, addr))
     }

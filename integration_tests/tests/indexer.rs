@@ -19,18 +19,41 @@ const L2_TO_L1_TIMEOUT_MILLIS: u64 = 600_000;
 async fn indexer_test_run() -> Result<()> {
     let ctx = TestContext::new().await?;
 
-    // RUN OBSERVATION
-    info!(
-        "Waiting {} ms for blocks to be created and finalized on Bedrock",
-        L2_TO_L1_TIMEOUT_MILLIS
-    );
-    tokio::time::sleep(std::time::Duration::from_millis(L2_TO_L1_TIMEOUT_MILLIS)).await;
-    info!("Wait period complete");
+    info!("TestContext initialized, Bedrock + Sequencer + Indexer all running");
+
+    // Check finalization progress over time to diagnose stalls
+    for i in 0..6 {
+        let elapsed_secs = (i * 100) as u64;
+        if i > 0 {
+            info!(
+                "Waiting {} more seconds for blocks to finalize...",
+                elapsed_secs
+            );
+            tokio::time::sleep(std::time::Duration::from_secs(elapsed_secs)).await;
+        }
+
+        let seq_block =
+            sequencer_service_rpc::RpcClient::get_last_block_id(ctx.sequencer_client()).await?;
+        let indexer_block = ctx
+            .indexer_client()
+            .get_last_finalized_block_id()
+            .await
+            .unwrap();
+
+        info!(
+            "Status at +{elapsed_secs}s: sequencer at {seq_block}, indexer finalized at {indexer_block}"
+        );
+
+        if indexer_block > 1 {
+            info!("Finalization starting, breaking early");
+            break;
+        }
+    }
 
     let last_block_seq =
         sequencer_service_rpc::RpcClient::get_last_block_id(ctx.sequencer_client()).await?;
 
-    info!("Last block on sequencer: {last_block_seq}");
+    info!("Final: Sequencer at block {last_block_seq}");
 
     let last_block_indexer = ctx
         .indexer_client()
@@ -38,7 +61,7 @@ async fn indexer_test_run() -> Result<()> {
         .await
         .unwrap();
 
-    info!("Last finalized block on indexer: {last_block_indexer}");
+    info!("Final: Indexer finalized at block {last_block_indexer}");
 
     assert!(last_block_indexer > 1);
 

@@ -193,7 +193,7 @@ jobs:
         env:
           RISC0_DEV_MODE: "1"
           RUST_LOG: "debug"
-        run: cargo nextest run -p integration_tests indexer --test-threads=1
+        run: cargo nextest run -p integration_tests indexer -- indexer_test_run
 
       - name: Debug Docker state on failure
         if: failure()
