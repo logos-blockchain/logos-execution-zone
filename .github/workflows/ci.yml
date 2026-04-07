@@ -124,7 +124,7 @@ jobs:
         run: rustup install
 
       - name: Install nextest
-        run: cargo install --locked cargo-nextest
+        run: cargo install --locked cargo-nextest --version 0.9.132
 
       - name: Run tests
         env:
@@ -152,7 +152,7 @@ jobs:
         run: rustup install
 
       - name: Install nextest
-        run: cargo install --locked cargo-nextest
+        run: cargo install --locked cargo-nextest --version 0.9.132
 
       - name: Run tests
         env:
@@ -193,7 +193,7 @@ jobs:
         env:
           RISC0_DEV_MODE: "1"
           RUST_LOG: "debug"
-        run: cargo nextest run -p integration_tests indexer -- indexer_test_run
+        run: cargo nextest run -p integration_tests -E 'test(indexer_test_run)' --test-threads=1
 
       - name: Debug Docker state on failure
         if: failure()
