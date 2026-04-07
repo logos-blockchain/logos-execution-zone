@@ -5,7 +5,7 @@ use bytesize::ByteSize;
 use indexer_service::{BackoffConfig, ChannelId, ClientConfig, IndexerConfig};
 use key_protocol::key_management::KeyChain;
 use nssa::{Account, AccountId};
-use nssa_core::{PrivateKey, PublicKey, account::Data, program::DEFAULT_PROGRAM_ID};
+use nssa_core::{PrivateKey, PublicKey, account::{Data, Identifier}, program::DEFAULT_PROGRAM_ID};
 use sequencer_core::config::{BedrockConfig, SequencerConfig};
 use testnet_initial_state::{
     PrivateAccountPrivateInitialData, PrivateAccountPublicInitialData,
@@ -46,11 +46,11 @@ impl InitialData {
         let mut public_alice_public_key =
             PublicKey::new_from_private_key(&public_alice_private_key);
         let mut public_alice_account_id =
-            AccountId::public_account_id(&public_alice_public_key, None);
+            AccountId::public_account_id(&public_alice_public_key);
 
         let mut public_bob_private_key = PrivateKey::new_os_random();
         let mut public_bob_public_key = PublicKey::new_from_private_key(&public_bob_private_key);
-        let mut public_bob_account_id = AccountId::public_account_id(&public_bob_public_key, None);
+        let mut public_bob_account_id = AccountId::public_account_id(&public_bob_public_key);
 
         // Ensure consistent ordering
         if public_alice_account_id > public_bob_account_id {
@@ -61,11 +61,11 @@ impl InitialData {
 
         let mut private_charlie_key_chain = KeyChain::new_os_random();
         let mut private_charlie_account_id =
-            AccountId::private_account_id(&private_charlie_key_chain.nullifier_public_key, None);
+            AccountId::private_account_id(&private_charlie_key_chain.nullifier_public_key, Identifier(0_u128));
 
         let mut private_david_key_chain = KeyChain::new_os_random();
         let mut private_david_account_id =
-            AccountId::private_account_id(&private_david_key_chain.nullifier_public_key, None);
+            AccountId::private_account_id(&private_david_key_chain.nullifier_public_key, Identifier(0_u128));
 
         // Ensure consistent ordering
         if private_charlie_account_id > private_david_account_id {
@@ -109,7 +109,7 @@ impl InitialData {
             .iter()
             .map(|(priv_key, balance)| {
                 let pub_key = PublicKey::new_from_private_key(priv_key);
-                let account_id = AccountId::public_account_id(&pub_key, None);
+                let account_id = AccountId::public_account_id(&pub_key);
                 PublicAccountPublicInitialData {
                     account_id,
                     balance: *balance,
@@ -133,7 +133,7 @@ impl InitialData {
             .iter()
             .map(|(priv_key, _)| {
                 let pub_key = PublicKey::new_from_private_key(priv_key);
-                let account_id = AccountId::public_account_id(&pub_key, None);
+                let account_id = AccountId::public_account_id(&pub_key);
                 InitialAccountData::Public(PublicAccountPrivateInitialData {
                     account_id,
                     pub_sign_key: priv_key.clone(),
@@ -141,7 +141,7 @@ impl InitialData {
             })
             .chain(self.private_accounts.iter().map(|(key_chain, account)| {
                 let account_id =
-                    AccountId::private_account_id(&key_chain.nullifier_public_key, None);
+                    AccountId::private_account_id(&key_chain.nullifier_public_key, Identifier(0_u128));
                 InitialAccountData::Private(Box::new(PrivateAccountPrivateInitialData {
                     account_id,
                     account: account.clone(),

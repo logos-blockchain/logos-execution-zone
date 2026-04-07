@@ -74,7 +74,8 @@ impl Signature {
     }
 
     #[cfg(feature = "test-utils")]
-    pub fn new_for_tests(value: [u8; 64]) -> Self {
+    #[must_use]
+    pub const fn new_for_tests(value: [u8; 64]) -> Self {
         Self { value }
     }
 }

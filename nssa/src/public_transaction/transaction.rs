@@ -61,7 +61,7 @@ impl PublicTransaction {
 
 #[cfg(test)]
 pub mod tests {
-    use nssa_core::{PrivateKey, PublicKey, Signature};
+    use nssa_core::{PrivateKey, PublicKey};
     use sha2::{Digest as _, digest::FixedOutput as _};
 
     use crate::{
@@ -205,6 +205,8 @@ pub mod tests {
     #[cfg(feature = "test-utils")]
     #[test]
     fn all_signatures_must_be_valid() {
+        use nssa_core::Signature;
+
         let (key1, key2, addr1, addr2) = keys_for_tests();
         let state = state_for_tests();
         let nonces = vec![0_u128.into(), 0_u128.into()];

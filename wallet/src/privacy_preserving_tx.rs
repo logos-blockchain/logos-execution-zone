@@ -3,7 +3,7 @@ use key_protocol::key_management::ephemeral_key_holder::EphemeralKeyHolder;
 use nssa::AccountId;
 use nssa_core::{
     MembershipProof, NullifierPublicKey, NullifierSecretKey, PrivateKey, SharedSecretKey,
-    account::{AccountWithMetadata, Nonce},
+    account::{AccountWithMetadata, Identifier, Nonce},
     encryption::{EphemeralPublicKey, ViewingPublicKey},
 };
 
@@ -82,7 +82,7 @@ impl AccountManager {
                     (State::Private(pre), mask)
                 }
                 PrivacyPreservingAccount::PrivateForeign { npk, vpk } => {
-                    let account_id = AccountId::private_account_id(&npk, None);
+                    let account_id = AccountId::private_account_id(&npk, Identifier(0_u128));
                     let acc = nssa_core::account::Account::default();
                     let auth_acc = AccountWithMetadata::new(acc, false, account_id);
                     let pre = AccountPreparedData {

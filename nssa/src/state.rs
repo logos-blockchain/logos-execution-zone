@@ -357,7 +357,6 @@ pub mod tests {
     use std::collections::HashMap;
 
     use nssa_core::account::Identifier;
-    #[allow(unused_imports)]
     use nssa_core::{
         BlockId, Commitment, Nullifier, NullifierPublicKey, NullifierSecretKey, PrivateKey,
         PublicKey, SharedSecretKey, Timestamp,
@@ -378,7 +377,6 @@ pub mod tests {
         },
         program::Program,
         public_transaction,
-        signature::PrivateKey,
         state::{
             CLOCK_01_PROGRAM_ACCOUNT_ID, CLOCK_10_PROGRAM_ACCOUNT_ID, CLOCK_50_PROGRAM_ACCOUNT_ID,
             CLOCK_PROGRAM_ACCOUNT_IDS, MAX_NUMBER_CHAINED_CALLS,
@@ -2595,7 +2593,7 @@ pub mod tests {
     fn unauthorized_public_account_claiming_fails() {
         let program = Program::authenticated_transfer_program();
         let account_key = PrivateKey::try_new([9; 32]).unwrap();
-        let account_id = AccountId::from(&PublicKey::new_from_private_key(&account_key));
+        let account_id = AccountId::public_account_id(&PublicKey::new_from_private_key(&account_key));
         let mut state = V03State::new_with_genesis_accounts(&[], &[], 0);
 
         assert_eq!(state.get_account_by_id(account_id), Account::default());
@@ -2616,7 +2614,7 @@ pub mod tests {
     fn authorized_public_account_claiming_succeeds() {
         let program = Program::authenticated_transfer_program();
         let account_key = PrivateKey::try_new([10; 32]).unwrap();
-        let account_id = AccountId::from(&PublicKey::new_from_private_key(&account_key));
+        let account_id = AccountId::public_account_id(&PublicKey::new_from_private_key(&account_key));
         let mut state = V03State::new_with_genesis_accounts(&[], &[], 0);
 
         assert_eq!(state.get_account_by_id(account_id), Account::default());
@@ -2912,7 +2910,6 @@ pub mod tests {
         );
     }
 
-    // TODO: Marvin check this
     #[test_case::test_case(1; "single call")]
     #[test_case::test_case(2; "two calls")]
     fn private_chained_call(number_of_calls: u32) {
@@ -3839,7 +3836,7 @@ pub mod tests {
             V03State::new_with_genesis_accounts(&[(recipient_id, 0)], &[], genesis_timestamp)
                 .with_test_programs();
         let key1 = PrivateKey::try_new([1; 32]).unwrap();
-        let sender_id = AccountId::from(&PublicKey::new_from_private_key(&key1));
+        let sender_id = AccountId::public_account_id(&PublicKey::new_from_private_key(&key1));
         state.force_insert_account(
             sender_id,
             Account {
@@ -3882,7 +3879,7 @@ pub mod tests {
             V03State::new_with_genesis_accounts(&[(recipient_id, 0)], &[], genesis_timestamp)
                 .with_test_programs();
         let key1 = PrivateKey::try_new([1; 32]).unwrap();
-        let sender_id = AccountId::from(&PublicKey::new_from_private_key(&key1));
+        let sender_id = AccountId::public_account_id(&PublicKey::new_from_private_key(&key1));
         state.force_insert_account(
             sender_id,
             Account {

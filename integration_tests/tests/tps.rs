@@ -28,7 +28,7 @@ use nssa::{
 };
 use nssa_core::{
     MembershipProof, NullifierPublicKey, PrivateKey, PublicKey,
-    account::{AccountWithMetadata, Nonce, data::Data},
+    account::{AccountWithMetadata, Identifier, Nonce, data::Data},
     encryption::ViewingPublicKey,
 };
 use sequencer_service_rpc::RpcClient as _;
@@ -49,7 +49,7 @@ impl TpsTestManager {
                 private_key_bytes[..8].copy_from_slice(&i.to_le_bytes());
                 let private_key = PrivateKey::try_new(private_key_bytes).unwrap();
                 let public_key = PublicKey::new_from_private_key(&private_key);
-                let account_id = AccountId::public_account_id(&public_key, None);
+                let account_id = AccountId::public_account_id(&public_key);
                 (private_key, account_id)
             })
             .collect();
@@ -212,7 +212,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
     let sender_vsk = [99; 32];
     let sender_vpk = ViewingPublicKey::from_scalar(sender_vsk);
     let sender_npk = NullifierPublicKey::from(&sender_nsk);
-    let sender_id = AccountId::private_account_id(&sender_npk, None);
+    let sender_id = AccountId::private_account_id(&sender_npk, Identifier(0_u128));
     let sender_pre = AccountWithMetadata::new(
         Account {
             balance: 100,
@@ -221,17 +221,17 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
             data: Data::default(),
         },
         true,
-        AccountId::private_account_id(&sender_npk, None),
+        AccountId::private_account_id(&sender_npk, Identifier(0_u128)),
     );
     let recipient_nsk = [2; 32];
     let recipient_vsk = [99; 32];
     let recipient_vpk = ViewingPublicKey::from_scalar(recipient_vsk);
     let recipient_npk = NullifierPublicKey::from(&recipient_nsk);
-    let recipient_id = AccountId::private_account_id(&recipient_npk, None);
+    let recipient_id = AccountId::private_account_id(&recipient_npk, Identifier(0_u128));
     let recipient_pre = AccountWithMetadata::new(
         Account::default(),
         false,
-        AccountId::private_account_id(&recipient_npk, None),
+        AccountId::private_account_id(&recipient_npk, Identifier(0_u128)),
     );
 
     let eph_holder_from = EphemeralKeyHolder::new(&sender_npk);
