@@ -7,6 +7,7 @@ fn main() {
     let (
         ProgramInput {
             self_program_id,
+            caller_program_id,
             pre_states,
             instruction: (data_opt, should_claim),
         },
@@ -36,6 +37,7 @@ fn main() {
 
     ProgramOutput::new(
         self_program_id,
+        caller_program_id,
         instruction_words,
         vec![pre],
         vec![post_state],

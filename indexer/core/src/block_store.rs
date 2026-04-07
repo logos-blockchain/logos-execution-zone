@@ -4,7 +4,7 @@ use anyhow::Result;
 use bedrock_client::HeaderId;
 use common::{
     block::{BedrockStatus, Block},
-    transaction::NSSATransaction,
+    transaction::{NSSATransaction, clock_invocation},
 };
 use nssa::{Account, AccountId, V03State};
 use nssa_core::BlockId;
@@ -122,7 +122,18 @@ impl IndexerStore {
         {
             let mut state_guard = self.current_state.write().await;
 
-            for transaction in &block.body.transactions {
+            let (clock_tx, user_txs) = block
+                .body
+                .transactions
+                .split_last()
+                .ok_or_else(|| anyhow::anyhow!("Block has no transactions"))?;
+
+            anyhow::ensure!(
+                *clock_tx == NSSATransaction::Public(clock_invocation(block.header.timestamp)),
+                "Last transaction in block must be the clock invocation for the block timestamp"
+            );
+
+            for transaction in user_txs {
                 transaction
                     .clone()
                     .transaction_stateless_check()?
@@ -132,6 +143,16 @@ impl IndexerStore {
                         block.header.timestamp,
                     )?;
             }
+
+            // Apply the clock invocation directly (it is expected to modify clock accounts).
+            let NSSATransaction::Public(clock_public_tx) = clock_tx else {
+                anyhow::bail!("Clock invocation must be a public transaction");
+            };
+            state_guard.transition_from_public_transaction(
+                clock_public_tx,
+                block.header.block_id,
+                block.header.timestamp,
+            )?;
         }
 
         // ToDo: Currently we are fetching only finalized blocks
@@ -178,7 +199,7 @@ mod tests {
         let storage = IndexerStore::open_db_with_genesis(
             home.as_ref(),
             &genesis_block(),
-            &nssa::V03State::new_with_genesis_accounts(&[(acc1(), 10000), (acc2(), 20000)], &[]),
+            &nssa::V03State::new_with_genesis_accounts(&[(acc1(), 10000), (acc2(), 20000)], &[], 0),
         )
         .unwrap();
 
@@ -196,7 +217,7 @@ mod tests {
         let storage = IndexerStore::open_db_with_genesis(
             home.as_ref(),
             &genesis_block(),
-            &nssa::V03State::new_with_genesis_accounts(&[(acc1(), 10000), (acc2(), 20000)], &[]),
+            &nssa::V03State::new_with_genesis_accounts(&[(acc1(), 10000), (acc2(), 20000)], &[], 0),
         )
         .unwrap();
 
@@ -214,11 +235,14 @@ mod tests {
                 10,
                 &sign_key,
             );
+            let block_id = u64::try_from(i).unwrap();
+            let block_timestamp = block_id.saturating_mul(100);
+            let clock_tx = NSSATransaction::Public(clock_invocation(block_timestamp));
 
             let next_block = common::test_utils::produce_dummy_block(
-                u64::try_from(i).unwrap(),
+                block_id,
                 Some(prev_hash),
-                vec![tx],
+                vec![tx, clock_tx],
             );
             prev_hash = next_block.header.hash;
 

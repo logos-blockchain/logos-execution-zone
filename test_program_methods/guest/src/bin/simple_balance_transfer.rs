@@ -6,6 +6,7 @@ fn main() {
     let (
         ProgramInput {
             self_program_id,
+            caller_program_id,
             pre_states,
             instruction: balance,
         },
@@ -29,6 +30,7 @@ fn main() {
 
     ProgramOutput::new(
         self_program_id,
+        caller_program_id,
         instruction_words,
         vec![sender_pre, receiver_pre],
         vec![

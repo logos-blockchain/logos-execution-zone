@@ -92,6 +92,7 @@ impl IndexerCore {
             let mut state = V03State::new_with_genesis_accounts(
                 &init_accs.unwrap_or_default(),
                 &initial_commitments.unwrap_or_default(),
+                genesis_block.header.timestamp,
             );
 
             // ToDo: Remove after testnet

@@ -228,7 +228,7 @@ pub fn initial_state() -> V03State {
         .map(|acc_data| (acc_data.account_id, acc_data.balance))
         .collect();
 
-    nssa::V03State::new_with_genesis_accounts(&init_accs, &initial_commitments)
+    nssa::V03State::new_with_genesis_accounts(&init_accs, &initial_commitments, 0)
 }
 
 #[must_use]

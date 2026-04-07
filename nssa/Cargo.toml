@@ -9,6 +9,7 @@ workspace = true
 
 [dependencies]
 nssa_core = { workspace = true, features = ["host", "test-utils"] }
+clock_core.workspace = true
 
 anyhow.workspace = true
 thiserror.workspace = true

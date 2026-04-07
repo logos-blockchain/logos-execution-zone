@@ -3035,7 +3035,7 @@ fn new_definition_lp_symmetric_amounts() {
 
 fn state_for_amm_tests() -> V03State {
     let initial_data = [];
-    let mut state = V03State::new_with_genesis_accounts(&initial_data, &[]);
+    let mut state = V03State::new_with_genesis_accounts(&initial_data, &[], 0);
     state.force_insert_account(
         IdForExeTests::pool_definition_id(),
         AccountsForExeTests::pool_definition_init(),
@@ -3078,7 +3078,7 @@ fn state_for_amm_tests() -> V03State {
 
 fn state_for_amm_tests_with_new_def() -> V03State {
     let initial_data = [];
-    let mut state = V03State::new_with_genesis_accounts(&initial_data, &[]);
+    let mut state = V03State::new_with_genesis_accounts(&initial_data, &[], 0);
     state.force_insert_account(
         IdForExeTests::token_a_definition_id(),
         AccountsForExeTests::token_a_definition_account(),

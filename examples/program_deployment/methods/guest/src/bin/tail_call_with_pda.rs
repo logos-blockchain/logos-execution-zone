@@ -34,6 +34,7 @@ fn main() {
     let (
         ProgramInput {
             self_program_id,
+            caller_program_id,
             pre_states,
             instruction: (),
         },
@@ -71,6 +72,7 @@ fn main() {
     // called to commit the output.
     ProgramOutput::new(
         self_program_id,
+        caller_program_id,
         instruction_data,
         vec![pre_state],
         vec![post_state],
