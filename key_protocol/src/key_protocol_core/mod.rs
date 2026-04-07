@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use anyhow::Result;
 use k256::AffinePoint;
+use nssa_core::account::Identifier;
 use serde::{Deserialize, Serialize};
 
 use crate::key_management::{
@@ -33,7 +34,6 @@ impl NSSAUserData {
         for (account_id, key) in accounts_keys_map {
             let expected_account_id = nssa::AccountId::public_account_id(
                 &nssa_core::PublicKey::new_from_private_key(key),
-                None,
             );
             if &expected_account_id != account_id {
                 println!("{expected_account_id}, {account_id}");
@@ -49,7 +49,7 @@ impl NSSAUserData {
         let mut check_res = true;
         for (account_id, (key, _)) in accounts_keys_map {
             let expected_account_id =
-                nssa::AccountId::private_account_id(&key.nullifier_public_key, None);
+                nssa::AccountId::private_account_id(&key.nullifier_public_key, Identifier(0_u128));
             if expected_account_id != *account_id {
                 println!("{expected_account_id}, {account_id}");
                 check_res = false;

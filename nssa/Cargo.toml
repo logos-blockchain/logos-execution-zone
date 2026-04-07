@@ -8,7 +8,7 @@ license = { workspace = true }
 workspace = true
 
 [dependencies]
-nssa_core = { workspace = true, features = ["host"] }
+nssa_core = { workspace = true, features = ["host", "test-utils"] }
 
 anyhow.workspace = true
 thiserror.workspace = true

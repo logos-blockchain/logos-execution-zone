@@ -396,7 +396,7 @@ impl WalletCore {
                 .map(|keys| (keys.npk.clone(), keys.ssk))
                 .collect::<Vec<_>>(),
             acc_manager.private_account_auth(),
-            vec![], // TODO check (Marvin)
+            vec![],
             acc_manager.private_account_membership_proofs(),
             &program.to_owned(),
         )
@@ -410,7 +410,7 @@ impl WalletCore {
                     .iter()
                     .map(|keys| {
                         (
-                            AccountId::private_account_id(&keys.npk.clone(), None),
+                            AccountId::private_account_id(&keys.npk.clone(), Identifier(0_u128)),
                             keys.vpk.clone(),
                             keys.epk.clone(),
                         )
@@ -505,7 +505,10 @@ impl WalletCore {
         let affected_accounts = private_account_key_chains
             .flat_map(|(acc_account_id, key_chain, index)| {
                 let view_tag = EncryptedAccountData::compute_view_tag(
-                    &AccountId::private_account_id(&key_chain.nullifier_public_key, None),
+                    &AccountId::private_account_id(
+                        &key_chain.nullifier_public_key,
+                        Identifier(0_u128),
+                    ),
                     &key_chain.viewing_public_key,
                 );
 

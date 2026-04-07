@@ -5,7 +5,8 @@ use key_protocol::key_management::{
 };
 use nssa::{Account, AccountId, Data, V03State};
 use nssa_core::{
-    NullifierPublicKey, PrivateKey, PublicKey, encryption::shared_key_derivation::Secp256k1Point,
+    NullifierPublicKey, PrivateKey, PublicKey, account::Identifier,
+    encryption::shared_key_derivation::Secp256k1Point,
 };
 use serde::{Deserialize, Serialize};
 
@@ -110,17 +111,15 @@ pub fn initial_pub_accounts_private_keys() -> Vec<PublicAccountPrivateInitialDat
 
     vec![
         PublicAccountPrivateInitialData {
-            account_id: AccountId::public_account_id(
-                &PublicKey::new_from_private_key(&acc1_pub_sign_key),
-                None,
-            ),
+            account_id: AccountId::public_account_id(&PublicKey::new_from_private_key(
+                &acc1_pub_sign_key,
+            )),
             pub_sign_key: acc1_pub_sign_key,
         },
         PublicAccountPrivateInitialData {
-            account_id: AccountId::public_account_id(
-                &PublicKey::new_from_private_key(&acc2_pub_sign_key),
-                None,
-            ),
+            account_id: AccountId::public_account_id(&PublicKey::new_from_private_key(
+                &acc2_pub_sign_key,
+            )),
             pub_sign_key: acc2_pub_sign_key,
         },
     ]
@@ -150,7 +149,10 @@ pub fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialD
 
     vec![
         PrivateAccountPrivateInitialData {
-            account_id: AccountId::private_account_id(&key_chain_1.nullifier_public_key, None),
+            account_id: AccountId::private_account_id(
+                &key_chain_1.nullifier_public_key,
+                Identifier(13_u128),
+            ),
             account: Account {
                 program_owner: DEFAULT_PROGRAM_OWNER,
                 balance: PRIV_ACC_A_INITIAL_BALANCE,
@@ -160,7 +162,10 @@ pub fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialD
             key_chain: key_chain_1,
         },
         PrivateAccountPrivateInitialData {
-            account_id: AccountId::private_account_id(&key_chain_2.nullifier_public_key, None),
+            account_id: AccountId::private_account_id(
+                &key_chain_2.nullifier_public_key,
+                Identifier(42_u128),
+            ),
             account: Account {
                 program_owner: DEFAULT_PROGRAM_OWNER,
                 balance: PRIV_ACC_B_INITIAL_BALANCE,
@@ -208,7 +213,7 @@ pub fn initial_state() -> V03State {
         .iter()
         .map(|init_comm_data| {
             let npk = &init_comm_data.npk;
-            let acc_id = &AccountId::private_account_id(npk, None);
+            let acc_id = &AccountId::private_account_id(npk, Identifier(0_u128));
 
             let mut acc = init_comm_data.account.clone();
 

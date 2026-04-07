@@ -243,11 +243,11 @@ mod tests {
     }
 
     fn acc1() -> AccountId {
-        AccountId::public_account_id(&PublicKey::new_from_private_key(&acc1_sign_key()), None)
+        AccountId::public_account_id(&PublicKey::new_from_private_key(&acc1_sign_key()))
     }
 
     fn acc2() -> AccountId {
-        AccountId::public_account_id(&PublicKey::new_from_private_key(&acc2_sign_key()), None)
+        AccountId::public_account_id(&PublicKey::new_from_private_key(&acc2_sign_key()))
     }
 
     #[test]

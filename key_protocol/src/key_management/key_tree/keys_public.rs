@@ -99,7 +99,7 @@ impl KeyNode for ChildKeysPublic {
     }
 
     fn account_id(&self) -> nssa::AccountId {
-        nssa::AccountId::public_account_id(&self.cpk, None)
+        nssa::AccountId::public_account_id(&self.cpk)
     }
 }
 

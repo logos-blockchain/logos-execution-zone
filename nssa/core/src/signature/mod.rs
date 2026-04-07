@@ -72,6 +72,11 @@ impl Signature {
 
         pk.verify_raw(bytes, &sig).is_ok()
     }
+
+    #[cfg(feature = "test-utils")]
+    pub fn new_for_tests(value: [u8; 64]) -> Self {
+        Self { value }
+    }
 }
 
 #[cfg(test)]
@@ -81,12 +86,6 @@ mod bip340_test_vectors;
 mod tests {
 
     use crate::{Signature, signature::bip340_test_vectors};
-
-    impl Signature {
-        pub(crate) fn _new_for_tests(value: [u8; 64]) -> Self {
-            Self { value }
-        }
-    }
 
     #[test]
     fn signature_generation_from_bip340_test_vectors() {

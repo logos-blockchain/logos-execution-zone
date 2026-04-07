@@ -1,5 +1,5 @@
 use k256::{Scalar, elliptic_curve::PrimeField as _};
-use nssa_core::{NullifierPublicKey, encryption::ViewingPublicKey};
+use nssa_core::{NullifierPublicKey, account::Identifier, encryption::ViewingPublicKey};
 use serde::{Deserialize, Serialize};
 
 use crate::key_management::{
@@ -111,7 +111,7 @@ impl KeyNode for ChildKeysPrivate {
     }
 
     fn account_id(&self) -> nssa::AccountId {
-        nssa::AccountId::private_account_id(&self.value.0.nullifier_public_key, None)
+        nssa::AccountId::private_account_id(&self.value.0.nullifier_public_key, Identifier(0_u128))
     }
 }
 

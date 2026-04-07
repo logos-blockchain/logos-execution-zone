@@ -27,3 +27,4 @@ serde_json.workspace = true
 [features]
 default = ["dep:k256"]
 host = ["dep:k256"]
+test-utils = ["dep:k256"]

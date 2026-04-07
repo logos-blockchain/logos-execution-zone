@@ -1313,24 +1313,21 @@ impl IdForExeTests {
     }
 
     fn user_token_a_id() -> AccountId {
-        AccountId::public_account_id(
-            &PublicKey::new_from_private_key(&PrivateKeysForTests::user_token_a_key()),
-            None,
-        )
+        AccountId::public_account_id(&PublicKey::new_from_private_key(
+            &PrivateKeysForTests::user_token_a_key(),
+        ))
     }
 
     fn user_token_b_id() -> AccountId {
-        AccountId::public_account_id(
-            &PublicKey::new_from_private_key(&PrivateKeysForTests::user_token_b_key()),
-            None,
-        )
+        AccountId::public_account_id(&PublicKey::new_from_private_key(
+            &PrivateKeysForTests::user_token_b_key(),
+        ))
     }
 
     fn user_token_lp_id() -> AccountId {
-        AccountId::public_account_id(
-            &PublicKey::new_from_private_key(&PrivateKeysForTests::user_token_lp_key()),
-            None,
-        )
+        AccountId::public_account_id(&PublicKey::new_from_private_key(
+            &PrivateKeysForTests::user_token_lp_key(),
+        ))
     }
 
     fn vault_a_id() -> AccountId {

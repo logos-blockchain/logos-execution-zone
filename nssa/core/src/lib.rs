@@ -8,7 +8,9 @@ pub use commitment::{
     Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, DUMMY_COMMITMENT_HASH, MembershipProof,
     compute_digest_for_path,
 };
-pub use encryption::{EncryptionScheme, SharedSecretKey};
+pub use encryption::{
+    EncryptionScheme, SharedSecretKey, shared_key_derivation::EphemeralPublicKey,
+};
 pub use nullifier::{Nullifier, NullifierPublicKey, NullifierSecretKey};
 pub use signature::{PrivateKey, PublicKey, Signature};
 

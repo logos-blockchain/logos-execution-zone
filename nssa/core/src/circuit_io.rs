@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     Commitment, CommitmentSetDigest, MembershipProof, Nullifier, NullifierPublicKey,
     NullifierSecretKey, SharedSecretKey,
-    account::{Account, AccountWithMetadata},
+    account::{Account, AccountWithMetadata, Identifier},
     encryption::Ciphertext,
     program::{BlockValidityWindow, ProgramId, ProgramOutput, TimestampValidityWindow},
 };
@@ -22,8 +22,8 @@ pub struct PrivacyPreservingCircuitInput {
     pub private_account_keys: Vec<(NullifierPublicKey, SharedSecretKey)>,
     /// Nullifier secret keys for authorized private accounts.
     pub private_account_nsks: Vec<NullifierSecretKey>,
-    /// Identifiers used to generate `AccountId` (TODO: marvin double check logic).
-    pub private_account_identifiers: Vec<u128>,
+    /// Identifiers used to generate `AccountId`.
+    pub private_account_identifiers: Vec<Identifier>,
     /// Membership proofs for private accounts. Can be [`None`] for uninitialized accounts.
     pub private_account_membership_proofs: Vec<Option<MembershipProof>>,
     /// Program ID.
@@ -59,7 +59,7 @@ mod tests {
     use super::*;
     use crate::{
         Commitment, Nullifier, NullifierPublicKey,
-        account::{Account, AccountId, AccountWithMetadata, Nonce},
+        account::{Account, AccountId, AccountWithMetadata, Identifier, Nonce},
     };
 
     #[test]
@@ -95,7 +95,10 @@ mod tests {
             }],
             ciphertexts: vec![Ciphertext(vec![255, 255, 1, 1, 2, 2])],
             new_commitments: vec![Commitment::new(
-                &AccountId::private_account_id(&NullifierPublicKey::from(&[1_u8; 32]), None),
+                &AccountId::private_account_id(
+                    &NullifierPublicKey::from(&[1_u8; 32]),
+                    Identifier(0_u128),
+                ),
                 &Account::default(),
             )],
             new_nullifiers: vec![(
@@ -103,7 +106,7 @@ mod tests {
                     &Commitment::new(
                         &AccountId::private_account_id(
                             &NullifierPublicKey::from(&[2_u8; 32]),
-                            None,
+                            Identifier(0_u128),
                         ),
                         &Account::default(),
                     ),

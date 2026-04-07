@@ -129,7 +129,7 @@ mod tests {
 
         let public_key = nssa_core::PublicKey::new_from_private_key(&pub_account_signing_key);
 
-        let account = nssa::AccountId::public_account_id(&public_key, None);
+        let account = nssa::AccountId::public_account_id(&public_key);
 
         println!("======Prerequisites======");
         println!();

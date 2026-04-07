@@ -10,12 +10,16 @@ use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde::{Deserialize, Serialize};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
 
-use crate::{NullifierPublicKey, NullifierSecretKey, PublicKey, program::ProgramId};
+use crate::{
+    EphemeralPublicKey, NullifierPublicKey, NullifierSecretKey, PublicKey, program::ProgramId,
+};
 
 pub mod data;
 
 #[derive(Copy, Debug, Default, Clone, Eq, PartialEq)]
 pub struct Nonce(pub u128);
+#[derive(Copy, Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+pub struct Identifier(pub u128);
 
 impl Nonce {
     pub const fn public_account_nonce_increment(&mut self) {
@@ -90,6 +94,23 @@ impl BorshDeserialize for Nonce {
 }
 
 pub type Balance = u128;
+
+impl Identifier {
+    #[must_use]
+    pub fn private_identifier(epk: &EphemeralPublicKey, index: u8) -> Self {
+        const PRIVATE_ACCOUNT_ID_PREFIX: &[u8; 32] = b"/LEE/v0.3/AccountId/Identifier/\x00";
+
+        let mut bytes = Vec::<u8>::new();
+        bytes.extend_from_slice(PRIVATE_ACCOUNT_ID_PREFIX);
+        bytes.extend_from_slice(&epk.0);
+        bytes.extend_from_slice(&[index]);
+
+        let mut value = [0_u8; 16];
+        value.copy_from_slice(&Impl::hash_bytes(&bytes).as_bytes()[0..16]);
+
+        Self(u128::from_le_bytes(value))
+    }
+}
 
 /// Account to be used both in public and private contexts.
 #[derive(
@@ -180,18 +201,14 @@ impl AccountId {
     }
 
     #[must_use]
-    pub fn private_account_id(value: &NullifierPublicKey, identifier: Option<u128>) -> Self {
+    pub fn private_account_id(value: &NullifierPublicKey, identifier: Identifier) -> Self {
         const PRIVATE_ACCOUNT_ID_PREFIX: &[u8; 32] =
             b"/LEE/v0.3/AccountId/Private/\x00\x00\x00\x00";
 
         let mut bytes = Vec::<u8>::new();
         bytes.extend_from_slice(PRIVATE_ACCOUNT_ID_PREFIX);
         bytes.extend_from_slice(&value.0);
-
-        match identifier {
-            None => {}
-            Some(identifier) => bytes.extend_from_slice(&identifier.to_le_bytes()),
-        }
+        bytes.extend_from_slice(&identifier.0.to_le_bytes());
 
         Self::new(
             Impl::hash_bytes(&bytes)
@@ -202,18 +219,14 @@ impl AccountId {
     }
 
     #[must_use]
-    pub fn public_account_id(value: &PublicKey, identifier: Option<u128>) -> Self {
+    pub fn public_account_id(value: &PublicKey) -> Self {
         const PUBLIC_ACCOUNT_ID_PREFIX: &[u8; 32] =
             b"/LEE/v0.3/AccountId/Public/\x00\x00\x00\x00\x00";
 
         let mut bytes = Vec::<u8>::new();
         bytes.extend_from_slice(PUBLIC_ACCOUNT_ID_PREFIX);
         bytes.extend_from_slice(value.value());
-
-        match identifier {
-            None => {}
-            Some(identifier) => bytes.extend_from_slice(&identifier.to_le_bytes()),
-        }
+        // bytes.extend_from_slice(&identifier.0.to_le_bytes());
 
         Self::new(
             Impl::hash_bytes(&bytes)
@@ -409,7 +422,9 @@ mod tests {
             126, 85, 106, 222, 127, 193, 125, 168, 62, 150, 129, 194, 135, 114,
         ]);
 
-        let account_id = AccountId::private_account_id(&npk, Some(13_u128));
+        let identifier = Identifier(13_u128);
+
+        let account_id = AccountId::private_account_id(&npk, identifier);
 
         assert_eq!(account_id, expected_account_id);
     }
@@ -419,12 +434,27 @@ mod tests {
         let pub_key = PublicKey::try_new([42_u8; 32]).expect("Expect valid Public Key");
 
         let expected_account_id = AccountId::new([
-            75, 60, 223, 47, 170, 89, 187, 173, 89, 16, 96, 18, 76, 101, 203, 128, 241, 4, 253, 18,
-            61, 201, 37, 226, 199, 119, 9, 1, 239, 131, 221, 142,
+            55, 223, 166, 27, 166, 126, 71, 128, 222, 225, 215, 176, 98, 21, 215, 13, 71, 74, 13,
+            72, 200, 175, 25, 19, 96, 160, 250, 230, 45, 15, 254, 134,
         ]);
 
-        let account_id = AccountId::public_account_id(&pub_key, Some(13_u128));
+        let account_id = AccountId::public_account_id(&pub_key);
 
         assert_eq!(account_id, expected_account_id);
+    }
+
+    #[test]
+    fn identifier_from_ephemeral_public_key() {
+        let epk = EphemeralPublicKey::from_scalar([
+            185, 147, 32, 242, 145, 91, 123, 77, 42, 33, 134, 84, 12, 165, 117, 70, 158, 201, 95,
+            153, 14, 12, 92, 235, 128, 156, 194, 169, 68, 35, 165, 127,
+        ]);
+
+        let expected_identifier = Identifier(u128::from_le_bytes([
+            170, 216, 75, 182, 85, 117, 119, 230, 115, 121, 70, 204, 104, 96, 182, 122,
+        ]));
+        let identifier = Identifier::private_identifier(&epk, 13_u8);
+
+        assert_eq!(identifier, expected_identifier);
     }
 }

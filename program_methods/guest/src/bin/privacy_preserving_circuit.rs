@@ -7,7 +7,7 @@ use nssa_core::{
     Commitment, CommitmentSetDigest, DUMMY_COMMITMENT_HASH, EncryptionScheme, MembershipProof,
     Nullifier, NullifierPublicKey, NullifierSecretKey, PrivacyPreservingCircuitInput,
     PrivacyPreservingCircuitOutput, SharedSecretKey,
-    account::{Account, AccountId, AccountWithMetadata, Nonce},
+    account::{Account, AccountId, AccountWithMetadata, Identifier, Nonce},
     compute_digest_for_path,
     program::{
         AccountPostState, BlockValidityWindow, ChainedCall, Claim, DEFAULT_PROGRAM_ID,
@@ -295,7 +295,7 @@ fn compute_circuit_output(
     visibility_mask: &[u8],
     private_account_keys: &[(NullifierPublicKey, SharedSecretKey)],
     private_account_nsks: &[NullifierSecretKey],
-    private_account_identifiers: &[u128],
+    private_account_identifiers: &[Identifier],
     private_account_membership_proofs: &[Option<MembershipProof>],
 ) -> PrivacyPreservingCircuitOutput {
     let mut output = PrivacyPreservingCircuitOutput {
@@ -335,15 +335,12 @@ fn compute_circuit_output(
                     panic!("Missing private account key");
                 };
 
-                // TODO: (Marvin) double check
                 let Some(identifier) = private_identifiers_iter.next() else {
                     panic!("Missing private account identifier");
                 };
 
-                // TODO: (Marvin) identifier used here)
-                // Relevant here as this applies for both cases (authenicated and not authenicated).
                 assert_eq!(
-                    AccountId::private_account_id(npk, Some(*identifier)),
+                    AccountId::private_account_id(npk, *identifier),
                     pre_state.account_id,
                     "AccountId mismatch"
                 );
@@ -406,9 +403,7 @@ fn compute_circuit_output(
                         "Membership proof must be None for unauthorized accounts"
                     );
 
-                    // TODO: (Marvin) need to add a Vec<identifier> as input.
-                    // TODO: use here
-                    let account_id = AccountId::private_account_id(npk, Some(*identifier));
+                    let account_id = AccountId::private_account_id(npk, *identifier);
                     let nullifier = Nullifier::for_account_initialization(&account_id);
 
                     let new_nonce = Nonce::private_account_nonce_init(npk);
@@ -466,11 +461,11 @@ fn compute_nullifier_and_set_digest(
     pre_account: &Account,
     npk: &NullifierPublicKey,
     nsk: &NullifierSecretKey,
-    identifier: u128,
+    identifier: Identifier,
 ) -> (Nullifier, CommitmentSetDigest) {
     // TODO: consider rewriting the function to receive account id instead of npk.
     // NOTE: this does not use the identifier at all.
-    let account_id = AccountId::private_account_id(npk, Some(identifier));
+    let account_id = AccountId::private_account_id(npk, identifier);
     membership_proof_opt.as_ref().map_or_else(
         || {
             assert_eq!(

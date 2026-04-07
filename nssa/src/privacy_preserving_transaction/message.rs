@@ -130,7 +130,7 @@ impl Message {
 pub mod tests {
     use nssa_core::{
         Commitment, EncryptionScheme, Nullifier, NullifierPublicKey, SharedSecretKey,
-        account::Account,
+        account::{Account, Identifier},
         encryption::{EphemeralPublicKey, ViewingPublicKey},
         program::{BlockValidityWindow, TimestampValidityWindow},
     };
@@ -152,8 +152,8 @@ pub mod tests {
         let npk1 = NullifierPublicKey::from(&nsk1);
         let npk2 = NullifierPublicKey::from(&nsk2);
 
-        let account_id1 = AccountId::private_account_id(&npk1, None);
-        let account_id2 = AccountId::private_account_id(&npk2, None);
+        let account_id1 = AccountId::private_account_id(&npk1, Identifier(0_u128));
+        let account_id2 = AccountId::private_account_id(&npk2, Identifier(0_u128));
         let public_account_ids = vec![account_id1, account_id2];
 
         let nonces = vec![1_u128.into(), 2_u128.into(), 3_u128.into()];
@@ -186,7 +186,7 @@ pub mod tests {
     fn encrypted_account_data_constructor() {
         let npk = NullifierPublicKey::from(&[1; 32]);
         let vpk = ViewingPublicKey::from_scalar([2; 32]);
-        let account_id = AccountId::private_account_id(&npk, None);
+        let account_id = AccountId::private_account_id(&npk, Identifier(0_u128));
         let account = Account::default();
         let commitment = Commitment::new(&account_id, &account);
         let esk = [3; 32];

@@ -5,11 +5,11 @@ use chacha20::{
 };
 use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde::{Deserialize, Serialize};
+pub use shared_key_derivation::EphemeralPublicKey;
 #[cfg(feature = "host")]
-pub use shared_key_derivation::{EphemeralPublicKey, EphemeralSecretKey, ViewingPublicKey};
+pub use shared_key_derivation::{EphemeralSecretKey, ViewingPublicKey};
 
 use crate::{Commitment, account::Account};
-#[cfg(feature = "host")]
 pub mod shared_key_derivation;
 
 pub type Scalar = [u8; 32];
