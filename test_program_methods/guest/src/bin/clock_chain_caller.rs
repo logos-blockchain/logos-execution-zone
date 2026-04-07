@@ -34,7 +34,13 @@ fn main() {
         pda_seeds: vec![],
     };
 
-    ProgramOutput::new(self_program_id, caller_program_id, instruction_words, pre_states, post_states)
-        .with_chained_calls(vec![chained_call])
-        .write();
+    ProgramOutput::new(
+        self_program_id,
+        caller_program_id,
+        instruction_words,
+        pre_states,
+        post_states,
+    )
+    .with_chained_calls(vec![chained_call])
+    .write();
 }

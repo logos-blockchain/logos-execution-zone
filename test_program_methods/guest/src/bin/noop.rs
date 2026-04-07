@@ -17,5 +17,12 @@ fn main() {
         .iter()
         .map(|account| AccountPostState::new(account.account.clone()))
         .collect();
-    ProgramOutput::new(self_program_id, caller_program_id, instruction_words, pre_states, post_states).write();
+    ProgramOutput::new(
+        self_program_id,
+        caller_program_id,
+        instruction_words,
+        pre_states,
+        post_states,
+    )
+    .write();
 }
