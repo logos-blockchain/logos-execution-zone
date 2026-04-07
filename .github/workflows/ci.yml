@@ -161,7 +161,7 @@ jobs:
         run: cargo nextest run -p integration_tests -- --skip tps_test --skip indexer
 
   integration-tests-indexer:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
@@ -182,26 +182,40 @@ jobs:
       - name: Install nextest
         run: cargo install --locked cargo-nextest
 
+      - name: Clean up Docker state before tests
+        run: |
+          echo "=== Docker cleanup before tests ==="
+          docker system prune -af --volumes || true
+          docker ps -a
+          docker network ls
+
       - name: Run tests
         env:
           RISC0_DEV_MODE: "1"
-          RUST_LOG: "info"
+          RUST_LOG: "debug"
         run: cargo nextest run -p integration_tests indexer --test-threads=1
 
       - name: Debug Docker state on failure
         if: failure()
         run: |
-          echo "=== docker ps -a ==="
-          docker ps -a || true
+          echo "=== Docker containers (after failure) ==="
+          docker ps -a --format 'table {{.Names}}\t{{.Status}}\t{{.Image}}' || true
 
-          echo "=== docker network ls ==="
+          echo ""
+          echo "=== Docker networks ==="
           docker network ls || true
 
-          echo "=== logs: bedrock/cfgsync containers ==="
-          for c in $(docker ps -a --format '{{.Names}}' | grep -E 'logos-blockchain|cfgsync' | tail -n 40); do
-            echo "----- ${c} -----"
-            docker logs --tail 300 "$c" || true
+          echo ""
+          echo "=== Recent container logs (logos-blockchain + cfgsync) ==="
+          for c in $(docker ps -a --format '{{.Names}}' | grep -E 'logos-blockchain|cfgsync' | tail -n 50); do
+            echo ""
+            echo "------- Container: ${c} -------"
+            docker logs --tail 400 "$c" 2>&1 || echo "Failed to get logs for ${c}"
           done
+
+          echo ""
+          echo "=== Docker system info ==="
+          docker system df || true
 
   valid-proof-test:
     runs-on: ubuntu-latest

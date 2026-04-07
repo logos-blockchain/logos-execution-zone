@@ -20,12 +20,17 @@ async fn indexer_test_run() -> Result<()> {
     let ctx = TestContext::new().await?;
 
     // RUN OBSERVATION
+    info!(
+        "Waiting {} ms for blocks to be created and finalized on Bedrock",
+        L2_TO_L1_TIMEOUT_MILLIS
+    );
     tokio::time::sleep(std::time::Duration::from_millis(L2_TO_L1_TIMEOUT_MILLIS)).await;
+    info!("Wait period complete");
 
     let last_block_seq =
         sequencer_service_rpc::RpcClient::get_last_block_id(ctx.sequencer_client()).await?;
 
-    info!("Last block on seq now is {last_block_seq}");
+    info!("Last block on sequencer: {last_block_seq}");
 
     let last_block_indexer = ctx
         .indexer_client()
@@ -33,7 +38,7 @@ async fn indexer_test_run() -> Result<()> {
         .await
         .unwrap();
 
-    info!("Last block on ind now is {last_block_indexer}");
+    info!("Last finalized block on indexer: {last_block_indexer}");
 
     assert!(last_block_indexer > 1);
 
@@ -54,7 +59,7 @@ async fn indexer_block_batching() -> Result<()> {
         .await
         .unwrap();
 
-    info!("Last block on ind now is {last_block_indexer}");
+    info!("Last finalized block on indexer now is {last_block_indexer}");
 
     assert!(last_block_indexer > 1);
 

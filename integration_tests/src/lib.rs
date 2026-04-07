@@ -6,7 +6,7 @@ use anyhow::{Context as _, Result, bail};
 use common::{HashType, transaction::NSSATransaction};
 use futures::FutureExt as _;
 use indexer_service::IndexerHandle;
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
 use nssa::{AccountId, PrivacyPreservingTransaction};
 use nssa_core::Commitment;
 use sequencer_core::indexer_client::{IndexerClient, IndexerClientTrait as _};
@@ -65,13 +65,15 @@ impl TestContext {
         // Ensure logger is initialized only once
         *LOGGER;
 
-        debug!("Test context setup");
+        debug!("Test context setup starting");
 
         let (bedrock_compose, bedrock_addr) = Self::setup_bedrock_node().await?;
+        info!("Bedrock cluster ready at {bedrock_addr}");
 
         let (indexer_handle, temp_indexer_dir) = Self::setup_indexer(bedrock_addr, &initial_data)
             .await
             .context("Failed to setup Indexer")?;
+        info!("Indexer ready at {}", indexer_handle.addr());
 
         let (sequencer_handle, temp_sequencer_dir) = Self::setup_sequencer(
             sequencer_partial_config,
@@ -81,11 +83,13 @@ impl TestContext {
         )
         .await
         .context("Failed to setup Sequencer")?;
+        info!("Sequencer ready at {}", sequencer_handle.addr());
 
         let (wallet, temp_wallet_dir, wallet_password) =
             Self::setup_wallet(sequencer_handle.addr(), &initial_data)
                 .await
                 .context("Failed to setup wallet")?;
+        info!("Wallet initialized");
 
         let sequencer_url = config::addr_to_url(config::UrlProtocol::Http, sequencer_handle.addr())
             .context("Failed to convert sequencer addr to URL")?;
@@ -97,6 +101,8 @@ impl TestContext {
         let indexer_client = IndexerClient::new(&indexer_url)
             .await
             .context("Failed to create indexer client")?;
+
+        info!("All components initialized and connected, test ready");
 
         Ok(Self {
             sequencer_client,
@@ -180,6 +186,13 @@ impl TestContext {
         };
 
         let addr = SocketAddr::from(([127, 0, 0, 1], port));
+
+        // Wait for Bedrock consensus to stabilize after startup
+        // The cfgsync server coordinates all 4 nodes; we give them time to reach consensus
+        debug!("Bedrock services are up, waiting for consensus stabilization...");
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        debug!("Bedrock consensus stabilization complete");
+
         Ok((compose, addr))
     }
 
