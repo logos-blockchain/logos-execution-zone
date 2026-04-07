@@ -58,15 +58,14 @@ async fn sync_private_account_with_non_zero_chain_index() -> Result<()> {
         anyhow::bail!("Expected RegisterAccount return value");
     };
 
-    // Get the keys for the newly created account
-    let (to_keys, _) = ctx
+    let bundle = ctx
         .wallet()
         .storage()
         .user_data
         .get_private_account(to_account_id)
-        .unwrap()
-        .key_chain
         .context("Failed to get private account")?;
+
+    let to_keys = bundle.key_chain;
 
     // Send to this account using claiming path (using npk and vpk instead of account ID)
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {

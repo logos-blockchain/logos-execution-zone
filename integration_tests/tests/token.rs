@@ -1097,14 +1097,14 @@ async fn token_claiming_path_with_private_accounts() -> Result<()> {
     };
 
     // Get keys for foreign mint (claiming path)
-    let (holder_keys, _) = ctx
+    let holder_keys = ctx
         .wallet()
         .storage()
         .user_data
         .get_private_account(recipient_account_id)
         .unwrap()
-        .key_chain
-        .context("Failed to get private account keys")?;
+        .key_chain;
+    // .context("Failed to get private account keys")?;
 
     // Mint using claiming path (foreign account)
     let mint_amount = 9;

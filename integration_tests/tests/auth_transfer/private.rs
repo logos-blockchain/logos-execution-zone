@@ -164,14 +164,14 @@ async fn private_transfer_to_owned_account_using_claiming_path() -> Result<()> {
     };
 
     // Get the keys for the newly created account
-    let (to_keys, _) = ctx
+    let bundle = ctx
         .wallet()
         .storage()
         .user_data
         .get_private_account(to_account_id)
-        .unwrap()
-        .key_chain
         .context("Failed to get private account")?;
+
+    let to_keys = bundle.key_chain;
 
     // Send to this account using claiming path (using npk and vpk instead of account ID)
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
@@ -325,14 +325,14 @@ async fn private_transfer_to_owned_account_continuous_run_path() -> Result<()> {
     };
 
     // Get the newly created account's keys
-    let (to_keys, _) = ctx
+    let bundle = ctx
         .wallet()
         .storage()
         .user_data
         .get_private_account(to_account_id)
-        .unwrap()
-        .key_chain
         .context("Failed to get private account")?;
+
+    let to_keys = bundle.key_chain;
 
     // Send transfer using nullifier and  viewing public keys
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {

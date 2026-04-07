@@ -69,10 +69,7 @@ impl NSSAUserData {
 
     pub fn new_with_accounts(
         default_accounts_keys: BTreeMap<nssa::AccountId, PublicBundle>,
-        default_accounts_key_chains: BTreeMap<
-            nssa::AccountId,
-            PrivateBundle,
-        >,
+        default_accounts_key_chains: BTreeMap<nssa::AccountId, PrivateBundle>,
         public_key_tree: KeyTreePublic,
         private_key_tree: KeyTreePrivate,
     ) -> Result<Self> {
@@ -147,11 +144,8 @@ impl NSSAUserData {
     }
 
     /// Returns the signing key for public transaction signatures.
-    #[must_use] //Marvin: double check TODO
+    #[must_use]
     pub fn get_private_account(&self, account_id: nssa::AccountId) -> Option<PrivateBundle> {
-        // self.default_user_private_accounts
-        // .get(&account_id)
-        // .or_else(|| self.private_key_tree.get_node(account_id).map(Into::into))
         self.default_user_private_accounts
             .get(&account_id)
             .cloned()
@@ -166,7 +160,6 @@ impl NSSAUserData {
     }
 
     /// Returns the signing key for public transaction signatures.
-    /// TODO: fix this comment (Marvin)
     pub fn get_private_account_mut(
         &mut self,
         account_id: &nssa::AccountId,
@@ -231,7 +224,10 @@ mod tests {
 
         let account_id_private_str = account_id_private.to_string();
         println!("{account_id_private_str:#?}");
-        let key_chain = &user_data.get_private_account(account_id_private).unwrap().key_chain;
+        let key_chain = &user_data
+            .get_private_account(account_id_private)
+            .unwrap()
+            .key_chain;
         println!("{key_chain:#?}");
     }
 }
