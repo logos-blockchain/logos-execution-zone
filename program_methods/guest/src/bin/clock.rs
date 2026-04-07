@@ -40,6 +40,7 @@ fn main() {
     let (
         ProgramInput {
             self_program_id,
+            caller_program_id,
             pre_states,
             instruction: timestamp,
         },
@@ -84,6 +85,7 @@ fn main() {
 
     ProgramOutput::new(
         self_program_id,
+        caller_program_id,
         instruction_words,
         vec![pre_01, pre_10, pre_50],
         vec![post_01, post_10, post_50],

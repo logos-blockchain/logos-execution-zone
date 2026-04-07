@@ -7846,6 +7846,7 @@ dependencies = [
  "clock_core",
  "nssa_core",
  "risc0-zkvm",
+ "serde",
 ]
 
 [[package]]

@@ -6,6 +6,7 @@ fn main() {
     let (
         ProgramInput {
             self_program_id,
+            caller_program_id,
             pre_states,
             ..
         },
@@ -20,6 +21,7 @@ fn main() {
 
     ProgramOutput::new(
         self_program_id,
+        caller_program_id,
         instruction_words,
         vec![pre1, pre2],
         vec![AccountPostState::new(account_pre1)],

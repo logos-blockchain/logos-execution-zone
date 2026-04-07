@@ -118,8 +118,11 @@ impl ValidatedStateDiff {
                 "Program {:?} pre_states: {:?}, instruction_data: {:?}",
                 chained_call.program_id, chained_call.pre_states, chained_call.instruction_data
             );
-            let mut program_output =
-                program.execute(&chained_call.pre_states, &chained_call.instruction_data)?;
+            let mut program_output = program.execute(
+                caller_program_id,
+                &chained_call.pre_states,
+                &chained_call.instruction_data,
+            )?;
             debug!(
                 "Program {:?} output: {:?}",
                 chained_call.program_id, program_output
@@ -156,6 +159,12 @@ impl ValidatedStateDiff {
             // Verify that the program output's self_program_id matches the expected program ID.
             ensure!(
                 program_output.self_program_id == chained_call.program_id,
+                NssaError::InvalidProgramBehavior
+            );
+
+            // Verify that the program output's caller_program_id matches the actual caller.
+            ensure!(
+                program_output.caller_program_id == caller_program_id,
                 NssaError::InvalidProgramBehavior
             );
 

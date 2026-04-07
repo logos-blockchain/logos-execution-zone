@@ -1,24 +1,28 @@
-use nssa_core::program::{AccountPostState, ProgramInput, ProgramOutput, read_nssa_inputs};
+use nssa_core::program::{
+    AccountPostState, DEFAULT_PROGRAM_ID, ProgramInput, ProgramOutput, read_nssa_inputs,
+};
 
 type Instruction = ();
 
 fn main() {
     let (
         ProgramInput {
-            self_program_id,
+            self_program_id: _, // ignore the correct ID
             caller_program_id,
             pre_states,
-            ..
+            instruction: (),
         },
         instruction_words,
     ) = read_nssa_inputs::<Instruction>();
 
     let post_states = pre_states
         .iter()
-        .map(|account| AccountPostState::new(account.account.clone()))
+        .map(|a| AccountPostState::new(a.account.clone()))
         .collect();
+
+    // Deliberately output wrong self_program_id
     ProgramOutput::new(
-        self_program_id,
+        DEFAULT_PROGRAM_ID, // WRONG: should be self_program_id
         caller_program_id,
         instruction_words,
         pre_states,

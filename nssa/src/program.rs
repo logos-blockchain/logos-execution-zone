@@ -53,13 +53,20 @@ impl Program {
 
     pub(crate) fn execute(
         &self,
+        caller_program_id: Option<ProgramId>,
         pre_states: &[AccountWithMetadata],
         instruction_data: &InstructionData,
     ) -> Result<ProgramOutput, NssaError> {
         // Write inputs to the program
         let mut env_builder = ExecutorEnv::builder();
         env_builder.session_limit(Some(MAX_NUM_CYCLES_PUBLIC_EXECUTION));
-        Self::write_inputs(self.id, pre_states, instruction_data, &mut env_builder)?;
+        Self::write_inputs(
+            self.id,
+            caller_program_id,
+            pre_states,
+            instruction_data,
+            &mut env_builder,
+        )?;
         let env = env_builder.build().unwrap();
 
         // Execute the program (without proving)
@@ -80,12 +87,16 @@ impl Program {
     /// Writes inputs to `env_builder` in the order expected by the programs.
     pub(crate) fn write_inputs(
         program_id: ProgramId,
+        caller_program_id: Option<ProgramId>,
         pre_states: &[AccountWithMetadata],
         instruction_data: &[u32],
         env_builder: &mut ExecutorEnvBuilder,
     ) -> Result<(), NssaError> {
         env_builder
             .write(&program_id)
+            .map_err(|e| NssaError::ProgramWriteInputFailed(e.to_string()))?;
+        env_builder
+            .write(&caller_program_id)
             .map_err(|e| NssaError::ProgramWriteInputFailed(e.to_string()))?;
         let pre_states = pre_states.to_vec();
         env_builder
@@ -321,6 +332,34 @@ mod tests {
         }
 
         #[must_use]
+        pub fn flash_swap_initiator() -> Self {
+            use test_program_methods::FLASH_SWAP_INITIATOR_ELF;
+            Self::new(FLASH_SWAP_INITIATOR_ELF.to_vec())
+                .expect("flash_swap_initiator must be a valid Risc0 program")
+        }
+
+        #[must_use]
+        pub fn flash_swap_callback() -> Self {
+            use test_program_methods::FLASH_SWAP_CALLBACK_ELF;
+            Self::new(FLASH_SWAP_CALLBACK_ELF.to_vec())
+                .expect("flash_swap_callback must be a valid Risc0 program")
+        }
+
+        #[must_use]
+        pub fn malicious_self_program_id() -> Self {
+            use test_program_methods::MALICIOUS_SELF_PROGRAM_ID_ELF;
+            Self::new(MALICIOUS_SELF_PROGRAM_ID_ELF.to_vec())
+                .expect("malicious_self_program_id must be a valid Risc0 program")
+        }
+
+        #[must_use]
+        pub fn malicious_caller_program_id() -> Self {
+            use test_program_methods::MALICIOUS_CALLER_PROGRAM_ID_ELF;
+            Self::new(MALICIOUS_CALLER_PROGRAM_ID_ELF.to_vec())
+                .expect("malicious_caller_program_id must be a valid Risc0 program")
+        }
+
+        #[must_use]
         pub fn time_locked_transfer() -> Self {
             use test_program_methods::TIME_LOCKED_TRANSFER_ELF;
             Self::new(TIME_LOCKED_TRANSFER_ELF.to_vec()).unwrap()
@@ -358,7 +397,7 @@ mod tests {
             ..Account::default()
         };
         let program_output = program
-            .execute(&[sender, recipient], &instruction_data)
+            .execute(None, &[sender, recipient], &instruction_data)
             .unwrap();
 
         let [sender_post, recipient_post] = program_output.post_states.try_into().unwrap();
