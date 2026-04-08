@@ -215,8 +215,11 @@ jobs:
           kill "$(cat /tmp/log-watcher.pid)" 2>/dev/null || true
           for f in /tmp/container-logs/*.log; do
             [ -e "$f" ] || continue
-            echo "=== $f ==="
-            tail -300 "$f"
+            echo "=== $f (lines: $(wc -l < $f)) ==="
+            echo "--- proposed-block events with removals ---"
+            grep -B 200 -A 5 -E '\([1-9][0-9]* removed\)' "$f" | tail -3000 || true
+            echo "--- mempool/tx/inscribe activity ---"
+            grep -i -E 'mempool|inscrib|verif|reject|invalid|gas|validate|removed' "$f" | tail -1000 || true
           done
 
   valid-proof-test:
