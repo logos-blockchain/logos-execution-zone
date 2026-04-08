@@ -28,12 +28,13 @@ pub struct NSSAUserData {
 /// TODO: eventually, this should have `sign_key: Option<PrivateKey>` and `pub_key: PublicKey`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PublicBundle {
-    pub sign_key: nssa::PrivateKey,
+    pub sign_key: nssa_core::PrivateKey,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PrivateBundle {
     pub key_chain: KeyChain,
+    pub identifier: Identifier,
     pub account: nssa_core::account::Account,
 }
 
@@ -44,7 +45,7 @@ impl NSSAUserData {
         let mut check_res = true;
         for (account_id, public_bundle) in accounts_keys_map {
             let expected_account_id = nssa::AccountId::public_account_id(
-                &nssa::PublicKey::new_from_private_key(&public_bundle.sign_key),
+                &nssa_core::PublicKey::new_from_private_key(&public_bundle.sign_key),
             );
             if &expected_account_id != account_id {
                 println!("{expected_account_id}, {account_id}");
@@ -59,7 +60,10 @@ impl NSSAUserData {
     ) -> bool {
         let mut check_res = true;
         for (account_id, bundle) in accounts_keys_map {
-            let expected_account_id = nssa::AccountId::privte_account_id(&bundle.key_chain.nullifier_public_key, Identifier(0_u128));
+            let expected_account_id = nssa::AccountId::private_account_id(
+                &bundle.key_chain.nullifier_public_key,
+                bundle.identifier,
+            );
             if expected_account_id != *account_id {
                 println!("{expected_account_id}, {account_id}");
                 check_res = false;
@@ -154,8 +158,9 @@ impl NSSAUserData {
                 self.private_key_tree
                     .get_node(account_id)
                     .map(|child_keys_private| PrivateBundle {
-                        key_chain: child_keys_private.value.0.clone(),
-                        account: child_keys_private.value.1.clone(),
+                        key_chain: child_keys_private.value.key_chain.clone(),
+                        identifier: child_keys_private.value.identifier,
+                        account: child_keys_private.value.account.clone(),
                     })
             })
     }

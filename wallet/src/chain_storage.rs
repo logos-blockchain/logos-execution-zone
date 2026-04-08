@@ -86,6 +86,7 @@ impl WalletChainStore {
                             data.account_id,
                             PrivateBundle {
                                 key_chain: data.key_chain,
+                                identifier: data.identifier,
                                 account: data.account,
                             },
                         );
@@ -136,6 +137,7 @@ impl WalletChainStore {
                         data.account_id,
                         PrivateBundle {
                             key_chain: data.key_chain,
+                            identifier: data.identifier,
                             account,
                         },
                     );
@@ -211,7 +213,7 @@ impl WalletChainStore {
                         .private_key_tree
                         .key_map
                         .entry(chain_index.clone())
-                        .and_modify(|data| data.value.1 = account)
+                        .and_modify(|data| data.value.account = account)
                 });
         }
     }

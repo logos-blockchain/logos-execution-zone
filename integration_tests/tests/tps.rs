@@ -18,7 +18,10 @@ use integration_tests::{
     TestContext,
     config::{InitialData, SequencerPartialConfig},
 };
-use key_protocol::key_management::{KeyChain, ephemeral_key_holder::EphemeralKeyHolder};
+use key_protocol::{
+    key_management::{KeyChain, ephemeral_key_holder::EphemeralKeyHolder},
+    key_protocol_core::PrivateBundle,
+};
 use log::info;
 use nssa::{
     Account, AccountId, PrivacyPreservingTransaction, PublicTransaction,
@@ -107,6 +110,7 @@ impl TpsTestManager {
         // Generate an initial commitment to be used with the privacy preserving transaction
         // created with the `build_privacy_transaction` function.
         let key_chain = KeyChain::new_os_random();
+        let identifier = Identifier::new_os_random();
         let account = Account {
             balance: 100,
             nonce: Nonce(0xdead_beef),
@@ -116,7 +120,11 @@ impl TpsTestManager {
 
         InitialData {
             public_accounts,
-            private_accounts: vec![(key_chain, account)],
+            private_accounts: vec![PrivateBundle {
+                key_chain,
+                identifier,
+                account,
+            }],
         }
     }
 

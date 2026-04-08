@@ -78,6 +78,9 @@ const PUB_ACC_B_INITIAL_BALANCE: u128 = 20000;
 const PRIV_ACC_A_INITIAL_BALANCE: u128 = 10000;
 const PRIV_ACC_B_INITIAL_BALANCE: u128 = 20000;
 
+const PRIV_ACC_A_IDENTIFIER: u128 = 13;
+const PRIV_ACC_B_IDENTIFIER: u128 = 42;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PublicAccountPublicInitialData {
     pub account_id: AccountId,
@@ -87,6 +90,7 @@ pub struct PublicAccountPublicInitialData {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PrivateAccountPublicInitialData {
     pub npk: nssa_core::NullifierPublicKey,
+    pub identifier: Identifier,
     pub account: nssa_core::account::Account,
 }
 
@@ -100,6 +104,7 @@ pub struct PublicAccountPrivateInitialData {
 pub struct PrivateAccountPrivateInitialData {
     pub account_id: nssa::AccountId,
     pub account: nssa_core::account::Account,
+    pub identifier: Identifier,
     pub key_chain: KeyChain,
 }
 
@@ -147,6 +152,9 @@ pub fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialD
         viewing_public_key: Secp256k1Point(VPK_PRIV_ACC_B.to_vec()),
     };
 
+    let identifier_1 = Identifier(PRIV_ACC_A_IDENTIFIER);
+    let identifier_2 = Identifier(PRIV_ACC_B_IDENTIFIER);
+
     vec![
         PrivateAccountPrivateInitialData {
             account_id: AccountId::private_account_id(
@@ -159,6 +167,7 @@ pub fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialD
                 data: Data::default(),
                 nonce: 0.into(),
             },
+            identifier: identifier_1,
             key_chain: key_chain_1,
         },
         PrivateAccountPrivateInitialData {
@@ -172,6 +181,7 @@ pub fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialD
                 data: Data::default(),
                 nonce: 0.into(),
             },
+            identifier: identifier_2,
             key_chain: key_chain_2,
         },
     ]
@@ -183,6 +193,7 @@ pub fn initial_commitments() -> Vec<PrivateAccountPublicInitialData> {
         .into_iter()
         .map(|data| PrivateAccountPublicInitialData {
             npk: data.key_chain.nullifier_public_key.clone(),
+            identifier: data.identifier,
             account: data.account,
         })
         .collect()
@@ -212,8 +223,7 @@ pub fn initial_state() -> V03State {
     let initial_commitments: Vec<nssa_core::Commitment> = initial_commitments()
         .iter()
         .map(|init_comm_data| {
-            let npk = &init_comm_data.npk;
-            let acc_id = &AccountId::private_account_id(npk, Identifier(0_u128));
+            let acc_id = &AccountId::private_account_id(&init_comm_data.npk, init_comm_data.identifier);
 
             let mut acc = init_comm_data.account.clone();
 
@@ -385,6 +395,7 @@ mod tests {
             init_comms[0],
             PrivateAccountPublicInitialData {
                 npk: NullifierPublicKey(NPK_PRIV_ACC_A),
+                identifier: Identifier(PRIV_ACC_A_IDENTIFIER),
                 account: Account {
                     program_owner: DEFAULT_PROGRAM_OWNER,
                     balance: PRIV_ACC_A_INITIAL_BALANCE,
@@ -398,6 +409,7 @@ mod tests {
             init_comms[1],
             PrivateAccountPublicInitialData {
                 npk: NullifierPublicKey(NPK_PRIV_ACC_B),
+                identifier: Identifier(PRIV_ACC_B_IDENTIFIER),
                 account: Account {
                     program_owner: DEFAULT_PROGRAM_OWNER,
                     balance: PRIV_ACC_B_INITIAL_BALANCE,

@@ -3,9 +3,13 @@ use std::{net::SocketAddr, path::PathBuf, time::Duration};
 use anyhow::{Context as _, Result};
 use bytesize::ByteSize;
 use indexer_service::{BackoffConfig, ChannelId, ClientConfig, IndexerConfig};
-use key_protocol::key_management::KeyChain;
+use key_protocol::{key_management::KeyChain, key_protocol_core::PrivateBundle};
 use nssa::{Account, AccountId};
-use nssa_core::{PrivateKey, PublicKey, account::{Data, Identifier}, program::DEFAULT_PROGRAM_ID};
+use nssa_core::{
+    PrivateKey, PublicKey,
+    account::{Data, Identifier},
+    program::DEFAULT_PROGRAM_ID,
+};
 use sequencer_core::config::{BedrockConfig, SequencerConfig};
 use testnet_initial_state::{
     PrivateAccountPrivateInitialData, PrivateAccountPublicInitialData,
@@ -36,7 +40,7 @@ impl Default for SequencerPartialConfig {
 
 pub struct InitialData {
     pub public_accounts: Vec<(PrivateKey, u128)>,
-    pub private_accounts: Vec<(KeyChain, Account)>,
+    pub private_accounts: Vec<PrivateBundle>,
 }
 
 impl InitialData {
@@ -45,8 +49,7 @@ impl InitialData {
         let mut public_alice_private_key = PrivateKey::new_os_random();
         let mut public_alice_public_key =
             PublicKey::new_from_private_key(&public_alice_private_key);
-        let mut public_alice_account_id =
-            AccountId::public_account_id(&public_alice_public_key);
+        let mut public_alice_account_id = AccountId::public_account_id(&public_alice_public_key);
 
         let mut public_bob_private_key = PrivateKey::new_os_random();
         let mut public_bob_public_key = PublicKey::new_from_private_key(&public_bob_private_key);
@@ -60,12 +63,18 @@ impl InitialData {
         }
 
         let mut private_charlie_key_chain = KeyChain::new_os_random();
-        let mut private_charlie_account_id =
-            AccountId::private_account_id(&private_charlie_key_chain.nullifier_public_key, Identifier(0_u128));
+        let private_charlie_identifier = Identifier::new_os_random();
+        let mut private_charlie_account_id = AccountId::private_account_id(
+            &private_charlie_key_chain.nullifier_public_key,
+            private_charlie_identifier,
+        );
 
         let mut private_david_key_chain = KeyChain::new_os_random();
-        let mut private_david_account_id =
-            AccountId::private_account_id(&private_david_key_chain.nullifier_public_key, Identifier(0_u128));
+        let private_david_identifier = Identifier::new_os_random();
+        let mut private_david_account_id = AccountId::private_account_id(
+            &private_david_key_chain.nullifier_public_key,
+            private_david_identifier,
+        );
 
         // Ensure consistent ordering
         if private_charlie_account_id > private_david_account_id {
@@ -82,24 +91,26 @@ impl InitialData {
                 (public_bob_private_key, 20_000),
             ],
             private_accounts: vec![
-                (
-                    private_charlie_key_chain,
-                    Account {
+                PrivateBundle {
+                    key_chain: private_charlie_key_chain,
+                    identifier: private_charlie_identifier,
+                    account: Account {
                         balance: 10_000,
                         data: Data::default(),
                         program_owner: DEFAULT_PROGRAM_ID,
                         nonce: 0_u128.into(),
                     },
-                ),
-                (
-                    private_david_key_chain,
-                    Account {
+                },
+                PrivateBundle {
+                    key_chain: private_david_key_chain,
+                    identifier: private_david_identifier,
+                    account: Account {
                         balance: 20_000,
                         data: Data::default(),
                         program_owner: DEFAULT_PROGRAM_ID,
                         nonce: 0_u128.into(),
                     },
-                ),
+                },
             ],
         }
     }
@@ -121,9 +132,10 @@ impl InitialData {
     fn sequencer_initial_private_accounts(&self) -> Vec<PrivateAccountPublicInitialData> {
         self.private_accounts
             .iter()
-            .map(|(key_chain, account)| PrivateAccountPublicInitialData {
-                npk: key_chain.nullifier_public_key.clone(),
-                account: account.clone(),
+            .map(|bundle| PrivateAccountPublicInitialData {
+                npk: bundle.key_chain.nullifier_public_key.clone(),
+                identifier: bundle.identifier,
+                account: bundle.account.clone(),
             })
             .collect()
     }
@@ -139,13 +151,16 @@ impl InitialData {
                     pub_sign_key: priv_key.clone(),
                 })
             })
-            .chain(self.private_accounts.iter().map(|(key_chain, account)| {
-                let account_id =
-                    AccountId::private_account_id(&key_chain.nullifier_public_key, Identifier(0_u128));
+            .chain(self.private_accounts.iter().map(|bundle| {
+                let account_id = AccountId::private_account_id(
+                    &bundle.key_chain.nullifier_public_key,
+                    bundle.identifier,
+                );
                 InitialAccountData::Private(Box::new(PrivateAccountPrivateInitialData {
                     account_id,
-                    account: account.clone(),
-                    key_chain: key_chain.clone(),
+                    account: bundle.account.clone(),
+                    identifier: bundle.identifier,
+                    key_chain: bundle.key_chain.clone(),
                 }))
             }))
             .collect()

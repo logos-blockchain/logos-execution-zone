@@ -13,7 +13,7 @@ use crate::{
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ChildKeysPrivate {
-    pub value: (KeyChain, nssa::Account),
+    pub value: PrivateBundle,
     pub ccc: [u8; 32],
     /// Can be [`None`] if root.
     pub cci: Option<u32>,
@@ -39,8 +39,8 @@ impl KeyNode for ChildKeysPrivate {
         let vpk = ViewingPublicKey::from_scalar(vsk);
 
         Self {
-            value: (
-                KeyChain {
+            value: PrivateBundle {
+                key_chain: KeyChain {
                     secret_spending_key: ssk,
                     nullifier_public_key: npk,
                     viewing_public_key: vpk,
@@ -49,8 +49,9 @@ impl KeyNode for ChildKeysPrivate {
                         viewing_secret_key: vsk,
                     },
                 },
-                nssa::Account::default(),
-            ),
+                identifier: Identifier::default(),
+                account: nssa::Account::default(),
+            },
             ccc,
             cci: None,
         }
@@ -58,11 +59,22 @@ impl KeyNode for ChildKeysPrivate {
 
     fn nth_child(&self, cci: u32) -> Self {
         #[expect(clippy::arithmetic_side_effects, reason = "TODO: fix later")]
-        let parent_pt =
-            Scalar::from_repr(self.value.0.private_key_holder.nullifier_secret_key.into())
-                .expect("Key generated as scalar, must be valid representation")
-                * Scalar::from_repr(self.value.0.private_key_holder.viewing_secret_key.into())
-                    .expect("Key generated as scalar, must be valid representation");
+        let parent_pt = Scalar::from_repr(
+            self.value
+                .key_chain
+                .private_key_holder
+                .nullifier_secret_key
+                .into(),
+        )
+        .expect("Key generated as scalar, must be valid representation")
+            * Scalar::from_repr(
+                self.value
+                    .key_chain
+                    .private_key_holder
+                    .viewing_secret_key
+                    .into(),
+            )
+            .expect("Key generated as scalar, must be valid representation");
         let mut input = vec![];
 
         input.extend_from_slice(b"LEE_seed_priv");
@@ -88,8 +100,8 @@ impl KeyNode for ChildKeysPrivate {
         let vpk = ViewingPublicKey::from_scalar(vsk);
 
         Self {
-            value: (
-                KeyChain {
+            value: PrivateBundle {
+                key_chain: KeyChain {
                     secret_spending_key: ssk,
                     nullifier_public_key: npk,
                     viewing_public_key: vpk,
@@ -98,8 +110,9 @@ impl KeyNode for ChildKeysPrivate {
                         viewing_secret_key: vsk,
                     },
                 },
-                nssa::Account::default(),
-            ),
+                identifier: Identifier(0_u128),
+                account: nssa::Account::default(),
+            },
             ccc,
             cci: Some(cci),
         }
@@ -114,17 +127,10 @@ impl KeyNode for ChildKeysPrivate {
     }
 
     fn account_id(&self) -> nssa::AccountId {
-        nssa::AccountId::private_account_id(&self.value.0.nullifier_public_key, Identifier(0_u128))
-    }
-}
-
-#[expect(
-    clippy::single_char_lifetime_names,
-    reason = "TODO add meaningful name"
-)]
-impl<'a> From<&'a ChildKeysPrivate> for &'a (KeyChain, nssa::Account) {
-    fn from(value: &'a ChildKeysPrivate) -> Self {
-        &value.value
+        nssa::AccountId::private_account_id(
+            &self.value.key_chain.nullifier_public_key,
+            Identifier(0_u128),
+        )
     }
 }
 
@@ -134,10 +140,7 @@ impl<'a> From<&'a ChildKeysPrivate> for &'a (KeyChain, nssa::Account) {
 )]
 impl<'a> From<&'a mut ChildKeysPrivate> for PrivateBundle {
     fn from(value: &'a mut ChildKeysPrivate) -> Self {
-        Self {
-            key_chain: value.value.0.clone(),
-            account: value.value.1.clone(),
-        }
+        value.value.clone()
     }
 }
 
@@ -189,12 +192,12 @@ mod tests {
             80, 170, 66, 217, 79, 38, 80, 11, 74, 147, 123, 221, 159, 166,
         ];
 
-        assert!(expected_ssk == keys.value.0.secret_spending_key);
+        assert!(expected_ssk == keys.value.key_chain.secret_spending_key);
         assert!(expected_ccc == keys.ccc);
-        assert!(expected_nsk == keys.value.0.private_key_holder.nullifier_secret_key);
-        assert!(expected_npk == keys.value.0.nullifier_public_key);
-        assert!(expected_vsk == keys.value.0.private_key_holder.viewing_secret_key);
-        assert!(expected_vpk_as_bytes == keys.value.0.viewing_public_key.to_bytes());
+        assert!(expected_nsk == keys.value.key_chain.private_key_holder.nullifier_secret_key);
+        assert!(expected_npk == keys.value.key_chain.nullifier_public_key);
+        assert!(expected_vsk == keys.value.key_chain.private_key_holder.viewing_secret_key);
+        assert!(expected_vpk_as_bytes == keys.value.key_chain.viewing_public_key.to_bytes());
     }
 
     #[test]
@@ -233,9 +236,23 @@ mod tests {
         ];
 
         assert!(expected_ccc == child_node.ccc);
-        assert!(expected_nsk == child_node.value.0.private_key_holder.nullifier_secret_key);
-        assert!(expected_npk == child_node.value.0.nullifier_public_key);
-        assert!(expected_vsk == child_node.value.0.private_key_holder.viewing_secret_key);
-        assert!(expected_vpk_as_bytes == child_node.value.0.viewing_public_key.to_bytes());
+        assert!(
+            expected_nsk
+                == child_node
+                    .value
+                    .key_chain
+                    .private_key_holder
+                    .nullifier_secret_key
+        );
+        assert!(expected_npk == child_node.value.key_chain.nullifier_public_key);
+        assert!(
+            expected_vsk
+                == child_node
+                    .value
+                    .key_chain
+                    .private_key_holder
+                    .viewing_secret_key
+        );
+        assert!(expected_vpk_as_bytes == child_node.value.key_chain.viewing_public_key.to_bytes());
     }
 }

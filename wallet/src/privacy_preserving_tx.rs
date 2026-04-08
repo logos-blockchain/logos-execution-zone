@@ -81,11 +81,13 @@ impl AccountManager {
 
                     (State::Private(pre), mask)
                 }
+
                 PrivacyPreservingAccount::PrivateForeign { npk, vpk } => {
-                    let account_id = AccountId::private_account_id(&npk, Identifier(0_u128));
+                    let account_id = AccountId::private_account_id(&npk, Identifier::default()); //TODO: here (Marvin) Should be based on epk
                     let acc = nssa_core::account::Account::default();
                     let auth_acc = AccountWithMetadata::new(acc, false, account_id);
                     let pre = AccountPreparedData {
+                        identifier: Identifier::default(), //TODO: here
                         nsk: None,
                         npk,
                         vpk,
@@ -137,13 +139,26 @@ impl AccountManager {
             .filter_map(|state| match state {
                 State::Private(pre) => {
                     let eph_holder = EphemeralKeyHolder::new(&pre.npk);
+                    let epk = eph_holder.generate_ephemeral_public_key();
 
                     Some(PrivateAccountKeys {
                         npk: pre.npk.clone(),
                         ssk: eph_holder.calculate_shared_secret_sender(&pre.vpk),
                         vpk: pre.vpk.clone(),
-                        epk: eph_holder.generate_ephemeral_public_key(),
+                        epk,
                     })
+                }
+                State::Public { .. } => None,
+            })
+            .collect()
+    }
+
+    pub fn private_account_identifiers(&self) -> Vec<Identifier> {
+        self.states
+            .iter()
+            .filter_map(|state| match state {
+                State::Private(pre) => {
+                    Some(pre.identifier)
                 }
                 State::Public { .. } => None,
             })
@@ -192,6 +207,7 @@ impl AccountManager {
 }
 
 struct AccountPreparedData {
+    identifier: Identifier,
     nsk: Option<NullifierSecretKey>,
     npk: NullifierPublicKey,
     vpk: ViewingPublicKey,
@@ -209,6 +225,7 @@ async fn private_acc_preparation(
 
     let from_keys = from_bundle.key_chain;
     let from_acc = from_bundle.account;
+    let from_identifier = from_bundle.identifier;
 
     let nsk = from_keys.private_key_holder.nullifier_secret_key;
 
@@ -226,6 +243,7 @@ async fn private_acc_preparation(
     let sender_pre = AccountWithMetadata::new(from_acc.clone(), true, account_id);
 
     Ok(AccountPreparedData {
+        identifier: from_identifier,
         nsk: Some(nsk),
         npk: from_npk,
         vpk: from_vpk,

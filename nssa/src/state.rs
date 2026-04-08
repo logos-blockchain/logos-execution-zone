@@ -356,11 +356,10 @@ pub mod tests {
 
     use std::collections::HashMap;
 
-    use nssa_core::account::Identifier;
     use nssa_core::{
         BlockId, Commitment, Nullifier, NullifierPublicKey, NullifierSecretKey, PrivateKey,
         PublicKey, SharedSecretKey, Timestamp,
-        account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
+        account::{Account, AccountId, AccountWithMetadata, Identifier, Nonce, data::Data},
         encryption::{EphemeralPublicKey, Scalar, ViewingPublicKey},
         program::{BlockValidityWindow, PdaSeed, ProgramId, TimestampValidityWindow},
     };
@@ -2593,7 +2592,8 @@ pub mod tests {
     fn unauthorized_public_account_claiming_fails() {
         let program = Program::authenticated_transfer_program();
         let account_key = PrivateKey::try_new([9; 32]).unwrap();
-        let account_id = AccountId::public_account_id(&PublicKey::new_from_private_key(&account_key));
+        let account_id =
+            AccountId::public_account_id(&PublicKey::new_from_private_key(&account_key));
         let mut state = V03State::new_with_genesis_accounts(&[], &[], 0);
 
         assert_eq!(state.get_account_by_id(account_id), Account::default());
@@ -2614,7 +2614,8 @@ pub mod tests {
     fn authorized_public_account_claiming_succeeds() {
         let program = Program::authenticated_transfer_program();
         let account_key = PrivateKey::try_new([10; 32]).unwrap();
-        let account_id = AccountId::public_account_id(&PublicKey::new_from_private_key(&account_key));
+        let account_id =
+            AccountId::public_account_id(&PublicKey::new_from_private_key(&account_key));
         let mut state = V03State::new_with_genesis_accounts(&[], &[], 0);
 
         assert_eq!(state.get_account_by_id(account_id), Account::default());

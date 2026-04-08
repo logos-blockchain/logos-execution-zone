@@ -178,7 +178,7 @@ mod tests {
             .get_node(second_child_id)
             .unwrap()
             .value
-            .0
+            .key_chain
             .clone()
     }
 

@@ -212,7 +212,7 @@ impl KeyTree<ChildKeysPrivate> {
             println!("Cleanup of tree at depth {i}");
             for id in ChainIndex::chain_ids_at_depth(i) {
                 if let Some(node) = self.key_map.get(&id) {
-                    if node.value.1 == nssa::Account::default() {
+                    if node.value.account == nssa::Account::default() {
                         let addr = node.account_id();
                         self.remove(addr);
                     } else {
@@ -478,25 +478,25 @@ mod tests {
             .key_map
             .get_mut(&ChainIndex::from_str("/1").unwrap())
             .unwrap();
-        acc.value.1.balance = 2;
+        acc.value.account.balance = 2;
 
         let acc = tree
             .key_map
             .get_mut(&ChainIndex::from_str("/2").unwrap())
             .unwrap();
-        acc.value.1.balance = 3;
+        acc.value.account.balance = 3;
 
         let acc = tree
             .key_map
             .get_mut(&ChainIndex::from_str("/0/1").unwrap())
             .unwrap();
-        acc.value.1.balance = 5;
+        acc.value.account.balance = 5;
 
         let acc = tree
             .key_map
             .get_mut(&ChainIndex::from_str("/1/0").unwrap())
             .unwrap();
-        acc.value.1.balance = 6;
+        acc.value.account.balance = 6;
 
         tree.cleanup_tree_remove_uninit_layered(10);
 
@@ -518,15 +518,15 @@ mod tests {
         assert_eq!(key_set, key_set_res);
 
         let acc = &tree.key_map[&ChainIndex::from_str("/1").unwrap()];
-        assert_eq!(acc.value.1.balance, 2);
+        assert_eq!(acc.value.account.balance, 2);
 
         let acc = &tree.key_map[&ChainIndex::from_str("/2").unwrap()];
-        assert_eq!(acc.value.1.balance, 3);
+        assert_eq!(acc.value.account.balance, 3);
 
         let acc = &tree.key_map[&ChainIndex::from_str("/0/1").unwrap()];
-        assert_eq!(acc.value.1.balance, 5);
+        assert_eq!(acc.value.account.balance, 5);
 
         let acc = &tree.key_map[&ChainIndex::from_str("/1/0").unwrap()];
-        assert_eq!(acc.value.1.balance, 6);
+        assert_eq!(acc.value.account.balance, 6);
     }
 }

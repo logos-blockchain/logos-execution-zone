@@ -72,7 +72,10 @@ impl IndexerCore {
                         acc.program_owner =
                             nssa::program::Program::authenticated_transfer_program().id();
 
-                        nssa_core::Commitment::new(&AccountId::private_account_id(npk, Identifier(0_u128)), &acc)
+                        nssa_core::Commitment::new(
+                            &AccountId::private_account_id(npk, Identifier(0_u128)),
+                            &acc,
+                        )
                     })
                     .collect()
             });

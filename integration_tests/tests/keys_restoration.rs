@@ -259,16 +259,16 @@ async fn restore_keys_from_seed() -> Result<()> {
         .expect("Acc 4 should be restored");
 
     assert_eq!(
-        acc1.value.1.program_owner,
+        acc1.value.account.program_owner,
         Program::authenticated_transfer_program().id()
     );
     assert_eq!(
-        acc2.value.1.program_owner,
+        acc2.value.account.program_owner,
         Program::authenticated_transfer_program().id()
     );
 
-    assert_eq!(acc1.value.1.balance, 100);
-    assert_eq!(acc2.value.1.balance, 101);
+    assert_eq!(acc1.value.account.balance, 100);
+    assert_eq!(acc2.value.account.balance, 101);
 
     info!("Tree checks passed, testing restored accounts can transact");
 

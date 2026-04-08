@@ -6,6 +6,7 @@ use std::{
 use base58::{FromBase58 as _, ToBase58 as _};
 use borsh::{BorshDeserialize, BorshSerialize};
 pub use data::Data;
+use rand::{RngCore as _, rngs::OsRng};
 use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde::{Deserialize, Serialize};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
@@ -18,7 +19,7 @@ pub mod data;
 
 #[derive(Copy, Debug, Default, Clone, Eq, PartialEq)]
 pub struct Nonce(pub u128);
-#[derive(Copy, Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Copy, Debug, Clone, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Identifier(pub u128);
 
 impl Nonce {
@@ -109,6 +110,13 @@ impl Identifier {
         value.copy_from_slice(&Impl::hash_bytes(&bytes).as_bytes()[0..16]);
 
         Self(u128::from_le_bytes(value))
+    }
+
+    #[must_use]
+    pub fn new_os_random() -> Self {
+        let mut bytes = [0_u8; 16];
+        OsRng.fill_bytes(&mut bytes);
+        Self(u128::from_le_bytes(bytes))
     }
 }
 
@@ -201,13 +209,13 @@ impl AccountId {
     }
 
     #[must_use]
-    pub fn private_account_id(value: &NullifierPublicKey, identifier: Identifier) -> Self {
+    pub fn private_account_id(npk: &NullifierPublicKey, identifier: Identifier) -> Self {
         const PRIVATE_ACCOUNT_ID_PREFIX: &[u8; 32] =
             b"/LEE/v0.3/AccountId/Private/\x00\x00\x00\x00";
 
         let mut bytes = Vec::<u8>::new();
         bytes.extend_from_slice(PRIVATE_ACCOUNT_ID_PREFIX);
-        bytes.extend_from_slice(&value.0);
+        bytes.extend_from_slice(&npk.0);
         bytes.extend_from_slice(&identifier.0.to_le_bytes());
 
         Self::new(
@@ -456,5 +464,10 @@ mod tests {
         let identifier = Identifier::private_identifier(&epk, 13_u8);
 
         assert_eq!(identifier, expected_identifier);
+    }
+
+    #[test]
+    fn default_identifier() {
+        assert_eq!(0_u128, Identifier::default().0);
     }
 }

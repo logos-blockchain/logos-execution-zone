@@ -27,7 +27,9 @@ use nssa::{
     },
 };
 use nssa_core::{
-    Commitment, MembershipProof, SharedSecretKey, account::{Identifier, Nonce}, program::InstructionData,
+    Commitment, MembershipProof, SharedSecretKey,
+    account::{Identifier, Nonce},
+    program::InstructionData,
 };
 pub use privacy_preserving_tx::PrivacyPreservingAccount;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
@@ -305,7 +307,10 @@ impl WalletCore {
     pub fn get_private_account_commitment(&self, account_id: AccountId) -> Option<Commitment> {
         let bundle = self.storage.user_data.get_private_account(account_id)?;
         Some(Commitment::new(
-            &bundle.key_chain.nullifier_public_key,
+            &AccountId::private_account_id(
+                &bundle.key_chain.nullifier_public_key,
+                Identifier(0_u128),
+            ),
             &bundle.account,
         ))
     }
@@ -393,6 +398,7 @@ impl WalletCore {
         )?;
 
         let private_account_keys = acc_manager.private_account_keys();
+        let private_account_identifiers = acc_manager.private_account_identifiers();
         let (output, proof) = nssa::privacy_preserving_transaction::circuit::execute_and_prove(
             pre_states,
             instruction_data,
@@ -402,7 +408,7 @@ impl WalletCore {
                 .map(|keys| (keys.npk.clone(), keys.ssk))
                 .collect::<Vec<_>>(),
             acc_manager.private_account_auth(),
-            vec![],
+            private_account_identifiers.clone(),
             acc_manager.private_account_membership_proofs(),
             &program.to_owned(),
         )
@@ -414,9 +420,10 @@ impl WalletCore {
                 Vec::from_iter(acc_manager.public_account_nonces()),
                 private_account_keys
                     .iter()
-                    .map(|keys| {
+                    .zip(private_account_identifiers)
+                    .map(|(keys, identifier)| {
                         (
-                            AccountId::private_account_id(&keys.npk.clone(), Identifier(0_u128)),
+                            AccountId::private_account_id(&keys.npk.clone(), identifier), 
                             keys.vpk.clone(),
                             keys.epk.clone(),
                         )
@@ -502,6 +509,7 @@ impl WalletCore {
                     acc_account_id,
                     PrivateBundle {
                         key_chain,
+                        identifier: _,
                         account: _,
                     },
                 )| (*acc_account_id, key_chain, None),
@@ -510,7 +518,7 @@ impl WalletCore {
                 |(chain_index, keys_node)| {
                     (
                         keys_node.account_id(),
-                        &keys_node.value.0,
+                        &keys_node.value.key_chain,
                         chain_index.index(),
                     )
                 },

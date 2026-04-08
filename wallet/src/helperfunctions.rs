@@ -193,6 +193,7 @@ pub fn produce_data_for_storage(
             InitialAccountData::Private(Box::new(PrivateAccountPrivateInitialData {
                 account_id: *account_id,
                 account: bundle.account.clone(),
+                identifier: bundle.identifier,
                 key_chain: bundle.key_chain.clone(),
             }))
             .into(),
