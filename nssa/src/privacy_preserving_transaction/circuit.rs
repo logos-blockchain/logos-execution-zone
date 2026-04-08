@@ -216,7 +216,7 @@ mod tests {
         let recipient = AccountWithMetadata::new(
             Account::default(),
             false,
-            AccountId::private_account_id(&recipient_keys.npk(), Identifier(0_u128)),
+            AccountId::private_account_id(&recipient_keys.npk(), recipient_keys.identifier),
         );
 
         let balance_to_move: u128 = 37;
@@ -246,7 +246,7 @@ mod tests {
             vec![0, 2],
             vec![(recipient_keys.npk(), shared_secret)],
             vec![],
-            vec![],
+            vec![recipient_keys.identifier],
             vec![None],
             &Program::authenticated_transfer_program().into(),
         )
@@ -278,7 +278,7 @@ mod tests {
         let sender_keys = test_private_account_keys_1();
         let recipient_keys = test_private_account_keys_2();
         let recipient_id =
-            AccountId::private_account_id(&test_private_account_keys_2().npk(), Identifier(0_u128));
+            AccountId::private_account_id(&recipient_keys.npk(), recipient_keys.identifier);
 
         let sender_nonce = Nonce(0xdead_beef);
         let sender_pre = AccountWithMetadata::new(
@@ -289,14 +289,14 @@ mod tests {
                 data: Data::default(),
             },
             true,
-            AccountId::private_account_id(&sender_keys.npk(), Identifier(0_u128)),
+            AccountId::private_account_id(&sender_keys.npk(), sender_keys.identifier),
         );
         let commitment_sender = Commitment::new(&sender_pre.account_id, &sender_pre.account);
 
         let recipient = AccountWithMetadata::new(
             Account::default(),
             false,
-            AccountId::private_account_id(&recipient_keys.npk(), Identifier(0_u128)),
+            AccountId::private_account_id(&recipient_keys.npk(), recipient_keys.identifier),
         );
         let balance_to_move: u128 = 37;
 
@@ -348,7 +348,7 @@ mod tests {
                 (recipient_keys.npk(), shared_secret_2),
             ],
             vec![sender_keys.nsk],
-            vec![],
+            vec![sender_keys.identifier, recipient_keys.identifier],
             vec![commitment_set.get_proof_for(&commitment_sender), None],
             &program.into(),
         )
@@ -386,7 +386,7 @@ mod tests {
         let pre = AccountWithMetadata::new(
             Account::default(),
             false,
-            AccountId::private_account_id(&account_keys.npk(), Identifier(0_u128)),
+            AccountId::private_account_id(&account_keys.npk(), Identifier(42_u128)),
         );
 
         let validity_window_chain_caller = Program::validity_window_chain_caller();
@@ -415,7 +415,7 @@ mod tests {
             vec![2],
             vec![(account_keys.npk(), shared_secret)],
             vec![],
-            vec![],
+            vec![Identifier(42_u128)],
             vec![None],
             &program_with_deps,
         );

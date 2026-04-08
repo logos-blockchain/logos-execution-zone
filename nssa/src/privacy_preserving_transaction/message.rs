@@ -198,8 +198,10 @@ pub mod tests {
 
         let expected_view_tag = {
             let mut hasher = Sha256::new();
-            hasher.update(b"/LEE/v0.3/ViewTag/");
-            hasher.update(npk.to_byte_array());
+            hasher.update(
+                b"/LEE/v0.3/ViewTag\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+            );
+            hasher.update(account_id.to_bytes());
             hasher.update(vpk.to_bytes());
             let digest: [u8; 32] = hasher.finalize().into();
             digest[0]
