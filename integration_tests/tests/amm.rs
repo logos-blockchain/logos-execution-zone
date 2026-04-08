@@ -117,7 +117,7 @@ async fn amm_public() -> Result<()> {
         definition_account_label: None,
         supply_account_id: Some(format_public_account_id(supply_account_id_1)),
         supply_account_label: None,
-        name: "A NAM1".to_string(),
+        name: "A NAM1".to_owned(),
 
         total_supply: 37,
     };
@@ -146,7 +146,7 @@ async fn amm_public() -> Result<()> {
         definition_account_label: None,
         supply_account_id: Some(format_public_account_id(supply_account_id_2)),
         supply_account_label: None,
-        name: "A NAM2".to_string(),
+        name: "A NAM2".to_owned(),
 
         total_supply: 37,
     };
@@ -537,7 +537,7 @@ async fn amm_new_pool_using_labels() -> Result<()> {
         definition_account_label: None,
         supply_account_id: Some(format_public_account_id(supply_account_id_1)),
         supply_account_label: None,
-        name: "TOKEN1".to_string(),
+        name: "TOKEN1".to_owned(),
         total_supply: 10,
     };
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
@@ -561,7 +561,7 @@ async fn amm_new_pool_using_labels() -> Result<()> {
         definition_account_label: None,
         supply_account_id: Some(format_public_account_id(supply_account_id_2)),
         supply_account_label: None,
-        name: "TOKEN2".to_string(),
+        name: "TOKEN2".to_owned(),
         total_supply: 10,
     };
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
