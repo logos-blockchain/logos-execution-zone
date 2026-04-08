@@ -7,7 +7,7 @@ use key_protocol::{
         key_tree::{KeyTreePrivate, KeyTreePublic, chain_index::ChainIndex},
         secret_holders::SeedHolder,
     },
-    key_protocol_core::NSSAUserData,
+    key_protocol_core::{NSSAUserData, PrivateBundle, PublicBundle},
 };
 use log::debug;
 use nssa::program::Program;
@@ -74,11 +74,21 @@ impl WalletChainStore {
                 }
                 PersistentAccountData::Preconfigured(acc_data) => match acc_data {
                     InitialAccountData::Public(data) => {
-                        public_init_acc_map.insert(data.account_id, data.pub_sign_key);
+                        public_init_acc_map.insert(
+                            data.account_id,
+                            PublicBundle {
+                                sign_key: data.pub_sign_key,
+                            },
+                        );
                     }
                     InitialAccountData::Private(data) => {
-                        private_init_acc_map
-                            .insert(data.account_id, (data.key_chain, data.account));
+                        private_init_acc_map.insert(
+                            data.account_id,
+                            PrivateBundle {
+                                key_chain: data.key_chain,
+                                account: data.account,
+                            },
+                        );
                     }
                 },
             }
@@ -108,7 +118,12 @@ impl WalletChainStore {
         for init_acc_data in initial_accounts {
             match init_acc_data {
                 InitialAccountData::Public(data) => {
-                    public_init_acc_map.insert(data.account_id, data.pub_sign_key);
+                    public_init_acc_map.insert(
+                        data.account_id,
+                        PublicBundle {
+                            sign_key: data.pub_sign_key,
+                        },
+                    );
                 }
                 InitialAccountData::Private(data) => {
                     let mut account = data.account;
@@ -117,7 +132,13 @@ impl WalletChainStore {
                     // startup. Fix this when program id can be fetched
                     // from the node and queried from the wallet.
                     account.program_owner = Program::authenticated_transfer_program().id();
-                    private_init_acc_map.insert(data.account_id, (data.key_chain, account));
+                    private_init_acc_map.insert(
+                        data.account_id,
+                        PrivateBundle {
+                            key_chain: data.key_chain,
+                            account,
+                        },
+                    );
                 }
             }
         }
@@ -178,7 +199,7 @@ impl WalletChainStore {
             .user_data
             .default_user_private_accounts
             .entry(account_id)
-            .and_modify(|data| data.1 = account.clone());
+            .and_modify(|data| data.account = account.clone());
 
         if matches!(entry, Entry::Vacant(_)) {
             self.user_data

@@ -9,8 +9,9 @@ use serde::Serialize;
 use crate::{
     error::NssaError,
     program_methods::{
-        AMM_ELF, ASSOCIATED_TOKEN_ACCOUNT_ELF, AUTHENTICATED_TRANSFER_ELF, CLOCK_ELF, PINATA_ELF,
-        TOKEN_ELF,
+        AMM_ELF, AMM_ID, ASSOCIATED_TOKEN_ACCOUNT_ELF, ASSOCIATED_TOKEN_ACCOUNT_ID,
+        AUTHENTICATED_TRANSFER_ELF, AUTHENTICATED_TRANSFER_ID, CLOCK_ELF, CLOCK_ID, PINATA_ELF,
+        PINATA_ID, TOKEN_ELF, TOKEN_ID,
     },
 };
 
@@ -110,32 +111,42 @@ impl Program {
 
     #[must_use]
     pub fn authenticated_transfer_program() -> Self {
-        // This unwrap won't panic since the `AUTHENTICATED_TRANSFER_ELF` comes from risc0 build of
-        // `program_methods`
-        Self::new(AUTHENTICATED_TRANSFER_ELF.to_vec()).unwrap()
+        Self {
+            id: AUTHENTICATED_TRANSFER_ID,
+            elf: AUTHENTICATED_TRANSFER_ELF.to_vec(),
+        }
     }
 
     #[must_use]
     pub fn token() -> Self {
-        // This unwrap won't panic since the `TOKEN_ELF` comes from risc0 build of
-        // `program_methods`
-        Self::new(TOKEN_ELF.to_vec()).unwrap()
+        Self {
+            id: TOKEN_ID,
+            elf: TOKEN_ELF.to_vec(),
+        }
     }
 
     #[must_use]
     pub fn amm() -> Self {
-        Self::new(AMM_ELF.to_vec()).expect("The AMM program must be a valid Risc0 program")
+        Self {
+            id: AMM_ID,
+            elf: AMM_ELF.to_vec(),
+        }
     }
 
     #[must_use]
     pub fn clock() -> Self {
-        Self::new(CLOCK_ELF.to_vec()).expect("The clock program must be a valid Risc0 program")
+        Self {
+            id: CLOCK_ID,
+            elf: CLOCK_ELF.to_vec(),
+        }
     }
 
     #[must_use]
     pub fn ata() -> Self {
-        Self::new(ASSOCIATED_TOKEN_ACCOUNT_ELF.to_vec())
-            .expect("The ATA program must be a valid Risc0 program")
+        Self {
+            id: ASSOCIATED_TOKEN_ACCOUNT_ID,
+            elf: ASSOCIATED_TOKEN_ACCOUNT_ELF.to_vec(),
+        }
     }
 }
 
@@ -143,16 +154,19 @@ impl Program {
 impl Program {
     #[must_use]
     pub fn pinata() -> Self {
-        // This unwrap won't panic since the `PINATA_ELF` comes from risc0 build of
-        // `program_methods`
-        Self::new(PINATA_ELF.to_vec()).unwrap()
+        Self {
+            id: PINATA_ID,
+            elf: PINATA_ELF.to_vec(),
+        }
     }
 
     #[must_use]
-    #[expect(clippy::non_ascii_literal, reason = "More readable")]
     pub fn pinata_token() -> Self {
-        use crate::program_methods::PINATA_TOKEN_ELF;
-        Self::new(PINATA_TOKEN_ELF.to_vec()).expect("Piñata program must be a valid R0BF file")
+        use crate::program_methods::{PINATA_TOKEN_ELF, PINATA_TOKEN_ID};
+        Self {
+            id: PINATA_TOKEN_ID,
+            elf: PINATA_TOKEN_ELF.to_vec(),
+        }
     }
 }
 
@@ -163,8 +177,9 @@ mod tests {
     use crate::{
         program::Program,
         program_methods::{
-            AUTHENTICATED_TRANSFER_ELF, AUTHENTICATED_TRANSFER_ID, PINATA_ELF, PINATA_ID,
-            TOKEN_ELF, TOKEN_ID,
+            AMM_ELF, AMM_ID, ASSOCIATED_TOKEN_ACCOUNT_ELF, ASSOCIATED_TOKEN_ACCOUNT_ID,
+            AUTHENTICATED_TRANSFER_ELF, AUTHENTICATED_TRANSFER_ID, CLOCK_ELF, CLOCK_ID, PINATA_ELF,
+            PINATA_ID, PINATA_TOKEN_ELF, PINATA_TOKEN_ID, TOKEN_ELF, TOKEN_ID,
         },
     };
 
@@ -311,24 +326,31 @@ mod tests {
 
         #[must_use]
         pub fn modified_transfer_program() -> Self {
-            use test_program_methods::MODIFIED_TRANSFER_ELF;
-            // This unwrap won't panic since the `MODIFIED_TRANSFER_ELF` comes from risc0 build of
-            // `program_methods`
-            Self::new(MODIFIED_TRANSFER_ELF.to_vec()).unwrap()
+            use test_program_methods::{MODIFIED_TRANSFER_ELF, MODIFIED_TRANSFER_ID};
+            Self {
+                id: MODIFIED_TRANSFER_ID,
+                elf: MODIFIED_TRANSFER_ELF.to_vec(),
+            }
         }
 
         #[must_use]
         pub fn validity_window() -> Self {
-            use test_program_methods::VALIDITY_WINDOW_ELF;
-            // This unwrap won't panic since the `VALIDITY_WINDOW_ELF` comes from risc0 build of
-            // `program_methods`
-            Self::new(VALIDITY_WINDOW_ELF.to_vec()).unwrap()
+            use test_program_methods::{VALIDITY_WINDOW_ELF, VALIDITY_WINDOW_ID};
+            Self {
+                id: VALIDITY_WINDOW_ID,
+                elf: VALIDITY_WINDOW_ELF.to_vec(),
+            }
         }
 
         #[must_use]
         pub fn validity_window_chain_caller() -> Self {
-            use test_program_methods::VALIDITY_WINDOW_CHAIN_CALLER_ELF;
-            Self::new(VALIDITY_WINDOW_CHAIN_CALLER_ELF.to_vec()).unwrap()
+            use test_program_methods::{
+                VALIDITY_WINDOW_CHAIN_CALLER_ELF, VALIDITY_WINDOW_CHAIN_CALLER_ID,
+            };
+            Self {
+                id: VALIDITY_WINDOW_CHAIN_CALLER_ID,
+                elf: VALIDITY_WINDOW_CHAIN_CALLER_ELF.to_vec(),
+            }
         }
 
         #[must_use]
@@ -418,5 +440,22 @@ mod tests {
         assert_eq!(token_program.elf, TOKEN_ELF);
         assert_eq!(pinata_program.id, PINATA_ID);
         assert_eq!(pinata_program.elf, PINATA_ELF);
+    }
+
+    #[test]
+    fn builtin_program_ids_match_elfs() {
+        let cases: &[(&[u8], [u32; 8])] = &[
+            (AMM_ELF, AMM_ID),
+            (AUTHENTICATED_TRANSFER_ELF, AUTHENTICATED_TRANSFER_ID),
+            (ASSOCIATED_TOKEN_ACCOUNT_ELF, ASSOCIATED_TOKEN_ACCOUNT_ID),
+            (CLOCK_ELF, CLOCK_ID),
+            (PINATA_ELF, PINATA_ID),
+            (PINATA_TOKEN_ELF, PINATA_TOKEN_ID),
+            (TOKEN_ELF, TOKEN_ID),
+        ];
+        for (elf, expected_id) in cases {
+            let program = Program::new(elf.to_vec()).unwrap();
+            assert_eq!(program.id(), *expected_id);
+        }
     }
 }

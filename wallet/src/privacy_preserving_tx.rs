@@ -203,14 +203,12 @@ async fn private_acc_preparation(
     wallet: &WalletCore,
     account_id: AccountId,
 ) -> Result<AccountPreparedData, ExecutionFailureKind> {
-    let Some((from_keys, from_acc)) = wallet
-        .storage
-        .user_data
-        .get_private_account(account_id)
-        .cloned()
-    else {
+    let Some(from_bundle) = wallet.storage.user_data.get_private_account(account_id) else {
         return Err(ExecutionFailureKind::KeyNotFoundError);
     };
+
+    let from_keys = from_bundle.key_chain;
+    let from_acc = from_bundle.account;
 
     let nsk = from_keys.private_key_holder.nullifier_secret_key;
 

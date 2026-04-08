@@ -2,10 +2,13 @@ use k256::{Scalar, elliptic_curve::PrimeField as _};
 use nssa_core::{NullifierPublicKey, account::Identifier, encryption::ViewingPublicKey};
 use serde::{Deserialize, Serialize};
 
-use crate::key_management::{
-    KeyChain,
-    key_tree::traits::KeyNode,
-    secret_holders::{PrivateKeyHolder, SecretSpendingKey},
+use crate::{
+    key_management::{
+        KeyChain,
+        key_tree::traits::KeyNode,
+        secret_holders::{PrivateKeyHolder, SecretSpendingKey},
+    },
+    key_protocol_core::PrivateBundle,
 };
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -129,9 +132,12 @@ impl<'a> From<&'a ChildKeysPrivate> for &'a (KeyChain, nssa::Account) {
     clippy::single_char_lifetime_names,
     reason = "TODO add meaningful name"
 )]
-impl<'a> From<&'a mut ChildKeysPrivate> for &'a mut (KeyChain, nssa::Account) {
+impl<'a> From<&'a mut ChildKeysPrivate> for PrivateBundle {
     fn from(value: &'a mut ChildKeysPrivate) -> Self {
-        &mut value.value
+        Self {
+            key_chain: value.value.0.clone(),
+            account: value.value.1.clone(),
+        }
     }
 }
 

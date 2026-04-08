@@ -58,19 +58,21 @@ async fn sync_private_account_with_non_zero_chain_index() -> Result<()> {
         anyhow::bail!("Expected RegisterAccount return value");
     };
 
-    // Get the keys for the newly created account
-    let (to_keys, _) = ctx
+    let bundle = ctx
         .wallet()
         .storage()
         .user_data
         .get_private_account(to_account_id)
-        .cloned()
         .context("Failed to get private account")?;
+
+    let to_keys = bundle.key_chain;
 
     // Send to this account using claiming path (using npk and vpk instead of account ID)
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: format_private_account_id(from),
+        from: Some(format_private_account_id(from)),
+        from_label: None,
         to: None,
+        to_label: None,
         to_npk: Some(hex::encode(to_keys.nullifier_public_key.0)),
         to_vpk: Some(hex::encode(to_keys.viewing_public_key.0)),
         amount: 100,
@@ -143,8 +145,10 @@ async fn restore_keys_from_seed() -> Result<()> {
 
     // Send to first private account
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: format_private_account_id(from),
+        from: Some(format_private_account_id(from)),
+        from_label: None,
         to: Some(format_private_account_id(to_account_id1)),
+        to_label: None,
         to_npk: None,
         to_vpk: None,
         amount: 100,
@@ -153,8 +157,10 @@ async fn restore_keys_from_seed() -> Result<()> {
 
     // Send to second private account
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: format_private_account_id(from),
+        from: Some(format_private_account_id(from)),
+        from_label: None,
         to: Some(format_private_account_id(to_account_id2)),
+        to_label: None,
         to_npk: None,
         to_vpk: None,
         amount: 101,
@@ -191,8 +197,10 @@ async fn restore_keys_from_seed() -> Result<()> {
 
     // Send to first public account
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: format_public_account_id(from),
+        from: Some(format_public_account_id(from)),
+        from_label: None,
         to: Some(format_public_account_id(to_account_id3)),
+        to_label: None,
         to_npk: None,
         to_vpk: None,
         amount: 102,
@@ -201,8 +209,10 @@ async fn restore_keys_from_seed() -> Result<()> {
 
     // Send to second public account
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: format_public_account_id(from),
+        from: Some(format_public_account_id(from)),
+        from_label: None,
         to: Some(format_public_account_id(to_account_id4)),
+        to_label: None,
         to_npk: None,
         to_vpk: None,
         amount: 103,
@@ -264,8 +274,10 @@ async fn restore_keys_from_seed() -> Result<()> {
 
     // Test that restored accounts can send transactions
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: format_private_account_id(to_account_id1),
+        from: Some(format_private_account_id(to_account_id1)),
+        from_label: None,
         to: Some(format_private_account_id(to_account_id2)),
+        to_label: None,
         to_npk: None,
         to_vpk: None,
         amount: 10,
@@ -273,8 +285,10 @@ async fn restore_keys_from_seed() -> Result<()> {
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: format_public_account_id(to_account_id3),
+        from: Some(format_public_account_id(to_account_id3)),
+        from_label: None,
         to: Some(format_public_account_id(to_account_id4)),
+        to_label: None,
         to_npk: None,
         to_vpk: None,
         amount: 11,
