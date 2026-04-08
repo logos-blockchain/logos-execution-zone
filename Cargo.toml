@@ -15,11 +15,15 @@ members = [
   "nssa/core",
   "programs/amm/core",
   "programs/amm",
+  "programs/clock/core",
   "programs/token/core",
   "programs/token",
-  "sequencer_core",
-  "sequencer_rpc",
-  "sequencer_runner",
+  "programs/associated_token_account/core",
+  "programs/associated_token_account",
+  "sequencer/core",
+  "sequencer/service",
+  "sequencer/service/protocol",
+  "sequencer/service/rpc",
   "indexer/core",
   "indexer/service",
   "indexer/service/protocol",
@@ -33,6 +37,7 @@ members = [
   "examples/program_deployment/methods",
   "examples/program_deployment/methods/guest",
   "bedrock_client",
+  "testnet_initial_state",
 ]
 
 [workspace.dependencies]
@@ -42,21 +47,26 @@ common = { path = "common" }
 mempool = { path = "mempool" }
 storage = { path = "storage" }
 key_protocol = { path = "key_protocol" }
-sequencer_core = { path = "sequencer_core" }
-sequencer_rpc = { path = "sequencer_rpc" }
-sequencer_runner = { path = "sequencer_runner" }
+sequencer_core = { path = "sequencer/core" }
+sequencer_service_protocol = { path = "sequencer/service/protocol" }
+sequencer_service_rpc = { path = "sequencer/service/rpc" }
+sequencer_service = { path = "sequencer/service" }
 indexer_core = { path = "indexer/core" }
 indexer_service = { path = "indexer/service" }
 indexer_service_protocol = { path = "indexer/service/protocol" }
 indexer_service_rpc = { path = "indexer/service/rpc" }
 wallet = { path = "wallet" }
 wallet-ffi = { path = "wallet-ffi", default-features = false }
+clock_core = { path = "programs/clock/core" }
 token_core = { path = "programs/token/core" }
 token_program = { path = "programs/token" }
 amm_core = { path = "programs/amm/core" }
 amm_program = { path = "programs/amm" }
+ata_core = { path = "programs/associated_token_account/core" }
+ata_program = { path = "programs/associated_token_account" }
 test_program_methods = { path = "test_program_methods" }
 bedrock_client = { path = "bedrock_client" }
+testnet_initial_state = { path = "testnet_initial_state" }
 
 tokio = { version = "1.50", features = [
   "net",

@@ -3,6 +3,7 @@ use clap::Subcommand;
 use itertools::Itertools as _;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use nssa::{Account, PublicKey, program::Program};
+use sequencer_service_rpc::RpcClient as _;
 use token_core::{TokenDefinition, TokenHolding};
 
 use crate::{
@@ -145,7 +146,7 @@ impl WalletSubcommand for NewSubcommand {
                 println!(
                     "Generated new account with account_id Private/{account_id} at path {chain_index}",
                 );
-                println!("With npk {}", hex::encode(key.nullifer_public_key.0));
+                println!("With npk {}", hex::encode(key.nullifier_public_key.0));
                 println!(
                     "With vpk {}",
                     hex::encode(key.viewing_public_key.to_bytes())
@@ -208,7 +209,7 @@ impl WalletSubcommand for AccountSubcommand {
                                 .get_private_account(account_id)
                                 .context("Private account not found in storage")?;
 
-                            println!("npk {}", hex::encode(key.nullifer_public_key.0));
+                            println!("npk {}", hex::encode(key.nullifier_public_key.0));
                             println!("vpk {}", hex::encode(key.viewing_public_key.to_bytes()));
                         }
                     }
@@ -244,11 +245,7 @@ impl WalletSubcommand for AccountSubcommand {
             }
             Self::New(new_subcommand) => new_subcommand.handle_subcommand(wallet_core).await,
             Self::SyncPrivate => {
-                let curr_last_block = wallet_core
-                    .sequencer_client
-                    .get_last_block()
-                    .await?
-                    .last_block;
+                let curr_last_block = wallet_core.sequencer_client.get_last_block_id().await?;
 
                 if wallet_core
                     .storage

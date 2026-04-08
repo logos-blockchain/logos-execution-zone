@@ -7,12 +7,13 @@ use nssa::Account;
 use nssa_core::account::Nonce;
 use rand::{RngCore as _, rngs::OsRng};
 use serde::Serialize;
+use testnet_initial_state::{PrivateAccountPrivateInitialData, PublicAccountPrivateInitialData};
 
 use crate::{
     HOME_DIR_ENV_VAR,
     config::{
-        InitialAccountData, InitialAccountDataPrivate, InitialAccountDataPublic, Label,
-        PersistentAccountDataPrivate, PersistentAccountDataPublic, PersistentStorage,
+        InitialAccountData, Label, PersistentAccountDataPrivate, PersistentAccountDataPublic,
+        PersistentStorage,
     },
 };
 
@@ -119,7 +120,7 @@ pub fn produce_data_for_storage(
 
     for (account_id, key) in &user_data.default_pub_account_signing_keys {
         vec_for_storage.push(
-            InitialAccountData::Public(InitialAccountDataPublic {
+            InitialAccountData::Public(PublicAccountPrivateInitialData {
                 account_id: *account_id,
                 pub_sign_key: key.clone(),
             })
@@ -129,7 +130,7 @@ pub fn produce_data_for_storage(
 
     for (account_id, (key_chain, account)) in &user_data.default_user_private_accounts {
         vec_for_storage.push(
-            InitialAccountData::Private(Box::new(InitialAccountDataPrivate {
+            InitialAccountData::Private(Box::new(PrivateAccountPrivateInitialData {
                 account_id: *account_id,
                 account: account.clone(),
                 key_chain: key_chain.clone(),

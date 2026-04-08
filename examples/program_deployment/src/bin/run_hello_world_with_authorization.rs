@@ -1,9 +1,10 @@
+use common::transaction::NSSATransaction;
 use nssa::{
     AccountId, PublicTransaction,
     program::Program,
     public_transaction::{Message, WitnessSet},
 };
-use nssa_core::account::Nonce;
+use sequencer_service_rpc::RpcClient as _;
 use wallet::WalletCore;
 
 // Before running this example, compile the `hello_world_with_authorization.rs` guest program with:
@@ -63,13 +64,7 @@ async fn main() {
         .await
         .expect("Node should be reachable to query account data");
     let signing_keys = [signing_key];
-    let message = Message::try_new(
-        program.id(),
-        vec![account_id],
-        nonces.iter().map(|x| Nonce(*x)).collect(),
-        greeting,
-    )
-    .unwrap();
+    let message = Message::try_new(program.id(), vec![account_id], nonces, greeting).unwrap();
     // Pass the signing key to sign the message. This will be used by the node
     // to flag the pre_state as `is_authorized` when executing the program
     let witness_set = WitnessSet::for_message(&message, &signing_keys);
@@ -78,7 +73,7 @@ async fn main() {
     // Submit the transaction
     let _response = wallet_core
         .sequencer_client
-        .send_tx_public(tx)
+        .send_transaction(NSSATransaction::Public(tx))
         .await
         .unwrap();
 }

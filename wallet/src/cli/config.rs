@@ -4,6 +4,7 @@ use clap::Subcommand;
 use crate::{
     WalletCore,
     cli::{SubcommandReturnValue, WalletSubcommand},
+    config::InitialAccountData,
 };
 
 /// Represents generic config CLI subcommand.
@@ -37,15 +38,6 @@ impl WalletSubcommand for ConfigSubcommand {
                     println!("{config_str}");
                 } else if let Some(key) = key {
                     match key.as_str() {
-                        "override_rust_log" => {
-                            if let Some(value) =
-                                &wallet_core.storage.wallet_config.override_rust_log
-                            {
-                                println!("{value}");
-                            } else {
-                                println!("Not set");
-                            }
-                        }
                         "sequencer_addr" => {
                             println!("{}", wallet_core.storage.wallet_config.sequencer_addr);
                         }
@@ -68,7 +60,17 @@ impl WalletSubcommand for ConfigSubcommand {
                             );
                         }
                         "initial_accounts" => {
-                            println!("{:#?}", wallet_core.storage.wallet_config.initial_accounts);
+                            println!(
+                                "{:#?}",
+                                wallet_core
+                                    .storage
+                                    .wallet_config
+                                    .initial_accounts
+                                    .clone()
+                                    .unwrap_or_else(
+                                        InitialAccountData::create_initial_accounts_data
+                                    )
+                            );
                         }
                         "basic_auth" => {
                             if let Some(basic_auth) = &wallet_core.storage.wallet_config.basic_auth
@@ -88,9 +90,6 @@ impl WalletSubcommand for ConfigSubcommand {
             }
             Self::Set { key, value } => {
                 match key.as_str() {
-                    "override_rust_log" => {
-                        wallet_core.storage.wallet_config.override_rust_log = Some(value);
-                    }
                     "sequencer_addr" => {
                         wallet_core.storage.wallet_config.sequencer_addr = value.parse()?;
                     }

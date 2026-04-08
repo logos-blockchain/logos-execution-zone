@@ -1,8 +1,9 @@
-use common::{error::ExecutionFailureKind, rpc_primitives::requests::SendTxResponse};
+use common::{HashType, transaction::NSSATransaction};
 use nssa::AccountId;
 use nssa_core::{MembershipProof, SharedSecretKey};
+use sequencer_service_rpc::RpcClient as _;
 
-use crate::{PrivacyPreservingAccount, WalletCore};
+use crate::{ExecutionFailureKind, PrivacyPreservingAccount, WalletCore};
 
 pub struct Pinata<'wallet>(pub &'wallet WalletCore);
 
@@ -12,7 +13,7 @@ impl Pinata<'_> {
         pinata_account_id: AccountId,
         winner_account_id: AccountId,
         solution: u128,
-    ) -> Result<SendTxResponse, ExecutionFailureKind> {
+    ) -> Result<HashType, ExecutionFailureKind> {
         let account_ids = vec![pinata_account_id, winner_account_id];
         let program_id = nssa::program::Program::pinata().id();
         let message =
@@ -22,7 +23,11 @@ impl Pinata<'_> {
         let witness_set = nssa::public_transaction::WitnessSet::for_message(&message, &[]);
         let tx = nssa::PublicTransaction::new(message, witness_set);
 
-        Ok(self.0.sequencer_client.send_tx_public(tx).await?)
+        Ok(self
+            .0
+            .sequencer_client
+            .send_transaction(NSSATransaction::Public(tx))
+            .await?)
     }
 
     /// Claim a pinata reward using a privacy-preserving transaction for an already-initialized
@@ -36,7 +41,7 @@ impl Pinata<'_> {
         winner_account_id: AccountId,
         solution: u128,
         _winner_proof: MembershipProof,
-    ) -> Result<(SendTxResponse, SharedSecretKey), ExecutionFailureKind> {
+    ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
         self.claim_private_owned_account(pinata_account_id, winner_account_id, solution)
             .await
     }
@@ -46,7 +51,7 @@ impl Pinata<'_> {
         pinata_account_id: AccountId,
         winner_account_id: AccountId,
         solution: u128,
-    ) -> Result<(SendTxResponse, SharedSecretKey), ExecutionFailureKind> {
+    ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
         self.0
             .send_privacy_preserving_tx(
                 vec![

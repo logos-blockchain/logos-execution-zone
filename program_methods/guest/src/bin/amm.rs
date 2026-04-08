@@ -9,11 +9,13 @@
 use std::num::NonZero;
 
 use amm_core::Instruction;
-use nssa_core::program::{ProgramInput, read_nssa_inputs, write_nssa_outputs_with_chained_call};
+use nssa_core::program::{ProgramInput, ProgramOutput, read_nssa_inputs};
 
 fn main() {
     let (
         ProgramInput {
+            self_program_id,
+            caller_program_id,
             pre_states,
             instruction,
         },
@@ -112,15 +114,15 @@ fn main() {
                 min_amount_to_remove_token_b,
             )
         }
-        Instruction::Swap {
+        Instruction::SwapExactInput {
             swap_amount_in,
             min_amount_out,
             token_definition_id_in,
         } => {
             let [pool, vault_a, vault_b, user_holding_a, user_holding_b] = pre_states
                 .try_into()
-                .expect("Transfer instruction requires exactly five accounts");
-            amm_program::swap::swap(
+                .expect("SwapExactInput instruction requires exactly five accounts");
+            amm_program::swap::swap_exact_input(
                 pool,
                 vault_a,
                 vault_b,
@@ -131,12 +133,34 @@ fn main() {
                 token_definition_id_in,
             )
         }
+        Instruction::SwapExactOutput {
+            exact_amount_out,
+            max_amount_in,
+            token_definition_id_in,
+        } => {
+            let [pool, vault_a, vault_b, user_holding_a, user_holding_b] = pre_states
+                .try_into()
+                .expect("SwapExactOutput instruction requires exactly five accounts");
+            amm_program::swap::swap_exact_output(
+                pool,
+                vault_a,
+                vault_b,
+                user_holding_a,
+                user_holding_b,
+                exact_amount_out,
+                max_amount_in,
+                token_definition_id_in,
+            )
+        }
     };
 
-    write_nssa_outputs_with_chained_call(
+    ProgramOutput::new(
+        self_program_id,
+        caller_program_id,
         instruction_words,
         pre_states_clone,
         post_states,
-        chained_calls,
-    );
+    )
+    .with_chained_calls(chained_calls)
+    .write();
 }

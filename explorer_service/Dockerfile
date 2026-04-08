@@ -22,7 +22,13 @@ WORKDIR /explorer_service
 COPY . .
 
 # Build the app
-RUN cargo leptos build --release -vv
+RUN --mount=type=cache,target=/usr/local/cargo/registry/index \
+    --mount=type=cache,target=/usr/local/cargo/registry/cache \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/explorer_service/target \
+    cargo leptos build --release -vv \
+    && cp /explorer_service/target/release/explorer_service /usr/local/bin/explorer_service \
+    && cp -r /explorer_service/target/site /explorer_service/site_output
 
 FROM debian:trixie-slim AS runtime
 WORKDIR /explorer_service
@@ -33,10 +39,10 @@ RUN apt-get update -y \
   && rm -rf /var/lib/apt/lists/*
 
 # Copy the server binary to the /explorer_service directory
-COPY --from=builder /explorer_service/target/release/explorer_service /explorer_service/
+COPY --from=builder /usr/local/bin/explorer_service /explorer_service/
 
 # /target/site contains our JS/WASM/CSS, etc.
-COPY --from=builder /explorer_service/target/site /explorer_service/site
+COPY --from=builder /explorer_service/site_output /explorer_service/site
 
 # Copy Cargo.toml as it’s needed at runtime
 COPY --from=builder /explorer_service/Cargo.toml /explorer_service/

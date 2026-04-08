@@ -1,12 +1,11 @@
-use std::num::NonZero;
+use std::{num::NonZero, vec};
 
 use amm_core::{
     PoolDefinition, compute_liquidity_token_pda, compute_liquidity_token_pda_seed,
     compute_pool_pda, compute_vault_pda, compute_vault_pda_seed,
 };
-#[cfg(feature = "nssa")]
 use nssa::{
-    PrivateKey, PublicKey, PublicTransaction, V02State, program::Program, public_transaction,
+    PrivateKey, PublicKey, PublicTransaction, V03State, program::Program, public_transaction,
 };
 use nssa_core::{
     account::{Account, AccountId, AccountWithMetadata, Data},
@@ -15,7 +14,10 @@ use nssa_core::{
 use token_core::{TokenDefinition, TokenHolding};
 
 use crate::{
-    add::add_liquidity, new_definition::new_definition, remove::remove_liquidity, swap::swap,
+    add::add_liquidity,
+    new_definition::new_definition,
+    remove::remove_liquidity,
+    swap::{swap_exact_input, swap_exact_output},
 };
 
 const TOKEN_PROGRAM_ID: ProgramId = [15; 8];
@@ -25,16 +27,15 @@ struct BalanceForTests;
 struct ChainedCallForTests;
 struct IdForTests;
 struct AccountWithMetadataForTests;
-#[cfg(feature = "nssa")]
+
 struct PrivateKeysForTests;
-#[cfg(feature = "nssa")]
+
 struct IdForExeTests;
-#[cfg(feature = "nssa")]
+
 struct BalanceForExeTests;
-#[cfg(feature = "nssa")]
+
 struct AccountsForExeTests;
 
-#[cfg(feature = "nssa")]
 impl PrivateKeysForTests {
     fn user_token_a_key() -> PrivateKey {
         PrivateKey::try_new([31; 32]).expect("Keys constructor expects valid private key")
@@ -155,6 +156,10 @@ impl BalanceForTests {
         200
     }
 
+    fn max_amount_in() -> u128 {
+        166
+    }
+
     fn vault_a_add_successful() -> u128 {
         1_400
     }
@@ -241,6 +246,74 @@ impl ChainedCallForTests {
             ],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: BalanceForTests::add_max_amount_b(),
+            },
+        )
+    }
+
+    fn cc_swap_exact_output_token_a_test_1() -> ChainedCall {
+        let swap_amount: u128 = 498;
+
+        ChainedCall::new(
+            TOKEN_PROGRAM_ID,
+            vec![
+                AccountWithMetadataForTests::user_holding_a(),
+                AccountWithMetadataForTests::vault_a_init(),
+            ],
+            &token_core::Instruction::Transfer {
+                amount_to_transfer: swap_amount,
+            },
+        )
+    }
+
+    fn cc_swap_exact_output_token_b_test_1() -> ChainedCall {
+        let swap_amount: u128 = 166;
+
+        let mut vault_b_auth = AccountWithMetadataForTests::vault_b_init();
+        vault_b_auth.is_authorized = true;
+
+        ChainedCall::new(
+            TOKEN_PROGRAM_ID,
+            vec![vault_b_auth, AccountWithMetadataForTests::user_holding_b()],
+            &token_core::Instruction::Transfer {
+                amount_to_transfer: swap_amount,
+            },
+        )
+        .with_pda_seeds(vec![compute_vault_pda_seed(
+            IdForTests::pool_definition_id(),
+            IdForTests::token_b_definition_id(),
+        )])
+    }
+
+    fn cc_swap_exact_output_token_a_test_2() -> ChainedCall {
+        let swap_amount: u128 = 285;
+
+        let mut vault_a_auth = AccountWithMetadataForTests::vault_a_init();
+        vault_a_auth.is_authorized = true;
+
+        ChainedCall::new(
+            TOKEN_PROGRAM_ID,
+            vec![vault_a_auth, AccountWithMetadataForTests::user_holding_a()],
+            &token_core::Instruction::Transfer {
+                amount_to_transfer: swap_amount,
+            },
+        )
+        .with_pda_seeds(vec![compute_vault_pda_seed(
+            IdForTests::pool_definition_id(),
+            IdForTests::token_a_definition_id(),
+        )])
+    }
+
+    fn cc_swap_exact_output_token_b_test_2() -> ChainedCall {
+        let swap_amount: u128 = 200;
+
+        ChainedCall::new(
+            TOKEN_PROGRAM_ID,
+            vec![
+                AccountWithMetadataForTests::user_holding_b(),
+                AccountWithMetadataForTests::vault_b_init(),
+            ],
+            &token_core::Instruction::Transfer {
+                amount_to_transfer: swap_amount,
             },
         )
     }
@@ -831,6 +904,54 @@ impl AccountWithMetadataForTests {
         }
     }
 
+    fn pool_definition_swap_exact_output_test_1() -> AccountWithMetadata {
+        AccountWithMetadata {
+            account: Account {
+                program_owner: ProgramId::default(),
+                balance: 0_u128,
+                data: Data::from(&PoolDefinition {
+                    definition_token_a_id: IdForTests::token_a_definition_id(),
+                    definition_token_b_id: IdForTests::token_b_definition_id(),
+                    vault_a_id: IdForTests::vault_a_id(),
+                    vault_b_id: IdForTests::vault_b_id(),
+                    liquidity_pool_id: IdForTests::token_lp_definition_id(),
+                    liquidity_pool_supply: BalanceForTests::lp_supply_init(),
+                    reserve_a: 1498_u128,
+                    reserve_b: 334_u128,
+                    fees: 0_u128,
+                    active: true,
+                }),
+                nonce: 0_u128.into(),
+            },
+            is_authorized: true,
+            account_id: IdForTests::pool_definition_id(),
+        }
+    }
+
+    fn pool_definition_swap_exact_output_test_2() -> AccountWithMetadata {
+        AccountWithMetadata {
+            account: Account {
+                program_owner: ProgramId::default(),
+                balance: 0_u128,
+                data: Data::from(&PoolDefinition {
+                    definition_token_a_id: IdForTests::token_a_definition_id(),
+                    definition_token_b_id: IdForTests::token_b_definition_id(),
+                    vault_a_id: IdForTests::vault_a_id(),
+                    vault_b_id: IdForTests::vault_b_id(),
+                    liquidity_pool_id: IdForTests::token_lp_definition_id(),
+                    liquidity_pool_supply: BalanceForTests::lp_supply_init(),
+                    reserve_a: BalanceForTests::vault_a_swap_test_2(),
+                    reserve_b: BalanceForTests::vault_b_swap_test_2(),
+                    fees: 0_u128,
+                    active: true,
+                }),
+                nonce: 0_u128.into(),
+            },
+            is_authorized: true,
+            account_id: IdForTests::pool_definition_id(),
+        }
+    }
+
     fn pool_definition_add_zero_lp() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
@@ -1008,7 +1129,6 @@ impl AccountWithMetadataForTests {
     }
 }
 
-#[cfg(feature = "nssa")]
 impl BalanceForExeTests {
     fn user_token_a_holding_init() -> u128 {
         10_000
@@ -1172,7 +1292,6 @@ impl BalanceForExeTests {
     }
 }
 
-#[cfg(feature = "nssa")]
 impl IdForExeTests {
     fn pool_definition_id() -> AccountId {
         amm_core::compute_pool_pda(
@@ -1229,7 +1348,6 @@ impl IdForExeTests {
     }
 }
 
-#[cfg(feature = "nssa")]
 impl AccountsForExeTests {
     fn user_token_a_holding() -> Account {
         Account {
@@ -1761,7 +1879,7 @@ impl AccountsForExeTests {
                 definition_id: IdForExeTests::token_lp_definition_id(),
                 balance: BalanceForExeTests::lp_supply_init(),
             }),
-            nonce: 0_u128.into(),
+            nonce: 1_u128.into(),
         }
     }
 
@@ -1806,7 +1924,7 @@ impl AccountsForExeTests {
                 definition_id: IdForExeTests::token_lp_definition_id(),
                 balance: 0,
             }),
-            nonce: 0_u128.into(),
+            nonce: 1.into(),
         }
     }
 }
@@ -2405,7 +2523,7 @@ fn call_new_definition_chained_call_successful() {
 #[should_panic(expected = "AccountId is not a token type for the pool")]
 #[test]
 fn call_swap_incorrect_token_type() {
-    let _post_states = swap(
+    let _post_states = swap_exact_input(
         AccountWithMetadataForTests::pool_definition_init(),
         AccountWithMetadataForTests::vault_a_init(),
         AccountWithMetadataForTests::vault_b_init(),
@@ -2420,7 +2538,7 @@ fn call_swap_incorrect_token_type() {
 #[should_panic(expected = "Vault A was not provided")]
 #[test]
 fn call_swap_vault_a_omitted() {
-    let _post_states = swap(
+    let _post_states = swap_exact_input(
         AccountWithMetadataForTests::pool_definition_init(),
         AccountWithMetadataForTests::vault_a_with_wrong_id(),
         AccountWithMetadataForTests::vault_b_init(),
@@ -2435,7 +2553,7 @@ fn call_swap_vault_a_omitted() {
 #[should_panic(expected = "Vault B was not provided")]
 #[test]
 fn call_swap_vault_b_omitted() {
-    let _post_states = swap(
+    let _post_states = swap_exact_input(
         AccountWithMetadataForTests::pool_definition_init(),
         AccountWithMetadataForTests::vault_a_init(),
         AccountWithMetadataForTests::vault_b_with_wrong_id(),
@@ -2450,7 +2568,7 @@ fn call_swap_vault_b_omitted() {
 #[should_panic(expected = "Reserve for Token A exceeds vault balance")]
 #[test]
 fn call_swap_reserves_vault_mismatch_1() {
-    let _post_states = swap(
+    let _post_states = swap_exact_input(
         AccountWithMetadataForTests::pool_definition_init(),
         AccountWithMetadataForTests::vault_a_init_low(),
         AccountWithMetadataForTests::vault_b_init(),
@@ -2465,7 +2583,7 @@ fn call_swap_reserves_vault_mismatch_1() {
 #[should_panic(expected = "Reserve for Token B exceeds vault balance")]
 #[test]
 fn call_swap_reserves_vault_mismatch_2() {
-    let _post_states = swap(
+    let _post_states = swap_exact_input(
         AccountWithMetadataForTests::pool_definition_init(),
         AccountWithMetadataForTests::vault_a_init(),
         AccountWithMetadataForTests::vault_b_init_low(),
@@ -2480,7 +2598,7 @@ fn call_swap_reserves_vault_mismatch_2() {
 #[should_panic(expected = "Pool is inactive")]
 #[test]
 fn call_swap_ianctive() {
-    let _post_states = swap(
+    let _post_states = swap_exact_input(
         AccountWithMetadataForTests::pool_definition_inactive(),
         AccountWithMetadataForTests::vault_a_init(),
         AccountWithMetadataForTests::vault_b_init(),
@@ -2495,7 +2613,7 @@ fn call_swap_ianctive() {
 #[should_panic(expected = "Withdraw amount is less than minimal amount out")]
 #[test]
 fn call_swap_below_min_out() {
-    let _post_states = swap(
+    let _post_states = swap_exact_input(
         AccountWithMetadataForTests::pool_definition_init(),
         AccountWithMetadataForTests::vault_a_init(),
         AccountWithMetadataForTests::vault_b_init(),
@@ -2509,7 +2627,7 @@ fn call_swap_below_min_out() {
 
 #[test]
 fn call_swap_chained_call_successful_1() {
-    let (post_states, chained_calls) = swap(
+    let (post_states, chained_calls) = swap_exact_input(
         AccountWithMetadataForTests::pool_definition_init(),
         AccountWithMetadataForTests::vault_a_init(),
         AccountWithMetadataForTests::vault_b_init(),
@@ -2541,7 +2659,7 @@ fn call_swap_chained_call_successful_1() {
 
 #[test]
 fn call_swap_chained_call_successful_2() {
-    let (post_states, chained_calls) = swap(
+    let (post_states, chained_calls) = swap_exact_input(
         AccountWithMetadataForTests::pool_definition_init(),
         AccountWithMetadataForTests::vault_a_init(),
         AccountWithMetadataForTests::vault_b_init(),
@@ -2568,6 +2686,281 @@ fn call_swap_chained_call_successful_2() {
     assert_eq!(
         chained_call_b,
         ChainedCallForTests::cc_swap_token_b_test_2()
+    );
+}
+
+#[should_panic(expected = "AccountId is not a token type for the pool")]
+#[test]
+fn call_swap_exact_output_incorrect_token_type() {
+    let _post_states = swap_exact_output(
+        AccountWithMetadataForTests::pool_definition_init(),
+        AccountWithMetadataForTests::vault_a_init(),
+        AccountWithMetadataForTests::vault_b_init(),
+        AccountWithMetadataForTests::user_holding_a(),
+        AccountWithMetadataForTests::user_holding_b(),
+        BalanceForTests::add_max_amount_a(),
+        BalanceForTests::max_amount_in(),
+        IdForTests::token_lp_definition_id(),
+    );
+}
+
+#[should_panic(expected = "Vault A was not provided")]
+#[test]
+fn call_swap_exact_output_vault_a_omitted() {
+    let _post_states = swap_exact_output(
+        AccountWithMetadataForTests::pool_definition_init(),
+        AccountWithMetadataForTests::vault_a_with_wrong_id(),
+        AccountWithMetadataForTests::vault_b_init(),
+        AccountWithMetadataForTests::user_holding_a(),
+        AccountWithMetadataForTests::user_holding_b(),
+        BalanceForTests::add_max_amount_a(),
+        BalanceForTests::max_amount_in(),
+        IdForTests::token_a_definition_id(),
+    );
+}
+
+#[should_panic(expected = "Vault B was not provided")]
+#[test]
+fn call_swap_exact_output_vault_b_omitted() {
+    let _post_states = swap_exact_output(
+        AccountWithMetadataForTests::pool_definition_init(),
+        AccountWithMetadataForTests::vault_a_init(),
+        AccountWithMetadataForTests::vault_b_with_wrong_id(),
+        AccountWithMetadataForTests::user_holding_a(),
+        AccountWithMetadataForTests::user_holding_b(),
+        BalanceForTests::add_max_amount_a(),
+        BalanceForTests::max_amount_in(),
+        IdForTests::token_a_definition_id(),
+    );
+}
+
+#[should_panic(expected = "Reserve for Token A exceeds vault balance")]
+#[test]
+fn call_swap_exact_output_reserves_vault_mismatch_1() {
+    let _post_states = swap_exact_output(
+        AccountWithMetadataForTests::pool_definition_init(),
+        AccountWithMetadataForTests::vault_a_init_low(),
+        AccountWithMetadataForTests::vault_b_init(),
+        AccountWithMetadataForTests::user_holding_a(),
+        AccountWithMetadataForTests::user_holding_b(),
+        BalanceForTests::add_max_amount_a(),
+        BalanceForTests::max_amount_in(),
+        IdForTests::token_a_definition_id(),
+    );
+}
+
+#[should_panic(expected = "Reserve for Token B exceeds vault balance")]
+#[test]
+fn call_swap_exact_output_reserves_vault_mismatch_2() {
+    let _post_states = swap_exact_output(
+        AccountWithMetadataForTests::pool_definition_init(),
+        AccountWithMetadataForTests::vault_a_init(),
+        AccountWithMetadataForTests::vault_b_init_low(),
+        AccountWithMetadataForTests::user_holding_a(),
+        AccountWithMetadataForTests::user_holding_b(),
+        BalanceForTests::add_max_amount_a(),
+        BalanceForTests::max_amount_in(),
+        IdForTests::token_a_definition_id(),
+    );
+}
+
+#[should_panic(expected = "Pool is inactive")]
+#[test]
+fn call_swap_exact_output_inactive() {
+    let _post_states = swap_exact_output(
+        AccountWithMetadataForTests::pool_definition_inactive(),
+        AccountWithMetadataForTests::vault_a_init(),
+        AccountWithMetadataForTests::vault_b_init(),
+        AccountWithMetadataForTests::user_holding_a(),
+        AccountWithMetadataForTests::user_holding_b(),
+        BalanceForTests::add_max_amount_a(),
+        BalanceForTests::max_amount_in(),
+        IdForTests::token_a_definition_id(),
+    );
+}
+
+#[should_panic(expected = "Required input exceeds maximum amount in")]
+#[test]
+fn call_swap_exact_output_exceeds_max_in() {
+    let _post_states = swap_exact_output(
+        AccountWithMetadataForTests::pool_definition_init(),
+        AccountWithMetadataForTests::vault_a_init(),
+        AccountWithMetadataForTests::vault_b_init(),
+        AccountWithMetadataForTests::user_holding_a(),
+        AccountWithMetadataForTests::user_holding_b(),
+        166_u128,
+        100_u128,
+        IdForTests::token_a_definition_id(),
+    );
+}
+
+#[should_panic(expected = "Exact amount out must be nonzero")]
+#[test]
+fn call_swap_exact_output_zero() {
+    let _post_states = swap_exact_output(
+        AccountWithMetadataForTests::pool_definition_init(),
+        AccountWithMetadataForTests::vault_a_init(),
+        AccountWithMetadataForTests::vault_b_init(),
+        AccountWithMetadataForTests::user_holding_a(),
+        AccountWithMetadataForTests::user_holding_b(),
+        0_u128,
+        500_u128,
+        IdForTests::token_a_definition_id(),
+    );
+}
+
+#[should_panic(expected = "Exact amount out exceeds reserve")]
+#[test]
+fn call_swap_exact_output_exceeds_reserve() {
+    let _post_states = swap_exact_output(
+        AccountWithMetadataForTests::pool_definition_init(),
+        AccountWithMetadataForTests::vault_a_init(),
+        AccountWithMetadataForTests::vault_b_init(),
+        AccountWithMetadataForTests::user_holding_a(),
+        AccountWithMetadataForTests::user_holding_b(),
+        BalanceForTests::vault_b_reserve_init(),
+        BalanceForTests::max_amount_in(),
+        IdForTests::token_a_definition_id(),
+    );
+}
+
+#[test]
+fn call_swap_exact_output_chained_call_successful() {
+    let (post_states, chained_calls) = swap_exact_output(
+        AccountWithMetadataForTests::pool_definition_init(),
+        AccountWithMetadataForTests::vault_a_init(),
+        AccountWithMetadataForTests::vault_b_init(),
+        AccountWithMetadataForTests::user_holding_a(),
+        AccountWithMetadataForTests::user_holding_b(),
+        BalanceForTests::max_amount_in(),
+        BalanceForTests::vault_b_reserve_init(),
+        IdForTests::token_a_definition_id(),
+    );
+
+    let pool_post = post_states[0].clone();
+
+    assert!(
+        AccountWithMetadataForTests::pool_definition_swap_exact_output_test_1().account
+            == *pool_post.account()
+    );
+
+    let chained_call_a = chained_calls[0].clone();
+    let chained_call_b = chained_calls[1].clone();
+
+    assert_eq!(
+        chained_call_a,
+        ChainedCallForTests::cc_swap_exact_output_token_a_test_1()
+    );
+    assert_eq!(
+        chained_call_b,
+        ChainedCallForTests::cc_swap_exact_output_token_b_test_1()
+    );
+}
+
+#[test]
+fn call_swap_exact_output_chained_call_successful_2() {
+    let (post_states, chained_calls) = swap_exact_output(
+        AccountWithMetadataForTests::pool_definition_init(),
+        AccountWithMetadataForTests::vault_a_init(),
+        AccountWithMetadataForTests::vault_b_init(),
+        AccountWithMetadataForTests::user_holding_a(),
+        AccountWithMetadataForTests::user_holding_b(),
+        285,
+        300,
+        IdForTests::token_b_definition_id(),
+    );
+
+    let pool_post = post_states[0].clone();
+
+    assert!(
+        AccountWithMetadataForTests::pool_definition_swap_exact_output_test_2().account
+            == *pool_post.account()
+    );
+
+    let chained_call_a = chained_calls[1].clone();
+    let chained_call_b = chained_calls[0].clone();
+
+    assert_eq!(
+        chained_call_a,
+        ChainedCallForTests::cc_swap_exact_output_token_a_test_2()
+    );
+    assert_eq!(
+        chained_call_b,
+        ChainedCallForTests::cc_swap_exact_output_token_b_test_2()
+    );
+}
+
+// Without the fix, `reserve_a * exact_amount_out` silently wraps to 0 in release mode,
+// making `deposit_amount = 0`. The slippage check `0 <= max_amount_in` always passes,
+// so an attacker receives `exact_amount_out` tokens while paying nothing.
+#[should_panic(expected = "reserve * amount_out overflows u128")]
+#[test]
+fn swap_exact_output_overflow_protection() {
+    // reserve_a chosen so that reserve_a * 2 overflows u128:
+    //   (u128::MAX / 2 + 1) * 2 = u128::MAX + 1 → wraps to 0
+    let large_reserve: u128 = u128::MAX / 2 + 1;
+    let reserve_b: u128 = 1_000;
+
+    let pool = AccountWithMetadata {
+        account: Account {
+            program_owner: ProgramId::default(),
+            balance: 0,
+            data: Data::from(&PoolDefinition {
+                definition_token_a_id: IdForTests::token_a_definition_id(),
+                definition_token_b_id: IdForTests::token_b_definition_id(),
+                vault_a_id: IdForTests::vault_a_id(),
+                vault_b_id: IdForTests::vault_b_id(),
+                liquidity_pool_id: IdForTests::token_lp_definition_id(),
+                liquidity_pool_supply: 1,
+                reserve_a: large_reserve,
+                reserve_b,
+                fees: 0,
+                active: true,
+            }),
+            nonce: 0_u128.into(),
+        },
+        is_authorized: true,
+        account_id: IdForTests::pool_definition_id(),
+    };
+
+    let vault_a = AccountWithMetadata {
+        account: Account {
+            program_owner: TOKEN_PROGRAM_ID,
+            balance: 0,
+            data: Data::from(&TokenHolding::Fungible {
+                definition_id: IdForTests::token_a_definition_id(),
+                balance: large_reserve,
+            }),
+            nonce: 0_u128.into(),
+        },
+        is_authorized: true,
+        account_id: IdForTests::vault_a_id(),
+    };
+
+    let vault_b = AccountWithMetadata {
+        account: Account {
+            program_owner: TOKEN_PROGRAM_ID,
+            balance: 0,
+            data: Data::from(&TokenHolding::Fungible {
+                definition_id: IdForTests::token_b_definition_id(),
+                balance: reserve_b,
+            }),
+            nonce: 0_u128.into(),
+        },
+        is_authorized: true,
+        account_id: IdForTests::vault_b_id(),
+    };
+
+    let _result = swap_exact_output(
+        pool,
+        vault_a,
+        vault_b,
+        AccountWithMetadataForTests::user_holding_a(),
+        AccountWithMetadataForTests::user_holding_b(),
+        2, // exact_amount_out: small, valid (< reserve_b)
+        1, // max_amount_in: tiny — real deposit would be enormous, but
+        // overflow wraps it to 0, making 0 <= 1 pass silently
+        IdForTests::token_a_definition_id(),
     );
 }
 
@@ -2641,10 +3034,9 @@ fn new_definition_lp_symmetric_amounts() {
     assert_eq!(chained_call_lp, expected_lp_call);
 }
 
-#[cfg(feature = "nssa")]
-fn state_for_amm_tests() -> V02State {
+fn state_for_amm_tests() -> V03State {
     let initial_data = [];
-    let mut state = V02State::new_with_genesis_accounts(&initial_data, &[]);
+    let mut state = V03State::new_with_genesis_accounts(&initial_data, &[], 0);
     state.force_insert_account(
         IdForExeTests::pool_definition_id(),
         AccountsForExeTests::pool_definition_init(),
@@ -2685,10 +3077,9 @@ fn state_for_amm_tests() -> V02State {
     state
 }
 
-#[cfg(feature = "nssa")]
-fn state_for_amm_tests_with_new_def() -> V02State {
+fn state_for_amm_tests_with_new_def() -> V03State {
     let initial_data = [];
-    let mut state = V02State::new_with_genesis_accounts(&initial_data, &[]);
+    let mut state = V03State::new_with_genesis_accounts(&initial_data, &[], 0);
     state.force_insert_account(
         IdForExeTests::token_a_definition_id(),
         AccountsForExeTests::token_a_definition_account(),
@@ -2708,7 +3099,6 @@ fn state_for_amm_tests_with_new_def() -> V02State {
     state
 }
 
-#[cfg(feature = "nssa")]
 #[test]
 fn simple_amm_remove() {
     let mut state = state_for_amm_tests();
@@ -2741,7 +3131,7 @@ fn simple_amm_remove() {
     );
 
     let tx = PublicTransaction::new(message, witness_set);
-    state.transition_from_public_transaction(&tx).unwrap();
+    state.transition_from_public_transaction(&tx, 1, 0).unwrap();
 
     let pool_post = state.get_account_by_id(IdForExeTests::pool_definition_id());
     let vault_a_post = state.get_account_by_id(IdForExeTests::vault_a_id());
@@ -2768,7 +3158,6 @@ fn simple_amm_remove() {
     assert_eq!(user_token_lp_post, expected_user_token_lp);
 }
 
-#[cfg(feature = "nssa")]
 #[test]
 fn simple_amm_new_definition_inactive_initialized_pool_and_uninit_user_lp() {
     let mut state = state_for_amm_tests_with_new_def();
@@ -2808,7 +3197,7 @@ fn simple_amm_new_definition_inactive_initialized_pool_and_uninit_user_lp() {
             IdForExeTests::user_token_b_id(),
             IdForExeTests::user_token_lp_id(),
         ],
-        vec![0_u128.into(), 0_u128.into()],
+        vec![0_u128.into(), 0_u128.into(), 0_u128.into()],
         instruction,
     )
     .unwrap();
@@ -2818,11 +3207,12 @@ fn simple_amm_new_definition_inactive_initialized_pool_and_uninit_user_lp() {
         &[
             &PrivateKeysForTests::user_token_a_key(),
             &PrivateKeysForTests::user_token_b_key(),
+            &PrivateKeysForTests::user_token_lp_key(),
         ],
     );
 
     let tx = PublicTransaction::new(message, witness_set);
-    state.transition_from_public_transaction(&tx).unwrap();
+    state.transition_from_public_transaction(&tx, 1, 0).unwrap();
 
     let pool_post = state.get_account_by_id(IdForExeTests::pool_definition_id());
     let vault_a_post = state.get_account_by_id(IdForExeTests::vault_a_id());
@@ -2849,7 +3239,6 @@ fn simple_amm_new_definition_inactive_initialized_pool_and_uninit_user_lp() {
     assert_eq!(user_token_lp_post, expected_user_token_lp);
 }
 
-#[cfg(feature = "nssa")]
 #[test]
 fn simple_amm_new_definition_inactive_initialized_pool_init_user_lp() {
     let mut state = state_for_amm_tests_with_new_def();
@@ -2907,7 +3296,7 @@ fn simple_amm_new_definition_inactive_initialized_pool_init_user_lp() {
     );
 
     let tx = PublicTransaction::new(message, witness_set);
-    state.transition_from_public_transaction(&tx).unwrap();
+    state.transition_from_public_transaction(&tx, 1, 0).unwrap();
 
     let pool_post = state.get_account_by_id(IdForExeTests::pool_definition_id());
     let vault_a_post = state.get_account_by_id(IdForExeTests::vault_a_id());
@@ -2934,7 +3323,6 @@ fn simple_amm_new_definition_inactive_initialized_pool_init_user_lp() {
     assert_eq!(user_token_lp_post, expected_user_token_lp);
 }
 
-#[cfg(feature = "nssa")]
 #[test]
 fn simple_amm_new_definition_uninitialized_pool() {
     let mut state = state_for_amm_tests_with_new_def();
@@ -2966,7 +3354,7 @@ fn simple_amm_new_definition_uninitialized_pool() {
             IdForExeTests::user_token_b_id(),
             IdForExeTests::user_token_lp_id(),
         ],
-        vec![0_u128.into(), 0_u128.into()],
+        vec![0_u128.into(), 0_u128.into(), 0_u128.into()],
         instruction,
     )
     .unwrap();
@@ -2976,11 +3364,12 @@ fn simple_amm_new_definition_uninitialized_pool() {
         &[
             &PrivateKeysForTests::user_token_a_key(),
             &PrivateKeysForTests::user_token_b_key(),
+            &PrivateKeysForTests::user_token_lp_key(),
         ],
     );
 
     let tx = PublicTransaction::new(message, witness_set);
-    state.transition_from_public_transaction(&tx).unwrap();
+    state.transition_from_public_transaction(&tx, 1, 0).unwrap();
 
     let pool_post = state.get_account_by_id(IdForExeTests::pool_definition_id());
     let vault_a_post = state.get_account_by_id(IdForExeTests::vault_a_id());
@@ -3007,7 +3396,6 @@ fn simple_amm_new_definition_uninitialized_pool() {
     assert_eq!(user_token_lp_post, expected_user_token_lp);
 }
 
-#[cfg(feature = "nssa")]
 #[test]
 fn simple_amm_add() {
     let mut state = state_for_amm_tests();
@@ -3043,7 +3431,7 @@ fn simple_amm_add() {
     );
 
     let tx = PublicTransaction::new(message, witness_set);
-    state.transition_from_public_transaction(&tx).unwrap();
+    state.transition_from_public_transaction(&tx, 1, 0).unwrap();
 
     let pool_post = state.get_account_by_id(IdForExeTests::pool_definition_id());
     let vault_a_post = state.get_account_by_id(IdForExeTests::vault_a_id());
@@ -3070,12 +3458,11 @@ fn simple_amm_add() {
     assert_eq!(user_token_lp_post, expected_user_token_lp);
 }
 
-#[cfg(feature = "nssa")]
 #[test]
 fn simple_amm_swap_1() {
     let mut state = state_for_amm_tests();
 
-    let instruction = amm_core::Instruction::Swap {
+    let instruction = amm_core::Instruction::SwapExactInput {
         swap_amount_in: BalanceForExeTests::swap_amount_in(),
         min_amount_out: BalanceForExeTests::swap_min_amount_out(),
         token_definition_id_in: IdForExeTests::token_b_definition_id(),
@@ -3101,7 +3488,7 @@ fn simple_amm_swap_1() {
     );
 
     let tx = PublicTransaction::new(message, witness_set);
-    state.transition_from_public_transaction(&tx).unwrap();
+    state.transition_from_public_transaction(&tx, 1, 0).unwrap();
 
     let pool_post = state.get_account_by_id(IdForExeTests::pool_definition_id());
     let vault_a_post = state.get_account_by_id(IdForExeTests::vault_a_id());
@@ -3122,12 +3509,11 @@ fn simple_amm_swap_1() {
     assert_eq!(user_token_b_post, expected_user_token_b);
 }
 
-#[cfg(feature = "nssa")]
 #[test]
 fn simple_amm_swap_2() {
     let mut state = state_for_amm_tests();
 
-    let instruction = amm_core::Instruction::Swap {
+    let instruction = amm_core::Instruction::SwapExactInput {
         swap_amount_in: BalanceForExeTests::swap_amount_in(),
         min_amount_out: BalanceForExeTests::swap_min_amount_out(),
         token_definition_id_in: IdForExeTests::token_a_definition_id(),
@@ -3152,7 +3538,7 @@ fn simple_amm_swap_2() {
     );
 
     let tx = PublicTransaction::new(message, witness_set);
-    state.transition_from_public_transaction(&tx).unwrap();
+    state.transition_from_public_transaction(&tx, 1, 0).unwrap();
 
     let pool_post = state.get_account_by_id(IdForExeTests::pool_definition_id());
     let vault_a_post = state.get_account_by_id(IdForExeTests::vault_a_id());

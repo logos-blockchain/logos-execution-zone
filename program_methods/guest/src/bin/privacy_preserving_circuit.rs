@@ -10,8 +10,9 @@ use nssa_core::{
     account::{Account, AccountId, AccountWithMetadata, Nonce},
     compute_digest_for_path,
     program::{
-        AccountPostState, ChainedCall, DEFAULT_PROGRAM_ID, MAX_NUMBER_CHAINED_CALLS, ProgramId,
-        ProgramOutput, validate_execution,
+        AccountPostState, BlockValidityWindow, ChainedCall, Claim, DEFAULT_PROGRAM_ID,
+        MAX_NUMBER_CHAINED_CALLS, ProgramId, ProgramOutput, TimestampValidityWindow,
+        validate_execution,
     },
 };
 use risc0_zkvm::{guest::env, serde::to_vec};
@@ -20,11 +21,53 @@ use risc0_zkvm::{guest::env, serde::to_vec};
 struct ExecutionState {
     pre_states: Vec<AccountWithMetadata>,
     post_states: HashMap<AccountId, Account>,
+    block_validity_window: BlockValidityWindow,
+    timestamp_validity_window: TimestampValidityWindow,
 }
 
 impl ExecutionState {
     /// Validate program outputs and derive the overall execution state.
-    pub fn derive_from_outputs(program_id: ProgramId, program_outputs: Vec<ProgramOutput>) -> Self {
+    pub fn derive_from_outputs(
+        visibility_mask: &[u8],
+        program_id: ProgramId,
+        program_outputs: Vec<ProgramOutput>,
+    ) -> Self {
+        let block_valid_from = program_outputs
+            .iter()
+            .filter_map(|output| output.block_validity_window.start())
+            .max();
+        let block_valid_until = program_outputs
+            .iter()
+            .filter_map(|output| output.block_validity_window.end())
+            .min();
+        let ts_valid_from = program_outputs
+            .iter()
+            .filter_map(|output| output.timestamp_validity_window.start())
+            .max();
+        let ts_valid_until = program_outputs
+            .iter()
+            .filter_map(|output| output.timestamp_validity_window.end())
+            .min();
+
+        let block_validity_window: BlockValidityWindow = (block_valid_from, block_valid_until)
+            .try_into()
+            .expect(
+                "There should be non empty intersection in the program output block validity windows",
+            );
+        let timestamp_validity_window: TimestampValidityWindow =
+            (ts_valid_from, ts_valid_until)
+                .try_into()
+                .expect(
+                    "There should be non empty intersection in the program output timestamp validity windows",
+                );
+
+        let mut execution_state = Self {
+            pre_states: Vec::new(),
+            post_states: HashMap::new(),
+            block_validity_window,
+            timestamp_validity_window,
+        };
+
         let Some(first_output) = program_outputs.first() else {
             panic!("No program outputs provided");
         };
@@ -36,11 +79,6 @@ impl ExecutionState {
             pda_seeds: Vec::new(),
         };
         let mut chained_calls = VecDeque::from_iter([(initial_call, None)]);
-
-        let mut execution_state = Self {
-            pre_states: Vec::new(),
-            post_states: HashMap::new(),
-        };
 
         let mut program_outputs_iter = program_outputs.into_iter();
         let mut chain_calls_counter = 0;
@@ -69,6 +107,22 @@ impl ExecutionState {
                 |_: Infallible| unreachable!("Infallible error is never constructed"),
             );
 
+            // Verify that the program output's self_program_id matches the expected program ID.
+            // This ensures the proof commits to which program produced the output.
+            assert_eq!(
+                program_output.self_program_id, chained_call.program_id,
+                "Program output self_program_id does not match chained call program_id"
+            );
+
+            // Verify that the program output's caller_program_id matches the actual caller.
+            // This prevents a malicious user from privately executing an internal function
+            // by spoofing caller_program_id (e.g. passing caller_program_id = self_program_id
+            // to bypass access control checks).
+            assert_eq!(
+                program_output.caller_program_id, caller_program_id,
+                "Program output caller_program_id does not match actual caller"
+            );
+
             // Check that the program is well behaved.
             // See the # Programs section for the definition of the `validate_execution` method.
             let execution_valid = validate_execution(
@@ -87,6 +141,7 @@ impl ExecutionState {
                 &chained_call.pda_seeds,
             );
             execution_state.validate_and_sync_states(
+                visibility_mask,
                 chained_call.program_id,
                 &authorized_pdas,
                 program_output.pre_states,
@@ -119,7 +174,7 @@ impl ExecutionState {
         {
             assert_ne!(
                 post.program_owner, DEFAULT_PROGRAM_ID,
-                "Account {account_id:?} was modified but not claimed"
+                "Account {account_id} was modified but not claimed"
             );
         }
 
@@ -129,6 +184,7 @@ impl ExecutionState {
     /// Validate program pre and post states and populate the execution state.
     fn validate_and_sync_states(
         &mut self,
+        visibility_mask: &[u8],
         program_id: ProgramId,
         authorized_pdas: &HashSet<AccountId>,
         pre_states: Vec<AccountWithMetadata>,
@@ -136,14 +192,25 @@ impl ExecutionState {
     ) {
         for (pre, mut post) in pre_states.into_iter().zip(post_states) {
             let pre_account_id = pre.account_id;
+            let pre_is_authorized = pre.is_authorized;
             let post_states_entry = self.post_states.entry(pre.account_id);
             match &post_states_entry {
                 Entry::Occupied(occupied) => {
+                    #[expect(
+                        clippy::shadow_unrelated,
+                        reason = "Shadowing is intentional to use all fields"
+                    )]
+                    let AccountWithMetadata {
+                        account: pre_account,
+                        account_id: pre_account_id,
+                        is_authorized: pre_is_authorized,
+                    } = pre;
+
                     // Ensure that new pre state is the same as known post state
                     assert_eq!(
                         occupied.get(),
-                        &pre.account,
-                        "Inconsistent pre state for account {pre_account_id:?}",
+                        &pre_account,
+                        "Inconsistent pre state for account {pre_account_id}",
                     );
 
                     let previous_is_authorized = self
@@ -152,7 +219,7 @@ impl ExecutionState {
                         .find(|acc| acc.account_id == pre_account_id)
                         .map_or_else(
                             || panic!(
-                                "Pre state must exist in execution state for account {pre_account_id:?}",
+                                "Pre state must exist in execution state for account {pre_account_id}",
                             ),
                             |acc| acc.is_authorized
                         );
@@ -161,22 +228,57 @@ impl ExecutionState {
                         previous_is_authorized || authorized_pdas.contains(&pre_account_id);
 
                     assert_eq!(
-                        pre.is_authorized, is_authorized,
-                        "Inconsistent authorization for account {pre_account_id:?}",
+                        pre_is_authorized, is_authorized,
+                        "Inconsistent authorization for account {pre_account_id}",
                     );
                 }
                 Entry::Vacant(_) => {
+                    // Pre state for the initial call
                     self.pre_states.push(pre);
                 }
             }
 
-            if post.requires_claim() {
+            if let Some(claim) = post.required_claim() {
                 // The invoked program can only claim accounts with default program id.
-                if post.account().program_owner == DEFAULT_PROGRAM_ID {
-                    post.account_mut().program_owner = program_id;
+                assert_eq!(
+                    post.account().program_owner,
+                    DEFAULT_PROGRAM_ID,
+                    "Cannot claim an initialized account {pre_account_id}"
+                );
+
+                let pre_state_position = self
+                    .pre_states
+                    .iter()
+                    .position(|acc| acc.account_id == pre_account_id)
+                    .expect("Pre state must exist at this point");
+
+                let is_public_account = visibility_mask[pre_state_position] == 0;
+                if is_public_account {
+                    match claim {
+                        Claim::Authorized => {
+                            // Note: no need to check authorized pdas because we have already
+                            // checked consistency of authorization above.
+                            assert!(
+                                pre_is_authorized,
+                                "Cannot claim unauthorized account {pre_account_id}"
+                            );
+                        }
+                        Claim::Pda(seed) => {
+                            let pda = AccountId::from((&program_id, &seed));
+                            assert_eq!(
+                                pre_account_id, pda,
+                                "Invalid PDA claim for account {pre_account_id} which does not match derived PDA {pda}"
+                            );
+                        }
+                    }
                 } else {
-                    panic!("Cannot claim an initialized account {pre_account_id:?}");
+                    // We don't care about the exact claim mechanism for private accounts.
+                    // This is because the main reason to have it is to protect against PDA griefing
+                    // attacks in public execution, while private PDA doesn't make much sense
+                    // anyway.
                 }
+
+                post.account_mut().program_owner = program_id;
             }
 
             post_states_entry.insert_entry(post.into_account());
@@ -210,6 +312,8 @@ fn compute_circuit_output(
         ciphertexts: Vec::new(),
         new_commitments: Vec::new(),
         new_nullifiers: Vec::new(),
+        block_validity_window: execution_state.block_validity_window,
+        timestamp_validity_window: execution_state.timestamp_validity_window,
     };
 
     let states_iter = execution_state.into_states_iter();
@@ -392,7 +496,8 @@ fn main() {
         program_id,
     } = env::read();
 
-    let execution_state = ExecutionState::derive_from_outputs(program_id, program_outputs);
+    let execution_state =
+        ExecutionState::derive_from_outputs(&visibility_mask, program_id, program_outputs);
 
     let output = compute_circuit_output(
         execution_state,

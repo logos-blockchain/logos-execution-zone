@@ -1,6 +1,7 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use log::warn;
-use nssa::{AccountId, V02State};
+use nssa::{AccountId, V03State, ValidatedStateDiff};
+use nssa_core::{BlockId, Timestamp};
 use serde::{Deserialize, Serialize};
 
 use crate::HashType;
@@ -10,6 +11,18 @@ pub enum NSSATransaction {
     Public(nssa::PublicTransaction),
     PrivacyPreserving(nssa::PrivacyPreservingTransaction),
     ProgramDeployment(nssa::ProgramDeploymentTransaction),
+}
+
+impl Serialize for NSSATransaction {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        crate::borsh_base64::serialize(self, serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for NSSATransaction {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        crate::borsh_base64::deserialize(deserializer)
+    }
 }
 
 impl NSSATransaction {
@@ -53,17 +66,53 @@ impl NSSATransaction {
         }
     }
 
+    /// Validates the transaction against the current state and returns the resulting diff
+    /// without applying it. Rejects transactions that modify clock system accounts.
+    pub fn validate_on_state(
+        &self,
+        state: &V03State,
+        block_id: BlockId,
+        timestamp: Timestamp,
+    ) -> Result<ValidatedStateDiff, nssa::error::NssaError> {
+        let diff = match self {
+            Self::Public(tx) => {
+                ValidatedStateDiff::from_public_transaction(tx, state, block_id, timestamp)
+            }
+            Self::PrivacyPreserving(tx) => ValidatedStateDiff::from_privacy_preserving_transaction(
+                tx, state, block_id, timestamp,
+            ),
+            Self::ProgramDeployment(tx) => {
+                ValidatedStateDiff::from_program_deployment_transaction(tx, state)
+            }
+        }?;
+
+        let public_diff = diff.public_diff();
+        let touches_clock = nssa::CLOCK_PROGRAM_ACCOUNT_IDS.iter().any(|id| {
+            public_diff
+                .get(id)
+                .is_some_and(|post| *post != state.get_account_by_id(*id))
+        });
+        if touches_clock {
+            return Err(nssa::error::NssaError::InvalidInput(
+                "Transaction modifies system clock accounts".into(),
+            ));
+        }
+
+        Ok(diff)
+    }
+
+    /// Validates the transaction against the current state, rejects modifications to clock
+    /// system accounts, and applies the resulting diff to the state.
     pub fn execute_check_on_state(
         self,
-        state: &mut V02State,
+        state: &mut V03State,
+        block_id: BlockId,
+        timestamp: Timestamp,
     ) -> Result<Self, nssa::error::NssaError> {
-        match &self {
-            Self::Public(tx) => state.transition_from_public_transaction(tx),
-            Self::PrivacyPreserving(tx) => state.transition_from_privacy_preserving_transaction(tx),
-            Self::ProgramDeployment(tx) => state.transition_from_program_deployment_transaction(tx),
-        }
-        .inspect_err(|err| warn!("Error at transition {err:#?}"))?;
-
+        let diff = self
+            .validate_on_state(state, block_id, timestamp)
+            .inspect_err(|err| warn!("Error at transition {err:#?}"))?;
+        state.apply_state_diff(diff);
         Ok(self)
     }
 }
@@ -87,7 +136,7 @@ impl From<nssa::ProgramDeploymentTransaction> for NSSATransaction {
 }
 
 #[derive(
-    Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize,
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
 )]
 pub enum TxKind {
     Public,
@@ -103,4 +152,21 @@ pub enum TransactionMalformationError {
     FailedToDecode { tx: HashType },
     #[error("Transaction size {size} exceeds maximum allowed size of {max} bytes")]
     TransactionTooLarge { size: usize, max: usize },
+}
+
+/// Returns the canonical Clock Program invocation transaction for the given block timestamp.
+/// Every valid block must end with exactly one occurrence of this transaction.
+#[must_use]
+pub fn clock_invocation(timestamp: clock_core::Instruction) -> nssa::PublicTransaction {
+    let message = nssa::public_transaction::Message::try_new(
+        nssa::program::Program::clock().id(),
+        clock_core::CLOCK_PROGRAM_ACCOUNT_IDS.to_vec(),
+        vec![],
+        timestamp,
+    )
+    .expect("Clock invocation message should always be constructable");
+    nssa::PublicTransaction::new(
+        message,
+        nssa::public_transaction::WitnessSet::from_raw_parts(vec![]),
+    )
 }

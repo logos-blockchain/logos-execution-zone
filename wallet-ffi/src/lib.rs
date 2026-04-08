@@ -28,7 +28,7 @@
 
 use std::sync::OnceLock;
 
-use common::error::ExecutionFailureKind;
+use ::wallet::ExecutionFailureKind;
 // Re-export public types for cbindgen
 pub use error::WalletFfiError as FfiError;
 use tokio::runtime::Handle;

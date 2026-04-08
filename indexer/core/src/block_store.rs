@@ -3,17 +3,18 @@ use std::{path::Path, sync::Arc};
 use anyhow::Result;
 use bedrock_client::HeaderId;
 use common::{
-    block::{BedrockStatus, Block, BlockId},
-    transaction::NSSATransaction,
+    block::{BedrockStatus, Block},
+    transaction::{NSSATransaction, clock_invocation},
 };
-use nssa::{Account, AccountId, V02State};
+use nssa::{Account, AccountId, V03State};
+use nssa_core::BlockId;
 use storage::indexer::RocksDBIO;
 use tokio::sync::RwLock;
 
 #[derive(Clone)]
 pub struct IndexerStore {
     dbio: Arc<RocksDBIO>,
-    current_state: Arc<RwLock<V02State>>,
+    current_state: Arc<RwLock<V03State>>,
 }
 
 impl IndexerStore {
@@ -24,7 +25,7 @@ impl IndexerStore {
     pub fn open_db_with_genesis(
         location: &Path,
         genesis_block: &Block,
-        initial_state: &V02State,
+        initial_state: &V03State,
     ) -> Result<Self> {
         let dbio = RocksDBIO::open_or_create(location, genesis_block, initial_state)?;
         let current_state = dbio.final_state()?;
@@ -46,7 +47,7 @@ impl IndexerStore {
         Ok(self.dbio.get_meta_last_block_in_db()?)
     }
 
-    pub fn get_block_at_id(&self, id: u64) -> Result<Block> {
+    pub fn get_block_at_id(&self, id: u64) -> Result<Option<Block>> {
         Ok(self.dbio.get_block(id)?)
     }
 
@@ -54,20 +55,25 @@ impl IndexerStore {
         Ok(self.dbio.get_block_batch(before, limit)?)
     }
 
-    pub fn get_transaction_by_hash(&self, tx_hash: [u8; 32]) -> Result<NSSATransaction> {
-        let block = self.get_block_at_id(self.dbio.get_block_id_by_tx_hash(tx_hash)?)?;
-        let transaction = block
+    pub fn get_transaction_by_hash(&self, tx_hash: [u8; 32]) -> Result<Option<NSSATransaction>> {
+        let Some(block_id) = self.dbio.get_block_id_by_tx_hash(tx_hash)? else {
+            return Ok(None);
+        };
+        let Some(block) = self.get_block_at_id(block_id)? else {
+            return Ok(None);
+        };
+        Ok(block
             .body
             .transactions
-            .iter()
-            .find(|enc_tx| enc_tx.hash().0 == tx_hash)
-            .ok_or_else(|| anyhow::anyhow!("Transaction not found in DB"))?;
-
-        Ok(transaction.clone())
+            .into_iter()
+            .find(|enc_tx| enc_tx.hash().0 == tx_hash))
     }
 
-    pub fn get_block_by_hash(&self, hash: [u8; 32]) -> Result<Block> {
-        self.get_block_at_id(self.dbio.get_block_id_by_hash(hash)?)
+    pub fn get_block_by_hash(&self, hash: [u8; 32]) -> Result<Option<Block>> {
+        let Some(id) = self.dbio.get_block_id_by_hash(hash)? else {
+            return Ok(None);
+        };
+        self.get_block_at_id(id)
     }
 
     pub fn get_transactions_by_account(
@@ -93,14 +99,14 @@ impl IndexerStore {
             .expect("Must be set at the DB startup")
     }
 
-    pub fn get_state_at_block(&self, block_id: u64) -> Result<V02State> {
+    pub fn get_state_at_block(&self, block_id: u64) -> Result<V03State> {
         Ok(self.dbio.calculate_state_for_id(block_id)?)
     }
 
     /// Recalculation of final state directly from DB.
     ///
     /// Used for indexer healthcheck.
-    pub fn recalculate_final_state(&self) -> Result<V02State> {
+    pub fn recalculate_final_state(&self) -> Result<V03State> {
         Ok(self.dbio.final_state()?)
     }
 
@@ -116,12 +122,37 @@ impl IndexerStore {
         {
             let mut state_guard = self.current_state.write().await;
 
-            for transaction in &block.body.transactions {
+            let (clock_tx, user_txs) = block
+                .body
+                .transactions
+                .split_last()
+                .ok_or_else(|| anyhow::anyhow!("Block has no transactions"))?;
+
+            anyhow::ensure!(
+                *clock_tx == NSSATransaction::Public(clock_invocation(block.header.timestamp)),
+                "Last transaction in block must be the clock invocation for the block timestamp"
+            );
+
+            for transaction in user_txs {
                 transaction
                     .clone()
                     .transaction_stateless_check()?
-                    .execute_check_on_state(&mut state_guard)?;
+                    .execute_check_on_state(
+                        &mut state_guard,
+                        block.header.block_id,
+                        block.header.timestamp,
+                    )?;
             }
+
+            // Apply the clock invocation directly (it is expected to modify clock accounts).
+            let NSSATransaction::Public(clock_public_tx) = clock_tx else {
+                anyhow::bail!("Clock invocation must be a public transaction");
+            };
+            state_guard.transition_from_public_transaction(
+                clock_public_tx,
+                block.header.block_id,
+                block.header.timestamp,
+            )?;
         }
 
         // ToDo: Currently we are fetching only finalized blocks
@@ -167,11 +198,11 @@ mod tests {
         let storage = IndexerStore::open_db_with_genesis(
             home.as_ref(),
             &genesis_block(),
-            &nssa::V02State::new_with_genesis_accounts(&[(acc1(), 10000), (acc2(), 20000)], &[]),
+            &nssa::V03State::new_with_genesis_accounts(&[(acc1(), 10000), (acc2(), 20000)], &[], 0),
         )
         .unwrap();
 
-        let block = storage.get_block_at_id(1).unwrap();
+        let block = storage.get_block_at_id(1).unwrap().unwrap();
         let final_id = storage.get_last_block_id().unwrap();
 
         assert_eq!(block.header.hash, genesis_block().header.hash);
@@ -185,7 +216,7 @@ mod tests {
         let storage = IndexerStore::open_db_with_genesis(
             home.as_ref(),
             &genesis_block(),
-            &nssa::V02State::new_with_genesis_accounts(&[(acc1(), 10000), (acc2(), 20000)], &[]),
+            &nssa::V03State::new_with_genesis_accounts(&[(acc1(), 10000), (acc2(), 20000)], &[], 0),
         )
         .unwrap();
 
@@ -203,11 +234,14 @@ mod tests {
                 10,
                 &sign_key,
             );
+            let block_id = u64::try_from(i).unwrap();
+            let block_timestamp = block_id.saturating_mul(100);
+            let clock_tx = NSSATransaction::Public(clock_invocation(block_timestamp));
 
             let next_block = common::test_utils::produce_dummy_block(
-                u64::try_from(i).unwrap(),
+                block_id,
                 Some(prev_hash),
-                vec![tx],
+                vec![tx, clock_tx],
             );
             prev_hash = next_block.header.hash;
 

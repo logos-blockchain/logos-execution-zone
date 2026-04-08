@@ -1,10 +1,12 @@
-use nssa_core::program::{AccountPostState, ProgramInput, read_nssa_inputs, write_nssa_outputs};
+use nssa_core::program::{AccountPostState, ProgramInput, ProgramOutput, read_nssa_inputs};
 
 type Instruction = u128;
 
 fn main() {
     let (
         ProgramInput {
+            self_program_id,
+            caller_program_id,
             pre_states,
             instruction: balance_to_burn,
         },
@@ -19,9 +21,12 @@ fn main() {
     let mut account_post = account_pre.clone();
     account_post.balance = account_post.balance.saturating_sub(balance_to_burn);
 
-    write_nssa_outputs(
+    ProgramOutput::new(
+        self_program_id,
+        caller_program_id,
         instruction_words,
         vec![pre],
         vec![AccountPostState::new(account_post)],
-    );
+    )
+    .write();
 }

@@ -6,7 +6,7 @@ data/
 .idea/
 .vscode/
 rocksdb
-sequencer_runner/data/
+sequencer/service/data/
 storage.json
 result
 wallet-ffi/wallet_ffi.h

@@ -2,11 +2,11 @@ use std::num::NonZeroU128;
 
 use amm_core::{
     PoolDefinition, compute_liquidity_token_pda, compute_liquidity_token_pda_seed,
-    compute_pool_pda, compute_vault_pda,
+    compute_pool_pda, compute_pool_pda_seed, compute_vault_pda, compute_vault_pda_seed,
 };
 use nssa_core::{
     account::{Account, AccountWithMetadata, Data},
-    program::{AccountPostState, ChainedCall, ProgramId},
+    program::{AccountPostState, ChainedCall, Claim, ProgramId},
 };
 
 #[expect(clippy::too_many_arguments, reason = "TODO: Fix later")]
@@ -108,36 +108,52 @@ pub fn new_definition(
     };
 
     pool_post.data = Data::from(&pool_post_definition);
-    let pool_post = AccountPostState::new_claimed_if_default(pool_post);
+    let pool_pda_seed = compute_pool_pda_seed(definition_token_a_id, definition_token_b_id);
+    let pool_post = AccountPostState::new_claimed_if_default(pool_post, Claim::Pda(pool_pda_seed));
 
     let token_program_id = user_holding_a.account.program_owner;
 
     // Chain call for Token A (user_holding_a -> Vault_A)
+    let vault_a_seed = compute_vault_pda_seed(pool.account_id, definition_token_a_id);
+    let vault_a_authorized = AccountWithMetadata {
+        is_authorized: true,
+        ..vault_a.clone()
+    };
     let call_token_a = ChainedCall::new(
         token_program_id,
-        vec![user_holding_a.clone(), vault_a.clone()],
+        vec![user_holding_a.clone(), vault_a_authorized],
         &token_core::Instruction::Transfer {
             amount_to_transfer: token_a_amount.into(),
         },
-    );
+    )
+    .with_pda_seeds(vec![vault_a_seed]);
+
     // Chain call for Token B (user_holding_b -> Vault_B)
+    let vault_b_seed = compute_vault_pda_seed(pool.account_id, definition_token_b_id);
+    let vault_b_authorized = AccountWithMetadata {
+        is_authorized: true,
+        ..vault_b.clone()
+    };
     let call_token_b = ChainedCall::new(
         token_program_id,
-        vec![user_holding_b.clone(), vault_b.clone()],
+        vec![user_holding_b.clone(), vault_b_authorized],
         &token_core::Instruction::Transfer {
             amount_to_transfer: token_b_amount.into(),
         },
-    );
+    )
+    .with_pda_seeds(vec![vault_b_seed]);
 
-    let mut pool_lp_auth = pool_definition_lp.clone();
-    pool_lp_auth.is_authorized = true;
-
+    let pool_lp_pda_seed = compute_liquidity_token_pda_seed(pool.account_id);
+    let pool_lp_authorized = AccountWithMetadata {
+        is_authorized: true,
+        ..pool_definition_lp.clone()
+    };
     let call_token_lp = ChainedCall::new(
         token_program_id,
-        vec![pool_lp_auth, user_holding_lp.clone()],
+        vec![pool_lp_authorized, user_holding_lp.clone()],
         &instruction,
     )
-    .with_pda_seeds(vec![compute_liquidity_token_pda_seed(pool.account_id)]);
+    .with_pda_seeds(vec![pool_lp_pda_seed]);
 
     let chained_calls = vec![call_token_lp, call_token_b, call_token_a];
 

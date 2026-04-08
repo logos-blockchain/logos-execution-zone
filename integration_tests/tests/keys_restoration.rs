@@ -14,6 +14,7 @@ use integration_tests::{
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use log::info;
 use nssa::{AccountId, program::Program};
+use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 use wallet::cli::{
     Command, SubcommandReturnValue,
@@ -70,7 +71,7 @@ async fn sync_private_account_with_non_zero_chain_index() -> Result<()> {
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
         from: format_private_account_id(from),
         to: None,
-        to_npk: Some(hex::encode(to_keys.nullifer_public_key.0)),
+        to_npk: Some(hex::encode(to_keys.nullifier_public_key.0)),
         to_vpk: Some(hex::encode(to_keys.viewing_public_key.0)),
         amount: 100,
     });
@@ -305,8 +306,8 @@ async fn restore_keys_from_seed() -> Result<()> {
         .get_account_balance(to_account_id4)
         .await?;
 
-    assert_eq!(acc3.balance, 91); // 102 - 11
-    assert_eq!(acc4.balance, 114); // 103 + 11
+    assert_eq!(acc3, 91); // 102 - 11
+    assert_eq!(acc4, 114); // 103 + 11
 
     info!("Successfully restored keys and verified transactions");
 

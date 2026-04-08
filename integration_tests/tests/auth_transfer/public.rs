@@ -4,6 +4,7 @@ use anyhow::Result;
 use integration_tests::{TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, format_public_account_id};
 use log::info;
 use nssa::program::Program;
+use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 use wallet::cli::{
     Command, SubcommandReturnValue,
@@ -41,8 +42,8 @@ async fn successful_transfer_to_existing_account() -> Result<()> {
     info!("Balance of sender: {acc_1_balance:#?}");
     info!("Balance of receiver: {acc_2_balance:#?}");
 
-    assert_eq!(acc_1_balance.balance, 9900);
-    assert_eq!(acc_2_balance.balance, 20100);
+    assert_eq!(acc_1_balance, 9900);
+    assert_eq!(acc_2_balance, 20100);
 
     Ok(())
 }
@@ -97,8 +98,8 @@ pub async fn successful_transfer_to_new_account() -> Result<()> {
     info!("Balance of sender: {acc_1_balance:#?}");
     info!("Balance of receiver: {acc_2_balance:#?}");
 
-    assert_eq!(acc_1_balance.balance, 9900);
-    assert_eq!(acc_2_balance.balance, 100);
+    assert_eq!(acc_1_balance, 9900);
+    assert_eq!(acc_2_balance, 100);
 
     Ok(())
 }
@@ -134,8 +135,8 @@ async fn failed_transfer_with_insufficient_balance() -> Result<()> {
     info!("Balance of sender: {acc_1_balance:#?}");
     info!("Balance of receiver: {acc_2_balance:#?}");
 
-    assert_eq!(acc_1_balance.balance, 10000);
-    assert_eq!(acc_2_balance.balance, 20000);
+    assert_eq!(acc_1_balance, 10000);
+    assert_eq!(acc_2_balance, 20000);
 
     Ok(())
 }
@@ -171,8 +172,8 @@ async fn two_consecutive_successful_transfers() -> Result<()> {
     info!("Balance of sender: {acc_1_balance:#?}");
     info!("Balance of receiver: {acc_2_balance:#?}");
 
-    assert_eq!(acc_1_balance.balance, 9900);
-    assert_eq!(acc_2_balance.balance, 20100);
+    assert_eq!(acc_1_balance, 9900);
+    assert_eq!(acc_2_balance, 20100);
 
     info!("First TX Success!");
 
@@ -203,8 +204,8 @@ async fn two_consecutive_successful_transfers() -> Result<()> {
     info!("Balance of sender: {acc_1_balance:#?}");
     info!("Balance of receiver: {acc_2_balance:#?}");
 
-    assert_eq!(acc_1_balance.balance, 9800);
-    assert_eq!(acc_2_balance.balance, 20200);
+    assert_eq!(acc_1_balance, 9800);
+    assert_eq!(acc_2_balance, 20200);
 
     info!("Second TX Success!");
 
@@ -230,11 +231,7 @@ async fn initialize_public_account() -> Result<()> {
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
     info!("Checking correct execution");
-    let account = ctx
-        .sequencer_client()
-        .get_account(account_id)
-        .await?
-        .account;
+    let account = ctx.sequencer_client().get_account(account_id).await?;
 
     assert_eq!(
         account.program_owner,

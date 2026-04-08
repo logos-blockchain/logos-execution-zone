@@ -123,7 +123,7 @@ pub unsafe extern "C" fn wallet_ffi_get_private_account_keys(
     };
 
     // NPK is a 32-byte array
-    let npk_bytes = key_chain.nullifer_public_key.0;
+    let npk_bytes = key_chain.nullifier_public_key.0;
 
     // VPK is a compressed secp256k1 point (33 bytes)
     let vpk_bytes = key_chain.viewing_public_key.to_bytes();
