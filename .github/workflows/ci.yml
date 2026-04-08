@@ -188,6 +188,14 @@ jobs:
           RUST_LOG: "info"
         run: cargo nextest run -p integration_tests indexer -- --skip tps_test
 
+      - name: Dump bedrock container logs on failure
+        if: failure()
+        run: |
+          for c in $(docker ps -aq); do
+            echo "=== $(docker inspect -f '{{.Name}}' $c) ==="
+            docker logs $c 2>&1 | tail -300
+          done
+
   valid-proof-test:
     runs-on: ubuntu-latest
     timeout-minutes: 60
