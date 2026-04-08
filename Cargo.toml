@@ -15,6 +15,7 @@ members = [
   "nssa/core",
   "programs/amm/core",
   "programs/amm",
+  "programs/clock/core",
   "programs/token/core",
   "programs/token",
   "programs/associated_token_account/core",
@@ -56,6 +57,7 @@ indexer_service_protocol = { path = "indexer/service/protocol" }
 indexer_service_rpc = { path = "indexer/service/rpc" }
 wallet = { path = "wallet" }
 wallet-ffi = { path = "wallet-ffi", default-features = false }
+clock_core = { path = "programs/clock/core" }
 token_core = { path = "programs/token/core" }
 token_program = { path = "programs/token" }
 amm_core = { path = "programs/amm/core" }

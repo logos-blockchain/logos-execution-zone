@@ -14,6 +14,7 @@ fn main() {
     let (
         ProgramInput {
             self_program_id,
+            caller_program_id,
             pre_states,
             instruction: (balance, auth_transfer_id, num_chain_calls, pda_seed),
         },
@@ -57,6 +58,7 @@ fn main() {
 
     ProgramOutput::new(
         self_program_id,
+        caller_program_id,
         instruction_words,
         vec![sender_pre.clone(), recipient_pre.clone()],
         vec![
