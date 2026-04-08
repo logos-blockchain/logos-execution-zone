@@ -120,11 +120,11 @@ tokio-retry = "0.3.0"
 schemars = "1.2"
 async-stream = "0.3.6"
 
-logos-blockchain-common-http-client = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "271a97ebd03f21a13e9ca72ef8411fd478960296" }
-logos-blockchain-key-management-system-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "271a97ebd03f21a13e9ca72ef8411fd478960296" }
-logos-blockchain-core = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "271a97ebd03f21a13e9ca72ef8411fd478960296" }
-logos-blockchain-chain-broadcast-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "271a97ebd03f21a13e9ca72ef8411fd478960296" }
-logos-blockchain-chain-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "271a97ebd03f21a13e9ca72ef8411fd478960296" }
+logos-blockchain-common-http-client = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "81192877116cbc3eedf6688b85fab6dd0e448290" }
+logos-blockchain-key-management-system-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "81192877116cbc3eedf6688b85fab6dd0e448290" }
+logos-blockchain-core = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "81192877116cbc3eedf6688b85fab6dd0e448290" }
+logos-blockchain-chain-broadcast-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "81192877116cbc3eedf6688b85fab6dd0e448290" }
+logos-blockchain-chain-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "81192877116cbc3eedf6688b85fab6dd0e448290" }
 
 rocksdb = { version = "0.24.0", default-features = false, features = [
   "snappy",
