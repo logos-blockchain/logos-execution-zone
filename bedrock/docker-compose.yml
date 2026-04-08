@@ -18,29 +18,3 @@ services:
       - cfgsync
     entrypoint: /etc/logos-blockchain/scripts/run_logos_blockchain_node.sh
 
-  logos-blockchain-node-1:
-    image: ghcr.io/logos-blockchain/logos-blockchain@sha256:000982e751dfd346ca5346b8025c685fc3abc585079c59cde3bde7fd63100657
-    volumes:
-      - ./scripts:/etc/logos-blockchain/scripts
-      - ./kzgrs_test_params:/kzgrs_test_params:z
-    depends_on:
-      - cfgsync
-    entrypoint: /etc/logos-blockchain/scripts/run_logos_blockchain_node.sh
-
-  logos-blockchain-node-2:
-    image: ghcr.io/logos-blockchain/logos-blockchain@sha256:000982e751dfd346ca5346b8025c685fc3abc585079c59cde3bde7fd63100657
-    volumes:
-      - ./scripts:/etc/logos-blockchain/scripts
-      - ./kzgrs_test_params:/kzgrs_test_params:z
-    depends_on:
-      - cfgsync
-    entrypoint: /etc/logos-blockchain/scripts/run_logos_blockchain_node.sh
-
-  logos-blockchain-node-3:
-    image: ghcr.io/logos-blockchain/logos-blockchain@sha256:000982e751dfd346ca5346b8025c685fc3abc585079c59cde3bde7fd63100657
-    volumes:
-      - ./scripts:/etc/logos-blockchain/scripts
-      - ./kzgrs_test_params:/kzgrs_test_params:z
-    depends_on:
-      - cfgsync
-    entrypoint: /etc/logos-blockchain/scripts/run_logos_blockchain_node.sh
