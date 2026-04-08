@@ -182,18 +182,41 @@ jobs:
       - name: Install nextest
         run: cargo install --locked cargo-nextest
 
+      - name: Start container log capture
+        run: |
+          mkdir -p /tmp/container-logs
+          (
+            seen=""
+            while true; do
+              for c in $(docker ps -q 2>/dev/null); do
+                case " $seen " in
+                  *" $c "*) ;;
+                  *)
+                    name=$(docker inspect -f '{{.Name}}' "$c" 2>/dev/null | sed 's|^/||')
+                    docker logs -f "$c" >"/tmp/container-logs/${name}.log" 2>&1 &
+                    seen="$seen $c"
+                    ;;
+                esac
+              done
+              sleep 1
+            done
+          ) &
+          echo $! > /tmp/log-watcher.pid
+
       - name: Run tests
         env:
           RISC0_DEV_MODE: "1"
           RUST_LOG: "info"
         run: cargo nextest run -p integration_tests indexer -- --skip tps_test
 
-      - name: Dump bedrock container logs on failure
+      - name: Dump captured container logs on failure
         if: failure()
         run: |
-          for c in $(docker ps -aq); do
-            echo "=== $(docker inspect -f '{{.Name}}' $c) ==="
-            docker logs $c 2>&1 | tail -300
+          kill "$(cat /tmp/log-watcher.pid)" 2>/dev/null || true
+          for f in /tmp/container-logs/*.log; do
+            [ -e "$f" ] || continue
+            echo "=== $f ==="
+            tail -300 "$f"
           done
 
   valid-proof-test:
