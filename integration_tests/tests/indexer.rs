@@ -45,13 +45,12 @@ async fn wait_for_indexer_to_catch_up(ctx: &TestContext) -> u64 {
             tokio::time::sleep(Duration::from_secs(2)).await;
         }
     };
-    match tokio::time::timeout(timeout, inner).await {
-        Ok(ind) => ind,
-        Err(_) => {
+    tokio::time::timeout(timeout, inner)
+        .await
+        .unwrap_or_else(|_| {
             info!("Indexer catch-up timed out: ind={last_ind}");
             last_ind
-        }
-    }
+        })
 }
 
 #[test]

@@ -17,6 +17,20 @@ curl -sf "${CFG_SERVER_ADDR}/deployment-settings" -o /deployment-settings.yaml
 # Single-node test setup: bump slot_activation_coeff from 1/10 to 1/2 so blocks
 # (and LIB) advance ~5x faster, keeping the indexer integration test within budget.
 # Safe with 1 node since there are no reorgs.
-sed -i '/slot_activation_coeff:/{n;n;s/denominator: 10/denominator: 2/}' /deployment-settings.yaml
+# Range-based sed: within the 4 lines after `slot_activation_coeff:`, rewrite any
+# `denominator: <num>` to `denominator: 2` regardless of field order or spacing.
+sed -i '/slot_activation_coeff:/,+4 s/denominator: [0-9]\+/denominator: 2/' /deployment-settings.yaml
+
+# Lower security_param so finalization (LIB) lag is shorter — the indexer only
+# sees finalized blocks, so a smaller security_param makes inscriptions visible
+# to the indexer much sooner.
+sed -i 's/security_param: [0-9]\+/security_param: 10/' /deployment-settings.yaml
+
+# Verify the patches took effect (printed to container stdout for debugging).
+echo "=== slot_activation_coeff after sed ==="
+sed -n '/slot_activation_coeff:/,+4 p' /deployment-settings.yaml
+echo "=== security_param after sed ==="
+grep 'security_param' /deployment-settings.yaml
+echo "======================================="
 
 exec /usr/bin/logos-blockchain-node /config.yaml --deployment /deployment-settings.yaml
