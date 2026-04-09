@@ -223,7 +223,8 @@ pub fn initial_state() -> V03State {
     let initial_commitments: Vec<nssa_core::Commitment> = initial_commitments()
         .iter()
         .map(|init_comm_data| {
-            let acc_id = &AccountId::private_account_id(&init_comm_data.npk, init_comm_data.identifier);
+            let acc_id =
+                &AccountId::private_account_id(&init_comm_data.npk, init_comm_data.identifier);
 
             let mut acc = init_comm_data.account.clone();
 

@@ -83,11 +83,11 @@ impl AccountManager {
                 }
 
                 PrivacyPreservingAccount::PrivateForeign { npk, vpk } => {
-                    let account_id = AccountId::private_account_id(&npk, Identifier::default()); //TODO: here (Marvin) Should be based on epk
+                    let account_id = AccountId::private_account_id(&npk, Identifier::default()); //Okay. This is being used a flag currently (Marvin) trying something
                     let acc = nssa_core::account::Account::default();
                     let auth_acc = AccountWithMetadata::new(acc, false, account_id);
                     let pre = AccountPreparedData {
-                        identifier: Identifier::default(), //TODO: here
+                        identifier: Identifier::default(), // TODO: ugh. Marvin
                         nsk: None,
                         npk,
                         vpk,
@@ -153,12 +153,21 @@ impl AccountManager {
             .collect()
     }
 
-    pub fn private_account_identifiers(&self) -> Vec<Identifier> {
+    pub fn private_account_identifiers(
+        &self,
+        private_account_keys: &Vec<PrivateAccountKeys>,
+    ) -> Vec<Identifier> {
         self.states
             .iter()
-            .filter_map(|state| match state {
+            .zip(private_account_keys)
+            .filter_map(|(state, key)| match state {
                 State::Private(pre) => {
-                    Some(pre.identifier)
+                    if pre.identifier == Identifier::default() {
+                        // Some(Identifier::default()) ATA works here ATA issue (Marvin)
+                        Some(Identifier::private_identifier(&key.epk, 0)) //TODO: currently using a placeholder index (Marvin)
+                    } else {
+                        Some(pre.identifier)
+                    }
                 }
                 State::Public { .. } => None,
             })

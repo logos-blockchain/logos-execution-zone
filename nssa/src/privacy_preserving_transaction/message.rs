@@ -162,9 +162,9 @@ pub mod tests {
 
         let encrypted_private_post_states = Vec::new();
 
-        let new_commitments = vec![Commitment::new(&account_id1, &account2)];
+        let new_commitments = vec![Commitment::new(&account_id2, &account2)];
 
-        let old_commitment = Commitment::new(&account_id2, &account1);
+        let old_commitment = Commitment::new(&account_id1, &account1);
         let new_nullifiers = vec![(
             Nullifier::for_account_update(&old_commitment, &nsk1),
             [0; 32],

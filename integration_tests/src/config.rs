@@ -63,14 +63,14 @@ impl InitialData {
         }
 
         let mut private_charlie_key_chain = KeyChain::new_os_random();
-        let private_charlie_identifier = Identifier::new_os_random();
+        let mut private_charlie_identifier = Identifier::new_os_random();
         let mut private_charlie_account_id = AccountId::private_account_id(
             &private_charlie_key_chain.nullifier_public_key,
             private_charlie_identifier,
         );
 
         let mut private_david_key_chain = KeyChain::new_os_random();
-        let private_david_identifier = Identifier::new_os_random();
+        let mut private_david_identifier = Identifier::new_os_random();
         let mut private_david_account_id = AccountId::private_account_id(
             &private_david_key_chain.nullifier_public_key,
             private_david_identifier,
@@ -82,6 +82,10 @@ impl InitialData {
             std::mem::swap(
                 &mut private_charlie_account_id,
                 &mut private_david_account_id,
+            );
+            std::mem::swap(
+                &mut private_charlie_identifier,
+                &mut private_david_identifier,
             );
         }
 

@@ -114,7 +114,7 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
                             let npk = &init_comm_data.npk;
 
                             let mut acc = init_comm_data.account.clone();
-                            let acc_id = &AccountId::private_account_id(npk, Identifier(0_u128));
+                            let acc_id = &AccountId::private_account_id(npk, Identifier(0_u128)); //TODO marvin
                             acc.program_owner =
                                 nssa::program::Program::authenticated_transfer_program().id();
 

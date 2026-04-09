@@ -377,13 +377,12 @@ fn compute_circuit_output(
                     let Some(membership_proof_opt) = private_membership_proofs_iter.next() else {
                         panic!("Missing membership proof");
                     };
-
+                    // TODO: here is the issue
                     let new_nullifier = compute_nullifier_and_set_digest(
                         membership_proof_opt.as_ref(),
                         &pre_state.account,
-                        npk,
+                        &pre_state.account_id,
                         nsk,
-                        *identifier,
                     );
 
                     let new_nonce = pre_state.account.nonce.private_account_nonce_increment(nsk);
@@ -465,31 +464,28 @@ fn compute_circuit_output(
     output
 }
 
+// Marvin: todo
 fn compute_nullifier_and_set_digest(
     membership_proof_opt: Option<&MembershipProof>,
     pre_account: &Account,
-    npk: &NullifierPublicKey,
+    account_id: &AccountId,
     nsk: &NullifierSecretKey,
-    identifier: Identifier,
 ) -> (Nullifier, CommitmentSetDigest) {
-    // TODO: consider rewriting the function to receive account id instead of npk.
-    // NOTE: this does not use the identifier at all.
-    let account_id = AccountId::private_account_id(npk, identifier);
     membership_proof_opt.as_ref().map_or_else(
         || {
             assert_eq!(
                 *pre_account,
                 Account::default(),
-                "Found new private account with non default values"
+                "Found new private account with non default values$Marvin$"
             );
 
             // Compute initialization nullifier
-            let nullifier = Nullifier::for_account_initialization(&account_id);
+            let nullifier = Nullifier::for_account_initialization(account_id);
             (nullifier, DUMMY_COMMITMENT_HASH)
         },
         |membership_proof| {
             // Compute commitment set digest associated with provided auth path
-            let commitment_pre = Commitment::new(&account_id, pre_account);
+            let commitment_pre = Commitment::new(account_id, pre_account);
             let set_digest = compute_digest_for_path(&commitment_pre, membership_proof);
 
             // Compute update nullifier

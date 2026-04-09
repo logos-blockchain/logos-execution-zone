@@ -27,9 +27,7 @@ use nssa::{
     },
 };
 use nssa_core::{
-    Commitment, MembershipProof, SharedSecretKey,
-    account::{Identifier, Nonce},
-    program::InstructionData,
+    Commitment, MembershipProof, SharedSecretKey, account::Nonce, program::InstructionData,
 };
 pub use privacy_preserving_tx::PrivacyPreservingAccount;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
@@ -309,7 +307,7 @@ impl WalletCore {
         Some(Commitment::new(
             &AccountId::private_account_id(
                 &bundle.key_chain.nullifier_public_key,
-                Identifier(0_u128),
+                bundle.identifier,
             ),
             &bundle.account,
         ))
@@ -398,7 +396,12 @@ impl WalletCore {
         )?;
 
         let private_account_keys = acc_manager.private_account_keys();
-        let private_account_identifiers = acc_manager.private_account_identifiers();
+        let private_account_identifiers =
+            acc_manager.private_account_identifiers(&private_account_keys);
+        // TODO: here. This is the function I want to use
+        // Okay. Now I have the "corrected" identifiers but NOT correct account_ids! (Marvin)
+        // -> So, we need to update AccountIds with these identifiers
+
         let (output, proof) = nssa::privacy_preserving_transaction::circuit::execute_and_prove(
             pre_states,
             instruction_data,
@@ -408,7 +411,7 @@ impl WalletCore {
                 .map(|keys| (keys.npk.clone(), keys.ssk))
                 .collect::<Vec<_>>(),
             acc_manager.private_account_auth(),
-            private_account_identifiers.clone(),
+            private_account_identifiers.clone(), // TODO: when was this done? Marvin
             acc_manager.private_account_membership_proofs(),
             &program.to_owned(),
         )
@@ -423,7 +426,7 @@ impl WalletCore {
                     .zip(private_account_identifiers)
                     .map(|(keys, identifier)| {
                         (
-                            AccountId::private_account_id(&keys.npk.clone(), identifier), 
+                            AccountId::private_account_id(&keys.npk.clone(), identifier),
                             keys.vpk.clone(),
                             keys.epk.clone(),
                         )
@@ -526,11 +529,9 @@ impl WalletCore {
 
         let affected_accounts = private_account_key_chains
             .flat_map(|(acc_account_id, key_chain, index)| {
+                // Why index? Marvin
                 let view_tag = EncryptedAccountData::compute_view_tag(
-                    &AccountId::private_account_id(
-                        &key_chain.nullifier_public_key,
-                        Identifier(0_u128),
-                    ),
+                    &acc_account_id,
                     &key_chain.viewing_public_key,
                 );
 
