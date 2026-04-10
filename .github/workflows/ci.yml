@@ -130,7 +130,7 @@ jobs:
         env:
           RISC0_DEV_MODE: "1"
           RUST_LOG: "info"
-        run: cargo nextest run --workspace --exclude integration_tests
+        run: cargo nextest run --workspace --exclude integration_tests --all-features
 
   integration-tests:
     runs-on: ubuntu-latest

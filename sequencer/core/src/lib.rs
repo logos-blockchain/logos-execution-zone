@@ -103,24 +103,26 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
                 "No database found when starting the sequencer. Creating a fresh new with the initial data"
             );
 
-            let initial_commitments: Option<Vec<nssa_core::Commitment>> = config
-                .initial_private_accounts
-                .clone()
-                .map(|initial_commitments| {
-                    initial_commitments
-                        .iter()
-                        .map(|init_comm_data| {
-                            let npk = &init_comm_data.npk;
+            let initial_private_accounts: Option<
+                Vec<(nssa_core::Commitment, nssa_core::Nullifier)>,
+            > = config.initial_private_accounts.clone().map(|accounts| {
+                accounts
+                    .iter()
+                    .map(|init_comm_data| {
+                        let npk = &init_comm_data.npk;
 
-                            let mut acc = init_comm_data.account.clone();
+                        let mut acc = init_comm_data.account.clone();
 
-                            acc.program_owner =
-                                nssa::program::Program::authenticated_transfer_program().id();
+                        acc.program_owner =
+                            nssa::program::Program::authenticated_transfer_program().id();
 
-                            nssa_core::Commitment::new(npk, &acc)
-                        })
-                        .collect()
-                });
+                        (
+                            nssa_core::Commitment::new(npk, &acc),
+                            nssa_core::Nullifier::for_account_initialization(npk),
+                        )
+                    })
+                    .collect()
+            });
 
             let init_accs: Option<Vec<(nssa::AccountId, u128)>> = config
                 .initial_public_accounts
@@ -134,10 +136,10 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
 
             // If initial commitments or accounts are present in config, need to construct state
             // from them
-            if initial_commitments.is_some() || init_accs.is_some() {
+            if initial_private_accounts.is_some() || init_accs.is_some() {
                 V03State::new_with_genesis_accounts(
                     &init_accs.unwrap_or_default(),
-                    &initial_commitments.unwrap_or_default(),
+                    initial_private_accounts.unwrap_or_default(),
                     genesis_block.header.timestamp,
                 )
             } else {
@@ -1058,6 +1060,78 @@ mod tests {
         assert!(
             result.is_err(),
             "Block production should abort when clock account data is corrupted"
+        );
+    }
+
+    #[tokio::test]
+    async fn genesis_private_account_cannot_be_re_initialized() {
+        use common::transaction::NSSATransaction;
+        use nssa::{
+            Account,
+            privacy_preserving_transaction::{
+                PrivacyPreservingTransaction, circuit::execute_and_prove, message::Message,
+                witness_set::WitnessSet,
+            },
+            program::Program,
+        };
+        use nssa_core::{
+            SharedSecretKey,
+            account::AccountWithMetadata,
+            encryption::{EphemeralPublicKey, EphemeralSecretKey, ViewingPublicKey},
+        };
+        use testnet_initial_state::PrivateAccountPublicInitialData;
+
+        let nsk: nssa_core::NullifierSecretKey = [7; 32];
+        let npk = nssa_core::NullifierPublicKey::from(&nsk);
+        let vsk: EphemeralSecretKey = [8; 32];
+        let vpk = ViewingPublicKey::from_scalar(vsk);
+
+        let genesis_account = Account {
+            program_owner: Program::authenticated_transfer_program().id(),
+            ..Account::default()
+        };
+
+        // Start a sequencer from config with a preconfigured private genesis account
+        let mut config = setup_sequencer_config();
+        config.initial_private_accounts = Some(vec![PrivateAccountPublicInitialData {
+            npk: npk.clone(),
+            account: genesis_account,
+        }]);
+
+        let (mut sequencer, _mempool_handle) =
+            SequencerCoreWithMockClients::start_from_config(config).await;
+
+        // Attempt to re-initialize the same genesis account via a privacy-preserving transaction
+        let esk = [9; 32];
+        let shared_secret = SharedSecretKey::new(&esk, &vpk);
+        let epk = EphemeralPublicKey::from_scalar(esk);
+
+        let (output, proof) = execute_and_prove(
+            vec![AccountWithMetadata::new(Account::default(), true, &npk)],
+            Program::serialize_instruction(0_u128).unwrap(),
+            vec![1],
+            vec![(npk.clone(), shared_secret)],
+            vec![nsk],
+            vec![None],
+            &Program::authenticated_transfer_program().into(),
+        )
+        .unwrap();
+
+        let message =
+            Message::try_from_circuit_output(vec![], vec![], vec![(npk, vpk, epk)], output)
+                .unwrap();
+
+        let witness_set = WitnessSet::for_message(&message, proof, &[]);
+        let tx = NSSATransaction::PrivacyPreserving(PrivacyPreservingTransaction::new(
+            message,
+            witness_set,
+        ));
+
+        let result = tx.execute_check_on_state(&mut sequencer.state, 2, 0);
+
+        assert!(
+            result.is_err_and(|e| e.to_string().contains("Nullifier already seen")),
+            "re-initializing a genesis private account must be rejected by the sequencer"
         );
     }
 }
