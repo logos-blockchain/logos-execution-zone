@@ -6,11 +6,8 @@ use nssa::AccountId;
 use crate::{
     AccDecodeData::Decode,
     WalletCore,
-    cli::{SubcommandReturnValue, WalletSubcommand},
-    helperfunctions::{
-        AccountPrivacyKind, parse_addr_with_privacy_prefix, resolve_account_label,
-        resolve_id_or_label,
-    },
+    account::AccountIdWithPrivacy,
+    cli::{CliAccountMention, SubcommandReturnValue, WalletSubcommand},
     program_facades::token::Token,
 };
 
@@ -19,26 +16,12 @@ use crate::{
 pub enum TokenProgramAgnosticSubcommand {
     /// Produce a new token.
     New {
-        /// `definition_account_id` - valid 32 byte base58 string with privacy prefix.
-        #[arg(
-            long,
-            conflicts_with = "definition_account_label",
-            required_unless_present = "definition_account_label"
-        )]
-        definition_account_id: Option<String>,
-        /// Definition account label (alternative to --definition-account-id).
-        #[arg(long, conflicts_with = "definition_account_id")]
-        definition_account_label: Option<String>,
-        /// `supply_account_id` - valid 32 byte base58 string with privacy prefix.
-        #[arg(
-            long,
-            conflicts_with = "supply_account_label",
-            required_unless_present = "supply_account_label"
-        )]
-        supply_account_id: Option<String>,
-        /// Supply account label (alternative to --supply-account-id).
-        #[arg(long, conflicts_with = "supply_account_id")]
-        supply_account_label: Option<String>,
+        /// Either 32 byte base58 account id string with privacy prefix or a label.
+        #[arg(long)]
+        definition_account_id: CliAccountMention,
+        /// Either 32 byte base58 account id string with privacy prefix or a label.
+        #[arg(long)]
+        supply_account_id: CliAccountMention,
         #[arg(short, long)]
         name: String,
         #[arg(short, long)]
@@ -51,22 +34,12 @@ pub enum TokenProgramAgnosticSubcommand {
     ///
     /// First is used for owned accounts, second otherwise.
     Send {
-        /// from - valid 32 byte base58 string with privacy prefix.
-        #[arg(
-            long,
-            conflicts_with = "from_label",
-            required_unless_present = "from_label"
-        )]
-        from: Option<String>,
-        /// From account label (alternative to --from).
-        #[arg(long, conflicts_with = "from")]
-        from_label: Option<String>,
-        /// to - valid 32 byte base58 string with privacy prefix.
-        #[arg(long, conflicts_with = "to_label")]
-        to: Option<String>,
-        /// To account label (alternative to --to).
-        #[arg(long, conflicts_with = "to")]
-        to_label: Option<String>,
+        /// Either 32 byte base58 account id string with privacy prefix or a label.
+        #[arg(long)]
+        from: CliAccountMention,
+        /// Either 32 byte base58 account id string with privacy prefix or a label.
+        #[arg(long)]
+        to: Option<CliAccountMention>,
         /// `to_npk` - valid 32 byte hex string.
         #[arg(long)]
         to_npk: Option<String>,
@@ -88,26 +61,12 @@ pub enum TokenProgramAgnosticSubcommand {
     /// Also if `definition` is private then it is owned, because
     /// we can not modify foreign accounts.
     Burn {
-        /// definition - valid 32 byte base58 string with privacy prefix.
-        #[arg(
-            long,
-            conflicts_with = "definition_label",
-            required_unless_present = "definition_label"
-        )]
-        definition: Option<String>,
-        /// Definition account label (alternative to --definition).
-        #[arg(long, conflicts_with = "definition")]
-        definition_label: Option<String>,
-        /// holder - valid 32 byte base58 string with privacy prefix.
-        #[arg(
-            long,
-            conflicts_with = "holder_label",
-            required_unless_present = "holder_label"
-        )]
-        holder: Option<String>,
-        /// Holder account label (alternative to --holder).
-        #[arg(long, conflicts_with = "holder")]
-        holder_label: Option<String>,
+        /// Either 32 byte base58 account id string with privacy prefix or a label.
+        #[arg(long)]
+        definition: CliAccountMention,
+        /// Either 32 byte base58 account id string with privacy prefix or a label.
+        #[arg(long)]
+        holder: CliAccountMention,
         /// amount - amount of balance to burn.
         #[arg(long)]
         amount: u128,
@@ -121,22 +80,12 @@ pub enum TokenProgramAgnosticSubcommand {
     ///
     /// First is used for owned accounts, second otherwise.
     Mint {
-        /// definition - valid 32 byte base58 string with privacy prefix.
-        #[arg(
-            long,
-            conflicts_with = "definition_label",
-            required_unless_present = "definition_label"
-        )]
-        definition: Option<String>,
-        /// Definition account label (alternative to --definition).
-        #[arg(long, conflicts_with = "definition")]
-        definition_label: Option<String>,
-        /// holder - valid 32 byte base58 string with privacy prefix.
-        #[arg(long, conflicts_with = "holder_label")]
-        holder: Option<String>,
-        /// Holder account label (alternative to --holder).
-        #[arg(long, conflicts_with = "holder")]
-        holder_label: Option<String>,
+        /// Either 32 byte base58 account id string with privacy prefix or a label.
+        #[arg(long)]
+        definition: CliAccountMention,
+        /// Either 32 byte base58 account id string with privacy prefix or a label.
+        #[arg(long)]
+        holder: Option<CliAccountMention>,
         /// `holder_npk` - valid 32 byte hex string.
         #[arg(long)]
         holder_npk: Option<String>,
@@ -161,101 +110,73 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
         match self {
             Self::New {
                 definition_account_id,
-                definition_account_label,
                 supply_account_id,
-                supply_account_label,
                 name,
                 total_supply,
             } => {
-                let definition_account_id = resolve_id_or_label(
-                    definition_account_id,
-                    definition_account_label,
-                    &wallet_core.storage.labels,
-                    &wallet_core.storage.user_data,
-                )?;
-                let supply_account_id = resolve_id_or_label(
-                    supply_account_id,
-                    supply_account_label,
-                    &wallet_core.storage.labels,
-                    &wallet_core.storage.user_data,
-                )?;
-                let (definition_account_id, definition_addr_privacy) =
-                    parse_addr_with_privacy_prefix(&definition_account_id)?;
-                let (supply_account_id, supply_addr_privacy) =
-                    parse_addr_with_privacy_prefix(&supply_account_id)?;
-
-                let underlying_subcommand = match (definition_addr_privacy, supply_addr_privacy) {
-                    (AccountPrivacyKind::Public, AccountPrivacyKind::Public) => {
-                        TokenProgramSubcommand::Create(
-                            CreateNewTokenProgramSubcommand::NewPublicDefPublicSupp {
-                                definition_account_id,
-                                supply_account_id,
-                                name,
-                                total_supply,
-                            },
-                        )
-                    }
-                    (AccountPrivacyKind::Public, AccountPrivacyKind::Private) => {
-                        TokenProgramSubcommand::Create(
-                            CreateNewTokenProgramSubcommand::NewPublicDefPrivateSupp {
-                                definition_account_id,
-                                supply_account_id,
-                                name,
-                                total_supply,
-                            },
-                        )
-                    }
-                    (AccountPrivacyKind::Private, AccountPrivacyKind::Private) => {
-                        TokenProgramSubcommand::Create(
-                            CreateNewTokenProgramSubcommand::NewPrivateDefPrivateSupp {
-                                definition_account_id,
-                                supply_account_id,
-                                name,
-                                total_supply,
-                            },
-                        )
-                    }
-                    (AccountPrivacyKind::Private, AccountPrivacyKind::Public) => {
-                        TokenProgramSubcommand::Create(
-                            CreateNewTokenProgramSubcommand::NewPrivateDefPublicSupp {
-                                definition_account_id,
-                                supply_account_id,
-                                name,
-                                total_supply,
-                            },
-                        )
-                    }
+                let definition_account_id = definition_account_id.resolve(wallet_core.storage())?;
+                let supply_account_id = supply_account_id.resolve(wallet_core.storage())?;
+                let underlying_subcommand = match (definition_account_id, supply_account_id) {
+                    (
+                        AccountIdWithPrivacy::Public(definition_account_id),
+                        AccountIdWithPrivacy::Public(supply_account_id),
+                    ) => TokenProgramSubcommand::Create(
+                        CreateNewTokenProgramSubcommand::NewPublicDefPublicSupp {
+                            definition_account_id,
+                            supply_account_id,
+                            name,
+                            total_supply,
+                        },
+                    ),
+                    (
+                        AccountIdWithPrivacy::Public(definition_account_id),
+                        AccountIdWithPrivacy::Private(supply_account_id),
+                    ) => TokenProgramSubcommand::Create(
+                        CreateNewTokenProgramSubcommand::NewPublicDefPrivateSupp {
+                            definition_account_id,
+                            supply_account_id,
+                            name,
+                            total_supply,
+                        },
+                    ),
+                    (
+                        AccountIdWithPrivacy::Private(definition_account_id),
+                        AccountIdWithPrivacy::Private(supply_account_id),
+                    ) => TokenProgramSubcommand::Create(
+                        CreateNewTokenProgramSubcommand::NewPrivateDefPrivateSupp {
+                            definition_account_id,
+                            supply_account_id,
+                            name,
+                            total_supply,
+                        },
+                    ),
+                    (
+                        AccountIdWithPrivacy::Private(definition_account_id),
+                        AccountIdWithPrivacy::Public(supply_account_id),
+                    ) => TokenProgramSubcommand::Create(
+                        CreateNewTokenProgramSubcommand::NewPrivateDefPublicSupp {
+                            definition_account_id,
+                            supply_account_id,
+                            name,
+                            total_supply,
+                        },
+                    ),
                 };
 
                 underlying_subcommand.handle_subcommand(wallet_core).await
             }
             Self::Send {
                 from,
-                from_label,
                 to,
-                to_label,
                 to_npk,
                 to_vpk,
                 to_identifier,
                 amount,
             } => {
-                let from = resolve_id_or_label(
-                    from,
-                    from_label,
-                    &wallet_core.storage.labels,
-                    &wallet_core.storage.user_data,
-                )?;
-                let to = match (to, to_label) {
-                    (v, None) => v,
-                    (None, Some(label)) => Some(resolve_account_label(
-                        &label,
-                        &wallet_core.storage.labels,
-                        &wallet_core.storage.user_data,
-                    )?),
-                    (Some(_), Some(_)) => {
-                        anyhow::bail!("Provide only one of --to or --to-label")
-                    }
-                };
+                let from = from.resolve(wallet_core.storage())?;
+                let to = to
+                    .map(|account_mention| account_mention.resolve(wallet_core.storage()))
+                    .transpose()?;
                 let underlying_subcommand = match (to, to_npk, to_vpk) {
                     (None, None, None) => {
                         anyhow::bail!(
@@ -270,170 +191,131 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                     (_, Some(_), None) | (_, None, Some(_)) => {
                         anyhow::bail!("List of public keys is uncomplete");
                     }
-                    (Some(to), None, None) => {
-                        let (from, from_privacy) = parse_addr_with_privacy_prefix(&from)?;
-                        let (to, to_privacy) = parse_addr_with_privacy_prefix(&to)?;
-
-                        match (from_privacy, to_privacy) {
-                            (AccountPrivacyKind::Public, AccountPrivacyKind::Public) => {
-                                TokenProgramSubcommand::Public(
-                                    TokenProgramSubcommandPublic::TransferToken {
-                                        sender_account_id: from,
-                                        recipient_account_id: to,
-                                        balance_to_move: amount,
-                                    },
-                                )
-                            }
-                            (AccountPrivacyKind::Private, AccountPrivacyKind::Private) => {
-                                TokenProgramSubcommand::Private(
-                                    TokenProgramSubcommandPrivate::TransferTokenPrivateOwned {
-                                        sender_account_id: from,
-                                        recipient_account_id: to,
-                                        balance_to_move: amount,
-                                    },
-                                )
-                            }
-                            (AccountPrivacyKind::Private, AccountPrivacyKind::Public) => {
-                                TokenProgramSubcommand::Deshielded(
-                                    TokenProgramSubcommandDeshielded::TransferTokenDeshielded {
-                                        sender_account_id: from,
-                                        recipient_account_id: to,
-                                        balance_to_move: amount,
-                                    },
-                                )
-                            }
-                            (AccountPrivacyKind::Public, AccountPrivacyKind::Private) => {
-                                TokenProgramSubcommand::Shielded(
-                                    TokenProgramSubcommandShielded::TransferTokenShieldedOwned {
-                                        sender_account_id: from,
-                                        recipient_account_id: to,
-                                        balance_to_move: amount,
-                                    },
-                                )
-                            }
-                        }
-                    }
-                    (None, Some(to_npk), Some(to_vpk)) => {
-                        let (from, from_privacy) = parse_addr_with_privacy_prefix(&from)?;
-
-                        match from_privacy {
-                            AccountPrivacyKind::Private => TokenProgramSubcommand::Private(
-                                TokenProgramSubcommandPrivate::TransferTokenPrivateForeign {
+                    (Some(to), None, None) => match (from, to) {
+                        (AccountIdWithPrivacy::Public(from), AccountIdWithPrivacy::Public(to)) => {
+                            TokenProgramSubcommand::Public(
+                                TokenProgramSubcommandPublic::TransferToken {
                                     sender_account_id: from,
-                                    recipient_npk: to_npk,
-                                    recipient_vpk: to_vpk,
-                                    recipient_identifier: to_identifier,
+                                    recipient_account_id: to,
                                     balance_to_move: amount,
                                 },
-                            ),
-                            AccountPrivacyKind::Public => TokenProgramSubcommand::Shielded(
-                                TokenProgramSubcommandShielded::TransferTokenShieldedForeign {
+                            )
+                        }
+                        (
+                            AccountIdWithPrivacy::Private(from),
+                            AccountIdWithPrivacy::Private(to),
+                        ) => TokenProgramSubcommand::Private(
+                            TokenProgramSubcommandPrivate::TransferTokenPrivateOwned {
+                                sender_account_id: from,
+                                recipient_account_id: to,
+                                balance_to_move: amount,
+                            },
+                        ),
+                        (AccountIdWithPrivacy::Private(from), AccountIdWithPrivacy::Public(to)) => {
+                            TokenProgramSubcommand::Deshielded(
+                                TokenProgramSubcommandDeshielded::TransferTokenDeshielded {
                                     sender_account_id: from,
-                                    recipient_npk: to_npk,
-                                    recipient_vpk: to_vpk,
-                                    recipient_identifier: to_identifier,
+                                    recipient_account_id: to,
                                     balance_to_move: amount,
                                 },
-                            ),
+                            )
                         }
-                    }
+                        (AccountIdWithPrivacy::Public(from), AccountIdWithPrivacy::Private(to)) => {
+                            TokenProgramSubcommand::Shielded(
+                                TokenProgramSubcommandShielded::TransferTokenShieldedOwned {
+                                    sender_account_id: from,
+                                    recipient_account_id: to,
+                                    balance_to_move: amount,
+                                },
+                            )
+                        }
+                    },
+                    (None, Some(to_npk), Some(to_vpk)) => match from {
+                        AccountIdWithPrivacy::Private(from) => TokenProgramSubcommand::Private(
+                            TokenProgramSubcommandPrivate::TransferTokenPrivateForeign {
+                                sender_account_id: from,
+                                recipient_npk: to_npk,
+                                recipient_vpk: to_vpk,
+                                recipient_identifier: to_identifier,
+                                balance_to_move: amount,
+                            },
+                        ),
+                        AccountIdWithPrivacy::Public(from) => TokenProgramSubcommand::Shielded(
+                            TokenProgramSubcommandShielded::TransferTokenShieldedForeign {
+                                sender_account_id: from,
+                                recipient_npk: to_npk,
+                                recipient_vpk: to_vpk,
+                                recipient_identifier: to_identifier,
+                                balance_to_move: amount,
+                            },
+                        ),
+                    },
                 };
 
                 underlying_subcommand.handle_subcommand(wallet_core).await
             }
             Self::Burn {
                 definition,
-                definition_label,
                 holder,
-                holder_label,
                 amount,
             } => {
-                let definition = resolve_id_or_label(
-                    definition,
-                    definition_label,
-                    &wallet_core.storage.labels,
-                    &wallet_core.storage.user_data,
-                )?;
-                let holder = resolve_id_or_label(
-                    holder,
-                    holder_label,
-                    &wallet_core.storage.labels,
-                    &wallet_core.storage.user_data,
-                )?;
-                let underlying_subcommand = {
-                    let (definition, definition_privacy) =
-                        parse_addr_with_privacy_prefix(&definition)?;
-                    let (holder, holder_privacy) = parse_addr_with_privacy_prefix(&holder)?;
-
-                    match (definition_privacy, holder_privacy) {
-                        (AccountPrivacyKind::Public, AccountPrivacyKind::Public) => {
-                            TokenProgramSubcommand::Public(
-                                TokenProgramSubcommandPublic::BurnToken {
-                                    definition_account_id: definition,
-                                    holder_account_id: holder,
-                                    amount,
-                                },
-                            )
-                        }
-                        (AccountPrivacyKind::Private, AccountPrivacyKind::Private) => {
-                            TokenProgramSubcommand::Private(
-                                TokenProgramSubcommandPrivate::BurnTokenPrivateOwned {
-                                    definition_account_id: definition,
-                                    holder_account_id: holder,
-                                    amount,
-                                },
-                            )
-                        }
-                        (AccountPrivacyKind::Private, AccountPrivacyKind::Public) => {
-                            TokenProgramSubcommand::Deshielded(
-                                TokenProgramSubcommandDeshielded::BurnTokenDeshieldedOwned {
-                                    definition_account_id: definition,
-                                    holder_account_id: holder,
-                                    amount,
-                                },
-                            )
-                        }
-                        (AccountPrivacyKind::Public, AccountPrivacyKind::Private) => {
-                            TokenProgramSubcommand::Shielded(
-                                TokenProgramSubcommandShielded::BurnTokenShielded {
-                                    definition_account_id: definition,
-                                    holder_account_id: holder,
-                                    amount,
-                                },
-                            )
-                        }
-                    }
+                let definition = definition.resolve(wallet_core.storage())?;
+                let holder = holder.resolve(wallet_core.storage())?;
+                let underlying_subcommand = match (definition, holder) {
+                    (
+                        AccountIdWithPrivacy::Public(definition),
+                        AccountIdWithPrivacy::Public(holder),
+                    ) => TokenProgramSubcommand::Public(TokenProgramSubcommandPublic::BurnToken {
+                        definition_account_id: definition,
+                        holder_account_id: holder,
+                        amount,
+                    }),
+                    (
+                        AccountIdWithPrivacy::Private(definition),
+                        AccountIdWithPrivacy::Private(holder),
+                    ) => TokenProgramSubcommand::Private(
+                        TokenProgramSubcommandPrivate::BurnTokenPrivateOwned {
+                            definition_account_id: definition,
+                            holder_account_id: holder,
+                            amount,
+                        },
+                    ),
+                    (
+                        AccountIdWithPrivacy::Private(definition),
+                        AccountIdWithPrivacy::Public(holder),
+                    ) => TokenProgramSubcommand::Deshielded(
+                        TokenProgramSubcommandDeshielded::BurnTokenDeshieldedOwned {
+                            definition_account_id: definition,
+                            holder_account_id: holder,
+                            amount,
+                        },
+                    ),
+                    (
+                        AccountIdWithPrivacy::Public(definition),
+                        AccountIdWithPrivacy::Private(holder),
+                    ) => TokenProgramSubcommand::Shielded(
+                        TokenProgramSubcommandShielded::BurnTokenShielded {
+                            definition_account_id: definition,
+                            holder_account_id: holder,
+                            amount,
+                        },
+                    ),
                 };
 
                 underlying_subcommand.handle_subcommand(wallet_core).await
             }
             Self::Mint {
                 definition,
-                definition_label,
                 holder,
-                holder_label,
                 holder_npk,
                 holder_vpk,
                 holder_identifier,
                 amount,
             } => {
-                let definition = resolve_id_or_label(
-                    definition,
-                    definition_label,
-                    &wallet_core.storage.labels,
-                    &wallet_core.storage.user_data,
-                )?;
-                let holder = match (holder, holder_label) {
-                    (v, None) => v,
-                    (None, Some(label)) => Some(resolve_account_label(
-                        &label,
-                        &wallet_core.storage.labels,
-                        &wallet_core.storage.user_data,
-                    )?),
-                    (Some(_), Some(_)) => {
-                        anyhow::bail!("Provide only one of --holder or --holder-label")
-                    }
-                };
+                let definition = definition.resolve(wallet_core.storage())?;
+                let holder = holder
+                    .map(|account_mention| account_mention.resolve(wallet_core.storage()))
+                    .transpose()?;
                 let underlying_subcommand = match (holder, holder_npk, holder_vpk) {
                     (None, None, None) => {
                         anyhow::bail!(
@@ -448,56 +330,51 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                     (_, Some(_), None) | (_, None, Some(_)) => {
                         anyhow::bail!("List of public keys is uncomplete");
                     }
-                    (Some(holder), None, None) => {
-                        let (definition, definition_privacy) =
-                            parse_addr_with_privacy_prefix(&definition)?;
-                        let (holder, holder_privacy) = parse_addr_with_privacy_prefix(&holder)?;
-
-                        match (definition_privacy, holder_privacy) {
-                            (AccountPrivacyKind::Public, AccountPrivacyKind::Public) => {
-                                TokenProgramSubcommand::Public(
-                                    TokenProgramSubcommandPublic::MintToken {
-                                        definition_account_id: definition,
-                                        holder_account_id: holder,
-                                        amount,
-                                    },
-                                )
-                            }
-                            (AccountPrivacyKind::Private, AccountPrivacyKind::Private) => {
-                                TokenProgramSubcommand::Private(
-                                    TokenProgramSubcommandPrivate::MintTokenPrivateOwned {
-                                        definition_account_id: definition,
-                                        holder_account_id: holder,
-                                        amount,
-                                    },
-                                )
-                            }
-                            (AccountPrivacyKind::Private, AccountPrivacyKind::Public) => {
-                                TokenProgramSubcommand::Deshielded(
-                                    TokenProgramSubcommandDeshielded::MintTokenDeshielded {
-                                        definition_account_id: definition,
-                                        holder_account_id: holder,
-                                        amount,
-                                    },
-                                )
-                            }
-                            (AccountPrivacyKind::Public, AccountPrivacyKind::Private) => {
-                                TokenProgramSubcommand::Shielded(
-                                    TokenProgramSubcommandShielded::MintTokenShieldedOwned {
-                                        definition_account_id: definition,
-                                        holder_account_id: holder,
-                                        amount,
-                                    },
-                                )
-                            }
-                        }
-                    }
-                    (None, Some(holder_npk), Some(holder_vpk)) => {
-                        let (definition, definition_privacy) =
-                            parse_addr_with_privacy_prefix(&definition)?;
-
-                        match definition_privacy {
-                            AccountPrivacyKind::Private => TokenProgramSubcommand::Private(
+                    (Some(holder), None, None) => match (definition, holder) {
+                        (
+                            AccountIdWithPrivacy::Public(definition),
+                            AccountIdWithPrivacy::Public(holder),
+                        ) => TokenProgramSubcommand::Public(
+                            TokenProgramSubcommandPublic::MintToken {
+                                definition_account_id: definition,
+                                holder_account_id: holder,
+                                amount,
+                            },
+                        ),
+                        (
+                            AccountIdWithPrivacy::Private(definition),
+                            AccountIdWithPrivacy::Private(holder),
+                        ) => TokenProgramSubcommand::Private(
+                            TokenProgramSubcommandPrivate::MintTokenPrivateOwned {
+                                definition_account_id: definition,
+                                holder_account_id: holder,
+                                amount,
+                            },
+                        ),
+                        (
+                            AccountIdWithPrivacy::Private(definition),
+                            AccountIdWithPrivacy::Public(holder),
+                        ) => TokenProgramSubcommand::Deshielded(
+                            TokenProgramSubcommandDeshielded::MintTokenDeshielded {
+                                definition_account_id: definition,
+                                holder_account_id: holder,
+                                amount,
+                            },
+                        ),
+                        (
+                            AccountIdWithPrivacy::Public(definition),
+                            AccountIdWithPrivacy::Private(holder),
+                        ) => TokenProgramSubcommand::Shielded(
+                            TokenProgramSubcommandShielded::MintTokenShieldedOwned {
+                                definition_account_id: definition,
+                                holder_account_id: holder,
+                                amount,
+                            },
+                        ),
+                    },
+                    (None, Some(holder_npk), Some(holder_vpk)) => match definition {
+                        AccountIdWithPrivacy::Private(definition) => {
+                            TokenProgramSubcommand::Private(
                                 TokenProgramSubcommandPrivate::MintTokenPrivateForeign {
                                     definition_account_id: definition,
                                     holder_npk,
@@ -505,8 +382,10 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                                     holder_identifier,
                                     amount,
                                 },
-                            ),
-                            AccountPrivacyKind::Public => TokenProgramSubcommand::Shielded(
+                            )
+                        }
+                        AccountIdWithPrivacy::Public(definition) => {
+                            TokenProgramSubcommand::Shielded(
                                 TokenProgramSubcommandShielded::MintTokenShieldedForeign {
                                     definition_account_id: definition,
                                     holder_npk,
@@ -514,9 +393,9 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                                     holder_identifier,
                                     amount,
                                 },
-                            ),
+                            )
                         }
-                    }
+                    },
                 };
 
                 underlying_subcommand.handle_subcommand(wallet_core).await
@@ -551,27 +430,27 @@ pub enum TokenProgramSubcommandPublic {
     // Transfer tokens using the token program
     TransferToken {
         #[arg(short, long)]
-        sender_account_id: String,
+        sender_account_id: AccountId,
         #[arg(short, long)]
-        recipient_account_id: String,
+        recipient_account_id: AccountId,
         #[arg(short, long)]
         balance_to_move: u128,
     },
     // Burn tokens using the token program
     BurnToken {
         #[arg(short, long)]
-        definition_account_id: String,
+        definition_account_id: AccountId,
         #[arg(short, long)]
-        holder_account_id: String,
+        holder_account_id: AccountId,
         #[arg(short, long)]
         amount: u128,
     },
     // Transfer tokens using the token program
     MintToken {
         #[arg(short, long)]
-        definition_account_id: String,
+        definition_account_id: AccountId,
         #[arg(short, long)]
-        holder_account_id: String,
+        holder_account_id: AccountId,
         #[arg(short, long)]
         amount: u128,
     },
@@ -583,16 +462,16 @@ pub enum TokenProgramSubcommandPrivate {
     // Transfer tokens using the token program
     TransferTokenPrivateOwned {
         #[arg(short, long)]
-        sender_account_id: String,
+        sender_account_id: AccountId,
         #[arg(short, long)]
-        recipient_account_id: String,
+        recipient_account_id: AccountId,
         #[arg(short, long)]
         balance_to_move: u128,
     },
     // Transfer tokens using the token program
     TransferTokenPrivateForeign {
         #[arg(short, long)]
-        sender_account_id: String,
+        sender_account_id: AccountId,
         /// `recipient_npk` - valid 32 byte hex string.
         #[arg(long)]
         recipient_npk: String,
@@ -608,25 +487,25 @@ pub enum TokenProgramSubcommandPrivate {
     // Burn tokens using the token program
     BurnTokenPrivateOwned {
         #[arg(short, long)]
-        definition_account_id: String,
+        definition_account_id: AccountId,
         #[arg(short, long)]
-        holder_account_id: String,
+        holder_account_id: AccountId,
         #[arg(short, long)]
         amount: u128,
     },
     // Transfer tokens using the token program
     MintTokenPrivateOwned {
         #[arg(short, long)]
-        definition_account_id: String,
+        definition_account_id: AccountId,
         #[arg(short, long)]
-        holder_account_id: String,
+        holder_account_id: AccountId,
         #[arg(short, long)]
         amount: u128,
     },
     // Transfer tokens using the token program
     MintTokenPrivateForeign {
         #[arg(short, long)]
-        definition_account_id: String,
+        definition_account_id: AccountId,
         #[arg(short, long)]
         holder_npk: String,
         #[arg(short, long)]
@@ -645,27 +524,27 @@ pub enum TokenProgramSubcommandDeshielded {
     // Transfer tokens using the token program
     TransferTokenDeshielded {
         #[arg(short, long)]
-        sender_account_id: String,
+        sender_account_id: AccountId,
         #[arg(short, long)]
-        recipient_account_id: String,
+        recipient_account_id: AccountId,
         #[arg(short, long)]
         balance_to_move: u128,
     },
     // Burn tokens using the token program
     BurnTokenDeshieldedOwned {
         #[arg(short, long)]
-        definition_account_id: String,
+        definition_account_id: AccountId,
         #[arg(short, long)]
-        holder_account_id: String,
+        holder_account_id: AccountId,
         #[arg(short, long)]
         amount: u128,
     },
     // Transfer tokens using the token program
     MintTokenDeshielded {
         #[arg(short, long)]
-        definition_account_id: String,
+        definition_account_id: AccountId,
         #[arg(short, long)]
-        holder_account_id: String,
+        holder_account_id: AccountId,
         #[arg(short, long)]
         amount: u128,
     },
@@ -677,16 +556,16 @@ pub enum TokenProgramSubcommandShielded {
     // Transfer tokens using the token program
     TransferTokenShieldedOwned {
         #[arg(short, long)]
-        sender_account_id: String,
+        sender_account_id: AccountId,
         #[arg(short, long)]
-        recipient_account_id: String,
+        recipient_account_id: AccountId,
         #[arg(short, long)]
         balance_to_move: u128,
     },
     // Transfer tokens using the token program
     TransferTokenShieldedForeign {
         #[arg(short, long)]
-        sender_account_id: String,
+        sender_account_id: AccountId,
         /// `recipient_npk` - valid 32 byte hex string.
         #[arg(long)]
         recipient_npk: String,
@@ -702,25 +581,25 @@ pub enum TokenProgramSubcommandShielded {
     // Burn tokens using the token program
     BurnTokenShielded {
         #[arg(short, long)]
-        definition_account_id: String,
+        definition_account_id: AccountId,
         #[arg(short, long)]
-        holder_account_id: String,
+        holder_account_id: AccountId,
         #[arg(short, long)]
         amount: u128,
     },
     // Transfer tokens using the token program
     MintTokenShieldedOwned {
         #[arg(short, long)]
-        definition_account_id: String,
+        definition_account_id: AccountId,
         #[arg(short, long)]
-        holder_account_id: String,
+        holder_account_id: AccountId,
         #[arg(short, long)]
         amount: u128,
     },
     // Transfer tokens using the token program
     MintTokenShieldedForeign {
         #[arg(short, long)]
-        definition_account_id: String,
+        definition_account_id: AccountId,
         #[arg(short, long)]
         holder_npk: String,
         #[arg(short, long)]
@@ -741,9 +620,9 @@ pub enum CreateNewTokenProgramSubcommand {
     /// Definition - public, supply - public.
     NewPublicDefPublicSupp {
         #[arg(short, long)]
-        definition_account_id: String,
+        definition_account_id: AccountId,
         #[arg(short, long)]
-        supply_account_id: String,
+        supply_account_id: AccountId,
         #[arg(short, long)]
         name: String,
         #[arg(short, long)]
@@ -754,9 +633,9 @@ pub enum CreateNewTokenProgramSubcommand {
     /// Definition - public, supply - private.
     NewPublicDefPrivateSupp {
         #[arg(short, long)]
-        definition_account_id: String,
+        definition_account_id: AccountId,
         #[arg(short, long)]
-        supply_account_id: String,
+        supply_account_id: AccountId,
         #[arg(short, long)]
         name: String,
         #[arg(short, long)]
@@ -767,9 +646,9 @@ pub enum CreateNewTokenProgramSubcommand {
     /// Definition - private, supply - public.
     NewPrivateDefPublicSupp {
         #[arg(short, long)]
-        definition_account_id: String,
+        definition_account_id: AccountId,
         #[arg(short, long)]
-        supply_account_id: String,
+        supply_account_id: AccountId,
         #[arg(short, long)]
         name: String,
         #[arg(short, long)]
@@ -780,9 +659,9 @@ pub enum CreateNewTokenProgramSubcommand {
     /// Definition - private, supply - private.
     NewPrivateDefPrivateSupp {
         #[arg(short, long)]
-        definition_account_id: String,
+        definition_account_id: AccountId,
         #[arg(short, long)]
-        supply_account_id: String,
+        supply_account_id: AccountId,
         #[arg(short, long)]
         name: String,
         #[arg(short, long)]
@@ -803,8 +682,8 @@ impl WalletSubcommand for TokenProgramSubcommandPublic {
             } => {
                 Token(wallet_core)
                     .send_transfer_transaction(
-                        sender_account_id.parse().unwrap(),
-                        recipient_account_id.parse().unwrap(),
+                        sender_account_id,
+                        recipient_account_id,
                         balance_to_move,
                     )
                     .await?;
@@ -816,11 +695,7 @@ impl WalletSubcommand for TokenProgramSubcommandPublic {
                 amount,
             } => {
                 Token(wallet_core)
-                    .send_burn_transaction(
-                        definition_account_id.parse().unwrap(),
-                        holder_account_id.parse().unwrap(),
-                        amount,
-                    )
+                    .send_burn_transaction(definition_account_id, holder_account_id, amount)
                     .await?;
                 Ok(SubcommandReturnValue::Empty)
             }
@@ -830,11 +705,7 @@ impl WalletSubcommand for TokenProgramSubcommandPublic {
                 amount,
             } => {
                 Token(wallet_core)
-                    .send_mint_transaction(
-                        definition_account_id.parse().unwrap(),
-                        holder_account_id.parse().unwrap(),
-                        amount,
-                    )
+                    .send_mint_transaction(definition_account_id, holder_account_id, amount)
                     .await?;
                 Ok(SubcommandReturnValue::Empty)
             }
@@ -853,9 +724,6 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                 recipient_account_id,
                 balance_to_move,
             } => {
-                let sender_account_id: AccountId = sender_account_id.parse().unwrap();
-                let recipient_account_id: AccountId = recipient_account_id.parse().unwrap();
-
                 let (tx_hash, [secret_sender, secret_recipient]) = Token(wallet_core)
                     .send_transfer_transaction_private_owned_account(
                         sender_account_id,
@@ -880,7 +748,7 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                     )?;
                 }
 
-                wallet_core.store_persistent_data().await?;
+                wallet_core.store_persistent_data()?;
 
                 Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
             }
@@ -891,7 +759,6 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                 recipient_identifier,
                 balance_to_move,
             } => {
-                let sender_account_id: AccountId = sender_account_id.parse().unwrap();
                 let recipient_npk_res = hex::decode(recipient_npk)?;
                 let mut recipient_npk = [0; 32];
                 recipient_npk.copy_from_slice(&recipient_npk_res);
@@ -927,7 +794,7 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                     )?;
                 }
 
-                wallet_core.store_persistent_data().await?;
+                wallet_core.store_persistent_data()?;
 
                 Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
             }
@@ -936,9 +803,6 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                 holder_account_id,
                 amount,
             } => {
-                let definition_account_id: AccountId = definition_account_id.parse().unwrap();
-                let holder_account_id: AccountId = holder_account_id.parse().unwrap();
-
                 let (tx_hash, [secret_definition, secret_holder]) = Token(wallet_core)
                     .send_burn_transaction_private_owned_account(
                         definition_account_id,
@@ -963,7 +827,7 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                     )?;
                 }
 
-                wallet_core.store_persistent_data().await?;
+                wallet_core.store_persistent_data()?;
 
                 Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
             }
@@ -972,9 +836,6 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                 holder_account_id,
                 amount,
             } => {
-                let definition_account_id: AccountId = definition_account_id.parse().unwrap();
-                let holder_account_id: AccountId = holder_account_id.parse().unwrap();
-
                 let (tx_hash, [secret_definition, secret_holder]) = Token(wallet_core)
                     .send_mint_transaction_private_owned_account(
                         definition_account_id,
@@ -999,7 +860,7 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                     )?;
                 }
 
-                wallet_core.store_persistent_data().await?;
+                wallet_core.store_persistent_data()?;
 
                 Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
             }
@@ -1010,8 +871,6 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                 holder_identifier,
                 amount,
             } => {
-                let definition_account_id: AccountId = definition_account_id.parse().unwrap();
-
                 let holder_npk_res = hex::decode(holder_npk)?;
                 let mut holder_npk = [0; 32];
                 holder_npk.copy_from_slice(&holder_npk_res);
@@ -1047,7 +906,7 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                     )?;
                 }
 
-                wallet_core.store_persistent_data().await?;
+                wallet_core.store_persistent_data()?;
 
                 Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
             }
@@ -1066,9 +925,6 @@ impl WalletSubcommand for TokenProgramSubcommandDeshielded {
                 recipient_account_id,
                 balance_to_move,
             } => {
-                let sender_account_id: AccountId = sender_account_id.parse().unwrap();
-                let recipient_account_id: AccountId = recipient_account_id.parse().unwrap();
-
                 let (tx_hash, secret_sender) = Token(wallet_core)
                     .send_transfer_transaction_deshielded(
                         sender_account_id,
@@ -1090,7 +946,7 @@ impl WalletSubcommand for TokenProgramSubcommandDeshielded {
                     )?;
                 }
 
-                wallet_core.store_persistent_data().await?;
+                wallet_core.store_persistent_data()?;
 
                 Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
             }
@@ -1099,9 +955,6 @@ impl WalletSubcommand for TokenProgramSubcommandDeshielded {
                 holder_account_id,
                 amount,
             } => {
-                let definition_account_id: AccountId = definition_account_id.parse().unwrap();
-                let holder_account_id: AccountId = holder_account_id.parse().unwrap();
-
                 let (tx_hash, secret_definition) = Token(wallet_core)
                     .send_burn_transaction_deshielded_owned_account(
                         definition_account_id,
@@ -1123,7 +976,7 @@ impl WalletSubcommand for TokenProgramSubcommandDeshielded {
                     )?;
                 }
 
-                wallet_core.store_persistent_data().await?;
+                wallet_core.store_persistent_data()?;
 
                 Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
             }
@@ -1132,9 +985,6 @@ impl WalletSubcommand for TokenProgramSubcommandDeshielded {
                 holder_account_id,
                 amount,
             } => {
-                let definition_account_id: AccountId = definition_account_id.parse().unwrap();
-                let holder_account_id: AccountId = holder_account_id.parse().unwrap();
-
                 let (tx_hash, secret_definition) = Token(wallet_core)
                     .send_mint_transaction_deshielded(
                         definition_account_id,
@@ -1156,7 +1006,7 @@ impl WalletSubcommand for TokenProgramSubcommandDeshielded {
                     )?;
                 }
 
-                wallet_core.store_persistent_data().await?;
+                wallet_core.store_persistent_data()?;
 
                 Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
             }
@@ -1177,7 +1027,6 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                 recipient_identifier,
                 balance_to_move,
             } => {
-                let sender_account_id: AccountId = sender_account_id.parse().unwrap();
                 let recipient_npk_res = hex::decode(recipient_npk)?;
                 let mut recipient_npk = [0; 32];
                 recipient_npk.copy_from_slice(&recipient_npk_res);
@@ -1208,7 +1057,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                     println!("Transaction data is {:?}", tx.message);
                 }
 
-                wallet_core.store_persistent_data().await?;
+                wallet_core.store_persistent_data()?;
 
                 Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
             }
@@ -1217,9 +1066,6 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                 recipient_account_id,
                 balance_to_move,
             } => {
-                let sender_account_id: AccountId = sender_account_id.parse().unwrap();
-                let recipient_account_id: AccountId = recipient_account_id.parse().unwrap();
-
                 let (tx_hash, secret_recipient) = Token(wallet_core)
                     .send_transfer_transaction_shielded_owned_account(
                         sender_account_id,
@@ -1241,7 +1087,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                     )?;
                 }
 
-                wallet_core.store_persistent_data().await?;
+                wallet_core.store_persistent_data()?;
 
                 Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
             }
@@ -1250,9 +1096,6 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                 holder_account_id,
                 amount,
             } => {
-                let definition_account_id: AccountId = definition_account_id.parse().unwrap();
-                let holder_account_id: AccountId = holder_account_id.parse().unwrap();
-
                 let (tx_hash, secret_holder) = Token(wallet_core)
                     .send_burn_transaction_shielded(
                         definition_account_id,
@@ -1274,7 +1117,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                     )?;
                 }
 
-                wallet_core.store_persistent_data().await?;
+                wallet_core.store_persistent_data()?;
 
                 Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
             }
@@ -1283,9 +1126,6 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                 holder_account_id,
                 amount,
             } => {
-                let definition_account_id: AccountId = definition_account_id.parse().unwrap();
-                let holder_account_id: AccountId = holder_account_id.parse().unwrap();
-
                 let (tx_hash, secret_holder) = Token(wallet_core)
                     .send_mint_transaction_shielded_owned_account(
                         definition_account_id,
@@ -1307,7 +1147,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                     )?;
                 }
 
-                wallet_core.store_persistent_data().await?;
+                wallet_core.store_persistent_data()?;
 
                 Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
             }
@@ -1318,8 +1158,6 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                 holder_identifier,
                 amount,
             } => {
-                let definition_account_id: AccountId = definition_account_id.parse().unwrap();
-
                 let holder_npk_res = hex::decode(holder_npk)?;
                 let mut holder_npk = [0; 32];
                 holder_npk.copy_from_slice(&holder_npk_res);
@@ -1350,7 +1188,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                     println!("Transaction data is {:?}", tx.message);
                 }
 
-                wallet_core.store_persistent_data().await?;
+                wallet_core.store_persistent_data()?;
 
                 Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
             }
@@ -1370,9 +1208,6 @@ impl WalletSubcommand for CreateNewTokenProgramSubcommand {
                 name,
                 total_supply,
             } => {
-                let definition_account_id: AccountId = definition_account_id.parse().unwrap();
-                let supply_account_id: AccountId = supply_account_id.parse().unwrap();
-
                 let (tx_hash, [secret_definition, secret_supply]) = Token(wallet_core)
                     .send_new_definition_private_owned_definiton_and_supply(
                         definition_account_id,
@@ -1398,7 +1233,7 @@ impl WalletSubcommand for CreateNewTokenProgramSubcommand {
                     )?;
                 }
 
-                wallet_core.store_persistent_data().await?;
+                wallet_core.store_persistent_data()?;
 
                 Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
             }
@@ -1408,9 +1243,6 @@ impl WalletSubcommand for CreateNewTokenProgramSubcommand {
                 name,
                 total_supply,
             } => {
-                let definition_account_id: AccountId = definition_account_id.parse().unwrap();
-                let supply_account_id: AccountId = supply_account_id.parse().unwrap();
-
                 let (tx_hash, secret_definition) = Token(wallet_core)
                     .send_new_definition_private_owned_definiton(
                         definition_account_id,
@@ -1433,7 +1265,7 @@ impl WalletSubcommand for CreateNewTokenProgramSubcommand {
                     )?;
                 }
 
-                wallet_core.store_persistent_data().await?;
+                wallet_core.store_persistent_data()?;
 
                 Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
             }
@@ -1443,9 +1275,6 @@ impl WalletSubcommand for CreateNewTokenProgramSubcommand {
                 name,
                 total_supply,
             } => {
-                let definition_account_id: AccountId = definition_account_id.parse().unwrap();
-                let supply_account_id: AccountId = supply_account_id.parse().unwrap();
-
                 let (tx_hash, secret_supply) = Token(wallet_core)
                     .send_new_definition_private_owned_supply(
                         definition_account_id,
@@ -1468,7 +1297,7 @@ impl WalletSubcommand for CreateNewTokenProgramSubcommand {
                     )?;
                 }
 
-                wallet_core.store_persistent_data().await?;
+                wallet_core.store_persistent_data()?;
 
                 Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
             }
@@ -1480,8 +1309,8 @@ impl WalletSubcommand for CreateNewTokenProgramSubcommand {
             } => {
                 Token(wallet_core)
                     .send_new_definition(
-                        definition_account_id.parse().unwrap(),
-                        supply_account_id.parse().unwrap(),
+                        definition_account_id,
+                        supply_account_id,
                         name,
                         total_supply,
                     )

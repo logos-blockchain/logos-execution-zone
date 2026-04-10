@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use crate::key_management::key_tree::traits::KeyTreeNode;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[cfg_attr(any(test, feature = "test_utils"), derive(PartialEq, Eq))]
 pub struct ChildKeysPublic {
     pub csk: nssa::PrivateKey,
     pub cpk: nssa::PublicKey,

@@ -24,6 +24,7 @@ use log::info;
 use nssa::{Account, AccountId, PrivateKey, PublicKey, program::Program};
 use nssa_core::program::DEFAULT_PROGRAM_ID;
 use tempfile::tempdir;
+use wallet::account::HumanReadableAccount;
 use wallet_ffi::{
     FfiAccount, FfiAccountList, FfiBytes32, FfiPrivateAccountKeys, FfiPublicAccountKey,
     FfiTransferResult, FfiU128, WalletHandle, error,
@@ -53,9 +54,22 @@ unsafe extern "C" {
         out_account_id: *mut FfiBytes32,
     ) -> error::WalletFfiError;
 
+    fn wallet_ffi_import_public_account(
+        handle: *mut WalletHandle,
+        private_key_hex: *const c_char,
+    ) -> error::WalletFfiError;
+
     fn wallet_ffi_create_private_accounts_key(
         handle: *mut WalletHandle,
         out_keys: *mut FfiPrivateAccountKeys,
+    ) -> error::WalletFfiError;
+
+    fn wallet_ffi_import_private_account(
+        handle: *mut WalletHandle,
+        key_chain_json: *const c_char,
+        chain_index: *const c_char,
+        identifier: *const FfiU128,
+        account_state_json: *const c_char,
     ) -> error::WalletFfiError;
 
     fn wallet_ffi_list_accounts(
@@ -191,13 +205,59 @@ fn new_wallet_ffi_with_test_context_config(
     let storage_path = CString::new(storage_path.to_str().unwrap())?;
     let password = CString::new(ctx.ctx().wallet_password())?;
 
-    Ok(unsafe {
+    let wallet_ffi_handle = unsafe {
         wallet_ffi_create_new(
             config_path.as_ptr(),
             storage_path.as_ptr(),
             password.as_ptr(),
         )
-    })
+    };
+
+    // Import accounts from source wallet
+    let source_wallet = ctx.ctx().wallet();
+    let source_key_chain = source_wallet.storage().key_chain();
+
+    for (account_id, _chain_index) in source_key_chain.public_account_ids() {
+        let private_key_hex = source_wallet
+            .get_account_public_signing_key(account_id)
+            .unwrap()
+            .to_string();
+        let private_key_hex = CString::new(private_key_hex)?;
+        unsafe { wallet_ffi_import_public_account(wallet_ffi_handle, private_key_hex.as_ptr()) }
+            .unwrap();
+    }
+
+    for (account_id, _chain_index) in source_key_chain.private_account_ids() {
+        let account = source_key_chain.private_account(account_id).unwrap();
+        let key_chain_json = CString::new(serde_json::to_string(account.key_chain)?)?;
+        let account_state_json = CString::new(serde_json::to_string(
+            &HumanReadableAccount::from(account.account.clone()),
+        )?)?;
+
+        let chain_index = account
+            .chain_index
+            .map(|chain_index| CString::new(chain_index.to_string()))
+            .transpose()?;
+        let chain_index_ptr = chain_index
+            .as_ref()
+            .map_or(std::ptr::null(), |value| value.as_ptr());
+        let identifier = FfiU128 {
+            data: account.identifier.to_le_bytes(),
+        };
+
+        unsafe {
+            wallet_ffi_import_private_account(
+                wallet_ffi_handle,
+                key_chain_json.as_ptr(),
+                chain_index_ptr,
+                &raw const identifier,
+                account_state_json.as_ptr(),
+            )
+        }
+        .unwrap();
+    }
+
+    Ok(wallet_ffi_handle)
 }
 
 fn new_wallet_ffi_with_default_config(password: &str) -> Result<*mut WalletHandle> {
@@ -405,7 +465,7 @@ fn test_wallet_ffi_get_balance_public() -> Result<()> {
 
     let balance = unsafe {
         let mut out_balance: [u8; 16] = [0; 16];
-        let ffi_account_id = FfiBytes32::from(&account_id);
+        let ffi_account_id = FfiBytes32::from(account_id);
         wallet_ffi_get_balance(
             wallet_ffi_handle,
             &raw const ffi_account_id,
@@ -435,7 +495,7 @@ fn test_wallet_ffi_get_account_public() -> Result<()> {
     let mut out_account = FfiAccount::default();
 
     let account: Account = unsafe {
-        let ffi_account_id = FfiBytes32::from(&account_id);
+        let ffi_account_id = FfiBytes32::from(account_id);
         wallet_ffi_get_account_public(
             wallet_ffi_handle,
             &raw const ffi_account_id,
@@ -451,7 +511,7 @@ fn test_wallet_ffi_get_account_public() -> Result<()> {
     );
     assert_eq!(account.balance, 10000);
     assert!(account.data.is_empty());
-    assert_eq!(account.nonce.0, 0);
+    assert_eq!(account.nonce.0, 1);
 
     unsafe {
         wallet_ffi_free_account_data(&raw mut out_account);
@@ -472,7 +532,7 @@ fn test_wallet_ffi_get_account_private() -> Result<()> {
     let mut out_account = FfiAccount::default();
 
     let account: Account = unsafe {
-        let ffi_account_id = FfiBytes32::from(&account_id);
+        let ffi_account_id = FfiBytes32::from(account_id);
         wallet_ffi_get_account_private(
             wallet_ffi_handle,
             &raw const ffi_account_id,
@@ -488,7 +548,6 @@ fn test_wallet_ffi_get_account_private() -> Result<()> {
     );
     assert_eq!(account.balance, 10000);
     assert!(account.data.is_empty());
-    assert_eq!(account.nonce, 0_u128.into());
 
     unsafe {
         wallet_ffi_free_account_data(&raw mut out_account);
@@ -509,7 +568,7 @@ fn test_wallet_ffi_get_public_account_keys() -> Result<()> {
     let mut out_key = FfiPublicAccountKey::default();
 
     let key: PublicKey = unsafe {
-        let ffi_account_id = FfiBytes32::from(&account_id);
+        let ffi_account_id = FfiBytes32::from(account_id);
         wallet_ffi_get_public_account_key(
             wallet_ffi_handle,
             &raw const ffi_account_id,
@@ -548,7 +607,7 @@ fn test_wallet_ffi_get_private_account_keys() -> Result<()> {
     let mut keys = FfiPrivateAccountKeys::default();
 
     unsafe {
-        let ffi_account_id = FfiBytes32::from(&account_id);
+        let ffi_account_id = FfiBytes32::from(account_id);
         wallet_ffi_get_private_account_keys(
             wallet_ffi_handle,
             &raw const ffi_account_id,
@@ -557,15 +616,15 @@ fn test_wallet_ffi_get_private_account_keys() -> Result<()> {
         .unwrap();
     };
 
-    let key_chain = &ctx
+    let account = &ctx
         .ctx()
         .wallet()
         .storage()
-        .user_data
-        .get_private_account(account_id)
-        .unwrap()
-        .0;
+        .key_chain()
+        .private_account(account_id)
+        .unwrap();
 
+    let key_chain = account.key_chain;
     let expected_npk = &key_chain.nullifier_public_key;
     let expected_vpk = &key_chain.viewing_public_key;
 
@@ -587,7 +646,7 @@ fn test_wallet_ffi_account_id_to_base58() -> Result<()> {
     let private_key = PrivateKey::new_os_random();
     let public_key = PublicKey::new_from_private_key(&private_key);
     let account_id = AccountId::from(&public_key);
-    let ffi_bytes: FfiBytes32 = (&account_id).into();
+    let ffi_bytes: FfiBytes32 = account_id.into();
     let ptr = unsafe { wallet_ffi_account_id_to_base58(&raw const ffi_bytes) };
 
     let ffi_result = unsafe { CStr::from_ptr(ptr).to_str()? };
@@ -744,8 +803,8 @@ fn test_wallet_ffi_transfer_public() -> Result<()> {
     let ctx = BlockingTestContext::new()?;
     let home = tempfile::tempdir()?;
     let wallet_ffi_handle = new_wallet_ffi_with_test_context_config(&ctx, home.path())?;
-    let from: FfiBytes32 = (&ctx.ctx().existing_public_accounts()[0]).into();
-    let to: FfiBytes32 = (&ctx.ctx().existing_public_accounts()[1]).into();
+    let from: FfiBytes32 = ctx.ctx().existing_public_accounts()[0].into();
+    let to: FfiBytes32 = ctx.ctx().existing_public_accounts()[1].into();
     let amount: [u8; 16] = 100_u128.to_le_bytes();
 
     let mut transfer_result = FfiTransferResult::default();
@@ -797,12 +856,12 @@ fn test_wallet_ffi_transfer_shielded() -> Result<()> {
     let ctx = BlockingTestContext::new()?;
     let home = tempfile::tempdir()?;
     let wallet_ffi_handle = new_wallet_ffi_with_test_context_config(&ctx, home.path())?;
-    let from: FfiBytes32 = (&ctx.ctx().existing_public_accounts()[0]).into();
+    let from: FfiBytes32 = ctx.ctx().existing_public_accounts()[0].into();
     let (to, to_keys) = unsafe {
         let mut out_keys = FfiPrivateAccountKeys::default();
         wallet_ffi_create_private_accounts_key(wallet_ffi_handle, &raw mut out_keys);
         let account_id = nssa::AccountId::from((&out_keys.npk(), 0_u128));
-        let to: FfiBytes32 = (&account_id).into();
+        let to: FfiBytes32 = account_id.into();
         (to, out_keys)
     };
     let amount: [u8; 16] = 100_u128.to_le_bytes();
@@ -871,8 +930,8 @@ fn test_wallet_ffi_transfer_deshielded() -> Result<()> {
     let ctx = BlockingTestContext::new()?;
     let home = tempfile::tempdir()?;
     let wallet_ffi_handle = new_wallet_ffi_with_test_context_config(&ctx, home.path())?;
-    let from: FfiBytes32 = (&ctx.ctx().existing_private_accounts()[0]).into();
-    let to: FfiBytes32 = (&ctx.ctx().existing_public_accounts()[0]).into();
+    let from: FfiBytes32 = ctx.ctx().existing_private_accounts()[0].into();
+    let to: FfiBytes32 = ctx.ctx().existing_public_accounts()[0].into();
     let amount: [u8; 16] = 100_u128.to_le_bytes();
 
     let mut transfer_result = FfiTransferResult::default();
@@ -883,8 +942,9 @@ fn test_wallet_ffi_transfer_deshielded() -> Result<()> {
             &raw const to,
             &raw const amount,
             &raw mut transfer_result,
-        );
+        )
     }
+    .unwrap();
 
     info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
@@ -892,9 +952,9 @@ fn test_wallet_ffi_transfer_deshielded() -> Result<()> {
     // Sync private account local storage with onchain encrypted state
     unsafe {
         let mut current_height = 0;
-        wallet_ffi_get_current_block_height(wallet_ffi_handle, &raw mut current_height);
-        wallet_ffi_sync_to_block(wallet_ffi_handle, current_height);
-    };
+        wallet_ffi_get_current_block_height(wallet_ffi_handle, &raw mut current_height).unwrap();
+        wallet_ffi_sync_to_block(wallet_ffi_handle, current_height).unwrap();
+    }
 
     let from_balance = unsafe {
         let mut out_balance: [u8; 16] = [0; 16];
@@ -931,12 +991,12 @@ fn test_wallet_ffi_transfer_private() -> Result<()> {
     let home = tempfile::tempdir()?;
     let wallet_ffi_handle = new_wallet_ffi_with_test_context_config(&ctx, home.path())?;
 
-    let from: FfiBytes32 = (&ctx.ctx().existing_private_accounts()[0]).into();
+    let from: FfiBytes32 = ctx.ctx().existing_private_accounts()[0].into();
     let (to, to_keys) = unsafe {
         let mut out_keys = FfiPrivateAccountKeys::default();
         wallet_ffi_create_private_accounts_key(wallet_ffi_handle, &raw mut out_keys);
         let account_id = nssa::AccountId::from((&out_keys.npk(), 0_u128));
-        let to: FfiBytes32 = (&account_id).into();
+        let to: FfiBytes32 = account_id.into();
         (to, out_keys)
     };
 

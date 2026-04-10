@@ -265,16 +265,16 @@ async fn private_acc_preparation(
     wallet: &WalletCore,
     account_id: AccountId,
 ) -> Result<AccountPreparedData, ExecutionFailureKind> {
-    let Some((from_keys, from_acc, from_identifier)) =
-        wallet.storage.user_data.get_private_account(account_id)
-    else {
+    let Some(from_acc) = wallet.storage.key_chain().private_account(account_id) else {
         return Err(ExecutionFailureKind::KeyNotFoundError);
     };
 
+    let from_identifier = from_acc.identifier;
+    let from_keys = &from_acc.key_chain;
     let nsk = from_keys.private_key_holder.nullifier_secret_key;
 
     let from_npk = from_keys.nullifier_public_key;
-    let from_vpk = from_keys.viewing_public_key;
+    let from_vpk = from_keys.viewing_public_key.clone();
 
     // TODO: Remove this unwrap, error types must be compatible
     let proof = wallet
@@ -284,7 +284,8 @@ async fn private_acc_preparation(
 
     // TODO: Technically we could allow unauthorized owned accounts, but currently we don't have
     // support from that in the wallet.
-    let sender_pre = AccountWithMetadata::new(from_acc.clone(), true, (&from_npk, from_identifier));
+    let sender_pre =
+        AccountWithMetadata::new(from_acc.account.clone(), true, (&from_npk, from_identifier));
 
     let eph_holder = EphemeralKeyHolder::new(&from_npk);
     let ssk = eph_holder.calculate_shared_secret_sender(&from_vpk);
@@ -311,33 +312,20 @@ async fn private_pda_preparation(
     seed: &PdaSeed,
 ) -> Result<AccountPreparedData, ExecutionFailureKind> {
     let account_id = nssa::AccountId::for_private_pda(program_id, seed, &npk);
-
-    // Check local cache first (private PDA state is encrypted on-chain, the sequencer
-    // only stores commitments). Fall back to default for new PDAs.
-    let acc = wallet
-        .storage
-        .user_data
-        .pda_accounts
-        .get(&account_id)
-        .cloned()
-        .unwrap_or_default();
-
-    let exists = acc != nssa_core::account::Account::default();
+    let account = wallet.storage().key_chain().private_pda_account(account_id);
+    let exists = account.is_some();
 
     // is_authorized tracks whether the account existed on-chain before this tx.
     // NSK is only provided for existing accounts: the circuit consumes NSKs sequentially
     // from an iterator and asserts none are left over, so supplying an NSK for a new
     // (unauthorized) account would trigger the over-supply assertion.
-    let pre_state = AccountWithMetadata::new(acc, exists, account_id);
+    let pre_state =
+        AccountWithMetadata::new(account.cloned().unwrap_or_default(), exists, account_id);
 
-    let proof = if exists {
-        wallet
-            .check_private_account_initialized(account_id)
-            .await
-            .unwrap_or(None)
-    } else {
-        None
-    };
+    let proof = wallet
+        .check_private_account_initialized(account_id)
+        .await
+        .unwrap_or(None);
 
     let eph_holder = EphemeralKeyHolder::new(&npk);
     let ssk = eph_holder.calculate_shared_secret_sender(&vpk);

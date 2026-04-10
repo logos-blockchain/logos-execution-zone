@@ -14,11 +14,8 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use bytesize::ByteSize;
 use common::transaction::NSSATransaction;
-use integration_tests::{
-    TestContext,
-    config::{InitialData, SequencerPartialConfig},
-};
-use key_protocol::key_management::{KeyChain, ephemeral_key_holder::EphemeralKeyHolder};
+use integration_tests::{TestContext, config::SequencerPartialConfig};
+use key_protocol::key_management::ephemeral_key_holder::EphemeralKeyHolder;
 use log::info;
 use nssa::{
     Account, AccountId, PrivacyPreservingTransaction, PrivateKey, PublicKey, PublicTransaction,
@@ -31,6 +28,7 @@ use nssa_core::{
     account::{AccountWithMetadata, Nonce, data::Data},
     encryption::ViewingPublicKey,
 };
+use sequencer_core::config::GenesisTransaction;
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 
@@ -81,7 +79,7 @@ impl TpsTestManager {
                     program.id(),
                     [pair[0].1, pair[1].1].to_vec(),
                     [Nonce(0_u128)].to_vec(),
-                    amount,
+                    authenticated_transfer_core::Instruction::Transfer { amount },
                 )
                 .unwrap();
                 let witness_set =
@@ -96,28 +94,14 @@ impl TpsTestManager {
     /// Generates a sequencer configuration with initial balance in a number of public accounts.
     /// The transactions generated with the function `build_public_txs` will be valid in a node
     /// started with the config from this method.
-    fn generate_initial_data(&self) -> InitialData {
-        // Create public public keypairs
-        let public_accounts = self
-            .public_keypairs
+    fn generate_genesis(&self) -> Vec<GenesisTransaction> {
+        self.public_keypairs
             .iter()
-            .map(|(key, _)| (key.clone(), 10))
-            .collect();
-
-        // Generate an initial commitment to be used with the privacy preserving transaction
-        // created with the `build_privacy_transaction` function.
-        let key_chain = KeyChain::new_os_random();
-        let account = Account {
-            balance: 100,
-            nonce: Nonce(0xdead_beef),
-            program_owner: Program::authenticated_transfer_program().id(),
-            data: Data::default(),
-        };
-
-        InitialData {
-            public_accounts,
-            private_accounts: vec![(key_chain, account)],
-        }
+            .map(|(_, account_id)| GenesisTransaction::SupplyPublicAccount {
+                account_id: *account_id,
+                balance: 10,
+            })
+            .collect()
     }
 
     const fn generate_sequencer_partial_config() -> SequencerPartialConfig {
@@ -139,7 +123,7 @@ pub async fn tps_test() -> Result<()> {
     let tps_test = TpsTestManager::new(target_tps, num_transactions);
     let ctx = TestContext::builder()
         .with_sequencer_partial_config(TpsTestManager::generate_sequencer_partial_config())
-        .with_initial_data(tps_test.generate_initial_data())
+        .with_genesis(tps_test.generate_genesis())
         .build()
         .await?;
 
@@ -166,7 +150,7 @@ pub async fn tps_test() -> Result<()> {
         loop {
             assert!(
                 now.elapsed().as_millis() <= target_time.as_millis(),
-                "TPS test failed by timeout"
+                "TPS test failed by timeout, transactions processed {i}/{num_transactions}"
             );
 
             let tx_obj = ctx
@@ -250,7 +234,10 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
     );
     let (output, proof) = circuit::execute_and_prove(
         vec![sender_pre, recipient_pre],
-        Program::serialize_instruction(balance_to_move).unwrap(),
+        Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
+            amount: balance_to_move,
+        })
+        .unwrap(),
         vec![
             InputAccountIdentity::PrivateAuthorizedUpdate {
                 ssk: sender_ss,

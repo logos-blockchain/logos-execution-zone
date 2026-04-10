@@ -17,6 +17,26 @@ pub struct MerkleTree {
 }
 
 impl MerkleTree {
+    pub fn with_capacity(capacity: usize) -> Self {
+        // Adjust capacity to ensure power of two
+        let capacity = capacity.next_power_of_two();
+        let total_depth = usize::try_from(capacity.trailing_zeros()).expect("u32 fits in usize");
+
+        let nodes = default_values::DEFAULT_VALUES[..=total_depth]
+            .iter()
+            .rev()
+            .enumerate()
+            .flat_map(|(level, default_value)| std::iter::repeat_n(default_value, 1 << level))
+            .copied()
+            .collect();
+
+        Self {
+            nodes,
+            capacity,
+            length: 0,
+        }
+    }
+
     pub fn root(&self) -> Node {
         let root_index = self.root_index();
         *self.get_node(root_index)
@@ -47,26 +67,6 @@ impl MerkleTree {
 
     fn set_node(&mut self, index: usize, node: Node) {
         self.nodes[index] = node;
-    }
-
-    pub fn with_capacity(capacity: usize) -> Self {
-        // Adjust capacity to ensure power of two
-        let capacity = capacity.next_power_of_two();
-        let total_depth = usize::try_from(capacity.trailing_zeros()).expect("u32 fits in usize");
-
-        let nodes = default_values::DEFAULT_VALUES[..=total_depth]
-            .iter()
-            .rev()
-            .enumerate()
-            .flat_map(|(level, default_value)| std::iter::repeat_n(default_value, 1 << level))
-            .copied()
-            .collect();
-
-        Self {
-            nodes,
-            capacity,
-            length: 0,
-        }
     }
 
     /// Reallocates storage of Merkle tree for double capacity.

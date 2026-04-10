@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use k256::{Scalar, elliptic_curve::PrimeField as _};
 use nssa_core::{Identifier, NullifierPublicKey, encryption::ViewingPublicKey};
 use serde::{Deserialize, Serialize};
@@ -9,8 +11,9 @@ use crate::key_management::{
 };
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[cfg_attr(any(test, feature = "test_utils"), derive(PartialEq, Eq))]
 pub struct ChildKeysPrivate {
-    pub value: (KeyChain, Vec<(Identifier, nssa::Account)>),
+    pub value: (KeyChain, BTreeMap<Identifier, nssa::Account>),
     pub ccc: [u8; 32],
     /// Can be [`None`] if root.
     pub cci: Option<u32>,
@@ -47,7 +50,7 @@ impl ChildKeysPrivate {
                         viewing_secret_key: vsk,
                     },
                 },
-                vec![],
+                BTreeMap::from_iter([(0, nssa::Account::default())]),
             ),
             ccc,
             cci: None,
@@ -97,7 +100,7 @@ impl ChildKeysPrivate {
                         viewing_secret_key: vsk,
                     },
                 },
-                vec![],
+                BTreeMap::from_iter([(0, nssa::Account::default())]),
             ),
             ccc,
             cci: Some(cci),
@@ -115,7 +118,7 @@ impl KeyTreeNode for ChildKeysPrivate {
     }
 
     fn account_ids(&self) -> impl Iterator<Item = nssa::AccountId> {
-        self.value.1.iter().map(|(identifier, _)| {
+        self.value.1.keys().map(|identifier| {
             nssa::AccountId::from((&self.value.0.nullifier_public_key, *identifier))
         })
     }

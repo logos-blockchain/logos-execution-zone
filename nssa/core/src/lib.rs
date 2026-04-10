@@ -24,6 +24,8 @@ pub mod program;
 #[cfg(feature = "host")]
 pub mod error;
 
+pub const GENESIS_BLOCK_ID: BlockId = 1;
+
 pub type BlockId = u64;
 /// Unix timestamp in milliseconds.
 pub type Timestamp = u64;

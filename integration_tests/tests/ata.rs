@@ -9,8 +9,8 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 use ata_core::{compute_ata_seed, get_associated_token_account_id};
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, format_private_account_id,
-    format_public_account_id, verify_commitment_is_in_state,
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, private_mention, public_mention,
+    verify_commitment_is_in_state,
 };
 use log::info;
 use nssa::program::Program;
@@ -68,10 +68,8 @@ async fn create_ata_initializes_holding_account() -> Result<()> {
     wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
         Command::Token(TokenProgramAgnosticSubcommand::New {
-            definition_account_id: Some(format_public_account_id(definition_account_id)),
-            definition_account_label: None,
-            supply_account_id: Some(format_public_account_id(supply_account_id)),
-            supply_account_label: None,
+            definition_account_id: public_mention(definition_account_id),
+            supply_account_id: public_mention(supply_account_id),
             name: "TEST".to_owned(),
             total_supply,
         }),
@@ -85,8 +83,8 @@ async fn create_ata_initializes_holding_account() -> Result<()> {
     wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
         Command::Ata(AtaSubcommand::Create {
-            owner: format_public_account_id(owner_account_id),
-            token_definition: definition_account_id.to_string(),
+            owner: public_mention(owner_account_id),
+            token_definition: definition_account_id,
         }),
     )
     .await?;
@@ -132,10 +130,8 @@ async fn create_ata_is_idempotent() -> Result<()> {
     wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
         Command::Token(TokenProgramAgnosticSubcommand::New {
-            definition_account_id: Some(format_public_account_id(definition_account_id)),
-            definition_account_label: None,
-            supply_account_id: Some(format_public_account_id(supply_account_id)),
-            supply_account_label: None,
+            definition_account_id: public_mention(definition_account_id),
+            supply_account_id: public_mention(supply_account_id),
             name: "TEST".to_owned(),
             total_supply: 100,
         }),
@@ -149,8 +145,8 @@ async fn create_ata_is_idempotent() -> Result<()> {
     wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
         Command::Ata(AtaSubcommand::Create {
-            owner: format_public_account_id(owner_account_id),
-            token_definition: definition_account_id.to_string(),
+            owner: public_mention(owner_account_id),
+            token_definition: definition_account_id,
         }),
     )
     .await?;
@@ -162,8 +158,8 @@ async fn create_ata_is_idempotent() -> Result<()> {
     wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
         Command::Ata(AtaSubcommand::Create {
-            owner: format_public_account_id(owner_account_id),
-            token_definition: definition_account_id.to_string(),
+            owner: public_mention(owner_account_id),
+            token_definition: definition_account_id,
         }),
     )
     .await?;
@@ -212,10 +208,8 @@ async fn transfer_and_burn_via_ata() -> Result<()> {
     wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
         Command::Token(TokenProgramAgnosticSubcommand::New {
-            definition_account_id: Some(format_public_account_id(definition_account_id)),
-            definition_account_label: None,
-            supply_account_id: Some(format_public_account_id(supply_account_id)),
-            supply_account_label: None,
+            definition_account_id: public_mention(definition_account_id),
+            supply_account_id: public_mention(supply_account_id),
             name: "TEST".to_owned(),
             total_supply,
         }),
@@ -240,16 +234,16 @@ async fn transfer_and_burn_via_ata() -> Result<()> {
     wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
         Command::Ata(AtaSubcommand::Create {
-            owner: format_public_account_id(sender_account_id),
-            token_definition: definition_account_id.to_string(),
+            owner: public_mention(sender_account_id),
+            token_definition: definition_account_id,
         }),
     )
     .await?;
     wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
         Command::Ata(AtaSubcommand::Create {
-            owner: format_public_account_id(recipient_account_id),
-            token_definition: definition_account_id.to_string(),
+            owner: public_mention(recipient_account_id),
+            token_definition: definition_account_id,
         }),
     )
     .await?;
@@ -262,10 +256,8 @@ async fn transfer_and_burn_via_ata() -> Result<()> {
     wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
         Command::Token(TokenProgramAgnosticSubcommand::Send {
-            from: Some(format_public_account_id(supply_account_id)),
-            from_label: None,
-            to: Some(format_public_account_id(sender_ata_id)),
-            to_label: None,
+            from: public_mention(supply_account_id),
+            to: Some(public_mention(sender_ata_id)),
             to_npk: None,
             to_vpk: None,
             to_identifier: Some(0),
@@ -282,9 +274,9 @@ async fn transfer_and_burn_via_ata() -> Result<()> {
     wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
         Command::Ata(AtaSubcommand::Send {
-            from: format_public_account_id(sender_account_id),
-            token_definition: definition_account_id.to_string(),
-            to: recipient_ata_id.to_string(),
+            from: public_mention(sender_account_id),
+            token_definition: definition_account_id,
+            to: recipient_ata_id,
             amount: transfer_amount,
         }),
     )
@@ -320,8 +312,8 @@ async fn transfer_and_burn_via_ata() -> Result<()> {
     wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
         Command::Ata(AtaSubcommand::Burn {
-            holder: format_public_account_id(sender_account_id),
-            token_definition: definition_account_id.to_string(),
+            holder: public_mention(sender_account_id),
+            token_definition: definition_account_id,
             amount: burn_amount,
         }),
     )
@@ -371,10 +363,8 @@ async fn create_ata_with_private_owner() -> Result<()> {
     wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
         Command::Token(TokenProgramAgnosticSubcommand::New {
-            definition_account_id: Some(format_public_account_id(definition_account_id)),
-            definition_account_label: None,
-            supply_account_id: Some(format_public_account_id(supply_account_id)),
-            supply_account_label: None,
+            definition_account_id: public_mention(definition_account_id),
+            supply_account_id: public_mention(supply_account_id),
             name: "TEST".to_owned(),
             total_supply: 100,
         }),
@@ -388,8 +378,8 @@ async fn create_ata_with_private_owner() -> Result<()> {
     wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
         Command::Ata(AtaSubcommand::Create {
-            owner: format_private_account_id(owner_account_id),
-            token_definition: definition_account_id.to_string(),
+            owner: private_mention(owner_account_id),
+            token_definition: definition_account_id,
         }),
     )
     .await?;
@@ -445,10 +435,8 @@ async fn transfer_via_ata_private_owner() -> Result<()> {
     wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
         Command::Token(TokenProgramAgnosticSubcommand::New {
-            definition_account_id: Some(format_public_account_id(definition_account_id)),
-            definition_account_label: None,
-            supply_account_id: Some(format_public_account_id(supply_account_id)),
-            supply_account_label: None,
+            definition_account_id: public_mention(definition_account_id),
+            supply_account_id: public_mention(supply_account_id),
             name: "TEST".to_owned(),
             total_supply,
         }),
@@ -473,16 +461,16 @@ async fn transfer_via_ata_private_owner() -> Result<()> {
     wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
         Command::Ata(AtaSubcommand::Create {
-            owner: format_private_account_id(sender_account_id),
-            token_definition: definition_account_id.to_string(),
+            owner: private_mention(sender_account_id),
+            token_definition: definition_account_id,
         }),
     )
     .await?;
     wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
         Command::Ata(AtaSubcommand::Create {
-            owner: format_public_account_id(recipient_account_id),
-            token_definition: definition_account_id.to_string(),
+            owner: public_mention(recipient_account_id),
+            token_definition: definition_account_id,
         }),
     )
     .await?;
@@ -495,10 +483,8 @@ async fn transfer_via_ata_private_owner() -> Result<()> {
     wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
         Command::Token(TokenProgramAgnosticSubcommand::Send {
-            from: Some(format_public_account_id(supply_account_id)),
-            from_label: None,
-            to: Some(format_public_account_id(sender_ata_id)),
-            to_label: None,
+            from: public_mention(supply_account_id),
+            to: Some(public_mention(sender_ata_id)),
             to_npk: None,
             to_vpk: None,
             to_identifier: Some(0),
@@ -515,9 +501,9 @@ async fn transfer_via_ata_private_owner() -> Result<()> {
     wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
         Command::Ata(AtaSubcommand::Send {
-            from: format_private_account_id(sender_account_id),
-            token_definition: definition_account_id.to_string(),
-            to: recipient_ata_id.to_string(),
+            from: private_mention(sender_account_id),
+            token_definition: definition_account_id,
+            to: recipient_ata_id,
             amount: transfer_amount,
         }),
     )
@@ -572,10 +558,8 @@ async fn burn_via_ata_private_owner() -> Result<()> {
     wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
         Command::Token(TokenProgramAgnosticSubcommand::New {
-            definition_account_id: Some(format_public_account_id(definition_account_id)),
-            definition_account_label: None,
-            supply_account_id: Some(format_public_account_id(supply_account_id)),
-            supply_account_label: None,
+            definition_account_id: public_mention(definition_account_id),
+            supply_account_id: public_mention(supply_account_id),
             name: "TEST".to_owned(),
             total_supply,
         }),
@@ -596,8 +580,8 @@ async fn burn_via_ata_private_owner() -> Result<()> {
     wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
         Command::Ata(AtaSubcommand::Create {
-            owner: format_private_account_id(holder_account_id),
-            token_definition: definition_account_id.to_string(),
+            owner: private_mention(holder_account_id),
+            token_definition: definition_account_id,
         }),
     )
     .await?;
@@ -610,10 +594,8 @@ async fn burn_via_ata_private_owner() -> Result<()> {
     wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
         Command::Token(TokenProgramAgnosticSubcommand::Send {
-            from: Some(format_public_account_id(supply_account_id)),
-            from_label: None,
-            to: Some(format_public_account_id(holder_ata_id)),
-            to_label: None,
+            from: public_mention(supply_account_id),
+            to: Some(public_mention(holder_ata_id)),
             to_npk: None,
             to_vpk: None,
             to_identifier: Some(0),
@@ -630,8 +612,8 @@ async fn burn_via_ata_private_owner() -> Result<()> {
     wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
         Command::Ata(AtaSubcommand::Burn {
-            holder: format_private_account_id(holder_account_id),
-            token_definition: definition_account_id.to_string(),
+            holder: private_mention(holder_account_id),
+            token_definition: definition_account_id,
             amount: burn_amount,
         }),
     )

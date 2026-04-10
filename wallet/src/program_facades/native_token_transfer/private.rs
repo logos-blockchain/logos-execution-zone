@@ -12,12 +12,13 @@ impl NativeTokenTransfer<'_> {
         &self,
         from: AccountId,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
-        let instruction: u128 = 0;
-
         self.0
             .send_privacy_preserving_tx(
                 vec![PrivacyPreservingAccount::PrivateOwned(from)],
-                Program::serialize_instruction(instruction).unwrap(),
+                Program::serialize_instruction(
+                    authenticated_transfer_core::Instruction::Initialize,
+                )
+                .unwrap(),
                 &Program::authenticated_transfer_program().into(),
             )
             .await

@@ -1,6 +1,5 @@
 #![expect(
     clippy::print_stdout,
-    clippy::print_stderr,
     reason = "This is a CLI application, printing to stdout and stderr is expected and convenient"
 )]
 #![expect(
@@ -12,7 +11,6 @@ use std::path::PathBuf;
 
 use anyhow::{Context as _, Result};
 use bip39::Mnemonic;
-use chain_storage::WalletChainStore;
 use common::{HashType, transaction::NSSATransaction};
 use config::WalletConfig;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
@@ -28,21 +26,19 @@ use nssa_core::{
 };
 pub use privacy_preserving_tx::PrivacyPreservingAccount;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
+use storage::Storage;
 use tokio::io::AsyncWriteExt as _;
 
-use crate::{
-    config::{PersistentStorage, WalletConfigOverrides},
-    helperfunctions::produce_data_for_storage,
-    poller::TxPoller,
-};
+use crate::{account::AccountIdWithPrivacy, config::WalletConfigOverrides, poller::TxPoller};
 
-pub mod chain_storage;
+pub mod account;
 pub mod cli;
 pub mod config;
 pub mod helperfunctions;
 pub mod poller;
 mod privacy_preserving_tx;
 pub mod program_facades;
+pub mod storage;
 
 pub const HOME_DIR_ENV_VAR: &str = "NSSA_WALLET_HOME_DIR";
 
@@ -73,11 +69,13 @@ pub enum ExecutionFailureKind {
 pub struct WalletCore {
     config_path: PathBuf,
     config_overrides: Option<WalletConfigOverrides>,
-    storage: WalletChainStore,
+    config: WalletConfig,
+
+    storage: Storage,
     storage_path: PathBuf,
+
     poller: TxPoller,
     pub sequencer_client: SequencerClient,
-    pub last_synced_block: u64,
 }
 
 impl WalletCore {
@@ -94,24 +92,10 @@ impl WalletCore {
         storage_path: PathBuf,
         config_overrides: Option<WalletConfigOverrides>,
     ) -> Result<Self> {
-        let PersistentStorage {
-            accounts: persistent_accounts,
-            last_synced_block,
-            labels,
-        } = PersistentStorage::from_path(&storage_path).with_context(|| {
-            format!(
-                "Failed to read persistent storage at {}",
-                storage_path.display()
-            )
-        })?;
+        let storage = Storage::from_path(&storage_path)
+            .with_context(|| format!("Failed to load storage from {}", storage_path.display()))?;
 
-        Self::new(
-            config_path,
-            storage_path,
-            config_overrides,
-            |config| WalletChainStore::new(config, persistent_accounts, labels),
-            last_synced_block,
-        )
+        Self::new(config_path, storage_path, config_overrides, storage)
     }
 
     pub fn new_init_storage(
@@ -120,30 +104,17 @@ impl WalletCore {
         config_overrides: Option<WalletConfigOverrides>,
         password: &str,
     ) -> Result<(Self, Mnemonic)> {
-        let mut mnemonic_out = None;
-        let wallet = Self::new(
-            config_path,
-            storage_path,
-            config_overrides,
-            |config| {
-                let (storage, mnemonic) = WalletChainStore::new_storage(config, password)?;
-                mnemonic_out = Some(mnemonic);
-                Ok(storage)
-            },
-            0,
-        )?;
-        Ok((
-            wallet,
-            mnemonic_out.expect("mnemonic should be set after new_storage"),
-        ))
+        let (storage, mnemonic) = Storage::new(password).context("Failed to create storage")?;
+        let wallet = Self::new(config_path, storage_path, config_overrides, storage)?;
+
+        Ok((wallet, mnemonic))
     }
 
     fn new(
         config_path: PathBuf,
         storage_path: PathBuf,
         config_overrides: Option<WalletConfigOverrides>,
-        storage_ctor: impl FnOnce(WalletConfig) -> Result<WalletChainStore>,
-        last_synced_block: u64,
+        storage: Storage,
     ) -> Result<Self> {
         let mut config =
             WalletConfig::from_path_or_initialize_default(&config_path).with_context(|| {
@@ -176,54 +147,54 @@ impl WalletCore {
 
         let tx_poller = TxPoller::new(&config, sequencer_client.clone());
 
-        let storage = storage_ctor(config)?;
-
         Ok(Self {
             config_path,
+            config_overrides,
+            config,
             storage_path,
             storage,
             poller: tx_poller,
             sequencer_client,
-            last_synced_block,
-            config_overrides,
         })
     }
 
     /// Get configuration with applied overrides.
     #[must_use]
     pub const fn config(&self) -> &WalletConfig {
-        &self.storage.wallet_config
+        &self.config
+    }
+
+    pub fn set_config(&mut self, config: WalletConfig) {
+        self.config = config;
     }
 
     /// Get storage.
     #[must_use]
-    pub const fn storage(&self) -> &WalletChainStore {
+    pub const fn storage(&self) -> &Storage {
         &self.storage
+    }
+
+    /// Get mutable reference to storage.
+    #[must_use]
+    pub const fn storage_mut(&mut self) -> &mut Storage {
+        &mut self.storage
     }
 
     /// Restore storage from an existing mnemonic phrase.
     pub fn restore_storage(&mut self, mnemonic: &Mnemonic, password: &str) -> Result<()> {
-        self.storage = WalletChainStore::restore_storage(
-            self.storage.wallet_config.clone(),
-            mnemonic,
-            password,
-        )?;
-        Ok(())
+        self.storage.restore(mnemonic, password)
     }
 
     /// Store persistent data at home.
-    pub async fn store_persistent_data(&self) -> Result<()> {
-        let data = produce_data_for_storage(
-            &self.storage.user_data,
-            self.last_synced_block,
-            self.storage.labels.clone(),
-        );
-        let storage = serde_json::to_vec_pretty(&data)?;
-
-        let mut storage_file = tokio::fs::File::create(&self.storage_path).await?;
-        storage_file.write_all(&storage).await?;
-        // Ensure data is flushed to disk before returning to prevent race conditions
-        storage_file.sync_all().await?;
+    pub fn store_persistent_data(&self) -> Result<()> {
+        self.storage
+            .save_to_path(&self.storage_path)
+            .with_context(|| {
+                format!(
+                    "Failed to store persistent accounts at {}",
+                    self.storage_path.display()
+                )
+            })?;
 
         println!(
             "Stored persistent accounts at {}",
@@ -235,7 +206,7 @@ impl WalletCore {
 
     /// Store persistent data at home.
     pub async fn store_config_changes(&self) -> Result<()> {
-        let config = serde_json::to_vec_pretty(&self.storage.wallet_config)?;
+        let config = serde_json::to_vec_pretty(&self.config)?;
 
         let mut config_file = tokio::fs::File::create(&self.config_path).await?;
         config_file.write_all(&config).await?;
@@ -252,13 +223,13 @@ impl WalletCore {
         chain_index: Option<ChainIndex>,
     ) -> (AccountId, ChainIndex) {
         self.storage
-            .user_data
+            .key_chain_mut()
             .generate_new_public_transaction_private_key(chain_index)
     }
 
     pub fn create_private_accounts_key(&mut self, chain_index: Option<ChainIndex>) -> ChainIndex {
         self.storage
-            .user_data
+            .key_chain_mut()
             .create_private_accounts_key(chain_index)
     }
 
@@ -266,25 +237,9 @@ impl WalletCore {
         &mut self,
         chain_index: Option<ChainIndex>,
     ) -> (AccountId, ChainIndex) {
-        let cci = self
-            .storage
-            .user_data
-            .create_private_accounts_key(chain_index);
-        let identifier: nssa_core::Identifier = rand::random();
-        let npk = self
-            .storage
-            .user_data
-            .private_key_tree
-            .key_map
-            .get(&cci)
-            .expect("Node was just inserted")
-            .value
-            .0
-            .nullifier_public_key;
-        let account_id = AccountId::from((&npk, identifier));
         self.storage
-            .insert_private_account_data(account_id, identifier, Account::default());
-        (account_id, cci)
+            .key_chain_mut()
+            .generate_new_privacy_preserving_transaction_key_chain(chain_index)
     }
 
     /// Get account balance.
@@ -297,7 +252,20 @@ impl WalletCore {
         Ok(self.sequencer_client.get_accounts_nonces(accs).await?)
     }
 
-    /// Get account.
+    pub async fn get_account(&self, account_id: AccountIdWithPrivacy) -> Result<Account> {
+        match account_id {
+            AccountIdWithPrivacy::Public(acc_id) => self.get_account_public(acc_id).await,
+            AccountIdWithPrivacy::Private(acc_id) => {
+                if let Some(account) = self.get_account_private(acc_id) {
+                    Ok(account)
+                } else {
+                    anyhow::bail!("Private account with id {acc_id} not found in storage")
+                }
+            }
+        }
+    }
+
+    /// Get public account.
     pub async fn get_account_public(&self, account_id: AccountId) -> Result<Account> {
         Ok(self.sequencer_client.get_account(account_id).await?)
     }
@@ -307,24 +275,21 @@ impl WalletCore {
         &self,
         account_id: AccountId,
     ) -> Option<&nssa::PrivateKey> {
-        self.storage
-            .user_data
-            .get_pub_account_signing_key(account_id)
+        self.storage.key_chain().pub_account_signing_key(account_id)
     }
 
     #[must_use]
     pub fn get_account_private(&self, account_id: AccountId) -> Option<Account> {
         self.storage
-            .user_data
-            .get_private_account(account_id)
-            .map(|(_keys, account, _identifier)| account)
+            .key_chain()
+            .private_account(account_id)
+            .map(|acc| acc.account.clone())
     }
 
     #[must_use]
     pub fn get_private_account_commitment(&self, account_id: AccountId) -> Option<Commitment> {
-        let (_keys, account, _identifier) =
-            self.storage.user_data.get_private_account(account_id)?;
-        Some(Commitment::new(&account_id, &account))
+        let account = self.storage.key_chain().private_account(account_id)?;
+        Some(Commitment::new(&account_id, account.account))
     }
 
     /// Poll transactions.
@@ -370,7 +335,9 @@ impl WalletCore {
                     println!("Received new acc {res_acc:#?}");
 
                     self.storage
-                        .insert_private_account_data(*acc_account_id, identifier, res_acc);
+                        .key_chain_mut()
+                        .insert_private_account(*acc_account_id, identifier, res_acc)
+                        .expect("Account Id should exist");
                 }
                 AccDecodeData::Skip => {}
             }
@@ -451,15 +418,23 @@ impl WalletCore {
         ))
     }
 
+    pub async fn sync_to_latest_block(&mut self) -> Result<u64> {
+        let latest_block_id = self.sequencer_client.get_last_block_id().await?;
+        println!("Latest block is {latest_block_id}");
+        self.sync_to_block(latest_block_id).await?;
+        Ok(latest_block_id)
+    }
+
     pub async fn sync_to_block(&mut self, block_id: u64) -> Result<()> {
         use futures::TryStreamExt as _;
 
-        if self.last_synced_block >= block_id {
+        let last_synced_block = self.storage.last_synced_block();
+        if last_synced_block >= block_id {
             return Ok(());
         }
 
         let before_polling = std::time::Instant::now();
-        let num_of_blocks = block_id.saturating_sub(self.last_synced_block);
+        let num_of_blocks = block_id.saturating_sub(last_synced_block);
         if num_of_blocks == 0 {
             return Ok(());
         }
@@ -467,9 +442,8 @@ impl WalletCore {
         println!("Syncing to block {block_id}. Blocks to sync: {num_of_blocks}");
 
         let poller = self.poller.clone();
-        let mut blocks = std::pin::pin!(
-            poller.poll_block_range(self.last_synced_block.saturating_add(1)..=block_id)
-        );
+        let mut blocks =
+            std::pin::pin!(poller.poll_block_range(last_synced_block.saturating_add(1)..=block_id));
 
         let bar = indicatif::ProgressBar::new(num_of_blocks);
         while let Some(block) = blocks.try_next().await? {
@@ -477,8 +451,8 @@ impl WalletCore {
                 self.sync_private_accounts_with_tx(tx);
             }
 
-            self.last_synced_block = block.header.block_id;
-            self.store_persistent_data().await?;
+            self.storage.set_last_synced_block(block.header.block_id);
+            self.store_persistent_data()?;
             bar.inc(1);
         }
         bar.finish();
@@ -496,23 +470,11 @@ impl WalletCore {
             return;
         };
 
-        let private_account_key_chains = self
+        let affected_accounts = self
             .storage
-            .user_data
-            .default_user_private_accounts
-            .values()
-            .map(|entry| (&entry.key_chain, None))
-            .chain(
-                self.storage
-                    .user_data
-                    .private_key_tree
-                    .key_map
-                    .iter()
-                    .map(|(chain_index, keys_node)| (&keys_node.value.0, chain_index.index())),
-            );
-
-        let affected_accounts = private_account_key_chains
-            .flat_map(|(key_chain, index)| {
+            .key_chain()
+            .private_account_key_chains()
+            .flat_map(|(_account_id, key_chain, index)| {
                 let view_tag = EncryptedAccountData::compute_view_tag(
                     &key_chain.nullifier_public_key,
                     &key_chain.viewing_public_key,
@@ -527,8 +489,10 @@ impl WalletCore {
                     .filter_map(move |(ciph_id, encrypted_data)| {
                         let ciphertext = &encrypted_data.ciphertext;
                         let commitment = &new_commitments[ciph_id];
-                        let shared_secret =
-                            key_chain.calculate_shared_secret_receiver(&encrypted_data.epk, index);
+                        let shared_secret = key_chain.calculate_shared_secret_receiver(
+                            &encrypted_data.epk,
+                            index.and_then(ChainIndex::index),
+                        );
 
                         nssa_core::EncryptionScheme::decrypt(
                             ciphertext,
@@ -555,7 +519,9 @@ impl WalletCore {
                 "Received new account for account_id {affected_account_id:#?} with account object {new_acc:#?}"
             );
             self.storage
-                .insert_private_account_data(affected_account_id, identifier, new_acc);
+                .key_chain_mut()
+                .insert_private_account(affected_account_id, identifier, new_acc)
+                .expect("Account Id should exist");
         }
     }
 

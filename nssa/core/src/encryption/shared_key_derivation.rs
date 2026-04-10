@@ -17,7 +17,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{SharedSecretKey, encryption::Scalar};
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(
+    Serialize, Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord, BorshSerialize, BorshDeserialize,
+)]
 pub struct Secp256k1Point(pub Vec<u8>);
 
 impl std::fmt::Debug for Secp256k1Point {

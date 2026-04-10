@@ -1,6 +1,7 @@
 use common::PINATA_BASE58;
 use key_protocol::key_management::{
     KeyChain,
+    key_tree::chain_index::ChainIndex,
     secret_holders::{PrivateKeyHolder, SecretSpendingKey},
 };
 use nssa::{Account, AccountId, Data, PrivateKey, PublicKey, V03State};
@@ -97,6 +98,7 @@ pub struct PublicAccountPrivateInitialData {
 pub struct PrivateAccountPrivateInitialData {
     pub account: nssa_core::account::Account,
     pub key_chain: KeyChain,
+    pub chain_index: Option<ChainIndex>,
     pub identifier: nssa_core::Identifier,
 }
 
@@ -156,6 +158,7 @@ pub fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialD
                 nonce: 0.into(),
             },
             key_chain: key_chain_1,
+            chain_index: None,
             identifier: 0,
         },
         PrivateAccountPrivateInitialData {
@@ -166,6 +169,7 @@ pub fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialD
                 nonce: 0.into(),
             },
             key_chain: key_chain_2,
+            chain_index: None,
             identifier: 0,
         },
     ]

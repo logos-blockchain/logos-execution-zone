@@ -20,6 +20,7 @@ members = [
   "programs/token",
   "programs/associated_token_account/core",
   "programs/associated_token_account",
+  "programs/authenticated_transfer/core",
   "sequencer/core",
   "sequencer/service",
   "sequencer/service/protocol",
@@ -65,6 +66,7 @@ amm_core = { path = "programs/amm/core" }
 amm_program = { path = "programs/amm" }
 ata_core = { path = "programs/associated_token_account/core" }
 ata_program = { path = "programs/associated_token_account" }
+authenticated_transfer_core = { path = "programs/authenticated_transfer/core" }
 test_program_methods = { path = "test_program_methods" }
 testnet_initial_state = { path = "testnet_initial_state" }
 
@@ -78,6 +80,7 @@ tokio-util = "0.7.18"
 risc0-zkvm = { version = "3.0.5", features = ['std'] }
 risc0-build = "3.0.5"
 anyhow = "1.0.98"
+derive_more = "2.1.1"
 num_cpus = "1.13.1"
 openssl = { version = "0.10", features = ["vendored"] }
 openssl-probe = { version = "0.1.2" }

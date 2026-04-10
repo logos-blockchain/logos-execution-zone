@@ -35,14 +35,14 @@ impl Token<'_> {
         let def_private_key = self
             .0
             .storage
-            .user_data
-            .get_pub_account_signing_key(definition_account_id)
+            .key_chain()
+            .pub_account_signing_key(definition_account_id)
             .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
         let supply_private_key = self
             .0
             .storage
-            .user_data
-            .get_pub_account_signing_key(supply_account_id)
+            .key_chain()
+            .pub_account_signing_key(supply_account_id)
             .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
 
         let witness_set = nssa::public_transaction::WitnessSet::for_message(
@@ -169,16 +169,16 @@ impl Token<'_> {
         let sender_sk = self
             .0
             .storage
-            .user_data
-            .get_pub_account_signing_key(sender_account_id)
+            .key_chain()
+            .pub_account_signing_key(sender_account_id)
             .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
         private_keys.push(sender_sk);
 
         if let Some(recipient_sk) = self
             .0
             .storage
-            .user_data
-            .get_pub_account_signing_key(recipient_account_id)
+            .key_chain()
+            .pub_account_signing_key(recipient_account_id)
         {
             private_keys.push(recipient_sk);
             let recipient_nonces = self
@@ -404,8 +404,8 @@ impl Token<'_> {
         let signing_key = self
             .0
             .storage
-            .user_data
-            .get_pub_account_signing_key(holder_account_id)
+            .key_chain()
+            .pub_account_signing_key(holder_account_id)
             .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
         let witness_set =
             nssa::public_transaction::WitnessSet::for_message(&message, &[signing_key]);
@@ -532,16 +532,16 @@ impl Token<'_> {
         let definition_sk = self
             .0
             .storage
-            .user_data
-            .get_pub_account_signing_key(definition_account_id)
+            .key_chain()
+            .pub_account_signing_key(definition_account_id)
             .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
         private_keys.push(definition_sk);
 
         if let Some(holder_sk) = self
             .0
             .storage
-            .user_data
-            .get_pub_account_signing_key(holder_account_id)
+            .key_chain()
+            .pub_account_signing_key(holder_account_id)
         {
             private_keys.push(holder_sk);
             let recipient_nonces = self

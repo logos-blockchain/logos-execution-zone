@@ -1,17 +1,14 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use common::block::{Block, HashableBlockData};
+use common::block::Block;
 // ToDo: Remove after testnet
-use common::{HashType, PINATA_BASE58};
 use futures::StreamExt as _;
 use log::{error, info, warn};
 use logos_blockchain_core::header::HeaderId;
 use logos_blockchain_zone_sdk::{
     CommonHttpClient, ZoneMessage, adapter::NodeHttpClient, indexer::ZoneIndexer,
 };
-use nssa::V03State;
-use testnet_initial_state::initial_state_testnet;
 
 use crate::{block_store::IndexerStore, config::IndexerConfig};
 
@@ -27,69 +24,6 @@ pub struct IndexerCore {
 
 impl IndexerCore {
     pub fn new(config: IndexerConfig) -> Result<Self> {
-        let hashable_data = HashableBlockData {
-            block_id: 1,
-            transactions: vec![],
-            prev_block_hash: HashType([0; 32]),
-            timestamp: 0,
-        };
-
-        // Genesis creation is fine as it is,
-        // because it will be overwritten by sequencer.
-        // Therefore:
-        // ToDo: remove key from indexer config, use some default.
-        let signing_key = nssa::PrivateKey::try_new(config.signing_key).unwrap();
-        let channel_genesis_msg_id = [0; 32];
-        let genesis_block = hashable_data.into_pending_block(&signing_key, channel_genesis_msg_id);
-
-        let initial_private_accounts: Option<Vec<(nssa_core::Commitment, nssa_core::Nullifier)>> =
-            config.initial_private_accounts.as_ref().map(|accounts| {
-                accounts
-                    .iter()
-                    .map(|init_comm_data| {
-                        let npk = &init_comm_data.npk;
-                        let account_id = nssa::AccountId::from((npk, 0));
-
-                        let mut acc = init_comm_data.account.clone();
-
-                        acc.program_owner =
-                            nssa::program::Program::authenticated_transfer_program().id();
-
-                        (
-                            nssa_core::Commitment::new(&account_id, &acc),
-                            nssa_core::Nullifier::for_account_initialization(&account_id),
-                        )
-                    })
-                    .collect()
-            });
-
-        let init_accs: Option<Vec<(nssa::AccountId, u128)>> = config
-            .initial_public_accounts
-            .as_ref()
-            .map(|initial_accounts| {
-                initial_accounts
-                    .iter()
-                    .map(|acc_data| (acc_data.account_id, acc_data.balance))
-                    .collect()
-            });
-
-        // If initial commitments or accounts are present in config, need to construct state from
-        // them
-        let state = if initial_private_accounts.is_some() || init_accs.is_some() {
-            let mut state = V03State::new_with_genesis_accounts(
-                &init_accs.unwrap_or_default(),
-                initial_private_accounts.unwrap_or_default(),
-                genesis_block.header.timestamp,
-            );
-
-            // ToDo: Remove after testnet
-            state.add_pinata_program(PINATA_BASE58.parse().unwrap());
-
-            state
-        } else {
-            initial_state_testnet()
-        };
-
         let home = config.home.join("rocksdb");
 
         let basic_auth = config.bedrock_config.auth.clone().map(Into::into);
@@ -102,7 +36,7 @@ impl IndexerCore {
         Ok(Self {
             zone_indexer: Arc::new(zone_indexer),
             config,
-            store: IndexerStore::open_db_with_genesis(&home, &genesis_block, &state)?,
+            store: IndexerStore::open_db(&home)?,
         })
     }
 

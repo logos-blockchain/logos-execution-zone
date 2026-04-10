@@ -9,8 +9,8 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 use common::PINATA_BASE58;
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, format_private_account_id,
-    format_public_account_id, verify_commitment_is_in_state,
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, private_mention, public_mention,
+    verify_commitment_is_in_state,
 };
 use log::info;
 use sequencer_service_rpc::RpcClient as _;
@@ -42,8 +42,6 @@ async fn claim_pinata_to_uninitialized_public_account_fails_fast() -> Result<()>
         anyhow::bail!("Expected RegisterAccount return value");
     };
 
-    let winner_account_id_formatted = format_public_account_id(winner_account_id);
-
     let pinata_balance_pre = ctx
         .sequencer_client()
         .get_account_balance(PINATA_BASE58.parse().unwrap())
@@ -52,8 +50,7 @@ async fn claim_pinata_to_uninitialized_public_account_fails_fast() -> Result<()>
     let claim_result = wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
         Command::Pinata(PinataProgramAgnosticSubcommand::Claim {
-            to: Some(winner_account_id_formatted),
-            to_label: None,
+            to: public_mention(winner_account_id),
         }),
     )
     .await;
@@ -97,8 +94,6 @@ async fn claim_pinata_to_uninitialized_private_account_fails_fast() -> Result<()
         anyhow::bail!("Expected RegisterAccount return value");
     };
 
-    let winner_account_id_formatted = format_private_account_id(winner_account_id);
-
     let pinata_balance_pre = ctx
         .sequencer_client()
         .get_account_balance(PINATA_BASE58.parse().unwrap())
@@ -107,8 +102,7 @@ async fn claim_pinata_to_uninitialized_private_account_fails_fast() -> Result<()
     let claim_result = wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
         Command::Pinata(PinataProgramAgnosticSubcommand::Claim {
-            to: Some(winner_account_id_formatted),
-            to_label: None,
+            to: private_mention(winner_account_id),
         }),
     )
     .await;
@@ -139,8 +133,7 @@ async fn claim_pinata_to_existing_public_account() -> Result<()> {
 
     let pinata_prize = 150;
     let command = Command::Pinata(PinataProgramAgnosticSubcommand::Claim {
-        to: Some(format_public_account_id(ctx.existing_public_accounts()[0])),
-        to_label: None,
+        to: public_mention(ctx.existing_public_accounts()[0]),
     });
 
     let pinata_balance_pre = ctx
@@ -178,10 +171,7 @@ async fn claim_pinata_to_existing_private_account() -> Result<()> {
 
     let pinata_prize = 150;
     let command = Command::Pinata(PinataProgramAgnosticSubcommand::Claim {
-        to: Some(format_private_account_id(
-            ctx.existing_private_accounts()[0],
-        )),
-        to_label: None,
+        to: private_mention(ctx.existing_private_accounts()[0]),
     });
 
     let pinata_balance_pre = ctx
@@ -241,12 +231,9 @@ async fn claim_pinata_to_new_private_account() -> Result<()> {
         anyhow::bail!("Expected RegisterAccount return value");
     };
 
-    let winner_account_id_formatted = format_private_account_id(winner_account_id);
-
     // Initialize account under auth transfer program
     let command = Command::AuthTransfer(AuthTransferSubcommand::Init {
-        account_id: Some(winner_account_id_formatted.clone()),
-        account_label: None,
+        account_id: private_mention(winner_account_id),
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
@@ -261,8 +248,7 @@ async fn claim_pinata_to_new_private_account() -> Result<()> {
 
     // Claim pinata to the new private account
     let command = Command::Pinata(PinataProgramAgnosticSubcommand::Claim {
-        to: Some(winner_account_id_formatted),
-        to_label: None,
+        to: private_mention(winner_account_id),
     });
 
     let pinata_balance_pre = ctx

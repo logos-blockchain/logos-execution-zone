@@ -4,7 +4,7 @@
 )]
 
 pub use nssa_core::{
-    SharedSecretKey,
+    GENESIS_BLOCK_ID, SharedSecretKey,
     account::{Account, AccountId, Data},
     encryption::EphemeralPublicKey,
     program::ProgramId,

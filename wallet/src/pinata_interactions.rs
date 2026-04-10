@@ -54,8 +54,7 @@ impl WalletCore {
         let eph_holder_winner = EphemeralKeyHolder::new(&winner_npk);
         let shared_secret_winner = eph_holder_winner.calculate_shared_secret_sender(&winner_vpk);
 
-        let (output, proof) = circuit::execute_and_prove(
-            &[pinata_pre, winner_pre],
+        let (output, proof) = circuit::execute_and_prove(&[pinata_pre, winner_pre], false,
             &nssa::program::Program::serialize_instruction(solution).unwrap(),
             &[0, 1],
             &produce_random_nonces(1),
@@ -121,8 +120,7 @@ impl WalletCore {
         let eph_holder_winner = EphemeralKeyHolder::new(&winner_npk);
         let shared_secret_winner = eph_holder_winner.calculate_shared_secret_sender(&winner_vpk);
 
-        let (output, proof) = circuit::execute_and_prove(
-            &[pinata_pre, winner_pre],
+        let (output, proof) = circuit::execute_and_prove(&[pinata_pre, winner_pre], false,
             &nssa::program::Program::serialize_instruction(solution).unwrap(),
             &[0, 2],
             &produce_random_nonces(1),

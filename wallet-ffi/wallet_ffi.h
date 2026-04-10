@@ -411,6 +411,50 @@ enum WalletFfiError wallet_ffi_get_account_private(struct WalletHandle *handle,
 void wallet_ffi_free_account_data(struct FfiAccount *account);
 
 /**
+ * Import a public account private key into wallet storage.
+ *
+ * # Parameters
+ * - `handle`: Valid wallet handle
+ * - `private_key_hex`: Hex-encoded private key string
+ *
+ * # Returns
+ * - `Success` on successful import
+ * - Error code on failure
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+ * - `private_key_hex` must be a valid pointer to a null-terminated C string
+ */
+enum WalletFfiError wallet_ffi_import_public_account(struct WalletHandle *handle,
+                                                     const char *private_key_hex);
+
+/**
+ * Import a private account keychain and account state into wallet storage.
+ *
+ * # Parameters
+ * - `handle`: Valid wallet handle
+ * - `key_chain_json`: JSON-encoded `key_protocol::key_management::KeyChain`
+ * - `chain_index`: Optional chain index string (for example `/0/1`, `NULL` if unknown)
+ * - `identifier`: Identifier for this private account as little-endian u128 bytes
+ * - `account_state_json`: JSON-encoded `wallet::account::HumanReadableAccount`
+ *
+ * # Returns
+ * - `Success` on successful import
+ * - Error code on failure
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+ * - `key_chain_json` must be a valid pointer to a null-terminated C string
+ * - `identifier` must be a valid pointer to a `FfiU128` struct
+ * - `account_state_json` must be a valid pointer to a null-terminated C string
+ */
+enum WalletFfiError wallet_ffi_import_private_account(struct WalletHandle *handle,
+                                                      const char *key_chain_json,
+                                                      const char *chain_index,
+                                                      const struct FfiU128 *identifier,
+                                                      const char *account_state_json);
+
+/**
  * Get the public key for a public account.
  *
  * This returns the public key derived from the account's signing key.

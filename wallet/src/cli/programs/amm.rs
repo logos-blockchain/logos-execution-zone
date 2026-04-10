@@ -4,8 +4,8 @@ use nssa::AccountId;
 
 use crate::{
     WalletCore,
-    cli::{SubcommandReturnValue, WalletSubcommand},
-    helperfunctions::{AccountPrivacyKind, parse_addr_with_privacy_prefix, resolve_id_or_label},
+    account::AccountIdWithPrivacy,
+    cli::{CliAccountMention, SubcommandReturnValue, WalletSubcommand},
     program_facades::amm::Amm,
 };
 
@@ -18,36 +18,15 @@ pub enum AmmProgramAgnosticSubcommand {
     ///
     /// Only public execution allowed.
     New {
-        /// `user_holding_a` - valid 32 byte base58 string with privacy prefix.
-        #[arg(
-            long,
-            conflicts_with = "user_holding_a_label",
-            required_unless_present = "user_holding_a_label"
-        )]
-        user_holding_a: Option<String>,
-        /// User holding A account label (alternative to --user-holding-a).
-        #[arg(long, conflicts_with = "user_holding_a")]
-        user_holding_a_label: Option<String>,
-        /// `user_holding_b` - valid 32 byte base58 string with privacy prefix.
-        #[arg(
-            long,
-            conflicts_with = "user_holding_b_label",
-            required_unless_present = "user_holding_b_label"
-        )]
-        user_holding_b: Option<String>,
-        /// User holding B account label (alternative to --user-holding-b).
-        #[arg(long, conflicts_with = "user_holding_b")]
-        user_holding_b_label: Option<String>,
-        /// `user_holding_lp` - valid 32 byte base58 string with privacy prefix.
-        #[arg(
-            long,
-            conflicts_with = "user_holding_lp_label",
-            required_unless_present = "user_holding_lp_label"
-        )]
-        user_holding_lp: Option<String>,
-        /// User holding LP account label (alternative to --user-holding-lp).
-        #[arg(long, conflicts_with = "user_holding_lp")]
-        user_holding_lp_label: Option<String>,
+        /// Either 32 byte base58 account id string with privacy prefix or a label.
+        #[arg(long)]
+        user_holding_a: CliAccountMention,
+        /// Either 32 byte base58 account id string with privacy prefix or a label.
+        #[arg(long)]
+        user_holding_b: CliAccountMention,
+        /// Either 32 byte base58 account id string with privacy prefix or a label.
+        #[arg(long)]
+        user_holding_lp: CliAccountMention,
         #[arg(long)]
         balance_a: u128,
         #[arg(long)]
@@ -59,33 +38,19 @@ pub enum AmmProgramAgnosticSubcommand {
     ///
     /// Only public execution allowed.
     SwapExactInput {
-        /// `user_holding_a` - valid 32 byte base58 string with privacy prefix.
-        #[arg(
-            long,
-            conflicts_with = "user_holding_a_label",
-            required_unless_present = "user_holding_a_label"
-        )]
-        user_holding_a: Option<String>,
-        /// User holding A account label (alternative to --user-holding-a).
-        #[arg(long, conflicts_with = "user_holding_a")]
-        user_holding_a_label: Option<String>,
-        /// `user_holding_b` - valid 32 byte base58 string with privacy prefix.
-        #[arg(
-            long,
-            conflicts_with = "user_holding_b_label",
-            required_unless_present = "user_holding_b_label"
-        )]
-        user_holding_b: Option<String>,
-        /// User holding B account label (alternative to --user-holding-b).
-        #[arg(long, conflicts_with = "user_holding_b")]
-        user_holding_b_label: Option<String>,
+        /// Either 32 byte base58 account id string with privacy prefix or a label.
+        #[arg(long)]
+        user_holding_a: CliAccountMention,
+        /// Either 32 byte base58 account id string with privacy prefix or a label.
+        #[arg(long)]
+        user_holding_b: CliAccountMention,
         #[arg(long)]
         amount_in: u128,
         #[arg(long)]
         min_amount_out: u128,
         /// `token_definition` - valid 32 byte base58 string WITHOUT privacy prefix.
         #[arg(long)]
-        token_definition: String,
+        token_definition: AccountId,
     },
     /// Swap specifying exact output amount.
     ///
@@ -93,19 +58,19 @@ pub enum AmmProgramAgnosticSubcommand {
     ///
     /// Only public execution allowed.
     SwapExactOutput {
-        /// `user_holding_a` - valid 32 byte base58 string with privacy prefix.
+        /// Either 32 byte base58 account id string with privacy prefix or a label.
         #[arg(long)]
-        user_holding_a: String,
-        /// `user_holding_b` - valid 32 byte base58 string with privacy prefix.
+        user_holding_a: CliAccountMention,
+        /// Either 32 byte base58 account id string with privacy prefix or a label.
         #[arg(long)]
-        user_holding_b: String,
+        user_holding_b: CliAccountMention,
         #[arg(long)]
         exact_amount_out: u128,
         #[arg(long)]
         max_amount_in: u128,
         /// `token_definition` - valid 32 byte base58 string WITHOUT privacy prefix.
         #[arg(long)]
-        token_definition: String,
+        token_definition: AccountId,
     },
     /// Add liquidity.
     ///
@@ -113,36 +78,15 @@ pub enum AmmProgramAgnosticSubcommand {
     ///
     /// Only public execution allowed.
     AddLiquidity {
-        /// `user_holding_a` - valid 32 byte base58 string with privacy prefix.
-        #[arg(
-            long,
-            conflicts_with = "user_holding_a_label",
-            required_unless_present = "user_holding_a_label"
-        )]
-        user_holding_a: Option<String>,
-        /// User holding A account label (alternative to --user-holding-a).
-        #[arg(long, conflicts_with = "user_holding_a")]
-        user_holding_a_label: Option<String>,
-        /// `user_holding_b` - valid 32 byte base58 string with privacy prefix.
-        #[arg(
-            long,
-            conflicts_with = "user_holding_b_label",
-            required_unless_present = "user_holding_b_label"
-        )]
-        user_holding_b: Option<String>,
-        /// User holding B account label (alternative to --user-holding-b).
-        #[arg(long, conflicts_with = "user_holding_b")]
-        user_holding_b_label: Option<String>,
-        /// `user_holding_lp` - valid 32 byte base58 string with privacy prefix.
-        #[arg(
-            long,
-            conflicts_with = "user_holding_lp_label",
-            required_unless_present = "user_holding_lp_label"
-        )]
-        user_holding_lp: Option<String>,
-        /// User holding LP account label (alternative to --user-holding-lp).
-        #[arg(long, conflicts_with = "user_holding_lp")]
-        user_holding_lp_label: Option<String>,
+        /// Either 32 byte base58 account id string with privacy prefix or a label.
+        #[arg(long)]
+        user_holding_a: CliAccountMention,
+        /// Either 32 byte base58 account id string with privacy prefix or a label.
+        #[arg(long)]
+        user_holding_b: CliAccountMention,
+        /// Either 32 byte base58 account id string with privacy prefix or a label.
+        #[arg(long)]
+        user_holding_lp: CliAccountMention,
         #[arg(long)]
         min_amount_lp: u128,
         #[arg(long)]
@@ -156,36 +100,15 @@ pub enum AmmProgramAgnosticSubcommand {
     ///
     /// Only public execution allowed.
     RemoveLiquidity {
-        /// `user_holding_a` - valid 32 byte base58 string with privacy prefix.
-        #[arg(
-            long,
-            conflicts_with = "user_holding_a_label",
-            required_unless_present = "user_holding_a_label"
-        )]
-        user_holding_a: Option<String>,
-        /// User holding A account label (alternative to --user-holding-a).
-        #[arg(long, conflicts_with = "user_holding_a")]
-        user_holding_a_label: Option<String>,
-        /// `user_holding_b` - valid 32 byte base58 string with privacy prefix.
-        #[arg(
-            long,
-            conflicts_with = "user_holding_b_label",
-            required_unless_present = "user_holding_b_label"
-        )]
-        user_holding_b: Option<String>,
-        /// User holding B account label (alternative to --user-holding-b).
-        #[arg(long, conflicts_with = "user_holding_b")]
-        user_holding_b_label: Option<String>,
-        /// `user_holding_lp` - valid 32 byte base58 string with privacy prefix.
-        #[arg(
-            long,
-            conflicts_with = "user_holding_lp_label",
-            required_unless_present = "user_holding_lp_label"
-        )]
-        user_holding_lp: Option<String>,
-        /// User holding LP account label (alternative to --user-holding-lp).
-        #[arg(long, conflicts_with = "user_holding_lp")]
-        user_holding_lp_label: Option<String>,
+        /// Either 32 byte base58 account id string with privacy prefix or a label.
+        #[arg(long)]
+        user_holding_a: CliAccountMention,
+        /// Either 32 byte base58 account id string with privacy prefix or a label.
+        #[arg(long)]
+        user_holding_b: CliAccountMention,
+        /// Either 32 byte base58 account id string with privacy prefix or a label.
+        #[arg(long)]
+        user_holding_lp: CliAccountMention,
         #[arg(long)]
         balance_lp: u128,
         #[arg(long)]
@@ -203,52 +126,19 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
         match self {
             Self::New {
                 user_holding_a,
-                user_holding_a_label,
                 user_holding_b,
-                user_holding_b_label,
                 user_holding_lp,
-                user_holding_lp_label,
                 balance_a,
                 balance_b,
             } => {
-                let user_holding_a = resolve_id_or_label(
-                    user_holding_a,
-                    user_holding_a_label,
-                    &wallet_core.storage.labels,
-                    &wallet_core.storage.user_data,
-                )?;
-                let user_holding_b = resolve_id_or_label(
-                    user_holding_b,
-                    user_holding_b_label,
-                    &wallet_core.storage.labels,
-                    &wallet_core.storage.user_data,
-                )?;
-                let user_holding_lp = resolve_id_or_label(
-                    user_holding_lp,
-                    user_holding_lp_label,
-                    &wallet_core.storage.labels,
-                    &wallet_core.storage.user_data,
-                )?;
-                let (user_holding_a, user_holding_a_privacy) =
-                    parse_addr_with_privacy_prefix(&user_holding_a)?;
-                let (user_holding_b, user_holding_b_privacy) =
-                    parse_addr_with_privacy_prefix(&user_holding_b)?;
-                let (user_holding_lp, user_holding_lp_privacy) =
-                    parse_addr_with_privacy_prefix(&user_holding_lp)?;
-
-                let user_holding_a: AccountId = user_holding_a.parse()?;
-                let user_holding_b: AccountId = user_holding_b.parse()?;
-                let user_holding_lp: AccountId = user_holding_lp.parse()?;
-
-                match (
-                    user_holding_a_privacy,
-                    user_holding_b_privacy,
-                    user_holding_lp_privacy,
-                ) {
+                let user_holding_a = user_holding_a.resolve(wallet_core.storage())?;
+                let user_holding_b = user_holding_b.resolve(wallet_core.storage())?;
+                let user_holding_lp = user_holding_lp.resolve(wallet_core.storage())?;
+                match (user_holding_a, user_holding_b, user_holding_lp) {
                     (
-                        AccountPrivacyKind::Public,
-                        AccountPrivacyKind::Public,
-                        AccountPrivacyKind::Public,
+                        AccountIdWithPrivacy::Public(user_holding_a),
+                        AccountIdWithPrivacy::Public(user_holding_b),
+                        AccountIdWithPrivacy::Public(user_holding_lp),
                     ) => {
                         Amm(wallet_core)
                             .send_new_definition(
@@ -270,42 +160,25 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
             }
             Self::SwapExactInput {
                 user_holding_a,
-                user_holding_a_label,
                 user_holding_b,
-                user_holding_b_label,
                 amount_in,
                 min_amount_out,
                 token_definition,
             } => {
-                let user_holding_a = resolve_id_or_label(
-                    user_holding_a,
-                    user_holding_a_label,
-                    &wallet_core.storage.labels,
-                    &wallet_core.storage.user_data,
-                )?;
-                let user_holding_b = resolve_id_or_label(
-                    user_holding_b,
-                    user_holding_b_label,
-                    &wallet_core.storage.labels,
-                    &wallet_core.storage.user_data,
-                )?;
-                let (user_holding_a, user_holding_a_privacy) =
-                    parse_addr_with_privacy_prefix(&user_holding_a)?;
-                let (user_holding_b, user_holding_b_privacy) =
-                    parse_addr_with_privacy_prefix(&user_holding_b)?;
-
-                let user_holding_a: AccountId = user_holding_a.parse()?;
-                let user_holding_b: AccountId = user_holding_b.parse()?;
-
-                match (user_holding_a_privacy, user_holding_b_privacy) {
-                    (AccountPrivacyKind::Public, AccountPrivacyKind::Public) => {
+                let user_holding_a = user_holding_a.resolve(wallet_core.storage())?;
+                let user_holding_b = user_holding_b.resolve(wallet_core.storage())?;
+                match (user_holding_a, user_holding_b) {
+                    (
+                        AccountIdWithPrivacy::Public(user_holding_a),
+                        AccountIdWithPrivacy::Public(user_holding_b),
+                    ) => {
                         Amm(wallet_core)
                             .send_swap_exact_input(
                                 user_holding_a,
                                 user_holding_b,
                                 amount_in,
                                 min_amount_out,
-                                token_definition.parse()?,
+                                token_definition,
                             )
                             .await?;
 
@@ -324,23 +197,20 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
                 max_amount_in,
                 token_definition,
             } => {
-                let (user_holding_a, user_holding_a_privacy) =
-                    parse_addr_with_privacy_prefix(&user_holding_a)?;
-                let (user_holding_b, user_holding_b_privacy) =
-                    parse_addr_with_privacy_prefix(&user_holding_b)?;
-
-                let user_holding_a: AccountId = user_holding_a.parse()?;
-                let user_holding_b: AccountId = user_holding_b.parse()?;
-
-                match (user_holding_a_privacy, user_holding_b_privacy) {
-                    (AccountPrivacyKind::Public, AccountPrivacyKind::Public) => {
+                let user_holding_a = user_holding_a.resolve(wallet_core.storage())?;
+                let user_holding_b = user_holding_b.resolve(wallet_core.storage())?;
+                match (user_holding_a, user_holding_b) {
+                    (
+                        AccountIdWithPrivacy::Public(user_holding_a),
+                        AccountIdWithPrivacy::Public(user_holding_b),
+                    ) => {
                         Amm(wallet_core)
                             .send_swap_exact_output(
                                 user_holding_a,
                                 user_holding_b,
                                 exact_amount_out,
                                 max_amount_in,
-                                token_definition.parse()?,
+                                token_definition,
                             )
                             .await?;
 
@@ -354,53 +224,20 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
             }
             Self::AddLiquidity {
                 user_holding_a,
-                user_holding_a_label,
                 user_holding_b,
-                user_holding_b_label,
                 user_holding_lp,
-                user_holding_lp_label,
                 min_amount_lp,
                 max_amount_a,
                 max_amount_b,
             } => {
-                let user_holding_a = resolve_id_or_label(
-                    user_holding_a,
-                    user_holding_a_label,
-                    &wallet_core.storage.labels,
-                    &wallet_core.storage.user_data,
-                )?;
-                let user_holding_b = resolve_id_or_label(
-                    user_holding_b,
-                    user_holding_b_label,
-                    &wallet_core.storage.labels,
-                    &wallet_core.storage.user_data,
-                )?;
-                let user_holding_lp = resolve_id_or_label(
-                    user_holding_lp,
-                    user_holding_lp_label,
-                    &wallet_core.storage.labels,
-                    &wallet_core.storage.user_data,
-                )?;
-                let (user_holding_a, user_holding_a_privacy) =
-                    parse_addr_with_privacy_prefix(&user_holding_a)?;
-                let (user_holding_b, user_holding_b_privacy) =
-                    parse_addr_with_privacy_prefix(&user_holding_b)?;
-                let (user_holding_lp, user_holding_lp_privacy) =
-                    parse_addr_with_privacy_prefix(&user_holding_lp)?;
-
-                let user_holding_a: AccountId = user_holding_a.parse()?;
-                let user_holding_b: AccountId = user_holding_b.parse()?;
-                let user_holding_lp: AccountId = user_holding_lp.parse()?;
-
-                match (
-                    user_holding_a_privacy,
-                    user_holding_b_privacy,
-                    user_holding_lp_privacy,
-                ) {
+                let user_holding_a = user_holding_a.resolve(wallet_core.storage())?;
+                let user_holding_b = user_holding_b.resolve(wallet_core.storage())?;
+                let user_holding_lp = user_holding_lp.resolve(wallet_core.storage())?;
+                match (user_holding_a, user_holding_b, user_holding_lp) {
                     (
-                        AccountPrivacyKind::Public,
-                        AccountPrivacyKind::Public,
-                        AccountPrivacyKind::Public,
+                        AccountIdWithPrivacy::Public(user_holding_a),
+                        AccountIdWithPrivacy::Public(user_holding_b),
+                        AccountIdWithPrivacy::Public(user_holding_lp),
                     ) => {
                         Amm(wallet_core)
                             .send_add_liquidity(
@@ -423,53 +260,20 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
             }
             Self::RemoveLiquidity {
                 user_holding_a,
-                user_holding_a_label,
                 user_holding_b,
-                user_holding_b_label,
                 user_holding_lp,
-                user_holding_lp_label,
                 balance_lp,
                 min_amount_a,
                 min_amount_b,
             } => {
-                let user_holding_a = resolve_id_or_label(
-                    user_holding_a,
-                    user_holding_a_label,
-                    &wallet_core.storage.labels,
-                    &wallet_core.storage.user_data,
-                )?;
-                let user_holding_b = resolve_id_or_label(
-                    user_holding_b,
-                    user_holding_b_label,
-                    &wallet_core.storage.labels,
-                    &wallet_core.storage.user_data,
-                )?;
-                let user_holding_lp = resolve_id_or_label(
-                    user_holding_lp,
-                    user_holding_lp_label,
-                    &wallet_core.storage.labels,
-                    &wallet_core.storage.user_data,
-                )?;
-                let (user_holding_a, user_holding_a_privacy) =
-                    parse_addr_with_privacy_prefix(&user_holding_a)?;
-                let (user_holding_b, user_holding_b_privacy) =
-                    parse_addr_with_privacy_prefix(&user_holding_b)?;
-                let (user_holding_lp, user_holding_lp_privacy) =
-                    parse_addr_with_privacy_prefix(&user_holding_lp)?;
-
-                let user_holding_a: AccountId = user_holding_a.parse()?;
-                let user_holding_b: AccountId = user_holding_b.parse()?;
-                let user_holding_lp: AccountId = user_holding_lp.parse()?;
-
-                match (
-                    user_holding_a_privacy,
-                    user_holding_b_privacy,
-                    user_holding_lp_privacy,
-                ) {
+                let user_holding_a = user_holding_a.resolve(wallet_core.storage())?;
+                let user_holding_b = user_holding_b.resolve(wallet_core.storage())?;
+                let user_holding_lp = user_holding_lp.resolve(wallet_core.storage())?;
+                match (user_holding_a, user_holding_b, user_holding_lp) {
                     (
-                        AccountPrivacyKind::Public,
-                        AccountPrivacyKind::Public,
-                        AccountPrivacyKind::Public,
+                        AccountIdWithPrivacy::Public(user_holding_a),
+                        AccountIdWithPrivacy::Public(user_holding_b),
+                        AccountIdWithPrivacy::Public(user_holding_lp),
                     ) => {
                         Amm(wallet_core)
                             .send_remove_liquidity(

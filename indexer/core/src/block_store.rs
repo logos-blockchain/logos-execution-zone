@@ -5,9 +5,10 @@ use common::{
     block::{BedrockStatus, Block},
     transaction::{NSSATransaction, clock_invocation},
 };
+use log::info;
 use logos_blockchain_core::{header::HeaderId, mantle::ops::channel::MsgId};
 use logos_blockchain_zone_sdk::Slot;
-use nssa::{Account, AccountId, V03State};
+use nssa::{Account, AccountId, V03State, ValidatedStateDiff};
 use nssa_core::BlockId;
 use storage::indexer::RocksDBIO;
 use tokio::sync::RwLock;
@@ -21,14 +22,10 @@ pub struct IndexerStore {
 impl IndexerStore {
     /// Starting database at the start of new chain.
     /// Creates files if necessary.
-    ///
-    /// ATTENTION: Will overwrite genesis block.
-    pub fn open_db_with_genesis(
-        location: &Path,
-        genesis_block: &Block,
-        initial_state: &V03State,
-    ) -> Result<Self> {
-        let dbio = RocksDBIO::open_or_create(location, genesis_block, initial_state)?;
+    pub fn open_db(location: &Path) -> Result<Self> {
+        let initial_state = testnet_initial_state::initial_state();
+        let dbio = RocksDBIO::open_or_create(location, &initial_state)?;
+
         let current_state = dbio.final_state()?;
 
         Ok(Self {
@@ -44,8 +41,8 @@ impl IndexerStore {
             .map(HeaderId::from))
     }
 
-    pub fn get_last_block_id(&self) -> Result<u64> {
-        Ok(self.dbio.get_meta_last_block_in_db()?)
+    pub fn get_last_block_id(&self) -> Result<Option<u64>> {
+        self.dbio.get_meta_last_block_id_in_db().map_err(Into::into)
     }
 
     pub fn get_block_at_id(&self, id: u64) -> Result<Option<Block>> {
@@ -86,18 +83,14 @@ impl IndexerStore {
         Ok(self.dbio.get_acc_transactions(acc_id, offset, limit)?)
     }
 
-    #[must_use]
-    pub fn genesis_id(&self) -> u64 {
+    pub fn genesis_id(&self) -> Result<Option<u64>> {
         self.dbio
-            .get_meta_first_block_in_db()
-            .expect("Must be set at the DB startup")
+            .get_meta_first_block_id_in_db()
+            .map_err(Into::into)
     }
 
-    #[must_use]
-    pub fn last_block(&self) -> u64 {
-        self.dbio
-            .get_meta_last_block_in_db()
-            .expect("Must be set at the DB startup")
+    pub fn last_block(&self) -> Result<Option<u64>> {
+        self.dbio.get_meta_last_block_id_in_db().map_err(Into::into)
     }
 
     pub fn get_state_at_block(&self, block_id: u64) -> Result<V03State> {
@@ -136,6 +129,7 @@ impl IndexerStore {
     }
 
     pub async fn put_block(&self, mut block: Block, l1_header: HeaderId) -> Result<()> {
+        info!("Applying block {}", block.header.block_id);
         {
             let mut state_guard = self.current_state.write().await;
 
@@ -150,15 +144,32 @@ impl IndexerStore {
                 "Last transaction in block must be the clock invocation for the block timestamp"
             );
 
+            let is_genesis = block.header.block_id == 1;
             for transaction in user_txs {
-                transaction
-                    .clone()
-                    .transaction_stateless_check()?
-                    .execute_check_on_state(
-                        &mut state_guard,
-                        block.header.block_id,
-                        block.header.timestamp,
-                    )?;
+                if is_genesis {
+                    let genesis_tx = match transaction {
+                        NSSATransaction::Public(public_tx) => public_tx,
+                        NSSATransaction::PrivacyPreserving(_)
+                        | NSSATransaction::ProgramDeployment(_) => {
+                            anyhow::bail!("Genesis block should contain only public transactions")
+                        }
+                    };
+                    let state_diff = ValidatedStateDiff::from_public_genesis_transaction(
+                        genesis_tx,
+                        &state_guard,
+                    )
+                    .context("Failed to create state diff from genesis transaction")?;
+                    state_guard.apply_state_diff(state_diff);
+                } else {
+                    transaction
+                        .clone()
+                        .transaction_stateless_check()?
+                        .execute_check_on_state(
+                            &mut state_guard,
+                            block.header.block_id,
+                            block.header.timestamp,
+                        )?;
+                }
             }
 
             // Apply the clock invocation directly (it is expected to modify clock accounts).
@@ -177,20 +188,18 @@ impl IndexerStore {
         // to represent correct block finality
         block.bedrock_status = BedrockStatus::Finalized;
 
+        info!("Putting block {} into DB", block.header.block_id);
         Ok(self.dbio.put_block(&block, l1_header.into())?)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use nssa::{AccountId, PublicKey};
+    use common::{HashType, block::HashableBlockData};
+    use nssa::{AccountId, CLOCK_01_PROGRAM_ACCOUNT_ID, PublicKey, PublicTransaction};
     use tempfile::tempdir;
 
     use super::*;
-
-    fn genesis_block() -> Block {
-        common::test_utils::produce_dummy_block(1, None, vec![])
-    }
 
     fn acc1_sign_key() -> nssa::PrivateKey {
         nssa::PrivateKey::try_new([1; 32]).unwrap()
@@ -208,48 +217,58 @@ mod tests {
         AccountId::from(&PublicKey::new_from_private_key(&acc2_sign_key()))
     }
 
+    fn genesis_mint_tx(account: AccountId, balance: u128) -> NSSATransaction {
+        let message = nssa::public_transaction::Message::try_new(
+            nssa::program::Program::authenticated_transfer_program().id(),
+            vec![account, CLOCK_01_PROGRAM_ACCOUNT_ID],
+            vec![],
+            authenticated_transfer_core::Instruction::Mint { amount: balance },
+        )
+        .unwrap();
+        let witness_set = nssa::public_transaction::WitnessSet::for_message(&message, &[]);
+        PublicTransaction::new(message, witness_set).into()
+    }
+
     #[test]
     fn correct_startup() {
         let home = tempdir().unwrap();
 
-        let storage = IndexerStore::open_db_with_genesis(
-            home.as_ref(),
-            &genesis_block(),
-            &nssa::V03State::new_with_genesis_accounts(
-                &[(acc1(), 10000), (acc2(), 20000)],
-                vec![],
-                0,
-            ),
-        )
-        .unwrap();
+        let storage = IndexerStore::open_db(home.as_ref()).unwrap();
 
-        let block = storage.get_block_at_id(1).unwrap().unwrap();
         let final_id = storage.get_last_block_id().unwrap();
 
-        assert_eq!(block.header.hash, genesis_block().header.hash);
-        assert_eq!(final_id, 1);
+        assert_eq!(final_id, None);
     }
 
     #[tokio::test]
     async fn state_transition() {
         let home = tempdir().unwrap();
 
-        let storage = IndexerStore::open_db_with_genesis(
-            home.as_ref(),
-            &genesis_block(),
-            &nssa::V03State::new_with_genesis_accounts(
-                &[(acc1(), 10000), (acc2(), 20000)],
-                vec![],
-                0,
-            ),
-        )
-        .unwrap();
-
-        let mut prev_hash = genesis_block().header.hash;
+        let storage = IndexerStore::open_db(home.as_ref()).unwrap();
 
         let from = acc1();
         let to = acc2();
         let sign_key = acc1_sign_key();
+
+        // Submit genesis block
+        let clock_tx = NSSATransaction::Public(clock_invocation(0));
+        let supply_from_tx = genesis_mint_tx(from, 10000);
+        let supply_to_tx = genesis_mint_tx(to, 20000);
+        let genesis_block_data = HashableBlockData {
+            block_id: 1,
+            prev_block_hash: HashType::default(),
+            timestamp: 0,
+            transactions: vec![supply_from_tx, supply_to_tx, clock_tx],
+        };
+        let genesis_block = genesis_block_data.into_pending_block(
+            &common::test_utils::sequencer_sign_key_for_testing(),
+            [0; 32],
+        );
+        let mut prev_hash = Some(genesis_block.header.hash);
+        storage
+            .put_block(genesis_block, HeaderId::from([0_u8; 32]))
+            .await
+            .unwrap();
 
         for i in 2..10 {
             let tx = common::test_utils::create_transaction_native_token_transfer(
@@ -261,9 +280,8 @@ mod tests {
             );
             let block_id = u64::try_from(i).unwrap();
 
-            let next_block =
-                common::test_utils::produce_dummy_block(block_id, Some(prev_hash), vec![tx]);
-            prev_hash = next_block.header.hash;
+            let next_block = common::test_utils::produce_dummy_block(block_id, prev_hash, vec![tx]);
+            prev_hash = Some(next_block.header.hash);
 
             storage
                 .put_block(next_block, HeaderId::from([u8::try_from(i).unwrap(); 32]))

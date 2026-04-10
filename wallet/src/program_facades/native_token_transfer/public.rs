@@ -1,3 +1,4 @@
+use authenticated_transfer_core::Instruction as AuthTransferInstruction;
 use common::{HashType, transaction::NSSATransaction};
 use nssa::{
     AccountId, PublicTransaction,
@@ -33,13 +34,13 @@ impl NativeTokenTransfer<'_> {
                 .map_err(ExecutionFailureKind::SequencerError)?;
 
             let mut private_keys = Vec::new();
-            let from_signing_key = self.0.storage.user_data.get_pub_account_signing_key(from);
+            let from_signing_key = self.0.storage.key_chain().pub_account_signing_key(from);
             let Some(from_signing_key) = from_signing_key else {
                 return Err(ExecutionFailureKind::KeyNotFoundError);
             };
             private_keys.push(from_signing_key);
 
-            let to_signing_key = self.0.storage.user_data.get_pub_account_signing_key(to);
+            let to_signing_key = self.0.storage.key_chain().pub_account_signing_key(to);
             if let Some(to_signing_key) = to_signing_key {
                 private_keys.push(to_signing_key);
                 let to_nonces = self
@@ -54,8 +55,15 @@ impl NativeTokenTransfer<'_> {
                 );
             }
 
-            let message =
-                Message::try_new(program_id, account_ids, nonces, balance_to_move).unwrap();
+            let message = Message::try_new(
+                program_id,
+                account_ids,
+                nonces,
+                AuthTransferInstruction::Transfer {
+                    amount: balance_to_move,
+                },
+            )
+            .unwrap();
             let witness_set = WitnessSet::for_message(&message, &private_keys);
 
             let tx = PublicTransaction::new(message, witness_set);
@@ -80,12 +88,17 @@ impl NativeTokenTransfer<'_> {
             .await
             .map_err(ExecutionFailureKind::SequencerError)?;
 
-        let instruction: u128 = 0;
         let account_ids = vec![from];
         let program_id = Program::authenticated_transfer_program().id();
-        let message = Message::try_new(program_id, account_ids, nonces, instruction).unwrap();
+        let message = Message::try_new(
+            program_id,
+            account_ids,
+            nonces,
+            AuthTransferInstruction::Initialize,
+        )
+        .unwrap();
 
-        let signing_key = self.0.storage.user_data.get_pub_account_signing_key(from);
+        let signing_key = self.0.storage.key_chain().pub_account_signing_key(from);
 
         let Some(signing_key) = signing_key else {
             return Err(ExecutionFailureKind::KeyNotFoundError);

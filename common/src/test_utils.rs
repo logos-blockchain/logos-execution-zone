@@ -47,12 +47,11 @@ pub fn produce_dummy_empty_transaction() -> NSSATransaction {
     let program_id = nssa::program::Program::authenticated_transfer_program().id();
     let account_ids = vec![];
     let nonces = vec![];
-    let instruction_data: u128 = 0;
     let message = nssa::public_transaction::Message::try_new(
         program_id,
         account_ids,
         nonces,
-        instruction_data,
+        authenticated_transfer_core::Instruction::Initialize,
     )
     .unwrap();
     let private_key = nssa::PrivateKey::try_new([1; 32]).unwrap();
@@ -78,7 +77,9 @@ pub fn create_transaction_native_token_transfer(
         program_id,
         account_ids,
         nonces,
-        balance_to_move,
+        authenticated_transfer_core::Instruction::Transfer {
+            amount: balance_to_move,
+        },
     )
     .unwrap();
     let witness_set = nssa::public_transaction::WitnessSet::for_message(&message, &[signing_key]);

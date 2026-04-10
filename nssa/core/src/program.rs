@@ -636,7 +636,6 @@ pub fn validate_execution(
     }
 
     // 8. Total balance is preserved
-
     let Some(total_balance_pre_states) =
         WrappedBalanceSum::from_balances(pre_states.iter().map(|pre| pre.account.balance))
     else {

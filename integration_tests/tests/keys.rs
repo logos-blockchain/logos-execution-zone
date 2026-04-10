@@ -8,8 +8,8 @@ use std::{str::FromStr as _, time::Duration};
 
 use anyhow::{Context as _, Result};
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, fetch_privacy_preserving_tx,
-    format_private_account_id, format_public_account_id, verify_commitment_is_in_state,
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, fetch_privacy_preserving_tx, private_mention,
+    public_mention, verify_commitment_is_in_state,
 };
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use log::info;
@@ -59,22 +59,20 @@ async fn sync_private_account_with_non_zero_chain_index() -> Result<()> {
     };
 
     // Get the keys for the newly created account
-    let (to_keys, _, to_identifier) = ctx
+    let to_account = ctx
         .wallet()
         .storage()
-        .user_data
-        .get_private_account(to_account_id)
+        .key_chain()
+        .private_account(to_account_id)
         .context("Failed to get private account")?;
 
     // Send to this account using claiming path (using npk and vpk instead of account ID)
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: Some(format_private_account_id(from)),
-        from_label: None,
+        from: private_mention(from),
         to: None,
-        to_label: None,
-        to_npk: Some(hex::encode(to_keys.nullifier_public_key.0)),
-        to_vpk: Some(hex::encode(to_keys.viewing_public_key.0)),
-        to_identifier: Some(to_identifier),
+        to_npk: Some(hex::encode(to_account.key_chain.nullifier_public_key.0)),
+        to_vpk: Some(hex::encode(&to_account.key_chain.viewing_public_key.0)),
+        to_identifier: Some(to_account.identifier),
         amount: 100,
     });
 
@@ -145,10 +143,8 @@ async fn restore_keys_from_seed() -> Result<()> {
 
     // Send to first private account
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: Some(format_private_account_id(from)),
-        from_label: None,
-        to: Some(format_private_account_id(to_account_id1)),
-        to_label: None,
+        from: private_mention(from),
+        to: Some(private_mention(to_account_id1)),
         to_npk: None,
         to_vpk: None,
         to_identifier: Some(0),
@@ -158,10 +154,8 @@ async fn restore_keys_from_seed() -> Result<()> {
 
     // Send to second private account
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: Some(format_private_account_id(from)),
-        from_label: None,
-        to: Some(format_private_account_id(to_account_id2)),
-        to_label: None,
+        from: private_mention(from),
+        to: Some(private_mention(to_account_id2)),
         to_npk: None,
         to_vpk: None,
         to_identifier: Some(0),
@@ -199,10 +193,8 @@ async fn restore_keys_from_seed() -> Result<()> {
 
     // Send to first public account
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: Some(format_public_account_id(from)),
-        from_label: None,
-        to: Some(format_public_account_id(to_account_id3)),
-        to_label: None,
+        from: public_mention(from),
+        to: Some(public_mention(to_account_id3)),
         to_npk: None,
         to_vpk: None,
         to_identifier: Some(0),
@@ -212,10 +204,8 @@ async fn restore_keys_from_seed() -> Result<()> {
 
     // Send to second public account
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: Some(format_public_account_id(from)),
-        from_label: None,
-        to: Some(format_public_account_id(to_account_id4)),
-        to_label: None,
+        from: public_mention(from),
+        to: Some(public_mention(to_account_id4)),
         to_npk: None,
         to_vpk: None,
         to_identifier: Some(0),
@@ -232,56 +222,50 @@ async fn restore_keys_from_seed() -> Result<()> {
     let acc1 = ctx
         .wallet()
         .storage()
-        .user_data
-        .private_key_tree
-        .get_node(to_account_id1)
+        .key_chain()
+        .private_account(to_account_id1)
         .expect("Acc 1 should be restored");
 
     let acc2 = ctx
         .wallet()
         .storage()
-        .user_data
-        .private_key_tree
-        .get_node(to_account_id2)
+        .key_chain()
+        .private_account(to_account_id2)
         .expect("Acc 2 should be restored");
 
     // Verify restored public accounts
     let _acc3 = ctx
         .wallet()
         .storage()
-        .user_data
-        .public_key_tree
-        .get_node(to_account_id3)
+        .key_chain()
+        .pub_account_signing_key(to_account_id3)
         .expect("Acc 3 should be restored");
 
     let _acc4 = ctx
         .wallet()
         .storage()
-        .user_data
-        .public_key_tree
-        .get_node(to_account_id4)
+        .key_chain()
+        .pub_account_signing_key(to_account_id4)
         .expect("Acc 4 should be restored");
 
     assert_eq!(
-        acc1.value.1[0].1.program_owner,
+        acc1.account.program_owner,
         Program::authenticated_transfer_program().id()
     );
     assert_eq!(
-        acc2.value.1[0].1.program_owner,
+        acc2.account.program_owner,
         Program::authenticated_transfer_program().id()
     );
 
-    assert_eq!(acc1.value.1[0].1.balance, 100);
-    assert_eq!(acc2.value.1[0].1.balance, 101);
+    assert_eq!(acc1.account.balance, 100);
+    assert_eq!(acc2.account.balance, 101);
 
     info!("Tree checks passed, testing restored accounts can transact");
 
     // Test that restored accounts can send transactions
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: Some(format_private_account_id(to_account_id1)),
-        from_label: None,
-        to: Some(format_private_account_id(to_account_id2)),
-        to_label: None,
+        from: private_mention(to_account_id1),
+        to: Some(private_mention(to_account_id2)),
         to_npk: None,
         to_vpk: None,
         to_identifier: Some(0),
@@ -290,10 +274,8 @@ async fn restore_keys_from_seed() -> Result<()> {
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: Some(format_public_account_id(to_account_id3)),
-        from_label: None,
-        to: Some(format_public_account_id(to_account_id4)),
-        to_label: None,
+        from: public_mention(to_account_id3),
+        to: Some(public_mention(to_account_id4)),
         to_npk: None,
         to_vpk: None,
         to_identifier: Some(0),

@@ -1,3 +1,4 @@
+use authenticated_transfer_core::Instruction as AuthTransferInstruction;
 use nssa_core::program::{
     AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput,
     read_nssa_inputs,
@@ -25,7 +26,7 @@ fn main() {
         return;
     };
 
-    let instruction_data = to_vec(&balance).unwrap();
+    let instruction_data = to_vec(&AuthTransferInstruction::Transfer { amount: balance }).unwrap();
 
     let mut running_recipient_pre = recipient_pre.clone();
     let mut running_sender_pre = sender_pre.clone();

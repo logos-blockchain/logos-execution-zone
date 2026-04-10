@@ -33,12 +33,7 @@ impl Ata<'_> {
             .await
             .map_err(ExecutionFailureKind::SequencerError)?;
 
-        let Some(signing_key) = self
-            .0
-            .storage
-            .user_data
-            .get_pub_account_signing_key(owner_id)
-        else {
+        let Some(signing_key) = self.0.storage.key_chain().pub_account_signing_key(owner_id) else {
             return Err(ExecutionFailureKind::KeyNotFoundError);
         };
 
@@ -85,12 +80,7 @@ impl Ata<'_> {
             .await
             .map_err(ExecutionFailureKind::SequencerError)?;
 
-        let Some(signing_key) = self
-            .0
-            .storage
-            .user_data
-            .get_pub_account_signing_key(owner_id)
-        else {
+        let Some(signing_key) = self.0.storage.key_chain().pub_account_signing_key(owner_id) else {
             return Err(ExecutionFailureKind::KeyNotFoundError);
         };
 
@@ -139,12 +129,7 @@ impl Ata<'_> {
             .await
             .map_err(ExecutionFailureKind::SequencerError)?;
 
-        let Some(signing_key) = self
-            .0
-            .storage
-            .user_data
-            .get_pub_account_signing_key(owner_id)
-        else {
+        let Some(signing_key) = self.0.storage.key_chain().pub_account_signing_key(owner_id) else {
             return Err(ExecutionFailureKind::KeyNotFoundError);
         };
 
