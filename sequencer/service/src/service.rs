@@ -142,28 +142,43 @@ impl<BC: BlockSettlementClientTrait + Send + 'static, IC: IndexerClientTrait + S
     ) -> Result<common::receipt::TxReceipt, ErrorObjectOwned> {
         use common::receipt::{TxReceipt, TxStatus};
 
-        let sequencer = self.sequencer.lock().await;
+        // Check durable tiers under the sequencer lock, then release it before
+        // touching `pending_txs` to preserve lock-ordering invariants.
+        let terminal_receipt = {
+            let sequencer = self.sequencer.lock().await;
 
-        // 1. Rejected store: durable, survives restarts.
-        if let Some(record) = sequencer.block_store().get_rejected_tx(tx_hash) {
-            return Ok(TxReceipt {
-                tx_hash,
-                status: TxStatus::Rejected { reason: record.reason },
-                timestamp_ms: Some(record.timestamp_ms),
-            });
+            // 1. Rejected store: durable, survives restarts.
+            if let Some(record) = sequencer.block_store().get_rejected_tx(tx_hash) {
+                Some(TxReceipt {
+                    tx_hash,
+                    status: TxStatus::Rejected { reason: record.reason },
+                    timestamp_ms: Some(record.timestamp_ms),
+                })
+            // 2. Block store: finalized and pending blocks.
+            } else if let Some(block_id) = sequencer.block_store().get_block_id_for_tx(tx_hash) {
+                let timestamp_ms = sequencer
+                    .block_store()
+                    .get_block_at_id(block_id)
+                    .ok()
+                    .flatten()
+                    .map(|b| b.header.timestamp);
+                Some(TxReceipt {
+                    tx_hash,
+                    status: TxStatus::Included { block_id },
+                    timestamp_ms,
+                })
+            } else {
+                None
+            }
+            // Sequencer lock released here.
+        };
+
+        if let Some(receipt) = terminal_receipt {
+            // Lazy eviction: TX has reached a terminal state; prune it from the
+            // pending set so `pending_txs` does not grow without bound.
+            self.pending_txs.lock().await.remove(&tx_hash);
+            return Ok(receipt);
         }
-
-        // 2. Block store: finalized and pending blocks.
-        if let Some(block_id) = sequencer.block_store().get_block_id_for_tx(tx_hash) {
-            return Ok(TxReceipt {
-                tx_hash,
-                status: TxStatus::Included { block_id },
-                timestamp_ms: None,
-            });
-        }
-
-        // Release the sequencer lock before checking the pending set.
-        drop(sequencer);
 
         // 3. Pending set: submitted to mempool but not yet in a block.
         if self.pending_txs.lock().await.contains(&tx_hash) {
