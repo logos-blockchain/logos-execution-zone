@@ -406,6 +406,18 @@ impl ValidatedStateDiff {
         self.0.public_diff.clone()
     }
 
+    /// Returns the new nullifiers produced by this transaction.
+    #[must_use]
+    pub fn new_nullifiers(&self) -> &[nssa_core::Nullifier] {
+        &self.0.new_nullifiers
+    }
+
+    /// Returns the new commitments produced by this transaction.
+    #[must_use]
+    pub fn new_commitments(&self) -> &[nssa_core::Commitment] {
+        &self.0.new_commitments
+    }
+
     pub(crate) fn into_state_diff(self) -> StateDiff {
         self.0
     }
