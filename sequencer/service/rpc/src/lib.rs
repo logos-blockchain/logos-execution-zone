@@ -7,7 +7,7 @@ use jsonrpsee::types::ErrorObjectOwned;
 pub use jsonrpsee::{core::ClientError, http_client::HttpClientBuilder as SequencerClientBuilder};
 use sequencer_service_protocol::{
     Account, AccountId, Block, BlockId, Commitment, HashType, MembershipProof, NSSATransaction,
-    Nonce, ProgramId, TxReceipt,
+    Nonce, ProgramId, SimulationResult, TxReceipt,
 };
 
 #[cfg(all(not(feature = "server"), not(feature = "client")))]
@@ -75,6 +75,12 @@ pub trait Rpc {
         &self,
         tx_hash: HashType,
     ) -> Result<TxReceipt, ErrorObjectOwned>;
+
+    #[method(name = "simulateTransaction")]
+    async fn simulate_transaction(
+        &self,
+        tx: NSSATransaction,
+    ) -> Result<SimulationResult, ErrorObjectOwned>;
 
     #[method(name = "getAccountsNonces")]
     async fn get_accounts_nonces(

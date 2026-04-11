@@ -4,6 +4,7 @@ pub use common::{
     HashType,
     block::Block,
     receipt::{TxReceipt, TxStatus},
+    simulation::SimulationResult,
     transaction::NSSATransaction,
 };
 pub use nssa::{Account, AccountId, ProgramId};
