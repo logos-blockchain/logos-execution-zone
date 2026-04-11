@@ -23,3 +23,6 @@ hex.workspace = true
 borsh.workspace = true
 logos-blockchain-common-http-client.workspace = true
 jsonrpsee = { workspace = true }
+
+[dev-dependencies]
+serde_json.workspace = true
