@@ -8,6 +8,7 @@ mod borsh_base64;
 pub mod config;
 pub mod transaction;
 pub mod receipt;
+pub mod simulation;
 
 // Module for tests utility functions
 // TODO: Compile only for tests
