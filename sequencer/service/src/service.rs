@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::{BTreeMap, HashSet}, sync::Arc};
 
 use common::transaction::{NSSATransaction, TransactionMalformationError};
 use jsonrpsee::{
@@ -23,10 +23,11 @@ pub struct SequencerService<BC: BlockSettlementClientTrait, IC: IndexerClientTra
     sequencer: Arc<Mutex<SequencerCore<BC, IC>>>,
     mempool_handle: MemPoolHandle<NSSATransaction>,
     max_block_size: u64,
+    pending_txs: Arc<Mutex<HashSet<HashType>>>,
 }
 
 impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerService<BC, IC> {
-    pub const fn new(
+    pub fn new(
         sequencer: Arc<Mutex<SequencerCore<BC, IC>>>,
         mempool_handle: MemPoolHandle<NSSATransaction>,
         max_block_size: u64,
@@ -35,6 +36,7 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerService<BC
             sequencer,
             mempool_handle,
             max_block_size,
+            pending_txs: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 }
@@ -74,6 +76,8 @@ impl<BC: BlockSettlementClientTrait + Send + 'static, IC: IndexerClientTrait + S
             .push(authenticated_tx)
             .await
             .expect("Mempool is closed, this is a bug");
+
+        self.pending_txs.lock().await.insert(tx_hash);
 
         Ok(tx_hash)
     }
@@ -130,6 +134,44 @@ impl<BC: BlockSettlementClientTrait + Send + 'static, IC: IndexerClientTrait + S
     ) -> Result<Option<NSSATransaction>, ErrorObjectOwned> {
         let sequencer = self.sequencer.lock().await;
         Ok(sequencer.block_store().get_transaction_by_hash(tx_hash))
+    }
+
+    async fn get_transaction_receipt(
+        &self,
+        tx_hash: HashType,
+    ) -> Result<common::receipt::TxReceipt, ErrorObjectOwned> {
+        use common::receipt::{TxReceipt, TxStatus};
+
+        let sequencer = self.sequencer.lock().await;
+
+        // 1. Rejected store: durable, survives restarts.
+        if let Some(record) = sequencer.block_store().get_rejected_tx(tx_hash) {
+            return Ok(TxReceipt {
+                tx_hash,
+                status: TxStatus::Rejected { reason: record.reason },
+                timestamp_ms: Some(record.timestamp_ms),
+            });
+        }
+
+        // 2. Block store: finalized and pending blocks.
+        if let Some(block_id) = sequencer.block_store().get_block_id_for_tx(tx_hash) {
+            return Ok(TxReceipt {
+                tx_hash,
+                status: TxStatus::Included { block_id },
+                timestamp_ms: None,
+            });
+        }
+
+        // Release the sequencer lock before checking the pending set.
+        drop(sequencer);
+
+        // 3. Pending set: submitted to mempool but not yet in a block.
+        if self.pending_txs.lock().await.contains(&tx_hash) {
+            return Ok(TxReceipt { tx_hash, status: TxStatus::Pending, timestamp_ms: None });
+        }
+
+        // 4. Unknown: never submitted, invalid hash, or set was evicted.
+        Ok(TxReceipt { tx_hash, status: TxStatus::Unknown, timestamp_ms: None })
     }
 
     async fn get_accounts_nonces(
@@ -264,5 +306,32 @@ mod tests {
         let result = service.send_transaction(tx).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), expected_hash);
+    }
+
+    #[tokio::test]
+    async fn get_receipt_returns_pending_after_submit() {
+        use sequencer_service_rpc::RpcServer as _;
+        let service = make_service().await;
+        let tx = common::test_utils::produce_dummy_empty_transaction();
+        let tx_hash = tx.hash();
+        service.send_transaction(tx).await.unwrap();
+        let receipt = service.get_transaction_receipt(tx_hash).await.unwrap();
+        assert!(
+            matches!(receipt.status, common::receipt::TxStatus::Pending)
+                || matches!(receipt.status, common::receipt::TxStatus::Included { .. }),
+            "Expected Pending or Included, got {:?}",
+            receipt.status
+        );
+    }
+
+    #[tokio::test]
+    async fn get_receipt_returns_unknown_for_unseen_hash() {
+        use sequencer_service_rpc::RpcServer as _;
+        let service = make_service().await;
+        let receipt = service
+            .get_transaction_receipt(HashType([0xff; 32]))
+            .await
+            .unwrap();
+        assert!(matches!(receipt.status, common::receipt::TxStatus::Unknown));
     }
 }
