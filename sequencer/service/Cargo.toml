@@ -26,12 +26,14 @@ jsonrpsee.workspace = true
 futures.workspace = true
 bytesize.workspace = true
 borsh.workspace = true
+chrono.workspace = true
 
 [dev-dependencies]
 sequencer_core = { workspace = true, features = ["mock"] }
 bedrock_client.workspace = true
 logos-blockchain-core.workspace = true
 tempfile.workspace = true
+testnet_initial_state.workspace = true
 
 [features]
 default = []

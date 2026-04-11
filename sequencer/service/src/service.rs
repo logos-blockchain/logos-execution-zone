@@ -1,5 +1,6 @@
 use std::{collections::{BTreeMap, HashSet}, sync::Arc};
 
+use chrono;
 use common::transaction::{NSSATransaction, TransactionMalformationError};
 use jsonrpsee::{
     core::async_trait,
@@ -189,6 +190,47 @@ impl<BC: BlockSettlementClientTrait + Send + 'static, IC: IndexerClientTrait + S
         Ok(TxReceipt { tx_hash, status: TxStatus::Unknown, timestamp_ms: None })
     }
 
+    async fn simulate_transaction(
+        &self,
+        tx: NSSATransaction,
+    ) -> Result<common::simulation::SimulationResult, ErrorObjectOwned> {
+        use common::simulation::SimulationResult;
+
+        // 1. Stateless check -- no lock required.
+        let tx = tx
+            .transaction_stateless_check()
+            .inspect_err(|err| warn!("simulate_transaction: stateless check failed: {err:#?}"))
+            .map_err(ErrorObjectOwned::from)?;
+
+        // 2. Clone state under lock, then release immediately.
+        let (state_clone, block_id, timestamp_ms) = {
+            let sequencer = self.sequencer.lock().await;
+            let block_id = sequencer.chain_height() + 1;
+            let timestamp_ms = u64::try_from(chrono::Utc::now().timestamp_millis())
+                .expect("current timestamp must be positive");
+            (sequencer.state().clone(), block_id, timestamp_ms)
+        };
+        // Lock is released here. Simulation runs concurrently with block production.
+
+        // 3. Execute on the cloned state -- never committed.
+        match tx.validate_on_state(&state_clone, block_id, timestamp_ms) {
+            Ok(diff) => Ok(SimulationResult {
+                success: true,
+                error: None,
+                accounts_modified: diff.public_diff().into_iter().collect(),
+                nullifiers_created: diff.new_nullifiers().to_vec(),
+                commitments_created: diff.new_commitments().to_vec(),
+            }),
+            Err(err) => Ok(SimulationResult {
+                success: false,
+                error: Some(err.to_string()),
+                accounts_modified: vec![],
+                nullifiers_created: vec![],
+                commitments_created: vec![],
+            }),
+        }
+    }
+
     async fn get_accounts_nonces(
         &self,
         account_ids: Vec<AccountId>,
@@ -348,5 +390,39 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(receipt.status, common::receipt::TxStatus::Unknown));
+    }
+
+    #[tokio::test]
+    async fn simulate_valid_transaction_returns_success() {
+        use sequencer_service_rpc::RpcServer as _;
+        let service = make_service().await;
+        let tx = common::test_utils::produce_dummy_empty_transaction();
+        let result = service.simulate_transaction(tx).await.unwrap();
+        assert!(result.success, "Expected success, got error: {:?}", result.error);
+    }
+
+    #[tokio::test]
+    async fn simulate_does_not_modify_state() {
+        use sequencer_service_rpc::RpcServer as _;
+        let service = make_service().await;
+        let tx = common::test_utils::produce_dummy_empty_transaction();
+
+        // Simulate the transaction.
+        let sim_result = service.simulate_transaction(tx.clone()).await.unwrap();
+        assert!(sim_result.success);
+
+        // The state read via get_account should be unchanged after simulation.
+        use testnet_initial_state::initial_pub_accounts_private_keys;
+        let keys = initial_pub_accounts_private_keys();
+        let account_id = keys[0].account_id;
+        let account_before = service.get_account(account_id).await.unwrap();
+
+        // Simulate again -- state should not change.
+        let tx2 = common::test_utils::produce_dummy_empty_transaction();
+        let sim_result2 = service.simulate_transaction(tx2).await.unwrap();
+        assert!(sim_result2.success);
+
+        let account_after = service.get_account(account_id).await.unwrap();
+        assert_eq!(account_before.nonce, account_after.nonce, "Simulation must not modify state");
     }
 }
