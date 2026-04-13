@@ -1,0 +1,4 @@
+[advisories]
+ignore = [
+  { id = "RUSTSEC-2026-0097", reason = "rand 0.8.5 is a transitive dep from ark-std/logos-blockchain-*/risc0-* which pin to 0.8.x. Fix is in rand >= 0.9.3, outside the 0.8 semver range. The vulnerability requires custom logger + thread_rng + reseeding which we don't trigger." },
+]

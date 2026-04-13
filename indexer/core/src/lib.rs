@@ -26,7 +26,6 @@ pub struct IndexerCore {
     pub store: IndexerStore,
 }
 
-//test
 #[derive(Clone)]
 /// This struct represents one L1 block data fetched from backfilling.
 pub struct BackfillBlockData {
