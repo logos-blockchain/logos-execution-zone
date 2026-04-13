@@ -7,7 +7,10 @@ use std::time::Duration;
 
 use anyhow::Result;
 use indexer_service_rpc::RpcClient as _;
-use integration_tests::{TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, format_public_account_id, test_context_ffi::BlockingTestContextFFI};
+use integration_tests::{
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, format_public_account_id,
+    test_context_ffi::BlockingTestContextFFI,
+};
 use log::info;
 use wallet::cli::{Command, programs::native_token_transfer::AuthTransferSubcommand};
 
@@ -149,29 +152,17 @@ async fn indexer_state_consistency() -> Result<()> {
 
 #[test]
 fn indexer_test_run_ffi() -> Result<()> {
-    println!("Hello 1");
     let blocking_ctx = BlockingTestContextFFI::new()?;
     let runtime_wrapped = blocking_ctx.runtime();
-
-    log::info!("Hello 3");
 
     // RUN OBSERVATION
     runtime_wrapped.block_on(async {
         tokio::time::sleep(std::time::Duration::from_millis(L2_TO_L1_TIMEOUT_MILLIS)).await;
     });
 
-    println!("Hello 11");
-
-    let last_block_seq = blocking_ctx.ctx().get_last_block_sequencer(runtime_wrapped.clone())?;
-
-    println!("Hello 12");
-    
-    let last_block_indexer = blocking_ctx.ctx().get_last_block_indexer(runtime_wrapped)?;
-
-    println!("Hello 13");
-
-    println!("Last block on ind now is {last_block_indexer}");
-    println!("Last block on seq now is {last_block_seq}");
+    let last_block_indexer = blocking_ctx
+        .ctx()
+        .get_last_block_indexer(runtime_wrapped)?;
 
     assert!(last_block_indexer > 1);
 

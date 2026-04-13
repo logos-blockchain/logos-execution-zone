@@ -18,36 +18,51 @@ impl IndexerServiceFFI {
         }
     }
 
-    // Helper to safely take ownership back
+    /// Helper to take ownership back.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that:
+    /// - `self` is a valid object(contains valid pointers in all fields)
     #[must_use]
-    pub fn into_parts(self) -> (Box<IndexerHandle>, Box<Runtime>) {
+    pub unsafe fn into_parts(self) -> (Box<IndexerHandle>, Box<Runtime>) {
         let indexer_handle = unsafe { Box::from_raw(self.indexer_handle.cast::<IndexerHandle>()) };
         let runtime = unsafe { Box::from_raw(self.runtime.cast::<Runtime>()) };
         (indexer_handle, runtime)
     }
 
-    // Helper to get indexer handle addr
-    pub unsafe fn addr(&self) -> SocketAddr {
+    /// Helper to get indexer handle addr.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that:
+    /// - `self` is a valid object(contains valid pointers in all fields)
+    #[must_use]
+    pub const unsafe fn addr(&self) -> SocketAddr {
         let indexer_handle = unsafe {
             self.indexer_handle
                 .cast::<IndexerHandle>()
                 .as_ref()
-                .expect("Indexr Handle must be non-null pointer")
+                .expect("Indexer Handle must be non-null pointer")
         };
 
         indexer_handle.addr()
     }
 
-    // Helper to get indexer handle addr
-    pub unsafe fn handle(&self) -> &IndexerHandle {
-        let indexer_handle = unsafe {
+    /// Helper to get indexer handle addr.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that:
+    /// - `self` is a valid object(contains valid pointers in all fields)
+    #[must_use]
+    pub const unsafe fn handle(&self) -> &IndexerHandle {
+        unsafe {
             self.indexer_handle
                 .cast::<IndexerHandle>()
                 .as_ref()
-                .expect("Indexr Handle must be non-null pointer")
-        };
-
-        indexer_handle
+                .expect("Indexer Handle must be non-null pointer")
+        }
     }
 }
 
