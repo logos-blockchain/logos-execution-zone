@@ -1,7 +1,7 @@
 services:
 
   cfgsync:
-    image: ghcr.io/logos-blockchain/logos-blockchain@sha256:093d0319a366a5b7b7db1a29fd54510dea37336f24accbda6d5d1b94d15fb64b
+    image: ghcr.io/logos-blockchain/logos-blockchain@sha256:c5243681b353278cabb562a176f0a5cfbefc2056f18cebc47fe0e3720c29fb12
     volumes:
       - ./scripts:/etc/logos-blockchain/scripts
       - ./cfgsync.yaml:/etc/logos-blockchain/cfgsync.yaml:z
@@ -9,12 +9,13 @@ services:
     entrypoint: /etc/logos-blockchain/scripts/run_cfgsync.sh
 
   logos-blockchain-node-0:
-    image: ghcr.io/logos-blockchain/logos-blockchain@sha256:093d0319a366a5b7b7db1a29fd54510dea37336f24accbda6d5d1b94d15fb64b
+    image: ghcr.io/logos-blockchain/logos-blockchain@sha256:c5243681b353278cabb562a176f0a5cfbefc2056f18cebc47fe0e3720c29fb12
     ports:
       - "${PORT:-8080}:18080/tcp"
     volumes:
       - ./scripts:/etc/logos-blockchain/scripts
       - ./kzgrs_test_params:/kzgrs_test_params:z
+      - ./deployment-settings.yaml:/etc/logos-blockchain/deployment-settings.yaml:z
     depends_on:
       - cfgsync
     entrypoint: /etc/logos-blockchain/scripts/run_logos_blockchain_node.sh
