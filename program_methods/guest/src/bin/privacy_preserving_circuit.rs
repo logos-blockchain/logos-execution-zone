@@ -107,6 +107,22 @@ impl ExecutionState {
                 |_: Infallible| unreachable!("Infallible error is never constructed"),
             );
 
+            // Verify that the program output's self_program_id matches the expected program ID.
+            // This ensures the proof commits to which program produced the output.
+            assert_eq!(
+                program_output.self_program_id, chained_call.program_id,
+                "Program output self_program_id does not match chained call program_id"
+            );
+
+            // Verify that the program output's caller_program_id matches the actual caller.
+            // This prevents a malicious user from privately executing an internal function
+            // by spoofing caller_program_id (e.g. passing caller_program_id = self_program_id
+            // to bypass access control checks).
+            assert_eq!(
+                program_output.caller_program_id, caller_program_id,
+                "Program output caller_program_id does not match actual caller"
+            );
+
             // Check that the program is well behaved.
             // See the # Programs section for the definition of the `validate_execution` method.
             let execution_valid = validate_execution(

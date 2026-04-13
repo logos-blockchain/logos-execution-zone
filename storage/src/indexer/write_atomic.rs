@@ -2,10 +2,14 @@ use std::collections::HashMap;
 
 use rocksdb::WriteBatch;
 
-use super::{
-    Arc, BREAKPOINT_INTERVAL, Block, BoundColumnFamily, DB_META_FIRST_BLOCK_IN_DB_KEY,
-    DB_META_FIRST_BLOCK_SET_KEY, DB_META_LAST_BLOCK_IN_DB_KEY, DB_META_LAST_BREAKPOINT_ID,
-    DB_META_LAST_OBSERVED_L1_LIB_HEADER_ID_IN_DB_KEY, DbError, DbResult, RocksDBIO,
+use super::{BREAKPOINT_INTERVAL, Block, DbError, DbResult, RocksDBIO};
+use crate::{
+    DB_META_FIRST_BLOCK_IN_DB_KEY, DBIO as _,
+    cells::shared_cells::{FirstBlockSetCell, LastBlockCell},
+    indexer::indexer_cells::{
+        AccNumTxCell, BlockHashToBlockIdMapCell, LastBreakpointIdCell, LastObservedL1LibHeaderCell,
+        TxHashToBlockIdMapCell,
+    },
 };
 
 #[expect(clippy::multiple_inherent_impl, reason = "Readability")]
@@ -18,22 +22,27 @@ impl RocksDBIO {
         num_tx: u64,
         write_batch: &mut WriteBatch,
     ) -> DbResult<()> {
-        let cf_ameta = self.account_meta_column();
+        self.put_batch(&AccNumTxCell(num_tx), acc_id, write_batch)
+    }
 
-        write_batch.put_cf(
-            &cf_ameta,
-            borsh::to_vec(&acc_id).map_err(|err| {
-                DbError::borsh_cast_message(err, Some("Failed to serialize account id".to_owned()))
-            })?,
-            borsh::to_vec(&num_tx).map_err(|err| {
-                DbError::borsh_cast_message(
-                    err,
-                    Some("Failed to serialize acc metadata".to_owned()),
-                )
-            })?,
-        );
+    // Mappings
 
-        Ok(())
+    pub fn put_block_id_by_hash_batch(
+        &self,
+        hash: [u8; 32],
+        block_id: u64,
+        write_batch: &mut WriteBatch,
+    ) -> DbResult<()> {
+        self.put_batch(&BlockHashToBlockIdMapCell(block_id), hash, write_batch)
+    }
+
+    pub fn put_block_id_by_tx_hash_batch(
+        &self,
+        tx_hash: [u8; 32],
+        block_id: u64,
+        write_batch: &mut WriteBatch,
+    ) -> DbResult<()> {
+        self.put_batch(&TxHashToBlockIdMapCell(block_id), tx_hash, write_batch)
     }
 
     // Account
@@ -163,23 +172,7 @@ impl RocksDBIO {
         block_id: u64,
         write_batch: &mut WriteBatch,
     ) -> DbResult<()> {
-        let cf_meta = self.meta_column();
-        write_batch.put_cf(
-            &cf_meta,
-            borsh::to_vec(&DB_META_LAST_BLOCK_IN_DB_KEY).map_err(|err| {
-                DbError::borsh_cast_message(
-                    err,
-                    Some("Failed to serialize DB_META_LAST_BLOCK_IN_DB_KEY".to_owned()),
-                )
-            })?,
-            borsh::to_vec(&block_id).map_err(|err| {
-                DbError::borsh_cast_message(
-                    err,
-                    Some("Failed to serialize last block id".to_owned()),
-                )
-            })?,
-        );
-        Ok(())
+        self.put_batch(&LastBlockCell(block_id), (), write_batch)
     }
 
     pub fn put_meta_last_observed_l1_lib_header_in_db_batch(
@@ -187,26 +180,7 @@ impl RocksDBIO {
         l1_lib_header: [u8; 32],
         write_batch: &mut WriteBatch,
     ) -> DbResult<()> {
-        let cf_meta = self.meta_column();
-        write_batch.put_cf(
-            &cf_meta,
-            borsh::to_vec(&DB_META_LAST_OBSERVED_L1_LIB_HEADER_ID_IN_DB_KEY).map_err(|err| {
-                DbError::borsh_cast_message(
-                    err,
-                    Some(
-                        "Failed to serialize DB_META_LAST_OBSERVED_L1_LIB_HEADER_ID_IN_DB_KEY"
-                            .to_owned(),
-                    ),
-                )
-            })?,
-            borsh::to_vec(&l1_lib_header).map_err(|err| {
-                DbError::borsh_cast_message(
-                    err,
-                    Some("Failed to serialize last l1 block header".to_owned()),
-                )
-            })?,
-        );
-        Ok(())
+        self.put_batch(&LastObservedL1LibHeaderCell(l1_lib_header), (), write_batch)
     }
 
     pub fn put_meta_last_breakpoint_id_batch(
@@ -214,46 +188,17 @@ impl RocksDBIO {
         br_id: u64,
         write_batch: &mut WriteBatch,
     ) -> DbResult<()> {
-        let cf_meta = self.meta_column();
-        write_batch.put_cf(
-            &cf_meta,
-            borsh::to_vec(&DB_META_LAST_BREAKPOINT_ID).map_err(|err| {
-                DbError::borsh_cast_message(
-                    err,
-                    Some("Failed to serialize DB_META_LAST_BREAKPOINT_ID".to_owned()),
-                )
-            })?,
-            borsh::to_vec(&br_id).map_err(|err| {
-                DbError::borsh_cast_message(
-                    err,
-                    Some("Failed to serialize last block id".to_owned()),
-                )
-            })?,
-        );
-        Ok(())
+        self.put_batch(&LastBreakpointIdCell(br_id), (), write_batch)
     }
 
     pub fn put_meta_is_first_block_set_batch(&self, write_batch: &mut WriteBatch) -> DbResult<()> {
-        let cf_meta = self.meta_column();
-        write_batch.put_cf(
-            &cf_meta,
-            borsh::to_vec(&DB_META_FIRST_BLOCK_SET_KEY).map_err(|err| {
-                DbError::borsh_cast_message(
-                    err,
-                    Some("Failed to serialize DB_META_FIRST_BLOCK_SET_KEY".to_owned()),
-                )
-            })?,
-            [1_u8; 1],
-        );
-        Ok(())
+        self.put_batch(&FirstBlockSetCell(true), (), write_batch)
     }
 
     // Block
 
     pub fn put_block(&self, block: &Block, l1_lib_header: [u8; 32]) -> DbResult<()> {
         let cf_block = self.block_column();
-        let cf_hti = self.hash_to_id_column();
-        let cf_tti: Arc<BoundColumnFamily<'_>> = self.tx_hash_to_id_column();
         let last_curr_block = self.get_meta_last_block_in_db()?;
         let mut write_batch = WriteBatch::default();
 
@@ -272,33 +217,22 @@ impl RocksDBIO {
             self.put_meta_last_observed_l1_lib_header_in_db_batch(l1_lib_header, &mut write_batch)?;
         }
 
-        write_batch.put_cf(
-            &cf_hti,
-            borsh::to_vec(&block.header.hash).map_err(|err| {
-                DbError::borsh_cast_message(err, Some("Failed to serialize block hash".to_owned()))
-            })?,
-            borsh::to_vec(&block.header.block_id).map_err(|err| {
-                DbError::borsh_cast_message(err, Some("Failed to serialize block id".to_owned()))
-            })?,
-        );
+        self.put_block_id_by_hash_batch(
+            block.header.hash.into(),
+            block.header.block_id,
+            &mut write_batch,
+        )?;
 
         let mut acc_to_tx_map: HashMap<[u8; 32], Vec<[u8; 32]>> = HashMap::new();
 
         for tx in &block.body.transactions {
             let tx_hash = tx.hash();
 
-            write_batch.put_cf(
-                &cf_tti,
-                borsh::to_vec(&tx_hash).map_err(|err| {
-                    DbError::borsh_cast_message(err, Some("Failed to serialize tx hash".to_owned()))
-                })?,
-                borsh::to_vec(&block.header.block_id).map_err(|err| {
-                    DbError::borsh_cast_message(
-                        err,
-                        Some("Failed to serialize block id".to_owned()),
-                    )
-                })?,
-            );
+            self.put_block_id_by_tx_hash_batch(
+                tx_hash.into(),
+                block.header.block_id,
+                &mut write_batch,
+            )?;
 
             let acc_ids = tx
                 .affected_public_account_ids()

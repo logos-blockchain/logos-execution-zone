@@ -16,6 +16,8 @@ type Instruction = (BlockValidityWindow, ProgramId, BlockValidityWindow);
 fn main() {
     let (
         ProgramInput {
+            self_program_id,
+            caller_program_id,
             pre_states,
             instruction: (block_validity_window, chained_program_id, chained_block_validity_window),
         },
@@ -38,6 +40,8 @@ fn main() {
     };
 
     ProgramOutput::new(
+        self_program_id,
+        caller_program_id,
         instruction_words,
         vec![pre],
         vec![AccountPostState::new(post)],

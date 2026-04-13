@@ -8,6 +8,8 @@ type Instruction = (BlockValidityWindow, TimestampValidityWindow);
 fn main() {
     let (
         ProgramInput {
+            self_program_id,
+            caller_program_id,
             pre_states,
             instruction: (block_validity_window, timestamp_validity_window),
         },
@@ -21,6 +23,8 @@ fn main() {
     let post = pre.account.clone();
 
     ProgramOutput::new(
+        self_program_id,
+        caller_program_id,
         instruction_words,
         vec![pre],
         vec![AccountPostState::new(post)],

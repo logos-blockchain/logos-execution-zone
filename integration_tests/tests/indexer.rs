@@ -1,17 +1,20 @@
 #![expect(
+    clippy::shadow_unrelated,
     clippy::tests_outside_test_module,
     reason = "We don't care about these in tests"
 )]
 
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use indexer_service_rpc::RpcClient as _;
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, format_public_account_id,
-    test_context_ffi::BlockingTestContextFFI,
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, format_private_account_id,
+    format_public_account_id, test_context_ffi::BlockingTestContextFFI,
+    verify_commitment_is_in_state,
 };
 use log::info;
+use nssa::AccountId;
 use wallet::cli::{Command, programs::native_token_transfer::AuthTransferSubcommand};
 
 /// Timeout in milliseconds to reliably await for block finalization.
@@ -85,8 +88,10 @@ async fn indexer_state_consistency() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: format_public_account_id(ctx.existing_public_accounts()[0]),
+        from: Some(format_public_account_id(ctx.existing_public_accounts()[0])),
+        from_label: None,
         to: Some(format_public_account_id(ctx.existing_public_accounts()[1])),
+        to_label: None,
         to_npk: None,
         to_vpk: None,
         amount: 100,
@@ -114,6 +119,38 @@ async fn indexer_state_consistency() -> Result<()> {
 
     assert_eq!(acc_1_balance, 9900);
     assert_eq!(acc_2_balance, 20100);
+
+    let from: AccountId = ctx.existing_private_accounts()[0];
+    let to: AccountId = ctx.existing_private_accounts()[1];
+
+    let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
+        from: Some(format_private_account_id(from)),
+        from_label: None,
+        to: Some(format_private_account_id(to)),
+        to_label: None,
+        to_npk: None,
+        to_vpk: None,
+        amount: 100,
+    });
+
+    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
+
+    info!("Waiting for next block creation");
+    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
+
+    let new_commitment1 = ctx
+        .wallet()
+        .get_private_account_commitment(from)
+        .context("Failed to get private account commitment for sender")?;
+    assert!(verify_commitment_is_in_state(new_commitment1, ctx.sequencer_client()).await);
+
+    let new_commitment2 = ctx
+        .wallet()
+        .get_private_account_commitment(to)
+        .context("Failed to get private account commitment for receiver")?;
+    assert!(verify_commitment_is_in_state(new_commitment2, ctx.sequencer_client()).await);
+
+    info!("Successfully transferred privately to owned account");
 
     // WAIT
     info!("Waiting for indexer to parse blocks");
@@ -150,6 +187,79 @@ async fn indexer_state_consistency() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn indexer_state_consistency_with_labels() -> Result<()> {
+    let mut ctx = TestContext::new().await?;
+
+    // Assign labels to both accounts
+    let from_label = "idx-sender-label".to_owned();
+    let to_label_str = "idx-receiver-label".to_owned();
+
+    let label_cmd = Command::Account(wallet::cli::account::AccountSubcommand::Label {
+        account_id: Some(format_public_account_id(ctx.existing_public_accounts()[0])),
+        account_label: None,
+        label: from_label.clone(),
+    });
+    wallet::cli::execute_subcommand(ctx.wallet_mut(), label_cmd).await?;
+
+    let label_cmd = Command::Account(wallet::cli::account::AccountSubcommand::Label {
+        account_id: Some(format_public_account_id(ctx.existing_public_accounts()[1])),
+        account_label: None,
+        label: to_label_str.clone(),
+    });
+    wallet::cli::execute_subcommand(ctx.wallet_mut(), label_cmd).await?;
+
+    // Send using labels instead of account IDs
+    let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
+        from: None,
+        from_label: Some(from_label),
+        to: None,
+        to_label: Some(to_label_str),
+        to_npk: None,
+        to_vpk: None,
+        amount: 100,
+    });
+
+    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
+
+    info!("Waiting for next block creation");
+    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
+
+    let acc_1_balance = sequencer_service_rpc::RpcClient::get_account_balance(
+        ctx.sequencer_client(),
+        ctx.existing_public_accounts()[0],
+    )
+    .await?;
+    let acc_2_balance = sequencer_service_rpc::RpcClient::get_account_balance(
+        ctx.sequencer_client(),
+        ctx.existing_public_accounts()[1],
+    )
+    .await?;
+
+    assert_eq!(acc_1_balance, 9900);
+    assert_eq!(acc_2_balance, 20100);
+
+    info!("Waiting for indexer to parse blocks");
+    tokio::time::sleep(std::time::Duration::from_millis(L2_TO_L1_TIMEOUT_MILLIS)).await;
+
+    let acc1_ind_state = ctx
+        .indexer_client()
+        .get_account(ctx.existing_public_accounts()[0].into())
+        .await
+        .unwrap();
+    let acc1_seq_state = sequencer_service_rpc::RpcClient::get_account(
+        ctx.sequencer_client(),
+        ctx.existing_public_accounts()[0],
+    )
+    .await?;
+
+    assert_eq!(acc1_ind_state, acc1_seq_state.into());
+
+    info!("Indexer state is consistent after label-based transfer");
+
+    Ok(())
+}
+
 #[test]
 fn indexer_test_run_ffi() -> Result<()> {
     let blocking_ctx = BlockingTestContextFFI::new()?;
@@ -160,9 +270,7 @@ fn indexer_test_run_ffi() -> Result<()> {
         tokio::time::sleep(std::time::Duration::from_millis(L2_TO_L1_TIMEOUT_MILLIS)).await;
     });
 
-    let last_block_indexer = blocking_ctx
-        .ctx()
-        .get_last_block_indexer(runtime_wrapped)?;
+    let last_block_indexer = blocking_ctx.ctx().get_last_block_indexer(runtime_wrapped)?;
 
     assert!(last_block_indexer > 1);
 

@@ -6,44 +6,29 @@ use rocksdb::{
     BoundColumnFamily, ColumnFamilyDescriptor, DBWithThreadMode, MultiThreaded, Options,
 };
 
-use crate::error::DbError;
+use crate::{BREAKPOINT_INTERVAL, CF_BLOCK_NAME, CF_META_NAME, DBIO, DbResult, error::DbError};
 
+pub mod indexer_cells;
 pub mod read_multiple;
 pub mod read_once;
 pub mod write_atomic;
 pub mod write_non_atomic;
 
-/// Maximal size of stored blocks in base.
-///
-/// Used to control db size.
-///
-/// Currently effectively unbounded.
-pub const BUFF_SIZE_ROCKSDB: usize = usize::MAX;
-
-/// Size of stored blocks cache in memory.
-///
-/// Keeping small to not run out of memory.
-pub const CACHE_SIZE: usize = 1000;
-
-/// Key base for storing metainformation about id of first block in db.
-pub const DB_META_FIRST_BLOCK_IN_DB_KEY: &str = "first_block_in_db";
-/// Key base for storing metainformation about id of last current block in db.
-pub const DB_META_LAST_BLOCK_IN_DB_KEY: &str = "last_block_in_db";
 /// Key base for storing metainformation about id of last observed L1 lib header in db.
 pub const DB_META_LAST_OBSERVED_L1_LIB_HEADER_ID_IN_DB_KEY: &str =
     "last_observed_l1_lib_header_in_db";
-/// Key base for storing metainformation which describe if first block has been set.
-pub const DB_META_FIRST_BLOCK_SET_KEY: &str = "first_block_set";
 /// Key base for storing metainformation about the last breakpoint.
 pub const DB_META_LAST_BREAKPOINT_ID: &str = "last_breakpoint_id";
 
-/// Interval between state breakpoints.
-pub const BREAKPOINT_INTERVAL: u8 = 100;
+/// Cell name for a breakpoint.
+pub const BREAKPOINT_CELL_NAME: &str = "breakpoint";
+/// Cell name for a block hash to block id map.
+pub const BLOCK_HASH_CELL_NAME: &str = "block hash";
+/// Cell name for a tx hash to block id map.
+pub const TX_HASH_CELL_NAME: &str = "tx hash";
+/// Cell name for a account number of transactions.
+pub const ACC_NUM_CELL_NAME: &str = "acc id";
 
-/// Name of block column family.
-pub const CF_BLOCK_NAME: &str = "cf_block";
-/// Name of meta column family.
-pub const CF_META_NAME: &str = "cf_meta";
 /// Name of breakpoint column family.
 pub const CF_BREAKPOINT_NAME: &str = "cf_breakpoint";
 /// Name of hash to id map column family.
@@ -55,10 +40,14 @@ pub const CF_ACC_META: &str = "cf_acc_meta";
 /// Name of account id to tx hash map column family.
 pub const CF_ACC_TO_TX: &str = "cf_acc_to_tx";
 
-pub type DbResult<T> = Result<T, DbError>;
-
 pub struct RocksDBIO {
     pub db: DBWithThreadMode<MultiThreaded>,
+}
+
+impl DBIO for RocksDBIO {
+    fn db(&self) -> &DBWithThreadMode<MultiThreaded> {
+        &self.db
+    }
 }
 
 impl RocksDBIO {
@@ -257,7 +246,11 @@ mod tests {
         let dbio = RocksDBIO::open_or_create(
             temdir_path,
             &genesis_block(),
-            &nssa::V03State::new_with_genesis_accounts(&[(acc1(), 10000), (acc2(), 20000)], &[]),
+            &nssa::V03State::new_with_genesis_accounts(
+                &[(acc1(), 10000), (acc2(), 20000)],
+                vec![],
+                0,
+            ),
         )
         .unwrap();
 
@@ -294,7 +287,11 @@ mod tests {
         let dbio = RocksDBIO::open_or_create(
             temdir_path,
             &genesis_block(),
-            &nssa::V03State::new_with_genesis_accounts(&[(acc1(), 10000), (acc2(), 20000)], &[]),
+            &nssa::V03State::new_with_genesis_accounts(
+                &[(acc1(), 10000), (acc2(), 20000)],
+                vec![],
+                0,
+            ),
         )
         .unwrap();
 
@@ -347,7 +344,11 @@ mod tests {
         let dbio = RocksDBIO::open_or_create(
             temdir_path,
             &genesis_block(),
-            &nssa::V03State::new_with_genesis_accounts(&[(acc1(), 10000), (acc2(), 20000)], &[]),
+            &nssa::V03State::new_with_genesis_accounts(
+                &[(acc1(), 10000), (acc2(), 20000)],
+                vec![],
+                0,
+            ),
         )
         .unwrap();
 
@@ -420,7 +421,11 @@ mod tests {
         let dbio = RocksDBIO::open_or_create(
             temdir_path,
             &genesis_block(),
-            &nssa::V03State::new_with_genesis_accounts(&[(acc1(), 10000), (acc2(), 20000)], &[]),
+            &nssa::V03State::new_with_genesis_accounts(
+                &[(acc1(), 10000), (acc2(), 20000)],
+                vec![],
+                0,
+            ),
         )
         .unwrap();
 
@@ -503,7 +508,11 @@ mod tests {
         let dbio = RocksDBIO::open_or_create(
             temdir_path,
             &genesis_block(),
-            &nssa::V03State::new_with_genesis_accounts(&[(acc1(), 10000), (acc2(), 20000)], &[]),
+            &nssa::V03State::new_with_genesis_accounts(
+                &[(acc1(), 10000), (acc2(), 20000)],
+                vec![],
+                0,
+            ),
         )
         .unwrap();
 
@@ -599,7 +608,11 @@ mod tests {
         let dbio = RocksDBIO::open_or_create(
             temdir_path,
             &genesis_block(),
-            &nssa::V03State::new_with_genesis_accounts(&[(acc1(), 10000), (acc2(), 20000)], &[]),
+            &nssa::V03State::new_with_genesis_accounts(
+                &[(acc1(), 10000), (acc2(), 20000)],
+                vec![],
+                0,
+            ),
         )
         .unwrap();
 

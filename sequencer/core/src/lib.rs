@@ -7,7 +7,7 @@ use common::PINATA_BASE58;
 use common::{
     HashType,
     block::{BedrockStatus, Block, HashableBlockData},
-    transaction::NSSATransaction,
+    transaction::{NSSATransaction, clock_invocation},
 };
 use config::SequencerConfig;
 use log::{error, info, warn};
@@ -16,7 +16,6 @@ use mempool::{MemPool, MemPoolHandle};
 #[cfg(feature = "mock")]
 pub use mock::SequencerCoreWithMockClients;
 use nssa::V03State;
-use nssa_core::{BlockId, Timestamp};
 pub use storage::error::DbError;
 use testnet_initial_state::initial_state;
 
@@ -104,24 +103,26 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
                 "No database found when starting the sequencer. Creating a fresh new with the initial data"
             );
 
-            let initial_commitments: Option<Vec<nssa_core::Commitment>> = config
-                .initial_private_accounts
-                .clone()
-                .map(|initial_commitments| {
-                    initial_commitments
-                        .iter()
-                        .map(|init_comm_data| {
-                            let npk = &init_comm_data.npk;
+            let initial_private_accounts: Option<
+                Vec<(nssa_core::Commitment, nssa_core::Nullifier)>,
+            > = config.initial_private_accounts.clone().map(|accounts| {
+                accounts
+                    .iter()
+                    .map(|init_comm_data| {
+                        let npk = &init_comm_data.npk;
 
-                            let mut acc = init_comm_data.account.clone();
+                        let mut acc = init_comm_data.account.clone();
 
-                            acc.program_owner =
-                                nssa::program::Program::authenticated_transfer_program().id();
+                        acc.program_owner =
+                            nssa::program::Program::authenticated_transfer_program().id();
 
-                            nssa_core::Commitment::new(npk, &acc)
-                        })
-                        .collect()
-                });
+                        (
+                            nssa_core::Commitment::new(npk, &acc),
+                            nssa_core::Nullifier::for_account_initialization(npk),
+                        )
+                    })
+                    .collect()
+            });
 
             let init_accs: Option<Vec<(nssa::AccountId, u128)>> = config
                 .initial_public_accounts
@@ -135,10 +136,11 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
 
             // If initial commitments or accounts are present in config, need to construct state
             // from them
-            if initial_commitments.is_some() || init_accs.is_some() {
+            if initial_private_accounts.is_some() || init_accs.is_some() {
                 V03State::new_with_genesis_accounts(
                     &init_accs.unwrap_or_default(),
-                    &initial_commitments.unwrap_or_default(),
+                    initial_private_accounts.unwrap_or_default(),
+                    genesis_block.header.timestamp,
                 )
             } else {
                 initial_state()
@@ -161,28 +163,6 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
         };
 
         (sequencer_core, mempool_handle)
-    }
-
-    fn execute_check_transaction_on_state(
-        &mut self,
-        tx: NSSATransaction,
-        block_id: BlockId,
-        timestamp: Timestamp,
-    ) -> Result<NSSATransaction, nssa::error::NssaError> {
-        match &tx {
-            NSSATransaction::Public(tx) => self
-                .state
-                .transition_from_public_transaction(tx, block_id, timestamp),
-            NSSATransaction::PrivacyPreserving(tx) => self
-                .state
-                .transition_from_privacy_preserving_transaction(tx, block_id, timestamp),
-            NSSATransaction::ProgramDeployment(tx) => self
-                .state
-                .transition_from_program_deployment_transaction(tx),
-        }
-        .inspect_err(|err| warn!("Error at transition {err:#?}"))?;
-
-        Ok(tx)
     }
 
     pub async fn produce_new_block(&mut self) -> Result<u64> {
@@ -224,12 +204,20 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
         let new_block_timestamp = u64::try_from(chrono::Utc::now().timestamp_millis())
             .expect("Timestamp must be positive");
 
+        // Pre-create the mandatory clock tx so its size is included in the block size check.
+        let clock_tx = clock_invocation(new_block_timestamp);
+        let clock_nssa_tx = NSSATransaction::Public(clock_tx.clone());
+
         while let Some(tx) = self.mempool.pop() {
             let tx_hash = tx.hash();
 
-            // Check if block size exceeds limit
-            let temp_valid_transactions =
-                [valid_transactions.as_slice(), std::slice::from_ref(&tx)].concat();
+            // Check if block size exceeds limit (including the mandatory clock tx).
+            let temp_valid_transactions = [
+                valid_transactions.as_slice(),
+                std::slice::from_ref(&tx),
+                std::slice::from_ref(&clock_nssa_tx),
+            ]
+            .concat();
             let temp_hashable_data = HashableBlockData {
                 block_id: new_block_height,
                 transactions: temp_valid_transactions,
@@ -252,25 +240,34 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
                 break;
             }
 
-            match self.execute_check_transaction_on_state(tx, new_block_height, new_block_timestamp)
-            {
-                Ok(valid_tx) => {
-                    valid_transactions.push(valid_tx);
-
-                    info!("Validated transaction with hash {tx_hash}, including it in block");
-
-                    if valid_transactions.len() >= self.sequencer_config.max_num_tx_in_block {
-                        break;
-                    }
-                }
+            let validated_diff = match tx.validate_on_state(
+                &self.state,
+                new_block_height,
+                new_block_timestamp,
+            ) {
+                Ok(diff) => diff,
                 Err(err) => {
                     error!(
                         "Transaction with hash {tx_hash} failed execution check with error: {err:#?}, skipping it",
                     );
-                    // TODO: Probably need to handle unsuccessful transaction execution?
+                    continue;
                 }
+            };
+
+            self.state.apply_state_diff(validated_diff);
+
+            valid_transactions.push(tx);
+            info!("Validated transaction with hash {tx_hash}, including it in block");
+            if valid_transactions.len() >= self.sequencer_config.max_num_tx_in_block {
+                break;
             }
         }
+
+        // Append the Clock Program invocation as the mandatory last transaction.
+        self.state
+            .transition_from_public_transaction(&clock_tx, new_block_height, new_block_timestamp)
+            .context("Clock transaction failed. Aborting block production.")?;
+        valid_transactions.push(clock_nssa_tx);
 
         let hashable_data = HashableBlockData {
             block_id: new_block_height,
@@ -395,7 +392,10 @@ mod tests {
     use std::{pin::pin, time::Duration};
 
     use bedrock_client::BackoffConfig;
-    use common::{test_utils::sequencer_sign_key_for_testing, transaction::NSSATransaction};
+    use common::{
+        test_utils::sequencer_sign_key_for_testing,
+        transaction::{NSSATransaction, clock_invocation},
+    };
     use logos_blockchain_core::mantle::ops::channel::ChannelId;
     use mempool::MemPoolHandle;
     use testnet_initial_state::{initial_accounts, initial_pub_accounts_private_keys};
@@ -524,7 +524,7 @@ mod tests {
         let tx = tx.transaction_stateless_check().unwrap();
 
         // Signature is not from sender. Execution fails
-        let result = sequencer.execute_check_transaction_on_state(tx, 0, 0);
+        let result = tx.execute_check_on_state(&mut sequencer.state, 0, 0);
 
         assert!(matches!(
             result,
@@ -550,7 +550,9 @@ mod tests {
         // Passed pre-check
         assert!(result.is_ok());
 
-        let result = sequencer.execute_check_transaction_on_state(result.unwrap(), 0, 0);
+        let result = result
+            .unwrap()
+            .execute_check_on_state(&mut sequencer.state, 0, 0);
         let is_failed_at_balance_mismatch = matches!(
             result.err().unwrap(),
             nssa::error::NssaError::ProgramExecutionFailed(_)
@@ -572,8 +574,7 @@ mod tests {
             acc1, 0, acc2, 100, &sign_key1,
         );
 
-        sequencer
-            .execute_check_transaction_on_state(tx, 0, 0)
+        tx.execute_check_on_state(&mut sequencer.state, 0, 0)
             .unwrap();
 
         let bal_from = sequencer.state.get_account_by_id(acc1).balance;
@@ -652,8 +653,14 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        // Only one should be included in the block
-        assert_eq!(block.body.transactions, vec![tx.clone()]);
+        // Only one user tx should be included; the clock tx is always appended last.
+        assert_eq!(
+            block.body.transactions,
+            vec![
+                tx.clone(),
+                NSSATransaction::Public(clock_invocation(block.header.timestamp))
+            ]
+        );
     }
 
     #[tokio::test]
@@ -679,7 +686,13 @@ mod tests {
             .get_block_at_id(sequencer.chain_height)
             .unwrap()
             .unwrap();
-        assert_eq!(block.body.transactions, vec![tx.clone()]);
+        assert_eq!(
+            block.body.transactions,
+            vec![
+                tx.clone(),
+                NSSATransaction::Public(clock_invocation(block.header.timestamp))
+            ]
+        );
 
         // Add same transaction should fail
         mempool_handle.push(tx.clone()).await.unwrap();
@@ -691,7 +704,13 @@ mod tests {
             .get_block_at_id(sequencer.chain_height)
             .unwrap()
             .unwrap();
-        assert!(block.body.transactions.is_empty());
+        // The replay is rejected, so only the clock tx is in the block.
+        assert_eq!(
+            block.body.transactions,
+            vec![NSSATransaction::Public(clock_invocation(
+                block.header.timestamp
+            ))]
+        );
     }
 
     #[tokio::test]
@@ -726,7 +745,13 @@ mod tests {
                 .get_block_at_id(sequencer.chain_height)
                 .unwrap()
                 .unwrap();
-            assert_eq!(block.body.transactions, vec![tx.clone()]);
+            assert_eq!(
+                block.body.transactions,
+                vec![
+                    tx.clone(),
+                    NSSATransaction::Public(clock_invocation(block.header.timestamp))
+                ]
+            );
         }
 
         // Instantiating a new sequencer from the same config. This should load the existing block
@@ -856,8 +881,54 @@ mod tests {
         );
         assert_eq!(
             new_block.body.transactions,
-            vec![tx],
-            "New block should contain the submitted transaction"
+            vec![
+                tx,
+                NSSATransaction::Public(clock_invocation(new_block.header.timestamp))
+            ],
+            "New block should contain the submitted transaction and the clock invocation"
+        );
+    }
+
+    #[tokio::test]
+    async fn transactions_touching_clock_account_are_dropped_from_block() {
+        let (mut sequencer, mempool_handle) = common_setup().await;
+
+        // Canonical clock invocation and a crafted variant with a different timestamp — both must
+        // be dropped because their diffs touch the clock accounts.
+        let crafted_clock_tx = {
+            let message = nssa::public_transaction::Message::try_new(
+                nssa::program::Program::clock().id(),
+                nssa::CLOCK_PROGRAM_ACCOUNT_IDS.to_vec(),
+                vec![],
+                42_u64,
+            )
+            .unwrap();
+            NSSATransaction::Public(nssa::PublicTransaction::new(
+                message,
+                nssa::public_transaction::WitnessSet::from_raw_parts(vec![]),
+            ))
+        };
+        mempool_handle
+            .push(NSSATransaction::Public(clock_invocation(0)))
+            .await
+            .unwrap();
+        mempool_handle.push(crafted_clock_tx).await.unwrap();
+        sequencer
+            .produce_new_block_with_mempool_transactions()
+            .unwrap();
+
+        let block = sequencer
+            .store
+            .get_block_at_id(sequencer.chain_height)
+            .unwrap()
+            .unwrap();
+
+        // Both transactions were dropped. Only the system-appended clock tx remains.
+        assert_eq!(
+            block.body.transactions,
+            vec![NSSATransaction::Public(clock_invocation(
+                block.header.timestamp
+            ))]
         );
     }
 
@@ -907,6 +978,160 @@ mod tests {
         assert_ne!(
             sequencer.chain_height, different_genesis_id,
             "Chain height should NOT match the modified config.genesis_id"
+        );
+    }
+
+    #[tokio::test]
+    async fn user_tx_that_chain_calls_clock_is_dropped() {
+        let (mut sequencer, mempool_handle) = common_setup().await;
+
+        // Deploy the clock_chain_caller test program.
+        let deploy_tx =
+            NSSATransaction::ProgramDeployment(nssa::ProgramDeploymentTransaction::new(
+                nssa::program_deployment_transaction::Message::new(
+                    test_program_methods::CLOCK_CHAIN_CALLER_ELF.to_vec(),
+                ),
+            ));
+        mempool_handle.push(deploy_tx).await.unwrap();
+        sequencer
+            .produce_new_block_with_mempool_transactions()
+            .unwrap();
+
+        // Build a user transaction that invokes clock_chain_caller, which in turn chain-calls the
+        // clock program with the clock accounts. The sequencer should detect that the resulting
+        // state diff modifies clock accounts and drop the transaction.
+        let clock_chain_caller_id =
+            nssa::program::Program::new(test_program_methods::CLOCK_CHAIN_CALLER_ELF.to_vec())
+                .unwrap()
+                .id();
+        let clock_program_id = nssa::program::Program::clock().id();
+        let timestamp: u64 = 0;
+
+        let message = nssa::public_transaction::Message::try_new(
+            clock_chain_caller_id,
+            nssa::CLOCK_PROGRAM_ACCOUNT_IDS.to_vec(),
+            vec![], // no signers
+            (clock_program_id, timestamp),
+        )
+        .unwrap();
+        let user_tx = NSSATransaction::Public(nssa::PublicTransaction::new(
+            message,
+            nssa::public_transaction::WitnessSet::from_raw_parts(vec![]),
+        ));
+
+        mempool_handle.push(user_tx).await.unwrap();
+        sequencer
+            .produce_new_block_with_mempool_transactions()
+            .unwrap();
+
+        let block = sequencer
+            .store
+            .get_block_at_id(sequencer.chain_height)
+            .unwrap()
+            .unwrap();
+
+        // The user tx must have been dropped; only the mandatory clock invocation remains.
+        assert_eq!(
+            block.body.transactions,
+            vec![NSSATransaction::Public(clock_invocation(
+                block.header.timestamp
+            ))]
+        );
+    }
+
+    #[tokio::test]
+    async fn block_production_aborts_when_clock_account_data_is_corrupted() {
+        let (mut sequencer, mempool_handle) = common_setup().await;
+
+        // Corrupt the clock 01 account data so the clock program panics on deserialization.
+        let clock_account_id = nssa::CLOCK_01_PROGRAM_ACCOUNT_ID;
+        let mut corrupted = sequencer.state.get_account_by_id(clock_account_id);
+        corrupted.data = vec![0xff; 3].try_into().unwrap();
+        sequencer
+            .state
+            .force_insert_account(clock_account_id, corrupted);
+
+        // Push a dummy transaction so the mempool is non-empty.
+        let tx = common::test_utils::produce_dummy_empty_transaction();
+        mempool_handle.push(tx).await.unwrap();
+
+        // Block production must fail because the appended clock tx cannot execute.
+        let result = sequencer.produce_new_block_with_mempool_transactions();
+        assert!(
+            result.is_err(),
+            "Block production should abort when clock account data is corrupted"
+        );
+    }
+
+    #[tokio::test]
+    async fn genesis_private_account_cannot_be_re_initialized() {
+        use common::transaction::NSSATransaction;
+        use nssa::{
+            Account,
+            privacy_preserving_transaction::{
+                PrivacyPreservingTransaction, circuit::execute_and_prove, message::Message,
+                witness_set::WitnessSet,
+            },
+            program::Program,
+        };
+        use nssa_core::{
+            SharedSecretKey,
+            account::AccountWithMetadata,
+            encryption::{EphemeralPublicKey, EphemeralSecretKey, ViewingPublicKey},
+        };
+        use testnet_initial_state::PrivateAccountPublicInitialData;
+
+        let nsk: nssa_core::NullifierSecretKey = [7; 32];
+        let npk = nssa_core::NullifierPublicKey::from(&nsk);
+        let vsk: EphemeralSecretKey = [8; 32];
+        let vpk = ViewingPublicKey::from_scalar(vsk);
+
+        let genesis_account = Account {
+            program_owner: Program::authenticated_transfer_program().id(),
+            ..Account::default()
+        };
+
+        // Start a sequencer from config with a preconfigured private genesis account
+        let mut config = setup_sequencer_config();
+        config.initial_private_accounts = Some(vec![PrivateAccountPublicInitialData {
+            npk: npk.clone(),
+            account: genesis_account,
+        }]);
+
+        let (mut sequencer, _mempool_handle) =
+            SequencerCoreWithMockClients::start_from_config(config).await;
+
+        // Attempt to re-initialize the same genesis account via a privacy-preserving transaction
+        let esk = [9; 32];
+        let shared_secret = SharedSecretKey::new(&esk, &vpk);
+        let epk = EphemeralPublicKey::from_scalar(esk);
+
+        let (output, proof) = execute_and_prove(
+            vec![AccountWithMetadata::new(Account::default(), true, &npk)],
+            Program::serialize_instruction(0_u128).unwrap(),
+            vec![1],
+            vec![(npk.clone(), shared_secret)],
+            vec![nsk],
+            vec![None],
+            &Program::authenticated_transfer_program().into(),
+        )
+        .unwrap();
+
+        let message =
+            Message::try_from_circuit_output(vec![], vec![], vec![(npk, vpk, epk)], output)
+                .unwrap();
+
+        let witness_set = WitnessSet::for_message(&message, proof, &[]);
+        let tx = NSSATransaction::PrivacyPreserving(PrivacyPreservingTransaction::new(
+            message,
+            witness_set,
+        ));
+
+        let result = tx.execute_check_on_state(&mut sequencer.state, 2, 0);
+
+        assert!(
+            result.is_err_and(|e| e.to_string().contains("Nullifier already seen")),
+            "re-initializing a genesis private account must be rejected by the sequencer"
         );
     }
 }

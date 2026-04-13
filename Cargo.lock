@@ -1463,6 +1463,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a822ea5bc7590f9d40f1ba12c0dc3c2760f3482c6984db1573ad11031420831"
 
 [[package]]
+name = "clock_core"
+version = "0.1.0"
+dependencies = [
+ "borsh",
+ "nssa_core",
+]
+
+[[package]]
 name = "cobs"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1511,6 +1519,7 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "borsh",
+ "clock_core",
  "hex",
  "log",
  "logos-blockchain-common-http-client",
@@ -5270,6 +5279,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "borsh",
+ "clock_core",
  "env_logger",
  "hex",
  "hex-literal 1.1.0",
@@ -5908,6 +5918,7 @@ dependencies = [
  "amm_program",
  "ata_core",
  "ata_program",
+ "clock_core",
  "nssa_core",
  "risc0-zkvm",
  "serde",
@@ -7162,6 +7173,7 @@ dependencies = [
  "serde_json",
  "storage",
  "tempfile",
+ "test_program_methods",
  "testnet_initial_state",
  "tokio",
  "url",
@@ -7842,8 +7854,10 @@ dependencies = [
 name = "test_programs"
 version = "0.1.0"
 dependencies = [
+ "clock_core",
  "nssa_core",
  "risc0-zkvm",
+ "serde",
 ]
 
 [[package]]

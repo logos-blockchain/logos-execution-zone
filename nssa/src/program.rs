@@ -9,7 +9,9 @@ use serde::Serialize;
 use crate::{
     error::NssaError,
     program_methods::{
-        AMM_ELF, ASSOCIATED_TOKEN_ACCOUNT_ELF, AUTHENTICATED_TRANSFER_ELF, PINATA_ELF, TOKEN_ELF,
+        AMM_ELF, AMM_ID, ASSOCIATED_TOKEN_ACCOUNT_ELF, ASSOCIATED_TOKEN_ACCOUNT_ID,
+        AUTHENTICATED_TRANSFER_ELF, AUTHENTICATED_TRANSFER_ID, CLOCK_ELF, CLOCK_ID, PINATA_ELF,
+        PINATA_ID, TOKEN_ELF, TOKEN_ID,
     },
 };
 
@@ -52,13 +54,20 @@ impl Program {
 
     pub(crate) fn execute(
         &self,
+        caller_program_id: Option<ProgramId>,
         pre_states: &[AccountWithMetadata],
         instruction_data: &InstructionData,
     ) -> Result<ProgramOutput, NssaError> {
         // Write inputs to the program
         let mut env_builder = ExecutorEnv::builder();
         env_builder.session_limit(Some(MAX_NUM_CYCLES_PUBLIC_EXECUTION));
-        Self::write_inputs(pre_states, instruction_data, &mut env_builder)?;
+        Self::write_inputs(
+            self.id,
+            caller_program_id,
+            pre_states,
+            instruction_data,
+            &mut env_builder,
+        )?;
         let env = env_builder.build().unwrap();
 
         // Execute the program (without proving)
@@ -78,40 +87,66 @@ impl Program {
 
     /// Writes inputs to `env_builder` in the order expected by the programs.
     pub(crate) fn write_inputs(
+        program_id: ProgramId,
+        caller_program_id: Option<ProgramId>,
         pre_states: &[AccountWithMetadata],
         instruction_data: &[u32],
         env_builder: &mut ExecutorEnvBuilder,
     ) -> Result<(), NssaError> {
+        env_builder
+            .write(&program_id)
+            .map_err(|e| NssaError::ProgramWriteInputFailed(e.to_string()))?;
+        env_builder
+            .write(&caller_program_id)
+            .map_err(|e| NssaError::ProgramWriteInputFailed(e.to_string()))?;
         let pre_states = pre_states.to_vec();
         env_builder
-            .write(&(pre_states, instruction_data))
+            .write(&pre_states)
+            .map_err(|e| NssaError::ProgramWriteInputFailed(e.to_string()))?;
+        env_builder
+            .write(&instruction_data)
             .map_err(|e| NssaError::ProgramWriteInputFailed(e.to_string()))?;
         Ok(())
     }
 
     #[must_use]
     pub fn authenticated_transfer_program() -> Self {
-        // This unwrap won't panic since the `AUTHENTICATED_TRANSFER_ELF` comes from risc0 build of
-        // `program_methods`
-        Self::new(AUTHENTICATED_TRANSFER_ELF.to_vec()).unwrap()
+        Self {
+            id: AUTHENTICATED_TRANSFER_ID,
+            elf: AUTHENTICATED_TRANSFER_ELF.to_vec(),
+        }
     }
 
     #[must_use]
     pub fn token() -> Self {
-        // This unwrap won't panic since the `TOKEN_ELF` comes from risc0 build of
-        // `program_methods`
-        Self::new(TOKEN_ELF.to_vec()).unwrap()
+        Self {
+            id: TOKEN_ID,
+            elf: TOKEN_ELF.to_vec(),
+        }
     }
 
     #[must_use]
     pub fn amm() -> Self {
-        Self::new(AMM_ELF.to_vec()).expect("The AMM program must be a valid Risc0 program")
+        Self {
+            id: AMM_ID,
+            elf: AMM_ELF.to_vec(),
+        }
+    }
+
+    #[must_use]
+    pub fn clock() -> Self {
+        Self {
+            id: CLOCK_ID,
+            elf: CLOCK_ELF.to_vec(),
+        }
     }
 
     #[must_use]
     pub fn ata() -> Self {
-        Self::new(ASSOCIATED_TOKEN_ACCOUNT_ELF.to_vec())
-            .expect("The ATA program must be a valid Risc0 program")
+        Self {
+            id: ASSOCIATED_TOKEN_ACCOUNT_ID,
+            elf: ASSOCIATED_TOKEN_ACCOUNT_ELF.to_vec(),
+        }
     }
 }
 
@@ -119,16 +154,19 @@ impl Program {
 impl Program {
     #[must_use]
     pub fn pinata() -> Self {
-        // This unwrap won't panic since the `PINATA_ELF` comes from risc0 build of
-        // `program_methods`
-        Self::new(PINATA_ELF.to_vec()).unwrap()
+        Self {
+            id: PINATA_ID,
+            elf: PINATA_ELF.to_vec(),
+        }
     }
 
     #[must_use]
-    #[expect(clippy::non_ascii_literal, reason = "More readable")]
     pub fn pinata_token() -> Self {
-        use crate::program_methods::PINATA_TOKEN_ELF;
-        Self::new(PINATA_TOKEN_ELF.to_vec()).expect("Piñata program must be a valid R0BF file")
+        use crate::program_methods::{PINATA_TOKEN_ELF, PINATA_TOKEN_ID};
+        Self {
+            id: PINATA_TOKEN_ID,
+            elf: PINATA_TOKEN_ELF.to_vec(),
+        }
     }
 }
 
@@ -139,8 +177,9 @@ mod tests {
     use crate::{
         program::Program,
         program_methods::{
-            AUTHENTICATED_TRANSFER_ELF, AUTHENTICATED_TRANSFER_ID, PINATA_ELF, PINATA_ID,
-            TOKEN_ELF, TOKEN_ID,
+            AMM_ELF, AMM_ID, ASSOCIATED_TOKEN_ACCOUNT_ELF, ASSOCIATED_TOKEN_ACCOUNT_ID,
+            AUTHENTICATED_TRANSFER_ELF, AUTHENTICATED_TRANSFER_ID, CLOCK_ELF, CLOCK_ID, PINATA_ELF,
+            PINATA_ID, PINATA_TOKEN_ELF, PINATA_TOKEN_ID, TOKEN_ELF, TOKEN_ID,
         },
     };
 
@@ -287,24 +326,71 @@ mod tests {
 
         #[must_use]
         pub fn modified_transfer_program() -> Self {
-            use test_program_methods::MODIFIED_TRANSFER_ELF;
-            // This unwrap won't panic since the `MODIFIED_TRANSFER_ELF` comes from risc0 build of
-            // `program_methods`
-            Self::new(MODIFIED_TRANSFER_ELF.to_vec()).unwrap()
+            use test_program_methods::{MODIFIED_TRANSFER_ELF, MODIFIED_TRANSFER_ID};
+            Self {
+                id: MODIFIED_TRANSFER_ID,
+                elf: MODIFIED_TRANSFER_ELF.to_vec(),
+            }
         }
 
         #[must_use]
         pub fn validity_window() -> Self {
-            use test_program_methods::VALIDITY_WINDOW_ELF;
-            // This unwrap won't panic since the `VALIDITY_WINDOW_ELF` comes from risc0 build of
-            // `program_methods`
-            Self::new(VALIDITY_WINDOW_ELF.to_vec()).unwrap()
+            use test_program_methods::{VALIDITY_WINDOW_ELF, VALIDITY_WINDOW_ID};
+            Self {
+                id: VALIDITY_WINDOW_ID,
+                elf: VALIDITY_WINDOW_ELF.to_vec(),
+            }
         }
 
         #[must_use]
         pub fn validity_window_chain_caller() -> Self {
-            use test_program_methods::VALIDITY_WINDOW_CHAIN_CALLER_ELF;
-            Self::new(VALIDITY_WINDOW_CHAIN_CALLER_ELF.to_vec()).unwrap()
+            use test_program_methods::{
+                VALIDITY_WINDOW_CHAIN_CALLER_ELF, VALIDITY_WINDOW_CHAIN_CALLER_ID,
+            };
+            Self {
+                id: VALIDITY_WINDOW_CHAIN_CALLER_ID,
+                elf: VALIDITY_WINDOW_CHAIN_CALLER_ELF.to_vec(),
+            }
+        }
+
+        #[must_use]
+        pub fn flash_swap_initiator() -> Self {
+            use test_program_methods::FLASH_SWAP_INITIATOR_ELF;
+            Self::new(FLASH_SWAP_INITIATOR_ELF.to_vec())
+                .expect("flash_swap_initiator must be a valid Risc0 program")
+        }
+
+        #[must_use]
+        pub fn flash_swap_callback() -> Self {
+            use test_program_methods::FLASH_SWAP_CALLBACK_ELF;
+            Self::new(FLASH_SWAP_CALLBACK_ELF.to_vec())
+                .expect("flash_swap_callback must be a valid Risc0 program")
+        }
+
+        #[must_use]
+        pub fn malicious_self_program_id() -> Self {
+            use test_program_methods::MALICIOUS_SELF_PROGRAM_ID_ELF;
+            Self::new(MALICIOUS_SELF_PROGRAM_ID_ELF.to_vec())
+                .expect("malicious_self_program_id must be a valid Risc0 program")
+        }
+
+        #[must_use]
+        pub fn malicious_caller_program_id() -> Self {
+            use test_program_methods::MALICIOUS_CALLER_PROGRAM_ID_ELF;
+            Self::new(MALICIOUS_CALLER_PROGRAM_ID_ELF.to_vec())
+                .expect("malicious_caller_program_id must be a valid Risc0 program")
+        }
+
+        #[must_use]
+        pub fn time_locked_transfer() -> Self {
+            use test_program_methods::TIME_LOCKED_TRANSFER_ELF;
+            Self::new(TIME_LOCKED_TRANSFER_ELF.to_vec()).unwrap()
+        }
+
+        #[must_use]
+        pub fn pinata_cooldown() -> Self {
+            use test_program_methods::PINATA_COOLDOWN_ELF;
+            Self::new(PINATA_COOLDOWN_ELF.to_vec()).unwrap()
         }
     }
 
@@ -333,7 +419,7 @@ mod tests {
             ..Account::default()
         };
         let program_output = program
-            .execute(&[sender, recipient], &instruction_data)
+            .execute(None, &[sender, recipient], &instruction_data)
             .unwrap();
 
         let [sender_post, recipient_post] = program_output.post_states.try_into().unwrap();
@@ -354,5 +440,22 @@ mod tests {
         assert_eq!(token_program.elf, TOKEN_ELF);
         assert_eq!(pinata_program.id, PINATA_ID);
         assert_eq!(pinata_program.elf, PINATA_ELF);
+    }
+
+    #[test]
+    fn builtin_program_ids_match_elfs() {
+        let cases: &[(&[u8], [u32; 8])] = &[
+            (AMM_ELF, AMM_ID),
+            (AUTHENTICATED_TRANSFER_ELF, AUTHENTICATED_TRANSFER_ID),
+            (ASSOCIATED_TOKEN_ACCOUNT_ELF, ASSOCIATED_TOKEN_ACCOUNT_ID),
+            (CLOCK_ELF, CLOCK_ID),
+            (PINATA_ELF, PINATA_ID),
+            (PINATA_TOKEN_ELF, PINATA_TOKEN_ID),
+            (TOKEN_ELF, TOKEN_ID),
+        ];
+        for (elf, expected_id) in cases {
+            let program = Program::new(elf.to_vec()).unwrap();
+            assert_eq!(program.id(), *expected_id);
+        }
     }
 }
