@@ -1,5 +1,5 @@
 use std::{
-    ffi::{CString, c_char}, fs::File, io::Write, net::SocketAddr, path::PathBuf
+    ffi::{CString, c_char}, fs::File, io::Write, net::SocketAddr, path::PathBuf, sync::Arc
 };
 
 use anyhow::{Context, Result, bail};
@@ -9,7 +9,7 @@ use log::{debug, error, warn};
 use nssa::AccountId;
 use sequencer_core::indexer_client::{IndexerClient, IndexerClientTrait};
 use sequencer_service::SequencerHandle;
-use sequencer_service_rpc::{SequencerClient, SequencerClientBuilder};
+use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
 use tempfile::TempDir;
 use testcontainers::compose::DockerCompose;
 use wallet::{WalletCore, config::WalletConfigOverrides};
@@ -41,11 +41,10 @@ pub struct TestContextFFI {
     _temp_indexer_dir: TempDir,
     _temp_sequencer_dir: TempDir,
     _temp_wallet_dir: TempDir,
-    _runtime: tokio::runtime::Runtime,
 }
 
 impl TestContextBuilder {
-    pub fn build_ffi(self, runtime: tokio::runtime::Runtime) -> Result<TestContextFFI> {
+    pub fn build_ffi(self, runtime: Arc<tokio::runtime::Runtime>) -> Result<TestContextFFI> {
         TestContextFFI::new_configured(
             self.sequencer_partial_config.unwrap_or_default(),
             self.initial_data.unwrap_or_else(|| {
@@ -58,7 +57,7 @@ impl TestContextBuilder {
 
 impl TestContextFFI {
     /// Create new test context.
-    pub fn new(runtime: tokio::runtime::Runtime) -> Result<Self> {
+    pub fn new(runtime: Arc<tokio::runtime::Runtime>) -> Result<Self> {
         Self::builder().build_ffi(runtime)
     }
 
@@ -70,17 +69,27 @@ impl TestContextFFI {
     fn new_configured(
         sequencer_partial_config: config::SequencerPartialConfig,
         initial_data: config::InitialData,
-        runtime: tokio::runtime::Runtime
+        runtime: Arc<tokio::runtime::Runtime>
     ) -> Result<Self> {
         // Ensure logger is initialized only once
         *LOGGER;
 
         debug!("Test context setup");
 
+        println!("Hello 3");
+
+        runtime.block_on(async { println!("Hello 3.5") });
+
+        println!("Hello 4");
+
         let (bedrock_compose, bedrock_addr) = runtime.block_on(Self::setup_bedrock_node())?;
+
+        println!("Hello 5");
 
         let (indexer_ffi, temp_indexer_dir) = Self::setup_indexer_ffi(bedrock_addr, &initial_data)
             .context("Failed to setup Indexer")?;
+
+        println!("Hello 6");
 
         let (sequencer_handle, temp_sequencer_dir) = runtime.block_on(Self::setup_sequencer(
             sequencer_partial_config,
@@ -90,10 +99,14 @@ impl TestContextFFI {
         ))
         .context("Failed to setup Sequencer")?;
 
+        println!("Hello 7");
+
         let (wallet, temp_wallet_dir, wallet_password) =
             runtime.block_on(Self::setup_wallet(sequencer_handle.addr(), &initial_data)
     )
                 .context("Failed to setup wallet")?;
+
+        println!("Hello 8");
 
         let sequencer_url = config::addr_to_url(config::UrlProtocol::Http, sequencer_handle.addr())
             .context("Failed to convert sequencer addr to URL")?;
@@ -107,6 +120,8 @@ impl TestContextFFI {
 )
             .context("Failed to create indexer client")?;
 
+        println!("Hello 9");
+
         Ok(Self {
             sequencer_client,
             indexer_client,
@@ -118,7 +133,6 @@ impl TestContextFFI {
             _temp_indexer_dir: temp_indexer_dir,
             _temp_sequencer_dir: temp_sequencer_dir,
             _temp_wallet_dir: temp_wallet_dir,
-            _runtime: runtime,
         })
     }
 
@@ -339,12 +353,15 @@ impl TestContextFFI {
             .collect()
     }
 
-    pub fn get_last_block_sequencer(&self) -> Result<u64> {
-        Ok(self._runtime.block_on(self.sequencer_client.get_last_finalized_block_id())?)
+    pub fn get_last_block_sequencer(&self, runtime: Arc<tokio::runtime::Runtime>) -> Result<u64> {
+        let res = runtime.block_on(self.sequencer_client.get_last_block_id()).unwrap();
+
+        println!("Hello 11.5");
+        Ok(res)
     }
 
-    pub fn get_last_block_indexer(&self) -> Result<u64> {
-        Ok(self._runtime.block_on(self.indexer_client.get_last_finalized_block_id())?)
+    pub fn get_last_block_indexer(&self, runtime: Arc<tokio::runtime::Runtime>) -> Result<u64> {
+        Ok(runtime.block_on(self.indexer_client.get_last_finalized_block_id())?)
     }
 }
 
@@ -361,7 +378,6 @@ impl Drop for TestContextFFI {
             indexer_client: _,
             wallet: _,
             wallet_password: _,
-            _runtime: _,
         } = self;
 
         let sequencer_handle = sequencer_handle
@@ -377,11 +393,15 @@ impl Drop for TestContextFFI {
             );
         }
 
+        println!("Hello 14");
+
         let indexer_handle = unsafe { indexer_ffi.handle() };
 
         if !indexer_handle.is_healthy() {
             error!("Indexer handle has unexpectedly stopped before TestContext drop");
         }
+
+        println!("Hello 15");
 
         let container = bedrock_compose
             .service(BEDROCK_SERVICE_WITH_OPEN_PORT)
@@ -400,5 +420,50 @@ impl Drop for TestContextFFI {
                 container.id()
             );
         }
+
+        println!("Hello 16");
+    }
+}
+
+/// A test context with ffi to be used in normal #[test] tests.
+pub struct BlockingTestContextFFI {
+    ctx: Option<TestContextFFI>,
+    runtime: Arc<tokio::runtime::Runtime>,
+}
+
+impl BlockingTestContextFFI {
+    pub fn new() -> Result<Self> {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let runtime_wrapped = Arc::new(runtime);
+        let ctx = TestContextFFI::new(runtime_wrapped.clone())?;
+        Ok(Self {
+            ctx: Some(ctx),
+            runtime: runtime_wrapped,
+        })
+    }
+
+    pub const fn ctx(&self) -> &TestContextFFI {
+        self.ctx.as_ref().expect("TestContext is set")
+    }
+
+    pub fn runtime(&self) -> Arc<tokio::runtime::Runtime> {
+        self.runtime.clone()
+    }
+}
+
+impl Drop for BlockingTestContextFFI {
+    fn drop(&mut self) {
+        let Self { ctx, runtime } = self;
+
+        println!("Hello 20");
+
+        // Ensure async cleanup of TestContext by blocking on its drop in the runtime.
+        runtime.block_on(async {
+            if let Some(ctx) = ctx.take() {
+                drop(ctx);
+            }
+        });
+
+        println!("Hello 21");
     }
 }
