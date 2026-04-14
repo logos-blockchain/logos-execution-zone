@@ -5,7 +5,7 @@ use crate::{
     NullifierSecretKey, SharedSecretKey,
     account::{Account, AccountWithMetadata},
     encryption::Ciphertext,
-    program::{BlockValidityWindow, ProgramId, ProgramOutput, TimestampValidityWindow},
+    program::{BlockValidityWindow, PdaSeed, ProgramId, ProgramOutput, TimestampValidityWindow},
 };
 
 #[derive(Serialize, Deserialize)]
@@ -26,6 +26,11 @@ pub struct PrivacyPreservingCircuitInput {
     pub private_account_membership_proofs: Vec<Option<MembershipProof>>,
     /// Program ID.
     pub program_id: ProgramId,
+    /// Private PDA info for mask-3 accounts.
+    /// Unlike the other private_account_* fields which are parallel arrays indexed by private
+    /// account position, this is a separate lookup table. The circuit matches entries by
+    /// (program_id, seed) against the chained calls' pda_seeds to resolve private PDA authorization.
+    pub private_pda_info: Vec<(ProgramId, PdaSeed, NullifierPublicKey)>,
 }
 
 #[derive(Serialize, Deserialize)]
