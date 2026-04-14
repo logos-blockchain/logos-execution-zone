@@ -10,6 +10,7 @@ workspace = true
 [dependencies]
 common.workspace = true
 nssa.workspace = true
+nssa_core.workspace = true
 mempool.workspace = true
 sequencer_core = { workspace = true, features = ["testnet"] }
 sequencer_service_protocol.workspace = true

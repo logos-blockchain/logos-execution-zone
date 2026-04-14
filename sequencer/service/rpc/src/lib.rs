@@ -7,7 +7,7 @@ use jsonrpsee::types::ErrorObjectOwned;
 pub use jsonrpsee::{core::ClientError, http_client::HttpClientBuilder as SequencerClientBuilder};
 use sequencer_service_protocol::{
     Account, AccountId, Block, BlockId, Commitment, HashType, MembershipProof, NSSATransaction,
-    Nonce, ProgramId, SimulationResult, TxReceipt,
+    Nonce, ProgramId, SimulationResult, StateSnapshot, TxReceipt,
 };
 
 #[cfg(all(not(feature = "server"), not(feature = "client")))]
@@ -99,6 +99,12 @@ pub trait Rpc {
 
     #[method(name = "getProgramIds")]
     async fn get_program_ids(&self) -> Result<BTreeMap<String, ProgramId>, ErrorObjectOwned>;
+
+    /// Returns a snapshot of the current execution state as opaque Borsh bytes.
+    /// Intended for fork mode: a local sequencer can bootstrap from this snapshot
+    /// instead of replaying blocks from genesis.
+    #[method(name = "getStateSnapshot")]
+    async fn get_state_snapshot(&self) -> Result<StateSnapshot, ErrorObjectOwned>;
 
     // =============================================================================================
 }

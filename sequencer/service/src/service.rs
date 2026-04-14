@@ -256,6 +256,14 @@ impl<BC: BlockSettlementClientTrait + Send + 'static, IC: IndexerClientTrait + S
         Ok(sequencer.state().get_account_by_id(account_id))
     }
 
+    async fn get_state_snapshot(&self) -> Result<common::snapshot::StateSnapshot, ErrorObjectOwned> {
+        let sequencer = self.sequencer.lock().await;
+        let state_bytes = borsh::to_vec(sequencer.state()).map_err(|e| {
+            ErrorObjectOwned::owned(ErrorCode::InternalError.code(), e.to_string(), None::<()>)
+        })?;
+        Ok(common::snapshot::StateSnapshot { state_bytes, block_id: sequencer.chain_height() })
+    }
+
     async fn get_program_ids(&self) -> Result<BTreeMap<String, ProgramId>, ErrorObjectOwned> {
         let mut program_ids = BTreeMap::new();
         program_ids.insert(
@@ -319,6 +327,7 @@ mod tests {
             indexer_rpc_url: "ws://localhost:8779".parse().unwrap(),
             initial_public_accounts: None,
             initial_private_accounts: None,
+            override_initial_state: None,
         }
     }
 
@@ -424,5 +433,25 @@ mod tests {
 
         let account_after = service.get_account(account_id).await.unwrap();
         assert_eq!(account_before.nonce, account_after.nonce, "Simulation must not modify state");
+    }
+
+    #[tokio::test]
+    async fn get_state_snapshot_returns_deserializable_state() {
+        use nssa::V03State;
+        use sequencer_service_rpc::RpcServer as _;
+
+        let service = make_service().await;
+        let snapshot = service.get_state_snapshot().await.unwrap();
+
+        // The returned bytes must round-trip through Borsh.
+        assert!(
+            !snapshot.state_bytes.is_empty(),
+            "Snapshot state_bytes must not be empty"
+        );
+        let decoded = borsh::from_slice::<V03State>(&snapshot.state_bytes);
+        assert!(decoded.is_ok(), "Snapshot bytes must deserialize to V03State");
+
+        // block_id reflects the sequencer's chain height at snapshot time.
+        assert_eq!(snapshot.block_id, 1, "Fresh sequencer genesis block id should be 1");
     }
 }

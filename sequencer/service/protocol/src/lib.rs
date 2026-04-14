@@ -5,6 +5,7 @@ pub use common::{
     block::Block,
     receipt::{TxReceipt, TxStatus},
     simulation::SimulationResult,
+    snapshot::StateSnapshot,
     transaction::NSSATransaction,
 };
 pub use nssa::{Account, AccountId, ProgramId};

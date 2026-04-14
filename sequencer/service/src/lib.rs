@@ -18,6 +18,8 @@ use sequencer_service_rpc::RpcServer as _;
 use tokio::{sync::Mutex, task::JoinHandle};
 
 pub mod service;
+#[cfg(feature = "standalone")]
+pub mod fork;
 
 const REQUEST_BODY_MAX_SIZE: ByteSize = ByteSize::mib(10);
 
@@ -187,6 +189,23 @@ pub async fn run(config: SequencerConfig, port: u16) -> Result<SequencerHandle> 
         retry_pending_blocks_loop_handle,
         listen_for_bedrock_blocks_loop_handle,
     ))
+}
+
+/// Start the sequencer from a remote chain's state snapshot (fork mode).
+///
+/// Injects the provided `forked_state` as the initial execution state and sets
+/// the genesis block ID to `fork_block_id`, so new blocks are produced starting
+/// at `fork_block_id + 1`. Only available with the `standalone` feature.
+#[cfg(feature = "standalone")]
+pub async fn run_forked(
+    mut config: SequencerConfig,
+    port: u16,
+    forked_state: nssa::V03State,
+    fork_block_id: nssa_core::BlockId,
+) -> Result<SequencerHandle> {
+    config.genesis_id = fork_block_id;
+    config.override_initial_state = Some(Box::new(forked_state));
+    run(config, port).await
 }
 
 async fn run_server(

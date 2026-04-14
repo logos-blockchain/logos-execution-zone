@@ -11,6 +11,7 @@ use bytesize::ByteSize;
 use common::config::BasicAuth;
 use humantime_serde;
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
+use nssa::V03State;
 use serde::{Deserialize, Serialize};
 use testnet_initial_state::{PrivateAccountPublicInitialData, PublicAccountPublicInitialData};
 use url::Url;
@@ -48,6 +49,11 @@ pub struct SequencerConfig {
     pub initial_public_accounts: Option<Vec<PublicAccountPublicInitialData>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub initial_private_accounts: Option<Vec<PrivateAccountPublicInitialData>>,
+    /// Injected programmatically for fork mode; never read from or written to config files.
+    /// When `Some`, this state is used directly as the initial state, bypassing genesis and
+    /// `initial_public_accounts`/`initial_private_accounts`.
+    #[serde(skip)]
+    pub override_initial_state: Option<Box<V03State>>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]

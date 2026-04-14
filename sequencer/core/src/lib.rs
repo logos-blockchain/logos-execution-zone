@@ -53,7 +53,7 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
     /// If no database is found, the sequencer performs a fresh start from genesis,
     /// initializing its state with the accounts defined in the configuration file.
     pub async fn start_from_config(
-        config: SequencerConfig,
+        mut config: SequencerConfig,
     ) -> (Self, MemPoolHandle<NSSATransaction>) {
         let hashable_data = HashableBlockData {
             block_id: config.genesis_id,
@@ -95,7 +95,10 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
             .expect("Failed to read latest block meta from store");
 
         #[cfg_attr(not(feature = "testnet"), allow(unused_mut))]
-        let mut state = if let Some(state) = store.get_nssa_state() {
+        let mut state = if let Some(override_state) = config.override_initial_state.take() {
+            info!("Using forked state as initial state (fork mode).");
+            *override_state
+        } else if let Some(state) = store.get_nssa_state() {
             info!("Found local database. Loading state and pending blocks from it.");
             state
         } else {

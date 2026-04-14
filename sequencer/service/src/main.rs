@@ -12,6 +12,12 @@ struct Args {
     config_path: PathBuf,
     #[clap(short, long, default_value = "3040")]
     port: u16,
+    /// Fork initial state from a running sequencer at this URL (requires `--features standalone`).
+    /// The local sequencer will start producing blocks from the remote chain's current head.
+    /// Example: `--fork http://localhost:3040`
+    #[cfg(feature = "standalone")]
+    #[clap(long)]
+    fork: Option<url::Url>,
 }
 
 #[tokio::main]
@@ -22,12 +28,25 @@ struct Args {
 async fn main() -> Result<()> {
     env_logger::init();
 
-    let Args { config_path, port } = Args::parse();
+    let args = Args::parse();
 
     let cancellation_token = listen_for_shutdown_signal();
 
-    let config = sequencer_service::SequencerConfig::from_path(&config_path)?;
-    let sequencer_handle = sequencer_service::run(config, port).await?;
+    let config = sequencer_service::SequencerConfig::from_path(&args.config_path)?;
+
+    #[cfg(feature = "standalone")]
+    let sequencer_handle = if let Some(ref fork_url) = args.fork {
+        info!("Fork mode: fetching state snapshot from {fork_url}");
+        let (forked_state, fork_block_id) =
+            sequencer_service::fork::fetch_fork_state(fork_url).await?;
+        info!("Forked state fetched at block {fork_block_id}, starting local sequencer");
+        sequencer_service::run_forked(config, args.port, forked_state, fork_block_id).await?
+    } else {
+        sequencer_service::run(config, args.port).await?
+    };
+
+    #[cfg(not(feature = "standalone"))]
+    let sequencer_handle = sequencer_service::run(config, args.port).await?;
 
     tokio::select! {
         () = cancellation_token.cancelled() => {
