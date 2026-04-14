@@ -439,8 +439,18 @@ impl BlockingTestContextFFI {
     }
 
     #[must_use]
+    pub const fn ctx_mut(&mut self) -> &mut TestContextFFI {
+        self.ctx.as_mut().expect("TestContext is set")
+    }
+
+    #[must_use]
     pub const fn runtime(&self) -> &Arc<tokio::runtime::Runtime> {
         &self.runtime
+    }
+
+    #[must_use]
+    pub fn runtime_clone(&self) -> Arc<tokio::runtime::Runtime> {
+        Arc::<tokio::runtime::Runtime>::clone(&self.runtime)
     }
 }
 
