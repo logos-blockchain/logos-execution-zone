@@ -10,6 +10,7 @@ use crate::key_management::{
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ChildKeysPrivate {
+    // this should store value: (keychain, vec<identifier, account>) 
     pub value: (KeyChain, nssa::Account),
     pub ccc: [u8; 32],
     /// Can be [`None`] if root.
@@ -111,7 +112,7 @@ impl KeyNode for ChildKeysPrivate {
     }
 
     fn account_id(&self) -> nssa::AccountId {
-        nssa::AccountId::from(&self.value.0.nullifier_public_key)
+        nssa::AccountId::from((&self.value.0.nullifier_public_key, 0))
     }
 }
 

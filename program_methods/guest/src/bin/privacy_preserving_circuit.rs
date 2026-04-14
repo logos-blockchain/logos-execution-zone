@@ -343,7 +343,7 @@ fn compute_circuit_output(
                 };
 
                 assert_eq!(
-                    AccountId::from(npk),
+                    AccountId::from((npk, 0)),
                     pre_state.account_id,
                     "AccountId mismatch"
                 );

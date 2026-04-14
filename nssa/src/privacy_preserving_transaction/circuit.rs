@@ -214,7 +214,7 @@ mod tests {
         let recipient = AccountWithMetadata::new(
             Account::default(),
             false,
-            AccountId::from(&recipient_keys.npk()),
+            AccountId::from((&recipient_keys.npk(), 0)),
         );
 
         let balance_to_move: u128 = 37;
@@ -284,14 +284,14 @@ mod tests {
                 data: Data::default(),
             },
             true,
-            AccountId::from(&sender_keys.npk()),
+            AccountId::from((&sender_keys.npk(), 0)),
         );
         let commitment_sender = Commitment::new(&sender_keys.npk(), &sender_pre.account);
 
         let recipient = AccountWithMetadata::new(
             Account::default(),
             false,
-            AccountId::from(&recipient_keys.npk()),
+            AccountId::from((&recipient_keys.npk(), 0)),
         );
         let balance_to_move: u128 = 37;
 
@@ -380,7 +380,7 @@ mod tests {
         let pre = AccountWithMetadata::new(
             Account::default(),
             false,
-            AccountId::from(&account_keys.npk()),
+            AccountId::from((&account_keys.npk(), 0)),
         );
 
         let validity_window_chain_caller = Program::validity_window_chain_caller();

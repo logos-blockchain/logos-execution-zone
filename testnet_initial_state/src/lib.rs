@@ -142,7 +142,7 @@ pub fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialD
 
     vec![
         PrivateAccountPrivateInitialData {
-            account_id: AccountId::from(&key_chain_1.nullifier_public_key),
+            account_id: AccountId::from((&key_chain_1.nullifier_public_key, 0)),
             account: Account {
                 program_owner: DEFAULT_PROGRAM_OWNER,
                 balance: PRIV_ACC_A_INITIAL_BALANCE,
@@ -152,7 +152,7 @@ pub fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialD
             key_chain: key_chain_1,
         },
         PrivateAccountPrivateInitialData {
-            account_id: AccountId::from(&key_chain_2.nullifier_public_key),
+            account_id: AccountId::from((&key_chain_2.nullifier_public_key, 0)),
             account: Account {
                 program_owner: DEFAULT_PROGRAM_OWNER,
                 balance: PRIV_ACC_B_INITIAL_BALANCE,

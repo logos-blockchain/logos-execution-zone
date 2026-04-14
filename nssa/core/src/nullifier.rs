@@ -8,14 +8,22 @@ use crate::{Commitment, account::AccountId};
 #[cfg_attr(any(feature = "host", test), derive(Clone, Hash))]
 pub struct NullifierPublicKey(pub [u8; 32]);
 
-impl From<&NullifierPublicKey> for AccountId {
-    fn from(value: &NullifierPublicKey) -> Self {
+pub type Identifier = u128;
+
+impl From<(&NullifierPublicKey, Identifier)> for AccountId {
+    fn from(value: (&NullifierPublicKey, Identifier)) -> Self {
+        let (npk, _identifier) = value;
         const PRIVATE_ACCOUNT_ID_PREFIX: &[u8; 32] =
             b"/LEE/v0.3/AccountId/Private/\x00\x00\x00\x00";
 
+        // 32 bytes prefix || 32 bytes npk || 16 bytes identifier
+        // TODO: change bytes to [0; 80] and include identifier in little endian;
         let mut bytes = [0; 64];
         bytes[0..32].copy_from_slice(PRIVATE_ACCOUNT_ID_PREFIX);
-        bytes[32..].copy_from_slice(&value.0);
+        bytes[32..64].copy_from_slice(&npk.0);
+        // // TODO: uncomment this line
+        // bytes[64..].copy_from_slice(&identifier.to_le_bytes());
+
         Self::new(
             Impl::hash_bytes(&bytes)
                 .as_bytes()
@@ -149,7 +157,7 @@ mod tests {
             81, 186, 14, 167, 234, 28, 236, 32, 213, 125, 251, 193, 233,
         ]);
 
-        let account_id = AccountId::from(&npk);
+        let account_id = AccountId::from((&npk, 0));
 
         assert_eq!(account_id, expected_account_id);
     }

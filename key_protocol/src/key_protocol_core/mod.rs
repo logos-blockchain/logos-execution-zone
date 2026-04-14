@@ -17,6 +17,7 @@ pub struct NSSAUserData {
     /// Default public accounts.
     pub default_pub_account_signing_keys: BTreeMap<nssa::AccountId, nssa::PrivateKey>,
     /// Default private accounts.
+    // TODO: this should store (keychain, account, identifier) in the values of the map
     pub default_user_private_accounts:
         BTreeMap<nssa::AccountId, (KeyChain, nssa_core::account::Account)>,
     /// Tree of public keys.
@@ -46,7 +47,8 @@ impl NSSAUserData {
     ) -> bool {
         let mut check_res = true;
         for (account_id, (key, _)) in accounts_keys_map {
-            let expected_account_id = nssa::AccountId::from(&key.nullifier_public_key);
+            // TODO: Generalize to other identifiers
+            let expected_account_id = nssa::AccountId::from((&key.nullifier_public_key, 0));
             if expected_account_id != *account_id {
                 println!("{expected_account_id}, {account_id}");
                 check_res = false;

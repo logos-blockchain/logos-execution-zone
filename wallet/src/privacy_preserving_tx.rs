@@ -83,7 +83,7 @@ impl AccountManager {
                 }
                 PrivacyPreservingAccount::PrivateForeign { npk, vpk } => {
                     let acc = nssa_core::account::Account::default();
-                    let auth_acc = AccountWithMetadata::new(acc, false, &npk);
+                    let auth_acc = AccountWithMetadata::new(acc, false, (&npk, 0));
                     let pre = AccountPreparedData {
                         nsk: None,
                         npk,
@@ -224,7 +224,7 @@ async fn private_acc_preparation(
 
     // TODO: Technically we could allow unauthorized owned accounts, but currently we don't have
     // support from that in the wallet.
-    let sender_pre = AccountWithMetadata::new(from_acc.clone(), true, &from_npk);
+    let sender_pre = AccountWithMetadata::new(from_acc.clone(), true, (&from_npk, 0));
 
     Ok(AccountPreparedData {
         nsk: Some(nsk),

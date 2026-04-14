@@ -1212,7 +1212,7 @@ pub mod tests {
 
         let sender_nonce = sender.account.nonce;
 
-        let recipient = AccountWithMetadata::new(Account::default(), false, &recipient_keys.npk());
+        let recipient = AccountWithMetadata::new(Account::default(), false, (&recipient_keys.npk(), 0));
 
         let esk = [3; 32];
         let shared_secret = SharedSecretKey::new(&esk, &recipient_keys.vpk());
@@ -1251,9 +1251,9 @@ pub mod tests {
         let program = Program::authenticated_transfer_program();
         let sender_commitment = Commitment::new(&sender_keys.npk(), sender_private_account);
         let sender_pre =
-            AccountWithMetadata::new(sender_private_account.clone(), true, &sender_keys.npk());
+            AccountWithMetadata::new(sender_private_account.clone(), true, (&sender_keys.npk(), 0));
         let recipient_pre =
-            AccountWithMetadata::new(Account::default(), false, &recipient_keys.npk());
+            AccountWithMetadata::new(Account::default(), false, (&recipient_keys.npk(), 0));
 
         let esk_1 = [3; 32];
         let shared_secret_1 = SharedSecretKey::new(&esk_1, &sender_keys.vpk());
@@ -1303,7 +1303,7 @@ pub mod tests {
         let program = Program::authenticated_transfer_program();
         let sender_commitment = Commitment::new(&sender_keys.npk(), sender_private_account);
         let sender_pre =
-            AccountWithMetadata::new(sender_private_account.clone(), true, &sender_keys.npk());
+            AccountWithMetadata::new(sender_private_account.clone(), true, (&sender_keys.npk(), 0));
         let recipient_pre = AccountWithMetadata::new(
             state.get_account_by_id(*recipient_account_id),
             false,
@@ -1824,10 +1824,10 @@ pub mod tests {
                 ..Account::default()
             },
             true,
-            &sender_keys.npk(),
+            (&sender_keys.npk(), 0),
         );
         let private_account_2 =
-            AccountWithMetadata::new(Account::default(), false, &recipient_keys.npk());
+            AccountWithMetadata::new(Account::default(), false, (&recipient_keys.npk(), 0));
 
         let result = execute_and_prove(
             vec![private_account_1, private_account_2],
@@ -1862,7 +1862,7 @@ pub mod tests {
                 ..Account::default()
             },
             true,
-            &sender_keys.npk(),
+            (&sender_keys.npk(), 0),
         );
         let private_account_2 =
             AccountWithMetadata::new(Account::default(), false, AccountId::new([1; 32]));
@@ -1897,10 +1897,10 @@ pub mod tests {
                 ..Account::default()
             },
             true,
-            &sender_keys.npk(),
+            (&sender_keys.npk(), 0),
         );
         let private_account_2 =
-            AccountWithMetadata::new(Account::default(), false, &recipient_keys.npk());
+            AccountWithMetadata::new(Account::default(), false, (&recipient_keys.npk(), 0));
 
         // Setting no second commitment proof.
         let private_account_membership_proofs = [Some((0, vec![]))];
@@ -1938,10 +1938,10 @@ pub mod tests {
                 ..Account::default()
             },
             true,
-            &sender_keys.npk(),
+            (&sender_keys.npk(), 0),
         );
         let private_account_2 =
-            AccountWithMetadata::new(Account::default(), false, &recipient_keys.npk());
+            AccountWithMetadata::new(Account::default(), false, (&recipient_keys.npk(), 0));
 
         // Setting no auth key for an execution with one non default private accounts.
         let private_account_nsks = [];
@@ -1979,10 +1979,10 @@ pub mod tests {
                 ..Account::default()
             },
             true,
-            &sender_keys.npk(),
+            (&sender_keys.npk(), 0),
         );
         let private_account_2 =
-            AccountWithMetadata::new(Account::default(), false, &recipient_keys.npk());
+            AccountWithMetadata::new(Account::default(), false, (&recipient_keys.npk(), 0));
 
         let private_account_keys = [
             // First private account is the sender
@@ -2027,7 +2027,7 @@ pub mod tests {
                 ..Account::default()
             },
             true,
-            &sender_keys.npk(),
+            (&sender_keys.npk(), 0),
         );
         let private_account_2 = AccountWithMetadata::new(
             Account {
@@ -2036,7 +2036,7 @@ pub mod tests {
                 ..Account::default()
             },
             false,
-            &recipient_keys.npk(),
+            (&recipient_keys.npk(), 0),
         );
 
         let result = execute_and_prove(
@@ -2073,7 +2073,7 @@ pub mod tests {
                 ..Account::default()
             },
             true,
-            &sender_keys.npk(),
+            (&sender_keys.npk(), 0),
         );
         let private_account_2 = AccountWithMetadata::new(
             Account {
@@ -2082,7 +2082,7 @@ pub mod tests {
                 ..Account::default()
             },
             false,
-            &recipient_keys.npk(),
+            (&recipient_keys.npk(), 0),
         );
 
         let result = execute_and_prove(
@@ -2119,7 +2119,7 @@ pub mod tests {
                 ..Account::default()
             },
             true,
-            &sender_keys.npk(),
+            (&sender_keys.npk(), 0),
         );
         let private_account_2 = AccountWithMetadata::new(
             Account {
@@ -2128,7 +2128,7 @@ pub mod tests {
                 ..Account::default()
             },
             false,
-            &recipient_keys.npk(),
+            (&recipient_keys.npk(), 0),
         );
 
         let result = execute_and_prove(
@@ -2165,7 +2165,7 @@ pub mod tests {
                 ..Account::default()
             },
             true,
-            &sender_keys.npk(),
+            (&sender_keys.npk(), 0),
         );
         let private_account_2 = AccountWithMetadata::new(
             Account {
@@ -2174,7 +2174,7 @@ pub mod tests {
                 ..Account::default()
             },
             false,
-            &recipient_keys.npk(),
+            (&recipient_keys.npk(), 0),
         );
 
         let result = execute_and_prove(
@@ -2212,13 +2212,13 @@ pub mod tests {
                 ..Account::default()
             },
             true,
-            &sender_keys.npk(),
+            (&sender_keys.npk(), 0),
         );
         let private_account_2 = AccountWithMetadata::new(
             Account::default(),
             // This should be set to false in normal circumstances
             true,
-            &recipient_keys.npk(),
+            (&recipient_keys.npk(), 0),
         );
 
         let result = execute_and_prove(
@@ -2284,10 +2284,10 @@ pub mod tests {
                 ..Account::default()
             },
             true,
-            &sender_keys.npk(),
+            (&sender_keys.npk(), 0),
         );
         let private_account_2 =
-            AccountWithMetadata::new(Account::default(), false, &recipient_keys.npk());
+            AccountWithMetadata::new(Account::default(), false, (&recipient_keys.npk(), 0));
 
         let result = execute_and_prove(
             vec![private_account_1, private_account_2],
@@ -2323,10 +2323,10 @@ pub mod tests {
                 ..Account::default()
             },
             true,
-            &sender_keys.npk(),
+            (&sender_keys.npk(), 0),
         );
         let private_account_2 =
-            AccountWithMetadata::new(Account::default(), false, &recipient_keys.npk());
+            AccountWithMetadata::new(Account::default(), false, (&recipient_keys.npk(), 0));
 
         // Setting three private account keys for a circuit execution with only two private
         // accounts.
@@ -2369,10 +2369,10 @@ pub mod tests {
                 ..Account::default()
             },
             true,
-            &sender_keys.npk(),
+            (&sender_keys.npk(), 0),
         );
         let private_account_2 =
-            AccountWithMetadata::new(Account::default(), false, &recipient_keys.npk());
+            AccountWithMetadata::new(Account::default(), false, (&recipient_keys.npk(), 0));
 
         // Setting two private account keys for a circuit execution with only one non default
         // private account (visibility mask equal to 1 means that auth keys are expected).
@@ -2468,7 +2468,7 @@ pub mod tests {
                 ..Account::default()
             },
             true,
-            &sender_keys.npk(),
+            (&sender_keys.npk(), 0),
         );
 
         let visibility_mask = [1, 1];
@@ -2802,7 +2802,7 @@ pub mod tests {
             vec![(sender_commitment.clone(), sender_init_nullifier)],
             0,
         );
-        let sender_pre = AccountWithMetadata::new(sender_private_account, true, &sender_keys.npk());
+        let sender_pre = AccountWithMetadata::new(sender_private_account, true, (&sender_keys.npk(), 0));
         let recipient_private_key = PrivateKey::try_new([2; 32]).unwrap();
         let recipient_account_id =
             AccountId::from(&PublicKey::new_from_private_key(&recipient_private_key));
@@ -2868,7 +2868,7 @@ pub mod tests {
                 ..Account::default()
             },
             true,
-            &from_keys.npk(),
+            (&from_keys.npk(), 0),
         );
         let to_account = AccountWithMetadata::new(
             Account {
@@ -2876,7 +2876,7 @@ pub mod tests {
                 ..Account::default()
             },
             true,
-            &to_keys.npk(),
+            (&to_keys.npk(), 0),
         );
 
         let from_commitment = Commitment::new(&from_keys.npk(), &from_account.account);
@@ -3166,7 +3166,7 @@ pub mod tests {
 
         // Create an authorized private account with default values (new account being initialized)
         let authorized_account =
-            AccountWithMetadata::new(Account::default(), true, &private_keys.npk());
+            AccountWithMetadata::new(Account::default(), true, (&private_keys.npk(), 0));
 
         let program = Program::authenticated_transfer_program();
 
@@ -3219,7 +3219,7 @@ pub mod tests {
         // operate them without the corresponding private keys, so unauthorized private claiming
         // remains allowed.
         let unauthorized_account =
-            AccountWithMetadata::new(Account::default(), false, &private_keys.npk());
+            AccountWithMetadata::new(Account::default(), false, (&private_keys.npk(), 0));
 
         let program = Program::claimer();
         let esk = [5; 32];
@@ -3265,7 +3265,7 @@ pub mod tests {
 
         // Step 1: Create a new private account with authorization
         let authorized_account =
-            AccountWithMetadata::new(Account::default(), true, &private_keys.npk());
+            AccountWithMetadata::new(Account::default(), true, (&private_keys.npk(), 0));
 
         let claimer_program = Program::claimer();
 
@@ -3387,7 +3387,7 @@ pub mod tests {
         let program = Program::changer_claimer();
         let sender_keys = test_private_account_keys_1();
         let private_account =
-            AccountWithMetadata::new(Account::default(), true, &sender_keys.npk());
+            AccountWithMetadata::new(Account::default(), true, (&sender_keys.npk(), 0));
         // Don't change data (None) and don't claim (false)
         let instruction: (Option<Vec<u8>>, bool) = (None, false);
 
@@ -3413,7 +3413,7 @@ pub mod tests {
         let program = Program::changer_claimer();
         let sender_keys = test_private_account_keys_1();
         let private_account =
-            AccountWithMetadata::new(Account::default(), true, &sender_keys.npk());
+            AccountWithMetadata::new(Account::default(), true, (&sender_keys.npk(), 0));
         // Change data but don't claim (false) - should fail
         let new_data = vec![1, 2, 3, 4, 5];
         let instruction: (Option<Vec<u8>>, bool) = (Some(new_data), false);
@@ -3453,7 +3453,7 @@ pub mod tests {
             sender_keys.account_id(),
         );
         let recipient_account =
-            AccountWithMetadata::new(Account::default(), true, &recipient_keys.npk());
+            AccountWithMetadata::new(Account::default(), true, (&recipient_keys.npk(), 0));
 
         let recipient_commitment =
             Commitment::new(&recipient_keys.npk(), &recipient_account.account);
@@ -3615,7 +3615,7 @@ pub mod tests {
         let block_validity_window: BlockValidityWindow = validity_window.try_into().unwrap();
         let validity_window_program = Program::validity_window();
         let account_keys = test_private_account_keys_1();
-        let pre = AccountWithMetadata::new(Account::default(), false, &account_keys.npk());
+        let pre = AccountWithMetadata::new(Account::default(), false, (&account_keys.npk(), 0));
         let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0).with_test_programs();
         let tx = {
             let esk = [3; 32];
@@ -3684,7 +3684,7 @@ pub mod tests {
             validity_window.try_into().unwrap();
         let validity_window_program = Program::validity_window();
         let account_keys = test_private_account_keys_1();
-        let pre = AccountWithMetadata::new(Account::default(), false, &account_keys.npk());
+        let pre = AccountWithMetadata::new(Account::default(), false, (&account_keys.npk(), 0));
         let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0).with_test_programs();
         let tx = {
             let esk = [3; 32];
