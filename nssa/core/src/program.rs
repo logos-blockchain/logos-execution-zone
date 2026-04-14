@@ -6,7 +6,7 @@ use risc0_zkvm::{DeserializeOwned, guest::env, serde::Deserializer};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    BlockId, Timestamp,
+    BlockId, NullifierPublicKey, Timestamp,
     account::{Account, AccountId, AccountWithMetadata},
 };
 
@@ -56,6 +56,34 @@ impl From<(&ProgramId, &PdaSeed)> for AccountId {
                 .expect("Hash output must be exactly 32 bytes long"),
         )
     }
+}
+
+/// Derives an [`AccountId`] for a private PDA from the program ID, seed, and nullifier public key.
+///
+/// Unlike public PDAs (`AccountId::from((&ProgramId, &PdaSeed))`), this includes the `npk` in the
+/// derivation, making the address unique per group of controllers sharing viewing keys.
+pub fn private_pda_account_id(
+    program_id: &ProgramId,
+    seed: &PdaSeed,
+    npk: &NullifierPublicKey,
+) -> AccountId {
+    use risc0_zkvm::sha::{Impl, Sha256 as _};
+    const PRIVATE_PDA_PREFIX: &[u8; 32] =
+        b"/LEE/v0.3/AccountId/PrivatePDA/\x00";
+
+    let mut bytes = [0u8; 128];
+    bytes[0..32].copy_from_slice(PRIVATE_PDA_PREFIX);
+    let program_id_bytes: &[u8] =
+        bytemuck::try_cast_slice(program_id).expect("ProgramId should be castable to &[u8]");
+    bytes[32..64].copy_from_slice(program_id_bytes);
+    bytes[64..96].copy_from_slice(&seed.0);
+    bytes[96..128].copy_from_slice(&npk.to_byte_array());
+    AccountId::new(
+        Impl::hash_bytes(&bytes)
+            .as_bytes()
+            .try_into()
+            .expect("Hash output must be exactly 32 bytes long"),
+    )
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
