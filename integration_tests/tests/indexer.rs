@@ -17,27 +17,52 @@ use log::info;
 use nssa::AccountId;
 use wallet::cli::{Command, programs::native_token_transfer::AuthTransferSubcommand};
 
-/// Timeout in milliseconds to reliably await for block finalization.
-const L2_TO_L1_TIMEOUT_MILLIS: u64 = 100_000;
+/// Maximum time to wait for the indexer to catch up to the sequencer.
+const L2_TO_L1_TIMEOUT_MILLIS: u64 = 180_000;
+
+/// Poll the indexer until its last finalized block id reaches the sequencer's
+/// current last block id (and at least the genesis block has been advanced past),
+/// or until [`L2_TO_L1_TIMEOUT_MILLIS`] elapses. Returns the last indexer block
+/// id observed.
+async fn wait_for_indexer_to_catch_up(ctx: &TestContext) -> u64 {
+    let timeout = Duration::from_millis(L2_TO_L1_TIMEOUT_MILLIS);
+    let mut last_ind: u64 = 1;
+    let inner = async {
+        loop {
+            let seq = sequencer_service_rpc::RpcClient::get_last_block_id(ctx.sequencer_client())
+                .await
+                .unwrap_or(0);
+            let ind = ctx
+                .indexer_client()
+                .get_last_finalized_block_id()
+                .await
+                .unwrap_or(1);
+            last_ind = ind;
+            if ind >= seq && ind > 1 {
+                info!("Indexer caught up: seq={seq}, ind={ind}");
+                return ind;
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    };
+    tokio::time::timeout(timeout, inner)
+        .await
+        .unwrap_or_else(|_| {
+            info!("Indexer catch-up timed out: ind={last_ind}");
+            last_ind
+        })
+}
 
 #[tokio::test]
 async fn indexer_test_run() -> Result<()> {
     let ctx = TestContext::new().await?;
 
-    // RUN OBSERVATION
-    tokio::time::sleep(std::time::Duration::from_millis(L2_TO_L1_TIMEOUT_MILLIS)).await;
+    let last_block_indexer = wait_for_indexer_to_catch_up(&ctx).await;
 
     let last_block_seq =
         sequencer_service_rpc::RpcClient::get_last_block_id(ctx.sequencer_client()).await?;
 
     info!("Last block on seq now is {last_block_seq}");
-
-    let last_block_indexer = ctx
-        .indexer_client()
-        .get_last_finalized_block_id()
-        .await
-        .unwrap();
-
     info!("Last block on ind now is {last_block_indexer}");
 
     assert!(last_block_indexer > 1);
@@ -49,15 +74,8 @@ async fn indexer_test_run() -> Result<()> {
 async fn indexer_block_batching() -> Result<()> {
     let ctx = TestContext::new().await?;
 
-    // WAIT
     info!("Waiting for indexer to parse blocks");
-    tokio::time::sleep(std::time::Duration::from_millis(L2_TO_L1_TIMEOUT_MILLIS)).await;
-
-    let last_block_indexer = ctx
-        .indexer_client()
-        .get_last_finalized_block_id()
-        .await
-        .unwrap();
+    let last_block_indexer = wait_for_indexer_to_catch_up(&ctx).await;
 
     info!("Last block on ind now is {last_block_indexer}");
 
@@ -152,9 +170,8 @@ async fn indexer_state_consistency() -> Result<()> {
 
     info!("Successfully transferred privately to owned account");
 
-    // WAIT
     info!("Waiting for indexer to parse blocks");
-    tokio::time::sleep(std::time::Duration::from_millis(L2_TO_L1_TIMEOUT_MILLIS)).await;
+    wait_for_indexer_to_catch_up(&ctx).await;
 
     let acc1_ind_state = ctx
         .indexer_client()
@@ -240,7 +257,7 @@ async fn indexer_state_consistency_with_labels() -> Result<()> {
     assert_eq!(acc_2_balance, 20100);
 
     info!("Waiting for indexer to parse blocks");
-    tokio::time::sleep(std::time::Duration::from_millis(L2_TO_L1_TIMEOUT_MILLIS)).await;
+    wait_for_indexer_to_catch_up(&ctx).await;
 
     let acc1_ind_state = ctx
         .indexer_client()
