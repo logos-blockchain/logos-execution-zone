@@ -440,12 +440,22 @@ impl WrappedBalanceSum {
 pub fn compute_authorized_pdas(
     caller_program_id: Option<ProgramId>,
     pda_seeds: &[PdaSeed],
+    private_pda_info: &[(ProgramId, PdaSeed, NullifierPublicKey)],
 ) -> HashSet<AccountId> {
     caller_program_id
         .map(|caller_program_id| {
             pda_seeds
                 .iter()
-                .map(|pda_seed| AccountId::from((&caller_program_id, pda_seed)))
+                .map(|pda_seed| {
+                    if let Some((_, _, npk)) = private_pda_info
+                        .iter()
+                        .find(|(pid, s, _)| *pid == caller_program_id && s == pda_seed)
+                    {
+                        private_pda_account_id(&caller_program_id, pda_seed, npk)
+                    } else {
+                        AccountId::from((&caller_program_id, pda_seed))
+                    }
+                })
                 .collect()
         })
         .unwrap_or_default()

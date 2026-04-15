@@ -131,6 +131,7 @@ pub fn execute_and_prove(
         private_account_nsks,
         private_account_membership_proofs,
         program_id: program_with_dependencies.program.id(),
+        private_pda_info: vec![],
     };
 
     env_builder.write(&circuit_input).unwrap();

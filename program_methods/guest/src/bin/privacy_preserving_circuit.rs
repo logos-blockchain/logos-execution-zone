@@ -11,7 +11,7 @@ use nssa_core::{
     compute_digest_for_path,
     program::{
         AccountPostState, BlockValidityWindow, ChainedCall, Claim, DEFAULT_PROGRAM_ID,
-        MAX_NUMBER_CHAINED_CALLS, ProgramId, ProgramOutput, TimestampValidityWindow,
+        MAX_NUMBER_CHAINED_CALLS, PdaSeed, ProgramId, ProgramOutput, TimestampValidityWindow,
         validate_execution,
     },
 };
@@ -31,6 +31,7 @@ impl ExecutionState {
         visibility_mask: &[u8],
         program_id: ProgramId,
         program_outputs: Vec<ProgramOutput>,
+        private_pda_info: &[(ProgramId, PdaSeed, NullifierPublicKey)],
     ) -> Self {
         let block_valid_from = program_outputs
             .iter()
@@ -139,11 +140,13 @@ impl ExecutionState {
             let authorized_pdas = nssa_core::program::compute_authorized_pdas(
                 caller_program_id,
                 &chained_call.pda_seeds,
+                private_pda_info,
             );
             execution_state.validate_and_sync_states(
                 visibility_mask,
                 chained_call.program_id,
                 &authorized_pdas,
+                private_pda_info,
                 program_output.pre_states,
                 program_output.post_states,
             );
@@ -187,6 +190,7 @@ impl ExecutionState {
         visibility_mask: &[u8],
         program_id: ProgramId,
         authorized_pdas: &HashSet<AccountId>,
+        _private_pda_info: &[(ProgramId, PdaSeed, NullifierPublicKey)],
         pre_states: Vec<AccountWithMetadata>,
         post_states: Vec<AccountPostState>,
     ) {
@@ -305,6 +309,7 @@ fn compute_circuit_output(
     private_account_keys: &[(NullifierPublicKey, SharedSecretKey)],
     private_account_nsks: &[NullifierSecretKey],
     private_account_membership_proofs: &[Option<MembershipProof>],
+    _private_pda_info: &[(ProgramId, PdaSeed, NullifierPublicKey)],
 ) -> PrivacyPreservingCircuitOutput {
     let mut output = PrivacyPreservingCircuitOutput {
         public_pre_states: Vec::new(),
@@ -494,10 +499,11 @@ fn main() {
         private_account_nsks,
         private_account_membership_proofs,
         program_id,
+        private_pda_info,
     } = env::read();
 
     let execution_state =
-        ExecutionState::derive_from_outputs(&visibility_mask, program_id, program_outputs);
+        ExecutionState::derive_from_outputs(&visibility_mask, program_id, program_outputs, &private_pda_info);
 
     let output = compute_circuit_output(
         execution_state,
@@ -505,6 +511,7 @@ fn main() {
         &private_account_keys,
         &private_account_nsks,
         &private_account_membership_proofs,
+        &private_pda_info,
     );
 
     env::commit(&output);

@@ -129,7 +129,7 @@ impl ValidatedStateDiff {
             );
 
             let authorized_pdas =
-                compute_authorized_pdas(caller_program_id, &chained_call.pda_seeds);
+                compute_authorized_pdas(caller_program_id, &chained_call.pda_seeds, &[]);
 
             let is_authorized = |account_id: &AccountId| {
                 signer_account_ids.contains(account_id) || authorized_pdas.contains(account_id)
