@@ -239,8 +239,8 @@ mod tests {
     const PUB_ACC_A_TEXT_ADDR: &str = "6iArKUXxhUJqS7kCaPNhwMWt3ro71PDyBj7jwAyE2VQV";
     const PUB_ACC_B_TEXT_ADDR: &str = "7wHg9sbJwc6h3NP1S9bekfAzB8CHifEcxKswCKUt3YQo";
 
-    const PRIV_ACC_A_TEXT_ADDR: &str = "5ya25h4Xc9GAmrGB2WrTEnEWtQKJwRwQx3Xfo2tucNcE";
-    const PRIV_ACC_B_TEXT_ADDR: &str = "E8HwiTyQe4H9HK7icTvn95HQMnzx49mP9A2ddtMLpNaN";
+    const PRIV_ACC_A_TEXT_ADDR: &str = "4eGX3M3rgjHsme8n3sSp89af8JRZtYVTesbJjLqaX1VQ";
+    const PRIV_ACC_B_TEXT_ADDR: &str = "3m6HQmCgmAvsxZtxAHPqqEqoBG4335fCG8TzxigyW7rE";
 
     #[test]
     fn pub_state_consistency() {

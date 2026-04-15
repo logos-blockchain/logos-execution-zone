@@ -12,17 +12,15 @@ pub type Identifier = u128;
 
 impl From<(&NullifierPublicKey, Identifier)> for AccountId {
     fn from(value: (&NullifierPublicKey, Identifier)) -> Self {
-        let (npk, _identifier) = value;
+        let (npk, identifier) = value;
         const PRIVATE_ACCOUNT_ID_PREFIX: &[u8; 32] =
             b"/LEE/v0.3/AccountId/Private/\x00\x00\x00\x00";
 
         // 32 bytes prefix || 32 bytes npk || 16 bytes identifier
-        // TODO: change bytes to [0; 80] and include identifier in little endian;
-        let mut bytes = [0; 64];
+        let mut bytes = [0; 80];
         bytes[0..32].copy_from_slice(PRIVATE_ACCOUNT_ID_PREFIX);
         bytes[32..64].copy_from_slice(&npk.0);
-        // // TODO: uncomment this line
-        // bytes[64..].copy_from_slice(&identifier.to_le_bytes());
+        bytes[64..80].copy_from_slice(&identifier.to_le_bytes());
 
         Self::new(
             Impl::hash_bytes(&bytes)
@@ -153,8 +151,8 @@ mod tests {
         ];
         let npk = NullifierPublicKey::from(&nsk);
         let expected_account_id = AccountId::new([
-            139, 72, 194, 222, 215, 187, 147, 56, 55, 35, 222, 205, 156, 12, 204, 227, 166, 44, 30,
-            81, 186, 14, 167, 234, 28, 236, 32, 213, 125, 251, 193, 233,
+            165, 52, 40, 32, 231, 171, 113, 10, 65, 241, 156, 72, 154, 207, 122, 192, 15, 46, 50,
+            253, 105, 164, 89, 84, 40, 191, 182, 119, 64, 255, 67, 142,
         ]);
 
         let account_id = AccountId::from((&npk, 0));
