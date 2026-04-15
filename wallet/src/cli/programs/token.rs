@@ -882,6 +882,7 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                         sender_account_id,
                         recipient_npk,
                         recipient_vpk,
+                        0,
                         balance_to_move,
                     )
                     .await?;
@@ -1000,6 +1001,7 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                         definition_account_id,
                         holder_npk,
                         holder_vpk,
+                        0,
                         amount,
                     )
                     .await?;
@@ -1164,6 +1166,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                         sender_account_id,
                         recipient_npk,
                         recipient_vpk,
+                        0,
                         balance_to_move,
                     )
                     .await?;
@@ -1304,6 +1307,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                         definition_account_id,
                         holder_npk,
                         holder_vpk,
+                        0,
                         amount,
                     )
                     .await?;

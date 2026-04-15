@@ -160,7 +160,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded(
     let transfer = NativeTokenTransfer(&wallet);
 
     match block_on(
-        transfer.send_shielded_transfer_to_outer_account(from_id, to_npk, to_vpk, amount),
+        transfer.send_shielded_transfer_to_outer_account(from_id, to_npk, to_vpk, 0, amount),
     ) {
         Ok((tx_hash, _shared_key)) => {
             let tx_hash = CString::new(tx_hash.to_string())
@@ -328,7 +328,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private(
 
     let transfer = NativeTokenTransfer(&wallet);
 
-    match block_on(transfer.send_private_transfer_to_outer_account(from_id, to_npk, to_vpk, amount))
+    match block_on(transfer.send_private_transfer_to_outer_account(from_id, to_npk, to_vpk, 0, amount))
     {
         Ok((tx_hash, _shared_key)) => {
             let tx_hash = CString::new(tx_hash.to_string())
