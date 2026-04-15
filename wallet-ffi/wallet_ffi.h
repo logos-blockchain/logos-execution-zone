@@ -685,6 +685,7 @@ enum WalletFfiError wallet_ffi_transfer_public(struct WalletHandle *handle,
  * - `handle`: Valid wallet handle
  * - `from`: Source account ID (must be owned by this wallet)
  * - `to_keys`: Destination account keys
+ * - `to_identifier`: Identifier for the recipient's private account
  * - `amount`: Amount to transfer as little-endian [u8; 16]
  * - `out_result`: Output pointer for transfer result
  *
@@ -707,6 +708,7 @@ enum WalletFfiError wallet_ffi_transfer_public(struct WalletHandle *handle,
 enum WalletFfiError wallet_ffi_transfer_shielded(struct WalletHandle *handle,
                                                  const struct FfiBytes32 *from,
                                                  const struct FfiPrivateAccountKeys *to_keys,
+                                                 const struct FfiU128 *to_identifier,
                                                  const uint8_t (*amount)[16],
                                                  struct FfiTransferResult *out_result);
 
@@ -753,6 +755,7 @@ enum WalletFfiError wallet_ffi_transfer_deshielded(struct WalletHandle *handle,
  * - `handle`: Valid wallet handle
  * - `from`: Source account ID (must be owned by this wallet)
  * - `to_keys`: Destination account keys
+ * - `to_identifier`: Identifier for the recipient's private account
  * - `amount`: Amount to transfer as little-endian [u8; 16]
  * - `out_result`: Output pointer for transfer result
  *
@@ -775,6 +778,7 @@ enum WalletFfiError wallet_ffi_transfer_deshielded(struct WalletHandle *handle,
 enum WalletFfiError wallet_ffi_transfer_private(struct WalletHandle *handle,
                                                 const struct FfiBytes32 *from,
                                                 const struct FfiPrivateAccountKeys *to_keys,
+                                                const struct FfiU128 *to_identifier,
                                                 const uint8_t (*amount)[16],
                                                 struct FfiTransferResult *out_result);
 

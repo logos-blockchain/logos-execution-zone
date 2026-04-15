@@ -26,7 +26,7 @@ use nssa_core::program::DEFAULT_PROGRAM_ID;
 use tempfile::tempdir;
 use wallet_ffi::{
     FfiAccount, FfiAccountList, FfiBytes32, FfiPrivateAccountKeys, FfiPublicAccountKey,
-    FfiTransferResult, WalletHandle, error,
+    FfiTransferResult, FfiU128, WalletHandle, error,
 };
 
 unsafe extern "C" {
@@ -116,6 +116,7 @@ unsafe extern "C" {
         handle: *mut WalletHandle,
         from: *const FfiBytes32,
         to_keys: *const FfiPrivateAccountKeys,
+        to_identifier: *const FfiU128,
         amount: *const [u8; 16],
         out_result: *mut FfiTransferResult,
     ) -> error::WalletFfiError;
@@ -132,6 +133,7 @@ unsafe extern "C" {
         handle: *mut WalletHandle,
         from: *const FfiBytes32,
         to_keys: *const FfiPrivateAccountKeys,
+        to_identifier: *const FfiU128,
         amount: *const [u8; 16],
         out_result: *mut FfiTransferResult,
     ) -> error::WalletFfiError;
@@ -846,10 +848,12 @@ fn test_wallet_ffi_transfer_shielded() -> Result<()> {
 
     let mut transfer_result = FfiTransferResult::default();
     unsafe {
+        let to_identifier = FfiU128 { data: 0_u128.to_le_bytes() };
         wallet_ffi_transfer_shielded(
             wallet_ffi_handle,
             &raw const from,
             &raw const to_keys,
+            &raw const to_identifier,
             &raw const amount,
             &raw mut transfer_result,
         );
@@ -981,10 +985,12 @@ fn test_wallet_ffi_transfer_private() -> Result<()> {
 
     let mut transfer_result = FfiTransferResult::default();
     unsafe {
+        let to_identifier = FfiU128 { data: 0_u128.to_le_bytes() };
         wallet_ffi_transfer_private(
             wallet_ffi_handle,
             &raw const from,
             &raw const to_keys,
+            &raw const to_identifier,
             &raw const amount,
             &raw mut transfer_result,
         );
