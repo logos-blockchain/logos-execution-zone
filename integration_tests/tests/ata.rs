@@ -268,6 +268,7 @@ async fn transfer_and_burn_via_ata() -> Result<()> {
             to_label: None,
             to_npk: None,
             to_vpk: None,
+        to_identifier: 0,
             amount: fund_amount,
         }),
     )
@@ -500,6 +501,7 @@ async fn transfer_via_ata_private_owner() -> Result<()> {
             to_label: None,
             to_npk: None,
             to_vpk: None,
+        to_identifier: 0,
             amount: fund_amount,
         }),
     )
@@ -614,6 +616,7 @@ async fn burn_via_ata_private_owner() -> Result<()> {
             to_label: None,
             to_npk: None,
             to_vpk: None,
+        to_identifier: 0,
             amount: fund_amount,
         }),
     )

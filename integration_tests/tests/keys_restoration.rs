@@ -75,6 +75,7 @@ async fn sync_private_account_with_non_zero_chain_index() -> Result<()> {
         to_label: None,
         to_npk: Some(hex::encode(to_keys.nullifier_public_key.0)),
         to_vpk: Some(hex::encode(to_keys.viewing_public_key.0)),
+        to_identifier: 0,
         amount: 100,
     });
 
@@ -151,6 +152,7 @@ async fn restore_keys_from_seed() -> Result<()> {
         to_label: None,
         to_npk: None,
         to_vpk: None,
+        to_identifier: 0,
         amount: 100,
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
@@ -163,6 +165,7 @@ async fn restore_keys_from_seed() -> Result<()> {
         to_label: None,
         to_npk: None,
         to_vpk: None,
+        to_identifier: 0,
         amount: 101,
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
@@ -203,6 +206,7 @@ async fn restore_keys_from_seed() -> Result<()> {
         to_label: None,
         to_npk: None,
         to_vpk: None,
+        to_identifier: 0,
         amount: 102,
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
@@ -215,6 +219,7 @@ async fn restore_keys_from_seed() -> Result<()> {
         to_label: None,
         to_npk: None,
         to_vpk: None,
+        to_identifier: 0,
         amount: 103,
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
@@ -280,6 +285,7 @@ async fn restore_keys_from_seed() -> Result<()> {
         to_label: None,
         to_npk: None,
         to_vpk: None,
+        to_identifier: 0,
         amount: 10,
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
@@ -291,6 +297,7 @@ async fn restore_keys_from_seed() -> Result<()> {
         to_label: None,
         to_npk: None,
         to_vpk: None,
+        to_identifier: 0,
         amount: 11,
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;

@@ -112,6 +112,7 @@ async fn indexer_state_consistency() -> Result<()> {
         to_label: None,
         to_npk: None,
         to_vpk: None,
+        to_identifier: 0,
         amount: 100,
     });
 
@@ -148,6 +149,7 @@ async fn indexer_state_consistency() -> Result<()> {
         to_label: None,
         to_npk: None,
         to_vpk: None,
+        to_identifier: 0,
         amount: 100,
     });
 
@@ -234,6 +236,7 @@ async fn indexer_state_consistency_with_labels() -> Result<()> {
         to_label: Some(to_label_str),
         to_npk: None,
         to_vpk: None,
+        to_identifier: 0,
         amount: 100,
     });
 
