@@ -603,6 +603,16 @@ fn main() {
         private_pda_info,
     } = env::read();
 
+    // Validate no duplicate (program_id, seed) pairs in private_pda_info
+    for (i, (pid_a, seed_a, _)) in private_pda_info.iter().enumerate() {
+        assert!(
+            !private_pda_info[..i]
+                .iter()
+                .any(|(pid_b, seed_b, _)| pid_a == pid_b && seed_a == seed_b),
+            "Duplicate (program_id, seed) in private_pda_info"
+        );
+    }
+
     let execution_state = ExecutionState::derive_from_outputs(
         &visibility_mask,
         program_id,
