@@ -309,7 +309,7 @@ fn compute_circuit_output(
     private_account_keys: &[(NullifierPublicKey, SharedSecretKey)],
     private_account_nsks: &[NullifierSecretKey],
     private_account_membership_proofs: &[Option<MembershipProof>],
-    _private_pda_info: &[(ProgramId, PdaSeed, NullifierPublicKey)],
+    private_pda_info: &[(ProgramId, PdaSeed, NullifierPublicKey)],
 ) -> PrivacyPreservingCircuitOutput {
     let mut output = PrivacyPreservingCircuitOutput {
         public_pre_states: Vec::new(),
@@ -426,6 +426,86 @@ fn compute_circuit_output(
                 let commitment_post = Commitment::new(npk, &post_with_updated_nonce);
 
                 // Encrypt and push post state
+                let encrypted_account = EncryptionScheme::encrypt(
+                    &post_with_updated_nonce,
+                    shared_secret,
+                    &commitment_post,
+                    output_index,
+                );
+
+                output.new_commitments.push(commitment_post);
+                output.ciphertexts.push(encrypted_account);
+                output_index = output_index
+                    .checked_add(1)
+                    .unwrap_or_else(|| panic!("Too many private accounts, output index overflow"));
+            }
+            3 => {
+                // Private PDA account
+                let Some((npk, shared_secret)) = private_keys_iter.next() else {
+                    panic!("Missing private account key");
+                };
+
+                // Verify AccountId against private PDA formula
+                let (pda_program_id, pda_seed, _) = private_pda_info
+                    .iter()
+                    .find(|(_, _, info_npk)| info_npk == npk)
+                    .expect("mask-3 account must have a matching private_pda_info entry");
+                assert_eq!(
+                    nssa_core::program::private_pda_account_id(pda_program_id, pda_seed, npk),
+                    pre_state.account_id,
+                    "Private PDA AccountId mismatch"
+                );
+
+                let (new_nullifier, new_nonce) = if pre_state.is_authorized {
+                    // Existing private PDA with authentication (like mask 1)
+                    let Some(nsk) = private_nsks_iter.next() else {
+                        panic!("Missing private account nullifier secret key");
+                    };
+                    assert_eq!(
+                        npk,
+                        &NullifierPublicKey::from(nsk),
+                        "Nullifier public key mismatch"
+                    );
+
+                    let Some(membership_proof_opt) = private_membership_proofs_iter.next() else {
+                        panic!("Missing membership proof");
+                    };
+
+                    let new_nullifier = compute_nullifier_and_set_digest(
+                        membership_proof_opt.as_ref(),
+                        &pre_state.account,
+                        npk,
+                        nsk,
+                    );
+                    let new_nonce = pre_state.account.nonce.private_account_nonce_increment(nsk);
+                    (new_nullifier, new_nonce)
+                } else {
+                    // New private PDA (like mask 2)
+                    assert_eq!(
+                        pre_state.account,
+                        Account::default(),
+                        "New private PDA must be default"
+                    );
+
+                    let Some(membership_proof_opt) = private_membership_proofs_iter.next() else {
+                        panic!("Missing membership proof");
+                    };
+                    assert!(
+                        membership_proof_opt.is_none(),
+                        "Membership proof must be None for new accounts"
+                    );
+
+                    let nullifier = Nullifier::for_account_initialization(npk);
+                    let new_nonce = Nonce::private_account_nonce_init(npk);
+                    ((nullifier, DUMMY_COMMITMENT_HASH), new_nonce)
+                };
+                output.new_nullifiers.push(new_nullifier);
+
+                let mut post_with_updated_nonce = post_state;
+                post_with_updated_nonce.nonce = new_nonce;
+
+                let commitment_post = Commitment::new(npk, &post_with_updated_nonce);
+
                 let encrypted_account = EncryptionScheme::encrypt(
                     &post_with_updated_nonce,
                     shared_secret,
