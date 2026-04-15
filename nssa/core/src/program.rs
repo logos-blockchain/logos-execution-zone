@@ -747,4 +747,135 @@ mod tests {
         assert_eq!(account_post_state.account(), &account);
         assert_eq!(account_post_state.account_mut(), &mut account);
     }
+
+    // ---- private_pda_account_id tests ----
+
+    /// Same inputs always produce the same AccountId.
+    #[test]
+    fn private_pda_account_id_is_deterministic() {
+        let program_id: ProgramId = [1; 8];
+        let seed = PdaSeed::new([2; 32]);
+        let npk = NullifierPublicKey([3; 32]);
+        let id1 = private_pda_account_id(&program_id, &seed, &npk);
+        let id2 = private_pda_account_id(&program_id, &seed, &npk);
+        assert_eq!(id1, id2);
+    }
+
+    /// Two groups with different viewing keys at the same (program, seed) get different addresses.
+    #[test]
+    fn private_pda_account_id_differs_for_different_npk() {
+        let program_id: ProgramId = [1; 8];
+        let seed = PdaSeed::new([2; 32]);
+        let npk_a = NullifierPublicKey([3; 32]);
+        let npk_b = NullifierPublicKey([4; 32]);
+        assert_ne!(
+            private_pda_account_id(&program_id, &seed, &npk_a),
+            private_pda_account_id(&program_id, &seed, &npk_b),
+        );
+    }
+
+    /// Different seeds produce different addresses, even with the same program and npk.
+    #[test]
+    fn private_pda_account_id_differs_for_different_seed() {
+        let program_id: ProgramId = [1; 8];
+        let seed_a = PdaSeed::new([2; 32]);
+        let seed_b = PdaSeed::new([5; 32]);
+        let npk = NullifierPublicKey([3; 32]);
+        assert_ne!(
+            private_pda_account_id(&program_id, &seed_a, &npk),
+            private_pda_account_id(&program_id, &seed_b, &npk),
+        );
+    }
+
+    /// Different programs produce different addresses, even with the same seed and npk.
+    #[test]
+    fn private_pda_account_id_differs_for_different_program_id() {
+        let program_id_a: ProgramId = [1; 8];
+        let program_id_b: ProgramId = [9; 8];
+        let seed = PdaSeed::new([2; 32]);
+        let npk = NullifierPublicKey([3; 32]);
+        assert_ne!(
+            private_pda_account_id(&program_id_a, &seed, &npk),
+            private_pda_account_id(&program_id_b, &seed, &npk),
+        );
+    }
+
+    /// A private PDA at the same (program, seed) has a different address than a public PDA,
+    /// because the private formula uses a different prefix and includes npk.
+    #[test]
+    fn private_pda_account_id_differs_from_public_pda() {
+        let program_id: ProgramId = [1; 8];
+        let seed = PdaSeed::new([2; 32]);
+        let npk = NullifierPublicKey([3; 32]);
+        let private_id = private_pda_account_id(&program_id, &seed, &npk);
+        let public_id = AccountId::from((&program_id, &seed));
+        assert_ne!(private_id, public_id);
+    }
+
+    /// A private PDA address differs from a standard private account address at the same npk,
+    /// because the private PDA formula includes program_id and seed.
+    #[test]
+    fn private_pda_account_id_differs_from_standard_private() {
+        let program_id: ProgramId = [1; 8];
+        let seed = PdaSeed::new([2; 32]);
+        let npk = NullifierPublicKey([3; 32]);
+        let private_pda_id = private_pda_account_id(&program_id, &seed, &npk);
+        let standard_private_id = AccountId::from(&npk);
+        assert_ne!(private_pda_id, standard_private_id);
+    }
+
+    // ---- compute_authorized_pdas with private_pda_info tests ----
+
+    /// With no private PDA info, compute_authorized_pdas returns public PDA addresses
+    /// (backward compatible with the existing behavior).
+    #[test]
+    fn compute_authorized_pdas_empty_private_info_returns_public_ids() {
+        let caller: ProgramId = [1; 8];
+        let seed = PdaSeed::new([2; 32]);
+        let result = compute_authorized_pdas(Some(caller), &[seed.clone()], &[]);
+        let expected = AccountId::from((&caller, &seed));
+        assert!(result.contains(&expected));
+    }
+
+    /// When a pda_seed matches a private_pda_info entry, the result uses the private PDA
+    /// formula (with npk) instead of the public formula.
+    #[test]
+    fn compute_authorized_pdas_matching_entry_returns_private_id() {
+        let caller: ProgramId = [1; 8];
+        let seed = PdaSeed::new([2; 32]);
+        let npk = NullifierPublicKey([3; 32]);
+        let info = vec![(caller, seed.clone(), npk.clone())];
+        let result = compute_authorized_pdas(Some(caller), &[seed.clone()], &info);
+        let expected = private_pda_account_id(&caller, &seed, &npk);
+        assert!(result.contains(&expected));
+        // Should NOT contain the public PDA
+        let public_id = AccountId::from((&caller, &seed));
+        assert!(!result.contains(&public_id));
+    }
+
+    /// When a pda_seed does NOT match any private_pda_info entry, the result uses the
+    /// standard public PDA formula (no npk).
+    #[test]
+    fn compute_authorized_pdas_non_matching_entry_returns_public_id() {
+        let caller: ProgramId = [1; 8];
+        let seed_a = PdaSeed::new([2; 32]);
+        let seed_b = PdaSeed::new([9; 32]);
+        let npk = NullifierPublicKey([3; 32]);
+        // Info is for seed_b, but we authorize seed_a
+        let info = vec![(caller, seed_b, npk)];
+        let result = compute_authorized_pdas(Some(caller), &[seed_a.clone()], &info);
+        let expected = AccountId::from((&caller, &seed_a));
+        assert!(result.contains(&expected));
+    }
+
+    /// With no caller (top-level call), the result is always empty regardless of private_pda_info.
+    #[test]
+    fn compute_authorized_pdas_no_caller_returns_empty() {
+        let seed = PdaSeed::new([2; 32]);
+        let npk = NullifierPublicKey([3; 32]);
+        let caller: ProgramId = [1; 8];
+        let info = vec![(caller, seed.clone(), npk)];
+        let result = compute_authorized_pdas(None, &[seed], &info);
+        assert!(result.is_empty());
+    }
 }
