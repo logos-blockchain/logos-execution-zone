@@ -382,8 +382,8 @@ impl ProgramOutput {
 }
 
 /// Representation of a number as `lo + hi * 2^128`.
-#[derive(PartialEq, Eq)]
-struct WrappedBalanceSum {
+#[derive(Debug, PartialEq, Eq)]
+pub struct WrappedBalanceSum {
     lo: u128,
     hi: u128,
 }
@@ -393,7 +393,7 @@ impl WrappedBalanceSum {
     ///
     /// Returns [`None`] if balance sum overflows `lo + hi * 2^128` representation, which is not
     /// expected in practical scenarios.
-    fn from_balances(balances: impl Iterator<Item = u128>) -> Option<Self> {
+    pub fn from_balances(balances: impl Iterator<Item = u128>) -> Option<Self> {
         let mut wrapped = Self { lo: 0, hi: 0 };
 
         for balance in balances {
@@ -406,6 +406,75 @@ impl WrappedBalanceSum {
 
         Some(wrapped)
     }
+}
+
+impl std::fmt::Display for WrappedBalanceSum {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.hi == 0 {
+            write!(f, "{}", self.lo)
+        } else {
+            write!(f, "{} * 2^128 + {}", self.hi, self.lo)
+        }
+    }
+}
+
+impl From<u128> for WrappedBalanceSum {
+    fn from(value: u128) -> Self {
+        Self { lo: value, hi: 0 }
+    }
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum ExecutionValidationError {
+    #[error("Pre-state account IDs are not unique")]
+    PreStateAccountIdsNotUnique,
+
+    #[error(
+        "Pre-state and post-state lengths do not match: pre-state length {pre_state_length}, post-state length {post_state_length}"
+    )]
+    MismatchedPreStatePostStateLength {
+        pre_state_length: usize,
+        post_state_length: usize,
+    },
+
+    #[error("Unallowed modification of nonce for account {account_id}")]
+    ModifiedNonce { account_id: AccountId },
+
+    #[error("Unallowed modification of program owner for account {account_id}")]
+    ModifiedProgramOwner { account_id: AccountId },
+
+    #[error(
+        "Trying to decrease balance of account {account_id} owned by {owner_program_id:?} in a program {executing_program_id:?} which is not the owner"
+    )]
+    UnauthorizedBalanceDecrease {
+        account_id: AccountId,
+        owner_program_id: ProgramId,
+        executing_program_id: ProgramId,
+    },
+
+    #[error(
+        "Unauthorized modification of data for account {account_id} which is not default and not owned by executing program {executing_program_id:?}"
+    )]
+    UnauthorizedDataModification {
+        account_id: AccountId,
+        executing_program_id: ProgramId,
+    },
+
+    #[error(
+        "Post-state for account {account_id} has default program owner but pre-state was not default"
+    )]
+    NonDefaultAccountWithDefaultOwner { account_id: AccountId },
+
+    #[error("Total balance across accounts overflowed 2^256 - 1")]
+    BalanceSumOverflow,
+
+    #[error(
+        "Total balance across accounts is not preserved: total balance in pre-states {total_balance_pre_states}, total balance in post-states {total_balance_post_states}"
+    )]
+    MismatchedTotalBalance {
+        total_balance_pre_states: WrappedBalanceSum,
+        total_balance_post_states: WrappedBalanceSum,
+    },
 }
 
 #[must_use]
@@ -448,31 +517,39 @@ pub fn read_nssa_inputs<T: DeserializeOwned>() -> (ProgramInput<T>, InstructionD
 /// - `pre_states`: The list of input accounts, each annotated with authorization metadata.
 /// - `post_states`: The list of resulting accounts after executing the program logic.
 /// - `executing_program_id`: The identifier of the program that was executed.
-#[must_use]
 pub fn validate_execution(
     pre_states: &[AccountWithMetadata],
     post_states: &[AccountPostState],
     executing_program_id: ProgramId,
-) -> bool {
+) -> Result<(), ExecutionValidationError> {
     // 1. Check account ids are all different
     if !validate_uniqueness_of_account_ids(pre_states) {
-        return false;
+        return Err(ExecutionValidationError::PreStateAccountIdsNotUnique);
     }
 
     // 2. Lengths must match
     if pre_states.len() != post_states.len() {
-        return false;
+        return Err(
+            ExecutionValidationError::MismatchedPreStatePostStateLength {
+                pre_state_length: pre_states.len(),
+                post_state_length: post_states.len(),
+            },
+        );
     }
 
     for (pre, post) in pre_states.iter().zip(post_states) {
         // 3. Nonce must remain unchanged
         if pre.account.nonce != post.account.nonce {
-            return false;
+            return Err(ExecutionValidationError::ModifiedNonce {
+                account_id: pre.account_id,
+            });
         }
 
         // 4. Program ownership changes are not allowed
         if pre.account.program_owner != post.account.program_owner {
-            return false;
+            return Err(ExecutionValidationError::ModifiedProgramOwner {
+                account_id: pre.account_id,
+            });
         }
 
         let account_program_owner = pre.account.program_owner;
@@ -481,7 +558,11 @@ pub fn validate_execution(
         if post.account.balance < pre.account.balance
             && account_program_owner != executing_program_id
         {
-            return false;
+            return Err(ExecutionValidationError::UnauthorizedBalanceDecrease {
+                account_id: pre.account_id,
+                owner_program_id: account_program_owner,
+                executing_program_id,
+            });
         }
 
         // 6. Data changes only allowed if owned by executing program or if account pre state has
@@ -490,13 +571,20 @@ pub fn validate_execution(
             && pre.account != Account::default()
             && account_program_owner != executing_program_id
         {
-            return false;
+            return Err(ExecutionValidationError::UnauthorizedDataModification {
+                account_id: pre.account_id,
+                executing_program_id,
+            });
         }
 
         // 7. If a post state has default program owner, the pre state must have been a default
         //    account
         if post.account.program_owner == DEFAULT_PROGRAM_ID && pre.account != Account::default() {
-            return false;
+            return Err(
+                ExecutionValidationError::NonDefaultAccountWithDefaultOwner {
+                    account_id: pre.account_id,
+                },
+            );
         }
     }
 
@@ -505,20 +593,23 @@ pub fn validate_execution(
     let Some(total_balance_pre_states) =
         WrappedBalanceSum::from_balances(pre_states.iter().map(|pre| pre.account.balance))
     else {
-        return false;
+        return Err(ExecutionValidationError::BalanceSumOverflow);
     };
 
     let Some(total_balance_post_states) =
         WrappedBalanceSum::from_balances(post_states.iter().map(|post| post.account.balance))
     else {
-        return false;
+        return Err(ExecutionValidationError::BalanceSumOverflow);
     };
 
     if total_balance_pre_states != total_balance_post_states {
-        return false;
+        return Err(ExecutionValidationError::MismatchedTotalBalance {
+            total_balance_pre_states,
+            total_balance_post_states,
+        });
     }
 
-    true
+    Ok(())
 }
 
 fn validate_uniqueness_of_account_ids(pre_states: &[AccountWithMetadata]) -> bool {
