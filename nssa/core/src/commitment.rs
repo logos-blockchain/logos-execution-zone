@@ -2,7 +2,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde::{Deserialize, Serialize};
 
-use crate::{NullifierPublicKey, account::Account};
+use crate::account::{Account, AccountId};
 
 /// A commitment to all zero data.
 /// ```python
@@ -49,16 +49,16 @@ impl std::fmt::Debug for Commitment {
 }
 
 impl Commitment {
-    /// Generates the commitment to a private account owned by user for npk:
-    /// SHA256( `Comm_DS` || npk || `program_owner` || balance || nonce || SHA256(data)).
+    /// Generates the commitment to a private account owned by user for account_id:
+    /// SHA256( `Comm_DS` || account_id || `program_owner` || balance || nonce || SHA256(data)).
     #[must_use]
-    pub fn new(npk: &NullifierPublicKey, account: &Account) -> Self {
+    pub fn new(account_id: &AccountId, account: &Account) -> Self {
         const COMMITMENT_PREFIX: &[u8; 32] =
             b"/LEE/v0.3/Commitment/\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
 
         let mut bytes = Vec::new();
         bytes.extend_from_slice(COMMITMENT_PREFIX);
-        bytes.extend_from_slice(&npk.to_byte_array());
+        bytes.extend_from_slice(account_id.value());
         let account_bytes_with_hashed_data = {
             let mut this = Vec::new();
             for word in &account.program_owner {
@@ -115,14 +115,14 @@ mod tests {
     use risc0_zkvm::sha::{Impl, Sha256 as _};
 
     use crate::{
-        Commitment, DUMMY_COMMITMENT, DUMMY_COMMITMENT_HASH, NullifierPublicKey, account::Account,
+        Commitment, DUMMY_COMMITMENT, DUMMY_COMMITMENT_HASH, account::{Account, AccountId},
     };
 
     #[test]
     fn nothing_up_my_sleeve_dummy_commitment() {
         let default_account = Account::default();
-        let npk_null = NullifierPublicKey([0; 32]);
-        let expected_dummy_commitment = Commitment::new(&npk_null, &default_account);
+        let account_id_null = AccountId::new([0; 32]);
+        let expected_dummy_commitment = Commitment::new(&account_id_null, &default_account);
         assert_eq!(DUMMY_COMMITMENT, expected_dummy_commitment);
     }
 
