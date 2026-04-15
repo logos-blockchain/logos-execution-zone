@@ -750,7 +750,7 @@ mod tests {
 
     // ---- private_pda_account_id tests ----
 
-    /// Same inputs always produce the same AccountId.
+    /// Same inputs always produce the same `AccountId`.
     #[test]
     fn private_pda_account_id_is_deterministic() {
         let program_id: ProgramId = [1; 8];
@@ -812,8 +812,8 @@ mod tests {
         assert_ne!(private_id, public_id);
     }
 
-    /// A private PDA address differs from a standard private account address at the same npk,
-    /// because the private PDA formula includes program_id and seed.
+    /// A private PDA address differs from a standard private account address at the same `npk`,
+    /// because the private PDA formula includes `program_id` and `seed`.
     #[test]
     fn private_pda_account_id_differs_from_standard_private() {
         let program_id: ProgramId = [1; 8];
@@ -826,26 +826,26 @@ mod tests {
 
     // ---- compute_authorized_pdas with private_pda_info tests ----
 
-    /// With no private PDA info, compute_authorized_pdas returns public PDA addresses
+    /// With no private PDA info, `compute_authorized_pdas` returns public PDA addresses
     /// (backward compatible with the existing behavior).
     #[test]
     fn compute_authorized_pdas_empty_private_info_returns_public_ids() {
         let caller: ProgramId = [1; 8];
         let seed = PdaSeed::new([2; 32]);
-        let result = compute_authorized_pdas(Some(caller), &[seed.clone()], &[]);
+        let result = compute_authorized_pdas(Some(caller), &[seed], &[]);
         let expected = AccountId::from((&caller, &seed));
         assert!(result.contains(&expected));
     }
 
-    /// When a pda_seed matches a private_pda_info entry, the result uses the private PDA
-    /// formula (with npk) instead of the public formula.
+    /// When a `pda_seed` matches a `private_pda_info` entry, the result uses the private PDA
+    /// formula (with `npk`) instead of the public formula.
     #[test]
     fn compute_authorized_pdas_matching_entry_returns_private_id() {
         let caller: ProgramId = [1; 8];
         let seed = PdaSeed::new([2; 32]);
         let npk = NullifierPublicKey([3; 32]);
-        let info = vec![(caller, seed.clone(), npk.clone())];
-        let result = compute_authorized_pdas(Some(caller), &[seed.clone()], &info);
+        let info = vec![(caller, seed, npk.clone())];
+        let result = compute_authorized_pdas(Some(caller), &[seed], &info);
         let expected = private_pda_account_id(&caller, &seed, &npk);
         assert!(result.contains(&expected));
         // Should NOT contain the public PDA
@@ -853,8 +853,8 @@ mod tests {
         assert!(!result.contains(&public_id));
     }
 
-    /// When a pda_seed does NOT match any private_pda_info entry, the result uses the
-    /// standard public PDA formula (no npk).
+    /// When a `pda_seed` does NOT match any `private_pda_info` entry, the result uses the
+    /// standard public PDA formula (no `npk`).
     #[test]
     fn compute_authorized_pdas_non_matching_entry_returns_public_id() {
         let caller: ProgramId = [1; 8];
@@ -863,18 +863,18 @@ mod tests {
         let npk = NullifierPublicKey([3; 32]);
         // Info is for seed_b, but we authorize seed_a
         let info = vec![(caller, seed_b, npk)];
-        let result = compute_authorized_pdas(Some(caller), &[seed_a.clone()], &info);
+        let result = compute_authorized_pdas(Some(caller), &[seed_a], &info);
         let expected = AccountId::from((&caller, &seed_a));
         assert!(result.contains(&expected));
     }
 
-    /// With no caller (top-level call), the result is always empty regardless of private_pda_info.
+    /// With no caller (top-level call), the result is always empty regardless of `private_pda_info`.
     #[test]
     fn compute_authorized_pdas_no_caller_returns_empty() {
         let seed = PdaSeed::new([2; 32]);
         let npk = NullifierPublicKey([3; 32]);
         let caller: ProgramId = [1; 8];
-        let info = vec![(caller, seed.clone(), npk)];
+        let info = vec![(caller, seed, npk)];
         let result = compute_authorized_pdas(None, &[seed], &info);
         assert!(result.is_empty());
     }
