@@ -262,6 +262,7 @@ impl Token<'_> {
                     PrivacyPreservingAccount::PrivateForeign {
                         npk: recipient_npk,
                         vpk: recipient_vpk,
+                        identifier: 0,
                     },
                 ],
                 instruction_data,
@@ -358,6 +359,7 @@ impl Token<'_> {
                     PrivacyPreservingAccount::PrivateForeign {
                         npk: recipient_npk,
                         vpk: recipient_vpk,
+                        identifier: 0,
                     },
                 ],
                 instruction_data,
@@ -621,6 +623,7 @@ impl Token<'_> {
                     PrivacyPreservingAccount::PrivateForeign {
                         npk: holder_npk,
                         vpk: holder_vpk,
+                        identifier: 0,
                     },
                 ],
                 instruction_data,
@@ -717,6 +720,7 @@ impl Token<'_> {
                     PrivacyPreservingAccount::PrivateForeign {
                         npk: holder_npk,
                         vpk: holder_vpk,
+                        identifier: 0,
                     },
                 ],
                 instruction_data,

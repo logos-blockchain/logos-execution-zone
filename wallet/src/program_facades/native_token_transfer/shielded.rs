@@ -50,6 +50,7 @@ impl NativeTokenTransfer<'_> {
                     PrivacyPreservingAccount::PrivateForeign {
                         npk: to_npk,
                         vpk: to_vpk,
+                        identifier: 0,
                     },
                 ],
                 instruction_data,

@@ -16,6 +16,7 @@ pub enum PrivacyPreservingAccount {
     PrivateForeign {
         npk: NullifierPublicKey,
         vpk: ViewingPublicKey,
+        identifier: Identifier,
     },
 }
 
@@ -29,7 +30,7 @@ impl PrivacyPreservingAccount {
     pub const fn is_private(&self) -> bool {
         matches!(
             &self,
-            Self::PrivateOwned(_) | Self::PrivateForeign { npk: _, vpk: _ }
+            Self::PrivateOwned(_) | Self::PrivateForeign { npk: _, vpk: _, identifier: _ }
         )
     }
 }
@@ -82,13 +83,13 @@ impl AccountManager {
 
                     (State::Private(pre), mask)
                 }
-                PrivacyPreservingAccount::PrivateForeign { npk, vpk } => {
+                PrivacyPreservingAccount::PrivateForeign { npk, vpk, identifier } => {
                     let acc = nssa_core::account::Account::default();
-                    let auth_acc = AccountWithMetadata::new(acc, false, (&npk, 0));
+                    let auth_acc = AccountWithMetadata::new(acc, false, (&npk, identifier));
                     let pre = AccountPreparedData {
                         nsk: None,
                         npk,
-                        identifier: 0,
+                        identifier,
                         vpk,
                         pre_state: auth_acc,
                         proof: None,
