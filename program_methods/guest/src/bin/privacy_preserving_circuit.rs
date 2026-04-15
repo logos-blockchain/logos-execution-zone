@@ -282,10 +282,11 @@ impl ExecutionState {
                             let (_, _, npk) = private_pda_info
                                 .iter()
                                 .find(|(pid, s, _)| *pid == program_id && s == &seed)
-                                .expect("mask-3 PDA claim must have a matching private_pda_info entry");
-                            let pda = nssa_core::program::private_pda_account_id(
-                                &program_id, &seed, npk,
-                            );
+                                .expect(
+                                    "mask-3 PDA claim must have a matching private_pda_info entry",
+                                );
+                            let pda =
+                                nssa_core::program::private_pda_account_id(&program_id, &seed, npk);
                             assert_eq!(
                                 pre_account_id, pda,
                                 "Invalid private PDA claim for account {pre_account_id}"
@@ -602,8 +603,12 @@ fn main() {
         private_pda_info,
     } = env::read();
 
-    let execution_state =
-        ExecutionState::derive_from_outputs(&visibility_mask, program_id, program_outputs, &private_pda_info);
+    let execution_state = ExecutionState::derive_from_outputs(
+        &visibility_mask,
+        program_id,
+        program_outputs,
+        &private_pda_info,
+    );
 
     let output = compute_circuit_output(
         execution_state,

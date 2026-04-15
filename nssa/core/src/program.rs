@@ -62,14 +62,14 @@ impl From<(&ProgramId, &PdaSeed)> for AccountId {
 ///
 /// Unlike public PDAs (`AccountId::from((&ProgramId, &PdaSeed))`), this includes the `npk` in the
 /// derivation, making the address unique per group of controllers sharing viewing keys.
+#[must_use]
 pub fn private_pda_account_id(
     program_id: &ProgramId,
     seed: &PdaSeed,
     npk: &NullifierPublicKey,
 ) -> AccountId {
     use risc0_zkvm::sha::{Impl, Sha256 as _};
-    const PRIVATE_PDA_PREFIX: &[u8; 32] =
-        b"/LEE/v0.3/AccountId/PrivatePDA/\x00";
+    const PRIVATE_PDA_PREFIX: &[u8; 32] = b"/LEE/v0.3/AccountId/PrivatePDA/\x00";
 
     let mut bytes = [0u8; 128];
     bytes[0..32].copy_from_slice(PRIVATE_PDA_PREFIX);
