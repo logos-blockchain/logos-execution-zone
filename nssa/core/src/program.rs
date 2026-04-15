@@ -868,7 +868,8 @@ mod tests {
         assert!(result.contains(&expected));
     }
 
-    /// With no caller (top-level call), the result is always empty regardless of `private_pda_info`.
+    /// With no caller (top-level call), the result is always empty regardless of
+    /// `private_pda_info`.
     #[test]
     fn compute_authorized_pdas_no_caller_returns_empty() {
         let seed = PdaSeed::new([2; 32]);
