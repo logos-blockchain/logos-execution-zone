@@ -1,5 +1,5 @@
 use k256::{Scalar, elliptic_curve::PrimeField as _};
-use nssa_core::{NullifierPublicKey, encryption::ViewingPublicKey};
+use nssa_core::{Identifier, NullifierPublicKey, encryption::ViewingPublicKey};
 use serde::{Deserialize, Serialize};
 
 use crate::key_management::{
@@ -10,8 +10,7 @@ use crate::key_management::{
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ChildKeysPrivate {
-    // this should store value: (keychain, vec<identifier, account>) 
-    pub value: (KeyChain, nssa::Account),
+    pub value: (KeyChain, nssa::Account, Identifier),
     pub ccc: [u8; 32],
     /// Can be [`None`] if root.
     pub cci: Option<u32>,
@@ -48,6 +47,7 @@ impl KeyNode for ChildKeysPrivate {
                     },
                 },
                 nssa::Account::default(),
+                0,
             ),
             ccc,
             cci: None,
@@ -97,6 +97,7 @@ impl KeyNode for ChildKeysPrivate {
                     },
                 },
                 nssa::Account::default(),
+                0,
             ),
             ccc,
             cci: Some(cci),
@@ -120,7 +121,7 @@ impl KeyNode for ChildKeysPrivate {
     clippy::single_char_lifetime_names,
     reason = "TODO add meaningful name"
 )]
-impl<'a> From<&'a ChildKeysPrivate> for &'a (KeyChain, nssa::Account) {
+impl<'a> From<&'a ChildKeysPrivate> for &'a (KeyChain, nssa::Account, Identifier) {
     fn from(value: &'a ChildKeysPrivate) -> Self {
         &value.value
     }
@@ -130,7 +131,7 @@ impl<'a> From<&'a ChildKeysPrivate> for &'a (KeyChain, nssa::Account) {
     clippy::single_char_lifetime_names,
     reason = "TODO add meaningful name"
 )]
-impl<'a> From<&'a mut ChildKeysPrivate> for &'a mut (KeyChain, nssa::Account) {
+impl<'a> From<&'a mut ChildKeysPrivate> for &'a mut (KeyChain, nssa::Account, Identifier) {
     fn from(value: &'a mut ChildKeysPrivate) -> Self {
         &mut value.value
     }

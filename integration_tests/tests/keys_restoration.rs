@@ -59,7 +59,7 @@ async fn sync_private_account_with_non_zero_chain_index() -> Result<()> {
     };
 
     // Get the keys for the newly created account
-    let (to_keys, _) = ctx
+    let (to_keys, _, _) = ctx
         .wallet()
         .storage()
         .user_data

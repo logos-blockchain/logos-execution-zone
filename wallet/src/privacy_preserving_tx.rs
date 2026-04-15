@@ -2,7 +2,7 @@ use anyhow::Result;
 use key_protocol::key_management::ephemeral_key_holder::EphemeralKeyHolder;
 use nssa::{AccountId, PrivateKey};
 use nssa_core::{
-    MembershipProof, NullifierPublicKey, NullifierSecretKey, SharedSecretKey,
+    Identifier, MembershipProof, NullifierPublicKey, NullifierSecretKey, SharedSecretKey,
     account::{AccountWithMetadata, Nonce},
     encryption::{EphemeralPublicKey, ViewingPublicKey},
 };
@@ -36,6 +36,7 @@ impl PrivacyPreservingAccount {
 
 pub struct PrivateAccountKeys {
     pub npk: NullifierPublicKey,
+    pub identifier: Identifier,
     pub ssk: SharedSecretKey,
     pub vpk: ViewingPublicKey,
     pub epk: EphemeralPublicKey,
@@ -87,6 +88,7 @@ impl AccountManager {
                     let pre = AccountPreparedData {
                         nsk: None,
                         npk,
+                        identifier: 0,
                         vpk,
                         pre_state: auth_acc,
                         proof: None,
@@ -139,6 +141,7 @@ impl AccountManager {
 
                     Some(PrivateAccountKeys {
                         npk: pre.npk.clone(),
+                        identifier: pre.identifier,
                         ssk: eph_holder.calculate_shared_secret_sender(&pre.vpk),
                         vpk: pre.vpk.clone(),
                         epk: eph_holder.generate_ephemeral_public_key(),
@@ -193,6 +196,7 @@ impl AccountManager {
 struct AccountPreparedData {
     nsk: Option<NullifierSecretKey>,
     npk: NullifierPublicKey,
+    identifier: Identifier,
     vpk: ViewingPublicKey,
     pre_state: AccountWithMetadata,
     proof: Option<MembershipProof>,
@@ -202,7 +206,7 @@ async fn private_acc_preparation(
     wallet: &WalletCore,
     account_id: AccountId,
 ) -> Result<AccountPreparedData, ExecutionFailureKind> {
-    let Some((from_keys, from_acc)) = wallet
+    let Some((from_keys, from_acc, from_identifier)) = wallet
         .storage
         .user_data
         .get_private_account(account_id)
@@ -224,11 +228,13 @@ async fn private_acc_preparation(
 
     // TODO: Technically we could allow unauthorized owned accounts, but currently we don't have
     // support from that in the wallet.
-    let sender_pre = AccountWithMetadata::new(from_acc.clone(), true, (&from_npk, 0));
+    let sender_pre =
+        AccountWithMetadata::new(from_acc.clone(), true, (&from_npk, from_identifier));
 
     Ok(AccountPreparedData {
         nsk: Some(nsk),
         npk: from_npk,
+        identifier: from_identifier,
         vpk: from_vpk,
         pre_state: sender_pre,
         proof,

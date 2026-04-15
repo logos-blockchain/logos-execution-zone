@@ -98,6 +98,7 @@ pub struct PrivateAccountPrivateInitialData {
     pub account_id: nssa::AccountId,
     pub account: nssa_core::account::Account,
     pub key_chain: KeyChain,
+    pub identifier: nssa_core::Identifier,
 }
 
 #[must_use]
@@ -150,6 +151,7 @@ pub fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialD
                 nonce: 0.into(),
             },
             key_chain: key_chain_1,
+            identifier: 0,
         },
         PrivateAccountPrivateInitialData {
             account_id: AccountId::from((&key_chain_2.nullifier_public_key, 0)),
@@ -160,6 +162,7 @@ pub fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialD
                 nonce: 0.into(),
             },
             key_chain: key_chain_2,
+            identifier: 0,
         },
     ]
 }

@@ -156,7 +156,7 @@ impl WalletSubcommand for NewSubcommand {
                         .insert(account_id.to_string(), Label::new(label));
                 }
 
-                let (key, _) = wallet_core
+                let (key, _, _) = wallet_core
                     .storage
                     .user_data
                     .get_private_account(account_id)
@@ -229,7 +229,7 @@ impl WalletSubcommand for AccountSubcommand {
                             println!("pk {}", hex::encode(public_key.value()));
                         }
                         AccountPrivacyKind::Private => {
-                            let (key, _) = wallet_core
+                            let (key, _, _) = wallet_core
                                 .storage
                                 .user_data
                                 .get_private_account(account_id)

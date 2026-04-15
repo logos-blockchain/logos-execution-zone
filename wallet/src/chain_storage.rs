@@ -78,7 +78,7 @@ impl WalletChainStore {
                     }
                     InitialAccountData::Private(data) => {
                         private_init_acc_map
-                            .insert(data.account_id, (data.key_chain, data.account));
+                            .insert(data.account_id, (data.key_chain, data.account, data.identifier));
                     }
                 },
             }
@@ -117,7 +117,8 @@ impl WalletChainStore {
                     // startup. Fix this when program id can be fetched
                     // from the node and queried from the wallet.
                     account.program_owner = Program::authenticated_transfer_program().id();
-                    private_init_acc_map.insert(data.account_id, (data.key_chain, account));
+                    private_init_acc_map
+                        .insert(data.account_id, (data.key_chain, account, data.identifier));
                 }
             }
         }

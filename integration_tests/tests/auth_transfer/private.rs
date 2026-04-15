@@ -170,7 +170,7 @@ async fn private_transfer_to_owned_account_using_claiming_path() -> Result<()> {
     };
 
     // Get the keys for the newly created account
-    let (to_keys, _) = ctx
+    let (to_keys, _, _) = ctx
         .wallet()
         .storage()
         .user_data
@@ -336,7 +336,7 @@ async fn private_transfer_to_owned_account_continuous_run_path() -> Result<()> {
     };
 
     // Get the newly created account's keys
-    let (to_keys, _) = ctx
+    let (to_keys, _, _) = ctx
         .wallet()
         .storage()
         .user_data

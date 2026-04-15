@@ -300,7 +300,8 @@ impl WalletCore {
 
     #[must_use]
     pub fn get_private_account_commitment(&self, account_id: AccountId) -> Option<Commitment> {
-        let (_keys, account) = self.storage.user_data.get_private_account(account_id)?;
+        let (_keys, account, _identifier) =
+            self.storage.user_data.get_private_account(account_id)?;
         Some(Commitment::new(&account_id, account))
     }
 
@@ -393,7 +394,7 @@ impl WalletCore {
             acc_manager.visibility_mask().to_vec(),
             private_account_keys
                 .iter()
-                .map(|keys| (keys.npk.clone(), 0, keys.ssk))
+                .map(|keys| (keys.npk.clone(), keys.identifier, keys.ssk))
                 .collect::<Vec<_>>(),
             acc_manager.private_account_auth(),
             acc_manager.private_account_membership_proofs(),
@@ -484,7 +485,7 @@ impl WalletCore {
             .user_data
             .default_user_private_accounts
             .iter()
-            .map(|(acc_account_id, (key_chain, _))| (*acc_account_id, key_chain, None))
+            .map(|(acc_account_id, (key_chain, _, _))| (*acc_account_id, key_chain, None))
             .chain(self.storage.user_data.private_key_tree.key_map.iter().map(
                 |(chain_index, keys_node)| {
                     (

@@ -144,6 +144,7 @@ impl InitialData {
                     account_id,
                     account: account.clone(),
                     key_chain: key_chain.clone(),
+                    identifier: 0,
                 }))
             }))
             .collect()

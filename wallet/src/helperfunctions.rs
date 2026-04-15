@@ -188,12 +188,13 @@ pub fn produce_data_for_storage(
         );
     }
 
-    for (account_id, (key_chain, account)) in &user_data.default_user_private_accounts {
+    for (account_id, (key_chain, account, identifier)) in &user_data.default_user_private_accounts {
         vec_for_storage.push(
             InitialAccountData::Private(Box::new(PrivateAccountPrivateInitialData {
                 account_id: *account_id,
                 account: account.clone(),
                 key_chain: key_chain.clone(),
+                identifier: *identifier,
             }))
             .into(),
         );

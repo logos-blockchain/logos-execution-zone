@@ -4,6 +4,8 @@ use anyhow::Result;
 use k256::AffinePoint;
 use serde::{Deserialize, Serialize};
 
+use nssa_core::Identifier;
+
 use crate::key_management::{
     KeyChain,
     key_tree::{KeyTreePrivate, KeyTreePublic, chain_index::ChainIndex},
@@ -17,9 +19,8 @@ pub struct NSSAUserData {
     /// Default public accounts.
     pub default_pub_account_signing_keys: BTreeMap<nssa::AccountId, nssa::PrivateKey>,
     /// Default private accounts.
-    // TODO: this should store (keychain, account, identifier) in the values of the map
     pub default_user_private_accounts:
-        BTreeMap<nssa::AccountId, (KeyChain, nssa_core::account::Account)>,
+        BTreeMap<nssa::AccountId, (KeyChain, nssa_core::account::Account, Identifier)>,
     /// Tree of public keys.
     pub public_key_tree: KeyTreePublic,
     /// Tree of private keys.
@@ -43,12 +44,15 @@ impl NSSAUserData {
     }
 
     fn valid_private_key_transaction_pairing_check(
-        accounts_keys_map: &BTreeMap<nssa::AccountId, (KeyChain, nssa_core::account::Account)>,
+        accounts_keys_map: &BTreeMap<
+            nssa::AccountId,
+            (KeyChain, nssa_core::account::Account, Identifier),
+        >,
     ) -> bool {
         let mut check_res = true;
-        for (account_id, (key, _)) in accounts_keys_map {
-            // TODO: Generalize to other identifiers
-            let expected_account_id = nssa::AccountId::from((&key.nullifier_public_key, 0));
+        for (account_id, (key, _, identifier)) in accounts_keys_map {
+            let expected_account_id =
+                nssa::AccountId::from((&key.nullifier_public_key, *identifier));
             if expected_account_id != *account_id {
                 println!("{expected_account_id}, {account_id}");
                 check_res = false;
@@ -61,7 +65,7 @@ impl NSSAUserData {
         default_accounts_keys: BTreeMap<nssa::AccountId, nssa::PrivateKey>,
         default_accounts_key_chains: BTreeMap<
             nssa::AccountId,
-            (KeyChain, nssa_core::account::Account),
+            (KeyChain, nssa_core::account::Account, Identifier),
         >,
         public_key_tree: KeyTreePublic,
         private_key_tree: KeyTreePrivate,
@@ -140,7 +144,7 @@ impl NSSAUserData {
     pub fn get_private_account(
         &self,
         account_id: nssa::AccountId,
-    ) -> Option<&(KeyChain, nssa_core::account::Account)> {
+    ) -> Option<&(KeyChain, nssa_core::account::Account, Identifier)> {
         self.default_user_private_accounts
             .get(&account_id)
             .or_else(|| self.private_key_tree.get_node(account_id).map(Into::into))
@@ -150,7 +154,7 @@ impl NSSAUserData {
     pub fn get_private_account_mut(
         &mut self,
         account_id: &nssa::AccountId,
-    ) -> Option<&mut (KeyChain, nssa_core::account::Account)> {
+    ) -> Option<&mut (KeyChain, nssa_core::account::Account, Identifier)> {
         // First seek in defaults
         if let Some(key) = self.default_user_private_accounts.get_mut(account_id) {
             Some(key)

@@ -1131,7 +1131,7 @@ async fn token_claiming_path_with_private_accounts() -> Result<()> {
     };
 
     // Get keys for foreign mint (claiming path)
-    let (holder_keys, _) = ctx
+    let (holder_keys, _, _) = ctx
         .wallet()
         .storage()
         .user_data
