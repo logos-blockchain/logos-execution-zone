@@ -190,7 +190,7 @@ impl ExecutionState {
         visibility_mask: &[u8],
         program_id: ProgramId,
         authorized_pdas: &HashSet<AccountId>,
-        _private_pda_info: &[(ProgramId, PdaSeed, NullifierPublicKey)],
+        private_pda_info: &[(ProgramId, PdaSeed, NullifierPublicKey)],
         pre_states: Vec<AccountWithMetadata>,
         post_states: Vec<AccountPostState>,
     ) {
@@ -257,6 +257,7 @@ impl ExecutionState {
                     .expect("Pre state must exist at this point");
 
                 let is_public_account = visibility_mask[pre_state_position] == 0;
+                let is_private_pda = visibility_mask[pre_state_position] == 3;
                 if is_public_account {
                     match claim {
                         Claim::Authorized => {
@@ -275,11 +276,30 @@ impl ExecutionState {
                             );
                         }
                     }
+                } else if is_private_pda {
+                    match claim {
+                        Claim::Pda(seed) => {
+                            let (_, _, npk) = private_pda_info
+                                .iter()
+                                .find(|(pid, s, _)| *pid == program_id && s == &seed)
+                                .expect("mask-3 PDA claim must have a matching private_pda_info entry");
+                            let pda = nssa_core::program::private_pda_account_id(
+                                &program_id, &seed, npk,
+                            );
+                            assert_eq!(
+                                pre_account_id, pda,
+                                "Invalid private PDA claim for account {pre_account_id}"
+                            );
+                        }
+                        Claim::Authorized => {
+                            assert!(
+                                pre_is_authorized,
+                                "Cannot claim unauthorized private PDA {pre_account_id}"
+                            );
+                        }
+                    }
                 } else {
-                    // We don't care about the exact claim mechanism for private accounts.
-                    // This is because the main reason to have it is to protect against PDA griefing
-                    // attacks in public execution, while private PDA doesn't make much sense
-                    // anyway.
+                    // Mask 1/2: standard private accounts don't use PDA claims.
                 }
 
                 post.account_mut().program_owner = program_id;
