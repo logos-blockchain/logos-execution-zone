@@ -133,12 +133,17 @@ impl ExecutionState {
 
             // Check that the program is well behaved.
             // See the # Programs section for the definition of the `validate_execution` method.
-            let execution_valid = validate_execution(
+            let validated_execution = validate_execution(
                 &program_output.pre_states,
                 &program_output.post_states,
                 chained_call.program_id,
             );
-            assert!(execution_valid, "Bad behaved program");
+            if let Err(err) = validated_execution {
+                panic!(
+                    "Invalid program behavior in program {:?}: {err}",
+                    chained_call.program_id
+                );
+            }
 
             // Collect private-PDA bindings from this program_output's proven data. Each
             // `private_pda_seeds` entry in an outgoing chained call attests that the caller

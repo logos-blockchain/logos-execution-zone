@@ -367,14 +367,14 @@ pub mod tests {
         account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
         encryption::{EphemeralPublicKey, Scalar, ViewingPublicKey},
         program::{
-            BlockValidityWindow, PdaSeed, ProgramId, TimestampValidityWindow,
-            private_pda_account_id,
+            BlockValidityWindow, ExecutionValidationError, PdaSeed, ProgramId,
+            TimestampValidityWindow, WrappedBalanceSum, private_pda_account_id,
         },
     };
 
     use crate::{
         PublicKey, PublicTransaction, V03State,
-        error::NssaError,
+        error::{InvalidProgramBehaviorError, NssaError},
         execute_and_prove,
         privacy_preserving_transaction::{
             PrivacyPreservingTransaction,
@@ -936,10 +936,11 @@ pub mod tests {
 
     #[test]
     fn program_should_fail_if_modifies_nonces() {
-        let initial_data = [(AccountId::new([1; 32]), 100)];
+        let account_id = AccountId::new([1; 32]);
+        let initial_data = [(account_id, 100)];
         let mut state =
             V03State::new_with_genesis_accounts(&initial_data, vec![], 0).with_test_programs();
-        let account_ids = vec![AccountId::new([1; 32])];
+        let account_ids = vec![account_id];
         let program_id = Program::nonce_changer_program().id();
         let message =
             public_transaction::Message::try_new(program_id, account_ids, vec![], ()).unwrap();
@@ -948,7 +949,14 @@ pub mod tests {
 
         let result = state.transition_from_public_transaction(&tx, 1, 0);
 
-        assert!(matches!(result, Err(NssaError::InvalidProgramBehavior)));
+        assert!(matches!(
+            result,
+            Err(NssaError::InvalidProgramBehavior(
+                InvalidProgramBehaviorError::ExecutionValidationFailed(
+                    ExecutionValidationError::ModifiedNonce { account_id: err_account_id }
+                )
+            )) if err_account_id == account_id
+        ));
     }
 
     #[test]
@@ -965,7 +973,17 @@ pub mod tests {
 
         let result = state.transition_from_public_transaction(&tx, 1, 0);
 
-        assert!(matches!(result, Err(NssaError::InvalidProgramBehavior)));
+        assert!(matches!(
+            result,
+            Err(NssaError::InvalidProgramBehavior(
+                InvalidProgramBehaviorError::ExecutionValidationFailed(
+                    ExecutionValidationError::MismatchedPreStatePostStateLength {
+                        pre_state_length,
+                        post_state_length
+                    }
+                )
+            )) if pre_state_length == 1 && post_state_length == 2
+        ));
     }
 
     #[test]
@@ -982,7 +1000,17 @@ pub mod tests {
 
         let result = state.transition_from_public_transaction(&tx, 1, 0);
 
-        assert!(matches!(result, Err(NssaError::InvalidProgramBehavior)));
+        assert!(matches!(
+            result,
+            Err(NssaError::InvalidProgramBehavior(
+                InvalidProgramBehaviorError::ExecutionValidationFailed(
+                    ExecutionValidationError::MismatchedPreStatePostStateLength {
+                        pre_state_length,
+                        post_state_length
+                    }
+                )
+            )) if pre_state_length == 2 && post_state_length == 1
+        ));
     }
 
     #[test]
@@ -1006,7 +1034,12 @@ pub mod tests {
 
         let result = state.transition_from_public_transaction(&tx, 1, 0);
 
-        assert!(matches!(result, Err(NssaError::InvalidProgramBehavior)));
+        assert!(matches!(
+            result,
+            Err(NssaError::InvalidProgramBehavior(InvalidProgramBehaviorError::ExecutionValidationFailed(
+                ExecutionValidationError::ModifiedProgramOwner { account_id: err_account_id }
+            ))) if err_account_id == account_id
+        ));
     }
 
     #[test]
@@ -1030,7 +1063,12 @@ pub mod tests {
 
         let result = state.transition_from_public_transaction(&tx, 1, 0);
 
-        assert!(matches!(result, Err(NssaError::InvalidProgramBehavior)));
+        assert!(matches!(
+            result,
+            Err(NssaError::InvalidProgramBehavior(InvalidProgramBehaviorError::ExecutionValidationFailed(
+                ExecutionValidationError::ModifiedProgramOwner { account_id: err_account_id }
+            ))) if err_account_id == account_id
+        ));
     }
 
     #[test]
@@ -1054,7 +1092,12 @@ pub mod tests {
 
         let result = state.transition_from_public_transaction(&tx, 1, 0);
 
-        assert!(matches!(result, Err(NssaError::InvalidProgramBehavior)));
+        assert!(matches!(
+            result,
+            Err(NssaError::InvalidProgramBehavior(InvalidProgramBehaviorError::ExecutionValidationFailed(
+                ExecutionValidationError::ModifiedProgramOwner { account_id: err_account_id }
+            ))) if err_account_id == account_id
+        ));
     }
 
     #[test]
@@ -1078,16 +1121,21 @@ pub mod tests {
 
         let result = state.transition_from_public_transaction(&tx, 1, 0);
 
-        assert!(matches!(result, Err(NssaError::InvalidProgramBehavior)));
+        assert!(matches!(
+            result,
+            Err(NssaError::InvalidProgramBehavior(InvalidProgramBehaviorError::ExecutionValidationFailed(
+                ExecutionValidationError::ModifiedProgramOwner { account_id: err_account_id }
+            ))) if err_account_id == account_id
+        ));
     }
 
     #[test]
     fn program_should_fail_if_transfers_balance_from_non_owned_account() {
-        let initial_data = [(AccountId::new([1; 32]), 100)];
-        let mut state =
-            V03State::new_with_genesis_accounts(&initial_data, vec![], 0).with_test_programs();
         let sender_account_id = AccountId::new([1; 32]);
         let receiver_account_id = AccountId::new([2; 32]);
+        let initial_data = [(sender_account_id, 100)];
+        let mut state =
+            V03State::new_with_genesis_accounts(&initial_data, vec![], 0).with_test_programs();
         let balance_to_move: u128 = 1;
         let program_id = Program::simple_balance_transfer().id();
         assert_ne!(
@@ -1106,7 +1154,12 @@ pub mod tests {
 
         let result = state.transition_from_public_transaction(&tx, 1, 0);
 
-        assert!(matches!(result, Err(NssaError::InvalidProgramBehavior)));
+        assert!(matches!(
+            result,
+            Err(NssaError::InvalidProgramBehavior(InvalidProgramBehaviorError::ExecutionValidationFailed(
+                ExecutionValidationError::UnauthorizedBalanceDecrease { account_id: err_account_id, owner_program_id, executing_program_id }
+            ))) if err_account_id == sender_account_id && owner_program_id != program_id && executing_program_id == program_id
+        ));
     }
 
     #[test]
@@ -1131,7 +1184,12 @@ pub mod tests {
 
         let result = state.transition_from_public_transaction(&tx, 1, 0);
 
-        assert!(matches!(result, Err(NssaError::InvalidProgramBehavior)));
+        assert!(matches!(
+            result,
+            Err(NssaError::InvalidProgramBehavior(InvalidProgramBehaviorError::ExecutionValidationFailed(
+                ExecutionValidationError::UnauthorizedDataModification { account_id: err_account_id, executing_program_id }
+            ))) if err_account_id == account_id && executing_program_id == program_id
+        ));
     }
 
     #[test]
@@ -1149,7 +1207,12 @@ pub mod tests {
 
         let result = state.transition_from_public_transaction(&tx, 1, 0);
 
-        assert!(matches!(result, Err(NssaError::InvalidProgramBehavior)));
+        assert!(matches!(
+            result,
+            Err(NssaError::InvalidProgramBehavior(InvalidProgramBehaviorError::ExecutionValidationFailed(
+                ExecutionValidationError::MismatchedTotalBalance { total_balance_pre_states, total_balance_post_states }
+            ))) if total_balance_pre_states == 0.into() && total_balance_post_states == 1.into()
+        ));
     }
 
     #[test]
@@ -1178,7 +1241,12 @@ pub mod tests {
         let tx = PublicTransaction::new(message, witness_set);
         let result = state.transition_from_public_transaction(&tx, 1, 0);
 
-        assert!(matches!(result, Err(NssaError::InvalidProgramBehavior)));
+        assert!(matches!(
+            result,
+            Err(NssaError::InvalidProgramBehavior(InvalidProgramBehaviorError::ExecutionValidationFailed(
+                ExecutionValidationError::MismatchedTotalBalance { total_balance_pre_states, total_balance_post_states }
+            ))) if total_balance_pre_states == 100.into() && total_balance_post_states == 99.into()
+        ));
     }
 
     fn test_public_account_keys_1() -> TestPublicKeys {
@@ -3209,7 +3277,12 @@ pub mod tests {
 
         let result = state.transition_from_public_transaction(&tx, 1, 0);
 
-        assert!(matches!(result, Err(NssaError::InvalidProgramBehavior)));
+        assert!(matches!(
+            result,
+            Err(NssaError::InvalidProgramBehavior(
+                InvalidProgramBehaviorError::ClaimedNonDefaultAccount { account_id: err_account_id }
+            )) if err_account_id == account_id
+        ));
     }
 
     /// This test ensures that even if a malicious program tries to perform overflow of balances
@@ -3255,7 +3328,22 @@ pub mod tests {
         let witness_set = public_transaction::WitnessSet::for_message(&message, &[&sender_key]);
         let tx = PublicTransaction::new(message, witness_set);
         let res = state.transition_from_public_transaction(&tx, 1, 0);
-        assert!(matches!(res, Err(NssaError::InvalidProgramBehavior)));
+        let expected_total_balance_pre_states = WrappedBalanceSum::from_balances(
+            [sender_init_balance, recipient_init_balance].into_iter(),
+        )
+        .unwrap();
+        let expected_total_balance_post_states = WrappedBalanceSum::from_balances(
+            [sender_init_balance, recipient_init_balance, u128::MAX, 1].into_iter(),
+        )
+        .unwrap();
+        assert!(matches!(
+            res,
+            Err(NssaError::InvalidProgramBehavior(
+                InvalidProgramBehaviorError::ExecutionValidationFailed(
+                    ExecutionValidationError::MismatchedTotalBalance { total_balance_pre_states, total_balance_post_states }
+                )
+            )) if total_balance_pre_states == expected_total_balance_pre_states && total_balance_post_states == expected_total_balance_post_states
+        ));
 
         let sender_post = state.get_account_by_id(sender_id);
         let recipient_post = state.get_account_by_id(recipient_id);
@@ -3500,7 +3588,14 @@ pub mod tests {
         let result = state.transition_from_public_transaction(&tx, 1, 0);
 
         // Should fail - cannot modify data without claiming the account
-        assert!(matches!(result, Err(NssaError::InvalidProgramBehavior)));
+        assert!(matches!(
+            result,
+            Err(NssaError::InvalidProgramBehavior(
+                InvalidProgramBehaviorError::DefaultAccountModifiedWithoutClaim {
+                    account_id: err_account_id
+                }
+            )) if err_account_id == account_id
+        ));
     }
 
     #[test]
