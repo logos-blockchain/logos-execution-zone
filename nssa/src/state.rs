@@ -2411,7 +2411,8 @@ pub mod tests {
     }
 
     /// A program must not be allowed to claim a mask-0 (public) account via `Claim::PrivatePda`.
-    /// The circuit panics in `validate_and_sync_states` when the visibility and claim kind disagree.
+    /// The circuit panics in `validate_and_sync_states` when the visibility and claim kind
+    /// disagree.
     #[test]
     fn mask_0_cannot_be_claimed_as_private_pda_panics() {
         let program = Program::private_pda_claimer();
