@@ -200,7 +200,7 @@ impl WalletChainStore {
 #[cfg(test)]
 mod tests {
     use key_protocol::key_management::key_tree::{
-        keys_private::ChildKeysPrivate, keys_public::ChildKeysPublic, traits::KeyNode as _,
+        keys_private::ChildKeysPrivate, keys_public::ChildKeysPublic,
     };
 
     use super::*;

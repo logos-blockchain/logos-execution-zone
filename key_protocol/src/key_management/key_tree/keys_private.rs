@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::key_management::{
     KeyChain,
-    key_tree::traits::KeyNode,
+    key_tree::traits::KeyTreeNode,
     secret_holders::{PrivateKeyHolder, SecretSpendingKey},
 };
 
@@ -16,8 +16,8 @@ pub struct ChildKeysPrivate {
     pub cci: Option<u32>,
 }
 
-impl KeyNode for ChildKeysPrivate {
-    fn root(seed: [u8; 64]) -> Self {
+impl ChildKeysPrivate {
+    pub fn root(seed: [u8; 64]) -> Self {
         let hash_value = hmac_sha512::HMAC::mac(seed, b"LEE_master_priv");
 
         let ssk = SecretSpendingKey(
@@ -54,7 +54,7 @@ impl KeyNode for ChildKeysPrivate {
         }
     }
 
-    fn nth_child(&self, cci: u32) -> Self {
+    pub fn nth_child(&self, cci: u32, identifier: Identifier) -> Self {
         #[expect(clippy::arithmetic_side_effects, reason = "TODO: fix later")]
         let parent_pt =
             Scalar::from_repr(self.value.0.private_key_holder.nullifier_secret_key.into())
@@ -97,23 +97,23 @@ impl KeyNode for ChildKeysPrivate {
                     },
                 },
                 nssa::Account::default(),
-                0,
+                identifier,
             ),
             ccc,
             cci: Some(cci),
         }
     }
 
-    fn chain_code(&self) -> &[u8; 32] {
+    pub fn chain_code(&self) -> &[u8; 32] {
         &self.ccc
     }
 
-    fn child_index(&self) -> Option<u32> {
+    pub fn child_index(&self) -> Option<u32> {
         self.cci
     }
 
-    fn account_id(&self) -> nssa::AccountId {
-        nssa::AccountId::from((&self.value.0.nullifier_public_key, 0))
+    pub fn account_id(&self) -> nssa::AccountId {
+        nssa::AccountId::from((&self.value.0.nullifier_public_key, self.value.2))
     }
 }
 
@@ -134,6 +134,20 @@ impl<'a> From<&'a ChildKeysPrivate> for &'a (KeyChain, nssa::Account, Identifier
 impl<'a> From<&'a mut ChildKeysPrivate> for &'a mut (KeyChain, nssa::Account, Identifier) {
     fn from(value: &'a mut ChildKeysPrivate) -> Self {
         &mut value.value
+    }
+}
+
+impl KeyTreeNode for ChildKeysPrivate {
+    fn from_seed(seed: [u8; 64]) -> Self {
+        Self::root(seed)
+    }
+
+    fn derive_child(&self, cci: u32) -> Self {
+        self.nth_child(cci, 0)
+    }
+
+    fn account_ids(&self) -> Vec<nssa::AccountId> {
+        vec![self.account_id()]
     }
 }
 
@@ -203,7 +217,7 @@ mod tests {
         ];
 
         let root_node = ChildKeysPrivate::root(seed);
-        let child_node = ChildKeysPrivate::nth_child(&root_node, 42_u32);
+        let child_node = ChildKeysPrivate::nth_child(&root_node, 42_u32, 0);
 
         let expected_ccc: [u8; 32] = [
             27, 73, 133, 213, 214, 63, 217, 184, 164, 17, 172, 140, 223, 95, 255, 157, 11, 0, 58,

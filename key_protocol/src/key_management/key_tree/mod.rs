@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::key_management::{
     key_tree::{
         chain_index::ChainIndex, keys_private::ChildKeysPrivate, keys_public::ChildKeysPublic,
-        traits::KeyNode,
+        traits::KeyTreeNode,
     },
     secret_holders::SeedHolder,
 };
@@ -20,7 +20,7 @@ pub mod traits;
 pub const DEPTH_SOFT_CAP: u32 = 20;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct KeyTree<N: KeyNode> {
+pub struct KeyTree<N: KeyTreeNode> {
     pub key_map: BTreeMap<ChainIndex, N>,
     pub account_id_map: BTreeMap<nssa::AccountId, ChainIndex>,
 }
@@ -28,7 +28,7 @@ pub struct KeyTree<N: KeyNode> {
 pub type KeyTreePublic = KeyTree<ChildKeysPublic>;
 pub type KeyTreePrivate = KeyTree<ChildKeysPrivate>;
 
-impl<N: KeyNode> KeyTree<N> {
+impl<N: KeyTreeNode> KeyTree<N> {
     #[must_use]
     pub fn new(seed: &SeedHolder) -> Self {
         let seed_fit: [u8; 64] = seed
@@ -37,29 +37,69 @@ impl<N: KeyNode> KeyTree<N> {
             .try_into()
             .expect("SeedHolder seed is 64 bytes long");
 
-        let root_keys = N::root(seed_fit);
-        let account_id = root_keys.account_id();
-
-        let key_map = BTreeMap::from_iter([(ChainIndex::root(), root_keys)]);
-        let account_id_map = BTreeMap::from_iter([(account_id, ChainIndex::root())]);
+        let root_keys = N::from_seed(seed_fit);
+        let account_id_map = root_keys
+            .account_ids()
+            .into_iter()
+            .map(|id| (id, ChainIndex::root()))
+            .collect();
 
         Self {
-            key_map,
+            key_map: BTreeMap::from_iter([(ChainIndex::root(), root_keys)]),
             account_id_map,
         }
     }
 
     pub fn new_from_root(root: N) -> Self {
-        let account_id_map = BTreeMap::from_iter([(root.account_id(), ChainIndex::root())]);
-        let key_map = BTreeMap::from_iter([(ChainIndex::root(), root)]);
+        let account_id_map = root
+            .account_ids()
+            .into_iter()
+            .map(|id| (id, ChainIndex::root()))
+            .collect();
 
         Self {
-            key_map,
+            key_map: BTreeMap::from_iter([(ChainIndex::root(), root)]),
             account_id_map,
         }
     }
 
-    // ToDo: Add function to create a tree from list of nodes with consistency check.
+    pub fn generate_new_node(
+        &mut self,
+        parent_cci: &ChainIndex,
+    ) -> Option<(nssa::AccountId, ChainIndex)> {
+        let parent_keys = self.key_map.get(parent_cci)?;
+        let next_child_id = self
+            .find_next_last_child_of_id(parent_cci)
+            .expect("Can be None only if parent is not present");
+        let next_cci = parent_cci.nth_child(next_child_id);
+
+        let child_keys = parent_keys.derive_child(next_child_id);
+        let account_ids = child_keys.account_ids();
+        let primary_account_id = *account_ids.first().expect("account_ids() must be non-empty");
+
+        for account_id in account_ids {
+            self.account_id_map.insert(account_id, next_cci.clone());
+        }
+        self.key_map.insert(next_cci.clone(), child_keys);
+
+        Some((primary_account_id, next_cci))
+    }
+
+    pub fn fill_node(&mut self, chain_index: &ChainIndex) -> Option<(nssa::AccountId, ChainIndex)> {
+        let parent_keys = self.key_map.get(&chain_index.parent()?)?;
+        let child_id = *chain_index.chain().last()?;
+
+        let child_keys = parent_keys.derive_child(child_id);
+        let account_ids = child_keys.account_ids();
+        let primary_account_id = *account_ids.first().expect("account_ids() must be non-empty");
+
+        for account_id in account_ids {
+            self.account_id_map.insert(account_id, chain_index.clone());
+        }
+        self.key_map.insert(chain_index.clone(), child_keys);
+
+        Some((primary_account_id, chain_index.clone()))
+    }
 
     #[must_use]
     pub fn find_next_last_child_of_id(&self, parent_id: &ChainIndex) -> Option<u32> {
@@ -102,25 +142,6 @@ impl<N: KeyNode> KeyTree<N> {
         }
     }
 
-    pub fn generate_new_node(
-        &mut self,
-        parent_cci: &ChainIndex,
-    ) -> Option<(nssa::AccountId, ChainIndex)> {
-        let parent_keys = self.key_map.get(parent_cci)?;
-        let next_child_id = self
-            .find_next_last_child_of_id(parent_cci)
-            .expect("Can be None only if parent is not present");
-        let next_cci = parent_cci.nth_child(next_child_id);
-
-        let child_keys = parent_keys.nth_child(next_child_id);
-        let account_id = child_keys.account_id();
-
-        self.key_map.insert(next_cci.clone(), child_keys);
-        self.account_id_map.insert(account_id, next_cci.clone());
-
-        Some((account_id, next_cci))
-    }
-
     fn find_next_slot_layered(&self) -> ChainIndex {
         let mut depth = 1;
 
@@ -134,42 +155,8 @@ impl<N: KeyNode> KeyTree<N> {
         }
     }
 
-    pub fn fill_node(&mut self, chain_index: &ChainIndex) -> Option<(nssa::AccountId, ChainIndex)> {
-        let parent_keys = self.key_map.get(&chain_index.parent()?)?;
-        let child_id = *chain_index.chain().last()?;
-
-        let child_keys = parent_keys.nth_child(child_id);
-        let account_id = child_keys.account_id();
-
-        self.key_map.insert(chain_index.clone(), child_keys);
-        self.account_id_map.insert(account_id, chain_index.clone());
-
-        Some((account_id, chain_index.clone()))
-    }
-
     pub fn generate_new_node_layered(&mut self) -> Option<(nssa::AccountId, ChainIndex)> {
         self.fill_node(&self.find_next_slot_layered())
-    }
-
-    #[must_use]
-    pub fn get_node(&self, account_id: nssa::AccountId) -> Option<&N> {
-        let chain_id = self.account_id_map.get(&account_id)?;
-        self.key_map.get(chain_id)
-    }
-
-    pub fn get_node_mut(&mut self, account_id: nssa::AccountId) -> Option<&mut N> {
-        let chain_id = self.account_id_map.get(&account_id)?;
-        self.key_map.get_mut(chain_id)
-    }
-
-    pub fn insert(&mut self, account_id: nssa::AccountId, chain_index: ChainIndex, node: N) {
-        self.account_id_map.insert(account_id, chain_index.clone());
-        self.key_map.insert(chain_index, node);
-    }
-
-    pub fn remove(&mut self, addr: nssa::AccountId) -> Option<N> {
-        let chain_index = self.account_id_map.remove(&addr)?;
-        self.key_map.remove(&chain_index)
     }
 
     /// Populates tree with children.
@@ -193,6 +180,27 @@ impl<N: KeyNode> KeyTree<N> {
                 };
             }
         }
+    }
+
+    #[must_use]
+    pub fn get_node(&self, account_id: nssa::AccountId) -> Option<&N> {
+        let chain_id = self.account_id_map.get(&account_id)?;
+        self.key_map.get(chain_id)
+    }
+
+    pub fn get_node_mut(&mut self, account_id: nssa::AccountId) -> Option<&mut N> {
+        let chain_id = self.account_id_map.get(&account_id)?;
+        self.key_map.get_mut(chain_id)
+    }
+
+    pub fn insert(&mut self, account_id: nssa::AccountId, chain_index: ChainIndex, node: N) {
+        self.account_id_map.insert(account_id, chain_index.clone());
+        self.key_map.insert(chain_index, node);
+    }
+
+    pub fn remove(&mut self, addr: nssa::AccountId) -> Option<N> {
+        let chain_index = self.account_id_map.remove(&addr)?;
+        self.key_map.remove(&chain_index)
     }
 }
 

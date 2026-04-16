@@ -15,7 +15,7 @@ use bip39::Mnemonic;
 use chain_storage::WalletChainStore;
 use common::{HashType, transaction::NSSATransaction};
 use config::WalletConfig;
-use key_protocol::key_management::key_tree::{chain_index::ChainIndex, traits::KeyNode as _};
+use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use log::info;
 use nssa::{
     Account, AccountId, PrivacyPreservingTransaction,
