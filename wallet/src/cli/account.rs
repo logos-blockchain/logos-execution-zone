@@ -2,7 +2,7 @@ use anyhow::{Context as _, Result};
 use clap::Subcommand;
 use itertools::Itertools as _;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
-use nssa::{Account, PublicKey, program::Program};
+use nssa::{Account, AccountId, PublicKey, program::Program};
 use sequencer_service_rpc::RpcClient as _;
 use token_core::{TokenDefinition, TokenHolding};
 
@@ -147,7 +147,17 @@ impl WalletSubcommand for NewSubcommand {
                     anyhow::bail!("Label '{label}' is already in use by another account");
                 }
 
-                let (account_id, chain_index) = wallet_core.create_new_account_private(cci);
+                let chain_index = wallet_core.create_new_account_private(cci);
+
+                let node = wallet_core
+                    .storage
+                    .user_data
+                    .private_key_tree
+                    .key_map
+                    .get(&chain_index)
+                    .expect("Node was just inserted");
+                let key = &node.value.0;
+                let account_id = AccountId::from((&key.nullifier_public_key, 0_u128));
 
                 if let Some(label) = label {
                     wallet_core
@@ -155,12 +165,6 @@ impl WalletSubcommand for NewSubcommand {
                         .labels
                         .insert(account_id.to_string(), Label::new(label));
                 }
-
-                let (key, _, _) = wallet_core
-                    .storage
-                    .user_data
-                    .get_private_account(account_id)
-                    .unwrap();
 
                 println!(
                     "Generated new account with account_id Private/{account_id} at path {chain_index}",

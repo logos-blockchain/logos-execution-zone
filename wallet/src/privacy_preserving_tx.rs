@@ -211,7 +211,6 @@ async fn private_acc_preparation(
         .storage
         .user_data
         .get_private_account(account_id)
-        .cloned()
     else {
         return Err(ExecutionFailureKind::KeyNotFoundError);
     };

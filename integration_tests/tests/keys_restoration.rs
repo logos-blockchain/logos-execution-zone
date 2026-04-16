@@ -64,7 +64,6 @@ async fn sync_private_account_with_non_zero_chain_index() -> Result<()> {
         .storage()
         .user_data
         .get_private_account(to_account_id)
-        .cloned()
         .context("Failed to get private account")?;
 
     // Send to this account using claiming path (using npk and vpk instead of account ID)
@@ -264,16 +263,16 @@ async fn restore_keys_from_seed() -> Result<()> {
         .expect("Acc 4 should be restored");
 
     assert_eq!(
-        acc1.value.1.program_owner,
+        acc1.value.1[0].1.program_owner,
         Program::authenticated_transfer_program().id()
     );
     assert_eq!(
-        acc2.value.1.program_owner,
+        acc2.value.1[0].1.program_owner,
         Program::authenticated_transfer_program().id()
     );
 
-    assert_eq!(acc1.value.1.balance, 100);
-    assert_eq!(acc2.value.1.balance, 101);
+    assert_eq!(acc1.value.1[0].1.balance, 100);
+    assert_eq!(acc2.value.1[0].1.balance, 101);
 
     info!("Tree checks passed, testing restored accounts can transact");
 

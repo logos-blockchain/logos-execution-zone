@@ -178,7 +178,6 @@ async fn private_transfer_to_owned_account_using_claiming_path() -> Result<()> {
         .storage()
         .user_data
         .get_private_account(to_account_id)
-        .cloned()
         .context("Failed to get private account")?;
 
     // Send to this account using claiming path (using npk and vpk instead of account ID)
@@ -347,7 +346,6 @@ async fn private_transfer_to_owned_account_continuous_run_path() -> Result<()> {
         .storage()
         .user_data
         .get_private_account(to_account_id)
-        .cloned()
         .context("Failed to get private account")?;
 
     // Send transfer using nullifier and  viewing public keys

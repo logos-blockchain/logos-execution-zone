@@ -10,7 +10,7 @@ use crate::key_management::{
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ChildKeysPrivate {
-    pub value: (KeyChain, nssa::Account, Identifier),
+    pub value: (KeyChain, Vec<(Identifier, nssa::Account)>),
     pub ccc: [u8; 32],
     /// Can be [`None`] if root.
     pub cci: Option<u32>,
@@ -46,15 +46,14 @@ impl ChildKeysPrivate {
                         viewing_secret_key: vsk,
                     },
                 },
-                nssa::Account::default(),
-                0,
+                vec![],
             ),
             ccc,
             cci: None,
         }
     }
 
-    pub fn nth_child(&self, cci: u32, identifier: Identifier) -> Self {
+    pub fn nth_child(&self, cci: u32) -> Self {
         #[expect(clippy::arithmetic_side_effects, reason = "TODO: fix later")]
         let parent_pt =
             Scalar::from_repr(self.value.0.private_key_holder.nullifier_secret_key.into())
@@ -96,8 +95,7 @@ impl ChildKeysPrivate {
                         viewing_secret_key: vsk,
                     },
                 },
-                nssa::Account::default(),
-                identifier,
+                vec![],
             ),
             ccc,
             cci: Some(cci),
@@ -111,17 +109,13 @@ impl ChildKeysPrivate {
     pub fn child_index(&self) -> Option<u32> {
         self.cci
     }
-
-    pub fn account_id(&self) -> nssa::AccountId {
-        nssa::AccountId::from((&self.value.0.nullifier_public_key, self.value.2))
-    }
 }
 
 #[expect(
     clippy::single_char_lifetime_names,
     reason = "TODO add meaningful name"
 )]
-impl<'a> From<&'a ChildKeysPrivate> for &'a (KeyChain, nssa::Account, Identifier) {
+impl<'a> From<&'a ChildKeysPrivate> for &'a (KeyChain, Vec<(Identifier, nssa::Account)>) {
     fn from(value: &'a ChildKeysPrivate) -> Self {
         &value.value
     }
@@ -131,7 +125,7 @@ impl<'a> From<&'a ChildKeysPrivate> for &'a (KeyChain, nssa::Account, Identifier
     clippy::single_char_lifetime_names,
     reason = "TODO add meaningful name"
 )]
-impl<'a> From<&'a mut ChildKeysPrivate> for &'a mut (KeyChain, nssa::Account, Identifier) {
+impl<'a> From<&'a mut ChildKeysPrivate> for &'a mut (KeyChain, Vec<(Identifier, nssa::Account)>) {
     fn from(value: &'a mut ChildKeysPrivate) -> Self {
         &mut value.value
     }
@@ -143,11 +137,17 @@ impl KeyTreeNode for ChildKeysPrivate {
     }
 
     fn derive_child(&self, cci: u32) -> Self {
-        self.nth_child(cci, 0)
+        self.nth_child(cci)
     }
 
     fn account_ids(&self) -> Vec<nssa::AccountId> {
-        vec![self.account_id()]
+        self.value
+            .1
+            .iter()
+            .map(|(identifier, _)| {
+                nssa::AccountId::from((&self.value.0.nullifier_public_key, *identifier))
+            })
+            .collect()
     }
 }
 
@@ -217,7 +217,7 @@ mod tests {
         ];
 
         let root_node = ChildKeysPrivate::root(seed);
-        let child_node = ChildKeysPrivate::nth_child(&root_node, 42_u32, 0);
+        let child_node = ChildKeysPrivate::nth_child(&root_node, 42_u32);
 
         let expected_ccc: [u8; 32] = [
             27, 73, 133, 213, 214, 63, 217, 184, 164, 17, 172, 140, 223, 95, 255, 157, 11, 0, 58,

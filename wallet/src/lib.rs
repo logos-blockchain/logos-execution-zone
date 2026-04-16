@@ -259,7 +259,7 @@ impl WalletCore {
     pub fn create_new_account_private(
         &mut self,
         chain_index: Option<ChainIndex>,
-    ) -> (AccountId, ChainIndex) {
+    ) -> ChainIndex {
         self.storage
             .user_data
             .generate_new_privacy_preserving_transaction_key_chain(chain_index)
@@ -295,14 +295,14 @@ impl WalletCore {
         self.storage
             .user_data
             .get_private_account(account_id)
-            .map(|value| value.1.clone())
+            .map(|(_keys, account, _identifier)| account)
     }
 
     #[must_use]
     pub fn get_private_account_commitment(&self, account_id: AccountId) -> Option<Commitment> {
         let (_keys, account, _identifier) =
             self.storage.user_data.get_private_account(account_id)?;
-        Some(Commitment::new(&account_id, account))
+        Some(Commitment::new(&account_id, &account))
     }
 
     /// Poll transactions.
@@ -485,14 +485,16 @@ impl WalletCore {
             .user_data
             .default_user_private_accounts
             .iter()
-            .map(|(acc_account_id, (key_chain, _, _))| (*acc_account_id, key_chain, None))
+            .map(|(acc_account_id, (key_chain, _))| (*acc_account_id, key_chain, None))
             .chain(self.storage.user_data.private_key_tree.key_map.iter().map(
                 |(chain_index, keys_node)| {
-                    (
-                        keys_node.account_id(),
-                        &keys_node.value.0,
-                        chain_index.index(),
-                    )
+                    // Use identifier=0 as the expected first account for this node.
+                    // The actual identifier will be confirmed once the account is synced.
+                    let account_id = nssa::AccountId::from((
+                        &keys_node.value.0.nullifier_public_key,
+                        0_u128,
+                    ));
+                    (account_id, &keys_node.value.0, chain_index.index())
                 },
             ));
 

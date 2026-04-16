@@ -77,8 +77,10 @@ impl WalletChainStore {
                         public_init_acc_map.insert(data.account_id, data.pub_sign_key);
                     }
                     InitialAccountData::Private(data) => {
-                        private_init_acc_map
-                            .insert(data.account_id, (data.key_chain, data.account, data.identifier));
+                        private_init_acc_map.insert(
+                            data.account_id,
+                            (data.key_chain, vec![(data.identifier, data.account)]),
+                        );
                     }
                 },
             }
@@ -117,8 +119,10 @@ impl WalletChainStore {
                     // startup. Fix this when program id can be fetched
                     // from the node and queried from the wallet.
                     account.program_owner = Program::authenticated_transfer_program().id();
-                    private_init_acc_map
-                        .insert(data.account_id, (data.key_chain, account, data.identifier));
+                    private_init_acc_map.insert(
+                        data.account_id,
+                        (data.key_chain, vec![(data.identifier, account)]),
+                    );
                 }
             }
         }
@@ -175,24 +179,86 @@ impl WalletChainStore {
     ) {
         debug!("inserting at address {account_id}, this account {account:?}");
 
-        let entry = self
-            .user_data
-            .default_user_private_accounts
-            .entry(account_id)
-            .and_modify(|data| data.1 = account.clone());
+        // Update default accounts if present
+        if let Entry::Occupied(mut entry) =
+            self.user_data.default_user_private_accounts.entry(account_id)
+        {
+            let (key_chain, entries) = entry.get_mut();
+            let identifier = entries
+                .iter()
+                .find_map(|(id, _)| {
+                    if nssa::AccountId::from((&key_chain.nullifier_public_key, *id)) == account_id {
+                        Some(*id)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(0);
+            // Update existing entry or insert new one
+            if let Some((_, acc)) = entries.iter_mut().find(|(id, _)| *id == identifier) {
+                *acc = account;
+            } else {
+                entries.push((identifier, account));
+            }
+            return;
+        }
 
-        if matches!(entry, Entry::Vacant(_)) {
-            self.user_data
+        // Otherwise update the private key tree
+        // Identifier is hardcoded to 0 until ciphertexts carry the identifier
+        let identifier: nssa_core::Identifier = 0;
+
+        // Find the node by iterating all tree nodes for this account_id
+        let chain_index = self
+            .user_data
+            .private_key_tree
+            .account_id_map
+            .get(&account_id)
+            .cloned();
+
+        if let Some(chain_index) = chain_index {
+            // Node already in account_id_map — update its entry
+            if let Some(node) = self
+                .user_data
                 .private_key_tree
-                .account_id_map
-                .get(&account_id)
-                .map(|chain_index| {
+                .key_map
+                .get_mut(&chain_index)
+            {
+                if let Some((_, acc)) =
+                    node.value.1.iter_mut().find(|(id, _)| *id == identifier)
+                {
+                    *acc = account;
+                } else {
+                    node.value.1.push((identifier, account));
+                }
+            }
+        } else {
+            // Node not yet in account_id_map — find it by checking all nodes
+            for (ci, node) in self
+                .user_data
+                .private_key_tree
+                .key_map
+                .iter_mut()
+            {
+                let expected_id = nssa::AccountId::from((
+                    &node.value.0.nullifier_public_key,
+                    identifier,
+                ));
+                if expected_id == account_id {
+                    if let Some((_, acc)) =
+                        node.value.1.iter_mut().find(|(id, _)| *id == identifier)
+                    {
+                        *acc = account;
+                    } else {
+                        node.value.1.push((identifier, account));
+                    }
+                    // Register in account_id_map
                     self.user_data
                         .private_key_tree
-                        .key_map
-                        .entry(chain_index.clone())
-                        .and_modify(|data| data.value.1 = account)
-                });
+                        .account_id_map
+                        .insert(account_id, ci.clone());
+                    break;
+                }
+            }
         }
     }
 }
@@ -229,7 +295,10 @@ mod tests {
                 data: public_data,
             }),
             PersistentAccountData::Private(Box::new(PersistentAccountDataPrivate {
-                account_id: private_data.account_id(),
+                account_id: nssa::AccountId::from((
+                    &private_data.value.0.nullifier_public_key,
+                    0_u128,
+                )),
                 chain_index: ChainIndex::root(),
                 data: private_data,
             })),

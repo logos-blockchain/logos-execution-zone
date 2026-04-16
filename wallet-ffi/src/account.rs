@@ -98,7 +98,16 @@ pub unsafe extern "C" fn wallet_ffi_create_account_private(
         }
     };
 
-    let (account_id, _chain_index) = wallet.create_new_account_private(None);
+    let chain_index = wallet.create_new_account_private(None);
+
+    let node = wallet
+        .storage()
+        .user_data
+        .private_key_tree
+        .key_map
+        .get(&chain_index)
+        .expect("Node was just inserted");
+    let account_id = AccountId::from((&node.value.0.nullifier_public_key, 0_u128));
 
     unsafe {
         (*out_account_id).data = *account_id.value();

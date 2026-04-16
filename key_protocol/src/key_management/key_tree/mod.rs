@@ -63,10 +63,7 @@ impl<N: KeyTreeNode> KeyTree<N> {
         }
     }
 
-    pub fn generate_new_node(
-        &mut self,
-        parent_cci: &ChainIndex,
-    ) -> Option<(nssa::AccountId, ChainIndex)> {
+    pub fn generate_new_node(&mut self, parent_cci: &ChainIndex) -> Option<ChainIndex> {
         let parent_keys = self.key_map.get(parent_cci)?;
         let next_child_id = self
             .find_next_last_child_of_id(parent_cci)
@@ -75,30 +72,28 @@ impl<N: KeyTreeNode> KeyTree<N> {
 
         let child_keys = parent_keys.derive_child(next_child_id);
         let account_ids = child_keys.account_ids();
-        let primary_account_id = *account_ids.first().expect("account_ids() must be non-empty");
 
         for account_id in account_ids {
             self.account_id_map.insert(account_id, next_cci.clone());
         }
         self.key_map.insert(next_cci.clone(), child_keys);
 
-        Some((primary_account_id, next_cci))
+        Some(next_cci)
     }
 
-    pub fn fill_node(&mut self, chain_index: &ChainIndex) -> Option<(nssa::AccountId, ChainIndex)> {
+    pub fn fill_node(&mut self, chain_index: &ChainIndex) -> Option<ChainIndex> {
         let parent_keys = self.key_map.get(&chain_index.parent()?)?;
         let child_id = *chain_index.chain().last()?;
 
         let child_keys = parent_keys.derive_child(child_id);
         let account_ids = child_keys.account_ids();
-        let primary_account_id = *account_ids.first().expect("account_ids() must be non-empty");
 
         for account_id in account_ids {
             self.account_id_map.insert(account_id, chain_index.clone());
         }
         self.key_map.insert(chain_index.clone(), child_keys);
 
-        Some((primary_account_id, chain_index.clone()))
+        Some(chain_index.clone())
     }
 
     #[must_use]
@@ -155,7 +150,7 @@ impl<N: KeyTreeNode> KeyTree<N> {
         }
     }
 
-    pub fn generate_new_node_layered(&mut self) -> Option<(nssa::AccountId, ChainIndex)> {
+    pub fn generate_new_node_layered(&mut self) -> Option<ChainIndex> {
         self.fill_node(&self.find_next_slot_layered())
     }
 
@@ -204,35 +199,27 @@ impl<N: KeyTreeNode> KeyTree<N> {
     }
 }
 
-impl KeyTree<ChildKeysPrivate> {
-    /// Cleanup of non-initialized accounts in a private tree.
-    ///
-    /// If account is default, removes them, stops at first non-default account.
-    ///
-    /// Walks through tree in lairs of same depth using `ChainIndex::chain_ids_at_depth()`.
-    ///
-    /// Chain must be parsed for accounts beforehand.
-    ///
-    /// Slow, maintains tree consistency.
-    pub fn cleanup_tree_remove_uninit_layered(&mut self, depth: u32) {
-        let depth = usize::try_from(depth).expect("Depth is expected to fit in usize");
-        'outer: for i in (1..depth).rev() {
-            println!("Cleanup of tree at depth {i}");
-            for id in ChainIndex::chain_ids_at_depth(i) {
-                if let Some(node) = self.key_map.get(&id) {
-                    if node.value.1 == nssa::Account::default() {
-                        let addr = node.account_id();
-                        self.remove(addr);
-                    } else {
-                        break 'outer;
-                    }
-                }
-            }
-        }
-    }
-}
-
 impl KeyTree<ChildKeysPublic> {
+    /// Generate a new public key node, returning the account ID and chain index.
+    pub fn generate_new_public_node(
+        &mut self,
+        parent_cci: &ChainIndex,
+    ) -> Option<(nssa::AccountId, ChainIndex)> {
+        let cci = self.generate_new_node(parent_cci)?;
+        let node = self.key_map.get(&cci)?;
+        let account_id = *node.account_ids().first()?;
+        Some((account_id, cci))
+    }
+
+    /// Generate a new public key node using layered placement, returning the account ID and chain
+    /// index.
+    pub fn generate_new_public_node_layered(&mut self) -> Option<(nssa::AccountId, ChainIndex)> {
+        let cci = self.generate_new_node_layered()?;
+        let node = self.key_map.get(&cci)?;
+        let account_id = *node.account_ids().first()?;
+        Some((account_id, cci))
+    }
+
     /// Cleanup of non-initialized accounts in a public tree.
     ///
     /// If account is default, removes them, stops at first non-default account.
@@ -264,6 +251,37 @@ impl KeyTree<ChildKeysPublic> {
         }
 
         Ok(())
+    }
+}
+
+impl KeyTree<ChildKeysPrivate> {
+    /// Cleanup of non-initialized accounts in a private tree.
+    ///
+    /// If account has no synced entries, removes it, stops at first initialized account.
+    ///
+    /// Walks through tree in layers of same depth using `ChainIndex::chain_ids_at_depth()`.
+    ///
+    /// Chain must be parsed for accounts beforehand.
+    ///
+    /// Slow, maintains tree consistency.
+    pub fn cleanup_tree_remove_uninit_layered(&mut self, depth: u32) {
+        let depth = usize::try_from(depth).expect("Depth is expected to fit in usize");
+        'outer: for i in (1..depth).rev() {
+            println!("Cleanup of tree at depth {i}");
+            for id in ChainIndex::chain_ids_at_depth(i) {
+                if let Some(node) = self.key_map.get(&id) {
+                    if node.value.1.is_empty() {
+                        let account_ids: Vec<_> = node.account_ids();
+                        self.key_map.remove(&id);
+                        for addr in account_ids {
+                            self.account_id_map.remove(&addr);
+                        }
+                    } else {
+                        break 'outer;
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -486,25 +504,51 @@ mod tests {
             .key_map
             .get_mut(&ChainIndex::from_str("/1").unwrap())
             .unwrap();
-        acc.value.1.balance = 2;
+        acc.value.1.push((0, {
+            let mut a = nssa::Account::default();
+            a.balance = 2;
+            a
+        }));
 
         let acc = tree
             .key_map
             .get_mut(&ChainIndex::from_str("/2").unwrap())
             .unwrap();
-        acc.value.1.balance = 3;
+        acc.value.1.push((0, {
+            let mut a = nssa::Account::default();
+            a.balance = 3;
+            a
+        }));
 
         let acc = tree
             .key_map
             .get_mut(&ChainIndex::from_str("/0/1").unwrap())
             .unwrap();
-        acc.value.1.balance = 5;
+        acc.value.1.push((0, {
+            let mut a = nssa::Account::default();
+            a.balance = 5;
+            a
+        }));
 
         let acc = tree
             .key_map
             .get_mut(&ChainIndex::from_str("/1/0").unwrap())
             .unwrap();
-        acc.value.1.balance = 6;
+        acc.value.1.push((0, {
+            let mut a = nssa::Account::default();
+            a.balance = 6;
+            a
+        }));
+
+        // Update account_id_map for nodes that now have entries
+        for chain_index_str in ["/1", "/2", "/0/1", "/1/0"] {
+            let id = ChainIndex::from_str(chain_index_str).unwrap();
+            if let Some(node) = tree.key_map.get(&id) {
+                for account_id in node.account_ids() {
+                    tree.account_id_map.insert(account_id, id.clone());
+                }
+            }
+        }
 
         tree.cleanup_tree_remove_uninit_layered(10);
 
@@ -526,15 +570,15 @@ mod tests {
         assert_eq!(key_set, key_set_res);
 
         let acc = &tree.key_map[&ChainIndex::from_str("/1").unwrap()];
-        assert_eq!(acc.value.1.balance, 2);
+        assert_eq!(acc.value.1[0].1.balance, 2);
 
         let acc = &tree.key_map[&ChainIndex::from_str("/2").unwrap()];
-        assert_eq!(acc.value.1.balance, 3);
+        assert_eq!(acc.value.1[0].1.balance, 3);
 
         let acc = &tree.key_map[&ChainIndex::from_str("/0/1").unwrap()];
-        assert_eq!(acc.value.1.balance, 5);
+        assert_eq!(acc.value.1[0].1.balance, 5);
 
         let acc = &tree.key_map[&ChainIndex::from_str("/1/0").unwrap()];
-        assert_eq!(acc.value.1.balance, 6);
+        assert_eq!(acc.value.1[0].1.balance, 6);
     }
 }
