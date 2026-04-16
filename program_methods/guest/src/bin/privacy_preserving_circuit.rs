@@ -24,7 +24,7 @@ struct ExecutionState {
     block_validity_window: BlockValidityWindow,
     timestamp_validity_window: TimestampValidityWindow,
     /// Map from private-PDA `AccountId` to the npk used to derive it, sourced entirely from
-    /// Risc0-proven `Claim::PrivatePda` in post_states and `private_pda_seeds` in chained
+    /// Risc0-proven `Claim::PrivatePda` in `post_states` and `private_pda_seeds` in chained
     /// calls. `compute_circuit_output` uses this to verify that the npk supplied via
     /// `private_account_keys` for a mask-3 account matches the npk attested by some program's
     /// proof.
