@@ -85,6 +85,7 @@ pub fn execute_and_prove(
         instruction_data,
         pre_states,
         pda_seeds: vec![],
+        private_pda_seeds: vec![],
     };
 
     let mut chained_calls = VecDeque::from_iter([(initial_call, initial_program, None)]);
@@ -131,7 +132,6 @@ pub fn execute_and_prove(
         private_account_nsks,
         private_account_membership_proofs,
         program_id: program_with_dependencies.program.id(),
-        private_pda_info: vec![],
     };
 
     env_builder.write(&circuit_input).unwrap();

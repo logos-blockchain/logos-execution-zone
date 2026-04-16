@@ -65,7 +65,14 @@ pub struct ChainedCall {
     pub pre_states: Vec<AccountWithMetadata>,
     /// The instruction data to pass.
     pub instruction_data: InstructionData,
+    /// Public PDA seeds authorized for the callee. Each derives an `AccountId` via
+    /// `AccountId::from((&caller_program_id, seed))`.
     pub pda_seeds: Vec<PdaSeed>,
+    /// Private PDA `(seed, npk)` pairs authorized for the callee. Each derives an `AccountId`
+    /// via `private_pda_account_id(&caller_program_id, seed, npk)`. The npk binds the
+    /// authorization to a specific group of controllers and is part of the caller program's
+    /// Risc0-proven output, so the outer circuit can trust it.
+    pub private_pda_seeds: Vec<(PdaSeed, NullifierPublicKey)>,
 }
 
 impl ChainedCall {
@@ -81,12 +88,22 @@ impl ChainedCall {
             instruction_data: risc0_zkvm::serde::to_vec(instruction)
                 .expect("Serialization to Vec<u32> should not fail"),
             pda_seeds: Vec::new(),
+            private_pda_seeds: Vec::new(),
         }
     }
 
     #[must_use]
     pub fn with_pda_seeds(mut self, pda_seeds: Vec<PdaSeed>) -> Self {
         self.pda_seeds = pda_seeds;
+        self
+    }
+
+    #[must_use]
+    pub fn with_private_pda_seeds(
+        mut self,
+        private_pda_seeds: Vec<(PdaSeed, NullifierPublicKey)>,
+    ) -> Self {
+        self.private_pda_seeds = private_pda_seeds;
         self
     }
 }
@@ -114,8 +131,16 @@ pub enum Claim {
     /// This will give no error if program had authorization in pre state and may be useful
     /// if program decides to give up authorization for a chained call.
     Authorized,
-    /// The program requests ownership of the account through a PDA.
+    /// The program requests ownership of the account through a public PDA. The `AccountId` is
+    /// `AccountId::from((&program_id, &seed))`.
     Pda(PdaSeed),
+    /// The program requests ownership of the account through a private PDA. The `AccountId` is
+    /// `private_pda_account_id(&program_id, &seed, &npk)`. The npk is part of the program's
+    /// Risc0-proven output, so the outer circuit can trust it.
+    PrivatePda {
+        seed: PdaSeed,
+        npk: NullifierPublicKey,
+    },
 }
 
 impl AccountPostState {
@@ -436,29 +461,27 @@ pub fn private_pda_account_id(
     )
 }
 
+/// Computes the set of PDA `AccountId`s the callee is authorized to mutate.
+///
+/// `pda_seeds` produces public PDAs. `private_pda_seeds` produces private PDAs whose derivation
+/// includes the caller-supplied npk. All seeds and npks must come from the caller's Risc0-proven
+/// [`ChainedCall`], so the outer circuit can trust them.
 #[must_use]
 pub fn compute_authorized_pdas(
     caller_program_id: Option<ProgramId>,
     pda_seeds: &[PdaSeed],
-    private_pda_info: &[(ProgramId, PdaSeed, NullifierPublicKey)],
+    private_pda_seeds: &[(PdaSeed, NullifierPublicKey)],
 ) -> HashSet<AccountId> {
-    caller_program_id
-        .map(|caller_program_id| {
-            pda_seeds
-                .iter()
-                .map(|pda_seed| {
-                    if let Some((_, _, npk)) = private_pda_info
-                        .iter()
-                        .find(|(pid, s, _)| *pid == caller_program_id && s == pda_seed)
-                    {
-                        private_pda_account_id(&caller_program_id, pda_seed, npk)
-                    } else {
-                        AccountId::from((&caller_program_id, pda_seed))
-                    }
-                })
-                .collect()
-        })
-        .unwrap_or_default()
+    let Some(caller) = caller_program_id else {
+        return HashSet::new();
+    };
+    let public = pda_seeds
+        .iter()
+        .map(|seed| AccountId::from((&caller, seed)));
+    let private = private_pda_seeds
+        .iter()
+        .map(|(seed, npk)| private_pda_account_id(&caller, seed, npk));
+    public.chain(private).collect()
 }
 
 /// Reads the NSSA inputs from the guest environment.
@@ -824,59 +847,52 @@ mod tests {
         assert_ne!(private_pda_id, standard_private_id);
     }
 
-    // ---- compute_authorized_pdas with private_pda_info tests ----
+    // ---- compute_authorized_pdas tests ----
 
-    /// With no private PDA info, `compute_authorized_pdas` returns public PDA addresses
-    /// (backward compatible with the existing behavior).
+    /// With no private PDA seeds, `compute_authorized_pdas` returns public PDA addresses only.
     #[test]
-    fn compute_authorized_pdas_empty_private_info_returns_public_ids() {
+    fn compute_authorized_pdas_public_only() {
         let caller: ProgramId = [1; 8];
         let seed = PdaSeed::new([2; 32]);
         let result = compute_authorized_pdas(Some(caller), &[seed], &[]);
         let expected = AccountId::from((&caller, &seed));
         assert!(result.contains(&expected));
+        assert_eq!(result.len(), 1);
     }
 
-    /// When a `pda_seed` matches a `private_pda_info` entry, the result uses the private PDA
-    /// formula (with `npk`) instead of the public formula.
+    /// Private PDA seeds produce private PDA `AccountId`s via the `npk`-inclusive derivation.
     #[test]
-    fn compute_authorized_pdas_matching_entry_returns_private_id() {
+    fn compute_authorized_pdas_private_only() {
         let caller: ProgramId = [1; 8];
         let seed = PdaSeed::new([2; 32]);
         let npk = NullifierPublicKey([3; 32]);
-        let info = vec![(caller, seed, npk.clone())];
-        let result = compute_authorized_pdas(Some(caller), &[seed], &info);
+        let result = compute_authorized_pdas(Some(caller), &[], &[(seed, npk)]);
         let expected = private_pda_account_id(&caller, &seed, &npk);
         assert!(result.contains(&expected));
-        // Should NOT contain the public PDA
         let public_id = AccountId::from((&caller, &seed));
         assert!(!result.contains(&public_id));
+        assert_eq!(result.len(), 1);
     }
 
-    /// When a `pda_seed` does NOT match any `private_pda_info` entry, the result uses the
-    /// standard public PDA formula (no `npk`).
+    /// Public and private seeds can coexist in a single chained call; both are authorized.
     #[test]
-    fn compute_authorized_pdas_non_matching_entry_returns_public_id() {
+    fn compute_authorized_pdas_public_and_private() {
         let caller: ProgramId = [1; 8];
-        let seed_a = PdaSeed::new([2; 32]);
-        let seed_b = PdaSeed::new([9; 32]);
+        let pub_seed = PdaSeed::new([2; 32]);
+        let priv_seed = PdaSeed::new([4; 32]);
         let npk = NullifierPublicKey([3; 32]);
-        // Info is for seed_b, but we authorize seed_a
-        let info = vec![(caller, seed_b, npk)];
-        let result = compute_authorized_pdas(Some(caller), &[seed_a], &info);
-        let expected = AccountId::from((&caller, &seed_a));
-        assert!(result.contains(&expected));
+        let result = compute_authorized_pdas(Some(caller), &[pub_seed], &[(priv_seed, npk)]);
+        assert!(result.contains(&AccountId::from((&caller, &pub_seed))));
+        assert!(result.contains(&private_pda_account_id(&caller, &priv_seed, &npk)));
+        assert_eq!(result.len(), 2);
     }
 
-    /// With no caller (top-level call), the result is always empty regardless of
-    /// `private_pda_info`.
+    /// With no caller (top-level call), the result is always empty.
     #[test]
     fn compute_authorized_pdas_no_caller_returns_empty() {
         let seed = PdaSeed::new([2; 32]);
         let npk = NullifierPublicKey([3; 32]);
-        let caller: ProgramId = [1; 8];
-        let info = vec![(caller, seed, npk)];
-        let result = compute_authorized_pdas(None, &[seed], &info);
+        let result = compute_authorized_pdas(None, &[seed], &[(seed, npk)]);
         assert!(result.is_empty());
     }
 }
