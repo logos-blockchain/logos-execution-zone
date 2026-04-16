@@ -773,15 +773,19 @@ mod tests {
 
     // ---- private_pda_account_id tests ----
 
-    /// Same inputs always produce the same `AccountId`.
+    /// Pins `private_pda_account_id` against a hardcoded expected output for a specific
+    /// `(program_id, seed, npk)` triple. Any change to `PRIVATE_PDA_PREFIX`, byte ordering,
+    /// or the underlying hash breaks this test.
     #[test]
-    fn private_pda_account_id_is_deterministic() {
+    fn private_pda_account_id_matches_pinned_value() {
         let program_id: ProgramId = [1; 8];
         let seed = PdaSeed::new([2; 32]);
         let npk = NullifierPublicKey([3; 32]);
-        let id1 = private_pda_account_id(&program_id, &seed, &npk);
-        let id2 = private_pda_account_id(&program_id, &seed, &npk);
-        assert_eq!(id1, id2);
+        let expected = AccountId::new([
+            132, 198, 103, 173, 244, 211, 188, 217, 249, 99, 126, 205, 152, 120, 192, 47, 13,
+            53, 133, 3, 17, 69, 92, 243, 140, 94, 182, 211, 218, 75, 215, 45,
+        ]);
+        assert_eq!(private_pda_account_id(&program_id, &seed, &npk), expected);
     }
 
     /// Two groups with different viewing keys at the same (program, seed) get different addresses.
