@@ -366,7 +366,10 @@ pub mod tests {
         Timestamp,
         account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
         encryption::{EphemeralPublicKey, Scalar, ViewingPublicKey},
-        program::{BlockValidityWindow, PdaSeed, ProgramId, TimestampValidityWindow},
+        program::{
+            BlockValidityWindow, PdaSeed, ProgramId, TimestampValidityWindow,
+            private_pda_account_id,
+        },
     };
 
     use crate::{
@@ -2243,8 +2246,11 @@ pub mod tests {
         assert!(matches!(result, Err(NssaError::CircuitProvingError(_))));
     }
 
+    /// A mask-3 account with no proven `Claim::PrivatePda` or `ChainedCall.private_pda_seeds`
+    /// attestation must be rejected by the circuit, since there is no binding from which to verify
+    /// its npk.
     #[test]
-    fn circuit_should_fail_with_invalid_visibility_mask_value() {
+    fn mask_3_without_binding_panics() {
         let program = Program::simple_balance_transfer();
         let public_account_1 = AccountWithMetadata::new(
             Account {
@@ -2263,6 +2269,121 @@ pub mod tests {
             vec![public_account_1, public_account_2],
             Program::serialize_instruction(10_u128).unwrap(),
             visibility_mask.to_vec(),
+            vec![],
+            vec![],
+            vec![],
+            &program.into(),
+        );
+
+        assert!(matches!(result, Err(NssaError::CircuitProvingError(_))));
+    }
+
+    /// Happy path: a program claims a new mask-3 account via `Claim::PrivatePda { seed, npk }`.
+    /// The circuit derives the `AccountId` via `private_pda_account_id(program_id, seed, npk)`
+    /// and matches it against the proven claim; the wallet-supplied npk in `private_account_keys`
+    /// matches the attested npk from the bindings map; a commitment, nullifier and ciphertext are
+    /// produced.
+    #[test]
+    fn mask_3_private_pda_claim_succeeds() {
+        let program = Program::private_pda_claimer();
+        let keys = test_private_account_keys_1();
+        let npk = keys.npk();
+        let seed = PdaSeed::new([42; 32]);
+        let shared_secret = SharedSecretKey::new(&[55; 32], &keys.vpk());
+
+        let account_id = private_pda_account_id(&program.id(), &seed, &npk);
+        let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
+
+        let result = execute_and_prove(
+            vec![pre_state],
+            Program::serialize_instruction((seed, npk)).unwrap(),
+            vec![3],
+            vec![(npk, shared_secret)],
+            vec![],
+            vec![None],
+            &program.into(),
+        );
+
+        let (output, _proof) = result.expect("mask-3 private PDA claim should succeed");
+        assert_eq!(output.new_nullifiers.len(), 1);
+        assert_eq!(output.new_commitments.len(), 1);
+        assert_eq!(output.ciphertexts.len(), 1);
+        assert!(output.public_pre_states.is_empty());
+        assert!(output.public_post_states.is_empty());
+    }
+
+    /// The wallet supplies an npk in `private_account_keys` that differs from the npk attested
+    /// by the program's `Claim::PrivatePda`. The circuit's mask-3 binding check must reject.
+    #[test]
+    fn mask_3_wallet_npk_mismatch_panics() {
+        let program = Program::private_pda_claimer();
+        let attested_keys = test_private_account_keys_1();
+        let wallet_keys = test_private_account_keys_2();
+        let attested_npk = attested_keys.npk();
+        let wallet_npk = wallet_keys.npk();
+        let seed = PdaSeed::new([42; 32]);
+        let shared_secret = SharedSecretKey::new(&[55; 32], &wallet_keys.vpk());
+
+        // The account_id derives from the attested npk (what the program claims). The wallet
+        // supplies a different npk in private_account_keys, which must fail the binding check.
+        let account_id = private_pda_account_id(&program.id(), &seed, &attested_npk);
+        let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
+
+        let result = execute_and_prove(
+            vec![pre_state],
+            Program::serialize_instruction((seed, attested_npk)).unwrap(),
+            vec![3],
+            vec![(wallet_npk, shared_secret)],
+            vec![],
+            vec![None],
+            &program.into(),
+        );
+
+        assert!(matches!(result, Err(NssaError::CircuitProvingError(_))));
+    }
+
+    /// A program must not be allowed to claim a mask-0 (public) account via `Claim::PrivatePda`.
+    /// The circuit panics in `validate_and_sync_states` when the visibility and claim kind disagree.
+    #[test]
+    fn mask_0_cannot_be_claimed_as_private_pda_panics() {
+        let program = Program::private_pda_claimer();
+        let keys = test_private_account_keys_1();
+        let npk = keys.npk();
+        let seed = PdaSeed::new([42; 32]);
+
+        // Public account: program_owner = DEFAULT, account_id arbitrary.
+        let pre_state =
+            AccountWithMetadata::new(Account::default(), false, AccountId::new([7; 32]));
+
+        let result = execute_and_prove(
+            vec![pre_state],
+            Program::serialize_instruction((seed, npk)).unwrap(),
+            vec![0],
+            vec![],
+            vec![],
+            vec![],
+            &program.into(),
+        );
+
+        assert!(matches!(result, Err(NssaError::CircuitProvingError(_))));
+    }
+
+    /// A program must not be allowed to claim a mask-3 (private PDA) account via `Claim::Pda`.
+    /// Private PDAs use a distinct derivation and must be claimed with `Claim::PrivatePda`.
+    #[test]
+    fn mask_3_cannot_be_claimed_as_public_pda_panics() {
+        let program = Program::pda_claimer();
+        let seed = PdaSeed::new([42; 32]);
+
+        // The account_id does not need to match any private-PDA derivation; the circuit panics on
+        // the mask-3 / `Claim::Pda` mismatch before any derivation check.
+        let pre_state =
+            AccountWithMetadata::new(Account::default(), false, AccountId::new([7; 32]));
+
+        let result = execute_and_prove(
+            vec![pre_state],
+            Program::serialize_instruction(seed).unwrap(),
+            vec![3],
             vec![],
             vec![],
             vec![],

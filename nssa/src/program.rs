@@ -293,6 +293,26 @@ mod tests {
         }
 
         #[must_use]
+        pub fn private_pda_claimer() -> Self {
+            use test_program_methods::{PRIVATE_PDA_CLAIMER_ELF, PRIVATE_PDA_CLAIMER_ID};
+
+            Self {
+                id: PRIVATE_PDA_CLAIMER_ID,
+                elf: PRIVATE_PDA_CLAIMER_ELF.to_vec(),
+            }
+        }
+
+        #[must_use]
+        pub fn pda_claimer() -> Self {
+            use test_program_methods::{PDA_CLAIMER_ELF, PDA_CLAIMER_ID};
+
+            Self {
+                id: PDA_CLAIMER_ID,
+                elf: PDA_CLAIMER_ELF.to_vec(),
+            }
+        }
+
+        #[must_use]
         pub fn changer_claimer() -> Self {
             use test_program_methods::{CHANGER_CLAIMER_ELF, CHANGER_CLAIMER_ID};
 
