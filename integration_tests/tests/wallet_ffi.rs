@@ -48,10 +48,12 @@ unsafe extern "C" {
         out_account_id: *mut FfiBytes32,
     ) -> error::WalletFfiError;
 
-    fn wallet_ffi_create_account_private(
+    fn wallet_ffi_create_private_accounts_key(
         handle: *mut WalletHandle,
-        out_account_id: *mut FfiBytes32,
+        out_keys: *mut FfiPrivateAccountKeys,
     ) -> error::WalletFfiError;
+
+    fn wallet_ffi_free_private_account_keys(keys: *mut FfiPrivateAccountKeys);
 
     fn wallet_ffi_list_accounts(
         handle: *mut WalletHandle,
@@ -262,33 +264,32 @@ fn wallet_ffi_create_public_accounts() -> Result<()> {
 fn wallet_ffi_create_private_accounts() -> Result<()> {
     let password = "password_for_tests";
     let n_accounts = 10;
-    // Create `n_accounts` private accounts with wallet FFI
-    let new_private_account_ids_ffi = unsafe {
-        let mut account_ids = Vec::new();
+    // Create `n_accounts` receiving keys with wallet FFI
+    let new_npks_ffi = unsafe {
+        let mut npks = Vec::new();
 
         let wallet_ffi_handle = new_wallet_ffi_with_default_config(password)?;
         for _ in 0..n_accounts {
-            let mut out_account_id = FfiBytes32::from_bytes([0; 32]);
-            wallet_ffi_create_account_private(wallet_ffi_handle, &raw mut out_account_id);
-            account_ids.push(out_account_id.data);
+            let mut out_keys = FfiPrivateAccountKeys::default();
+            wallet_ffi_create_private_accounts_key(wallet_ffi_handle, &raw mut out_keys);
+            npks.push(out_keys.nullifier_public_key.data);
+            wallet_ffi_free_private_account_keys(&raw mut out_keys);
         }
         wallet_ffi_destroy(wallet_ffi_handle);
-        account_ids
+        npks
     };
 
-    // All returned IDs must be unique and non-zero
-    assert_eq!(new_private_account_ids_ffi.len(), n_accounts);
-    let unique: HashSet<_> = new_private_account_ids_ffi.iter().collect();
+    // All returned NPKs must be unique and non-zero
+    assert_eq!(new_npks_ffi.len(), n_accounts);
+    let unique: HashSet<_> = new_npks_ffi.iter().collect();
     assert_eq!(
         unique.len(),
         n_accounts,
-        "Duplicate private account IDs returned"
+        "Duplicate NPKs returned"
     );
     assert!(
-        new_private_account_ids_ffi
-            .iter()
-            .all(|id| *id != [0_u8; 32]),
-        "Zero account ID returned"
+        new_npks_ffi.iter().all(|id| *id != [0_u8; 32]),
+        "Zero NPK returned"
     );
 
     Ok(())
@@ -296,47 +297,34 @@ fn wallet_ffi_create_private_accounts() -> Result<()> {
 #[test]
 fn wallet_ffi_save_and_load_persistent_storage() -> Result<()> {
     let ctx = BlockingTestContext::new()?;
-    let mut out_private_account_id = FfiBytes32::from_bytes([0; 32]);
     let home = tempfile::tempdir()?;
+    let mut first_npk = [0u8; 32];
 
-    // Create a private account with the wallet FFI and save it
+    // Create a receiving key and save
     unsafe {
         let wallet_ffi_handle = new_wallet_ffi_with_test_context_config(&ctx, home.path())?;
-        wallet_ffi_create_account_private(wallet_ffi_handle, &raw mut out_private_account_id);
-
+        let mut out_keys = FfiPrivateAccountKeys::default();
+        wallet_ffi_create_private_accounts_key(wallet_ffi_handle, &raw mut out_keys);
+        first_npk = out_keys.nullifier_public_key.data;
+        wallet_ffi_free_private_account_keys(&raw mut out_keys);
         wallet_ffi_save(wallet_ffi_handle);
         wallet_ffi_destroy(wallet_ffi_handle);
     }
 
-    let private_account_keys = unsafe {
+    // After loading, creating a new key should yield a different NPK (state was persisted)
+    let second_npk = unsafe {
         let wallet_ffi_handle = load_existing_ffi_wallet(home.path())?;
-
-        let mut private_account = FfiAccount::default();
-
-        let result = wallet_ffi_get_account_private(
-            wallet_ffi_handle,
-            &raw const out_private_account_id,
-            &raw mut private_account,
-        );
-        assert_eq!(result, error::WalletFfiError::Success);
-
         let mut out_keys = FfiPrivateAccountKeys::default();
-        let result = wallet_ffi_get_private_account_keys(
-            wallet_ffi_handle,
-            &raw const out_private_account_id,
-            &raw mut out_keys,
-        );
-        assert_eq!(result, error::WalletFfiError::Success);
-
+        wallet_ffi_create_private_accounts_key(wallet_ffi_handle, &raw mut out_keys);
+        let npk = out_keys.nullifier_public_key.data;
+        wallet_ffi_free_private_account_keys(&raw mut out_keys);
         wallet_ffi_destroy(wallet_ffi_handle);
-
-        out_keys
+        npk
     };
 
-    assert_eq!(
-        nssa::AccountId::from((&private_account_keys.npk(), 0)),
-        out_private_account_id.into()
-    );
+    assert_ne!(first_npk, [0u8; 32], "First NPK should be non-zero");
+    assert_ne!(second_npk, [0u8; 32], "Second NPK should be non-zero");
+    assert_ne!(first_npk, second_npk, "Keys should differ after state was persisted");
 
     Ok(())
 }
@@ -351,15 +339,17 @@ fn test_wallet_ffi_list_accounts() -> Result<()> {
         let mut public_ids: Vec<[u8; 32]> = Vec::new();
         let mut private_ids: Vec<[u8; 32]> = Vec::new();
 
-        // Create 5 public accounts and 5 private accounts, recording their IDs
+        // Create 5 public accounts and 5 receiving keys
         for _ in 0..5 {
             let mut out_account_id = FfiBytes32::from_bytes([0; 32]);
             wallet_ffi_create_account_public(handle, &raw mut out_account_id);
             public_ids.push(out_account_id.data);
 
-            wallet_ffi_create_account_private(handle, &raw mut out_account_id);
-            private_ids.push(out_account_id.data);
+            let mut out_keys = FfiPrivateAccountKeys::default();
+            wallet_ffi_create_private_accounts_key(handle, &raw mut out_keys);
+            wallet_ffi_free_private_account_keys(&raw mut out_keys);
         }
+        let _ = private_ids;
 
         (handle, public_ids, private_ids)
     };
@@ -396,19 +386,13 @@ fn test_wallet_ffi_list_accounts() -> Result<()> {
             "Created public account not found in list with is_public=true"
         );
     }
-    for id in &created_private_ids {
-        assert!(
-            listed_private_ids.contains(id),
-            "Created private account not found in list with is_public=false"
-        );
-    }
-
-    // Total listed accounts must be at least the number we created
+    // Total listed accounts must be at least the number of public accounts created
+    // (receiving keys without synced accounts don't appear in the list)
     assert!(
-        wallet_ffi_account_list.count >= created_public_ids.len() + created_private_ids.len(),
-        "Listed account count ({}) is less than the number of created accounts ({})",
+        wallet_ffi_account_list.count >= created_public_ids.len(),
+        "Listed account count ({}) is less than the number of created public accounts ({})",
         wallet_ffi_account_list.count,
-        created_public_ids.len() + created_private_ids.len()
+        created_public_ids.len()
     );
 
     unsafe {
@@ -712,25 +696,16 @@ fn wallet_ffi_init_private_account_auth_transfer() -> Result<()> {
     let home = tempfile::tempdir()?;
     let wallet_ffi_handle = new_wallet_ffi_with_test_context_config(&ctx, home.path())?;
 
-    // Create a new uninitialized public account
-    let mut out_account_id = FfiBytes32::from_bytes([0; 32]);
-    unsafe {
-        wallet_ffi_create_account_private(wallet_ffi_handle, &raw mut out_account_id);
-    }
-
-    // Check its program owner is the default program id
-    let account: Account = unsafe {
-        let mut out_account = FfiAccount::default();
-        wallet_ffi_get_account_private(
-            wallet_ffi_handle,
-            &raw const out_account_id,
-            &raw mut out_account,
-        );
-        (&out_account).try_into().unwrap()
+    // Create a new receiving key and derive account_id for identifier=0
+    let out_account_id: FfiBytes32 = unsafe {
+        let mut out_keys = FfiPrivateAccountKeys::default();
+        wallet_ffi_create_private_accounts_key(wallet_ffi_handle, &raw mut out_keys);
+        let account_id = nssa::AccountId::from((&out_keys.npk(), 0_u128));
+        wallet_ffi_free_private_account_keys(&raw mut out_keys);
+        (&account_id).into()
     };
-    assert_eq!(account.program_owner, DEFAULT_PROGRAM_ID);
 
-    // Call the init funciton
+    // Call the init function
     let mut transfer_result = FfiTransferResult::default();
     unsafe {
         wallet_ffi_register_private_account(
@@ -834,15 +809,11 @@ fn test_wallet_ffi_transfer_shielded() -> Result<()> {
     let wallet_ffi_handle = new_wallet_ffi_with_test_context_config(&ctx, home.path())?;
     let from: FfiBytes32 = (&ctx.ctx().existing_public_accounts()[0]).into();
     let (to, to_keys) = unsafe {
-        let mut out_account_id = FfiBytes32::default();
         let mut out_keys = FfiPrivateAccountKeys::default();
-        wallet_ffi_create_account_private(wallet_ffi_handle, &raw mut out_account_id);
-        wallet_ffi_get_private_account_keys(
-            wallet_ffi_handle,
-            &raw const out_account_id,
-            &raw mut out_keys,
-        );
-        (out_account_id, out_keys)
+        wallet_ffi_create_private_accounts_key(wallet_ffi_handle, &raw mut out_keys);
+        let account_id = nssa::AccountId::from((&out_keys.npk(), 0_u128));
+        let to: FfiBytes32 = (&account_id).into();
+        (to, out_keys)
     };
     let amount: [u8; 16] = 100_u128.to_le_bytes();
 
@@ -970,15 +941,11 @@ fn test_wallet_ffi_transfer_private() -> Result<()> {
 
     let from: FfiBytes32 = (&ctx.ctx().existing_private_accounts()[0]).into();
     let (to, to_keys) = unsafe {
-        let mut out_account_id = FfiBytes32::default();
         let mut out_keys = FfiPrivateAccountKeys::default();
-        wallet_ffi_create_account_private(wallet_ffi_handle, &raw mut out_account_id);
-        wallet_ffi_get_private_account_keys(
-            wallet_ffi_handle,
-            &raw const out_account_id,
-            &raw mut out_keys,
-        );
-        (out_account_id, out_keys)
+        wallet_ffi_create_private_accounts_key(wallet_ffi_handle, &raw mut out_keys);
+        let account_id = nssa::AccountId::from((&out_keys.npk(), 0_u128));
+        let to: FfiBytes32 = (&account_id).into();
+        (to, out_keys)
     };
 
     let amount: [u8; 16] = 100_u128.to_le_bytes();

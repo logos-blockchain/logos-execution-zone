@@ -121,19 +121,19 @@ impl NSSAUserData {
             .or_else(|| self.public_key_tree.get_node(account_id).map(Into::into))
     }
 
-    /// Generates a new private key node and returns its `ChainIndex`.
-    pub fn generate_new_privacy_preserving_transaction_key_chain(
+    /// Creates a new receiving key node and returns its `ChainIndex`.
+    pub fn create_private_accounts_key(
         &mut self,
         parent_cci: Option<ChainIndex>,
     ) -> ChainIndex {
         match parent_cci {
             Some(parent_cci) => self
                 .private_key_tree
-                .generate_new_private_node(&parent_cci)
+                .create_private_accounts_key_node(&parent_cci)
                 .expect("Parent must be present in a tree"),
             None => self
                 .private_key_tree
-                .generate_new_private_node_layered()
+                .create_private_accounts_key_node_layered()
                 .expect("Search for new node slot failed"),
         }
     }
@@ -222,7 +222,7 @@ mod tests {
         let mut user_data = NSSAUserData::default();
 
         let chain_index = user_data
-            .generate_new_privacy_preserving_transaction_key_chain(Some(ChainIndex::root()));
+            .create_private_accounts_key(Some(ChainIndex::root()));
 
         let is_key_chain_generated = user_data.private_key_tree.key_map.contains_key(&chain_index);
         assert!(is_key_chain_generated);

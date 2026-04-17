@@ -82,8 +82,8 @@ pub enum NewSubcommand {
         /// Label to assign to the new account.
         label: Option<String>,
     },
-    /// Register new private account.
-    Private {
+    /// Create a new receiving key (npk + vpk) to share with senders.
+    PrivateAccountsKey {
         #[arg(long)]
         /// Chain index of a parent node.
         cci: Option<ChainIndex>,
@@ -133,8 +133,8 @@ impl WalletSubcommand for NewSubcommand {
 
                 Ok(SubcommandReturnValue::RegisterAccount { account_id })
             }
-            Self::Private { cci } => {
-                let chain_index = wallet_core.create_new_account_private(cci);
+            Self::PrivateAccountsKey { cci } => {
+                let chain_index = wallet_core.create_private_accounts_key(cci);
 
                 let node = wallet_core
                     .storage

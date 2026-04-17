@@ -127,6 +127,24 @@ typedef struct FfiBytes32 {
 } FfiBytes32;
 
 /**
+ * Public keys for a private account (safe to expose).
+ */
+typedef struct FfiPrivateAccountKeys {
+  /**
+   * Nullifier public key (32 bytes).
+   */
+  struct FfiBytes32 nullifier_public_key;
+  /**
+   * viewing public key (compressed secp256k1 point).
+   */
+  const uint8_t *viewing_public_key;
+  /**
+   * Length of viewing public key (typically 33 bytes).
+   */
+  uintptr_t viewing_public_key_len;
+} FfiPrivateAccountKeys;
+
+/**
  * Single entry in the account list.
  */
 typedef struct FfiAccountListEntry {
@@ -190,24 +208,6 @@ typedef struct FfiPublicAccountKey {
 } FfiPublicAccountKey;
 
 /**
- * Public keys for a private account (safe to expose).
- */
-typedef struct FfiPrivateAccountKeys {
-  /**
-   * Nullifier public key (32 bytes).
-   */
-  struct FfiBytes32 nullifier_public_key;
-  /**
-   * viewing public key (compressed secp256k1 point).
-   */
-  const uint8_t *viewing_public_key;
-  /**
-   * Length of viewing public key (typically 33 bytes).
-   */
-  uintptr_t viewing_public_key_len;
-} FfiPrivateAccountKeys;
-
-/**
  * Result of a transfer operation.
  */
 typedef struct FfiTransferResult {
@@ -245,23 +245,27 @@ enum WalletFfiError wallet_ffi_create_account_public(struct WalletHandle *handle
 /**
  * Create a new private key node.
  *
- * Returns the nullifier public key (npk) to share with senders. Account IDs are
- * discovered later via sync when senders initialize accounts under this key.
+ * Returns the nullifier public key (npk) and viewing public key (vpk) to share with
+ * senders. Account IDs are discovered later via sync when senders initialize accounts
+ * under this key.
  *
  * # Parameters
  * - `handle`: Valid wallet handle
- * - `out_npk`: Output pointer for the nullifier public key (32 bytes)
+ * - `out_keys`: Output pointer for the key data (npk + vpk)
  *
  * # Returns
  * - `Success` on successful creation
  * - Error code on failure
  *
+ * # Memory
+ * The keys structure must be freed with `wallet_ffi_free_private_account_keys()`.
+ *
  * # Safety
  * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
- * - `out_npk` must be a valid pointer to a `FfiBytes32` struct
+ * - `out_keys` must be a valid pointer to a `FfiPrivateAccountKeys` struct
  */
-enum WalletFfiError wallet_ffi_create_account_private(struct WalletHandle *handle,
-                                                      struct FfiBytes32 *out_npk);
+enum WalletFfiError wallet_ffi_create_private_accounts_key(struct WalletHandle *handle,
+                                                           struct FfiPrivateAccountKeys *out_keys);
 
 /**
  * List all accounts in the wallet.

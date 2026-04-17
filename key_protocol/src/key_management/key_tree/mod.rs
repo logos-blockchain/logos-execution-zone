@@ -256,11 +256,11 @@ impl KeyTree<ChildKeysPublic> {
 }
 
 impl KeyTree<ChildKeysPrivate> {
-    pub fn generate_new_private_node(&mut self, parent_cci: &ChainIndex) -> Option<ChainIndex> {
+    pub fn create_private_accounts_key_node(&mut self, parent_cci: &ChainIndex) -> Option<ChainIndex> {
         self.generate_new_node(parent_cci)
     }
 
-    pub fn generate_new_private_node_layered(&mut self) -> Option<ChainIndex> {
+    pub fn create_private_accounts_key_node_layered(&mut self) -> Option<ChainIndex> {
         self.generate_new_node_layered()
     }
 

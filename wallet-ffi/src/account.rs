@@ -7,7 +7,7 @@ use nssa::AccountId;
 use crate::{
     block_on,
     error::{print_error, WalletFfiError},
-    types::{FfiAccount, FfiAccountList, FfiAccountListEntry, FfiBytes32, WalletHandle},
+    types::{FfiAccount, FfiAccountList, FfiAccountListEntry, FfiBytes32, FfiPrivateAccountKeys, WalletHandle},
     wallet::get_wallet,
 };
 
@@ -61,32 +61,36 @@ pub unsafe extern "C" fn wallet_ffi_create_account_public(
 
 /// Create a new private key node.
 ///
-/// Returns the nullifier public key (npk) to share with senders. Account IDs are
-/// discovered later via sync when senders initialize accounts under this key.
+/// Returns the nullifier public key (npk) and viewing public key (vpk) to share with
+/// senders. Account IDs are discovered later via sync when senders initialize accounts
+/// under this key.
 ///
 /// # Parameters
 /// - `handle`: Valid wallet handle
-/// - `out_npk`: Output pointer for the nullifier public key (32 bytes)
+/// - `out_keys`: Output pointer for the key data (npk + vpk)
 ///
 /// # Returns
 /// - `Success` on successful creation
 /// - Error code on failure
 ///
+/// # Memory
+/// The keys structure must be freed with `wallet_ffi_free_private_account_keys()`.
+///
 /// # Safety
 /// - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
-/// - `out_npk` must be a valid pointer to a `FfiBytes32` struct
+/// - `out_keys` must be a valid pointer to a `FfiPrivateAccountKeys` struct
 #[no_mangle]
-pub unsafe extern "C" fn wallet_ffi_create_account_private(
+pub unsafe extern "C" fn wallet_ffi_create_private_accounts_key(
     handle: *mut WalletHandle,
-    out_npk: *mut FfiBytes32,
+    out_keys: *mut FfiPrivateAccountKeys,
 ) -> WalletFfiError {
     let wrapper = match get_wallet(handle) {
         Ok(w) => w,
         Err(e) => return e,
     };
 
-    if out_npk.is_null() {
-        print_error("Null output pointer for npk");
+    if out_keys.is_null() {
+        print_error("Null output pointer for keys");
         return WalletFfiError::NullPointer;
     }
 
@@ -98,7 +102,7 @@ pub unsafe extern "C" fn wallet_ffi_create_account_private(
         }
     };
 
-    let chain_index = wallet.create_new_account_private(None);
+    let chain_index = wallet.create_private_accounts_key(None);
 
     let node = wallet
         .storage()
@@ -108,8 +112,20 @@ pub unsafe extern "C" fn wallet_ffi_create_account_private(
         .get(&chain_index)
         .expect("Node was just inserted");
 
+    let key_chain = &node.value.0;
+    let npk_bytes = key_chain.nullifier_public_key.0;
+    let vpk_bytes = key_chain.viewing_public_key.to_bytes();
+    let vpk_len = vpk_bytes.len();
+    #[expect(
+        clippy::as_conversions,
+        reason = "We need to convert the boxed slice into a raw pointer for FFI"
+    )]
+    let vpk_ptr = Box::into_raw(vpk_bytes.to_vec().into_boxed_slice()) as *const u8;
+
     unsafe {
-        (*out_npk).data = node.value.0.nullifier_public_key.0;
+        (*out_keys).nullifier_public_key.data = npk_bytes;
+        (*out_keys).viewing_public_key = vpk_ptr;
+        (*out_keys).viewing_public_key_len = vpk_len;
     }
 
     WalletFfiError::Success

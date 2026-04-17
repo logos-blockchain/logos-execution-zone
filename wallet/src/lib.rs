@@ -256,13 +256,13 @@ impl WalletCore {
             .generate_new_public_transaction_private_key(chain_index)
     }
 
-    pub fn create_new_account_private(
+    pub fn create_private_accounts_key(
         &mut self,
         chain_index: Option<ChainIndex>,
     ) -> ChainIndex {
         self.storage
             .user_data
-            .generate_new_privacy_preserving_transaction_key_chain(chain_index)
+            .create_private_accounts_key(chain_index)
     }
 
     /// Get account balance.
