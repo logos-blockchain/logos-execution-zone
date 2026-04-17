@@ -259,7 +259,7 @@ impl WalletCore {
     pub fn create_new_account_private(
         &mut self,
         chain_index: Option<ChainIndex>,
-    ) -> ChainIndex {
+    ) -> (AccountId, ChainIndex) {
         self.storage
             .user_data
             .generate_new_privacy_preserving_transaction_key_chain(chain_index)

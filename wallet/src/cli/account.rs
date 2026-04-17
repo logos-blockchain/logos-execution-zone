@@ -147,7 +147,7 @@ impl WalletSubcommand for NewSubcommand {
                     anyhow::bail!("Label '{label}' is already in use by another account");
                 }
 
-                let chain_index = wallet_core.create_new_account_private(cci);
+                let (account_id, chain_index) = wallet_core.create_new_account_private(cci);
 
                 let node = wallet_core
                     .storage
@@ -157,7 +157,6 @@ impl WalletSubcommand for NewSubcommand {
                     .get(&chain_index)
                     .expect("Node was just inserted");
                 let key = &node.value.0;
-                let account_id = AccountId::from((&key.nullifier_public_key, 0_u128));
 
                 if let Some(label) = label {
                     wallet_core

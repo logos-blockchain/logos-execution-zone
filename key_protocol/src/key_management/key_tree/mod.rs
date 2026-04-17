@@ -255,6 +255,28 @@ impl KeyTree<ChildKeysPublic> {
 }
 
 impl KeyTree<ChildKeysPrivate> {
+    /// Generate a new private key node, registering the identifier=0 account_id immediately.
+    pub fn generate_new_private_node(
+        &mut self,
+        parent_cci: &ChainIndex,
+    ) -> Option<(nssa::AccountId, ChainIndex)> {
+        let cci = self.generate_new_node(parent_cci)?;
+        let node = self.key_map.get(&cci)?;
+        let account_id = nssa::AccountId::from((&node.value.0.nullifier_public_key, 0_u128));
+        self.account_id_map.insert(account_id, cci.clone());
+        Some((account_id, cci))
+    }
+
+    /// Generate a new private key node using layered placement, registering the identifier=0
+    /// account_id immediately.
+    pub fn generate_new_private_node_layered(&mut self) -> Option<(nssa::AccountId, ChainIndex)> {
+        let cci = self.generate_new_node_layered()?;
+        let node = self.key_map.get(&cci)?;
+        let account_id = nssa::AccountId::from((&node.value.0.nullifier_public_key, 0_u128));
+        self.account_id_map.insert(account_id, cci.clone());
+        Some((account_id, cci))
+    }
+
     /// Cleanup of non-initialized accounts in a private tree.
     ///
     /// If account has no synced entries, removes it, stops at first initialized account.
