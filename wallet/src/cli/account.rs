@@ -2,7 +2,7 @@ use anyhow::{Context as _, Result};
 use clap::Subcommand;
 use itertools::Itertools as _;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
-use nssa::{Account, AccountId, PublicKey, program::Program};
+use nssa::{Account, PublicKey, program::Program};
 use sequencer_service_rpc::RpcClient as _;
 use token_core::{TokenDefinition, TokenHolding};
 
@@ -87,9 +87,6 @@ pub enum NewSubcommand {
         #[arg(long)]
         /// Chain index of a parent node.
         cci: Option<ChainIndex>,
-        #[arg(short, long)]
-        /// Label to assign to the new account.
-        label: Option<String>,
     },
 }
 
@@ -136,18 +133,8 @@ impl WalletSubcommand for NewSubcommand {
 
                 Ok(SubcommandReturnValue::RegisterAccount { account_id })
             }
-            Self::Private { cci, label } => {
-                if let Some(label) = &label
-                    && wallet_core
-                        .storage
-                        .labels
-                        .values()
-                        .any(|l| l.to_string() == *label)
-                {
-                    anyhow::bail!("Label '{label}' is already in use by another account");
-                }
-
-                let (account_id, chain_index) = wallet_core.create_new_account_private(cci);
+            Self::Private { cci } => {
+                let chain_index = wallet_core.create_new_account_private(cci);
 
                 let node = wallet_core
                     .storage
@@ -158,16 +145,7 @@ impl WalletSubcommand for NewSubcommand {
                     .expect("Node was just inserted");
                 let key = &node.value.0;
 
-                if let Some(label) = label {
-                    wallet_core
-                        .storage
-                        .labels
-                        .insert(account_id.to_string(), Label::new(label));
-                }
-
-                println!(
-                    "Generated new account with account_id Private/{account_id} at path {chain_index}",
-                );
+                println!("Generated new private key node at path {chain_index}");
                 println!("With npk {}", hex::encode(key.nullifier_public_key.0));
                 println!(
                     "With vpk {}",
@@ -176,7 +154,7 @@ impl WalletSubcommand for NewSubcommand {
 
                 wallet_core.store_persistent_data().await?;
 
-                Ok(SubcommandReturnValue::RegisterAccount { account_id })
+                Ok(SubcommandReturnValue::Empty)
             }
         }
     }

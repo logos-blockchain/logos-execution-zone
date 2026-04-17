@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use anyhow::Result;
 use nssa::{Account, AccountId};
+use nssa_core::Identifier;
 use serde::{Deserialize, Serialize};
 
 use crate::key_management::{
@@ -255,26 +256,30 @@ impl KeyTree<ChildKeysPublic> {
 }
 
 impl KeyTree<ChildKeysPrivate> {
-    /// Generate a new private key node, registering the identifier=0 account_id immediately.
-    pub fn generate_new_private_node(
-        &mut self,
-        parent_cci: &ChainIndex,
-    ) -> Option<(nssa::AccountId, ChainIndex)> {
-        let cci = self.generate_new_node(parent_cci)?;
-        let node = self.key_map.get(&cci)?;
-        let account_id = nssa::AccountId::from((&node.value.0.nullifier_public_key, 0_u128));
-        self.account_id_map.insert(account_id, cci.clone());
-        Some((account_id, cci))
+    pub fn generate_new_private_node(&mut self, parent_cci: &ChainIndex) -> Option<ChainIndex> {
+        self.generate_new_node(parent_cci)
     }
 
-    /// Generate a new private key node using layered placement, registering the identifier=0
-    /// account_id immediately.
-    pub fn generate_new_private_node_layered(&mut self) -> Option<(nssa::AccountId, ChainIndex)> {
-        let cci = self.generate_new_node_layered()?;
-        let node = self.key_map.get(&cci)?;
-        let account_id = nssa::AccountId::from((&node.value.0.nullifier_public_key, 0_u128));
+    pub fn generate_new_private_node_layered(&mut self) -> Option<ChainIndex> {
+        self.generate_new_node_layered()
+    }
+
+    /// Register an additional identifier on an existing private key node, inserting the derived
+    /// `AccountId` into `account_id_map`. Returns `None` if the node does not exist or the
+    /// `AccountId` is already registered.
+    pub fn register_identifier_on_node(
+        &mut self,
+        cci: &ChainIndex,
+        identifier: Identifier,
+    ) -> Option<nssa::AccountId> {
+        let node = self.key_map.get(cci)?;
+        let account_id =
+            nssa::AccountId::from((&node.value.0.nullifier_public_key, identifier));
+        if self.account_id_map.contains_key(&account_id) {
+            return None;
+        }
         self.account_id_map.insert(account_id, cci.clone());
-        Some((account_id, cci))
+        Some(account_id)
     }
 
     /// Cleanup of non-initialized accounts in a private tree.

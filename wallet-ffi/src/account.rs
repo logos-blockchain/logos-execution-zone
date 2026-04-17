@@ -59,14 +59,14 @@ pub unsafe extern "C" fn wallet_ffi_create_account_public(
     WalletFfiError::Success
 }
 
-/// Create a new private account.
+/// Create a new private key node.
 ///
-/// Private accounts use privacy-preserving transactions with nullifiers
-/// and commitments.
+/// Returns the nullifier public key (npk) to share with senders. Account IDs are
+/// discovered later via sync when senders initialize accounts under this key.
 ///
 /// # Parameters
 /// - `handle`: Valid wallet handle
-/// - `out_account_id`: Output pointer for the new account ID (32 bytes)
+/// - `out_npk`: Output pointer for the nullifier public key (32 bytes)
 ///
 /// # Returns
 /// - `Success` on successful creation
@@ -74,19 +74,19 @@ pub unsafe extern "C" fn wallet_ffi_create_account_public(
 ///
 /// # Safety
 /// - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
-/// - `out_account_id` must be a valid pointer to a `FfiBytes32` struct
+/// - `out_npk` must be a valid pointer to a `FfiBytes32` struct
 #[no_mangle]
 pub unsafe extern "C" fn wallet_ffi_create_account_private(
     handle: *mut WalletHandle,
-    out_account_id: *mut FfiBytes32,
+    out_npk: *mut FfiBytes32,
 ) -> WalletFfiError {
     let wrapper = match get_wallet(handle) {
         Ok(w) => w,
         Err(e) => return e,
     };
 
-    if out_account_id.is_null() {
-        print_error("Null output pointer for account_id");
+    if out_npk.is_null() {
+        print_error("Null output pointer for npk");
         return WalletFfiError::NullPointer;
     }
 
@@ -98,10 +98,18 @@ pub unsafe extern "C" fn wallet_ffi_create_account_private(
         }
     };
 
-    let (account_id, _chain_index) = wallet.create_new_account_private(None);
+    let chain_index = wallet.create_new_account_private(None);
+
+    let node = wallet
+        .storage()
+        .user_data
+        .private_key_tree
+        .key_map
+        .get(&chain_index)
+        .expect("Node was just inserted");
 
     unsafe {
-        (*out_account_id).data = *account_id.value();
+        (*out_npk).data = node.value.0.nullifier_public_key.0;
     }
 
     WalletFfiError::Success

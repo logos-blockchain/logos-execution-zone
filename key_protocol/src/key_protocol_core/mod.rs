@@ -121,13 +121,11 @@ impl NSSAUserData {
             .or_else(|| self.public_key_tree.get_node(account_id).map(Into::into))
     }
 
-    /// Generated new private key for privacy preserving transactions.
-    ///
-    /// Returns the `AccountId` (for identifier=0) and `ChainIndex` of the new node.
+    /// Generates a new private key node and returns its `ChainIndex`.
     pub fn generate_new_privacy_preserving_transaction_key_chain(
         &mut self,
         parent_cci: Option<ChainIndex>,
-    ) -> (nssa::AccountId, ChainIndex) {
+    ) -> ChainIndex {
         match parent_cci {
             Some(parent_cci) => self
                 .private_key_tree
@@ -138,6 +136,18 @@ impl NSSAUserData {
                 .generate_new_private_node_layered()
                 .expect("Search for new node slot failed"),
         }
+    }
+
+    /// Registers an additional identifier on an existing private key node, deriving and recording
+    /// the corresponding `AccountId`. Returns `None` if the node does not exist or the identifier
+    /// is already registered.
+    pub fn register_identifier_on_private_key_chain(
+        &mut self,
+        cci: ChainIndex,
+        identifier: Identifier,
+    ) -> Option<nssa::AccountId> {
+        self.private_key_tree
+            .register_identifier_on_node(&cci, identifier)
     }
 
     /// Returns the key chain and account data for the given private account ID.
@@ -211,15 +221,11 @@ mod tests {
     fn new_account() {
         let mut user_data = NSSAUserData::default();
 
-        let (account_id, chain_index) = user_data
+        let chain_index = user_data
             .generate_new_privacy_preserving_transaction_key_chain(Some(ChainIndex::root()));
 
         let is_key_chain_generated = user_data.private_key_tree.key_map.contains_key(&chain_index);
         assert!(is_key_chain_generated);
-
-        let is_account_id_registered =
-            user_data.private_key_tree.account_id_map.contains_key(&account_id);
-        assert!(is_account_id_registered);
 
         let key_chain = &user_data.private_key_tree.key_map[&chain_index].value.0;
         println!("{key_chain:#?}");
