@@ -149,7 +149,7 @@
         in
         {
           wallet = walletFfiPackage;
-          indeder = indexerFfiPackage;
+          indexer = indexerFfiPackage;
           default = walletFfiPackage;
         }
       );
