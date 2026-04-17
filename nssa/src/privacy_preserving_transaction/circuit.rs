@@ -259,7 +259,7 @@ mod tests {
         assert_eq!(output.new_nullifiers.len(), 1);
         assert_eq!(output.ciphertexts.len(), 1);
 
-        let recipient_post = EncryptionScheme::decrypt(
+        let (_identifier, recipient_post) = EncryptionScheme::decrypt(
             &output.ciphertexts[0],
             &shared_secret,
             &output.new_commitments[0],
@@ -357,7 +357,7 @@ mod tests {
         assert_eq!(output.new_nullifiers, expected_new_nullifiers);
         assert_eq!(output.ciphertexts.len(), 2);
 
-        let sender_post = EncryptionScheme::decrypt(
+        let (_identifier, sender_post) = EncryptionScheme::decrypt(
             &output.ciphertexts[0],
             &shared_secret_1,
             &expected_new_commitments[0],
@@ -366,7 +366,7 @@ mod tests {
         .unwrap();
         assert_eq!(sender_post, expected_private_account_1);
 
-        let recipient_post = EncryptionScheme::decrypt(
+        let (_identifier, recipient_post) = EncryptionScheme::decrypt(
             &output.ciphertexts[1],
             &shared_secret_2,
             &expected_new_commitments[1],

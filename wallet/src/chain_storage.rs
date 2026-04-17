@@ -175,6 +175,7 @@ impl WalletChainStore {
     pub fn insert_private_account_data(
         &mut self,
         account_id: nssa::AccountId,
+        identifier: nssa_core::Identifier,
         account: nssa_core::account::Account,
     ) {
         debug!("inserting at address {account_id}, this account {account:?}");
@@ -204,8 +205,6 @@ impl WalletChainStore {
         }
 
         // Otherwise update the private key tree
-        // Identifier is hardcoded to 0 until ciphertexts carry the identifier
-        let identifier: nssa_core::Identifier = 0;
 
         // Find the node by iterating all tree nodes for this account_id
         let chain_index = self

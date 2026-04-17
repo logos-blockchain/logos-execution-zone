@@ -425,6 +425,7 @@ fn compute_circuit_output(
                 // Encrypt and push post state
                 let encrypted_account = EncryptionScheme::encrypt(
                     &post_with_updated_nonce,
+                    *identifier,
                     shared_secret,
                     &commitment_post,
                     output_index,
