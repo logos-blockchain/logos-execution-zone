@@ -129,12 +129,6 @@ pub enum InvalidProgramBehaviorError {
         actual: AccountId,
     },
 
-    #[error("Private PDA claim mismatch: expected {expected:?}, actual {actual:?}")]
-    MismatchedPrivatePdaClaim {
-        expected: AccountId,
-        actual: AccountId,
-    },
-
     #[error("Default account {account_id} was modified without being claimed")]
     DefaultAccountModifiedWithoutClaim { account_id: AccountId },
 

@@ -37,7 +37,6 @@ fn main() {
         instruction_data: chained_instruction,
         pre_states,
         pda_seeds: vec![],
-        private_pda_seeds: vec![],
     };
 
     ProgramOutput::new(

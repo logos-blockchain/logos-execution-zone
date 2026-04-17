@@ -8,8 +8,7 @@ use nssa_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, Timestamp,
     account::{Account, AccountId, AccountWithMetadata},
     program::{
-        ChainedCall, Claim, DEFAULT_PROGRAM_ID, compute_authorized_pdas, private_pda_account_id,
-        validate_execution,
+        ChainedCall, Claim, DEFAULT_PROGRAM_ID, compute_authorized_pdas, validate_execution,
     },
 };
 
@@ -99,7 +98,6 @@ impl ValidatedStateDiff {
             instruction_data: message.instruction_data.clone(),
             pre_states: input_pre_states,
             pda_seeds: vec![],
-            private_pda_seeds: vec![],
         };
 
         let mut chained_calls = VecDeque::from_iter([(initial_call, None)]);
@@ -130,11 +128,8 @@ impl ValidatedStateDiff {
                 chained_call.program_id, program_output
             );
 
-            let authorized_pdas = compute_authorized_pdas(
-                caller_program_id,
-                &chained_call.pda_seeds,
-                &chained_call.private_pda_seeds,
-            );
+            let authorized_pdas =
+                compute_authorized_pdas(caller_program_id, &chained_call.pda_seeds);
 
             let is_authorized = |account_id: &AccountId| {
                 signer_account_ids.contains(account_id) || authorized_pdas.contains(account_id)
@@ -228,21 +223,12 @@ impl ValidatedStateDiff {
                     }
                     Claim::Pda(seed) => {
                         // The program can only claim accounts that correspond to the PDAs it is
-                        // authorized to claim.
+                        // authorized to claim. The public-execution path only sees mask-0
+                        // accounts, so the public-PDA derivation is the correct formula here.
                         let pda = AccountId::from((&chained_call.program_id, &seed));
                         ensure!(
                             account_id == pda,
                             InvalidProgramBehaviorError::MismatchedPdaClaim {
-                                expected: pda,
-                                actual: account_id
-                            }
-                        );
-                    }
-                    Claim::PrivatePda { seed, npk } => {
-                        let pda = private_pda_account_id(&chained_call.program_id, &seed, &npk);
-                        ensure!(
-                            account_id == pda,
-                            InvalidProgramBehaviorError::MismatchedPrivatePdaClaim {
                                 expected: pda,
                                 actual: account_id
                             }

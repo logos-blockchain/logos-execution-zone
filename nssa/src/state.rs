@@ -2314,12 +2314,16 @@ pub mod tests {
         assert!(matches!(result, Err(NssaError::CircuitProvingError(_))));
     }
 
-    /// A mask-3 account with no proven `Claim::PrivatePda` or `ChainedCall.private_pda_seeds`
-    /// attestation must be rejected by the circuit, since there is no binding from which to verify
-    /// its npk.
+    /// A mask-3 account that no program claims via `Claim::Pda` and no caller authorizes via
+    /// `ChainedCall.pda_seeds` has no binding between its wallet-supplied npk and its
+    /// `account_id`, so the circuit must reject. Here `simple_balance_transfer` emits no claim
+    /// for the second account, leaving position 1 unbound.
     #[test]
     fn mask_3_without_binding_panics() {
         let program = Program::simple_balance_transfer();
+        let keys = test_private_account_keys_1();
+        let npk = keys.npk();
+        let shared_secret = SharedSecretKey::new(&[55; 32], &keys.vpk());
         let public_account_1 = AccountWithMetadata::new(
             Account {
                 program_owner: program.id(),
@@ -2329,31 +2333,31 @@ pub mod tests {
             true,
             AccountId::new([0; 32]),
         );
-        let public_account_2 =
+        let mask3_account =
             AccountWithMetadata::new(Account::default(), false, AccountId::new([1; 32]));
 
         let visibility_mask = [0, 3];
         let result = execute_and_prove(
-            vec![public_account_1, public_account_2],
+            vec![public_account_1, mask3_account],
             Program::serialize_instruction(10_u128).unwrap(),
             visibility_mask.to_vec(),
+            vec![(npk, shared_secret)],
             vec![],
-            vec![],
-            vec![],
+            vec![None],
             &program.into(),
         );
 
         assert!(matches!(result, Err(NssaError::CircuitProvingError(_))));
     }
 
-    /// Happy path: a program claims a new mask-3 account via `Claim::PrivatePda { seed, npk }`.
-    /// The circuit derives the `AccountId` via `private_pda_account_id(program_id, seed, npk)`
-    /// and matches it against the proven claim; the wallet-supplied npk in `private_account_keys`
-    /// matches the attested npk from the bindings map; a commitment, nullifier and ciphertext are
-    /// produced.
+    /// Happy path: a program claims a new mask-3 account via `Claim::Pda(seed)`. The circuit
+    /// reads the npk for that `pre_state` from `private_account_keys` at the `pre_state`'s
+    /// position, derives `AccountId` via `private_pda_account_id(program_id, seed, npk)`, and
+    /// asserts it equals the `pre_state`'s `account_id`. The equality both validates the claim
+    /// and binds the wallet-supplied npk to the `account_id`.
     #[test]
     fn mask_3_private_pda_claim_succeeds() {
-        let program = Program::private_pda_claimer();
+        let program = Program::pda_claimer();
         let keys = test_private_account_keys_1();
         let npk = keys.npk();
         let seed = PdaSeed::new([42; 32]);
@@ -2364,7 +2368,7 @@ pub mod tests {
 
         let result = execute_and_prove(
             vec![pre_state],
-            Program::serialize_instruction((seed, npk)).unwrap(),
+            Program::serialize_instruction(seed).unwrap(),
             vec![3],
             vec![(npk, shared_secret)],
             vec![],
@@ -2380,11 +2384,11 @@ pub mod tests {
         assert!(output.public_post_states.is_empty());
     }
 
-    /// The wallet supplies an npk in `private_account_keys` that differs from the npk attested
-    /// by the program's `Claim::PrivatePda`. The circuit's mask-3 binding check must reject.
+    /// The wallet supplies an npk that does not match the `pre_state`'s `account_id` under
+    /// `private_pda_account_id(program, claim_seed, npk)`. The claim equality check rejects.
     #[test]
     fn mask_3_wallet_npk_mismatch_panics() {
-        let program = Program::private_pda_claimer();
+        let program = Program::pda_claimer();
         let attested_keys = test_private_account_keys_1();
         let wallet_keys = test_private_account_keys_2();
         let attested_npk = attested_keys.npk();
@@ -2392,14 +2396,15 @@ pub mod tests {
         let seed = PdaSeed::new([42; 32]);
         let shared_secret = SharedSecretKey::new(&[55; 32], &wallet_keys.vpk());
 
-        // The account_id derives from the attested npk (what the program claims). The wallet
-        // supplies a different npk in private_account_keys, which must fail the binding check.
+        // account_id is derived from `attested_npk`, but the wallet provides `wallet_npk` for
+        // this pre_state. `private_pda_account_id(program, seed, wallet_npk) != account_id`, so
+        // the claim check in the circuit must reject.
         let account_id = private_pda_account_id(&program.id(), &seed, &attested_npk);
         let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
         let result = execute_and_prove(
             vec![pre_state],
-            Program::serialize_instruction((seed, attested_npk)).unwrap(),
+            Program::serialize_instruction(seed).unwrap(),
             vec![3],
             vec![(wallet_npk, shared_secret)],
             vec![],
@@ -2410,52 +2415,112 @@ pub mod tests {
         assert!(matches!(result, Err(NssaError::CircuitProvingError(_))));
     }
 
-    /// A program must not be allowed to claim a mask-0 (public) account via `Claim::PrivatePda`.
-    /// The circuit panics in `validate_and_sync_states` when the visibility and claim kind
-    /// disagree.
+    /// Happy path for the caller-seeds authorization of a mask-3 PDA. The delegator claims a
+    /// private PDA via `Claim::Pda(seed)`, then chains to a callee (`noop`) delegating the same
+    /// seed via `ChainedCall.pda_seeds`. In the callee's step, the `pre_state` is already in
+    /// `self.pre_states` (Occupied branch) and its authorization is established via the private
+    /// derivation `private_pda_account_id(delegator, seed, npk) == pre.account_id`. This exercises
+    /// the `authorized_via_private` path in `validate_and_sync_states`.
     #[test]
-    fn mask_0_cannot_be_claimed_as_private_pda_panics() {
-        let program = Program::private_pda_claimer();
+    fn caller_pda_seeds_authorize_mask_3_private_pda_for_callee() {
+        let delegator = Program::private_pda_delegator();
+        let noop = Program::noop();
         let keys = test_private_account_keys_1();
         let npk = keys.npk();
-        let seed = PdaSeed::new([42; 32]);
+        let seed = PdaSeed::new([77; 32]);
+        let shared_secret = SharedSecretKey::new(&[55; 32], &keys.vpk());
 
-        // Public account: program_owner = DEFAULT, account_id arbitrary.
-        let pre_state =
-            AccountWithMetadata::new(Account::default(), false, AccountId::new([7; 32]));
+        let account_id = private_pda_account_id(&delegator.id(), &seed, &npk);
+        let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
+
+        let noop_id = noop.id();
+        let program_with_deps = ProgramWithDependencies::new(delegator, [(noop_id, noop)].into());
 
         let result = execute_and_prove(
             vec![pre_state],
-            Program::serialize_instruction((seed, npk)).unwrap(),
-            vec![0],
+            Program::serialize_instruction((seed, seed, noop_id)).unwrap(),
+            vec![3],
+            vec![(npk, shared_secret)],
             vec![],
+            vec![None],
+            &program_with_deps,
+        );
+
+        let (output, _proof) =
+            result.expect("caller-seeds authorization of mask-3 private PDA should succeed");
+        assert_eq!(output.new_commitments.len(), 1);
+        assert_eq!(output.new_nullifiers.len(), 1);
+    }
+
+    /// The delegator chains with a different seed than the one it claimed with. In the callee
+    /// step, neither public nor private caller-seeds authorization matches; `pre.is_authorized`
+    /// was set to `true` by the delegator but no proven source supports it, so the consistency
+    /// assertion rejects.
+    #[test]
+    fn caller_pda_seeds_with_wrong_seed_rejects_mask_3_for_callee() {
+        let delegator = Program::private_pda_delegator();
+        let noop = Program::noop();
+        let keys = test_private_account_keys_1();
+        let npk = keys.npk();
+        let claim_seed = PdaSeed::new([77; 32]);
+        let wrong_delegated_seed = PdaSeed::new([88; 32]);
+        let shared_secret = SharedSecretKey::new(&[55; 32], &keys.vpk());
+
+        let account_id = private_pda_account_id(&delegator.id(), &claim_seed, &npk);
+        let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
+
+        let noop_id = noop.id();
+        let program_with_deps = ProgramWithDependencies::new(delegator, [(noop_id, noop)].into());
+
+        let result = execute_and_prove(
+            vec![pre_state],
+            Program::serialize_instruction((claim_seed, wrong_delegated_seed, noop_id)).unwrap(),
+            vec![3],
+            vec![(npk, shared_secret)],
             vec![],
-            vec![],
-            &program.into(),
+            vec![None],
+            &program_with_deps,
         );
 
         assert!(matches!(result, Err(NssaError::CircuitProvingError(_))));
     }
 
-    /// A program must not be allowed to claim a mask-3 (private PDA) account via `Claim::Pda`.
-    /// Private PDAs use a distinct derivation and must be claimed with `Claim::PrivatePda`.
+    /// Pins the current limitation: a mask-3 PDA that was claimed in a previous transaction
+    /// cannot be re-used in a new transaction as-is, because this PR only binds wallet-supplied
+    /// npks via a fresh `Claim::Pda` or a caller's `ChainedCall.pda_seeds` — neither is present
+    /// when a program operates on an already-owned private PDA at top level. The circuit rejects.
+    ///
+    /// TODO: a follow-up PR in the Private PDAs series needs to let the wallet supply a
+    /// `(seed, original_owner_program_id)` side input per mask-3 `pre_state` so the circuit
+    /// can re-verify `private_pda_account_id(owner, seed, npk) == pre.account_id` without a
+    /// claim.
     #[test]
-    fn mask_3_cannot_be_claimed_as_public_pda_panics() {
-        let program = Program::pda_claimer();
-        let seed = PdaSeed::new([42; 32]);
+    fn mask_3_reuse_across_txs_currently_unsupported() {
+        let program = Program::noop();
+        let keys = test_private_account_keys_1();
+        let npk = keys.npk();
+        let shared_secret = SharedSecretKey::new(&[55; 32], &keys.vpk());
+        let seed = PdaSeed::new([99; 32]);
 
-        // The account_id does not need to match any private-PDA derivation; the circuit panics on
-        // the mask-3 / `Claim::Pda` mismatch before any derivation check.
-        let pre_state =
-            AccountWithMetadata::new(Account::default(), false, AccountId::new([7; 32]));
+        // Simulate a previously-claimed private PDA: program_owner != DEFAULT, is_authorized = true,
+        // account_id derived via the private formula.
+        let account_id = private_pda_account_id(&program.id(), &seed, &npk);
+        let owned_pre_state = AccountWithMetadata::new(
+            Account {
+                program_owner: program.id(),
+                ..Account::default()
+            },
+            true,
+            account_id,
+        );
 
         let result = execute_and_prove(
-            vec![pre_state],
-            Program::serialize_instruction(seed).unwrap(),
+            vec![owned_pre_state],
+            Program::serialize_instruction(()).unwrap(),
             vec![3],
+            vec![(npk, shared_secret)],
             vec![],
-            vec![],
-            vec![],
+            vec![None],
             &program.into(),
         );
 

@@ -23,18 +23,20 @@ struct ExecutionState {
     post_states: HashMap<AccountId, Account>,
     block_validity_window: BlockValidityWindow,
     timestamp_validity_window: TimestampValidityWindow,
-    /// Map from private-PDA `AccountId` to the npk used to derive it, sourced entirely from
-    /// Risc0-proven `Claim::PrivatePda` in `post_states` and `private_pda_seeds` in chained
-    /// calls. `compute_circuit_output` uses this to verify that the npk supplied via
-    /// `private_account_keys` for a mask-3 account matches the npk attested by some program's
-    /// proof.
-    private_pda_bindings: HashMap<AccountId, NullifierPublicKey>,
+    /// Positions (in `pre_states`) of mask-3 accounts whose wallet-supplied npk has been bound
+    /// to their `AccountId` via a proven `private_pda_account_id(program_id, seed, npk)` check.
+    /// The binding happens when the circuit validates a `Claim::Pda(seed)` on that `pre_state`,
+    /// or when it authorizes that `pre_state` via a caller's `ChainedCall.pda_seeds`. After the
+    /// main loop, every mask-3 position must appear in this set; otherwise the npk is unbound
+    /// and the circuit rejects.
+    mask3_bound_positions: HashSet<usize>,
 }
 
 impl ExecutionState {
     /// Validate program outputs and derive the overall execution state.
     pub fn derive_from_outputs(
         visibility_mask: &[u8],
+        mask3_npk_by_position: &HashMap<usize, NullifierPublicKey>,
         program_id: ProgramId,
         program_outputs: Vec<ProgramOutput>,
     ) -> Self {
@@ -72,7 +74,7 @@ impl ExecutionState {
             post_states: HashMap::new(),
             block_validity_window,
             timestamp_validity_window,
-            private_pda_bindings: HashMap::new(),
+            mask3_bound_positions: HashSet::new(),
         };
 
         let Some(first_output) = program_outputs.first() else {
@@ -84,7 +86,6 @@ impl ExecutionState {
             instruction_data: first_output.instruction_data.clone(),
             pre_states: first_output.pre_states.clone(),
             pda_seeds: Vec::new(),
-            private_pda_seeds: Vec::new(),
         };
         let mut chained_calls = VecDeque::from_iter([(initial_call, None)]);
 
@@ -145,40 +146,21 @@ impl ExecutionState {
                 );
             }
 
-            // Collect private-PDA bindings from this program_output's proven data. Each
-            // `private_pda_seeds` entry in an outgoing chained call attests that the caller
-            // (this program) authorizes the callee to mutate the PDA derived from
-            // `(self_program_id, seed, npk)`. Each `Claim::PrivatePda` in this program's
-            // post_states attests that it claims the PDA derived from the same formula with
-            // its own program_id.
-            for next_call in &program_output.chained_calls {
-                for (seed, npk) in &next_call.private_pda_seeds {
-                    let account_id = private_pda_account_id(&chained_call.program_id, seed, npk);
-                    execution_state
-                        .private_pda_bindings
-                        .insert(account_id, *npk);
-                }
-            }
-            for post in &program_output.post_states {
-                if let Some(Claim::PrivatePda { seed, npk }) = post.required_claim() {
-                    let account_id = private_pda_account_id(&chained_call.program_id, &seed, &npk);
-                    execution_state.private_pda_bindings.insert(account_id, npk);
-                }
-            }
-
             for next_call in program_output.chained_calls.iter().rev() {
                 chained_calls.push_front((next_call.clone(), Some(chained_call.program_id)));
             }
 
-            let authorized_pdas = nssa_core::program::compute_authorized_pdas(
+            let authorized_public_pdas = nssa_core::program::compute_authorized_pdas(
                 caller_program_id,
                 &chained_call.pda_seeds,
-                &chained_call.private_pda_seeds,
             );
             execution_state.validate_and_sync_states(
                 visibility_mask,
+                mask3_npk_by_position,
                 chained_call.program_id,
-                &authorized_pdas,
+                caller_program_id,
+                &chained_call.pda_seeds,
+                &authorized_public_pdas,
                 program_output.pre_states,
                 program_output.post_states,
             );
@@ -191,6 +173,19 @@ impl ExecutionState {
             program_outputs_iter.next().is_none(),
             "Inner call without a chained call found",
         );
+
+        // Every mask-3 pre_state must have had its npk bound to its account_id, either via a
+        // `Claim::Pda(seed)` in some program's post_state or via a caller's `pda_seeds` matching
+        // the private derivation. An unbound mask-3 pre_state has no cryptographic link between
+        // the wallet-supplied npk and the account_id, and must be rejected.
+        for (pos, &mask) in visibility_mask.iter().enumerate() {
+            if mask == 3 {
+                assert!(
+                    execution_state.mask3_bound_positions.contains(&pos),
+                    "mask-3 pre_state at position {pos} has no proven (seed, npk) binding via Claim::Pda or caller pda_seeds"
+                );
+            }
+        }
 
         // Check that all modified uninitialized accounts were claimed
         for (account_id, post) in execution_state
@@ -217,11 +212,15 @@ impl ExecutionState {
     }
 
     /// Validate program pre and post states and populate the execution state.
+    #[expect(clippy::too_many_arguments, reason = "breaking out a context struct does not buy us anything here")]
     fn validate_and_sync_states(
         &mut self,
         visibility_mask: &[u8],
+        mask3_npk_by_position: &HashMap<usize, NullifierPublicKey>,
         program_id: ProgramId,
-        authorized_pdas: &HashSet<AccountId>,
+        caller_program_id: Option<ProgramId>,
+        caller_pda_seeds: &[nssa_core::program::PdaSeed],
+        authorized_public_pdas: &HashSet<AccountId>,
         pre_states: Vec<AccountWithMetadata>,
         post_states: Vec<AccountPostState>,
     ) {
@@ -248,19 +247,40 @@ impl ExecutionState {
                         "Inconsistent pre state for account {pre_account_id}",
                     );
 
-                    let previous_is_authorized = self
+                    let (previous_is_authorized, pre_state_position) = self
                         .pre_states
                         .iter()
-                        .find(|acc| acc.account_id == pre_account_id)
+                        .enumerate()
+                        .find(|(_, acc)| acc.account_id == pre_account_id)
                         .map_or_else(
                             || panic!(
                                 "Pre state must exist in execution state for account {pre_account_id}",
                             ),
-                            |acc| acc.is_authorized
+                            |(pos, acc)| (acc.is_authorized, pos)
                         );
 
+                    let authorized_via_public = authorized_public_pdas.contains(&pre_account_id);
+                    // Mask-3 PDAs are authorized by matching a caller seed against the private
+                    // derivation with this pre_state's npk. The equality check binds the npk.
+                    // Only reachable when `caller_program_id.is_some()` — top-level flows have
+                    // no caller-emitted seeds, so binding at top level must come from the
+                    // claim path below.
+                    let authorized_via_private = mask3_npk_by_position
+                        .get(&pre_state_position)
+                        .and_then(|npk| {
+                            let caller = caller_program_id?;
+                            caller_pda_seeds.iter().find(|seed| {
+                                private_pda_account_id(&caller, seed, npk) == pre_account_id
+                            })?;
+                            Some(())
+                        })
+                        .is_some();
+                    if authorized_via_private {
+                        self.mask3_bound_positions.insert(pre_state_position);
+                    }
+
                     let is_authorized =
-                        previous_is_authorized || authorized_pdas.contains(&pre_account_id);
+                        previous_is_authorized || authorized_via_public || authorized_via_private;
 
                     assert_eq!(
                         pre_is_authorized, is_authorized,
@@ -287,10 +307,9 @@ impl ExecutionState {
                     .position(|acc| acc.account_id == pre_account_id)
                     .expect("Pre state must exist at this point");
 
-                let is_public_account = visibility_mask[pre_state_position] == 0;
-                let is_private_pda = visibility_mask[pre_state_position] == 3;
-                if is_public_account {
-                    match claim {
+                let mask = visibility_mask[pre_state_position];
+                match mask {
+                    0 => match claim {
                         Claim::Authorized => {
                             // Note: no need to check authorized pdas because we have already
                             // checked consistency of authorization above.
@@ -306,35 +325,31 @@ impl ExecutionState {
                                 "Invalid PDA claim for account {pre_account_id} which does not match derived PDA {pda}"
                             );
                         }
-                        Claim::PrivatePda { .. } => {
-                            panic!(
-                                "Public account {pre_account_id} cannot be claimed via Claim::PrivatePda"
-                            );
-                        }
-                    }
-                } else if is_private_pda {
-                    match claim {
+                    },
+                    3 => match claim {
                         Claim::Authorized => {
                             assert!(
                                 pre_is_authorized,
                                 "Cannot claim unauthorized private PDA {pre_account_id}"
                             );
                         }
-                        Claim::PrivatePda { seed, npk } => {
-                            let pda = private_pda_account_id(&program_id, &seed, &npk);
+                        Claim::Pda(seed) => {
+                            let npk = mask3_npk_by_position
+                                .get(&pre_state_position)
+                                .expect("mask-3 pre_state must have an npk in the position map");
+                            let pda = private_pda_account_id(&program_id, &seed, npk);
                             assert_eq!(
                                 pre_account_id, pda,
                                 "Invalid private PDA claim for account {pre_account_id}"
                             );
+                            self.mask3_bound_positions.insert(pre_state_position);
                         }
-                        Claim::Pda(_) => {
-                            panic!(
-                                "Private PDA {pre_account_id} must be claimed via Claim::PrivatePda, not Claim::Pda"
-                            );
-                        }
+                    },
+                    _ => {
+                        // Mask 1/2: standard private accounts don't enforce the claim semantics.
+                        // Unauthorized private claiming is intentionally allowed since operating
+                        // these accounts requires the npk/nsk keypair anyway.
                     }
-                } else {
-                    // Mask 1/2: standard private accounts don't use PDA claims.
                 }
 
                 post.account_mut().program_owner = program_id;
@@ -359,7 +374,7 @@ impl ExecutionState {
 }
 
 fn compute_circuit_output(
-    mut execution_state: ExecutionState,
+    execution_state: ExecutionState,
     visibility_mask: &[u8],
     private_account_keys: &[(NullifierPublicKey, SharedSecretKey)],
     private_account_nsks: &[NullifierSecretKey],
@@ -374,7 +389,6 @@ fn compute_circuit_output(
         block_validity_window: execution_state.block_validity_window,
         timestamp_validity_window: execution_state.timestamp_validity_window,
     };
-    let private_pda_bindings = std::mem::take(&mut execution_state.private_pda_bindings);
 
     let states_iter = execution_state.into_states_iter();
     assert_eq!(
@@ -495,21 +509,16 @@ fn compute_circuit_output(
                     .unwrap_or_else(|| panic!("Too many private accounts, output index overflow"));
             }
             3 => {
-                // Private PDA account. The npk supplied via private_account_keys must match the
-                // npk attested by some program's Risc0-proven output (either a `Claim::PrivatePda`
-                // in post_states or a `private_pda_seeds` entry in a chained call). The bindings
-                // map is built entirely from proven data in `derive_from_outputs`.
+                // Private PDA account. The wallet-supplied npk has already been bound to
+                // `pre_state.account_id` upstream in `validate_and_sync_states`, either via a
+                // `Claim::Pda(seed)` match or via a caller `pda_seeds` match, both of which
+                // assert `private_pda_account_id(owner, seed, npk) == account_id`. The post-loop
+                // assertion in `derive_from_outputs` (see the `mask3_bound_positions` check)
+                // guarantees that every mask-3 position has been through at least one such
+                // binding, so this branch can safely use the wallet npk without re-verifying.
                 let Some((npk, shared_secret)) = private_keys_iter.next() else {
                     panic!("Missing private account key");
                 };
-                let attested_npk = private_pda_bindings.get(&pre_state.account_id).expect(
-                    "mask-3 account must be attested by a proven Claim::PrivatePda or ChainedCall.private_pda_seeds entry",
-                );
-                assert_eq!(
-                    npk, attested_npk,
-                    "Private PDA npk does not match proven attestation for {}",
-                    pre_state.account_id
-                );
 
                 let (new_nullifier, new_nonce) = if pre_state.is_authorized {
                     // Existing private PDA with authentication (like mask 1)
@@ -636,8 +645,33 @@ fn main() {
         program_id,
     } = env::read();
 
-    let execution_state =
-        ExecutionState::derive_from_outputs(&visibility_mask, program_id, program_outputs);
+    // Build a position → npk map for mask-3 pre_states. `private_account_keys` is consumed in
+    // pre_state order across all masks 1/2/3, so walk `visibility_mask` in lock-step. The
+    // downstream `compute_circuit_output` also consumes the same iterator and its trailing
+    // assertions catch an over-supply of keys; under-supply surfaces here.
+    let mut mask3_npk_by_position: HashMap<usize, NullifierPublicKey> = HashMap::new();
+    {
+        let mut keys_iter = private_account_keys.iter();
+        for (pos, &mask) in visibility_mask.iter().enumerate() {
+            if matches!(mask, 1..=3) {
+                let (npk, _) = keys_iter.next().unwrap_or_else(|| {
+                    panic!(
+                        "private_account_keys shorter than visibility_mask demands: no key for masked position {pos} (mask {mask})"
+                    )
+                });
+                if mask == 3 {
+                    mask3_npk_by_position.insert(pos, *npk);
+                }
+            }
+        }
+    }
+
+    let execution_state = ExecutionState::derive_from_outputs(
+        &visibility_mask,
+        &mask3_npk_by_position,
+        program_id,
+        program_outputs,
+    );
 
     let output = compute_circuit_output(
         execution_state,
