@@ -2494,6 +2494,42 @@ pub mod tests {
     /// `(seed, original_owner_program_id)` side input per mask-3 `pre_state` so the circuit
     /// can re-verify `private_pda_account_id(owner, seed, npk) == pre.account_id` without a
     /// claim.
+    /// Exploit-scenario pin. A single `(program_id, seed)` pair can derive a family of
+    /// `AccountId`s (one public PDA and one private PDA per distinct npk). Without the tx-wide
+    /// family-binding check, a program could claim `PDA_alice` (mask-3, `alice_npk`) and
+    /// `PDA_bob` (mask-3, `bob_npk`) under the same seed in one transaction, and — once reuse
+    /// is supported — a later chained call could delegate both to a callee via
+    /// `pda_seeds: [S]` and mix balances across them. The binding check rejects the setup
+    /// here: after the first claim records `(program, seed) → PDA_alice`, the second claim
+    /// tries to record `(program, seed) → PDA_bob` and panics.
+    #[test]
+    fn two_mask_3_claims_under_same_seed_are_rejected() {
+        let program = Program::two_pda_claimer();
+        let keys_a = test_private_account_keys_1();
+        let keys_b = test_private_account_keys_2();
+        let seed = PdaSeed::new([55; 32]);
+        let shared_a = SharedSecretKey::new(&[66; 32], &keys_a.vpk());
+        let shared_b = SharedSecretKey::new(&[77; 32], &keys_b.vpk());
+
+        let account_a = private_pda_account_id(&program.id(), &seed, &keys_a.npk());
+        let account_b = private_pda_account_id(&program.id(), &seed, &keys_b.npk());
+
+        let pre_a = AccountWithMetadata::new(Account::default(), false, account_a);
+        let pre_b = AccountWithMetadata::new(Account::default(), false, account_b);
+
+        let result = execute_and_prove(
+            vec![pre_a, pre_b],
+            Program::serialize_instruction(seed).unwrap(),
+            vec![3, 3],
+            vec![(keys_a.npk(), shared_a), (keys_b.npk(), shared_b)],
+            vec![],
+            vec![None, None],
+            &program.into(),
+        );
+
+        assert!(matches!(result, Err(NssaError::CircuitProvingError(_))));
+    }
+
     #[test]
     fn mask_3_reuse_across_txs_currently_unsupported() {
         let program = Program::noop();
@@ -2502,8 +2538,8 @@ pub mod tests {
         let shared_secret = SharedSecretKey::new(&[55; 32], &keys.vpk());
         let seed = PdaSeed::new([99; 32]);
 
-        // Simulate a previously-claimed private PDA: program_owner != DEFAULT, is_authorized = true,
-        // account_id derived via the private formula.
+        // Simulate a previously-claimed private PDA: program_owner != DEFAULT, is_authorized =
+        // true, account_id derived via the private formula.
         let account_id = private_pda_account_id(&program.id(), &seed, &npk);
         let owned_pre_state = AccountWithMetadata::new(
             Account {

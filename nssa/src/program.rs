@@ -313,6 +313,16 @@ mod tests {
         }
 
         #[must_use]
+        pub fn two_pda_claimer() -> Self {
+            use test_program_methods::{TWO_PDA_CLAIMER_ELF, TWO_PDA_CLAIMER_ID};
+
+            Self {
+                id: TWO_PDA_CLAIMER_ID,
+                elf: TWO_PDA_CLAIMER_ELF.to_vec(),
+            }
+        }
+
+        #[must_use]
         pub fn changer_claimer() -> Self {
             use test_program_methods::{CHANGER_CLAIMER_ELF, CHANGER_CLAIMER_ID};
 
