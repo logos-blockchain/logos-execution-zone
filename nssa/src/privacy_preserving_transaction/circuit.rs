@@ -211,10 +211,11 @@ mod tests {
             AccountId::new([0; 32]),
         );
 
+        let recipient_account_id = AccountId::from((&recipient_keys.npk(), 0));
         let recipient = AccountWithMetadata::new(
             Account::default(),
             false,
-            AccountId::from((&recipient_keys.npk(), 0)),
+            recipient_account_id,
         );
 
         let balance_to_move: u128 = 37;
@@ -229,7 +230,7 @@ mod tests {
         let expected_recipient_post = Account {
             program_owner: program.id(),
             balance: balance_to_move,
-            nonce: Nonce::private_account_nonce_init(&recipient_keys.npk()),
+            nonce: Nonce::private_account_nonce_init(&recipient_account_id),
             data: Data::default(),
         };
 
@@ -289,17 +290,16 @@ mod tests {
         let sender_account_id = AccountId::from((&sender_keys.npk(), 0));
         let commitment_sender = Commitment::new(&sender_account_id, &sender_pre.account);
 
+        let recipient_account_id = AccountId::from((&recipient_keys.npk(), 0));
         let recipient = AccountWithMetadata::new(
             Account::default(),
             false,
-            AccountId::from((&recipient_keys.npk(), 0)),
+            recipient_account_id,
         );
         let balance_to_move: u128 = 37;
 
         let mut commitment_set = CommitmentSet::with_capacity(2);
         commitment_set.extend(std::slice::from_ref(&commitment_sender));
-
-        let recipient_account_id = AccountId::from((&recipient_keys.npk(), 0));
         let expected_new_nullifiers = vec![
             (
                 Nullifier::for_account_update(&commitment_sender, &sender_keys.nsk),
@@ -322,7 +322,7 @@ mod tests {
         let expected_private_account_2 = Account {
             program_owner: program.id(),
             balance: balance_to_move,
-            nonce: Nonce::private_account_nonce_init(&recipient_keys.npk()),
+            nonce: Nonce::private_account_nonce_init(&recipient_account_id),
             ..Default::default()
         };
         let expected_new_commitments = vec![

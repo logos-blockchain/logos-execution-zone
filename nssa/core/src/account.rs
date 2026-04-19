@@ -10,7 +10,7 @@ use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde::{Deserialize, Serialize};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
 
-use crate::{NullifierPublicKey, NullifierSecretKey, program::ProgramId};
+use crate::{NullifierSecretKey, program::ProgramId};
 
 pub mod data;
 
@@ -26,9 +26,9 @@ impl Nonce {
     }
 
     #[must_use]
-    pub fn private_account_nonce_init(npk: &NullifierPublicKey) -> Self {
+    pub fn private_account_nonce_init(account_id: &AccountId) -> Self {
         let mut bytes: [u8; 64] = [0_u8; 64];
-        bytes[..32].copy_from_slice(&npk.0);
+        bytes[..32].copy_from_slice(account_id.value());
         let result: [u8; 32] = Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap();
         let result = result.first_chunk::<16>().unwrap();
 
@@ -306,8 +306,8 @@ mod tests {
 
     #[test]
     fn initialize_private_nonce() {
-        let npk = NullifierPublicKey([42; 32]);
-        let nonce = Nonce::private_account_nonce_init(&npk);
+        let account_id = AccountId::new([42; 32]);
+        let nonce = Nonce::private_account_nonce_init(&account_id);
         let expected_nonce = Nonce(37_937_661_125_547_691_021_612_781_941_709_513_486);
         assert_eq!(nonce, expected_nonce);
     }
