@@ -2315,9 +2315,9 @@ pub mod tests {
     }
 
     /// A mask-3 account that no program claims via `Claim::Pda` and no caller authorizes via
-    /// `ChainedCall.pda_seeds` has no binding between its wallet-supplied npk and its
-    /// `account_id`, so the circuit must reject. Here `simple_balance_transfer` emits no claim
-    /// for the second account, leaving position 1 unbound.
+    /// `ChainedCall.pda_seeds` has no binding between its supplied npk and its `account_id`,
+    /// so the circuit must reject. Here `simple_balance_transfer` emits no claim for the
+    /// second account, leaving position 1 unbound.
     #[test]
     fn mask_3_without_binding_panics() {
         let program = Program::simple_balance_transfer();
@@ -2354,7 +2354,7 @@ pub mod tests {
     /// reads the npk for that `pre_state` from `private_account_keys` at the `pre_state`'s
     /// position, derives `AccountId` via `private_pda_account_id(program_id, seed, npk)`, and
     /// asserts it equals the `pre_state`'s `account_id`. The equality both validates the claim
-    /// and binds the wallet-supplied npk to the `account_id`.
+    /// and binds the supplied npk to the `account_id`.
     #[test]
     fn mask_3_private_pda_claim_succeeds() {
         let program = Program::pda_claimer();
@@ -2384,29 +2384,31 @@ pub mod tests {
         assert!(output.public_post_states.is_empty());
     }
 
-    /// The wallet supplies an npk that does not match the `pre_state`'s `account_id` under
+    /// An npk is supplied that does not match the `pre_state`'s `account_id` under
     /// `private_pda_account_id(program, claim_seed, npk)`. The claim equality check rejects.
     #[test]
     fn mask_3_wallet_npk_mismatch_panics() {
+        // `keys_a` produces the `pre_state`'s `account_id` (the registered pair), `keys_b` is
+        // the mismatched pair supplied in `private_account_keys` for that pre_state.
         let program = Program::pda_claimer();
-        let attested_keys = test_private_account_keys_1();
-        let wallet_keys = test_private_account_keys_2();
-        let attested_npk = attested_keys.npk();
-        let wallet_npk = wallet_keys.npk();
+        let keys_a = test_private_account_keys_1();
+        let keys_b = test_private_account_keys_2();
+        let npk_a = keys_a.npk();
+        let npk_b = keys_b.npk();
         let seed = PdaSeed::new([42; 32]);
-        let shared_secret = SharedSecretKey::new(&[55; 32], &wallet_keys.vpk());
+        let shared_secret = SharedSecretKey::new(&[55; 32], &keys_b.vpk());
 
-        // account_id is derived from `attested_npk`, but the wallet provides `wallet_npk` for
-        // this pre_state. `private_pda_account_id(program, seed, wallet_npk) != account_id`, so
-        // the claim check in the circuit must reject.
-        let account_id = private_pda_account_id(&program.id(), &seed, &attested_npk);
+        // `account_id` is derived from `npk_a`, but `npk_b` is supplied for this pre_state.
+        // `private_pda_account_id(program, seed, npk_b) != account_id`, so the claim check in
+        // the circuit must reject.
+        let account_id = private_pda_account_id(&program.id(), &seed, &npk_a);
         let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
         let result = execute_and_prove(
             vec![pre_state],
             Program::serialize_instruction(seed).unwrap(),
             vec![3],
-            vec![(wallet_npk, shared_secret)],
+            vec![(npk_b, shared_secret)],
             vec![],
             vec![None],
             &program.into(),

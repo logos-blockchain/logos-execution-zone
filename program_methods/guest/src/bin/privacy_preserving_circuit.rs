@@ -187,7 +187,7 @@ impl ExecutionState {
         // Every mask-3 pre_state must have had its npk bound to its account_id, either via a
         // `Claim::Pda(seed)` in some program's post_state or via a caller's `pda_seeds` matching
         // the private derivation. An unbound mask-3 pre_state has no cryptographic link between
-        // the wallet-supplied npk and the account_id, and must be rejected.
+        // the supplied npk and the account_id, and must be rejected.
         for (pos, &mask) in visibility_mask.iter().enumerate() {
             if mask == 3 {
                 assert!(
@@ -575,7 +575,7 @@ fn compute_circuit_output(
                     .unwrap_or_else(|| panic!("Too many private accounts, output index overflow"));
             }
             3 => {
-                // Private PDA account. The wallet-supplied npk has already been bound to
+                // Private PDA account. The supplied npk has already been bound to
                 // `pre_state.account_id` upstream in `validate_and_sync_states`, either via a
                 // `Claim::Pda(seed)` match or via a caller `pda_seeds` match, both of which
                 // assert `private_pda_account_id(owner, seed, npk) == account_id`. The post-loop
