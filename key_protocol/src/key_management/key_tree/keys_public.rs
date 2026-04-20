@@ -65,14 +65,6 @@ impl ChildKeysPublic {
         }
     }
 
-    pub fn chain_code(&self) -> &[u8; 32] {
-        &self.ccc
-    }
-
-    pub fn child_index(&self) -> Option<u32> {
-        self.cci
-    }
-
     pub fn account_id(&self) -> nssa::AccountId {
         nssa::AccountId::from(&self.cpk)
     }

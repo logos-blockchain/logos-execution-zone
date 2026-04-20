@@ -101,14 +101,6 @@ impl ChildKeysPrivate {
             cci: Some(cci),
         }
     }
-
-    pub fn chain_code(&self) -> &[u8; 32] {
-        &self.ccc
-    }
-
-    pub fn child_index(&self) -> Option<u32> {
-        self.cci
-    }
 }
 
 #[expect(
