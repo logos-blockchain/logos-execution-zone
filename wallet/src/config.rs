@@ -23,7 +23,7 @@ use url::Url;
 pub struct PersistentAccountDataPublic {
     pub account_id: nssa::AccountId,
     pub chain_index: ChainIndex,
-    pub data: ChildKeysPublic,
+    pub data: Option<ChildKeysPublic>, // `None` when Keycard is used.
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

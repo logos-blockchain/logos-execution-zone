@@ -13,6 +13,8 @@ pub struct WitnessSet {
 
 impl WitnessSet {
     #[must_use]
+    // TODO: this generates signatures.
+    // However. we may need to get signatures from Keycard.
     pub fn for_message(message: &Message, proof: Proof, private_keys: &[&PrivateKey]) -> Self {
         let message_bytes = message.to_bytes();
         let signatures_and_public_keys = private_keys

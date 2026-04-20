@@ -9,6 +9,25 @@ pub struct WitnessSet {
 
 impl WitnessSet {
     #[must_use]
+    pub fn from_list(signatures: &[Signature], pub_keys: &[PublicKey]) -> Self {
+        assert_eq!(signatures.len(), pub_keys.len());
+
+        let signatures_and_public_keys = signatures
+            .iter()
+            .zip( pub_keys.iter())
+            .map(|(sig,key)| {
+                (
+                    sig.clone(), key.clone()
+                )
+            })
+            .collect();
+
+        Self {
+            signatures_and_public_keys,
+        }
+    }
+
+    #[must_use]
     pub fn for_message(message: &Message, private_keys: &[&PrivateKey]) -> Self {
         let message_bytes = message.to_bytes();
         let signatures_and_public_keys = private_keys

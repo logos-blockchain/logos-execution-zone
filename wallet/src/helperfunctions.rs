@@ -158,7 +158,7 @@ pub fn produce_data_for_storage(
                 PersistentAccountDataPublic {
                     account_id: *account_id,
                     chain_index: key.clone(),
-                    data: data.clone(),
+                    data: Some(data.clone()),
                 }
                 .into(),
             );
