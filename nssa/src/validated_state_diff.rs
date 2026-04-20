@@ -223,7 +223,7 @@ impl ValidatedStateDiff {
                     }
                     Claim::Pda(seed) => {
                         // The program can only claim accounts that correspond to the PDAs it is
-                        // authorized to claim. The public-execution path only sees mask-0
+                        // authorized to claim. The public-execution path only sees public
                         // accounts, so the public-PDA derivation is the correct formula here.
                         let pda = AccountId::from((&chained_call.program_id, &seed));
                         ensure!(

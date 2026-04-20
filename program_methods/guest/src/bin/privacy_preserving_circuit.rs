@@ -23,20 +23,26 @@ struct ExecutionState {
     post_states: HashMap<AccountId, Account>,
     block_validity_window: BlockValidityWindow,
     timestamp_validity_window: TimestampValidityWindow,
-    /// Positions (in `pre_states`) of mask-3 accounts whose wallet-supplied npk has been bound
-    /// to their `AccountId` via a proven `private_pda_account_id(program_id, seed, npk)` check.
-    /// The binding happens when the circuit validates a `Claim::Pda(seed)` on that `pre_state`,
-    /// or when it authorizes that `pre_state` via a caller's `ChainedCall.pda_seeds`. After the
-    /// main loop, every mask-3 position must appear in this set; otherwise the npk is unbound
-    /// and the circuit rejects.
+    /// Positions (in `pre_states`) of mask-3 accounts whose supplied npk has been bound to
+    /// their `AccountId` via a proven `private_pda_account_id(program_id, seed, npk)` check.
+    /// Two proof paths populate this set:
+    ///   1. A `Claim::Pda(seed)` in a program's post_state on that `pre_state`.
+    ///   2. A caller's `ChainedCall.pda_seeds` entry matching that `pre_state` under the
+    ///      private derivation.
+    /// Binding is an idempotent property, not an event: the same position can legitimately be
+    /// bound through both paths in the same tx (e.g. a program claims a private PDA and then
+    /// delegates it to a callee), and the set uses `contains`, not `assert!(insert)`. After
+    /// the main loop, every mask-3 position must appear in this set; otherwise the npk is
+    /// unbound and the circuit rejects.
     mask3_bound_positions: HashSet<usize>,
     /// Across the whole transaction, each `(program_id, seed)` pair may resolve to at most one
-    /// `AccountId`. A seed under a program can derive a family of accounts (one public PDA and
-    /// one private PDA per distinct npk), and unifying `Claim::PrivatePda` and `ChainedCall`'s
-    /// private seeds into plain `Claim::Pda(seed)` / `pda_seeds` would otherwise let a single
-    /// `pda_seeds: [S]` in a chained call authorize multiple family members at once. We record
-    /// every claim and caller-authorization resolution here and reject any mismatch, making the
-    /// rule: one `(program, seed)` → one account per tx.
+    /// `AccountId`. A seed under a program can derive a family of accounts, one public PDA and
+    /// one private PDA per distinct npk. Without this check, a single `pda_seeds: [S]` entry in
+    /// a chained call could authorize multiple family members at once (different npks under the
+    /// same seed) and let a callee mix balances across them. Every claim and every
+    /// caller-authorization resolution is recorded here, either as a new `(program, seed)` →
+    /// `AccountId` entry or as an equality check against the existing one, making the rule: one
+    /// `(program, seed)` → one account per tx.
     pda_family_binding: HashMap<(ProgramId, PdaSeed), AccountId>,
 }
 

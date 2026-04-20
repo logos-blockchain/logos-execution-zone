@@ -2417,10 +2417,9 @@ pub mod tests {
 
     /// Happy path for the caller-seeds authorization of a mask-3 PDA. The delegator claims a
     /// private PDA via `Claim::Pda(seed)`, then chains to a callee (`noop`) delegating the same
-    /// seed via `ChainedCall.pda_seeds`. In the callee's step, the `pre_state` is already in
-    /// `self.pre_states` (Occupied branch) and its authorization is established via the private
-    /// derivation `private_pda_account_id(delegator, seed, npk) == pre.account_id`. This exercises
-    /// the `authorized_via_private` path in `validate_and_sync_states`.
+    /// seed via `ChainedCall.pda_seeds`. In the callee's step, the `pre_state`'s authorization
+    /// is established via the private derivation
+    /// `private_pda_account_id(delegator, seed, npk) == pre.account_id`.
     #[test]
     fn caller_pda_seeds_authorize_mask_3_private_pda_for_callee() {
         let delegator = Program::private_pda_delegator();
@@ -2485,20 +2484,11 @@ pub mod tests {
         assert!(matches!(result, Err(NssaError::CircuitProvingError(_))));
     }
 
-    /// Pins the current limitation: a mask-3 PDA that was claimed in a previous transaction
-    /// cannot be re-used in a new transaction as-is, because this PR only binds wallet-supplied
-    /// npks via a fresh `Claim::Pda` or a caller's `ChainedCall.pda_seeds` — neither is present
-    /// when a program operates on an already-owned private PDA at top level. The circuit rejects.
-    ///
-    /// TODO: a follow-up PR in the Private PDAs series needs to let the wallet supply a
-    /// `(seed, original_owner_program_id)` side input per mask-3 `pre_state` so the circuit
-    /// can re-verify `private_pda_account_id(owner, seed, npk) == pre.account_id` without a
-    /// claim.
     /// Exploit-scenario pin. A single `(program_id, seed)` pair can derive a family of
-    /// `AccountId`s (one public PDA and one private PDA per distinct npk). Without the tx-wide
+    /// `AccountId`s, one public PDA and one private PDA per distinct npk. Without the tx-wide
     /// family-binding check, a program could claim `PDA_alice` (mask-3, `alice_npk`) and
-    /// `PDA_bob` (mask-3, `bob_npk`) under the same seed in one transaction, and — once reuse
-    /// is supported — a later chained call could delegate both to a callee via
+    /// `PDA_bob` (mask-3, `bob_npk`) under the same seed in one transaction, and once reuse
+    /// is supported a later chained call could delegate both to a callee via
     /// `pda_seeds: [S]` and mix balances across them. The binding check rejects the setup
     /// here: after the first claim records `(program, seed) → PDA_alice`, the second claim
     /// tries to record `(program, seed) → PDA_bob` and panics.
@@ -2530,6 +2520,18 @@ pub mod tests {
         assert!(matches!(result, Err(NssaError::CircuitProvingError(_))));
     }
 
+    /// Pins the current limitation: a mask-3 PDA that was claimed in a previous transaction
+    /// cannot be re-used in a new transaction as-is. This PR only binds supplied npks via a
+    /// fresh `Claim::Pda` or a caller's `ChainedCall.pda_seeds`, neither is present when a
+    /// program operates on an already-owned private PDA at top level. The reject site is the
+    /// post-loop `private_pda_bound_positions` assertion in
+    /// `privacy_preserving_circuit.rs`: `noop` emits no `Claim::Pda` and there is no caller
+    /// `ChainedCall.pda_seeds`, so position 0 is never bound and the assertion fires.
+    //
+    // TODO: a follow-up PR in the Private PDAs series needs to let the wallet supply a
+    // `(seed, original_owner_program_id)` side input per mask-3 `pre_state` so the circuit
+    // can re-verify `private_pda_account_id(owner, seed, npk) == pre.account_id` without a
+    // claim.
     #[test]
     fn mask_3_reuse_across_txs_currently_unsupported() {
         let program = Program::noop();
