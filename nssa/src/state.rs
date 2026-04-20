@@ -2319,7 +2319,7 @@ pub mod tests {
     /// so the circuit must reject. Here `simple_balance_transfer` emits no claim for the
     /// second account, leaving position 1 unbound.
     #[test]
-    fn mask_3_without_binding_panics() {
+    fn private_pda_without_binding_fails() {
         let program = Program::simple_balance_transfer();
         let keys = test_private_account_keys_1();
         let npk = keys.npk();
@@ -2333,12 +2333,12 @@ pub mod tests {
             true,
             AccountId::new([0; 32]),
         );
-        let mask3_account =
+        let private_pda_account =
             AccountWithMetadata::new(Account::default(), false, AccountId::new([1; 32]));
 
         let visibility_mask = [0, 3];
         let result = execute_and_prove(
-            vec![public_account_1, mask3_account],
+            vec![public_account_1, private_pda_account],
             Program::serialize_instruction(10_u128).unwrap(),
             visibility_mask.to_vec(),
             vec![(npk, shared_secret)],
@@ -2356,7 +2356,7 @@ pub mod tests {
     /// asserts it equals the `pre_state`'s `account_id`. The equality both validates the claim
     /// and binds the supplied npk to the `account_id`.
     #[test]
-    fn mask_3_private_pda_claim_succeeds() {
+    fn private_pda_claim_succeeds() {
         let program = Program::pda_claimer();
         let keys = test_private_account_keys_1();
         let npk = keys.npk();
@@ -2387,7 +2387,7 @@ pub mod tests {
     /// An npk is supplied that does not match the `pre_state`'s `account_id` under
     /// `private_pda_account_id(program, claim_seed, npk)`. The claim equality check rejects.
     #[test]
-    fn mask_3_wallet_npk_mismatch_panics() {
+    fn private_pda_npk_mismatch_fails() {
         // `keys_a` produces the `pre_state`'s `account_id` (the registered pair), `keys_b` is
         // the mismatched pair supplied in `private_account_keys` for that pre_state.
         let program = Program::pda_claimer();
@@ -2423,7 +2423,7 @@ pub mod tests {
     /// is established via the private derivation
     /// `private_pda_account_id(delegator, seed, npk) == pre.account_id`.
     #[test]
-    fn caller_pda_seeds_authorize_mask_3_private_pda_for_callee() {
+    fn caller_pda_seeds_authorize_private_pda_for_callee() {
         let delegator = Program::private_pda_delegator();
         let noop = Program::noop();
         let keys = test_private_account_keys_1();
@@ -2458,7 +2458,7 @@ pub mod tests {
     /// was set to `true` by the delegator but no proven source supports it, so the consistency
     /// assertion rejects.
     #[test]
-    fn caller_pda_seeds_with_wrong_seed_rejects_mask_3_for_callee() {
+    fn caller_pda_seeds_with_wrong_seed_rejects_private_pda_for_callee() {
         let delegator = Program::private_pda_delegator();
         let noop = Program::noop();
         let keys = test_private_account_keys_1();
@@ -2495,7 +2495,7 @@ pub mod tests {
     /// here: after the first claim records `(program, seed) → PDA_alice`, the second claim
     /// tries to record `(program, seed) → PDA_bob` and panics.
     #[test]
-    fn two_mask_3_claims_under_same_seed_are_rejected() {
+    fn two_private_pda_claims_under_same_seed_are_rejected() {
         let program = Program::two_pda_claimer();
         let keys_a = test_private_account_keys_1();
         let keys_b = test_private_account_keys_2();
@@ -2529,13 +2529,12 @@ pub mod tests {
     /// post-loop `private_pda_bound_positions` assertion in
     /// `privacy_preserving_circuit.rs`: `noop` emits no `Claim::Pda` and there is no caller
     /// `ChainedCall.pda_seeds`, so position 0 is never bound and the assertion fires.
-    //
     // TODO: a follow-up PR in the Private PDAs series needs to let the wallet supply a
     // `(seed, original_owner_program_id)` side input per mask-3 `pre_state` so the circuit
     // can re-verify `private_pda_account_id(owner, seed, npk) == pre.account_id` without a
     // claim.
     #[test]
-    fn mask_3_reuse_across_txs_currently_unsupported() {
+    fn private_pda_top_level_reuse_rejected_by_binding_check() {
         let program = Program::noop();
         let keys = test_private_account_keys_1();
         let npk = keys.npk();

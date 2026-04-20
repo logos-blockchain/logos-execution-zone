@@ -25,16 +25,14 @@ struct ExecutionState {
     timestamp_validity_window: TimestampValidityWindow,
     /// Positions (in `pre_states`) of mask-3 accounts whose supplied npk has been bound to
     /// their `AccountId` via a proven `private_pda_account_id(program_id, seed, npk)` check.
-    /// Two proof paths populate this set:
-    ///   1. A `Claim::Pda(seed)` in a program's post_state on that `pre_state`.
-    ///   2. A caller's `ChainedCall.pda_seeds` entry matching that `pre_state` under the
-    ///      private derivation.
-    /// Binding is an idempotent property, not an event: the same position can legitimately be
-    /// bound through both paths in the same tx (e.g. a program claims a private PDA and then
-    /// delegates it to a callee), and the set uses `contains`, not `assert!(insert)`. After
-    /// the main loop, every mask-3 position must appear in this set; otherwise the npk is
-    /// unbound and the circuit rejects.
-    mask3_bound_positions: HashSet<usize>,
+    /// Two proof paths populate this set: a `Claim::Pda(seed)` in a program's `post_state` on
+    /// that `pre_state`, or a caller's `ChainedCall.pda_seeds` entry matching that `pre_state`
+    /// under the private derivation. Binding is an idempotent property, not an event: the same
+    /// position can legitimately be bound through both paths in the same tx (e.g. a program
+    /// claims a private PDA and then delegates it to a callee), and the set uses `contains`,
+    /// not `assert!(insert)`. After the main loop, every mask-3 position must appear in this
+    /// set; otherwise the npk is unbound and the circuit rejects.
+    private_pda_bound_positions: HashSet<usize>,
     /// Across the whole transaction, each `(program_id, seed)` pair may resolve to at most one
     /// `AccountId`. A seed under a program can derive a family of accounts, one public PDA and
     /// one private PDA per distinct npk. Without this check, a single `pda_seeds: [S]` entry in
@@ -50,7 +48,7 @@ impl ExecutionState {
     /// Validate program outputs and derive the overall execution state.
     pub fn derive_from_outputs(
         visibility_mask: &[u8],
-        mask3_npk_by_position: &HashMap<usize, NullifierPublicKey>,
+        private_pda_npk_by_position: &HashMap<usize, NullifierPublicKey>,
         program_id: ProgramId,
         program_outputs: Vec<ProgramOutput>,
     ) -> Self {
@@ -88,7 +86,7 @@ impl ExecutionState {
             post_states: HashMap::new(),
             block_validity_window,
             timestamp_validity_window,
-            mask3_bound_positions: HashSet::new(),
+            private_pda_bound_positions: HashSet::new(),
             pda_family_binding: HashMap::new(),
         };
 
@@ -167,7 +165,7 @@ impl ExecutionState {
 
             execution_state.validate_and_sync_states(
                 visibility_mask,
-                mask3_npk_by_position,
+                private_pda_npk_by_position,
                 chained_call.program_id,
                 caller_program_id,
                 &chained_call.pda_seeds,
@@ -191,8 +189,8 @@ impl ExecutionState {
         for (pos, &mask) in visibility_mask.iter().enumerate() {
             if mask == 3 {
                 assert!(
-                    execution_state.mask3_bound_positions.contains(&pos),
-                    "mask-3 pre_state at position {pos} has no proven (seed, npk) binding via Claim::Pda or caller pda_seeds"
+                    execution_state.private_pda_bound_positions.contains(&pos),
+                    "private PDA pre_state at position {pos} has no proven (seed, npk) binding via Claim::Pda or caller pda_seeds"
                 );
             }
         }
@@ -229,7 +227,7 @@ impl ExecutionState {
     fn validate_and_sync_states(
         &mut self,
         visibility_mask: &[u8],
-        mask3_npk_by_position: &HashMap<usize, NullifierPublicKey>,
+        private_pda_npk_by_position: &HashMap<usize, NullifierPublicKey>,
         program_id: ProgramId,
         caller_program_id: Option<ProgramId>,
         caller_pda_seeds: &[PdaSeed],
@@ -274,27 +272,27 @@ impl ExecutionState {
                     // Find which caller seed (if any) authorizes this pre_state, under the
                     // public or the private derivation. We need the *specific* seed (not just a
                     // bool) so we can record the `(caller, seed) → account_id` family binding.
-                    // Only reachable when `caller_program_id.is_some()` — top-level flows have
-                    // no caller-emitted seeds, so binding at top level must come from the claim
-                    // path below.
-                    let matched_caller_seed: Option<(PdaSeed, bool)> =
-                        caller_program_id.and_then(|caller| {
+                    // The match arm also returns the caller so the consumer below does not have
+                    // to re-unwrap `caller_program_id`. Only reachable when
+                    // `caller_program_id.is_some()`, top-level flows have no caller-emitted
+                    // seeds, so binding at top level must come from the claim path below.
+                    let matched_caller_seed: Option<(PdaSeed, bool, ProgramId)> = caller_program_id
+                        .and_then(|caller| {
                             caller_pda_seeds.iter().find_map(|seed| {
                                 if AccountId::from((&caller, seed)) == pre_account_id {
-                                    return Some((*seed, false));
+                                    return Some((*seed, false, caller));
                                 }
-                                if let Some(npk) = mask3_npk_by_position.get(&pre_state_position)
+                                if let Some(npk) =
+                                    private_pda_npk_by_position.get(&pre_state_position)
                                     && private_pda_account_id(&caller, seed, npk) == pre_account_id
                                 {
-                                    return Some((*seed, true));
+                                    return Some((*seed, true, caller));
                                 }
                                 None
                             })
                         });
 
-                    if let Some((seed, is_private_form)) = matched_caller_seed {
-                        let caller = caller_program_id
-                            .expect("matched caller seed implies caller_program_id is set");
+                    if let Some((seed, is_private_form, caller)) = matched_caller_seed {
                         assert_family_binding(
                             &mut self.pda_family_binding,
                             caller,
@@ -302,7 +300,7 @@ impl ExecutionState {
                             pre_account_id,
                         );
                         if is_private_form {
-                            self.mask3_bound_positions.insert(pre_state_position);
+                            self.private_pda_bound_positions.insert(pre_state_position);
                         }
                     }
 
@@ -366,15 +364,15 @@ impl ExecutionState {
                             );
                         }
                         Claim::Pda(seed) => {
-                            let npk = mask3_npk_by_position
-                                .get(&pre_state_position)
-                                .expect("mask-3 pre_state must have an npk in the position map");
+                            let npk = private_pda_npk_by_position.get(&pre_state_position).expect(
+                                "private PDA pre_state must have an npk in the position map",
+                            );
                             let pda = private_pda_account_id(&program_id, &seed, npk);
                             assert_eq!(
                                 pre_account_id, pda,
                                 "Invalid private PDA claim for account {pre_account_id}"
                             );
-                            self.mask3_bound_positions.insert(pre_state_position);
+                            self.private_pda_bound_positions.insert(pre_state_position);
                             assert_family_binding(
                                 &mut self.pda_family_binding,
                                 program_id,
@@ -579,7 +577,7 @@ fn compute_circuit_output(
                 // `pre_state.account_id` upstream in `validate_and_sync_states`, either via a
                 // `Claim::Pda(seed)` match or via a caller `pda_seeds` match, both of which
                 // assert `private_pda_account_id(owner, seed, npk) == account_id`. The post-loop
-                // assertion in `derive_from_outputs` (see the `mask3_bound_positions` check)
+                // assertion in `derive_from_outputs` (see the `private_pda_bound_positions` check)
                 // guarantees that every mask-3 position has been through at least one such
                 // binding, so this branch can safely use the wallet npk without re-verifying.
                 let Some((npk, shared_secret)) = private_keys_iter.next() else {
@@ -715,7 +713,7 @@ fn main() {
     // pre_state order across all masks 1/2/3, so walk `visibility_mask` in lock-step. The
     // downstream `compute_circuit_output` also consumes the same iterator and its trailing
     // assertions catch an over-supply of keys; under-supply surfaces here.
-    let mut mask3_npk_by_position: HashMap<usize, NullifierPublicKey> = HashMap::new();
+    let mut private_pda_npk_by_position: HashMap<usize, NullifierPublicKey> = HashMap::new();
     {
         let mut keys_iter = private_account_keys.iter();
         for (pos, &mask) in visibility_mask.iter().enumerate() {
@@ -726,7 +724,7 @@ fn main() {
                     )
                 });
                 if mask == 3 {
-                    mask3_npk_by_position.insert(pos, *npk);
+                    private_pda_npk_by_position.insert(pos, *npk);
                 }
             }
         }
@@ -734,7 +732,7 @@ fn main() {
 
     let execution_state = ExecutionState::derive_from_outputs(
         &visibility_mask,
-        &mask3_npk_by_position,
+        &private_pda_npk_by_position,
         program_id,
         program_outputs,
     );
