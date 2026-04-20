@@ -533,41 +533,25 @@ mod tests {
             .key_map
             .get_mut(&ChainIndex::from_str("/1").unwrap())
             .unwrap();
-        acc.value.1.push((0, {
-            let mut a = nssa::Account::default();
-            a.balance = 2;
-            a
-        }));
+        acc.value.1.push((0, nssa::Account { balance: 2, ..nssa::Account::default() }));
 
         let acc = tree
             .key_map
             .get_mut(&ChainIndex::from_str("/2").unwrap())
             .unwrap();
-        acc.value.1.push((0, {
-            let mut a = nssa::Account::default();
-            a.balance = 3;
-            a
-        }));
+        acc.value.1.push((0, nssa::Account { balance: 3, ..nssa::Account::default() }));
 
         let acc = tree
             .key_map
             .get_mut(&ChainIndex::from_str("/0/1").unwrap())
             .unwrap();
-        acc.value.1.push((0, {
-            let mut a = nssa::Account::default();
-            a.balance = 5;
-            a
-        }));
+        acc.value.1.push((0, nssa::Account { balance: 5, ..nssa::Account::default() }));
 
         let acc = tree
             .key_map
             .get_mut(&ChainIndex::from_str("/1/0").unwrap())
             .unwrap();
-        acc.value.1.push((0, {
-            let mut a = nssa::Account::default();
-            a.balance = 6;
-            a
-        }));
+        acc.value.1.push((0, nssa::Account { balance: 6, ..nssa::Account::default() }));
 
         // Update account_id_map for nodes that now have entries
         for chain_index_str in ["/1", "/2", "/0/1", "/1/0"] {

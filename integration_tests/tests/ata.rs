@@ -43,9 +43,8 @@ async fn new_public_account(ctx: &mut TestContext) -> Result<nssa::AccountId> {
 async fn new_private_account(ctx: &mut TestContext) -> Result<nssa::AccountId> {
     let result = wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
-        Command::Account(AccountSubcommand::New(NewSubcommand::Private {
+        Command::Account(AccountSubcommand::New(NewSubcommand::PrivateAccountsKey {
             cci: None,
-            label: None,
         })),
     )
     .await?;

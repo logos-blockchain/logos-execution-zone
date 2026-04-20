@@ -13,6 +13,7 @@ pub struct ChildKeysPublic {
 }
 
 impl ChildKeysPublic {
+    #[must_use]
     pub fn root(seed: [u8; 64]) -> Self {
         let hash_value = hmac_sha512::HMAC::mac(seed, "LEE_master_pub");
 
@@ -33,6 +34,7 @@ impl ChildKeysPublic {
         }
     }
 
+    #[must_use]
     pub fn nth_child(&self, cci: u32) -> Self {
         let hash_value = self.compute_hash_value(cci);
 
@@ -65,6 +67,7 @@ impl ChildKeysPublic {
         }
     }
 
+    #[must_use]
     pub fn account_id(&self) -> nssa::AccountId {
         nssa::AccountId::from(&self.cpk)
     }

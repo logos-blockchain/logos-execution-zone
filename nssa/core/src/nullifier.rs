@@ -4,17 +4,17 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Commitment, account::AccountId};
 
+const PRIVATE_ACCOUNT_ID_PREFIX: &[u8; 32] = b"/LEE/v0.3/AccountId/Private/\x00\x00\x00\x00";
+
+pub type Identifier = u128;
+
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(any(feature = "host", test), derive(Clone, Hash))]
 pub struct NullifierPublicKey(pub [u8; 32]);
 
-pub type Identifier = u128;
-
 impl From<(&NullifierPublicKey, Identifier)> for AccountId {
     fn from(value: (&NullifierPublicKey, Identifier)) -> Self {
         let (npk, identifier) = value;
-        const PRIVATE_ACCOUNT_ID_PREFIX: &[u8; 32] =
-            b"/LEE/v0.3/AccountId/Private/\x00\x00\x00\x00";
 
         // 32 bytes prefix || 32 bytes npk || 16 bytes identifier
         let mut bytes = [0; 80];

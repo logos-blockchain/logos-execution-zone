@@ -17,6 +17,7 @@ pub struct ChildKeysPrivate {
 }
 
 impl ChildKeysPrivate {
+    #[must_use]
     pub fn root(seed: [u8; 64]) -> Self {
         let hash_value = hmac_sha512::HMAC::mac(seed, b"LEE_master_priv");
 
@@ -53,6 +54,7 @@ impl ChildKeysPrivate {
         }
     }
 
+    #[must_use]
     pub fn nth_child(&self, cci: u32) -> Self {
         #[expect(clippy::arithmetic_side_effects, reason = "TODO: fix later")]
         let parent_pt =

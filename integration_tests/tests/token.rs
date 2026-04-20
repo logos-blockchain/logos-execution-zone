@@ -296,9 +296,8 @@ async fn create_and_transfer_token_with_private_supply() -> Result<()> {
     // Create new account for the token supply holder (private)
     let result = wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
-        Command::Account(AccountSubcommand::New(NewSubcommand::Private {
+        Command::Account(AccountSubcommand::New(NewSubcommand::PrivateAccountsKey {
             cci: None,
-            label: None,
         })),
     )
     .await?;
@@ -312,9 +311,8 @@ async fn create_and_transfer_token_with_private_supply() -> Result<()> {
     // Create new account for receiving a token transaction (private)
     let result = wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
-        Command::Account(AccountSubcommand::New(NewSubcommand::Private {
+        Command::Account(AccountSubcommand::New(NewSubcommand::PrivateAccountsKey {
             cci: None,
-            label: None,
         })),
     )
     .await?;
@@ -459,9 +457,8 @@ async fn create_token_with_private_definition() -> Result<()> {
     // Create token definition account (private)
     let result = wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
-        Command::Account(AccountSubcommand::New(NewSubcommand::Private {
+        Command::Account(AccountSubcommand::New(NewSubcommand::PrivateAccountsKey {
             cci: Some(ChainIndex::root()),
-            label: None,
         })),
     )
     .await?;
@@ -531,9 +528,8 @@ async fn create_token_with_private_definition() -> Result<()> {
     // Create private recipient account
     let result = wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
-        Command::Account(AccountSubcommand::New(NewSubcommand::Private {
+        Command::Account(AccountSubcommand::New(NewSubcommand::PrivateAccountsKey {
             cci: None,
-            label: None,
         })),
     )
     .await?;
@@ -661,9 +657,8 @@ async fn create_token_with_private_definition_and_supply() -> Result<()> {
     // Create token definition account (private)
     let result = wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
-        Command::Account(AccountSubcommand::New(NewSubcommand::Private {
+        Command::Account(AccountSubcommand::New(NewSubcommand::PrivateAccountsKey {
             cci: None,
-            label: None,
         })),
     )
     .await?;
@@ -677,9 +672,8 @@ async fn create_token_with_private_definition_and_supply() -> Result<()> {
     // Create supply account (private)
     let result = wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
-        Command::Account(AccountSubcommand::New(NewSubcommand::Private {
+        Command::Account(AccountSubcommand::New(NewSubcommand::PrivateAccountsKey {
             cci: None,
-            label: None,
         })),
     )
     .await?;
@@ -739,9 +733,8 @@ async fn create_token_with_private_definition_and_supply() -> Result<()> {
     // Create recipient account
     let result = wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
-        Command::Account(AccountSubcommand::New(NewSubcommand::Private {
+        Command::Account(AccountSubcommand::New(NewSubcommand::PrivateAccountsKey {
             cci: None,
-            label: None,
         })),
     )
     .await?;
@@ -854,9 +847,8 @@ async fn shielded_token_transfer() -> Result<()> {
     // Create recipient account (private) for shielded transfer
     let result = wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
-        Command::Account(AccountSubcommand::New(NewSubcommand::Private {
+        Command::Account(AccountSubcommand::New(NewSubcommand::PrivateAccountsKey {
             cci: None,
-            label: None,
         })),
     )
     .await?;
@@ -965,9 +957,8 @@ async fn deshielded_token_transfer() -> Result<()> {
     // Create supply account (private)
     let result = wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
-        Command::Account(AccountSubcommand::New(NewSubcommand::Private {
+        Command::Account(AccountSubcommand::New(NewSubcommand::PrivateAccountsKey {
             cci: None,
-            label: None,
         })),
     )
     .await?;
@@ -1076,9 +1067,8 @@ async fn token_claiming_path_with_private_accounts() -> Result<()> {
     // Create token definition account (private)
     let result = wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
-        Command::Account(AccountSubcommand::New(NewSubcommand::Private {
+        Command::Account(AccountSubcommand::New(NewSubcommand::PrivateAccountsKey {
             cci: None,
-            label: None,
         })),
     )
     .await?;
@@ -1092,9 +1082,8 @@ async fn token_claiming_path_with_private_accounts() -> Result<()> {
     // Create supply account (private)
     let result = wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
-        Command::Account(AccountSubcommand::New(NewSubcommand::Private {
+        Command::Account(AccountSubcommand::New(NewSubcommand::PrivateAccountsKey {
             cci: None,
-            label: None,
         })),
     )
     .await?;
@@ -1125,9 +1114,8 @@ async fn token_claiming_path_with_private_accounts() -> Result<()> {
     // Create new private account for claiming path
     let result = wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
-        Command::Account(AccountSubcommand::New(NewSubcommand::Private {
+        Command::Account(AccountSubcommand::New(NewSubcommand::PrivateAccountsKey {
             cci: None,
-            label: None,
         })),
     )
     .await?;

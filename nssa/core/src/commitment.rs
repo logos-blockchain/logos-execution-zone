@@ -49,8 +49,8 @@ impl std::fmt::Debug for Commitment {
 }
 
 impl Commitment {
-    /// Generates the commitment to a private account owned by user for account_id:
-    /// SHA256( `Comm_DS` || account_id || `program_owner` || balance || nonce || SHA256(data)).
+    /// Generates the commitment to a private account owned by user for `account_id`:
+    /// SHA256( `Comm_DS` || `account_id` || `program_owner` || balance || nonce || SHA256(data)).
     #[must_use]
     pub fn new(account_id: &AccountId, account: &Account) -> Self {
         const COMMITMENT_PREFIX: &[u8; 32] =

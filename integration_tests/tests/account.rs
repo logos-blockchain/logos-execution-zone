@@ -74,9 +74,8 @@ async fn new_private_account_with_label() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
     let label = "my-test-private-account".to_owned();
-    let command = Command::Account(AccountSubcommand::New(NewSubcommand::Private {
+    let command = Command::Account(AccountSubcommand::New(NewSubcommand::PrivateAccountsKey {
         cci: None,
-        label: Some(label.clone()),
     }));
 
     let result = execute_subcommand(ctx.wallet_mut(), command).await?;

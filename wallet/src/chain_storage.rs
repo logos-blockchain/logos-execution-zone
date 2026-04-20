@@ -190,11 +190,8 @@ impl WalletChainStore {
             let identifier = entries
                 .iter()
                 .find_map(|(id, _)| {
-                    if nssa::AccountId::from((&key_chain.nullifier_public_key, *id)) == account_id {
-                        Some(*id)
-                    } else {
-                        None
-                    }
+                    (nssa::AccountId::from((&key_chain.nullifier_public_key, *id)) == account_id)
+                        .then_some(*id)
                 })
                 .unwrap_or(0);
             // Update existing entry or insert new one
@@ -232,7 +229,7 @@ impl WalletChainStore {
             }
         } else {
             // Node not yet in account_id_map — find it by checking all nodes
-            for (ci, node) in self.user_data.private_key_tree.key_map.iter_mut() {
+            for (ci, node) in &mut self.user_data.private_key_tree.key_map {
                 let expected_id =
                     nssa::AccountId::from((&node.value.0.nullifier_public_key, identifier));
                 if expected_id == account_id {

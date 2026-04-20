@@ -53,8 +53,6 @@ unsafe extern "C" {
         out_keys: *mut FfiPrivateAccountKeys,
     ) -> error::WalletFfiError;
 
-    fn wallet_ffi_free_private_account_keys(keys: *mut FfiPrivateAccountKeys);
-
     fn wallet_ffi_list_accounts(
         handle: *mut WalletHandle,
         out_list: *mut FfiAccountList,
@@ -294,18 +292,17 @@ fn wallet_ffi_create_private_accounts() -> Result<()> {
 fn wallet_ffi_save_and_load_persistent_storage() -> Result<()> {
     let ctx = BlockingTestContext::new()?;
     let home = tempfile::tempdir()?;
-    let mut first_npk = [0u8; 32];
-
     // Create a receiving key and save
-    unsafe {
+    let first_npk = unsafe {
         let wallet_ffi_handle = new_wallet_ffi_with_test_context_config(&ctx, home.path())?;
         let mut out_keys = FfiPrivateAccountKeys::default();
         wallet_ffi_create_private_accounts_key(wallet_ffi_handle, &raw mut out_keys);
-        first_npk = out_keys.nullifier_public_key.data;
+        let npk = out_keys.nullifier_public_key.data;
         wallet_ffi_free_private_account_keys(&raw mut out_keys);
         wallet_ffi_save(wallet_ffi_handle);
         wallet_ffi_destroy(wallet_ffi_handle);
-    }
+        npk
+    };
 
     // After loading, creating a new key should yield a different NPK (state was persisted)
     let second_npk = unsafe {
@@ -318,8 +315,8 @@ fn wallet_ffi_save_and_load_persistent_storage() -> Result<()> {
         npk
     };
 
-    assert_ne!(first_npk, [0u8; 32], "First NPK should be non-zero");
-    assert_ne!(second_npk, [0u8; 32], "Second NPK should be non-zero");
+    assert_ne!(first_npk, [0_u8; 32], "First NPK should be non-zero");
+    assert_ne!(second_npk, [0_u8; 32], "Second NPK should be non-zero");
     assert_ne!(
         first_npk, second_npk,
         "Keys should differ after state was persisted"
@@ -333,10 +330,9 @@ fn test_wallet_ffi_list_accounts() -> Result<()> {
     let password = "password_for_tests";
 
     // Create the wallet FFI and track which account IDs were created as public/private
-    let (wallet_ffi_handle, created_public_ids, created_private_ids) = unsafe {
+    let (wallet_ffi_handle, created_public_ids) = unsafe {
         let handle = new_wallet_ffi_with_default_config(password)?;
         let mut public_ids: Vec<[u8; 32]> = Vec::new();
-        let mut private_ids: Vec<[u8; 32]> = Vec::new();
 
         // Create 5 public accounts and 5 receiving keys
         for _ in 0..5 {
@@ -348,9 +344,8 @@ fn test_wallet_ffi_list_accounts() -> Result<()> {
             wallet_ffi_create_private_accounts_key(handle, &raw mut out_keys);
             wallet_ffi_free_private_account_keys(&raw mut out_keys);
         }
-        let _ = private_ids;
 
-        (handle, public_ids, private_ids)
+        (handle, public_ids)
     };
 
     // Get the account list with FFI method
@@ -373,12 +368,6 @@ fn test_wallet_ffi_list_accounts() -> Result<()> {
         .filter(|e| e.is_public)
         .map(|e| e.account_id.data)
         .collect();
-    let listed_private_ids: HashSet<[u8; 32]> = wallet_ffi_account_list_slice
-        .iter()
-        .filter(|e| !e.is_public)
-        .map(|e| e.account_id.data)
-        .collect();
-
     for id in &created_public_ids {
         assert!(
             listed_public_ids.contains(id),
