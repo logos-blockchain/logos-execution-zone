@@ -7,7 +7,10 @@ use nssa::AccountId;
 use crate::{
     block_on,
     error::{print_error, WalletFfiError},
-    types::{FfiAccount, FfiAccountList, FfiAccountListEntry, FfiBytes32, FfiPrivateAccountKeys, WalletHandle},
+    types::{
+        FfiAccount, FfiAccountList, FfiAccountListEntry, FfiBytes32, FfiPrivateAccountKeys,
+        WalletHandle,
+    },
     wallet::get_wallet,
 };
 

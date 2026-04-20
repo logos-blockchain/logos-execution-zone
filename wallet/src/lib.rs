@@ -256,10 +256,7 @@ impl WalletCore {
             .generate_new_public_transaction_private_key(chain_index)
     }
 
-    pub fn create_private_accounts_key(
-        &mut self,
-        chain_index: Option<ChainIndex>,
-    ) -> ChainIndex {
+    pub fn create_private_accounts_key(&mut self, chain_index: Option<ChainIndex>) -> ChainIndex {
         self.storage
             .user_data
             .create_private_accounts_key(chain_index)
@@ -486,9 +483,14 @@ impl WalletCore {
             .default_user_private_accounts
             .values()
             .map(|(key_chain, _)| (key_chain, None))
-            .chain(self.storage.user_data.private_key_tree.key_map.iter().map(
-                |(chain_index, keys_node)| (&keys_node.value.0, chain_index.index()),
-            ));
+            .chain(
+                self.storage
+                    .user_data
+                    .private_key_tree
+                    .key_map
+                    .iter()
+                    .map(|(chain_index, keys_node)| (&keys_node.value.0, chain_index.index())),
+            );
 
         let affected_accounts = private_account_key_chains
             .flat_map(|(key_chain, index)| {

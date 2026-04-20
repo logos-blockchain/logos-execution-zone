@@ -135,7 +135,12 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded(
         Err(e) => return e,
     };
 
-    if from.is_null() || to_keys.is_null() || to_identifier.is_null() || amount.is_null() || out_result.is_null() {
+    if from.is_null()
+        || to_keys.is_null()
+        || to_identifier.is_null()
+        || amount.is_null()
+        || out_result.is_null()
+    {
         print_error("Null pointer argument");
         return WalletFfiError::NullPointer;
     }
@@ -162,9 +167,13 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded(
 
     let transfer = NativeTokenTransfer(&wallet);
 
-    match block_on(
-        transfer.send_shielded_transfer_to_outer_account(from_id, to_npk, to_vpk, to_identifier, amount),
-    ) {
+    match block_on(transfer.send_shielded_transfer_to_outer_account(
+        from_id,
+        to_npk,
+        to_vpk,
+        to_identifier,
+        amount,
+    )) {
         Ok((tx_hash, _shared_key)) => {
             let tx_hash = CString::new(tx_hash.to_string())
                 .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
@@ -307,7 +316,12 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private(
         Err(e) => return e,
     };
 
-    if from.is_null() || to_keys.is_null() || to_identifier.is_null() || amount.is_null() || out_result.is_null() {
+    if from.is_null()
+        || to_keys.is_null()
+        || to_identifier.is_null()
+        || amount.is_null()
+        || out_result.is_null()
+    {
         print_error("Null pointer argument");
         return WalletFfiError::NullPointer;
     }
@@ -334,8 +348,13 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private(
 
     let transfer = NativeTokenTransfer(&wallet);
 
-    match block_on(transfer.send_private_transfer_to_outer_account(from_id, to_npk, to_vpk, to_identifier, amount))
-    {
+    match block_on(transfer.send_private_transfer_to_outer_account(
+        from_id,
+        to_npk,
+        to_vpk,
+        to_identifier,
+        amount,
+    )) {
         Ok((tx_hash, _shared_key)) => {
             let tx_hash = CString::new(tx_hash.to_string())
                 .map_or(ptr::null_mut(), std::ffi::CString::into_raw);

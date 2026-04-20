@@ -115,7 +115,8 @@ mod tests {
     use risc0_zkvm::sha::{Impl, Sha256 as _};
 
     use crate::{
-        Commitment, DUMMY_COMMITMENT, DUMMY_COMMITMENT_HASH, account::{Account, AccountId},
+        Commitment, DUMMY_COMMITMENT, DUMMY_COMMITMENT_HASH,
+        account::{Account, AccountId},
     };
 
     #[test]

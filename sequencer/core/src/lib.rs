@@ -1108,7 +1108,11 @@ mod tests {
         let epk = EphemeralPublicKey::from_scalar(esk);
 
         let (output, proof) = execute_and_prove(
-            vec![AccountWithMetadata::new(Account::default(), true, (&npk, 0))],
+            vec![AccountWithMetadata::new(
+                Account::default(),
+                true,
+                (&npk, 0),
+            )],
             Program::serialize_instruction(0_u128).unwrap(),
             vec![1],
             vec![(npk.clone(), 0, shared_secret)],

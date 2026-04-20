@@ -1213,7 +1213,8 @@ pub mod tests {
 
         let sender_nonce = sender.account.nonce;
 
-        let recipient = AccountWithMetadata::new(Account::default(), false, (&recipient_keys.npk(), 0));
+        let recipient =
+            AccountWithMetadata::new(Account::default(), false, (&recipient_keys.npk(), 0));
 
         let esk = [3; 32];
         let shared_secret = SharedSecretKey::new(&esk, &recipient_keys.vpk());
@@ -1252,8 +1253,11 @@ pub mod tests {
         let program = Program::authenticated_transfer_program();
         let sender_account_id = AccountId::from((&sender_keys.npk(), 0));
         let sender_commitment = Commitment::new(&sender_account_id, sender_private_account);
-        let sender_pre =
-            AccountWithMetadata::new(sender_private_account.clone(), true, (&sender_keys.npk(), 0));
+        let sender_pre = AccountWithMetadata::new(
+            sender_private_account.clone(),
+            true,
+            (&sender_keys.npk(), 0),
+        );
         let recipient_pre =
             AccountWithMetadata::new(Account::default(), false, (&recipient_keys.npk(), 0));
 
@@ -1305,8 +1309,11 @@ pub mod tests {
         let program = Program::authenticated_transfer_program();
         let sender_account_id = AccountId::from((&sender_keys.npk(), 0));
         let sender_commitment = Commitment::new(&sender_account_id, sender_private_account);
-        let sender_pre =
-            AccountWithMetadata::new(sender_private_account.clone(), true, (&sender_keys.npk(), 0));
+        let sender_pre = AccountWithMetadata::new(
+            sender_private_account.clone(),
+            true,
+            (&sender_keys.npk(), 0),
+        );
         let recipient_pre = AccountWithMetadata::new(
             state.get_account_by_id(*recipient_account_id),
             false,
@@ -2835,7 +2842,8 @@ pub mod tests {
             vec![(sender_commitment.clone(), sender_init_nullifier)],
             0,
         );
-        let sender_pre = AccountWithMetadata::new(sender_private_account, true, (&sender_keys.npk(), 0));
+        let sender_pre =
+            AccountWithMetadata::new(sender_private_account, true, (&sender_keys.npk(), 0));
         let recipient_private_key = PrivateKey::try_new([2; 32]).unwrap();
         let recipient_account_id =
             AccountId::from(&PublicKey::new_from_private_key(&recipient_private_key));

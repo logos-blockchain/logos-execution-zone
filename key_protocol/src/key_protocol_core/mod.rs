@@ -2,9 +2,8 @@ use std::collections::BTreeMap;
 
 use anyhow::Result;
 use k256::AffinePoint;
-use serde::{Deserialize, Serialize};
-
 use nssa_core::Identifier;
+use serde::{Deserialize, Serialize};
 
 use crate::key_management::{
     KeyChain,
@@ -122,10 +121,7 @@ impl NSSAUserData {
     }
 
     /// Creates a new receiving key node and returns its `ChainIndex`.
-    pub fn create_private_accounts_key(
-        &mut self,
-        parent_cci: Option<ChainIndex>,
-    ) -> ChainIndex {
+    pub fn create_private_accounts_key(&mut self, parent_cci: Option<ChainIndex>) -> ChainIndex {
         match parent_cci {
             Some(parent_cci) => self
                 .private_key_tree
@@ -221,10 +217,12 @@ mod tests {
     fn new_account() {
         let mut user_data = NSSAUserData::default();
 
-        let chain_index = user_data
-            .create_private_accounts_key(Some(ChainIndex::root()));
+        let chain_index = user_data.create_private_accounts_key(Some(ChainIndex::root()));
 
-        let is_key_chain_generated = user_data.private_key_tree.key_map.contains_key(&chain_index);
+        let is_key_chain_generated = user_data
+            .private_key_tree
+            .key_map
+            .contains_key(&chain_index);
         assert!(is_key_chain_generated);
 
         let key_chain = &user_data.private_key_tree.key_map[&chain_index].value.0;

@@ -226,8 +226,11 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
     let recipient_vsk = [99; 32];
     let recipient_vpk = ViewingPublicKey::from_scalar(recipient_vsk);
     let recipient_npk = NullifierPublicKey::from(&recipient_nsk);
-    let recipient_pre =
-        AccountWithMetadata::new(Account::default(), false, AccountId::from((&recipient_npk, 0)));
+    let recipient_pre = AccountWithMetadata::new(
+        Account::default(),
+        false,
+        AccountId::from((&recipient_npk, 0)),
+    );
 
     let eph_holder_from = EphemeralKeyHolder::new(&sender_npk);
     let sender_ss = eph_holder_from.calculate_shared_secret_sender(&sender_vpk);

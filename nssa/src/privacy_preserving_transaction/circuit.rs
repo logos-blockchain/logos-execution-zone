@@ -212,11 +212,7 @@ mod tests {
         );
 
         let recipient_account_id = AccountId::from((&recipient_keys.npk(), 0));
-        let recipient = AccountWithMetadata::new(
-            Account::default(),
-            false,
-            recipient_account_id,
-        );
+        let recipient = AccountWithMetadata::new(Account::default(), false, recipient_account_id);
 
         let balance_to_move: u128 = 37;
 
@@ -291,11 +287,7 @@ mod tests {
         let commitment_sender = Commitment::new(&sender_account_id, &sender_pre.account);
 
         let recipient_account_id = AccountId::from((&recipient_keys.npk(), 0));
-        let recipient = AccountWithMetadata::new(
-            Account::default(),
-            false,
-            recipient_account_id,
-        );
+        let recipient = AccountWithMetadata::new(Account::default(), false, recipient_account_id);
         let balance_to_move: u128 = 37;
 
         let mut commitment_set = CommitmentSet::with_capacity(2);

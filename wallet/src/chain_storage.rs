@@ -181,8 +181,10 @@ impl WalletChainStore {
         debug!("inserting at address {account_id}, this account {account:?}");
 
         // Update default accounts if present
-        if let Entry::Occupied(mut entry) =
-            self.user_data.default_user_private_accounts.entry(account_id)
+        if let Entry::Occupied(mut entry) = self
+            .user_data
+            .default_user_private_accounts
+            .entry(account_id)
         {
             let (key_chain, entries) = entry.get_mut();
             let identifier = entries
@@ -222,9 +224,7 @@ impl WalletChainStore {
                 .key_map
                 .get_mut(&chain_index)
             {
-                if let Some((_, acc)) =
-                    node.value.1.iter_mut().find(|(id, _)| *id == identifier)
-                {
+                if let Some((_, acc)) = node.value.1.iter_mut().find(|(id, _)| *id == identifier) {
                     *acc = account;
                 } else {
                     node.value.1.push((identifier, account));
@@ -232,16 +232,9 @@ impl WalletChainStore {
             }
         } else {
             // Node not yet in account_id_map — find it by checking all nodes
-            for (ci, node) in self
-                .user_data
-                .private_key_tree
-                .key_map
-                .iter_mut()
-            {
-                let expected_id = nssa::AccountId::from((
-                    &node.value.0.nullifier_public_key,
-                    identifier,
-                ));
+            for (ci, node) in self.user_data.private_key_tree.key_map.iter_mut() {
+                let expected_id =
+                    nssa::AccountId::from((&node.value.0.nullifier_public_key, identifier));
                 if expected_id == account_id {
                     if let Some((_, acc)) =
                         node.value.1.iter_mut().find(|(id, _)| *id == identifier)

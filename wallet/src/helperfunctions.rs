@@ -165,8 +165,12 @@ pub fn produce_data_for_storage(
         }
     }
 
-    let covered_private_chain_indices: std::collections::BTreeSet<_> =
-        user_data.private_key_tree.account_id_map.values().cloned().collect();
+    let covered_private_chain_indices: std::collections::BTreeSet<_> = user_data
+        .private_key_tree
+        .account_id_map
+        .values()
+        .cloned()
+        .collect();
 
     for (account_id, key) in &user_data.private_key_tree.account_id_map {
         if let Some(data) = user_data.private_key_tree.key_map.get(key) {
@@ -186,8 +190,7 @@ pub fn produce_data_for_storage(
     // entirely, making it impossible to detect incoming transfers.
     for (chain_index, node) in &user_data.private_key_tree.key_map {
         if !covered_private_chain_indices.contains(chain_index) {
-            let account_id =
-                nssa::AccountId::from((&node.value.0.nullifier_public_key, 0_u128));
+            let account_id = nssa::AccountId::from((&node.value.0.nullifier_public_key, 0_u128));
             vec_for_storage.push(
                 PersistentAccountDataPrivate {
                     account_id,

@@ -411,7 +411,13 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandPrivate {
                     nssa_core::encryption::shared_key_derivation::Secp256k1Point(to_vpk.to_vec());
 
                 let (tx_hash, [secret_from, _]) = NativeTokenTransfer(wallet_core)
-                    .send_private_transfer_to_outer_account(from, to_npk, to_vpk, to_identifier, amount)
+                    .send_private_transfer_to_outer_account(
+                        from,
+                        to_npk,
+                        to_vpk,
+                        to_identifier,
+                        amount,
+                    )
                     .await?;
 
                 println!("Transaction hash is {tx_hash}");
@@ -487,7 +493,13 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandShielded {
                     nssa_core::encryption::shared_key_derivation::Secp256k1Point(to_vpk.to_vec());
 
                 let (tx_hash, _) = NativeTokenTransfer(wallet_core)
-                    .send_shielded_transfer_to_outer_account(from, to_npk, to_vpk, to_identifier, amount)
+                    .send_shielded_transfer_to_outer_account(
+                        from,
+                        to_npk,
+                        to_vpk,
+                        to_identifier,
+                        amount,
+                    )
                     .await?;
 
                 println!("Transaction hash is {tx_hash}");

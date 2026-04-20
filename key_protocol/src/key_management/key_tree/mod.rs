@@ -256,7 +256,10 @@ impl KeyTree<ChildKeysPublic> {
 }
 
 impl KeyTree<ChildKeysPrivate> {
-    pub fn create_private_accounts_key_node(&mut self, parent_cci: &ChainIndex) -> Option<ChainIndex> {
+    pub fn create_private_accounts_key_node(
+        &mut self,
+        parent_cci: &ChainIndex,
+    ) -> Option<ChainIndex> {
         self.generate_new_node(parent_cci)
     }
 
@@ -273,8 +276,7 @@ impl KeyTree<ChildKeysPrivate> {
         identifier: Identifier,
     ) -> Option<nssa::AccountId> {
         let node = self.key_map.get(cci)?;
-        let account_id =
-            nssa::AccountId::from((&node.value.0.nullifier_public_key, identifier));
+        let account_id = nssa::AccountId::from((&node.value.0.nullifier_public_key, identifier));
         if self.account_id_map.contains_key(&account_id) {
             return None;
         }

@@ -344,11 +344,7 @@ fn compute_circuit_output(
 
                 let account_id = AccountId::from((npk, *identifier));
 
-                assert_eq!(
-                    account_id,
-                    pre_state.account_id,
-                    "AccountId mismatch"
-                );
+                assert_eq!(account_id, pre_state.account_id, "AccountId mismatch");
 
                 let (new_nullifier, new_nonce) = if account_visibility_mask == 1 {
                     // Private account with authentication

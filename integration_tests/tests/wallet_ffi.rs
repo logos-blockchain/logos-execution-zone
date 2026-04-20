@@ -282,11 +282,7 @@ fn wallet_ffi_create_private_accounts() -> Result<()> {
     // All returned NPKs must be unique and non-zero
     assert_eq!(new_npks_ffi.len(), n_accounts);
     let unique: HashSet<_> = new_npks_ffi.iter().collect();
-    assert_eq!(
-        unique.len(),
-        n_accounts,
-        "Duplicate NPKs returned"
-    );
+    assert_eq!(unique.len(), n_accounts, "Duplicate NPKs returned");
     assert!(
         new_npks_ffi.iter().all(|id| *id != [0_u8; 32]),
         "Zero NPK returned"
@@ -324,7 +320,10 @@ fn wallet_ffi_save_and_load_persistent_storage() -> Result<()> {
 
     assert_ne!(first_npk, [0u8; 32], "First NPK should be non-zero");
     assert_ne!(second_npk, [0u8; 32], "Second NPK should be non-zero");
-    assert_ne!(first_npk, second_npk, "Keys should differ after state was persisted");
+    assert_ne!(
+        first_npk, second_npk,
+        "Keys should differ after state was persisted"
+    );
 
     Ok(())
 }
@@ -819,7 +818,9 @@ fn test_wallet_ffi_transfer_shielded() -> Result<()> {
 
     let mut transfer_result = FfiTransferResult::default();
     unsafe {
-        let to_identifier = FfiU128 { data: 0_u128.to_le_bytes() };
+        let to_identifier = FfiU128 {
+            data: 0_u128.to_le_bytes(),
+        };
         wallet_ffi_transfer_shielded(
             wallet_ffi_handle,
             &raw const from,
@@ -952,7 +953,9 @@ fn test_wallet_ffi_transfer_private() -> Result<()> {
 
     let mut transfer_result = FfiTransferResult::default();
     unsafe {
-        let to_identifier = FfiU128 { data: 0_u128.to_le_bytes() };
+        let to_identifier = FfiU128 {
+            data: 0_u128.to_le_bytes(),
+        };
         wallet_ffi_transfer_private(
             wallet_ffi_handle,
             &raw const from,

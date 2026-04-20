@@ -30,7 +30,12 @@ impl PrivacyPreservingAccount {
     pub const fn is_private(&self) -> bool {
         matches!(
             &self,
-            Self::PrivateOwned(_) | Self::PrivateForeign { npk: _, vpk: _, identifier: _ }
+            Self::PrivateOwned(_)
+                | Self::PrivateForeign {
+                    npk: _,
+                    vpk: _,
+                    identifier: _
+                }
         )
     }
 }
@@ -83,7 +88,11 @@ impl AccountManager {
 
                     (State::Private(pre), mask)
                 }
-                PrivacyPreservingAccount::PrivateForeign { npk, vpk, identifier } => {
+                PrivacyPreservingAccount::PrivateForeign {
+                    npk,
+                    vpk,
+                    identifier,
+                } => {
                     let acc = nssa_core::account::Account::default();
                     let auth_acc = AccountWithMetadata::new(acc, false, (&npk, identifier));
                     let pre = AccountPreparedData {
@@ -207,10 +216,8 @@ async fn private_acc_preparation(
     wallet: &WalletCore,
     account_id: AccountId,
 ) -> Result<AccountPreparedData, ExecutionFailureKind> {
-    let Some((from_keys, from_acc, from_identifier)) = wallet
-        .storage
-        .user_data
-        .get_private_account(account_id)
+    let Some((from_keys, from_acc, from_identifier)) =
+        wallet.storage.user_data.get_private_account(account_id)
     else {
         return Err(ExecutionFailureKind::KeyNotFoundError);
     };
@@ -228,8 +235,7 @@ async fn private_acc_preparation(
 
     // TODO: Technically we could allow unauthorized owned accounts, but currently we don't have
     // support from that in the wallet.
-    let sender_pre =
-        AccountWithMetadata::new(from_acc.clone(), true, (&from_npk, from_identifier));
+    let sender_pre = AccountWithMetadata::new(from_acc.clone(), true, (&from_npk, from_identifier));
 
     Ok(AccountPreparedData {
         nsk: Some(nsk),
