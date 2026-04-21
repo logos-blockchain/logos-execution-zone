@@ -152,8 +152,13 @@ impl WalletSubcommand for KeycardSubcommand {
                     python_path::add_python_path(py).expect("keycard_wallet.py not found");
 
                     let wallet = KeycardWallet::new(py).expect("Expect keycard wallet");
+                    let available = wallet.is_unpaired_keycard_available(py).expect("Expect a Boolean.");
 
-                    let _available = wallet.is_unpaired_keycard_available(py);
+                    if available {
+                        println!("\u{2705} Keycard is available.");
+                    } else {
+                        println!("\u{274c} Keycard is not available.");
+                    }
                 });
 
                 Ok(SubcommandReturnValue::Empty)
@@ -165,7 +170,13 @@ impl WalletSubcommand for KeycardSubcommand {
 
                     let wallet = KeycardWallet::new(py).expect("Expect keycard wallet");
 
-                    let _ = wallet.setup_communication(py, pin.expect("TODO"));
+                    let is_connected = wallet.setup_communication(py, pin.expect("TODO")).expect("Expect a Boolean.");
+
+                    if is_connected {
+                        println!("\u{2705} Keycard is now connected to wallet.");
+                    } else {
+                        println!("\u{274c} Keycard is not connected to wallet.");
+                    }
                 });             
 
                 Ok(SubcommandReturnValue::Empty) 
