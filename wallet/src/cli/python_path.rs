@@ -10,8 +10,7 @@ pub fn add_python_path(py: Python) -> PyResult<()> {
 
     let paths_to_add: Vec<PathBuf> = vec![
         current_dir.join("python"),
-        current_dir.join("python").join("keycard-py-lee-schnorr"),  // ← add this
-        //current_dir.join("python").join("keycard-py-lee-schnorr").join(".venv").join("Lib").join("site-packages"),
+        current_dir.join("python").join("keycard-py"),
     ];
 
     // Sanity check — warns early if a path doesn't exist
