@@ -1,0 +1,13 @@
+[package]
+name = "lez_sdk_macros"
+version = "0.1.0"
+edition = "2021"
+description = "Procedural macros for Logos Execution Zone (LEZ) cross-program calls"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn.workspace = true 
+quote.workspace = true 
+proc-macro2.workspace = true 
