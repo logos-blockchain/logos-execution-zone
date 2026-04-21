@@ -174,7 +174,7 @@ mod tests {
         // /2
         let second_chain_index = key_tree_private.generate_new_node_layered().unwrap();
 
-        key_tree_private.key_map[&second_chain_index].value.0.clone()
+        key_tree_private.key_map.get(&second_chain_index).expect("Node was just inserted").value.0.clone()
     }
 
     #[test]

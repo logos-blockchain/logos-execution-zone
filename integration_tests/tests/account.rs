@@ -4,7 +4,7 @@
 )]
 
 use anyhow::Result;
-use integration_tests::TestContext;
+use integration_tests::{TestContext, format_private_account_id};
 use log::info;
 use nssa::program::Program;
 use sequencer_service_rpc::RpcClient as _;
@@ -70,33 +70,29 @@ async fn new_public_account_with_label() -> Result<()> {
 }
 
 #[test]
-async fn new_private_account_with_label() -> Result<()> {
+async fn add_label_to_existing_account() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
+    let account_id = ctx.existing_private_accounts()[0];
     let label = "my-test-private-account".to_owned();
-    let command = Command::Account(AccountSubcommand::New(NewSubcommand::PrivateAccountsKey {
-        cci: None,
-    }));
+    let command = Command::Account(AccountSubcommand::Label {
+        account_id: Some(format_private_account_id(account_id)),
+        account_label: None,
+        label: label.clone(),
+    });
 
-    let result = execute_subcommand(ctx.wallet_mut(), command).await?;
+    execute_subcommand(ctx.wallet_mut(), command).await?;
 
-    // Extract the account_id from the result
-
-    let wallet::cli::SubcommandReturnValue::RegisterAccount { account_id } = result else {
-        panic!("Expected RegisterAccount return value")
-    };
-
-    // Verify the label was stored
     let stored_label = ctx
         .wallet()
         .storage()
         .labels
         .get(&account_id.to_string())
-        .expect("Label should be stored for the new account");
+        .expect("Label should be stored for the account");
 
     assert_eq!(stored_label.to_string(), label);
 
-    info!("Successfully created private account with label");
+    info!("Successfully set label on existing private account");
 
     Ok(())
 }
