@@ -7,7 +7,7 @@ use nssa::{
 use sequencer_service_rpc::RpcClient as _;
 
 use super::NativeTokenTransfer;
-use crate::ExecutionFailureKind;
+use crate::{ExecutionFailureKind, WalletCore};
 
 impl NativeTokenTransfer<'_> {
     pub async fn send_public_transfer(
@@ -26,22 +26,17 @@ impl NativeTokenTransfer<'_> {
             let account_ids = vec![from, to];
             let program_id = Program::authenticated_transfer_program().id();
 
+            let mut sign_ids = Vec::new();
+            sign_ids.push(from);
+
             let mut nonces = self
                 .0
                 .get_accounts_nonces(vec![from])
                 .await
                 .map_err(ExecutionFailureKind::SequencerError)?;
-
-            let mut private_keys = Vec::new();
-            let from_signing_key = self.0.storage.user_data.get_pub_account_signing_key(from);
-            let Some(from_signing_key) = from_signing_key else {
-                return Err(ExecutionFailureKind::KeyNotFoundError);
-            };
-            private_keys.push(from_signing_key);
-
             let to_signing_key = self.0.storage.user_data.get_pub_account_signing_key(to);
-            if let Some(to_signing_key) = to_signing_key {
-                private_keys.push(to_signing_key);
+            if let Some(_to_signing_key) = to_signing_key {
+                sign_ids.push(to);
                 let to_nonces = self
                     .0
                     .get_accounts_nonces(vec![to])
@@ -56,7 +51,9 @@ impl NativeTokenTransfer<'_> {
 
             let message =
                 Message::try_new(program_id, account_ids, nonces, balance_to_move).unwrap();
-            let witness_set = WitnessSet::for_message(&message, &private_keys);
+
+            let witness_set = WalletCore::sign_public_message(self.0, &message, &sign_ids)
+                .expect("Expect a valid signature");
 
             let tx = PublicTransaction::new(message, witness_set);
 
