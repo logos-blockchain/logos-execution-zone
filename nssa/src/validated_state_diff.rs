@@ -14,7 +14,7 @@ use nssa_core::{
 
 use crate::{
     V03State, ensure,
-    error::NssaError,
+    error::{InvalidProgramBehaviorError, NssaError},
     privacy_preserving_transaction::{
         PrivacyPreservingTransaction, circuit::Proof, message::Message,
     },
@@ -145,39 +145,52 @@ impl ValidatedStateDiff {
                     .unwrap_or_else(|| state.get_account_by_id(account_id));
                 ensure!(
                     pre.account == expected_pre,
-                    NssaError::InvalidProgramBehavior
+                    InvalidProgramBehaviorError::InconsistentAccountPreState {
+                        account_id,
+                        expected: Box::new(expected_pre),
+                        actual: Box::new(pre.account.clone())
+                    }
                 );
 
                 // Check that authorization flags are consistent with the provided ones or
                 // authorized by program through the PDA mechanism
+                let expected_is_authorized = is_authorized(&account_id);
                 ensure!(
-                    pre.is_authorized == is_authorized(&account_id),
-                    NssaError::InvalidProgramBehavior
+                    pre.is_authorized == expected_is_authorized,
+                    InvalidProgramBehaviorError::InconsistentAccountAuthorization {
+                        account_id,
+                        expected_authorization: expected_is_authorized,
+                        actual_authorization: pre.is_authorized
+                    }
                 );
             }
 
             // Verify that the program output's self_program_id matches the expected program ID.
             ensure!(
                 program_output.self_program_id == chained_call.program_id,
-                NssaError::InvalidProgramBehavior
+                InvalidProgramBehaviorError::MismatchedProgramId {
+                    expected: chained_call.program_id,
+                    actual: program_output.self_program_id
+                }
             );
 
             // Verify that the program output's caller_program_id matches the actual caller.
             ensure!(
                 program_output.caller_program_id == caller_program_id,
-                NssaError::InvalidProgramBehavior
+                InvalidProgramBehaviorError::MismatchedCallerProgramId {
+                    expected: caller_program_id,
+                    actual: program_output.caller_program_id,
+                }
             );
 
             // Verify execution corresponds to a well-behaved program.
             // See the # Programs section for the definition of the `validate_execution` method.
-            ensure!(
-                validate_execution(
-                    &program_output.pre_states,
-                    &program_output.post_states,
-                    chained_call.program_id,
-                ),
-                NssaError::InvalidProgramBehavior
-            );
+            validate_execution(
+                &program_output.pre_states,
+                &program_output.post_states,
+                chained_call.program_id,
+            )
+            .map_err(InvalidProgramBehaviorError::ExecutionValidationFailed)?;
 
             // Verify validity window
             ensure!(
@@ -192,27 +205,33 @@ impl ValidatedStateDiff {
                 let Some(claim) = post.required_claim() else {
                     continue;
                 };
+                let account_id = program_output.pre_states[i].account_id;
+
                 // The invoked program can only claim accounts with default program id.
                 ensure!(
                     post.account().program_owner == DEFAULT_PROGRAM_ID,
-                    NssaError::InvalidProgramBehavior
+                    InvalidProgramBehaviorError::ClaimedNonDefaultAccount { account_id }
                 );
-
-                let account_id = program_output.pre_states[i].account_id;
 
                 match claim {
                     Claim::Authorized => {
                         // The program can only claim accounts that were authorized by the signer.
                         ensure!(
                             is_authorized(&account_id),
-                            NssaError::InvalidProgramBehavior
+                            InvalidProgramBehaviorError::ClaimedUnauthorizedAccount { account_id }
                         );
                     }
                     Claim::Pda(seed) => {
                         // The program can only claim accounts that correspond to the PDAs it is
                         // authorized to claim.
                         let pda = AccountId::from((&chained_call.program_id, &seed));
-                        ensure!(account_id == pda, NssaError::InvalidProgramBehavior);
+                        ensure!(
+                            account_id == pda,
+                            InvalidProgramBehaviorError::MismatchedPdaClaim {
+                                expected: pda,
+                                actual: account_id
+                            }
+                        );
                     }
                 }
 
@@ -238,7 +257,7 @@ impl ValidatedStateDiff {
         }
 
         // Check that all modified uninitialized accounts where claimed
-        for post in state_diff.iter().filter_map(|(account_id, post)| {
+        for (account_id, post) in state_diff.iter().filter_map(|(account_id, post)| {
             let pre = state.get_account_by_id(*account_id);
             if pre.program_owner != DEFAULT_PROGRAM_ID {
                 return None;
@@ -246,11 +265,11 @@ impl ValidatedStateDiff {
             if pre == *post {
                 return None;
             }
-            Some(post)
+            Some((*account_id, post))
         }) {
             ensure!(
                 post.program_owner != DEFAULT_PROGRAM_ID,
-                NssaError::InvalidProgramBehavior
+                InvalidProgramBehaviorError::DefaultAccountModifiedWithoutClaim { account_id }
             );
         }
 

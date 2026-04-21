@@ -125,12 +125,17 @@ impl ExecutionState {
 
             // Check that the program is well behaved.
             // See the # Programs section for the definition of the `validate_execution` method.
-            let execution_valid = validate_execution(
+            let validated_execution = validate_execution(
                 &program_output.pre_states,
                 &program_output.post_states,
                 chained_call.program_id,
             );
-            assert!(execution_valid, "Bad behaved program");
+            if let Err(err) = validated_execution {
+                panic!(
+                    "Invalid program behavior in program {:?}: {err}",
+                    chained_call.program_id
+                );
+            }
 
             for next_call in program_output.chained_calls.iter().rev() {
                 chained_calls.push_front((next_call.clone(), Some(chained_call.program_id)));
