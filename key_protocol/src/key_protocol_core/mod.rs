@@ -15,7 +15,6 @@ pub type PublicKey = AffinePoint;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NSSAUserData {
     /// Default public accounts.
-    /// TODO: it appears this is unnecessary
     pub default_pub_account_signing_keys: BTreeMap<nssa::AccountId, nssa::PrivateKey>,
     /// Default private accounts.
     pub default_user_private_accounts:
@@ -33,7 +32,7 @@ impl NSSAUserData {
         let mut check_res = true;
         for (account_id, key) in accounts_keys_map {
             let expected_account_id =
-                nssa::AccountId::from(&nssa::PublicKey::new_from_private_key(&key));
+                nssa::AccountId::from(&nssa::PublicKey::new_from_private_key(key));
             if &expected_account_id != account_id {
                 println!("{expected_account_id}, {account_id}");
                 check_res = false;
@@ -56,7 +55,6 @@ impl NSSAUserData {
         check_res
     }
 
-    // Default only? (Marvin)
     pub fn new_with_accounts(
         default_accounts_keys: BTreeMap<nssa::AccountId, nssa::PrivateKey>,
         default_accounts_key_chains: BTreeMap<
@@ -66,7 +64,7 @@ impl NSSAUserData {
         public_key_tree: KeyTreePublic,
         private_key_tree: KeyTreePrivate,
     ) -> Result<Self> {
-        if !Self::valid_public_key_transaction_pairing_check(&default_accounts_keys) { // TODO: modified not to use default_pub... (Marvin)
+        if !Self::valid_public_key_transaction_pairing_check(&default_accounts_keys) {
             anyhow::bail!(
                 "Key transaction pairing check not satisfied, there are public account_ids, which are not derived from keys"
             );
@@ -114,7 +112,7 @@ impl NSSAUserData {
         self.default_pub_account_signing_keys
             .get(&account_id)
             .or_else(|| self.public_key_tree.get_node(account_id).map(Into::into))
-    } // TODO: dependent on whether keycard is not; part I care about is get-node() (Marvin)
+    }
 
     /// Generated new private key for privacy preserving transactions.
     ///

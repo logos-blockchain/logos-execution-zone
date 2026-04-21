@@ -14,12 +14,8 @@ impl WitnessSet {
 
         let signatures_and_public_keys = signatures
             .iter()
-            .zip( pub_keys.iter())
-            .map(|(sig,key)| {
-                (
-                    sig.clone(), key.clone()
-                )
-            })
+            .zip(pub_keys.iter())
+            .map(|(sig, key)| (sig.clone(), key.clone()))
             .collect();
 
         Self {
