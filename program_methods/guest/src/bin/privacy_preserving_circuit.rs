@@ -608,7 +608,13 @@ fn compute_circuit_output(
                     let new_nonce = pre_state.account.nonce.private_account_nonce_increment(nsk);
                     (new_nullifier, new_nonce)
                 } else {
-                    // New private PDA (like mask 2)
+                    // New private PDA (like mask 2). The default + unauthorized requirement
+                    // here rules out use cases like a fully-private multisig, which would need
+                    // a non-default, non-authorized private PDA input account.
+                    // TODO(private-pdas-pr-2/3): relax this once the wallet can supply a
+                    // `(seed, owner)` side input so the npk-to-account_id binding can be
+                    // re-verified for an existing private PDA without a `Claim::Pda` or caller
+                    // `pda_seeds` match.
                     assert_eq!(
                         pre_state.account,
                         Account::default(),

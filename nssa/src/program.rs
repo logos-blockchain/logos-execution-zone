@@ -343,6 +343,16 @@ mod tests {
         }
 
         #[must_use]
+        pub fn auth_asserting_noop() -> Self {
+            use test_program_methods::{AUTH_ASSERTING_NOOP_ELF, AUTH_ASSERTING_NOOP_ID};
+
+            Self {
+                id: AUTH_ASSERTING_NOOP_ID,
+                elf: AUTH_ASSERTING_NOOP_ELF.to_vec(),
+            }
+        }
+
+        #[must_use]
         pub fn malicious_authorization_changer() -> Self {
             use test_program_methods::{
                 MALICIOUS_AUTHORIZATION_CHANGER_ELF, MALICIOUS_AUTHORIZATION_CHANGER_ID,

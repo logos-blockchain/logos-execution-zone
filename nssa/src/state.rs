@@ -2425,7 +2425,7 @@ pub mod tests {
     #[test]
     fn caller_pda_seeds_authorize_private_pda_for_callee() {
         let delegator = Program::private_pda_delegator();
-        let noop = Program::noop();
+        let callee = Program::auth_asserting_noop();
         let keys = test_private_account_keys_1();
         let npk = keys.npk();
         let seed = PdaSeed::new([77; 32]);
@@ -2434,12 +2434,13 @@ pub mod tests {
         let account_id = private_pda_account_id(&delegator.id(), &seed, &npk);
         let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
-        let noop_id = noop.id();
-        let program_with_deps = ProgramWithDependencies::new(delegator, [(noop_id, noop)].into());
+        let callee_id = callee.id();
+        let program_with_deps =
+            ProgramWithDependencies::new(delegator, [(callee_id, callee)].into());
 
         let result = execute_and_prove(
             vec![pre_state],
-            Program::serialize_instruction((seed, seed, noop_id)).unwrap(),
+            Program::serialize_instruction((seed, seed, callee_id)).unwrap(),
             vec![3],
             vec![(npk, shared_secret)],
             vec![],
@@ -2460,7 +2461,7 @@ pub mod tests {
     #[test]
     fn caller_pda_seeds_with_wrong_seed_rejects_private_pda_for_callee() {
         let delegator = Program::private_pda_delegator();
-        let noop = Program::noop();
+        let callee = Program::auth_asserting_noop();
         let keys = test_private_account_keys_1();
         let npk = keys.npk();
         let claim_seed = PdaSeed::new([77; 32]);
@@ -2470,12 +2471,13 @@ pub mod tests {
         let account_id = private_pda_account_id(&delegator.id(), &claim_seed, &npk);
         let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
-        let noop_id = noop.id();
-        let program_with_deps = ProgramWithDependencies::new(delegator, [(noop_id, noop)].into());
+        let callee_id = callee.id();
+        let program_with_deps =
+            ProgramWithDependencies::new(delegator, [(callee_id, callee)].into());
 
         let result = execute_and_prove(
             vec![pre_state],
-            Program::serialize_instruction((claim_seed, wrong_delegated_seed, noop_id)).unwrap(),
+            Program::serialize_instruction((claim_seed, wrong_delegated_seed, callee_id)).unwrap(),
             vec![3],
             vec![(npk, shared_secret)],
             vec![],
