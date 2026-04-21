@@ -159,8 +159,9 @@ async fn private_transfer_to_owned_account_using_claiming_path() -> Result<()> {
     let from: AccountId = ctx.existing_private_accounts()[0];
 
     // Create a new private account
-    let command = Command::Account(AccountSubcommand::New(NewSubcommand::PrivateAccountsKey {
+    let command = Command::Account(AccountSubcommand::New(NewSubcommand::Private {
         cci: None,
+        label: None,
     }));
 
     let sub_ret = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
@@ -326,8 +327,9 @@ async fn private_transfer_to_owned_account_continuous_run_path() -> Result<()> {
     let from: AccountId = ctx.existing_private_accounts()[0];
 
     // Create a new private account
-    let command = Command::Account(AccountSubcommand::New(NewSubcommand::PrivateAccountsKey {
+    let command = Command::Account(AccountSubcommand::New(NewSubcommand::Private {
         cci: None,
+        label: None,
     }));
     let sub_ret = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
@@ -390,8 +392,9 @@ async fn private_transfer_to_owned_account_continuous_run_path() -> Result<()> {
 async fn initialize_private_account() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
-    let command = Command::Account(AccountSubcommand::New(NewSubcommand::PrivateAccountsKey {
+    let command = Command::Account(AccountSubcommand::New(NewSubcommand::Private {
         cci: None,
+        label: None,
     }));
     let result = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
     let SubcommandReturnValue::RegisterAccount { account_id } = result else {
@@ -489,8 +492,9 @@ async fn initialize_private_account_using_label() -> Result<()> {
 
     // Create a new private account with a label
     let label = "init-private-label".to_owned();
-    let command = Command::Account(AccountSubcommand::New(NewSubcommand::PrivateAccountsKey {
+    let command = Command::Account(AccountSubcommand::New(NewSubcommand::Private {
         cci: None,
+        label: Some(label.clone()),
     }));
     let result = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
     let SubcommandReturnValue::RegisterAccount { account_id } = result else {

@@ -82,6 +82,15 @@ pub enum NewSubcommand {
         /// Label to assign to the new account.
         label: Option<String>,
     },
+    /// Register new private account with a random identifier.
+    Private {
+        #[arg(long)]
+        /// Chain index of a parent node.
+        cci: Option<ChainIndex>,
+        #[arg(short, long)]
+        /// Label to assign to the new account.
+        label: Option<String>,
+    },
     /// Create a new receiving key (npk + vpk) to share with senders.
     PrivateAccountsKey {
         #[arg(long)]
@@ -128,6 +137,48 @@ impl WalletSubcommand for NewSubcommand {
                     "Generated new account with account_id Public/{account_id} at path {chain_index}"
                 );
                 println!("With pk {}", hex::encode(public_key.value()));
+
+                wallet_core.store_persistent_data().await?;
+
+                Ok(SubcommandReturnValue::RegisterAccount { account_id })
+            }
+            Self::Private { cci, label } => {
+                if let Some(label) = &label
+                    && wallet_core
+                        .storage
+                        .labels
+                        .values()
+                        .any(|l| l.to_string() == *label)
+                {
+                    anyhow::bail!("Label '{label}' is already in use by another account");
+                }
+
+                let (account_id, chain_index) = wallet_core.create_new_account_private(cci);
+
+                let node = wallet_core
+                    .storage
+                    .user_data
+                    .private_key_tree
+                    .key_map
+                    .get(&chain_index)
+                    .expect("Node was just inserted");
+                let key = &node.value.0;
+
+                if let Some(label) = label {
+                    wallet_core
+                        .storage
+                        .labels
+                        .insert(account_id.to_string(), Label::new(label));
+                }
+
+                println!(
+                    "Generated new account with account_id Private/{account_id} at path {chain_index}"
+                );
+                println!("With npk {}", hex::encode(key.nullifier_public_key.0));
+                println!(
+                    "With vpk {}",
+                    hex::encode(key.viewing_public_key.to_bytes())
+                );
 
                 wallet_core.store_persistent_data().await?;
 

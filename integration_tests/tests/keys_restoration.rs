@@ -29,8 +29,9 @@ async fn sync_private_account_with_non_zero_chain_index() -> Result<()> {
     let from: AccountId = ctx.existing_private_accounts()[0];
 
     // Create a new private account
-    let command = Command::Account(AccountSubcommand::New(NewSubcommand::PrivateAccountsKey {
+    let command = Command::Account(AccountSubcommand::New(NewSubcommand::Private {
         cci: None,
+        label: None,
     }));
 
     for _ in 0..3 {
@@ -38,8 +39,9 @@ async fn sync_private_account_with_non_zero_chain_index() -> Result<()> {
         // This way we have account with child index > 0.
         let result = wallet::cli::execute_subcommand(
             ctx.wallet_mut(),
-            Command::Account(AccountSubcommand::New(NewSubcommand::PrivateAccountsKey {
+            Command::Account(AccountSubcommand::New(NewSubcommand::Private {
                 cci: None,
+                label: None,
             })),
         )
         .await?;
@@ -116,8 +118,9 @@ async fn restore_keys_from_seed() -> Result<()> {
     let from: AccountId = ctx.existing_private_accounts()[0];
 
     // Create first private account at root
-    let command = Command::Account(AccountSubcommand::New(NewSubcommand::PrivateAccountsKey {
+    let command = Command::Account(AccountSubcommand::New(NewSubcommand::Private {
         cci: Some(ChainIndex::root()),
+        label: None,
     }));
     let result = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
     let SubcommandReturnValue::RegisterAccount {
@@ -128,8 +131,9 @@ async fn restore_keys_from_seed() -> Result<()> {
     };
 
     // Create second private account at /0
-    let command = Command::Account(AccountSubcommand::New(NewSubcommand::PrivateAccountsKey {
+    let command = Command::Account(AccountSubcommand::New(NewSubcommand::Private {
         cci: Some(ChainIndex::from_str("/0")?),
+        label: None,
     }));
     let result = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
     let SubcommandReturnValue::RegisterAccount {

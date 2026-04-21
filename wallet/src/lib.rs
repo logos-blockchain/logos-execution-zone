@@ -262,6 +262,32 @@ impl WalletCore {
             .create_private_accounts_key(chain_index)
     }
 
+    pub fn create_new_account_private(
+        &mut self,
+        chain_index: Option<ChainIndex>,
+    ) -> (AccountId, ChainIndex) {
+        let cci = self
+            .storage
+            .user_data
+            .create_private_accounts_key(chain_index);
+        let identifier: nssa_core::Identifier = rand::random();
+        let npk = self
+            .storage
+            .user_data
+            .private_key_tree
+            .key_map
+            .get(&cci)
+            .expect("Node was just inserted")
+            .value
+            .0
+            .nullifier_public_key
+            .clone();
+        let account_id = AccountId::from((&npk, identifier));
+        self.storage
+            .insert_private_account_data(account_id, identifier, Account::default());
+        (account_id, cci)
+    }
+
     /// Get account balance.
     pub async fn get_account_balance(&self, acc: AccountId) -> Result<u128> {
         Ok(self.sequencer_client.get_account_balance(acc).await?)

@@ -5,6 +5,7 @@ This tutorial walks through native token transfers between public and private ac
 4. Private account creation.
 5. Native token transfer from a public account to a private account.
 6. Native token transfer from a public account to a private account owned by someone else.
+7. Sending to a private accounts key from multiple independent senders.
 
 ---
 
@@ -12,7 +13,7 @@ The CLI provides commands to manage accounts. Run `wallet account` to see the op
 ```bash
 Commands:
   get           Get account data
-  new           Create a new public account or private accounts key
+  new           Produce new public or private account
   sync-private  Sync private accounts
   help  Print this message or the help of the given subcommand(s)
 ```
@@ -136,69 +137,62 @@ Account owned by authenticated-transfer program
 {"balance":37}
 ```
 
-## 4. Private accounts key creation
+## 4. Private account creation
 
 > [!Important]
 > Private accounts are structurally identical to public accounts, but their values are stored off-chain. On-chain, only a 32-byte commitment is recorded.
 > Transactions include encrypted private values so the owner can recover them, and the decryption keys are never shared.
 > Private accounts use two keypairs: nullifier keys for privacy-preserving executions and viewing keys for encrypting and decrypting values.
-> A private account ID is derived from the nullifier public key and an identifier chosen by the sender at the time of the first transfer.
+> The private account ID is derived from the nullifier public key.
 > Private accounts can be initialized by anyone, but once initialized they can only be modified by the owner’s keys.
 > Updates include a new commitment and a nullifier for the old state, which prevents linkage between versions.
 
-### a. Create a private accounts key
+### a. Create a private account
 
 ```bash
-wallet account new private-accounts-key
+wallet account new private
 
 # Output:
-Generated new private accounts key at path /0
+Generated new account with account_id Private/HacPU3hakLYzWtSqUPw6TUr8fqoMieVWovsUR6sJf7cL
 With npk e6366f79d026c8bd64ae6b3d601f0506832ec682ab54897f205fffe64ec0d951
 With vpk 02ddc96d0eb56e00ce14994cfdaec5ae1f76244180a919545983156e3519940a17
 ```
 
 > [!Tip]
-> Share `npk` and `vpk` with anyone who wants to send you tokens. The account ID for a given payment is determined by the sender when they create the transaction. Run `wallet account sync-private` after receiving a transfer to discover new account IDs under your key.
+> Save this account ID. You will use it in later commands.
+
+### b. Check the account status
+
+Just like public accounts, new private accounts start out uninitialized:
+
+```bash
+wallet account get --account-id Private/HacPU3hakLYzWtSqUPw6TUr8fqoMieVWovsUR6sJf7cL
+
+# Output:
+Account is Uninitialized
+```
 
 > [!Important]
-> Private account data is never visible to the network. It exists only in your local wallet storage.
+> Private accounts are never visible to the network. They exist only in your local wallet storage.
 
 ## 5. Native token transfer from a public account to a private account
 
 > [!Important]
 > Sending tokens to an uninitialized private account causes the authenticated-transfer program to claim it, just like with public accounts. Program logic is the same regardless of account type.
-> When sending to a private account, use the recipient’s `npk` and `vpk`. The sender chooses an identifier for the payment; the recipient’s account ID is derived from `(npk, identifier)` and is only known after the recipient syncs.
 
 ### a. Send 17 tokens to the private account
 
 > [!Note]
-> The syntax matches public-to-public transfers, but the recipient is identified by `npk` and `vpk`. This runs locally, generates a proof, and submits it to the sequencer. It may take 30 seconds to 4 minutes.
+> The syntax matches public-to-public transfers, but the recipient is a private ID. This runs locally, generates a proof, and submits it to the sequencer. It may take 30 seconds to 4 minutes.
 
 ```bash
 wallet auth-transfer send \
     --from Public/Ev1JprP9BmhbFVQyBcbznU8bAXcwrzwRoPTetXdQPAWS \
-    --to-npk e6366f79d026c8bd64ae6b3d601f0506832ec682ab54897f205fffe64ec0d951 \
-    --to-vpk 02ddc96d0eb56e00ce14994cfdaec5ae1f76244180a919545983156e3519940a17 \
+    --to Private/HacPU3hakLYzWtSqUPw6TUr8fqoMieVWovsUR6sJf7cL \
     --amount 17
 ```
 
-### b. Sync to discover the private account ID
-
-```bash
-wallet account sync-private
-```
-
-```bash
-wallet account list
-
-# Output (private account entry):
-/0 Private/HacPU3hakLYzWtSqUPw6TUr8fqoMieVWovsUR6sJf7cL
-```
-
-> [!Tip]
-> Save this account ID. You will use it in later commands.
-
-### c. Check both accounts
+### b. Check both accounts
 
 ```bash
 # Public sender account
@@ -210,7 +204,7 @@ Account owned by authenticated-transfer program
 ```
 
 ```bash
-# Private recipient account (use the ID discovered after sync)
+# Private recipient account
 wallet account get --account-id Private/HacPU3hakLYzWtSqUPw6TUr8fqoMieVWovsUR6sJf7cL
 
 # Output:
@@ -227,7 +221,7 @@ Account owned by authenticated-transfer program
 ## 6. Native token transfer from a public account to a private account owned by someone else
 
 > [!Important]
-> When the recipient is someone else, you only have their `npk` and `vpk` — never their account ID. The flow is identical to section 5.
+> We’ll simulate transferring to someone else by creating a new private accounts key and treating it as if it belonged to another user. When the recipient is someone else, you only have their `npk` and `vpk` — not an account ID.
 
 ### a. Create a new private accounts key to simulate a foreign recipient
 
@@ -239,6 +233,9 @@ Generated new private accounts key at path /1
 With npk 0c95ebc4b3830f53da77bb0b80a276a776cdcf6410932acc718dcdb3f788a00e
 With vpk 039fd12a3674a880d3e917804129141e4170d419d1f9e28a3dcf979c1f2369cb72
 ```
+
+> [!Tip]
+> Ignore the account ID here and use the `npk` and `vpk` values to send to a foreign private account.
 
 ### b. Send 3 tokens using the recipient’s npk and vpk
 
@@ -256,3 +253,65 @@ wallet auth-transfer send \
 
 > [!Note]
 > You have seen transfers between two public accounts and from a public sender to a private recipient. Transfers from a private sender, whether to a public account or to another private account, follow the same pattern.
+
+## 7. Sending to a private accounts key from multiple independent senders
+
+> [!Important]
+> A private accounts key (`npk` + `vpk`) can be shared with multiple senders. Each sender independently chooses an identifier; the recipient's account ID is derived from `(npk, identifier)`. Two senders using different identifiers produce two separate private accounts under the same key.
+
+### a. Alice creates a private accounts key
+
+```bash
+wallet account new private-accounts-key
+
+# Output:
+Generated new private accounts key at path /2
+With npk a3f7c21b8e905d4f6a1bc783d0e2f94c1d5a6b7e8f9012345678abcdef012345
+With vpk 03b1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6071819202122232425262728292a2b2c
+```
+
+Alice shares the `npk` and `vpk` values with Bob and Charlie out of band.
+
+### b. Bob sends 10 tokens to Alice using identifier 1
+
+```bash
+wallet auth-transfer send \
+    --from Public/BobXqJprP9BmhbFVQyBcbznU8bAXcwrzwRoPTetXdQPA \
+    --to-npk a3f7c21b8e905d4f6a1bc783d0e2f94c1d5a6b7e8f9012345678abcdef012345 \
+    --to-vpk 03b1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6071819202122232425262728292a2b2c \
+    --to-identifier 1 \
+    --amount 10
+```
+
+### c. Charlie sends 5 tokens to Alice using identifier 2
+
+```bash
+wallet auth-transfer send \
+    --from Public/CharlieYrP9BmhbFVQyBcbznU8bAXcwrzwRoPTetXdQPB \
+    --to-npk a3f7c21b8e905d4f6a1bc783d0e2f94c1d5a6b7e8f9012345678abcdef012345 \
+    --to-vpk 03b1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6071819202122232425262728292a2b2c \
+    --to-identifier 2 \
+    --amount 5
+```
+
+> [!Note]
+> Bob and Charlie each chose a different identifier. They do not need to coordinate — any two distinct values work.
+
+### d. Alice syncs to discover the new accounts
+
+```bash
+wallet account sync-private
+```
+
+```bash
+wallet account list
+
+# Output (private account entries under key /2):
+/2 Private/AliceBobAcctXxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+/2 Private/AliceCharlieAcctXxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+Alice now has two separate private accounts, one funded by Bob and one by Charlie, both controlled by the same key at path `/2`.
+
+> [!Tip]
+> Alice can check each account balance with `wallet account get --account-id Private/...`. Neither balance is visible on-chain.
