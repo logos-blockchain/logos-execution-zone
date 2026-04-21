@@ -1,0 +1,14 @@
+[package]
+name = "lez_sdk"
+version = "0.1.0"
+edition = "2021"
+description = "SDK for Continuation-Passing Style (CPS) execution in LEZ"
+
+[dependencies]
+lez_sdk_macros = { path = "../lez_sdk_macros" }
+nssa_core = { path = "../nssa/core" }
+
+risc0-zkvm.workspace = true
+serde.workspace = true 
+sha2.workspace = true 
+bytemuck.workspace = true
