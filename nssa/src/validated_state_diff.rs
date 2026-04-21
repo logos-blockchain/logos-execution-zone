@@ -225,7 +225,7 @@ impl ValidatedStateDiff {
                         // The program can only claim accounts that correspond to the PDAs it is
                         // authorized to claim. The public-execution path only sees public
                         // accounts, so the public-PDA derivation is the correct formula here.
-                        let pda = AccountId::from((&chained_call.program_id, &seed));
+                        let pda = AccountId::for_public_pda(&chained_call.program_id, &seed);
                         ensure!(
                             account_id == pda,
                             InvalidProgramBehaviorError::MismatchedPdaClaim {

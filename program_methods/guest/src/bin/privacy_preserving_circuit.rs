@@ -12,7 +12,7 @@ use nssa_core::{
     program::{
         AccountPostState, BlockValidityWindow, ChainedCall, Claim, DEFAULT_PROGRAM_ID,
         MAX_NUMBER_CHAINED_CALLS, PdaSeed, ProgramId, ProgramOutput, TimestampValidityWindow,
-        private_pda_account_id, validate_execution,
+        validate_execution,
     },
 };
 use risc0_zkvm::{guest::env, serde::to_vec};
@@ -24,7 +24,8 @@ struct ExecutionState {
     block_validity_window: BlockValidityWindow,
     timestamp_validity_window: TimestampValidityWindow,
     /// Positions (in `pre_states`) of mask-3 accounts whose supplied npk has been bound to
-    /// their `AccountId` via a proven `private_pda_account_id(program_id, seed, npk)` check.
+    /// their `AccountId` via a proven `AccountId::for_private_pda(program_id, seed, npk)`
+    /// check.
     /// Two proof paths populate this set: a `Claim::Pda(seed)` in a program's `post_state` on
     /// that `pre_state`, or a caller's `ChainedCall.pda_seeds` entry matching that `pre_state`
     /// under the private derivation. Binding is an idempotent property, not an event: the same
@@ -279,12 +280,13 @@ impl ExecutionState {
                     let matched_caller_seed: Option<(PdaSeed, bool, ProgramId)> = caller_program_id
                         .and_then(|caller| {
                             caller_pda_seeds.iter().find_map(|seed| {
-                                if AccountId::from((&caller, seed)) == pre_account_id {
+                                if AccountId::for_public_pda(&caller, seed) == pre_account_id {
                                     return Some((*seed, false, caller));
                                 }
                                 if let Some(npk) =
                                     private_pda_npk_by_position.get(&pre_state_position)
-                                    && private_pda_account_id(&caller, seed, npk) == pre_account_id
+                                    && AccountId::for_private_pda(&caller, seed, npk)
+                                        == pre_account_id
                                 {
                                     return Some((*seed, true, caller));
                                 }
@@ -343,7 +345,7 @@ impl ExecutionState {
                             );
                         }
                         Claim::Pda(seed) => {
-                            let pda = AccountId::from((&program_id, &seed));
+                            let pda = AccountId::for_public_pda(&program_id, &seed);
                             assert_eq!(
                                 pre_account_id, pda,
                                 "Invalid PDA claim for account {pre_account_id} which does not match derived PDA {pda}"
@@ -367,7 +369,7 @@ impl ExecutionState {
                             let npk = private_pda_npk_by_position.get(&pre_state_position).expect(
                                 "private PDA pre_state must have an npk in the position map",
                             );
-                            let pda = private_pda_account_id(&program_id, &seed, npk);
+                            let pda = AccountId::for_private_pda(&program_id, &seed, npk);
                             assert_eq!(
                                 pre_account_id, pda,
                                 "Invalid private PDA claim for account {pre_account_id}"
@@ -576,10 +578,11 @@ fn compute_circuit_output(
                 // Private PDA account. The supplied npk has already been bound to
                 // `pre_state.account_id` upstream in `validate_and_sync_states`, either via a
                 // `Claim::Pda(seed)` match or via a caller `pda_seeds` match, both of which
-                // assert `private_pda_account_id(owner, seed, npk) == account_id`. The post-loop
-                // assertion in `derive_from_outputs` (see the `private_pda_bound_positions` check)
-                // guarantees that every mask-3 position has been through at least one such
-                // binding, so this branch can safely use the wallet npk without re-verifying.
+                // assert `AccountId::for_private_pda(owner, seed, npk) == account_id`. The
+                // post-loop assertion in `derive_from_outputs` (see the
+                // `private_pda_bound_positions` check) guarantees that every mask-3
+                // position has been through at least one such binding, so this
+                // branch can safely use the wallet npk without re-verifying.
                 let Some((npk, shared_secret)) = private_keys_iter.next() else {
                     panic!("Missing private account key");
                 };

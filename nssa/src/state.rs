@@ -368,7 +368,7 @@ pub mod tests {
         encryption::{EphemeralPublicKey, Scalar, ViewingPublicKey},
         program::{
             BlockValidityWindow, ExecutionValidationError, PdaSeed, ProgramId,
-            TimestampValidityWindow, WrappedBalanceSum, private_pda_account_id,
+            TimestampValidityWindow, WrappedBalanceSum,
         },
     };
 
@@ -2352,7 +2352,7 @@ pub mod tests {
 
     /// Happy path: a program claims a new mask-3 account via `Claim::Pda(seed)`. The circuit
     /// reads the npk for that `pre_state` from `private_account_keys` at the `pre_state`'s
-    /// position, derives `AccountId` via `private_pda_account_id(program_id, seed, npk)`, and
+    /// position, derives `AccountId` via `AccountId::for_private_pda(program_id, seed, npk)`, and
     /// asserts it equals the `pre_state`'s `account_id`. The equality both validates the claim
     /// and binds the supplied npk to the `account_id`.
     #[test]
@@ -2363,7 +2363,7 @@ pub mod tests {
         let seed = PdaSeed::new([42; 32]);
         let shared_secret = SharedSecretKey::new(&[55; 32], &keys.vpk());
 
-        let account_id = private_pda_account_id(&program.id(), &seed, &npk);
+        let account_id = AccountId::for_private_pda(&program.id(), &seed, &npk);
         let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
         let result = execute_and_prove(
@@ -2385,7 +2385,7 @@ pub mod tests {
     }
 
     /// An npk is supplied that does not match the `pre_state`'s `account_id` under
-    /// `private_pda_account_id(program, claim_seed, npk)`. The claim equality check rejects.
+    /// `AccountId::for_private_pda(program, claim_seed, npk)`. The claim equality check rejects.
     #[test]
     fn private_pda_npk_mismatch_fails() {
         // `keys_a` produces the `pre_state`'s `account_id` (the registered pair), `keys_b` is
@@ -2399,9 +2399,9 @@ pub mod tests {
         let shared_secret = SharedSecretKey::new(&[55; 32], &keys_b.vpk());
 
         // `account_id` is derived from `npk_a`, but `npk_b` is supplied for this pre_state.
-        // `private_pda_account_id(program, seed, npk_b) != account_id`, so the claim check in
+        // `AccountId::for_private_pda(program, seed, npk_b) != account_id`, so the claim check in
         // the circuit must reject.
-        let account_id = private_pda_account_id(&program.id(), &seed, &npk_a);
+        let account_id = AccountId::for_private_pda(&program.id(), &seed, &npk_a);
         let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
         let result = execute_and_prove(
@@ -2421,7 +2421,7 @@ pub mod tests {
     /// private PDA via `Claim::Pda(seed)`, then chains to a callee (`noop`) delegating the same
     /// seed via `ChainedCall.pda_seeds`. In the callee's step, the `pre_state`'s authorization
     /// is established via the private derivation
-    /// `private_pda_account_id(delegator, seed, npk) == pre.account_id`.
+    /// `AccountId::for_private_pda(delegator, seed, npk) == pre.account_id`.
     #[test]
     fn caller_pda_seeds_authorize_private_pda_for_callee() {
         let delegator = Program::private_pda_delegator();
@@ -2431,7 +2431,7 @@ pub mod tests {
         let seed = PdaSeed::new([77; 32]);
         let shared_secret = SharedSecretKey::new(&[55; 32], &keys.vpk());
 
-        let account_id = private_pda_account_id(&delegator.id(), &seed, &npk);
+        let account_id = AccountId::for_private_pda(&delegator.id(), &seed, &npk);
         let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
         let callee_id = callee.id();
@@ -2468,7 +2468,7 @@ pub mod tests {
         let wrong_delegated_seed = PdaSeed::new([88; 32]);
         let shared_secret = SharedSecretKey::new(&[55; 32], &keys.vpk());
 
-        let account_id = private_pda_account_id(&delegator.id(), &claim_seed, &npk);
+        let account_id = AccountId::for_private_pda(&delegator.id(), &claim_seed, &npk);
         let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
         let callee_id = callee.id();
@@ -2505,8 +2505,8 @@ pub mod tests {
         let shared_a = SharedSecretKey::new(&[66; 32], &keys_a.vpk());
         let shared_b = SharedSecretKey::new(&[77; 32], &keys_b.vpk());
 
-        let account_a = private_pda_account_id(&program.id(), &seed, &keys_a.npk());
-        let account_b = private_pda_account_id(&program.id(), &seed, &keys_b.npk());
+        let account_a = AccountId::for_private_pda(&program.id(), &seed, &keys_a.npk());
+        let account_b = AccountId::for_private_pda(&program.id(), &seed, &keys_b.npk());
 
         let pre_a = AccountWithMetadata::new(Account::default(), false, account_a);
         let pre_b = AccountWithMetadata::new(Account::default(), false, account_b);
@@ -2533,7 +2533,7 @@ pub mod tests {
     /// `ChainedCall.pda_seeds`, so position 0 is never bound and the assertion fires.
     // TODO: a follow-up PR in the Private PDAs series needs to let the wallet supply a
     // `(seed, original_owner_program_id)` side input per mask-3 `pre_state` so the circuit
-    // can re-verify `private_pda_account_id(owner, seed, npk) == pre.account_id` without a
+    // can re-verify `AccountId::for_private_pda(owner, seed, npk) == pre.account_id` without a
     // claim.
     #[test]
     fn private_pda_top_level_reuse_rejected_by_binding_check() {
@@ -2545,7 +2545,7 @@ pub mod tests {
 
         // Simulate a previously-claimed private PDA: program_owner != DEFAULT, is_authorized =
         // true, account_id derived via the private formula.
-        let account_id = private_pda_account_id(&program.id(), &seed, &npk);
+        let account_id = AccountId::for_private_pda(&program.id(), &seed, &npk);
         let owned_pre_state = AccountWithMetadata::new(
             Account {
                 program_owner: program.id(),
@@ -2967,7 +2967,7 @@ pub mod tests {
     fn execution_that_requires_authentication_of_a_program_derived_account_id_succeeds() {
         let chain_caller = Program::chain_caller();
         let pda_seed = PdaSeed::new([37; 32]);
-        let from = AccountId::from((&chain_caller.id(), &pda_seed));
+        let from = AccountId::for_public_pda(&chain_caller.id(), &pda_seed);
         let to = AccountId::new([2; 32]);
         let initial_balance = 1000;
         let initial_data = [(from, initial_balance), (to, 0)];
@@ -3279,7 +3279,8 @@ pub mod tests {
         let pinata_definition_id = AccountId::new([1; 32]);
         let pinata_token_definition_id = AccountId::new([2; 32]);
         // Total supply of pinata token will be in an account under a PDA.
-        let pinata_token_holding_id = AccountId::from((&pinata_token.id(), &PdaSeed::new([0; 32])));
+        let pinata_token_holding_id =
+            AccountId::for_public_pda(&pinata_token.id(), &PdaSeed::new([0; 32]));
         let winner_token_holding_id = AccountId::new([3; 32]);
 
         let expected_winner_account_holding = token_core::TokenHolding::Fungible {
@@ -4296,8 +4297,8 @@ pub mod tests {
         let callback = Program::flash_swap_callback();
         let token = Program::authenticated_transfer_program();
 
-        let vault_id = AccountId::from((&initiator.id(), &PdaSeed::new([0_u8; 32])));
-        let receiver_id = AccountId::from((&callback.id(), &PdaSeed::new([1_u8; 32])));
+        let vault_id = AccountId::for_public_pda(&initiator.id(), &PdaSeed::new([0_u8; 32]));
+        let receiver_id = AccountId::for_public_pda(&callback.id(), &PdaSeed::new([1_u8; 32]));
 
         let initial_balance: u128 = 1000;
         let amount_out: u128 = 100;
@@ -4347,8 +4348,8 @@ pub mod tests {
         let callback = Program::flash_swap_callback();
         let token = Program::authenticated_transfer_program();
 
-        let vault_id = AccountId::from((&initiator.id(), &PdaSeed::new([0_u8; 32])));
-        let receiver_id = AccountId::from((&callback.id(), &PdaSeed::new([1_u8; 32])));
+        let vault_id = AccountId::for_public_pda(&initiator.id(), &PdaSeed::new([0_u8; 32]));
+        let receiver_id = AccountId::for_public_pda(&callback.id(), &PdaSeed::new([1_u8; 32]));
 
         let initial_balance: u128 = 1000;
         let amount_out: u128 = 100;
@@ -4405,8 +4406,8 @@ pub mod tests {
         let callback = Program::flash_swap_callback();
         let token = Program::authenticated_transfer_program();
 
-        let vault_id = AccountId::from((&initiator.id(), &PdaSeed::new([0_u8; 32])));
-        let receiver_id = AccountId::from((&callback.id(), &PdaSeed::new([1_u8; 32])));
+        let vault_id = AccountId::for_public_pda(&initiator.id(), &PdaSeed::new([0_u8; 32]));
+        let receiver_id = AccountId::for_public_pda(&callback.id(), &PdaSeed::new([1_u8; 32]));
 
         let initial_balance: u128 = 1000;
 
@@ -4454,7 +4455,7 @@ pub mod tests {
         let initiator = Program::flash_swap_initiator();
         let token = Program::authenticated_transfer_program();
 
-        let vault_id = AccountId::from((&initiator.id(), &PdaSeed::new([0_u8; 32])));
+        let vault_id = AccountId::for_public_pda(&initiator.id(), &PdaSeed::new([0_u8; 32]));
 
         let vault_account = Account {
             program_owner: token.id(),
