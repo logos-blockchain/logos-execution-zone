@@ -1,7 +1,7 @@
 use std::{
     ffi::{CString, c_char},
     fs::File,
-    io::Write,
+    io::Write as _,
     net::SocketAddr,
     path::PathBuf,
 };
