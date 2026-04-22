@@ -243,6 +243,29 @@ enum WalletFfiError wallet_ffi_create_account_public(struct WalletHandle *handle
                                                      struct FfiBytes32 *out_account_id);
 
 /**
+ * Create a new private account, storing a default account entry in local storage.
+ *
+ * This is the private-account equivalent of `wallet_ffi_create_account_public`.
+ * It generates a key node, assigns a random identifier, and inserts a default
+ * account record so the account can immediately be used with
+ * `wallet_ffi_register_private_account`.
+ *
+ * # Parameters
+ * - `handle`: Valid wallet handle
+ * - `out_account_id`: Output pointer for the new account ID (32 bytes)
+ *
+ * # Returns
+ * - `Success` on successful creation
+ * - Error code on failure
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+ * - `out_account_id` must be a valid pointer to a `FfiBytes32` struct
+ */
+enum WalletFfiError wallet_ffi_create_account_private(struct WalletHandle *handle,
+                                                      struct FfiBytes32 *out_account_id);
+
+/**
  * Create a new private key node.
  *
  * Returns the nullifier public key (npk) and viewing public key (vpk) to share with

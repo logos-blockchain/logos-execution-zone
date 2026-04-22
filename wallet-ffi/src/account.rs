@@ -62,6 +62,56 @@ pub unsafe extern "C" fn wallet_ffi_create_account_public(
     WalletFfiError::Success
 }
 
+/// Create a new private account, storing a default account entry in local storage.
+///
+/// This is the private-account equivalent of `wallet_ffi_create_account_public`.
+/// It generates a key node, assigns a random identifier, and inserts a default
+/// account record so the account can immediately be used with
+/// `wallet_ffi_register_private_account`.
+///
+/// # Parameters
+/// - `handle`: Valid wallet handle
+/// - `out_account_id`: Output pointer for the new account ID (32 bytes)
+///
+/// # Returns
+/// - `Success` on successful creation
+/// - Error code on failure
+///
+/// # Safety
+/// - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+/// - `out_account_id` must be a valid pointer to a `FfiBytes32` struct
+#[no_mangle]
+pub unsafe extern "C" fn wallet_ffi_create_account_private(
+    handle: *mut WalletHandle,
+    out_account_id: *mut FfiBytes32,
+) -> WalletFfiError {
+    let wrapper = match get_wallet(handle) {
+        Ok(w) => w,
+        Err(e) => return e,
+    };
+
+    if out_account_id.is_null() {
+        print_error("Null output pointer for account_id");
+        return WalletFfiError::NullPointer;
+    }
+
+    let mut wallet = match wrapper.core.lock() {
+        Ok(w) => w,
+        Err(e) => {
+            print_error(format!("Failed to lock wallet: {e}"));
+            return WalletFfiError::InternalError;
+        }
+    };
+
+    let (account_id, _chain_index) = wallet.create_new_account_private(None);
+
+    unsafe {
+        (*out_account_id).data = *account_id.value();
+    }
+
+    WalletFfiError::Success
+}
+
 /// Create a new private key node.
 ///
 /// Returns the nullifier public key (npk) and viewing public key (vpk) to share with

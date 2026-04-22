@@ -341,7 +341,7 @@ async fn private_transfer_to_owned_account_continuous_run_path() -> Result<()> {
     };
 
     // Get the newly created account's keys
-    let (to_keys, _, _) = ctx
+    let (to_keys, _, to_identifier) = ctx
         .wallet()
         .storage()
         .user_data
@@ -356,7 +356,7 @@ async fn private_transfer_to_owned_account_continuous_run_path() -> Result<()> {
         to_label: None,
         to_npk: Some(hex::encode(to_keys.nullifier_public_key.0)),
         to_vpk: Some(hex::encode(to_keys.viewing_public_key.0)),
-        to_identifier: 0,
+        to_identifier,
         amount: 100,
     });
 

@@ -48,6 +48,11 @@ unsafe extern "C" {
         out_account_id: *mut FfiBytes32,
     ) -> error::WalletFfiError;
 
+    fn wallet_ffi_create_account_private(
+        handle: *mut WalletHandle,
+        out_account_id: *mut FfiBytes32,
+    ) -> error::WalletFfiError;
+
     fn wallet_ffi_create_private_accounts_key(
         handle: *mut WalletHandle,
         out_keys: *mut FfiPrivateAccountKeys,
@@ -684,14 +689,11 @@ fn wallet_ffi_init_private_account_auth_transfer() -> Result<()> {
     let home = tempfile::tempdir()?;
     let wallet_ffi_handle = new_wallet_ffi_with_test_context_config(&ctx, home.path())?;
 
-    // Create a new receiving key and derive account_id for identifier=0
-    let out_account_id: FfiBytes32 = unsafe {
-        let mut out_keys = FfiPrivateAccountKeys::default();
-        wallet_ffi_create_private_accounts_key(wallet_ffi_handle, &raw mut out_keys);
-        let account_id = nssa::AccountId::from((&out_keys.npk(), 0_u128));
-        wallet_ffi_free_private_account_keys(&raw mut out_keys);
-        (&account_id).into()
-    };
+    // Create a new private account
+    let mut out_account_id = FfiBytes32::default();
+    unsafe {
+        wallet_ffi_create_account_private(wallet_ffi_handle, &raw mut out_account_id);
+    }
 
     // Call the init function
     let mut transfer_result = FfiTransferResult::default();
