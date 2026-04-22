@@ -61,7 +61,7 @@ pub fn compute_ata_seed(owner_id: AccountId, definition_id: AccountId) -> PdaSee
 }
 
 pub fn get_associated_token_account_id(ata_program_id: &ProgramId, seed: &PdaSeed) -> AccountId {
-    AccountId::from((ata_program_id, seed))
+    AccountId::for_public_pda(ata_program_id, seed)
 }
 
 /// Verify the ATA's address matches `(ata_program_id, owner, definition)` and return

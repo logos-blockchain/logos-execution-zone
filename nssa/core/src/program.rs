@@ -6,7 +6,7 @@ use risc0_zkvm::{DeserializeOwned, guest::env, serde::Deserializer};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    BlockId, Timestamp,
+    BlockId, NullifierPublicKey, Timestamp,
     account::{Account, AccountId, AccountWithMetadata},
 };
 
@@ -27,7 +27,7 @@ pub struct ProgramInput<T> {
 /// Each program can derive up to `2^256` unique account IDs by choosing different
 /// seeds. PDAs allow programs to control namespaced account identifiers without
 /// collisions between programs.
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct PdaSeed([u8; 32]);
 
 impl PdaSeed {
@@ -37,8 +37,10 @@ impl PdaSeed {
     }
 }
 
-impl From<(&ProgramId, &PdaSeed)> for AccountId {
-    fn from(value: (&ProgramId, &PdaSeed)) -> Self {
+impl AccountId {
+    /// Derives an [`AccountId`] for a public PDA from the program ID and seed.
+    #[must_use]
+    pub fn for_public_pda(program_id: &ProgramId, seed: &PdaSeed) -> Self {
         use risc0_zkvm::sha::{Impl, Sha256 as _};
         const PROGRAM_DERIVED_ACCOUNT_ID_PREFIX: &[u8; 32] =
             b"/NSSA/v0.2/AccountId/PDA/\x00\x00\x00\x00\x00\x00\x00";
@@ -46,9 +48,38 @@ impl From<(&ProgramId, &PdaSeed)> for AccountId {
         let mut bytes = [0; 96];
         bytes[0..32].copy_from_slice(PROGRAM_DERIVED_ACCOUNT_ID_PREFIX);
         let program_id_bytes: &[u8] =
-            bytemuck::try_cast_slice(value.0).expect("ProgramId should be castable to &[u8]");
+            bytemuck::try_cast_slice(program_id).expect("ProgramId should be castable to &[u8]");
         bytes[32..64].copy_from_slice(program_id_bytes);
-        bytes[64..].copy_from_slice(&value.1.0);
+        bytes[64..].copy_from_slice(&seed.0);
+        Self::new(
+            Impl::hash_bytes(&bytes)
+                .as_bytes()
+                .try_into()
+                .expect("Hash output must be exactly 32 bytes long"),
+        )
+    }
+
+    /// Derives an [`AccountId`] for a private PDA from the program ID, seed, and nullifier
+    /// public key.
+    ///
+    /// Unlike public PDAs ([`AccountId::for_public_pda`]), this includes the `npk` in the
+    /// derivation, making the address unique per group of controllers sharing viewing keys.
+    #[must_use]
+    pub fn for_private_pda(
+        program_id: &ProgramId,
+        seed: &PdaSeed,
+        npk: &NullifierPublicKey,
+    ) -> Self {
+        use risc0_zkvm::sha::{Impl, Sha256 as _};
+        const PRIVATE_PDA_PREFIX: &[u8; 32] = b"/LEE/v0.3/AccountId/PrivatePDA/\x00";
+
+        let mut bytes = [0_u8; 128];
+        bytes[0..32].copy_from_slice(PRIVATE_PDA_PREFIX);
+        let program_id_bytes: &[u8] =
+            bytemuck::try_cast_slice(program_id).expect("ProgramId should be castable to &[u8]");
+        bytes[32..64].copy_from_slice(program_id_bytes);
+        bytes[64..96].copy_from_slice(&seed.0);
+        bytes[96..128].copy_from_slice(&npk.to_byte_array());
         Self::new(
             Impl::hash_bytes(&bytes)
                 .as_bytes()
@@ -65,6 +96,9 @@ pub struct ChainedCall {
     pub pre_states: Vec<AccountWithMetadata>,
     /// The instruction data to pass.
     pub instruction_data: InstructionData,
+    /// PDA seeds authorized for the callee. For each seed, the callee is authorized to
+    /// mutate the `AccountId` derived from `(caller_program_id, seed)`, regardless of
+    /// whether the account is public or private.
     pub pda_seeds: Vec<PdaSeed>,
 }
 
@@ -114,7 +148,9 @@ pub enum Claim {
     /// This will give no error if program had authorization in pre state and may be useful
     /// if program decides to give up authorization for a chained call.
     Authorized,
-    /// The program requests ownership of the account through a PDA.
+    /// The program requests ownership of the account through a PDA. The program emits the
+    /// seed; the `AccountId` is derived from `(program_id, seed)`, regardless of whether the
+    /// account is public or private.
     Pda(PdaSeed),
 }
 
@@ -477,19 +513,24 @@ pub enum ExecutionValidationError {
     },
 }
 
+/// Computes the set of public-PDA `AccountId`s the callee is authorized to mutate.
+///
+/// Returns only public-form derivations, suitable for contexts where all accounts are public
+/// (e.g. the public-execution path). The privacy circuit must additionally check each mask-3
+/// `pre_state` against [`AccountId::for_private_pda`] with the supplied npk for that
+/// `pre_state`.
 #[must_use]
-pub fn compute_authorized_pdas(
+pub fn compute_public_authorized_pdas(
     caller_program_id: Option<ProgramId>,
     pda_seeds: &[PdaSeed],
 ) -> HashSet<AccountId> {
-    caller_program_id
-        .map(|caller_program_id| {
-            pda_seeds
-                .iter()
-                .map(|pda_seed| AccountId::from((&caller_program_id, pda_seed)))
-                .collect()
-        })
-        .unwrap_or_default()
+    let Some(caller) = caller_program_id else {
+        return HashSet::new();
+    };
+    pda_seeds
+        .iter()
+        .map(|seed| AccountId::for_public_pda(&caller, seed))
+        .collect()
 }
 
 /// Reads the NSSA inputs from the guest environment.
@@ -799,5 +840,109 @@ mod tests {
 
         assert_eq!(account_post_state.account(), &account);
         assert_eq!(account_post_state.account_mut(), &mut account);
+    }
+
+    // ---- AccountId::for_private_pda tests ----
+
+    /// Pins `AccountId::for_private_pda` against a hardcoded expected output for a specific
+    /// `(program_id, seed, npk)` triple. Any change to `PRIVATE_PDA_PREFIX`, byte ordering,
+    /// or the underlying hash breaks this test.
+    #[test]
+    fn for_private_pda_matches_pinned_value() {
+        let program_id: ProgramId = [1; 8];
+        let seed = PdaSeed::new([2; 32]);
+        let npk = NullifierPublicKey([3; 32]);
+        let expected = AccountId::new([
+            132, 198, 103, 173, 244, 211, 188, 217, 249, 99, 126, 205, 152, 120, 192, 47, 13, 53,
+            133, 3, 17, 69, 92, 243, 140, 94, 182, 211, 218, 75, 215, 45,
+        ]);
+        assert_eq!(
+            AccountId::for_private_pda(&program_id, &seed, &npk),
+            expected
+        );
+    }
+
+    /// Two groups with different viewing keys at the same (program, seed) get different addresses.
+    #[test]
+    fn for_private_pda_differs_for_different_npk() {
+        let program_id: ProgramId = [1; 8];
+        let seed = PdaSeed::new([2; 32]);
+        let npk_a = NullifierPublicKey([3; 32]);
+        let npk_b = NullifierPublicKey([4; 32]);
+        assert_ne!(
+            AccountId::for_private_pda(&program_id, &seed, &npk_a),
+            AccountId::for_private_pda(&program_id, &seed, &npk_b),
+        );
+    }
+
+    /// Different seeds produce different addresses, even with the same program and npk.
+    #[test]
+    fn for_private_pda_differs_for_different_seed() {
+        let program_id: ProgramId = [1; 8];
+        let seed_a = PdaSeed::new([2; 32]);
+        let seed_b = PdaSeed::new([5; 32]);
+        let npk = NullifierPublicKey([3; 32]);
+        assert_ne!(
+            AccountId::for_private_pda(&program_id, &seed_a, &npk),
+            AccountId::for_private_pda(&program_id, &seed_b, &npk),
+        );
+    }
+
+    /// Different programs produce different addresses, even with the same seed and npk.
+    #[test]
+    fn for_private_pda_differs_for_different_program_id() {
+        let program_id_a: ProgramId = [1; 8];
+        let program_id_b: ProgramId = [9; 8];
+        let seed = PdaSeed::new([2; 32]);
+        let npk = NullifierPublicKey([3; 32]);
+        assert_ne!(
+            AccountId::for_private_pda(&program_id_a, &seed, &npk),
+            AccountId::for_private_pda(&program_id_b, &seed, &npk),
+        );
+    }
+
+    /// A private PDA at the same (program, seed) has a different address than a public PDA,
+    /// because the private formula uses a different prefix and includes npk.
+    #[test]
+    fn for_private_pda_differs_from_public_pda() {
+        let program_id: ProgramId = [1; 8];
+        let seed = PdaSeed::new([2; 32]);
+        let npk = NullifierPublicKey([3; 32]);
+        let private_id = AccountId::for_private_pda(&program_id, &seed, &npk);
+        let public_id = AccountId::for_public_pda(&program_id, &seed);
+        assert_ne!(private_id, public_id);
+    }
+
+    /// A private PDA address differs from a standard private account address at the same `npk`,
+    /// because the private PDA formula includes `program_id` and `seed`.
+    #[test]
+    fn for_private_pda_differs_from_standard_private() {
+        let program_id: ProgramId = [1; 8];
+        let seed = PdaSeed::new([2; 32]);
+        let npk = NullifierPublicKey([3; 32]);
+        let private_pda_id = AccountId::for_private_pda(&program_id, &seed, &npk);
+        let standard_private_id = AccountId::from(&npk);
+        assert_ne!(private_pda_id, standard_private_id);
+    }
+
+    // ---- compute_public_authorized_pdas tests ----
+
+    /// `compute_public_authorized_pdas` returns the public PDA addresses for the caller's seeds.
+    #[test]
+    fn compute_public_authorized_pdas_with_seeds() {
+        let caller: ProgramId = [1; 8];
+        let seed = PdaSeed::new([2; 32]);
+        let result = compute_public_authorized_pdas(Some(caller), &[seed]);
+        let expected = AccountId::for_public_pda(&caller, &seed);
+        assert!(result.contains(&expected));
+        assert_eq!(result.len(), 1);
+    }
+
+    /// With no caller (top-level call), the result is always empty.
+    #[test]
+    fn compute_public_authorized_pdas_no_caller_returns_empty() {
+        let seed = PdaSeed::new([2; 32]);
+        let result = compute_public_authorized_pdas(None, &[seed]);
+        assert!(result.is_empty());
     }
 }

@@ -108,8 +108,8 @@ impl WalletCore {
             &[1, 1],
             &produce_random_nonces(2),
             &[
-                (from_npk.clone(), shared_secret_from.clone()),
-                (to_npk.clone(), shared_secret_to.clone()),
+                (from_npk, shared_secret_from.clone()),
+                (to_npk, shared_secret_to.clone()),
             ],
             &[
                 (from_nsk.unwrap(), from_proof.unwrap()),
@@ -124,12 +124,12 @@ impl WalletCore {
             vec![],
             vec![
                 (
-                    from_npk.clone(),
+                    from_npk,
                     from_vpk.clone(),
                     eph_holder_from.generate_ephemeral_public_key(),
                 ),
                 (
-                    to_npk.clone(),
+                    to_npk,
                     to_vpk.clone(),
                     eph_holder_to.generate_ephemeral_public_key(),
                 ),
@@ -185,8 +185,8 @@ impl WalletCore {
             &[1, 2],
             &produce_random_nonces(2),
             &[
-                (from_npk.clone(), shared_secret_from.clone()),
-                (to_npk.clone(), shared_secret_to.clone()),
+                (from_npk, shared_secret_from.clone()),
+                (to_npk, shared_secret_to.clone()),
             ],
             &[(from_nsk.unwrap(), from_proof.unwrap())],
             &program.into(),
@@ -198,12 +198,12 @@ impl WalletCore {
             vec![],
             vec![
                 (
-                    from_npk.clone(),
+                    from_npk,
                     from_vpk.clone(),
                     eph_holder_from.generate_ephemeral_public_key(),
                 ),
                 (
-                    to_npk.clone(),
+                    to_npk,
                     to_vpk.clone(),
                     eph_holder_to.generate_ephemeral_public_key(),
                 ),
@@ -255,8 +255,8 @@ impl WalletCore {
             &[1, 2],
             &produce_random_nonces(2),
             &[
-                (from_npk.clone(), shared_secret_from.clone()),
-                (to_npk.clone(), shared_secret_to.clone()),
+                (from_npk, shared_secret_from.clone()),
+                (to_npk, shared_secret_to.clone()),
             ],
             &[(from_nsk.unwrap(), from_proof.unwrap())],
             &program.into(),
@@ -268,12 +268,12 @@ impl WalletCore {
             vec![],
             vec![
                 (
-                    from_npk.clone(),
+                    from_npk,
                     from_vpk.clone(),
                     eph_holder.generate_ephemeral_public_key(),
                 ),
                 (
-                    to_npk.clone(),
+                    to_npk,
                     to_vpk.clone(),
                     eph_holder.generate_ephemeral_public_key(),
                 ),
@@ -324,7 +324,7 @@ impl WalletCore {
             &instruction_data,
             &[1, 0],
             &produce_random_nonces(1),
-            &[(from_npk.clone(), shared_secret.clone())],
+            &[(from_npk, shared_secret.clone())],
             &[(from_nsk.unwrap(), from_proof.unwrap())],
             &program.into(),
         )
@@ -334,7 +334,7 @@ impl WalletCore {
             vec![to],
             vec![],
             vec![(
-                from_npk.clone(),
+                from_npk,
                 from_vpk.clone(),
                 eph_holder.generate_ephemeral_public_key(),
             )],
@@ -385,7 +385,7 @@ impl WalletCore {
             &instruction_data,
             &[0, 1],
             &produce_random_nonces(1),
-            &[(to_npk.clone(), shared_secret.clone())],
+            &[(to_npk, shared_secret.clone())],
             &[(to_nsk.unwrap(), to_proof)],
             &program.into(),
         )
@@ -395,7 +395,7 @@ impl WalletCore {
             vec![from],
             vec![from_acc.nonce],
             vec![(
-                to_npk.clone(),
+                to_npk,
                 to_vpk.clone(),
                 eph_holder.generate_ephemeral_public_key(),
             )],
@@ -451,7 +451,7 @@ impl WalletCore {
             &instruction_data,
             &[0, 2],
             &produce_random_nonces(1),
-            &[(to_npk.clone(), shared_secret.clone())],
+            &[(to_npk, shared_secret.clone())],
             &[],
             &program.into(),
         )
@@ -461,7 +461,7 @@ impl WalletCore {
             vec![from],
             vec![from_acc.nonce],
             vec![(
-                to_npk.clone(),
+                to_npk,
                 to_vpk.clone(),
                 eph_holder.generate_ephemeral_public_key(),
             )],
@@ -513,7 +513,7 @@ impl WalletCore {
             &instruction_data,
             &[0, 2],
             &produce_random_nonces(1),
-            &[(to_npk.clone(), shared_secret.clone())],
+            &[(to_npk, shared_secret.clone())],
             &[],
             &program.into(),
         )
@@ -523,7 +523,7 @@ impl WalletCore {
             vec![from],
             vec![from_acc.nonce],
             vec![(
-                to_npk.clone(),
+                to_npk,
                 to_vpk.clone(),
                 eph_holder.generate_ephemeral_public_key(),
             )],
@@ -565,7 +565,7 @@ impl WalletCore {
             &Program::serialize_instruction(instruction).unwrap(),
             &[2],
             &produce_random_nonces(1),
-            &[(from_npk.clone(), shared_secret_from.clone())],
+            &[(from_npk, shared_secret_from.clone())],
             &[],
             &Program::authenticated_transfer_program().into(),
         )
@@ -575,7 +575,7 @@ impl WalletCore {
             vec![],
             vec![],
             vec![(
-                from_npk.clone(),
+                from_npk,
                 from_vpk.clone(),
                 eph_holder_from.generate_ephemeral_public_key(),
             )],

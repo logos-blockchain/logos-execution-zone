@@ -46,7 +46,7 @@ async fn main() {
     let program = Program::new(bytecode).unwrap();
 
     // Compute the PDA to pass it as input account to the public execution
-    let pda = AccountId::from((&program.id(), &PDA_SEED));
+    let pda = AccountId::for_public_pda(&program.id(), &PDA_SEED);
     let account_ids = vec![pda];
     let instruction_data = ();
     let nonces = vec![];

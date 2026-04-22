@@ -8,7 +8,7 @@ use nssa_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, Timestamp,
     account::{Account, AccountId, AccountWithMetadata},
     program::{
-        ChainedCall, Claim, DEFAULT_PROGRAM_ID, compute_authorized_pdas, validate_execution,
+        ChainedCall, Claim, DEFAULT_PROGRAM_ID, compute_public_authorized_pdas, validate_execution,
     },
 };
 
@@ -129,7 +129,7 @@ impl ValidatedStateDiff {
             );
 
             let authorized_pdas =
-                compute_authorized_pdas(caller_program_id, &chained_call.pda_seeds);
+                compute_public_authorized_pdas(caller_program_id, &chained_call.pda_seeds);
 
             let is_authorized = |account_id: &AccountId| {
                 signer_account_ids.contains(account_id) || authorized_pdas.contains(account_id)
@@ -223,8 +223,9 @@ impl ValidatedStateDiff {
                     }
                     Claim::Pda(seed) => {
                         // The program can only claim accounts that correspond to the PDAs it is
-                        // authorized to claim.
-                        let pda = AccountId::from((&chained_call.program_id, &seed));
+                        // authorized to claim. The public-execution path only sees public
+                        // accounts, so the public-PDA derivation is the correct formula here.
+                        let pda = AccountId::for_public_pda(&chained_call.program_id, &seed);
                         ensure!(
                             account_id == pda,
                             InvalidProgramBehaviorError::MismatchedPdaClaim {
