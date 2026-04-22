@@ -8,7 +8,7 @@ use nssa_core::{
     MembershipProof, Nullifier, NullifierPublicKey, NullifierSecretKey,
     PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput, SharedSecretKey,
     account::{Account, AccountId, AccountWithMetadata, Nonce},
-    compute_digest_for_path,
+    compute_digest_for_path, derive_identifier,
     program::{
         AccountPostState, BlockValidityWindow, ChainedCall, Claim, DEFAULT_PROGRAM_ID,
         MAX_NUMBER_CHAINED_CALLS, ProgramId, ProgramOutput, TimestampValidityWindow,
@@ -343,11 +343,22 @@ fn compute_circuit_output(
                 output.public_post_states.push(post_state);
             }
             1 | 2 => {
-                let Some((npk, identifier, shared_secret)) = private_keys_iter.next() else {
+                let Some((npk, input_identifier, shared_secret)) = private_keys_iter.next() else {
                     panic!("Missing private account key");
                 };
 
-                let account_id = AccountId::from((npk, *identifier));
+                let Some(membership_proof_opt) = private_membership_proofs_iter.next() else {
+                    panic!("Missing membership proof");
+                };
+
+                // On init the identifier is fixed by the protocol using the shared secret as source of entropy. On update the witness is used
+                let identifier = if membership_proof_opt.is_none() {
+                    derive_identifier(shared_secret)
+                } else {
+                    *input_identifier
+                };
+
+                let account_id = AccountId::from((npk, identifier));
 
                 assert_eq!(account_id, pre_state.account_id, "AccountId mismatch");
 
@@ -371,10 +382,6 @@ fn compute_circuit_output(
                         "Pre-state not authorized for authenticated private account"
                     );
 
-                    let Some(membership_proof_opt) = private_membership_proofs_iter.next() else {
-                        panic!("Missing membership proof");
-                    };
-
                     let new_nullifier = compute_nullifier_and_set_digest(
                         membership_proof_opt.as_ref(),
                         &pre_state.account,
@@ -386,7 +393,7 @@ fn compute_circuit_output(
 
                     (new_nullifier, new_nonce)
                 } else {
-                    // Private account without authentication
+                    // Private account without authentication (always INIT).
 
                     assert_eq!(
                         pre_state.account,
@@ -398,10 +405,6 @@ fn compute_circuit_output(
                         !pre_state.is_authorized,
                         "Found new private account marked as authorized."
                     );
-
-                    let Some(membership_proof_opt) = private_membership_proofs_iter.next() else {
-                        panic!("Missing membership proof");
-                    };
 
                     assert!(
                         membership_proof_opt.is_none(),
@@ -426,7 +429,7 @@ fn compute_circuit_output(
                 // Encrypt and push post state
                 let encrypted_account = EncryptionScheme::encrypt(
                     &post_with_updated_nonce,
-                    *identifier,
+                    identifier,
                     shared_secret,
                     &commitment_post,
                     output_index,

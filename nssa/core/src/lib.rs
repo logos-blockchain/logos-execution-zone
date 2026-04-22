@@ -9,7 +9,9 @@ pub use commitment::{
     compute_digest_for_path,
 };
 pub use encryption::{EncryptionScheme, SharedSecretKey};
-pub use nullifier::{Identifier, Nullifier, NullifierPublicKey, NullifierSecretKey};
+pub use nullifier::{
+    Identifier, Nullifier, NullifierPublicKey, NullifierSecretKey, derive_identifier,
+};
 
 pub mod account;
 mod circuit_io;

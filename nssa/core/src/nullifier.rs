@@ -2,9 +2,11 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde::{Deserialize, Serialize};
 
-use crate::{Commitment, account::AccountId};
+use crate::{Commitment, SharedSecretKey, account::AccountId};
 
 const PRIVATE_ACCOUNT_ID_PREFIX: &[u8; 32] = b"/LEE/v0.3/AccountId/Private/\x00\x00\x00\x00";
+const IDENTIFIER_DOMAIN_SEPARATOR: &[u8; 32] =
+    b"/LEE/v0.3/Identifier/\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
 
 pub type Identifier = u128;
 
@@ -99,6 +101,20 @@ impl Nullifier {
     }
 }
 
+// TODO: use a dedicated struct for Identifier and make this into a constructor of the type
+#[must_use]
+pub fn derive_identifier(shared_secret: &SharedSecretKey) -> Identifier {
+    let mut bytes = [0_u8; 64];
+    bytes[..32].copy_from_slice(IDENTIFIER_DOMAIN_SEPARATOR);
+    bytes[32..].copy_from_slice(&shared_secret.0);
+    let hash = Impl::hash_bytes(&bytes);
+    Identifier::from_le_bytes(
+        hash.as_bytes()[..16]
+            .try_into()
+            .expect("slice of length 16"),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -141,6 +157,27 @@ mod tests {
         ]);
         let npk = NullifierPublicKey::from(&nsk);
         assert_eq!(npk, expected_npk);
+    }
+
+    #[test]
+    fn derive_identifier_is_deterministic_and_domain_separated() {
+        let shared_secret = SharedSecretKey([0x11; 32]);
+        let other_secret = SharedSecretKey([0x12; 32]);
+
+        let a = derive_identifier(&shared_secret);
+        let b = derive_identifier(&shared_secret);
+        let c = derive_identifier(&other_secret);
+
+        assert_eq!(a, b, "same shared secret must derive the same identifier");
+        assert_ne!(a, c, "different secrets must derive different identifiers");
+
+        // Cross-check: output equals first 16 LE bytes of sha256(domain || secret).
+        let mut preimage = [0_u8; 64];
+        preimage[..32].copy_from_slice(IDENTIFIER_DOMAIN_SEPARATOR);
+        preimage[32..].copy_from_slice(&shared_secret.0);
+        let expected =
+            Identifier::from_le_bytes(Impl::hash_bytes(&preimage).as_bytes()[..16].try_into().unwrap());
+        assert_eq!(a, expected);
     }
 
     #[test]
