@@ -96,12 +96,9 @@ pub struct ChainedCall {
     pub pre_states: Vec<AccountWithMetadata>,
     /// The instruction data to pass.
     pub instruction_data: InstructionData,
-    /// PDA seeds authorized for the callee. For each callee `pre_state`, the outer circuit
-    /// checks whether its `AccountId` matches a public PDA derivation
-    /// `AccountId::for_public_pda(&caller, seed)` (mask 0) or a private PDA derivation
-    /// `AccountId::for_private_pda(&caller, seed, npk)` (mask 3, where `npk` is the supplied
-    /// npk for that `pre_state`). Programs stay privacy-agnostic: they emit seeds, the circuit
-    /// resolves public vs private based on the `pre_state`'s mask.
+    /// PDA seeds authorized for the callee. For each seed, the callee is authorized to
+    /// mutate the `AccountId` derived from `(caller_program_id, seed)`, regardless of
+    /// whether the account is public or private.
     pub pda_seeds: Vec<PdaSeed>,
 }
 
@@ -151,12 +148,9 @@ pub enum Claim {
     /// This will give no error if program had authorization in pre state and may be useful
     /// if program decides to give up authorization for a chained call.
     Authorized,
-    /// The program requests ownership of the account through a PDA. The `pre_state`'s
-    /// visibility mask selects the derivation formula: mask 0 uses
-    /// `AccountId::for_public_pda(&program_id, &seed)`, mask 3 uses
-    /// `AccountId::for_private_pda(&program_id, &seed, &npk)` with the supplied npk for that
-    /// `pre_state`. Programs stay privacy-agnostic: they emit a seed, the circuit resolves the
-    /// rest from the mask.
+    /// The program requests ownership of the account through a PDA. The program emits the
+    /// seed; the `AccountId` is derived from `(program_id, seed)`, regardless of whether the
+    /// account is public or private.
     Pda(PdaSeed),
 }
 
@@ -526,7 +520,7 @@ pub enum ExecutionValidationError {
 /// `pre_state` against [`AccountId::for_private_pda`] with the supplied npk for that
 /// `pre_state`.
 #[must_use]
-pub fn compute_authorized_pdas(
+pub fn compute_public_authorized_pdas(
     caller_program_id: Option<ProgramId>,
     pda_seeds: &[PdaSeed],
 ) -> HashSet<AccountId> {
@@ -931,14 +925,14 @@ mod tests {
         assert_ne!(private_pda_id, standard_private_id);
     }
 
-    // ---- compute_authorized_pdas tests ----
+    // ---- compute_public_authorized_pdas tests ----
 
-    /// `compute_authorized_pdas` returns the public PDA addresses for the caller's seeds.
+    /// `compute_public_authorized_pdas` returns the public PDA addresses for the caller's seeds.
     #[test]
-    fn compute_authorized_pdas_with_seeds() {
+    fn compute_public_authorized_pdas_with_seeds() {
         let caller: ProgramId = [1; 8];
         let seed = PdaSeed::new([2; 32]);
-        let result = compute_authorized_pdas(Some(caller), &[seed]);
+        let result = compute_public_authorized_pdas(Some(caller), &[seed]);
         let expected = AccountId::for_public_pda(&caller, &seed);
         assert!(result.contains(&expected));
         assert_eq!(result.len(), 1);
@@ -946,9 +940,9 @@ mod tests {
 
     /// With no caller (top-level call), the result is always empty.
     #[test]
-    fn compute_authorized_pdas_no_caller_returns_empty() {
+    fn compute_public_authorized_pdas_no_caller_returns_empty() {
         let seed = PdaSeed::new([2; 32]);
-        let result = compute_authorized_pdas(None, &[seed]);
+        let result = compute_public_authorized_pdas(None, &[seed]);
         assert!(result.is_empty());
     }
 }
