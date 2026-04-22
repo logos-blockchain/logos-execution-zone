@@ -3485,7 +3485,9 @@ dependencies = [
  "cbindgen",
  "indexer_service",
  "log",
+ "sequencer_core",
  "tokio",
+ "url",
 ]
 
 [[package]]

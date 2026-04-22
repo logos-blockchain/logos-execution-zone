@@ -6,6 +6,9 @@ version = "0.1.0"
 
 [dependencies]
 indexer_service.workspace = true
+sequencer_core.workspace = true
+
+url.workspace = true
 log = { workspace = true }
 tokio = { features = ["rt-multi-thread"], workspace = true }
 

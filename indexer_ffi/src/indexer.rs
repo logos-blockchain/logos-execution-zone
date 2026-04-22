@@ -1,20 +1,27 @@
 use std::{ffi::c_void, net::SocketAddr};
 
 use indexer_service::IndexerHandle;
+use sequencer_core::indexer_client::IndexerClient;
 use tokio::runtime::Runtime;
 
 #[repr(C)]
 pub struct IndexerServiceFFI {
     indexer_handle: *mut c_void,
     runtime: *mut c_void,
+    indexer_client: *mut c_void,
 }
 
 impl IndexerServiceFFI {
-    pub fn new(indexer_handle: indexer_service::IndexerHandle, runtime: Runtime) -> Self {
+    pub fn new(
+        indexer_handle: indexer_service::IndexerHandle,
+        runtime: Runtime,
+        indexer_client: IndexerClient,
+    ) -> Self {
         Self {
             // Box the complex types and convert to opaque pointers
             indexer_handle: Box::into_raw(Box::new(indexer_handle)).cast::<c_void>(),
             runtime: Box::into_raw(Box::new(runtime)).cast::<c_void>(),
+            indexer_client: Box::into_raw(Box::new(indexer_client)).cast::<c_void>(),
         }
     }
 
@@ -25,10 +32,11 @@ impl IndexerServiceFFI {
     /// The caller must ensure that:
     /// - `self` is a valid object(contains valid pointers in all fields)
     #[must_use]
-    pub unsafe fn into_parts(self) -> (Box<IndexerHandle>, Box<Runtime>) {
+    pub unsafe fn into_parts(self) -> (Box<IndexerHandle>, Box<Runtime>, Box<IndexerClient>) {
         let indexer_handle = unsafe { Box::from_raw(self.indexer_handle.cast::<IndexerHandle>()) };
         let runtime = unsafe { Box::from_raw(self.runtime.cast::<Runtime>()) };
-        (indexer_handle, runtime)
+        let indexer_client = unsafe { Box::from_raw(self.indexer_client.cast::<IndexerClient>()) };
+        (indexer_handle, runtime, indexer_client)
     }
 
     /// Helper to get indexer handle addr.
@@ -49,7 +57,7 @@ impl IndexerServiceFFI {
         indexer_handle.addr()
     }
 
-    /// Helper to get indexer handle addr.
+    /// Helper to get indexer handle ref.
     ///
     /// # Safety
     ///
@@ -62,6 +70,22 @@ impl IndexerServiceFFI {
                 .cast::<IndexerHandle>()
                 .as_ref()
                 .expect("Indexer Handle must be non-null pointer")
+        }
+    }
+
+    /// Helper to get indexer client ref.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that:
+    /// - `self` is a valid object(contains valid pointers in all fields)
+    #[must_use]
+    pub const unsafe fn client(&self) -> &IndexerClient {
+        unsafe {
+            self.indexer_client
+                .cast::<IndexerClient>()
+                .as_ref()
+                .expect("Indexer Client must be non-null pointer")
         }
     }
 }

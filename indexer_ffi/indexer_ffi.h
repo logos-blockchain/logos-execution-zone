@@ -12,6 +12,7 @@ typedef enum OperationStatus {
 typedef struct IndexerServiceFFI {
   void *indexer_handle;
   void *runtime;
+  void *indexer_client;
 } IndexerServiceFFI;
 
 /**
