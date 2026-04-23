@@ -23,7 +23,7 @@ impl KeycardWallet {
     /// Calls Python: is_unpaired_keycard_available()
     pub fn is_unpaired_keycard_available(&self, py: Python) -> PyResult<bool> {
         self.instance
-            .bind(py)                          // replaces as_ref(py)
+            .bind(py)
             .call_method0("is_unpaired_keycard_available")?
             .extract()
     }
@@ -44,22 +44,6 @@ impl KeycardWallet {
             .extract()
     }
 
-    pub fn get_public_signing_key(&self, py: Python) -> PyResult<[u8; 32]> {
-        self.instance
-            .bind(py)
-            .call_method0("get_public_signing_key")?
-            .extract()
-    }
-
-    pub fn derive_path(&self, py: Python, path: Vec<u32>) -> PyResult<()> {
-        let path = Self::convert_path_to_string(path);
-
-        self.instance
-            .bind(py)
-            .call_method1("change_path", (path,))?;
-        Ok(())
-    }
-
     fn convert_path_to_string(path: Vec<u32>) -> String {
         format!(
             "m/{}",
@@ -70,23 +54,19 @@ impl KeycardWallet {
         )
     }
 
-    pub fn sign_message_current_key(&self, py: Python, message: &[u8; 32]) -> PyResult<[u8; 64]> {
-        let py_message = pyo3::types::PyBytes::new_bound(py, message);
-        
-        let py_signature: Vec<u8> = self.instance
+    pub fn get_public_key_for_path(
+        &self,
+        py: Python,
+        path: &str,
+    ) -> PyResult<Option<[u8;32]>> {
+        let public_key: Vec<u8> = self.instance
             .bind(py)
-            .call_method1("sign_message_current_key", (py_message,))?
-            .getattr("signature")?  // or "bytes", "data", "value", etc.
+            .call_method1("get_public_key_for_path", (py_message, path))?
+            .getattr("public_key")?
             .extract()?;
 
-        let signature: [u8; 64] = py_signature
-            .try_into()
-            .map_err(|_| PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "Expected signature of exactly 64 bytes"
-            ))?;
-
-        Ok(signature)
-    }
+        Ok(Some(public_key.bytes()))
+    }   
 
     pub fn sign_message_with_path(&self, py: Python, path: Vec<u32>, message: &[u8; 32]) -> PyResult<[u8; 64]> {
         let py_message = pyo3::types::PyBytes::new_bound(py, message);
@@ -94,8 +74,8 @@ impl KeycardWallet {
         
         let py_signature: Vec<u8> = self.instance
             .bind(py)
-            .call_method1("sign_message_with_path", (path, py_message))?
-            .getattr("signature")?  // or "bytes", "data", "value", etc.
+            .call_method1("sign_message_with_path", (py_message, path))?
+            .getattr("signature")?
             .extract()?;
 
         let signature: [u8; 64] = py_signature
@@ -107,17 +87,10 @@ impl KeycardWallet {
         Ok(signature)
     }
 
-    pub fn remove_account_keys(&self, py: Python) -> PyResult<()> {
+    pub fn load_mnemonic(&self, py: Python, mnemonic: &str) -> PyResult<()> {
         self.instance
             .bind(py)
-            .call_method0("remove_account_keys")?;
-        Ok(())
-    }
-
-    pub fn load_account_keys(&self, py: Python, mnemonic: &str) -> PyResult<()> {
-        self.instance
-            .bind(py)
-            .call_method1("load_account_keys", (mnemonic,))?;
+            .call_method1("load_mnemonic", (mnemonic,))?;
         Ok(())
     }
 }

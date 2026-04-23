@@ -10,7 +10,10 @@ from keycard import constants
 import keycard
 
 PIN = '123456'
+PUK = '123456123456'
 DEFAULT_PAIRING_PASSWORD = "KeycardDefaultPairing"
+DEFAULT_MNEMONIC = "fashion degree mountain wool question damp current pond grow dolphin chronic then"
+DEFAULT_PASSPHRASE = ""
 
 class KeycardWallet:
     def __init__(self):
@@ -46,144 +49,88 @@ class KeycardWallet:
             self.card.select()  
                 
             if not self.card.is_initialized:
-                # TODO: need to be able to initialize a card.
                 return False
             
             if self.pairing_index is None: 
-                pairing_index, pairing_key = self.card.pair(password) #Testing   
+                pairing_index, pairing_key = self.card.pair(password)   
                 self.pairing_index = pairing_index
                 self.pairing_key = pairing_key 
+
                
             self.card.open_secure_channel(pairing_index, pairing_key)  
-            self.card.verify_pin(PIN)      
+            self.card.verify_pin(pin)
+
             return True
         except Exception as e:  
             print(f"Error: {e}")  
             return False
 
-    """
-    # Needs to be more robust to handle card removal and reinsertion
-    def is_selected_card_available(self) -> bool:
-        if self.transport.connection is None:
-                return False
-        
+    def load_mnemonic(self, mnemonic = DEFAULT_MNEMONIC, passphrase = DEFAULT_PASSPHRASE) -> bool:
         try:
-            #TODO: fix this up Try a lightweight operation  
-            # Card is present
-            self.card.send_apdu(cla=0x00, ins=0xA4, p1=0x04, p2=0x00, data=b'')
-           # return True  
-        except Exception:  
-            return False
-        
-        # TODO: attempt to prevent a new card from being inserted
-        return self.card.is_selected  
+            # Convert mnemonic to seed  
+            mnemo = Mnemonic("english")  
+            seed = mnemo.to_seed(mnemonic, passphrase)  
 
-    """
+            print(f"PIN verified: {self.card.is_pin_verified}")  
+            print(f"Secure channel open: {self.card.is_secure_channel_open}")  
+            print(f"Card initialized: {self.card.status.get('initialized', False)}")  
+            print(f"Seed length: {len(seed)}")
 
-    # Wrapped
-    def disconnect(self) -> bool:
-        try:
-            self.card.unpair(self.pairing_index)
-            self.pairing_index = None
-            self.pairing_key = None
+            # Load the LEE seed onto the card  
+            result = self.card.load_key(  
+                key_type = constants.LoadKeyType.BIP39_SEED,  
+                bip39_seed = seed  
+            )
+
             return True
         except Exception as e:
             print(f"Error during disconnect: {e}")
             return False
 
-    # TODO: add path?
-    # Wrapped
-    def get_public_signing_key(self):
-        uncompressed_pub_key = self.card.export_current_key(public_only=True).public_key
-
-        # Convert to VerifyingKey object  
-        vk = VerifyingKey.from_string(uncompressed_pub_key, curve=SECP256k1)  
-      
-        return vk.to_string("compressed")[1:]
-    
-    """
-    # TODO: don't think this possible; blocked by firmware
-    def get_private_signing_key(self):  
+    def disconnect(self) -> bool:
         try:
-            exported = self.card.export_current_key(public_only=False)  
-            print(f"Exported key: {exported}")  
-            print(f"Public key: {exported.public_key.hex() if exported.public_key else 'None'}")  
-            print(f"Private key: {exported.private_key.hex() if exported.private_key else 'None'}")  
-            print(f"Chain code: {exported.chain_code.hex() if exported.chain_code else 'None'}")  
+            if not self.card.is_secure_channel_open:
+                return None
             
-            if exported.private_key is None:  
-                raise ValueError("No private key returned - key may not be loaded on card")  
-                
-            return exported.private_key  
-        except Exception as e:  
-            print(f"Error exporting key: {e}")  
-            raise
-    """
-    # TODO: delete this function
-    def debug_key_export(self):  
-        """Debug why key export fails with SW=6985"""  
-        
-        # 1. Check if a key exists  
-        try:  
-            status = self.card.status  
-            print(f"Status: {status}")  
-        except Exception as e:  
-            print(f"Cannot get status: {e}")  
-        
-        # 2. Try public key export first  
-        try:  
-            exported = self.card.export_current_key(public_only=True)  
-            print(f"Public key export: {exported.public_key.hex() if exported.public_key else 'None'}")  
-        except Exception as e:  
-            print(f"Public key export failed: {e}")  
-        
-        # 3. Check if key needs to be generated  
-        try:  
-            key_uid = self. card.generate_key()  
-            print(f"Generated key UID: {key_uid.hex()}")  
-        except Exception as e:  
-            print(f"Key generation failed: {e}")  
-        
-        # 4. Try private export again  
-        try:  
-            exported = self.card.export_current_key(public_only=False)
-            if exported.private_key:  
-                print(f"Private key: {exported.private_key.hex()}")  
-            else:  
-                print("Private key is None - key may not allow export")  
-        except Exception as e:  
-            print(f"Private key export failed: {e}")
-    
-    #TODO: check well formed?
-    # Wrapped
-    def change_path(self, path):
-        self.card.derive_key(path)
+            self.card.unpair(self.pairing_index)
+            self.pairing_index = None
+            self.pairing_key = None
 
-    # Message must be 32 bytes
-    # TODO: rename to current_path
-    # Wrapped
-    def sign_message_current_key(self, message = b"TestMessageMustBe32Bytes!\x00\x00\x00\x00\x00\x00\x00"):
-        # Message must be sent bytes
-        return self.card.sign(message, constants.SigningAlgorithm.SCHNORR_BIP340)
-    
-
-    # Does not update the path
-    # Wrapped
-    def sign_message_with_path(self, path, message = b"TestMessageMustBe32Bytes!\x00\x00\x00\x00\x00\x00\x00"):
-        # must be sent bytes
-        return self.card.sign_with_path(message, path, False, constants.SigningAlgorithm.SCHNORR_BIP340)
-    
-    # Wrapped
-    def remove_account_keys(self):
-        self.card.remove_key()
-
-    # TODO: update to accept a different language?
-    def load_account_keys(self, mnemonic) :
-        mnemo = Mnemonic("english")  
-        seed = mnemo.to_seed(mnemonic, passphrase="")  
+            return True
+        except Exception as e:
+            print(f"Error during unpair: {e}")
+            return False
         
-        # Load the seed onto the card  
-        result = self.card.load_key(
-            key_type= constants.LoadKeyType.BIP39_SEED,  
-            lee_seed=seed  
-        )
+    def get_public_key_for_path(self, path: str = "m/44'/60'/0'/0/0") -> str | None:
+        try:
+            if not self.card.is_secure_channel_open or not self.card.is_pin_verified:
+                return None
+
+            public_key = self.card.export_key(  
+                derivation_option = constants.DerivationOption.DERIVE,  
+                public_only = True,  
+                keypath = path  
+            )   
+
+            return public_key.public_key.hex()
+        
+        except Exception as e:
+            print(f"Error getting public key: {e}")
+            return None
+
+    def sign_message_for_path(self, message: bytes = b"DefaultMessageTestDefaultMessage", path: str = "m/44'/60'/0'/0/0") -> str | None:
+        try:
+            if not self.card.is_secure_channel_open or not self.card.is_pin_verified:
+                return None
+            
+            signature = self.card.sign_with_path(
+                digest = message,
+                path= path,
+                make_current = False
+            )
+
+            return signature.signature.hex()
+
+        except Exception as e:
+            print(f"Error signing message: {e}")
+            return None
