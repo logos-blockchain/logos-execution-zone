@@ -17,7 +17,7 @@ use nssa_core::program::{
 // account is passed along but marked with `is_authorized = true`.
 
 const HELLO_WORLD_WITH_AUTHORIZATION_PROGRAM_ID_HEX: &str =
-    "1d95c761168a7fa62eb15a3cc74d3f075e6ec98e6c1ac25bd5bcc7e0a9426398";
+    "60a0cc3d560cba06ba65f02ca70db7828e448a15f320eb7d0fd48e7fb1fa5a3e";
 const PDA_SEED: PdaSeed = PdaSeed::new([37; 32]);
 
 fn hello_world_program_id() -> ProgramId {
