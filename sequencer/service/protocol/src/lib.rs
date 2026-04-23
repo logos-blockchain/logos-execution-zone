@@ -1,5 +1,12 @@
 //! Reexports of types used by sequencer rpc specification.
 
-pub use common::{HashType, block::Block, transaction::NSSATransaction};
+pub use common::{
+    HashType,
+    block::Block,
+    receipt::{TxReceipt, TxStatus},
+    simulation::SimulationResult,
+    snapshot::StateSnapshot,
+    transaction::NSSATransaction,
+};
 pub use nssa::{Account, AccountId, ProgramId};
 pub use nssa_core::{BlockId, Commitment, MembershipProof, account::Nonce};

@@ -103,6 +103,27 @@ impl SequencerStore {
     pub fn get_nssa_state(&self) -> Option<V03State> {
         self.dbio.get_nssa_state().ok()
     }
+
+    pub fn store_rejected_tx(
+        &mut self,
+        hash: common::HashType,
+        reason: String,
+        block_height: u64,
+        timestamp_ms: u64,
+    ) -> anyhow::Result<()> {
+        use common::receipt::RejectedTxRecord;
+        let record = RejectedTxRecord { reason, timestamp_ms, block_height };
+        Ok(self.dbio.put_rejected_tx(hash, &record)?)
+    }
+
+    pub fn get_rejected_tx(&self, hash: common::HashType) -> Option<common::receipt::RejectedTxRecord> {
+        self.dbio.get_rejected_tx(hash).ok().flatten()
+    }
+
+    /// Returns the block_id that contains this transaction, or `None` if not yet included.
+    pub fn get_block_id_for_tx(&self, hash: common::HashType) -> Option<u64> {
+        self.tx_hash_to_block_map.get(&hash).copied()
+    }
 }
 
 pub(crate) fn block_to_transactions_map(block: &Block) -> HashMap<HashType, u64> {
@@ -263,5 +284,71 @@ mod tests {
             finalized_block.bedrock_status,
             common::block::BedrockStatus::Finalized
         ));
+    }
+
+    #[test]
+    fn store_and_get_rejected_tx() {
+        let temp_dir = tempdir().unwrap();
+        let signing_key = sequencer_sign_key_for_testing();
+        let genesis_block_hashable_data = HashableBlockData {
+            block_id: 0,
+            prev_block_hash: HashType([0; 32]),
+            timestamp: 0,
+            transactions: vec![],
+        };
+        let genesis_block = genesis_block_hashable_data.into_pending_block(&signing_key, [0; 32]);
+        let mut store =
+            SequencerStore::open_db_with_genesis(temp_dir.path(), &genesis_block, [0; 32], signing_key)
+                .unwrap();
+
+        let hash = HashType([42; 32]);
+        store
+            .store_rejected_tx(hash, "bad nonce".to_owned(), 1, 1_000_000)
+            .unwrap();
+
+        let record = store.get_rejected_tx(hash).unwrap();
+        assert_eq!(record.reason, "bad nonce");
+        assert_eq!(record.block_height, 1);
+    }
+
+    #[test]
+    fn get_block_id_for_tx_returns_none_when_not_included() {
+        let temp_dir = tempdir().unwrap();
+        let signing_key = sequencer_sign_key_for_testing();
+        let genesis_block_hashable_data = HashableBlockData {
+            block_id: 0,
+            prev_block_hash: HashType([0; 32]),
+            timestamp: 0,
+            transactions: vec![],
+        };
+        let genesis_block = genesis_block_hashable_data.into_pending_block(&signing_key, [0; 32]);
+        let store =
+            SequencerStore::open_db_with_genesis(temp_dir.path(), &genesis_block, [0; 32], signing_key)
+                .unwrap();
+
+        assert!(store.get_block_id_for_tx(HashType([1; 32])).is_none());
+    }
+
+    #[test]
+    fn get_block_id_for_tx_returns_block_id_after_inclusion() {
+        let temp_dir = tempdir().unwrap();
+        let signing_key = sequencer_sign_key_for_testing();
+        let genesis_block_hashable_data = HashableBlockData {
+            block_id: 0,
+            prev_block_hash: HashType([0; 32]),
+            timestamp: 0,
+            transactions: vec![],
+        };
+        let genesis_block = genesis_block_hashable_data.into_pending_block(&signing_key, [0; 32]);
+        let mut store =
+            SequencerStore::open_db_with_genesis(temp_dir.path(), &genesis_block, [0; 32], signing_key)
+                .unwrap();
+
+        let tx = common::test_utils::produce_dummy_empty_transaction();
+        let block = common::test_utils::produce_dummy_block(1, None, vec![tx.clone()]);
+        let dummy_state = nssa::V03State::new_with_genesis_accounts(&[], vec![], 0);
+        store.update(&block, [1; 32], &dummy_state).unwrap();
+
+        assert_eq!(store.get_block_id_for_tx(tx.hash()), Some(1));
     }
 }
