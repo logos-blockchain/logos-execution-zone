@@ -7,6 +7,7 @@ typedef enum OperationStatus {
   Ok = 0,
   NullPointer = 1,
   InitializationError = 2,
+  ClientError = 3,
 } OperationStatus;
 
 typedef struct IndexerServiceFFI {
@@ -27,6 +28,17 @@ typedef struct PointerResult_IndexerServiceFFI__OperationStatus {
 } PointerResult_IndexerServiceFFI__OperationStatus;
 
 typedef struct PointerResult_IndexerServiceFFI__OperationStatus InitializedIndexerServiceFFIResult;
+
+/**
+ * Simple wrapper around a pointer to a value or an error.
+ *
+ * Pointer is not guaranteed. You should check the error field before
+ * dereferencing the pointer.
+ */
+typedef struct PointerResult_u64__OperationStatus {
+  uint64_t *value;
+  enum OperationStatus error;
+} PointerResult_u64__OperationStatus;
 
 /**
  * Creates and starts an indexer based on the provided
@@ -71,6 +83,26 @@ enum OperationStatus stop_indexer(struct IndexerServiceFFI *indexer);
  * will cause a segfault.
  */
 void free_cstring(char *block);
+
+/**
+ * Stops and frees the resources associated with the given indexer service.
+ *
+ * # Arguments
+ *
+ * - `indexer`: A pointer to the `IndexerServiceFFI` instance to be stopped.
+ *
+ * # Returns
+ *
+ * An `OperationStatus` indicating success or failure.
+ *
+ * # Safety
+ *
+ * The caller must ensure that:
+ * - `indexer` is a valid pointer to a `IndexerServiceFFI` instance
+ * - The `IndexerServiceFFI` instance was created by this library
+ * - The pointer will not be used after this function returns
+ */
+struct PointerResult_u64__OperationStatus query_last_block(const struct IndexerServiceFFI *indexer);
 
 bool is_ok(const enum OperationStatus *self);
 

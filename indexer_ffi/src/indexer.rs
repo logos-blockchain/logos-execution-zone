@@ -88,6 +88,22 @@ impl IndexerServiceFFI {
                 .expect("Indexer Client must be non-null pointer")
         }
     }
+
+    /// Helper to get indexer runtime ref.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure that:
+    /// - `self` is a valid object(contains valid pointers in all fields)
+    #[must_use]
+    pub const unsafe fn runtime(&self) -> &Runtime {
+        unsafe {
+            self.runtime
+                .cast::<Runtime>()
+                .as_ref()
+                .expect("Indexer Runtime must be non-null pointer")
+        }
+    }
 }
 
 // Implement Drop to prevent memory leaks

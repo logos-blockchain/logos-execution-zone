@@ -5,6 +5,7 @@
 )]
 
 use anyhow::{Context as _, Result};
+use indexer_ffi::{IndexerServiceFFI, OperationStatus, api::PointerResult};
 use indexer_service_rpc::RpcClient as _;
 use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, format_private_account_id, format_public_account_id,
@@ -17,6 +18,12 @@ use wallet::cli::{Command, programs::native_token_transfer::AuthTransferSubcomma
 /// Maximum time to wait for the indexer to catch up to the sequencer.
 const L2_TO_L1_TIMEOUT_MILLIS: u64 = 180_000;
 
+unsafe extern "C" {
+    unsafe fn query_last_block(
+        indexer: *const IndexerServiceFFI,
+    ) -> PointerResult<u64, OperationStatus>;
+}
+
 #[test]
 fn indexer_test_run_ffi() -> Result<()> {
     let blocking_ctx = BlockingTestContextFFI::new()?;
@@ -28,10 +35,19 @@ fn indexer_test_run_ffi() -> Result<()> {
     });
 
     let last_block_indexer = blocking_ctx.ctx().get_last_block_indexer(runtime_wrapped)?;
+    let last_block_indexer_ffi_res = unsafe { query_last_block(blocking_ctx.indexer_ffi()) };
+
+    assert!(last_block_indexer_ffi_res.error.is_ok());
+
+    let last_block_indexer_ffi = unsafe { *last_block_indexer_ffi_res.value };
 
     info!("Last block on ind now is {last_block_indexer}");
+    info!("Last block on ind ffi now is {last_block_indexer_ffi}");
 
     assert!(last_block_indexer > 1);
+    assert!(last_block_indexer_ffi > 1);
+
+    assert_eq!(last_block_indexer, last_block_indexer_ffi);
 
     Ok(())
 }

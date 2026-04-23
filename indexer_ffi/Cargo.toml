@@ -7,6 +7,7 @@ version = "0.1.0"
 [dependencies]
 indexer_service.workspace = true
 sequencer_core.workspace = true
+indexer_service_rpc.workspace = true
 
 url.workspace = true
 log = { workspace = true }
