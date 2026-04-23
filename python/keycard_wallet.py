@@ -96,7 +96,7 @@ class KeycardWallet:
             print(f"Error during unpair: {e}")
             return False
         
-    def get_public_key_for_path(self, path: str = "m/44'/60'/0'/0/0") -> str | None:
+    def get_public_key_for_path(self, path: str = "m/44'/60'/0'/0/0") -> bytes | None:
         try:
             if not self.card.is_secure_channel_open or not self.card.is_pin_verified:
                 return None
@@ -106,14 +106,18 @@ class KeycardWallet:
                 public_only = True,  
                 keypath = path  
             )   
+            # TODO (marvin) clean this up
+            public_key = public_key.public_key
+            public_key = VerifyingKey.from_string(public_key[1:], curve=SECP256k1)  
+            public_key = public_key.to_string("compressed")[1:]
 
-            return public_key.public_key.hex()
+            return public_key
         
         except Exception as e:
             print(f"Error getting public key: {e}")
             return None
 
-    def sign_message_for_path(self, message: bytes = b"DefaultMessageTestDefaultMessage", path: str = "m/44'/60'/0'/0/0") -> str | None:
+    def sign_message_for_path(self, message: bytes = b"DefaultMessageTestDefaultMessage", path: str = "m/44'/60'/0'/0/0") -> bytes | None:
         try:
             if not self.card.is_secure_channel_open or not self.card.is_pin_verified:
                 return None
@@ -125,7 +129,7 @@ class KeycardWallet:
                 make_current = False
             )
 
-            return signature.signature.hex()
+            return signature.signature
 
         except Exception as e:
             print(f"Error signing message: {e}")

@@ -12,16 +12,10 @@ use crate::{
 pub enum KeycardSubcommand {
     Available,
     Load {
-        #[arg(
-            short,
-            long,
-        )]
+        #[arg(short, long)]
         mnemonic: Option<String>,
-        #[arg(
-            short,
-            long,
-        )]
-        pin: Option<String>
+        #[arg(short, long)]
+        pin: Option<String>,
     },
 }
 
@@ -37,7 +31,9 @@ impl WalletSubcommand for KeycardSubcommand {
                     python_path::add_python_path(py).expect("keycard_wallet.py not found");
 
                     let wallet = KeycardWallet::new(py).expect("Expect keycard wallet");
-                    let available = wallet.is_unpaired_keycard_available(py).expect("Expect a Boolean.");
+                    let available = wallet
+                        .is_unpaired_keycard_available(py)
+                        .expect("Expect a Boolean.");
 
                     if available {
                         println!("\u{2705} Keycard is available.");
@@ -47,46 +43,30 @@ impl WalletSubcommand for KeycardSubcommand {
                 });
 
                 Ok(SubcommandReturnValue::Empty)
-            },/*
-            Self::Connect { pin } => {
-                // TODO This should be persistent.  
+            }
+            Self::Load { mnemonic, pin } => {
                 Python::with_gil(|py| {
                     python_path::add_python_path(py).expect("keycard_wallet.py not found");
 
                     let wallet = KeycardWallet::new(py).expect("Expect keycard wallet");
 
-                    let is_connected = wallet.setup_communication(py, pin.expect("TODO")).expect("Expect a Boolean.");
+                    let is_connected = wallet
+                        .setup_communication(py, &pin.expect("TODO"))
+                        .expect("Expect a Boolean.");
 
                     if is_connected {
                         println!("\u{2705} Keycard is now connected to wallet.");
                     } else {
                         println!("\u{274c} Keycard is not connected to wallet.");
                     }
-                });             
-
-                Ok(SubcommandReturnValue::Empty) 
-            },*/
-            Self::Load { mnemonic, pin } => { 
-                Python::with_gil(|py| {
-                    python_path::add_python_path(py).expect("keycard_wallet.py not found");
-
-                    let wallet = KeycardWallet::new(py).expect("Expect keycard wallet");
-
-                    let is_connected = wallet.setup_communication(py, pin.expect("TODO")).expect("Expect a Boolean.");
-
-                    if is_connected {
-                        println!("\u{2705} Keycard is now connected to wallet.");
-                    } else {
-                        println!("\u{274c} Keycard is not connected to wallet.");
-                    }                   
 
                     let _ = wallet.load_mnemonic(py, &mnemonic.expect("TODO"));
 
                     let _ = wallet.disconnect(py);
-                });             
+                });
 
-                Ok(SubcommandReturnValue::Empty) 
-            },
+                Ok(SubcommandReturnValue::Empty)
+            }
         }
     }
 }

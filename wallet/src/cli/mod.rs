@@ -27,9 +27,9 @@ pub mod account;
 pub mod chain;
 pub mod config;
 pub mod keycard;
+pub mod keycard_wallet;
 pub mod programs;
 pub mod python_path;
-pub mod keycard_wallet;
 
 pub(crate) trait WalletSubcommand {
     async fn handle_subcommand(self, wallet_core: &mut WalletCore)

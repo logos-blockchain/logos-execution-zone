@@ -13,8 +13,6 @@ pub struct WitnessSet {
 
 impl WitnessSet {
     #[must_use]
-    // TODO: this generates signatures.
-    // However. we may need to get signatures from Keycard.
     pub fn for_message(message: &Message, proof: Proof, private_keys: &[&PrivateKey]) -> Self {
         let message_bytes = message.to_bytes();
         let signatures_and_public_keys = private_keys
@@ -26,6 +24,22 @@ impl WitnessSet {
                 )
             })
             .collect();
+        Self {
+            signatures_and_public_keys,
+            proof,
+        }
+    }
+
+    #[must_use]
+    pub fn from_list(proof: Proof, signatures: &Vec<Signature>, public_keys: &Vec<PublicKey>) -> Self {
+        assert_eq!(signatures.len(), public_keys.len());
+
+        let signatures_and_public_keys = signatures
+            .iter()
+            .zip(public_keys.iter())
+            .map(|(sig, key)| (sig.clone(), key.clone()))
+            .collect();
+
         Self {
             signatures_and_public_keys,
             proof,

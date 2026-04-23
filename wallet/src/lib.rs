@@ -18,11 +18,11 @@ use config::WalletConfig;
 use key_protocol::key_management::key_tree::{chain_index::ChainIndex, traits::KeyNode as _};
 use log::info;
 use nssa::{
-    Account, AccountId, PrivacyPreservingTransaction,
-    privacy_preserving_transaction::{
+    PublicKey,
+    Account, AccountId, PrivacyPreservingTransaction, Signature, privacy_preserving_transaction::{
         circuit::{ProgramWithDependencies, Proof},
         message::EncryptedAccountData,
-    },
+    }
 };
 use nssa_core::{
     Commitment, MembershipProof, SharedSecretKey, account::Nonce, program::InstructionData,
@@ -32,9 +32,7 @@ use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuil
 use tokio::io::AsyncWriteExt as _;
 
 use crate::{
-    config::{PersistentStorage, WalletConfigOverrides},
-    helperfunctions::produce_data_for_storage,
-    poller::TxPoller,
+    cli::keycard_wallet::KeycardWallet, config::{PersistentStorage, WalletConfigOverrides}, helperfunctions::produce_data_for_storage, poller::TxPoller
 };
 
 pub mod chain_storage;
@@ -581,6 +579,38 @@ impl WalletCore {
                 message,
                 proof.clone(),
                 &acc_manager.public_account_auth(),
+            ),
+        )
+    }
+
+    pub fn sign_privacy_message_with_keycard(
+        message: &nssa::privacy_preserving_transaction::Message,
+        proof: Proof,
+        pin: &String,
+        key_paths: &[String]
+    ) -> Result<nssa::privacy_preserving_transaction::witness_set::WitnessSet, ExecutionFailureKind>
+    {
+        let mut signatures = Vec::<Signature>::new();
+        let mut public_keys = Vec::<PublicKey>::new();
+
+                    let message_bytes: [u8; 32] = {
+                        let v = message.to_bytes();
+                        let mut bytes = [0_u8; 32];
+                        let len = v.len().min(32);
+                        bytes[..len].copy_from_slice(&v[..len]);
+                        bytes
+                    };
+
+        for path in key_paths.iter() {
+            public_keys.push( KeycardWallet::get_public_key_for_path_with_connect(&pin, &path));
+            signatures.push( KeycardWallet::sign_message_for_path_with_connection(&pin, &path, &message_bytes).expect("Expect a valid signature"));
+        }
+
+        Ok(
+            nssa::privacy_preserving_transaction::witness_set::WitnessSet::from_list(
+                proof,
+                &signatures,
+                &public_keys,
             ),
         )
     }

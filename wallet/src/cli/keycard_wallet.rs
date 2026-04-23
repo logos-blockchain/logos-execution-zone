@@ -1,5 +1,7 @@
-use pyo3::prelude::*;
-use pyo3::types::PyAny;
+use nssa::{AccountId, PublicKey, Signature};
+use pyo3::{prelude::*, types::PyAny};
+
+use crate::cli::python_path;
 
 /// Rust wrapper around the Python KeycardWallet class.
 /// Holds a persistent Python object in memory.
@@ -28,8 +30,8 @@ impl KeycardWallet {
             .extract()
     }
 
-    pub fn setup_communication(&self, py: Python, pin: String) -> PyResult<bool> {
-        let py_pin = pyo3::types::PyString::new_bound(py, &pin);
+    pub fn setup_communication(&self, py: Python, pin: &String) -> PyResult<bool> {
+        let py_pin = pyo3::types::PyString::new_bound(py, pin);
 
         self.instance
             .bind(py)
@@ -38,54 +40,96 @@ impl KeycardWallet {
     }
 
     pub fn disconnect(&self, py: Python) -> PyResult<bool> {
-        self.instance
+        self.instance.bind(py).call_method0("disconnect")?.extract()
+    }
+
+    pub fn get_public_key_for_path(&self, py: Python, path: &String) -> PyResult<PublicKey> {
+        let public_key: Vec<u8> = self
+            .instance
             .bind(py)
-            .call_method0("disconnect")?
-            .extract()
+            .call_method1("get_public_key_for_path", (path,))?
+            .extract()?;
+
+        let public_key: [u8; 32] = public_key.try_into().expect("Expect 32 bytes");
+
+        Ok(PublicKey::try_new(public_key).expect("Expect a valid public key1"))
     }
 
-    fn convert_path_to_string(path: Vec<u32>) -> String {
-        format!(
-            "m/{}",
-            path.iter()
-                .map(|n| n.to_string())
-                .collect::<Vec<_>>()
-                .join("'/")
-        )
+    pub fn get_public_key_for_path_with_connect(pin: &String, path: &String) -> PublicKey {
+        let pub_key = Python::with_gil(|py| {
+            python_path::add_python_path(py).expect("keycard_wallet.py not found");
+
+            let wallet = KeycardWallet::new(py).expect("Expect keycard wallet");
+
+            let is_connected = wallet
+                .setup_communication(py, pin)
+                .expect("Expect a Boolean.");
+
+            if is_connected {
+                println!("\u{2705} Keycard is now connected to wallet.");
+            } else {
+                println!("\u{274c} Keycard is not connected to wallet.");
+            }
+
+            let pub_key = wallet.get_public_key_for_path(py, path);
+
+            let _ = wallet.disconnect(py);
+            pub_key
+        });
+        pub_key.expect("Expect a valid public key2")
     }
 
-    pub fn get_public_key_for_path(
+    pub fn sign_message_for_path(
         &self,
         py: Python,
-        path: Vec<u32>,
-    ) -> PyResult<Option<[u8;32]>> {
-        let py_path = Self::convert_path_to_string(path); 
-        let public_key: Vec<u8> = self.instance
-            .bind(py)
-            .call_method1("get_public_key_for_path", (py_path,))?
-            .getattr("public_key")?
-            .extract()?;
-
-        Ok(Some(public_key.try_into().expect("TODO")))
-    }   
-
-    pub fn sign_message_with_path(&self, py: Python, path: Vec<u32>, message: &[u8; 32]) -> PyResult<[u8; 64]> {
+        path: &String,
+        message: &[u8; 32],
+    ) -> PyResult<Signature> {
         let py_message = pyo3::types::PyBytes::new_bound(py, message);
-        let path = Self::convert_path_to_string(path);
-        
-        let py_signature: Vec<u8> = self.instance
+
+        let py_signature: Vec<u8> = self
+            .instance
             .bind(py)
-            .call_method1("sign_message_with_path", (py_message, path))?
-            .getattr("signature")?
+            .call_method1("sign_message_for_path", (py_message, path))?
             .extract()?;
 
-        let signature: [u8; 64] = py_signature
-            .try_into()
-            .map_err(|_| PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "Expected signature of exactly 64 bytes"
-            ))?;
+        let signature: [u8; 64] = py_signature.try_into().map_err(|_| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                "Expected signature of exactly 64 bytes",
+            )
+        })?;
+        println!("{:?}", signature);
+        Ok(Signature { value: signature })
+    }
 
-        Ok(signature)
+    pub fn sign_message_for_path_with_connection(
+        pin: &String,
+        path: &String,
+        message: &[u8; 32],
+    ) -> PyResult<Signature> {
+            let signature = Python::with_gil(|py| {
+            python_path::add_python_path(py).expect("keycard_wallet.py not found");
+
+            let wallet = KeycardWallet::new(py).expect("Expect keycard wallet");
+
+            let is_connected = wallet
+                .setup_communication(py, pin)
+                .expect("Expect a Boolean.");
+
+            if is_connected {
+                println!("\u{2705} Keycard is now connected to wallet.");
+            } else {
+                println!("\u{274c} Keycard is not connected to wallet.");
+            }
+
+            let signature = wallet.sign_message_for_path(py, path, message);
+
+            let _ = wallet.disconnect(py);
+
+            signature
+        });
+
+        signature
     }
 
     pub fn load_mnemonic(&self, py: Python, mnemonic: &str) -> PyResult<()> {
@@ -93,5 +137,11 @@ impl KeycardWallet {
             .bind(py)
             .call_method1("load_mnemonic", (mnemonic,))?;
         Ok(())
+    }
+
+    pub fn get_account_id_for_path_with_connect(pin: &String, key_path: &String) -> AccountId {
+        let public_key = KeycardWallet::get_public_key_for_path_with_connect(pin, key_path);
+
+        AccountId::from(&public_key)
     }
 }
