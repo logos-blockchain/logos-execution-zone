@@ -185,7 +185,7 @@ mod tests {
 
     use nssa_core::{
         Commitment, DUMMY_COMMITMENT_HASH, EncryptionScheme, Nullifier, SharedSecretKey,
-        account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
+        account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data}, derive_identifier,
     };
 
     use super::*;
@@ -274,6 +274,16 @@ mod tests {
         let sender_keys = test_private_account_keys_1();
         let recipient_keys = test_private_account_keys_2();
 
+        let esk_1 = [3; 32];
+        let shared_secret_1 = SharedSecretKey::new(&esk_1, &sender_keys.vpk());
+        let sender_identifier = derive_identifier(&shared_secret_1);
+        let sender_account_id = AccountId::from((&sender_keys.npk(), sender_identifier));
+
+        let esk_2 = [5; 32];
+        let shared_secret_2 = SharedSecretKey::new(&esk_2, &recipient_keys.vpk());
+        let recipient_identifier = derive_identifier(&shared_secret_2);
+        let recipient_account_id = AccountId::from((&recipient_keys.npk(), recipient_identifier));
+
         let sender_nonce = Nonce(0xdead_beef);
         let sender_pre = AccountWithMetadata::new(
             Account {
@@ -283,15 +293,11 @@ mod tests {
                 data: Data::default(),
             },
             true,
-            AccountId::from((&sender_keys.npk(), 0)),
+            sender_account_id,
         );
-        let sender_account_id = AccountId::from((&sender_keys.npk(), 0));
-        let commitment_sender = Commitment::new(&sender_account_id, &sender_pre.account);
-
-        let recipient_account_id = AccountId::from((&recipient_keys.npk(), 0));
         let recipient = AccountWithMetadata::new(Account::default(), false, recipient_account_id);
-        let balance_to_move: u128 = 37;
 
+        let commitment_sender = Commitment::new(&sender_account_id, &sender_pre.account);
         let mut commitment_set = CommitmentSet::with_capacity(2);
         commitment_set.extend(std::slice::from_ref(&commitment_sender));
         let expected_new_nullifiers = vec![
@@ -304,6 +310,8 @@ mod tests {
                 DUMMY_COMMITMENT_HASH,
             ),
         ];
+
+        let balance_to_move: u128 = 37;
 
         let program = Program::authenticated_transfer_program();
 
@@ -324,19 +332,14 @@ mod tests {
             Commitment::new(&recipient_account_id, &expected_private_account_2),
         ];
 
-        let esk_1 = [3; 32];
-        let shared_secret_1 = SharedSecretKey::new(&esk_1, &sender_keys.vpk());
-
-        let esk_2 = [5; 32];
-        let shared_secret_2 = SharedSecretKey::new(&esk_2, &recipient_keys.vpk());
 
         let (output, proof) = execute_and_prove(
             vec![sender_pre, recipient],
             Program::serialize_instruction(balance_to_move).unwrap(),
             vec![1, 2],
             vec![
-                (sender_keys.npk(), 0, shared_secret_1),
-                (recipient_keys.npk(), 0, shared_secret_2),
+                (sender_keys.npk(), sender_identifier, shared_secret_1),
+                (recipient_keys.npk(), recipient_identifier, shared_secret_2),
             ],
             vec![sender_keys.nsk],
             vec![commitment_set.get_proof_for(&commitment_sender), None],
