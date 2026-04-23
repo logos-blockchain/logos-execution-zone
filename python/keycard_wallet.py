@@ -71,15 +71,10 @@ class KeycardWallet:
             mnemo = Mnemonic("english")  
             seed = mnemo.to_seed(mnemonic, passphrase)  
 
-            print(f"PIN verified: {self.card.is_pin_verified}")  
-            print(f"Secure channel open: {self.card.is_secure_channel_open}")  
-            print(f"Card initialized: {self.card.status.get('initialized', False)}")  
-            print(f"Seed length: {len(seed)}")
-
             # Load the LEE seed onto the card  
             result = self.card.load_key(  
                 key_type = constants.LoadKeyType.BIP39_SEED,  
-                bip39_seed = seed  
+                lee_seed = seed  
             )
 
             return True
@@ -125,7 +120,8 @@ class KeycardWallet:
             
             signature = self.card.sign_with_path(
                 digest = message,
-                path= path,
+                path = path,
+                algorithm = constants.SigningAlgorithm.SCHNORR_BIP340,
                 make_current = False
             )
 

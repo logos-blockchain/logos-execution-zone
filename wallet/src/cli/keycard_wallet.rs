@@ -57,15 +57,16 @@ impl KeycardWallet {
     pub fn get_public_key_for_path(
         &self,
         py: Python,
-        path: &str,
+        path: Vec<u32>,
     ) -> PyResult<Option<[u8;32]>> {
+        let py_path = Self::convert_path_to_string(path); 
         let public_key: Vec<u8> = self.instance
             .bind(py)
-            .call_method1("get_public_key_for_path", (py_message, path))?
+            .call_method1("get_public_key_for_path", (py_path,))?
             .getattr("public_key")?
             .extract()?;
 
-        Ok(Some(public_key.bytes()))
+        Ok(Some(public_key.try_into().expect("TODO")))
     }   
 
     pub fn sign_message_with_path(&self, py: Python, path: Vec<u32>, message: &[u8; 32]) -> PyResult<[u8; 64]> {
