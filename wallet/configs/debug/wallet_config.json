@@ -7,14 +7,80 @@
     "initial_accounts": [
         {
             "Public": {
-                "account_id": "CbgR6tj5kWx5oziiFptM7jMvrQeYY3Mzaao6ciuhSr2r",
-                "pub_sign_key": "7f273098f25b71e6c005a9519f2678da8d1c7f01f6a27778e2d9948abdf901fb"
+                "account_id": "jZvdpERLqEkzk6CAz6vDuDJ1wx5aoyFpDa1VFmRvuPX",
+                "pub_sign_key": [
+                    157,
+                    102,
+                    173,
+                    116,
+                    76,
+                    167,
+                    130,
+                    165,
+                    77,
+                    104,
+                    14,
+                    233,
+                    114,
+                    43,
+                    180,
+                    98,
+                    59,
+                    187,
+                    165,
+                    28,
+                    80,
+                    130,
+                    126,
+                    164,
+                    224,
+                    181,
+                    203,
+                    53,
+                    31,
+                    168,
+                    169,
+                    23
+                ]
             }
         },
         {
             "Public": {
-                "account_id": "2RHZhw9h534Zr3eq2RGhQete2Hh667foECzXPmSkGni2",
-                "pub_sign_key": "f434f8741720014586ae43356d2aec6257da086222f604ddb75d69733b86fc4c"
+                "account_id": "3jQfsyRyvVpBfdkZegf8QpjfcDq1M5RAXB4H4eJ4kTtf",
+                "pub_sign_key": [
+                    230,
+                    17,
+                    4,
+                    52,
+                    87,
+                    162,
+                    72,
+                    137,
+                    119,
+                    205,
+                    163,
+                    211,
+                    118,
+                    157,
+                    15,
+                    164,
+                    67,
+                    12,
+                    124,
+                    50,
+                    159,
+                    23,
+                    184,
+                    6,
+                    109,
+                    154,
+                    2,
+                    219,
+                    147,
+                    239,
+                    125,
+                    20
+                ]
             }
         },
         {
