@@ -17,7 +17,7 @@ use nssa_core::{
 };
 use risc0_zkvm::{guest::env, serde::to_vec};
 
-const PRIVATE_PDA_FIXED_IDENTIFIER: u128 = 0;
+const PRIVATE_PDA_FIXED_IDENTIFIER: u128 = u128::MAX;
 
 /// State of the involved accounts before and after program execution.
 struct ExecutionState {
