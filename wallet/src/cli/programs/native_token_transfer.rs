@@ -156,7 +156,7 @@ impl WalletSubcommand for AuthTransferSubcommand {
                         anyhow::bail!("Provide only one of --to or --to-label")
                     }
                 };
-                let to_identifier = to_identifier.unwrap_or(rand::random());
+                let to_identifier = to_identifier.unwrap_or_else(rand::random);
                 let underlying_subcommand = match (to, to_npk, to_vpk) {
                     (None, None, None) => {
                         anyhow::bail!(

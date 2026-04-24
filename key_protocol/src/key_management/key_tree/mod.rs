@@ -41,7 +41,6 @@ impl<N: KeyTreeNode> KeyTree<N> {
         let root_keys = N::from_seed(seed_fit);
         let account_id_map = root_keys
             .account_ids()
-            .into_iter()
             .map(|id| (id, ChainIndex::root()))
             .collect();
 
@@ -54,7 +53,6 @@ impl<N: KeyTreeNode> KeyTree<N> {
     pub fn new_from_root(root: N) -> Self {
         let account_id_map = root
             .account_ids()
-            .into_iter()
             .map(|id| (id, ChainIndex::root()))
             .collect();
 
