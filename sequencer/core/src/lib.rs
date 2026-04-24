@@ -1095,7 +1095,7 @@ mod tests {
         // Start a sequencer from config with a preconfigured private genesis account
         let mut config = setup_sequencer_config();
         config.initial_private_accounts = Some(vec![PrivateAccountPublicInitialData {
-            npk: npk.clone(),
+            npk,
             account: genesis_account,
         }]);
 
@@ -1115,7 +1115,7 @@ mod tests {
             )],
             Program::serialize_instruction(0_u128).unwrap(),
             vec![1],
-            vec![(npk.clone(), 0, shared_secret)],
+            vec![(npk, 0, shared_secret)],
             vec![nsk],
             vec![None],
             &Program::authenticated_transfer_program().into(),

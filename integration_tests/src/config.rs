@@ -121,7 +121,7 @@ impl InitialData {
         self.private_accounts
             .iter()
             .map(|(key_chain, account)| PrivateAccountPublicInitialData {
-                npk: key_chain.nullifier_public_key.clone(),
+                npk: key_chain.nullifier_public_key,
                 account: account.clone(),
             })
             .collect()

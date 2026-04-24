@@ -252,10 +252,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
         vec![sender_pre, recipient_pre],
         Program::serialize_instruction(balance_to_move).unwrap(),
         vec![1, 2],
-        vec![
-            (sender_npk.clone(), 0, sender_ss),
-            (recipient_npk.clone(), 0, recipient_ss),
-        ],
+        vec![(sender_npk, 0, sender_ss), (recipient_npk, 0, recipient_ss)],
         vec![sender_nsk],
         vec![Some(proof)],
         &program.into(),

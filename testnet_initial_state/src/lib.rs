@@ -172,7 +172,7 @@ pub fn initial_commitments() -> Vec<PrivateAccountPublicInitialData> {
     initial_priv_accounts_private_keys()
         .into_iter()
         .map(|data| PrivateAccountPublicInitialData {
-            npk: data.key_chain.nullifier_public_key.clone(),
+            npk: data.key_chain.nullifier_public_key,
             account: data.account,
         })
         .collect()

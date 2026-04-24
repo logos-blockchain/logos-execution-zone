@@ -417,7 +417,7 @@ impl WalletCore {
             acc_manager.visibility_mask().to_vec(),
             private_account_keys
                 .iter()
-                .map(|keys| (keys.npk.clone(), keys.identifier, keys.ssk))
+                .map(|keys| (keys.npk, keys.identifier, keys.ssk))
                 .collect::<Vec<_>>(),
             acc_manager.private_account_auth(),
             acc_manager.private_account_membership_proofs(),
@@ -431,7 +431,7 @@ impl WalletCore {
                 Vec::from_iter(acc_manager.public_account_nonces()),
                 private_account_keys
                     .iter()
-                    .map(|keys| (keys.npk.clone(), keys.vpk.clone(), keys.epk.clone()))
+                    .map(|keys| (keys.npk, keys.vpk.clone(), keys.epk.clone()))
                     .collect(),
                 output,
             )
