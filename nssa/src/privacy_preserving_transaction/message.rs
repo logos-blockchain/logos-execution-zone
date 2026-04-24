@@ -118,6 +118,11 @@ impl Message {
             timestamp_validity_window: output.timestamp_validity_window,
         })
     }
+
+    #[must_use]
+    pub fn hash_message(&self) -> [u8; 32] {
+        Sha256::digest(self.to_bytes()).into()
+    }
 }
 
 #[cfg(test)]
