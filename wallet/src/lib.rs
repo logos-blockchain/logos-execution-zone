@@ -280,8 +280,7 @@ impl WalletCore {
             .expect("Node was just inserted")
             .value
             .0
-            .nullifier_public_key
-            .clone();
+            .nullifier_public_key;
         let account_id = AccountId::from((&npk, identifier));
         self.storage
             .insert_private_account_data(account_id, identifier, Account::default());

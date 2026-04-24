@@ -17,6 +17,8 @@ use nssa_core::{
 };
 use risc0_zkvm::{guest::env, serde::to_vec};
 
+const PRIVATE_PDA_FIXED_IDENTIFIER: u128 = 0;
+
 /// State of the involved accounts before and after program execution.
 struct ExecutionState {
     pre_states: Vec<AccountWithMetadata>,
@@ -54,7 +56,7 @@ impl ExecutionState {
     /// Validate program outputs and derive the overall execution state.
     pub fn derive_from_outputs(
         visibility_mask: &[u8],
-        private_account_keys: &[(NullifierPublicKey, SharedSecretKey)],
+        private_account_keys: &[(NullifierPublicKey, Identifier, SharedSecretKey)],
         program_id: ProgramId,
         program_outputs: Vec<ProgramOutput>,
     ) -> Self {
@@ -67,7 +69,7 @@ impl ExecutionState {
             let mut keys_iter = private_account_keys.iter();
             for (pos, &mask) in visibility_mask.iter().enumerate() {
                 if matches!(mask, 1..=3) {
-                    let (npk, _) = keys_iter.next().unwrap_or_else(|| {
+                    let (npk, _, _) = keys_iter.next().unwrap_or_else(|| {
                         panic!(
                             "private_account_keys shorter than visibility_mask demands: no key for masked position {pos} (mask {mask})"
                         )
@@ -627,9 +629,11 @@ fn compute_circuit_output(
                 // `private_pda_bound_positions` check) guarantees that every mask-3
                 // position has been through at least one such binding, so this
                 // branch can safely use the wallet npk without re-verifying.
-                let Some((npk, shared_secret)) = private_keys_iter.next() else {
+                let Some((npk, identifier, shared_secret)) = private_keys_iter.next() else {
                     panic!("Missing private account key");
                 };
+
+                assert_eq!(*identifier, PRIVATE_PDA_FIXED_IDENTIFIER);
 
                 let (new_nullifier, new_nonce) = if pre_state.is_authorized {
                     // Existing private PDA with authentication (like mask 1)
@@ -649,7 +653,7 @@ fn compute_circuit_output(
                     let new_nullifier = compute_nullifier_and_set_digest(
                         membership_proof_opt.as_ref(),
                         &pre_state.account,
-                        npk,
+                        &pre_state.account_id,
                         nsk,
                     );
                     let new_nonce = pre_state.account.nonce.private_account_nonce_increment(nsk);
@@ -676,8 +680,8 @@ fn compute_circuit_output(
                         "Membership proof must be None for new accounts"
                     );
 
-                    let nullifier = Nullifier::for_account_initialization(npk);
-                    let new_nonce = Nonce::private_account_nonce_init(npk);
+                    let nullifier = Nullifier::for_account_initialization(&pre_state.account_id);
+                    let new_nonce = Nonce::private_account_nonce_init(&pre_state.account_id);
                     ((nullifier, DUMMY_COMMITMENT_HASH), new_nonce)
                 };
                 output.new_nullifiers.push(new_nullifier);
@@ -685,10 +689,11 @@ fn compute_circuit_output(
                 let mut post_with_updated_nonce = post_state;
                 post_with_updated_nonce.nonce = new_nonce;
 
-                let commitment_post = Commitment::new(npk, &post_with_updated_nonce);
+                let commitment_post = Commitment::new(&pre_state.account_id, &post_with_updated_nonce);
 
                 let encrypted_account = EncryptionScheme::encrypt(
                     &post_with_updated_nonce,
+                    PRIVATE_PDA_FIXED_IDENTIFIER,
                     shared_secret,
                     &commitment_post,
                     output_index,
