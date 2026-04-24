@@ -1,4 +1,4 @@
-use secp256k1::Scalar;
+use k256::elliptic_curve::{PrimeField as _, sec1::ToEncodedPoint as _};
 use serde::{Deserialize, Serialize};
 
 use crate::key_management::key_tree::traits::KeyNode;
@@ -13,7 +13,6 @@ pub struct ChildKeysPublic {
 }
 
 impl ChildKeysPublic {
-    #[expect(clippy::big_endian_bytes, reason = "BIP-032 uses big endian")]
     fn compute_hash_value(&self, cci: u32) -> [u8; 64] {
         let mut hash_input = vec![];
 
@@ -21,16 +20,17 @@ impl ChildKeysPublic {
             // Non-harden.
             // BIP-032 compatibility requires 1-byte header from the public_key;
             // Not stored in `self.cpk.value()`.
-            let sk = secp256k1::SecretKey::from_byte_array(*self.csk.value())
+            let sk = k256::SecretKey::from_bytes(self.csk.value().into())
                 .expect("32 bytes, within curve order");
-            let pk = secp256k1::PublicKey::from_secret_key(&secp256k1::Secp256k1::new(), &sk);
-            hash_input.extend_from_slice(&secp256k1::PublicKey::serialize(&pk));
+            let pk = sk.public_key();
+            hash_input.extend_from_slice(pk.to_encoded_point(true).as_bytes());
         } else {
             // Harden.
             hash_input.extend_from_slice(&[0_u8]);
             hash_input.extend_from_slice(self.csk.value());
         }
 
+        #[expect(clippy::big_endian_bytes, reason = "BIP-032 uses big endian")]
         hash_input.extend_from_slice(&cci.to_be_bytes());
 
         hmac_sha512::HMAC::mac(hash_input, self.ccc)
@@ -41,7 +41,12 @@ impl KeyNode for ChildKeysPublic {
     fn root(seed: [u8; 64]) -> Self {
         let hash_value = hmac_sha512::HMAC::mac(seed, "LEE_master_pub");
 
-        let csk = nssa::PrivateKey::try_new(*hash_value.first_chunk::<32>().unwrap()).unwrap();
+        let csk = nssa::PrivateKey::try_new(
+            *hash_value
+                .first_chunk::<32>()
+                .expect("hash_value is 64 bytes, must be safe to get first 32"),
+        )
+        .expect("Expect a valid Private Key");
         let ccc = *hash_value.last_chunk::<32>().unwrap();
         let cpk = nssa::PublicKey::new_from_private_key(&csk);
 
@@ -56,26 +61,20 @@ impl KeyNode for ChildKeysPublic {
     fn nth_child(&self, cci: u32) -> Self {
         let hash_value = self.compute_hash_value(cci);
 
-        let csk = secp256k1::SecretKey::from_byte_array(
-            *hash_value
-                .first_chunk::<32>()
-                .expect("hash_value is 64 bytes, must be safe to get first 32"),
-        )
-        .unwrap();
-
         let csk = nssa::PrivateKey::try_new({
-            let scalar = Scalar::from_be_bytes(*self.csk.value()).unwrap();
+            let hash_value = hash_value
+                .first_chunk::<32>()
+                .expect("hash_value is 64 bytes, must be safe to get first 32");
 
-            csk.add_tweak(&scalar)
-                .expect("Expect a valid Scalar")
-                .secret_bytes()
+            let value_1 =
+                k256::Scalar::from_repr((*hash_value).into()).expect("Expect a valid k256 scalar");
+            let value_2 = k256::Scalar::from_repr((*self.csk.value()).into())
+                .expect("Expect a valid k256 scalar");
+
+            let sum = value_1.add(&value_2);
+            sum.to_bytes().into()
         })
-        .unwrap();
-
-        assert!(
-            secp256k1::constants::CURVE_ORDER >= *csk.value(),
-            "Secret key cannot exceed curve order"
-        );
+        .expect("Expect a valid private key");
 
         let ccc = *hash_value
             .last_chunk::<32>()

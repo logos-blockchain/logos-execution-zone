@@ -79,8 +79,10 @@ async fn create_and_transfer_public_token() -> Result<()> {
     let name = "A NAME".to_owned();
     let total_supply = 37;
     let subcommand = TokenProgramAgnosticSubcommand::New {
-        definition_account_id: format_public_account_id(definition_account_id),
-        supply_account_id: format_public_account_id(supply_account_id),
+        definition_account_id: Some(format_public_account_id(definition_account_id)),
+        definition_account_label: None,
+        supply_account_id: Some(format_public_account_id(supply_account_id)),
+        supply_account_label: None,
         name: name.clone(),
         total_supply,
     };
@@ -126,8 +128,10 @@ async fn create_and_transfer_public_token() -> Result<()> {
     // Transfer 7 tokens from supply_acc to recipient_account_id
     let transfer_amount = 7;
     let subcommand = TokenProgramAgnosticSubcommand::Send {
-        from: format_public_account_id(supply_account_id),
+        from: Some(format_public_account_id(supply_account_id)),
+        from_label: None,
         to: Some(format_public_account_id(recipient_account_id)),
+        to_label: None,
         to_npk: None,
         to_vpk: None,
         amount: transfer_amount,
@@ -171,8 +175,10 @@ async fn create_and_transfer_public_token() -> Result<()> {
     // Burn 3 tokens from recipient_acc
     let burn_amount = 3;
     let subcommand = TokenProgramAgnosticSubcommand::Burn {
-        definition: format_public_account_id(definition_account_id),
-        holder: format_public_account_id(recipient_account_id),
+        definition: Some(format_public_account_id(definition_account_id)),
+        definition_label: None,
+        holder: Some(format_public_account_id(recipient_account_id)),
+        holder_label: None,
         amount: burn_amount,
     };
 
@@ -215,8 +221,10 @@ async fn create_and_transfer_public_token() -> Result<()> {
     // Mint 10 tokens at recipient_acc
     let mint_amount = 10;
     let subcommand = TokenProgramAgnosticSubcommand::Mint {
-        definition: format_public_account_id(definition_account_id),
+        definition: Some(format_public_account_id(definition_account_id)),
+        definition_label: None,
         holder: Some(format_public_account_id(recipient_account_id)),
+        holder_label: None,
         holder_npk: None,
         holder_vpk: None,
         amount: mint_amount,
@@ -319,8 +327,10 @@ async fn create_and_transfer_token_with_private_supply() -> Result<()> {
     let name = "A NAME".to_owned();
     let total_supply = 37;
     let subcommand = TokenProgramAgnosticSubcommand::New {
-        definition_account_id: format_public_account_id(definition_account_id),
-        supply_account_id: format_private_account_id(supply_account_id),
+        definition_account_id: Some(format_public_account_id(definition_account_id)),
+        definition_account_label: None,
+        supply_account_id: Some(format_private_account_id(supply_account_id)),
+        supply_account_label: None,
         name: name.clone(),
         total_supply,
     };
@@ -356,8 +366,10 @@ async fn create_and_transfer_token_with_private_supply() -> Result<()> {
     // Transfer 7 tokens from supply_acc to recipient_account_id
     let transfer_amount = 7;
     let subcommand = TokenProgramAgnosticSubcommand::Send {
-        from: format_private_account_id(supply_account_id),
+        from: Some(format_private_account_id(supply_account_id)),
+        from_label: None,
         to: Some(format_private_account_id(recipient_account_id)),
+        to_label: None,
         to_npk: None,
         to_vpk: None,
         amount: transfer_amount,
@@ -383,8 +395,10 @@ async fn create_and_transfer_token_with_private_supply() -> Result<()> {
     // Burn 3 tokens from recipient_acc
     let burn_amount = 3;
     let subcommand = TokenProgramAgnosticSubcommand::Burn {
-        definition: format_public_account_id(definition_account_id),
-        holder: format_private_account_id(recipient_account_id),
+        definition: Some(format_public_account_id(definition_account_id)),
+        definition_label: None,
+        holder: Some(format_private_account_id(recipient_account_id)),
+        holder_label: None,
         amount: burn_amount,
     };
 
@@ -475,8 +489,10 @@ async fn create_token_with_private_definition() -> Result<()> {
     let name = "A NAME".to_owned();
     let total_supply = 37;
     let subcommand = TokenProgramAgnosticSubcommand::New {
-        definition_account_id: format_private_account_id(definition_account_id),
-        supply_account_id: format_public_account_id(supply_account_id),
+        definition_account_id: Some(format_private_account_id(definition_account_id)),
+        definition_account_label: None,
+        supply_account_id: Some(format_public_account_id(supply_account_id)),
+        supply_account_label: None,
         name: name.clone(),
         total_supply,
     };
@@ -544,8 +560,10 @@ async fn create_token_with_private_definition() -> Result<()> {
     // Mint to public account
     let mint_amount_public = 10;
     let subcommand = TokenProgramAgnosticSubcommand::Mint {
-        definition: format_private_account_id(definition_account_id),
+        definition: Some(format_private_account_id(definition_account_id)),
+        definition_label: None,
         holder: Some(format_public_account_id(recipient_account_id_public)),
+        holder_label: None,
         holder_npk: None,
         holder_vpk: None,
         amount: mint_amount_public,
@@ -590,8 +608,10 @@ async fn create_token_with_private_definition() -> Result<()> {
     // Mint to private account
     let mint_amount_private = 5;
     let subcommand = TokenProgramAgnosticSubcommand::Mint {
-        definition: format_private_account_id(definition_account_id),
+        definition: Some(format_private_account_id(definition_account_id)),
+        definition_label: None,
         holder: Some(format_private_account_id(recipient_account_id_private)),
+        holder_label: None,
         holder_npk: None,
         holder_vpk: None,
         amount: mint_amount_private,
@@ -669,8 +689,10 @@ async fn create_token_with_private_definition_and_supply() -> Result<()> {
     let name = "A NAME".to_owned();
     let total_supply = 37;
     let subcommand = TokenProgramAgnosticSubcommand::New {
-        definition_account_id: format_private_account_id(definition_account_id),
-        supply_account_id: format_private_account_id(supply_account_id),
+        definition_account_id: Some(format_private_account_id(definition_account_id)),
+        definition_account_label: None,
+        supply_account_id: Some(format_private_account_id(supply_account_id)),
+        supply_account_label: None,
         name,
         total_supply,
     };
@@ -728,8 +750,10 @@ async fn create_token_with_private_definition_and_supply() -> Result<()> {
     // Transfer tokens
     let transfer_amount = 7;
     let subcommand = TokenProgramAgnosticSubcommand::Send {
-        from: format_private_account_id(supply_account_id),
+        from: Some(format_private_account_id(supply_account_id)),
+        from_label: None,
         to: Some(format_private_account_id(recipient_account_id)),
+        to_label: None,
         to_npk: None,
         to_vpk: None,
         amount: transfer_amount,
@@ -841,8 +865,10 @@ async fn shielded_token_transfer() -> Result<()> {
     let name = "A NAME".to_owned();
     let total_supply = 37;
     let subcommand = TokenProgramAgnosticSubcommand::New {
-        definition_account_id: format_public_account_id(definition_account_id),
-        supply_account_id: format_public_account_id(supply_account_id),
+        definition_account_id: Some(format_public_account_id(definition_account_id)),
+        definition_account_label: None,
+        supply_account_id: Some(format_public_account_id(supply_account_id)),
+        supply_account_label: None,
         name,
         total_supply,
     };
@@ -855,8 +881,10 @@ async fn shielded_token_transfer() -> Result<()> {
     // Perform shielded transfer: public supply -> private recipient
     let transfer_amount = 7;
     let subcommand = TokenProgramAgnosticSubcommand::Send {
-        from: format_public_account_id(supply_account_id),
+        from: Some(format_public_account_id(supply_account_id)),
+        from_label: None,
         to: Some(format_private_account_id(recipient_account_id)),
+        to_label: None,
         to_npk: None,
         to_vpk: None,
         amount: transfer_amount,
@@ -963,8 +991,10 @@ async fn deshielded_token_transfer() -> Result<()> {
     let name = "A NAME".to_owned();
     let total_supply = 37;
     let subcommand = TokenProgramAgnosticSubcommand::New {
-        definition_account_id: format_public_account_id(definition_account_id),
-        supply_account_id: format_private_account_id(supply_account_id),
+        definition_account_id: Some(format_public_account_id(definition_account_id)),
+        definition_account_label: None,
+        supply_account_id: Some(format_private_account_id(supply_account_id)),
+        supply_account_label: None,
         name,
         total_supply,
     };
@@ -977,8 +1007,10 @@ async fn deshielded_token_transfer() -> Result<()> {
     // Perform deshielded transfer: private supply -> public recipient
     let transfer_amount = 7;
     let subcommand = TokenProgramAgnosticSubcommand::Send {
-        from: format_private_account_id(supply_account_id),
+        from: Some(format_private_account_id(supply_account_id)),
+        from_label: None,
         to: Some(format_public_account_id(recipient_account_id)),
+        to_label: None,
         to_npk: None,
         to_vpk: None,
         amount: transfer_amount,
@@ -1069,8 +1101,10 @@ async fn token_claiming_path_with_private_accounts() -> Result<()> {
     let name = "A NAME".to_owned();
     let total_supply = 37;
     let subcommand = TokenProgramAgnosticSubcommand::New {
-        definition_account_id: format_private_account_id(definition_account_id),
-        supply_account_id: format_private_account_id(supply_account_id),
+        definition_account_id: Some(format_private_account_id(definition_account_id)),
+        definition_account_label: None,
+        supply_account_id: Some(format_private_account_id(supply_account_id)),
+        supply_account_label: None,
         name,
         total_supply,
     };
@@ -1108,8 +1142,10 @@ async fn token_claiming_path_with_private_accounts() -> Result<()> {
     // Mint using claiming path (foreign account)
     let mint_amount = 9;
     let subcommand = TokenProgramAgnosticSubcommand::Mint {
-        definition: format_private_account_id(definition_account_id),
+        definition: Some(format_private_account_id(definition_account_id)),
+        definition_label: None,
         holder: None,
+        holder_label: None,
         holder_npk: Some(hex::encode(holder_keys.nullifier_public_key.0)),
         holder_vpk: Some(hex::encode(holder_keys.viewing_public_key.0)),
         amount: mint_amount,
@@ -1146,6 +1182,196 @@ async fn token_claiming_path_with_private_accounts() -> Result<()> {
     );
 
     info!("Successfully minted tokens using claiming path");
+
+    Ok(())
+}
+
+#[test]
+async fn create_token_using_labels() -> Result<()> {
+    let mut ctx = TestContext::new().await?;
+
+    // Create definition and supply accounts with labels
+    let def_label = "token-definition-label".to_owned();
+    let supply_label = "token-supply-label".to_owned();
+
+    let result = wallet::cli::execute_subcommand(
+        ctx.wallet_mut(),
+        Command::Account(AccountSubcommand::New(NewSubcommand::Public {
+            cci: None,
+            label: Some(def_label.clone()),
+        })),
+    )
+    .await?;
+    let SubcommandReturnValue::RegisterAccount {
+        account_id: definition_account_id,
+    } = result
+    else {
+        anyhow::bail!("Expected RegisterAccount return value");
+    };
+
+    let result = wallet::cli::execute_subcommand(
+        ctx.wallet_mut(),
+        Command::Account(AccountSubcommand::New(NewSubcommand::Public {
+            cci: None,
+            label: Some(supply_label.clone()),
+        })),
+    )
+    .await?;
+    let SubcommandReturnValue::RegisterAccount {
+        account_id: supply_account_id,
+    } = result
+    else {
+        anyhow::bail!("Expected RegisterAccount return value");
+    };
+
+    // Create token using account labels instead of IDs
+    let name = "LABELED TOKEN".to_owned();
+    let total_supply = 100;
+    let subcommand = TokenProgramAgnosticSubcommand::New {
+        definition_account_id: None,
+        definition_account_label: Some(def_label),
+        supply_account_id: None,
+        supply_account_label: Some(supply_label),
+        name: name.clone(),
+        total_supply,
+    };
+    wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
+
+    info!("Waiting for next block creation");
+    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
+
+    let definition_acc = ctx
+        .sequencer_client()
+        .get_account(definition_account_id)
+        .await?;
+    let token_definition = TokenDefinition::try_from(&definition_acc.data)?;
+
+    assert_eq!(definition_acc.program_owner, Program::token().id());
+    assert_eq!(
+        token_definition,
+        TokenDefinition::Fungible {
+            name,
+            total_supply,
+            metadata_id: None
+        }
+    );
+
+    let supply_acc = ctx
+        .sequencer_client()
+        .get_account(supply_account_id)
+        .await?;
+    let token_holding = TokenHolding::try_from(&supply_acc.data)?;
+    assert_eq!(
+        token_holding,
+        TokenHolding::Fungible {
+            definition_id: definition_account_id,
+            balance: total_supply
+        }
+    );
+
+    info!("Successfully created token using definition and supply account labels");
+
+    Ok(())
+}
+
+#[test]
+async fn transfer_token_using_from_label() -> Result<()> {
+    let mut ctx = TestContext::new().await?;
+
+    // Create definition account
+    let result = wallet::cli::execute_subcommand(
+        ctx.wallet_mut(),
+        Command::Account(AccountSubcommand::New(NewSubcommand::Public {
+            cci: None,
+            label: None,
+        })),
+    )
+    .await?;
+    let SubcommandReturnValue::RegisterAccount {
+        account_id: definition_account_id,
+    } = result
+    else {
+        anyhow::bail!("Expected RegisterAccount return value");
+    };
+
+    // Create supply account with a label
+    let supply_label = "token-supply-sender".to_owned();
+    let result = wallet::cli::execute_subcommand(
+        ctx.wallet_mut(),
+        Command::Account(AccountSubcommand::New(NewSubcommand::Public {
+            cci: None,
+            label: Some(supply_label.clone()),
+        })),
+    )
+    .await?;
+    let SubcommandReturnValue::RegisterAccount {
+        account_id: supply_account_id,
+    } = result
+    else {
+        anyhow::bail!("Expected RegisterAccount return value");
+    };
+
+    // Create recipient account
+    let result = wallet::cli::execute_subcommand(
+        ctx.wallet_mut(),
+        Command::Account(AccountSubcommand::New(NewSubcommand::Public {
+            cci: None,
+            label: None,
+        })),
+    )
+    .await?;
+    let SubcommandReturnValue::RegisterAccount {
+        account_id: recipient_account_id,
+    } = result
+    else {
+        anyhow::bail!("Expected RegisterAccount return value");
+    };
+
+    // Create token
+    let total_supply = 50;
+    let subcommand = TokenProgramAgnosticSubcommand::New {
+        definition_account_id: Some(format_public_account_id(definition_account_id)),
+        definition_account_label: None,
+        supply_account_id: Some(format_public_account_id(supply_account_id)),
+        supply_account_label: None,
+        name: "LABEL TEST TOKEN".to_owned(),
+        total_supply,
+    };
+    wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
+
+    info!("Waiting for next block creation");
+    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
+
+    // Transfer token using from_label instead of from
+    let transfer_amount = 20;
+    let subcommand = TokenProgramAgnosticSubcommand::Send {
+        from: None,
+        from_label: Some(supply_label),
+        to: Some(format_public_account_id(recipient_account_id)),
+        to_label: None,
+        to_npk: None,
+        to_vpk: None,
+        amount: transfer_amount,
+    };
+    wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
+
+    info!("Waiting for next block creation");
+    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
+
+    let recipient_acc = ctx
+        .sequencer_client()
+        .get_account(recipient_account_id)
+        .await?;
+    let token_holding = TokenHolding::try_from(&recipient_acc.data)?;
+    assert_eq!(
+        token_holding,
+        TokenHolding::Fungible {
+            definition_id: definition_account_id,
+            balance: transfer_amount
+        }
+    );
+
+    info!("Successfully transferred token using from_label");
 
     Ok(())
 }

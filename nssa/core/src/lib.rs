@@ -21,3 +21,7 @@ pub mod program;
 
 #[cfg(feature = "host")]
 pub mod error;
+
+pub type BlockId = u64;
+/// Unix timestamp in milliseconds.
+pub type Timestamp = u64;

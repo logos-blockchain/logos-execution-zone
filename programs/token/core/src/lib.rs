@@ -10,23 +10,23 @@ pub enum Instruction {
     /// Transfer tokens from sender to recipient.
     ///
     /// Required accounts:
-    /// - Sender's Token Holding account (authorized),
-    /// - Recipient's Token Holding account.
+    /// - Sender's Token Holding account (initialized, authorized),
+    /// - Recipient's Token Holding account (initialized or authorized and uninitialized).
     Transfer { amount_to_transfer: u128 },
 
     /// Create a new fungible token definition without metadata.
     ///
     /// Required accounts:
-    /// - Token Definition account (uninitialized),
-    /// - Token Holding account (uninitialized).
+    /// - Token Definition account (uninitialized, authorized),
+    /// - Token Holding account (uninitialized, authorized).
     NewFungibleDefinition { name: String, total_supply: u128 },
 
     /// Create a new fungible or non-fungible token definition with metadata.
     ///
     /// Required accounts:
-    /// - Token Definition account (uninitialized),
-    /// - Token Holding account (uninitialized),
-    /// - Token Metadata account (uninitialized).
+    /// - Token Definition account (uninitialized, authorized),
+    /// - Token Holding account (uninitialized, authorized),
+    /// - Token Metadata account (uninitialized, authorized).
     NewDefinitionWithMetadata {
         new_definition: NewTokenDefinition,
         /// Boxed to avoid large enum variant size.
@@ -36,29 +36,29 @@ pub enum Instruction {
     /// Initialize a token holding account for a given token definition.
     ///
     /// Required accounts:
-    /// - Token Definition account (initialized),
-    /// - Token Holding account (uninitialized),
+    /// - Token Definition account (initialized, any authorization),
+    /// - Token Holding account (uninitialized, authorized),
     InitializeAccount,
 
     /// Burn tokens from the holder's account.
     ///
     /// Required accounts:
-    /// - Token Definition account (initialized),
-    /// - Token Holding account (authorized).
+    /// - Token Definition account (initialized, any authorization),
+    /// - Token Holding account (initialized, authorized).
     Burn { amount_to_burn: u128 },
 
     /// Mint new tokens to the holder's account.
     ///
     /// Required accounts:
-    /// - Token Definition account (authorized),
-    /// - Token Holding account (uninitialized or initialized).
+    /// - Token Definition account (initialized, authorized),
+    /// - Token Holding account (uninitialized or authorized and initialized).
     Mint { amount_to_mint: u128 },
 
     /// Print a new NFT from the master copy.
     ///
     /// Required accounts:
     /// - NFT Master Token Holding account (authorized),
-    /// - NFT Printed Copy Token Holding account (uninitialized).
+    /// - NFT Printed Copy Token Holding account (uninitialized, authorized).
     PrintNft,
 }
 

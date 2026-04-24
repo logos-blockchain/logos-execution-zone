@@ -1,6 +1,7 @@
-use std::{io::Write as _, path::PathBuf};
+use std::{io::Write as _, path::PathBuf, str::FromStr as _};
 
 use anyhow::{Context as _, Result};
+use bip39::Mnemonic;
 use clap::{Parser, Subcommand};
 use common::{HashType, transaction::NSSATransaction};
 use futures::TryFutureExt as _;
@@ -14,8 +15,9 @@ use crate::{
         chain::ChainSubcommand,
         config::ConfigSubcommand,
         programs::{
-            amm::AmmProgramAgnosticSubcommand, native_token_transfer::AuthTransferSubcommand,
-            pinata::PinataProgramAgnosticSubcommand, token::TokenProgramAgnosticSubcommand,
+            amm::AmmProgramAgnosticSubcommand, ata::AtaSubcommand,
+            native_token_transfer::AuthTransferSubcommand, pinata::PinataProgramAgnosticSubcommand,
+            token::TokenProgramAgnosticSubcommand,
         },
     },
 };
@@ -52,6 +54,9 @@ pub enum Command {
     /// AMM program interaction subcommand.
     #[command(subcommand)]
     AMM(AmmProgramAgnosticSubcommand),
+    /// Associated Token Account program interaction subcommand.
+    #[command(subcommand)]
+    Ata(AtaSubcommand),
     /// Check the wallet can connect to the node and builtin local programs
     /// match the remote versions.
     CheckHealth,
@@ -158,12 +163,14 @@ pub async fn execute_subcommand(
         }
         Command::Token(token_subcommand) => token_subcommand.handle_subcommand(wallet_core).await?,
         Command::AMM(amm_subcommand) => amm_subcommand.handle_subcommand(wallet_core).await?,
+        Command::Ata(ata_subcommand) => ata_subcommand.handle_subcommand(wallet_core).await?,
         Command::Config(config_subcommand) => {
             config_subcommand.handle_subcommand(wallet_core).await?
         }
         Command::RestoreKeys { depth } => {
+            let mnemonic = read_mnemonic_from_stdin()?;
             let password = read_password_from_stdin()?;
-            wallet_core.reset_storage(password)?;
+            wallet_core.restore_storage(&mnemonic, &password)?;
             execute_keys_restoration(wallet_core, depth).await?;
 
             SubcommandReturnValue::Empty
@@ -205,6 +212,16 @@ pub fn read_password_from_stdin() -> Result<String> {
     std::io::stdin().read_line(&mut password)?;
 
     Ok(password.trim().to_owned())
+}
+
+pub fn read_mnemonic_from_stdin() -> Result<Mnemonic> {
+    let mut phrase = String::new();
+
+    print!("Input recovery phrase: ");
+    std::io::stdout().flush()?;
+    std::io::stdin().read_line(&mut phrase)?;
+
+    Mnemonic::from_str(phrase.trim()).context("Invalid mnemonic phrase")
 }
 
 pub async fn execute_keys_restoration(wallet_core: &mut WalletCore, depth: u32) -> Result<()> {

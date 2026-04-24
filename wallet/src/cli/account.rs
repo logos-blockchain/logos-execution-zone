@@ -10,7 +10,10 @@ use crate::{
     WalletCore,
     cli::{SubcommandReturnValue, WalletSubcommand},
     config::Label,
-    helperfunctions::{AccountPrivacyKind, HumanReadableAccount, parse_addr_with_privacy_prefix},
+    helperfunctions::{
+        AccountPrivacyKind, HumanReadableAccount, parse_addr_with_privacy_prefix,
+        resolve_id_or_label,
+    },
 };
 
 /// Represents generic chain CLI subcommand.
@@ -25,8 +28,16 @@ pub enum AccountSubcommand {
         #[arg(short, long)]
         keys: bool,
         /// Valid 32 byte base58 string with privacy prefix.
-        #[arg(short, long)]
-        account_id: String,
+        #[arg(
+            short,
+            long,
+            conflicts_with = "account_label",
+            required_unless_present = "account_label"
+        )]
+        account_id: Option<String>,
+        /// Account label (alternative to --account-id).
+        #[arg(long, conflicts_with = "account_id")]
+        account_label: Option<String>,
     },
     /// Produce new public or private account.
     #[command(subcommand)]
@@ -43,8 +54,16 @@ pub enum AccountSubcommand {
     /// Set a label for an account.
     Label {
         /// Valid 32 byte base58 string with privacy prefix.
-        #[arg(short, long)]
-        account_id: String,
+        #[arg(
+            short,
+            long,
+            conflicts_with = "account_label",
+            required_unless_present = "account_label"
+        )]
+        account_id: Option<String>,
+        /// Account label (alternative to --account-id).
+        #[arg(long = "account-label", conflicts_with = "account_id")]
+        account_label: Option<String>,
         /// The label to assign to the account.
         #[arg(short, long)]
         label: String,
@@ -171,8 +190,15 @@ impl WalletSubcommand for AccountSubcommand {
                 raw,
                 keys,
                 account_id,
+                account_label,
             } => {
-                let (account_id_str, addr_kind) = parse_addr_with_privacy_prefix(&account_id)?;
+                let resolved = resolve_id_or_label(
+                    account_id,
+                    account_label,
+                    &wallet_core.storage.labels,
+                    &wallet_core.storage.user_data,
+                )?;
+                let (account_id_str, addr_kind) = parse_addr_with_privacy_prefix(&resolved)?;
 
                 let account_id: nssa::AccountId = account_id_str.parse()?;
 
@@ -371,8 +397,18 @@ impl WalletSubcommand for AccountSubcommand {
 
                 Ok(SubcommandReturnValue::Empty)
             }
-            Self::Label { account_id, label } => {
-                let (account_id_str, _) = parse_addr_with_privacy_prefix(&account_id)?;
+            Self::Label {
+                account_id,
+                account_label,
+                label,
+            } => {
+                let resolved = resolve_id_or_label(
+                    account_id,
+                    account_label,
+                    &wallet_core.storage.labels,
+                    &wallet_core.storage.user_data,
+                )?;
+                let (account_id_str, _) = parse_addr_with_privacy_prefix(&resolved)?;
 
                 // Check if label is already used by a different account
                 if let Some(existing_account) = wallet_core

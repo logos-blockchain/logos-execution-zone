@@ -8,34 +8,22 @@ use std::{
 use anyhow::{Context as _, Result};
 use common::config::BasicAuth;
 use humantime_serde;
-use key_protocol::key_management::{
-    KeyChain,
-    key_tree::{
-        chain_index::ChainIndex, keys_private::ChildKeysPrivate, keys_public::ChildKeysPublic,
-    },
+use key_protocol::key_management::key_tree::{
+    chain_index::ChainIndex, keys_private::ChildKeysPrivate, keys_public::ChildKeysPublic,
 };
 use log::warn;
 use serde::{Deserialize, Serialize};
+use testnet_initial_state::{
+    PrivateAccountPrivateInitialData, PublicAccountPrivateInitialData,
+    initial_priv_accounts_private_keys, initial_pub_accounts_private_keys,
+};
 use url::Url;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InitialAccountDataPublic {
-    pub account_id: nssa::AccountId,
-    pub pub_sign_key: nssa::PrivateKey,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PersistentAccountDataPublic {
     pub account_id: nssa::AccountId,
     pub chain_index: ChainIndex,
     pub data: ChildKeysPublic,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InitialAccountDataPrivate {
-    pub account_id: nssa::AccountId,
-    pub account: nssa_core::account::Account,
-    pub key_chain: KeyChain,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,8 +38,29 @@ pub struct PersistentAccountDataPrivate {
 // memory
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum InitialAccountData {
-    Public(InitialAccountDataPublic),
-    Private(Box<InitialAccountDataPrivate>),
+    Public(PublicAccountPrivateInitialData),
+    Private(Box<PrivateAccountPrivateInitialData>),
+}
+
+impl InitialAccountData {
+    #[must_use]
+    pub const fn account_id(&self) -> nssa::AccountId {
+        match &self {
+            Self::Public(acc) => acc.account_id,
+            Self::Private(acc) => acc.account_id,
+        }
+    }
+
+    pub(crate) fn create_initial_accounts_data() -> Vec<Self> {
+        let pub_data = initial_pub_accounts_private_keys();
+        let priv_data = initial_priv_accounts_private_keys();
+
+        pub_data
+            .into_iter()
+            .map(Into::into)
+            .chain(priv_data.into_iter().map(Into::into))
+            .collect()
+    }
 }
 
 // Big difference in enum variants sizes
@@ -114,16 +123,6 @@ impl PersistentStorage {
     }
 }
 
-impl InitialAccountData {
-    #[must_use]
-    pub fn account_id(&self) -> nssa::AccountId {
-        match &self {
-            Self::Public(acc) => acc.account_id,
-            Self::Private(acc) => acc.account_id,
-        }
-    }
-}
-
 impl PersistentAccountData {
     #[must_use]
     pub fn account_id(&self) -> nssa::AccountId {
@@ -135,14 +134,14 @@ impl PersistentAccountData {
     }
 }
 
-impl From<InitialAccountDataPublic> for InitialAccountData {
-    fn from(value: InitialAccountDataPublic) -> Self {
+impl From<PublicAccountPrivateInitialData> for InitialAccountData {
+    fn from(value: PublicAccountPrivateInitialData) -> Self {
         Self::Public(value)
     }
 }
 
-impl From<InitialAccountDataPrivate> for InitialAccountData {
-    fn from(value: InitialAccountDataPrivate) -> Self {
+impl From<PrivateAccountPrivateInitialData> for InitialAccountData {
+    fn from(value: PrivateAccountPrivateInitialData) -> Self {
         Self::Private(Box::new(value))
     }
 }
@@ -197,37 +196,15 @@ pub struct WalletConfig {
     pub seq_poll_max_retries: u64,
     /// Max amount of blocks to poll in one request.
     pub seq_block_poll_max_amount: u64,
-    /// Initial accounts for wallet.
-    pub initial_accounts: Vec<InitialAccountData>,
-    /// Basic authentication credentials.
+    /// Basic authentication credentials
     #[serde(skip_serializing_if = "Option::is_none")]
     pub basic_auth: Option<BasicAuth>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub initial_accounts: Option<Vec<InitialAccountData>>,
 }
 
 impl Default for WalletConfig {
     fn default() -> Self {
-        let pub_sign_key1 = nssa::PrivateKey::try_new([
-            127, 39, 48, 152, 242, 91, 113, 230, 192, 5, 169, 81, 159, 38, 120, 218, 141, 28, 127,
-            1, 246, 162, 119, 120, 226, 217, 148, 138, 189, 249, 1, 251,
-        ])
-        .unwrap();
-        let public_key1 = nssa::PublicKey::new_from_private_key(&pub_sign_key1);
-        let public_account_id1 = nssa::AccountId::from(&public_key1);
-
-        let pub_sign_key2 = nssa::PrivateKey::try_new([
-            244, 52, 248, 116, 23, 32, 1, 69, 134, 174, 67, 53, 109, 42, 236, 98, 87, 218, 8, 98,
-            34, 246, 4, 221, 183, 93, 105, 115, 59, 134, 252, 76,
-        ])
-        .unwrap();
-        let public_key2 = nssa::PublicKey::new_from_private_key(&pub_sign_key2);
-        let public_account_id2 = nssa::AccountId::from(&public_key2);
-
-        let key_chain1 = KeyChain::new_mnemonic("default_private_account_1".to_owned());
-        let private_account_id1 = nssa::AccountId::from(&key_chain1.nullifier_public_key);
-
-        let key_chain2 = KeyChain::new_mnemonic("default_private_account_2".to_owned());
-        let private_account_id2 = nssa::AccountId::from(&key_chain2.nullifier_public_key);
-
         Self {
             sequencer_addr: "http://127.0.0.1:3040".parse().unwrap(),
             seq_poll_timeout: Duration::from_secs(12),
@@ -235,32 +212,7 @@ impl Default for WalletConfig {
             seq_poll_max_retries: 5,
             seq_block_poll_max_amount: 100,
             basic_auth: None,
-            initial_accounts: vec![
-                InitialAccountData::Public(InitialAccountDataPublic {
-                    account_id: public_account_id1,
-                    pub_sign_key: pub_sign_key1,
-                }),
-                InitialAccountData::Public(InitialAccountDataPublic {
-                    account_id: public_account_id2,
-                    pub_sign_key: pub_sign_key2,
-                }),
-                InitialAccountData::Private(Box::new(InitialAccountDataPrivate {
-                    account_id: private_account_id1,
-                    account: nssa::Account {
-                        balance: 10_000,
-                        ..Default::default()
-                    },
-                    key_chain: key_chain1,
-                })),
-                InitialAccountData::Private(Box::new(InitialAccountDataPrivate {
-                    account_id: private_account_id2,
-                    account: nssa::Account {
-                        balance: 20_000,
-                        ..Default::default()
-                    },
-                    key_chain: key_chain2,
-                })),
-            ],
+            initial_accounts: None,
         }
     }
 }
@@ -310,8 +262,8 @@ impl WalletConfig {
             seq_tx_poll_max_blocks,
             seq_poll_max_retries,
             seq_block_poll_max_amount,
-            initial_accounts,
             basic_auth,
+            initial_accounts,
         } = self;
 
         let WalletConfigOverrides {
@@ -320,8 +272,8 @@ impl WalletConfig {
             seq_tx_poll_max_blocks: o_seq_tx_poll_max_blocks,
             seq_poll_max_retries: o_seq_poll_max_retries,
             seq_block_poll_max_amount: o_seq_block_poll_max_amount,
-            initial_accounts: o_initial_accounts,
             basic_auth: o_basic_auth,
+            initial_accounts: o_initial_accounts,
         } = overrides;
 
         if let Some(v) = o_sequencer_addr {
@@ -344,13 +296,13 @@ impl WalletConfig {
             warn!("Overriding wallet config 'seq_block_poll_max_amount' to {v}");
             *seq_block_poll_max_amount = v;
         }
-        if let Some(v) = o_initial_accounts {
-            warn!("Overriding wallet config 'initial_accounts' to {v:#?}");
-            *initial_accounts = v;
-        }
         if let Some(v) = o_basic_auth {
             warn!("Overriding wallet config 'basic_auth' to {v:#?}");
             *basic_auth = v;
+        }
+        if let Some(v) = o_initial_accounts {
+            warn!("Overriding wallet config 'initial_accounts' to {v:#?}");
+            *initial_accounts = v;
         }
     }
 }

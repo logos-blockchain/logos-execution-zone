@@ -138,7 +138,7 @@ impl AccountManager {
                     let eph_holder = EphemeralKeyHolder::new(&pre.npk);
 
                     Some(PrivateAccountKeys {
-                        npk: pre.npk.clone(),
+                        npk: pre.npk,
                         ssk: eph_holder.calculate_shared_secret_sender(&pre.vpk),
                         vpk: pre.vpk.clone(),
                         epk: eph_holder.generate_ephemeral_public_key(),

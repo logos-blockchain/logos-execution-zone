@@ -1,0 +1,16 @@
+[package]
+name = "testnet_initial_state"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[dependencies]
+key_protocol.workspace = true
+nssa.workspace = true
+nssa_core.workspace = true
+common.workspace = true
+
+serde.workspace = true
+
+[lints]
+workspace = true
