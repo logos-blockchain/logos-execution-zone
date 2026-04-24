@@ -366,12 +366,15 @@ pub mod tests {
         Timestamp,
         account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
         encryption::{EphemeralPublicKey, Scalar, ViewingPublicKey},
-        program::{BlockValidityWindow, PdaSeed, ProgramId, TimestampValidityWindow},
+        program::{
+            BlockValidityWindow, ExecutionValidationError, PdaSeed, ProgramId,
+            TimestampValidityWindow, WrappedBalanceSum,
+        },
     };
 
     use crate::{
         PublicKey, PublicTransaction, V03State,
-        error::NssaError,
+        error::{InvalidProgramBehaviorError, NssaError},
         execute_and_prove,
         privacy_preserving_transaction::{
             PrivacyPreservingTransaction,
@@ -933,10 +936,11 @@ pub mod tests {
 
     #[test]
     fn program_should_fail_if_modifies_nonces() {
-        let initial_data = [(AccountId::new([1; 32]), 100)];
+        let account_id = AccountId::new([1; 32]);
+        let initial_data = [(account_id, 100)];
         let mut state =
             V03State::new_with_genesis_accounts(&initial_data, vec![], 0).with_test_programs();
-        let account_ids = vec![AccountId::new([1; 32])];
+        let account_ids = vec![account_id];
         let program_id = Program::nonce_changer_program().id();
         let message =
             public_transaction::Message::try_new(program_id, account_ids, vec![], ()).unwrap();
@@ -945,7 +949,14 @@ pub mod tests {
 
         let result = state.transition_from_public_transaction(&tx, 1, 0);
 
-        assert!(matches!(result, Err(NssaError::InvalidProgramBehavior)));
+        assert!(matches!(
+            result,
+            Err(NssaError::InvalidProgramBehavior(
+                InvalidProgramBehaviorError::ExecutionValidationFailed(
+                    ExecutionValidationError::ModifiedNonce { account_id: err_account_id }
+                )
+            )) if err_account_id == account_id
+        ));
     }
 
     #[test]
@@ -962,7 +973,17 @@ pub mod tests {
 
         let result = state.transition_from_public_transaction(&tx, 1, 0);
 
-        assert!(matches!(result, Err(NssaError::InvalidProgramBehavior)));
+        assert!(matches!(
+            result,
+            Err(NssaError::InvalidProgramBehavior(
+                InvalidProgramBehaviorError::ExecutionValidationFailed(
+                    ExecutionValidationError::MismatchedPreStatePostStateLength {
+                        pre_state_length,
+                        post_state_length
+                    }
+                )
+            )) if pre_state_length == 1 && post_state_length == 2
+        ));
     }
 
     #[test]
@@ -979,7 +1000,17 @@ pub mod tests {
 
         let result = state.transition_from_public_transaction(&tx, 1, 0);
 
-        assert!(matches!(result, Err(NssaError::InvalidProgramBehavior)));
+        assert!(matches!(
+            result,
+            Err(NssaError::InvalidProgramBehavior(
+                InvalidProgramBehaviorError::ExecutionValidationFailed(
+                    ExecutionValidationError::MismatchedPreStatePostStateLength {
+                        pre_state_length,
+                        post_state_length
+                    }
+                )
+            )) if pre_state_length == 2 && post_state_length == 1
+        ));
     }
 
     #[test]
@@ -1003,7 +1034,12 @@ pub mod tests {
 
         let result = state.transition_from_public_transaction(&tx, 1, 0);
 
-        assert!(matches!(result, Err(NssaError::InvalidProgramBehavior)));
+        assert!(matches!(
+            result,
+            Err(NssaError::InvalidProgramBehavior(InvalidProgramBehaviorError::ExecutionValidationFailed(
+                ExecutionValidationError::ModifiedProgramOwner { account_id: err_account_id }
+            ))) if err_account_id == account_id
+        ));
     }
 
     #[test]
@@ -1027,7 +1063,12 @@ pub mod tests {
 
         let result = state.transition_from_public_transaction(&tx, 1, 0);
 
-        assert!(matches!(result, Err(NssaError::InvalidProgramBehavior)));
+        assert!(matches!(
+            result,
+            Err(NssaError::InvalidProgramBehavior(InvalidProgramBehaviorError::ExecutionValidationFailed(
+                ExecutionValidationError::ModifiedProgramOwner { account_id: err_account_id }
+            ))) if err_account_id == account_id
+        ));
     }
 
     #[test]
@@ -1051,7 +1092,12 @@ pub mod tests {
 
         let result = state.transition_from_public_transaction(&tx, 1, 0);
 
-        assert!(matches!(result, Err(NssaError::InvalidProgramBehavior)));
+        assert!(matches!(
+            result,
+            Err(NssaError::InvalidProgramBehavior(InvalidProgramBehaviorError::ExecutionValidationFailed(
+                ExecutionValidationError::ModifiedProgramOwner { account_id: err_account_id }
+            ))) if err_account_id == account_id
+        ));
     }
 
     #[test]
@@ -1075,16 +1121,21 @@ pub mod tests {
 
         let result = state.transition_from_public_transaction(&tx, 1, 0);
 
-        assert!(matches!(result, Err(NssaError::InvalidProgramBehavior)));
+        assert!(matches!(
+            result,
+            Err(NssaError::InvalidProgramBehavior(InvalidProgramBehaviorError::ExecutionValidationFailed(
+                ExecutionValidationError::ModifiedProgramOwner { account_id: err_account_id }
+            ))) if err_account_id == account_id
+        ));
     }
 
     #[test]
     fn program_should_fail_if_transfers_balance_from_non_owned_account() {
-        let initial_data = [(AccountId::new([1; 32]), 100)];
-        let mut state =
-            V03State::new_with_genesis_accounts(&initial_data, vec![], 0).with_test_programs();
         let sender_account_id = AccountId::new([1; 32]);
         let receiver_account_id = AccountId::new([2; 32]);
+        let initial_data = [(sender_account_id, 100)];
+        let mut state =
+            V03State::new_with_genesis_accounts(&initial_data, vec![], 0).with_test_programs();
         let balance_to_move: u128 = 1;
         let program_id = Program::simple_balance_transfer().id();
         assert_ne!(
@@ -1103,7 +1154,12 @@ pub mod tests {
 
         let result = state.transition_from_public_transaction(&tx, 1, 0);
 
-        assert!(matches!(result, Err(NssaError::InvalidProgramBehavior)));
+        assert!(matches!(
+            result,
+            Err(NssaError::InvalidProgramBehavior(InvalidProgramBehaviorError::ExecutionValidationFailed(
+                ExecutionValidationError::UnauthorizedBalanceDecrease { account_id: err_account_id, owner_program_id, executing_program_id }
+            ))) if err_account_id == sender_account_id && owner_program_id != program_id && executing_program_id == program_id
+        ));
     }
 
     #[test]
@@ -1128,7 +1184,12 @@ pub mod tests {
 
         let result = state.transition_from_public_transaction(&tx, 1, 0);
 
-        assert!(matches!(result, Err(NssaError::InvalidProgramBehavior)));
+        assert!(matches!(
+            result,
+            Err(NssaError::InvalidProgramBehavior(InvalidProgramBehaviorError::ExecutionValidationFailed(
+                ExecutionValidationError::UnauthorizedDataModification { account_id: err_account_id, executing_program_id }
+            ))) if err_account_id == account_id && executing_program_id == program_id
+        ));
     }
 
     #[test]
@@ -1146,7 +1207,12 @@ pub mod tests {
 
         let result = state.transition_from_public_transaction(&tx, 1, 0);
 
-        assert!(matches!(result, Err(NssaError::InvalidProgramBehavior)));
+        assert!(matches!(
+            result,
+            Err(NssaError::InvalidProgramBehavior(InvalidProgramBehaviorError::ExecutionValidationFailed(
+                ExecutionValidationError::MismatchedTotalBalance { total_balance_pre_states, total_balance_post_states }
+            ))) if total_balance_pre_states == 0.into() && total_balance_post_states == 1.into()
+        ));
     }
 
     #[test]
@@ -1175,7 +1241,12 @@ pub mod tests {
         let tx = PublicTransaction::new(message, witness_set);
         let result = state.transition_from_public_transaction(&tx, 1, 0);
 
-        assert!(matches!(result, Err(NssaError::InvalidProgramBehavior)));
+        assert!(matches!(
+            result,
+            Err(NssaError::InvalidProgramBehavior(InvalidProgramBehaviorError::ExecutionValidationFailed(
+                ExecutionValidationError::MismatchedTotalBalance { total_balance_pre_states, total_balance_post_states }
+            ))) if total_balance_pre_states == 100.into() && total_balance_post_states == 99.into()
+        ));
     }
 
     fn test_public_account_keys_1() -> TestPublicKeys {
@@ -2243,9 +2314,16 @@ pub mod tests {
         assert!(matches!(result, Err(NssaError::CircuitProvingError(_))));
     }
 
+    /// A mask-3 account that no program claims via `Claim::Pda` and no caller authorizes via
+    /// `ChainedCall.pda_seeds` has no binding between its supplied npk and its `account_id`,
+    /// so the circuit must reject. Here `simple_balance_transfer` emits no claim for the
+    /// second account, leaving position 1 unbound.
     #[test]
-    fn circuit_should_fail_with_invalid_visibility_mask_value() {
+    fn private_pda_without_binding_fails() {
         let program = Program::simple_balance_transfer();
+        let keys = test_private_account_keys_1();
+        let npk = keys.npk();
+        let shared_secret = SharedSecretKey::new(&[55; 32], &keys.vpk());
         let public_account_1 = AccountWithMetadata::new(
             Account {
                 program_owner: program.id(),
@@ -2255,17 +2333,235 @@ pub mod tests {
             true,
             AccountId::new([0; 32]),
         );
-        let public_account_2 =
+        let private_pda_account =
             AccountWithMetadata::new(Account::default(), false, AccountId::new([1; 32]));
 
         let visibility_mask = [0, 3];
         let result = execute_and_prove(
-            vec![public_account_1, public_account_2],
+            vec![public_account_1, private_pda_account],
             Program::serialize_instruction(10_u128).unwrap(),
             visibility_mask.to_vec(),
+            vec![(npk, shared_secret)],
             vec![],
+            vec![None],
+            &program.into(),
+        );
+
+        assert!(matches!(result, Err(NssaError::CircuitProvingError(_))));
+    }
+
+    /// Happy path: a program claims a new mask-3 account via `Claim::Pda(seed)`. The circuit
+    /// reads the npk for that `pre_state` from `private_account_keys` at the `pre_state`'s
+    /// position, derives `AccountId` via `AccountId::for_private_pda(program_id, seed, npk)`, and
+    /// asserts it equals the `pre_state`'s `account_id`. The equality both validates the claim
+    /// and binds the supplied npk to the `account_id`.
+    #[test]
+    fn private_pda_claim_succeeds() {
+        let program = Program::pda_claimer();
+        let keys = test_private_account_keys_1();
+        let npk = keys.npk();
+        let seed = PdaSeed::new([42; 32]);
+        let shared_secret = SharedSecretKey::new(&[55; 32], &keys.vpk());
+
+        let account_id = AccountId::for_private_pda(&program.id(), &seed, &npk);
+        let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
+
+        let result = execute_and_prove(
+            vec![pre_state],
+            Program::serialize_instruction(seed).unwrap(),
+            vec![3],
+            vec![(npk, shared_secret)],
             vec![],
+            vec![None],
+            &program.into(),
+        );
+
+        let (output, _proof) = result.expect("mask-3 private PDA claim should succeed");
+        assert_eq!(output.new_nullifiers.len(), 1);
+        assert_eq!(output.new_commitments.len(), 1);
+        assert_eq!(output.ciphertexts.len(), 1);
+        assert!(output.public_pre_states.is_empty());
+        assert!(output.public_post_states.is_empty());
+    }
+
+    /// An npk is supplied that does not match the `pre_state`'s `account_id` under
+    /// `AccountId::for_private_pda(program, claim_seed, npk)`. The claim equality check rejects.
+    #[test]
+    fn private_pda_npk_mismatch_fails() {
+        // `keys_a` produces the `pre_state`'s `account_id` (the registered pair), `keys_b` is
+        // the mismatched pair supplied in `private_account_keys` for that pre_state.
+        let program = Program::pda_claimer();
+        let keys_a = test_private_account_keys_1();
+        let keys_b = test_private_account_keys_2();
+        let npk_a = keys_a.npk();
+        let npk_b = keys_b.npk();
+        let seed = PdaSeed::new([42; 32]);
+        let shared_secret = SharedSecretKey::new(&[55; 32], &keys_b.vpk());
+
+        // `account_id` is derived from `npk_a`, but `npk_b` is supplied for this pre_state.
+        // `AccountId::for_private_pda(program, seed, npk_b) != account_id`, so the claim check in
+        // the circuit must reject.
+        let account_id = AccountId::for_private_pda(&program.id(), &seed, &npk_a);
+        let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
+
+        let result = execute_and_prove(
+            vec![pre_state],
+            Program::serialize_instruction(seed).unwrap(),
+            vec![3],
+            vec![(npk_b, shared_secret)],
             vec![],
+            vec![None],
+            &program.into(),
+        );
+
+        assert!(matches!(result, Err(NssaError::CircuitProvingError(_))));
+    }
+
+    /// Happy path for the caller-seeds authorization of a mask-3 PDA. The delegator claims a
+    /// private PDA via `Claim::Pda(seed)`, then chains to a callee (`noop`) delegating the same
+    /// seed via `ChainedCall.pda_seeds`. In the callee's step, the `pre_state`'s authorization
+    /// is established via the private derivation
+    /// `AccountId::for_private_pda(delegator, seed, npk) == pre.account_id`.
+    #[test]
+    fn caller_pda_seeds_authorize_private_pda_for_callee() {
+        let delegator = Program::private_pda_delegator();
+        let callee = Program::auth_asserting_noop();
+        let keys = test_private_account_keys_1();
+        let npk = keys.npk();
+        let seed = PdaSeed::new([77; 32]);
+        let shared_secret = SharedSecretKey::new(&[55; 32], &keys.vpk());
+
+        let account_id = AccountId::for_private_pda(&delegator.id(), &seed, &npk);
+        let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
+
+        let callee_id = callee.id();
+        let program_with_deps =
+            ProgramWithDependencies::new(delegator, [(callee_id, callee)].into());
+
+        let result = execute_and_prove(
+            vec![pre_state],
+            Program::serialize_instruction((seed, seed, callee_id)).unwrap(),
+            vec![3],
+            vec![(npk, shared_secret)],
+            vec![],
+            vec![None],
+            &program_with_deps,
+        );
+
+        let (output, _proof) =
+            result.expect("caller-seeds authorization of mask-3 private PDA should succeed");
+        assert_eq!(output.new_commitments.len(), 1);
+        assert_eq!(output.new_nullifiers.len(), 1);
+    }
+
+    /// The delegator chains with a different seed than the one it claimed with. In the callee
+    /// step, neither public nor private caller-seeds authorization matches; `pre.is_authorized`
+    /// was set to `true` by the delegator but no proven source supports it, so the consistency
+    /// assertion rejects.
+    #[test]
+    fn caller_pda_seeds_with_wrong_seed_rejects_private_pda_for_callee() {
+        let delegator = Program::private_pda_delegator();
+        let callee = Program::auth_asserting_noop();
+        let keys = test_private_account_keys_1();
+        let npk = keys.npk();
+        let claim_seed = PdaSeed::new([77; 32]);
+        let wrong_delegated_seed = PdaSeed::new([88; 32]);
+        let shared_secret = SharedSecretKey::new(&[55; 32], &keys.vpk());
+
+        let account_id = AccountId::for_private_pda(&delegator.id(), &claim_seed, &npk);
+        let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
+
+        let callee_id = callee.id();
+        let program_with_deps =
+            ProgramWithDependencies::new(delegator, [(callee_id, callee)].into());
+
+        let result = execute_and_prove(
+            vec![pre_state],
+            Program::serialize_instruction((claim_seed, wrong_delegated_seed, callee_id)).unwrap(),
+            vec![3],
+            vec![(npk, shared_secret)],
+            vec![],
+            vec![None],
+            &program_with_deps,
+        );
+
+        assert!(matches!(result, Err(NssaError::CircuitProvingError(_))));
+    }
+
+    /// Exploit-scenario pin. A single `(program_id, seed)` pair can derive a family of
+    /// `AccountId`s, one public PDA and one private PDA per distinct npk. Without the tx-wide
+    /// family-binding check, a program could claim `PDA_alice` (mask-3, `alice_npk`) and
+    /// `PDA_bob` (mask-3, `bob_npk`) under the same seed in one transaction, and once reuse
+    /// is supported a later chained call could delegate both to a callee via
+    /// `pda_seeds: [S]` and mix balances across them. The binding check rejects the setup
+    /// here: after the first claim records `(program, seed) → PDA_alice`, the second claim
+    /// tries to record `(program, seed) → PDA_bob` and panics.
+    #[test]
+    fn two_private_pda_claims_under_same_seed_are_rejected() {
+        let program = Program::two_pda_claimer();
+        let keys_a = test_private_account_keys_1();
+        let keys_b = test_private_account_keys_2();
+        let seed = PdaSeed::new([55; 32]);
+        let shared_a = SharedSecretKey::new(&[66; 32], &keys_a.vpk());
+        let shared_b = SharedSecretKey::new(&[77; 32], &keys_b.vpk());
+
+        let account_a = AccountId::for_private_pda(&program.id(), &seed, &keys_a.npk());
+        let account_b = AccountId::for_private_pda(&program.id(), &seed, &keys_b.npk());
+
+        let pre_a = AccountWithMetadata::new(Account::default(), false, account_a);
+        let pre_b = AccountWithMetadata::new(Account::default(), false, account_b);
+
+        let result = execute_and_prove(
+            vec![pre_a, pre_b],
+            Program::serialize_instruction(seed).unwrap(),
+            vec![3, 3],
+            vec![(keys_a.npk(), shared_a), (keys_b.npk(), shared_b)],
+            vec![],
+            vec![None, None],
+            &program.into(),
+        );
+
+        assert!(matches!(result, Err(NssaError::CircuitProvingError(_))));
+    }
+
+    /// Pins the current limitation: a mask-3 PDA that was claimed in a previous transaction
+    /// cannot be re-used in a new transaction as-is. This PR only binds supplied npks via a
+    /// fresh `Claim::Pda` or a caller's `ChainedCall.pda_seeds`, neither is present when a
+    /// program operates on an already-owned private PDA at top level. The reject site is the
+    /// post-loop `private_pda_bound_positions` assertion in
+    /// `privacy_preserving_circuit.rs`: `noop` emits no `Claim::Pda` and there is no caller
+    /// `ChainedCall.pda_seeds`, so position 0 is never bound and the assertion fires.
+    // TODO: a follow-up PR in the Private PDAs series needs to let the wallet supply a
+    // `(seed, original_owner_program_id)` side input per mask-3 `pre_state` so the circuit
+    // can re-verify `AccountId::for_private_pda(owner, seed, npk) == pre.account_id` without a
+    // claim.
+    #[test]
+    fn private_pda_top_level_reuse_rejected_by_binding_check() {
+        let program = Program::noop();
+        let keys = test_private_account_keys_1();
+        let npk = keys.npk();
+        let shared_secret = SharedSecretKey::new(&[55; 32], &keys.vpk());
+        let seed = PdaSeed::new([99; 32]);
+
+        // Simulate a previously-claimed private PDA: program_owner != DEFAULT, is_authorized =
+        // true, account_id derived via the private formula.
+        let account_id = AccountId::for_private_pda(&program.id(), &seed, &npk);
+        let owned_pre_state = AccountWithMetadata::new(
+            Account {
+                program_owner: program.id(),
+                ..Account::default()
+            },
+            true,
+            account_id,
+        );
+
+        let result = execute_and_prove(
+            vec![owned_pre_state],
+            Program::serialize_instruction(()).unwrap(),
+            vec![3],
+            vec![(npk, shared_secret)],
+            vec![],
+            vec![None],
             &program.into(),
         );
 
@@ -2671,7 +2967,7 @@ pub mod tests {
     fn execution_that_requires_authentication_of_a_program_derived_account_id_succeeds() {
         let chain_caller = Program::chain_caller();
         let pda_seed = PdaSeed::new([37; 32]);
-        let from = AccountId::from((&chain_caller.id(), &pda_seed));
+        let from = AccountId::for_public_pda(&chain_caller.id(), &pda_seed);
         let to = AccountId::new([2; 32]);
         let initial_balance = 1000;
         let initial_data = [(from, initial_balance), (to, 0)];
@@ -2983,7 +3279,8 @@ pub mod tests {
         let pinata_definition_id = AccountId::new([1; 32]);
         let pinata_token_definition_id = AccountId::new([2; 32]);
         // Total supply of pinata token will be in an account under a PDA.
-        let pinata_token_holding_id = AccountId::from((&pinata_token.id(), &PdaSeed::new([0; 32])));
+        let pinata_token_holding_id =
+            AccountId::for_public_pda(&pinata_token.id(), &PdaSeed::new([0; 32]));
         let winner_token_holding_id = AccountId::new([3; 32]);
 
         let expected_winner_account_holding = token_core::TokenHolding::Fungible {
@@ -3088,7 +3385,12 @@ pub mod tests {
 
         let result = state.transition_from_public_transaction(&tx, 1, 0);
 
-        assert!(matches!(result, Err(NssaError::InvalidProgramBehavior)));
+        assert!(matches!(
+            result,
+            Err(NssaError::InvalidProgramBehavior(
+                InvalidProgramBehaviorError::ClaimedNonDefaultAccount { account_id: err_account_id }
+            )) if err_account_id == account_id
+        ));
     }
 
     /// This test ensures that even if a malicious program tries to perform overflow of balances
@@ -3134,7 +3436,22 @@ pub mod tests {
         let witness_set = public_transaction::WitnessSet::for_message(&message, &[&sender_key]);
         let tx = PublicTransaction::new(message, witness_set);
         let res = state.transition_from_public_transaction(&tx, 1, 0);
-        assert!(matches!(res, Err(NssaError::InvalidProgramBehavior)));
+        let expected_total_balance_pre_states = WrappedBalanceSum::from_balances(
+            [sender_init_balance, recipient_init_balance].into_iter(),
+        )
+        .unwrap();
+        let expected_total_balance_post_states = WrappedBalanceSum::from_balances(
+            [sender_init_balance, recipient_init_balance, u128::MAX, 1].into_iter(),
+        )
+        .unwrap();
+        assert!(matches!(
+            res,
+            Err(NssaError::InvalidProgramBehavior(
+                InvalidProgramBehaviorError::ExecutionValidationFailed(
+                    ExecutionValidationError::MismatchedTotalBalance { total_balance_pre_states, total_balance_post_states }
+                )
+            )) if total_balance_pre_states == expected_total_balance_pre_states && total_balance_post_states == expected_total_balance_post_states
+        ));
 
         let sender_post = state.get_account_by_id(sender_id);
         let recipient_post = state.get_account_by_id(recipient_id);
@@ -3379,7 +3696,14 @@ pub mod tests {
         let result = state.transition_from_public_transaction(&tx, 1, 0);
 
         // Should fail - cannot modify data without claiming the account
-        assert!(matches!(result, Err(NssaError::InvalidProgramBehavior)));
+        assert!(matches!(
+            result,
+            Err(NssaError::InvalidProgramBehavior(
+                InvalidProgramBehaviorError::DefaultAccountModifiedWithoutClaim {
+                    account_id: err_account_id
+                }
+            )) if err_account_id == account_id
+        ));
     }
 
     #[test]
@@ -3973,8 +4297,8 @@ pub mod tests {
         let callback = Program::flash_swap_callback();
         let token = Program::authenticated_transfer_program();
 
-        let vault_id = AccountId::from((&initiator.id(), &PdaSeed::new([0_u8; 32])));
-        let receiver_id = AccountId::from((&callback.id(), &PdaSeed::new([1_u8; 32])));
+        let vault_id = AccountId::for_public_pda(&initiator.id(), &PdaSeed::new([0_u8; 32]));
+        let receiver_id = AccountId::for_public_pda(&callback.id(), &PdaSeed::new([1_u8; 32]));
 
         let initial_balance: u128 = 1000;
         let amount_out: u128 = 100;
@@ -4024,8 +4348,8 @@ pub mod tests {
         let callback = Program::flash_swap_callback();
         let token = Program::authenticated_transfer_program();
 
-        let vault_id = AccountId::from((&initiator.id(), &PdaSeed::new([0_u8; 32])));
-        let receiver_id = AccountId::from((&callback.id(), &PdaSeed::new([1_u8; 32])));
+        let vault_id = AccountId::for_public_pda(&initiator.id(), &PdaSeed::new([0_u8; 32]));
+        let receiver_id = AccountId::for_public_pda(&callback.id(), &PdaSeed::new([1_u8; 32]));
 
         let initial_balance: u128 = 1000;
         let amount_out: u128 = 100;
@@ -4082,8 +4406,8 @@ pub mod tests {
         let callback = Program::flash_swap_callback();
         let token = Program::authenticated_transfer_program();
 
-        let vault_id = AccountId::from((&initiator.id(), &PdaSeed::new([0_u8; 32])));
-        let receiver_id = AccountId::from((&callback.id(), &PdaSeed::new([1_u8; 32])));
+        let vault_id = AccountId::for_public_pda(&initiator.id(), &PdaSeed::new([0_u8; 32]));
+        let receiver_id = AccountId::for_public_pda(&callback.id(), &PdaSeed::new([1_u8; 32]));
 
         let initial_balance: u128 = 1000;
 
@@ -4131,7 +4455,7 @@ pub mod tests {
         let initiator = Program::flash_swap_initiator();
         let token = Program::authenticated_transfer_program();
 
-        let vault_id = AccountId::from((&initiator.id(), &PdaSeed::new([0_u8; 32])));
+        let vault_id = AccountId::for_public_pda(&initiator.id(), &PdaSeed::new([0_u8; 32]));
 
         let vault_account = Account {
             program_owner: token.id(),
