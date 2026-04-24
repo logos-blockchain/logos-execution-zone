@@ -135,12 +135,12 @@ pub fn test_vectors() -> Vec<TestVector> {
         //                 )).unwrap(),
         //     aux_rand: None,
         //     message: Some(
-        //                     
+        //
         // hex::decode("243F6A8885A308D313198A2E03707344A4093822299F31D0082EFA98EC4E6C89").
         // unwrap(),                 ),
         //     signature: Signature {
         //                     value: hex_to_bytes(
-        //                         
+        //
         // "6CFF5C3BA86C69EA4B7376F31A9BCB4F74C1976089B2D9963DA2E5543E17776969E89B4C5564D00349106B8497785DD7D1D713A8AE82B32FA79D5F7FC407D39B"
         // ,                     ),
         //                 },
@@ -290,12 +290,12 @@ pub fn test_vectors() -> Vec<TestVector> {
         //                 )).unwrap(),
         //     aux_rand: None,
         //     message: Some(
-        //                     
+        //
         // hex::decode("243F6A8885A308D313198A2E03707344A4093822299F31D0082EFA98EC4E6C89").
         // unwrap(),                 ),
         //     signature: Signature {
         //                     value: hex_to_bytes(
-        //                         
+        //
         // "6CFF5C3BA86C69EA4B7376F31A9BCB4F74C1976089B2D9963DA2E5543E17776969E89B4C5564D00349106B8497785DD7D1D713A8AE82B32FA79D5F7FC407D39B"
         // ,                     ),
         //                 },
