@@ -8,13 +8,11 @@ use std::{
 use anyhow::Result;
 use bedrock_client::BackoffConfig;
 use bytesize::ByteSize;
-use common::{
-    block::{AccountInitialData, CommitmentsInitialData},
-    config::BasicAuth,
-};
+use common::config::BasicAuth;
 use humantime_serde;
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use serde::{Deserialize, Serialize};
+use testnet_initial_state::{PrivateAccountPublicInitialData, PublicAccountPublicInitialData};
 use url::Url;
 
 // TODO: Provide default values
@@ -26,9 +24,10 @@ pub struct SequencerConfig {
     pub genesis_id: u64,
     /// If `True`, then adds random sequence of bytes to genesis block.
     pub is_genesis_random: bool,
-    /// Maximum number of transactions in block.
+    /// Maximum number of user transactions in a block (excludes the mandatory clock transaction).
     pub max_num_tx_in_block: usize,
-    /// Maximum block size (includes header and transactions).
+    /// Maximum block size (includes header, user transactions, and the mandatory clock
+    /// transaction).
     #[serde(default = "default_max_block_size")]
     pub max_block_size: ByteSize,
     /// Mempool maximum size.
@@ -39,16 +38,16 @@ pub struct SequencerConfig {
     /// Interval in which pending blocks are retried.
     #[serde(with = "humantime_serde")]
     pub retry_pending_blocks_timeout: Duration,
-    /// List of initial accounts data.
-    pub initial_accounts: Vec<AccountInitialData>,
-    /// List of initial commitments.
-    pub initial_commitments: Vec<CommitmentsInitialData>,
     /// Sequencer own signing key.
     pub signing_key: [u8; 32],
     /// Bedrock configuration options.
     pub bedrock_config: BedrockConfig,
     /// Indexer RPC URL.
     pub indexer_rpc_url: Url,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub initial_public_accounts: Option<Vec<PublicAccountPublicInitialData>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub initial_private_accounts: Option<Vec<PrivateAccountPublicInitialData>>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]

@@ -1,17 +1,26 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use borsh::{BorshDeserialize, BorshSerialize};
+use clock_core::ClockAccountData;
+pub use clock_core::{
+    CLOCK_01_PROGRAM_ACCOUNT_ID, CLOCK_10_PROGRAM_ACCOUNT_ID, CLOCK_50_PROGRAM_ACCOUNT_ID,
+    CLOCK_PROGRAM_ACCOUNT_IDS,
+};
 use nssa_core::{
-    Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, MembershipProof, Nullifier,
+    BlockId, Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, MembershipProof, Nullifier,
+    Timestamp,
     account::{Account, AccountId, Nonce},
     program::ProgramId,
 };
 
 use crate::{
-    error::NssaError, merkle_tree::MerkleTree,
-    privacy_preserving_transaction::PrivacyPreservingTransaction, program::Program,
+    error::NssaError,
+    merkle_tree::MerkleTree,
+    privacy_preserving_transaction::PrivacyPreservingTransaction,
+    program::Program,
     program_deployment_transaction::ProgramDeploymentTransaction,
     public_transaction::PublicTransaction,
+    validated_state_diff::{StateDiff, ValidatedStateDiff},
 };
 
 pub const MAX_NUMBER_CHAINED_CALLS: usize = 10;
@@ -72,7 +81,7 @@ impl NullifierSet {
         Self(BTreeSet::new())
     }
 
-    fn extend(&mut self, new_nullifiers: Vec<Nullifier>) {
+    fn extend(&mut self, new_nullifiers: &[Nullifier]) {
         self.0.extend(new_nullifiers);
     }
 
@@ -117,7 +126,8 @@ impl V03State {
     #[must_use]
     pub fn new_with_genesis_accounts(
         initial_data: &[(AccountId, u128)],
-        initial_commitments: &[nssa_core::Commitment],
+        initial_private_accounts: Vec<(Commitment, Nullifier)>,
+        genesis_timestamp: nssa_core::Timestamp,
     ) -> Self {
         let authenticated_transfer_program = Program::authenticated_transfer_program();
         let public_state = initial_data
@@ -133,88 +143,105 @@ impl V03State {
             })
             .collect();
 
-        let mut private_state = CommitmentSet::with_capacity(32);
-        private_state.extend(&[DUMMY_COMMITMENT]);
-        private_state.extend(initial_commitments);
+        let mut commitment_set = CommitmentSet::with_capacity(32);
+        commitment_set.extend(&[DUMMY_COMMITMENT]);
+        let (commitments, nullifiers): (Vec<Commitment>, Vec<Nullifier>) =
+            initial_private_accounts.into_iter().unzip();
+        commitment_set.extend(&commitments);
+        let mut nullifier_set = NullifierSet::new();
+        nullifier_set.extend(&nullifiers);
+        let private_state = (commitment_set, nullifier_set);
 
         let mut this = Self {
             public_state,
-            private_state: (private_state, NullifierSet::new()),
+            private_state,
             programs: HashMap::new(),
         };
+
+        this.insert_program(Program::clock());
+        this.insert_clock_accounts(genesis_timestamp);
 
         this.insert_program(Program::authenticated_transfer_program());
         this.insert_program(Program::token());
         this.insert_program(Program::amm());
+        this.insert_program(Program::ata());
 
         this
+    }
+
+    fn insert_clock_accounts(&mut self, genesis_timestamp: nssa_core::Timestamp) {
+        let data = ClockAccountData {
+            block_id: 0,
+            timestamp: genesis_timestamp,
+        }
+        .to_bytes();
+        let clock_program_id = Program::clock().id();
+        for account_id in CLOCK_PROGRAM_ACCOUNT_IDS {
+            self.public_state.insert(
+                account_id,
+                Account {
+                    program_owner: clock_program_id,
+                    data: data
+                        .clone()
+                        .try_into()
+                        .expect("Clock account data should fit within accounts data"),
+                    ..Account::default()
+                },
+            );
+        }
     }
 
     pub(crate) fn insert_program(&mut self, program: Program) {
         self.programs.insert(program.id(), program);
     }
 
-    pub fn transition_from_public_transaction(
-        &mut self,
-        tx: &PublicTransaction,
-    ) -> Result<(), NssaError> {
-        let state_diff = tx.validate_and_produce_public_state_diff(self)?;
-
+    pub fn apply_state_diff(&mut self, diff: ValidatedStateDiff) {
+        let StateDiff {
+            signer_account_ids,
+            public_diff,
+            new_commitments,
+            new_nullifiers,
+            program,
+        } = diff.into_state_diff();
         #[expect(
             clippy::iter_over_hash_type,
             reason = "Iteration order doesn't matter here"
         )]
-        for (account_id, post) in state_diff {
-            let current_account = self.get_account_by_id_mut(account_id);
-
-            *current_account = post;
+        for (account_id, account) in public_diff {
+            *self.get_account_by_id_mut(account_id) = account;
         }
-
-        for account_id in tx.signer_account_ids() {
-            let current_account = self.get_account_by_id_mut(account_id);
-            current_account.nonce.public_account_nonce_increment();
+        for account_id in signer_account_ids {
+            self.get_account_by_id_mut(account_id)
+                .nonce
+                .public_account_nonce_increment();
         }
+        self.private_state.0.extend(&new_commitments);
+        self.private_state.1.extend(&new_nullifiers);
+        if let Some(program) = program {
+            self.insert_program(program);
+        }
+    }
 
+    pub fn transition_from_public_transaction(
+        &mut self,
+        tx: &PublicTransaction,
+        block_id: BlockId,
+        timestamp: Timestamp,
+    ) -> Result<(), NssaError> {
+        let diff = ValidatedStateDiff::from_public_transaction(tx, self, block_id, timestamp)?;
+        self.apply_state_diff(diff);
         Ok(())
     }
 
     pub fn transition_from_privacy_preserving_transaction(
         &mut self,
         tx: &PrivacyPreservingTransaction,
+        block_id: BlockId,
+        timestamp: Timestamp,
     ) -> Result<(), NssaError> {
-        // 1. Verify the transaction satisfies acceptance criteria
-        let public_state_diff = tx.validate_and_produce_public_state_diff(self)?;
-
-        let message = tx.message();
-
-        // 2. Add new commitments
-        self.private_state.0.extend(&message.new_commitments);
-
-        // 3. Add new nullifiers
-        let new_nullifiers = message
-            .new_nullifiers
-            .iter()
-            .cloned()
-            .map(|(nullifier, _)| nullifier)
-            .collect::<Vec<Nullifier>>();
-        self.private_state.1.extend(new_nullifiers);
-
-        // 4. Update public accounts
-        #[expect(
-            clippy::iter_over_hash_type,
-            reason = "Iteration order doesn't matter here"
-        )]
-        for (account_id, post) in public_state_diff {
-            let current_account = self.get_account_by_id_mut(account_id);
-            *current_account = post;
-        }
-
-        // 5. Increment nonces for public signers
-        for account_id in tx.signer_account_ids() {
-            let current_account = self.get_account_by_id_mut(account_id);
-            current_account.nonce.public_account_nonce_increment();
-        }
-
+        let diff =
+            ValidatedStateDiff::from_privacy_preserving_transaction(tx, self, block_id, timestamp)?;
+        self.apply_state_diff(diff);
         Ok(())
     }
 
@@ -222,8 +249,8 @@ impl V03State {
         &mut self,
         tx: &ProgramDeploymentTransaction,
     ) -> Result<(), NssaError> {
-        let program = tx.validate_and_produce_public_state_diff(self)?;
-        self.insert_program(program);
+        let diff = ValidatedStateDiff::from_program_deployment_transaction(tx, self)?;
+        self.apply_state_diff(diff);
         Ok(())
     }
 
@@ -335,15 +362,19 @@ pub mod tests {
     use std::collections::HashMap;
 
     use nssa_core::{
-        Commitment, Nullifier, NullifierPublicKey, NullifierSecretKey, SharedSecretKey,
+        BlockId, Commitment, Nullifier, NullifierPublicKey, NullifierSecretKey, SharedSecretKey,
+        Timestamp,
         account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
         encryption::{EphemeralPublicKey, Scalar, ViewingPublicKey},
-        program::{PdaSeed, ProgramId},
+        program::{
+            BlockValidityWindow, ExecutionValidationError, PdaSeed, ProgramId,
+            TimestampValidityWindow, WrappedBalanceSum,
+        },
     };
 
     use crate::{
         PublicKey, PublicTransaction, V03State,
-        error::NssaError,
+        error::{InvalidProgramBehaviorError, NssaError},
         execute_and_prove,
         privacy_preserving_transaction::{
             PrivacyPreservingTransaction,
@@ -354,7 +385,10 @@ pub mod tests {
         program::Program,
         public_transaction,
         signature::PrivateKey,
-        state::MAX_NUMBER_CHAINED_CALLS,
+        state::{
+            CLOCK_01_PROGRAM_ACCOUNT_ID, CLOCK_10_PROGRAM_ACCOUNT_ID, CLOCK_50_PROGRAM_ACCOUNT_ID,
+            CLOCK_PROGRAM_ACCOUNT_IDS, MAX_NUMBER_CHAINED_CALLS,
+        },
     };
 
     impl V03State {
@@ -373,6 +407,13 @@ pub mod tests {
             self.insert_program(Program::amm());
             self.insert_program(Program::claimer());
             self.insert_program(Program::changer_claimer());
+            self.insert_program(Program::validity_window());
+            self.insert_program(Program::flash_swap_initiator());
+            self.insert_program(Program::flash_swap_callback());
+            self.insert_program(Program::malicious_self_program_id());
+            self.insert_program(Program::malicious_caller_program_id());
+            self.insert_program(Program::time_locked_transfer());
+            self.insert_program(Program::pinata_cooldown());
             self
         }
 
@@ -449,19 +490,61 @@ pub mod tests {
         }
     }
 
+    // ── Flash Swap types (mirrors of guest types for host-side serialisation) ──
+
+    #[derive(serde::Serialize, serde::Deserialize)]
+    struct CallbackInstruction {
+        return_funds: bool,
+        token_program_id: ProgramId,
+        amount: u128,
+    }
+
+    #[derive(serde::Serialize, serde::Deserialize)]
+    enum FlashSwapInstruction {
+        Initiate {
+            token_program_id: ProgramId,
+            callback_program_id: ProgramId,
+            amount_out: u128,
+            callback_instruction_data: Vec<u32>,
+        },
+        InvariantCheck {
+            min_vault_balance: u128,
+        },
+    }
+
     fn transfer_transaction(
         from: AccountId,
         from_key: &PrivateKey,
-        nonce: u128,
+        from_nonce: u128,
         to: AccountId,
+        to_key: &PrivateKey,
+        to_nonce: u128,
         balance: u128,
     ) -> PublicTransaction {
         let account_ids = vec![from, to];
-        let nonces = vec![Nonce(nonce)];
+        let nonces = vec![Nonce(from_nonce), Nonce(to_nonce)];
         let program_id = Program::authenticated_transfer_program().id();
         let message =
             public_transaction::Message::try_new(program_id, account_ids, nonces, balance).unwrap();
-        let witness_set = public_transaction::WitnessSet::for_message(&message, &[from_key]);
+        let witness_set =
+            public_transaction::WitnessSet::for_message(&message, &[from_key, to_key]);
+        PublicTransaction::new(message, witness_set)
+    }
+
+    fn build_flash_swap_tx(
+        initiator: &Program,
+        vault_id: AccountId,
+        receiver_id: AccountId,
+        instruction: FlashSwapInstruction,
+    ) -> PublicTransaction {
+        let message = public_transaction::Message::try_new(
+            initiator.id(),
+            vec![vault_id, receiver_id],
+            vec![], // no signers — vault is PDA-authorised
+            instruction,
+        )
+        .unwrap();
+        let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
         PublicTransaction::new(message, witness_set)
     }
 
@@ -473,6 +556,7 @@ pub mod tests {
         let addr2 = AccountId::from(&PublicKey::new_from_private_key(&key2));
         let initial_data = [(addr1, 100_u128), (addr2, 151_u128)];
         let authenticated_transfers_program = Program::authenticated_transfer_program();
+        let clock_program = Program::clock();
         let expected_public_state = {
             let mut this = HashMap::new();
             this.insert(
@@ -491,6 +575,16 @@ pub mod tests {
                     ..Account::default()
                 },
             );
+            for account_id in CLOCK_PROGRAM_ACCOUNT_IDS {
+                this.insert(
+                    account_id,
+                    Account {
+                        program_owner: clock_program.id(),
+                        data: [0_u8; 16].to_vec().try_into().unwrap(),
+                        ..Account::default()
+                    },
+                );
+            }
             this
         };
         let expected_builtin_programs = {
@@ -499,20 +593,52 @@ pub mod tests {
                 authenticated_transfers_program.id(),
                 authenticated_transfers_program,
             );
+            this.insert(clock_program.id(), clock_program);
             this.insert(Program::token().id(), Program::token());
             this.insert(Program::amm().id(), Program::amm());
+            this.insert(Program::ata().id(), Program::ata());
             this
         };
 
-        let state = V03State::new_with_genesis_accounts(&initial_data, &[]);
+        let state = V03State::new_with_genesis_accounts(&initial_data, vec![], 0);
 
         assert_eq!(state.public_state, expected_public_state);
         assert_eq!(state.programs, expected_builtin_programs);
     }
 
     #[test]
+    fn new_with_genesis_includes_nullifiers_for_private_accounts() {
+        let keys1 = test_private_account_keys_1();
+        let keys2 = test_private_account_keys_2();
+
+        let account = Account {
+            balance: 100,
+            program_owner: Program::authenticated_transfer_program().id(),
+            ..Account::default()
+        };
+
+        let npk1 = keys1.npk();
+        let npk2 = keys2.npk();
+
+        let init_commitment1 = Commitment::new(&npk1, &account);
+        let init_commitment2 = Commitment::new(&npk2, &account);
+        let init_nullifier1 = Nullifier::for_account_initialization(&npk1);
+        let init_nullifier2 = Nullifier::for_account_initialization(&npk2);
+
+        let initial_private_accounts = vec![
+            (init_commitment1, init_nullifier1),
+            (init_commitment2, init_nullifier2),
+        ];
+
+        let state = V03State::new_with_genesis_accounts(&[], initial_private_accounts, 0);
+
+        assert!(state.private_state.1.contains(&init_nullifier1));
+        assert!(state.private_state.1.contains(&init_nullifier2));
+    }
+
+    #[test]
     fn insert_program() {
-        let mut state = V03State::new_with_genesis_accounts(&[], &[]);
+        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0);
         let program_to_insert = Program::simple_balance_transfer();
         let program_id = program_to_insert.id();
         assert!(!state.programs.contains_key(&program_id));
@@ -527,7 +653,7 @@ pub mod tests {
         let key = PrivateKey::try_new([1; 32]).unwrap();
         let account_id = AccountId::from(&PublicKey::new_from_private_key(&key));
         let initial_data = [(account_id, 100_u128)];
-        let state = V03State::new_with_genesis_accounts(&initial_data, &[]);
+        let state = V03State::new_with_genesis_accounts(&initial_data, vec![], 0);
         let expected_account = &state.public_state[&account_id];
 
         let account = state.get_account_by_id(account_id);
@@ -538,7 +664,7 @@ pub mod tests {
     #[test]
     fn get_account_by_account_id_default_account() {
         let addr2 = AccountId::new([0; 32]);
-        let state = V03State::new_with_genesis_accounts(&[], &[]);
+        let state = V03State::new_with_genesis_accounts(&[], vec![], 0);
         let expected_account = Account::default();
 
         let account = state.get_account_by_id(addr2);
@@ -548,7 +674,7 @@ pub mod tests {
 
     #[test]
     fn builtin_programs_getter() {
-        let state = V03State::new_with_genesis_accounts(&[], &[]);
+        let state = V03State::new_with_genesis_accounts(&[], vec![], 0);
 
         let builtin_programs = state.programs();
 
@@ -560,19 +686,20 @@ pub mod tests {
         let key = PrivateKey::try_new([1; 32]).unwrap();
         let account_id = AccountId::from(&PublicKey::new_from_private_key(&key));
         let initial_data = [(account_id, 100)];
-        let mut state = V03State::new_with_genesis_accounts(&initial_data, &[]);
+        let mut state = V03State::new_with_genesis_accounts(&initial_data, vec![], 0);
         let from = account_id;
-        let to = AccountId::new([2; 32]);
+        let to_key = PrivateKey::try_new([2; 32]).unwrap();
+        let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
         assert_eq!(state.get_account_by_id(to), Account::default());
         let balance_to_move = 5;
 
-        let tx = transfer_transaction(from, &key, 0, to, balance_to_move);
-        state.transition_from_public_transaction(&tx).unwrap();
+        let tx = transfer_transaction(from, &key, 0, to, &to_key, 0, balance_to_move);
+        state.transition_from_public_transaction(&tx, 1, 0).unwrap();
 
         assert_eq!(state.get_account_by_id(from).balance, 95);
         assert_eq!(state.get_account_by_id(to).balance, 5);
         assert_eq!(state.get_account_by_id(from).nonce, Nonce(1));
-        assert_eq!(state.get_account_by_id(to).nonce, Nonce(0));
+        assert_eq!(state.get_account_by_id(to).nonce, Nonce(1));
     }
 
     #[test]
@@ -580,15 +707,16 @@ pub mod tests {
         let key = PrivateKey::try_new([1; 32]).unwrap();
         let account_id = AccountId::from(&PublicKey::new_from_private_key(&key));
         let initial_data = [(account_id, 100)];
-        let mut state = V03State::new_with_genesis_accounts(&initial_data, &[]);
+        let mut state = V03State::new_with_genesis_accounts(&initial_data, vec![], 0);
         let from = account_id;
         let from_key = key;
-        let to = AccountId::new([2; 32]);
+        let to_key = PrivateKey::try_new([2; 32]).unwrap();
+        let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
         let balance_to_move = 101;
         assert!(state.get_account_by_id(from).balance < balance_to_move);
 
-        let tx = transfer_transaction(from, &from_key, 0, to, balance_to_move);
-        let result = state.transition_from_public_transaction(&tx);
+        let tx = transfer_transaction(from, &from_key, 0, to, &to_key, 0, balance_to_move);
+        let result = state.transition_from_public_transaction(&tx, 1, 0);
 
         assert!(matches!(result, Err(NssaError::ProgramExecutionFailed(_))));
         assert_eq!(state.get_account_by_id(from).balance, 100);
@@ -604,20 +732,21 @@ pub mod tests {
         let account_id1 = AccountId::from(&PublicKey::new_from_private_key(&key1));
         let account_id2 = AccountId::from(&PublicKey::new_from_private_key(&key2));
         let initial_data = [(account_id1, 100), (account_id2, 200)];
-        let mut state = V03State::new_with_genesis_accounts(&initial_data, &[]);
+        let mut state = V03State::new_with_genesis_accounts(&initial_data, vec![], 0);
         let from = account_id2;
         let from_key = key2;
         let to = account_id1;
+        let to_key = key1;
         assert_ne!(state.get_account_by_id(to), Account::default());
         let balance_to_move = 8;
 
-        let tx = transfer_transaction(from, &from_key, 0, to, balance_to_move);
-        state.transition_from_public_transaction(&tx).unwrap();
+        let tx = transfer_transaction(from, &from_key, 0, to, &to_key, 0, balance_to_move);
+        state.transition_from_public_transaction(&tx, 1, 0).unwrap();
 
         assert_eq!(state.get_account_by_id(from).balance, 192);
         assert_eq!(state.get_account_by_id(to).balance, 108);
         assert_eq!(state.get_account_by_id(from).nonce, Nonce(1));
-        assert_eq!(state.get_account_by_id(to).nonce, Nonce(0));
+        assert_eq!(state.get_account_by_id(to).nonce, Nonce(1));
     }
 
     #[test]
@@ -627,46 +756,214 @@ pub mod tests {
         let key2 = PrivateKey::try_new([2; 32]).unwrap();
         let account_id2 = AccountId::from(&PublicKey::new_from_private_key(&key2));
         let initial_data = [(account_id1, 100)];
-        let mut state = V03State::new_with_genesis_accounts(&initial_data, &[]);
-        let account_id3 = AccountId::new([3; 32]);
+        let mut state = V03State::new_with_genesis_accounts(&initial_data, vec![], 0);
+        let key3 = PrivateKey::try_new([3; 32]).unwrap();
+        let account_id3 = AccountId::from(&PublicKey::new_from_private_key(&key3));
         let balance_to_move = 5;
 
-        let tx = transfer_transaction(account_id1, &key1, 0, account_id2, balance_to_move);
-        state.transition_from_public_transaction(&tx).unwrap();
+        let tx = transfer_transaction(
+            account_id1,
+            &key1,
+            0,
+            account_id2,
+            &key2,
+            0,
+            balance_to_move,
+        );
+        state.transition_from_public_transaction(&tx, 1, 0).unwrap();
         let balance_to_move = 3;
-        let tx = transfer_transaction(account_id2, &key2, 0, account_id3, balance_to_move);
-        state.transition_from_public_transaction(&tx).unwrap();
+        let tx = transfer_transaction(
+            account_id2,
+            &key2,
+            1,
+            account_id3,
+            &key3,
+            0,
+            balance_to_move,
+        );
+        state.transition_from_public_transaction(&tx, 1, 0).unwrap();
 
         assert_eq!(state.get_account_by_id(account_id1).balance, 95);
         assert_eq!(state.get_account_by_id(account_id2).balance, 2);
         assert_eq!(state.get_account_by_id(account_id3).balance, 3);
         assert_eq!(state.get_account_by_id(account_id1).nonce, Nonce(1));
-        assert_eq!(state.get_account_by_id(account_id2).nonce, Nonce(1));
-        assert_eq!(state.get_account_by_id(account_id3).nonce, Nonce(0));
+        assert_eq!(state.get_account_by_id(account_id2).nonce, Nonce(2));
+        assert_eq!(state.get_account_by_id(account_id3).nonce, Nonce(1));
+    }
+
+    fn clock_transaction(timestamp: nssa_core::Timestamp) -> PublicTransaction {
+        let message = public_transaction::Message::try_new(
+            Program::clock().id(),
+            CLOCK_PROGRAM_ACCOUNT_IDS.to_vec(),
+            vec![],
+            timestamp,
+        )
+        .unwrap();
+        PublicTransaction::new(
+            message,
+            public_transaction::WitnessSet::from_raw_parts(vec![]),
+        )
+    }
+
+    fn clock_account_data(state: &V03State, account_id: AccountId) -> (u64, nssa_core::Timestamp) {
+        let data = state.get_account_by_id(account_id).data.into_inner();
+        let parsed = clock_core::ClockAccountData::from_bytes(&data);
+        (parsed.block_id, parsed.timestamp)
+    }
+
+    #[test]
+    fn clock_genesis_state_has_zero_block_id_and_genesis_timestamp() {
+        let genesis_timestamp = 1_000_000_u64;
+        let state = V03State::new_with_genesis_accounts(&[], vec![], genesis_timestamp);
+
+        let (block_id, timestamp) = clock_account_data(&state, CLOCK_01_PROGRAM_ACCOUNT_ID);
+
+        assert_eq!(block_id, 0);
+        assert_eq!(timestamp, genesis_timestamp);
+    }
+
+    #[test]
+    fn clock_invocation_increments_block_id() {
+        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0);
+
+        let tx = clock_transaction(1234);
+        state.transition_from_public_transaction(&tx, 0, 0).unwrap();
+
+        let (block_id, _) = clock_account_data(&state, CLOCK_01_PROGRAM_ACCOUNT_ID);
+        assert_eq!(block_id, 1);
+    }
+
+    #[test]
+    fn clock_invocation_stores_timestamp_from_instruction() {
+        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0);
+        let block_timestamp = 1_700_000_000_000_u64;
+
+        let tx = clock_transaction(block_timestamp);
+        state.transition_from_public_transaction(&tx, 0, 0).unwrap();
+
+        let (_, timestamp) = clock_account_data(&state, CLOCK_01_PROGRAM_ACCOUNT_ID);
+        assert_eq!(timestamp, block_timestamp);
+    }
+
+    #[test]
+    fn clock_invocation_sequence_correctly_increments_block_id() {
+        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0);
+
+        for expected_block_id in 1_u64..=5 {
+            let tx = clock_transaction(expected_block_id * 1000);
+            state.transition_from_public_transaction(&tx, 0, 0).unwrap();
+
+            let (block_id, timestamp) = clock_account_data(&state, CLOCK_01_PROGRAM_ACCOUNT_ID);
+            assert_eq!(block_id, expected_block_id);
+            assert_eq!(timestamp, expected_block_id * 1000);
+        }
+    }
+
+    #[test]
+    fn clock_10_account_not_updated_when_block_id_not_multiple_of_10() {
+        let genesis_timestamp = 0_u64;
+        let mut state = V03State::new_with_genesis_accounts(&[], vec![], genesis_timestamp);
+
+        // Run 9 clock ticks (block_ids 1..=9), none of which are multiples of 10.
+        for tick in 1_u64..=9 {
+            let tx = clock_transaction(tick * 1000);
+            state.transition_from_public_transaction(&tx, 0, 0).unwrap();
+        }
+
+        let (block_id_10, timestamp_10) = clock_account_data(&state, CLOCK_10_PROGRAM_ACCOUNT_ID);
+        // The 10-block account should still reflect genesis state.
+        assert_eq!(block_id_10, 0);
+        assert_eq!(timestamp_10, genesis_timestamp);
+    }
+
+    #[test]
+    fn clock_10_account_updated_when_block_id_is_multiple_of_10() {
+        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0);
+
+        // Run 10 clock ticks so block_id reaches 10.
+        for tick in 1_u64..=10 {
+            let tx = clock_transaction(tick * 1000);
+            state.transition_from_public_transaction(&tx, 0, 0).unwrap();
+        }
+
+        let (block_id_1, timestamp_1) = clock_account_data(&state, CLOCK_01_PROGRAM_ACCOUNT_ID);
+        let (block_id_10, timestamp_10) = clock_account_data(&state, CLOCK_10_PROGRAM_ACCOUNT_ID);
+        assert_eq!(block_id_1, 10);
+        assert_eq!(block_id_10, 10);
+        assert_eq!(timestamp_10, timestamp_1);
+    }
+
+    #[test]
+    fn clock_50_account_only_updated_at_multiples_of_50() {
+        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0);
+
+        // After 49 ticks the 50-block account should be unchanged.
+        for tick in 1_u64..=49 {
+            let tx = clock_transaction(tick * 1000);
+            state.transition_from_public_transaction(&tx, 0, 0).unwrap();
+        }
+        let (block_id_50, _) = clock_account_data(&state, CLOCK_50_PROGRAM_ACCOUNT_ID);
+        assert_eq!(block_id_50, 0);
+
+        // Tick 50 — now the 50-block account should update.
+        let tx = clock_transaction(50 * 1000);
+        state.transition_from_public_transaction(&tx, 0, 0).unwrap();
+        let (block_id_50, timestamp_50) = clock_account_data(&state, CLOCK_50_PROGRAM_ACCOUNT_ID);
+        assert_eq!(block_id_50, 50);
+        assert_eq!(timestamp_50, 50 * 1000);
+    }
+
+    #[test]
+    fn all_three_clock_accounts_updated_at_multiple_of_50() {
+        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0);
+
+        // Advance to block 50 (a multiple of both 10 and 50).
+        for tick in 1_u64..=50 {
+            let tx = clock_transaction(tick * 1000);
+            state.transition_from_public_transaction(&tx, 0, 0).unwrap();
+        }
+
+        let (block_id_1, ts_1) = clock_account_data(&state, CLOCK_01_PROGRAM_ACCOUNT_ID);
+        let (block_id_10, ts_10) = clock_account_data(&state, CLOCK_10_PROGRAM_ACCOUNT_ID);
+        let (block_id_50, ts_50) = clock_account_data(&state, CLOCK_50_PROGRAM_ACCOUNT_ID);
+
+        assert_eq!(block_id_1, 50);
+        assert_eq!(block_id_10, 50);
+        assert_eq!(block_id_50, 50);
+        assert_eq!(ts_1, ts_10);
+        assert_eq!(ts_1, ts_50);
     }
 
     #[test]
     fn program_should_fail_if_modifies_nonces() {
-        let initial_data = [(AccountId::new([1; 32]), 100)];
+        let account_id = AccountId::new([1; 32]);
+        let initial_data = [(account_id, 100)];
         let mut state =
-            V03State::new_with_genesis_accounts(&initial_data, &[]).with_test_programs();
-        let account_ids = vec![AccountId::new([1; 32])];
+            V03State::new_with_genesis_accounts(&initial_data, vec![], 0).with_test_programs();
+        let account_ids = vec![account_id];
         let program_id = Program::nonce_changer_program().id();
         let message =
             public_transaction::Message::try_new(program_id, account_ids, vec![], ()).unwrap();
         let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
         let tx = PublicTransaction::new(message, witness_set);
 
-        let result = state.transition_from_public_transaction(&tx);
+        let result = state.transition_from_public_transaction(&tx, 1, 0);
 
-        assert!(matches!(result, Err(NssaError::InvalidProgramBehavior)));
+        assert!(matches!(
+            result,
+            Err(NssaError::InvalidProgramBehavior(
+                InvalidProgramBehaviorError::ExecutionValidationFailed(
+                    ExecutionValidationError::ModifiedNonce { account_id: err_account_id }
+                )
+            )) if err_account_id == account_id
+        ));
     }
 
     #[test]
     fn program_should_fail_if_output_accounts_exceed_inputs() {
         let initial_data = [(AccountId::new([1; 32]), 100)];
         let mut state =
-            V03State::new_with_genesis_accounts(&initial_data, &[]).with_test_programs();
+            V03State::new_with_genesis_accounts(&initial_data, vec![], 0).with_test_programs();
         let account_ids = vec![AccountId::new([1; 32])];
         let program_id = Program::extra_output_program().id();
         let message =
@@ -674,16 +971,26 @@ pub mod tests {
         let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
         let tx = PublicTransaction::new(message, witness_set);
 
-        let result = state.transition_from_public_transaction(&tx);
+        let result = state.transition_from_public_transaction(&tx, 1, 0);
 
-        assert!(matches!(result, Err(NssaError::InvalidProgramBehavior)));
+        assert!(matches!(
+            result,
+            Err(NssaError::InvalidProgramBehavior(
+                InvalidProgramBehaviorError::ExecutionValidationFailed(
+                    ExecutionValidationError::MismatchedPreStatePostStateLength {
+                        pre_state_length,
+                        post_state_length
+                    }
+                )
+            )) if pre_state_length == 1 && post_state_length == 2
+        ));
     }
 
     #[test]
     fn program_should_fail_with_missing_output_accounts() {
         let initial_data = [(AccountId::new([1; 32]), 100)];
         let mut state =
-            V03State::new_with_genesis_accounts(&initial_data, &[]).with_test_programs();
+            V03State::new_with_genesis_accounts(&initial_data, vec![], 0).with_test_programs();
         let account_ids = vec![AccountId::new([1; 32]), AccountId::new([2; 32])];
         let program_id = Program::missing_output_program().id();
         let message =
@@ -691,16 +998,26 @@ pub mod tests {
         let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
         let tx = PublicTransaction::new(message, witness_set);
 
-        let result = state.transition_from_public_transaction(&tx);
+        let result = state.transition_from_public_transaction(&tx, 1, 0);
 
-        assert!(matches!(result, Err(NssaError::InvalidProgramBehavior)));
+        assert!(matches!(
+            result,
+            Err(NssaError::InvalidProgramBehavior(
+                InvalidProgramBehaviorError::ExecutionValidationFailed(
+                    ExecutionValidationError::MismatchedPreStatePostStateLength {
+                        pre_state_length,
+                        post_state_length
+                    }
+                )
+            )) if pre_state_length == 2 && post_state_length == 1
+        ));
     }
 
     #[test]
     fn program_should_fail_if_modifies_program_owner_with_only_non_default_program_owner() {
         let initial_data = [(AccountId::new([1; 32]), 0)];
         let mut state =
-            V03State::new_with_genesis_accounts(&initial_data, &[]).with_test_programs();
+            V03State::new_with_genesis_accounts(&initial_data, vec![], 0).with_test_programs();
         let account_id = AccountId::new([1; 32]);
         let account = state.get_account_by_id(account_id);
         // Assert the target account only differs from the default account in the program owner
@@ -715,15 +1032,20 @@ pub mod tests {
         let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
         let tx = PublicTransaction::new(message, witness_set);
 
-        let result = state.transition_from_public_transaction(&tx);
+        let result = state.transition_from_public_transaction(&tx, 1, 0);
 
-        assert!(matches!(result, Err(NssaError::InvalidProgramBehavior)));
+        assert!(matches!(
+            result,
+            Err(NssaError::InvalidProgramBehavior(InvalidProgramBehaviorError::ExecutionValidationFailed(
+                ExecutionValidationError::ModifiedProgramOwner { account_id: err_account_id }
+            ))) if err_account_id == account_id
+        ));
     }
 
     #[test]
     fn program_should_fail_if_modifies_program_owner_with_only_non_default_balance() {
         let initial_data = [];
-        let mut state = V03State::new_with_genesis_accounts(&initial_data, &[])
+        let mut state = V03State::new_with_genesis_accounts(&initial_data, vec![], 0)
             .with_test_programs()
             .with_non_default_accounts_but_default_program_owners();
         let account_id = AccountId::new([255; 32]);
@@ -739,15 +1061,20 @@ pub mod tests {
         let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
         let tx = PublicTransaction::new(message, witness_set);
 
-        let result = state.transition_from_public_transaction(&tx);
+        let result = state.transition_from_public_transaction(&tx, 1, 0);
 
-        assert!(matches!(result, Err(NssaError::InvalidProgramBehavior)));
+        assert!(matches!(
+            result,
+            Err(NssaError::InvalidProgramBehavior(InvalidProgramBehaviorError::ExecutionValidationFailed(
+                ExecutionValidationError::ModifiedProgramOwner { account_id: err_account_id }
+            ))) if err_account_id == account_id
+        ));
     }
 
     #[test]
     fn program_should_fail_if_modifies_program_owner_with_only_non_default_nonce() {
         let initial_data = [];
-        let mut state = V03State::new_with_genesis_accounts(&initial_data, &[])
+        let mut state = V03State::new_with_genesis_accounts(&initial_data, vec![], 0)
             .with_test_programs()
             .with_non_default_accounts_but_default_program_owners();
         let account_id = AccountId::new([254; 32]);
@@ -763,15 +1090,20 @@ pub mod tests {
         let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
         let tx = PublicTransaction::new(message, witness_set);
 
-        let result = state.transition_from_public_transaction(&tx);
+        let result = state.transition_from_public_transaction(&tx, 1, 0);
 
-        assert!(matches!(result, Err(NssaError::InvalidProgramBehavior)));
+        assert!(matches!(
+            result,
+            Err(NssaError::InvalidProgramBehavior(InvalidProgramBehaviorError::ExecutionValidationFailed(
+                ExecutionValidationError::ModifiedProgramOwner { account_id: err_account_id }
+            ))) if err_account_id == account_id
+        ));
     }
 
     #[test]
     fn program_should_fail_if_modifies_program_owner_with_only_non_default_data() {
         let initial_data = [];
-        let mut state = V03State::new_with_genesis_accounts(&initial_data, &[])
+        let mut state = V03State::new_with_genesis_accounts(&initial_data, vec![], 0)
             .with_test_programs()
             .with_non_default_accounts_but_default_program_owners();
         let account_id = AccountId::new([253; 32]);
@@ -787,18 +1119,23 @@ pub mod tests {
         let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
         let tx = PublicTransaction::new(message, witness_set);
 
-        let result = state.transition_from_public_transaction(&tx);
+        let result = state.transition_from_public_transaction(&tx, 1, 0);
 
-        assert!(matches!(result, Err(NssaError::InvalidProgramBehavior)));
+        assert!(matches!(
+            result,
+            Err(NssaError::InvalidProgramBehavior(InvalidProgramBehaviorError::ExecutionValidationFailed(
+                ExecutionValidationError::ModifiedProgramOwner { account_id: err_account_id }
+            ))) if err_account_id == account_id
+        ));
     }
 
     #[test]
     fn program_should_fail_if_transfers_balance_from_non_owned_account() {
-        let initial_data = [(AccountId::new([1; 32]), 100)];
-        let mut state =
-            V03State::new_with_genesis_accounts(&initial_data, &[]).with_test_programs();
         let sender_account_id = AccountId::new([1; 32]);
         let receiver_account_id = AccountId::new([2; 32]);
+        let initial_data = [(sender_account_id, 100)];
+        let mut state =
+            V03State::new_with_genesis_accounts(&initial_data, vec![], 0).with_test_programs();
         let balance_to_move: u128 = 1;
         let program_id = Program::simple_balance_transfer().id();
         assert_ne!(
@@ -815,15 +1152,20 @@ pub mod tests {
         let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
         let tx = PublicTransaction::new(message, witness_set);
 
-        let result = state.transition_from_public_transaction(&tx);
+        let result = state.transition_from_public_transaction(&tx, 1, 0);
 
-        assert!(matches!(result, Err(NssaError::InvalidProgramBehavior)));
+        assert!(matches!(
+            result,
+            Err(NssaError::InvalidProgramBehavior(InvalidProgramBehaviorError::ExecutionValidationFailed(
+                ExecutionValidationError::UnauthorizedBalanceDecrease { account_id: err_account_id, owner_program_id, executing_program_id }
+            ))) if err_account_id == sender_account_id && owner_program_id != program_id && executing_program_id == program_id
+        ));
     }
 
     #[test]
     fn program_should_fail_if_modifies_data_of_non_owned_account() {
         let initial_data = [];
-        let mut state = V03State::new_with_genesis_accounts(&initial_data, &[])
+        let mut state = V03State::new_with_genesis_accounts(&initial_data, vec![], 0)
             .with_test_programs()
             .with_non_default_accounts_but_default_program_owners();
         let account_id = AccountId::new([255; 32]);
@@ -840,16 +1182,21 @@ pub mod tests {
         let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
         let tx = PublicTransaction::new(message, witness_set);
 
-        let result = state.transition_from_public_transaction(&tx);
+        let result = state.transition_from_public_transaction(&tx, 1, 0);
 
-        assert!(matches!(result, Err(NssaError::InvalidProgramBehavior)));
+        assert!(matches!(
+            result,
+            Err(NssaError::InvalidProgramBehavior(InvalidProgramBehaviorError::ExecutionValidationFailed(
+                ExecutionValidationError::UnauthorizedDataModification { account_id: err_account_id, executing_program_id }
+            ))) if err_account_id == account_id && executing_program_id == program_id
+        ));
     }
 
     #[test]
     fn program_should_fail_if_does_not_preserve_total_balance_by_minting() {
         let initial_data = [];
         let mut state =
-            V03State::new_with_genesis_accounts(&initial_data, &[]).with_test_programs();
+            V03State::new_with_genesis_accounts(&initial_data, vec![], 0).with_test_programs();
         let account_id = AccountId::new([1; 32]);
         let program_id = Program::minter().id();
 
@@ -858,15 +1205,20 @@ pub mod tests {
         let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
         let tx = PublicTransaction::new(message, witness_set);
 
-        let result = state.transition_from_public_transaction(&tx);
+        let result = state.transition_from_public_transaction(&tx, 1, 0);
 
-        assert!(matches!(result, Err(NssaError::InvalidProgramBehavior)));
+        assert!(matches!(
+            result,
+            Err(NssaError::InvalidProgramBehavior(InvalidProgramBehaviorError::ExecutionValidationFailed(
+                ExecutionValidationError::MismatchedTotalBalance { total_balance_pre_states, total_balance_post_states }
+            ))) if total_balance_pre_states == 0.into() && total_balance_post_states == 1.into()
+        ));
     }
 
     #[test]
     fn program_should_fail_if_does_not_preserve_total_balance_by_burning() {
         let initial_data = [];
-        let mut state = V03State::new_with_genesis_accounts(&initial_data, &[])
+        let mut state = V03State::new_with_genesis_accounts(&initial_data, vec![], 0)
             .with_test_programs()
             .with_account_owned_by_burner_program();
         let program_id = Program::burner().id();
@@ -887,9 +1239,14 @@ pub mod tests {
         .unwrap();
         let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
         let tx = PublicTransaction::new(message, witness_set);
-        let result = state.transition_from_public_transaction(&tx);
+        let result = state.transition_from_public_transaction(&tx, 1, 0);
 
-        assert!(matches!(result, Err(NssaError::InvalidProgramBehavior)));
+        assert!(matches!(
+            result,
+            Err(NssaError::InvalidProgramBehavior(InvalidProgramBehaviorError::ExecutionValidationFailed(
+                ExecutionValidationError::MismatchedTotalBalance { total_balance_pre_states, total_balance_post_states }
+            ))) if total_balance_pre_states == 100.into() && total_balance_post_states == 99.into()
+        ));
     }
 
     fn test_public_account_keys_1() -> TestPublicKeys {
@@ -1058,7 +1415,7 @@ pub mod tests {
         let recipient_keys = test_private_account_keys_1();
 
         let mut state =
-            V03State::new_with_genesis_accounts(&[(sender_keys.account_id(), 200)], &[]);
+            V03State::new_with_genesis_accounts(&[(sender_keys.account_id(), 200)], vec![], 0);
 
         let balance_to_move = 37;
 
@@ -1080,7 +1437,7 @@ pub mod tests {
         assert!(!state.private_state.0.contains(&expected_new_commitment));
 
         state
-            .transition_from_privacy_preserving_transaction(&tx)
+            .transition_from_privacy_preserving_transaction(&tx, 1, 0)
             .unwrap();
 
         let sender_post = state.get_account_by_id(sender_keys.account_id());
@@ -1106,7 +1463,7 @@ pub mod tests {
         };
         let recipient_keys = test_private_account_keys_2();
 
-        let mut state = V03State::new_with_genesis_accounts(&[], &[])
+        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0)
             .with_private_account(&sender_keys, &sender_private_account);
 
         let balance_to_move = 37;
@@ -1150,7 +1507,7 @@ pub mod tests {
         assert!(!state.private_state.1.contains(&expected_new_nullifier));
 
         state
-            .transition_from_privacy_preserving_transaction(&tx)
+            .transition_from_privacy_preserving_transaction(&tx, 1, 0)
             .unwrap();
 
         assert_eq!(state.public_state, previous_public_state);
@@ -1175,7 +1532,8 @@ pub mod tests {
         let recipient_initial_balance = 400;
         let mut state = V03State::new_with_genesis_accounts(
             &[(recipient_keys.account_id(), recipient_initial_balance)],
-            &[],
+            vec![],
+            0,
         )
         .with_private_account(&sender_keys, &sender_private_account);
 
@@ -1214,7 +1572,7 @@ pub mod tests {
         assert!(!state.private_state.1.contains(&expected_new_nullifier));
 
         state
-            .transition_from_privacy_preserving_transaction(&tx)
+            .transition_from_privacy_preserving_transaction(&tx, 1, 0)
             .unwrap();
 
         let recipient_post = state.get_account_by_id(recipient_keys.account_id());
@@ -1956,9 +2314,16 @@ pub mod tests {
         assert!(matches!(result, Err(NssaError::CircuitProvingError(_))));
     }
 
+    /// A mask-3 account that no program claims via `Claim::Pda` and no caller authorizes via
+    /// `ChainedCall.pda_seeds` has no binding between its supplied npk and its `account_id`,
+    /// so the circuit must reject. Here `simple_balance_transfer` emits no claim for the
+    /// second account, leaving position 1 unbound.
     #[test]
-    fn circuit_should_fail_with_invalid_visibility_mask_value() {
+    fn private_pda_without_binding_fails() {
         let program = Program::simple_balance_transfer();
+        let keys = test_private_account_keys_1();
+        let npk = keys.npk();
+        let shared_secret = SharedSecretKey::new(&[55; 32], &keys.vpk());
         let public_account_1 = AccountWithMetadata::new(
             Account {
                 program_owner: program.id(),
@@ -1968,17 +2333,235 @@ pub mod tests {
             true,
             AccountId::new([0; 32]),
         );
-        let public_account_2 =
+        let private_pda_account =
             AccountWithMetadata::new(Account::default(), false, AccountId::new([1; 32]));
 
         let visibility_mask = [0, 3];
         let result = execute_and_prove(
-            vec![public_account_1, public_account_2],
+            vec![public_account_1, private_pda_account],
             Program::serialize_instruction(10_u128).unwrap(),
             visibility_mask.to_vec(),
+            vec![(npk, shared_secret)],
             vec![],
+            vec![None],
+            &program.into(),
+        );
+
+        assert!(matches!(result, Err(NssaError::CircuitProvingError(_))));
+    }
+
+    /// Happy path: a program claims a new mask-3 account via `Claim::Pda(seed)`. The circuit
+    /// reads the npk for that `pre_state` from `private_account_keys` at the `pre_state`'s
+    /// position, derives `AccountId` via `AccountId::for_private_pda(program_id, seed, npk)`, and
+    /// asserts it equals the `pre_state`'s `account_id`. The equality both validates the claim
+    /// and binds the supplied npk to the `account_id`.
+    #[test]
+    fn private_pda_claim_succeeds() {
+        let program = Program::pda_claimer();
+        let keys = test_private_account_keys_1();
+        let npk = keys.npk();
+        let seed = PdaSeed::new([42; 32]);
+        let shared_secret = SharedSecretKey::new(&[55; 32], &keys.vpk());
+
+        let account_id = AccountId::for_private_pda(&program.id(), &seed, &npk);
+        let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
+
+        let result = execute_and_prove(
+            vec![pre_state],
+            Program::serialize_instruction(seed).unwrap(),
+            vec![3],
+            vec![(npk, shared_secret)],
             vec![],
+            vec![None],
+            &program.into(),
+        );
+
+        let (output, _proof) = result.expect("mask-3 private PDA claim should succeed");
+        assert_eq!(output.new_nullifiers.len(), 1);
+        assert_eq!(output.new_commitments.len(), 1);
+        assert_eq!(output.ciphertexts.len(), 1);
+        assert!(output.public_pre_states.is_empty());
+        assert!(output.public_post_states.is_empty());
+    }
+
+    /// An npk is supplied that does not match the `pre_state`'s `account_id` under
+    /// `AccountId::for_private_pda(program, claim_seed, npk)`. The claim equality check rejects.
+    #[test]
+    fn private_pda_npk_mismatch_fails() {
+        // `keys_a` produces the `pre_state`'s `account_id` (the registered pair), `keys_b` is
+        // the mismatched pair supplied in `private_account_keys` for that pre_state.
+        let program = Program::pda_claimer();
+        let keys_a = test_private_account_keys_1();
+        let keys_b = test_private_account_keys_2();
+        let npk_a = keys_a.npk();
+        let npk_b = keys_b.npk();
+        let seed = PdaSeed::new([42; 32]);
+        let shared_secret = SharedSecretKey::new(&[55; 32], &keys_b.vpk());
+
+        // `account_id` is derived from `npk_a`, but `npk_b` is supplied for this pre_state.
+        // `AccountId::for_private_pda(program, seed, npk_b) != account_id`, so the claim check in
+        // the circuit must reject.
+        let account_id = AccountId::for_private_pda(&program.id(), &seed, &npk_a);
+        let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
+
+        let result = execute_and_prove(
+            vec![pre_state],
+            Program::serialize_instruction(seed).unwrap(),
+            vec![3],
+            vec![(npk_b, shared_secret)],
             vec![],
+            vec![None],
+            &program.into(),
+        );
+
+        assert!(matches!(result, Err(NssaError::CircuitProvingError(_))));
+    }
+
+    /// Happy path for the caller-seeds authorization of a mask-3 PDA. The delegator claims a
+    /// private PDA via `Claim::Pda(seed)`, then chains to a callee (`noop`) delegating the same
+    /// seed via `ChainedCall.pda_seeds`. In the callee's step, the `pre_state`'s authorization
+    /// is established via the private derivation
+    /// `AccountId::for_private_pda(delegator, seed, npk) == pre.account_id`.
+    #[test]
+    fn caller_pda_seeds_authorize_private_pda_for_callee() {
+        let delegator = Program::private_pda_delegator();
+        let callee = Program::auth_asserting_noop();
+        let keys = test_private_account_keys_1();
+        let npk = keys.npk();
+        let seed = PdaSeed::new([77; 32]);
+        let shared_secret = SharedSecretKey::new(&[55; 32], &keys.vpk());
+
+        let account_id = AccountId::for_private_pda(&delegator.id(), &seed, &npk);
+        let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
+
+        let callee_id = callee.id();
+        let program_with_deps =
+            ProgramWithDependencies::new(delegator, [(callee_id, callee)].into());
+
+        let result = execute_and_prove(
+            vec![pre_state],
+            Program::serialize_instruction((seed, seed, callee_id)).unwrap(),
+            vec![3],
+            vec![(npk, shared_secret)],
+            vec![],
+            vec![None],
+            &program_with_deps,
+        );
+
+        let (output, _proof) =
+            result.expect("caller-seeds authorization of mask-3 private PDA should succeed");
+        assert_eq!(output.new_commitments.len(), 1);
+        assert_eq!(output.new_nullifiers.len(), 1);
+    }
+
+    /// The delegator chains with a different seed than the one it claimed with. In the callee
+    /// step, neither public nor private caller-seeds authorization matches; `pre.is_authorized`
+    /// was set to `true` by the delegator but no proven source supports it, so the consistency
+    /// assertion rejects.
+    #[test]
+    fn caller_pda_seeds_with_wrong_seed_rejects_private_pda_for_callee() {
+        let delegator = Program::private_pda_delegator();
+        let callee = Program::auth_asserting_noop();
+        let keys = test_private_account_keys_1();
+        let npk = keys.npk();
+        let claim_seed = PdaSeed::new([77; 32]);
+        let wrong_delegated_seed = PdaSeed::new([88; 32]);
+        let shared_secret = SharedSecretKey::new(&[55; 32], &keys.vpk());
+
+        let account_id = AccountId::for_private_pda(&delegator.id(), &claim_seed, &npk);
+        let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
+
+        let callee_id = callee.id();
+        let program_with_deps =
+            ProgramWithDependencies::new(delegator, [(callee_id, callee)].into());
+
+        let result = execute_and_prove(
+            vec![pre_state],
+            Program::serialize_instruction((claim_seed, wrong_delegated_seed, callee_id)).unwrap(),
+            vec![3],
+            vec![(npk, shared_secret)],
+            vec![],
+            vec![None],
+            &program_with_deps,
+        );
+
+        assert!(matches!(result, Err(NssaError::CircuitProvingError(_))));
+    }
+
+    /// Exploit-scenario pin. A single `(program_id, seed)` pair can derive a family of
+    /// `AccountId`s, one public PDA and one private PDA per distinct npk. Without the tx-wide
+    /// family-binding check, a program could claim `PDA_alice` (mask-3, `alice_npk`) and
+    /// `PDA_bob` (mask-3, `bob_npk`) under the same seed in one transaction, and once reuse
+    /// is supported a later chained call could delegate both to a callee via
+    /// `pda_seeds: [S]` and mix balances across them. The binding check rejects the setup
+    /// here: after the first claim records `(program, seed) → PDA_alice`, the second claim
+    /// tries to record `(program, seed) → PDA_bob` and panics.
+    #[test]
+    fn two_private_pda_claims_under_same_seed_are_rejected() {
+        let program = Program::two_pda_claimer();
+        let keys_a = test_private_account_keys_1();
+        let keys_b = test_private_account_keys_2();
+        let seed = PdaSeed::new([55; 32]);
+        let shared_a = SharedSecretKey::new(&[66; 32], &keys_a.vpk());
+        let shared_b = SharedSecretKey::new(&[77; 32], &keys_b.vpk());
+
+        let account_a = AccountId::for_private_pda(&program.id(), &seed, &keys_a.npk());
+        let account_b = AccountId::for_private_pda(&program.id(), &seed, &keys_b.npk());
+
+        let pre_a = AccountWithMetadata::new(Account::default(), false, account_a);
+        let pre_b = AccountWithMetadata::new(Account::default(), false, account_b);
+
+        let result = execute_and_prove(
+            vec![pre_a, pre_b],
+            Program::serialize_instruction(seed).unwrap(),
+            vec![3, 3],
+            vec![(keys_a.npk(), shared_a), (keys_b.npk(), shared_b)],
+            vec![],
+            vec![None, None],
+            &program.into(),
+        );
+
+        assert!(matches!(result, Err(NssaError::CircuitProvingError(_))));
+    }
+
+    /// Pins the current limitation: a mask-3 PDA that was claimed in a previous transaction
+    /// cannot be re-used in a new transaction as-is. This PR only binds supplied npks via a
+    /// fresh `Claim::Pda` or a caller's `ChainedCall.pda_seeds`, neither is present when a
+    /// program operates on an already-owned private PDA at top level. The reject site is the
+    /// post-loop `private_pda_bound_positions` assertion in
+    /// `privacy_preserving_circuit.rs`: `noop` emits no `Claim::Pda` and there is no caller
+    /// `ChainedCall.pda_seeds`, so position 0 is never bound and the assertion fires.
+    // TODO: a follow-up PR in the Private PDAs series needs to let the wallet supply a
+    // `(seed, original_owner_program_id)` side input per mask-3 `pre_state` so the circuit
+    // can re-verify `AccountId::for_private_pda(owner, seed, npk) == pre.account_id` without a
+    // claim.
+    #[test]
+    fn private_pda_top_level_reuse_rejected_by_binding_check() {
+        let program = Program::noop();
+        let keys = test_private_account_keys_1();
+        let npk = keys.npk();
+        let shared_secret = SharedSecretKey::new(&[55; 32], &keys.vpk());
+        let seed = PdaSeed::new([99; 32]);
+
+        // Simulate a previously-claimed private PDA: program_owner != DEFAULT, is_authorized =
+        // true, account_id derived via the private formula.
+        let account_id = AccountId::for_private_pda(&program.id(), &seed, &npk);
+        let owned_pre_state = AccountWithMetadata::new(
+            Account {
+                program_owner: program.id(),
+                ..Account::default()
+            },
+            true,
+            account_id,
+        );
+
+        let result = execute_and_prove(
+            vec![owned_pre_state],
+            Program::serialize_instruction(()).unwrap(),
+            vec![3],
+            vec![(npk, shared_secret)],
+            vec![],
+            vec![None],
             &program.into(),
         );
 
@@ -2127,7 +2710,7 @@ pub mod tests {
         };
         let recipient_keys = test_private_account_keys_2();
 
-        let mut state = V03State::new_with_genesis_accounts(&[], &[])
+        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0)
             .with_private_account(&sender_keys, &sender_private_account);
 
         let balance_to_move = 37;
@@ -2142,7 +2725,7 @@ pub mod tests {
         );
 
         state
-            .transition_from_privacy_preserving_transaction(&tx)
+            .transition_from_privacy_preserving_transaction(&tx, 1, 0)
             .unwrap();
 
         let sender_private_account = Account {
@@ -2160,7 +2743,7 @@ pub mod tests {
             &state,
         );
 
-        let result = state.transition_from_privacy_preserving_transaction(&tx);
+        let result = state.transition_from_privacy_preserving_transaction(&tx, 1, 0);
 
         assert!(matches!(result, Err(NssaError::InvalidInput(_))));
         let NssaError::InvalidInput(error_message) = result.err().unwrap() else {
@@ -2207,15 +2790,14 @@ pub mod tests {
     #[test]
     fn claiming_mechanism() {
         let program = Program::authenticated_transfer_program();
-        let key = PrivateKey::try_new([1; 32]).unwrap();
-        let account_id = AccountId::from(&PublicKey::new_from_private_key(&key));
+        let from_key = PrivateKey::try_new([1; 32]).unwrap();
+        let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
         let initial_balance = 100;
-        let initial_data = [(account_id, initial_balance)];
+        let initial_data = [(from, initial_balance)];
         let mut state =
-            V03State::new_with_genesis_accounts(&initial_data, &[]).with_test_programs();
-        let from = account_id;
-        let from_key = key;
-        let to = AccountId::new([2; 32]);
+            V03State::new_with_genesis_accounts(&initial_data, vec![], 0).with_test_programs();
+        let to_key = PrivateKey::try_new([2; 32]).unwrap();
+        let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
         let amount: u128 = 37;
 
         // Check the recipient is an uninitialized account
@@ -2224,24 +2806,78 @@ pub mod tests {
         let expected_recipient_post = Account {
             program_owner: program.id(),
             balance: amount,
+            nonce: Nonce(1),
             ..Account::default()
         };
 
         let message = public_transaction::Message::try_new(
             program.id(),
             vec![from, to],
-            vec![Nonce(0)],
+            vec![Nonce(0), Nonce(0)],
             amount,
         )
         .unwrap();
-        let witness_set = public_transaction::WitnessSet::for_message(&message, &[&from_key]);
+        let witness_set =
+            public_transaction::WitnessSet::for_message(&message, &[&from_key, &to_key]);
         let tx = PublicTransaction::new(message, witness_set);
 
-        state.transition_from_public_transaction(&tx).unwrap();
+        state.transition_from_public_transaction(&tx, 1, 0).unwrap();
 
         let recipient_post = state.get_account_by_id(to);
 
         assert_eq!(recipient_post, expected_recipient_post);
+    }
+
+    #[test]
+    fn unauthorized_public_account_claiming_fails() {
+        let program = Program::authenticated_transfer_program();
+        let account_key = PrivateKey::try_new([9; 32]).unwrap();
+        let account_id = AccountId::from(&PublicKey::new_from_private_key(&account_key));
+        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0);
+
+        assert_eq!(state.get_account_by_id(account_id), Account::default());
+
+        let message =
+            public_transaction::Message::try_new(program.id(), vec![account_id], vec![], 0_u128)
+                .unwrap();
+        let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+        let tx = PublicTransaction::new(message, witness_set);
+
+        let result = state.transition_from_public_transaction(&tx, 1, 0);
+
+        assert!(matches!(result, Err(NssaError::ProgramExecutionFailed(_))));
+        assert_eq!(state.get_account_by_id(account_id), Account::default());
+    }
+
+    #[test]
+    fn authorized_public_account_claiming_succeeds() {
+        let program = Program::authenticated_transfer_program();
+        let account_key = PrivateKey::try_new([10; 32]).unwrap();
+        let account_id = AccountId::from(&PublicKey::new_from_private_key(&account_key));
+        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0);
+
+        assert_eq!(state.get_account_by_id(account_id), Account::default());
+
+        let message = public_transaction::Message::try_new(
+            program.id(),
+            vec![account_id],
+            vec![Nonce(0)],
+            0_u128,
+        )
+        .unwrap();
+        let witness_set = public_transaction::WitnessSet::for_message(&message, &[&account_key]);
+        let tx = PublicTransaction::new(message, witness_set);
+
+        state.transition_from_public_transaction(&tx, 1, 0).unwrap();
+
+        assert_eq!(
+            state.get_account_by_id(account_id),
+            Account {
+                program_owner: program.id(),
+                nonce: Nonce(1),
+                ..Account::default()
+            }
+        );
     }
 
     #[test]
@@ -2253,7 +2889,7 @@ pub mod tests {
         let initial_balance = 1000;
         let initial_data = [(from, initial_balance), (to, 0)];
         let mut state =
-            V03State::new_with_genesis_accounts(&initial_data, &[]).with_test_programs();
+            V03State::new_with_genesis_accounts(&initial_data, vec![], 0).with_test_programs();
         let from_key = key;
         let amount: u128 = 37;
         let instruction: (u128, ProgramId, u32, Option<PdaSeed>) = (
@@ -2280,7 +2916,7 @@ pub mod tests {
         let witness_set = public_transaction::WitnessSet::for_message(&message, &[&from_key]);
         let tx = PublicTransaction::new(message, witness_set);
 
-        state.transition_from_public_transaction(&tx).unwrap();
+        state.transition_from_public_transaction(&tx, 1, 0).unwrap();
 
         let from_post = state.get_account_by_id(from);
         let to_post = state.get_account_by_id(to);
@@ -2298,7 +2934,7 @@ pub mod tests {
         let initial_balance = 100;
         let initial_data = [(from, initial_balance), (to, 0)];
         let mut state =
-            V03State::new_with_genesis_accounts(&initial_data, &[]).with_test_programs();
+            V03State::new_with_genesis_accounts(&initial_data, vec![], 0).with_test_programs();
         let from_key = key;
         let amount: u128 = 0;
         let instruction: (u128, ProgramId, u32, Option<PdaSeed>) = (
@@ -2320,7 +2956,7 @@ pub mod tests {
         let witness_set = public_transaction::WitnessSet::for_message(&message, &[&from_key]);
         let tx = PublicTransaction::new(message, witness_set);
 
-        let result = state.transition_from_public_transaction(&tx);
+        let result = state.transition_from_public_transaction(&tx, 1, 0);
         assert!(matches!(
             result,
             Err(NssaError::MaxChainedCallsDepthExceeded)
@@ -2331,12 +2967,12 @@ pub mod tests {
     fn execution_that_requires_authentication_of_a_program_derived_account_id_succeeds() {
         let chain_caller = Program::chain_caller();
         let pda_seed = PdaSeed::new([37; 32]);
-        let from = AccountId::from((&chain_caller.id(), &pda_seed));
+        let from = AccountId::for_public_pda(&chain_caller.id(), &pda_seed);
         let to = AccountId::new([2; 32]);
         let initial_balance = 1000;
         let initial_data = [(from, initial_balance), (to, 0)];
         let mut state =
-            V03State::new_with_genesis_accounts(&initial_data, &[]).with_test_programs();
+            V03State::new_with_genesis_accounts(&initial_data, vec![], 0).with_test_programs();
         let amount: u128 = 58;
         let instruction: (u128, ProgramId, u32, Option<PdaSeed>) = (
             amount,
@@ -2361,7 +2997,7 @@ pub mod tests {
         let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
         let tx = PublicTransaction::new(message, witness_set);
 
-        state.transition_from_public_transaction(&tx).unwrap();
+        state.transition_from_public_transaction(&tx, 1, 0).unwrap();
 
         let from_post = state.get_account_by_id(from);
         let to_post = state.get_account_by_id(to);
@@ -2377,15 +3013,14 @@ pub mod tests {
         // program and not the chained_caller program.
         let chain_caller = Program::chain_caller();
         let auth_transfer = Program::authenticated_transfer_program();
-        let key = PrivateKey::try_new([1; 32]).unwrap();
-        let account_id = AccountId::from(&PublicKey::new_from_private_key(&key));
+        let from_key = PrivateKey::try_new([1; 32]).unwrap();
+        let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
         let initial_balance = 100;
-        let initial_data = [(account_id, initial_balance)];
+        let initial_data = [(from, initial_balance)];
         let mut state =
-            V03State::new_with_genesis_accounts(&initial_data, &[]).with_test_programs();
-        let from = account_id;
-        let from_key = key;
-        let to = AccountId::new([2; 32]);
+            V03State::new_with_genesis_accounts(&initial_data, vec![], 0).with_test_programs();
+        let to_key = PrivateKey::try_new([2; 32]).unwrap();
+        let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
         let amount: u128 = 37;
 
         // Check the recipient is an uninitialized account
@@ -2395,6 +3030,7 @@ pub mod tests {
             // The expected program owner is the authenticated transfer program
             program_owner: auth_transfer.id(),
             balance: amount,
+            nonce: Nonce(1),
             ..Account::default()
         };
 
@@ -2410,19 +3046,106 @@ pub mod tests {
             chain_caller.id(),
             vec![to, from], // The chain_caller program permutes the account order in the chain
             // call
-            vec![Nonce(0)],
+            vec![Nonce(0), Nonce(0)],
             instruction,
         )
         .unwrap();
-        let witness_set = public_transaction::WitnessSet::for_message(&message, &[&from_key]);
+        let witness_set =
+            public_transaction::WitnessSet::for_message(&message, &[&from_key, &to_key]);
         let tx = PublicTransaction::new(message, witness_set);
 
-        state.transition_from_public_transaction(&tx).unwrap();
+        state.transition_from_public_transaction(&tx, 1, 0).unwrap();
 
         let from_post = state.get_account_by_id(from);
         let to_post = state.get_account_by_id(to);
         assert_eq!(from_post.balance, initial_balance - amount);
         assert_eq!(to_post, expected_to_post);
+    }
+
+    #[test]
+    fn unauthorized_public_account_claiming_fails_when_executed_privately() {
+        let program = Program::authenticated_transfer_program();
+        let account_id = AccountId::new([11; 32]);
+        let public_account = AccountWithMetadata::new(Account::default(), false, account_id);
+
+        let result = execute_and_prove(
+            vec![public_account],
+            Program::serialize_instruction(0_u128).unwrap(),
+            vec![0],
+            vec![],
+            vec![],
+            vec![],
+            &program.into(),
+        );
+
+        assert!(matches!(result, Err(NssaError::ProgramProveFailed(_))));
+    }
+
+    #[test]
+    fn authorized_public_account_claiming_succeeds_when_executed_privately() {
+        let program = Program::authenticated_transfer_program();
+        let program_id = program.id();
+        let sender_keys = test_private_account_keys_1();
+        let sender_private_account = Account {
+            program_owner: program_id,
+            balance: 100,
+            ..Account::default()
+        };
+        let sender_commitment = Commitment::new(&sender_keys.npk(), &sender_private_account);
+        let sender_init_nullifier = Nullifier::for_account_initialization(&sender_keys.npk());
+        let mut state = V03State::new_with_genesis_accounts(
+            &[],
+            vec![(sender_commitment.clone(), sender_init_nullifier)],
+            0,
+        );
+        let sender_pre = AccountWithMetadata::new(sender_private_account, true, &sender_keys.npk());
+        let recipient_private_key = PrivateKey::try_new([2; 32]).unwrap();
+        let recipient_account_id =
+            AccountId::from(&PublicKey::new_from_private_key(&recipient_private_key));
+        let recipient_pre =
+            AccountWithMetadata::new(Account::default(), true, recipient_account_id);
+        let esk = [5; 32];
+        let shared_secret = SharedSecretKey::new(&esk, &sender_keys.vpk());
+        let epk = EphemeralPublicKey::from_scalar(esk);
+
+        let (output, proof) = execute_and_prove(
+            vec![sender_pre, recipient_pre],
+            Program::serialize_instruction(37_u128).unwrap(),
+            vec![1, 0],
+            vec![(sender_keys.npk(), shared_secret)],
+            vec![sender_keys.nsk],
+            vec![state.get_proof_for_commitment(&sender_commitment)],
+            &program.into(),
+        )
+        .unwrap();
+
+        let message = Message::try_from_circuit_output(
+            vec![recipient_account_id],
+            vec![Nonce(0)],
+            vec![(sender_keys.npk(), sender_keys.vpk(), epk)],
+            output,
+        )
+        .unwrap();
+
+        let witness_set = WitnessSet::for_message(&message, proof, &[&recipient_private_key]);
+        let tx = PrivacyPreservingTransaction::new(message, witness_set);
+
+        state
+            .transition_from_privacy_preserving_transaction(&tx, 1, 0)
+            .unwrap();
+
+        let nullifier = Nullifier::for_account_update(&sender_commitment, &sender_keys.nsk);
+        assert!(state.private_state.1.contains(&nullifier));
+
+        assert_eq!(
+            state.get_account_by_id(recipient_account_id),
+            Account {
+                program_owner: program_id,
+                balance: 37,
+                nonce: Nonce(1),
+                ..Account::default()
+            }
+        );
     }
 
     #[test_case::test_case(1; "single call")]
@@ -2454,9 +3177,15 @@ pub mod tests {
 
         let from_commitment = Commitment::new(&from_keys.npk(), &from_account.account);
         let to_commitment = Commitment::new(&to_keys.npk(), &to_account.account);
+        let from_init_nullifier = Nullifier::for_account_initialization(&from_keys.npk());
+        let to_init_nullifier = Nullifier::for_account_initialization(&to_keys.npk());
         let mut state = V03State::new_with_genesis_accounts(
             &[],
-            &[from_commitment.clone(), to_commitment.clone()],
+            vec![
+                (from_commitment.clone(), from_init_nullifier),
+                (to_commitment.clone(), to_init_nullifier),
+            ],
+            0,
         )
         .with_test_programs();
         let amount: u128 = 37;
@@ -2526,7 +3255,7 @@ pub mod tests {
         let transaction = PrivacyPreservingTransaction::new(message, witness_set);
 
         state
-            .transition_from_privacy_preserving_transaction(&transaction)
+            .transition_from_privacy_preserving_transaction(&transaction, 1, 0)
             .unwrap();
 
         // Assert
@@ -2550,7 +3279,8 @@ pub mod tests {
         let pinata_definition_id = AccountId::new([1; 32]);
         let pinata_token_definition_id = AccountId::new([2; 32]);
         // Total supply of pinata token will be in an account under a PDA.
-        let pinata_token_holding_id = AccountId::from((&pinata_token.id(), &PdaSeed::new([0; 32])));
+        let pinata_token_holding_id =
+            AccountId::for_public_pda(&pinata_token.id(), &PdaSeed::new([0; 32]));
         let winner_token_holding_id = AccountId::new([3; 32]);
 
         let expected_winner_account_holding = token_core::TokenHolding::Fungible {
@@ -2563,39 +3293,50 @@ pub mod tests {
             ..Account::default()
         };
 
-        let mut state = V03State::new_with_genesis_accounts(&[], &[]);
+        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0);
         state.add_pinata_token_program(pinata_definition_id);
 
-        // Execution of the token program to create new token for the pinata token
-        // definition and supply accounts
+        // Set up the token accounts directly (bypassing public transactions which
+        // would require signers for Claim::Authorized). The focus of this test is
+        // the PDA mechanism in the pinata program's chained call, not token creation.
         let total_supply: u128 = 10_000_000;
-        let instruction = token_core::Instruction::NewFungibleDefinition {
+        let token_definition = token_core::TokenDefinition::Fungible {
             name: String::from("PINATA"),
             total_supply,
+            metadata_id: None,
         };
-        let message = public_transaction::Message::try_new(
-            token.id(),
-            vec![pinata_token_definition_id, pinata_token_holding_id],
-            vec![],
-            instruction,
-        )
-        .unwrap();
-        let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
-        let tx = PublicTransaction::new(message, witness_set);
-        state.transition_from_public_transaction(&tx).unwrap();
-
-        // Execution of winner's token holding account initialization
-        let instruction = token_core::Instruction::InitializeAccount;
-        let message = public_transaction::Message::try_new(
-            token.id(),
-            vec![pinata_token_definition_id, winner_token_holding_id],
-            vec![],
-            instruction,
-        )
-        .unwrap();
-        let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
-        let tx = PublicTransaction::new(message, witness_set);
-        state.transition_from_public_transaction(&tx).unwrap();
+        let token_holding = token_core::TokenHolding::Fungible {
+            definition_id: pinata_token_definition_id,
+            balance: total_supply,
+        };
+        let winner_holding = token_core::TokenHolding::Fungible {
+            definition_id: pinata_token_definition_id,
+            balance: 0,
+        };
+        state.force_insert_account(
+            pinata_token_definition_id,
+            Account {
+                program_owner: token.id(),
+                data: Data::from(&token_definition),
+                ..Account::default()
+            },
+        );
+        state.force_insert_account(
+            pinata_token_holding_id,
+            Account {
+                program_owner: token.id(),
+                data: Data::from(&token_holding),
+                ..Account::default()
+            },
+        );
+        state.force_insert_account(
+            winner_token_holding_id,
+            Account {
+                program_owner: token.id(),
+                data: Data::from(&winner_holding),
+                ..Account::default()
+            },
+        );
 
         // Submit a solution to the pinata program to claim the prize
         let solution: u128 = 989_106;
@@ -2612,7 +3353,7 @@ pub mod tests {
         .unwrap();
         let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
         let tx = PublicTransaction::new(message, witness_set);
-        state.transition_from_public_transaction(&tx).unwrap();
+        state.transition_from_public_transaction(&tx, 1, 0).unwrap();
 
         let winner_token_holding_post = state.get_account_by_id(winner_token_holding_id);
         assert_eq!(
@@ -2624,7 +3365,7 @@ pub mod tests {
     #[test]
     fn claiming_mechanism_cannot_claim_initialied_accounts() {
         let claimer = Program::claimer();
-        let mut state = V03State::new_with_genesis_accounts(&[], &[]).with_test_programs();
+        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0).with_test_programs();
         let account_id = AccountId::new([2; 32]);
 
         // Insert an account with non-default program owner
@@ -2642,9 +3383,14 @@ pub mod tests {
         let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
         let tx = PublicTransaction::new(message, witness_set);
 
-        let result = state.transition_from_public_transaction(&tx);
+        let result = state.transition_from_public_transaction(&tx, 1, 0);
 
-        assert!(matches!(result, Err(NssaError::InvalidProgramBehavior)));
+        assert!(matches!(
+            result,
+            Err(NssaError::InvalidProgramBehavior(
+                InvalidProgramBehaviorError::ClaimedNonDefaultAccount { account_id: err_account_id }
+            )) if err_account_id == account_id
+        ));
     }
 
     /// This test ensures that even if a malicious program tries to perform overflow of balances
@@ -2664,7 +3410,8 @@ pub mod tests {
                 (sender_id, sender_init_balance),
                 (recipient_id, recipient_init_balance),
             ],
-            &[],
+            vec![],
+            0,
         );
 
         state.insert_program(Program::modified_transfer_program());
@@ -2688,8 +3435,23 @@ pub mod tests {
 
         let witness_set = public_transaction::WitnessSet::for_message(&message, &[&sender_key]);
         let tx = PublicTransaction::new(message, witness_set);
-        let res = state.transition_from_public_transaction(&tx);
-        assert!(matches!(res, Err(NssaError::InvalidProgramBehavior)));
+        let res = state.transition_from_public_transaction(&tx, 1, 0);
+        let expected_total_balance_pre_states = WrappedBalanceSum::from_balances(
+            [sender_init_balance, recipient_init_balance].into_iter(),
+        )
+        .unwrap();
+        let expected_total_balance_post_states = WrappedBalanceSum::from_balances(
+            [sender_init_balance, recipient_init_balance, u128::MAX, 1].into_iter(),
+        )
+        .unwrap();
+        assert!(matches!(
+            res,
+            Err(NssaError::InvalidProgramBehavior(
+                InvalidProgramBehaviorError::ExecutionValidationFailed(
+                    ExecutionValidationError::MismatchedTotalBalance { total_balance_pre_states, total_balance_post_states }
+                )
+            )) if total_balance_pre_states == expected_total_balance_pre_states && total_balance_post_states == expected_total_balance_post_states
+        ));
 
         let sender_post = state.get_account_by_id(sender_id);
         let recipient_post = state.get_account_by_id(recipient_id);
@@ -2714,7 +3476,7 @@ pub mod tests {
 
     #[test]
     fn private_authorized_uninitialized_account() {
-        let mut state = V03State::new_with_genesis_accounts(&[], &[]);
+        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0);
 
         // Set up keys for the authorized private account
         let private_keys = test_private_account_keys_1();
@@ -2757,7 +3519,7 @@ pub mod tests {
         let witness_set = WitnessSet::for_message(&message, proof, &[]);
 
         let tx = PrivacyPreservingTransaction::new(message, witness_set);
-        let result = state.transition_from_privacy_preserving_transaction(&tx);
+        let result = state.transition_from_privacy_preserving_transaction(&tx, 1, 0);
         assert!(result.is_ok());
 
         let nullifier = Nullifier::for_account_initialization(&private_keys.npk());
@@ -2765,8 +3527,55 @@ pub mod tests {
     }
 
     #[test]
+    fn private_unauthorized_uninitialized_account_can_still_be_claimed() {
+        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0).with_test_programs();
+
+        let private_keys = test_private_account_keys_1();
+        // This is intentional: claim authorization was introduced to protect public accounts,
+        // especially PDAs. Private PDAs are not useful in practice because there is no way to
+        // operate them without the corresponding private keys, so unauthorized private claiming
+        // remains allowed.
+        let unauthorized_account =
+            AccountWithMetadata::new(Account::default(), false, &private_keys.npk());
+
+        let program = Program::claimer();
+        let esk = [5; 32];
+        let shared_secret = SharedSecretKey::new(&esk, &private_keys.vpk());
+        let epk = EphemeralPublicKey::from_scalar(esk);
+
+        let (output, proof) = execute_and_prove(
+            vec![unauthorized_account],
+            Program::serialize_instruction(0_u128).unwrap(),
+            vec![2],
+            vec![(private_keys.npk(), shared_secret)],
+            vec![],
+            vec![None],
+            &program.into(),
+        )
+        .unwrap();
+
+        let message = Message::try_from_circuit_output(
+            vec![],
+            vec![],
+            vec![(private_keys.npk(), private_keys.vpk(), epk)],
+            output,
+        )
+        .unwrap();
+
+        let witness_set = WitnessSet::for_message(&message, proof, &[]);
+        let tx = PrivacyPreservingTransaction::new(message, witness_set);
+
+        state
+            .transition_from_privacy_preserving_transaction(&tx, 1, 0)
+            .unwrap();
+
+        let nullifier = Nullifier::for_account_initialization(&private_keys.npk());
+        assert!(state.private_state.1.contains(&nullifier));
+    }
+
+    #[test]
     fn private_account_claimed_then_used_without_init_flag_should_fail() {
-        let mut state = V03State::new_with_genesis_accounts(&[], &[]).with_test_programs();
+        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0).with_test_programs();
 
         // Set up keys for the private account
         let private_keys = test_private_account_keys_1();
@@ -2810,7 +3619,7 @@ pub mod tests {
         // Claim should succeed
         assert!(
             state
-                .transition_from_privacy_preserving_transaction(&tx)
+                .transition_from_privacy_preserving_transaction(&tx, 1, 0)
                 .is_ok()
         );
 
@@ -2847,7 +3656,7 @@ pub mod tests {
     fn public_changer_claimer_no_data_change_no_claim_succeeds() {
         let initial_data = [];
         let mut state =
-            V03State::new_with_genesis_accounts(&initial_data, &[]).with_test_programs();
+            V03State::new_with_genesis_accounts(&initial_data, vec![], 0).with_test_programs();
         let account_id = AccountId::new([1; 32]);
         let program_id = Program::changer_claimer().id();
         // Don't change data (None) and don't claim (false)
@@ -2859,7 +3668,7 @@ pub mod tests {
         let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
         let tx = PublicTransaction::new(message, witness_set);
 
-        let result = state.transition_from_public_transaction(&tx);
+        let result = state.transition_from_public_transaction(&tx, 1, 0);
 
         // Should succeed - no changes made, no claim needed
         assert!(result.is_ok());
@@ -2871,7 +3680,7 @@ pub mod tests {
     fn public_changer_claimer_data_change_no_claim_fails() {
         let initial_data = [];
         let mut state =
-            V03State::new_with_genesis_accounts(&initial_data, &[]).with_test_programs();
+            V03State::new_with_genesis_accounts(&initial_data, vec![], 0).with_test_programs();
         let account_id = AccountId::new([1; 32]);
         let program_id = Program::changer_claimer().id();
         // Change data but don't claim (false) - should fail
@@ -2884,10 +3693,17 @@ pub mod tests {
         let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
         let tx = PublicTransaction::new(message, witness_set);
 
-        let result = state.transition_from_public_transaction(&tx);
+        let result = state.transition_from_public_transaction(&tx, 1, 0);
 
         // Should fail - cannot modify data without claiming the account
-        assert!(matches!(result, Err(NssaError::InvalidProgramBehavior)));
+        assert!(matches!(
+            result,
+            Err(NssaError::InvalidProgramBehavior(
+                InvalidProgramBehaviorError::DefaultAccountModifiedWithoutClaim {
+                    account_id: err_account_id
+                }
+            )) if err_account_id == account_id
+        ));
     }
 
     #[test]
@@ -2965,9 +3781,11 @@ pub mod tests {
 
         let recipient_commitment =
             Commitment::new(&recipient_keys.npk(), &recipient_account.account);
+        let recipient_init_nullifier = Nullifier::for_account_initialization(&recipient_keys.npk());
         let state = V03State::new_with_genesis_accounts(
             &[(sender_account.account_id, sender_account.account.balance)],
-            std::slice::from_ref(&recipient_commitment),
+            vec![(recipient_commitment.clone(), recipient_init_nullifier)],
+            0,
         )
         .with_test_programs();
 
@@ -2996,14 +3814,718 @@ pub mod tests {
         assert!(matches!(result, Err(NssaError::CircuitProvingError(_))));
     }
 
+    #[test_case::test_case((Some(1), Some(3)), 3; "at upper bound")]
+    #[test_case::test_case((Some(1), Some(3)), 2; "inside range")]
+    #[test_case::test_case((Some(1), Some(3)), 0; "below range")]
+    #[test_case::test_case((Some(1), Some(3)), 1; "at lower bound")]
+    #[test_case::test_case((Some(1), Some(3)), 4; "above range")]
+    #[test_case::test_case((Some(1), None), 1; "lower bound only - at bound")]
+    #[test_case::test_case((Some(1), None), 10; "lower bound only - above")]
+    #[test_case::test_case((Some(1), None), 0; "lower bound only - below")]
+    #[test_case::test_case((None, Some(3)), 3; "upper bound only - at bound")]
+    #[test_case::test_case((None, Some(3)), 0; "upper bound only - below")]
+    #[test_case::test_case((None, Some(3)), 4; "upper bound only - above")]
+    #[test_case::test_case((None, None), 0; "no bounds - always valid")]
+    #[test_case::test_case((None, None), 100; "no bounds - always valid 2")]
+    fn validity_window_works_in_public_transactions(
+        validity_window: (Option<BlockId>, Option<BlockId>),
+        block_id: BlockId,
+    ) {
+        let block_validity_window: BlockValidityWindow = validity_window.try_into().unwrap();
+        let validity_window_program = Program::validity_window();
+        let account_keys = test_public_account_keys_1();
+        let pre = AccountWithMetadata::new(Account::default(), false, account_keys.account_id());
+        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0).with_test_programs();
+        let tx = {
+            let account_ids = vec![pre.account_id];
+            let nonces = vec![];
+            let program_id = validity_window_program.id();
+            let instruction = (
+                block_validity_window,
+                TimestampValidityWindow::new_unbounded(),
+            );
+            let message =
+                public_transaction::Message::try_new(program_id, account_ids, nonces, instruction)
+                    .unwrap();
+            let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+            PublicTransaction::new(message, witness_set)
+        };
+        let result = state.transition_from_public_transaction(&tx, block_id, 0);
+        let is_inside_validity_window =
+            match (block_validity_window.start(), block_validity_window.end()) {
+                (Some(s), Some(e)) => s <= block_id && block_id < e,
+                (Some(s), None) => s <= block_id,
+                (None, Some(e)) => block_id < e,
+                (None, None) => true,
+            };
+        if is_inside_validity_window {
+            assert!(result.is_ok());
+        } else {
+            assert!(matches!(result, Err(NssaError::OutOfValidityWindow)));
+        }
+    }
+
+    #[test_case::test_case((Some(1), Some(3)), 3; "at upper bound")]
+    #[test_case::test_case((Some(1), Some(3)), 2; "inside range")]
+    #[test_case::test_case((Some(1), Some(3)), 0; "below range")]
+    #[test_case::test_case((Some(1), Some(3)), 1; "at lower bound")]
+    #[test_case::test_case((Some(1), Some(3)), 4; "above range")]
+    #[test_case::test_case((Some(1), None), 1; "lower bound only - at bound")]
+    #[test_case::test_case((Some(1), None), 10; "lower bound only - above")]
+    #[test_case::test_case((Some(1), None), 0; "lower bound only - below")]
+    #[test_case::test_case((None, Some(3)), 3; "upper bound only - at bound")]
+    #[test_case::test_case((None, Some(3)), 0; "upper bound only - below")]
+    #[test_case::test_case((None, Some(3)), 4; "upper bound only - above")]
+    #[test_case::test_case((None, None), 0; "no bounds - always valid")]
+    #[test_case::test_case((None, None), 100; "no bounds - always valid 2")]
+    fn timestamp_validity_window_works_in_public_transactions(
+        validity_window: (Option<Timestamp>, Option<Timestamp>),
+        timestamp: Timestamp,
+    ) {
+        let timestamp_validity_window: TimestampValidityWindow =
+            validity_window.try_into().unwrap();
+        let validity_window_program = Program::validity_window();
+        let account_keys = test_public_account_keys_1();
+        let pre = AccountWithMetadata::new(Account::default(), false, account_keys.account_id());
+        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0).with_test_programs();
+        let tx = {
+            let account_ids = vec![pre.account_id];
+            let nonces = vec![];
+            let program_id = validity_window_program.id();
+            let instruction = (
+                BlockValidityWindow::new_unbounded(),
+                timestamp_validity_window,
+            );
+            let message =
+                public_transaction::Message::try_new(program_id, account_ids, nonces, instruction)
+                    .unwrap();
+            let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+            PublicTransaction::new(message, witness_set)
+        };
+        let result = state.transition_from_public_transaction(&tx, 1, timestamp);
+        let is_inside_validity_window = match (
+            timestamp_validity_window.start(),
+            timestamp_validity_window.end(),
+        ) {
+            (Some(s), Some(e)) => s <= timestamp && timestamp < e,
+            (Some(s), None) => s <= timestamp,
+            (None, Some(e)) => timestamp < e,
+            (None, None) => true,
+        };
+        if is_inside_validity_window {
+            assert!(result.is_ok());
+        } else {
+            assert!(matches!(result, Err(NssaError::OutOfValidityWindow)));
+        }
+    }
+
+    #[test_case::test_case((Some(1), Some(3)), 3; "at upper bound")]
+    #[test_case::test_case((Some(1), Some(3)), 2; "inside range")]
+    #[test_case::test_case((Some(1), Some(3)), 0; "below range")]
+    #[test_case::test_case((Some(1), Some(3)), 1; "at lower bound")]
+    #[test_case::test_case((Some(1), Some(3)), 4; "above range")]
+    #[test_case::test_case((Some(1), None), 1; "lower bound only - at bound")]
+    #[test_case::test_case((Some(1), None), 10; "lower bound only - above")]
+    #[test_case::test_case((Some(1), None), 0; "lower bound only - below")]
+    #[test_case::test_case((None, Some(3)), 3; "upper bound only - at bound")]
+    #[test_case::test_case((None, Some(3)), 0; "upper bound only - below")]
+    #[test_case::test_case((None, Some(3)), 4; "upper bound only - above")]
+    #[test_case::test_case((None, None), 0; "no bounds - always valid")]
+    #[test_case::test_case((None, None), 100; "no bounds - always valid 2")]
+    fn validity_window_works_in_privacy_preserving_transactions(
+        validity_window: (Option<BlockId>, Option<BlockId>),
+        block_id: BlockId,
+    ) {
+        let block_validity_window: BlockValidityWindow = validity_window.try_into().unwrap();
+        let validity_window_program = Program::validity_window();
+        let account_keys = test_private_account_keys_1();
+        let pre = AccountWithMetadata::new(Account::default(), false, &account_keys.npk());
+        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0).with_test_programs();
+        let tx = {
+            let esk = [3; 32];
+            let shared_secret = SharedSecretKey::new(&esk, &account_keys.vpk());
+            let epk = EphemeralPublicKey::from_scalar(esk);
+
+            let instruction = (
+                block_validity_window,
+                TimestampValidityWindow::new_unbounded(),
+            );
+            let (output, proof) = circuit::execute_and_prove(
+                vec![pre],
+                Program::serialize_instruction(instruction).unwrap(),
+                vec![2],
+                vec![(account_keys.npk(), shared_secret)],
+                vec![],
+                vec![None],
+                &validity_window_program.into(),
+            )
+            .unwrap();
+
+            let message = Message::try_from_circuit_output(
+                vec![],
+                vec![],
+                vec![(account_keys.npk(), account_keys.vpk(), epk)],
+                output,
+            )
+            .unwrap();
+
+            let witness_set = WitnessSet::for_message(&message, proof, &[]);
+            PrivacyPreservingTransaction::new(message, witness_set)
+        };
+        let result = state.transition_from_privacy_preserving_transaction(&tx, block_id, 0);
+        let is_inside_validity_window =
+            match (block_validity_window.start(), block_validity_window.end()) {
+                (Some(s), Some(e)) => s <= block_id && block_id < e,
+                (Some(s), None) => s <= block_id,
+                (None, Some(e)) => block_id < e,
+                (None, None) => true,
+            };
+        if is_inside_validity_window {
+            assert!(result.is_ok());
+        } else {
+            assert!(matches!(result, Err(NssaError::OutOfValidityWindow)));
+        }
+    }
+
+    #[test_case::test_case((Some(1), Some(3)), 3; "at upper bound")]
+    #[test_case::test_case((Some(1), Some(3)), 2; "inside range")]
+    #[test_case::test_case((Some(1), Some(3)), 0; "below range")]
+    #[test_case::test_case((Some(1), Some(3)), 1; "at lower bound")]
+    #[test_case::test_case((Some(1), Some(3)), 4; "above range")]
+    #[test_case::test_case((Some(1), None), 1; "lower bound only - at bound")]
+    #[test_case::test_case((Some(1), None), 10; "lower bound only - above")]
+    #[test_case::test_case((Some(1), None), 0; "lower bound only - below")]
+    #[test_case::test_case((None, Some(3)), 3; "upper bound only - at bound")]
+    #[test_case::test_case((None, Some(3)), 0; "upper bound only - below")]
+    #[test_case::test_case((None, Some(3)), 4; "upper bound only - above")]
+    #[test_case::test_case((None, None), 0; "no bounds - always valid")]
+    #[test_case::test_case((None, None), 100; "no bounds - always valid 2")]
+    fn timestamp_validity_window_works_in_privacy_preserving_transactions(
+        validity_window: (Option<Timestamp>, Option<Timestamp>),
+        timestamp: Timestamp,
+    ) {
+        let timestamp_validity_window: TimestampValidityWindow =
+            validity_window.try_into().unwrap();
+        let validity_window_program = Program::validity_window();
+        let account_keys = test_private_account_keys_1();
+        let pre = AccountWithMetadata::new(Account::default(), false, &account_keys.npk());
+        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0).with_test_programs();
+        let tx = {
+            let esk = [3; 32];
+            let shared_secret = SharedSecretKey::new(&esk, &account_keys.vpk());
+            let epk = EphemeralPublicKey::from_scalar(esk);
+
+            let instruction = (
+                BlockValidityWindow::new_unbounded(),
+                timestamp_validity_window,
+            );
+            let (output, proof) = circuit::execute_and_prove(
+                vec![pre],
+                Program::serialize_instruction(instruction).unwrap(),
+                vec![2],
+                vec![(account_keys.npk(), shared_secret)],
+                vec![],
+                vec![None],
+                &validity_window_program.into(),
+            )
+            .unwrap();
+
+            let message = Message::try_from_circuit_output(
+                vec![],
+                vec![],
+                vec![(account_keys.npk(), account_keys.vpk(), epk)],
+                output,
+            )
+            .unwrap();
+
+            let witness_set = WitnessSet::for_message(&message, proof, &[]);
+            PrivacyPreservingTransaction::new(message, witness_set)
+        };
+        let result = state.transition_from_privacy_preserving_transaction(&tx, 1, timestamp);
+        let is_inside_validity_window = match (
+            timestamp_validity_window.start(),
+            timestamp_validity_window.end(),
+        ) {
+            (Some(s), Some(e)) => s <= timestamp && timestamp < e,
+            (Some(s), None) => s <= timestamp,
+            (None, Some(e)) => timestamp < e,
+            (None, None) => true,
+        };
+        if is_inside_validity_window {
+            assert!(result.is_ok());
+        } else {
+            assert!(matches!(result, Err(NssaError::OutOfValidityWindow)));
+        }
+    }
+
+    fn time_locked_transfer_transaction(
+        from: AccountId,
+        from_key: &PrivateKey,
+        from_nonce: u128,
+        to: AccountId,
+        clock_account_id: AccountId,
+        amount: u128,
+        deadline: u64,
+    ) -> PublicTransaction {
+        let program_id = Program::time_locked_transfer().id();
+        let message = public_transaction::Message::try_new(
+            program_id,
+            vec![from, to, clock_account_id],
+            vec![Nonce(from_nonce)],
+            (amount, deadline),
+        )
+        .unwrap();
+        let witness_set = public_transaction::WitnessSet::for_message(&message, &[from_key]);
+        PublicTransaction::new(message, witness_set)
+    }
+
+    #[test]
+    fn time_locked_transfer_succeeds_when_deadline_has_passed() {
+        let recipient_id = AccountId::new([42; 32]);
+        let genesis_timestamp = 500_u64;
+        let mut state =
+            V03State::new_with_genesis_accounts(&[(recipient_id, 0)], vec![], genesis_timestamp)
+                .with_test_programs();
+        let key1 = PrivateKey::try_new([1; 32]).unwrap();
+        let sender_id = AccountId::from(&PublicKey::new_from_private_key(&key1));
+        state.force_insert_account(
+            sender_id,
+            Account {
+                program_owner: Program::time_locked_transfer().id(),
+                balance: 100,
+                ..Account::default()
+            },
+        );
+
+        let amount = 100_u128;
+        // Deadline in the past: transfer should succeed.
+        let deadline = 0_u64;
+
+        let tx = time_locked_transfer_transaction(
+            sender_id,
+            &key1,
+            0,
+            recipient_id,
+            CLOCK_01_PROGRAM_ACCOUNT_ID,
+            amount,
+            deadline,
+        );
+
+        let block_id = 1;
+        let timestamp = genesis_timestamp + 100;
+        state
+            .transition_from_public_transaction(&tx, block_id, timestamp)
+            .unwrap();
+
+        // Balances changed.
+        assert_eq!(state.get_account_by_id(sender_id).balance, 0);
+        assert_eq!(state.get_account_by_id(recipient_id).balance, 100);
+    }
+
+    #[test]
+    fn time_locked_transfer_fails_when_deadline_is_in_the_future() {
+        let recipient_id = AccountId::new([42; 32]);
+        let genesis_timestamp = 500_u64;
+        let mut state =
+            V03State::new_with_genesis_accounts(&[(recipient_id, 0)], vec![], genesis_timestamp)
+                .with_test_programs();
+        let key1 = PrivateKey::try_new([1; 32]).unwrap();
+        let sender_id = AccountId::from(&PublicKey::new_from_private_key(&key1));
+        state.force_insert_account(
+            sender_id,
+            Account {
+                program_owner: Program::time_locked_transfer().id(),
+                balance: 100,
+                ..Account::default()
+            },
+        );
+
+        let amount = 100_u128;
+        // Far-future deadline: program should panic.
+        let deadline = u64::MAX;
+
+        let tx = time_locked_transfer_transaction(
+            sender_id,
+            &key1,
+            0,
+            recipient_id,
+            CLOCK_01_PROGRAM_ACCOUNT_ID,
+            amount,
+            deadline,
+        );
+
+        let block_id = 1;
+        let timestamp = genesis_timestamp + 100;
+        let result = state.transition_from_public_transaction(&tx, block_id, timestamp);
+
+        assert!(
+            result.is_err(),
+            "Transfer should fail when deadline is in the future"
+        );
+        // Balances unchanged.
+        assert_eq!(state.get_account_by_id(sender_id).balance, 100);
+        assert_eq!(state.get_account_by_id(recipient_id).balance, 0);
+    }
+
+    fn pinata_cooldown_data(prize: u128, cooldown_ms: u64, last_claim_timestamp: u64) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(32);
+        buf.extend_from_slice(&prize.to_le_bytes());
+        buf.extend_from_slice(&cooldown_ms.to_le_bytes());
+        buf.extend_from_slice(&last_claim_timestamp.to_le_bytes());
+        buf
+    }
+
+    fn pinata_cooldown_transaction(
+        pinata_id: AccountId,
+        winner_id: AccountId,
+        clock_account_id: AccountId,
+    ) -> PublicTransaction {
+        let program_id = Program::pinata_cooldown().id();
+        let message = public_transaction::Message::try_new(
+            program_id,
+            vec![pinata_id, winner_id, clock_account_id],
+            vec![],
+            (),
+        )
+        .unwrap();
+        let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+        PublicTransaction::new(message, witness_set)
+    }
+
+    #[test]
+    fn pinata_cooldown_claim_succeeds_after_cooldown() {
+        let winner_id = AccountId::new([11; 32]);
+        let pinata_id = AccountId::new([99; 32]);
+
+        let genesis_timestamp = 1000_u64;
+        let mut state =
+            V03State::new_with_genesis_accounts(&[(winner_id, 0)], vec![], genesis_timestamp)
+                .with_test_programs();
+
+        let prize = 50_u128;
+        let cooldown_ms = 500_u64;
+        // Last claim was at genesis, so any timestamp >= genesis + cooldown should work.
+        let last_claim_timestamp = genesis_timestamp;
+
+        state.force_insert_account(
+            pinata_id,
+            Account {
+                program_owner: Program::pinata_cooldown().id(),
+                balance: 1000,
+                data: pinata_cooldown_data(prize, cooldown_ms, last_claim_timestamp)
+                    .try_into()
+                    .unwrap(),
+                ..Account::default()
+            },
+        );
+
+        let tx = pinata_cooldown_transaction(pinata_id, winner_id, CLOCK_01_PROGRAM_ACCOUNT_ID);
+
+        let block_id = 1;
+        let block_timestamp = genesis_timestamp + cooldown_ms;
+        // Advance clock so the cooldown check reads an updated timestamp.
+        let clock_tx = clock_transaction(block_timestamp);
+        state
+            .transition_from_public_transaction(&clock_tx, block_id, block_timestamp)
+            .unwrap();
+
+        state
+            .transition_from_public_transaction(&tx, block_id, block_timestamp)
+            .unwrap();
+
+        assert_eq!(state.get_account_by_id(pinata_id).balance, 1000 - prize);
+        assert_eq!(state.get_account_by_id(winner_id).balance, prize);
+    }
+
+    #[test]
+    fn pinata_cooldown_claim_fails_during_cooldown() {
+        let winner_id = AccountId::new([11; 32]);
+        let pinata_id = AccountId::new([99; 32]);
+
+        let genesis_timestamp = 1000_u64;
+        let mut state =
+            V03State::new_with_genesis_accounts(&[(winner_id, 0)], vec![], genesis_timestamp)
+                .with_test_programs();
+
+        let prize = 50_u128;
+        let cooldown_ms = 500_u64;
+        let last_claim_timestamp = genesis_timestamp;
+
+        state.force_insert_account(
+            pinata_id,
+            Account {
+                balance: 1000,
+                data: pinata_cooldown_data(prize, cooldown_ms, last_claim_timestamp)
+                    .try_into()
+                    .unwrap(),
+                ..Account::default()
+            },
+        );
+
+        let tx = pinata_cooldown_transaction(pinata_id, winner_id, CLOCK_01_PROGRAM_ACCOUNT_ID);
+
+        let block_id = 1;
+        // Timestamp is only 100ms after last claim, well within the 500ms cooldown.
+        let block_timestamp = genesis_timestamp + 100;
+        let clock_tx = clock_transaction(block_timestamp);
+        state
+            .transition_from_public_transaction(&clock_tx, block_id, block_timestamp)
+            .unwrap();
+
+        let result = state.transition_from_public_transaction(&tx, block_id, block_timestamp);
+
+        assert!(result.is_err(), "Claim should fail during cooldown period");
+        assert_eq!(state.get_account_by_id(pinata_id).balance, 1000);
+        assert_eq!(state.get_account_by_id(winner_id).balance, 0);
+    }
+
     #[test]
     fn state_serialization_roundtrip() {
         let account_id_1 = AccountId::new([1; 32]);
         let account_id_2 = AccountId::new([2; 32]);
         let initial_data = [(account_id_1, 100_u128), (account_id_2, 151_u128)];
-        let state = V03State::new_with_genesis_accounts(&initial_data, &[]).with_test_programs();
+        let state =
+            V03State::new_with_genesis_accounts(&initial_data, vec![], 0).with_test_programs();
         let bytes = borsh::to_vec(&state).unwrap();
         let state_from_bytes: V03State = borsh::from_slice(&bytes).unwrap();
         assert_eq!(state, state_from_bytes);
+    }
+
+    #[test]
+    fn flash_swap_successful() {
+        let initiator = Program::flash_swap_initiator();
+        let callback = Program::flash_swap_callback();
+        let token = Program::authenticated_transfer_program();
+
+        let vault_id = AccountId::for_public_pda(&initiator.id(), &PdaSeed::new([0_u8; 32]));
+        let receiver_id = AccountId::for_public_pda(&callback.id(), &PdaSeed::new([1_u8; 32]));
+
+        let initial_balance: u128 = 1000;
+        let amount_out: u128 = 100;
+
+        let vault_account = Account {
+            program_owner: token.id(),
+            balance: initial_balance,
+            ..Account::default()
+        };
+        let receiver_account = Account {
+            program_owner: token.id(),
+            balance: 0,
+            ..Account::default()
+        };
+
+        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0).with_test_programs();
+        state.force_insert_account(vault_id, vault_account);
+        state.force_insert_account(receiver_id, receiver_account);
+
+        // Callback instruction: return funds
+        let cb_instruction = CallbackInstruction {
+            return_funds: true,
+            token_program_id: token.id(),
+            amount: amount_out,
+        };
+        let cb_data = Program::serialize_instruction(cb_instruction).unwrap();
+
+        let instruction = FlashSwapInstruction::Initiate {
+            token_program_id: token.id(),
+            callback_program_id: callback.id(),
+            amount_out,
+            callback_instruction_data: cb_data,
+        };
+
+        let tx = build_flash_swap_tx(&initiator, vault_id, receiver_id, instruction);
+        let result = state.transition_from_public_transaction(&tx, 1, 0);
+        assert!(result.is_ok(), "flash swap should succeed: {result:?}");
+
+        // Vault balance restored, receiver back to 0
+        assert_eq!(state.get_account_by_id(vault_id).balance, initial_balance);
+        assert_eq!(state.get_account_by_id(receiver_id).balance, 0);
+    }
+
+    #[test]
+    fn flash_swap_callback_keeps_funds_rollback() {
+        let initiator = Program::flash_swap_initiator();
+        let callback = Program::flash_swap_callback();
+        let token = Program::authenticated_transfer_program();
+
+        let vault_id = AccountId::for_public_pda(&initiator.id(), &PdaSeed::new([0_u8; 32]));
+        let receiver_id = AccountId::for_public_pda(&callback.id(), &PdaSeed::new([1_u8; 32]));
+
+        let initial_balance: u128 = 1000;
+        let amount_out: u128 = 100;
+
+        let vault_account = Account {
+            program_owner: token.id(),
+            balance: initial_balance,
+            ..Account::default()
+        };
+        let receiver_account = Account {
+            program_owner: token.id(),
+            balance: 0,
+            ..Account::default()
+        };
+
+        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0).with_test_programs();
+        state.force_insert_account(vault_id, vault_account);
+        state.force_insert_account(receiver_id, receiver_account);
+
+        // Callback instruction: do NOT return funds
+        let cb_instruction = CallbackInstruction {
+            return_funds: false,
+            token_program_id: token.id(),
+            amount: amount_out,
+        };
+        let cb_data = Program::serialize_instruction(cb_instruction).unwrap();
+
+        let instruction = FlashSwapInstruction::Initiate {
+            token_program_id: token.id(),
+            callback_program_id: callback.id(),
+            amount_out,
+            callback_instruction_data: cb_data,
+        };
+
+        let tx = build_flash_swap_tx(&initiator, vault_id, receiver_id, instruction);
+        let result = state.transition_from_public_transaction(&tx, 1, 0);
+
+        // Invariant check fails → entire tx rolls back
+        assert!(
+            result.is_err(),
+            "flash swap should fail when callback keeps funds"
+        );
+
+        // State unchanged (rollback)
+        assert_eq!(state.get_account_by_id(vault_id).balance, initial_balance);
+        assert_eq!(state.get_account_by_id(receiver_id).balance, 0);
+    }
+
+    #[test]
+    fn flash_swap_self_call_targets_correct_program() {
+        // Zero-amount flash swap: the invariant self-call still runs and succeeds
+        // because vault balance doesn't decrease.
+        let initiator = Program::flash_swap_initiator();
+        let callback = Program::flash_swap_callback();
+        let token = Program::authenticated_transfer_program();
+
+        let vault_id = AccountId::for_public_pda(&initiator.id(), &PdaSeed::new([0_u8; 32]));
+        let receiver_id = AccountId::for_public_pda(&callback.id(), &PdaSeed::new([1_u8; 32]));
+
+        let initial_balance: u128 = 1000;
+
+        let vault_account = Account {
+            program_owner: token.id(),
+            balance: initial_balance,
+            ..Account::default()
+        };
+        let receiver_account = Account {
+            program_owner: token.id(),
+            balance: 0,
+            ..Account::default()
+        };
+
+        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0).with_test_programs();
+        state.force_insert_account(vault_id, vault_account);
+        state.force_insert_account(receiver_id, receiver_account);
+
+        let cb_instruction = CallbackInstruction {
+            return_funds: true,
+            token_program_id: token.id(),
+            amount: 0,
+        };
+        let cb_data = Program::serialize_instruction(cb_instruction).unwrap();
+
+        let instruction = FlashSwapInstruction::Initiate {
+            token_program_id: token.id(),
+            callback_program_id: callback.id(),
+            amount_out: 0,
+            callback_instruction_data: cb_data,
+        };
+
+        let tx = build_flash_swap_tx(&initiator, vault_id, receiver_id, instruction);
+        let result = state.transition_from_public_transaction(&tx, 1, 0);
+        assert!(
+            result.is_ok(),
+            "zero-amount flash swap should succeed: {result:?}"
+        );
+    }
+
+    #[test]
+    fn flash_swap_standalone_invariant_check_rejected() {
+        // Calling InvariantCheck directly (not as a chained self-call) should fail
+        // because caller_program_id will be None.
+        let initiator = Program::flash_swap_initiator();
+        let token = Program::authenticated_transfer_program();
+
+        let vault_id = AccountId::for_public_pda(&initiator.id(), &PdaSeed::new([0_u8; 32]));
+
+        let vault_account = Account {
+            program_owner: token.id(),
+            balance: 1000,
+            ..Account::default()
+        };
+
+        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0).with_test_programs();
+        state.force_insert_account(vault_id, vault_account);
+
+        let instruction = FlashSwapInstruction::InvariantCheck {
+            min_vault_balance: 1000,
+        };
+
+        let message = public_transaction::Message::try_new(
+            initiator.id(),
+            vec![vault_id],
+            vec![],
+            instruction,
+        )
+        .unwrap();
+        let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+        let tx = PublicTransaction::new(message, witness_set);
+
+        let result = state.transition_from_public_transaction(&tx, 1, 0);
+        assert!(
+            result.is_err(),
+            "standalone InvariantCheck should be rejected (caller_program_id is None)"
+        );
+    }
+
+    #[test]
+    fn malicious_self_program_id_rejected_in_public_execution() {
+        let program = Program::malicious_self_program_id();
+        let acc_id = AccountId::new([99; 32]);
+        let account = Account::default();
+
+        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0).with_test_programs();
+        state.force_insert_account(acc_id, account);
+
+        let message =
+            public_transaction::Message::try_new(program.id(), vec![acc_id], vec![], ()).unwrap();
+        let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+        let tx = PublicTransaction::new(message, witness_set);
+
+        let result = state.transition_from_public_transaction(&tx, 1, 0);
+        assert!(
+            result.is_err(),
+            "program with wrong self_program_id in output should be rejected"
+        );
+    }
+
+    #[test]
+    fn malicious_caller_program_id_rejected_in_public_execution() {
+        let program = Program::malicious_caller_program_id();
+        let acc_id = AccountId::new([99; 32]);
+        let account = Account::default();
+
+        let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0).with_test_programs();
+        state.force_insert_account(acc_id, account);
+
+        let message =
+            public_transaction::Message::try_new(program.id(), vec![acc_id], vec![], ()).unwrap();
+        let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+        let tx = PublicTransaction::new(message, witness_set);
+
+        let result = state.transition_from_public_transaction(&tx, 1, 0);
+        assert!(
+            result.is_err(),
+            "program with spoofed caller_program_id in output should be rejected"
+        );
     }
 }

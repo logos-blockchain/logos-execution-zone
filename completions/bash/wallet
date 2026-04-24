@@ -22,6 +22,20 @@ _wallet_complete_account_id() {
     fi
 }
 
+# Helper function to complete account labels
+_wallet_complete_account_label() {
+    local cur="$1"
+    local labels
+
+    if command -v wallet &>/dev/null; then
+        labels=$(wallet account list 2>/dev/null | grep -o '\[.*\]' | sed 's/^\[//;s/\]$//')
+    fi
+
+    if [[ -n "$labels" ]]; then
+        COMPREPLY=($(compgen -W "$labels" -- "$cur"))
+    fi
+}
+
 _wallet() {
     local cur prev words cword
     _init_completion 2>/dev/null || {
@@ -91,20 +105,32 @@ _wallet() {
                         --account-id)
                             _wallet_complete_account_id "$cur"
                             ;;
+                        --account-label)
+                            _wallet_complete_account_label "$cur"
+                            ;;
                         *)
-                            COMPREPLY=($(compgen -W "--account-id" -- "$cur"))
+                            COMPREPLY=($(compgen -W "--account-id --account-label" -- "$cur"))
                             ;;
                     esac
                     ;;
                 send)
                     case "$prev" in
-                        --from | --to)
+                        --from)
                             _wallet_complete_account_id "$cur"
+                            ;;
+                        --from-label)
+                            _wallet_complete_account_label "$cur"
+                            ;;
+                        --to)
+                            _wallet_complete_account_id "$cur"
+                            ;;
+                        --to-label)
+                            _wallet_complete_account_label "$cur"
                             ;;
                         --to-npk | --to-vpk | --amount)
                             ;; # no specific completion
                         *)
-                            COMPREPLY=($(compgen -W "--from --to --to-npk --to-vpk --amount" -- "$cur"))
+                            COMPREPLY=($(compgen -W "--from --from-label --to --to-label --to-npk --to-vpk --amount" -- "$cur"))
                             ;;
                     esac
                     ;;
@@ -147,8 +173,11 @@ _wallet() {
                         -a | --account-id)
                             _wallet_complete_account_id "$cur"
                             ;;
+                        --account-label)
+                            _wallet_complete_account_label "$cur"
+                            ;;
                         *)
-                            COMPREPLY=($(compgen -W "-r --raw -k --keys -a --account-id" -- "$cur"))
+                            COMPREPLY=($(compgen -W "-r --raw -k --keys -a --account-id --account-label" -- "$cur"))
                             ;;
                     esac
                     ;;
@@ -186,10 +215,13 @@ _wallet() {
                         -a | --account-id)
                             _wallet_complete_account_id "$cur"
                             ;;
+                        --account-label)
+                            _wallet_complete_account_label "$cur"
+                            ;;
                         -l | --label)
                             ;; # no specific completion for label value
                         *)
-                            COMPREPLY=($(compgen -W "-a --account-id -l --label" -- "$cur"))
+                            COMPREPLY=($(compgen -W "-a --account-id --account-label -l --label" -- "$cur"))
                             ;;
                     esac
                     ;;
@@ -206,8 +238,11 @@ _wallet() {
                         --to)
                             _wallet_complete_account_id "$cur"
                             ;;
+                        --to-label)
+                            _wallet_complete_account_label "$cur"
+                            ;;
                         *)
-                            COMPREPLY=($(compgen -W "--to" -- "$cur"))
+                            COMPREPLY=($(compgen -W "--to --to-label" -- "$cur"))
                             ;;
                     esac
                     ;;
@@ -221,49 +256,85 @@ _wallet() {
                     ;;
                 new)
                     case "$prev" in
-                        --definition-account-id | --supply-account-id)
+                        --definition-account-id)
                             _wallet_complete_account_id "$cur"
+                            ;;
+                        --definition-account-label)
+                            _wallet_complete_account_label "$cur"
+                            ;;
+                        --supply-account-id)
+                            _wallet_complete_account_id "$cur"
+                            ;;
+                        --supply-account-label)
+                            _wallet_complete_account_label "$cur"
                             ;;
                         -n | --name | -t | --total-supply)
                             ;; # no specific completion
                         *)
-                            COMPREPLY=($(compgen -W "--definition-account-id --supply-account-id -n --name -t --total-supply" -- "$cur"))
+                            COMPREPLY=($(compgen -W "--definition-account-id --definition-account-label --supply-account-id --supply-account-label -n --name -t --total-supply" -- "$cur"))
                             ;;
                     esac
                     ;;
                 send)
                     case "$prev" in
-                        --from | --to)
+                        --from)
                             _wallet_complete_account_id "$cur"
+                            ;;
+                        --from-label)
+                            _wallet_complete_account_label "$cur"
+                            ;;
+                        --to)
+                            _wallet_complete_account_id "$cur"
+                            ;;
+                        --to-label)
+                            _wallet_complete_account_label "$cur"
                             ;;
                         --to-npk | --to-vpk | --amount)
                             ;; # no specific completion
                         *)
-                            COMPREPLY=($(compgen -W "--from --to --to-npk --to-vpk --amount" -- "$cur"))
+                            COMPREPLY=($(compgen -W "--from --from-label --to --to-label --to-npk --to-vpk --amount" -- "$cur"))
                             ;;
                     esac
                     ;;
                 burn)
                     case "$prev" in
-                        --definition | --holder)
+                        --definition)
                             _wallet_complete_account_id "$cur"
+                            ;;
+                        --definition-label)
+                            _wallet_complete_account_label "$cur"
+                            ;;
+                        --holder)
+                            _wallet_complete_account_id "$cur"
+                            ;;
+                        --holder-label)
+                            _wallet_complete_account_label "$cur"
                             ;;
                         --amount)
                             ;; # no specific completion
                         *)
-                            COMPREPLY=($(compgen -W "--definition --holder --amount" -- "$cur"))
+                            COMPREPLY=($(compgen -W "--definition --definition-label --holder --holder-label --amount" -- "$cur"))
                             ;;
                     esac
                     ;;
                 mint)
                     case "$prev" in
-                        --definition | --holder)
+                        --definition)
                             _wallet_complete_account_id "$cur"
+                            ;;
+                        --definition-label)
+                            _wallet_complete_account_label "$cur"
+                            ;;
+                        --holder)
+                            _wallet_complete_account_id "$cur"
+                            ;;
+                        --holder-label)
+                            _wallet_complete_account_label "$cur"
                             ;;
                         --holder-npk | --holder-vpk | --amount)
                             ;; # no specific completion
                         *)
-                            COMPREPLY=($(compgen -W "--definition --holder --holder-npk --holder-vpk --amount" -- "$cur"))
+                            COMPREPLY=($(compgen -W "--definition --definition-label --holder --holder-label --holder-npk --holder-vpk --amount" -- "$cur"))
                             ;;
                     esac
                     ;;
@@ -277,49 +348,103 @@ _wallet() {
                     ;;
                 new)
                     case "$prev" in
-                        --user-holding-a | --user-holding-b | --user-holding-lp)
+                        --user-holding-a)
                             _wallet_complete_account_id "$cur"
+                            ;;
+                        --user-holding-a-label)
+                            _wallet_complete_account_label "$cur"
+                            ;;
+                        --user-holding-b)
+                            _wallet_complete_account_id "$cur"
+                            ;;
+                        --user-holding-b-label)
+                            _wallet_complete_account_label "$cur"
+                            ;;
+                        --user-holding-lp)
+                            _wallet_complete_account_id "$cur"
+                            ;;
+                        --user-holding-lp-label)
+                            _wallet_complete_account_label "$cur"
                             ;;
                         --balance-a | --balance-b)
                             ;; # no specific completion
                         *)
-                            COMPREPLY=($(compgen -W "--user-holding-a --user-holding-b --user-holding-lp --balance-a --balance-b" -- "$cur"))
+                            COMPREPLY=($(compgen -W "--user-holding-a --user-holding-a-label --user-holding-b --user-holding-b-label --user-holding-lp --user-holding-lp-label --balance-a --balance-b" -- "$cur"))
                             ;;
                     esac
                     ;;
                 swap)
                     case "$prev" in
-                        --user-holding-a | --user-holding-b)
+                        --user-holding-a)
                             _wallet_complete_account_id "$cur"
+                            ;;
+                        --user-holding-a-label)
+                            _wallet_complete_account_label "$cur"
+                            ;;
+                        --user-holding-b)
+                            _wallet_complete_account_id "$cur"
+                            ;;
+                        --user-holding-b-label)
+                            _wallet_complete_account_label "$cur"
                             ;;
                         --amount-in | --min-amount-out | --token-definition)
                             ;; # no specific completion
                         *)
-                            COMPREPLY=($(compgen -W "--user-holding-a --user-holding-b --amount-in --min-amount-out --token-definition" -- "$cur"))
+                            COMPREPLY=($(compgen -W "--user-holding-a --user-holding-a-label --user-holding-b --user-holding-b-label --amount-in --min-amount-out --token-definition" -- "$cur"))
                             ;;
                     esac
                     ;;
                 add-liquidity)
                     case "$prev" in
-                        --user-holding-a | --user-holding-b | --user-holding-lp)
+                        --user-holding-a)
                             _wallet_complete_account_id "$cur"
+                            ;;
+                        --user-holding-a-label)
+                            _wallet_complete_account_label "$cur"
+                            ;;
+                        --user-holding-b)
+                            _wallet_complete_account_id "$cur"
+                            ;;
+                        --user-holding-b-label)
+                            _wallet_complete_account_label "$cur"
+                            ;;
+                        --user-holding-lp)
+                            _wallet_complete_account_id "$cur"
+                            ;;
+                        --user-holding-lp-label)
+                            _wallet_complete_account_label "$cur"
                             ;;
                         --max-amount-a | --max-amount-b | --min-amount-lp)
                             ;; # no specific completion
                         *)
-                            COMPREPLY=($(compgen -W "--user-holding-a --user-holding-b --user-holding-lp --max-amount-a --max-amount-b --min-amount-lp" -- "$cur"))
+                            COMPREPLY=($(compgen -W "--user-holding-a --user-holding-a-label --user-holding-b --user-holding-b-label --user-holding-lp --user-holding-lp-label --max-amount-a --max-amount-b --min-amount-lp" -- "$cur"))
                             ;;
                     esac
                     ;;
                 remove-liquidity)
                     case "$prev" in
-                        --user-holding-a | --user-holding-b | --user-holding-lp)
+                        --user-holding-a)
                             _wallet_complete_account_id "$cur"
+                            ;;
+                        --user-holding-a-label)
+                            _wallet_complete_account_label "$cur"
+                            ;;
+                        --user-holding-b)
+                            _wallet_complete_account_id "$cur"
+                            ;;
+                        --user-holding-b-label)
+                            _wallet_complete_account_label "$cur"
+                            ;;
+                        --user-holding-lp)
+                            _wallet_complete_account_id "$cur"
+                            ;;
+                        --user-holding-lp-label)
+                            _wallet_complete_account_label "$cur"
                             ;;
                         --balance-lp | --min-amount-a | --min-amount-b)
                             ;; # no specific completion
                         *)
-                            COMPREPLY=($(compgen -W "--user-holding-a --user-holding-b --user-holding-lp --balance-lp --min-amount-a --min-amount-b" -- "$cur"))
+                            COMPREPLY=($(compgen -W "--user-holding-a --user-holding-a-label --user-holding-b --user-holding-b-label --user-holding-lp --user-holding-lp-label --balance-lp --min-amount-a --min-amount-b" -- "$cur"))
                             ;;
                     esac
                     ;;

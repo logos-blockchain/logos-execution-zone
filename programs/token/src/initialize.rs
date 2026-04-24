@@ -1,6 +1,6 @@
 use nssa_core::{
     account::{Account, AccountWithMetadata, Data},
-    program::AccountPostState,
+    program::{AccountPostState, Claim},
 };
 use token_core::{TokenDefinition, TokenHolding};
 
@@ -30,6 +30,6 @@ pub fn initialize_account(
 
     vec![
         AccountPostState::new(definition_post),
-        AccountPostState::new_claimed(account_to_initialize),
+        AccountPostState::new_claimed(account_to_initialize, Claim::Authorized),
     ]
 }

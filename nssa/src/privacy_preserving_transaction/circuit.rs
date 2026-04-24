@@ -10,7 +10,7 @@ use nssa_core::{
 use risc0_zkvm::{ExecutorEnv, InnerReceipt, ProverOpts, Receipt, default_prover};
 
 use crate::{
-    error::NssaError,
+    error::{InvalidProgramBehaviorError, NssaError},
     program::Program,
     program_methods::{PRIVACY_PRESERVING_CIRCUIT_ELF, PRIVACY_PRESERVING_CIRCUIT_ID},
     state::MAX_NUMBER_CHAINED_CALLS,
@@ -87,15 +87,16 @@ pub fn execute_and_prove(
         pda_seeds: vec![],
     };
 
-    let mut chained_calls = VecDeque::from_iter([(initial_call, initial_program)]);
+    let mut chained_calls = VecDeque::from_iter([(initial_call, initial_program, None)]);
     let mut chain_calls_counter = 0;
-    while let Some((chained_call, program)) = chained_calls.pop_front() {
+    while let Some((chained_call, program, caller_program_id)) = chained_calls.pop_front() {
         if chain_calls_counter >= MAX_NUMBER_CHAINED_CALLS {
             return Err(NssaError::MaxChainedCallsDepthExceeded);
         }
 
         let inner_receipt = execute_and_prove_program(
             program,
+            caller_program_id,
             &chained_call.pre_states,
             &chained_call.instruction_data,
         )?;
@@ -112,10 +113,12 @@ pub fn execute_and_prove(
         env_builder.add_assumption(inner_receipt);
 
         for new_call in program_output.chained_calls.into_iter().rev() {
-            let next_program = dependencies
-                .get(&new_call.program_id)
-                .ok_or(NssaError::InvalidProgramBehavior)?;
-            chained_calls.push_front((new_call, next_program));
+            let next_program = dependencies.get(&new_call.program_id).ok_or(
+                InvalidProgramBehaviorError::UndeclaredProgramDependency {
+                    program_id: new_call.program_id,
+                },
+            )?;
+            chained_calls.push_front((new_call, next_program, Some(chained_call.program_id)));
         }
 
         chain_calls_counter = chain_calls_counter
@@ -153,12 +156,19 @@ pub fn execute_and_prove(
 
 fn execute_and_prove_program(
     program: &Program,
+    caller_program_id: Option<ProgramId>,
     pre_states: &[AccountWithMetadata],
     instruction_data: &InstructionData,
 ) -> Result<Receipt, NssaError> {
     // Write inputs to the program
     let mut env_builder = ExecutorEnv::builder();
-    Program::write_inputs(pre_states, instruction_data, &mut env_builder)?;
+    Program::write_inputs(
+        program.id(),
+        caller_program_id,
+        pre_states,
+        instruction_data,
+        &mut env_builder,
+    )?;
     let env = env_builder.build().unwrap();
 
     // Prove the program
@@ -174,12 +184,13 @@ mod tests {
     #![expect(clippy::shadow_unrelated, reason = "We don't care about it in tests")]
 
     use nssa_core::{
-        Commitment, DUMMY_COMMITMENT_HASH, EncryptionScheme, Nullifier,
+        Commitment, DUMMY_COMMITMENT_HASH, EncryptionScheme, Nullifier, SharedSecretKey,
         account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
     };
 
     use super::*;
     use crate::{
+        error::NssaError,
         privacy_preserving_transaction::circuit::execute_and_prove,
         program::Program,
         state::{
@@ -363,5 +374,47 @@ mod tests {
         )
         .unwrap();
         assert_eq!(recipient_post, expected_private_account_2);
+    }
+
+    #[test]
+    fn circuit_fails_when_chained_validity_windows_have_empty_intersection() {
+        let account_keys = test_private_account_keys_1();
+        let pre = AccountWithMetadata::new(
+            Account::default(),
+            false,
+            AccountId::from(&account_keys.npk()),
+        );
+
+        let validity_window_chain_caller = Program::validity_window_chain_caller();
+        let validity_window = Program::validity_window();
+
+        let instruction = Program::serialize_instruction((
+            Some(1_u64),
+            Some(4_u64),
+            validity_window.id(),
+            Some(4_u64),
+            Some(7_u64),
+        ))
+        .unwrap();
+
+        let esk = [3; 32];
+        let shared_secret = SharedSecretKey::new(&esk, &account_keys.vpk());
+
+        let program_with_deps = ProgramWithDependencies::new(
+            validity_window_chain_caller,
+            [(validity_window.id(), validity_window)].into(),
+        );
+
+        let result = execute_and_prove(
+            vec![pre],
+            instruction,
+            vec![2],
+            vec![(account_keys.npk(), shared_secret)],
+            vec![],
+            vec![None],
+            &program_with_deps,
+        );
+
+        assert!(matches!(result, Err(NssaError::CircuitProvingError(_))));
     }
 }

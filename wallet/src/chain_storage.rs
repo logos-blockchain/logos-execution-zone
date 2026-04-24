@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashMap, btree_map::Entry};
 
 use anyhow::Result;
+use bip39::Mnemonic;
 use key_protocol::{
     key_management::{
         key_tree::{KeyTreePrivate, KeyTreePublic, chain_index::ChainIndex},
@@ -95,33 +96,69 @@ impl WalletChainStore {
         })
     }
 
-    pub fn new_storage(config: WalletConfig, password: String) -> Result<Self> {
+    pub fn new_storage(config: WalletConfig, password: &str) -> Result<(Self, Mnemonic)> {
         let mut public_init_acc_map = BTreeMap::new();
         let mut private_init_acc_map = BTreeMap::new();
 
-        for init_acc_data in config.initial_accounts.clone() {
+        let initial_accounts = config
+            .initial_accounts
+            .clone()
+            .unwrap_or_else(InitialAccountData::create_initial_accounts_data);
+
+        for init_acc_data in initial_accounts {
             match init_acc_data {
                 InitialAccountData::Public(data) => {
                     public_init_acc_map.insert(data.account_id, data.pub_sign_key);
                 }
                 InitialAccountData::Private(data) => {
                     let mut account = data.account;
-                    // TODO: Program owner is only known after code is compiled and can't be set in
-                    // the config. Therefore we overwrite it here on startup. Fix this when program
-                    // id can be fetched from the node and queried from the wallet.
+                    // TODO: Program owner is only known after code is compiled and can't be set
+                    // in the config. Therefore we overwrite it here on
+                    // startup. Fix this when program id can be fetched
+                    // from the node and queried from the wallet.
                     account.program_owner = Program::authenticated_transfer_program().id();
                     private_init_acc_map.insert(data.account_id, (data.key_chain, account));
                 }
             }
         }
 
-        let public_tree = KeyTreePublic::new(&SeedHolder::new_mnemonic(password.clone()));
-        let private_tree = KeyTreePrivate::new(&SeedHolder::new_mnemonic(password));
+        // TODO: Use password for storage encryption
+        let _ = password;
+        let (seed_holder, mnemonic) = SeedHolder::new_mnemonic("");
+        let public_tree = KeyTreePublic::new(&seed_holder);
+        let private_tree = KeyTreePrivate::new(&seed_holder);
+
+        Ok((
+            Self {
+                user_data: NSSAUserData::new_with_accounts(
+                    public_init_acc_map,
+                    private_init_acc_map,
+                    public_tree,
+                    private_tree,
+                )?,
+                wallet_config: config,
+                labels: HashMap::new(),
+            },
+            mnemonic,
+        ))
+    }
+
+    /// Restore storage from an existing mnemonic phrase.
+    pub fn restore_storage(
+        config: WalletConfig,
+        mnemonic: &Mnemonic,
+        password: &str,
+    ) -> Result<Self> {
+        // TODO: Use password for storage encryption
+        let _ = password;
+        let seed_holder = SeedHolder::from_mnemonic(mnemonic, "");
+        let public_tree = KeyTreePublic::new(&seed_holder);
+        let private_tree = KeyTreePrivate::new(&seed_holder);
 
         Ok(Self {
             user_data: NSSAUserData::new_with_accounts(
-                public_init_acc_map,
-                private_init_acc_map,
+                BTreeMap::new(),
+                BTreeMap::new(),
                 public_tree,
                 private_tree,
             )?,
@@ -161,45 +198,12 @@ impl WalletChainStore {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr as _;
-
     use key_protocol::key_management::key_tree::{
         keys_private::ChildKeysPrivate, keys_public::ChildKeysPublic, traits::KeyNode as _,
     };
-    use nssa::PrivateKey;
 
     use super::*;
-    use crate::config::{
-        InitialAccountData, InitialAccountDataPublic, PersistentAccountDataPrivate,
-        PersistentAccountDataPublic,
-    };
-
-    fn create_initial_accounts() -> Vec<InitialAccountData> {
-        vec![
-            InitialAccountData::Public(InitialAccountDataPublic {
-                account_id: nssa::AccountId::from_str(
-                    "CbgR6tj5kWx5oziiFptM7jMvrQeYY3Mzaao6ciuhSr2r",
-                )
-                .unwrap(),
-                pub_sign_key: PrivateKey::try_new([
-                    127, 39, 48, 152, 242, 91, 113, 230, 192, 5, 169, 81, 159, 38, 120, 218, 141,
-                    28, 127, 1, 246, 162, 119, 120, 226, 217, 148, 138, 189, 249, 1, 251,
-                ])
-                .unwrap(),
-            }),
-            InitialAccountData::Public(InitialAccountDataPublic {
-                account_id: nssa::AccountId::from_str(
-                    "2RHZhw9h534Zr3eq2RGhQete2Hh667foECzXPmSkGni2",
-                )
-                .unwrap(),
-                pub_sign_key: PrivateKey::try_new([
-                    244, 52, 248, 116, 23, 32, 1, 69, 134, 174, 67, 53, 109, 42, 236, 98, 87, 218,
-                    8, 98, 34, 246, 4, 221, 183, 93, 105, 115, 59, 134, 252, 76,
-                ])
-                .unwrap(),
-            }),
-        ]
-    }
+    use crate::config::{PersistentAccountDataPrivate, PersistentAccountDataPublic};
 
     fn create_sample_wallet_config() -> WalletConfig {
         WalletConfig {
@@ -208,8 +212,8 @@ mod tests {
             seq_tx_poll_max_blocks: 5,
             seq_poll_max_retries: 10,
             seq_block_poll_max_amount: 100,
-            initial_accounts: create_initial_accounts(),
             basic_auth: None,
+            initial_accounts: None,
         }
     }
 

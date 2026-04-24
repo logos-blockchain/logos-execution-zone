@@ -68,9 +68,25 @@ pub enum Instruction {
     /// - User Holding Account for Token A
     /// - User Holding Account for Token B Either User Holding Account for Token A or Token B is
     ///   authorized.
-    Swap {
+    SwapExactInput {
         swap_amount_in: u128,
         min_amount_out: u128,
+        token_definition_id_in: AccountId,
+    },
+
+    /// Swap tokens specifying the exact desired output amount,
+    /// while maintaining the Pool constant product.
+    ///
+    /// Required accounts:
+    /// - AMM Pool (initialized)
+    /// - Vault Holding Account for Token A (initialized)
+    /// - Vault Holding Account for Token B (initialized)
+    /// - User Holding Account for Token A
+    /// - User Holding Account for Token B Either User Holding Account for Token A or Token B is
+    ///   authorized.
+    SwapExactOutput {
+        exact_amount_out: u128,
+        max_amount_in: u128,
         token_definition_id_in: AccountId,
     },
 }
@@ -119,10 +135,10 @@ pub fn compute_pool_pda(
     definition_token_a_id: AccountId,
     definition_token_b_id: AccountId,
 ) -> AccountId {
-    AccountId::from((
+    AccountId::for_public_pda(
         &amm_program_id,
         &compute_pool_pda_seed(definition_token_a_id, definition_token_b_id),
-    ))
+    )
 }
 
 #[must_use]
@@ -159,10 +175,10 @@ pub fn compute_vault_pda(
     pool_id: AccountId,
     definition_token_id: AccountId,
 ) -> AccountId {
-    AccountId::from((
+    AccountId::for_public_pda(
         &amm_program_id,
         &compute_vault_pda_seed(pool_id, definition_token_id),
-    ))
+    )
 }
 
 #[must_use]
@@ -183,7 +199,7 @@ pub fn compute_vault_pda_seed(pool_id: AccountId, definition_token_id: AccountId
 
 #[must_use]
 pub fn compute_liquidity_token_pda(amm_program_id: ProgramId, pool_id: AccountId) -> AccountId {
-    AccountId::from((&amm_program_id, &compute_liquidity_token_pda_seed(pool_id)))
+    AccountId::for_public_pda(&amm_program_id, &compute_liquidity_token_pda_seed(pool_id))
 }
 
 #[must_use]

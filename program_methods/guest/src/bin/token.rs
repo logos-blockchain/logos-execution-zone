@@ -6,12 +6,14 @@
 //! Token program accepts [`Instruction`] as input, refer to the corresponding documentation
 //! for more details.
 
-use nssa_core::program::{ProgramInput, read_nssa_inputs, write_nssa_outputs};
+use nssa_core::program::{ProgramInput, ProgramOutput, read_nssa_inputs};
 use token_program::core::Instruction;
 
 fn main() {
     let (
         ProgramInput {
+            self_program_id,
+            caller_program_id,
             pre_states,
             instruction,
         },
@@ -81,5 +83,12 @@ fn main() {
         }
     };
 
-    write_nssa_outputs(instruction_words, pre_states_clone, post_states);
+    ProgramOutput::new(
+        self_program_id,
+        caller_program_id,
+        instruction_words,
+        pre_states_clone,
+        post_states,
+    )
+    .write();
 }
