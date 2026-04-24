@@ -1,6 +1,9 @@
 use std::{path::Path, sync::Arc};
 
-use common::block::Block;
+use common::{
+    block::Block,
+    transaction::{NSSATransaction, clock_invocation},
+};
 use nssa::V03State;
 use rocksdb::{
     BoundColumnFamily, ColumnFamilyDescriptor, DBWithThreadMode, MultiThreaded, Options,
@@ -169,22 +172,52 @@ impl RocksDBIO {
             for block in self.get_block_batch_seq(
                 start.checked_add(1).expect("Will be lesser that u64::MAX")..=block_id,
             )? {
-                for transaction in block.body.transactions {
-                    transaction
-                        .transaction_stateless_check()
-                        .map_err(|err| {
-                            DbError::db_interaction_error(format!(
-                                "transaction pre check failed with err {err:?}"
-                            ))
-                        })?
-                        .execute_check_on_state(
-                            &mut breakpoint,
+                let expected_clock =
+                    NSSATransaction::Public(clock_invocation(block.header.timestamp));
+
+                if let Some((clock_tx, user_txs)) = block.body.transactions.split_last() {
+                    if *clock_tx != expected_clock {
+                        return Err(DbError::db_interaction_error(
+                            "Last transaction in block must be the clock invocation for the block timestamp"
+                                .to_owned(),
+                        ));
+                    }
+                    for transaction in user_txs {
+                        transaction
+                            .clone()
+                            .transaction_stateless_check()
+                            .map_err(|err| {
+                                DbError::db_interaction_error(format!(
+                                    "transaction pre check failed with err {err:?}"
+                                ))
+                            })?
+                            .execute_check_on_state(
+                                &mut breakpoint,
+                                block.header.block_id,
+                                block.header.timestamp,
+                            )
+                            .map_err(|err| {
+                                DbError::db_interaction_error(format!(
+                                    "transaction execution failed with err {err:?}"
+                                ))
+                            })?;
+                    }
+
+                    let NSSATransaction::Public(clock_public_tx) = clock_tx else {
+                        return Err(DbError::db_interaction_error(
+                            "Clock invocation must be a public transaction".to_owned(),
+                        ));
+                    };
+
+                    breakpoint
+                        .transition_from_public_transaction(
+                            clock_public_tx,
                             block.header.block_id,
                             block.header.timestamp,
                         )
                         .map_err(|err| {
                             DbError::db_interaction_error(format!(
-                                "transaction execution failed with err {err:?}"
+                                "clock transaction execution failed with err {err:?}"
                             ))
                         })?;
                 }
@@ -213,6 +246,7 @@ fn closest_breakpoint_id(block_id: u64) -> u64 {
 #[expect(clippy::shadow_unrelated, reason = "Fine for tests")]
 #[cfg(test)]
 mod tests {
+    use common::test_utils::produce_dummy_block;
     use nssa::{AccountId, PublicKey};
     use tempfile::tempdir;
 
@@ -302,7 +336,7 @@ mod tests {
 
         let transfer_tx =
             common::test_utils::create_transaction_native_token_transfer(from, 0, to, 1, &sign_key);
-        let block = common::test_utils::produce_dummy_block(2, Some(prev_hash), vec![transfer_tx]);
+        let block = produce_dummy_block(2, Some(prev_hash), vec![transfer_tx]);
 
         dbio.put_block(&block, [1; 32]).unwrap();
 
@@ -369,11 +403,7 @@ mod tests {
                 1,
                 &sign_key,
             );
-            let block = common::test_utils::produce_dummy_block(
-                (i + 1).into(),
-                Some(prev_hash),
-                vec![transfer_tx],
-            );
+            let block = produce_dummy_block((i + 1).into(), Some(prev_hash), vec![transfer_tx]);
             dbio.put_block(&block, [i; 32]).unwrap();
         }
 
@@ -439,7 +469,7 @@ mod tests {
         let prev_hash = last_block.header.hash;
         let transfer_tx =
             common::test_utils::create_transaction_native_token_transfer(from, 0, to, 1, &sign_key);
-        let block = common::test_utils::produce_dummy_block(2, Some(prev_hash), vec![transfer_tx]);
+        let block = produce_dummy_block(2, Some(prev_hash), vec![transfer_tx]);
 
         let control_hash1 = block.header.hash;
 
@@ -451,7 +481,7 @@ mod tests {
         let prev_hash = last_block.header.hash;
         let transfer_tx =
             common::test_utils::create_transaction_native_token_transfer(from, 1, to, 1, &sign_key);
-        let block = common::test_utils::produce_dummy_block(3, Some(prev_hash), vec![transfer_tx]);
+        let block = produce_dummy_block(3, Some(prev_hash), vec![transfer_tx]);
 
         let control_hash2 = block.header.hash;
 
@@ -466,7 +496,7 @@ mod tests {
 
         let control_tx_hash1 = transfer_tx.hash();
 
-        let block = common::test_utils::produce_dummy_block(4, Some(prev_hash), vec![transfer_tx]);
+        let block = produce_dummy_block(4, Some(prev_hash), vec![transfer_tx]);
         dbio.put_block(&block, [3; 32]).unwrap();
 
         let last_id = dbio.get_meta_last_block_in_db().unwrap();
@@ -478,7 +508,7 @@ mod tests {
 
         let control_tx_hash2 = transfer_tx.hash();
 
-        let block = common::test_utils::produce_dummy_block(5, Some(prev_hash), vec![transfer_tx]);
+        let block = produce_dummy_block(5, Some(prev_hash), vec![transfer_tx]);
         dbio.put_block(&block, [4; 32]).unwrap();
 
         let control_block_id1 = dbio.get_block_id_by_hash(control_hash1.0).unwrap().unwrap();
@@ -526,7 +556,7 @@ mod tests {
         let prev_hash = last_block.header.hash;
         let transfer_tx =
             common::test_utils::create_transaction_native_token_transfer(from, 0, to, 1, &sign_key);
-        let block = common::test_utils::produce_dummy_block(2, Some(prev_hash), vec![transfer_tx]);
+        let block = produce_dummy_block(2, Some(prev_hash), vec![transfer_tx]);
 
         block_res.push(block.clone());
         dbio.put_block(&block, [1; 32]).unwrap();
@@ -537,7 +567,7 @@ mod tests {
         let prev_hash = last_block.header.hash;
         let transfer_tx =
             common::test_utils::create_transaction_native_token_transfer(from, 1, to, 1, &sign_key);
-        let block = common::test_utils::produce_dummy_block(3, Some(prev_hash), vec![transfer_tx]);
+        let block = produce_dummy_block(3, Some(prev_hash), vec![transfer_tx]);
 
         block_res.push(block.clone());
         dbio.put_block(&block, [2; 32]).unwrap();
@@ -549,7 +579,7 @@ mod tests {
         let transfer_tx =
             common::test_utils::create_transaction_native_token_transfer(from, 2, to, 1, &sign_key);
 
-        let block = common::test_utils::produce_dummy_block(4, Some(prev_hash), vec![transfer_tx]);
+        let block = produce_dummy_block(4, Some(prev_hash), vec![transfer_tx]);
         block_res.push(block.clone());
         dbio.put_block(&block, [3; 32]).unwrap();
 
@@ -560,7 +590,7 @@ mod tests {
         let transfer_tx =
             common::test_utils::create_transaction_native_token_transfer(from, 3, to, 1, &sign_key);
 
-        let block = common::test_utils::produce_dummy_block(5, Some(prev_hash), vec![transfer_tx]);
+        let block = produce_dummy_block(5, Some(prev_hash), vec![transfer_tx]);
         block_res.push(block.clone());
         dbio.put_block(&block, [4; 32]).unwrap();
 
@@ -633,11 +663,7 @@ mod tests {
         tx_hash_res.push(transfer_tx1.hash().0);
         tx_hash_res.push(transfer_tx2.hash().0);
 
-        let block = common::test_utils::produce_dummy_block(
-            2,
-            Some(prev_hash),
-            vec![transfer_tx1, transfer_tx2],
-        );
+        let block = produce_dummy_block(2, Some(prev_hash), vec![transfer_tx1, transfer_tx2]);
 
         dbio.put_block(&block, [1; 32]).unwrap();
 
@@ -652,11 +678,7 @@ mod tests {
         tx_hash_res.push(transfer_tx1.hash().0);
         tx_hash_res.push(transfer_tx2.hash().0);
 
-        let block = common::test_utils::produce_dummy_block(
-            3,
-            Some(prev_hash),
-            vec![transfer_tx1, transfer_tx2],
-        );
+        let block = produce_dummy_block(3, Some(prev_hash), vec![transfer_tx1, transfer_tx2]);
 
         dbio.put_block(&block, [2; 32]).unwrap();
 
@@ -671,11 +693,7 @@ mod tests {
         tx_hash_res.push(transfer_tx1.hash().0);
         tx_hash_res.push(transfer_tx2.hash().0);
 
-        let block = common::test_utils::produce_dummy_block(
-            4,
-            Some(prev_hash),
-            vec![transfer_tx1, transfer_tx2],
-        );
+        let block = produce_dummy_block(4, Some(prev_hash), vec![transfer_tx1, transfer_tx2]);
 
         dbio.put_block(&block, [3; 32]).unwrap();
 
@@ -687,7 +705,7 @@ mod tests {
             common::test_utils::create_transaction_native_token_transfer(from, 6, to, 1, &sign_key);
         tx_hash_res.push(transfer_tx.hash().0);
 
-        let block = common::test_utils::produce_dummy_block(5, Some(prev_hash), vec![transfer_tx]);
+        let block = produce_dummy_block(5, Some(prev_hash), vec![transfer_tx]);
 
         dbio.put_block(&block, [4; 32]).unwrap();
 
