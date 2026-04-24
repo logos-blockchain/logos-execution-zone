@@ -11,6 +11,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Context as _, Result};
+use bip39::Mnemonic;
 use chain_storage::WalletChainStore;
 use common::{HashType, transaction::NSSATransaction};
 use config::WalletConfig;
@@ -64,6 +65,8 @@ pub enum ExecutionFailureKind {
     InsufficientFundsError,
     #[error("Account {0} data is invalid")]
     AccountDataError(AccountId),
+    #[error("Failed to build transaction: {0}")]
+    TransactionBuildError(#[from] nssa::error::NssaError),
 }
 
 #[expect(clippy::partial_pub_fields, reason = "TODO: make all fields private")]
@@ -115,15 +118,24 @@ impl WalletCore {
         config_path: PathBuf,
         storage_path: PathBuf,
         config_overrides: Option<WalletConfigOverrides>,
-        password: String,
-    ) -> Result<Self> {
-        Self::new(
+        password: &str,
+    ) -> Result<(Self, Mnemonic)> {
+        let mut mnemonic_out = None;
+        let wallet = Self::new(
             config_path,
             storage_path,
             config_overrides,
-            |config| WalletChainStore::new_storage(config, password),
+            |config| {
+                let (storage, mnemonic) = WalletChainStore::new_storage(config, password)?;
+                mnemonic_out = Some(mnemonic);
+                Ok(storage)
+            },
             0,
-        )
+        )?;
+        Ok((
+            wallet,
+            mnemonic_out.expect("mnemonic should be set after new_storage"),
+        ))
     }
 
     fn new(
@@ -189,9 +201,13 @@ impl WalletCore {
         &self.storage
     }
 
-    /// Reset storage.
-    pub fn reset_storage(&mut self, password: String) -> Result<()> {
-        self.storage = WalletChainStore::new_storage(self.storage.wallet_config.clone(), password)?;
+    /// Restore storage from an existing mnemonic phrase.
+    pub fn restore_storage(&mut self, mnemonic: &Mnemonic, password: &str) -> Result<()> {
+        self.storage = WalletChainStore::restore_storage(
+            self.storage.wallet_config.clone(),
+            mnemonic,
+            password,
+        )?;
         Ok(())
     }
 
@@ -377,7 +393,7 @@ impl WalletCore {
             acc_manager.visibility_mask().to_vec(),
             private_account_keys
                 .iter()
-                .map(|keys| (keys.npk.clone(), keys.ssk))
+                .map(|keys| (keys.npk, keys.ssk))
                 .collect::<Vec<_>>(),
             acc_manager.private_account_auth(),
             acc_manager.private_account_membership_proofs(),
@@ -391,7 +407,7 @@ impl WalletCore {
                 Vec::from_iter(acc_manager.public_account_nonces()),
                 private_account_keys
                     .iter()
-                    .map(|keys| (keys.npk.clone(), keys.vpk.clone(), keys.epk.clone()))
+                    .map(|keys| (keys.npk, keys.vpk.clone(), keys.epk.clone()))
                     .collect(),
                 output,
             )

@@ -77,9 +77,7 @@ pub unsafe extern "C" fn wallet_ffi_claim_pinata(
     match block_on(pinata.claim(pinata_id, winner_id, solution)) {
         Ok(tx_hash) => {
             let tx_hash = CString::new(tx_hash.to_string())
-                .map(std::ffi::CString::into_raw)
-                .unwrap_or(ptr::null_mut());
-
+                .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
             unsafe {
                 (*out_result).tx_hash = tx_hash;
                 (*out_result).success = true;
@@ -184,8 +182,7 @@ pub unsafe extern "C" fn wallet_ffi_claim_pinata_private_owned_already_initializ
     ) {
         Ok((tx_hash, _shared_key)) => {
             let tx_hash = CString::new(tx_hash.to_string())
-                .map(std::ffi::CString::into_raw)
-                .unwrap_or(ptr::null_mut());
+                .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
 
             unsafe {
                 (*out_result).tx_hash = tx_hash;
@@ -270,8 +267,7 @@ pub unsafe extern "C" fn wallet_ffi_claim_pinata_private_owned_not_initialized(
     match block_on(pinata.claim_private_owned_account(pinata_id, winner_id, solution)) {
         Ok((tx_hash, _shared_key)) => {
             let tx_hash = CString::new(tx_hash.to_string())
-                .map(std::ffi::CString::into_raw)
-                .unwrap_or(ptr::null_mut());
+                .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
 
             unsafe {
                 (*out_result).tx_hash = tx_hash;

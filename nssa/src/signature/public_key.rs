@@ -1,6 +1,7 @@
 use std::str::FromStr;
 
 use borsh::{BorshDeserialize, BorshSerialize};
+use k256::elliptic_curve::sec1::ToEncodedPoint as _;
 use nssa_core::account::AccountId;
 use serde_with::{DeserializeFromStr, SerializeDisplay};
 use sha2::{Digest as _, Sha256};
@@ -27,8 +28,7 @@ impl FromStr for PublicKey {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let mut bytes = [0_u8; 32];
-        hex::decode_to_slice(s, &mut bytes)
-            .map_err(|_err| NssaError::InvalidPublicKey(secp256k1::Error::InvalidPublicKey))?;
+        hex::decode_to_slice(s, &mut bytes).map_err(NssaError::InvalidHexPublicKey)?;
         Self::try_new(bytes)
     }
 }
@@ -46,19 +46,24 @@ impl PublicKey {
     #[must_use]
     pub fn new_from_private_key(key: &PrivateKey) -> Self {
         let value = {
-            let secret_key = secp256k1::SecretKey::from_byte_array(*key.value()).unwrap();
-            let public_key =
-                secp256k1::PublicKey::from_secret_key(&secp256k1::Secp256k1::new(), &secret_key);
-            let (x_only, _) = public_key.x_only_public_key();
-            x_only.serialize()
+            let secret_key = k256::SecretKey::from_bytes(&(*key.value()).into())
+                .expect("Expect a valid private key");
+
+            let encoded = secret_key.public_key().to_encoded_point(false);
+            let x_only = encoded
+                .x()
+                .expect("Expect k256 point to have a x-coordinate");
+
+            *x_only.first_chunk().expect("x_only is exactly 32 bytes")
         };
         Self(value)
     }
 
     pub fn try_new(value: [u8; 32]) -> Result<Self, NssaError> {
-        // Check point is valid
-        let _ = secp256k1::XOnlyPublicKey::from_byte_array(value)
-            .map_err(NssaError::InvalidPublicKey)?;
+        // Check point is a valid x-only public key
+        let _ =
+            k256::schnorr::VerifyingKey::from_bytes(&value).map_err(NssaError::InvalidPublicKey)?;
+
         Ok(Self(value))
     }
 

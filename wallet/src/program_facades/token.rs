@@ -19,15 +19,36 @@ impl Token<'_> {
         let account_ids = vec![definition_account_id, supply_account_id];
         let program_id = nssa::program::Program::token().id();
         let instruction = Instruction::NewFungibleDefinition { name, total_supply };
+        let nonces = self
+            .0
+            .get_accounts_nonces(account_ids.clone())
+            .await
+            .map_err(ExecutionFailureKind::SequencerError)?;
         let message = nssa::public_transaction::Message::try_new(
             program_id,
             account_ids,
-            vec![],
+            nonces,
             instruction,
         )
         .unwrap();
 
-        let witness_set = nssa::public_transaction::WitnessSet::for_message(&message, &[]);
+        let def_private_key = self
+            .0
+            .storage
+            .user_data
+            .get_pub_account_signing_key(definition_account_id)
+            .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
+        let supply_private_key = self
+            .0
+            .storage
+            .user_data
+            .get_pub_account_signing_key(supply_account_id)
+            .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
+
+        let witness_set = nssa::public_transaction::WitnessSet::for_message(
+            &message,
+            &[def_private_key, supply_private_key],
+        );
 
         let tx = nssa::PublicTransaction::new(message, witness_set);
 
@@ -138,11 +159,40 @@ impl Token<'_> {
         let instruction = Instruction::Transfer {
             amount_to_transfer: amount,
         };
-        let nonces = self
+        let mut nonces = self
             .0
             .get_accounts_nonces(vec![sender_account_id])
             .await
             .map_err(ExecutionFailureKind::SequencerError)?;
+
+        let mut private_keys = Vec::new();
+        let sender_sk = self
+            .0
+            .storage
+            .user_data
+            .get_pub_account_signing_key(sender_account_id)
+            .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
+        private_keys.push(sender_sk);
+
+        if let Some(recipient_sk) = self
+            .0
+            .storage
+            .user_data
+            .get_pub_account_signing_key(recipient_account_id)
+        {
+            private_keys.push(recipient_sk);
+            let recipient_nonces = self
+                .0
+                .get_accounts_nonces(vec![recipient_account_id])
+                .await
+                .map_err(ExecutionFailureKind::SequencerError)?;
+            nonces.extend(recipient_nonces);
+        } else {
+            println!(
+                "Receiver's account ({recipient_account_id}) private key not found in wallet. Proceeding with only sender's key."
+            );
+        }
+
         let message = nssa::public_transaction::Message::try_new(
             program_id,
             account_ids,
@@ -150,17 +200,8 @@ impl Token<'_> {
             instruction,
         )
         .unwrap();
-
-        let Some(signing_key) = self
-            .0
-            .storage
-            .user_data
-            .get_pub_account_signing_key(sender_account_id)
-        else {
-            return Err(ExecutionFailureKind::KeyNotFoundError);
-        };
         let witness_set =
-            nssa::public_transaction::WitnessSet::for_message(&message, &[signing_key]);
+            nssa::public_transaction::WitnessSet::for_message(&message, &private_keys);
 
         let tx = nssa::PublicTransaction::new(message, witness_set);
 
@@ -477,11 +518,40 @@ impl Token<'_> {
             amount_to_mint: amount,
         };
 
-        let nonces = self
+        let mut nonces = self
             .0
             .get_accounts_nonces(vec![definition_account_id])
             .await
             .map_err(ExecutionFailureKind::SequencerError)?;
+
+        let mut private_keys = Vec::new();
+        let definition_sk = self
+            .0
+            .storage
+            .user_data
+            .get_pub_account_signing_key(definition_account_id)
+            .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
+        private_keys.push(definition_sk);
+
+        if let Some(holder_sk) = self
+            .0
+            .storage
+            .user_data
+            .get_pub_account_signing_key(holder_account_id)
+        {
+            private_keys.push(holder_sk);
+            let recipient_nonces = self
+                .0
+                .get_accounts_nonces(vec![holder_account_id])
+                .await
+                .map_err(ExecutionFailureKind::SequencerError)?;
+            nonces.extend(recipient_nonces);
+        } else {
+            println!(
+                "Holder's account ({holder_account_id}) private key not found in wallet. Proceeding with only definition's key."
+            );
+        }
+
         let message = nssa::public_transaction::Message::try_new(
             Program::token().id(),
             account_ids,
@@ -489,17 +559,8 @@ impl Token<'_> {
             instruction,
         )
         .unwrap();
-
-        let Some(signing_key) = self
-            .0
-            .storage
-            .user_data
-            .get_pub_account_signing_key(definition_account_id)
-        else {
-            return Err(ExecutionFailureKind::KeyNotFoundError);
-        };
         let witness_set =
-            nssa::public_transaction::WitnessSet::for_message(&message, &[signing_key]);
+            nssa::public_transaction::WitnessSet::for_message(&message, &private_keys);
 
         let tx = nssa::PublicTransaction::new(message, witness_set);
 

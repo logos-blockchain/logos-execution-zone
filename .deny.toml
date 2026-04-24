@@ -13,6 +13,7 @@ ignore = [
   { id = "RUSTSEC-2025-0055", reason = "`tracing-subscriber` v0.2.25 pulled in transitively by ark-relations v0.4.0; fix requires ark-relations to upgrade to tracing-subscriber >=0.3.20. Tracked in #321." },
   { id = "RUSTSEC-2025-0141", reason = "`bincode` is permanently unmaintained; alternatives include postcard, bitcode, rkyv. Migration tracked in #321." },
   { id = "RUSTSEC-2023-0089", reason = "atomic-polyfill is pulled transitively via risc0-zkvm; waiting on upstream fix (see https://github.com/risc0/risc0/issues/3453)" },
+  { id = "RUSTSEC-2026-0097", reason = "`rand` v0.8.5 is present transitively from logos crates, modification may break integration" },
 ]
 yanked = "deny"
 unused-ignored-advisory = "deny"

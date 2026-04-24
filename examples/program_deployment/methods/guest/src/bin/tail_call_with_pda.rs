@@ -1,6 +1,6 @@
 use nssa_core::program::{
-    AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, read_nssa_inputs,
-    write_nssa_outputs_with_chained_call,
+    AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput,
+    read_nssa_inputs,
 };
 
 // Tail Call with PDA example program.
@@ -33,6 +33,8 @@ fn main() {
     // Read inputs
     let (
         ProgramInput {
+            self_program_id,
+            caller_program_id,
             pre_states,
             instruction: (),
         },
@@ -65,11 +67,16 @@ fn main() {
         pda_seeds: vec![PDA_SEED],
     };
 
-    // Write the outputs
-    write_nssa_outputs_with_chained_call(
+    // Write the outputs.
+    // WARNING: constructing a `ProgramOutput` has no effect on its own. `.write()` must be
+    // called to commit the output.
+    ProgramOutput::new(
+        self_program_id,
+        caller_program_id,
         instruction_data,
         vec![pre_state],
         vec![post_state],
-        vec![chained_call],
-    );
+    )
+    .with_chained_calls(vec![chained_call])
+    .write();
 }
