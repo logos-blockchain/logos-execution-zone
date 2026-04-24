@@ -1,8 +1,7 @@
 use nssa_core::{
     account::Data,
     program::{
-        AccountPostState, ChainedCall, PdaSeed, ProgramInput, read_nssa_inputs,
-        write_nssa_outputs_with_chained_call,
+        AccountPostState, ChainedCall, PdaSeed, ProgramInput, ProgramOutput, read_nssa_inputs,
     },
 };
 use risc0_zkvm::sha::{Impl, Sha256 as _};
@@ -53,6 +52,8 @@ fn main() {
     // winner_token_holding]
     let (
         ProgramInput {
+            self_program_id,
+            caller_program_id,
             pre_states,
             instruction: solution,
         },
@@ -97,7 +98,9 @@ fn main() {
     )
     .with_pda_seeds(vec![PdaSeed::new([0; 32])]);
 
-    write_nssa_outputs_with_chained_call(
+    ProgramOutput::new(
+        self_program_id,
+        caller_program_id,
         instruction_words,
         vec![
             pinata_definition,
@@ -109,6 +112,7 @@ fn main() {
             AccountPostState::new(pinata_token_holding_post),
             AccountPostState::new(winner_token_holding_post),
         ],
-        vec![chained_call],
-    );
+    )
+    .with_chained_calls(vec![chained_call])
+    .write();
 }

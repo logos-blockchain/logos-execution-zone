@@ -1,8 +1,7 @@
 use nssa_core::{
     account::AccountWithMetadata,
     program::{
-        AccountPostState, ChainedCall, ProgramId, ProgramInput, read_nssa_inputs,
-        write_nssa_outputs_with_chained_call,
+        AccountPostState, ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_nssa_inputs,
     },
 };
 use risc0_zkvm::serde::to_vec;
@@ -15,6 +14,8 @@ type Instruction = (u128, ProgramId);
 fn main() {
     let (
         ProgramInput {
+            self_program_id,
+            caller_program_id,
             pre_states,
             instruction: (balance, transfer_program_id),
         },
@@ -40,13 +41,16 @@ fn main() {
         pda_seeds: vec![],
     };
 
-    write_nssa_outputs_with_chained_call(
+    ProgramOutput::new(
+        self_program_id,
+        caller_program_id,
         instruction_words,
         vec![sender.clone(), receiver.clone()],
         vec![
             AccountPostState::new(sender.account),
             AccountPostState::new(receiver.account),
         ],
-        vec![chained_call],
-    );
+    )
+    .with_chained_calls(vec![chained_call])
+    .write();
 }

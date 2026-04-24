@@ -8,8 +8,6 @@ license = { workspace = true }
 workspace = true
 
 [dependencies]
-secp256k1 = "0.31.1"
-
 nssa.workspace = true
 nssa_core.workspace = true
 common.workspace = true
