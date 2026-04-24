@@ -15,6 +15,7 @@ members = [
   "nssa/core",
   "programs/amm/core",
   "programs/amm",
+  "programs/clock/core",
   "programs/token/core",
   "programs/token",
   "programs/associated_token_account/core",
@@ -56,6 +57,7 @@ indexer_service_protocol = { path = "indexer/service/protocol" }
 indexer_service_rpc = { path = "indexer/service/rpc" }
 wallet = { path = "wallet" }
 wallet-ffi = { path = "wallet-ffi", default-features = false }
+clock_core = { path = "programs/clock/core" }
 token_core = { path = "programs/token/core" }
 token_program = { path = "programs/token" }
 amm_core = { path = "programs/amm/core" }
@@ -118,11 +120,11 @@ tokio-retry = "0.3.0"
 schemars = "1.2"
 async-stream = "0.3.6"
 
-logos-blockchain-common-http-client = { git = "https://github.com/logos-blockchain/logos-blockchain.git" }
-logos-blockchain-key-management-system-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git" }
-logos-blockchain-core = { git = "https://github.com/logos-blockchain/logos-blockchain.git" }
-logos-blockchain-chain-broadcast-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git" }
-logos-blockchain-chain-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git" }
+logos-blockchain-common-http-client = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "1da154c74b911318fb853d37261f8a05ffe513b4" }
+logos-blockchain-key-management-system-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "1da154c74b911318fb853d37261f8a05ffe513b4" }
+logos-blockchain-core = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "1da154c74b911318fb853d37261f8a05ffe513b4" }
+logos-blockchain-chain-broadcast-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "1da154c74b911318fb853d37261f8a05ffe513b4" }
+logos-blockchain-chain-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "1da154c74b911318fb853d37261f8a05ffe513b4" }
 
 rocksdb = { version = "0.24.0", default-features = false, features = [
   "snappy",
@@ -149,6 +151,14 @@ inherits = "release"
 opt-level = 'z'
 lto = true
 codegen-units = 1
+
+# Keep backtraces but drop full DWARF type info to avoid LLD OOM/SIGBUS when
+# linking large integration-test binaries on resource-constrained CI runners.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.test]
+debug = "line-tables-only"
 
 [workspace.lints.rust]
 warnings = "deny"

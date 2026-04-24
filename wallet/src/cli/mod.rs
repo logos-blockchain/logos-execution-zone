@@ -1,6 +1,7 @@
-use std::{io::Write as _, path::PathBuf};
+use std::{io::Write as _, path::PathBuf, str::FromStr as _};
 
 use anyhow::{Context as _, Result};
+use bip39::Mnemonic;
 use clap::{Parser, Subcommand};
 use common::{HashType, transaction::NSSATransaction};
 use futures::TryFutureExt as _;
@@ -167,8 +168,9 @@ pub async fn execute_subcommand(
             config_subcommand.handle_subcommand(wallet_core).await?
         }
         Command::RestoreKeys { depth } => {
+            let mnemonic = read_mnemonic_from_stdin()?;
             let password = read_password_from_stdin()?;
-            wallet_core.reset_storage(password)?;
+            wallet_core.restore_storage(&mnemonic, &password)?;
             execute_keys_restoration(wallet_core, depth).await?;
 
             SubcommandReturnValue::Empty
@@ -210,6 +212,16 @@ pub fn read_password_from_stdin() -> Result<String> {
     std::io::stdin().read_line(&mut password)?;
 
     Ok(password.trim().to_owned())
+}
+
+pub fn read_mnemonic_from_stdin() -> Result<Mnemonic> {
+    let mut phrase = String::new();
+
+    print!("Input recovery phrase: ");
+    std::io::stdout().flush()?;
+    std::io::stdin().read_line(&mut phrase)?;
+
+    Mnemonic::from_str(phrase.trim()).context("Invalid mnemonic phrase")
 }
 
 pub async fn execute_keys_restoration(wallet_core: &mut WalletCore, depth: u32) -> Result<()> {

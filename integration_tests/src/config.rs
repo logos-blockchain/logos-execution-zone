@@ -121,7 +121,7 @@ impl InitialData {
         self.private_accounts
             .iter()
             .map(|(key_chain, account)| PrivateAccountPublicInitialData {
-                npk: key_chain.nullifier_public_key.clone(),
+                npk: key_chain.nullifier_public_key,
                 account: account.clone(),
             })
             .collect()
@@ -211,7 +211,7 @@ pub fn sequencer_config(
         max_block_size,
         mempool_max_size,
         block_create_timeout,
-        retry_pending_blocks_timeout: Duration::from_mins(2),
+        retry_pending_blocks_timeout: Duration::from_secs(5),
         initial_public_accounts: Some(initial_data.sequencer_initial_public_accounts()),
         initial_private_accounts: Some(initial_data.sequencer_initial_private_accounts()),
         signing_key: [37; 32],

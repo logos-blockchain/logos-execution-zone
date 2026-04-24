@@ -52,7 +52,7 @@ The derivation works as follows:
 
 ```
 seed = SHA256(owner_id || definition_id)
-ata_address = AccountId::from((ata_program_id, seed))
+ata_address = AccountId::for_public_pda(ata_program_id, seed)
 ```
 
 Because the computation is pure, anyone who knows the owner and definition can reproduce the exact same ATA address — no network call required.

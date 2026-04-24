@@ -150,7 +150,7 @@ mod tests {
         let retrieved_tx = node_store.get_transaction_by_hash(tx.hash());
         assert_eq!(None, retrieved_tx);
         // Add the block with the transaction
-        let dummy_state = V03State::new_with_genesis_accounts(&[], &[]);
+        let dummy_state = V03State::new_with_genesis_accounts(&[], vec![], 0);
         node_store.update(&block, [1; 32], &dummy_state).unwrap();
         // Try again
         let retrieved_tx = node_store.get_transaction_by_hash(tx.hash());
@@ -209,7 +209,7 @@ mod tests {
         let block_hash = block.header.hash;
         let block_msg_id = [1; 32];
 
-        let dummy_state = V03State::new_with_genesis_accounts(&[], &[]);
+        let dummy_state = V03State::new_with_genesis_accounts(&[], vec![], 0);
         node_store
             .update(&block, block_msg_id, &dummy_state)
             .unwrap();
@@ -244,7 +244,7 @@ mod tests {
         let block = common::test_utils::produce_dummy_block(1, None, vec![tx]);
         let block_id = block.header.block_id;
 
-        let dummy_state = V03State::new_with_genesis_accounts(&[], &[]);
+        let dummy_state = V03State::new_with_genesis_accounts(&[], vec![], 0);
         node_store.update(&block, [1; 32], &dummy_state).unwrap();
 
         // Verify initial status is Pending

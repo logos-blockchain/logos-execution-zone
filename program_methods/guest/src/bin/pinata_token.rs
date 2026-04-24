@@ -52,6 +52,8 @@ fn main() {
     // winner_token_holding]
     let (
         ProgramInput {
+            self_program_id,
+            caller_program_id,
             pre_states,
             instruction: solution,
         },
@@ -97,6 +99,8 @@ fn main() {
     .with_pda_seeds(vec![PdaSeed::new([0; 32])]);
 
     ProgramOutput::new(
+        self_program_id,
+        caller_program_id,
         instruction_words,
         vec![
             pinata_definition,

@@ -6,7 +6,7 @@ use risc0_zkvm::{DeserializeOwned, guest::env, serde::Deserializer};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    BlockId, Timestamp,
+    BlockId, NullifierPublicKey, Timestamp,
     account::{Account, AccountId, AccountWithMetadata},
 };
 
@@ -16,6 +16,8 @@ pub const MAX_NUMBER_CHAINED_CALLS: usize = 10;
 pub type ProgramId = [u32; 8];
 pub type InstructionData = Vec<u32>;
 pub struct ProgramInput<T> {
+    pub self_program_id: ProgramId,
+    pub caller_program_id: Option<ProgramId>,
     pub pre_states: Vec<AccountWithMetadata>,
     pub instruction: T,
 }
@@ -25,7 +27,7 @@ pub struct ProgramInput<T> {
 /// Each program can derive up to `2^256` unique account IDs by choosing different
 /// seeds. PDAs allow programs to control namespaced account identifiers without
 /// collisions between programs.
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct PdaSeed([u8; 32]);
 
 impl PdaSeed {
@@ -35,8 +37,10 @@ impl PdaSeed {
     }
 }
 
-impl From<(&ProgramId, &PdaSeed)> for AccountId {
-    fn from(value: (&ProgramId, &PdaSeed)) -> Self {
+impl AccountId {
+    /// Derives an [`AccountId`] for a public PDA from the program ID and seed.
+    #[must_use]
+    pub fn for_public_pda(program_id: &ProgramId, seed: &PdaSeed) -> Self {
         use risc0_zkvm::sha::{Impl, Sha256 as _};
         const PROGRAM_DERIVED_ACCOUNT_ID_PREFIX: &[u8; 32] =
             b"/NSSA/v0.2/AccountId/PDA/\x00\x00\x00\x00\x00\x00\x00";
@@ -44,9 +48,38 @@ impl From<(&ProgramId, &PdaSeed)> for AccountId {
         let mut bytes = [0; 96];
         bytes[0..32].copy_from_slice(PROGRAM_DERIVED_ACCOUNT_ID_PREFIX);
         let program_id_bytes: &[u8] =
-            bytemuck::try_cast_slice(value.0).expect("ProgramId should be castable to &[u8]");
+            bytemuck::try_cast_slice(program_id).expect("ProgramId should be castable to &[u8]");
         bytes[32..64].copy_from_slice(program_id_bytes);
-        bytes[64..].copy_from_slice(&value.1.0);
+        bytes[64..].copy_from_slice(&seed.0);
+        Self::new(
+            Impl::hash_bytes(&bytes)
+                .as_bytes()
+                .try_into()
+                .expect("Hash output must be exactly 32 bytes long"),
+        )
+    }
+
+    /// Derives an [`AccountId`] for a private PDA from the program ID, seed, and nullifier
+    /// public key.
+    ///
+    /// Unlike public PDAs ([`AccountId::for_public_pda`]), this includes the `npk` in the
+    /// derivation, making the address unique per group of controllers sharing viewing keys.
+    #[must_use]
+    pub fn for_private_pda(
+        program_id: &ProgramId,
+        seed: &PdaSeed,
+        npk: &NullifierPublicKey,
+    ) -> Self {
+        use risc0_zkvm::sha::{Impl, Sha256 as _};
+        const PRIVATE_PDA_PREFIX: &[u8; 32] = b"/LEE/v0.3/AccountId/PrivatePDA/\x00";
+
+        let mut bytes = [0_u8; 128];
+        bytes[0..32].copy_from_slice(PRIVATE_PDA_PREFIX);
+        let program_id_bytes: &[u8] =
+            bytemuck::try_cast_slice(program_id).expect("ProgramId should be castable to &[u8]");
+        bytes[32..64].copy_from_slice(program_id_bytes);
+        bytes[64..96].copy_from_slice(&seed.0);
+        bytes[96..128].copy_from_slice(&npk.to_byte_array());
         Self::new(
             Impl::hash_bytes(&bytes)
                 .as_bytes()
@@ -63,6 +96,9 @@ pub struct ChainedCall {
     pub pre_states: Vec<AccountWithMetadata>,
     /// The instruction data to pass.
     pub instruction_data: InstructionData,
+    /// PDA seeds authorized for the callee. For each seed, the callee is authorized to
+    /// mutate the `AccountId` derived from `(caller_program_id, seed)`, regardless of
+    /// whether the account is public or private.
     pub pda_seeds: Vec<PdaSeed>,
 }
 
@@ -112,7 +148,9 @@ pub enum Claim {
     /// This will give no error if program had authorization in pre state and may be useful
     /// if program decides to give up authorization for a chained call.
     Authorized,
-    /// The program requests ownership of the account through a PDA.
+    /// The program requests ownership of the account through a PDA. The program emits the
+    /// seed; the `AccountId` is derived from `(program_id, seed)`, regardless of whether the
+    /// account is public or private.
     Pda(PdaSeed),
 }
 
@@ -281,6 +319,11 @@ pub struct InvalidWindow;
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
 #[must_use = "ProgramOutput does nothing unless written"]
 pub struct ProgramOutput {
+    /// The program ID of the program that produced this output.
+    pub self_program_id: ProgramId,
+    /// The program ID of the caller that invoked this program via a chained call,
+    /// or `None` if this is a top-level call.
+    pub caller_program_id: Option<ProgramId>,
     /// The instruction data the program received to produce this output.
     pub instruction_data: InstructionData,
     /// The account pre states the program received to produce this output.
@@ -297,11 +340,15 @@ pub struct ProgramOutput {
 
 impl ProgramOutput {
     pub const fn new(
+        self_program_id: ProgramId,
+        caller_program_id: Option<ProgramId>,
         instruction_data: InstructionData,
         pre_states: Vec<AccountWithMetadata>,
         post_states: Vec<AccountPostState>,
     ) -> Self {
         Self {
+            self_program_id,
+            caller_program_id,
             instruction_data,
             pre_states,
             post_states,
@@ -371,8 +418,8 @@ impl ProgramOutput {
 }
 
 /// Representation of a number as `lo + hi * 2^128`.
-#[derive(PartialEq, Eq)]
-struct WrappedBalanceSum {
+#[derive(Debug, PartialEq, Eq)]
+pub struct WrappedBalanceSum {
     lo: u128,
     hi: u128,
 }
@@ -382,7 +429,7 @@ impl WrappedBalanceSum {
     ///
     /// Returns [`None`] if balance sum overflows `lo + hi * 2^128` representation, which is not
     /// expected in practical scenarios.
-    fn from_balances(balances: impl Iterator<Item = u128>) -> Option<Self> {
+    pub fn from_balances(balances: impl Iterator<Item = u128>) -> Option<Self> {
         let mut wrapped = Self { lo: 0, hi: 0 };
 
         for balance in balances {
@@ -397,29 +444,107 @@ impl WrappedBalanceSum {
     }
 }
 
+impl std::fmt::Display for WrappedBalanceSum {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.hi == 0 {
+            write!(f, "{}", self.lo)
+        } else {
+            write!(f, "{} * 2^128 + {}", self.hi, self.lo)
+        }
+    }
+}
+
+impl From<u128> for WrappedBalanceSum {
+    fn from(value: u128) -> Self {
+        Self { lo: value, hi: 0 }
+    }
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum ExecutionValidationError {
+    #[error("Pre-state account IDs are not unique")]
+    PreStateAccountIdsNotUnique,
+
+    #[error(
+        "Pre-state and post-state lengths do not match: pre-state length {pre_state_length}, post-state length {post_state_length}"
+    )]
+    MismatchedPreStatePostStateLength {
+        pre_state_length: usize,
+        post_state_length: usize,
+    },
+
+    #[error("Unallowed modification of nonce for account {account_id}")]
+    ModifiedNonce { account_id: AccountId },
+
+    #[error("Unallowed modification of program owner for account {account_id}")]
+    ModifiedProgramOwner { account_id: AccountId },
+
+    #[error(
+        "Trying to decrease balance of account {account_id} owned by {owner_program_id:?} in a program {executing_program_id:?} which is not the owner"
+    )]
+    UnauthorizedBalanceDecrease {
+        account_id: AccountId,
+        owner_program_id: ProgramId,
+        executing_program_id: ProgramId,
+    },
+
+    #[error(
+        "Unauthorized modification of data for account {account_id} which is not default and not owned by executing program {executing_program_id:?}"
+    )]
+    UnauthorizedDataModification {
+        account_id: AccountId,
+        executing_program_id: ProgramId,
+    },
+
+    #[error(
+        "Post-state for account {account_id} has default program owner but pre-state was not default"
+    )]
+    NonDefaultAccountWithDefaultOwner { account_id: AccountId },
+
+    #[error("Total balance across accounts overflowed 2^256 - 1")]
+    BalanceSumOverflow,
+
+    #[error(
+        "Total balance across accounts is not preserved: total balance in pre-states {total_balance_pre_states}, total balance in post-states {total_balance_post_states}"
+    )]
+    MismatchedTotalBalance {
+        total_balance_pre_states: WrappedBalanceSum,
+        total_balance_post_states: WrappedBalanceSum,
+    },
+}
+
+/// Computes the set of public-PDA `AccountId`s the callee is authorized to mutate.
+///
+/// Returns only public-form derivations, suitable for contexts where all accounts are public
+/// (e.g. the public-execution path). The privacy circuit must additionally check each mask-3
+/// `pre_state` against [`AccountId::for_private_pda`] with the supplied npk for that
+/// `pre_state`.
 #[must_use]
-pub fn compute_authorized_pdas(
+pub fn compute_public_authorized_pdas(
     caller_program_id: Option<ProgramId>,
     pda_seeds: &[PdaSeed],
 ) -> HashSet<AccountId> {
-    caller_program_id
-        .map(|caller_program_id| {
-            pda_seeds
-                .iter()
-                .map(|pda_seed| AccountId::from((&caller_program_id, pda_seed)))
-                .collect()
-        })
-        .unwrap_or_default()
+    let Some(caller) = caller_program_id else {
+        return HashSet::new();
+    };
+    pda_seeds
+        .iter()
+        .map(|seed| AccountId::for_public_pda(&caller, seed))
+        .collect()
 }
 
 /// Reads the NSSA inputs from the guest environment.
 #[must_use]
 pub fn read_nssa_inputs<T: DeserializeOwned>() -> (ProgramInput<T>, InstructionData) {
+    let self_program_id: ProgramId = env::read();
+    let caller_program_id: Option<ProgramId> = env::read();
     let pre_states: Vec<AccountWithMetadata> = env::read();
     let instruction_words: InstructionData = env::read();
     let instruction = T::deserialize(&mut Deserializer::new(instruction_words.as_ref())).unwrap();
     (
         ProgramInput {
+            self_program_id,
+            caller_program_id,
             pre_states,
             instruction,
         },
@@ -433,31 +558,39 @@ pub fn read_nssa_inputs<T: DeserializeOwned>() -> (ProgramInput<T>, InstructionD
 /// - `pre_states`: The list of input accounts, each annotated with authorization metadata.
 /// - `post_states`: The list of resulting accounts after executing the program logic.
 /// - `executing_program_id`: The identifier of the program that was executed.
-#[must_use]
 pub fn validate_execution(
     pre_states: &[AccountWithMetadata],
     post_states: &[AccountPostState],
     executing_program_id: ProgramId,
-) -> bool {
+) -> Result<(), ExecutionValidationError> {
     // 1. Check account ids are all different
     if !validate_uniqueness_of_account_ids(pre_states) {
-        return false;
+        return Err(ExecutionValidationError::PreStateAccountIdsNotUnique);
     }
 
     // 2. Lengths must match
     if pre_states.len() != post_states.len() {
-        return false;
+        return Err(
+            ExecutionValidationError::MismatchedPreStatePostStateLength {
+                pre_state_length: pre_states.len(),
+                post_state_length: post_states.len(),
+            },
+        );
     }
 
     for (pre, post) in pre_states.iter().zip(post_states) {
         // 3. Nonce must remain unchanged
         if pre.account.nonce != post.account.nonce {
-            return false;
+            return Err(ExecutionValidationError::ModifiedNonce {
+                account_id: pre.account_id,
+            });
         }
 
         // 4. Program ownership changes are not allowed
         if pre.account.program_owner != post.account.program_owner {
-            return false;
+            return Err(ExecutionValidationError::ModifiedProgramOwner {
+                account_id: pre.account_id,
+            });
         }
 
         let account_program_owner = pre.account.program_owner;
@@ -466,7 +599,11 @@ pub fn validate_execution(
         if post.account.balance < pre.account.balance
             && account_program_owner != executing_program_id
         {
-            return false;
+            return Err(ExecutionValidationError::UnauthorizedBalanceDecrease {
+                account_id: pre.account_id,
+                owner_program_id: account_program_owner,
+                executing_program_id,
+            });
         }
 
         // 6. Data changes only allowed if owned by executing program or if account pre state has
@@ -475,13 +612,20 @@ pub fn validate_execution(
             && pre.account != Account::default()
             && account_program_owner != executing_program_id
         {
-            return false;
+            return Err(ExecutionValidationError::UnauthorizedDataModification {
+                account_id: pre.account_id,
+                executing_program_id,
+            });
         }
 
         // 7. If a post state has default program owner, the pre state must have been a default
         //    account
         if post.account.program_owner == DEFAULT_PROGRAM_ID && pre.account != Account::default() {
-            return false;
+            return Err(
+                ExecutionValidationError::NonDefaultAccountWithDefaultOwner {
+                    account_id: pre.account_id,
+                },
+            );
         }
     }
 
@@ -490,20 +634,23 @@ pub fn validate_execution(
     let Some(total_balance_pre_states) =
         WrappedBalanceSum::from_balances(pre_states.iter().map(|pre| pre.account.balance))
     else {
-        return false;
+        return Err(ExecutionValidationError::BalanceSumOverflow);
     };
 
     let Some(total_balance_post_states) =
         WrappedBalanceSum::from_balances(post_states.iter().map(|post| post.account.balance))
     else {
-        return false;
+        return Err(ExecutionValidationError::BalanceSumOverflow);
     };
 
     if total_balance_pre_states != total_balance_post_states {
-        return false;
+        return Err(ExecutionValidationError::MismatchedTotalBalance {
+            total_balance_pre_states,
+            total_balance_post_states,
+        });
     }
 
-    true
+    Ok(())
 }
 
 fn validate_uniqueness_of_account_ids(pre_states: &[AccountWithMetadata]) -> bool {
@@ -620,7 +767,7 @@ mod tests {
 
     #[test]
     fn program_output_try_with_block_validity_window_range() {
-        let output = ProgramOutput::new(vec![], vec![], vec![])
+        let output = ProgramOutput::new(DEFAULT_PROGRAM_ID, None, vec![], vec![], vec![])
             .try_with_block_validity_window(10_u64..100)
             .unwrap();
         assert_eq!(output.block_validity_window.start(), Some(10));
@@ -629,24 +776,24 @@ mod tests {
 
     #[test]
     fn program_output_with_block_validity_window_range_from() {
-        let output =
-            ProgramOutput::new(vec![], vec![], vec![]).with_block_validity_window(10_u64..);
+        let output = ProgramOutput::new(DEFAULT_PROGRAM_ID, None, vec![], vec![], vec![])
+            .with_block_validity_window(10_u64..);
         assert_eq!(output.block_validity_window.start(), Some(10));
         assert_eq!(output.block_validity_window.end(), None);
     }
 
     #[test]
     fn program_output_with_block_validity_window_range_to() {
-        let output =
-            ProgramOutput::new(vec![], vec![], vec![]).with_block_validity_window(..100_u64);
+        let output = ProgramOutput::new(DEFAULT_PROGRAM_ID, None, vec![], vec![], vec![])
+            .with_block_validity_window(..100_u64);
         assert_eq!(output.block_validity_window.start(), None);
         assert_eq!(output.block_validity_window.end(), Some(100));
     }
 
     #[test]
     fn program_output_try_with_block_validity_window_empty_range_fails() {
-        let result =
-            ProgramOutput::new(vec![], vec![], vec![]).try_with_block_validity_window(5_u64..5);
+        let result = ProgramOutput::new(DEFAULT_PROGRAM_ID, None, vec![], vec![], vec![])
+            .try_with_block_validity_window(5_u64..5);
         assert!(result.is_err());
     }
 
@@ -693,5 +840,109 @@ mod tests {
 
         assert_eq!(account_post_state.account(), &account);
         assert_eq!(account_post_state.account_mut(), &mut account);
+    }
+
+    // ---- AccountId::for_private_pda tests ----
+
+    /// Pins `AccountId::for_private_pda` against a hardcoded expected output for a specific
+    /// `(program_id, seed, npk)` triple. Any change to `PRIVATE_PDA_PREFIX`, byte ordering,
+    /// or the underlying hash breaks this test.
+    #[test]
+    fn for_private_pda_matches_pinned_value() {
+        let program_id: ProgramId = [1; 8];
+        let seed = PdaSeed::new([2; 32]);
+        let npk = NullifierPublicKey([3; 32]);
+        let expected = AccountId::new([
+            132, 198, 103, 173, 244, 211, 188, 217, 249, 99, 126, 205, 152, 120, 192, 47, 13, 53,
+            133, 3, 17, 69, 92, 243, 140, 94, 182, 211, 218, 75, 215, 45,
+        ]);
+        assert_eq!(
+            AccountId::for_private_pda(&program_id, &seed, &npk),
+            expected
+        );
+    }
+
+    /// Two groups with different viewing keys at the same (program, seed) get different addresses.
+    #[test]
+    fn for_private_pda_differs_for_different_npk() {
+        let program_id: ProgramId = [1; 8];
+        let seed = PdaSeed::new([2; 32]);
+        let npk_a = NullifierPublicKey([3; 32]);
+        let npk_b = NullifierPublicKey([4; 32]);
+        assert_ne!(
+            AccountId::for_private_pda(&program_id, &seed, &npk_a),
+            AccountId::for_private_pda(&program_id, &seed, &npk_b),
+        );
+    }
+
+    /// Different seeds produce different addresses, even with the same program and npk.
+    #[test]
+    fn for_private_pda_differs_for_different_seed() {
+        let program_id: ProgramId = [1; 8];
+        let seed_a = PdaSeed::new([2; 32]);
+        let seed_b = PdaSeed::new([5; 32]);
+        let npk = NullifierPublicKey([3; 32]);
+        assert_ne!(
+            AccountId::for_private_pda(&program_id, &seed_a, &npk),
+            AccountId::for_private_pda(&program_id, &seed_b, &npk),
+        );
+    }
+
+    /// Different programs produce different addresses, even with the same seed and npk.
+    #[test]
+    fn for_private_pda_differs_for_different_program_id() {
+        let program_id_a: ProgramId = [1; 8];
+        let program_id_b: ProgramId = [9; 8];
+        let seed = PdaSeed::new([2; 32]);
+        let npk = NullifierPublicKey([3; 32]);
+        assert_ne!(
+            AccountId::for_private_pda(&program_id_a, &seed, &npk),
+            AccountId::for_private_pda(&program_id_b, &seed, &npk),
+        );
+    }
+
+    /// A private PDA at the same (program, seed) has a different address than a public PDA,
+    /// because the private formula uses a different prefix and includes npk.
+    #[test]
+    fn for_private_pda_differs_from_public_pda() {
+        let program_id: ProgramId = [1; 8];
+        let seed = PdaSeed::new([2; 32]);
+        let npk = NullifierPublicKey([3; 32]);
+        let private_id = AccountId::for_private_pda(&program_id, &seed, &npk);
+        let public_id = AccountId::for_public_pda(&program_id, &seed);
+        assert_ne!(private_id, public_id);
+    }
+
+    /// A private PDA address differs from a standard private account address at the same `npk`,
+    /// because the private PDA formula includes `program_id` and `seed`.
+    #[test]
+    fn for_private_pda_differs_from_standard_private() {
+        let program_id: ProgramId = [1; 8];
+        let seed = PdaSeed::new([2; 32]);
+        let npk = NullifierPublicKey([3; 32]);
+        let private_pda_id = AccountId::for_private_pda(&program_id, &seed, &npk);
+        let standard_private_id = AccountId::from(&npk);
+        assert_ne!(private_pda_id, standard_private_id);
+    }
+
+    // ---- compute_public_authorized_pdas tests ----
+
+    /// `compute_public_authorized_pdas` returns the public PDA addresses for the caller's seeds.
+    #[test]
+    fn compute_public_authorized_pdas_with_seeds() {
+        let caller: ProgramId = [1; 8];
+        let seed = PdaSeed::new([2; 32]);
+        let result = compute_public_authorized_pdas(Some(caller), &[seed]);
+        let expected = AccountId::for_public_pda(&caller, &seed);
+        assert!(result.contains(&expected));
+        assert_eq!(result.len(), 1);
+    }
+
+    /// With no caller (top-level call), the result is always empty.
+    #[test]
+    fn compute_public_authorized_pdas_no_caller_returns_empty() {
+        let seed = PdaSeed::new([2; 32]);
+        let result = compute_public_authorized_pdas(None, &[seed]);
+        assert!(result.is_empty());
     }
 }

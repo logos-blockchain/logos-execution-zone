@@ -17,6 +17,7 @@ token_core.workspace = true
 amm_core.workspace = true
 testnet_initial_state.workspace = true
 ata_core.workspace = true
+bip39.workspace = true
 
 anyhow.workspace = true
 thiserror.workspace = true

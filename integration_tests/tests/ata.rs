@@ -68,8 +68,10 @@ async fn create_ata_initializes_holding_account() -> Result<()> {
     wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
         Command::Token(TokenProgramAgnosticSubcommand::New {
-            definition_account_id: format_public_account_id(definition_account_id),
-            supply_account_id: format_public_account_id(supply_account_id),
+            definition_account_id: Some(format_public_account_id(definition_account_id)),
+            definition_account_label: None,
+            supply_account_id: Some(format_public_account_id(supply_account_id)),
+            supply_account_label: None,
             name: "TEST".to_owned(),
             total_supply,
         }),
@@ -130,8 +132,10 @@ async fn create_ata_is_idempotent() -> Result<()> {
     wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
         Command::Token(TokenProgramAgnosticSubcommand::New {
-            definition_account_id: format_public_account_id(definition_account_id),
-            supply_account_id: format_public_account_id(supply_account_id),
+            definition_account_id: Some(format_public_account_id(definition_account_id)),
+            definition_account_label: None,
+            supply_account_id: Some(format_public_account_id(supply_account_id)),
+            supply_account_label: None,
             name: "TEST".to_owned(),
             total_supply: 100,
         }),
@@ -208,8 +212,10 @@ async fn transfer_and_burn_via_ata() -> Result<()> {
     wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
         Command::Token(TokenProgramAgnosticSubcommand::New {
-            definition_account_id: format_public_account_id(definition_account_id),
-            supply_account_id: format_public_account_id(supply_account_id),
+            definition_account_id: Some(format_public_account_id(definition_account_id)),
+            definition_account_label: None,
+            supply_account_id: Some(format_public_account_id(supply_account_id)),
+            supply_account_label: None,
             name: "TEST".to_owned(),
             total_supply,
         }),
@@ -256,8 +262,10 @@ async fn transfer_and_burn_via_ata() -> Result<()> {
     wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
         Command::Token(TokenProgramAgnosticSubcommand::Send {
-            from: format_public_account_id(supply_account_id),
+            from: Some(format_public_account_id(supply_account_id)),
+            from_label: None,
             to: Some(format_public_account_id(sender_ata_id)),
+            to_label: None,
             to_npk: None,
             to_vpk: None,
             amount: fund_amount,
@@ -362,8 +370,10 @@ async fn create_ata_with_private_owner() -> Result<()> {
     wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
         Command::Token(TokenProgramAgnosticSubcommand::New {
-            definition_account_id: format_public_account_id(definition_account_id),
-            supply_account_id: format_public_account_id(supply_account_id),
+            definition_account_id: Some(format_public_account_id(definition_account_id)),
+            definition_account_label: None,
+            supply_account_id: Some(format_public_account_id(supply_account_id)),
+            supply_account_label: None,
             name: "TEST".to_owned(),
             total_supply: 100,
         }),
@@ -434,8 +444,10 @@ async fn transfer_via_ata_private_owner() -> Result<()> {
     wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
         Command::Token(TokenProgramAgnosticSubcommand::New {
-            definition_account_id: format_public_account_id(definition_account_id),
-            supply_account_id: format_public_account_id(supply_account_id),
+            definition_account_id: Some(format_public_account_id(definition_account_id)),
+            definition_account_label: None,
+            supply_account_id: Some(format_public_account_id(supply_account_id)),
+            supply_account_label: None,
             name: "TEST".to_owned(),
             total_supply,
         }),
@@ -482,8 +494,10 @@ async fn transfer_via_ata_private_owner() -> Result<()> {
     wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
         Command::Token(TokenProgramAgnosticSubcommand::Send {
-            from: format_public_account_id(supply_account_id),
+            from: Some(format_public_account_id(supply_account_id)),
+            from_label: None,
             to: Some(format_public_account_id(sender_ata_id)),
+            to_label: None,
             to_npk: None,
             to_vpk: None,
             amount: fund_amount,
@@ -556,8 +570,10 @@ async fn burn_via_ata_private_owner() -> Result<()> {
     wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
         Command::Token(TokenProgramAgnosticSubcommand::New {
-            definition_account_id: format_public_account_id(definition_account_id),
-            supply_account_id: format_public_account_id(supply_account_id),
+            definition_account_id: Some(format_public_account_id(definition_account_id)),
+            definition_account_label: None,
+            supply_account_id: Some(format_public_account_id(supply_account_id)),
+            supply_account_label: None,
             name: "TEST".to_owned(),
             total_supply,
         }),
@@ -592,8 +608,10 @@ async fn burn_via_ata_private_owner() -> Result<()> {
     wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
         Command::Token(TokenProgramAgnosticSubcommand::Send {
-            from: format_public_account_id(supply_account_id),
+            from: Some(format_public_account_id(supply_account_id)),
+            from_label: None,
             to: Some(format_public_account_id(holder_ata_id)),
+            to_label: None,
             to_npk: None,
             to_vpk: None,
             amount: fund_amount,

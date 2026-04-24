@@ -138,7 +138,7 @@ pub struct Account {
 }
 
 pub type BlockId = u64;
-pub type TimeStamp = u64;
+pub type Timestamp = u64;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct Block {
@@ -153,7 +153,7 @@ pub struct BlockHeader {
     pub block_id: BlockId,
     pub prev_block_hash: HashType,
     pub hash: HashType,
-    pub timestamp: TimeStamp,
+    pub timestamp: Timestamp,
     pub signature: Signature,
 }
 

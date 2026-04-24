@@ -57,11 +57,9 @@ impl IndexerCore {
         let channel_genesis_msg_id = [0; 32];
         let genesis_block = hashable_data.into_pending_block(&signing_key, channel_genesis_msg_id);
 
-        let initial_commitments: Option<Vec<nssa_core::Commitment>> = config
-            .initial_private_accounts
-            .as_ref()
-            .map(|initial_commitments| {
-                initial_commitments
+        let initial_private_accounts: Option<Vec<(nssa_core::Commitment, nssa_core::Nullifier)>> =
+            config.initial_private_accounts.as_ref().map(|accounts| {
+                accounts
                     .iter()
                     .map(|init_comm_data| {
                         let npk = &init_comm_data.npk;
@@ -71,7 +69,10 @@ impl IndexerCore {
                         acc.program_owner =
                             nssa::program::Program::authenticated_transfer_program().id();
 
-                        nssa_core::Commitment::new(npk, &acc)
+                        (
+                            nssa_core::Commitment::new(npk, &acc),
+                            nssa_core::Nullifier::for_account_initialization(npk),
+                        )
                     })
                     .collect()
             });
@@ -88,10 +89,11 @@ impl IndexerCore {
 
         // If initial commitments or accounts are present in config, need to construct state from
         // them
-        let state = if initial_commitments.is_some() || init_accs.is_some() {
+        let state = if initial_private_accounts.is_some() || init_accs.is_some() {
             let mut state = V03State::new_with_genesis_accounts(
                 &init_accs.unwrap_or_default(),
-                &initial_commitments.unwrap_or_default(),
+                initial_private_accounts.unwrap_or_default(),
+                genesis_block.header.timestamp,
             );
 
             // ToDo: Remove after testnet
@@ -142,7 +144,22 @@ impl IndexerCore {
                     info!("Parsed {} L2 blocks with ids {:?}", l2_block_vec.len(), l2_blocks_parsed_ids);
 
                         for l2_block in l2_block_vec {
-                            self.store.put_block(l2_block.clone(), l1_header).await?;
+                            // TODO: proper fix is to make the sequencer's genesis include a
+                            // trailing `clock_invocation(0)` (and have the indexer's
+                            // `open_db_with_genesis` not pre-apply state transitions) so the
+                            // inscribed genesis can flow through `put_block` like any other
+                            // block. For now we skip re-applying it.
+                            //
+                            // The channel-start (block_id == 1) is the sequencer's genesis
+                            // inscription that we re-discover during initial search. The
+                            // indexer already has its own locally-constructed genesis in
+                            // the store from `open_db_with_genesis`, so re-applying the
+                            // inscribed copy is both redundant and would fail the strict
+                            // block validation in `put_block` (the inscribed genesis lacks
+                            // the trailing clock invocation).
+                            if l2_block.header.block_id != 1 {
+                                self.store.put_block(l2_block.clone(), l1_header).await?;
+                            }
 
                         yield Ok(l2_block);
                     }
