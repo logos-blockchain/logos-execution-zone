@@ -17,7 +17,7 @@ pub type PublicKey = AffinePoint;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UserPrivateAccountData {
     pub key_chain: KeyChain,
-    pub accounts: Vec<(Identifier, Account)>
+    pub accounts: Vec<(Identifier, Account)>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -54,7 +54,8 @@ impl NSSAUserData {
         let mut check_res = true;
         for (account_id, entry) in accounts_keys_map {
             let any_match = entry.accounts.iter().any(|(identifier, _)| {
-                nssa::AccountId::from((&entry.key_chain.nullifier_public_key, *identifier)) == *account_id
+                nssa::AccountId::from((&entry.key_chain.nullifier_public_key, *identifier))
+                    == *account_id
             });
             if !any_match {
                 println!("No matching entry found for account_id {account_id}");

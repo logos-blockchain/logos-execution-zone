@@ -115,12 +115,9 @@ impl KeyTreeNode for ChildKeysPrivate {
     }
 
     fn account_ids(&self) -> impl Iterator<Item = nssa::AccountId> {
-        self.value
-            .1
-            .iter()
-            .map(|(identifier, _)| {
-                nssa::AccountId::from((&self.value.0.nullifier_public_key, *identifier))
-            })
+        self.value.1.iter().map(|(identifier, _)| {
+            nssa::AccountId::from((&self.value.0.nullifier_public_key, *identifier))
+        })
     }
 }
 

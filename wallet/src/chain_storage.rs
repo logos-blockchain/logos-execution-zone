@@ -79,7 +79,11 @@ impl WalletChainStore {
                     InitialAccountData::Private(data) => {
                         private_init_acc_map.insert(
                             data.account_id,
-                            UserPrivateAccountData{ key_chain: data.key_chain, accounts: vec![(data.identifier, data.account)]});
+                            UserPrivateAccountData {
+                                key_chain: data.key_chain,
+                                accounts: vec![(data.identifier, data.account)],
+                            },
+                        );
                     }
                 },
             }
@@ -120,7 +124,11 @@ impl WalletChainStore {
                     account.program_owner = Program::authenticated_transfer_program().id();
                     private_init_acc_map.insert(
                         data.account_id,
-                        UserPrivateAccountData{key_chain: data.key_chain, accounts:vec![(data.identifier, account)]});
+                        UserPrivateAccountData {
+                            key_chain: data.key_chain,
+                            accounts: vec![(data.identifier, account)],
+                        },
+                    );
                 }
             }
         }
@@ -185,10 +193,12 @@ impl WalletChainStore {
             .entry(account_id)
         {
             let entry = entry.get_mut();
-            let identifier = entry.accounts
+            let identifier = entry
+                .accounts
                 .iter()
                 .find_map(|(id, _)| {
-                    (nssa::AccountId::from((&entry.key_chain.nullifier_public_key, *id)) == account_id)
+                    (nssa::AccountId::from((&entry.key_chain.nullifier_public_key, *id))
+                        == account_id)
                         .then_some(*id)
                 })
                 .unwrap_or(0);
