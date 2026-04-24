@@ -134,7 +134,7 @@ async fn create_and_transfer_public_token() -> Result<()> {
         to_label: None,
         to_npk: None,
         to_vpk: None,
-        to_identifier: 0,
+        to_identifier: Some(0),
         amount: transfer_amount,
     };
 
@@ -374,7 +374,7 @@ async fn create_and_transfer_token_with_private_supply() -> Result<()> {
         to_label: None,
         to_npk: None,
         to_vpk: None,
-        to_identifier: 0,
+        to_identifier: Some(0),
         amount: transfer_amount,
     };
 
@@ -761,7 +761,7 @@ async fn create_token_with_private_definition_and_supply() -> Result<()> {
         to_label: None,
         to_npk: None,
         to_vpk: None,
-        to_identifier: 0,
+        to_identifier: Some(0),
         amount: transfer_amount,
     };
 
@@ -893,7 +893,7 @@ async fn shielded_token_transfer() -> Result<()> {
         to_label: None,
         to_npk: None,
         to_vpk: None,
-        to_identifier: 0,
+        to_identifier: Some(0),
         amount: transfer_amount,
     };
 
@@ -1020,7 +1020,7 @@ async fn deshielded_token_transfer() -> Result<()> {
         to_label: None,
         to_npk: None,
         to_vpk: None,
-        to_identifier: 0,
+        to_identifier: Some(0),
         amount: transfer_amount,
     };
 
@@ -1359,7 +1359,7 @@ async fn transfer_token_using_from_label() -> Result<()> {
         to_label: None,
         to_npk: None,
         to_vpk: None,
-        to_identifier: 0,
+        to_identifier: Some(0),
         amount: transfer_amount,
     };
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;

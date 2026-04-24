@@ -75,8 +75,8 @@ pub enum TokenProgramAgnosticSubcommand {
         to_vpk: Option<String>,
         /// Identifier for the recipient's private account (only used when sending to a foreign
         /// private account via `--to-npk`/`--to-vpk`).
-        #[arg(long, default_value_t = 0)]
-        to_identifier: u128,
+        #[arg(long)]
+        to_identifier: Option<u128>,
         /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
@@ -256,6 +256,7 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                         anyhow::bail!("Provide only one of --to or --to-label")
                     }
                 };
+                let to_identifier = to_identifier.unwrap_or(rand::random());
                 let underlying_subcommand = match (to, to_npk, to_vpk) {
                     (None, None, None) => {
                         anyhow::bail!(

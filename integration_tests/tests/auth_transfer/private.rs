@@ -30,7 +30,7 @@ async fn private_transfer_to_owned_account() -> Result<()> {
         to_label: None,
         to_npk: None,
         to_vpk: None,
-        to_identifier: 0,
+        to_identifier: Some(0),
         amount: 100,
     });
 
@@ -72,7 +72,7 @@ async fn private_transfer_to_foreign_account() -> Result<()> {
         to_label: None,
         to_npk: Some(to_npk_string),
         to_vpk: Some(hex::encode(to_vpk.0)),
-        to_identifier: 0,
+        to_identifier: Some(0),
         amount: 100,
     });
 
@@ -123,7 +123,7 @@ async fn deshielded_transfer_to_public_account() -> Result<()> {
         to_label: None,
         to_npk: None,
         to_vpk: None,
-        to_identifier: 0,
+        to_identifier: Some(0),
         amount: 100,
     });
 
@@ -188,7 +188,7 @@ async fn private_transfer_to_owned_account_using_claiming_path() -> Result<()> {
         to_label: None,
         to_npk: Some(hex::encode(to_keys.nullifier_public_key.0)),
         to_vpk: Some(hex::encode(to_keys.viewing_public_key.0)),
-        to_identifier,
+        to_identifier: Some(to_identifier),
         amount: 100,
     });
 
@@ -239,7 +239,7 @@ async fn shielded_transfer_to_owned_private_account() -> Result<()> {
         to_label: None,
         to_npk: None,
         to_vpk: None,
-        to_identifier: 0,
+        to_identifier: Some(0),
         amount: 100,
     });
 
@@ -284,7 +284,7 @@ async fn shielded_transfer_to_foreign_account() -> Result<()> {
         to_label: None,
         to_npk: Some(to_npk_string),
         to_vpk: Some(hex::encode(to_vpk.0)),
-        to_identifier: 0,
+        to_identifier: Some(0),
         amount: 100,
     });
 
@@ -356,7 +356,7 @@ async fn private_transfer_to_owned_account_continuous_run_path() -> Result<()> {
         to_label: None,
         to_npk: Some(hex::encode(to_keys.nullifier_public_key.0)),
         to_vpk: Some(hex::encode(to_keys.viewing_public_key.0)),
-        to_identifier,
+        to_identifier: Some(to_identifier),
         amount: 100,
     });
 
@@ -460,7 +460,7 @@ async fn private_transfer_using_from_label() -> Result<()> {
         to_label: None,
         to_npk: None,
         to_vpk: None,
-        to_identifier: 0,
+        to_identifier: Some(0),
         amount: 100,
     });
 

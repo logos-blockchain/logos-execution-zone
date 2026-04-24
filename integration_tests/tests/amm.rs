@@ -133,7 +133,7 @@ async fn amm_public() -> Result<()> {
         to_label: None,
         to_npk: None,
         to_vpk: None,
-        to_identifier: 0,
+        to_identifier: Some(0),
         amount: 7,
     };
 
@@ -163,7 +163,7 @@ async fn amm_public() -> Result<()> {
         to_label: None,
         to_npk: None,
         to_vpk: None,
-        to_identifier: 0,
+        to_identifier: Some(0),
         amount: 7,
     };
 
@@ -552,7 +552,7 @@ async fn amm_new_pool_using_labels() -> Result<()> {
         to_label: None,
         to_npk: None,
         to_vpk: None,
-        to_identifier: 0,
+        to_identifier: Some(0),
         amount: 5,
     };
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
@@ -577,7 +577,7 @@ async fn amm_new_pool_using_labels() -> Result<()> {
         to_label: None,
         to_npk: None,
         to_vpk: None,
-        to_identifier: 0,
+        to_identifier: Some(0),
         amount: 5,
     };
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
