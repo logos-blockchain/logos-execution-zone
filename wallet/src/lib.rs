@@ -508,7 +508,7 @@ impl WalletCore {
             .user_data
             .default_user_private_accounts
             .values()
-            .map(|(key_chain, _)| (key_chain, None))
+            .map(|entry| (&entry.key_chain, None))
             .chain(
                 self.storage
                     .user_data

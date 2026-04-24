@@ -208,7 +208,7 @@ impl KeyTree<ChildKeysPublic> {
     ) -> Option<(nssa::AccountId, ChainIndex)> {
         let cci = self.generate_new_node(parent_cci)?;
         let node = self.key_map.get(&cci)?;
-        let account_id = *node.account_ids().first()?;
+        let account_id = node.account_ids().next()?;
         Some((account_id, cci))
     }
 
@@ -217,7 +217,7 @@ impl KeyTree<ChildKeysPublic> {
     pub fn generate_new_public_node_layered(&mut self) -> Option<(nssa::AccountId, ChainIndex)> {
         let cci = self.generate_new_node_layered()?;
         let node = self.key_map.get(&cci)?;
-        let account_id = *node.account_ids().first()?;
+        let account_id = node.account_ids().next()?;
         Some((account_id, cci))
     }
 
@@ -298,9 +298,9 @@ impl KeyTree<ChildKeysPrivate> {
         'outer: for i in (1..depth).rev() {
             println!("Cleanup of tree at depth {i}");
             for id in ChainIndex::chain_ids_at_depth(i) {
-                if let Some(node) = self.key_map.get(&id) {
+                if let Some(node) = self.key_map.get(&id).cloned() {
                     if node.value.1.is_empty() {
-                        let account_ids: Vec<_> = node.account_ids();
+                        let account_ids = node.account_ids();
                         self.key_map.remove(&id);
                         for addr in account_ids {
                             self.account_id_map.remove(&addr);

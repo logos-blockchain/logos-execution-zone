@@ -115,8 +115,8 @@ impl KeyTreeNode for ChildKeysPublic {
         self.nth_child(cci)
     }
 
-    fn account_ids(&self) -> Vec<nssa::AccountId> {
-        vec![self.account_id()]
+    fn account_ids(&self) -> impl Iterator<Item = nssa::AccountId> {
+        std::iter::once(self.account_id())
     }
 }
 

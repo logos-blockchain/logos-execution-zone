@@ -212,13 +212,13 @@ pub fn produce_data_for_storage(
         );
     }
 
-    for (account_id, (key_chain, entries)) in &user_data.default_user_private_accounts {
-        for (identifier, account) in entries {
+    for (account_id, entry) in &user_data.default_user_private_accounts {
+        for (identifier, account) in &entry.accounts {
             vec_for_storage.push(
                 InitialAccountData::Private(Box::new(PrivateAccountPrivateInitialData {
                     account_id: *account_id,
                     account: account.clone(),
-                    key_chain: key_chain.clone(),
+                    key_chain: entry.key_chain.clone(),
                     identifier: *identifier,
                 }))
                 .into(),

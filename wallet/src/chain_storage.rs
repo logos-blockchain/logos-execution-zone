@@ -7,7 +7,7 @@ use key_protocol::{
         key_tree::{KeyTreePrivate, KeyTreePublic, chain_index::ChainIndex},
         secret_holders::SeedHolder,
     },
-    key_protocol_core::NSSAUserData,
+    key_protocol_core::{NSSAUserData, UserPrivateAccountData},
 };
 use log::debug;
 use nssa::program::Program;
@@ -79,8 +79,7 @@ impl WalletChainStore {
                     InitialAccountData::Private(data) => {
                         private_init_acc_map.insert(
                             data.account_id,
-                            (data.key_chain, vec![(data.identifier, data.account)]),
-                        );
+                            UserPrivateAccountData{ key_chain: data.key_chain, accounts: vec![(data.identifier, data.account)]});
                     }
                 },
             }
@@ -121,8 +120,7 @@ impl WalletChainStore {
                     account.program_owner = Program::authenticated_transfer_program().id();
                     private_init_acc_map.insert(
                         data.account_id,
-                        (data.key_chain, vec![(data.identifier, account)]),
-                    );
+                        UserPrivateAccountData{key_chain: data.key_chain, accounts:vec![(data.identifier, account)]});
                 }
             }
         }
@@ -186,19 +184,19 @@ impl WalletChainStore {
             .default_user_private_accounts
             .entry(account_id)
         {
-            let (key_chain, entries) = entry.get_mut();
-            let identifier = entries
+            let entry = entry.get_mut();
+            let identifier = entry.accounts
                 .iter()
                 .find_map(|(id, _)| {
-                    (nssa::AccountId::from((&key_chain.nullifier_public_key, *id)) == account_id)
+                    (nssa::AccountId::from((&entry.key_chain.nullifier_public_key, *id)) == account_id)
                         .then_some(*id)
                 })
                 .unwrap_or(0);
             // Update existing entry or insert new one
-            if let Some((_, acc)) = entries.iter_mut().find(|(id, _)| *id == identifier) {
+            if let Some((_, acc)) = entry.accounts.iter_mut().find(|(id, _)| *id == identifier) {
                 *acc = account;
             } else {
-                entries.push((identifier, account));
+                entry.accounts.push((identifier, account));
             }
             return;
         }

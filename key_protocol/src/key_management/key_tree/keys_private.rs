@@ -134,14 +134,13 @@ impl KeyTreeNode for ChildKeysPrivate {
         self.nth_child(cci)
     }
 
-    fn account_ids(&self) -> Vec<nssa::AccountId> {
+    fn account_ids(&self) -> impl Iterator<Item = nssa::AccountId> {
         self.value
             .1
             .iter()
             .map(|(identifier, _)| {
                 nssa::AccountId::from((&self.value.0.nullifier_public_key, *identifier))
             })
-            .collect()
     }
 }
 

@@ -4,5 +4,5 @@ pub trait KeyTreeNode: Sized {
     #[must_use]
     fn derive_child(&self, cci: u32) -> Self;
     #[must_use]
-    fn account_ids(&self) -> Vec<nssa::AccountId>;
+    fn account_ids(&self) -> impl Iterator<Item = nssa::AccountId>;
 }
