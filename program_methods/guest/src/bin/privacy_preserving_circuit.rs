@@ -528,6 +528,10 @@ fn compute_circuit_output(
                 let Some((npk, identifier, shared_secret)) = private_keys_iter.next() else {
                     panic!("Missing private account key");
                 };
+                assert_ne!(
+                    *identifier, PRIVATE_PDA_FIXED_IDENTIFIER,
+                    "Identifier must be different from {PRIVATE_PDA_FIXED_IDENTIFIER}. This is reserved for private PDA."
+                );
 
                 let account_id = AccountId::from((npk, *identifier));
 
@@ -633,7 +637,10 @@ fn compute_circuit_output(
                     panic!("Missing private account key");
                 };
 
-                assert_eq!(*identifier, PRIVATE_PDA_FIXED_IDENTIFIER);
+                assert_eq!(
+                    *identifier, PRIVATE_PDA_FIXED_IDENTIFIER,
+                    "Identifier for private PDAs must be {PRIVATE_PDA_FIXED_IDENTIFIER}."
+                );
 
                 let (new_nullifier, new_nonce) = if pre_state.is_authorized {
                     // Existing private PDA with authentication (like mask 1)
@@ -689,7 +696,8 @@ fn compute_circuit_output(
                 let mut post_with_updated_nonce = post_state;
                 post_with_updated_nonce.nonce = new_nonce;
 
-                let commitment_post = Commitment::new(&pre_state.account_id, &post_with_updated_nonce);
+                let commitment_post =
+                    Commitment::new(&pre_state.account_id, &post_with_updated_nonce);
 
                 let encrypted_account = EncryptionScheme::encrypt(
                     &post_with_updated_nonce,
