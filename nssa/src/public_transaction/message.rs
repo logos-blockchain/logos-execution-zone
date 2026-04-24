@@ -4,6 +4,7 @@ use nssa_core::{
     program::{InstructionData, ProgramId},
 };
 use serde::Serialize;
+use sha2::{Digest as _, Sha256};
 
 use crate::{AccountId, error::NssaError, program::Program};
 
@@ -62,5 +63,10 @@ impl Message {
             nonces,
             instruction_data,
         }
+    }
+
+    #[must_use]
+    pub fn hash_message(&self) -> [u8; 32] {
+        Sha256::digest(self.to_bytes()).into()
     }
 }

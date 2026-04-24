@@ -14,12 +14,12 @@ pub struct WitnessSet {
 impl WitnessSet {
     #[must_use]
     pub fn for_message(message: &Message, proof: Proof, private_keys: &[&PrivateKey]) -> Self {
-        let message_bytes = message.to_bytes();
+        let message_hash = message.hash_message();
         let signatures_and_public_keys = private_keys
             .iter()
             .map(|&key| {
                 (
-                    Signature::new(key, &message_bytes),
+                    Signature::new(key, &message_hash),
                     PublicKey::new_from_private_key(key),
                 )
             })
@@ -32,9 +32,9 @@ impl WitnessSet {
 
     #[must_use]
     pub fn signatures_are_valid_for(&self, message: &Message) -> bool {
-        let message_bytes = message.to_bytes();
+        let message_hash = message.hash_message();
         for (signature, public_key) in self.signatures_and_public_keys() {
-            if !signature.is_valid_for(&message_bytes, public_key) {
+            if !signature.is_valid_for(&message_hash, public_key) {
                 return false;
             }
         }
