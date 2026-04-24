@@ -86,8 +86,8 @@ impl HashableBlockData {
         bedrock_parent_id: MantleMsgId,
     ) -> Block {
         let data_bytes = borsh::to_vec(&self).unwrap();
-        let signature = nssa::Signature::new(signing_key, &data_bytes);
         let hash = OwnHasher::hash(&data_bytes);
+        let signature = nssa::Signature::new(signing_key, &hash.0);
         Block {
             header: BlockHeader {
                 block_id: self.block_id,

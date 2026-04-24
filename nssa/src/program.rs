@@ -293,6 +293,36 @@ mod tests {
         }
 
         #[must_use]
+        pub fn pda_claimer() -> Self {
+            use test_program_methods::{PDA_CLAIMER_ELF, PDA_CLAIMER_ID};
+
+            Self {
+                id: PDA_CLAIMER_ID,
+                elf: PDA_CLAIMER_ELF.to_vec(),
+            }
+        }
+
+        #[must_use]
+        pub fn private_pda_delegator() -> Self {
+            use test_program_methods::{PRIVATE_PDA_DELEGATOR_ELF, PRIVATE_PDA_DELEGATOR_ID};
+
+            Self {
+                id: PRIVATE_PDA_DELEGATOR_ID,
+                elf: PRIVATE_PDA_DELEGATOR_ELF.to_vec(),
+            }
+        }
+
+        #[must_use]
+        pub fn two_pda_claimer() -> Self {
+            use test_program_methods::{TWO_PDA_CLAIMER_ELF, TWO_PDA_CLAIMER_ID};
+
+            Self {
+                id: TWO_PDA_CLAIMER_ID,
+                elf: TWO_PDA_CLAIMER_ELF.to_vec(),
+            }
+        }
+
+        #[must_use]
         pub fn changer_claimer() -> Self {
             use test_program_methods::{CHANGER_CLAIMER_ELF, CHANGER_CLAIMER_ID};
 
@@ -309,6 +339,16 @@ mod tests {
             Self {
                 id: NOOP_ID,
                 elf: NOOP_ELF.to_vec(),
+            }
+        }
+
+        #[must_use]
+        pub fn auth_asserting_noop() -> Self {
+            use test_program_methods::{AUTH_ASSERTING_NOOP_ELF, AUTH_ASSERTING_NOOP_ID};
+
+            Self {
+                id: AUTH_ASSERTING_NOOP_ID,
+                elf: AUTH_ASSERTING_NOOP_ELF.to_vec(),
             }
         }
 
