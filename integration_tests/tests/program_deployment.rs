@@ -11,10 +11,13 @@ use integration_tests::{
     NSSA_PROGRAM_FOR_TEST_DATA_CHANGER, TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext,
 };
 use log::info;
-use nssa::{AccountId, program::Program};
+use nssa::program::Program;
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
-use wallet::cli::Command;
+use wallet::cli::{
+    Command, SubcommandReturnValue,
+    account::{AccountSubcommand, NewSubcommand},
+};
 
 #[test]
 async fn deploy_and_execute_program() -> Result<()> {
@@ -40,14 +43,31 @@ async fn deploy_and_execute_program() -> Result<()> {
     // logic)
     let bytecode = std::fs::read(binary_filepath)?;
     let data_changer = Program::new(bytecode)?;
-    let account_id: AccountId = "11".repeat(16).parse()?;
+
+    let SubcommandReturnValue::RegisterAccount { account_id } = wallet::cli::execute_subcommand(
+        ctx.wallet_mut(),
+        Command::Account(AccountSubcommand::New(NewSubcommand::Public {
+            cci: None,
+            label: None,
+        })),
+    )
+    .await?
+    else {
+        panic!("Expected RegisterAccount return value");
+    };
+
+    let nonces = ctx.wallet().get_accounts_nonces(vec![account_id]).await?;
+    let private_key = ctx
+        .wallet()
+        .get_account_public_signing_key(account_id)
+        .unwrap();
     let message = nssa::public_transaction::Message::try_new(
         data_changer.id(),
         vec![account_id],
-        vec![],
+        nonces,
         vec![0],
     )?;
-    let witness_set = nssa::public_transaction::WitnessSet::for_message(&message, &[]);
+    let witness_set = nssa::public_transaction::WitnessSet::for_message(&message, &[private_key]);
     let transaction = nssa::PublicTransaction::new(message, witness_set);
     let _response = ctx
         .sequencer_client()
@@ -64,7 +84,7 @@ async fn deploy_and_execute_program() -> Result<()> {
     assert_eq!(post_state_account.program_owner, data_changer.id());
     assert_eq!(post_state_account.balance, 0);
     assert_eq!(post_state_account.data.as_ref(), &[0]);
-    assert_eq!(post_state_account.nonce.0, 0);
+    assert_eq!(post_state_account.nonce.0, 1);
 
     info!("Successfully deployed and executed program");
 

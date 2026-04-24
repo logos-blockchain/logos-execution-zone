@@ -49,21 +49,28 @@ impl Signature {
         aux_random: [u8; 32],
     ) -> Self {
         let value = {
-            let secp = secp256k1::Secp256k1::new();
-            let secret_key = secp256k1::SecretKey::from_byte_array(*key.value()).unwrap();
-            let keypair = secp256k1::Keypair::from_secret_key(&secp, &secret_key);
-            let signature = secp.sign_schnorr_with_aux_rand(message, &keypair, &aux_random);
-            signature.to_byte_array()
+            let signing_key = k256::schnorr::SigningKey::from_bytes(key.value())
+                .expect("Expect valid signing key");
+            signing_key
+                .sign_raw(message, &aux_random)
+                .expect("Expect to produce a valid signature")
+                .to_bytes()
         };
+
         Self { value }
     }
 
     #[must_use]
     pub fn is_valid_for(&self, bytes: &[u8], public_key: &PublicKey) -> bool {
-        let pk = secp256k1::XOnlyPublicKey::from_byte_array(*public_key.value()).unwrap();
-        let secp = secp256k1::Secp256k1::new();
-        let sig = secp256k1::schnorr::Signature::from_byte_array(self.value);
-        secp.verify_schnorr(&sig, bytes, &pk).is_ok()
+        let Ok(pk) = k256::schnorr::VerifyingKey::from_bytes(public_key.value()) else {
+            return false;
+        };
+
+        let Ok(sig) = k256::schnorr::Signature::try_from(self.value.as_slice()) else {
+            return false;
+        };
+
+        pk.verify_raw(bytes, &sig).is_ok()
     }
 }
 

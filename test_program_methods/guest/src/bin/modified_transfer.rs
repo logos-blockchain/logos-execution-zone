@@ -5,7 +5,7 @@
 
 use nssa_core::{
     account::{Account, AccountWithMetadata},
-    program::{AccountPostState, ProgramInput, read_nssa_inputs, write_nssa_outputs},
+    program::{AccountPostState, ProgramInput, ProgramOutput, read_nssa_inputs},
 };
 
 /// Initializes a default account under the ownership of this program.
@@ -64,6 +64,8 @@ fn main() {
     // Read input accounts.
     let (
         ProgramInput {
+            self_program_id,
+            caller_program_id,
             pre_states,
             instruction: balance_to_move,
         },
@@ -80,5 +82,12 @@ fn main() {
         }
         _ => panic!("invalid params"),
     };
-    write_nssa_outputs(instruction_data, pre_states, post_states);
+    ProgramOutput::new(
+        self_program_id,
+        caller_program_id,
+        instruction_data,
+        pre_states,
+        post_states,
+    )
+    .write();
 }

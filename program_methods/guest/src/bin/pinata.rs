@@ -1,4 +1,4 @@
-use nssa_core::program::{AccountPostState, ProgramInput, read_nssa_inputs, write_nssa_outputs};
+use nssa_core::program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_nssa_inputs};
 use risc0_zkvm::sha::{Impl, Sha256 as _};
 
 const PRIZE: u128 = 150;
@@ -46,6 +46,8 @@ fn main() {
     // It is expected to receive only two accounts: [pinata_account, winner_account]
     let (
         ProgramInput {
+            self_program_id,
+            caller_program_id,
             pre_states,
             instruction: solution,
         },
@@ -78,12 +80,15 @@ fn main() {
         .checked_add(PRIZE)
         .expect("Overflow when adding prize to winner");
 
-    write_nssa_outputs(
+    ProgramOutput::new(
+        self_program_id,
+        caller_program_id,
         instruction_words,
         vec![pinata, winner],
         vec![
-            AccountPostState::new_claimed_if_default(pinata_post),
+            AccountPostState::new_claimed_if_default(pinata_post, Claim::Authorized),
             AccountPostState::new(winner_post),
         ],
-    );
+    )
+    .write();
 }

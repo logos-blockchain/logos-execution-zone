@@ -7,12 +7,13 @@ use nssa::Account;
 use nssa_core::account::Nonce;
 use rand::{RngCore as _, rngs::OsRng};
 use serde::Serialize;
+use testnet_initial_state::{PrivateAccountPrivateInitialData, PublicAccountPrivateInitialData};
 
 use crate::{
     HOME_DIR_ENV_VAR,
     config::{
-        InitialAccountData, InitialAccountDataPrivate, InitialAccountDataPublic, Label,
-        PersistentAccountDataPrivate, PersistentAccountDataPublic, PersistentStorage,
+        InitialAccountData, Label, PersistentAccountDataPrivate, PersistentAccountDataPublic,
+        PersistentStorage,
     },
 };
 
@@ -47,6 +48,66 @@ impl From<Account> for HumanReadableAccount {
             nonce: account.nonce.0,
         }
     }
+}
+
+/// Resolve an account id-or-label pair to a `Privacy/id` string.
+///
+/// Exactly one of `id` or `label` must be `Some`. If `id` is provided it is
+/// returned as-is; if `label` is provided it is resolved via
+/// [`resolve_account_label`]. Any other combination returns an error.
+pub fn resolve_id_or_label(
+    id: Option<String>,
+    label: Option<String>,
+    labels: &HashMap<String, Label>,
+    user_data: &NSSAUserData,
+) -> Result<String> {
+    match (id, label) {
+        (Some(id), None) => Ok(id),
+        (None, Some(label)) => resolve_account_label(&label, labels, user_data),
+        _ => anyhow::bail!("provide exactly one of account id or account label"),
+    }
+}
+
+/// Resolve an account label to its full `Privacy/id` string representation.
+///
+/// Looks up the label in the labels map and determines whether the account is
+/// public or private by checking the user data key trees.
+pub fn resolve_account_label(
+    label: &str,
+    labels: &HashMap<String, Label>,
+    user_data: &NSSAUserData,
+) -> Result<String> {
+    let account_id_str = labels
+        .iter()
+        .find(|(_, l)| l.to_string() == label)
+        .map(|(k, _)| k.clone())
+        .ok_or_else(|| anyhow::anyhow!("No account found with label '{label}'"))?;
+
+    let account_id: nssa::AccountId = account_id_str.parse()?;
+
+    let privacy = if user_data
+        .public_key_tree
+        .account_id_map
+        .contains_key(&account_id)
+        || user_data
+            .default_pub_account_signing_keys
+            .contains_key(&account_id)
+    {
+        "Public"
+    } else if user_data
+        .private_key_tree
+        .account_id_map
+        .contains_key(&account_id)
+        || user_data
+            .default_user_private_accounts
+            .contains_key(&account_id)
+    {
+        "Private"
+    } else {
+        anyhow::bail!("Account with label '{label}' not found in wallet");
+    };
+
+    Ok(format!("{privacy}/{account_id_str}"))
 }
 
 /// Get home dir for wallet. Env var `NSSA_WALLET_HOME_DIR` must be set before execution to succeed.
@@ -119,7 +180,7 @@ pub fn produce_data_for_storage(
 
     for (account_id, key) in &user_data.default_pub_account_signing_keys {
         vec_for_storage.push(
-            InitialAccountData::Public(InitialAccountDataPublic {
+            InitialAccountData::Public(PublicAccountPrivateInitialData {
                 account_id: *account_id,
                 pub_sign_key: key.clone(),
             })
@@ -129,7 +190,7 @@ pub fn produce_data_for_storage(
 
     for (account_id, (key_chain, account)) in &user_data.default_user_private_accounts {
         vec_for_storage.push(
-            InitialAccountData::Private(Box::new(InitialAccountDataPrivate {
+            InitialAccountData::Private(Box::new(PrivateAccountPrivateInitialData {
                 account_id: *account_id,
                 account: account.clone(),
                 key_chain: key_chain.clone(),

@@ -9,6 +9,7 @@ workspace = true
 
 [dependencies]
 nssa_core = { workspace = true, features = ["host"] }
+clock_core.workspace = true
 
 anyhow.workspace = true
 thiserror.workspace = true
@@ -19,7 +20,7 @@ sha2.workspace = true
 rand.workspace = true
 borsh.workspace = true
 hex.workspace = true
-secp256k1 = "0.31.1"
+k256.workspace = true
 risc0-binfmt = "3.0.2"
 log.workspace = true
 
