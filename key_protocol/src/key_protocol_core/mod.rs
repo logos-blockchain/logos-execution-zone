@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use anyhow::Result;
 use k256::AffinePoint;
+use nssa::{Account, AccountId};
 use nssa_core::Identifier;
 use serde::{Deserialize, Serialize};
 
@@ -12,15 +13,19 @@ use crate::key_management::{
 };
 
 pub type PublicKey = AffinePoint;
-pub type DefaultPrivateAccountsMap =
-    BTreeMap<nssa::AccountId, (KeyChain, Vec<(Identifier, nssa_core::account::Account)>)>;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct UserPrivateAccountData {
+    pub key_chain: KeyChain,
+    pub accounts: Vec<(Identifier, Account)>
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NSSAUserData {
     /// Default public accounts.
     pub default_pub_account_signing_keys: BTreeMap<nssa::AccountId, nssa::PrivateKey>,
     /// Default private accounts.
-    pub default_user_private_accounts: DefaultPrivateAccountsMap,
+    pub default_user_private_accounts: BTreeMap<AccountId, UserPrivateAccountData>,
     /// Tree of public keys.
     pub public_key_tree: KeyTreePublic,
     /// Tree of private keys.
@@ -44,12 +49,12 @@ impl NSSAUserData {
     }
 
     fn valid_private_key_transaction_pairing_check(
-        accounts_keys_map: &DefaultPrivateAccountsMap,
+        accounts_keys_map: &BTreeMap<AccountId, UserPrivateAccountData>,
     ) -> bool {
         let mut check_res = true;
-        for (account_id, (key, entries)) in accounts_keys_map {
-            let any_match = entries.iter().any(|(identifier, _)| {
-                nssa::AccountId::from((&key.nullifier_public_key, *identifier)) == *account_id
+        for (account_id, entry) in accounts_keys_map {
+            let any_match = entry.accounts.iter().any(|(identifier, _)| {
+                nssa::AccountId::from((&entry.key_chain.nullifier_public_key, *identifier)) == *account_id
             });
             if !any_match {
                 println!("No matching entry found for account_id {account_id}");
@@ -61,7 +66,7 @@ impl NSSAUserData {
 
     pub fn new_with_accounts(
         default_accounts_keys: BTreeMap<nssa::AccountId, nssa::PrivateKey>,
-        default_accounts_key_chains: DefaultPrivateAccountsMap,
+        default_accounts_key_chains: BTreeMap<AccountId, UserPrivateAccountData>,
         public_key_tree: KeyTreePublic,
         private_key_tree: KeyTreePrivate,
     ) -> Result<Self> {
@@ -148,12 +153,12 @@ impl NSSAUserData {
         account_id: nssa::AccountId,
     ) -> Option<(KeyChain, nssa_core::account::Account, Identifier)> {
         // Check default accounts
-        if let Some((key_chain, entries)) = self.default_user_private_accounts.get(&account_id) {
-            for (identifier, account) in entries {
+        if let Some(entry) = self.default_user_private_accounts.get(&account_id) {
+            for (identifier, account) in &entry.accounts {
                 let expected_id =
-                    nssa::AccountId::from((&key_chain.nullifier_public_key, *identifier));
+                    nssa::AccountId::from((&entry.key_chain.nullifier_public_key, *identifier));
                 if expected_id == account_id {
-                    return Some((key_chain.clone(), account.clone(), *identifier));
+                    return Some((entry.key_chain.clone(), account.clone(), *identifier));
                 }
             }
             return None;
