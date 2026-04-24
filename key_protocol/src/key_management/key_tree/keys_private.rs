@@ -105,26 +105,6 @@ impl ChildKeysPrivate {
     }
 }
 
-#[expect(
-    clippy::single_char_lifetime_names,
-    reason = "TODO add meaningful name"
-)]
-impl<'a> From<&'a ChildKeysPrivate> for &'a (KeyChain, Vec<(Identifier, nssa::Account)>) {
-    fn from(value: &'a ChildKeysPrivate) -> Self {
-        &value.value
-    }
-}
-
-#[expect(
-    clippy::single_char_lifetime_names,
-    reason = "TODO add meaningful name"
-)]
-impl<'a> From<&'a mut ChildKeysPrivate> for &'a mut (KeyChain, Vec<(Identifier, nssa::Account)>) {
-    fn from(value: &'a mut ChildKeysPrivate) -> Self {
-        &mut value.value
-    }
-}
-
 impl KeyTreeNode for ChildKeysPrivate {
     fn from_seed(seed: [u8; 64]) -> Self {
         Self::root(seed)
