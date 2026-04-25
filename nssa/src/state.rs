@@ -349,6 +349,10 @@ impl V03State {
     pub fn force_insert_account(&mut self, account_id: AccountId, account: Account) {
         self.public_state.insert(account_id, account);
     }
+
+    pub fn force_insert_program(&mut self, program_id: ProgramId, program: Program) {
+        self.programs.insert(program_id, program);
+    }
 }
 
 #[cfg(test)]
