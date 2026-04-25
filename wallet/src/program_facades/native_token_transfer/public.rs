@@ -1,17 +1,14 @@
 use common::{HashType, transaction::NSSATransaction};
+use keycard_wallet::KeycardWallet;
 use nssa::{
     AccountId, PublicTransaction,
     program::Program,
     public_transaction::{Message, WitnessSet},
 };
-use pyo3::Python;
 use sequencer_service_rpc::RpcClient as _;
 
 use super::NativeTokenTransfer;
-use crate::{
-    ExecutionFailureKind, WalletCore,
-    cli::{keycard_wallet::KeycardWallet, python_path},
-};
+use crate::{ExecutionFailureKind, WalletCore};
 
 impl NativeTokenTransfer<'_> {
     pub async fn send_public_transfer(
@@ -59,21 +56,22 @@ impl NativeTokenTransfer<'_> {
                 Message::try_new(program_id, account_ids, nonces, balance_to_move).unwrap();
 
             let witness_set = if pin.is_none() {
-                    WalletCore::sign_public_message(self.0, &message, &sign_ids)
-                                    .expect("Expect a valid signature")
-                } else {
-                                    // TODO: maybe the issue? (Marvin)
-                    let message_bytes: [u8; 32] = {
-                        let v = message.to_bytes();
-                        let mut bytes = [0_u8; 32];
-                        let len = v.len().min(32);
-                        bytes[..len].copy_from_slice(&v[..len]);
-                        bytes
-                    };
-                    let pub_key = KeycardWallet::get_public_key_for_path_with_connect(&pin.as_ref().expect("TODO"), &key_path.as_ref().expect("TODO"));
-                    let signature = KeycardWallet::sign_message_for_path_with_connection(&pin.as_ref().expect("TODO"), &key_path.as_ref().expect("TODO"), &message_bytes).expect("Expect valid signature");
-                    WitnessSet::from_list(&[signature], &[pub_key])
-                };
+                WalletCore::sign_public_message(self.0, &message, &sign_ids)
+                    .expect("Expect a valid signature")
+            } else {
+                
+                let pub_key = KeycardWallet::get_public_key_for_path_with_connect(
+                    &pin.as_ref().expect("TODO"),
+                    &key_path.as_ref().expect("TODO"),
+                );
+                let signature = KeycardWallet::sign_message_for_path_with_connect(
+                    &pin.as_ref().expect("TODO"),
+                    &key_path.as_ref().expect("TODO"),
+                    &message.hash_message(),
+                )
+                .expect("Expect valid signature");
+                WitnessSet::from_list(&[signature], &[pub_key])
+            };
 
             let tx = PublicTransaction::new(message, witness_set);
 
@@ -102,16 +100,8 @@ impl NativeTokenTransfer<'_> {
         let instruction: u128 = 0;
         let account_ids = vec![from];
         let program_id = Program::authenticated_transfer_program().id();
-        let message = Message::try_new(program_id, account_ids, nonces, instruction).unwrap();
+        let message = Message::try_new(program_id, account_ids, nonces, instruction).expect("Expect a valid Message");
 
-        // (Marvin): This really needs to be the ChainIndex
-        // But, I cannot change that due to Default Accounts.
-        // Instead, I had introduced a "NEW" sign...which I do not see...
-        // Correction: I did not need a specific function. Rather, I use `from_list` to combine
-        // public and signatures together for a WitnessSet.
-
-        // The tricky part is that I NEED to do everything with chain-codes... This won't look nice,
-        // but is feasible.
         let witness_set = if pin.is_none() {
             let signing_key = self.0.storage.user_data.get_pub_account_signing_key(from);
 
@@ -121,42 +111,18 @@ impl NativeTokenTransfer<'_> {
 
             WitnessSet::for_message(&message, &[signing_key])
         } else {
-            let witness_set = Python::with_gil(|py| {
-                python_path::add_python_path(py).expect("keycard_wallet.py not found");
+            let pub_key = KeycardWallet::get_public_key_for_path_with_connect(
+                pin.as_ref().expect("TODO"),
+                key_path.as_ref().expect("TODO"),
+            );
 
-                let wallet = KeycardWallet::new(py).expect("Expect keycard wallet");
-
-                let is_connected = wallet
-                    .setup_communication(py, pin.as_ref().expect("TODO"))
-                    .expect("Expect a Boolean.");
-
-                if is_connected {
-                    println!("\u{2705} Keycard is now connected to wallet.");
-                } else {
-                    println!("\u{274c} Keycard is not connected to wallet.");
-                }
-                // TODO: maybe the issue? (Marvin)
-                let message: [u8; 32] = {
-                    let v = message.to_bytes();
-                    let mut bytes = [0_u8; 32];
-                    let len = v.len().min(32);
-                    bytes[..len].copy_from_slice(&v[..len]);
-                    bytes
-                };
-
-                let pub_key = wallet
-                    .get_public_key_for_path(py, key_path.as_ref().expect("TODO"))
-                    .expect("Expect a valid public key");
-
-                let signature = wallet
-                    .sign_message_for_path(py, key_path.as_ref().expect("TODO"), &message)
-                    .expect("TODO");
-
-                let _ = wallet.disconnect(py);
-
-                WitnessSet::from_list(&[signature], &[pub_key])
-            });
-            witness_set
+            let signature = KeycardWallet::sign_message_for_path_with_connect(
+                pin.as_ref().as_ref().expect("TODO"),
+                key_path.as_ref().expect("TODO"),
+                &message.hash_message(),
+            )
+            .expect("Expect a valid Signature.");
+            WitnessSet::from_list(&[signature], &[pub_key])
         };
 
         let tx = PublicTransaction::new(message, witness_set);

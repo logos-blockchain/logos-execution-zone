@@ -26,6 +26,10 @@ pub enum PinataProgramAgnosticSubcommand {
         /// To account label (alternative to --to).
         #[arg(long, conflicts_with = "to")]
         to_label: Option<String>,
+        #[arg(long, conflicts_with = "to", conflicts_with = "to_label")]
+        pin: Option<String>,
+        #[arg(long, conflicts_with = "to", conflicts_with = "to_label")]
+        key_path: Option<String>,
     },
 }
 
@@ -35,15 +39,19 @@ impl WalletSubcommand for PinataProgramAgnosticSubcommand {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let underlying_subcommand = match self {
-            Self::Claim { to, to_label } => {
+            Self::Claim { to, to_label , pin, key_path} => {
+                
                 let to = resolve_id_or_label(
                     to,
                     to_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
+                    &pin,
+                    &key_path,
                 )?;
+              
                 let (to, to_addr_privacy) = parse_addr_with_privacy_prefix(&to)?;
-
+                // TODO: (Marvin) does privacy get marked correctly?
                 match to_addr_privacy {
                     AccountPrivacyKind::Public => {
                         PinataProgramSubcommand::Public(PinataProgramSubcommandPublic::Claim {

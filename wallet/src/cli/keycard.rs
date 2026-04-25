@@ -1,10 +1,11 @@
 use anyhow::Result;
 use clap::Subcommand;
+use keycard_wallet::{KeycardWallet, python_path};
 use pyo3::prelude::*;
 
 use crate::{
     WalletCore,
-    cli::{SubcommandReturnValue, WalletSubcommand, keycard_wallet::KeycardWallet, python_path},
+    cli::{SubcommandReturnValue, WalletSubcommand},
 };
 
 /// Represents generic chain CLI subcommand.

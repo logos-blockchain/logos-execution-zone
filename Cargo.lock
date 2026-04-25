@@ -4012,6 +4012,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "keycard_wallet"
+version = "0.1.0"
+dependencies = [
+ "amm_core",
+ "anyhow",
+ "async-stream",
+ "ata_core",
+ "base58",
+ "bip39",
+ "clap",
+ "common",
+ "env_logger",
+ "futures",
+ "hex",
+ "humantime",
+ "humantime-serde",
+ "indicatif",
+ "itertools 0.14.0",
+ "key_protocol",
+ "log",
+ "nssa",
+ "nssa_core",
+ "optfield",
+ "pyo3",
+ "rand 0.8.5",
+ "sequencer_service_rpc",
+ "serde",
+ "serde_json",
+ "sha2",
+ "testnet_initial_state",
+ "thiserror 2.0.18",
+ "token_core",
+ "tokio",
+ "url",
+]
+
+[[package]]
 name = "lazy-regex"
 version = "3.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9107,6 +9144,7 @@ dependencies = [
  "indicatif",
  "itertools 0.14.0",
  "key_protocol",
+ "keycard_wallet",
  "log",
  "nssa",
  "nssa_core",

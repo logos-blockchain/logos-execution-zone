@@ -76,6 +76,10 @@ pub enum TokenProgramAgnosticSubcommand {
         /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
+        #[arg(long, conflicts_with = "from", conflicts_with = "from_label")]
+        from_pin: Option<String>,
+        #[arg(long, conflicts_with = "from", conflicts_with = "from_label")]
+        from_key_path: Option<String>,
     },
     /// Burn tokens on `holder`, modify `definition`.
     ///
@@ -107,6 +111,10 @@ pub enum TokenProgramAgnosticSubcommand {
         /// amount - amount of balance to burn.
         #[arg(long)]
         amount: u128,
+        #[arg(long, conflicts_with = "holder", conflicts_with = "holder_label")]
+        holder_pin: Option<String>,
+        #[arg(long, conflicts_with = "holder", conflicts_with = "holder_label")]
+        holder_key_path: Option<String>,
     },
     /// Mint tokens on `holder`, modify `definition`.
     ///
@@ -142,6 +150,10 @@ pub enum TokenProgramAgnosticSubcommand {
         /// amount - amount of balance to mint.
         #[arg(long)]
         amount: u128,
+        #[arg(long, conflicts_with = "holder", conflicts_with = "holder_label")]
+        holder_pin: Option<String>,
+        #[arg(long, conflicts_with = "holder", conflicts_with = "holder_label")]
+        holder_key_path: Option<String>,
     },
 }
 
@@ -164,12 +176,16 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                     definition_account_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
+                    &None,
+                    &None,
                 )?;
                 let supply_account_id = resolve_id_or_label(
                     supply_account_id,
                     supply_account_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
+                    &None,
+                    &None,
                 )?;
                 let (definition_account_id, definition_addr_privacy) =
                     parse_addr_with_privacy_prefix(&definition_account_id)?;
@@ -229,12 +245,16 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                 to_npk,
                 to_vpk,
                 amount,
+                from_pin,
+                from_key_path
             } => {
                 let from = resolve_id_or_label(
                     from,
                     from_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
+                    &from_pin,
+                    &from_key_path,
                 )?;
                 let to = match (to, to_label) {
                     (v, None) => v,
@@ -264,7 +284,7 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                     (Some(to), None, None) => {
                         let (from, from_privacy) = parse_addr_with_privacy_prefix(&from)?;
                         let (to, to_privacy) = parse_addr_with_privacy_prefix(&to)?;
-
+                        // TODO: (Marvin) return here
                         match (from_privacy, to_privacy) {
                             (AccountPrivacyKind::Public, AccountPrivacyKind::Public) => {
                                 TokenProgramSubcommand::Public(
@@ -336,24 +356,30 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                 holder,
                 holder_label,
                 amount,
+                holder_pin,
+                holder_key_path,
             } => {
                 let definition = resolve_id_or_label(
                     definition,
                     definition_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
+                    &None,
+                    &None,
                 )?;
                 let holder = resolve_id_or_label(
                     holder,
                     holder_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
+                    &holder_pin,
+                    &holder_key_path,
                 )?;
                 let underlying_subcommand = {
                     let (definition, definition_privacy) =
                         parse_addr_with_privacy_prefix(&definition)?;
                     let (holder, holder_privacy) = parse_addr_with_privacy_prefix(&holder)?;
-
+                    // TODO Marvin return here
                     match (definition_privacy, holder_privacy) {
                         (AccountPrivacyKind::Public, AccountPrivacyKind::Public) => {
                             TokenProgramSubcommand::Public(
@@ -404,24 +430,26 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                 holder_npk,
                 holder_vpk,
                 amount,
+                holder_pin,
+                holder_key_path
             } => {
                 let definition = resolve_id_or_label(
                     definition,
                     definition_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
+                    &None,
+                    &None,
                 )?;
-                let holder = match (holder, holder_label) {
-                    (v, None) => v,
-                    (None, Some(label)) => Some(resolve_account_label(
-                        &label,
-                        &wallet_core.storage.labels,
-                        &wallet_core.storage.user_data,
-                    )?),
-                    (Some(_), Some(_)) => {
-                        anyhow::bail!("Provide only one of --holder or --holder-label")
-                    }
-                };
+                let holder = Some(resolve_id_or_label(
+                    holder.clone(),
+                    holder_label.clone(),
+                    &wallet_core.storage.labels,
+                    &wallet_core.storage.user_data,
+                    &holder_pin,
+                    &holder_key_path,
+                )?);
+                //TODO return here (Marvin)
                 let underlying_subcommand = match (holder, holder_npk, holder_vpk) {
                     (None, None, None) => {
                         anyhow::bail!(

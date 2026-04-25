@@ -38,6 +38,7 @@ members = [
   "examples/program_deployment/methods/guest",
   "bedrock_client",
   "testnet_initial_state",
+  "keycard_wallet",
 ]
 
 [workspace.dependencies]
@@ -67,6 +68,7 @@ ata_program = { path = "programs/associated_token_account" }
 test_program_methods = { path = "test_program_methods" }
 bedrock_client = { path = "bedrock_client" }
 testnet_initial_state = { path = "testnet_initial_state" }
+keycard_wallet = { path = "keycard_wallet" }
 
 tokio = { version = "1.50", features = [
   "net",

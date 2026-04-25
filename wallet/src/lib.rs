@@ -16,13 +16,14 @@ use chain_storage::WalletChainStore;
 use common::{HashType, transaction::NSSATransaction};
 use config::WalletConfig;
 use key_protocol::key_management::key_tree::{chain_index::ChainIndex, traits::KeyNode as _};
+use keycard_wallet::KeycardWallet;
 use log::info;
 use nssa::{
-    PublicKey,
-    Account, AccountId, PrivacyPreservingTransaction, Signature, privacy_preserving_transaction::{
+    Account, AccountId, PrivacyPreservingTransaction, PublicKey, Signature,
+    privacy_preserving_transaction::{
         circuit::{ProgramWithDependencies, Proof},
         message::EncryptedAccountData,
-    }
+    },
 };
 use nssa_core::{
     Commitment, MembershipProof, SharedSecretKey, account::Nonce, program::InstructionData,
@@ -32,7 +33,9 @@ use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuil
 use tokio::io::AsyncWriteExt as _;
 
 use crate::{
-    cli::keycard_wallet::KeycardWallet, config::{PersistentStorage, WalletConfigOverrides}, helperfunctions::produce_data_for_storage, poller::TxPoller
+    config::{PersistentStorage, WalletConfigOverrides},
+    helperfunctions::produce_data_for_storage,
+    poller::TxPoller,
 };
 
 pub mod chain_storage;
@@ -587,23 +590,28 @@ impl WalletCore {
         message: &nssa::privacy_preserving_transaction::Message,
         proof: Proof,
         pin: &String,
-        key_paths: &[String]
+        key_paths: &[String],
     ) -> Result<nssa::privacy_preserving_transaction::witness_set::WitnessSet, ExecutionFailureKind>
     {
         let mut signatures = Vec::<Signature>::new();
         let mut public_keys = Vec::<PublicKey>::new();
 
-                    let message_bytes: [u8; 32] = {
-                        let v = message.to_bytes();
-                        let mut bytes = [0_u8; 32];
-                        let len = v.len().min(32);
-                        bytes[..len].copy_from_slice(&v[..len]);
-                        bytes
-                    };
+        let message_bytes: [u8; 32] = {
+            let v = message.to_bytes();
+            let mut bytes = [0_u8; 32];
+            let len = v.len().min(32);
+            bytes[..len].copy_from_slice(&v[..len]);
+            bytes
+        };
 
         for path in key_paths.iter() {
-            public_keys.push( KeycardWallet::get_public_key_for_path_with_connect(&pin, &path));
-            signatures.push( KeycardWallet::sign_message_for_path_with_connection(&pin, &path, &message_bytes).expect("Expect a valid signature"));
+            public_keys.push(KeycardWallet::get_public_key_for_path_with_connect(
+                &pin, &path,
+            ));
+            signatures.push(
+                KeycardWallet::sign_message_for_path_with_connect(&pin, &path, &message_bytes)
+                    .expect("Expect a valid signature"),
+            );
         }
 
         Ok(

@@ -32,12 +32,15 @@ pub enum AccountSubcommand {
             short,
             long,
             conflicts_with = "account_label",
-            required_unless_present = "account_label"
         )]
         account_id: Option<String>,
         /// Account label (alternative to --account-id).
         #[arg(long, conflicts_with = "account_id")]
         account_label: Option<String>,
+        #[arg(long, conflicts_with = "account_id", conflicts_with = "account_id")]
+        pin: Option<String>,
+        #[arg(long, conflicts_with = "account_id", conflicts_with = "account_id")]
+        key_path: Option<String>,
     },
     /// Produce new public or private account.
     #[command(subcommand)]
@@ -191,12 +194,16 @@ impl WalletSubcommand for AccountSubcommand {
                 keys,
                 account_id,
                 account_label,
+                pin,
+                key_path,
             } => {
                 let resolved = resolve_id_or_label(
                     account_id,
                     account_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
+                    &pin,
+                    &key_path,
                 )?;
                 let (account_id_str, addr_kind) = parse_addr_with_privacy_prefix(&resolved)?;
 
@@ -407,6 +414,8 @@ impl WalletSubcommand for AccountSubcommand {
                     account_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
+                    &None,
+                    &None,
                 )?;
                 let (account_id_str, _) = parse_addr_with_privacy_prefix(&resolved)?;
 

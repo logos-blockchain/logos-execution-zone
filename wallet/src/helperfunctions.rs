@@ -8,6 +8,8 @@ use nssa_core::account::Nonce;
 use rand::{RngCore as _, rngs::OsRng};
 use serde::Serialize;
 use testnet_initial_state::{PrivateAccountPrivateInitialData, PublicAccountPrivateInitialData};
+use keycard_wallet::KeycardWallet;
+
 
 use crate::{
     HOME_DIR_ENV_VAR,
@@ -60,10 +62,13 @@ pub fn resolve_id_or_label(
     label: Option<String>,
     labels: &HashMap<String, Label>,
     user_data: &NSSAUserData,
+    pin: &Option<String>,
+    key_path: &Option<String>,
 ) -> Result<String> {
-    match (id, label) {
-        (Some(id), None) => Ok(id),
-        (None, Some(label)) => resolve_account_label(&label, labels, user_data),
+    match (id, label, pin) {
+        (Some(id), None, None) => Ok(id),
+        (None, Some(label), None) => resolve_account_label(&label, labels, user_data),
+        (None, None, Some(pin)) => Ok(KeycardWallet::get_account_id_for_path_with_connect(pin, key_path.as_ref().expect("TODO")).to_string()),
         _ => anyhow::bail!("provide exactly one of account id or account label"),
     }
 }
