@@ -13,3 +13,5 @@ clock_core.workspace = true
 
 risc0-zkvm.workspace = true
 serde = { workspace = true, default-features = false }
+
+lez_sdk = { path = "../../lez_sdk" }

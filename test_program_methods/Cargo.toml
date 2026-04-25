@@ -10,5 +10,7 @@ workspace = true
 [build-dependencies]
 risc0-build.workspace = true
 
+lez_sdk = { path = "../lez_sdk" }
+
 [package.metadata.risc0]
 methods = ["guest"]
