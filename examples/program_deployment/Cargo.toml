@@ -16,3 +16,6 @@ wallet.workspace = true
 
 tokio = { workspace = true, features = ["macros"] }
 clap.workspace = true
+
+lez_sdk = { path = "../../lez_sdk" }
+risc0-zkvm.workspace = true
