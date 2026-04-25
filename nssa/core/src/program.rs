@@ -300,6 +300,10 @@ pub struct ProgramOutput {
     pub block_validity_window: BlockValidityWindow,
     /// The timestamp window where the program output is valid.
     pub timestamp_validity_window: TimestampValidityWindow,
+    /// Capability ticket issued for internal continuation.
+    pub issued_tickets: Vec<[u8; 32]>,
+    /// Capability ticket consumed by the current execution (if it is an #[internal] function).
+    pub consumed_ticket: Option<[u8; 32]>,
 }
 
 impl ProgramOutput {
@@ -319,6 +323,8 @@ impl ProgramOutput {
             chained_calls: Vec::new(),
             block_validity_window: ValidityWindow::new_unbounded(),
             timestamp_validity_window: ValidityWindow::new_unbounded(),
+            issued_tickets: Vec::new(),
+            consumed_ticket: None,
         }
     }
 
@@ -378,6 +384,16 @@ impl ProgramOutput {
     pub fn valid_until_timestamp(mut self, ts: Option<Timestamp>) -> Result<Self, InvalidWindow> {
         self.timestamp_validity_window = (self.timestamp_validity_window.start(), ts).try_into()?;
         Ok(self)
+    }
+
+    pub fn with_issued_tickets(mut self, tickets: Vec<[u8; 32]>) -> Self {
+        self.issued_tickets = tickets;
+        self
+    }
+
+    pub fn with_consumed_ticket(mut self, ticket: [u8; 32]) -> Self {
+        self.consumed_ticket = Some(ticket);
+        self
     }
 }
 
