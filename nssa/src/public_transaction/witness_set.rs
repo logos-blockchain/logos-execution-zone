@@ -75,7 +75,7 @@ mod tests {
 
         assert_eq!(witness_set.signatures_and_public_keys.len(), 2);
 
-        let message_bytes = message.to_bytes();
+        let message_bytes = message.hash_message();
         for ((signature, public_key), expected_public_key) in witness_set
             .signatures_and_public_keys
             .into_iter()
