@@ -17,6 +17,7 @@ pub struct PrivacyPreservingCircuitInput {
     /// - `0` - public account
     /// - `1` - private account with authentication
     /// - `2` - private account without authentication
+    /// - `3` - private PDA account
     pub visibility_mask: Vec<u8>,
     /// Public keys of private accounts.
     pub private_account_keys: Vec<(NullifierPublicKey, SharedSecretKey)>,

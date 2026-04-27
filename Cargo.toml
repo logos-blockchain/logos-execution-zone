@@ -154,6 +154,14 @@ opt-level = 'z'
 lto = true
 codegen-units = 1
 
+# Keep backtraces but drop full DWARF type info to avoid LLD OOM/SIGBUS when
+# linking large integration-test binaries on resource-constrained CI runners.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.test]
+debug = "line-tables-only"
+
 [workspace.lints.rust]
 warnings = "deny"
 

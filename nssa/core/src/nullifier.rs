@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Commitment, account::AccountId};
 
-#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(any(feature = "host", test), derive(Clone, Hash))]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(any(feature = "host", test), derive(Hash))]
 pub struct NullifierPublicKey(pub [u8; 32]);
 
 impl From<&NullifierPublicKey> for AccountId {
