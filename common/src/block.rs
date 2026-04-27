@@ -85,15 +85,8 @@ impl HashableBlockData {
         signing_key: &nssa::PrivateKey,
         bedrock_parent_id: MantleMsgId,
     ) -> Block {
-        const PREFIX: &[u8; 32] =
-            b"/LEE/v0.3/Message/Block/\x00\x00\x00\x00\x00\x00\x00\x00";
-
         let data_bytes = borsh::to_vec(&self).unwrap();
-        let mut bytes = Vec::with_capacity(PREFIX.len() + data_bytes.len());
-        bytes.extend_from_slice(PREFIX);
-        bytes.extend_from_slice(&data_bytes);
-
-        let hash = OwnHasher::hash(&bytes);
+        let hash = OwnHasher::hash(&data_bytes);
         let signature = nssa::Signature::new(signing_key, &hash.0);
         Block {
             header: BlockHeader {

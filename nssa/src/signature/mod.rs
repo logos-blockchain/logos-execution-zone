@@ -37,7 +37,6 @@ impl FromStr for Signature {
 
 impl Signature {
     #[must_use]
-    /// This function expects the incoming message to be prehashed to be pre-2022 BIP-340/Keycard compatible.
     pub fn new(key: &PrivateKey, message: &[u8; 32]) -> Self {
         let mut aux_random = [0_u8; 32];
         OsRng.fill_bytes(&mut aux_random);
@@ -62,7 +61,7 @@ impl Signature {
     }
 
     #[must_use]
-    pub fn is_valid_for(&self, bytes: &[u8; 32], public_key: &PublicKey) -> bool {
+    pub fn is_valid_for(&self, bytes: &[u8], public_key: &PublicKey) -> bool {
         let Ok(pk) = k256::schnorr::VerifyingKey::from_bytes(public_key.value()) else {
             return false;
         };
@@ -98,8 +97,9 @@ mod tests {
             let Some(aux_random) = test_vector.aux_rand else {
                 continue;
             };
-            let message = test_vector.message;
-
+            let Some(message) = test_vector.message else {
+                continue;
+            };
             if !test_vector.verification_result {
                 continue;
             }
@@ -114,7 +114,7 @@ mod tests {
     #[test]
     fn signature_verification_from_bip340_test_vectors() {
         for (i, test_vector) in bip340_test_vectors::test_vectors().into_iter().enumerate() {
-            let message = test_vector.message;
+            let message = test_vector.message.unwrap_or([0_u8; 32]);
             let expected_result = test_vector.verification_result;
 
             let result = test_vector
