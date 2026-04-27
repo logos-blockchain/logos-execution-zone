@@ -134,7 +134,7 @@ pub fn test_vectors() -> Vec<TestVector> {
         //                     "EEFDEA4CDB677750A420FEE807EACF21EB9898AE79B9768766E4FAA04A2D4A34",
         //                 )).unwrap(),
         //     aux_rand: None,
-        //     message: 
+        //     message:
         //
         // hex::decode("243F6A8885A308D313198A2E03707344A4093822299F31D0082EFA98EC4E6C89").
         // unwrap(),                 ),
@@ -289,7 +289,7 @@ pub fn test_vectors() -> Vec<TestVector> {
         //                     "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC30",
         //                 )).unwrap(),
         //     aux_rand: None,
-        //     message: 
+        //     message:
         //
         // hex::decode("243F6A8885A308D313198A2E03707344A4093822299F31D0082EFA98EC4E6C89").
         // unwrap(),                 ),
@@ -369,7 +369,7 @@ pub fn test_vectors() -> Vec<TestVector> {
         // aux_rand: hex_to_bytes::<32>(
         // "0000000000000000000000000000000000000000000000000000000000000000",
         // )),
-        // message: 
+        // message:
         // hex::decode("99999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999").unwrap(),
         // ),
         // signature: Signature {
