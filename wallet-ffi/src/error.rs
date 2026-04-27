@@ -4,7 +4,7 @@
 
 /// Error codes returned by FFI functions.
 #[repr(C)]
-// #[must_use]
+#[must_use]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WalletFfiError {
     /// Operation completed successfully.
