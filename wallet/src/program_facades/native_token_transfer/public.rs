@@ -60,12 +60,12 @@ impl NativeTokenTransfer<'_> {
                     .expect("Expect a valid signature")
             } else {
                 let pub_key = KeycardWallet::get_public_key_for_path_with_connect(
-                    &pin.as_ref().expect("TODO"),
-                    &key_path.as_ref().expect("TODO"),
+                    &pin.as_ref().expect("Expect a pin as a String."),
+                    &key_path.as_ref().expect("Expect a key path String."),
                 );
                 let signature = KeycardWallet::sign_message_for_path_with_connect(
-                    &pin.as_ref().expect("TODO"),
-                    &key_path.as_ref().expect("TODO"),
+                    &pin.as_ref().expect("Expect a pin as a String."),
+                    &key_path.as_ref().expect("Expect a key path String."),
                     &message.hash_message(),
                 )
                 .expect("Expect valid signature");
@@ -112,13 +112,13 @@ impl NativeTokenTransfer<'_> {
             WitnessSet::for_message(&message, &[signing_key])
         } else {
             let pub_key = KeycardWallet::get_public_key_for_path_with_connect(
-                pin.as_ref().expect("TODO"),
-                key_path.as_ref().expect("TODO"),
+                pin.as_ref().expect("Expect a pin as a String."),
+                key_path.as_ref().expect("Expect a key path String."),
             );
 
             let signature = KeycardWallet::sign_message_for_path_with_connect(
-                pin.as_ref().as_ref().expect("TODO"),
-                key_path.as_ref().expect("TODO"),
+                pin.as_ref().as_ref().expect("Expect a pin as a String."),
+                key_path.as_ref().expect("Expect a key path String."),
                 &message.hash_message(),
             )
             .expect("Expect a valid Signature.");

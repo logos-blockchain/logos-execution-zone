@@ -90,14 +90,14 @@ mod tests {
 
         assert_eq!(witness_set.signatures_and_public_keys.len(), 2);
 
-        let message_bytes = message.to_bytes();
+        let message_hash = message.hash_message();
         for ((signature, public_key), expected_public_key) in witness_set
             .signatures_and_public_keys
             .into_iter()
             .zip([pubkey1, pubkey2])
         {
             assert_eq!(public_key, expected_public_key);
-            assert!(signature.is_valid_for(&message_bytes, &expected_public_key));
+            assert!(signature.is_valid_for(&message_hash, &expected_public_key));
         }
     }
 }

@@ -77,7 +77,8 @@ async fn sync_private_account_with_non_zero_chain_index() -> Result<()> {
         to_vpk: Some(hex::encode(to_keys.viewing_public_key.0)),
         amount: 100,
         pin: None,
-        key_path: None,
+        from_key_path: None,
+        to_key_path: None,
     });
 
     let sub_ret = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
@@ -155,7 +156,8 @@ async fn restore_keys_from_seed() -> Result<()> {
         to_vpk: None,
         amount: 100,
         pin: None,
-        key_path: None,
+        from_key_path: None,
+        to_key_path: None,
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
@@ -169,7 +171,8 @@ async fn restore_keys_from_seed() -> Result<()> {
         to_vpk: None,
         amount: 101,
         pin: None,
-        key_path: None,
+        from_key_path: None,
+        to_key_path: None,
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
@@ -211,7 +214,8 @@ async fn restore_keys_from_seed() -> Result<()> {
         to_vpk: None,
         amount: 102,
         pin: None,
-        key_path: None,
+        from_key_path: None,
+        to_key_path: None,
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
@@ -225,7 +229,8 @@ async fn restore_keys_from_seed() -> Result<()> {
         to_vpk: None,
         amount: 103,
         pin: None,
-        key_path: None,
+        from_key_path: None,
+        to_key_path: None,
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
@@ -292,7 +297,8 @@ async fn restore_keys_from_seed() -> Result<()> {
         to_vpk: None,
         amount: 10,
         pin: None,
-        key_path: None,
+        from_key_path: None,
+        to_key_path: None,
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
@@ -305,7 +311,8 @@ async fn restore_keys_from_seed() -> Result<()> {
         to_vpk: None,
         amount: 11,
         pin: None,
-        key_path: None,
+        from_key_path: None,
+        to_key_path: None,
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 

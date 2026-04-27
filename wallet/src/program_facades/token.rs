@@ -214,12 +214,12 @@ impl Token<'_> {
             nssa::public_transaction::WitnessSet::for_message(&message, &private_keys)
         } else {
             let sender_public_key = KeycardWallet::get_public_key_for_path_with_connect(
-                &pin.as_ref().expect("TODO"),
-                &sender_key_path.as_ref().expect("TODO"),
+                &pin.as_ref().expect("Expect a pin as a String."),
+                &sender_key_path.as_ref().expect("Expect a key path String."),
             );
             let signature = KeycardWallet::sign_message_for_path_with_connect(
-                &pin.expect("TODO"),
-                &sender_key_path.expect("TODO"),
+                &pin.expect("Expect a pin as a String."),
+                &sender_key_path.expect("Expect a key path String."),
                 &message.hash_message(),
             )
             .expect("Expect a valid signature");

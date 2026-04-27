@@ -31,11 +31,7 @@ impl WitnessSet {
     }
 
     #[must_use]
-    pub fn from_list(
-        proof: Proof,
-        signatures: &[Signature],
-        public_keys: &[PublicKey],
-    ) -> Self {
+    pub fn from_list(proof: Proof, signatures: &[Signature], public_keys: &[PublicKey]) -> Self {
         assert_eq!(signatures.len(), public_keys.len());
 
         let signatures_and_public_keys = signatures

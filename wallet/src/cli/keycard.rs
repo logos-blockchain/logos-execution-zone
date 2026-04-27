@@ -52,7 +52,7 @@ impl WalletSubcommand for KeycardSubcommand {
                     let wallet = KeycardWallet::new(py).expect("Expect keycard wallet");
 
                     let is_connected = wallet
-                        .setup_communication(py, &pin.expect("TODO"))
+                        .setup_communication(py, &pin.expect("Expect a pin as a String."))
                         .expect("Expect a Boolean.");
 
                     if is_connected {
@@ -61,7 +61,7 @@ impl WalletSubcommand for KeycardSubcommand {
                         println!("\u{274c} Keycard is not connected to wallet.");
                     }
 
-                    let _ = wallet.load_mnemonic(py, &mnemonic.expect("TODO"));
+                    let _ = wallet.load_mnemonic(py, &mnemonic.expect("Expect a mnemonic phrase as a string"));
 
                     let _ = wallet.disconnect(py);
                 });

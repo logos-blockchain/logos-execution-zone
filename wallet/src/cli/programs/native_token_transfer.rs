@@ -167,7 +167,7 @@ impl WalletSubcommand for AuthTransferSubcommand {
                     )?),
                     (None, None, Some(to_key_path)) => {
                         Some(KeycardWallet::get_account_id_for_path_with_connect(
-                            &pin.as_ref().expect("TODO"),
+                            &pin.as_ref().expect("Expect a pin as a String."),
                             &to_key_path,
                         ))
                     }
@@ -486,7 +486,7 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandShielded {
 
                 let (tx_hash, secret) = NativeTokenTransfer(wallet_core)
                     .send_shielded_transfer(from, to, amount, &pin, &key_path)
-                    .await?; //TODO: here (marvin)
+                    .await?;
 
                 println!("Transaction hash is {tx_hash}");
 

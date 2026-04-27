@@ -391,12 +391,12 @@ impl WalletCore {
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         let acc_manager = privacy_preserving_tx::AccountManager::new(self, accounts).await?;
 
-        let mut pre_states = acc_manager.pre_states();
+        let pre_states = acc_manager.pre_states();
 
         let keycard_account = if let Some(pin) = pin.as_ref() {
             let account_id = KeycardWallet::get_account_id_for_path_with_connect(
                 pin,
-                key_path.as_ref().expect("TODO"),
+                key_path.as_ref().expect("Expect a key path String."),
             );
 
             let (acc_id, _) =
@@ -417,11 +417,11 @@ impl WalletCore {
             None
         };
 
-        let mut nonces: Vec<Nonce> = acc_manager.public_account_nonces().into_iter().collect();
+        let nonces: Vec<Nonce> = acc_manager.public_account_nonces().into_iter().collect();
 
-        let mut account_ids: Vec<AccountId> = acc_manager.public_account_ids();
+        let account_ids: Vec<AccountId> = acc_manager.public_account_ids();
 
-        let mut visibility_mask = acc_manager.visibility_mask().to_vec();
+        let visibility_mask = acc_manager.visibility_mask().to_vec();
 
         if let Some(acc) = keycard_account.as_ref() {
             nonces.push(acc.account.nonce);
@@ -627,11 +627,11 @@ impl WalletCore {
         message: &nssa::privacy_preserving_transaction::Message,
         proof: &Proof,
         acc_manager: &privacy_preserving_tx::AccountManager,
-        pin: &Option<String>,
-        key_path: &Option<String>,
+        _pin: &Option<String>,
+        _key_path: &Option<String>,
     ) -> Result<nssa::privacy_preserving_transaction::witness_set::WitnessSet, ExecutionFailureKind>
     {
-        if pin.is_none() {
+        //if pin.is_none() {
             Ok(
                 nssa::privacy_preserving_transaction::witness_set::WitnessSet::for_message(
                     message,
@@ -639,14 +639,14 @@ impl WalletCore {
                     &acc_manager.public_account_auth(),
                 ),
             )
-        } else {
+        /*} else {
             let public_key = KeycardWallet::get_public_key_for_path_with_connect(
-                &pin.as_ref().expect("TODO"),
-                &key_path.as_ref().expect("TODO"),
+                &pin.as_ref().expect("Expect a pin as a String."),
+                &key_path.as_ref().expect("Expect a key path String."),
             );
             let signature = KeycardWallet::sign_message_for_path_with_connect(
-                &pin.as_ref().expect("TODO"),
-                &key_path.as_ref().expect("TODO"),
+                &pin.as_ref().expect("Expect a pin as a String."),
+                &key_path.as_ref().expect("Expect a key path String."),
                 &message.hash_message(),
             )
             .expect("Expect a valid signature");
@@ -661,7 +661,7 @@ impl WalletCore {
                     &public_keys,
                 ),
             )
-        }
+        }*/
     }
 
     pub fn sign_privacy_message_with_keycard(
@@ -674,20 +674,12 @@ impl WalletCore {
         let mut signatures = Vec::<Signature>::new();
         let mut public_keys = Vec::<PublicKey>::new();
 
-        let message_bytes: [u8; 32] = {
-            let v = message.to_bytes();
-            let mut bytes = [0_u8; 32];
-            let len = v.len().min(32);
-            bytes[..len].copy_from_slice(&v[..len]);
-            bytes
-        };
-
         for path in key_paths.iter() {
             public_keys.push(KeycardWallet::get_public_key_for_path_with_connect(
                 &pin, &path,
             ));
             signatures.push(
-                KeycardWallet::sign_message_for_path_with_connect(&pin, &path, &message_bytes)
+                KeycardWallet::sign_message_for_path_with_connect(&pin, &path, &message.hash_message())
                     .expect("Expect a valid signature"),
             );
         }

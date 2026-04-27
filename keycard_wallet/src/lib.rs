@@ -1,16 +1,15 @@
 use nssa::{AccountId, PublicKey, Signature};
 use pyo3::{prelude::*, types::PyAny};
 
-use crate::cli::python_path;
+pub mod python_path;
 
-/// Rust wrapper around the Python KeycardWallet class.
-/// Holds a persistent Python object in memory.
+/// Rust wrapper around the Python `KeycardWallet` class.
 pub struct KeycardWallet {
     instance: Py<PyAny>,
 }
 
 impl KeycardWallet {
-    /// Create a new Python KeycardWallet instance
+    /// Create a new Python `KeycardWallet` instance.
     pub fn new(py: Python) -> PyResult<Self> {
         let module = py.import_bound("keycard_wallet")?;
         let class = module.getattr("KeycardWallet")?;
@@ -22,7 +21,6 @@ impl KeycardWallet {
         })
     }
 
-    /// Calls Python: is_unpaired_keycard_available()
     pub fn is_unpaired_keycard_available(&self, py: Python) -> PyResult<bool> {
         self.instance
             .bind(py)
@@ -30,7 +28,7 @@ impl KeycardWallet {
             .extract()
     }
 
-    pub fn setup_communication(&self, py: Python, pin: &String) -> PyResult<bool> {
+    pub fn setup_communication(&self, py: Python, pin: &str) -> PyResult<bool> {
         let py_pin = pyo3::types::PyString::new_bound(py, pin);
 
         self.instance
@@ -43,7 +41,7 @@ impl KeycardWallet {
         self.instance.bind(py).call_method0("disconnect")?.extract()
     }
 
-    pub fn get_public_key_for_path(&self, py: Python, path: &String) -> PyResult<PublicKey> {
+    pub fn get_public_key_for_path(&self, py: Python, path: &str) -> PyResult<PublicKey> {
         let public_key: Vec<u8> = self
             .instance
             .bind(py)
@@ -55,11 +53,12 @@ impl KeycardWallet {
         Ok(PublicKey::try_new(public_key).expect("Expect a valid public key1"))
     }
 
-    pub fn get_public_key_for_path_with_connect(pin: &String, path: &String) -> PublicKey {
+    #[must_use]
+    pub fn get_public_key_for_path_with_connect(pin: &str, path: &str) -> PublicKey {
         let pub_key = Python::with_gil(|py| {
             python_path::add_python_path(py).expect("keycard_wallet.py not found");
 
-            let wallet = KeycardWallet::new(py).expect("Expect keycard wallet");
+            let wallet = Self::new(py).expect("Expect keycard wallet");
 
             let is_connected = wallet
                 .setup_communication(py, pin)
@@ -82,7 +81,7 @@ impl KeycardWallet {
     pub fn sign_message_for_path(
         &self,
         py: Python,
-        path: &String,
+        path: &str,
         message: &[u8; 32],
     ) -> PyResult<Signature> {
         let py_message = pyo3::types::PyBytes::new_bound(py, message);
@@ -98,19 +97,20 @@ impl KeycardWallet {
                 "Expected signature of exactly 64 bytes",
             )
         })?;
-        println!("{:?}", signature);
+        println!("{signature:?}");
         Ok(Signature { value: signature })
     }
 
-    pub fn sign_message_for_path_with_connection(
-        pin: &String,
-        path: &String,
+    #[must_use]
+    pub fn sign_message_for_path_with_connect(
+        pin: &str,
+        path: &str,
         message: &[u8; 32],
     ) -> PyResult<Signature> {
-            let signature = Python::with_gil(|py| {
+        Python::with_gil(|py| {
             python_path::add_python_path(py).expect("keycard_wallet.py not found");
 
-            let wallet = KeycardWallet::new(py).expect("Expect keycard wallet");
+            let wallet = Self::new(py).expect("Expect keycard wallet");
 
             let is_connected = wallet
                 .setup_communication(py, pin)
@@ -127,9 +127,7 @@ impl KeycardWallet {
             let _ = wallet.disconnect(py);
 
             signature
-        });
-
-        signature
+        })
     }
 
     pub fn load_mnemonic(&self, py: Python, mnemonic: &str) -> PyResult<()> {
@@ -139,9 +137,10 @@ impl KeycardWallet {
         Ok(())
     }
 
-    pub fn get_account_id_for_path_with_connect(pin: &String, key_path: &String) -> AccountId {
-        let public_key = KeycardWallet::get_public_key_for_path_with_connect(pin, key_path);
+    #[must_use]
+    pub fn get_account_id_for_path_with_connect(pin: &str, key_path: &str) -> String {
+        let public_key = Self::get_public_key_for_path_with_connect(pin, key_path);
 
-        AccountId::from(&public_key)
+        format!("Public/{}", AccountId::from(&public_key))
     }
 }

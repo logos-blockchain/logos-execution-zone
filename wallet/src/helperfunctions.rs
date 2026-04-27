@@ -69,7 +69,7 @@ pub fn resolve_id_or_label(
         (None, Some(label), None) => resolve_account_label(&label, labels, user_data),
         (None, None, Some(pin)) => Ok(KeycardWallet::get_account_id_for_path_with_connect(
             pin,
-            key_path.as_ref().expect("TODO"),
+            key_path.as_ref().expect("Expect a key path String."),
         )
         .to_string()),
         _ => anyhow::bail!("provide exactly one of account id, account label or keycard path"),
