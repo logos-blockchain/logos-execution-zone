@@ -3600,7 +3600,6 @@ dependencies = [
  "sequencer_service_rpc",
  "serde_json",
  "tempfile",
- "test_program_methods",
  "testcontainers",
  "testnet_initial_state",
  "token_core",

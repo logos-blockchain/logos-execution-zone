@@ -598,4 +598,73 @@ mod tests {
             }
         }
     }
+
+    /// Full lifecycle: create group, distribute GMS via seal/unseal, verify key
+    /// agreement, ratchet for forward secrecy.
+    #[test]
+    fn group_pda_lifecycle() {
+        use nssa_core::account::AccountId;
+
+        let alice_holder = GroupKeyHolder::new();
+        assert_eq!(alice_holder.epoch(), 0);
+        let pda_seed = PdaSeed::new([42_u8; 32]);
+        let program_id: nssa_core::program::ProgramId = [1; 8];
+
+        // Derive Alice's keys
+        let alice_keys = alice_holder.derive_keys_for_pda(&pda_seed);
+        let alice_npk = alice_keys.generate_nullifier_public_key();
+
+        // Seal GMS for Bob using Bob's viewing key, Bob unseals
+        let bob_ssk = SecretSpendingKey([77_u8; 32]);
+        let bob_keys = bob_ssk.produce_private_key_holder(None);
+        let bob_vpk = bob_keys.generate_viewing_public_key();
+        let bob_vsk = bob_keys.viewing_secret_key;
+
+        let sealed = alice_holder.seal_for(&bob_vpk);
+        let bob_holder =
+            GroupKeyHolder::unseal(&sealed, &bob_vsk).expect("Bob should unseal the GMS");
+
+        // Key agreement: both derive identical NPK and AccountId
+        let bob_npk = bob_holder
+            .derive_keys_for_pda(&pda_seed)
+            .generate_nullifier_public_key();
+        assert_eq!(alice_npk, bob_npk);
+
+        let alice_account_id = AccountId::for_private_pda(&program_id, &pda_seed, &alice_npk);
+        let bob_account_id = AccountId::for_private_pda(&program_id, &pda_seed, &bob_npk);
+        assert_eq!(alice_account_id, bob_account_id);
+
+        // Ratchet: forward secrecy
+        let mut ratcheted_holder = alice_holder;
+        ratcheted_holder.ratchet([99_u8; 32]);
+        assert_eq!(ratcheted_holder.epoch(), 1);
+
+        let ratcheted_npk = ratcheted_holder
+            .derive_keys_for_pda(&pda_seed)
+            .generate_nullifier_public_key();
+        let bob_stale_npk = bob_holder
+            .derive_keys_for_pda(&pda_seed)
+            .generate_nullifier_public_key();
+
+        assert_ne!(ratcheted_npk, bob_stale_npk);
+        assert_ne!(ratcheted_npk, alice_npk);
+
+        let new_account_id = AccountId::for_private_pda(&program_id, &pda_seed, &ratcheted_npk);
+        assert_ne!(alice_account_id, new_account_id);
+
+        // Bob's stale keys point to old address
+        let bob_stale_id = AccountId::for_private_pda(&program_id, &pda_seed, &bob_stale_npk);
+        assert_eq!(bob_stale_id, alice_account_id);
+        assert_ne!(bob_stale_id, new_account_id);
+
+        // Sealed round-trip of ratcheted GMS
+        let sealed_ratcheted = ratcheted_holder.seal_for(&bob_vpk);
+        let restored = GroupKeyHolder::unseal(&sealed_ratcheted, &bob_vsk)
+            .expect("Should unseal ratcheted GMS");
+        assert_eq!(
+            restored.dangerous_raw_gms(),
+            ratcheted_holder.dangerous_raw_gms()
+        );
+        assert_eq!(restored.epoch(), 1);
+    }
 }
