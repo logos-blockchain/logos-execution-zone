@@ -79,8 +79,6 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                &None,
-                &None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -111,8 +109,6 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                &None,
-                &None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -143,8 +139,6 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                &None,
-                &None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -255,8 +249,6 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                &None,
-                &None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -291,8 +283,6 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                &None,
-                &None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -323,8 +313,6 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                &None,
-                &None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -356,8 +344,6 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                &None,
-                &None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -393,8 +379,6 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                &None,
-                &None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -468,8 +452,6 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                &None,
-                &None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -500,8 +482,6 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                &None,
-                &None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -533,8 +513,6 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                &None,
-                &None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -630,8 +608,6 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                &None,
-                &None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -666,8 +642,6 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                &None,
-                &None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -698,8 +672,6 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                &None,
-                &None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -731,8 +703,6 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                &None,
-                &None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -768,8 +738,6 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                &None,
-                &None,
             )
             .await
             .map(|(resp, secrets)| {

@@ -28,14 +28,14 @@ pub enum AccountSubcommand {
         #[arg(short, long)]
         keys: bool,
         /// Valid 32 byte base58 string with privacy prefix.
-        #[arg(short, long, conflicts_with = "account_label")]
+        #[arg(short, long, conflicts_with = "account_label", required_unless_present_any = ["account_label", "pin"])]
         account_id: Option<String>,
         /// Account label (alternative to --account-id).
         #[arg(long, conflicts_with = "account_id")]
         account_label: Option<String>,
-        #[arg(long, conflicts_with = "account_id", conflicts_with = "account_id")]
+        #[arg(long, conflicts_with = "account_id", conflicts_with = "account_label", requires = "key_path")]
         pin: Option<String>,
-        #[arg(long, conflicts_with = "account_id", conflicts_with = "account_id")]
+        #[arg(long)]
         key_path: Option<String>,
     },
     /// Produce new public or private account.
@@ -205,6 +205,7 @@ impl WalletSubcommand for AccountSubcommand {
 
                 let account_id: nssa::AccountId = account_id_str.parse()?;
 
+                // Add account id to the display for keycard users.
                 println!("Account Id: {}", resolved);
 
                 if let Some(label) = wallet_core.storage.labels.get(&account_id_str) {
