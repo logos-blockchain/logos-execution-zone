@@ -14,7 +14,6 @@ use crate::{
         account::AccountSubcommand,
         chain::ChainSubcommand,
         config::ConfigSubcommand,
-        keycard::KeycardSubcommand,
         programs::{
             amm::AmmProgramAgnosticSubcommand, ata::AtaSubcommand,
             native_token_transfer::AuthTransferSubcommand, pinata::PinataProgramAgnosticSubcommand,
@@ -26,7 +25,6 @@ use crate::{
 pub mod account;
 pub mod chain;
 pub mod config;
-pub mod keycard;
 pub mod programs;
 
 pub(crate) trait WalletSubcommand {
@@ -75,8 +73,6 @@ pub enum Command {
     },
     /// Deploy a program.
     DeployProgram { binary_filepath: PathBuf },
-    #[command(subcommand)]
-    Keycard(KeycardSubcommand),
 }
 
 /// To execute commands, env var `NSSA_WALLET_HOME_DIR` must be set into directory with config.
@@ -124,9 +120,6 @@ pub async fn execute_subcommand(
         }
         Command::Pinata(pinata_subcommand) => {
             pinata_subcommand.handle_subcommand(wallet_core).await?
-        }
-        Command::Keycard(keycard_subcommand) => {
-            keycard_subcommand.handle_subcommand(wallet_core).await?
         }
         Command::CheckHealth => {
             let remote_program_ids = wallet_core

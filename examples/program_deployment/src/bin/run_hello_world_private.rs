@@ -52,8 +52,6 @@ async fn main() {
             accounts,
             Program::serialize_instruction(greeting).unwrap(),
             &program.into(),
-            &None,
-            &None,
         )
         .await
         .unwrap();

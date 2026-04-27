@@ -216,24 +216,18 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
                     user_holding_a_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
-                    &None,
-                    &None,
                 )?;
                 let user_holding_b = resolve_id_or_label(
                     user_holding_b,
                     user_holding_b_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
-                    &None,
-                    &None,
                 )?;
                 let user_holding_lp = resolve_id_or_label(
                     user_holding_lp,
                     user_holding_lp_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
-                    &None,
-                    &None,
                 )?;
                 let (user_holding_a, user_holding_a_privacy) =
                     parse_addr_with_privacy_prefix(&user_holding_a)?;
@@ -288,16 +282,12 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
                     user_holding_a_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
-                    &None,
-                    &None,
                 )?;
                 let user_holding_b = resolve_id_or_label(
                     user_holding_b,
                     user_holding_b_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
-                    &None,
-                    &None,
                 )?;
                 let (user_holding_a, user_holding_a_privacy) =
                     parse_addr_with_privacy_prefix(&user_holding_a)?;
@@ -378,24 +368,18 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
                     user_holding_a_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
-                    &None,
-                    &None,
                 )?;
                 let user_holding_b = resolve_id_or_label(
                     user_holding_b,
                     user_holding_b_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
-                    &None,
-                    &None,
                 )?;
                 let user_holding_lp = resolve_id_or_label(
                     user_holding_lp,
                     user_holding_lp_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
-                    &None,
-                    &None,
                 )?;
                 let (user_holding_a, user_holding_a_privacy) =
                     parse_addr_with_privacy_prefix(&user_holding_a)?;
@@ -453,24 +437,18 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
                     user_holding_a_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
-                    &None,
-                    &None,
                 )?;
                 let user_holding_b = resolve_id_or_label(
                     user_holding_b,
                     user_holding_b_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
-                    &None,
-                    &None,
                 )?;
                 let user_holding_lp = resolve_id_or_label(
                     user_holding_lp,
                     user_holding_lp_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
-                    &None,
-                    &None,
                 )?;
                 let (user_holding_a, user_holding_a_privacy) =
                     parse_addr_with_privacy_prefix(&user_holding_a)?;

@@ -54,8 +54,6 @@ async fn claim_pinata_to_uninitialized_public_account_fails_fast() -> Result<()>
         Command::Pinata(PinataProgramAgnosticSubcommand::Claim {
             to: Some(winner_account_id_formatted),
             to_label: None,
-            pin: None,
-            key_path: None,
         }),
     )
     .await;
@@ -111,8 +109,6 @@ async fn claim_pinata_to_uninitialized_private_account_fails_fast() -> Result<()
         Command::Pinata(PinataProgramAgnosticSubcommand::Claim {
             to: Some(winner_account_id_formatted),
             to_label: None,
-            pin: None,
-            key_path: None,
         }),
     )
     .await;
@@ -145,8 +141,6 @@ async fn claim_pinata_to_existing_public_account() -> Result<()> {
     let command = Command::Pinata(PinataProgramAgnosticSubcommand::Claim {
         to: Some(format_public_account_id(ctx.existing_public_accounts()[0])),
         to_label: None,
-        pin: None,
-        key_path: None,
     });
 
     let pinata_balance_pre = ctx
@@ -188,8 +182,6 @@ async fn claim_pinata_to_existing_private_account() -> Result<()> {
             ctx.existing_private_accounts()[0],
         )),
         to_label: None,
-        pin: None,
-        key_path: None,
     });
 
     let pinata_balance_pre = ctx
@@ -255,8 +247,6 @@ async fn claim_pinata_to_new_private_account() -> Result<()> {
     let command = Command::AuthTransfer(AuthTransferSubcommand::Init {
         account_id: Some(winner_account_id_formatted.clone()),
         account_label: None,
-        pin: None,
-        key_path: None,
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
@@ -273,8 +263,6 @@ async fn claim_pinata_to_new_private_account() -> Result<()> {
     let command = Command::Pinata(PinataProgramAgnosticSubcommand::Claim {
         to: Some(winner_account_id_formatted),
         to_label: None,
-        pin: None,
-        key_path: None,
     });
 
     let pinata_balance_pre = ctx

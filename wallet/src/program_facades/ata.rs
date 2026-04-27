@@ -194,13 +194,7 @@ impl Ata<'_> {
         ];
 
         self.0
-            .send_privacy_preserving_tx(
-                accounts,
-                instruction_data,
-                &ata_with_token_dependency(),
-                &None,
-                &None,
-            )
+            .send_privacy_preserving_tx(accounts, instruction_data, &ata_with_token_dependency())
             .await
             .map(|(hash, mut secrets)| {
                 let secret = secrets.pop().expect("expected owner's secret");
@@ -235,13 +229,7 @@ impl Ata<'_> {
         ];
 
         self.0
-            .send_privacy_preserving_tx(
-                accounts,
-                instruction_data,
-                &ata_with_token_dependency(),
-                &None,
-                &None,
-            )
+            .send_privacy_preserving_tx(accounts, instruction_data, &ata_with_token_dependency())
             .await
             .map(|(hash, mut secrets)| {
                 let secret = secrets.pop().expect("expected owner's secret");
@@ -275,13 +263,7 @@ impl Ata<'_> {
         ];
 
         self.0
-            .send_privacy_preserving_tx(
-                accounts,
-                instruction_data,
-                &ata_with_token_dependency(),
-                &None,
-                &None,
-            )
+            .send_privacy_preserving_tx(accounts, instruction_data, &ata_with_token_dependency())
             .await
             .map(|(hash, mut secrets)| {
                 let secret = secrets.pop().expect("expected owner's secret");
