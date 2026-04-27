@@ -3,13 +3,12 @@ use std::{collections::HashMap, path::PathBuf, str::FromStr as _};
 use anyhow::{Context as _, Result};
 use base58::ToBase58 as _;
 use key_protocol::key_protocol_core::NSSAUserData;
+use keycard_wallet::KeycardWallet;
 use nssa::Account;
 use nssa_core::account::Nonce;
 use rand::{RngCore as _, rngs::OsRng};
 use serde::Serialize;
 use testnet_initial_state::{PrivateAccountPrivateInitialData, PublicAccountPrivateInitialData};
-use keycard_wallet::KeycardWallet;
-
 
 use crate::{
     HOME_DIR_ENV_VAR,
@@ -68,8 +67,12 @@ pub fn resolve_id_or_label(
     match (id, label, pin) {
         (Some(id), None, None) => Ok(id),
         (None, Some(label), None) => resolve_account_label(&label, labels, user_data),
-        (None, None, Some(pin)) => Ok(KeycardWallet::get_account_id_for_path_with_connect(pin, key_path.as_ref().expect("TODO")).to_string()),
-        _ => anyhow::bail!("provide exactly one of account id or account label"),
+        (None, None, Some(pin)) => Ok(KeycardWallet::get_account_id_for_path_with_connect(
+            pin,
+            key_path.as_ref().expect("TODO"),
+        )
+        .to_string()),
+        _ => anyhow::bail!("provide exactly one of account id, account label or keycard path"),
     }
 }
 

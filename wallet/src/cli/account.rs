@@ -28,11 +28,7 @@ pub enum AccountSubcommand {
         #[arg(short, long)]
         keys: bool,
         /// Valid 32 byte base58 string with privacy prefix.
-        #[arg(
-            short,
-            long,
-            conflicts_with = "account_label",
-        )]
+        #[arg(short, long, conflicts_with = "account_label")]
         account_id: Option<String>,
         /// Account label (alternative to --account-id).
         #[arg(long, conflicts_with = "account_id")]
@@ -208,6 +204,8 @@ impl WalletSubcommand for AccountSubcommand {
                 let (account_id_str, addr_kind) = parse_addr_with_privacy_prefix(&resolved)?;
 
                 let account_id: nssa::AccountId = account_id_str.parse()?;
+
+                println!("Account Id: {}", resolved);
 
                 if let Some(label) = wallet_core.storage.labels.get(&account_id_str) {
                     println!("Label: {label}");

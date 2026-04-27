@@ -59,7 +59,6 @@ impl NativeTokenTransfer<'_> {
                 WalletCore::sign_public_message(self.0, &message, &sign_ids)
                     .expect("Expect a valid signature")
             } else {
-                
                 let pub_key = KeycardWallet::get_public_key_for_path_with_connect(
                     &pin.as_ref().expect("TODO"),
                     &key_path.as_ref().expect("TODO"),
@@ -100,7 +99,8 @@ impl NativeTokenTransfer<'_> {
         let instruction: u128 = 0;
         let account_ids = vec![from];
         let program_id = Program::authenticated_transfer_program().id();
-        let message = Message::try_new(program_id, account_ids, nonces, instruction).expect("Expect a valid Message");
+        let message = Message::try_new(program_id, account_ids, nonces, instruction)
+            .expect("Expect a valid Message");
 
         let witness_set = if pin.is_none() {
             let signing_key = self.0.storage.user_data.get_pub_account_signing_key(from);

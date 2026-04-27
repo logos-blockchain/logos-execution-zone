@@ -33,8 +33,8 @@ impl WitnessSet {
     #[must_use]
     pub fn from_list(
         proof: Proof,
-        signatures: &Vec<Signature>,
-        public_keys: &Vec<PublicKey>,
+        signatures: &[Signature],
+        public_keys: &[PublicKey],
     ) -> Self {
         assert_eq!(signatures.len(), public_keys.len());
 

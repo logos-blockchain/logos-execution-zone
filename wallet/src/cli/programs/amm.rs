@@ -51,7 +51,7 @@ pub enum AmmProgramAgnosticSubcommand {
         #[arg(long)]
         balance_a: u128,
         #[arg(long)]
-        balance_b: u128,        
+        balance_b: u128,
     },
     /// Swap specifying exact input amount.
     ///

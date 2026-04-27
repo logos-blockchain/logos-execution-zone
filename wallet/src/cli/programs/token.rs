@@ -76,8 +76,8 @@ pub enum TokenProgramAgnosticSubcommand {
         /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
-        #[arg(long, conflicts_with = "from", conflicts_with = "from_label")]
-        from_pin: Option<String>,
+        #[arg(long)]
+        pin: Option<String>,
         #[arg(long, conflicts_with = "from", conflicts_with = "from_label")]
         from_key_path: Option<String>,
     },
@@ -99,11 +99,7 @@ pub enum TokenProgramAgnosticSubcommand {
         #[arg(long, conflicts_with = "definition")]
         definition_label: Option<String>,
         /// holder - valid 32 byte base58 string with privacy prefix.
-        #[arg(
-            long,
-            conflicts_with = "holder_label",
-            required_unless_present = "holder_label"
-        )]
+        #[arg(long, conflicts_with = "holder_label")]
         holder: Option<String>,
         /// Holder account label (alternative to --holder).
         #[arg(long, conflicts_with = "holder")]
@@ -245,15 +241,15 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                 to_npk,
                 to_vpk,
                 amount,
-                from_pin,
-                from_key_path
+                pin,
+                from_key_path,
             } => {
                 let from = resolve_id_or_label(
                     from,
                     from_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
-                    &from_pin,
+                    &pin,
                     &from_key_path,
                 )?;
                 let to = match (to, to_label) {
@@ -284,7 +280,7 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                     (Some(to), None, None) => {
                         let (from, from_privacy) = parse_addr_with_privacy_prefix(&from)?;
                         let (to, to_privacy) = parse_addr_with_privacy_prefix(&to)?;
-                        // TODO: (Marvin) return here
+
                         match (from_privacy, to_privacy) {
                             (AccountPrivacyKind::Public, AccountPrivacyKind::Public) => {
                                 TokenProgramSubcommand::Public(
@@ -292,6 +288,8 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                                         sender_account_id: from,
                                         recipient_account_id: to,
                                         balance_to_move: amount,
+                                        pin,
+                                        sender_key_path: from_key_path,
                                     },
                                 )
                             }
@@ -379,7 +377,6 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                     let (definition, definition_privacy) =
                         parse_addr_with_privacy_prefix(&definition)?;
                     let (holder, holder_privacy) = parse_addr_with_privacy_prefix(&holder)?;
-                    // TODO Marvin return here
                     match (definition_privacy, holder_privacy) {
                         (AccountPrivacyKind::Public, AccountPrivacyKind::Public) => {
                             TokenProgramSubcommand::Public(
@@ -431,7 +428,7 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                 holder_vpk,
                 amount,
                 holder_pin,
-                holder_key_path
+                holder_key_path,
             } => {
                 let definition = resolve_id_or_label(
                     definition,
@@ -449,7 +446,6 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                     &holder_pin,
                     &holder_key_path,
                 )?);
-                //TODO return here (Marvin)
                 let underlying_subcommand = match (holder, holder_npk, holder_vpk) {
                     (None, None, None) => {
                         anyhow::bail!(
@@ -570,6 +566,10 @@ pub enum TokenProgramSubcommandPublic {
         recipient_account_id: String,
         #[arg(short, long)]
         balance_to_move: u128,
+        #[arg(long)]
+        pin: Option<String>,
+        #[arg(long)]
+        sender_key_path: Option<String>,
     },
     // Burn tokens using the token program
     BurnToken {
@@ -802,12 +802,16 @@ impl WalletSubcommand for TokenProgramSubcommandPublic {
                 sender_account_id,
                 recipient_account_id,
                 balance_to_move,
+                pin,
+                sender_key_path,
             } => {
                 Token(wallet_core)
                     .send_transfer_transaction(
                         sender_account_id.parse().unwrap(),
                         recipient_account_id.parse().unwrap(),
                         balance_to_move,
+                        pin,
+                        sender_key_path,
                     )
                     .await?;
                 Ok(SubcommandReturnValue::Empty)
