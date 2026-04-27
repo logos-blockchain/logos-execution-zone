@@ -33,7 +33,12 @@ pub enum AccountSubcommand {
         /// Account label (alternative to --account-id).
         #[arg(long, conflicts_with = "account_id")]
         account_label: Option<String>,
-        #[arg(long, conflicts_with = "account_id", conflicts_with = "account_label", requires = "key_path")]
+        #[arg(
+            long,
+            conflicts_with = "account_id",
+            conflicts_with = "account_label",
+            requires = "key_path"
+        )]
         pin: Option<String>,
         #[arg(long)]
         key_path: Option<String>,
@@ -206,7 +211,7 @@ impl WalletSubcommand for AccountSubcommand {
                 let account_id: nssa::AccountId = account_id_str.parse()?;
 
                 // Add account id to the display for keycard users.
-                println!("Account Id: {}", resolved);
+                log::info!("Account Id: {resolved}");
 
                 if let Some(label) = wallet_core.storage.labels.get(&account_id_str) {
                     println!("Label: {label}");

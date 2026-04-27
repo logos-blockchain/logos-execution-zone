@@ -18,7 +18,7 @@ amm_core.workspace = true
 testnet_initial_state.workspace = true
 ata_core.workspace = true
 bip39.workspace = true
-pyo3 = { version = "0.21", features = ["auto-initialize"] }
+pyo3.workspace = true
 
 anyhow.workspace = true
 thiserror.workspace = true

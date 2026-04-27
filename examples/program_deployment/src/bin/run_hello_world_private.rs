@@ -51,7 +51,7 @@ async fn main() {
         .send_privacy_preserving_tx(
             accounts,
             Program::serialize_instruction(greeting).unwrap(),
-            &program.into()
+            &program.into(),
         )
         .await
         .unwrap();

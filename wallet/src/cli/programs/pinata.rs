@@ -22,7 +22,12 @@ pub enum PinataProgramAgnosticSubcommand {
         /// To account label (alternative to --to).
         #[arg(long, conflicts_with = "to")]
         to_label: Option<String>,
-        #[arg(long, conflicts_with = "to", conflicts_with = "to_label", requires = "key_path")]
+        #[arg(
+            long,
+            conflicts_with = "to",
+            conflicts_with = "to_label",
+            requires = "key_path"
+        )]
         pin: Option<String>,
         #[arg(long)]
         key_path: Option<String>,

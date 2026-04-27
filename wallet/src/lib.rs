@@ -25,9 +25,7 @@ use nssa::{
     },
 };
 use nssa_core::{
-    Commitment, MembershipProof, SharedSecretKey,
-    account::Nonce,
-    program::InstructionData,
+    Commitment, MembershipProof, SharedSecretKey, account::Nonce, program::InstructionData,
 };
 pub use privacy_preserving_tx::PrivacyPreservingAccount;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};

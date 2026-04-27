@@ -11,13 +11,13 @@ pub struct KeycardWallet {
 impl KeycardWallet {
     /// Create a new Python `KeycardWallet` instance.
     pub fn new(py: Python) -> PyResult<Self> {
-        let module = py.import_bound("keycard_wallet")?;
+        let module = py.import("keycard_wallet")?;
         let class = module.getattr("KeycardWallet")?;
 
         let instance = class.call0()?;
 
         Ok(Self {
-            instance: instance.into_py(py),
+            instance: instance.into(),
         })
     }
 
@@ -28,12 +28,10 @@ impl KeycardWallet {
             .extract()
     }
 
-    pub fn setup_communication(&self, py: Python, pin: &str) -> PyResult<bool> {
-        let py_pin = pyo3::types::PyString::new_bound(py, pin);
-
+    pub fn setup_communication(&self, py: Python<'_>, pin: &str) -> PyResult<bool> {
         self.instance
             .bind(py)
-            .call_method1("setup_communication", (py_pin,))?
+            .call_method1("setup_communication", (pin,))?
             .extract()
     }
 
@@ -65,14 +63,14 @@ impl KeycardWallet {
                 .expect("Expect a Boolean.");
 
             if is_connected {
-                println!("\u{2705} Keycard is now connected to wallet.");
+                log::info!("\u{2705} Keycard is now connected to wallet.");
             } else {
-                println!("\u{274c} Keycard is not connected to wallet.");
+                log::info!("\u{274c} Keycard is not connected to wallet.");
             }
 
             let pub_key = wallet.get_public_key_for_path(py, path);
 
-            let _ = wallet.disconnect(py);
+            drop(wallet.disconnect(py));
             pub_key
         });
         pub_key.expect("Expect a valid public key2")
@@ -84,24 +82,23 @@ impl KeycardWallet {
         path: &str,
         message: &[u8; 32],
     ) -> PyResult<Signature> {
-        let py_message = pyo3::types::PyBytes::new_bound(py, message);
-
         let py_signature: Vec<u8> = self
             .instance
             .bind(py)
-            .call_method1("sign_message_for_path", (py_message, path))?
+            .call_method1("sign_message_for_path", (message, path))?
             .extract()?;
 
-        let signature: [u8; 64] = py_signature.try_into().map_err(|_| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                "Expected signature of exactly 64 bytes",
-            )
+        let signature: [u8; 64] = py_signature.try_into().map_err(|vec: Vec<u8>| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Invalid signature length: expected 64 bytes, got {} (bytes: {:02x?})",
+                vec.len(),
+                vec
+            ))
         })?;
-        println!("{signature:?}");
+
         Ok(Signature { value: signature })
     }
 
-    #[must_use]
     pub fn sign_message_for_path_with_connect(
         pin: &str,
         path: &str,
@@ -117,14 +114,14 @@ impl KeycardWallet {
                 .expect("Expect a Boolean.");
 
             if is_connected {
-                println!("\u{2705} Keycard is now connected to wallet.");
+                log::info!("\u{2705} Keycard is now connected to wallet.");
             } else {
-                println!("\u{274c} Keycard is not connected to wallet.");
+                log::info!("\u{274c} Keycard is not connected to wallet.");
             }
 
             let signature = wallet.sign_message_for_path(py, path, message);
 
-            let _ = wallet.disconnect(py);
+            drop(wallet.disconnect(py));
 
             signature
         })

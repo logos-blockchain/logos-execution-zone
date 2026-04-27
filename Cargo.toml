@@ -121,6 +121,7 @@ url = { version = "2.5.4", features = ["serde"] }
 tokio-retry = "0.3.0"
 schemars = "1.2"
 async-stream = "0.3.6"
+pyo3 = { version = "0.24", features = ["auto-initialize"] }
 
 logos-blockchain-common-http-client = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "1da154c74b911318fb853d37261f8a05ffe513b4" }
 logos-blockchain-key-management-system-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "1da154c74b911318fb853d37261f8a05ffe513b4" }

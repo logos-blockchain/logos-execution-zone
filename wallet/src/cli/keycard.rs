@@ -21,7 +21,6 @@ pub enum KeycardSubcommand {
 }
 
 impl WalletSubcommand for KeycardSubcommand {
-    #[expect(clippy::cognitive_complexity, reason = "TODO: fix later")]
     async fn handle_subcommand(
         self,
         _wallet_core: &mut WalletCore,
@@ -61,9 +60,12 @@ impl WalletSubcommand for KeycardSubcommand {
                         println!("\u{274c} Keycard is not connected to wallet.");
                     }
 
-                    let _ = wallet.load_mnemonic(py, &mnemonic.expect("Expect a mnemonic phrase as a string"));
+                    drop(wallet.load_mnemonic(
+                        py,
+                        &mnemonic.expect("Expect a mnemonic phrase as a string"),
+                    ));
 
-                    let _ = wallet.disconnect(py);
+                    drop(wallet.disconnect(py));
                 });
 
                 Ok(SubcommandReturnValue::Empty)

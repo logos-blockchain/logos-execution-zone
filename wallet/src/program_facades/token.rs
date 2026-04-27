@@ -182,7 +182,19 @@ impl Token<'_> {
         )
         .unwrap();
 
-        let witness_set = if pin.is_none() {
+        let witness_set = if let Some(pin) = &pin {
+            let sender_public_key = KeycardWallet::get_public_key_for_path_with_connect(
+                pin,
+                sender_key_path.as_ref().expect("Expect a key path String."),
+            );
+            let signature = KeycardWallet::sign_message_for_path_with_connect(
+                pin,
+                sender_key_path.as_ref().expect("Expect a key path String."),
+                &message.hash_message(),
+            )
+            .expect("Expect a valid signature");
+            WitnessSet::from_list(&[signature], &[sender_public_key])
+        } else {
             let mut private_keys = Vec::new();
             let sender_sk = self
                 .0
@@ -206,18 +218,6 @@ impl Token<'_> {
             }
 
             nssa::public_transaction::WitnessSet::for_message(&message, &private_keys)
-        } else {
-            let sender_public_key = KeycardWallet::get_public_key_for_path_with_connect(
-                &pin.as_ref().expect("Expect a pin as a String."),
-                &sender_key_path.as_ref().expect("Expect a key path String."),
-            );
-            let signature = KeycardWallet::sign_message_for_path_with_connect(
-                &pin.expect("Expect a pin as a String."),
-                &sender_key_path.expect("Expect a key path String."),
-                &message.hash_message(),
-            )
-            .expect("Expect a valid signature");
-            WitnessSet::from_list(&[signature], &[sender_public_key])
         };
 
         let tx = nssa::PublicTransaction::new(message, witness_set);
