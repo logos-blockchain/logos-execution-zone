@@ -134,6 +134,8 @@ async fn amm_public() -> Result<()> {
         to_npk: None,
         to_vpk: None,
         amount: 7,
+        from_pin: None,
+        from_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
@@ -163,6 +165,8 @@ async fn amm_public() -> Result<()> {
         to_npk: None,
         to_vpk: None,
         amount: 7,
+        from_pin: None,
+        from_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
@@ -551,6 +555,8 @@ async fn amm_new_pool_using_labels() -> Result<()> {
         to_npk: None,
         to_vpk: None,
         amount: 5,
+        from_pin: None,
+        from_key_path: None,
     };
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
@@ -575,6 +581,8 @@ async fn amm_new_pool_using_labels() -> Result<()> {
         to_npk: None,
         to_vpk: None,
         amount: 5,
+        from_pin: None,
+        from_key_path: None,
     };
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;

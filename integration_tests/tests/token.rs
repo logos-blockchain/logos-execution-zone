@@ -135,6 +135,8 @@ async fn create_and_transfer_public_token() -> Result<()> {
         to_npk: None,
         to_vpk: None,
         amount: transfer_amount,
+        from_pin: None,
+        from_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
@@ -180,6 +182,8 @@ async fn create_and_transfer_public_token() -> Result<()> {
         holder: Some(format_public_account_id(recipient_account_id)),
         holder_label: None,
         amount: burn_amount,
+        holder_pin: None,
+        holder_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
@@ -228,6 +232,8 @@ async fn create_and_transfer_public_token() -> Result<()> {
         holder_npk: None,
         holder_vpk: None,
         amount: mint_amount,
+        holder_pin: None,
+        holder_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
@@ -373,6 +379,8 @@ async fn create_and_transfer_token_with_private_supply() -> Result<()> {
         to_npk: None,
         to_vpk: None,
         amount: transfer_amount,
+        from_pin: None,
+        from_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
@@ -400,6 +408,8 @@ async fn create_and_transfer_token_with_private_supply() -> Result<()> {
         holder: Some(format_private_account_id(recipient_account_id)),
         holder_label: None,
         amount: burn_amount,
+        holder_pin: None,
+        holder_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
@@ -567,6 +577,8 @@ async fn create_token_with_private_definition() -> Result<()> {
         holder_npk: None,
         holder_vpk: None,
         amount: mint_amount_public,
+        holder_pin: None,
+        holder_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
@@ -615,6 +627,8 @@ async fn create_token_with_private_definition() -> Result<()> {
         holder_npk: None,
         holder_vpk: None,
         amount: mint_amount_private,
+        holder_pin: None,
+        holder_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
@@ -757,6 +771,8 @@ async fn create_token_with_private_definition_and_supply() -> Result<()> {
         to_npk: None,
         to_vpk: None,
         amount: transfer_amount,
+        from_pin: None,
+        from_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
@@ -888,6 +904,8 @@ async fn shielded_token_transfer() -> Result<()> {
         to_npk: None,
         to_vpk: None,
         amount: transfer_amount,
+        from_pin: None,
+        from_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
@@ -1014,6 +1032,8 @@ async fn deshielded_token_transfer() -> Result<()> {
         to_npk: None,
         to_vpk: None,
         amount: transfer_amount,
+        from_pin: None,
+        from_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
@@ -1149,6 +1169,8 @@ async fn token_claiming_path_with_private_accounts() -> Result<()> {
         holder_npk: Some(hex::encode(holder_keys.nullifier_public_key.0)),
         holder_vpk: Some(hex::encode(holder_keys.viewing_public_key.0)),
         amount: mint_amount,
+        holder_pin: None,
+        holder_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
@@ -1352,6 +1374,8 @@ async fn transfer_token_using_from_label() -> Result<()> {
         to_npk: None,
         to_vpk: None,
         amount: transfer_amount,
+        from_pin: None,
+        from_key_path: None,
     };
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
 
