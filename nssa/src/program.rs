@@ -313,6 +313,16 @@ mod tests {
         }
 
         #[must_use]
+        pub fn group_pda_spender() -> Self {
+            use test_program_methods::{GROUP_PDA_SPENDER_ELF, GROUP_PDA_SPENDER_ID};
+
+            Self {
+                id: GROUP_PDA_SPENDER_ID,
+                elf: GROUP_PDA_SPENDER_ELF.to_vec(),
+            }
+        }
+
+        #[must_use]
         pub fn two_pda_claimer() -> Self {
             use test_program_methods::{TWO_PDA_CLAIMER_ELF, TWO_PDA_CLAIMER_ID};
 
