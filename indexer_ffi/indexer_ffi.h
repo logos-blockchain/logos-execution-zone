@@ -10,24 +10,6 @@ typedef enum OperationStatus {
   ClientError = 3,
 } OperationStatus;
 
-typedef enum TransactionKind {
-  Public = 0,
-  Private,
-  ProgramDeploy,
-} TransactionKind;
-
-typedef enum BedrockStatus {
-  Pending = 0,
-  Safe,
-  Finalized,
-} BedrockStatus;
-
-typedef struct Vec_AccountId Vec_AccountId;
-
-typedef struct Vec_Nonce Vec_Nonce;
-
-typedef struct Vec_u32 Vec_u32;
-
 typedef struct IndexerServiceFFI {
   void *indexer_handle;
   void *runtime;
@@ -58,69 +40,6 @@ typedef struct PointerResult_u64__OperationStatus {
   enum OperationStatus error;
 } PointerResult_u64__OperationStatus;
 
-typedef uint64_t BlockId;
-
-typedef uint8_t HashType[32];
-
-typedef uint64_t Timestamp;
-
-typedef uint8_t Signature[64];
-
-typedef struct BlockHeader {
-  BlockId block_id;
-  HashType prev_block_hash;
-  HashType hash;
-  Timestamp timestamp;
-  Signature signature;
-} BlockHeader;
-
-typedef uint32_t ProgramId[8];
-
-typedef struct PublicMessage {
-  ProgramId program_id;
-  struct Vec_AccountId account_ids;
-  struct Vec_Nonce nonces;
-  struct Vec_u32 instruction_data;
-} PublicMessage;
-
-typedef struct WitnessSet {
-
-} WitnessSet;
-
-typedef struct PublicTransactionBody {
-  HashType hash;
-  struct PublicMessage message;
-  struct WitnessSet witness_set;
-} PublicTransactionBody;
-
-typedef struct TransactionBody {
-  struct PublicTransactionBody *public_body;
-} TransactionBody;
-
-typedef struct Transaction {
-  struct TransactionBody body;
-  enum TransactionKind kind;
-} Transaction;
-
-typedef struct BlockBody {
-  struct Transaction *txs;
-  uintptr_t len;
-} BlockBody;
-
-typedef uint8_t MsgId[32];
-
-typedef struct Block {
-  struct BlockHeader header;
-  struct BlockBody body;
-  enum BedrockStatus bedrock_status;
-  MsgId bedrock_parent_id;
-} Block;
-
-typedef struct BlockOpt {
-  struct Block *block;
-  bool is_ok;
-} BlockOpt;
-
 /**
  * Simple wrapper around a pointer to a value or an error.
  *
@@ -128,7 +47,7 @@ typedef struct BlockOpt {
  * dereferencing the pointer.
  */
 typedef struct PointerResult_BlockOpt__OperationStatus {
-  struct BlockOpt *value;
+  BlockOpt *value;
   enum OperationStatus error;
 } PointerResult_BlockOpt__OperationStatus;
 

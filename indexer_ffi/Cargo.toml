@@ -5,6 +5,8 @@ name = "indexer_ffi"
 version = "0.1.0"
 
 [dependencies]
+nssa_core.workspace = true
+nssa.workspace = true
 indexer_service.workspace = true
 sequencer_core.workspace = true
 indexer_service_rpc.workspace = true

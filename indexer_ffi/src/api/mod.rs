@@ -1,9 +1,9 @@
 pub use result::PointerResult;
 
 pub mod client;
+pub mod convert;
 pub mod lifecycle;
 pub mod memory;
 pub mod query;
 pub mod result;
 pub mod types;
-pub mod convert;

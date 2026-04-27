@@ -1,6 +1,13 @@
 use indexer_service_rpc::RpcClient;
 
-use crate::{IndexerServiceFFI, api::{PointerResult, types::{Block, BlockId, BlockOpt}}, errors::OperationStatus};
+use crate::{
+    IndexerServiceFFI,
+    api::{
+        PointerResult,
+        types::{Block, BlockId, BlockOpt},
+    },
+    errors::OperationStatus,
+};
 
 /// Stops and frees the resources associated with the given indexer service.
 ///

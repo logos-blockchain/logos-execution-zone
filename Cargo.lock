@@ -3486,6 +3486,8 @@ dependencies = [
  "indexer_service",
  "indexer_service_rpc",
  "log",
+ "nssa",
+ "nssa_core",
  "sequencer_core",
  "tokio",
  "url",
