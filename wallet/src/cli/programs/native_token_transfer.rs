@@ -156,7 +156,6 @@ impl WalletSubcommand for AuthTransferSubcommand {
                         anyhow::bail!("Provide only one of --to or --to-label")
                     }
                 };
-                let to_identifier = to_identifier.unwrap_or_else(rand::random);
                 let underlying_subcommand = match (to, to_npk, to_vpk) {
                     (None, None, None) => {
                         anyhow::bail!(
@@ -313,8 +312,8 @@ pub enum NativeTokenTransferProgramSubcommandShielded {
         #[arg(long)]
         to_vpk: String,
         /// Identifier for the recipient's private account.
-        #[arg(long, default_value_t = 0)]
-        to_identifier: u128,
+        #[arg(long)]
+        to_identifier: Option<u128>,
         /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
@@ -353,8 +352,8 @@ pub enum NativeTokenTransferProgramSubcommandPrivate {
         #[arg(long)]
         to_vpk: String,
         /// Identifier for the recipient's private account.
-        #[arg(long, default_value_t = 0)]
-        to_identifier: u128,
+        #[arg(long)]
+        to_identifier: Option<u128>,
         /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
@@ -416,7 +415,7 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandPrivate {
                         from,
                         to_npk,
                         to_vpk,
-                        to_identifier,
+                        to_identifier.unwrap_or_else(rand::random),
                         amount,
                     )
                     .await?;
@@ -498,7 +497,7 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandShielded {
                         from,
                         to_npk,
                         to_vpk,
-                        to_identifier,
+                        to_identifier.unwrap_or_else(rand::random),
                         amount,
                     )
                     .await?;

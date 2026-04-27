@@ -145,8 +145,8 @@ pub enum TokenProgramAgnosticSubcommand {
         holder_vpk: Option<String>,
         /// Identifier for the holder's private account (only used when minting to a foreign
         /// private account via `--holder-npk`/`--holder-vpk`).
-        #[arg(long, default_value_t = 0)]
-        holder_identifier: u128,
+        #[arg(long)]
+        holder_identifier: Option<u128>,
         /// amount - amount of balance to mint.
         #[arg(long)]
         amount: u128,
@@ -256,7 +256,6 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                         anyhow::bail!("Provide only one of --to or --to-label")
                     }
                 };
-                let to_identifier = to_identifier.unwrap_or_else(rand::random);
                 let underlying_subcommand = match (to, to_npk, to_vpk) {
                     (None, None, None) => {
                         anyhow::bail!(
@@ -601,8 +600,8 @@ pub enum TokenProgramSubcommandPrivate {
         #[arg(long)]
         recipient_vpk: String,
         /// Identifier for the recipient's private account.
-        #[arg(long, default_value_t = 0)]
-        recipient_identifier: u128,
+        #[arg(long)]
+        recipient_identifier: Option<u128>,
         #[arg(short, long)]
         balance_to_move: u128,
     },
@@ -633,8 +632,8 @@ pub enum TokenProgramSubcommandPrivate {
         #[arg(short, long)]
         holder_vpk: String,
         /// Identifier for the holder's private account.
-        #[arg(long, default_value_t = 0)]
-        holder_identifier: u128,
+        #[arg(long)]
+        holder_identifier: Option<u128>,
         #[arg(short, long)]
         amount: u128,
     },
@@ -695,8 +694,8 @@ pub enum TokenProgramSubcommandShielded {
         #[arg(long)]
         recipient_vpk: String,
         /// Identifier for the recipient's private account.
-        #[arg(long, default_value_t = 0)]
-        recipient_identifier: u128,
+        #[arg(long)]
+        recipient_identifier: Option<u128>,
         #[arg(short, long)]
         balance_to_move: u128,
     },
@@ -727,8 +726,8 @@ pub enum TokenProgramSubcommandShielded {
         #[arg(short, long)]
         holder_vpk: String,
         /// Identifier for the holder's private account.
-        #[arg(long, default_value_t = 0)]
-        holder_identifier: u128,
+        #[arg(long)]
+        holder_identifier: Option<u128>,
         #[arg(short, long)]
         amount: u128,
     },
@@ -910,7 +909,7 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                         sender_account_id,
                         recipient_npk,
                         recipient_vpk,
-                        recipient_identifier,
+                        recipient_identifier.unwrap_or_else(rand::random),
                         balance_to_move,
                     )
                     .await?;
@@ -1030,7 +1029,7 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                         definition_account_id,
                         holder_npk,
                         holder_vpk,
-                        holder_identifier,
+                        holder_identifier.unwrap_or_else(rand::random),
                         amount,
                     )
                     .await?;
@@ -1196,7 +1195,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                         sender_account_id,
                         recipient_npk,
                         recipient_vpk,
-                        recipient_identifier,
+                        recipient_identifier.unwrap_or_else(rand::random),
                         balance_to_move,
                     )
                     .await?;
@@ -1338,7 +1337,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                         definition_account_id,
                         holder_npk,
                         holder_vpk,
-                        holder_identifier,
+                        holder_identifier.unwrap_or_else(rand::random),
                         amount,
                     )
                     .await?;

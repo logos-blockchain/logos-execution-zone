@@ -228,7 +228,7 @@ async fn create_and_transfer_public_token() -> Result<()> {
         holder_label: None,
         holder_npk: None,
         holder_vpk: None,
-        holder_identifier: 0,
+        holder_identifier: None,
         amount: mint_amount,
     };
 
@@ -569,7 +569,7 @@ async fn create_token_with_private_definition() -> Result<()> {
         holder_label: None,
         holder_npk: None,
         holder_vpk: None,
-        holder_identifier: 0,
+        holder_identifier: None,
         amount: mint_amount_public,
     };
 
@@ -618,7 +618,7 @@ async fn create_token_with_private_definition() -> Result<()> {
         holder_label: None,
         holder_npk: None,
         holder_vpk: None,
-        holder_identifier: 0,
+        holder_identifier: None,
         amount: mint_amount_private,
     };
 
@@ -1155,7 +1155,7 @@ async fn token_claiming_path_with_private_accounts() -> Result<()> {
         holder_label: None,
         holder_npk: Some(hex::encode(holder_keys.nullifier_public_key.0)),
         holder_vpk: Some(hex::encode(holder_keys.viewing_public_key.0)),
-        holder_identifier,
+        holder_identifier: Some(holder_identifier),
         amount: mint_amount,
     };
 
