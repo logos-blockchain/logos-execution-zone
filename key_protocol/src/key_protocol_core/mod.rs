@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::key_management::{
     KeyChain,
+    group_key_holder::GroupKeyHolder,
     key_tree::{KeyTreePrivate, KeyTreePublic, chain_index::ChainIndex},
     secret_holders::SeedHolder,
 };
@@ -23,6 +24,17 @@ pub struct NSSAUserData {
     pub public_key_tree: KeyTreePublic,
     /// Tree of private keys.
     pub private_key_tree: KeyTreePrivate,
+    /// Group key holders for private PDA groups, keyed by a human-readable label.
+    /// Defaults to empty for backward compatibility with wallets that predate group PDAs.
+    /// An older wallet binary that re-serializes this struct will drop the field.
+    #[serde(default)]
+    pub group_key_holders: BTreeMap<String, GroupKeyHolder>,
+    /// Cached plaintext state of group PDA accounts, keyed by `AccountId`.
+    /// Updated after each group PDA transaction by decrypting the circuit output.
+    /// The sequencer only stores encrypted commitments, so this local cache is the
+    /// only source of plaintext state for group PDAs.
+    #[serde(default)]
+    pub group_pda_accounts: BTreeMap<nssa::AccountId, nssa_core::account::Account>,
 }
 
 impl NSSAUserData {
@@ -81,6 +93,8 @@ impl NSSAUserData {
             default_user_private_accounts: default_accounts_key_chains,
             public_key_tree,
             private_key_tree,
+            group_key_holders: BTreeMap::new(),
+            group_pda_accounts: BTreeMap::new(),
         })
     }
 
@@ -177,6 +191,20 @@ impl NSSAUserData {
             .copied()
             .chain(self.private_key_tree.account_id_map.keys().copied())
     }
+
+    /// Returns the `GroupKeyHolder` for the given label, if it exists.
+    #[must_use]
+    pub fn get_group_key_holder(&self, label: &str) -> Option<&GroupKeyHolder> {
+        self.group_key_holders.get(label)
+    }
+
+    /// Inserts or replaces a `GroupKeyHolder` under the given label.
+    ///
+    /// If a holder already exists under this label, it is silently replaced and the old
+    /// GMS is lost. Callers must ensure label uniqueness across groups.
+    pub fn insert_group_key_holder(&mut self, label: String, holder: GroupKeyHolder) {
+        self.group_key_holders.insert(label, holder);
+    }
 }
 
 impl Default for NSSAUserData {
@@ -195,6 +223,27 @@ impl Default for NSSAUserData {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn group_key_holder_storage_round_trip() {
+        let mut user_data = NSSAUserData::default();
+        assert!(user_data.get_group_key_holder("test-group").is_none());
+
+        let holder = GroupKeyHolder::from_gms([42_u8; 32]);
+        user_data.insert_group_key_holder(String::from("test-group"), holder.clone());
+
+        let retrieved = user_data
+            .get_group_key_holder("test-group")
+            .expect("should exist");
+        assert_eq!(retrieved.dangerous_raw_gms(), holder.dangerous_raw_gms());
+        assert_eq!(retrieved.epoch(), holder.epoch());
+    }
+
+    #[test]
+    fn group_key_holders_default_empty() {
+        let user_data = NSSAUserData::default();
+        assert!(user_data.group_key_holders.is_empty());
+    }
 
     #[test]
     fn new_account() {

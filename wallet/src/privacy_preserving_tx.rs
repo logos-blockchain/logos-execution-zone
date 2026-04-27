@@ -5,6 +5,7 @@ use nssa_core::{
     MembershipProof, NullifierPublicKey, NullifierSecretKey, SharedSecretKey,
     account::{AccountWithMetadata, Nonce},
     encryption::{EphemeralPublicKey, ViewingPublicKey},
+    program::{PdaSeed, ProgramId},
 };
 
 use crate::{ExecutionFailureKind, WalletCore};
@@ -16,6 +17,14 @@ pub enum PrivacyPreservingAccount {
     PrivateForeign {
         npk: NullifierPublicKey,
         vpk: ViewingPublicKey,
+    },
+    /// A private PDA owned by a group. The wallet derives keys from the
+    /// `GroupKeyHolder` stored under `group_label`, then computes the
+    /// `AccountId` via `AccountId::for_private_pda(program_id, seed, npk)`.
+    PrivateGroupPda {
+        group_label: String,
+        program_id: ProgramId,
+        seed: PdaSeed,
     },
 }
 
@@ -29,7 +38,9 @@ impl PrivacyPreservingAccount {
     pub const fn is_private(&self) -> bool {
         matches!(
             &self,
-            Self::PrivateOwned(_) | Self::PrivateForeign { npk: _, vpk: _ }
+            Self::PrivateOwned(_)
+                | Self::PrivateForeign { npk: _, vpk: _ }
+                | Self::PrivateGroupPda { .. }
         )
     }
 }
@@ -94,6 +105,16 @@ impl AccountManager {
 
                     (State::Private(pre), 2)
                 }
+                PrivacyPreservingAccount::PrivateGroupPda {
+                    group_label,
+                    program_id,
+                    seed,
+                } => {
+                    let pre =
+                        group_pda_preparation(wallet, &group_label, &program_id, &seed).await?;
+
+                    (State::Private(pre), 3)
+                }
             };
 
             pre_states.push(state);
@@ -106,6 +127,7 @@ impl AccountManager {
         })
     }
 
+    #[must_use]
     pub fn pre_states(&self) -> Vec<AccountWithMetadata> {
         self.states
             .iter()
@@ -116,10 +138,12 @@ impl AccountManager {
             .collect()
     }
 
+    #[must_use]
     pub fn visibility_mask(&self) -> &[u8] {
         &self.visibility_mask
     }
 
+    #[must_use]
     pub fn public_account_nonces(&self) -> Vec<Nonce> {
         self.states
             .iter()
@@ -130,6 +154,7 @@ impl AccountManager {
             .collect()
     }
 
+    #[must_use]
     pub fn private_account_keys(&self) -> Vec<PrivateAccountKeys> {
         self.states
             .iter()
@@ -149,6 +174,7 @@ impl AccountManager {
             .collect()
     }
 
+    #[must_use]
     pub fn private_account_auth(&self) -> Vec<NullifierSecretKey> {
         self.states
             .iter()
@@ -159,6 +185,7 @@ impl AccountManager {
             .collect()
     }
 
+    #[must_use]
     pub fn private_account_membership_proofs(&self) -> Vec<Option<MembershipProof>> {
         self.states
             .iter()
@@ -169,6 +196,7 @@ impl AccountManager {
             .collect()
     }
 
+    #[must_use]
     pub fn public_account_ids(&self) -> Vec<AccountId> {
         self.states
             .iter()
@@ -179,6 +207,7 @@ impl AccountManager {
             .collect()
     }
 
+    #[must_use]
     pub fn public_account_auth(&self) -> Vec<&PrivateKey> {
         self.states
             .iter()
@@ -196,6 +225,61 @@ struct AccountPreparedData {
     vpk: ViewingPublicKey,
     pre_state: AccountWithMetadata,
     proof: Option<MembershipProof>,
+}
+
+async fn group_pda_preparation(
+    wallet: &WalletCore,
+    group_label: &str,
+    program_id: &ProgramId,
+    seed: &PdaSeed,
+) -> Result<AccountPreparedData, ExecutionFailureKind> {
+    let holder = wallet
+        .storage
+        .user_data
+        .get_group_key_holder(group_label)
+        .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
+
+    let keys = holder.derive_keys_for_pda(seed);
+    let npk = keys.generate_nullifier_public_key();
+    let vpk = keys.generate_viewing_public_key();
+    let nsk = keys.nullifier_secret_key;
+    let account_id = nssa::AccountId::for_private_pda(program_id, seed, &npk);
+
+    // Check local cache first (private PDA state is encrypted on-chain, the sequencer
+    // only stores commitments). Fall back to default for new PDAs.
+    let acc = wallet
+        .storage
+        .user_data
+        .group_pda_accounts
+        .get(&account_id)
+        .cloned()
+        .unwrap_or_default();
+
+    let exists = acc != nssa_core::account::Account::default();
+
+    // is_authorized tracks whether the account existed on-chain before this tx.
+    // NSK is only provided for existing accounts: the circuit consumes NSKs sequentially
+    // from an iterator and asserts none are left over, so supplying an NSK for a new
+    // (unauthorized) account would trigger the over-supply assertion. This matches the
+    // PrivateForeign path (nsk: None for unauthorized accounts).
+    let pre_state = AccountWithMetadata::new(acc, exists, account_id);
+
+    let proof = if exists {
+        wallet
+            .check_private_account_initialized(account_id)
+            .await
+            .unwrap_or(None)
+    } else {
+        None
+    };
+
+    Ok(AccountPreparedData {
+        nsk: exists.then_some(nsk),
+        npk,
+        vpk,
+        pre_state,
+        proof,
+    })
 }
 
 async fn private_acc_preparation(
@@ -233,4 +317,20 @@ async fn private_acc_preparation(
         pre_state: sender_pre,
         proof,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn private_group_pda_is_private() {
+        let acc = PrivacyPreservingAccount::PrivateGroupPda {
+            group_label: String::from("test"),
+            program_id: [1; 8],
+            seed: PdaSeed::new([2; 32]),
+        };
+        assert!(acc.is_private());
+        assert!(!acc.is_public());
+    }
 }

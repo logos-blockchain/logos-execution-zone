@@ -41,7 +41,7 @@ pub mod cli;
 pub mod config;
 pub mod helperfunctions;
 pub mod poller;
-mod privacy_preserving_tx;
+pub mod privacy_preserving_tx;
 pub mod program_facades;
 
 pub const HOME_DIR_ENV_VAR: &str = "NSSA_WALLET_HOME_DIR";
@@ -199,6 +199,12 @@ impl WalletCore {
     #[must_use]
     pub const fn storage(&self) -> &WalletChainStore {
         &self.storage
+    }
+
+    /// Get mutable storage (e.g. for inserting group key holders).
+    #[must_use]
+    pub const fn storage_mut(&mut self) -> &mut WalletChainStore {
+        &mut self.storage
     }
 
     /// Restore storage from an existing mnemonic phrase.
