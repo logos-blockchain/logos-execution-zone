@@ -193,16 +193,6 @@ impl WalletChainStore {
             .entry(account_id)
         {
             let entry = entry.get_mut();
-            let identifier = entry
-                .accounts
-                .iter()
-                .find_map(|(id, _)| {
-                    (nssa::AccountId::from((&entry.key_chain.nullifier_public_key, *id))
-                        == account_id)
-                        .then_some(*id)
-                })
-                .unwrap_or(0);
-            // Update existing entry or insert new one
             if let Some((_, acc)) = entry.accounts.iter_mut().find(|(id, _)| *id == identifier) {
                 *acc = account;
             } else {
