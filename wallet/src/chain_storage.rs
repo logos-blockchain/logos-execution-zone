@@ -4,7 +4,7 @@ use anyhow::Result;
 use bip39::Mnemonic;
 use key_protocol::{
     key_management::{
-        key_tree::{KeyTreePrivate, KeyTreePublic, chain_index::ChainIndex},
+        key_tree::{KeyTreePrivate, KeyTreePublic},
         secret_holders::SeedHolder,
     },
     key_protocol_core::NSSAUserData,
@@ -37,40 +37,16 @@ impl WalletChainStore {
         let mut public_init_acc_map = BTreeMap::new();
         let mut private_init_acc_map = BTreeMap::new();
 
-        let public_root = persistent_accounts
-            .iter()
-            .find(|data| match data {
-                &PersistentAccountData::Public(data) => data.chain_index == ChainIndex::root(),
-                _ => false,
-            })
-            .cloned()
-            .expect("Malformed persistent account data, must have public root");
-
-        let private_root = persistent_accounts
-            .iter()
-            .find(|data| match data {
-                &PersistentAccountData::Private(data) => data.chain_index == ChainIndex::root(),
-                _ => false,
-            })
-            .cloned()
-            .expect("Malformed persistent account data, must have private root");
-
-        let mut public_tree = KeyTreePublic::new_from_root(match public_root {
-            PersistentAccountData::Public(data) => data.data,
-            _ => unreachable!(),
-        });
-        let mut private_tree = KeyTreePrivate::new_from_root(match private_root {
-            PersistentAccountData::Private(data) => data.data,
-            _ => unreachable!(),
-        });
+        let mut public_nodes = Vec::new();
+        let mut private_nodes = Vec::new();
 
         for pers_acc_data in persistent_accounts {
             match pers_acc_data {
                 PersistentAccountData::Public(data) => {
-                    public_tree.insert(data.account_id, data.chain_index, data.data);
+                    public_nodes.push((data.chain_index, data.data));
                 }
                 PersistentAccountData::Private(data) => {
-                    private_tree.insert(data.account_id, data.chain_index, data.data);
+                    private_nodes.push((data.chain_index, data.data));
                 }
                 PersistentAccountData::Preconfigured(acc_data) => match acc_data {
                     InitialAccountData::Public(data) => {
@@ -83,6 +59,13 @@ impl WalletChainStore {
                 },
             }
         }
+
+        // Use from_nodes() for consistency validation:
+        // ensures root is present and all parent nodes exist before children.
+        let public_tree = KeyTreePublic::from_nodes(public_nodes)
+            .map_err(|e| anyhow::anyhow!("Malformed public key tree in storage: {e}"))?;
+        let private_tree = KeyTreePrivate::from_nodes(private_nodes)
+            .map_err(|e| anyhow::anyhow!("Malformed private key tree in storage: {e}"))?;
 
         Ok(Self {
             user_data: NSSAUserData::new_with_accounts(

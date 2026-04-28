@@ -61,6 +61,57 @@ impl<N: KeyNode> KeyTree<N> {
 
     // ToDo: Add function to create a tree from list of nodes with consistency check.
 
+    /// Creates a `KeyTree` from a list of `(ChainIndex, N)` pairs.
+    ///
+    /// Performs a consistency check: every non-root node must have its parent present
+    /// in the provided list. Returns an error if the check fails.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The list is empty
+    /// - A non-root node's parent is missing from the list
+    /// - The root node (`ChainIndex::root()`) is missing
+    pub fn from_nodes(nodes: Vec<(ChainIndex, N)>) -> Result<Self> {
+        use anyhow::bail;
+
+        if nodes.is_empty() {
+            bail!("Cannot create KeyTree from empty node list");
+        }
+
+        let key_map: BTreeMap<ChainIndex, N> = nodes.into_iter().collect();
+
+        // Consistency check: root must be present
+        if !key_map.contains_key(&ChainIndex::root()) {
+            bail!("Node list must contain the root node");
+        }
+
+        // Consistency check: every non-root node must have its parent present
+        for chain_index in key_map.keys() {
+            if let Some(parent) = chain_index.parent() {
+                if !key_map.contains_key(&parent) {
+                    bail!(
+                        "Node {:?} is missing its parent {:?}",
+                        chain_index,
+                        parent
+                    );
+                }
+            }
+        }
+
+        // Build account_id_map from key_map
+        let account_id_map = key_map
+            .iter()
+            .map(|(chain_index, node)| (node.account_id(), chain_index.clone()))
+            .collect();
+
+        Ok(Self {
+            key_map,
+            account_id_map,
+        })
+    }
+
+
     #[must_use]
     pub fn find_next_last_child_of_id(&self, parent_id: &ChainIndex) -> Option<u32> {
         if !self.key_map.contains_key(parent_id) {
@@ -528,5 +579,57 @@ mod tests {
 
         let acc = &tree.key_map[&ChainIndex::from_str("/1/0").unwrap()];
         assert_eq!(acc.value.1.balance, 6);
+    }
+}
+
+#[cfg(test)]
+mod from_nodes_tests {
+    use super::*;
+    use crate::key_management::secret_holders::SeedHolder;
+
+    fn make_tree() -> KeyTreePublic {
+        let seed = SeedHolder::new_os_random();
+        KeyTree::new(&seed)
+    }
+
+    #[test]
+    fn from_nodes_empty_fails() {
+        let result = KeyTreePublic::from_nodes(vec![]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("empty"));
+    }
+
+    #[test]
+    fn from_nodes_missing_root_fails() {
+        let tree = make_tree();
+        // Get a non-root node
+        let non_root: Vec<_> = tree
+            .key_map
+            .iter()
+            .filter(|(k, _)| k != &&ChainIndex::root())
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .take(1)
+            .collect();
+
+        if non_root.is_empty() {
+            // Tree only has root, skip
+            return;
+        }
+
+        let result = KeyTreePublic::from_nodes(non_root);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn from_nodes_roundtrip() {
+        let tree = make_tree();
+        let nodes: Vec<_> = tree
+            .key_map
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+
+        let restored = KeyTreePublic::from_nodes(nodes).expect("should succeed");
+        assert_eq!(tree.key_map.len(), restored.key_map.len());
     }
 }
