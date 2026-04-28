@@ -24,21 +24,15 @@ pub enum AuthTransferSubcommand {
         #[arg(
             long,
             conflicts_with = "account_label",
-            conflicts_with = "pin",
-            required_unless_present_any = ["account_label", "pin"]
+            // required_unless_present = "account_label"
         )]
         account_id: Option<String>,
         /// Account label (alternative to --account-id).
-        #[arg(long, conflicts_with = "account_id", conflicts_with = "pin")]
+        #[arg(long, conflicts_with = "account_id")]
         account_label: Option<String>,
-        #[arg(
-            long,
-            conflicts_with = "account_id",
-            conflicts_with = "account_label",
-            requires = "key_path"
-        )]
-        pin: Option<String>,
         #[arg(long)]
+        pin: Option<String>,
+        #[arg(long, conflicts_with = "account_id", conflicts_with = "account_label")]
         key_path: Option<String>,
     },
     /// Send native tokens from one account to another with variable privacy.
@@ -49,10 +43,10 @@ pub enum AuthTransferSubcommand {
     /// First is used for owned accounts, second otherwise.
     Send {
         /// from - valid 32 byte base58 string with privacy prefix.
-        #[arg(long, conflicts_with = "from_label", conflicts_with = "pin", required_unless_present_any = ["from_label", "pin"])]
+        #[arg(long, conflicts_with = "from_label")]
         from: Option<String>,
         /// From account label (alternative to --from).
-        #[arg(long, conflicts_with = "from", conflicts_with = "pin")]
+        #[arg(long, conflicts_with = "from")]
         from_label: Option<String>,
         /// to - valid 32 byte base58 string with privacy prefix.
         #[arg(long, conflicts_with = "to_label")]
@@ -69,11 +63,11 @@ pub enum AuthTransferSubcommand {
         /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
-        #[arg(long)]
+        #[arg(long, conflicts_with = "from", conflicts_with = "from_label")]
         pin: Option<String>,
         #[arg(long, conflicts_with = "from", conflicts_with = "from_label")]
         from_key_path: Option<String>,
-        #[arg(long, conflicts_with = "to", conflicts_with = "to_label")]
+        #[arg(long, conflicts_with = "from", conflicts_with = "from_label")]
         to_key_path: Option<String>,
     },
 }
@@ -173,7 +167,7 @@ impl WalletSubcommand for AuthTransferSubcommand {
                     )?),
                     (None, None, Some(to_key_path)) => {
                         Some(KeycardWallet::get_account_id_for_path_with_connect(
-                            pin.as_ref().expect("Expect a pin as a String."),
+                            &pin.as_ref().expect("Expect a pin as a String."),
                             &to_key_path,
                         ))
                     }
@@ -232,6 +226,8 @@ impl WalletSubcommand for AuthTransferSubcommand {
                                         from,
                                         to,
                                         amount,
+                                        pin,
+                                        key_path: from_key_path,
                                     },
                                 )
                             }
@@ -258,6 +254,8 @@ impl WalletSubcommand for AuthTransferSubcommand {
                                         to_npk,
                                         to_vpk,
                                         amount,
+                                        pin,
+                                        key_path: from_key_path,
                                     },
                                 )
                             }
@@ -287,14 +285,9 @@ pub enum NativeTokenTransferProgramSubcommand {
         /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
-        #[arg(
-            long,
-            conflicts_with = "from",
-            conflicts_with = "from_label",
-            requires = "key_path"
-        )]
+        #[arg(long, conflicts_with = "from", conflicts_with = "from_label")]
         pin: Option<String>,
-        #[arg(long)]
+        #[arg(long, conflicts_with = "from", conflicts_with = "from_label")]
         key_path: Option<String>,
     },
     /// Private execution.
@@ -336,6 +329,10 @@ pub enum NativeTokenTransferProgramSubcommandShielded {
         /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
+        #[arg(long)]
+        pin: Option<String>,
+        #[arg(long)]
+        key_path: Option<String>,
     },
     /// Send native token transfer from `from` to `to` for `amount`.
     ///
@@ -353,6 +350,10 @@ pub enum NativeTokenTransferProgramSubcommandShielded {
         /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
+        #[arg(long)]
+        pin: Option<String>,
+        #[arg(long)]
+        key_path: Option<String>,
     },
 }
 
@@ -473,12 +474,18 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandShielded {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         match self {
-            Self::ShieldedOwned { from, to, amount } => {
+            Self::ShieldedOwned {
+                from,
+                to,
+                amount,
+                pin,
+                key_path,
+            } => {
                 let from: AccountId = from.parse().unwrap();
                 let to: AccountId = to.parse().unwrap();
 
                 let (tx_hash, secret) = NativeTokenTransfer(wallet_core)
-                    .send_shielded_transfer(from, to, amount)
+                    .send_shielded_transfer(from, to, amount, &pin, &key_path)
                     .await?;
 
                 println!("Transaction hash is {tx_hash}");
@@ -503,6 +510,8 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandShielded {
                 to_npk,
                 to_vpk,
                 amount,
+                pin,
+                key_path,
             } => {
                 let from: AccountId = from.parse().unwrap();
 
@@ -518,7 +527,9 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandShielded {
                     nssa_core::encryption::shared_key_derivation::Secp256k1Point(to_vpk.to_vec());
 
                 let (tx_hash, _) = NativeTokenTransfer(wallet_core)
-                    .send_shielded_transfer_to_outer_account(from, to_npk, to_vpk, amount)
+                    .send_shielded_transfer_to_outer_account(
+                        from, to_npk, to_vpk, amount, &pin, &key_path,
+                    )
                     .await?;
 
                 println!("Transaction hash is {tx_hash}");
