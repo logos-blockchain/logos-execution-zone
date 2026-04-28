@@ -414,8 +414,7 @@ impl WalletCore {
             )
             .unwrap();
 
-        let witness_set = Self::sign_privacy_message(&message, &proof, &acc_manager)
-            .expect("Expect a valid witness set");
+        let witness_set = Self::sign_privacy_message(&message, &proof, &acc_manager);
         let tx = PrivacyPreservingTransaction::new(message, witness_set);
 
         let shared_secrets: Vec<_> = private_account_keys
@@ -574,14 +573,12 @@ impl WalletCore {
         message: &nssa::privacy_preserving_transaction::Message,
         proof: &Proof,
         acc_manager: &privacy_preserving_tx::AccountManager,
-    ) -> Result<nssa::privacy_preserving_transaction::witness_set::WitnessSet, ExecutionFailureKind>
+    ) -> nssa::privacy_preserving_transaction::witness_set::WitnessSet
     {
-        Ok(
-            nssa::privacy_preserving_transaction::witness_set::WitnessSet::for_message(
+        nssa::privacy_preserving_transaction::witness_set::WitnessSet::for_message(
                 message,
                 proof.clone(),
-                &acc_manager.public_account_auth(),
-            ),
-        )
+                &acc_manager.public_account_auth())
+
     }
 }

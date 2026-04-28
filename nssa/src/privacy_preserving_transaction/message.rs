@@ -121,7 +121,18 @@ impl Message {
 
     #[must_use]
     pub fn hash_message(&self) -> [u8; 32] {
-        Sha256::digest(self.to_bytes()).into()
+        const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Privacy/\x00\x00\x00\x00\x00\x00";
+
+        let mut bytes = Vec::with_capacity(
+            PREFIX
+                .len()
+                .checked_add(self.to_bytes().len())
+                .expect("length overflow"),
+        );
+        bytes.extend_from_slice(PREFIX);
+        bytes.extend_from_slice(&self.to_bytes());
+
+        Sha256::digest(bytes).into()
     }
 }
 
