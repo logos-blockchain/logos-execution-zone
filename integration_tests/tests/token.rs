@@ -1174,7 +1174,8 @@ async fn token_claiming_path_with_private_accounts() -> Result<()> {
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
-
+    // This command breaks (Marvin)
+    println!("TEST5");
     info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
@@ -1182,6 +1183,7 @@ async fn token_claiming_path_with_private_accounts() -> Result<()> {
     let command = Command::Account(AccountSubcommand::SyncPrivate {});
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
+    println!("TEST6");
     // Verify commitment exists
     let recipient_commitment = ctx
         .wallet()

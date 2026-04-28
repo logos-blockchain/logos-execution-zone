@@ -9,6 +9,8 @@ use sha2::{Digest as _, Sha256};
 
 use crate::{AccountId, error::NssaError};
 
+const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Privacy/\x00\x00\x00\x00\x00\x00";
+
 pub type ViewTag = u8;
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -121,8 +123,6 @@ impl Message {
 
     #[must_use]
     pub fn hash_message(&self) -> [u8; 32] {
-        const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Privacy/\x00\x00\x00\x00\x00\x00";
-
         let mut bytes = Vec::with_capacity(
             PREFIX
                 .len()
@@ -140,16 +140,13 @@ impl Message {
 pub mod tests {
     use nssa_core::{
         Commitment, EncryptionScheme, Nullifier, NullifierPublicKey, SharedSecretKey,
-        account::Account,
+        account::{Account, AccountId, Nonce},
         encryption::{EphemeralPublicKey, ViewingPublicKey},
         program::{BlockValidityWindow, TimestampValidityWindow},
     };
     use sha2::{Digest as _, Sha256};
 
-    use crate::{
-        AccountId,
-        privacy_preserving_transaction::message::{EncryptedAccountData, Message},
-    };
+    use super::{EncryptedAccountData, Message, PREFIX};
 
     #[must_use]
     pub fn message_for_tests() -> Message {
@@ -188,6 +185,58 @@ pub mod tests {
             block_validity_window: BlockValidityWindow::new_unbounded(),
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
         }
+    }
+
+    #[test]
+    fn hash_message_privacy_pinned() {
+        let msg = Message {
+            public_account_ids: vec![AccountId::new([42_u8; 32])],
+            nonces: vec![Nonce(5)],
+            public_post_states: vec![],
+            encrypted_private_post_states: vec![],
+            new_commitments: vec![],
+            new_nullifiers: vec![],
+            block_validity_window: BlockValidityWindow::new_unbounded(),
+            timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
+        };
+
+        let public_account_ids_bytes: &[u8] = &[42_u8; 32];
+        let nonces_bytes: &[u8] = &[1, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        // all remaining vec fields are empty: u32 len=0
+        let empty_vec_bytes: &[u8] = &[0_u8; 4];
+        // validity windows: unbounded = {from: None (0u8), to: None (0u8)}
+        let unbounded_window_bytes: &[u8] = &[0_u8; 2];
+
+        let expected_borsh_vec: Vec<u8> = [
+            &[1_u8, 0, 0, 0], // public_account_ids
+            public_account_ids_bytes,
+            nonces_bytes,
+            empty_vec_bytes,        // public_post_state
+            empty_vec_bytes,        // encrypted_private_post_states
+            empty_vec_bytes,        // new_commitments
+            empty_vec_bytes,        // new_nullifiers
+            unbounded_window_bytes, // block_validity_window
+            unbounded_window_bytes, // timestamp_validity_window
+        ]
+        .concat();
+        let expected_borsh: &[u8] = &expected_borsh_vec;
+
+        assert_eq!(
+            borsh::to_vec(&msg).unwrap(),
+            expected_borsh,
+            "`privacy_preserving_transaction::hash_message()`: expected borsh order has changed"
+        );
+
+        let mut preimage = Vec::with_capacity(PREFIX.len() + expected_borsh.len());
+        preimage.extend_from_slice(PREFIX);
+        preimage.extend_from_slice(expected_borsh);
+        let expected_hash: [u8; 32] = Sha256::digest(&preimage).into();
+
+        assert_eq!(
+            msg.hash_message(),
+            expected_hash,
+            "`privacy_preserving_transaction::hash_message()`: serialization has changed"
+        );
     }
 
     #[test]

@@ -25,63 +25,48 @@ impl NativeTokenTransfer<'_> {
             .await
             .map_err(ExecutionFailureKind::SequencerError)?;
 
-        if balance >= balance_to_move {
-            let account_ids = vec![from, to];
-            let program_id = Program::authenticated_transfer_program().id();
-
-            let mut sign_ids = Vec::new();
-            sign_ids.push(from);
-
-            let mut nonces = self
-                .0
-                .get_accounts_nonces(vec![from])
-                .await
-                .map_err(ExecutionFailureKind::SequencerError)?;
-            let to_signing_key = self.0.storage.user_data.get_pub_account_signing_key(to);
-            if let Some(_to_signing_key) = to_signing_key {
-                sign_ids.push(to);
-                let to_nonces = self
-                    .0
-                    .get_accounts_nonces(vec![to])
-                    .await
-                    .map_err(ExecutionFailureKind::SequencerError)?;
-                nonces.extend(to_nonces);
-            } else {
-                println!(
-                    "Receiver's account ({to}) private key not found in wallet. Proceeding with only sender's key."
-                );
-            }
-
-            let message =
-                Message::try_new(program_id, account_ids, nonces, balance_to_move).unwrap();
-
-            let witness_set = if pin.is_none() {
-                WalletCore::sign_public_message(self.0, &message, &sign_ids)
-                    .expect("Expect a valid signature")
-            } else {
-                let pub_key = KeycardWallet::get_public_key_for_path_with_connect(
-                    pin.as_ref().expect("Expect a pin as a String."),
-                    key_path.as_ref().expect("Expect a key path String."),
-                );
-                let signature = KeycardWallet::sign_message_for_path_with_connect(
-                    pin.as_ref().expect("Expect a pin as a String."),
-                    key_path.as_ref().expect("Expect a key path String."),
-                    &message.hash_message(),
-                )
-                .expect("Expect valid signature");
-                WitnessSet::from_list(&[signature], &[pub_key])
-            };
-
-            let tx = PublicTransaction::new(message, witness_set);
-
-            Ok(self
-                .0
-                .sequencer_client
-                .send_transaction(NSSATransaction::Public(tx))
-                .await?)
-        } else {
-            Err(ExecutionFailureKind::InsufficientFundsError)
+        if balance < balance_to_move {
+            return Err(ExecutionFailureKind::InsufficientFundsError);
         }
+
+        let account_ids = vec![from, to];
+        let program_id = Program::authenticated_transfer_program().id();
+
+        // Fetch nonces for both accounts unconditionally
+        let nonces = self
+            .0
+            .get_accounts_nonces(account_ids.clone())
+            .await
+            .map_err(ExecutionFailureKind::SequencerError)?;
+
+        let message = Message::try_new(program_id, account_ids, nonces, balance_to_move).unwrap();
+
+        let witness_set = pin.as_ref().map_or_else(|| {
+                 let sign_ids = self.0.filter_owned_accounts(&[from, to]);
+                 WalletCore::sign_public_message(self.0, &message, &sign_ids)
+                     .expect("`WalletCore::sign_public_message() failed to produce a signature for a NativeTokenTransfer.")
+             }, |pin| {
+                 let key_path = key_path.as_ref().expect("`NativeTokenTransfer::send_public_transfer() expected a String for `key_path`.");
+                 let pub_key = KeycardWallet::get_public_key_for_path_with_connect(
+                     pin,
+                     key_path,
+                 );
+                 let signature = KeycardWallet::sign_message_for_path_with_connect(
+                     pin,
+                     key_path,
+                     &message.hash_message(),
+                 )
+                 .expect("`NativeTokenTransfer::send_public_transfer() failed to produce a Signature for the given `pin` and `key_path`.");
+                 WitnessSet::from_list(&[signature], &[pub_key])
+             });
+
+        let tx = PublicTransaction::new(message, witness_set);
+
+        Ok(self
+            .0
+            .sequencer_client
+            .send_transaction(NSSATransaction::Public(tx))
+            .await?)
     }
 
     pub async fn register_account(
