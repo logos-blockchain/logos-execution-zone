@@ -32,8 +32,6 @@ impl NativeTokenTransfer<'_> {
         let account_ids = vec![from, to];
         let program_id = Program::authenticated_transfer_program().id();
 
-        let sign_ids = self.0.filter_owned_accounts(&[from, to]);
-
         // Fetch nonces for both accounts unconditionally
         let nonces = self
             .0
@@ -43,9 +41,24 @@ impl NativeTokenTransfer<'_> {
 
         let message = Message::try_new(program_id, account_ids, nonces, balance_to_move).unwrap();
 
-        // Assumes this now silently skips accounts without signing keys
-        let witness_set = WalletCore::sign_public_message(self.0, &message, &sign_ids)
-            .expect("`WalletCore::sign_public_message() failed to produce a signature for a NativeTokenTransfer.");
+        let witness_set = pin.as_ref().map_or_else(|| {
+                 let sign_ids = self.0.filter_owned_accounts(&[from, to]);
+                 WalletCore::sign_public_message(self.0, &message, &sign_ids)
+                     .expect("`WalletCore::sign_public_message() failed to produce a signature for a NativeTokenTransfer.")
+             }, |pin| {
+                 let key_path = key_path.as_ref().expect("`NativeTokenTransfer::send_public_transfer() expected a String for `key_path`.");
+                 let pub_key = KeycardWallet::get_public_key_for_path_with_connect(
+                     pin,
+                     key_path,
+                 );
+                 let signature = KeycardWallet::sign_message_for_path_with_connect(
+                     pin,
+                     key_path,
+                     &message.hash_message(),
+                 )
+                 .expect("`NativeTokenTransfer::send_public_transfer() failed to produce a Signature for the given `pin` and `key_path`.");
+                 WitnessSet::from_list(&[signature], &[pub_key])
+             });
 
         let tx = PublicTransaction::new(message, witness_set);
 

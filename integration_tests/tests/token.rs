@@ -1100,7 +1100,7 @@ async fn token_claiming_path_with_private_accounts() -> Result<()> {
     else {
         anyhow::bail!("Expected RegisterAccount return value");
     };
-    
+
     // Create supply account (private)
     let result = wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
