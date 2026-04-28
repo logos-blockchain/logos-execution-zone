@@ -569,16 +569,16 @@ impl WalletCore {
         ))
     }
 
+    #[must_use]
     pub fn sign_privacy_message(
         message: &nssa::privacy_preserving_transaction::Message,
         proof: &Proof,
         acc_manager: &privacy_preserving_tx::AccountManager,
-    ) -> nssa::privacy_preserving_transaction::witness_set::WitnessSet
-    {
+    ) -> nssa::privacy_preserving_transaction::witness_set::WitnessSet {
         nssa::privacy_preserving_transaction::witness_set::WitnessSet::for_message(
-                message,
-                proof.clone(),
-                &acc_manager.public_account_auth())
-
+            message,
+            proof.clone(),
+            &acc_manager.public_account_auth(),
+        )
     }
 }
