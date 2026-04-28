@@ -69,6 +69,12 @@ pub unsafe extern "C" fn wallet_ffi_create_account_public(
 /// account record so the account can immediately be used with
 /// `wallet_ffi_register_private_account`.
 ///
+/// The identifier is chosen at random and is not encoded in the mnemonic seed.
+/// Once the account is initialized, the identifier is embedded in the encrypted
+/// transaction payload and can be recovered by running `sync-private` from the
+/// same mnemonic. An account that was created locally but has never been initialized
+/// cannot be recovered from the seed alone.
+///
 /// # Parameters
 /// - `handle`: Valid wallet handle
 /// - `out_account_id`: Output pointer for the new account ID (32 bytes)
