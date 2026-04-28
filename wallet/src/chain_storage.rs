@@ -56,9 +56,9 @@ impl WalletChainStore {
             .expect("Malformed persistent account data, must have private root");
 
         let mut public_tree = KeyTreePublic::new_from_root(match public_root {
-            PersistentAccountData::Public(data) => {
-                data.data.expect("Expect valid public account keys")
-            }
+            PersistentAccountData::Public(data) => data
+                .data
+                .expect("public tree in persistent_accounts failed to return a valid KeyTree."),
             _ => unreachable!(),
         });
         let mut private_tree = KeyTreePrivate::new_from_root(match private_root {
