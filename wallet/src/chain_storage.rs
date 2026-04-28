@@ -70,7 +70,13 @@ impl WalletChainStore {
                     public_tree.insert(data.account_id, data.chain_index, data.data);
                 }
                 PersistentAccountData::Private(data) => {
-                    private_tree.insert(data.account_id, data.chain_index, data.data);
+                    let npk = data.data.value.0.nullifier_public_key;
+                    let chain_index = data.chain_index;
+                    for identifier in &data.identifiers {
+                        let account_id = nssa::AccountId::from((&npk, *identifier));
+                        private_tree.account_id_map.insert(account_id, chain_index.clone());
+                    }
+                    private_tree.key_map.insert(chain_index, data.data);
                 }
                 PersistentAccountData::Preconfigured(acc_data) => match acc_data {
                     InitialAccountData::Public(data) => {
@@ -282,10 +288,7 @@ mod tests {
                 data: public_data,
             }),
             PersistentAccountData::Private(Box::new(PersistentAccountDataPrivate {
-                account_id: nssa::AccountId::from((
-                    &private_data.value.0.nullifier_public_key,
-                    0_u128,
-                )),
+                identifiers: vec![],
                 chain_index: ChainIndex::root(),
                 data: private_data,
             })),
