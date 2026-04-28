@@ -304,21 +304,7 @@ impl WalletSubcommand for AccountSubcommand {
             Self::New(new_subcommand) => new_subcommand.handle_subcommand(wallet_core).await,
             Self::SyncPrivate => {
                 let curr_last_block = wallet_core.sequencer_client.get_last_block_id().await?;
-
-                if wallet_core
-                    .storage
-                    .user_data
-                    .private_key_tree
-                    .account_id_map
-                    .is_empty()
-                {
-                    wallet_core.last_synced_block = curr_last_block;
-
-                    wallet_core.store_persistent_data().await?;
-                } else {
-                    wallet_core.sync_to_block(curr_last_block).await?;
-                }
-
+                wallet_core.sync_to_block(curr_last_block).await?;
                 Ok(SubcommandReturnValue::SyncedToBlock(curr_last_block))
             }
             Self::List { long } => {

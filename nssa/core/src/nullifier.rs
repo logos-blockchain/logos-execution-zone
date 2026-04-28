@@ -159,4 +159,21 @@ mod tests {
 
         assert_eq!(account_id, expected_account_id);
     }
+
+    #[test]
+    fn account_id_from_nullifier_public_key_identifier_1() {
+        let nsk = [
+            57, 5, 64, 115, 153, 56, 184, 51, 207, 238, 99, 165, 147, 214, 213, 151, 30, 251, 30,
+            196, 134, 22, 224, 211, 237, 120, 136, 225, 188, 220, 249, 28,
+        ];
+        let npk = NullifierPublicKey::from(&nsk);
+        let expected_account_id = AccountId::new([
+            203, 201, 109, 245, 40, 54, 195, 12, 55, 33, 0, 86, 245, 65, 70, 156, 24, 249, 26, 95,
+            56, 247, 99, 121, 165, 182, 234, 255, 19, 127, 191, 72,
+        ]);
+
+        let account_id = AccountId::from((&npk, 1));
+
+        assert_eq!(account_id, expected_account_id);
+    }
 }
