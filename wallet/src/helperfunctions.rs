@@ -187,7 +187,7 @@ pub fn produce_data_for_storage(
         );
     }
 
-    for (_, entry) in &user_data.default_user_private_accounts {
+    for entry in user_data.default_user_private_accounts.values() {
         for (identifier, account) in &entry.accounts {
             vec_for_storage.push(
                 InitialAccountData::Private(Box::new(PrivateAccountPrivateInitialData {

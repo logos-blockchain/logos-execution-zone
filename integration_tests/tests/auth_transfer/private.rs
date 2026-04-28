@@ -550,7 +550,10 @@ async fn shielded_transfers_to_two_identifiers_same_npk() -> Result<()> {
             .get(&chain_index)
             .expect("node was just inserted");
         let key_chain = &node.value.0;
-        (key_chain.nullifier_public_key, key_chain.viewing_public_key.clone())
+        (
+            key_chain.nullifier_public_key,
+            key_chain.viewing_public_key.clone(),
+        )
     };
 
     let npk_hex = hex::encode(npk.0);

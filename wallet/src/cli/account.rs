@@ -82,7 +82,7 @@ pub enum NewSubcommand {
         /// Label to assign to the new account.
         label: Option<String>,
     },
-    /// Register new private account with a random identifier.
+    /// Single-account convenience: creates a key node and auto-registers one account with a random identifier.
     Private {
         #[arg(long)]
         /// Chain index of a parent node.
@@ -91,7 +91,8 @@ pub enum NewSubcommand {
         /// Label to assign to the new account.
         label: Option<String>,
     },
-    /// Create a new receiving key (npk + vpk) to share with senders.
+    /// Recommended for receiving from multiple senders: creates a key node (npk + vpk) without
+    /// registering any account.
     PrivateAccountsKey {
         #[arg(long)]
         /// Chain index of a parent node.
