@@ -95,10 +95,16 @@ pub struct PublicAccountPrivateInitialData {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PrivateAccountPrivateInitialData {
-    pub account_id: nssa::AccountId,
     pub account: nssa_core::account::Account,
     pub key_chain: KeyChain,
     pub identifier: nssa_core::Identifier,
+}
+
+impl PrivateAccountPrivateInitialData {
+    #[must_use]
+    pub fn account_id(&self) -> nssa::AccountId {
+        nssa::AccountId::from((&self.key_chain.nullifier_public_key, self.identifier))
+    }
 }
 
 #[must_use]
@@ -143,7 +149,6 @@ pub fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialD
 
     vec![
         PrivateAccountPrivateInitialData {
-            account_id: AccountId::from((&key_chain_1.nullifier_public_key, 0)),
             account: Account {
                 program_owner: DEFAULT_PROGRAM_OWNER,
                 balance: PRIV_ACC_A_INITIAL_BALANCE,
@@ -154,7 +159,6 @@ pub fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialD
             identifier: 0,
         },
         PrivateAccountPrivateInitialData {
-            account_id: AccountId::from((&key_chain_2.nullifier_public_key, 0)),
             account: Account {
                 program_owner: DEFAULT_PROGRAM_OWNER,
                 balance: PRIV_ACC_B_INITIAL_BALANCE,
@@ -358,11 +362,11 @@ mod tests {
         );
 
         assert_eq!(
-            init_private_accs_keys[0].account_id.to_string(),
+            init_private_accs_keys[0].account_id().to_string(),
             PRIV_ACC_A_TEXT_ADDR
         );
         assert_eq!(
-            init_private_accs_keys[1].account_id.to_string(),
+            init_private_accs_keys[1].account_id().to_string(),
             PRIV_ACC_B_TEXT_ADDR
         );
 

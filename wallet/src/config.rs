@@ -44,10 +44,10 @@ pub enum InitialAccountData {
 
 impl InitialAccountData {
     #[must_use]
-    pub const fn account_id(&self) -> nssa::AccountId {
+    pub fn account_id(&self) -> nssa::AccountId {
         match &self {
             Self::Public(acc) => acc.account_id,
-            Self::Private(acc) => acc.account_id,
+            Self::Private(acc) => acc.account_id(),
         }
     }
 

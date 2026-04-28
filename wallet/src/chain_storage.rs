@@ -84,7 +84,7 @@ impl WalletChainStore {
                     }
                     InitialAccountData::Private(data) => {
                         private_init_acc_map.insert(
-                            data.account_id,
+                            data.account_id(),
                             UserPrivateAccountData {
                                 key_chain: data.key_chain,
                                 accounts: vec![(data.identifier, data.account)],
@@ -122,6 +122,7 @@ impl WalletChainStore {
                     public_init_acc_map.insert(data.account_id, data.pub_sign_key);
                 }
                 InitialAccountData::Private(data) => {
+                    let account_id = data.account_id();
                     let mut account = data.account;
                     // TODO: Program owner is only known after code is compiled and can't be set
                     // in the config. Therefore we overwrite it here on
@@ -129,7 +130,7 @@ impl WalletChainStore {
                     // from the node and queried from the wallet.
                     account.program_owner = Program::authenticated_transfer_program().id();
                     private_init_acc_map.insert(
-                        data.account_id,
+                        account_id,
                         UserPrivateAccountData {
                             key_chain: data.key_chain,
                             accounts: vec![(data.identifier, account)],
