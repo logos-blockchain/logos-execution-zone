@@ -164,6 +164,87 @@ impl From<InitialAccountData> for PersistentAccountData {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use key_protocol::key_management::key_tree::{
+        chain_index::ChainIndex, keys_public::ChildKeysPublic,
+    };
+    use nssa::{AccountId, PrivateKey, PublicKey};
+
+    use super::PersistentAccountDataPublic;
+
+    // Root public account keys derived from a known test seed; see key_protocol's keys_public tests.
+    const CSK_BYTES: [u8; 32] = [
+        40, 35, 239, 19, 53, 178, 250, 55, 115, 12, 34, 3, 153, 153, 72, 170, 190, 36, 172, 36,
+        202, 148, 181, 228, 35, 222, 58, 84, 156, 24, 146, 86,
+    ];
+    const CPK_BYTES: [u8; 32] = [
+        219, 141, 130, 105, 11, 203, 187, 124, 112, 75, 223, 22, 11, 164, 153, 127, 59, 247, 244,
+        166, 75, 66, 242, 224, 35, 156, 161, 75, 41, 51, 76, 245,
+    ];
+    const CCC: [u8; 32] = [
+        238, 94, 84, 154, 56, 224, 80, 218, 133, 249, 179, 222, 9, 24, 17, 252, 120, 127, 222, 13,
+        146, 126, 232, 239, 113, 9, 194, 219, 190, 48, 187, 155,
+    ];
+
+    fn make_child_keys_public() -> ChildKeysPublic {
+        ChildKeysPublic {
+            csk: PrivateKey::try_new(CSK_BYTES).unwrap(),
+            cpk: PublicKey::try_new(CPK_BYTES).unwrap(),
+            ccc: CCC,
+            cci: None,
+        }
+    }
+
+    fn make_public_account_data(data: Option<ChildKeysPublic>) -> PersistentAccountDataPublic {
+        PersistentAccountDataPublic {
+            account_id: AccountId::new([0u8; 32]),
+            chain_index: ChainIndex::root(),
+            data,
+        }
+    }
+
+    #[test]
+    fn persistent_account_data_public_roundtrip_some() {
+        let original = make_public_account_data(Some(make_child_keys_public()));
+        let json = serde_json::to_string(&original).unwrap();
+        let decoded: PersistentAccountDataPublic = serde_json::from_str(&json).unwrap();
+        let keys = decoded.data.expect("data should be Some after roundtrip");
+        assert_eq!(keys.csk, PrivateKey::try_new(CSK_BYTES).unwrap());
+        assert_eq!(keys.cpk, PublicKey::try_new(CPK_BYTES).unwrap());
+        assert_eq!(keys.ccc, CCC);
+        assert_eq!(keys.cci, None);
+    }
+
+    #[test]
+    fn persistent_account_data_public_roundtrip_none() {
+        let original = make_public_account_data(None);
+        let json = serde_json::to_string(&original).unwrap();
+        let decoded: PersistentAccountDataPublic = serde_json::from_str(&json).unwrap();
+        assert!(decoded.data.is_none());
+    }
+
+    #[test]
+    fn persistent_account_data_public_legacy_shape_deserializes() {
+        let legacy_json = r#"{
+            "account_id": "11111111111111111111111111111111",
+            "chain_index": [],
+            "data": {
+                "csk": "2823ef1335b2fa37730c2203999948aabe24ac24ca94b5e423de3a549c189256",
+                "cpk": "db8d82690bcbbb7c704bdf160ba4997f3bf7f4a64b42f2e0239ca14b29334cf5",
+                "ccc": [238,94,84,154,56,224,80,218,133,249,179,222,9,24,17,252,120,127,222,13,146,126,232,239,113,9,194,219,190,48,187,155],
+                "cci": null
+            }
+        }"#;
+        let decoded: PersistentAccountDataPublic = serde_json::from_str(legacy_json).unwrap();
+        let keys = decoded.data.expect("legacy shape deserializes as Some");
+        assert_eq!(keys.csk, PrivateKey::try_new(CSK_BYTES).unwrap());
+        assert_eq!(keys.cpk, PublicKey::try_new(CPK_BYTES).unwrap());
+        assert_eq!(keys.ccc, CCC);
+        assert_eq!(keys.cci, None);
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GasConfig {
     /// Gas spent per deploying one byte of data.
