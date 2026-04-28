@@ -73,7 +73,7 @@ class KeycardWallet:
 
             # Load the LEE seed onto the card  
             result = self.card.load_key(  
-                key_type = constants.LoadKeyType.BIP39_SEED,  
+                key_type = constants.LoadKeyType.LEE_SEED,  
                 lee_seed = seed  
             )
 

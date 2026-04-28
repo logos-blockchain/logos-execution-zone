@@ -132,7 +132,7 @@ pub enum TokenProgramAgnosticSubcommand {
         #[arg(long, conflicts_with = "definition")]
         definition_label: Option<String>,
         /// holder - valid 32 byte base58 string with privacy prefix.
-        #[arg(long, conflicts_with = "holder_label")]
+        #[arg(long, conflicts_with = "holder_label", required_unless_present_any = ["holder_label", "pin"])]
         holder: Option<String>,
         /// Holder account label (alternative to --holder).
         #[arg(long, conflicts_with = "holder")]
