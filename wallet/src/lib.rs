@@ -548,14 +548,14 @@ impl WalletCore {
     }
 
     pub fn sign_public_message(
-        wallet: &Self,
+        &self,
         message: &nssa::public_transaction::Message,
         account_ids: &[AccountId],
     ) -> Result<nssa::public_transaction::WitnessSet, ExecutionFailureKind> {
         let mut private_keys = Vec::new();
 
         for &account_id in account_ids {
-            let key = wallet
+            let key = self
                 .storage
                 .user_data
                 .get_pub_account_signing_key(account_id)
@@ -580,5 +580,14 @@ impl WalletCore {
             proof.clone(),
             &acc_manager.public_account_auth(),
         )
+    }
+
+    #[must_use]
+    pub fn filter_owned_accounts(&self, account_ids: &[nssa::AccountId]) -> Vec<nssa::AccountId> {
+        account_ids
+            .iter()
+            .filter(|&&account_id| self.get_account_public_signing_key(account_id).is_some())
+            .copied()
+            .collect()
     }
 }
