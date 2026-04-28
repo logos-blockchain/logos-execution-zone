@@ -1,6 +1,5 @@
 use common::{HashType, transaction::NSSATransaction};
-use keycard_wallet::KeycardWallet;
-use nssa::{AccountId, program::Program, public_transaction::WitnessSet};
+use nssa::{AccountId, program::Program};
 use nssa_core::{NullifierPublicKey, SharedSecretKey, encryption::ViewingPublicKey};
 use sequencer_service_rpc::RpcClient as _;
 use token_core::Instruction;
@@ -154,8 +153,6 @@ impl Token<'_> {
         sender_account_id: AccountId,
         recipient_account_id: AccountId,
         amount: u128,
-        pin: Option<String>,
-        sender_key_path: Option<String>,
     ) -> Result<HashType, ExecutionFailureKind> {
         let account_ids = vec![sender_account_id, recipient_account_id];
         let program_id = nssa::program::Program::token().id();
@@ -167,12 +164,34 @@ impl Token<'_> {
             .get_accounts_nonces(vec![sender_account_id])
             .await
             .map_err(ExecutionFailureKind::SequencerError)?;
-        let recipient_nonces = self
+
+        let mut private_keys = Vec::new();
+        let sender_sk = self
             .0
-            .get_accounts_nonces(vec![recipient_account_id])
-            .await
-            .map_err(ExecutionFailureKind::SequencerError)?;
-        nonces.extend(recipient_nonces);
+            .storage
+            .user_data
+            .get_pub_account_signing_key(sender_account_id)
+            .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
+        private_keys.push(sender_sk);
+
+        if let Some(recipient_sk) = self
+            .0
+            .storage
+            .user_data
+            .get_pub_account_signing_key(recipient_account_id)
+        {
+            private_keys.push(recipient_sk);
+            let recipient_nonces = self
+                .0
+                .get_accounts_nonces(vec![recipient_account_id])
+                .await
+                .map_err(ExecutionFailureKind::SequencerError)?;
+            nonces.extend(recipient_nonces);
+        } else {
+            println!(
+                "Receiver's account ({recipient_account_id}) private key not found in wallet. Proceeding with only sender's key."
+            );
+        }
 
         let message = nssa::public_transaction::Message::try_new(
             program_id,
@@ -181,44 +200,8 @@ impl Token<'_> {
             instruction,
         )
         .unwrap();
-
-        let witness_set = if let Some(pin) = &pin {
-            let sender_public_key = KeycardWallet::get_public_key_for_path_with_connect(
-                pin,
-                sender_key_path.as_ref().expect("Expect a key path String."),
-            );
-            let signature = KeycardWallet::sign_message_for_path_with_connect(
-                pin,
-                sender_key_path.as_ref().expect("Expect a key path String."),
-                &message.hash_message(),
-            )
-            .expect("Expect a valid signature");
-            WitnessSet::from_list(&[signature], &[sender_public_key])
-        } else {
-            let mut private_keys = Vec::new();
-            let sender_sk = self
-                .0
-                .storage
-                .user_data
-                .get_pub_account_signing_key(sender_account_id)
-                .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
-            private_keys.push(sender_sk);
-
-            if let Some(recipient_sk) = self
-                .0
-                .storage
-                .user_data
-                .get_pub_account_signing_key(recipient_account_id)
-            {
-                private_keys.push(recipient_sk);
-            } else {
-                println!(
-                    "Receiver's account ({recipient_account_id}) private key not found in wallet. Proceeding with only sender's key."
-                );
-            }
-
-            nssa::public_transaction::WitnessSet::for_message(&message, &private_keys)
-        };
+        let witness_set =
+            nssa::public_transaction::WitnessSet::for_message(&message, &private_keys);
 
         let tx = nssa::PublicTransaction::new(message, witness_set);
 

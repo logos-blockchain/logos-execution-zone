@@ -1,4 +1,5 @@
 use std::{env, path::PathBuf};
+
 use pyo3::{prelude::*, types::PyList};
 
 /// Adds the project's `python/` directory and venv site-packages to Python's sys.path.
@@ -25,11 +26,9 @@ pub fn add_python_path(py: Python<'_>) -> PyResult<()> {
         let path_str = path.to_str().expect("Invalid path");
 
         // Avoid duplicating the path
-        let already_present = sys_path.iter().any(|p| {
-            p.extract::<&str>()
-                .map(|s| s == path_str)
-                .unwrap_or(false)
-        });
+        let already_present = sys_path
+            .iter()
+            .any(|p| p.extract::<&str>().map(|s| s == path_str).unwrap_or(false));
 
         if !already_present {
             sys_path.insert(0, path_str)?;

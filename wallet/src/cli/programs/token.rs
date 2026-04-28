@@ -288,8 +288,6 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                                         sender_account_id: from,
                                         recipient_account_id: to,
                                         balance_to_move: amount,
-                                        pin,
-                                        sender_key_path: from_key_path,
                                     },
                                 )
                             }
@@ -566,10 +564,6 @@ pub enum TokenProgramSubcommandPublic {
         recipient_account_id: String,
         #[arg(short, long)]
         balance_to_move: u128,
-        #[arg(long)]
-        pin: Option<String>,
-        #[arg(long)]
-        sender_key_path: Option<String>,
     },
     // Burn tokens using the token program
     BurnToken {
@@ -802,16 +796,12 @@ impl WalletSubcommand for TokenProgramSubcommandPublic {
                 sender_account_id,
                 recipient_account_id,
                 balance_to_move,
-                pin,
-                sender_key_path,
             } => {
                 Token(wallet_core)
                     .send_transfer_transaction(
                         sender_account_id.parse().unwrap(),
                         recipient_account_id.parse().unwrap(),
                         balance_to_move,
-                        pin,
-                        sender_key_path,
                     )
                     .await?;
                 Ok(SubcommandReturnValue::Empty)
