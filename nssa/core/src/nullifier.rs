@@ -176,4 +176,22 @@ mod tests {
 
         assert_eq!(account_id, expected_account_id);
     }
+
+    #[test]
+    fn account_id_from_nullifier_public_key_byte_asymmetric_identifier() {
+        let identifier: u128 = 0x0123_4567_89AB_CDEF_FEDC_BA98_7654_3210;
+        let nsk = [
+            57, 5, 64, 115, 153, 56, 184, 51, 207, 238, 99, 165, 147, 214, 213, 151, 30, 251, 30,
+            196, 134, 22, 224, 211, 237, 120, 136, 225, 188, 220, 249, 28,
+        ];
+        let npk = NullifierPublicKey::from(&nsk);
+        let expected_account_id = AccountId::new([
+            178, 16, 226, 206, 217, 38, 38, 45, 155, 240, 226, 253, 168, 87, 146, 70, 72, 32, 174,
+            19, 245, 25, 214, 162, 209, 135, 252, 82, 27, 2, 174, 196,
+        ]);
+
+        let account_id = AccountId::from((&npk, identifier));
+
+        assert_eq!(account_id, expected_account_id);
+    }
 }
