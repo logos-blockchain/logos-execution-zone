@@ -467,8 +467,7 @@ impl WalletCore {
             )
             .unwrap();
 
-        let witness_set = Self::sign_privacy_message(&message, &proof, &acc_manager, pin, key_path)
-            .expect("Expect a valid witness set");
+        let witness_set = Self::sign_privacy_message(&message, &proof, &acc_manager);
         let tx = PrivacyPreservingTransaction::new(message, witness_set);
 
         let shared_secrets: Vec<_> = private_account_keys
