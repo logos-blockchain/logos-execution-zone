@@ -143,7 +143,7 @@ Account owned by authenticated-transfer program
 > Private accounts are structurally identical to public accounts, but their values are stored off-chain. On-chain, only a 32-byte commitment is recorded.
 > Transactions include encrypted private values so the owner can recover them, and the decryption keys are never shared.
 > Private accounts use two keypairs: nullifier keys for privacy-preserving executions and viewing keys for encrypting and decrypting values.
-> The private account ID is derived from the nullifier public key.
+> The private account ID is derived from the nullifier public key and a numeric identifier: `SHA256(prefix || npk || identifier)`. The same `npk` paired with different identifiers yields different, independent account IDs.
 > Private accounts can be initialized by anyone, but once initialized they can only be modified by the owner’s keys.
 > Updates include a new commitment and a nullifier for the old state, which prevents linkage between versions.
 
@@ -246,6 +246,9 @@ wallet auth-transfer send \
     --to-vpk 039fd12a3674a880d3e917804129141e4170d419d1f9e28a3dcf979c1f2369cb72 \
     --amount 3
 ```
+
+> [!Note]
+> `--to-identifier` is omitted here. When omitted, the wallet picks a random identifier, which is usually fine. Use the flag explicitly when a specific identifier is required.
 
 > [!Warning]
 > This command creates a privacy-preserving transaction, which may take a few minutes. The updated values are encrypted and included in the transaction.
