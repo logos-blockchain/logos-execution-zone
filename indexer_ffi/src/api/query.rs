@@ -1,10 +1,10 @@
-use indexer_service_rpc::RpcClient;
+use indexer_service_rpc::RpcClient as _;
 
 use crate::{
     IndexerServiceFFI,
     api::{
         PointerResult,
-        types::{Block, BlockId, BlockOpt},
+        types::{FfiBlockId, block::FfiBlockOpt},
     },
     errors::OperationStatus,
 };
@@ -66,8 +66,8 @@ pub unsafe extern "C" fn query_last_block(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn query_block(
     indexer: *const IndexerServiceFFI,
-    block_id: BlockId,
-) -> PointerResult<BlockOpt, OperationStatus> {
+    block_id: FfiBlockId,
+) -> PointerResult<FfiBlockOpt, OperationStatus> {
     if indexer.is_null() {
         log::error!("Attempted to query a null indexer pointer. This is a bug. Aborting.");
         return PointerResult::from_error(OperationStatus::NullPointer);
@@ -82,6 +82,12 @@ pub unsafe extern "C" fn query_block(
         .block_on(client.get_block_by_id(block_id))
         .map_or_else(
             |_| PointerResult::from_error(OperationStatus::ClientError),
-            |block| PointerResult::from_value(block.into()),
+            |block_opt| {
+                let block_ffi = block_opt.map_or_else(FfiBlockOpt::from_none, |block| {
+                    FfiBlockOpt::from_value(block.into())
+                });
+
+                PointerResult::from_value(block_ffi)
+            },
         )
 }

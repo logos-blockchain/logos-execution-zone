@@ -1,6 +1,7 @@
 #![expect(
     clippy::shadow_unrelated,
     clippy::tests_outside_test_module,
+    clippy::undocumented_unsafe_blocks,
     reason = "We don't care about these in tests"
 )]
 

@@ -3484,10 +3484,10 @@ version = "0.1.0"
 dependencies = [
  "cbindgen",
  "indexer_service",
+ "indexer_service_protocol",
  "indexer_service_rpc",
  "log",
  "nssa",
- "nssa_core",
  "sequencer_core",
  "tokio",
  "url",

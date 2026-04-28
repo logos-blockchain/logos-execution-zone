@@ -271,7 +271,7 @@ impl BlockingTestContextFFI {
 
     #[must_use]
     pub const fn indexer_ffi(&self) -> *const IndexerServiceFFI {
-        &(self.indexer_ffi)
+        &raw const (self.indexer_ffi)
     }
 }
 

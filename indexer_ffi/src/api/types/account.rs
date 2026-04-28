@@ -2,7 +2,7 @@
 
 use std::ptr;
 
-use crate::api::types::FfiVec;
+use indexer_service_protocol::ProgramId;
 
 /// 32-byte array type for `AccountId`, keys, hashes, etc.
 #[repr(C)]
@@ -31,6 +31,12 @@ pub struct FfiProgramId {
     pub data: [u32; 8],
 }
 
+impl From<ProgramId> for FfiProgramId {
+    fn from(value: ProgramId) -> Self {
+        Self { data: value.0 }
+    }
+}
+
 /// U128 - 16 bytes little endian.
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -53,12 +59,6 @@ pub struct FfiAccount {
     pub data_len: usize,
     /// Nonce as little-endian [u8; 16].
     pub nonce: FfiU128,
-}
-
-#[repr(C)]
-pub struct FfiAccountList {
-    pub entries: *const FfiAccount,
-    pub len: usize,
 }
 
 impl Default for FfiAccount {
@@ -100,32 +100,6 @@ impl Default for FfiPrivateAccountKeys {
 pub struct FfiPublicAccountKey {
     pub public_key: FfiBytes32,
 }
-
-/// Single entry in the account list.
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct FfiAccountIdListEntry {
-    pub account_id: FfiBytes32,
-    pub is_public: bool,
-}
-
-/// List of accounts returned by `wallet_ffi_list_accounts`.
-#[repr(C)]
-pub struct FfiAccountIdList {
-    pub entries: *mut FfiAccountIdListEntry,
-    pub count: usize,
-}
-
-impl Default for FfiAccountIdList {
-    fn default() -> Self {
-        Self {
-            entries: std::ptr::null_mut(),
-            count: 0,
-        }
-    }
-}
-
-pub type FfiVecBytes32 = FfiVec<FfiBytes32>;
 
 // Helper functions to convert between Rust and FFI types
 
