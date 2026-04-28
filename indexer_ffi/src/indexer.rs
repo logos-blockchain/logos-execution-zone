@@ -109,13 +109,23 @@ impl IndexerServiceFFI {
 // Implement Drop to prevent memory leaks
 impl Drop for IndexerServiceFFI {
     fn drop(&mut self) {
-        if self.indexer_handle.is_null() {
+        let Self {
+            indexer_handle,
+            runtime,
+            indexer_client,
+        } = self;
+
+        if indexer_handle.is_null() {
             log::error!("Attempted to drop a null indexer pointer. This is a bug");
         }
-        if self.runtime.is_null() {
+        if runtime.is_null() {
             log::error!("Attempted to drop a null tokio runtime pointer. This is a bug");
         }
-        drop(unsafe { Box::from_raw(self.indexer_handle.cast::<IndexerHandle>()) });
-        drop(unsafe { Box::from_raw(self.runtime.cast::<Runtime>()) });
+        if indexer_client.is_null() {
+            log::error!("Attempted to drop a null client pointer. This is a bug");
+        }
+        drop(unsafe { Box::from_raw(indexer_handle.cast::<IndexerHandle>()) });
+        drop(unsafe { Box::from_raw(runtime.cast::<Runtime>()) });
+        drop(unsafe { Box::from_raw(indexer_client.cast::<Runtime>()) });
     }
 }
