@@ -1075,7 +1075,7 @@ mod tests {
             program::Program,
         };
         use nssa_core::{
-            SharedSecretKey,
+            PrivacyPreservingCircuitInputAccount, SharedSecretKey,
             account::AccountWithMetadata,
             encryption::{EphemeralPublicKey, EphemeralSecretKey, ViewingPublicKey},
         };
@@ -1109,10 +1109,10 @@ mod tests {
         let (output, proof) = execute_and_prove(
             vec![AccountWithMetadata::new(Account::default(), true, &npk)],
             Program::serialize_instruction(0_u128).unwrap(),
-            vec![1],
-            vec![(npk, shared_secret)],
-            vec![nsk],
-            vec![None],
+            vec![PrivacyPreservingCircuitInputAccount::PrivateAuthorizedInit {
+                ssk: shared_secret,
+                nsk,
+            }],
             &Program::authenticated_transfer_program().into(),
         )
         .unwrap();

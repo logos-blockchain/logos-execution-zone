@@ -2,8 +2,8 @@ use std::collections::{HashMap, VecDeque};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use nssa_core::{
-    MembershipProof, NullifierPublicKey, NullifierSecretKey, PrivacyPreservingCircuitInput,
-    PrivacyPreservingCircuitOutput, SharedSecretKey,
+    PrivacyPreservingCircuitInput, PrivacyPreservingCircuitInputAccount,
+    PrivacyPreservingCircuitOutput,
     account::AccountWithMetadata,
     program::{ChainedCall, InstructionData, ProgramId, ProgramOutput},
 };
@@ -63,14 +63,10 @@ impl From<Program> for ProgramWithDependencies {
 
 /// Generates a proof of the execution of a NSSA program inside the privacy preserving execution
 /// circuit.
-/// TODO: too many parameters.
 pub fn execute_and_prove(
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: InstructionData,
-    visibility_mask: Vec<u8>,
-    private_account_keys: Vec<(NullifierPublicKey, SharedSecretKey)>,
-    private_account_nsks: Vec<NullifierSecretKey>,
-    private_account_membership_proofs: Vec<Option<MembershipProof>>,
+    accounts: Vec<PrivacyPreservingCircuitInputAccount>,
     program_with_dependencies: &ProgramWithDependencies,
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), NssaError> {
     let ProgramWithDependencies {
@@ -128,10 +124,7 @@ pub fn execute_and_prove(
 
     let circuit_input = PrivacyPreservingCircuitInput {
         program_outputs,
-        visibility_mask,
-        private_account_keys,
-        private_account_nsks,
-        private_account_membership_proofs,
+        accounts,
         program_id: program_with_dependencies.program.id(),
     };
 
@@ -243,10 +236,13 @@ mod tests {
         let (output, proof) = execute_and_prove(
             vec![sender, recipient],
             Program::serialize_instruction(balance_to_move).unwrap(),
-            vec![0, 2],
-            vec![(recipient_keys.npk(), shared_secret)],
-            vec![],
-            vec![None],
+            vec![
+                PrivacyPreservingCircuitInputAccount::Public,
+                PrivacyPreservingCircuitInputAccount::PrivateUnauthorized {
+                    npk: recipient_keys.npk(),
+                    ssk: shared_secret,
+                },
+            ],
             &Program::authenticated_transfer_program().into(),
         )
         .unwrap();
@@ -339,13 +335,19 @@ mod tests {
         let (output, proof) = execute_and_prove(
             vec![sender_pre, recipient],
             Program::serialize_instruction(balance_to_move).unwrap(),
-            vec![1, 2],
             vec![
-                (sender_keys.npk(), shared_secret_1),
-                (recipient_keys.npk(), shared_secret_2),
+                PrivacyPreservingCircuitInputAccount::PrivateAuthorizedUpdate {
+                    ssk: shared_secret_1,
+                    nsk: sender_keys.nsk,
+                    membership_proof: commitment_set
+                        .get_proof_for(&commitment_sender)
+                        .expect("sender's commitment must be in the set"),
+                },
+                PrivacyPreservingCircuitInputAccount::PrivateUnauthorized {
+                    npk: recipient_keys.npk(),
+                    ssk: shared_secret_2,
+                },
             ],
-            vec![sender_keys.nsk],
-            vec![commitment_set.get_proof_for(&commitment_sender), None],
             &program.into(),
         )
         .unwrap();
@@ -408,10 +410,10 @@ mod tests {
         let result = execute_and_prove(
             vec![pre],
             instruction,
-            vec![2],
-            vec![(account_keys.npk(), shared_secret)],
-            vec![],
-            vec![None],
+            vec![PrivacyPreservingCircuitInputAccount::PrivateUnauthorized {
+                npk: account_keys.npk(),
+                ssk: shared_secret,
+            }],
             &program_with_deps,
         );
 
