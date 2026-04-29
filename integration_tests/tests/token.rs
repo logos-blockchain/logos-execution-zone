@@ -1165,7 +1165,6 @@ async fn token_claiming_path_with_private_accounts() -> Result<()> {
         amount: mint_amount,
     };
 
-    // This should be the one that breaks? (Marvin)
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
 
     info!("Waiting for next block creation");

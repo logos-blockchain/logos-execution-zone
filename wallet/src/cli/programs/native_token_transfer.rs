@@ -173,7 +173,7 @@ impl WalletSubcommand for AuthTransferSubcommand {
                     )?),
                     (None, None, Some(to_key_path)) => {
                         Some(KeycardWallet::get_account_id_for_path_with_connect(
-                            pin.as_ref().expect("Expect a pin as a String."),
+                            pin.as_ref().expect("`wallet::programs::native_token_transfer::send`: invalid data received for pin"),
                             &to_key_path,
                         ))
                     }
