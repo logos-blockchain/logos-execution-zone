@@ -110,13 +110,13 @@ impl NativeTokenTransfer<'_> {
             WitnessSet::for_message(&message, &[signing_key])
         } else {
             let pub_key = KeycardWallet::get_public_key_for_path_with_connect(
-                pin.as_ref().expect("Expect a pin as a String."),
-                key_path.as_ref().expect("Expect a key path String."),
+                pin.as_ref().expect("`wallet::program_facades::native_token_transfer::public::register_account`: invalid data received for pin for public key"),
+                key_path.as_ref().expect("`wallet::program_facades::native_token_transfer::public::register_account`: invalid data received for key_path for public_key"),
             );
 
             let signature = KeycardWallet::sign_message_for_path_with_connect(
-                pin.as_ref().as_ref().expect("Expect a pin as a String."),
-                key_path.as_ref().expect("Expect a key path String."),
+                pin.as_ref().as_ref().expect("`wallet::program_facades::native_token_transfer::public::register_account`: invalid data received for pin for signature"),
+                key_path.as_ref().expect("`wallet::program_facades::native_token_transfer::public::register_account`: invalid data received for key_path for public_key"),
                 &message.hash_message(),
             )
             .expect("Expect a valid Signature.");
