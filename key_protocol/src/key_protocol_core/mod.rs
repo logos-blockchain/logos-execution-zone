@@ -29,7 +29,7 @@ pub struct NSSAUserData {
     /// An older wallet binary that re-serializes this struct will drop the field.
     #[serde(default)]
     pub group_key_holders: BTreeMap<String, GroupKeyHolder>,
-    /// Cached plaintext state of group PDA accounts, keyed by `AccountId`.
+    /// Cached plaintext state of group private PDA accounts, keyed by `AccountId`.
     /// Updated after each group PDA transaction by decrypting the circuit output.
     /// The sequencer only stores encrypted commitments, so this local cache is the
     /// only source of plaintext state for group PDAs.
@@ -194,7 +194,7 @@ impl NSSAUserData {
 
     /// Returns the `GroupKeyHolder` for the given label, if it exists.
     #[must_use]
-    pub fn get_group_key_holder(&self, label: &str) -> Option<&GroupKeyHolder> {
+    pub fn group_key_holder(&self, label: &str) -> Option<&GroupKeyHolder> {
         self.group_key_holders.get(label)
     }
 
@@ -227,13 +227,13 @@ mod tests {
     #[test]
     fn group_key_holder_storage_round_trip() {
         let mut user_data = NSSAUserData::default();
-        assert!(user_data.get_group_key_holder("test-group").is_none());
+        assert!(user_data.group_key_holder("test-group").is_none());
 
         let holder = GroupKeyHolder::from_gms([42_u8; 32]);
         user_data.insert_group_key_holder(String::from("test-group"), holder.clone());
 
         let retrieved = user_data
-            .get_group_key_holder("test-group")
+            .group_key_holder("test-group")
             .expect("should exist");
         assert_eq!(retrieved.dangerous_raw_gms(), holder.dangerous_raw_gms());
         assert_eq!(retrieved.epoch(), holder.epoch());

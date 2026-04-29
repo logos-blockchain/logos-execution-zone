@@ -186,6 +186,7 @@ mod tests {
     use nssa_core::{
         Commitment, DUMMY_COMMITMENT_HASH, EncryptionScheme, Nullifier, SharedSecretKey,
         account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
+        program::PdaSeed,
     };
 
     use super::*;
@@ -416,5 +417,101 @@ mod tests {
         );
 
         assert!(matches!(result, Err(NssaError::CircuitProvingError(_))));
+    }
+
+    /// Group PDA deposit: creates a new PDA and transfers balance from the
+    /// counterparty. Both accounts owned by `group_pda_spender`.
+    #[test]
+    fn group_pda_deposit() {
+        let program = Program::group_pda_spender();
+        let noop = Program::noop();
+        let keys = test_private_account_keys_1();
+        let npk = keys.npk();
+        let seed = PdaSeed::new([42; 32]);
+        let shared_secret_pda = SharedSecretKey::new(&[55; 32], &keys.vpk());
+
+        // PDA (new, mask 3)
+        let pda_id = AccountId::for_private_pda(&program.id(), &seed, &npk);
+        let pda_pre = AccountWithMetadata::new(Account::default(), false, pda_id);
+
+        // Sender (mask 0, public, owned by this program, has balance)
+        let sender_id = AccountId::new([99; 32]);
+        let sender_pre = AccountWithMetadata::new(
+            Account {
+                program_owner: program.id(),
+                balance: 10000,
+                ..Account::default()
+            },
+            true,
+            sender_id,
+        );
+
+        let noop_id = noop.id();
+        let program_with_deps = ProgramWithDependencies::new(program, [(noop_id, noop)].into());
+
+        let instruction = Program::serialize_instruction((seed, noop_id, 500_u128, true)).unwrap();
+
+        // PDA is mask 3 (private PDA), sender is mask 0 (public).
+        // The noop chained call is required to establish the mask-3 (seed, npk) binding
+        // that the circuit enforces for private PDAs. Without a caller providing pda_seeds,
+        // the circuit's binding check rejects the account.
+        let result = execute_and_prove(
+            vec![pda_pre, sender_pre],
+            instruction,
+            vec![3, 0],
+            vec![(npk, shared_secret_pda)],
+            vec![],
+            vec![None],
+            &program_with_deps,
+        );
+
+        let (output, _proof) = result.expect("group PDA deposit should succeed");
+        // Only PDA (mask 3) produces a commitment; sender (mask 0) is public.
+        assert_eq!(output.new_commitments.len(), 1);
+    }
+
+    /// Group PDA spend binding: the noop chained call with `pda_seeds` establishes
+    /// the mask-3 binding for an existing-but-default PDA. Uses amount=0 because
+    /// testing with a pre-funded PDA requires a two-tx sequence with membership proofs.
+    #[test]
+    fn group_pda_spend_binding() {
+        let program = Program::group_pda_spender();
+        let noop = Program::noop();
+        let keys = test_private_account_keys_1();
+        let npk = keys.npk();
+        let seed = PdaSeed::new([42; 32]);
+        let shared_secret_pda = SharedSecretKey::new(&[55; 32], &keys.vpk());
+
+        let pda_id = AccountId::for_private_pda(&program.id(), &seed, &npk);
+        let pda_pre = AccountWithMetadata::new(Account::default(), false, pda_id);
+
+        let bob_id = AccountId::new([88; 32]);
+        let bob_pre = AccountWithMetadata::new(
+            Account {
+                program_owner: program.id(),
+                balance: 10000,
+                ..Account::default()
+            },
+            true,
+            bob_id,
+        );
+
+        let noop_id = noop.id();
+        let program_with_deps = ProgramWithDependencies::new(program, [(noop_id, noop)].into());
+
+        let instruction = Program::serialize_instruction((seed, noop_id, 0_u128, false)).unwrap();
+
+        let result = execute_and_prove(
+            vec![pda_pre, bob_pre],
+            instruction,
+            vec![3, 0],
+            vec![(npk, shared_secret_pda)],
+            vec![],
+            vec![None],
+            &program_with_deps,
+        );
+
+        let (output, _proof) = result.expect("group PDA spend binding should succeed");
+        assert_eq!(output.new_commitments.len(), 1);
     }
 }

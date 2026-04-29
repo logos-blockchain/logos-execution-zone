@@ -236,7 +236,7 @@ async fn group_pda_preparation(
     let holder = wallet
         .storage
         .user_data
-        .get_group_key_holder(group_label)
+        .group_key_holder(group_label)
         .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
 
     let keys = holder.derive_keys_for_pda(seed);

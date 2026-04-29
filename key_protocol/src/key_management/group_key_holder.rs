@@ -13,13 +13,13 @@ use super::secret_holders::{PrivateKeyHolder, SecretSpendingKey, ViewingSecretKe
 /// Manages shared viewing keys for a group of controllers owning private PDAs.
 ///
 /// The Group Master Secret (GMS) is a 32-byte random value shared among controllers.
-/// Each private PDA owned by the group gets a unique `SecretSpendingKey` derived from
+/// Each private PDA owned by the group gets a unique [`SecretSpendingKey`] derived from
 /// the GMS by mixing the PDA seed into the SHA-256 input (see `secret_spending_key_for_pda`).
 ///
 /// # Distribution
 ///
 /// The GMS is a long-term secret and must never cross a trust boundary in raw form.
-/// Controllers share it off-chain by sealing it under each recipient's `ViewingPublicKey`
+/// Controllers share it off-chain by sealing it under each recipient's [`ViewingPublicKey`]
 /// (see `seal_for` / `unseal`). Wallets persisting a `GroupKeyHolder` must encrypt it at
 /// rest; the raw bytes are exposed only via [`GroupKeyHolder::dangerous_raw_gms`], which
 /// is intended for the sealing path exclusively.
@@ -91,14 +91,10 @@ impl GroupKeyHolder {
     /// The new GMS is `SHA256(PREFIX || rotation_salt || old_gms)`. The rotation salt must
     /// be a fresh 32-byte random value contributed by the member who initiates the rotation.
     /// Reusing a salt from a previous ratchet produces the same GMS as that previous
-    /// ratchet, collapsing the key rotation. Callers must generate the salt from a CSPRNG.
+    /// ratchet, collapsing the key rotation. Callers must generate the salt from a secure random source.
     ///
     /// After ratcheting, all remaining controllers must receive the new `GroupKeyHolder`
     /// via `seal_for` / `unseal`.
-    #[expect(
-        clippy::arithmetic_side_effects,
-        reason = "epoch overflow at 2^32 ratchets is not a realistic scenario"
-    )]
     pub fn ratchet(&mut self, rotation_salt: [u8; 32]) {
         const PREFIX: &[u8; 32] = b"/LEE/v0.3/GroupKeyRatchet/GMS\x00\x00\x00";
         let mut hasher = sha2::Sha256::new();
@@ -106,7 +102,7 @@ impl GroupKeyHolder {
         hasher.update(rotation_salt);
         hasher.update(self.gms);
         self.gms = hasher.finalize_fixed().into();
-        self.epoch += 1;
+        self.epoch = self.epoch.checked_add(1).expect("epoch overflow");
     }
 
     /// Derive a per-PDA [`SecretSpendingKey`] by mixing the seed into the SHA-256 input.
@@ -133,7 +129,7 @@ impl GroupKeyHolder {
             .produce_private_key_holder(None)
     }
 
-    /// Encrypts this holder's GMS and epoch under the recipient's `ViewingPublicKey`.
+    /// Encrypts this holder's GMS and epoch under the recipient's [`ViewingPublicKey`].
     ///
     /// Uses an ephemeral ECDH key exchange to derive a shared secret, then AES-256-GCM
     /// to encrypt the payload. The returned bytes are
@@ -142,10 +138,6 @@ impl GroupKeyHolder {
     /// Each call generates a fresh ephemeral key, so two seals of the same holder produce
     /// different ciphertexts.
     #[must_use]
-    #[expect(
-        clippy::arithmetic_side_effects,
-        reason = "capacity arithmetic on small constants cannot overflow"
-    )]
     pub fn seal_for(&self, recipient_vpk: &ViewingPublicKey) -> Vec<u8> {
         let mut ephemeral_scalar: Scalar = [0_u8; 32];
         OsRng.fill_bytes(&mut ephemeral_scalar);
@@ -166,7 +158,11 @@ impl GroupKeyHolder {
             .encrypt(&nonce, plaintext.as_ref())
             .expect("AES-GCM encryption should not fail with valid key/nonce");
 
-        let mut out = Vec::with_capacity(33 + 12 + ciphertext.len());
+        let capacity = 33_usize
+            .checked_add(12)
+            .and_then(|n| n.checked_add(ciphertext.len()))
+            .expect("seal capacity overflow");
+        let mut out = Vec::with_capacity(capacity);
         out.extend_from_slice(&ephemeral_pubkey.0);
         out.extend_from_slice(&nonce_bytes);
         out.extend_from_slice(&ciphertext);
