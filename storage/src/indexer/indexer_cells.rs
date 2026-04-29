@@ -213,7 +213,7 @@ impl SimpleWritableCell for AccNumTxCell {
 }
 
 /// Opaque bytes for the zone-sdk indexer cursor `Option<(MsgId, Slot)>`.
-/// The caller serializes via serde_json (neither type derives borsh).
+/// The caller serializes via `serde_json` (neither type derives borsh).
 #[derive(BorshDeserialize)]
 pub struct ZoneSdkIndexerCursorCellOwned(pub Vec<u8>);
 

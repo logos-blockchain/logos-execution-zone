@@ -96,7 +96,7 @@ impl SimpleWritableCell for LatestBlockMetaCellRef<'_> {
 }
 
 /// Opaque bytes for the zone-sdk sequencer checkpoint. The caller is
-/// responsible for the actual encoding (we use serde_json since
+/// responsible for the actual encoding (we use `serde_json` since
 /// `SequencerCheckpoint` only derives serde, not borsh).
 #[derive(BorshDeserialize)]
 pub struct ZoneSdkCheckpointCellOwned(pub Vec<u8>);
