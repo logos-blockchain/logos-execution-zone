@@ -1,6 +1,6 @@
 use crate::api::types::{
-    FfiAccountId, FfiNonce, FfiVec,
-    account::{FfiAccount, FfiBytes32},
+    FfiAccountId, FfiBytes32, FfiNonce, FfiVec,
+    account::FfiAccount,
     transaction::{
         FfiEncryptedAccountData, FfiNullifierCommitmentSet, FfiSignaturePubKeyEntry, FfiTransaction,
     },

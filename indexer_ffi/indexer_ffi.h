@@ -167,11 +167,15 @@ typedef struct FfiAccount {
   /**
    * Pointer to account data bytes.
    */
-  const uint8_t *data;
+  uint8_t *data;
   /**
    * Length of account data.
    */
   uintptr_t data_len;
+  /**
+   * Capacity of account data.
+   */
+  uintptr_t data_cap;
   /**
    * Nonce as little-endian [u8; 16].
    */
@@ -303,6 +307,66 @@ typedef struct PointerResult_FfiBlockOpt__OperationStatus {
 } PointerResult_FfiBlockOpt__OperationStatus;
 
 /**
+ * Simple wrapper around a pointer to a value or an error.
+ *
+ * Pointer is not guaranteed. You should check the error field before
+ * dereferencing the pointer.
+ */
+typedef struct PointerResult_FfiAccount__OperationStatus {
+  struct FfiAccount *value;
+  enum OperationStatus error;
+} PointerResult_FfiAccount__OperationStatus;
+
+typedef struct FfiOption_FfiTransaction {
+  struct FfiTransaction *value;
+  bool is_some;
+} FfiOption_FfiTransaction;
+
+/**
+ * Simple wrapper around a pointer to a value or an error.
+ *
+ * Pointer is not guaranteed. You should check the error field before
+ * dereferencing the pointer.
+ */
+typedef struct PointerResult_FfiOption_FfiTransaction_____OperationStatus {
+  struct FfiOption_FfiTransaction *value;
+  enum OperationStatus error;
+} PointerResult_FfiOption_FfiTransaction_____OperationStatus;
+
+typedef struct FfiVec_FfiBlock {
+  struct FfiBlock *entries;
+  uintptr_t len;
+  uintptr_t capacity;
+} FfiVec_FfiBlock;
+
+/**
+ * Simple wrapper around a pointer to a value or an error.
+ *
+ * Pointer is not guaranteed. You should check the error field before
+ * dereferencing the pointer.
+ */
+typedef struct PointerResult_FfiVec_FfiBlock_____OperationStatus {
+  struct FfiVec_FfiBlock *value;
+  enum OperationStatus error;
+} PointerResult_FfiVec_FfiBlock_____OperationStatus;
+
+typedef struct FfiOption_u64 {
+  uint64_t *value;
+  bool is_some;
+} FfiOption_u64;
+
+/**
+ * Simple wrapper around a pointer to a value or an error.
+ *
+ * Pointer is not guaranteed. You should check the error field before
+ * dereferencing the pointer.
+ */
+typedef struct PointerResult_FfiVec_FfiTransaction_____OperationStatus {
+  struct FfiVec_FfiTransaction *value;
+  enum OperationStatus error;
+} PointerResult_FfiVec_FfiTransaction_____OperationStatus;
+
+/**
  * Creates and starts an indexer based on the provided
  * configuration file path.
  *
@@ -347,45 +411,274 @@ enum OperationStatus stop_indexer(struct IndexerServiceFFI *indexer);
 void free_cstring(char *block);
 
 /**
- * Stops and frees the resources associated with the given indexer service.
+ * Query the last block id from indexer.
  *
  * # Arguments
  *
- * - `indexer`: A pointer to the `IndexerServiceFFI` instance to be stopped.
+ * - `indexer`: A pointer to the `IndexerServiceFFI` instance to be queried.
  *
  * # Returns
  *
- * An `OperationStatus` indicating success or failure.
+ * A `PointerResult<u64, OperationStatus>` indicating success or failure.
  *
  * # Safety
  *
  * The caller must ensure that:
  * - `indexer` is a valid pointer to a `IndexerServiceFFI` instance
- * - The `IndexerServiceFFI` instance was created by this library
- * - The pointer will not be used after this function returns
  */
 struct PointerResult_u64__OperationStatus query_last_block(const struct IndexerServiceFFI *indexer);
 
 /**
- * Stops and frees the resources associated with the given indexer service.
+ * Query the block by id from indexer.
  *
  * # Arguments
  *
- * - `indexer`: A pointer to the `IndexerServiceFFI` instance to be stopped.
+ * - `indexer`: A pointer to the `IndexerServiceFFI` instance to be queried.
+ * - `block_id`: `u64` number of block id
  *
  * # Returns
  *
- * An `OperationStatus` indicating success or failure.
+ * A `PointerResult<FfiBlockOpt, OperationStatus>` indicating success or failure.
  *
  * # Safety
  *
  * The caller must ensure that:
  * - `indexer` is a valid pointer to a `IndexerServiceFFI` instance
- * - The `IndexerServiceFFI` instance was created by this library
- * - The pointer will not be used after this function returns
  */
 struct PointerResult_FfiBlockOpt__OperationStatus query_block(const struct IndexerServiceFFI *indexer,
                                                               FfiBlockId block_id);
+
+/**
+ * Query the block by id from indexer.
+ *
+ * # Arguments
+ *
+ * - `indexer`: A pointer to the `IndexerServiceFFI` instance to be queried.
+ * - `hash`: `FfiHashType` - hash of block
+ *
+ * # Returns
+ *
+ * A `PointerResult<FfiBlockOpt, OperationStatus>` indicating success or failure.
+ *
+ * # Safety
+ *
+ * The caller must ensure that:
+ * - `indexer` is a valid pointer to a `IndexerServiceFFI` instance
+ */
+struct PointerResult_FfiBlockOpt__OperationStatus query_block_by_hash(const struct IndexerServiceFFI *indexer,
+                                                                      FfiHashType hash);
+
+/**
+ * Query the account by id from indexer.
+ *
+ * # Arguments
+ *
+ * - `indexer`: A pointer to the `IndexerServiceFFI` instance to be queried.
+ * - `account_id`: `FfiAccountId` - id of queried account
+ *
+ * # Returns
+ *
+ * A `PointerResult<FfiAccount, OperationStatus>` indicating success or failure.
+ *
+ * # Safety
+ *
+ * The caller must ensure that:
+ * - `indexer` is a valid pointer to a `IndexerServiceFFI` instance
+ */
+struct PointerResult_FfiAccount__OperationStatus query_account(const struct IndexerServiceFFI *indexer,
+                                                               FfiAccountId account_id);
+
+/**
+ * Query the trasnaction by hash from indexer.
+ *
+ * # Arguments
+ *
+ * - `indexer`: A pointer to the `IndexerServiceFFI` instance to be queried.
+ * - `hash`: `FfiHashType` - hash of transaction
+ *
+ * # Returns
+ *
+ * A `PointerResult<FfiOption<FfiTransaction>, OperationStatus>` indicating success or failure.
+ *
+ * # Safety
+ *
+ * The caller must ensure that:
+ * - `indexer` is a valid pointer to a `IndexerServiceFFI` instance
+ */
+struct PointerResult_FfiOption_FfiTransaction_____OperationStatus query_transaction(const struct IndexerServiceFFI *indexer,
+                                                                                    FfiHashType hash);
+
+/**
+ * Query the blocks by block range from indexer.
+ *
+ * # Arguments
+ *
+ * - `indexer`: A pointer to the `IndexerServiceFFI` instance to be queried.
+ * - `before`: `FfiOption<u64>` - end block of query
+ * - `limit`: `u64` - number of blocks to query before `before`
+ *
+ * # Returns
+ *
+ * A `PointerResult<FfiVec<FfiBlock>, OperationStatus>` indicating success or failure.
+ *
+ * # Safety
+ *
+ * The caller must ensure that:
+ * - `indexer` is a valid pointer to a `IndexerServiceFFI` instance
+ */
+struct PointerResult_FfiVec_FfiBlock_____OperationStatus query_block_vec(const struct IndexerServiceFFI *indexer,
+                                                                         struct FfiOption_u64 before,
+                                                                         uint64_t limit);
+
+/**
+ * Query the transactions range by account id from indexer.
+ *
+ * # Arguments
+ *
+ * - `indexer`: A pointer to the `IndexerServiceFFI` instance to be queried.
+ * - `account_id`: `FfiAccountId` - id of queried account
+ * - `offset`: `u64` - first tx id of query
+ * - `limit`: `u64` - number of tx ids to query after `offset`
+ *
+ * # Returns
+ *
+ * A `PointerResult<FfiVec<FfiBlock>, OperationStatus>` indicating success or failure.
+ *
+ * # Safety
+ *
+ * The caller must ensure that:
+ * - `indexer` is a valid pointer to a `IndexerServiceFFI` instance
+ */
+struct PointerResult_FfiVec_FfiTransaction_____OperationStatus query_transactions_by_account(const struct IndexerServiceFFI *indexer,
+                                                                                             FfiAccountId account_id,
+                                                                                             uint64_t offset,
+                                                                                             uint64_t limit);
+
+/**
+ * Frees the resources associated with the given ffi account.
+ *
+ * # Arguments
+ *
+ * - `val`: An instance of `FfiAccount`.
+ *
+ * # Returns
+ *
+ * void.
+ *
+ * # Safety
+ *
+ * The caller must ensure that:
+ * - `val` is a valid instance of `FfiAccount`.
+ */
+void free_ffi_account(struct FfiAccount val);
+
+/**
+ * Frees the resources associated with the given ffi block.
+ *
+ * # Arguments
+ *
+ * - `val`: An instance of `FfiBlock`.
+ *
+ * # Returns
+ *
+ * void.
+ *
+ * # Safety
+ *
+ * The caller must ensure that:
+ * - `val` is a valid instance of `FfiBlock`.
+ */
+void free_ffi_block(struct FfiBlock val);
+
+/**
+ * Frees the resources associated with the given ffi block option.
+ *
+ * # Arguments
+ *
+ * - `val`: An instance of `FfiBlockOpt`.
+ *
+ * # Returns
+ *
+ * void.
+ *
+ * # Safety
+ *
+ * The caller must ensure that:
+ * - `val` is a valid instance of `FfiBlockOpt`.
+ */
+void free_ffi_block_opt(FfiBlockOpt val);
+
+/**
+ * Frees the resources associated with the given ffi block vector.
+ *
+ * # Arguments
+ *
+ * - `val`: An instance of `FfiVec<FfiBlock>`.
+ *
+ * # Returns
+ *
+ * void.
+ *
+ * # Safety
+ *
+ * The caller must ensure that:
+ * - `val` is a valid instance of `FfiVec<FfiBlock>`.
+ */
+void free_ffi_block_vec(struct FfiVec_FfiBlock val);
+
+/**
+ * Frees the resources associated with the given ffi transaction.
+ *
+ * # Arguments
+ *
+ * - `val`: An instance of `FfiTransaction`.
+ *
+ * # Returns
+ *
+ * void.
+ *
+ * # Safety
+ *
+ * The caller must ensure that:
+ * - `val` is a valid instance of `FfiTransaction`.
+ */
+void free_ffi_transaction(struct FfiTransaction val);
+
+/**
+ * Frees the resources associated with the given ffi transaction option.
+ *
+ * # Arguments
+ *
+ * - `val`: An instance of `FfiOption<FfiTransaction>`.
+ *
+ * # Returns
+ *
+ * void.
+ *
+ * # Safety
+ *
+ * The caller must ensure that:
+ * - `val` is a valid instance of `FfiOption<FfiTransaction>`.
+ */
+void free_ffi_transaction_opt(struct FfiOption_FfiTransaction val);
+
+/**
+ * Frees the resources associated with the given vector of ffi transactions.
+ *
+ * # Arguments
+ *
+ * - `val`: An instance of `FfiVec<FfiTransaction>`.
+ *
+ * # Returns
+ *
+ * void.
+ *
+ * # Safety
+ *
+ * The caller must ensure that:
+ * - `val` is a valid instance of `FfiVec<FfiTransaction>`.
+ */
+void free_ffi_transaction_vec(struct FfiVec_FfiTransaction val);
 
 bool is_ok(const enum OperationStatus *self);
 

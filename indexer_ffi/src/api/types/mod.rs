@@ -1,11 +1,71 @@
-use indexer_service_protocol::{AccountId, HashType, MantleMsgId, PublicKey, Signature};
-
-use crate::api::types::account::{FfiBytes32, FfiBytes64, FfiU128};
+use indexer_service_protocol::{AccountId, HashType, MantleMsgId, ProgramId, PublicKey, Signature};
 
 pub mod account;
 pub mod block;
 pub mod transaction;
 pub mod vectors;
+
+/// 32-byte array type for `AccountId`, keys, hashes, etc.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct FfiBytes32 {
+    pub data: [u8; 32],
+}
+
+/// 64-byte array type for signatures, etc.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct FfiBytes64 {
+    pub data: [u8; 64],
+}
+
+/// Program ID - 8 u32 values (32 bytes total).
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct FfiProgramId {
+    pub data: [u32; 8],
+}
+
+impl From<ProgramId> for FfiProgramId {
+    fn from(value: ProgramId) -> Self {
+        Self { data: value.0 }
+    }
+}
+
+/// U128 - 16 bytes little endian.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct FfiU128 {
+    pub data: [u8; 16],
+}
+
+impl FfiBytes32 {
+    /// Create from a 32-byte array.
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self { data: bytes }
+    }
+
+    /// Create from an `AccountId`.
+    #[must_use]
+    pub const fn from_account_id(id: &nssa::AccountId) -> Self {
+        Self { data: *id.value() }
+    }
+}
+
+impl From<u128> for FfiU128 {
+    fn from(value: u128) -> Self {
+        Self {
+            data: value.to_le_bytes(),
+        }
+    }
+}
+
+impl From<FfiU128> for u128 {
+    fn from(value: FfiU128) -> Self {
+        Self::from_le_bytes(value.data)
+    }
+}
 
 pub type FfiHashType = FfiBytes32;
 pub type FfiMsgId = FfiBytes32;
@@ -61,6 +121,12 @@ impl<T> From<Vec<T>> for FfiVec<T> {
             len,
             capacity,
         }
+    }
+}
+
+impl<T> From<FfiVec<T>> for Vec<T> {
+    fn from(value: FfiVec<T>) -> Self {
+        unsafe { Self::from_raw_parts(value.entries, value.len, value.capacity) }
     }
 }
 
