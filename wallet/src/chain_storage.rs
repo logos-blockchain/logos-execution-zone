@@ -72,7 +72,7 @@ impl WalletChainStore {
                     public_tree.insert(
                         data.account_id,
                         data.chain_index,
-                        data.data.expect("Expect valid public account keys"),
+                        data.data.expect("`chain_storage::WalletChainStore::new()`: failed to produce a Key Tree for a PersistentAccountData."),
                     );
                 }
                 PersistentAccountData::Private(data) => {
