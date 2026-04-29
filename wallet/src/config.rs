@@ -173,7 +173,8 @@ mod tests {
 
     use super::PersistentAccountDataPublic;
 
-    // Root public account keys derived from a known test seed; see key_protocol's keys_public tests.
+    // Root public account keys derived from a known test seed; see key_protocol's keys_public
+    // tests.
     const CSK_BYTES: [u8; 32] = [
         40, 35, 239, 19, 53, 178, 250, 55, 115, 12, 34, 3, 153, 153, 72, 170, 190, 36, 172, 36,
         202, 148, 181, 228, 35, 222, 58, 84, 156, 24, 146, 86,
@@ -198,7 +199,7 @@ mod tests {
 
     fn make_public_account_data(data: Option<ChildKeysPublic>) -> PersistentAccountDataPublic {
         PersistentAccountDataPublic {
-            account_id: AccountId::new([0u8; 32]),
+            account_id: AccountId::new([0_u8; 32]),
             chain_index: ChainIndex::root(),
             data,
         }

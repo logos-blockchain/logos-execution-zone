@@ -49,7 +49,7 @@ pub enum Instruction {
 
 pub fn compute_ata_seed(owner_id: AccountId, definition_id: AccountId) -> PdaSeed {
     use risc0_zkvm::sha::{Impl, Sha256};
-    let mut bytes = [0u8; 64];
+    let mut bytes = [0_u8; 64];
     bytes[0..32].copy_from_slice(&owner_id.to_bytes());
     bytes[32..64].copy_from_slice(&definition_id.to_bytes());
     PdaSeed::new(
