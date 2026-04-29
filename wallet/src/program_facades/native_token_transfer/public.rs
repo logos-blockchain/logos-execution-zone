@@ -33,11 +33,24 @@ impl NativeTokenTransfer<'_> {
         let program_id = Program::authenticated_transfer_program().id();
 
         // Fetch nonces for both accounts unconditionally
-        let nonces = self
+        let mut nonces = self
             .0
-            .get_accounts_nonces(account_ids.clone())
+            .get_accounts_nonces(vec![from])
             .await
             .map_err(ExecutionFailureKind::SequencerError)?;
+        let to_signing_key = self.0.storage.user_data.get_pub_account_signing_key(to);
+        if let Some(_to_signing_key) = to_signing_key {
+            let to_nonces = self
+                .0
+                .get_accounts_nonces(vec![to])
+                .await
+                .map_err(ExecutionFailureKind::SequencerError)?;
+            nonces.extend(to_nonces);
+        } else {
+            println!(
+                "Receiver's account ({to}) private key not found in wallet. Proceeding with only sender's key."
+            );
+        }
 
         let message = Message::try_new(program_id, account_ids, nonces, balance_to_move).unwrap();
 

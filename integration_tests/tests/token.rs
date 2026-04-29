@@ -232,8 +232,6 @@ async fn create_and_transfer_public_token() -> Result<()> {
         holder_npk: None,
         holder_vpk: None,
         amount: mint_amount,
-        holder_pin: None,
-        holder_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
@@ -577,8 +575,6 @@ async fn create_token_with_private_definition() -> Result<()> {
         holder_npk: None,
         holder_vpk: None,
         amount: mint_amount_public,
-        holder_pin: None,
-        holder_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
@@ -627,8 +623,6 @@ async fn create_token_with_private_definition() -> Result<()> {
         holder_npk: None,
         holder_vpk: None,
         amount: mint_amount_private,
-        holder_pin: None,
-        holder_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
@@ -1169,13 +1163,11 @@ async fn token_claiming_path_with_private_accounts() -> Result<()> {
         holder_npk: Some(hex::encode(holder_keys.nullifier_public_key.0)),
         holder_vpk: Some(hex::encode(holder_keys.viewing_public_key.0)),
         amount: mint_amount,
-        holder_pin: None,
-        holder_key_path: None,
     };
 
+    // This should be the one that breaks? (Marvin)
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
-    // This command breaks (Marvin)
-    println!("TEST5");
+
     info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
@@ -1183,7 +1175,6 @@ async fn token_claiming_path_with_private_accounts() -> Result<()> {
     let command = Command::Account(AccountSubcommand::SyncPrivate {});
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
-    println!("TEST6");
     // Verify commitment exists
     let recipient_commitment = ctx
         .wallet()

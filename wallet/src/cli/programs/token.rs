@@ -146,10 +146,6 @@ pub enum TokenProgramAgnosticSubcommand {
         /// amount - amount of balance to mint.
         #[arg(long)]
         amount: u128,
-        #[arg(long, conflicts_with = "holder", conflicts_with = "holder_label")]
-        holder_pin: Option<String>,
-        #[arg(long, conflicts_with = "holder", conflicts_with = "holder_label")]
-        holder_key_path: Option<String>,
     },
 }
 
@@ -427,8 +423,6 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                 holder_npk,
                 holder_vpk,
                 amount,
-                holder_pin,
-                holder_key_path,
             } => {
                 let definition = resolve_id_or_label(
                     definition,
@@ -438,14 +432,17 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                     &None,
                     &None,
                 )?;
-                let holder = Some(resolve_id_or_label(
-                    holder.clone(),
-                    holder_label.clone(),
-                    &wallet_core.storage.labels,
-                    &wallet_core.storage.user_data,
-                    &holder_pin,
-                    &holder_key_path,
-                )?);
+                let holder = match (holder, holder_label) {
+                    (v, None) => v,
+                    (None, Some(label)) => Some(resolve_account_label(
+                        &label,
+                        &wallet_core.storage.labels,
+                        &wallet_core.storage.user_data,
+                    )?),
+                    (Some(_), Some(_)) => {
+                        anyhow::bail!("Provide only one of --holder or --holder-label")
+                    }
+                };
                 let underlying_subcommand = match (holder, holder_npk, holder_vpk) {
                     (None, None, None) => {
                         anyhow::bail!(
