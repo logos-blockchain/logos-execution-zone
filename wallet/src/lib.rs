@@ -391,7 +391,7 @@ impl WalletCore {
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         let acc_manager = privacy_preserving_tx::AccountManager::new(self, accounts).await?;
 
-        let pre_states = acc_manager.pre_states();
+        let mut pre_states = acc_manager.pre_states();
 
         let keycard_account = if let Some(pin) = pin.as_ref() {
             let account_id = KeycardWallet::get_account_id_for_path_with_connect(
@@ -417,20 +417,26 @@ impl WalletCore {
             None
         };
 
-        let nonces: Vec<Nonce> = acc_manager.public_account_nonces().into_iter().collect();
+        let mut nonces: Vec<Nonce> = acc_manager.public_account_nonces().into_iter().collect();
 
-        let account_ids: Vec<AccountId> = acc_manager.public_account_ids();
+        let mut account_ids: Vec<AccountId> = acc_manager.public_account_ids();
 
-        let visibility_mask = acc_manager.visibility_mask().to_vec();
+        let mut visibility_mask = acc_manager.visibility_mask().to_vec();
 
         if let Some(acc) = keycard_account.as_ref() {
-            nonces.push(acc.account.nonce);
-
-            account_ids.push(acc.account_id);
-
-            visibility_mask.push(0);
-
-            pre_states.push(acc.clone());
+            if acc_manager.public_account_ids().contains(&acc.account_id) {
+                if let Some(pre) = pre_states
+                    .iter_mut()
+                    .find(|p| p.account_id == acc.account_id)
+                {
+                    pre.is_authorized = true;
+                }
+            } else {
+                nonces.push(acc.account.nonce);
+                account_ids.push(acc.account_id);
+                visibility_mask.push(0);
+                pre_states.push(acc.clone());
+            }
         }
 
         tx_pre_check(
@@ -467,7 +473,8 @@ impl WalletCore {
             )
             .unwrap();
 
-        let witness_set = Self::sign_privacy_message(&message, &proof, &acc_manager);
+        let witness_set = Self::sign_privacy_message(&message, &proof, &acc_manager, pin, key_path)
+            .expect("TODO-Marvin");
         let tx = PrivacyPreservingTransaction::new(message, witness_set);
 
         let shared_secrets: Vec<_> = private_account_keys
@@ -622,65 +629,67 @@ impl WalletCore {
         ))
     }
 
-    #[must_use]
     pub fn sign_privacy_message(
         message: &nssa::privacy_preserving_transaction::Message,
         proof: &Proof,
         acc_manager: &privacy_preserving_tx::AccountManager,
-        _pin: &Option<String>,
-        _key_path: &Option<String>,
+        pin: &Option<String>,
+        key_path: &Option<String>,
     ) -> Result<nssa::privacy_preserving_transaction::witness_set::WitnessSet, ExecutionFailureKind>
     {
-        //if pin.is_none() {
-            Ok(
-                nssa::privacy_preserving_transaction::witness_set::WitnessSet::for_message(
-                    message,
-                    proof.clone(),
-                    &acc_manager.public_account_auth(),
-                ),
-            )
-        /*} else {
-            let public_key = KeycardWallet::get_public_key_for_path_with_connect(
-                &pin.as_ref().expect("Expect a pin as a String."),
-                &key_path.as_ref().expect("Expect a key path String."),
-            );
-            let signature = KeycardWallet::sign_message_for_path_with_connect(
-                &pin.as_ref().expect("Expect a pin as a String."),
-                &key_path.as_ref().expect("Expect a key path String."),
-                &message.hash_message(),
-            )
-            .expect("Expect a valid signature");
-            let mut signatures = Vec::<Signature>::new();
-            signatures.push(signature);
-            let mut public_keys = Vec::<PublicKey>::new();
-            public_keys.push(public_key);
-            Ok(
-                nssa::privacy_preserving_transaction::witness_set::WitnessSet::from_list(
-                    proof.clone(),
-                    &signatures,
-                    &public_keys,
-                ),
-            )
-        }*/
+        pin.as_ref().map_or_else(
+            || {
+                Ok(
+                    nssa::privacy_preserving_transaction::witness_set::WitnessSet::for_message(
+                        message,
+                        proof.clone(),
+                        &acc_manager.public_account_auth(),
+                    ),
+                )
+            },
+            |pin| {
+                let public_key = KeycardWallet::get_public_key_for_path_with_connect(
+                    pin,
+                    key_path.as_ref().expect("Expect a key path String."),
+                );
+                let signature = KeycardWallet::sign_message_for_path_with_connect(
+                    pin,
+                    key_path.as_ref().expect("Expect a key path String."),
+                    &message.hash_message(),
+                )
+                .expect("Expect a valid signature");
+                Ok(
+                    nssa::privacy_preserving_transaction::witness_set::WitnessSet::from_list(
+                        proof.clone(),
+                        &[signature],
+                        &[public_key],
+                    ),
+                )
+            },
+        )
     }
 
     pub fn sign_privacy_message_with_keycard(
         message: &nssa::privacy_preserving_transaction::Message,
         proof: Proof,
-        pin: &String,
+        pin: &str,
         key_paths: &[String],
     ) -> Result<nssa::privacy_preserving_transaction::witness_set::WitnessSet, ExecutionFailureKind>
     {
         let mut signatures = Vec::<Signature>::new();
         let mut public_keys = Vec::<PublicKey>::new();
 
-        for path in key_paths.iter() {
+        for path in key_paths {
             public_keys.push(KeycardWallet::get_public_key_for_path_with_connect(
-                &pin, &path,
+                pin, path,
             ));
             signatures.push(
-                KeycardWallet::sign_message_for_path_with_connect(&pin, &path, &message.hash_message())
-                    .expect("Expect a valid signature"),
+                KeycardWallet::sign_message_for_path_with_connect(
+                    pin,
+                    path,
+                    &message.hash_message(),
+                )
+                .expect("Expect a valid signature"),
             );
         }
 

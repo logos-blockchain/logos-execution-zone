@@ -115,7 +115,7 @@ impl WalletSubcommand for AuthTransferSubcommand {
                         let account_id = account_id.parse()?;
 
                         let (tx_hash, secret) = NativeTokenTransfer(wallet_core)
-                            .register_account_private(account_id)
+                            .register_account_private(account_id, &pin, &key_path)
                             .await?;
 
                         println!("Transaction hash is {tx_hash}");
@@ -210,6 +210,8 @@ impl WalletSubcommand for AuthTransferSubcommand {
                                         from,
                                         to,
                                         amount,
+                                        pin: pin.clone(),
+                                        key_path: from_key_path.clone(),
                                     },
                                 )
                             }
@@ -218,6 +220,8 @@ impl WalletSubcommand for AuthTransferSubcommand {
                                     from,
                                     to,
                                     amount,
+                                    pin: pin.clone(),
+                                    key_path: from_key_path.clone(),
                                 }
                             }
                             (AccountPrivacyKind::Public, AccountPrivacyKind::Private) => {
@@ -244,6 +248,8 @@ impl WalletSubcommand for AuthTransferSubcommand {
                                         to_npk,
                                         to_vpk,
                                         amount,
+                                        pin: pin.clone(),
+                                        key_path: from_key_path.clone(),
                                     },
                                 )
                             }
@@ -306,6 +312,10 @@ pub enum NativeTokenTransferProgramSubcommand {
         /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
+        #[arg(long)]
+        pin: Option<String>,
+        #[arg(long)]
+        key_path: Option<String>,
     },
     /// Shielded execution.
     #[command(subcommand)]
@@ -374,6 +384,10 @@ pub enum NativeTokenTransferProgramSubcommandPrivate {
         /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
+        #[arg(long)]
+        pin: Option<String>,
+        #[arg(long)]
+        key_path: Option<String>,
     },
     /// Send native token transfer from `from` to `to` for `amount`.
     ///
@@ -391,6 +405,10 @@ pub enum NativeTokenTransferProgramSubcommandPrivate {
         /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
+        #[arg(long)]
+        pin: Option<String>,
+        #[arg(long)]
+        key_path: Option<String>,
     },
 }
 
@@ -400,12 +418,18 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandPrivate {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         match self {
-            Self::PrivateOwned { from, to, amount } => {
+            Self::PrivateOwned {
+                from,
+                to,
+                amount,
+                pin,
+                key_path,
+            } => {
                 let from: AccountId = from.parse().unwrap();
                 let to: AccountId = to.parse().unwrap();
 
                 let (tx_hash, [secret_from, secret_to]) = NativeTokenTransfer(wallet_core)
-                    .send_private_transfer_to_owned_account(from, to, amount)
+                    .send_private_transfer_to_owned_account(from, to, amount, &pin, &key_path)
                     .await?;
 
                 println!("Transaction hash is {tx_hash}");
@@ -430,6 +454,8 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandPrivate {
                 to_npk,
                 to_vpk,
                 amount,
+                pin,
+                key_path,
             } => {
                 let from: AccountId = from.parse().unwrap();
                 let to_npk_res = hex::decode(to_npk)?;
@@ -444,7 +470,9 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandPrivate {
                     nssa_core::encryption::shared_key_derivation::Secp256k1Point(to_vpk.to_vec());
 
                 let (tx_hash, [secret_from, _]) = NativeTokenTransfer(wallet_core)
-                    .send_private_transfer_to_outer_account(from, to_npk, to_vpk, amount)
+                    .send_private_transfer_to_outer_account(
+                        from, to_npk, to_vpk, amount, &pin, &key_path,
+                    )
                     .await?;
 
                 println!("Transaction hash is {tx_hash}");
@@ -554,12 +582,18 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommand {
             Self::Shielded(shielded_subcommand) => {
                 shielded_subcommand.handle_subcommand(wallet_core).await
             }
-            Self::Deshielded { from, to, amount } => {
+            Self::Deshielded {
+                from,
+                to,
+                amount,
+                pin,
+                key_path,
+            } => {
                 let from: AccountId = from.parse().unwrap();
                 let to: AccountId = to.parse().unwrap();
 
                 let (tx_hash, secret) = NativeTokenTransfer(wallet_core)
-                    .send_deshielded_transfer(from, to, amount)
+                    .send_deshielded_transfer(from, to, amount, &pin, &key_path)
                     .await?;
 
                 println!("Transaction hash is {tx_hash}");
