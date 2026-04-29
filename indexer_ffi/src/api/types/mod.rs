@@ -130,6 +130,17 @@ impl<T> From<FfiVec<T>> for Vec<T> {
     }
 }
 
+impl<T> FfiVec<T> {
+    /// # Safety
+    ///
+    /// `index` must be lesser than `self.len`.
+    #[must_use]
+    pub unsafe fn get(&self, index: usize) -> &T {
+        let ptr = unsafe { self.entries.add(index) };
+        unsafe { &*ptr }
+    }
+}
+
 #[repr(C)]
 pub struct FfiOption<T> {
     pub value: *mut T,

@@ -126,6 +126,6 @@ impl Drop for IndexerServiceFFI {
         }
         drop(unsafe { Box::from_raw(indexer_handle.cast::<IndexerHandle>()) });
         drop(unsafe { Box::from_raw(runtime.cast::<Runtime>()) });
-        drop(unsafe { Box::from_raw(indexer_client.cast::<Runtime>()) });
+        drop(unsafe { Box::from_raw(indexer_client.cast::<IndexerClient>()) });
     }
 }

@@ -3606,6 +3606,7 @@ dependencies = [
  "hex",
  "indexer_ffi",
  "indexer_service",
+ "indexer_service_protocol",
  "indexer_service_rpc",
  "key_protocol",
  "log",

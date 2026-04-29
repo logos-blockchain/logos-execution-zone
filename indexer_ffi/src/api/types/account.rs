@@ -7,6 +7,7 @@ use crate::api::types::{FfiBytes32, FfiProgramId, FfiU128};
 /// Note: `balance` and `nonce` are u128 values represented as little-endian
 /// byte arrays since C doesn't have native u128 support.
 #[repr(C)]
+#[derive(Clone)]
 pub struct FfiAccount {
     pub program_owner: FfiProgramId,
     /// Balance as little-endian [u8; 16].
