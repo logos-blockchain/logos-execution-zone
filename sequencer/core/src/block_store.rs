@@ -68,6 +68,7 @@ impl SequencerStore {
     }
 
     /// Returns the transaction corresponding to the given hash, if it exists in the blockchain.
+    #[must_use]
     pub fn get_transaction_by_hash(&self, hash: HashType) -> Option<NSSATransaction> {
         let block_id = *self.tx_hash_to_block_map.get(&hash)?;
         let block = self
@@ -89,10 +90,12 @@ impl SequencerStore {
         Ok(self.dbio.latest_block_meta()?)
     }
 
+    #[must_use]
     pub const fn genesis_id(&self) -> u64 {
         self.genesis_id
     }
 
+    #[must_use]
     pub const fn signing_key(&self) -> &nssa::PrivateKey {
         &self.signing_key
     }
@@ -113,6 +116,7 @@ impl SequencerStore {
         Ok(())
     }
 
+    #[must_use]
     pub fn get_nssa_state(&self) -> Option<V03State> {
         self.dbio.get_nssa_state().ok()
     }
