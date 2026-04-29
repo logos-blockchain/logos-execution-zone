@@ -3,7 +3,7 @@ use nssa::AccountId;
 use crate::{
     HashType,
     block::{Block, HashableBlockData},
-    transaction::NSSATransaction,
+    transaction::{NSSATransaction, clock_invocation},
 };
 
 // Helpers
@@ -15,7 +15,7 @@ pub fn sequencer_sign_key_for_testing() -> nssa::PrivateKey {
 
 // Dummy producers
 
-/// Produce dummy block with.
+/// Produce dummy block with provided transactions + clock transaction an the end.
 ///
 /// `id` - block id, provide zero for genesis.
 ///
@@ -26,8 +26,12 @@ pub fn sequencer_sign_key_for_testing() -> nssa::PrivateKey {
 pub fn produce_dummy_block(
     id: u64,
     prev_hash: Option<HashType>,
-    transactions: Vec<NSSATransaction>,
+    mut transactions: Vec<NSSATransaction>,
 ) -> Block {
+    transactions.push(NSSATransaction::Public(clock_invocation(
+        id.saturating_mul(100),
+    )));
+
     let block_data = HashableBlockData {
         block_id: id,
         prev_block_hash: prev_hash.unwrap_or_default(),
