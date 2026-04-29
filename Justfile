@@ -30,10 +30,10 @@ run-bedrock:
     docker compose up
 
 # Run Sequencer
-[working-directory: 'sequencer_runner']
+[working-directory: 'sequencer/service']
 run-sequencer:
     @echo "🧠 Running sequencer"
-    RUST_LOG=info RISC0_DEV_MODE=1 cargo run --release -p sequencer_runner configs/debug
+    RUST_LOG=info RISC0_DEV_MODE=1 cargo run --release -p sequencer_service configs/debug/sequencer_config.json
 
 # Run Indexer
 [working-directory: 'indexer/service']
@@ -62,9 +62,9 @@ run-wallet +args:
 # Clean runtime data
 clean:
     @echo "🧹 Cleaning run artifacts"
-    rm -rf sequencer_runner/bedrock_signing_key
-    rm -rf sequencer_runner/rocksdb
-    rm -rf sequencer_runner/zone_sdk_checkpoint.json
+    rm -rf sequencer/service/bedrock_signing_key
+    rm -rf sequencer/service/rocksdb
+    rm -rf sequencer/service/zone_sdk_checkpoint.json
     rm -rf indexer/service/rocksdb
     rm -rf indexer/service/zone_sdk_indexer_cursor.json
     rm -rf wallet/configs/debug/storage.json

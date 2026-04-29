@@ -7,7 +7,10 @@ use crate::{
     AccDecodeData::Decode,
     WalletCore,
     cli::{SubcommandReturnValue, WalletSubcommand},
-    helperfunctions::{AccountPrivacyKind, parse_addr_with_privacy_prefix},
+    helperfunctions::{
+        AccountPrivacyKind, parse_addr_with_privacy_prefix, resolve_account_label,
+        resolve_id_or_label,
+    },
     program_facades::token::Token,
 };
 
@@ -17,11 +20,25 @@ pub enum TokenProgramAgnosticSubcommand {
     /// Produce a new token.
     New {
         /// `definition_account_id` - valid 32 byte base58 string with privacy prefix.
-        #[arg(long)]
-        definition_account_id: String,
+        #[arg(
+            long,
+            conflicts_with = "definition_account_label",
+            required_unless_present = "definition_account_label"
+        )]
+        definition_account_id: Option<String>,
+        /// Definition account label (alternative to --definition-account-id).
+        #[arg(long, conflicts_with = "definition_account_id")]
+        definition_account_label: Option<String>,
         /// `supply_account_id` - valid 32 byte base58 string with privacy prefix.
-        #[arg(long)]
-        supply_account_id: String,
+        #[arg(
+            long,
+            conflicts_with = "supply_account_label",
+            required_unless_present = "supply_account_label"
+        )]
+        supply_account_id: Option<String>,
+        /// Supply account label (alternative to --supply-account-id).
+        #[arg(long, conflicts_with = "supply_account_id")]
+        supply_account_label: Option<String>,
         #[arg(short, long)]
         name: String,
         #[arg(short, long)]
@@ -35,11 +52,21 @@ pub enum TokenProgramAgnosticSubcommand {
     /// First is used for owned accounts, second otherwise.
     Send {
         /// from - valid 32 byte base58 string with privacy prefix.
-        #[arg(long)]
-        from: String,
+        #[arg(
+            long,
+            conflicts_with = "from_label",
+            required_unless_present = "from_label"
+        )]
+        from: Option<String>,
+        /// From account label (alternative to --from).
+        #[arg(long, conflicts_with = "from")]
+        from_label: Option<String>,
         /// to - valid 32 byte base58 string with privacy prefix.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "to_label")]
         to: Option<String>,
+        /// To account label (alternative to --to).
+        #[arg(long, conflicts_with = "to")]
+        to_label: Option<String>,
         /// `to_npk` - valid 32 byte hex string.
         #[arg(long)]
         to_npk: Option<String>,
@@ -58,11 +85,25 @@ pub enum TokenProgramAgnosticSubcommand {
     /// we can not modify foreign accounts.
     Burn {
         /// definition - valid 32 byte base58 string with privacy prefix.
-        #[arg(long)]
-        definition: String,
+        #[arg(
+            long,
+            conflicts_with = "definition_label",
+            required_unless_present = "definition_label"
+        )]
+        definition: Option<String>,
+        /// Definition account label (alternative to --definition).
+        #[arg(long, conflicts_with = "definition")]
+        definition_label: Option<String>,
         /// holder - valid 32 byte base58 string with privacy prefix.
-        #[arg(long)]
-        holder: String,
+        #[arg(
+            long,
+            conflicts_with = "holder_label",
+            required_unless_present = "holder_label"
+        )]
+        holder: Option<String>,
+        /// Holder account label (alternative to --holder).
+        #[arg(long, conflicts_with = "holder")]
+        holder_label: Option<String>,
         /// amount - amount of balance to burn.
         #[arg(long)]
         amount: u128,
@@ -77,11 +118,21 @@ pub enum TokenProgramAgnosticSubcommand {
     /// First is used for owned accounts, second otherwise.
     Mint {
         /// definition - valid 32 byte base58 string with privacy prefix.
-        #[arg(long)]
-        definition: String,
+        #[arg(
+            long,
+            conflicts_with = "definition_label",
+            required_unless_present = "definition_label"
+        )]
+        definition: Option<String>,
+        /// Definition account label (alternative to --definition).
+        #[arg(long, conflicts_with = "definition")]
+        definition_label: Option<String>,
         /// holder - valid 32 byte base58 string with privacy prefix.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "holder_label")]
         holder: Option<String>,
+        /// Holder account label (alternative to --holder).
+        #[arg(long, conflicts_with = "holder")]
+        holder_label: Option<String>,
         /// `holder_npk` - valid 32 byte hex string.
         #[arg(long)]
         holder_npk: Option<String>,
@@ -102,10 +153,24 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
         match self {
             Self::New {
                 definition_account_id,
+                definition_account_label,
                 supply_account_id,
+                supply_account_label,
                 name,
                 total_supply,
             } => {
+                let definition_account_id = resolve_id_or_label(
+                    definition_account_id,
+                    definition_account_label,
+                    &wallet_core.storage.labels,
+                    &wallet_core.storage.user_data,
+                )?;
+                let supply_account_id = resolve_id_or_label(
+                    supply_account_id,
+                    supply_account_label,
+                    &wallet_core.storage.labels,
+                    &wallet_core.storage.user_data,
+                )?;
                 let (definition_account_id, definition_addr_privacy) =
                     parse_addr_with_privacy_prefix(&definition_account_id)?;
                 let (supply_account_id, supply_addr_privacy) =
@@ -158,11 +223,30 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
             }
             Self::Send {
                 from,
+                from_label,
                 to,
+                to_label,
                 to_npk,
                 to_vpk,
                 amount,
             } => {
+                let from = resolve_id_or_label(
+                    from,
+                    from_label,
+                    &wallet_core.storage.labels,
+                    &wallet_core.storage.user_data,
+                )?;
+                let to = match (to, to_label) {
+                    (v, None) => v,
+                    (None, Some(label)) => Some(resolve_account_label(
+                        &label,
+                        &wallet_core.storage.labels,
+                        &wallet_core.storage.user_data,
+                    )?),
+                    (Some(_), Some(_)) => {
+                        anyhow::bail!("Provide only one of --to or --to-label")
+                    }
+                };
                 let underlying_subcommand = match (to, to_npk, to_vpk) {
                     (None, None, None) => {
                         anyhow::bail!(
@@ -248,9 +332,23 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
             }
             Self::Burn {
                 definition,
+                definition_label,
                 holder,
+                holder_label,
                 amount,
             } => {
+                let definition = resolve_id_or_label(
+                    definition,
+                    definition_label,
+                    &wallet_core.storage.labels,
+                    &wallet_core.storage.user_data,
+                )?;
+                let holder = resolve_id_or_label(
+                    holder,
+                    holder_label,
+                    &wallet_core.storage.labels,
+                    &wallet_core.storage.user_data,
+                )?;
                 let underlying_subcommand = {
                     let (definition, definition_privacy) =
                         parse_addr_with_privacy_prefix(&definition)?;
@@ -300,11 +398,30 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
             }
             Self::Mint {
                 definition,
+                definition_label,
                 holder,
+                holder_label,
                 holder_npk,
                 holder_vpk,
                 amount,
             } => {
+                let definition = resolve_id_or_label(
+                    definition,
+                    definition_label,
+                    &wallet_core.storage.labels,
+                    &wallet_core.storage.user_data,
+                )?;
+                let holder = match (holder, holder_label) {
+                    (v, None) => v,
+                    (None, Some(label)) => Some(resolve_account_label(
+                        &label,
+                        &wallet_core.storage.labels,
+                        &wallet_core.storage.user_data,
+                    )?),
+                    (Some(_), Some(_)) => {
+                        anyhow::bail!("Provide only one of --holder or --holder-label")
+                    }
+                };
                 let underlying_subcommand = match (holder, holder_npk, holder_vpk) {
                     (None, None, None) => {
                         anyhow::bail!(
@@ -713,7 +830,7 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                 let sender_account_id: AccountId = sender_account_id.parse().unwrap();
                 let recipient_account_id: AccountId = recipient_account_id.parse().unwrap();
 
-                let (res, [secret_sender, secret_recipient]) = Token(wallet_core)
+                let (tx_hash, [secret_sender, secret_recipient]) = Token(wallet_core)
                     .send_transfer_transaction_private_owned_account(
                         sender_account_id,
                         recipient_account_id,
@@ -721,9 +838,8 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                     )
                     .await?;
 
-                println!("Results of tx send are {res:#?}");
+                println!("Transaction hash is {tx_hash}");
 
-                let tx_hash = res.tx_hash;
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
                 if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
@@ -761,7 +877,7 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                     recipient_vpk.to_vec(),
                 );
 
-                let (res, [secret_sender, _]) = Token(wallet_core)
+                let (tx_hash, [secret_sender, _]) = Token(wallet_core)
                     .send_transfer_transaction_private_foreign_account(
                         sender_account_id,
                         recipient_npk,
@@ -770,9 +886,8 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                     )
                     .await?;
 
-                println!("Results of tx send are {res:#?}");
+                println!("Transaction hash is {tx_hash}");
 
-                let tx_hash = res.tx_hash;
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
                 if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
@@ -796,7 +911,7 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                 let definition_account_id: AccountId = definition_account_id.parse().unwrap();
                 let holder_account_id: AccountId = holder_account_id.parse().unwrap();
 
-                let (res, [secret_definition, secret_holder]) = Token(wallet_core)
+                let (tx_hash, [secret_definition, secret_holder]) = Token(wallet_core)
                     .send_burn_transaction_private_owned_account(
                         definition_account_id,
                         holder_account_id,
@@ -804,9 +919,8 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                     )
                     .await?;
 
-                println!("Results of tx send are {res:#?}");
+                println!("Transaction hash is {tx_hash}");
 
-                let tx_hash = res.tx_hash;
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
                 if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
@@ -833,7 +947,7 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                 let definition_account_id: AccountId = definition_account_id.parse().unwrap();
                 let holder_account_id: AccountId = holder_account_id.parse().unwrap();
 
-                let (res, [secret_definition, secret_holder]) = Token(wallet_core)
+                let (tx_hash, [secret_definition, secret_holder]) = Token(wallet_core)
                     .send_mint_transaction_private_owned_account(
                         definition_account_id,
                         holder_account_id,
@@ -841,9 +955,8 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                     )
                     .await?;
 
-                println!("Results of tx send are {res:#?}");
+                println!("Transaction hash is {tx_hash}");
 
-                let tx_hash = res.tx_hash;
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
                 if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
@@ -882,7 +995,7 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                     holder_vpk.to_vec(),
                 );
 
-                let (res, [secret_definition, _]) = Token(wallet_core)
+                let (tx_hash, [secret_definition, _]) = Token(wallet_core)
                     .send_mint_transaction_private_foreign_account(
                         definition_account_id,
                         holder_npk,
@@ -891,9 +1004,8 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                     )
                     .await?;
 
-                println!("Results of tx send are {res:#?}");
+                println!("Transaction hash is {tx_hash}");
 
-                let tx_hash = res.tx_hash;
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
                 if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
@@ -927,7 +1039,7 @@ impl WalletSubcommand for TokenProgramSubcommandDeshielded {
                 let sender_account_id: AccountId = sender_account_id.parse().unwrap();
                 let recipient_account_id: AccountId = recipient_account_id.parse().unwrap();
 
-                let (res, secret_sender) = Token(wallet_core)
+                let (tx_hash, secret_sender) = Token(wallet_core)
                     .send_transfer_transaction_deshielded(
                         sender_account_id,
                         recipient_account_id,
@@ -935,9 +1047,8 @@ impl WalletSubcommand for TokenProgramSubcommandDeshielded {
                     )
                     .await?;
 
-                println!("Results of tx send are {res:#?}");
+                println!("Transaction hash is {tx_hash}");
 
-                let tx_hash = res.tx_hash;
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
                 if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
@@ -961,7 +1072,7 @@ impl WalletSubcommand for TokenProgramSubcommandDeshielded {
                 let definition_account_id: AccountId = definition_account_id.parse().unwrap();
                 let holder_account_id: AccountId = holder_account_id.parse().unwrap();
 
-                let (res, secret_definition) = Token(wallet_core)
+                let (tx_hash, secret_definition) = Token(wallet_core)
                     .send_burn_transaction_deshielded_owned_account(
                         definition_account_id,
                         holder_account_id,
@@ -969,9 +1080,8 @@ impl WalletSubcommand for TokenProgramSubcommandDeshielded {
                     )
                     .await?;
 
-                println!("Results of tx send are {res:#?}");
+                println!("Transaction hash is {tx_hash}");
 
-                let tx_hash = res.tx_hash;
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
                 if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
@@ -995,7 +1105,7 @@ impl WalletSubcommand for TokenProgramSubcommandDeshielded {
                 let definition_account_id: AccountId = definition_account_id.parse().unwrap();
                 let holder_account_id: AccountId = holder_account_id.parse().unwrap();
 
-                let (res, secret_definition) = Token(wallet_core)
+                let (tx_hash, secret_definition) = Token(wallet_core)
                     .send_mint_transaction_deshielded(
                         definition_account_id,
                         holder_account_id,
@@ -1003,9 +1113,8 @@ impl WalletSubcommand for TokenProgramSubcommandDeshielded {
                     )
                     .await?;
 
-                println!("Results of tx send are {res:#?}");
+                println!("Transaction hash is {tx_hash}");
 
-                let tx_hash = res.tx_hash;
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
                 if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
@@ -1050,7 +1159,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                     recipient_vpk.to_vec(),
                 );
 
-                let (res, _) = Token(wallet_core)
+                let (tx_hash, _) = Token(wallet_core)
                     .send_transfer_transaction_shielded_foreign_account(
                         sender_account_id,
                         recipient_npk,
@@ -1059,9 +1168,8 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                     )
                     .await?;
 
-                println!("Results of tx send are {res:#?}");
+                println!("Transaction hash is {tx_hash}");
 
-                let tx_hash = res.tx_hash;
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
                 if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
@@ -1080,7 +1188,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                 let sender_account_id: AccountId = sender_account_id.parse().unwrap();
                 let recipient_account_id: AccountId = recipient_account_id.parse().unwrap();
 
-                let (res, secret_recipient) = Token(wallet_core)
+                let (tx_hash, secret_recipient) = Token(wallet_core)
                     .send_transfer_transaction_shielded_owned_account(
                         sender_account_id,
                         recipient_account_id,
@@ -1088,9 +1196,8 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                     )
                     .await?;
 
-                println!("Results of tx send are {res:#?}");
+                println!("Transaction hash is {tx_hash}");
 
-                let tx_hash = res.tx_hash;
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
                 if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
@@ -1114,7 +1221,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                 let definition_account_id: AccountId = definition_account_id.parse().unwrap();
                 let holder_account_id: AccountId = holder_account_id.parse().unwrap();
 
-                let (res, secret_holder) = Token(wallet_core)
+                let (tx_hash, secret_holder) = Token(wallet_core)
                     .send_burn_transaction_shielded(
                         definition_account_id,
                         holder_account_id,
@@ -1122,9 +1229,8 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                     )
                     .await?;
 
-                println!("Results of tx send are {res:#?}");
+                println!("Transaction hash is {tx_hash}");
 
-                let tx_hash = res.tx_hash;
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
                 if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
@@ -1148,7 +1254,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                 let definition_account_id: AccountId = definition_account_id.parse().unwrap();
                 let holder_account_id: AccountId = holder_account_id.parse().unwrap();
 
-                let (res, secret_holder) = Token(wallet_core)
+                let (tx_hash, secret_holder) = Token(wallet_core)
                     .send_mint_transaction_shielded_owned_account(
                         definition_account_id,
                         holder_account_id,
@@ -1156,9 +1262,8 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                     )
                     .await?;
 
-                println!("Results of tx send are {res:#?}");
+                println!("Transaction hash is {tx_hash}");
 
-                let tx_hash = res.tx_hash;
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
                 if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
@@ -1194,7 +1299,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                     holder_vpk.to_vec(),
                 );
 
-                let (res, _) = Token(wallet_core)
+                let (tx_hash, _) = Token(wallet_core)
                     .send_mint_transaction_shielded_foreign_account(
                         definition_account_id,
                         holder_npk,
@@ -1203,9 +1308,8 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                     )
                     .await?;
 
-                println!("Results of tx send are {res:#?}");
+                println!("Transaction hash is {tx_hash}");
 
-                let tx_hash = res.tx_hash;
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
                 if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
@@ -1235,7 +1339,7 @@ impl WalletSubcommand for CreateNewTokenProgramSubcommand {
                 let definition_account_id: AccountId = definition_account_id.parse().unwrap();
                 let supply_account_id: AccountId = supply_account_id.parse().unwrap();
 
-                let (res, [secret_definition, secret_supply]) = Token(wallet_core)
+                let (tx_hash, [secret_definition, secret_supply]) = Token(wallet_core)
                     .send_new_definition_private_owned_definiton_and_supply(
                         definition_account_id,
                         supply_account_id,
@@ -1244,9 +1348,8 @@ impl WalletSubcommand for CreateNewTokenProgramSubcommand {
                     )
                     .await?;
 
-                println!("Results of tx send are {res:#?}");
+                println!("Transaction hash is {tx_hash}");
 
-                let tx_hash = res.tx_hash;
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
                 if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
@@ -1274,7 +1377,7 @@ impl WalletSubcommand for CreateNewTokenProgramSubcommand {
                 let definition_account_id: AccountId = definition_account_id.parse().unwrap();
                 let supply_account_id: AccountId = supply_account_id.parse().unwrap();
 
-                let (res, secret_definition) = Token(wallet_core)
+                let (tx_hash, secret_definition) = Token(wallet_core)
                     .send_new_definition_private_owned_definiton(
                         definition_account_id,
                         supply_account_id,
@@ -1283,9 +1386,8 @@ impl WalletSubcommand for CreateNewTokenProgramSubcommand {
                     )
                     .await?;
 
-                println!("Results of tx send are {res:#?}");
+                println!("Transaction hash is {tx_hash}");
 
-                let tx_hash = res.tx_hash;
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
                 if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
@@ -1310,7 +1412,7 @@ impl WalletSubcommand for CreateNewTokenProgramSubcommand {
                 let definition_account_id: AccountId = definition_account_id.parse().unwrap();
                 let supply_account_id: AccountId = supply_account_id.parse().unwrap();
 
-                let (res, secret_supply) = Token(wallet_core)
+                let (tx_hash, secret_supply) = Token(wallet_core)
                     .send_new_definition_private_owned_supply(
                         definition_account_id,
                         supply_account_id,
@@ -1319,9 +1421,8 @@ impl WalletSubcommand for CreateNewTokenProgramSubcommand {
                     )
                     .await?;
 
-                println!("Results of tx send are {res:#?}");
+                println!("Transaction hash is {tx_hash}");
 
-                let tx_hash = res.tx_hash;
                 let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
 
                 if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {

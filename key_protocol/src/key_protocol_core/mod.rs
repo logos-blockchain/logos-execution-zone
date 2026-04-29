@@ -46,7 +46,7 @@ impl NSSAUserData {
     ) -> bool {
         let mut check_res = true;
         for (account_id, (key, _)) in accounts_keys_map {
-            let expected_account_id = nssa::AccountId::from(&key.nullifer_public_key);
+            let expected_account_id = nssa::AccountId::from(&key.nullifier_public_key);
             if expected_account_id != *account_id {
                 println!("{expected_account_id}, {account_id}");
                 check_res = false;
@@ -66,13 +66,13 @@ impl NSSAUserData {
     ) -> Result<Self> {
         if !Self::valid_public_key_transaction_pairing_check(&default_accounts_keys) {
             anyhow::bail!(
-                "Key transaction pairing check not satisfied, there is account_ids, which is not derived from keys"
+                "Key transaction pairing check not satisfied, there are public account_ids, which are not derived from keys"
             );
         }
 
         if !Self::valid_private_key_transaction_pairing_check(&default_accounts_key_chains) {
             anyhow::bail!(
-                "Key transaction pairing check not satisfied, there is account_ids, which is not derived from keys"
+                "Key transaction pairing check not satisfied, there are private account_ids, which are not derived from keys"
             );
         }
 
@@ -181,11 +181,12 @@ impl NSSAUserData {
 
 impl Default for NSSAUserData {
     fn default() -> Self {
+        let (seed_holder, _mnemonic) = SeedHolder::new_mnemonic("");
         Self::new_with_accounts(
             BTreeMap::new(),
             BTreeMap::new(),
-            KeyTreePublic::new(&SeedHolder::new_mnemonic("default".to_owned())),
-            KeyTreePrivate::new(&SeedHolder::new_mnemonic("default".to_owned())),
+            KeyTreePublic::new(&seed_holder),
+            KeyTreePrivate::new(&seed_holder),
         )
         .unwrap()
     }

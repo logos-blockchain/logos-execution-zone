@@ -15,7 +15,7 @@ use wallet::{
 // TODO #169: We have sample configs for sequencer, but not for wallet
 // TODO #168: Why it requires config as a directory? Maybe better to deduce directory from config
 // file path?
-// TODO #172: Why it requires config as env var while sequencer_runner accepts as
+// TODO #172: Why it requires config as env var while sequencer_service accepts as
 // argument?
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -46,12 +46,20 @@ async fn main() -> Result<()> {
             println!("Persistent storage not found, need to execute setup");
 
             let password = read_password_from_stdin()?;
-            let wallet = WalletCore::new_init_storage(
+            let (wallet, mnemonic) = WalletCore::new_init_storage(
                 config_path,
                 storage_path,
                 Some(config_overrides),
-                password,
+                &password,
             )?;
+
+            println!();
+            println!("IMPORTANT: Write down your recovery phrase and store it securely.");
+            println!("This is the only way to recover your wallet if you lose access.");
+            println!();
+            println!("Recovery phrase:");
+            println!("  {mnemonic}");
+            println!();
 
             wallet.store_persistent_data().await?;
             wallet

@@ -7,7 +7,11 @@ use common::{HashType, PINATA_BASE58};
 use futures::StreamExt as _;
 use log::{error, info, warn};
 use logos_blockchain_core::header::HeaderId;
-use logos_blockchain_zone_sdk::indexer::ZoneIndexer;
+use logos_blockchain_zone_sdk::{
+    CommonHttpClient, ZoneMessage, adapter::NodeHttpClient, indexer::ZoneIndexer,
+};
+use nssa::V03State;
+use testnet_initial_state::initial_state_testnet;
 
 use crate::{block_store::IndexerStore, config::IndexerConfig};
 
@@ -16,7 +20,7 @@ pub mod config;
 
 #[derive(Clone)]
 pub struct IndexerCore {
-    pub zone_indexer: Arc<ZoneIndexer>,
+    pub zone_indexer: Arc<ZoneIndexer<NodeHttpClient>>,
     pub config: IndexerConfig,
     pub store: IndexerStore,
 }
@@ -38,45 +42,61 @@ impl IndexerCore {
         let channel_genesis_msg_id = [0; 32];
         let genesis_block = hashable_data.into_pending_block(&signing_key, channel_genesis_msg_id);
 
-        // This is a troubling moment, because changes in key protocol can
-        // affect this. And indexer can not reliably ask this data from sequencer
-        // because indexer must be independent from it.
-        // ToDo: move initial state generation into common and use the same method
-        // for indexer and sequencer. This way both services buit at same version
-        // could be in sync.
-        let initial_commitments: Vec<nssa_core::Commitment> = config
-            .initial_commitments
-            .iter()
-            .map(|init_comm_data| {
-                let npk = &init_comm_data.npk;
+        let initial_private_accounts: Option<Vec<(nssa_core::Commitment, nssa_core::Nullifier)>> =
+            config.initial_private_accounts.as_ref().map(|accounts| {
+                accounts
+                    .iter()
+                    .map(|init_comm_data| {
+                        let npk = &init_comm_data.npk;
 
-                let mut acc = init_comm_data.account.clone();
+                        let mut acc = init_comm_data.account.clone();
 
-                acc.program_owner = nssa::program::Program::authenticated_transfer_program().id();
+                        acc.program_owner =
+                            nssa::program::Program::authenticated_transfer_program().id();
 
-                nssa_core::Commitment::new(npk, &acc)
-            })
-            .collect();
+                        (
+                            nssa_core::Commitment::new(npk, &acc),
+                            nssa_core::Nullifier::for_account_initialization(npk),
+                        )
+                    })
+                    .collect()
+            });
 
-        let init_accs: Vec<(nssa::AccountId, u128)> = config
-            .initial_accounts
-            .iter()
-            .map(|acc_data| (acc_data.account_id, acc_data.balance))
-            .collect();
+        let init_accs: Option<Vec<(nssa::AccountId, u128)>> = config
+            .initial_public_accounts
+            .as_ref()
+            .map(|initial_accounts| {
+                initial_accounts
+                    .iter()
+                    .map(|acc_data| (acc_data.account_id, acc_data.balance))
+                    .collect()
+            });
 
-        let mut state = nssa::V02State::new_with_genesis_accounts(&init_accs, &initial_commitments);
+        // If initial commitments or accounts are present in config, need to construct state from
+        // them
+        let state = if initial_private_accounts.is_some() || init_accs.is_some() {
+            let mut state = V03State::new_with_genesis_accounts(
+                &init_accs.unwrap_or_default(),
+                initial_private_accounts.unwrap_or_default(),
+                genesis_block.header.timestamp,
+            );
 
-        // ToDo: Remove after testnet
-        state.add_pinata_program(PINATA_BASE58.parse().unwrap());
+            // ToDo: Remove after testnet
+            state.add_pinata_program(PINATA_BASE58.parse().unwrap());
+
+            state
+        } else {
+            initial_state_testnet()
+        };
 
         let home = config.home.join("rocksdb");
 
-        let auth = config.bedrock_client_config.auth.clone().map(Into::into);
-        let zone_indexer = ZoneIndexer::new(
-            config.channel_id,
+        let basic_auth = config.bedrock_client_config.auth.clone().map(Into::into);
+        let node = NodeHttpClient::new(
+            CommonHttpClient::new(basic_auth),
             config.bedrock_client_config.addr.clone(),
-            auth,
         );
+        let zone_indexer = ZoneIndexer::new(config.channel_id, node);
 
         Ok(Self {
             zone_indexer: Arc::new(zone_indexer),
@@ -99,7 +119,11 @@ impl IndexerCore {
 
             let mut follow_stream = std::pin::pin!(follow_stream);
 
-            while let Some(zone_block) = follow_stream.next().await {
+            while let Some(zone_message) = follow_stream.next().await {
+                let zone_block = match zone_message {
+                    ZoneMessage::Block(b) => b,
+                    ZoneMessage::Deposit(_) | ZoneMessage::Withdraw(_) => continue,
+                };
                 let block: Block = match borsh::from_slice(&zone_block.data) {
                     Ok(b) => b,
                     Err(e) => {

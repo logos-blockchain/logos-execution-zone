@@ -13,6 +13,7 @@ use integration_tests::{
     format_public_account_id, verify_commitment_is_in_state,
 };
 use log::info;
+use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 use wallet::cli::{
     Command, SubcommandReturnValue,
@@ -46,13 +47,13 @@ async fn claim_pinata_to_uninitialized_public_account_fails_fast() -> Result<()>
     let pinata_balance_pre = ctx
         .sequencer_client()
         .get_account_balance(PINATA_BASE58.parse().unwrap())
-        .await?
-        .balance;
+        .await?;
 
     let claim_result = wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
         Command::Pinata(PinataProgramAgnosticSubcommand::Claim {
-            to: winner_account_id_formatted,
+            to: Some(winner_account_id_formatted),
+            to_label: None,
         }),
     )
     .await;
@@ -70,8 +71,7 @@ async fn claim_pinata_to_uninitialized_public_account_fails_fast() -> Result<()>
     let pinata_balance_post = ctx
         .sequencer_client()
         .get_account_balance(PINATA_BASE58.parse().unwrap())
-        .await?
-        .balance;
+        .await?;
 
     assert_eq!(pinata_balance_post, pinata_balance_pre);
 
@@ -102,13 +102,13 @@ async fn claim_pinata_to_uninitialized_private_account_fails_fast() -> Result<()
     let pinata_balance_pre = ctx
         .sequencer_client()
         .get_account_balance(PINATA_BASE58.parse().unwrap())
-        .await?
-        .balance;
+        .await?;
 
     let claim_result = wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
         Command::Pinata(PinataProgramAgnosticSubcommand::Claim {
-            to: winner_account_id_formatted,
+            to: Some(winner_account_id_formatted),
+            to_label: None,
         }),
     )
     .await;
@@ -126,8 +126,7 @@ async fn claim_pinata_to_uninitialized_private_account_fails_fast() -> Result<()
     let pinata_balance_post = ctx
         .sequencer_client()
         .get_account_balance(PINATA_BASE58.parse().unwrap())
-        .await?
-        .balance;
+        .await?;
 
     assert_eq!(pinata_balance_post, pinata_balance_pre);
 
@@ -140,14 +139,14 @@ async fn claim_pinata_to_existing_public_account() -> Result<()> {
 
     let pinata_prize = 150;
     let command = Command::Pinata(PinataProgramAgnosticSubcommand::Claim {
-        to: format_public_account_id(ctx.existing_public_accounts()[0]),
+        to: Some(format_public_account_id(ctx.existing_public_accounts()[0])),
+        to_label: None,
     });
 
     let pinata_balance_pre = ctx
         .sequencer_client()
         .get_account_balance(PINATA_BASE58.parse().unwrap())
-        .await?
-        .balance;
+        .await?;
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
@@ -158,14 +157,12 @@ async fn claim_pinata_to_existing_public_account() -> Result<()> {
     let pinata_balance_post = ctx
         .sequencer_client()
         .get_account_balance(PINATA_BASE58.parse().unwrap())
-        .await?
-        .balance;
+        .await?;
 
     let winner_balance_post = ctx
         .sequencer_client()
         .get_account_balance(ctx.existing_public_accounts()[0])
-        .await?
-        .balance;
+        .await?;
 
     assert_eq!(pinata_balance_post, pinata_balance_pre - pinata_prize);
     assert_eq!(winner_balance_post, 10000 + pinata_prize);
@@ -181,14 +178,16 @@ async fn claim_pinata_to_existing_private_account() -> Result<()> {
 
     let pinata_prize = 150;
     let command = Command::Pinata(PinataProgramAgnosticSubcommand::Claim {
-        to: format_private_account_id(ctx.existing_private_accounts()[0]),
+        to: Some(format_private_account_id(
+            ctx.existing_private_accounts()[0],
+        )),
+        to_label: None,
     });
 
     let pinata_balance_pre = ctx
         .sequencer_client()
         .get_account_balance(PINATA_BASE58.parse().unwrap())
-        .await?
-        .balance;
+        .await?;
 
     let result = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
     let SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash: _ } = result else {
@@ -211,8 +210,7 @@ async fn claim_pinata_to_existing_private_account() -> Result<()> {
     let pinata_balance_post = ctx
         .sequencer_client()
         .get_account_balance(PINATA_BASE58.parse().unwrap())
-        .await?
-        .balance;
+        .await?;
 
     assert_eq!(pinata_balance_post, pinata_balance_pre - pinata_prize);
 
@@ -247,7 +245,8 @@ async fn claim_pinata_to_new_private_account() -> Result<()> {
 
     // Initialize account under auth transfer program
     let command = Command::AuthTransfer(AuthTransferSubcommand::Init {
-        account_id: winner_account_id_formatted.clone(),
+        account_id: Some(winner_account_id_formatted.clone()),
+        account_label: None,
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
@@ -262,14 +261,14 @@ async fn claim_pinata_to_new_private_account() -> Result<()> {
 
     // Claim pinata to the new private account
     let command = Command::Pinata(PinataProgramAgnosticSubcommand::Claim {
-        to: winner_account_id_formatted,
+        to: Some(winner_account_id_formatted),
+        to_label: None,
     });
 
     let pinata_balance_pre = ctx
         .sequencer_client()
         .get_account_balance(PINATA_BASE58.parse().unwrap())
-        .await?
-        .balance;
+        .await?;
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
@@ -285,8 +284,7 @@ async fn claim_pinata_to_new_private_account() -> Result<()> {
     let pinata_balance_post = ctx
         .sequencer_client()
         .get_account_balance(PINATA_BASE58.parse().unwrap())
-        .await?
-        .balance;
+        .await?;
 
     assert_eq!(pinata_balance_post, pinata_balance_pre - pinata_prize);
 

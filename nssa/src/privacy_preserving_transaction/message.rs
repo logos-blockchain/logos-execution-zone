@@ -3,6 +3,7 @@ use nssa_core::{
     Commitment, CommitmentSetDigest, Nullifier, NullifierPublicKey, PrivacyPreservingCircuitOutput,
     account::{Account, Nonce},
     encryption::{Ciphertext, EphemeralPublicKey, ViewingPublicKey},
+    program::{BlockValidityWindow, TimestampValidityWindow},
 };
 use sha2::{Digest as _, Sha256};
 
@@ -32,11 +33,11 @@ impl EncryptedAccountData {
         }
     }
 
-    /// Computes the tag as the first byte of SHA256("/NSSA/v0.2/ViewTag/" || Npk || vpk).
+    /// Computes the tag as the first byte of SHA256("/LEE/v0.3/ViewTag/" || Npk || vpk).
     #[must_use]
     pub fn compute_view_tag(npk: &NullifierPublicKey, vpk: &ViewingPublicKey) -> ViewTag {
         let mut hasher = Sha256::new();
-        hasher.update(b"/NSSA/v0.2/ViewTag/");
+        hasher.update(b"/LEE/v0.3/ViewTag/");
         hasher.update(npk.to_byte_array());
         hasher.update(vpk.to_bytes());
         let digest: [u8; 32] = hasher.finalize().into();
@@ -52,6 +53,8 @@ pub struct Message {
     pub encrypted_private_post_states: Vec<EncryptedAccountData>,
     pub new_commitments: Vec<Commitment>,
     pub new_nullifiers: Vec<(Nullifier, CommitmentSetDigest)>,
+    pub block_validity_window: BlockValidityWindow,
+    pub timestamp_validity_window: TimestampValidityWindow,
 }
 
 impl std::fmt::Debug for Message {
@@ -77,6 +80,8 @@ impl std::fmt::Debug for Message {
             )
             .field("new_commitments", &self.new_commitments)
             .field("new_nullifiers", &nullifiers)
+            .field("block_validity_window", &self.block_validity_window)
+            .field("timestamp_validity_window", &self.timestamp_validity_window)
             .finish()
     }
 }
@@ -109,6 +114,8 @@ impl Message {
             encrypted_private_post_states,
             new_commitments: output.new_commitments,
             new_nullifiers: output.new_nullifiers,
+            block_validity_window: output.block_validity_window,
+            timestamp_validity_window: output.timestamp_validity_window,
         })
     }
 }
@@ -119,6 +126,7 @@ pub mod tests {
         Commitment, EncryptionScheme, Nullifier, NullifierPublicKey, SharedSecretKey,
         account::Account,
         encryption::{EphemeralPublicKey, ViewingPublicKey},
+        program::{BlockValidityWindow, TimestampValidityWindow},
     };
     use sha2::{Digest as _, Sha256};
 
@@ -140,7 +148,7 @@ pub mod tests {
 
         let public_account_ids = vec![AccountId::new([1; 32])];
 
-        let nonces = vec![1, 2, 3];
+        let nonces = vec![1_u128.into(), 2_u128.into(), 3_u128.into()];
 
         let public_post_states = vec![Account::default()];
 
@@ -161,6 +169,8 @@ pub mod tests {
             encrypted_private_post_states,
             new_commitments,
             new_nullifiers,
+            block_validity_window: BlockValidityWindow::new_unbounded(),
+            timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
         }
     }
 
@@ -179,7 +189,7 @@ pub mod tests {
 
         let expected_view_tag = {
             let mut hasher = Sha256::new();
-            hasher.update(b"/NSSA/v0.2/ViewTag/");
+            hasher.update(b"/LEE/v0.3/ViewTag/");
             hasher.update(npk.to_byte_array());
             hasher.update(vpk.to_bytes());
             let digest: [u8; 32] = hasher.finalize().into();

@@ -1,11 +1,13 @@
 //! Conversions between `indexer_service_protocol` types and `nssa/nssa_core` types.
 
+use nssa_core::account::Nonce;
+
 use crate::{
     Account, AccountId, BedrockStatus, Block, BlockBody, BlockHeader, Ciphertext, Commitment,
     CommitmentSetDigest, Data, EncryptedAccountData, EphemeralPublicKey, HashType, MantleMsgId,
     Nullifier, PrivacyPreservingMessage, PrivacyPreservingTransaction, ProgramDeploymentMessage,
     ProgramDeploymentTransaction, ProgramId, Proof, PublicKey, PublicMessage, PublicTransaction,
-    Signature, Transaction, WitnessSet,
+    Signature, Transaction, ValidityWindow, WitnessSet,
 };
 
 // ============================================================================
@@ -52,7 +54,7 @@ impl From<nssa_core::account::Account> for Account {
             program_owner: program_owner.into(),
             balance,
             data: data.into(),
-            nonce,
+            nonce: nonce.0,
         }
     }
 }
@@ -72,7 +74,7 @@ impl TryFrom<Account> for nssa_core::account::Account {
             program_owner: program_owner.into(),
             balance,
             data: data.try_into()?,
-            nonce,
+            nonce: Nonce(nonce),
         })
     }
 }
@@ -250,7 +252,7 @@ impl From<nssa::public_transaction::Message> for PublicMessage {
         Self {
             program_id: program_id.into(),
             account_ids: account_ids.into_iter().map(Into::into).collect(),
-            nonces,
+            nonces: nonces.iter().map(|x| x.0).collect(),
             instruction_data,
         }
     }
@@ -267,7 +269,10 @@ impl From<PublicMessage> for nssa::public_transaction::Message {
         Self::new_preserialized(
             program_id.into(),
             account_ids.into_iter().map(Into::into).collect(),
-            nonces,
+            nonces
+                .iter()
+                .map(|x| nssa_core::account::Nonce(*x))
+                .collect(),
             instruction_data,
         )
     }
@@ -282,10 +287,12 @@ impl From<nssa::privacy_preserving_transaction::message::Message> for PrivacyPre
             encrypted_private_post_states,
             new_commitments,
             new_nullifiers,
+            block_validity_window,
+            timestamp_validity_window,
         } = value;
         Self {
             public_account_ids: public_account_ids.into_iter().map(Into::into).collect(),
-            nonces,
+            nonces: nonces.iter().map(|x| x.0).collect(),
             public_post_states: public_post_states.into_iter().map(Into::into).collect(),
             encrypted_private_post_states: encrypted_private_post_states
                 .into_iter()
@@ -296,12 +303,14 @@ impl From<nssa::privacy_preserving_transaction::message::Message> for PrivacyPre
                 .into_iter()
                 .map(|(n, d)| (n.into(), d.into()))
                 .collect(),
+            block_validity_window: block_validity_window.into(),
+            timestamp_validity_window: timestamp_validity_window.into(),
         }
     }
 }
 
 impl TryFrom<PrivacyPreservingMessage> for nssa::privacy_preserving_transaction::message::Message {
-    type Error = nssa_core::account::data::DataTooBigError;
+    type Error = nssa::error::NssaError;
 
     fn try_from(value: PrivacyPreservingMessage) -> Result<Self, Self::Error> {
         let PrivacyPreservingMessage {
@@ -311,14 +320,20 @@ impl TryFrom<PrivacyPreservingMessage> for nssa::privacy_preserving_transaction:
             encrypted_private_post_states,
             new_commitments,
             new_nullifiers,
+            block_validity_window,
+            timestamp_validity_window,
         } = value;
         Ok(Self {
             public_account_ids: public_account_ids.into_iter().map(Into::into).collect(),
-            nonces,
+            nonces: nonces
+                .iter()
+                .map(|x| nssa_core::account::Nonce(*x))
+                .collect(),
             public_post_states: public_post_states
                 .into_iter()
                 .map(TryInto::try_into)
-                .collect::<Result<Vec<_>, _>>()?,
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| nssa::error::NssaError::InvalidInput(format!("{e}")))?,
             encrypted_private_post_states: encrypted_private_post_states
                 .into_iter()
                 .map(Into::into)
@@ -328,6 +343,12 @@ impl TryFrom<PrivacyPreservingMessage> for nssa::privacy_preserving_transaction:
                 .into_iter()
                 .map(|(n, d)| (n.into(), d.into()))
                 .collect(),
+            block_validity_window: block_validity_window
+                .try_into()
+                .map_err(|e| nssa::error::NssaError::InvalidInput(format!("{e}")))?,
+            timestamp_validity_window: timestamp_validity_window
+                .try_into()
+                .map_err(|e| nssa::error::NssaError::InvalidInput(format!("{e}")))?,
         })
     }
 }
@@ -351,12 +372,16 @@ impl From<ProgramDeploymentMessage> for nssa::program_deployment_transaction::Me
 // WitnessSet conversions
 // ============================================================================
 
-impl TryFrom<nssa::public_transaction::WitnessSet> for WitnessSet {
-    type Error = ();
-
-    fn try_from(_value: nssa::public_transaction::WitnessSet) -> Result<Self, Self::Error> {
-        // Public transaction witness sets don't have proofs, so we can't convert them directly
-        Err(())
+impl From<nssa::public_transaction::WitnessSet> for WitnessSet {
+    fn from(value: nssa::public_transaction::WitnessSet) -> Self {
+        Self {
+            signatures_and_public_keys: value
+                .signatures_and_public_keys()
+                .iter()
+                .map(|(sig, pk)| (sig.clone().into(), pk.clone().into()))
+                .collect(),
+            proof: None,
+        }
     }
 }
 
@@ -368,7 +393,7 @@ impl From<nssa::privacy_preserving_transaction::witness_set::WitnessSet> for Wit
                 .into_iter()
                 .map(|(sig, pk)| (sig.into(), pk.into()))
                 .collect(),
-            proof: proof.into(),
+            proof: Some(proof.into()),
         }
     }
 }
@@ -388,7 +413,9 @@ impl TryFrom<WitnessSet> for nssa::privacy_preserving_transaction::witness_set::
 
         Ok(Self::from_raw_parts(
             signatures_and_public_keys,
-            proof.into(),
+            proof
+                .map(Into::into)
+                .ok_or_else(|| nssa::error::NssaError::InvalidInput("Missing proof".to_owned()))?,
         ))
     }
 }
@@ -408,14 +435,7 @@ impl From<nssa::PublicTransaction> for PublicTransaction {
         Self {
             hash,
             message: message.into(),
-            witness_set: WitnessSet {
-                signatures_and_public_keys: witness_set
-                    .signatures_and_public_keys()
-                    .iter()
-                    .map(|(sig, pk)| (sig.clone().into(), pk.clone().into()))
-                    .collect(),
-                proof: Proof(vec![]), // Public transactions don't have proofs
-            },
+            witness_set: witness_set.into(),
         }
     }
 }
@@ -472,14 +492,7 @@ impl TryFrom<PrivacyPreservingTransaction> for nssa::PrivacyPreservingTransactio
             witness_set,
         } = value;
 
-        Ok(Self::new(
-            message
-                .try_into()
-                .map_err(|err: nssa_core::account::data::DataTooBigError| {
-                    nssa::error::NssaError::InvalidInput(err.to_string())
-                })?,
-            witness_set.try_into()?,
-        ))
+        Ok(Self::new(message.try_into()?, witness_set.try_into()?))
     }
 }
 
@@ -678,5 +691,23 @@ impl From<common::HashType> for HashType {
 impl From<HashType> for common::HashType {
     fn from(value: HashType) -> Self {
         Self(value.0)
+    }
+}
+
+// ============================================================================
+// ValidityWindow conversions
+// ============================================================================
+
+impl From<nssa_core::program::ValidityWindow<u64>> for ValidityWindow {
+    fn from(value: nssa_core::program::ValidityWindow<u64>) -> Self {
+        Self((value.start(), value.end()))
+    }
+}
+
+impl TryFrom<ValidityWindow> for nssa_core::program::ValidityWindow<u64> {
+    type Error = nssa_core::program::InvalidWindow;
+
+    fn try_from(value: ValidityWindow) -> Result<Self, Self::Error> {
+        value.0.try_into()
     }
 }

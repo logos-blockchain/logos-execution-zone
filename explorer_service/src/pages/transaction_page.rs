@@ -84,7 +84,7 @@ pub fn TransactionPage() -> impl IntoView {
                                     } = witness_set;
 
                                     let program_id_str = program_id.to_string();
-                                    let proof_len = proof.0.len();
+                                    let proof_len = proof.map_or(0, |p| p.0.len());
                                     let signatures_count = signatures_and_public_keys.len();
 
                                     view! {
@@ -177,13 +177,14 @@ pub fn TransactionPage() -> impl IntoView {
                                         encrypted_private_post_states,
                                         new_commitments,
                                         new_nullifiers,
+                                        block_validity_window,
+                                        timestamp_validity_window,
                                     } = message;
                                     let WitnessSet {
                                         signatures_and_public_keys: _,
                                         proof,
                                     } = witness_set;
-
-                                    let proof_len = proof.0.len();
+                                    let proof_len = proof.map_or(0, |p| p.0.len());
                                     view! {
                                         <div class="transaction-details">
                                             <h2>"Privacy-Preserving Transaction Details"</h2>
@@ -211,6 +212,14 @@ pub fn TransactionPage() -> impl IntoView {
                                                 <div class="info-row">
                                                     <span class="info-label">"Proof Size:"</span>
                                                     <span class="info-value">{format!("{proof_len} bytes")}</span>
+                                                </div>
+                                                <div class="info-row">
+                                                    <span class="info-label">"Block Validity Window:"</span>
+                                                    <span class="info-value">{block_validity_window.to_string()}</span>
+                                                </div>
+                                                <div class="info-row">
+                                                    <span class="info-label">"Timestamp Validity Window:"</span>
+                                                    <span class="info-value">{timestamp_validity_window.to_string()}</span>
                                                 </div>
                                             </div>
 

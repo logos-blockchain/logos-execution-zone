@@ -3,13 +3,17 @@ use clap::Subcommand;
 use itertools::Itertools as _;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use nssa::{Account, PublicKey, program::Program};
+use sequencer_service_rpc::RpcClient as _;
 use token_core::{TokenDefinition, TokenHolding};
 
 use crate::{
     WalletCore,
     cli::{SubcommandReturnValue, WalletSubcommand},
     config::Label,
-    helperfunctions::{AccountPrivacyKind, HumanReadableAccount, parse_addr_with_privacy_prefix},
+    helperfunctions::{
+        AccountPrivacyKind, HumanReadableAccount, parse_addr_with_privacy_prefix,
+        resolve_id_or_label,
+    },
 };
 
 /// Represents generic chain CLI subcommand.
@@ -24,8 +28,16 @@ pub enum AccountSubcommand {
         #[arg(short, long)]
         keys: bool,
         /// Valid 32 byte base58 string with privacy prefix.
-        #[arg(short, long)]
-        account_id: String,
+        #[arg(
+            short,
+            long,
+            conflicts_with = "account_label",
+            required_unless_present = "account_label"
+        )]
+        account_id: Option<String>,
+        /// Account label (alternative to --account-id).
+        #[arg(long, conflicts_with = "account_id")]
+        account_label: Option<String>,
     },
     /// Produce new public or private account.
     #[command(subcommand)]
@@ -42,8 +54,16 @@ pub enum AccountSubcommand {
     /// Set a label for an account.
     Label {
         /// Valid 32 byte base58 string with privacy prefix.
-        #[arg(short, long)]
-        account_id: String,
+        #[arg(
+            short,
+            long,
+            conflicts_with = "account_label",
+            required_unless_present = "account_label"
+        )]
+        account_id: Option<String>,
+        /// Account label (alternative to --account-id).
+        #[arg(long = "account-label", conflicts_with = "account_id")]
+        account_label: Option<String>,
         /// The label to assign to the account.
         #[arg(short, long)]
         label: String,
@@ -145,7 +165,7 @@ impl WalletSubcommand for NewSubcommand {
                 println!(
                     "Generated new account with account_id Private/{account_id} at path {chain_index}",
                 );
-                println!("With npk {}", hex::encode(key.nullifer_public_key.0));
+                println!("With npk {}", hex::encode(key.nullifier_public_key.0));
                 println!(
                     "With vpk {}",
                     hex::encode(key.viewing_public_key.to_bytes())
@@ -170,8 +190,15 @@ impl WalletSubcommand for AccountSubcommand {
                 raw,
                 keys,
                 account_id,
+                account_label,
             } => {
-                let (account_id_str, addr_kind) = parse_addr_with_privacy_prefix(&account_id)?;
+                let resolved = resolve_id_or_label(
+                    account_id,
+                    account_label,
+                    &wallet_core.storage.labels,
+                    &wallet_core.storage.user_data,
+                )?;
+                let (account_id_str, addr_kind) = parse_addr_with_privacy_prefix(&resolved)?;
 
                 let account_id: nssa::AccountId = account_id_str.parse()?;
 
@@ -208,7 +235,7 @@ impl WalletSubcommand for AccountSubcommand {
                                 .get_private_account(account_id)
                                 .context("Private account not found in storage")?;
 
-                            println!("npk {}", hex::encode(key.nullifer_public_key.0));
+                            println!("npk {}", hex::encode(key.nullifier_public_key.0));
                             println!("vpk {}", hex::encode(key.viewing_public_key.to_bytes()));
                         }
                     }
@@ -244,11 +271,7 @@ impl WalletSubcommand for AccountSubcommand {
             }
             Self::New(new_subcommand) => new_subcommand.handle_subcommand(wallet_core).await,
             Self::SyncPrivate => {
-                let curr_last_block = wallet_core
-                    .sequencer_client
-                    .get_last_block()
-                    .await?
-                    .last_block;
+                let curr_last_block = wallet_core.sequencer_client.get_last_block_id().await?;
 
                 if wallet_core
                     .storage
@@ -374,8 +397,18 @@ impl WalletSubcommand for AccountSubcommand {
 
                 Ok(SubcommandReturnValue::Empty)
             }
-            Self::Label { account_id, label } => {
-                let (account_id_str, _) = parse_addr_with_privacy_prefix(&account_id)?;
+            Self::Label {
+                account_id,
+                account_label,
+                label,
+            } => {
+                let resolved = resolve_id_or_label(
+                    account_id,
+                    account_label,
+                    &wallet_core.storage.labels,
+                    &wallet_core.storage.user_data,
+                )?;
+                let (account_id_str, _) = parse_addr_with_privacy_prefix(&resolved)?;
 
                 // Check if label is already used by a different account
                 if let Some(existing_account) = wallet_core

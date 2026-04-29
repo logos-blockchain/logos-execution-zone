@@ -3,12 +3,14 @@
     reason = "This is an example program, it's fine to print to stdout"
 )]
 
+use common::transaction::NSSATransaction;
 use nssa::{
     AccountId, PublicTransaction,
     program::Program,
     public_transaction::{Message, WitnessSet},
 };
 use nssa_core::program::PdaSeed;
+use sequencer_service_rpc::RpcClient as _;
 use wallet::WalletCore;
 
 // Before running this example, compile the `simple_tail_call.rs` guest program with:
@@ -44,7 +46,7 @@ async fn main() {
     let program = Program::new(bytecode).unwrap();
 
     // Compute the PDA to pass it as input account to the public execution
-    let pda = AccountId::from((&program.id(), &PDA_SEED));
+    let pda = AccountId::for_public_pda(&program.id(), &PDA_SEED);
     let account_ids = vec![pda];
     let instruction_data = ();
     let nonces = vec![];
@@ -56,7 +58,7 @@ async fn main() {
     // Submit the transaction
     let _response = wallet_core
         .sequencer_client
-        .send_tx_public(tx)
+        .send_transaction(NSSATransaction::Public(tx))
         .await
         .unwrap();
 

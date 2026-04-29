@@ -1,5 +1,4 @@
 use anyhow::Result;
-use common::error::ExecutionFailureKind;
 use key_protocol::key_management::ephemeral_key_holder::EphemeralKeyHolder;
 use nssa::{AccountId, PrivateKey};
 use nssa_core::{
@@ -8,7 +7,7 @@ use nssa_core::{
     encryption::{EphemeralPublicKey, ViewingPublicKey},
 };
 
-use crate::WalletCore;
+use crate::{ExecutionFailureKind, WalletCore};
 
 #[derive(Clone)]
 pub enum PrivacyPreservingAccount {
@@ -139,7 +138,7 @@ impl AccountManager {
                     let eph_holder = EphemeralKeyHolder::new(&pre.npk);
 
                     Some(PrivateAccountKeys {
-                        npk: pre.npk.clone(),
+                        npk: pre.npk,
                         ssk: eph_holder.calculate_shared_secret_sender(&pre.vpk),
                         vpk: pre.vpk.clone(),
                         epk: eph_holder.generate_ephemeral_public_key(),
@@ -214,7 +213,7 @@ async fn private_acc_preparation(
 
     let nsk = from_keys.private_key_holder.nullifier_secret_key;
 
-    let from_npk = from_keys.nullifer_public_key;
+    let from_npk = from_keys.nullifier_public_key;
     let from_vpk = from_keys.viewing_public_key;
 
     // TODO: Remove this unwrap, error types must be compatible

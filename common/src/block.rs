@@ -1,14 +1,12 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use nssa::AccountId;
+use nssa_core::BlockId;
+pub use nssa_core::Timestamp;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256, digest::FixedOutput as _};
 
 use crate::{HashType, transaction::NSSATransaction};
-
 pub type MantleMsgId = [u8; 32];
 pub type BlockHash = HashType;
-pub type BlockId = u64;
-pub type TimeStamp = u64;
 
 #[derive(Debug, Clone, BorshSerialize, BorshDeserialize)]
 pub struct BlockMeta {
@@ -36,7 +34,7 @@ pub struct BlockHeader {
     pub block_id: BlockId,
     pub prev_block_hash: BlockHash,
     pub hash: BlockHash,
-    pub timestamp: TimeStamp,
+    pub timestamp: Timestamp,
     pub signature: nssa::Signature,
 }
 
@@ -60,11 +58,23 @@ pub struct Block {
     pub bedrock_parent_id: MantleMsgId,
 }
 
+impl Serialize for Block {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        crate::borsh_base64::serialize(self, serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for Block {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        crate::borsh_base64::deserialize(deserializer)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct HashableBlockData {
     pub block_id: BlockId,
     pub prev_block_hash: BlockHash,
-    pub timestamp: TimeStamp,
+    pub timestamp: Timestamp,
     pub transactions: Vec<NSSATransaction>,
 }
 
@@ -109,20 +119,6 @@ impl From<Block> for HashableBlockData {
             transactions: value.body.transactions,
         }
     }
-}
-
-/// Helper struct for account (de-)serialization.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AccountInitialData {
-    pub account_id: AccountId,
-    pub balance: u128,
-}
-
-/// Helper struct to (de-)serialize initial commitments.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CommitmentsInitialData {
-    pub npk: nssa_core::NullifierPublicKey,
-    pub account: nssa_core::account::Account,
 }
 
 #[cfg(test)]

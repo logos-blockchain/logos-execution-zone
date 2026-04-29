@@ -24,7 +24,6 @@ use log::info;
 use nssa::{Account, AccountId, PrivateKey, PublicKey, program::Program};
 use nssa_core::program::DEFAULT_PROGRAM_ID;
 use tempfile::tempdir;
-use wallet::WalletCore;
 use wallet_ffi::{
     FfiAccount, FfiAccountList, FfiBytes32, FfiPrivateAccountKeys, FfiPublicAccountKey,
     FfiTransferResult, WalletHandle, error,
@@ -211,14 +210,6 @@ fn new_wallet_ffi_with_default_config(password: &str) -> Result<*mut WalletHandl
     })
 }
 
-fn new_wallet_rust_with_default_config(password: &str) -> Result<WalletCore> {
-    let tempdir = tempdir()?;
-    let config_path = tempdir.path().join("wallet_config.json");
-    let storage_path = tempdir.path().join("storage.json");
-
-    WalletCore::new_init_storage(config_path, storage_path, None, password.to_owned())
-}
-
 fn load_existing_ffi_wallet(home: &Path) -> Result<*mut WalletHandle> {
     let config_path = home.join("wallet_config.json");
     let storage_path = home.join("storage.json");
@@ -232,19 +223,8 @@ fn load_existing_ffi_wallet(home: &Path) -> Result<*mut WalletHandle> {
 fn wallet_ffi_create_public_accounts() -> Result<()> {
     let password = "password_for_tests";
     let n_accounts = 10;
-    // First `n_accounts` public accounts created with Rust wallet
-    let new_public_account_ids_rust = {
-        let mut account_ids = Vec::new();
 
-        let mut wallet_rust = new_wallet_rust_with_default_config(password)?;
-        for _ in 0..n_accounts {
-            let account_id = wallet_rust.create_new_account_public(None).0;
-            account_ids.push(*account_id.value());
-        }
-        account_ids
-    };
-
-    // First `n_accounts` public accounts created with wallet FFI
+    // Create `n_accounts` public accounts with wallet FFI
     let new_public_account_ids_ffi = unsafe {
         let mut account_ids = Vec::new();
 
@@ -258,7 +238,20 @@ fn wallet_ffi_create_public_accounts() -> Result<()> {
         account_ids
     };
 
-    assert_eq!(new_public_account_ids_ffi, new_public_account_ids_rust);
+    // All returned IDs must be unique and non-zero
+    assert_eq!(new_public_account_ids_ffi.len(), n_accounts);
+    let unique: HashSet<_> = new_public_account_ids_ffi.iter().collect();
+    assert_eq!(
+        unique.len(),
+        n_accounts,
+        "Duplicate public account IDs returned"
+    );
+    assert!(
+        new_public_account_ids_ffi
+            .iter()
+            .all(|id| *id != [0_u8; 32]),
+        "Zero account ID returned"
+    );
 
     Ok(())
 }
@@ -267,19 +260,7 @@ fn wallet_ffi_create_public_accounts() -> Result<()> {
 fn wallet_ffi_create_private_accounts() -> Result<()> {
     let password = "password_for_tests";
     let n_accounts = 10;
-    // First `n_accounts` private accounts created with Rust wallet
-    let new_private_account_ids_rust = {
-        let mut account_ids = Vec::new();
-
-        let mut wallet_rust = new_wallet_rust_with_default_config(password)?;
-        for _ in 0..n_accounts {
-            let account_id = wallet_rust.create_new_account_private(None).0;
-            account_ids.push(*account_id.value());
-        }
-        account_ids
-    };
-
-    // First `n_accounts` private accounts created with wallet FFI
+    // Create `n_accounts` private accounts with wallet FFI
     let new_private_account_ids_ffi = unsafe {
         let mut account_ids = Vec::new();
 
@@ -293,7 +274,20 @@ fn wallet_ffi_create_private_accounts() -> Result<()> {
         account_ids
     };
 
-    assert_eq!(new_private_account_ids_ffi, new_private_account_ids_rust);
+    // All returned IDs must be unique and non-zero
+    assert_eq!(new_private_account_ids_ffi.len(), n_accounts);
+    let unique: HashSet<_> = new_private_account_ids_ffi.iter().collect();
+    assert_eq!(
+        unique.len(),
+        n_accounts,
+        "Duplicate private account IDs returned"
+    );
+    assert!(
+        new_private_account_ids_ffi
+            .iter()
+            .all(|id| *id != [0_u8; 32]),
+        "Zero account ID returned"
+    );
 
     Ok(())
 }
@@ -349,28 +343,23 @@ fn wallet_ffi_save_and_load_persistent_storage() -> Result<()> {
 fn test_wallet_ffi_list_accounts() -> Result<()> {
     let password = "password_for_tests";
 
-    // Create the wallet FFI
-    let wallet_ffi_handle = unsafe {
+    // Create the wallet FFI and track which account IDs were created as public/private
+    let (wallet_ffi_handle, created_public_ids, created_private_ids) = unsafe {
         let handle = new_wallet_ffi_with_default_config(password)?;
-        // Create 5 public accounts and 5 private accounts
+        let mut public_ids: Vec<[u8; 32]> = Vec::new();
+        let mut private_ids: Vec<[u8; 32]> = Vec::new();
+
+        // Create 5 public accounts and 5 private accounts, recording their IDs
         for _ in 0..5 {
             let mut out_account_id = FfiBytes32::from_bytes([0; 32]);
             wallet_ffi_create_account_public(handle, &raw mut out_account_id);
+            public_ids.push(out_account_id.data);
+
             wallet_ffi_create_account_private(handle, &raw mut out_account_id);
+            private_ids.push(out_account_id.data);
         }
 
-        handle
-    };
-
-    // Create the wallet Rust
-    let wallet_rust = {
-        let mut wallet = new_wallet_rust_with_default_config(password)?;
-        // Create 5 public accounts and 5 private accounts
-        for _ in 0..5 {
-            wallet.create_new_account_public(None);
-            wallet.create_new_account_private(None);
-        }
-        wallet
+        (handle, public_ids, private_ids)
     };
 
     // Get the account list with FFI method
@@ -380,15 +369,6 @@ fn test_wallet_ffi_list_accounts() -> Result<()> {
         out_list
     };
 
-    let wallet_rust_account_ids = wallet_rust
-        .storage()
-        .user_data
-        .account_ids()
-        .collect::<Vec<_>>();
-
-    // Assert same number of elements between Rust and FFI result
-    assert_eq!(wallet_rust_account_ids.len(), wallet_ffi_account_list.count);
-
     let wallet_ffi_account_list_slice = unsafe {
         core::slice::from_raw_parts(
             wallet_ffi_account_list.entries,
@@ -396,37 +376,38 @@ fn test_wallet_ffi_list_accounts() -> Result<()> {
         )
     };
 
-    // Assert same account ids between Rust and FFI result
-    assert_eq!(
-        wallet_rust_account_ids
-            .iter()
-            .map(nssa::AccountId::value)
-            .collect::<HashSet<_>>(),
-        wallet_ffi_account_list_slice
-            .iter()
-            .map(|entry| &entry.account_id.data)
-            .collect::<HashSet<_>>()
-    );
+    // All created accounts must appear in the list
+    let listed_public_ids: HashSet<[u8; 32]> = wallet_ffi_account_list_slice
+        .iter()
+        .filter(|e| e.is_public)
+        .map(|e| e.account_id.data)
+        .collect();
+    let listed_private_ids: HashSet<[u8; 32]> = wallet_ffi_account_list_slice
+        .iter()
+        .filter(|e| !e.is_public)
+        .map(|e| e.account_id.data)
+        .collect();
 
-    // Assert `is_pub` flag is correct in the FFI result
-    for entry in wallet_ffi_account_list_slice {
-        let account_id = AccountId::new(entry.account_id.data);
-        let is_pub_default_in_rust_wallet = wallet_rust
-            .storage()
-            .user_data
-            .default_pub_account_signing_keys
-            .contains_key(&account_id);
-        let is_pub_key_tree_wallet_rust = wallet_rust
-            .storage()
-            .user_data
-            .public_key_tree
-            .account_id_map
-            .contains_key(&account_id);
-
-        let is_public_in_rust_wallet = is_pub_default_in_rust_wallet || is_pub_key_tree_wallet_rust;
-
-        assert_eq!(entry.is_public, is_public_in_rust_wallet);
+    for id in &created_public_ids {
+        assert!(
+            listed_public_ids.contains(id),
+            "Created public account not found in list with is_public=true"
+        );
     }
+    for id in &created_private_ids {
+        assert!(
+            listed_private_ids.contains(id),
+            "Created private account not found in list with is_public=false"
+        );
+    }
+
+    // Total listed accounts must be at least the number we created
+    assert!(
+        wallet_ffi_account_list.count >= created_public_ids.len() + created_private_ids.len(),
+        "Listed account count ({}) is less than the number of created accounts ({})",
+        wallet_ffi_account_list.count,
+        created_public_ids.len() + created_private_ids.len()
+    );
 
     unsafe {
         wallet_ffi_free_account_list(&raw mut wallet_ffi_account_list);
@@ -491,7 +472,7 @@ fn test_wallet_ffi_get_account_public() -> Result<()> {
     );
     assert_eq!(account.balance, 10000);
     assert!(account.data.is_empty());
-    assert_eq!(account.nonce, 0);
+    assert_eq!(account.nonce.0, 0);
 
     unsafe {
         wallet_ffi_free_account_data(&raw mut out_account);
@@ -528,7 +509,7 @@ fn test_wallet_ffi_get_account_private() -> Result<()> {
     );
     assert_eq!(account.balance, 10000);
     assert!(account.data.is_empty());
-    assert_eq!(account.nonce, 0);
+    assert_eq!(account.nonce, 0_u128.into());
 
     unsafe {
         wallet_ffi_free_account_data(&raw mut out_account);
@@ -606,7 +587,7 @@ fn test_wallet_ffi_get_private_account_keys() -> Result<()> {
         .unwrap()
         .0;
 
-    let expected_npk = &key_chain.nullifer_public_key;
+    let expected_npk = &key_chain.nullifier_public_key;
     let expected_vpk = &key_chain.viewing_public_key;
 
     assert_eq!(&keys.npk(), expected_npk);
@@ -924,7 +905,7 @@ fn test_wallet_ffi_transfer_deshielded() -> Result<()> {
     let home = tempfile::tempdir()?;
     let wallet_ffi_handle = new_wallet_ffi_with_test_context_config(&ctx, home.path())?;
     let from: FfiBytes32 = (&ctx.ctx().existing_private_accounts()[0]).into();
-    let to = FfiBytes32::from_bytes([37; 32]);
+    let to: FfiBytes32 = (&ctx.ctx().existing_public_accounts()[0]).into();
     let amount: [u8; 16] = 100_u128.to_le_bytes();
 
     let mut transfer_result = FfiTransferResult::default();
@@ -967,7 +948,7 @@ fn test_wallet_ffi_transfer_deshielded() -> Result<()> {
     };
 
     assert_eq!(from_balance, 9900);
-    assert_eq!(to_balance, 100);
+    assert_eq!(to_balance, 10100);
 
     unsafe {
         wallet_ffi_free_transfer_result(&raw mut transfer_result);

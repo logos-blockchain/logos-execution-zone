@@ -16,7 +16,11 @@ pub use program_deployment_transaction::ProgramDeploymentTransaction;
 pub use program_methods::PRIVACY_PRESERVING_CIRCUIT_ID;
 pub use public_transaction::PublicTransaction;
 pub use signature::{PrivateKey, PublicKey, Signature};
-pub use state::V02State;
+pub use state::{
+    CLOCK_01_PROGRAM_ACCOUNT_ID, CLOCK_10_PROGRAM_ACCOUNT_ID, CLOCK_50_PROGRAM_ACCOUNT_ID,
+    CLOCK_PROGRAM_ACCOUNT_IDS, V03State,
+};
+pub use validated_state_diff::ValidatedStateDiff;
 
 pub mod encoding;
 pub mod error;
@@ -27,6 +31,7 @@ pub mod program_deployment_transaction;
 pub mod public_transaction;
 mod signature;
 mod state;
+mod validated_state_diff;
 
 pub mod program_methods {
     include!(concat!(env!("OUT_DIR"), "/program_methods/mod.rs"));

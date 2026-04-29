@@ -1,22 +1,26 @@
 //! This library contains common code for integration tests.
 
-use std::{net::SocketAddr, path::PathBuf, sync::LazyLock};
+use std::sync::LazyLock;
 
-use anyhow::{Context as _, Result, bail};
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
-use common::{HashType, sequencer_client::SequencerClient, transaction::NSSATransaction};
+use anyhow::{Context as _, Result};
+use common::{HashType, transaction::NSSATransaction};
 use futures::FutureExt as _;
 use indexer_service::IndexerHandle;
-use log::{debug, error, warn};
+use log::{debug, error};
 use nssa::{AccountId, PrivacyPreservingTransaction};
 use nssa_core::Commitment;
 use sequencer_core::indexer_client::{IndexerClient, IndexerClientTrait as _};
-use sequencer_runner::SequencerHandle;
+use sequencer_service::SequencerHandle;
+use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
 use tempfile::TempDir;
 use testcontainers::compose::DockerCompose;
-use wallet::{WalletCore, config::WalletConfigOverrides};
+use wallet::WalletCore;
+
+use crate::setup::{setup_bedrock_node, setup_indexer, setup_sequencer, setup_wallet};
 
 pub mod config;
+pub mod setup;
+pub mod test_context_ffi;
 
 // TODO: Remove this and control time from tests
 pub const TIME_TO_WAIT_FOR_BLOCK_SECONDS: u64 = 12;
@@ -38,7 +42,8 @@ pub struct TestContext {
     indexer_client: IndexerClient,
     wallet: WalletCore,
     wallet_password: String,
-    sequencer_handle: SequencerHandle,
+    /// Optional to move out value in Drop.
+    sequencer_handle: Option<SequencerHandle>,
     indexer_handle: IndexerHandle,
     bedrock_compose: DockerCompose,
     _temp_indexer_dir: TempDir,
@@ -66,13 +71,13 @@ impl TestContext {
 
         debug!("Test context setup");
 
-        let (bedrock_compose, bedrock_addr) = Self::setup_bedrock_node().await?;
+        let (bedrock_compose, bedrock_addr) = setup_bedrock_node().await?;
 
-        let (indexer_handle, temp_indexer_dir) = Self::setup_indexer(bedrock_addr, &initial_data)
+        let (indexer_handle, temp_indexer_dir) = setup_indexer(bedrock_addr, &initial_data)
             .await
             .context("Failed to setup Indexer")?;
 
-        let (sequencer_handle, temp_sequencer_dir) = Self::setup_sequencer(
+        let (sequencer_handle, temp_sequencer_dir) = setup_sequencer(
             sequencer_partial_config,
             bedrock_addr,
             indexer_handle.addr(),
@@ -82,7 +87,7 @@ impl TestContext {
         .context("Failed to setup Sequencer")?;
 
         let (wallet, temp_wallet_dir, wallet_password) =
-            Self::setup_wallet(sequencer_handle.addr(), &initial_data)
+            setup_wallet(sequencer_handle.addr(), &initial_data)
                 .await
                 .context("Failed to setup wallet")?;
 
@@ -90,8 +95,9 @@ impl TestContext {
             .context("Failed to convert sequencer addr to URL")?;
         let indexer_url = config::addr_to_url(config::UrlProtocol::Ws, indexer_handle.addr())
             .context("Failed to convert indexer addr to URL")?;
-        let sequencer_client =
-            SequencerClient::new(sequencer_url).context("Failed to create sequencer client")?;
+        let sequencer_client = SequencerClientBuilder::default()
+            .build(sequencer_url)
+            .context("Failed to create sequencer client")?;
         let indexer_client = IndexerClient::new(&indexer_url)
             .await
             .context("Failed to create indexer client")?;
@@ -102,171 +108,12 @@ impl TestContext {
             wallet,
             wallet_password,
             bedrock_compose,
-            sequencer_handle,
+            sequencer_handle: Some(sequencer_handle),
             indexer_handle,
             _temp_indexer_dir: temp_indexer_dir,
             _temp_sequencer_dir: temp_sequencer_dir,
             _temp_wallet_dir: temp_wallet_dir,
         })
-    }
-
-    async fn setup_bedrock_node() -> Result<(DockerCompose, SocketAddr)> {
-        let manifest_dir = env!("CARGO_MANIFEST_DIR");
-        let bedrock_compose_path =
-            PathBuf::from(manifest_dir).join("../bedrock/docker-compose.yml");
-
-        let mut compose = DockerCompose::with_auto_client(&[bedrock_compose_path])
-            .await
-            .context("Failed to setup docker compose for Bedrock")?
-            // Setting port to 0 to avoid conflicts between parallel tests, actual port will be retrieved after container is up
-            .with_env("PORT", "0");
-
-        #[expect(
-            clippy::items_after_statements,
-            reason = "This is more readable is this function used just after its definition"
-        )]
-        async fn up_and_retrieve_port(compose: &mut DockerCompose) -> Result<u16> {
-            compose
-                .up()
-                .await
-                .context("Failed to bring up Bedrock services")?;
-            let container = compose
-                .service(BEDROCK_SERVICE_WITH_OPEN_PORT)
-                .with_context(|| {
-                    format!(
-                        "Failed to get Bedrock service container `{BEDROCK_SERVICE_WITH_OPEN_PORT}`"
-                    )
-                })?;
-
-            let ports = container.ports().await.with_context(|| {
-                format!(
-                    "Failed to get ports for Bedrock service container `{}`",
-                    container.id()
-                )
-            })?;
-            ports
-                .map_to_host_port_ipv4(BEDROCK_SERVICE_PORT)
-                .with_context(|| {
-                    format!(
-                        "Failed to retrieve host port of {BEDROCK_SERVICE_PORT} container \
-                        port for container `{}`, existing ports: {ports:?}",
-                        container.id()
-                    )
-                })
-        }
-
-        let mut port = None;
-        let mut attempt = 0_u32;
-        let max_attempts = 5_u32;
-        while port.is_none() && attempt < max_attempts {
-            attempt = attempt
-                .checked_add(1)
-                .expect("We check that attempt < max_attempts, so this won't overflow");
-            match up_and_retrieve_port(&mut compose).await {
-                Ok(p) => {
-                    port = Some(p);
-                }
-                Err(err) => {
-                    warn!(
-                        "Failed to bring up Bedrock services: {err:?}, attempt {attempt}/{max_attempts}"
-                    );
-                }
-            }
-        }
-        let Some(port) = port else {
-            bail!("Failed to bring up Bedrock services after {max_attempts} attempts");
-        };
-
-        let addr = SocketAddr::from(([127, 0, 0, 1], port));
-        Ok((compose, addr))
-    }
-
-    async fn setup_indexer(
-        bedrock_addr: SocketAddr,
-        initial_data: &config::InitialData,
-    ) -> Result<(IndexerHandle, TempDir)> {
-        let temp_indexer_dir =
-            tempfile::tempdir().context("Failed to create temp dir for indexer home")?;
-
-        debug!(
-            "Using temp indexer home at {}",
-            temp_indexer_dir.path().display()
-        );
-
-        let indexer_config = config::indexer_config(
-            bedrock_addr,
-            temp_indexer_dir.path().to_owned(),
-            initial_data,
-        )
-        .context("Failed to create Indexer config")?;
-
-        indexer_service::run_server(indexer_config, 0)
-            .await
-            .context("Failed to run Indexer Service")
-            .map(|handle| (handle, temp_indexer_dir))
-    }
-
-    async fn setup_sequencer(
-        partial: config::SequencerPartialConfig,
-        bedrock_addr: SocketAddr,
-        indexer_addr: SocketAddr,
-        initial_data: &config::InitialData,
-    ) -> Result<(SequencerHandle, TempDir)> {
-        let temp_sequencer_dir =
-            tempfile::tempdir().context("Failed to create temp dir for sequencer home")?;
-
-        debug!(
-            "Using temp sequencer home at {}",
-            temp_sequencer_dir.path().display()
-        );
-
-        let config = config::sequencer_config(
-            partial,
-            temp_sequencer_dir.path().to_owned(),
-            bedrock_addr,
-            indexer_addr,
-            initial_data,
-        )
-        .context("Failed to create Sequencer config")?;
-
-        let sequencer_handle = sequencer_runner::startup_sequencer(config).await?;
-
-        Ok((sequencer_handle, temp_sequencer_dir))
-    }
-
-    async fn setup_wallet(
-        sequencer_addr: SocketAddr,
-        initial_data: &config::InitialData,
-    ) -> Result<(WalletCore, TempDir, String)> {
-        let config = config::wallet_config(sequencer_addr, initial_data)
-            .context("Failed to create Wallet config")?;
-        let config_serialized =
-            serde_json::to_string_pretty(&config).context("Failed to serialize Wallet config")?;
-
-        let temp_wallet_dir =
-            tempfile::tempdir().context("Failed to create temp dir for wallet home")?;
-
-        let config_path = temp_wallet_dir.path().join("wallet_config.json");
-        std::fs::write(&config_path, config_serialized)
-            .context("Failed to write wallet config in temp dir")?;
-
-        let storage_path = temp_wallet_dir.path().join("storage.json");
-        let config_overrides = WalletConfigOverrides::default();
-
-        let wallet_password = "test_pass".to_owned();
-        let wallet = WalletCore::new_init_storage(
-            config_path,
-            storage_path,
-            Some(config_overrides),
-            wallet_password.clone(),
-        )
-        .context("Failed to init wallet")?;
-        wallet
-            .store_persistent_data()
-            .await
-            .context("Failed to store wallet persistent data")?;
-
-        Ok((wallet, temp_wallet_dir, wallet_password))
     }
 
     /// Get reference to the wallet.
@@ -333,18 +180,20 @@ impl Drop for TestContext {
             wallet_password: _,
         } = self;
 
-        if sequencer_handle.is_finished() {
-            let Err(err) = self
-                .sequencer_handle
-                .run_forever()
+        let sequencer_handle = sequencer_handle
+            .take()
+            .expect("Sequencer handle should be present in TestContext drop");
+        if !sequencer_handle.is_healthy() {
+            let Err(err) = sequencer_handle
+                .failed()
                 .now_or_never()
-                .expect("Future is finished and should be ready");
+                .expect("Sequencer handle should not be running");
             error!(
-                "Sequencer handle has unexpectedly finished before TestContext drop with error: {err:#}"
+                "Sequencer handle has unexpectedly stopped before TestContext drop with error: {err:#}"
             );
         }
 
-        if indexer_handle.is_stopped() {
+        if !indexer_handle.is_healthy() {
             error!("Indexer handle has unexpectedly stopped before TestContext drop");
         }
 
@@ -459,15 +308,8 @@ pub async fn fetch_privacy_preserving_tx(
     seq_client: &SequencerClient,
     tx_hash: HashType,
 ) -> PrivacyPreservingTransaction {
-    let transaction_encoded = seq_client
-        .get_transaction_by_hash(tx_hash)
-        .await
-        .unwrap()
-        .transaction
-        .unwrap();
+    let tx = seq_client.get_transaction(tx_hash).await.unwrap().unwrap();
 
-    let tx_bytes = BASE64.decode(transaction_encoded).unwrap();
-    let tx = borsh::from_slice(&tx_bytes).unwrap();
     match tx {
         NSSATransaction::PrivacyPreserving(privacy_preserving_transaction) => {
             privacy_preserving_transaction
@@ -480,8 +322,10 @@ pub async fn verify_commitment_is_in_state(
     commitment: Commitment,
     seq_client: &SequencerClient,
 ) -> bool {
-    matches!(
-        seq_client.get_proof_for_commitment(commitment).await,
-        Ok(Some(_))
-    )
+    seq_client
+        .get_proof_for_commitment(commitment)
+        .await
+        .ok()
+        .flatten()
+        .is_some()
 }

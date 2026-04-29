@@ -1,9 +1,17 @@
-use nssa_core::program::{AccountPostState, ProgramInput, read_nssa_inputs, write_nssa_outputs};
+use nssa_core::program::{AccountPostState, ProgramInput, ProgramOutput, read_nssa_inputs};
 
 type Instruction = ();
 
 fn main() {
-    let (ProgramInput { pre_states, .. }, instruction_words) = read_nssa_inputs::<Instruction>();
+    let (
+        ProgramInput {
+            self_program_id,
+            caller_program_id,
+            pre_states,
+            ..
+        },
+        instruction_words,
+    ) = read_nssa_inputs::<Instruction>();
 
     let Ok([pre]) = <[_; 1]>::try_from(pre_states) else {
         return;
@@ -11,11 +19,14 @@ fn main() {
 
     let account_pre = &pre.account;
     let mut account_post = account_pre.clone();
-    account_post.nonce = account_post.nonce.overflowing_add(1).0;
+    account_post.nonce.public_account_nonce_increment();
 
-    write_nssa_outputs(
+    ProgramOutput::new(
+        self_program_id,
+        caller_program_id,
         instruction_words,
         vec![pre],
         vec![AccountPostState::new(account_post)],
-    );
+    )
+    .write();
 }

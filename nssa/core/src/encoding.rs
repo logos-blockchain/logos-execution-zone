@@ -25,8 +25,8 @@ impl Account {
             bytes.extend_from_slice(&word.to_le_bytes());
         }
         bytes.extend_from_slice(&self.balance.to_le_bytes());
-        bytes.extend_from_slice(&self.nonce.to_le_bytes());
-        let data_length: u32 = u32::try_from(self.data.len()).expect("data length fits in u32");
+        bytes.extend_from_slice(&self.nonce.0.to_le_bytes());
+        let data_length: u32 = u32::try_from(self.data.len()).expect("Invalid u32");
         bytes.extend_from_slice(&data_length.to_le_bytes());
         bytes.extend_from_slice(self.data.as_ref());
         bytes
@@ -35,7 +35,7 @@ impl Account {
     /// Deserializes an account from a cursor.
     #[cfg(feature = "host")]
     pub fn from_cursor(cursor: &mut Cursor<&[u8]>) -> Result<Self, NssaCoreError> {
-        use crate::account::data::Data;
+        use crate::account::{Nonce, data::Data};
 
         let mut u32_bytes = [0_u8; 4];
         let mut u128_bytes = [0_u8; 16];
@@ -53,7 +53,7 @@ impl Account {
 
         // nonce
         cursor.read_exact(&mut u128_bytes)?;
-        let nonce = u128::from_le_bytes(u128_bytes);
+        let nonce = Nonce(u128::from_le_bytes(u128_bytes));
 
         // data
         let data = Data::from_cursor(cursor)?;
@@ -189,7 +189,7 @@ mod tests {
         let account = Account {
             program_owner: [1, 2, 3, 4, 5, 6, 7, 8],
             balance: 123_456_789_012_345_678_901_234_567_890_123_456,
-            nonce: 42,
+            nonce: 42_u128.into(),
             data: b"hola mundo".to_vec().try_into().unwrap(),
         };
 
@@ -250,7 +250,7 @@ mod tests {
         let account = Account {
             program_owner: [1, 2, 3, 4, 5, 6, 7, 8],
             balance: 123_456_789_012_345_678_901_234_567_890_123_456,
-            nonce: 42,
+            nonce: 42_u128.into(),
             data: b"hola mundo".to_vec().try_into().unwrap(),
         };
         let bytes = account.to_bytes();

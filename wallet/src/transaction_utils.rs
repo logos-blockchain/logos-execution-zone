@@ -1,4 +1,5 @@
-use common::{error::ExecutionFailureKind, sequencer_client::json::SendTxResponse};
+use common::{HashType, transaction::NSSATransaction};
+use sequencer_service_rpc::RpcClient as _;
 use key_protocol::key_management::ephemeral_key_holder::EphemeralKeyHolder;
 use nssa::{
     Account, AccountId, PrivacyPreservingTransaction,
@@ -10,7 +11,7 @@ use nssa_core::{
     account::AccountWithMetadata, encryption::ViewingPublicKey, program::InstructionData,
 };
 
-use crate::{WalletCore, helperfunctions::produce_random_nonces};
+use crate::{ExecutionFailureKind, WalletCore, helperfunctions::produce_random_nonces};
 
 pub(crate) struct AccountPreparedData {
     pub nsk: Option<NullifierSecretKey>,
@@ -39,7 +40,7 @@ impl WalletCore {
         let mut nsk = None;
         let mut proof = None;
 
-        let from_npk = from_keys.nullifer_public_key;
+        let from_npk = from_keys.nullifier_public_key;
         let from_vpk = from_keys.viewing_public_key;
 
         let sender_commitment = Commitment::new(&from_npk, &from_acc);
@@ -51,11 +52,12 @@ impl WalletCore {
         }
 
         if needs_proof {
-            proof = self
-                .sequencer_client
-                .get_proof_for_commitment(sender_commitment)
-                .await
-                .unwrap();
+            proof = Some(
+                self.sequencer_client
+                    .get_proof_for_commitment(sender_commitment)
+                    .await
+                    .unwrap(),
+            );
         }
 
         Ok(AccountPreparedData {
@@ -75,7 +77,7 @@ impl WalletCore {
         tx_pre_check: impl FnOnce(&Account, &Account) -> Result<(), ExecutionFailureKind>,
         program: Program,
         to_proof: MembershipProof,
-    ) -> Result<(SendTxResponse, [SharedSecretKey; 2]), ExecutionFailureKind> {
+    ) -> Result<(HashType, [SharedSecretKey; 2]), ExecutionFailureKind> {
         let AccountPreparedData {
             nsk: from_nsk,
             npk: from_npk,
@@ -106,8 +108,8 @@ impl WalletCore {
             &[1, 1],
             &produce_random_nonces(2),
             &[
-                (from_npk.clone(), shared_secret_from.clone()),
-                (to_npk.clone(), shared_secret_to.clone()),
+                (from_npk, shared_secret_from.clone()),
+                (to_npk, shared_secret_to.clone()),
             ],
             &[
                 (from_nsk.unwrap(), from_proof.unwrap()),
@@ -122,12 +124,12 @@ impl WalletCore {
             vec![],
             vec![
                 (
-                    from_npk.clone(),
+                    from_npk,
                     from_vpk.clone(),
                     eph_holder_from.generate_ephemeral_public_key(),
                 ),
                 (
-                    to_npk.clone(),
+                    to_npk,
                     to_vpk.clone(),
                     eph_holder_to.generate_ephemeral_public_key(),
                 ),
@@ -140,7 +142,7 @@ impl WalletCore {
         let tx = PrivacyPreservingTransaction::new(message, witness_set);
 
         Ok((
-            self.sequencer_client.send_tx_private(tx).await?,
+            self.sequencer_client.send_transaction(NSSATransaction::PrivacyPreserving(tx).into()).await?,
             [shared_secret_from, shared_secret_to],
         ))
     }
@@ -152,7 +154,7 @@ impl WalletCore {
         instruction_data: InstructionData,
         tx_pre_check: impl FnOnce(&Account, &Account) -> Result<(), ExecutionFailureKind>,
         program: Program,
-    ) -> Result<(SendTxResponse, [SharedSecretKey; 2]), ExecutionFailureKind> {
+    ) -> Result<(HashType, [SharedSecretKey; 2]), ExecutionFailureKind> {
         let AccountPreparedData {
             nsk: from_nsk,
             npk: from_npk,
@@ -183,8 +185,8 @@ impl WalletCore {
             &[1, 2],
             &produce_random_nonces(2),
             &[
-                (from_npk.clone(), shared_secret_from.clone()),
-                (to_npk.clone(), shared_secret_to.clone()),
+                (from_npk, shared_secret_from.clone()),
+                (to_npk, shared_secret_to.clone()),
             ],
             &[(from_nsk.unwrap(), from_proof.unwrap())],
             &program.into(),
@@ -196,12 +198,12 @@ impl WalletCore {
             vec![],
             vec![
                 (
-                    from_npk.clone(),
+                    from_npk,
                     from_vpk.clone(),
                     eph_holder_from.generate_ephemeral_public_key(),
                 ),
                 (
-                    to_npk.clone(),
+                    to_npk,
                     to_vpk.clone(),
                     eph_holder_to.generate_ephemeral_public_key(),
                 ),
@@ -214,7 +216,7 @@ impl WalletCore {
         let tx = PrivacyPreservingTransaction::new(message, witness_set);
 
         Ok((
-            self.sequencer_client.send_tx_private(tx).await?,
+            self.sequencer_client.send_transaction(NSSATransaction::PrivacyPreserving(tx).into()).await?,
             [shared_secret_from, shared_secret_to],
         ))
     }
@@ -227,7 +229,7 @@ impl WalletCore {
         instruction_data: InstructionData,
         tx_pre_check: impl FnOnce(&Account, &Account) -> Result<(), ExecutionFailureKind>,
         program: Program,
-    ) -> Result<(SendTxResponse, [SharedSecretKey; 2]), ExecutionFailureKind> {
+    ) -> Result<(HashType, [SharedSecretKey; 2]), ExecutionFailureKind> {
         let AccountPreparedData {
             nsk: from_nsk,
             npk: from_npk,
@@ -253,8 +255,8 @@ impl WalletCore {
             &[1, 2],
             &produce_random_nonces(2),
             &[
-                (from_npk.clone(), shared_secret_from.clone()),
-                (to_npk.clone(), shared_secret_to.clone()),
+                (from_npk, shared_secret_from.clone()),
+                (to_npk, shared_secret_to.clone()),
             ],
             &[(from_nsk.unwrap(), from_proof.unwrap())],
             &program.into(),
@@ -266,12 +268,12 @@ impl WalletCore {
             vec![],
             vec![
                 (
-                    from_npk.clone(),
+                    from_npk,
                     from_vpk.clone(),
                     eph_holder.generate_ephemeral_public_key(),
                 ),
                 (
-                    to_npk.clone(),
+                    to_npk,
                     to_vpk.clone(),
                     eph_holder.generate_ephemeral_public_key(),
                 ),
@@ -285,7 +287,7 @@ impl WalletCore {
         let tx = PrivacyPreservingTransaction::new(message, witness_set);
 
         Ok((
-            self.sequencer_client.send_tx_private(tx).await?,
+            self.sequencer_client.send_transaction(NSSATransaction::PrivacyPreserving(tx).into()).await?,
             [shared_secret_from, shared_secret_to],
         ))
     }
@@ -297,7 +299,7 @@ impl WalletCore {
         instruction_data: InstructionData,
         tx_pre_check: impl FnOnce(&Account, &Account) -> Result<(), ExecutionFailureKind>,
         program: Program,
-    ) -> Result<(SendTxResponse, [nssa_core::SharedSecretKey; 1]), ExecutionFailureKind> {
+    ) -> Result<(HashType, [nssa_core::SharedSecretKey; 1]), ExecutionFailureKind> {
         let AccountPreparedData {
             nsk: from_nsk,
             npk: from_npk,
@@ -322,7 +324,7 @@ impl WalletCore {
             &instruction_data,
             &[1, 0],
             &produce_random_nonces(1),
-            &[(from_npk.clone(), shared_secret.clone())],
+            &[(from_npk, shared_secret.clone())],
             &[(from_nsk.unwrap(), from_proof.unwrap())],
             &program.into(),
         )
@@ -332,7 +334,7 @@ impl WalletCore {
             vec![to],
             vec![],
             vec![(
-                from_npk.clone(),
+                from_npk,
                 from_vpk.clone(),
                 eph_holder.generate_ephemeral_public_key(),
             )],
@@ -345,7 +347,7 @@ impl WalletCore {
         let tx = PrivacyPreservingTransaction::new(message, witness_set);
 
         Ok((
-            self.sequencer_client.send_tx_private(tx).await?,
+            self.sequencer_client.send_transaction(NSSATransaction::PrivacyPreserving(tx).into()).await?,
             [shared_secret],
         ))
     }
@@ -358,7 +360,7 @@ impl WalletCore {
         tx_pre_check: impl FnOnce(&Account, &Account) -> Result<(), ExecutionFailureKind>,
         program: Program,
         to_proof: MembershipProof,
-    ) -> Result<(SendTxResponse, [SharedSecretKey; 1]), ExecutionFailureKind> {
+    ) -> Result<(HashType, [SharedSecretKey; 1]), ExecutionFailureKind> {
         let Ok(from_acc) = self.get_account_public(from).await else {
             return Err(ExecutionFailureKind::KeyNotFoundError);
         };
@@ -383,7 +385,7 @@ impl WalletCore {
             &instruction_data,
             &[0, 1],
             &produce_random_nonces(1),
-            &[(to_npk.clone(), shared_secret.clone())],
+            &[(to_npk, shared_secret.clone())],
             &[(to_nsk.unwrap(), to_proof)],
             &program.into(),
         )
@@ -393,7 +395,7 @@ impl WalletCore {
             vec![from],
             vec![from_acc.nonce],
             vec![(
-                to_npk.clone(),
+                to_npk,
                 to_vpk.clone(),
                 eph_holder.generate_ephemeral_public_key(),
             )],
@@ -412,7 +414,7 @@ impl WalletCore {
         let tx = PrivacyPreservingTransaction::new(message, witness_set);
 
         Ok((
-            self.sequencer_client.send_tx_private(tx).await?,
+            self.sequencer_client.send_transaction(NSSATransaction::PrivacyPreserving(tx).into()).await?,
             [shared_secret],
         ))
     }
@@ -424,7 +426,7 @@ impl WalletCore {
         instruction_data: InstructionData,
         tx_pre_check: impl FnOnce(&Account, &Account) -> Result<(), ExecutionFailureKind>,
         program: Program,
-    ) -> Result<(SendTxResponse, [SharedSecretKey; 1]), ExecutionFailureKind> {
+    ) -> Result<(HashType, [SharedSecretKey; 1]), ExecutionFailureKind> {
         let Ok(from_acc) = self.get_account_public(from).await else {
             return Err(ExecutionFailureKind::KeyNotFoundError);
         };
@@ -449,7 +451,7 @@ impl WalletCore {
             &instruction_data,
             &[0, 2],
             &produce_random_nonces(1),
-            &[(to_npk.clone(), shared_secret.clone())],
+            &[(to_npk, shared_secret.clone())],
             &[],
             &program.into(),
         )
@@ -459,7 +461,7 @@ impl WalletCore {
             vec![from],
             vec![from_acc.nonce],
             vec![(
-                to_npk.clone(),
+                to_npk,
                 to_vpk.clone(),
                 eph_holder.generate_ephemeral_public_key(),
             )],
@@ -478,7 +480,7 @@ impl WalletCore {
         let tx = PrivacyPreservingTransaction::new(message, witness_set);
 
         Ok((
-            self.sequencer_client.send_tx_private(tx).await?,
+            self.sequencer_client.send_transaction(NSSATransaction::PrivacyPreserving(tx).into()).await?,
             [shared_secret],
         ))
     }
@@ -491,7 +493,7 @@ impl WalletCore {
         instruction_data: InstructionData,
         tx_pre_check: impl FnOnce(&Account, &Account) -> Result<(), ExecutionFailureKind>,
         program: Program,
-    ) -> Result<SendTxResponse, ExecutionFailureKind> {
+    ) -> Result<HashType, ExecutionFailureKind> {
         let Ok(from_acc) = self.get_account_public(from).await else {
             return Err(ExecutionFailureKind::KeyNotFoundError);
         };
@@ -511,7 +513,7 @@ impl WalletCore {
             &instruction_data,
             &[0, 2],
             &produce_random_nonces(1),
-            &[(to_npk.clone(), shared_secret.clone())],
+            &[(to_npk, shared_secret.clone())],
             &[],
             &program.into(),
         )
@@ -521,7 +523,7 @@ impl WalletCore {
             vec![from],
             vec![from_acc.nonce],
             vec![(
-                to_npk.clone(),
+                to_npk,
                 to_vpk.clone(),
                 eph_holder.generate_ephemeral_public_key(),
             )],
@@ -538,13 +540,13 @@ impl WalletCore {
         let witness_set = WitnessSet::for_message(&message, proof, &[signing_key]);
         let tx = PrivacyPreservingTransaction::new(message, witness_set);
 
-        Ok(self.sequencer_client.send_tx_private(tx).await?)
+        Ok(self.sequencer_client.send_transaction(NSSATransaction::PrivacyPreserving(tx).into()).await?)
     }
 
     pub async fn register_account_under_authenticated_transfers_programs_private(
         &self,
         from: AccountId,
-    ) -> Result<(SendTxResponse, [SharedSecretKey; 1]), ExecutionFailureKind> {
+    ) -> Result<(HashType, [SharedSecretKey; 1]), ExecutionFailureKind> {
         let AccountPreparedData {
             nsk: _,
             npk: from_npk,
@@ -563,7 +565,7 @@ impl WalletCore {
             &Program::serialize_instruction(instruction).unwrap(),
             &[2],
             &produce_random_nonces(1),
-            &[(from_npk.clone(), shared_secret_from.clone())],
+            &[(from_npk, shared_secret_from.clone())],
             &[],
             &Program::authenticated_transfer_program().into(),
         )
@@ -573,7 +575,7 @@ impl WalletCore {
             vec![],
             vec![],
             vec![(
-                from_npk.clone(),
+                from_npk,
                 from_vpk.clone(),
                 eph_holder_from.generate_ephemeral_public_key(),
             )],
@@ -585,7 +587,7 @@ impl WalletCore {
         let tx = PrivacyPreservingTransaction::new(message, witness_set);
 
         Ok((
-            self.sequencer_client.send_tx_private(tx).await?,
+            self.sequencer_client.send_transaction(NSSATransaction::PrivacyPreserving(tx).into()).await?,
             [shared_secret_from],
         ))
     }

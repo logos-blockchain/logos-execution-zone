@@ -222,7 +222,7 @@ impl From<nssa::Account> for FfiAccount {
             balance: value.balance.into(),
             data,
             data_len,
-            nonce: value.nonce.into(),
+            nonce: value.nonce.0.into(),
         }
     }
 }
@@ -244,7 +244,7 @@ impl TryFrom<&FfiAccount> for nssa::Account {
             program_owner: value.program_owner.data,
             balance: value.balance.into(),
             data,
-            nonce: value.nonce.into(),
+            nonce: nssa_core::account::Nonce(value.nonce.into()),
         })
     }
 }

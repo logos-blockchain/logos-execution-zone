@@ -161,7 +161,7 @@ The sequencer and logos blockchain node can be run locally:
       - `RUST_LOG=info cargo run -p indexer_service indexer/service/configs/indexer_config.json`
 
  3. On another terminal go to the `logos-blockchain/lssa` repo and run the sequencer:
-      - `RUST_LOG=info cargo run -p sequencer_runner sequencer_runner/configs/debug`
+      - `RUST_LOG=info cargo run -p sequencer_service sequencer/service/configs/debug/sequencer_config.json`
  4. (To run the explorer): on another terminal go to `logos-blockchain/lssa/explorer_service` and run the following:
       - `cargo install cargo-leptos`
       - `cargo leptos build --release`
@@ -171,8 +171,8 @@ The sequencer and logos blockchain node can be run locally:
 
 After stopping services above you need to remove 3 folders to start cleanly:
  1. In the `logos-blockchain/logos-blockchain` folder `state` (not needed in case of docker setup)
- 2. In the `lssa` folder `sequencer_runner/rocksdb`
- 3. In the `lssa` file `sequencer_runner/bedrock_signing_key`
+ 2. In the `lssa` folder `sequencer/service/rocksdb`
+ 3. In the `lssa` file `sequencer/service/bedrock_signing_key`
  4. In the `lssa` folder `indexer/service/rocksdb`
 
 ### Normal mode (`just` commands)
@@ -220,7 +220,7 @@ This will use a wallet binary built from this repo and not the one installed in 
 ### Standalone mode
 The sequencer can be run in standalone mode with:
 ```bash
-RUST_LOG=info cargo run --features standalone -p sequencer_runner sequencer_runner/configs/debug
+RUST_LOG=info cargo run --features standalone -p sequencer_service sequencer/service/configs/debug
 ```
 
 ## Running with Docker

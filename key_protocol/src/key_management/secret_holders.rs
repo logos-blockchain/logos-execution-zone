@@ -8,29 +8,26 @@ use rand::{RngCore as _, rngs::OsRng};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, digest::FixedOutput as _};
 
-const NSSA_ENTROPY_BYTES: [u8; 32] = [0; 32];
-
-#[derive(Debug)]
 /// Seed holder. Non-clonable to ensure that different holders use different seeds.
 /// Produces `TopSecretKeyHolder` objects.
+#[derive(Debug)]
 pub struct SeedHolder {
     // ToDo: Needs to be vec as serde derives is not implemented for [u8; 64]
     pub(crate) seed: Vec<u8>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 /// Secret spending key object. Can produce `PrivateKeyHolder` objects.
-pub struct SecretSpendingKey(pub(crate) [u8; 32]);
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct SecretSpendingKey(pub [u8; 32]);
 
 pub type ViewingSecretKey = Scalar;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 /// Private key holder. Produces public keys. Can produce `account_id`. Can produce shared secret
 /// for recepient.
-#[expect(clippy::partial_pub_fields, reason = "TODO: fix later")]
 pub struct PrivateKeyHolder {
     pub nullifier_secret_key: NullifierSecretKey,
-    pub(crate) viewing_secret_key: ViewingSecretKey,
+    pub viewing_secret_key: ViewingSecretKey,
 }
 
 impl SeedHolder {
@@ -49,9 +46,24 @@ impl SeedHolder {
     }
 
     #[must_use]
-    pub fn new_mnemonic(passphrase: String) -> Self {
-        let mnemonic = Mnemonic::from_entropy(&NSSA_ENTROPY_BYTES)
-            .expect("Enthropy must be a multiple of 32 bytes");
+    pub fn new_mnemonic(passphrase: &str) -> (Self, Mnemonic) {
+        let mut entropy_bytes: [u8; 32] = [0; 32];
+        OsRng.fill_bytes(&mut entropy_bytes);
+
+        let mnemonic =
+            Mnemonic::from_entropy(&entropy_bytes).expect("Entropy must be a multiple of 32 bytes");
+        let seed_wide = mnemonic.to_seed(passphrase);
+
+        (
+            Self {
+                seed: seed_wide.to_vec(),
+            },
+            mnemonic,
+        )
+    }
+
+    #[must_use]
+    pub fn from_mnemonic(mnemonic: &Mnemonic, passphrase: &str) -> Self {
         let seed_wide = mnemonic.to_seed(passphrase);
 
         Self {
@@ -79,6 +91,7 @@ impl SeedHolder {
 
 impl SecretSpendingKey {
     #[must_use]
+    #[expect(clippy::big_endian_bytes, reason = "BIP-032 uses big endian")]
     pub fn generate_nullifier_secret_key(&self, index: Option<u32>) -> NullifierSecretKey {
         const PREFIX: &[u8; 8] = b"LEE/keys";
         const SUFFIX_1: &[u8; 1] = &[1];
@@ -93,13 +106,14 @@ impl SecretSpendingKey {
         hasher.update(PREFIX);
         hasher.update(self.0);
         hasher.update(SUFFIX_1);
-        hasher.update(index.to_le_bytes());
+        hasher.update(index.to_be_bytes());
         hasher.update(SUFFIX_2);
 
         <NullifierSecretKey>::from(hasher.finalize_fixed())
     }
 
     #[must_use]
+    #[expect(clippy::big_endian_bytes, reason = "BIP-032 uses big endian")]
     pub fn generate_viewing_secret_key(&self, index: Option<u32>) -> ViewingSecretKey {
         const PREFIX: &[u8; 8] = b"LEE/keys";
         const SUFFIX_1: &[u8; 1] = &[2];
@@ -114,7 +128,7 @@ impl SecretSpendingKey {
         hasher.update(PREFIX);
         hasher.update(self.0);
         hasher.update(SUFFIX_1);
-        hasher.update(index.to_le_bytes());
+        hasher.update(index.to_be_bytes());
         hasher.update(SUFFIX_2);
 
         hasher.finalize_fixed().into()
@@ -174,12 +188,63 @@ mod tests {
     }
 
     #[test]
-    fn two_seeds_generated_same_from_same_mnemonic() {
-        let mnemonic = "test_pass";
+    fn two_seeds_recovered_same_from_same_mnemonic() {
+        let passphrase = "test_pass";
 
-        let seed_holder1 = SeedHolder::new_mnemonic(mnemonic.to_owned());
-        let seed_holder2 = SeedHolder::new_mnemonic(mnemonic.to_owned());
+        // Generate a mnemonic with random entropy
+        let (original_seed_holder, mnemonic) = SeedHolder::new_mnemonic(passphrase);
 
-        assert_eq!(seed_holder1.seed, seed_holder2.seed);
+        // Recover from the same mnemonic
+        let recovered_seed_holder = SeedHolder::from_mnemonic(&mnemonic, passphrase);
+
+        assert_eq!(original_seed_holder.seed, recovered_seed_holder.seed);
+    }
+
+    #[test]
+    fn new_mnemonic_generates_different_seeds_each_time() {
+        let (seed_holder1, mnemonic1) = SeedHolder::new_mnemonic("");
+        let (seed_holder2, mnemonic2) = SeedHolder::new_mnemonic("");
+
+        // Different entropy should produce different mnemonics and seeds
+        assert_ne!(mnemonic1.to_string(), mnemonic2.to_string());
+        assert_ne!(seed_holder1.seed, seed_holder2.seed);
+    }
+
+    #[test]
+    fn new_mnemonic_generates_24_word_phrase() {
+        let (_seed_holder, mnemonic) = SeedHolder::new_mnemonic("");
+
+        // 256 bits of entropy produces a 24-word mnemonic
+        let word_count = mnemonic.to_string().split_whitespace().count();
+        assert_eq!(word_count, 24);
+    }
+
+    #[test]
+    fn new_mnemonic_produces_valid_seed_length() {
+        let (seed_holder, _mnemonic) = SeedHolder::new_mnemonic("");
+
+        assert_eq!(seed_holder.seed.len(), 64);
+    }
+
+    #[test]
+    fn different_passphrases_produce_different_seeds() {
+        let (_seed_holder, mnemonic) = SeedHolder::new_mnemonic("");
+
+        let seed_with_pass_a = SeedHolder::from_mnemonic(&mnemonic, "password_a");
+        let seed_with_pass_b = SeedHolder::from_mnemonic(&mnemonic, "password_b");
+
+        // Same mnemonic but different passphrases should produce different seeds
+        assert_ne!(seed_with_pass_a.seed, seed_with_pass_b.seed);
+    }
+
+    #[test]
+    fn empty_passphrase_is_deterministic() {
+        let (_seed_holder, mnemonic) = SeedHolder::new_mnemonic("");
+
+        let seed1 = SeedHolder::from_mnemonic(&mnemonic, "");
+        let seed2 = SeedHolder::from_mnemonic(&mnemonic, "");
+
+        // Same mnemonic and passphrase should always produce the same seed
+        assert_eq!(seed1.seed, seed2.seed);
     }
 }

@@ -10,5 +10,8 @@ services:
     volumes:
       # Mount configuration
       - ./configs/indexer_config.json:/etc/indexer_service/indexer_config.json
-      # Mount data folder
-      - ./data:/var/lib/indexer_service
+      # Mount data volume
+      - indexer_data:/var/lib/indexer_service
+
+volumes:
+  indexer_data:

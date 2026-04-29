@@ -1,9 +1,12 @@
-use std::{io::Write as _, path::PathBuf, sync::Arc};
+use std::{io::Write as _, path::PathBuf, str::FromStr as _};
 
 use anyhow::{Context as _, Result};
+use bip39::Mnemonic;
 use clap::{Parser, Subcommand};
-use common::HashType;
+use common::{HashType, transaction::NSSATransaction};
+use futures::TryFutureExt as _;
 use nssa::{ProgramDeploymentTransaction, program::Program};
+use sequencer_service_rpc::RpcClient as _;
 
 use crate::{
     WalletCore,
@@ -12,8 +15,9 @@ use crate::{
         chain::ChainSubcommand,
         config::ConfigSubcommand,
         programs::{
-            amm::AmmProgramAgnosticSubcommand, native_token_transfer::AuthTransferSubcommand,
-            pinata::PinataProgramAgnosticSubcommand, token::TokenProgramAgnosticSubcommand,
+            amm::AmmProgramAgnosticSubcommand, ata::AtaSubcommand,
+            native_token_transfer::AuthTransferSubcommand, pinata::PinataProgramAgnosticSubcommand,
+            token::TokenProgramAgnosticSubcommand,
         },
     },
 };
@@ -50,6 +54,9 @@ pub enum Command {
     /// AMM program interaction subcommand.
     #[command(subcommand)]
     AMM(AmmProgramAgnosticSubcommand),
+    /// Associated Token Account program interaction subcommand.
+    #[command(subcommand)]
+    Ata(AtaSubcommand),
     /// Check the wallet can connect to the node and builtin local programs
     /// match the remote versions.
     CheckHealth,
@@ -156,12 +163,14 @@ pub async fn execute_subcommand(
         }
         Command::Token(token_subcommand) => token_subcommand.handle_subcommand(wallet_core).await?,
         Command::AMM(amm_subcommand) => amm_subcommand.handle_subcommand(wallet_core).await?,
+        Command::Ata(ata_subcommand) => ata_subcommand.handle_subcommand(wallet_core).await?,
         Command::Config(config_subcommand) => {
             config_subcommand.handle_subcommand(wallet_core).await?
         }
         Command::RestoreKeys { depth } => {
+            let mnemonic = read_mnemonic_from_stdin()?;
             let password = read_password_from_stdin()?;
-            wallet_core.reset_storage(password)?;
+            wallet_core.restore_storage(&mnemonic, &password)?;
             execute_keys_restoration(wallet_core, depth).await?;
 
             SubcommandReturnValue::Empty
@@ -175,7 +184,7 @@ pub async fn execute_subcommand(
             let transaction = ProgramDeploymentTransaction::new(message);
             let _response = wallet_core
                 .sequencer_client
-                .send_tx_program(transaction)
+                .send_transaction(NSSATransaction::ProgramDeployment(transaction))
                 .await
                 .context("Transaction submission error")?;
 
@@ -188,11 +197,7 @@ pub async fn execute_subcommand(
 
 pub async fn execute_continuous_run(wallet_core: &mut WalletCore) -> Result<()> {
     loop {
-        let latest_block_num = wallet_core
-            .sequencer_client
-            .get_last_block()
-            .await?
-            .last_block;
+        let latest_block_num = wallet_core.sequencer_client.get_last_block_id().await?;
         wallet_core.sync_to_block(latest_block_num).await?;
 
         tokio::time::sleep(wallet_core.config().seq_poll_timeout).await;
@@ -207,6 +212,16 @@ pub fn read_password_from_stdin() -> Result<String> {
     std::io::stdin().read_line(&mut password)?;
 
     Ok(password.trim().to_owned())
+}
+
+pub fn read_mnemonic_from_stdin() -> Result<Mnemonic> {
+    let mut phrase = String::new();
+
+    print!("Input recovery phrase: ");
+    std::io::stdout().flush()?;
+    std::io::stdin().read_line(&mut phrase)?;
+
+    Mnemonic::from_str(phrase.trim()).context("Invalid mnemonic phrase")
 }
 
 pub async fn execute_keys_restoration(wallet_core: &mut WalletCore, depth: u32) -> Result<()> {
@@ -230,16 +245,17 @@ pub async fn execute_keys_restoration(wallet_core: &mut WalletCore, depth: u32) 
         .storage
         .user_data
         .public_key_tree
-        .cleanup_tree_remove_uninit_layered(depth, Arc::clone(&wallet_core.sequencer_client))
+        .cleanup_tree_remove_uninit_layered(depth, |account_id| {
+            wallet_core
+                .sequencer_client
+                .get_account(account_id)
+                .map_err(Into::into)
+        })
         .await?;
 
     println!("Public tree cleaned up");
 
-    let last_block = wallet_core
-        .sequencer_client
-        .get_last_block()
-        .await?
-        .last_block;
+    let last_block = wallet_core.sequencer_client.get_last_block_id().await?;
 
     println!("Last block is {last_block}");
 

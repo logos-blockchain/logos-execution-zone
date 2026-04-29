@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use bytesize::ByteSize;
+use common::transaction::NSSATransaction;
 use integration_tests::{
     TestContext,
     config::{InitialData, SequencerPartialConfig},
@@ -27,9 +28,10 @@ use nssa::{
 };
 use nssa_core::{
     MembershipProof, NullifierPublicKey,
-    account::{AccountWithMetadata, data::Data},
+    account::{AccountWithMetadata, Nonce, data::Data},
     encryption::ViewingPublicKey,
 };
+use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 
 pub(crate) struct TpsTestManager {
@@ -78,7 +80,7 @@ impl TpsTestManager {
                 let message = putx::Message::try_new(
                     program.id(),
                     [pair[0].1, pair[1].1].to_vec(),
-                    [0_u128].to_vec(),
+                    [Nonce(0_u128)].to_vec(),
                     amount,
                 )
                 .unwrap();
@@ -107,7 +109,7 @@ impl TpsTestManager {
         let key_chain = KeyChain::new_os_random();
         let account = Account {
             balance: 100,
-            nonce: 0xdead_beef,
+            nonce: Nonce(0xdead_beef),
             program_owner: Program::authenticated_transfer_program().id(),
             data: Data::default(),
         };
@@ -153,10 +155,9 @@ pub async fn tps_test() -> Result<()> {
     for (i, tx) in txs.into_iter().enumerate() {
         let tx_hash = ctx
             .sequencer_client()
-            .send_tx_public(tx)
+            .send_transaction(NSSATransaction::Public(tx))
             .await
-            .unwrap()
-            .tx_hash;
+            .unwrap();
         info!("Sent tx {i}");
         tx_hashes.push(tx_hash);
     }
@@ -170,15 +171,13 @@ pub async fn tps_test() -> Result<()> {
 
             let tx_obj = ctx
                 .sequencer_client()
-                .get_transaction_by_hash(*tx_hash)
+                .get_transaction(*tx_hash)
                 .await
                 .inspect_err(|err| {
                     log::warn!("Failed to get transaction by hash {tx_hash} with error: {err:#?}");
                 });
 
-            if let Ok(tx_obj) = tx_obj
-                && tx_obj.transaction.is_some()
-            {
+            if tx_obj.is_ok_and(|opt| opt.is_some()) {
                 info!("Found tx {i} with hash {tx_hash}");
                 break;
             }
@@ -216,7 +215,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
     let sender_pre = AccountWithMetadata::new(
         Account {
             balance: 100,
-            nonce: 0xdead_beef,
+            nonce: Nonce(0xdead_beef),
             program_owner: program.id(),
             data: Data::default(),
         },
@@ -250,11 +249,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
         vec![sender_pre, recipient_pre],
         Program::serialize_instruction(balance_to_move).unwrap(),
         vec![1, 2],
-        vec![0xdead_beef1, 0xdead_beef2],
-        vec![
-            (sender_npk.clone(), sender_ss),
-            (recipient_npk.clone(), recipient_ss),
-        ],
+        vec![(sender_npk, sender_ss), (recipient_npk, recipient_ss)],
         vec![sender_nsk],
         vec![Some(proof)],
         &program.into(),

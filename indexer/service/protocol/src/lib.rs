@@ -138,7 +138,7 @@ pub struct Account {
 }
 
 pub type BlockId = u64;
-pub type TimeStamp = u64;
+pub type Timestamp = u64;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct Block {
@@ -153,7 +153,7 @@ pub struct BlockHeader {
     pub block_id: BlockId,
     pub prev_block_hash: HashType,
     pub hash: HashType,
-    pub timestamp: TimeStamp,
+    pub timestamp: Timestamp,
     pub signature: Signature,
 }
 
@@ -235,12 +235,14 @@ pub struct PrivacyPreservingMessage {
     pub encrypted_private_post_states: Vec<EncryptedAccountData>,
     pub new_commitments: Vec<Commitment>,
     pub new_nullifiers: Vec<(Nullifier, CommitmentSetDigest)>,
+    pub block_validity_window: ValidityWindow,
+    pub timestamp_validity_window: ValidityWindow,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct WitnessSet {
     pub signatures_and_public_keys: Vec<(Signature, PublicKey)>,
-    pub proof: Proof,
+    pub proof: Option<Proof>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -299,6 +301,20 @@ pub struct Nullifier(
     #[schemars(with = "String", description = "base64-encoded nullifier")]
     pub [u8; 32],
 );
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct ValidityWindow(pub (Option<BlockId>, Option<BlockId>));
+
+impl Display for ValidityWindow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            (Some(start), Some(end)) => write!(f, "[{start}, {end})"),
+            (Some(start), None) => write!(f, "[{start}, \u{221e})"),
+            (None, Some(end)) => write!(f, "(-\u{221e}, {end})"),
+            (None, None) => write!(f, "(-\u{221e}, \u{221e})"),
+        }
+    }
+}
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct CommitmentSetDigest(
