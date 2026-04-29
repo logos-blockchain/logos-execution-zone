@@ -91,7 +91,8 @@ impl GroupKeyHolder {
     /// The new GMS is `SHA256(PREFIX || rotation_salt || old_gms)`. The rotation salt must
     /// be a fresh 32-byte random value contributed by the member who initiates the rotation.
     /// Reusing a salt from a previous ratchet produces the same GMS as that previous
-    /// ratchet, collapsing the key rotation. Callers must generate the salt from a secure random source.
+    /// ratchet, collapsing the key rotation. Callers must generate the salt from a secure random
+    /// source.
     ///
     /// After ratcheting, all remaining controllers must receive the new `GroupKeyHolder`
     /// via `seal_for` / `unseal`.
