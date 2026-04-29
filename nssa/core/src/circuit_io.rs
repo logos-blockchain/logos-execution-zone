@@ -71,7 +71,10 @@ impl PrivacyPreservingCircuitInputAccount {
 
     #[must_use]
     pub const fn is_private_pda(&self) -> bool {
-        matches!(self, Self::PrivatePdaInit { .. } | Self::PrivatePdaUpdate { .. })
+        matches!(
+            self,
+            Self::PrivatePdaInit { .. } | Self::PrivatePdaUpdate { .. }
+        )
     }
 
     /// For private PDA variants, return the nullifier public key. `Init` carries it directly;

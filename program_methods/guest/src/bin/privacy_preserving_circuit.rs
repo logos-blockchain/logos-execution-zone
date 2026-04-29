@@ -353,7 +353,9 @@ impl ExecutionState {
                             let npk = self
                                 .private_pda_npk_by_position
                                 .get(&pre_state_position)
-                                .expect("private PDA pre_state must have an npk in the position map");
+                                .expect(
+                                    "private PDA pre_state must have an npk in the position map",
+                                );
                             let pda = AccountId::for_private_pda(&program_id, &seed, npk);
                             assert_eq!(
                                 pre_account_id, pda,
@@ -486,11 +488,7 @@ fn compute_circuit_output(
     };
 
     let states_iter = execution_state.into_states_iter();
-    assert_eq!(
-        accounts.len(),
-        states_iter.len(),
-        "Invalid accounts length"
-    );
+    assert_eq!(accounts.len(), states_iter.len(), "Invalid accounts length");
 
     let mut output_index = 0;
     for (account, (pre_state, post_state)) in accounts.iter().zip(states_iter) {

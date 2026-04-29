@@ -1109,10 +1109,12 @@ mod tests {
         let (output, proof) = execute_and_prove(
             vec![AccountWithMetadata::new(Account::default(), true, &npk)],
             Program::serialize_instruction(0_u128).unwrap(),
-            vec![PrivacyPreservingCircuitInputAccount::PrivateAuthorizedInit {
-                ssk: shared_secret,
-                nsk,
-            }],
+            vec![
+                PrivacyPreservingCircuitInputAccount::PrivateAuthorizedInit {
+                    ssk: shared_secret,
+                    nsk,
+                },
+            ],
             &Program::authenticated_transfer_program().into(),
         )
         .unwrap();

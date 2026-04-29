@@ -3220,10 +3220,12 @@ pub mod tests {
         let (output, proof) = execute_and_prove(
             vec![authorized_account],
             Program::serialize_instruction(balance).unwrap(),
-            vec![PrivacyPreservingCircuitInputAccount::PrivateAuthorizedInit {
-                ssk: shared_secret,
-                nsk: private_keys.nsk,
-            }],
+            vec![
+                PrivacyPreservingCircuitInputAccount::PrivateAuthorizedInit {
+                    ssk: shared_secret,
+                    nsk: private_keys.nsk,
+                },
+            ],
             &program.into(),
         )
         .unwrap();
@@ -3318,10 +3320,12 @@ pub mod tests {
         let (output, proof) = execute_and_prove(
             vec![authorized_account.clone()],
             Program::serialize_instruction(balance).unwrap(),
-            vec![PrivacyPreservingCircuitInputAccount::PrivateAuthorizedInit {
-                ssk: shared_secret,
-                nsk: private_keys.nsk,
-            }],
+            vec![
+                PrivacyPreservingCircuitInputAccount::PrivateAuthorizedInit {
+                    ssk: shared_secret,
+                    nsk: private_keys.nsk,
+                },
+            ],
             &claimer_program.into(),
         )
         .unwrap();
@@ -3363,10 +3367,12 @@ pub mod tests {
         let res = execute_and_prove(
             vec![account_metadata],
             Program::serialize_instruction(()).unwrap(),
-            vec![PrivacyPreservingCircuitInputAccount::PrivateAuthorizedInit {
-                ssk: shared_secret2,
-                nsk: private_keys.nsk,
-            }],
+            vec![
+                PrivacyPreservingCircuitInputAccount::PrivateAuthorizedInit {
+                    ssk: shared_secret2,
+                    nsk: private_keys.nsk,
+                },
+            ],
             &noop_program.into(),
         );
 
@@ -3439,11 +3445,13 @@ pub mod tests {
         let result = execute_and_prove(
             vec![private_account],
             Program::serialize_instruction(instruction).unwrap(),
-            vec![PrivacyPreservingCircuitInputAccount::PrivateAuthorizedUpdate {
-                ssk: SharedSecretKey::new(&[3; 32], &sender_keys.vpk()),
-                nsk: sender_keys.nsk,
-                membership_proof: (0, vec![]),
-            }],
+            vec![
+                PrivacyPreservingCircuitInputAccount::PrivateAuthorizedUpdate {
+                    ssk: SharedSecretKey::new(&[3; 32], &sender_keys.vpk()),
+                    nsk: sender_keys.nsk,
+                    membership_proof: (0, vec![]),
+                },
+            ],
             &program.into(),
         );
 
@@ -3464,11 +3472,13 @@ pub mod tests {
         let result = execute_and_prove(
             vec![private_account],
             Program::serialize_instruction(instruction).unwrap(),
-            vec![PrivacyPreservingCircuitInputAccount::PrivateAuthorizedUpdate {
-                ssk: SharedSecretKey::new(&[3; 32], &sender_keys.vpk()),
-                nsk: sender_keys.nsk,
-                membership_proof: (0, vec![]),
-            }],
+            vec![
+                PrivacyPreservingCircuitInputAccount::PrivateAuthorizedUpdate {
+                    ssk: SharedSecretKey::new(&[3; 32], &sender_keys.vpk()),
+                    nsk: sender_keys.nsk,
+                    membership_proof: (0, vec![]),
+                },
+            ],
             &program.into(),
         );
 
