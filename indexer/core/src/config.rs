@@ -28,7 +28,7 @@ pub struct IndexerConfig {
     pub signing_key: [u8; 32],
     #[serde(with = "humantime_serde")]
     pub consensus_info_polling_interval: Duration,
-    pub bedrock_client_config: ClientConfig,
+    pub bedrock_config: ClientConfig,
     pub channel_id: ChannelId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub initial_public_accounts: Option<Vec<PublicAccountPublicInitialData>>,

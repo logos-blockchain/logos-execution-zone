@@ -1,16 +1,17 @@
-use std::{collections::HashMap, path::Path};
+use std::{collections::HashMap, path::Path, sync::Arc};
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use common::{
     HashType,
     block::{Block, BlockMeta, MantleMsgId},
     transaction::NSSATransaction,
 };
+use logos_blockchain_zone_sdk::sequencer::SequencerCheckpoint;
 use nssa::V03State;
 use storage::{error::DbError, sequencer::RocksDBIO};
 
 pub struct SequencerStore {
-    dbio: RocksDBIO,
+    dbio: Arc<RocksDBIO>,
     // TODO: Consider adding the hashmap to the database for faster recovery.
     tx_hash_to_block_map: HashMap<HashType, u64>,
     genesis_id: u64,
@@ -30,7 +31,11 @@ impl SequencerStore {
     ) -> Result<Self> {
         let tx_hash_to_block_map = block_to_transactions_map(genesis_block);
 
-        let dbio = RocksDBIO::open_or_create(location, genesis_block, genesis_msg_id)?;
+        let dbio = Arc::new(RocksDBIO::open_or_create(
+            location,
+            genesis_block,
+            genesis_msg_id,
+        )?);
 
         let genesis_id = dbio.get_meta_first_block_in_db()?;
 
@@ -40,6 +45,14 @@ impl SequencerStore {
             genesis_id,
             signing_key,
         })
+    }
+
+    /// Shared handle to the underlying rocksdb. Used to persist the zone-sdk
+    /// checkpoint from the sequencer's drive task without needing &mut to the
+    /// store.
+    #[must_use]
+    pub fn dbio(&self) -> Arc<RocksDBIO> {
+        Arc::clone(&self.dbio)
     }
 
     pub fn get_block_at_id(&self, id: u64) -> Result<Option<Block>, DbError> {
@@ -102,6 +115,22 @@ impl SequencerStore {
 
     pub fn get_nssa_state(&self) -> Option<V03State> {
         self.dbio.get_nssa_state().ok()
+    }
+
+    pub fn get_zone_checkpoint(&self) -> Result<Option<SequencerCheckpoint>> {
+        let Some(bytes) = self.dbio.get_zone_sdk_checkpoint_bytes()? else {
+            return Ok(None);
+        };
+        let checkpoint: SequencerCheckpoint = serde_json::from_slice(&bytes)
+            .context("Failed to deserialize stored zone-sdk checkpoint")?;
+        Ok(Some(checkpoint))
+    }
+
+    pub fn set_zone_checkpoint(&self, checkpoint: &SequencerCheckpoint) -> Result<()> {
+        let bytes =
+            serde_json::to_vec(checkpoint).context("Failed to serialize zone-sdk checkpoint")?;
+        self.dbio.put_zone_sdk_checkpoint_bytes(&bytes)?;
+        Ok(())
     }
 }
 

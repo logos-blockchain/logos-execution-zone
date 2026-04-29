@@ -6,7 +6,9 @@ use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 use url::Url;
 
 use crate::{
-    block_publisher::BlockPublisherTrait, config::BedrockConfig, indexer_client::IndexerClientTrait,
+    block_publisher::{BlockPublisherTrait, CheckpointSink, SequencerCheckpoint},
+    config::BedrockConfig,
+    indexer_client::IndexerClientTrait,
 };
 
 pub type SequencerCoreWithMockClients = crate::SequencerCore<MockBlockPublisher, MockIndexerClient>;
@@ -19,6 +21,8 @@ impl BlockPublisherTrait for MockBlockPublisher {
         _config: &BedrockConfig,
         _bedrock_signing_key: Ed25519Key,
         _resubmit_interval: Duration,
+        _initial_checkpoint: Option<SequencerCheckpoint>,
+        _on_checkpoint: CheckpointSink,
     ) -> Result<Self> {
         Ok(Self)
     }

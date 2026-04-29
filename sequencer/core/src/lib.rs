@@ -90,22 +90,40 @@ impl<BP: BlockPublisherTrait, IC: IndexerClientTrait> SequencerCore<BP, IC> {
             .latest_block_meta()
             .expect("Failed to read latest block meta from store");
 
+        let initial_checkpoint = store
+            .get_zone_checkpoint()
+            .expect("Failed to load zone-sdk checkpoint");
+        let is_fresh_start = initial_checkpoint.is_none();
+
+        let dbio_for_checkpoint = store.dbio();
+        let on_checkpoint: block_publisher::CheckpointSink = Box::new(move |cp| {
+            let bytes = match serde_json::to_vec(&cp) {
+                Ok(b) => b,
+                Err(err) => {
+                    error!("Failed to serialize zone-sdk checkpoint: {err:#}");
+                    return;
+                }
+            };
+            if let Err(err) = dbio_for_checkpoint.put_zone_sdk_checkpoint_bytes(&bytes) {
+                error!("Failed to persist zone-sdk checkpoint: {err:#}");
+            }
+        });
+
         let block_publisher = BP::new(
             &config.bedrock_config,
             bedrock_signing_key,
             config.retry_pending_blocks_timeout,
+            initial_checkpoint,
+            on_checkpoint,
         )
         .await
         .expect("Failed to initialize Block Publisher");
 
-        // Publish the genesis block on every startup so the indexer can find the
-        // channel start. Zone-sdk dedups by msg_id, so re-publishing on restart
-        // is a no-op once it's already on-chain.
-        // TODO: persist & restore SequencerCheckpoint so restarts don't have to
-        // republish anything.
-        if latest_block_meta.id == config.genesis_id
-            && let Err(err) = block_publisher.publish_block(&genesis_block).await
-        {
+        // On a truly fresh start (no checkpoint persisted yet), publish the
+        // genesis block so the indexer can find the channel start. After the
+        // first publish, zone-sdk's checkpoint persistence covers further
+        // restarts.
+        if is_fresh_start && let Err(err) = block_publisher.publish_block(&genesis_block).await {
             error!("Failed to publish genesis block: {err:#}");
         }
 

@@ -4,14 +4,19 @@ use anyhow::{Context as _, Result, anyhow};
 use common::block::Block;
 pub use logos_blockchain_core::mantle::ops::channel::MsgId;
 pub use logos_blockchain_key_management_system_service::keys::Ed25519Key;
+pub use logos_blockchain_zone_sdk::sequencer::SequencerCheckpoint;
 use logos_blockchain_zone_sdk::{
     CommonHttpClient,
     adapter::NodeHttpClient,
-    sequencer::{SequencerConfig as ZoneSdkSequencerConfig, SequencerHandle, ZoneSequencer},
+    sequencer::{Event, SequencerConfig as ZoneSdkSequencerConfig, SequencerHandle, ZoneSequencer},
 };
 use tokio::task::JoinHandle;
 
 use crate::config::BedrockConfig;
+
+/// Sink for `Event::Published` checkpoints emitted by the drive task.
+/// Caller is responsible for persistence (e.g. writing to rocksdb).
+pub type CheckpointSink = Box<dyn Fn(SequencerCheckpoint) + Send + Sync + 'static>;
 
 #[expect(async_fn_in_trait, reason = "We don't care about Send/Sync here")]
 pub trait BlockPublisherTrait: Clone {
@@ -19,6 +24,8 @@ pub trait BlockPublisherTrait: Clone {
         config: &BedrockConfig,
         bedrock_signing_key: Ed25519Key,
         resubmit_interval: Duration,
+        initial_checkpoint: Option<SequencerCheckpoint>,
+        on_checkpoint: CheckpointSink,
     ) -> Result<Self>;
 
     /// Fire-and-forget publish. Zone-sdk drives the actual submission and
@@ -47,6 +54,8 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         config: &BedrockConfig,
         bedrock_signing_key: Ed25519Key,
         resubmit_interval: Duration,
+        initial_checkpoint: Option<SequencerCheckpoint>,
+        on_checkpoint: CheckpointSink,
     ) -> Result<Self> {
         let basic_auth = config.auth.clone().map(Into::into);
         let node = NodeHttpClient::new(CommonHttpClient::new(basic_auth), config.node_url.clone());
@@ -56,19 +65,19 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
             ..ZoneSdkSequencerConfig::default()
         };
 
-        // TODO: persist & restore SequencerCheckpoint via Event::Published listener
-        // for crash recovery. Always-fresh-start for now.
         let (mut sequencer, mut handle) = ZoneSequencer::init_with_config(
             config.channel_id,
             bedrock_signing_key,
             node,
             zone_sdk_config,
-            None,
+            initial_checkpoint,
         );
 
         let drive_task = tokio::spawn(async move {
             loop {
-                sequencer.next_event().await;
+                if let Some(Event::Published { checkpoint, .. }) = sequencer.next_event().await {
+                    on_checkpoint(checkpoint);
+                }
             }
         });
 

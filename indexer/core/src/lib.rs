@@ -5,7 +5,7 @@ use common::block::{Block, HashableBlockData};
 // ToDo: Remove after testnet
 use common::{HashType, PINATA_BASE58};
 use futures::StreamExt as _;
-use log::{error, info};
+use log::{error, info, warn};
 use logos_blockchain_core::header::HeaderId;
 use logos_blockchain_zone_sdk::{
     CommonHttpClient, ZoneMessage, adapter::NodeHttpClient, indexer::ZoneIndexer,
@@ -14,10 +14,6 @@ use nssa::V03State;
 use testnet_initial_state::initial_state_testnet;
 
 use crate::{block_store::IndexerStore, config::IndexerConfig};
-
-// TODO: persist & restore cursor (e.g. in rocksdb) so restarts don't have to
-// re-process the channel from the beginning. Mirrors the sequencer checkpoint
-// TODO in `block_publisher.rs`.
 
 pub mod block_store;
 pub mod config;
@@ -95,10 +91,10 @@ impl IndexerCore {
 
         let home = config.home.join("rocksdb");
 
-        let basic_auth = config.bedrock_client_config.auth.clone().map(Into::into);
+        let basic_auth = config.bedrock_config.auth.clone().map(Into::into);
         let node = NodeHttpClient::new(
             CommonHttpClient::new(basic_auth),
-            config.bedrock_client_config.addr.clone(),
+            config.bedrock_config.addr.clone(),
         );
         let zone_indexer = ZoneIndexer::new(config.channel_id, node);
 
@@ -111,12 +107,19 @@ impl IndexerCore {
 
     pub fn subscribe_parse_block_stream(&self) -> impl futures::Stream<Item = Result<Block>> + '_ {
         let poll_interval = self.config.consensus_info_polling_interval;
+        let initial_cursor = self
+            .store
+            .get_zone_cursor()
+            .expect("Failed to load zone-sdk indexer cursor");
 
         async_stream::stream! {
-            // In-memory only; not persisted across restarts (see top-of-file TODO).
-            let mut cursor = None;
+            let mut cursor = initial_cursor;
 
-            info!("Starting indexer from beginning of channel");
+            if cursor.is_some() {
+                info!("Resuming indexer from cursor {cursor:?}");
+            } else {
+                info!("Starting indexer from beginning of channel");
+            }
 
             loop {
                 let stream = match self.zone_indexer.next_messages(cursor).await {
@@ -141,7 +144,12 @@ impl IndexerCore {
                         Ok(b) => b,
                         Err(e) => {
                             error!("Failed to deserialize L2 block from zone-sdk: {e}");
+                            // Advance past the broken inscription so we don't
+                            // re-process it on restart.
                             cursor = Some((zone_block.id, slot));
+                            if let Err(err) = self.store.set_zone_cursor(&(zone_block.id, slot)) {
+                                warn!("Failed to persist indexer cursor: {err:#}");
+                            }
                             continue;
                         }
                     };
@@ -156,6 +164,9 @@ impl IndexerCore {
                     }
 
                     cursor = Some((zone_block.id, slot));
+                    if let Err(err) = self.store.set_zone_cursor(&(zone_block.id, slot)) {
+                        warn!("Failed to persist indexer cursor: {err:#}");
+                    }
                     yield Ok(block);
                 }
 

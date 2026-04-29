@@ -226,7 +226,7 @@ pub fn indexer_config(
     Ok(IndexerConfig {
         home,
         consensus_info_polling_interval: Duration::from_secs(1),
-        bedrock_client_config: ClientConfig {
+        bedrock_config: ClientConfig {
             addr: addr_to_url(UrlProtocol::Http, bedrock_addr)
                 .context("Failed to convert bedrock addr to URL")?,
             auth: None,

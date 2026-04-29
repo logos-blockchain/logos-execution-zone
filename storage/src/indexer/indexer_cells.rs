@@ -8,7 +8,8 @@ use crate::{
     indexer::{
         ACC_NUM_CELL_NAME, BLOCK_HASH_CELL_NAME, BREAKPOINT_CELL_NAME, CF_ACC_META,
         CF_BREAKPOINT_NAME, CF_HASH_TO_ID, CF_TX_TO_ID, DB_META_LAST_BREAKPOINT_ID,
-        DB_META_LAST_OBSERVED_L1_LIB_HEADER_ID_IN_DB_KEY, TX_HASH_CELL_NAME,
+        DB_META_LAST_OBSERVED_L1_LIB_HEADER_ID_IN_DB_KEY, DB_META_ZONE_SDK_INDEXER_CURSOR_KEY,
+        TX_HASH_CELL_NAME,
     },
 };
 
@@ -206,6 +207,41 @@ impl SimpleWritableCell for AccNumTxCell {
             DbError::borsh_cast_message(
                 err,
                 Some("Failed to serialize number of transactions".to_owned()),
+            )
+        })
+    }
+}
+
+/// Opaque bytes for the zone-sdk indexer cursor `Option<(MsgId, Slot)>`.
+/// The caller serializes via serde_json (neither type derives borsh).
+#[derive(BorshDeserialize)]
+pub struct ZoneSdkIndexerCursorCellOwned(pub Vec<u8>);
+
+impl SimpleStorableCell for ZoneSdkIndexerCursorCellOwned {
+    type KeyParams = ();
+
+    const CELL_NAME: &'static str = DB_META_ZONE_SDK_INDEXER_CURSOR_KEY;
+    const CF_NAME: &'static str = CF_META_NAME;
+}
+
+impl SimpleReadableCell for ZoneSdkIndexerCursorCellOwned {}
+
+#[derive(BorshSerialize)]
+pub struct ZoneSdkIndexerCursorCellRef<'bytes>(pub &'bytes [u8]);
+
+impl SimpleStorableCell for ZoneSdkIndexerCursorCellRef<'_> {
+    type KeyParams = ();
+
+    const CELL_NAME: &'static str = DB_META_ZONE_SDK_INDEXER_CURSOR_KEY;
+    const CF_NAME: &'static str = CF_META_NAME;
+}
+
+impl SimpleWritableCell for ZoneSdkIndexerCursorCellRef<'_> {
+    fn value_constructor(&self) -> DbResult<Vec<u8>> {
+        borsh::to_vec(&self).map_err(|err| {
+            DbError::borsh_cast_message(
+                err,
+                Some("Failed to serialize zone-sdk indexer cursor cell".to_owned()),
             )
         })
     }

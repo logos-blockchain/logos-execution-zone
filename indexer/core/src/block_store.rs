@@ -1,11 +1,12 @@
 use std::{path::Path, sync::Arc};
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use common::{
     block::{BedrockStatus, Block},
     transaction::{NSSATransaction, clock_invocation},
 };
-use logos_blockchain_core::header::HeaderId;
+use logos_blockchain_core::{header::HeaderId, mantle::ops::channel::MsgId};
+use logos_blockchain_zone_sdk::Slot;
 use nssa::{Account, AccountId, V03State};
 use nssa_core::BlockId;
 use storage::indexer::RocksDBIO;
@@ -101,6 +102,22 @@ impl IndexerStore {
 
     pub fn get_state_at_block(&self, block_id: u64) -> Result<V03State> {
         Ok(self.dbio.calculate_state_for_id(block_id)?)
+    }
+
+    pub fn get_zone_cursor(&self) -> Result<Option<(MsgId, Slot)>> {
+        let Some(bytes) = self.dbio.get_zone_sdk_indexer_cursor_bytes()? else {
+            return Ok(None);
+        };
+        let cursor: (MsgId, Slot) = serde_json::from_slice(&bytes)
+            .context("Failed to deserialize stored zone-sdk indexer cursor")?;
+        Ok(Some(cursor))
+    }
+
+    pub fn set_zone_cursor(&self, cursor: &(MsgId, Slot)) -> Result<()> {
+        let bytes =
+            serde_json::to_vec(cursor).context("Failed to serialize zone-sdk indexer cursor")?;
+        self.dbio.put_zone_sdk_indexer_cursor_bytes(&bytes)?;
+        Ok(())
     }
 
     /// Recalculation of final state directly from DB.

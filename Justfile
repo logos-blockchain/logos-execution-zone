@@ -64,9 +64,7 @@ clean:
     @echo "🧹 Cleaning run artifacts"
     rm -rf sequencer/service/bedrock_signing_key
     rm -rf sequencer/service/rocksdb
-    rm -rf sequencer/service/zone_sdk_checkpoint.json
     rm -rf indexer/service/rocksdb
-    rm -rf indexer/service/zone_sdk_indexer_cursor.json
     rm -rf wallet/configs/debug/storage.json
     rm -rf rocksdb
     cd bedrock && docker compose down -v
