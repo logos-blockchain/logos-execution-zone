@@ -1,14 +1,11 @@
-//! This library contains common code for integration tests.
-
-use std::sync::LazyLock;
+use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
-use common::{HashType, transaction::NSSATransaction};
 use futures::FutureExt as _;
-use indexer_service::IndexerHandle;
+use indexer_ffi::IndexerServiceFFI;
+use indexer_service_rpc::RpcClient as _;
 use log::{debug, error};
-use nssa::{AccountId, PrivacyPreservingTransaction};
-use nssa_core::Commitment;
+use nssa::AccountId;
 use sequencer_core::indexer_client::{IndexerClient, IndexerClientTrait as _};
 use sequencer_service::SequencerHandle;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
@@ -16,45 +13,52 @@ use tempfile::TempDir;
 use testcontainers::compose::DockerCompose;
 use wallet::WalletCore;
 
-use crate::setup::{setup_bedrock_node, setup_indexer, setup_sequencer, setup_wallet};
+use crate::{
+    BEDROCK_SERVICE_WITH_OPEN_PORT, LOGGER, TestContextBuilder, config,
+    setup::{setup_bedrock_node, setup_indexer_ffi, setup_sequencer, setup_wallet},
+};
 
-pub mod config;
-pub mod setup;
-pub mod test_context_ffi;
-
-// TODO: Remove this and control time from tests
-pub const TIME_TO_WAIT_FOR_BLOCK_SECONDS: u64 = 12;
-pub const NSSA_PROGRAM_FOR_TEST_DATA_CHANGER: &str = "data_changer.bin";
-pub const NSSA_PROGRAM_FOR_TEST_NOOP: &str = "noop.bin";
-
-const BEDROCK_SERVICE_WITH_OPEN_PORT: &str = "logos-blockchain-node-0";
-const BEDROCK_SERVICE_PORT: u16 = 18080;
-
-static LOGGER: LazyLock<()> = LazyLock::new(env_logger::init);
-
-/// Test context which sets up a sequencer and a wallet for integration tests.
+/// Test context which sets up a sequencer, indexer through ffi and a wallet for integration tests.
 ///
 /// It's memory and logically safe to create multiple instances of this struct in parallel tests,
 /// as each instance uses its own temporary directories for sequencer and wallet data.
 // NOTE: Order of fields is important for proper drop order.
-pub struct TestContext {
+pub struct TestContextFFI {
     sequencer_client: SequencerClient,
     indexer_client: IndexerClient,
     wallet: WalletCore,
     wallet_password: String,
     /// Optional to move out value in Drop.
     sequencer_handle: Option<SequencerHandle>,
-    indexer_handle: IndexerHandle,
     bedrock_compose: DockerCompose,
     _temp_indexer_dir: TempDir,
     _temp_sequencer_dir: TempDir,
     _temp_wallet_dir: TempDir,
 }
 
-impl TestContext {
+#[expect(
+    clippy::multiple_inherent_impl,
+    reason = "It is more natural to have this implementation here"
+)]
+impl TestContextBuilder {
+    pub fn build_ffi(
+        self,
+        runtime: &Arc<tokio::runtime::Runtime>,
+    ) -> Result<(TestContextFFI, IndexerServiceFFI)> {
+        TestContextFFI::new_configured(
+            self.sequencer_partial_config.unwrap_or_default(),
+            &self.initial_data.unwrap_or_else(|| {
+                config::InitialData::with_two_public_and_two_private_initialized_accounts()
+            }),
+            runtime,
+        )
+    }
+}
+
+impl TestContextFFI {
     /// Create new test context.
-    pub async fn new() -> Result<Self> {
-        Self::builder().build().await
+    pub fn new(runtime: &Arc<tokio::runtime::Runtime>) -> Result<(Self, IndexerServiceFFI)> {
+        Self::builder().build_ffi(runtime)
     }
 
     #[must_use]
@@ -62,58 +66,64 @@ impl TestContext {
         TestContextBuilder::new()
     }
 
-    async fn new_configured(
+    fn new_configured(
         sequencer_partial_config: config::SequencerPartialConfig,
-        initial_data: config::InitialData,
-    ) -> Result<Self> {
+        initial_data: &config::InitialData,
+        runtime: &Arc<tokio::runtime::Runtime>,
+    ) -> Result<(Self, IndexerServiceFFI)> {
         // Ensure logger is initialized only once
         *LOGGER;
 
         debug!("Test context setup");
 
-        let (bedrock_compose, bedrock_addr) = setup_bedrock_node().await?;
+        let (bedrock_compose, bedrock_addr) = runtime.block_on(setup_bedrock_node())?;
 
-        let (indexer_handle, temp_indexer_dir) = setup_indexer(bedrock_addr, &initial_data)
-            .await
-            .context("Failed to setup Indexer")?;
+        let (indexer_ffi, temp_indexer_dir) =
+            setup_indexer_ffi(bedrock_addr, initial_data).context("Failed to setup Indexer")?;
 
-        let (sequencer_handle, temp_sequencer_dir) = setup_sequencer(
-            sequencer_partial_config,
-            bedrock_addr,
-            indexer_handle.addr(),
-            &initial_data,
-        )
-        .await
-        .context("Failed to setup Sequencer")?;
+        let (sequencer_handle, temp_sequencer_dir) = runtime
+            .block_on(setup_sequencer(
+                sequencer_partial_config,
+                bedrock_addr,
+                // SAFETY: addr is valid if indexer_ffi is valid.
+                unsafe { indexer_ffi.addr() },
+                initial_data,
+            ))
+            .context("Failed to setup Sequencer")?;
 
-        let (wallet, temp_wallet_dir, wallet_password) =
-            setup_wallet(sequencer_handle.addr(), &initial_data)
-                .await
-                .context("Failed to setup wallet")?;
+        let (wallet, temp_wallet_dir, wallet_password) = runtime
+            .block_on(setup_wallet(sequencer_handle.addr(), initial_data))
+            .context("Failed to setup wallet")?;
 
         let sequencer_url = config::addr_to_url(config::UrlProtocol::Http, sequencer_handle.addr())
             .context("Failed to convert sequencer addr to URL")?;
-        let indexer_url = config::addr_to_url(config::UrlProtocol::Ws, indexer_handle.addr())
-            .context("Failed to convert indexer addr to URL")?;
+        let indexer_url = config::addr_to_url(
+            config::UrlProtocol::Ws,
+            // SAFETY: addr is valid if indexer_ffi is valid.
+            unsafe { indexer_ffi.addr() },
+        )
+        .context("Failed to convert indexer addr to URL")?;
         let sequencer_client = SequencerClientBuilder::default()
             .build(sequencer_url)
             .context("Failed to create sequencer client")?;
-        let indexer_client = IndexerClient::new(&indexer_url)
-            .await
+        let indexer_client = runtime
+            .block_on(IndexerClient::new(&indexer_url))
             .context("Failed to create indexer client")?;
 
-        Ok(Self {
-            sequencer_client,
-            indexer_client,
-            wallet,
-            wallet_password,
-            bedrock_compose,
-            sequencer_handle: Some(sequencer_handle),
-            indexer_handle,
-            _temp_indexer_dir: temp_indexer_dir,
-            _temp_sequencer_dir: temp_sequencer_dir,
-            _temp_wallet_dir: temp_wallet_dir,
-        })
+        Ok((
+            Self {
+                sequencer_client,
+                indexer_client,
+                wallet,
+                wallet_password,
+                bedrock_compose,
+                sequencer_handle: Some(sequencer_handle),
+                _temp_indexer_dir: temp_indexer_dir,
+                _temp_sequencer_dir: temp_sequencer_dir,
+                _temp_wallet_dir: temp_wallet_dir,
+            },
+            indexer_ffi,
+        ))
     }
 
     /// Get reference to the wallet.
@@ -163,13 +173,20 @@ impl TestContext {
             .private_account_ids()
             .collect()
     }
+
+    pub fn get_last_block_sequencer(&self, runtime: &Arc<tokio::runtime::Runtime>) -> Result<u64> {
+        Ok(runtime.block_on(self.sequencer_client.get_last_block_id())?)
+    }
+
+    pub fn get_last_block_indexer(&self, runtime: &Arc<tokio::runtime::Runtime>) -> Result<u64> {
+        Ok(runtime.block_on(self.indexer_client.get_last_finalized_block_id())?)
+    }
 }
 
-impl Drop for TestContext {
+impl Drop for TestContextFFI {
     fn drop(&mut self) {
         let Self {
             sequencer_handle,
-            indexer_handle,
             bedrock_compose,
             _temp_indexer_dir: _,
             _temp_sequencer_dir: _,
@@ -193,10 +210,6 @@ impl Drop for TestContext {
             );
         }
 
-        if !indexer_handle.is_healthy() {
-            error!("Indexer handle has unexpectedly stopped before TestContext drop");
-        }
-
         let container = bedrock_compose
             .service(BEDROCK_SERVICE_WITH_OPEN_PORT)
             .unwrap_or_else(|| {
@@ -217,69 +230,53 @@ impl Drop for TestContext {
     }
 }
 
-/// A test context to be used in normal #[test] tests.
-pub struct BlockingTestContext {
-    ctx: Option<TestContext>,
-    runtime: tokio::runtime::Runtime,
+/// A test context with ffi to be used in normal #[test] tests.
+pub struct BlockingTestContextFFI {
+    ctx: Option<TestContextFFI>,
+    runtime: Arc<tokio::runtime::Runtime>,
+    indexer_ffi: IndexerServiceFFI,
 }
 
-impl BlockingTestContext {
+impl BlockingTestContextFFI {
     pub fn new() -> Result<Self> {
         let runtime = tokio::runtime::Runtime::new().unwrap();
-        let ctx = runtime.block_on(TestContext::new())?;
+        let runtime_wrapped = Arc::new(runtime);
+        let (ctx, indexer_ffi) = TestContextFFI::new(&runtime_wrapped)?;
         Ok(Self {
             ctx: Some(ctx),
-            runtime,
+            runtime: runtime_wrapped,
+            indexer_ffi,
         })
     }
 
-    pub const fn ctx(&self) -> &TestContext {
+    #[must_use]
+    pub const fn ctx(&self) -> &TestContextFFI {
         self.ctx.as_ref().expect("TestContext is set")
     }
-}
 
-pub struct TestContextBuilder {
-    initial_data: Option<config::InitialData>,
-    sequencer_partial_config: Option<config::SequencerPartialConfig>,
-}
-
-impl TestContextBuilder {
-    const fn new() -> Self {
-        Self {
-            initial_data: None,
-            sequencer_partial_config: None,
-        }
+    #[must_use]
+    pub const fn ctx_mut(&mut self) -> &mut TestContextFFI {
+        self.ctx.as_mut().expect("TestContext is set")
     }
 
     #[must_use]
-    pub fn with_initial_data(mut self, initial_data: config::InitialData) -> Self {
-        self.initial_data = Some(initial_data);
-        self
+    pub const fn runtime(&self) -> &Arc<tokio::runtime::Runtime> {
+        &self.runtime
     }
 
     #[must_use]
-    pub const fn with_sequencer_partial_config(
-        mut self,
-        sequencer_partial_config: config::SequencerPartialConfig,
-    ) -> Self {
-        self.sequencer_partial_config = Some(sequencer_partial_config);
-        self
-    }
-
-    pub async fn build(self) -> Result<TestContext> {
-        TestContext::new_configured(
-            self.sequencer_partial_config.unwrap_or_default(),
-            self.initial_data.unwrap_or_else(|| {
-                config::InitialData::with_two_public_and_two_private_initialized_accounts()
-            }),
-        )
-        .await
+    pub fn runtime_clone(&self) -> Arc<tokio::runtime::Runtime> {
+        Arc::<tokio::runtime::Runtime>::clone(&self.runtime)
     }
 }
 
-impl Drop for BlockingTestContext {
+impl Drop for BlockingTestContextFFI {
     fn drop(&mut self) {
-        let Self { ctx, runtime } = self;
+        let Self {
+            ctx,
+            runtime,
+            indexer_ffi,
+        } = self;
 
         // Ensure async cleanup of TestContext by blocking on its drop in the runtime.
         runtime.block_on(async {
@@ -287,45 +284,13 @@ impl Drop for BlockingTestContext {
                 drop(ctx);
             }
         });
-    }
-}
 
-#[must_use]
-pub fn format_public_account_id(account_id: AccountId) -> String {
-    format!("Public/{account_id}")
-}
+        let indexer_handle =
+        // SAFETY: lib function ensures validity of value.
+        unsafe { indexer_ffi.handle() };
 
-#[must_use]
-pub fn format_private_account_id(account_id: AccountId) -> String {
-    format!("Private/{account_id}")
-}
-
-#[expect(
-    clippy::wildcard_enum_match_arm,
-    reason = "We want the code to panic if the transaction type is not PrivacyPreserving"
-)]
-pub async fn fetch_privacy_preserving_tx(
-    seq_client: &SequencerClient,
-    tx_hash: HashType,
-) -> PrivacyPreservingTransaction {
-    let tx = seq_client.get_transaction(tx_hash).await.unwrap().unwrap();
-
-    match tx {
-        NSSATransaction::PrivacyPreserving(privacy_preserving_transaction) => {
-            privacy_preserving_transaction
+        if !indexer_handle.is_healthy() {
+            error!("Indexer handle has unexpectedly stopped before TestContext drop");
         }
-        _ => panic!("Invalid tx type"),
     }
-}
-
-pub async fn verify_commitment_is_in_state(
-    commitment: Commitment,
-    seq_client: &SequencerClient,
-) -> bool {
-    seq_client
-        .get_proof_for_commitment(commitment)
-        .await
-        .ok()
-        .flatten()
-        .is_some()
 }

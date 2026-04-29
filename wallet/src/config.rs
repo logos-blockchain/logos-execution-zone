@@ -123,7 +123,6 @@ impl PersistentStorage {
     }
 }
 
-
 impl From<PublicAccountPrivateInitialData> for InitialAccountData {
     fn from(value: PublicAccountPrivateInitialData) -> Self {
         Self::Public(value)

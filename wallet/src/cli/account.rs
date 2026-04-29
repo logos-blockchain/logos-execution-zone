@@ -82,7 +82,8 @@ pub enum NewSubcommand {
         /// Label to assign to the new account.
         label: Option<String>,
     },
-    /// Single-account convenience: creates a key node and auto-registers one account with a random identifier.
+    /// Single-account convenience: creates a key node and auto-registers one account with a random
+    /// identifier.
     Private {
         #[arg(long)]
         /// Chain index of a parent node.

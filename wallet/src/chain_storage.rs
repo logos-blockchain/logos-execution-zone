@@ -74,7 +74,9 @@ impl WalletChainStore {
                     let chain_index = data.chain_index;
                     for identifier in &data.identifiers {
                         let account_id = nssa::AccountId::from((&npk, *identifier));
-                        private_tree.account_id_map.insert(account_id, chain_index.clone());
+                        private_tree
+                            .account_id_map
+                            .insert(account_id, chain_index.clone());
                     }
                     private_tree.key_map.insert(chain_index, data.data);
                 }
