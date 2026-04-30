@@ -2,8 +2,8 @@ use std::collections::{HashMap, VecDeque};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use nssa_core::{
-    MembershipProof, NullifierPublicKey, NullifierSecretKey, PrivacyPreservingCircuitInput,
-    PrivacyPreservingCircuitOutput, SharedSecretKey,
+    Identifier, MembershipProof, NullifierPublicKey, NullifierSecretKey,
+    PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput, SharedSecretKey,
     account::AccountWithMetadata,
     program::{ChainedCall, InstructionData, ProgramId, ProgramOutput},
 };
@@ -68,7 +68,7 @@ pub fn execute_and_prove(
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: InstructionData,
     visibility_mask: Vec<u8>,
-    private_account_keys: Vec<(NullifierPublicKey, SharedSecretKey)>,
+    private_account_keys: Vec<(NullifierPublicKey, Identifier, SharedSecretKey)>,
     private_account_nsks: Vec<NullifierSecretKey>,
     private_account_membership_proofs: Vec<Option<MembershipProof>>,
     program_with_dependencies: &ProgramWithDependencies,
@@ -214,11 +214,8 @@ mod tests {
             AccountId::new([0; 32]),
         );
 
-        let recipient = AccountWithMetadata::new(
-            Account::default(),
-            false,
-            AccountId::from(&recipient_keys.npk()),
-        );
+        let recipient_account_id = AccountId::from((&recipient_keys.npk(), 0));
+        let recipient = AccountWithMetadata::new(Account::default(), false, recipient_account_id);
 
         let balance_to_move: u128 = 37;
 
@@ -232,7 +229,7 @@ mod tests {
         let expected_recipient_post = Account {
             program_owner: program.id(),
             balance: balance_to_move,
-            nonce: Nonce::private_account_nonce_init(&recipient_keys.npk()),
+            nonce: Nonce::private_account_nonce_init(&recipient_account_id),
             data: Data::default(),
         };
 
@@ -245,7 +242,7 @@ mod tests {
             vec![sender, recipient],
             Program::serialize_instruction(balance_to_move).unwrap(),
             vec![0, 2],
-            vec![(recipient_keys.npk(), shared_secret)],
+            vec![(recipient_keys.npk(), 0, shared_secret)],
             vec![],
             vec![None],
             &Program::authenticated_transfer_program().into(),
@@ -262,7 +259,7 @@ mod tests {
         assert_eq!(output.new_nullifiers.len(), 1);
         assert_eq!(output.ciphertexts.len(), 1);
 
-        let recipient_post = EncryptionScheme::decrypt(
+        let (_identifier, recipient_post) = EncryptionScheme::decrypt(
             &output.ciphertexts[0],
             &shared_secret,
             &output.new_commitments[0],
@@ -287,27 +284,24 @@ mod tests {
                 data: Data::default(),
             },
             true,
-            AccountId::from(&sender_keys.npk()),
+            AccountId::from((&sender_keys.npk(), 0)),
         );
-        let commitment_sender = Commitment::new(&sender_keys.npk(), &sender_pre.account);
+        let sender_account_id = AccountId::from((&sender_keys.npk(), 0));
+        let commitment_sender = Commitment::new(&sender_account_id, &sender_pre.account);
 
-        let recipient = AccountWithMetadata::new(
-            Account::default(),
-            false,
-            AccountId::from(&recipient_keys.npk()),
-        );
+        let recipient_account_id = AccountId::from((&recipient_keys.npk(), 0));
+        let recipient = AccountWithMetadata::new(Account::default(), false, recipient_account_id);
         let balance_to_move: u128 = 37;
 
         let mut commitment_set = CommitmentSet::with_capacity(2);
         commitment_set.extend(std::slice::from_ref(&commitment_sender));
-
         let expected_new_nullifiers = vec![
             (
                 Nullifier::for_account_update(&commitment_sender, &sender_keys.nsk),
                 commitment_set.digest(),
             ),
             (
-                Nullifier::for_account_initialization(&recipient_keys.npk()),
+                Nullifier::for_account_initialization(&recipient_account_id),
                 DUMMY_COMMITMENT_HASH,
             ),
         ];
@@ -323,12 +317,12 @@ mod tests {
         let expected_private_account_2 = Account {
             program_owner: program.id(),
             balance: balance_to_move,
-            nonce: Nonce::private_account_nonce_init(&recipient_keys.npk()),
+            nonce: Nonce::private_account_nonce_init(&recipient_account_id),
             ..Default::default()
         };
         let expected_new_commitments = vec![
-            Commitment::new(&sender_keys.npk(), &expected_private_account_1),
-            Commitment::new(&recipient_keys.npk(), &expected_private_account_2),
+            Commitment::new(&sender_account_id, &expected_private_account_1),
+            Commitment::new(&recipient_account_id, &expected_private_account_2),
         ];
 
         let esk_1 = [3; 32];
@@ -342,8 +336,8 @@ mod tests {
             Program::serialize_instruction(balance_to_move).unwrap(),
             vec![1, 2],
             vec![
-                (sender_keys.npk(), shared_secret_1),
-                (recipient_keys.npk(), shared_secret_2),
+                (sender_keys.npk(), 0, shared_secret_1),
+                (recipient_keys.npk(), 0, shared_secret_2),
             ],
             vec![sender_keys.nsk],
             vec![commitment_set.get_proof_for(&commitment_sender), None],
@@ -358,7 +352,7 @@ mod tests {
         assert_eq!(output.new_nullifiers, expected_new_nullifiers);
         assert_eq!(output.ciphertexts.len(), 2);
 
-        let sender_post = EncryptionScheme::decrypt(
+        let (_identifier, sender_post) = EncryptionScheme::decrypt(
             &output.ciphertexts[0],
             &shared_secret_1,
             &expected_new_commitments[0],
@@ -367,7 +361,7 @@ mod tests {
         .unwrap();
         assert_eq!(sender_post, expected_private_account_1);
 
-        let recipient_post = EncryptionScheme::decrypt(
+        let (_identifier, recipient_post) = EncryptionScheme::decrypt(
             &output.ciphertexts[1],
             &shared_secret_2,
             &expected_new_commitments[1],
@@ -383,7 +377,7 @@ mod tests {
         let pre = AccountWithMetadata::new(
             Account::default(),
             false,
-            AccountId::from(&account_keys.npk()),
+            AccountId::from((&account_keys.npk(), 0)),
         );
 
         let validity_window_chain_caller = Program::validity_window_chain_caller();
@@ -410,7 +404,7 @@ mod tests {
             vec![pre],
             instruction,
             vec![2],
-            vec![(account_keys.npk(), shared_secret)],
+            vec![(account_keys.npk(), 0, shared_secret)],
             vec![],
             vec![None],
             &program_with_deps,
@@ -459,7 +453,7 @@ mod tests {
             vec![pda_pre, sender_pre],
             instruction,
             vec![3, 0],
-            vec![(npk, shared_secret_pda)],
+            vec![(npk, 0, shared_secret_pda)],
             vec![],
             vec![None],
             &program_with_deps,
@@ -505,7 +499,7 @@ mod tests {
             vec![pda_pre, bob_pre],
             instruction,
             vec![3, 0],
-            vec![(npk, shared_secret_pda)],
+            vec![(npk, 0, shared_secret_pda)],
             vec![],
             vec![None],
             &program_with_deps,

@@ -173,11 +173,12 @@ mod tests {
         // /0/0
         key_tree_private.generate_new_node_layered().unwrap();
         // /2
-        let (second_child_id, _) = key_tree_private.generate_new_node_layered().unwrap();
+        let second_chain_index = key_tree_private.generate_new_node_layered().unwrap();
 
         key_tree_private
-            .get_node(second_child_id)
-            .unwrap()
+            .key_map
+            .get(&second_chain_index)
+            .expect("Node was just inserted")
             .value
             .0
             .clone()

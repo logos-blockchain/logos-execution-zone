@@ -110,6 +110,7 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
                     .iter()
                     .map(|init_comm_data| {
                         let npk = &init_comm_data.npk;
+                        let account_id = nssa::AccountId::from((npk, 0));
 
                         let mut acc = init_comm_data.account.clone();
 
@@ -117,8 +118,8 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
                             nssa::program::Program::authenticated_transfer_program().id();
 
                         (
-                            nssa_core::Commitment::new(npk, &acc),
-                            nssa_core::Nullifier::for_account_initialization(npk),
+                            nssa_core::Commitment::new(&account_id, &acc),
+                            nssa_core::Nullifier::for_account_initialization(&account_id),
                         )
                     })
                     .collect()
@@ -1107,10 +1108,14 @@ mod tests {
         let epk = EphemeralPublicKey::from_scalar(esk);
 
         let (output, proof) = execute_and_prove(
-            vec![AccountWithMetadata::new(Account::default(), true, &npk)],
+            vec![AccountWithMetadata::new(
+                Account::default(),
+                true,
+                (&npk, 0),
+            )],
             Program::serialize_instruction(0_u128).unwrap(),
             vec![1],
-            vec![(npk, shared_secret)],
+            vec![(npk, 0, shared_secret)],
             vec![nsk],
             vec![None],
             &Program::authenticated_transfer_program().into(),

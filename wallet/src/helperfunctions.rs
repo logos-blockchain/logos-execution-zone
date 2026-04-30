@@ -165,17 +165,16 @@ pub fn produce_data_for_storage(
         }
     }
 
-    for (account_id, key) in &user_data.private_key_tree.account_id_map {
-        if let Some(data) = user_data.private_key_tree.key_map.get(key) {
-            vec_for_storage.push(
-                PersistentAccountDataPrivate {
-                    account_id: *account_id,
-                    chain_index: key.clone(),
-                    data: data.clone(),
-                }
-                .into(),
-            );
-        }
+    for (chain_index, node) in &user_data.private_key_tree.key_map {
+        let identifiers = node.value.1.iter().map(|(id, _)| *id).collect();
+        vec_for_storage.push(
+            PersistentAccountDataPrivate {
+                identifiers,
+                chain_index: chain_index.clone(),
+                data: node.clone(),
+            }
+            .into(),
+        );
     }
 
     for (account_id, key) in &user_data.default_pub_account_signing_keys {
@@ -188,15 +187,17 @@ pub fn produce_data_for_storage(
         );
     }
 
-    for (account_id, (key_chain, account)) in &user_data.default_user_private_accounts {
-        vec_for_storage.push(
-            InitialAccountData::Private(Box::new(PrivateAccountPrivateInitialData {
-                account_id: *account_id,
-                account: account.clone(),
-                key_chain: key_chain.clone(),
-            }))
-            .into(),
-        );
+    for entry in user_data.default_user_private_accounts.values() {
+        for (identifier, account) in &entry.accounts {
+            vec_for_storage.push(
+                InitialAccountData::Private(Box::new(PrivateAccountPrivateInitialData {
+                    account: account.clone(),
+                    key_chain: entry.key_chain.clone(),
+                    identifier: *identifier,
+                }))
+                .into(),
+            );
+        }
     }
 
     PersistentStorage {

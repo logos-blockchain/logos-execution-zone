@@ -127,6 +127,24 @@ typedef struct FfiBytes32 {
 } FfiBytes32;
 
 /**
+ * Public keys for a private account (safe to expose).
+ */
+typedef struct FfiPrivateAccountKeys {
+  /**
+   * Nullifier public key (32 bytes).
+   */
+  struct FfiBytes32 nullifier_public_key;
+  /**
+   * viewing public key (compressed secp256k1 point).
+   */
+  const uint8_t *viewing_public_key;
+  /**
+   * Length of viewing public key (typically 33 bytes).
+   */
+  uintptr_t viewing_public_key_len;
+} FfiPrivateAccountKeys;
+
+/**
  * Single entry in the account list.
  */
 typedef struct FfiAccountListEntry {
@@ -190,24 +208,6 @@ typedef struct FfiPublicAccountKey {
 } FfiPublicAccountKey;
 
 /**
- * Public keys for a private account (safe to expose).
- */
-typedef struct FfiPrivateAccountKeys {
-  /**
-   * Nullifier public key (32 bytes).
-   */
-  struct FfiBytes32 nullifier_public_key;
-  /**
-   * viewing public key (compressed secp256k1 point).
-   */
-  const uint8_t *viewing_public_key;
-  /**
-   * Length of viewing public key (typically 33 bytes).
-   */
-  uintptr_t viewing_public_key_len;
-} FfiPrivateAccountKeys;
-
-/**
  * Result of a transfer operation.
  */
 typedef struct FfiTransferResult {
@@ -243,10 +243,18 @@ enum WalletFfiError wallet_ffi_create_account_public(struct WalletHandle *handle
                                                      struct FfiBytes32 *out_account_id);
 
 /**
- * Create a new private account.
+ * Create a new private account, storing a default account entry in local storage.
  *
- * Private accounts use privacy-preserving transactions with nullifiers
- * and commitments.
+ * This is the private-account equivalent of `wallet_ffi_create_account_public`.
+ * It generates a key node, assigns a random identifier, and inserts a default
+ * account record so the account can immediately be used with
+ * `wallet_ffi_register_private_account`.
+ *
+ * The identifier is chosen at random and is not encoded in the mnemonic seed.
+ * Once the account is initialized, the identifier is embedded in the encrypted
+ * transaction payload and can be recovered by running `sync-private` from the
+ * same mnemonic. An account that was created locally but has never been initialized
+ * cannot be recovered from the seed alone.
  *
  * # Parameters
  * - `handle`: Valid wallet handle
@@ -262,6 +270,31 @@ enum WalletFfiError wallet_ffi_create_account_public(struct WalletHandle *handle
  */
 enum WalletFfiError wallet_ffi_create_account_private(struct WalletHandle *handle,
                                                       struct FfiBytes32 *out_account_id);
+
+/**
+ * Create a new private key node.
+ *
+ * Returns the nullifier public key (npk) and viewing public key (vpk) to share with
+ * senders. Account IDs are discovered later via sync when senders initialize accounts
+ * under this key.
+ *
+ * # Parameters
+ * - `handle`: Valid wallet handle
+ * - `out_keys`: Output pointer for the key data (npk + vpk)
+ *
+ * # Returns
+ * - `Success` on successful creation
+ * - Error code on failure
+ *
+ * # Memory
+ * The keys structure must be freed with `wallet_ffi_free_private_account_keys()`.
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+ * - `out_keys` must be a valid pointer to a `FfiPrivateAccountKeys` struct
+ */
+enum WalletFfiError wallet_ffi_create_private_accounts_key(struct WalletHandle *handle,
+                                                           struct FfiPrivateAccountKeys *out_keys);
 
 /**
  * List all accounts in the wallet.
@@ -685,6 +718,7 @@ enum WalletFfiError wallet_ffi_transfer_public(struct WalletHandle *handle,
  * - `handle`: Valid wallet handle
  * - `from`: Source account ID (must be owned by this wallet)
  * - `to_keys`: Destination account keys
+ * - `to_identifier`: Identifier for the recipient's private account
  * - `amount`: Amount to transfer as little-endian [u8; 16]
  * - `out_result`: Output pointer for transfer result
  *
@@ -707,6 +741,7 @@ enum WalletFfiError wallet_ffi_transfer_public(struct WalletHandle *handle,
 enum WalletFfiError wallet_ffi_transfer_shielded(struct WalletHandle *handle,
                                                  const struct FfiBytes32 *from,
                                                  const struct FfiPrivateAccountKeys *to_keys,
+                                                 const struct FfiU128 *to_identifier,
                                                  const uint8_t (*amount)[16],
                                                  struct FfiTransferResult *out_result);
 
@@ -753,6 +788,7 @@ enum WalletFfiError wallet_ffi_transfer_deshielded(struct WalletHandle *handle,
  * - `handle`: Valid wallet handle
  * - `from`: Source account ID (must be owned by this wallet)
  * - `to_keys`: Destination account keys
+ * - `to_identifier`: Identifier for the recipient's private account
  * - `amount`: Amount to transfer as little-endian [u8; 16]
  * - `out_result`: Output pointer for transfer result
  *
@@ -775,6 +811,7 @@ enum WalletFfiError wallet_ffi_transfer_deshielded(struct WalletHandle *handle,
 enum WalletFfiError wallet_ffi_transfer_private(struct WalletHandle *handle,
                                                 const struct FfiBytes32 *from,
                                                 const struct FfiPrivateAccountKeys *to_keys,
+                                                const struct FfiU128 *to_identifier,
                                                 const uint8_t (*amount)[16],
                                                 struct FfiTransferResult *out_result);
 

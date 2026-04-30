@@ -2,6 +2,8 @@ use std::collections::BTreeMap;
 
 use anyhow::Result;
 use k256::AffinePoint;
+use nssa::{Account, AccountId};
+use nssa_core::Identifier;
 use serde::{Deserialize, Serialize};
 
 use crate::key_management::{
@@ -14,12 +16,17 @@ use crate::key_management::{
 pub type PublicKey = AffinePoint;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct UserPrivateAccountData {
+    pub key_chain: KeyChain,
+    pub accounts: Vec<(Identifier, Account)>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NSSAUserData {
     /// Default public accounts.
     pub default_pub_account_signing_keys: BTreeMap<nssa::AccountId, nssa::PrivateKey>,
     /// Default private accounts.
-    pub default_user_private_accounts:
-        BTreeMap<nssa::AccountId, (KeyChain, nssa_core::account::Account)>,
+    pub default_user_private_accounts: BTreeMap<AccountId, UserPrivateAccountData>,
     /// Tree of public keys.
     pub public_key_tree: KeyTreePublic,
     /// Tree of private keys.
@@ -54,13 +61,16 @@ impl NSSAUserData {
     }
 
     fn valid_private_key_transaction_pairing_check(
-        accounts_keys_map: &BTreeMap<nssa::AccountId, (KeyChain, nssa_core::account::Account)>,
+        accounts_keys_map: &BTreeMap<AccountId, UserPrivateAccountData>,
     ) -> bool {
         let mut check_res = true;
-        for (account_id, (key, _)) in accounts_keys_map {
-            let expected_account_id = nssa::AccountId::from(&key.nullifier_public_key);
-            if expected_account_id != *account_id {
-                println!("{expected_account_id}, {account_id}");
+        for (account_id, entry) in accounts_keys_map {
+            let any_match = entry.accounts.iter().any(|(identifier, _)| {
+                nssa::AccountId::from((&entry.key_chain.nullifier_public_key, *identifier))
+                    == *account_id
+            });
+            if !any_match {
+                println!("No matching entry found for account_id {account_id}");
                 check_res = false;
             }
         }
@@ -69,10 +79,7 @@ impl NSSAUserData {
 
     pub fn new_with_accounts(
         default_accounts_keys: BTreeMap<nssa::AccountId, nssa::PrivateKey>,
-        default_accounts_key_chains: BTreeMap<
-            nssa::AccountId,
-            (KeyChain, nssa_core::account::Account),
-        >,
+        default_accounts_key_chains: BTreeMap<AccountId, UserPrivateAccountData>,
         public_key_tree: KeyTreePublic,
         private_key_tree: KeyTreePrivate,
     ) -> Result<Self> {
@@ -108,11 +115,11 @@ impl NSSAUserData {
         match parent_cci {
             Some(parent_cci) => self
                 .public_key_tree
-                .generate_new_node(&parent_cci)
+                .generate_new_public_node(&parent_cci)
                 .expect("Parent must be present in a tree"),
             None => self
                 .public_key_tree
-                .generate_new_node_layered()
+                .generate_new_public_node_layered()
                 .expect("Search for new node slot failed"),
         }
     }
@@ -128,50 +135,61 @@ impl NSSAUserData {
             .or_else(|| self.public_key_tree.get_node(account_id).map(Into::into))
     }
 
-    /// Generated new private key for privacy preserving transactions.
-    ///
-    /// Returns the `account_id` of new account.
-    pub fn generate_new_privacy_preserving_transaction_key_chain(
-        &mut self,
-        parent_cci: Option<ChainIndex>,
-    ) -> (nssa::AccountId, ChainIndex) {
+    /// Creates a new receiving key node and returns its `ChainIndex`.
+    pub fn create_private_accounts_key(&mut self, parent_cci: Option<ChainIndex>) -> ChainIndex {
         match parent_cci {
             Some(parent_cci) => self
                 .private_key_tree
-                .generate_new_node(&parent_cci)
+                .create_private_accounts_key_node(&parent_cci)
                 .expect("Parent must be present in a tree"),
             None => self
                 .private_key_tree
-                .generate_new_node_layered()
+                .create_private_accounts_key_node_layered()
                 .expect("Search for new node slot failed"),
         }
     }
 
-    /// Returns the signing key for public transaction signatures.
+    /// Registers an additional identifier on an existing private key node, deriving and recording
+    /// the corresponding `AccountId`. Returns `None` if the node does not exist or the identifier
+    /// is already registered.
+    pub fn register_identifier_on_private_key_chain(
+        &mut self,
+        cci: &ChainIndex,
+        identifier: Identifier,
+    ) -> Option<nssa::AccountId> {
+        self.private_key_tree
+            .register_identifier_on_node(cci, identifier)
+    }
+
+    /// Returns the key chain and account data for the given private account ID.
     #[must_use]
     pub fn get_private_account(
         &self,
         account_id: nssa::AccountId,
-    ) -> Option<&(KeyChain, nssa_core::account::Account)> {
-        self.default_user_private_accounts
-            .get(&account_id)
-            .or_else(|| self.private_key_tree.get_node(account_id).map(Into::into))
-    }
-
-    /// Returns the signing key for public transaction signatures.
-    pub fn get_private_account_mut(
-        &mut self,
-        account_id: &nssa::AccountId,
-    ) -> Option<&mut (KeyChain, nssa_core::account::Account)> {
-        // First seek in defaults
-        if let Some(key) = self.default_user_private_accounts.get_mut(account_id) {
-            Some(key)
-        // Then seek in tree
-        } else {
-            self.private_key_tree
-                .get_node_mut(*account_id)
-                .map(Into::into)
+    ) -> Option<(KeyChain, nssa_core::account::Account, Identifier)> {
+        // Check default accounts
+        if let Some(entry) = self.default_user_private_accounts.get(&account_id) {
+            for (identifier, account) in &entry.accounts {
+                let expected_id =
+                    nssa::AccountId::from((&entry.key_chain.nullifier_public_key, *identifier));
+                if expected_id == account_id {
+                    return Some((entry.key_chain.clone(), account.clone(), *identifier));
+                }
+            }
+            return None;
         }
+        // Check tree
+        if let Some(node) = self.private_key_tree.get_node(account_id) {
+            let key_chain = &node.value.0;
+            for (identifier, account) in &node.value.1 {
+                let expected_id =
+                    nssa::AccountId::from((&key_chain.nullifier_public_key, *identifier));
+                if expected_id == account_id {
+                    return Some((key_chain.clone(), account.clone(), *identifier));
+                }
+            }
+        }
+        None
     }
 
     pub fn account_ids(&self) -> impl Iterator<Item = nssa::AccountId> {
@@ -249,16 +267,15 @@ mod tests {
     fn new_account() {
         let mut user_data = NSSAUserData::default();
 
-        let (account_id_private, _) = user_data
-            .generate_new_privacy_preserving_transaction_key_chain(Some(ChainIndex::root()));
+        let chain_index = user_data.create_private_accounts_key(Some(ChainIndex::root()));
 
-        let is_key_chain_generated = user_data.get_private_account(account_id_private).is_some();
-
+        let is_key_chain_generated = user_data
+            .private_key_tree
+            .key_map
+            .contains_key(&chain_index);
         assert!(is_key_chain_generated);
 
-        let account_id_private_str = account_id_private.to_string();
-        println!("{account_id_private_str:#?}");
-        let key_chain = &user_data.get_private_account(account_id_private).unwrap().0;
+        let key_chain = &user_data.private_key_tree.key_map[&chain_index].value.0;
         println!("{key_chain:#?}");
     }
 }
