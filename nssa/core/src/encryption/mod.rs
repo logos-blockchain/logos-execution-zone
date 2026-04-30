@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "host")]
 pub use shared_key_derivation::{EphemeralPublicKey, EphemeralSecretKey, ViewingPublicKey};
 
-use crate::{Commitment, account::Account};
+use crate::{Commitment, Identifier, account::Account};
 #[cfg(feature = "host")]
 pub mod shared_key_derivation;
 
@@ -40,11 +40,14 @@ impl EncryptionScheme {
     #[must_use]
     pub fn encrypt(
         account: &Account,
+        identifier: Identifier,
         shared_secret: &SharedSecretKey,
         commitment: &Commitment,
         output_index: u32,
     ) -> Ciphertext {
-        let mut buffer = account.to_bytes();
+        // Plaintext: identifier (16 bytes, little-endian) || account bytes
+        let mut buffer = identifier.to_le_bytes().to_vec();
+        buffer.extend_from_slice(&account.to_bytes());
         Self::symmetric_transform(&mut buffer, shared_secret, commitment, output_index);
         Ciphertext(buffer)
     }
@@ -86,12 +89,17 @@ impl EncryptionScheme {
         shared_secret: &SharedSecretKey,
         commitment: &Commitment,
         output_index: u32,
-    ) -> Option<Account> {
+    ) -> Option<(Identifier, Account)> {
         use std::io::Cursor;
         let mut buffer = ciphertext.0.clone();
         Self::symmetric_transform(&mut buffer, shared_secret, commitment, output_index);
 
-        let mut cursor = Cursor::new(buffer.as_slice());
+        if buffer.len() < 16 {
+            return None;
+        }
+        let identifier = Identifier::from_le_bytes(buffer[..16].try_into().unwrap());
+
+        let mut cursor = Cursor::new(&buffer[16..]);
         Account::from_cursor(&mut cursor)
             .inspect_err(|err| {
                 println!(
@@ -104,5 +112,6 @@ impl EncryptionScheme {
                 );
             })
             .ok()
+            .map(|account| (identifier, account))
     }
 }
