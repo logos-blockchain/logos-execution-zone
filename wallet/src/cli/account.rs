@@ -28,19 +28,12 @@ pub enum AccountSubcommand {
         #[arg(short, long)]
         keys: bool,
         /// Valid 32 byte base58 string with privacy prefix.
-        #[arg(short, long, conflicts_with = "account_label", required_unless_present_any = ["account_label", "pin"])]
+        #[arg(short, long, conflicts_with = "account_label", required_unless_present_any = ["account_label", "key_path"])]
         account_id: Option<String>,
         /// Account label (alternative to --account-id).
         #[arg(long, conflicts_with = "account_id")]
         account_label: Option<String>,
-        #[arg(
-            long,
-            conflicts_with = "account_id",
-            conflicts_with = "account_label",
-            requires = "key_path"
-        )]
-        pin: Option<String>,
-        #[arg(long)]
+        #[arg(long, conflicts_with = "account_id", conflicts_with = "account_label")]
         key_path: Option<String>,
     },
     /// Produce new public or private account.
@@ -195,7 +188,6 @@ impl WalletSubcommand for AccountSubcommand {
                 keys,
                 account_id,
                 account_label,
-                pin,
                 key_path,
             } => {
                 let resolved = resolve_id_or_label(
@@ -203,8 +195,7 @@ impl WalletSubcommand for AccountSubcommand {
                     account_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
-                    &pin,
-                    &key_path,
+                    key_path.as_deref(),
                 )?;
                 let (account_id_str, addr_kind) = parse_addr_with_privacy_prefix(&resolved)?;
 
@@ -418,8 +409,7 @@ impl WalletSubcommand for AccountSubcommand {
                     account_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
-                    &None,
-                    &None,
+                    None,
                 )?;
                 let (account_id_str, _) = parse_addr_with_privacy_prefix(&resolved)?;
 

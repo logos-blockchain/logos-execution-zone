@@ -8,6 +8,7 @@ use futures::TryFutureExt as _;
 use nssa::{ProgramDeploymentTransaction, program::Program};
 use sequencer_service_rpc::RpcClient as _;
 
+pub use crate::helperfunctions::read_pin;
 use crate::{
     WalletCore,
     cli::{

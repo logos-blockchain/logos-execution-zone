@@ -5,6 +5,7 @@ use nssa::{
     program::Program,
     public_transaction::{Message, WitnessSet},
 };
+use pyo3::exceptions::PyRuntimeError;
 use sequencer_service_rpc::RpcClient as _;
 
 use super::NativeTokenTransfer;
@@ -16,8 +17,8 @@ impl NativeTokenTransfer<'_> {
         from: AccountId,
         to: AccountId,
         balance_to_move: u128,
-        pin: &Option<String>,
-        key_path: &Option<String>,
+        from_key_path: Option<&str>,
+        to_key_path: Option<&str>,
     ) -> Result<HashType, ExecutionFailureKind> {
         let balance = self
             .0
@@ -32,46 +33,38 @@ impl NativeTokenTransfer<'_> {
         let account_ids = vec![from, to];
         let program_id = Program::authenticated_transfer_program().id();
 
-        // Fetch nonces for both accounts unconditionally
-        let mut nonces = self
+        let nonces = self
             .0
-            .get_accounts_nonces(vec![from])
+            .get_accounts_nonces(account_ids.clone())
             .await
             .map_err(ExecutionFailureKind::SequencerError)?;
-        let to_signing_key = self.0.storage.user_data.get_pub_account_signing_key(to);
-        if let Some(_to_signing_key) = to_signing_key {
-            let to_nonces = self
-                .0
-                .get_accounts_nonces(vec![to])
-                .await
-                .map_err(ExecutionFailureKind::SequencerError)?;
-            nonces.extend(to_nonces);
+
+        let message = Message::try_new(program_id, account_ids, nonces, balance_to_move)
+            .map_err(ExecutionFailureKind::TransactionBuildError)?;
+
+        let witness_set = if let Some(from_key_path) = from_key_path {
+            let pin = crate::helperfunctions::read_pin().map_err(|e| {
+                ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(
+                    e.to_string(),
+                ))
+            })?;
+            let msg_hash = message.hash_message();
+            let (from_sig, from_pk) =
+                KeycardWallet::sign_message_for_path_with_connect(&pin, from_key_path, &msg_hash)?;
+            if let Some(to_key_path) = to_key_path {
+                let (to_sig, to_pk) = KeycardWallet::sign_message_for_path_with_connect(
+                    &pin,
+                    to_key_path,
+                    &msg_hash,
+                )?;
+                WitnessSet::from_list(&[from_sig, to_sig], &[from_pk, to_pk])
+            } else {
+                WitnessSet::from_list(&[from_sig], &[from_pk])
+            }
         } else {
-            println!(
-                "Receiver's account ({to}) private key not found in wallet. Proceeding with only sender's key."
-            );
-        }
-
-        let message = Message::try_new(program_id, account_ids, nonces, balance_to_move).unwrap();
-
-        let witness_set = pin.as_ref().map_or_else(|| {
-                 let sign_ids = self.0.filter_owned_accounts(&[from, to]);
-                 WalletCore::sign_public_message(self.0, &message, &sign_ids)
-                     .expect("`WalletCore::sign_public_message() failed to produce a signature for a NativeTokenTransfer.")
-             }, |pin| {
-                 let key_path = key_path.as_ref().expect("`NativeTokenTransfer::send_public_transfer() expected a String for `key_path`.");
-                 let pub_key = KeycardWallet::get_public_key_for_path_with_connect(
-                     pin,
-                     key_path,
-                 );
-                 let signature = KeycardWallet::sign_message_for_path_with_connect(
-                     pin,
-                     key_path,
-                     &message.hash_message(),
-                 )
-                 .expect("`NativeTokenTransfer::send_public_transfer() failed to produce a Signature for the given `pin` and `key_path`.");
-                 WitnessSet::from_list(&[signature], &[pub_key])
-             });
+            let sign_ids = self.0.filter_owned_accounts(&[from, to]);
+            WalletCore::sign_public_message(self.0, &message, &sign_ids)?
+        };
 
         let tx = PublicTransaction::new(message, witness_set);
 
@@ -85,8 +78,7 @@ impl NativeTokenTransfer<'_> {
     pub async fn register_account(
         &self,
         from: AccountId,
-        pin: &Option<String>,      // Used by Keycard.
-        key_path: &Option<String>, // Used by Keycard.
+        key_path: Option<&str>,
     ) -> Result<HashType, ExecutionFailureKind> {
         let nonces = self
             .0
@@ -98,9 +90,21 @@ impl NativeTokenTransfer<'_> {
         let account_ids = vec![from];
         let program_id = Program::authenticated_transfer_program().id();
         let message = Message::try_new(program_id, account_ids, nonces, instruction)
-            .expect("Expect a valid Message");
+            .map_err(ExecutionFailureKind::TransactionBuildError)?;
 
-        let witness_set = if pin.is_none() {
+        let witness_set = if let Some(key_path) = key_path {
+            let pin = crate::helperfunctions::read_pin().map_err(|e| {
+                ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(
+                    e.to_string(),
+                ))
+            })?;
+            let (signature, pub_key) = KeycardWallet::sign_message_for_path_with_connect(
+                &pin,
+                key_path,
+                &message.hash_message(),
+            )?;
+            WitnessSet::from_list(&[signature], &[pub_key])
+        } else {
             let signing_key = self.0.storage.user_data.get_pub_account_signing_key(from);
 
             let Some(signing_key) = signing_key else {
@@ -108,19 +112,6 @@ impl NativeTokenTransfer<'_> {
             };
 
             WitnessSet::for_message(&message, &[signing_key])
-        } else {
-            let pub_key = KeycardWallet::get_public_key_for_path_with_connect(
-                pin.as_ref().expect("`wallet::program_facades::native_token_transfer::public::register_account`: invalid data received for pin for public key"),
-                key_path.as_ref().expect("`wallet::program_facades::native_token_transfer::public::register_account`: invalid data received for key_path for public_key"),
-            );
-
-            let signature = KeycardWallet::sign_message_for_path_with_connect(
-                pin.as_ref().as_ref().expect("`wallet::program_facades::native_token_transfer::public::register_account`: invalid data received for pin for signature"),
-                key_path.as_ref().expect("`wallet::program_facades::native_token_transfer::public::register_account`: invalid data received for key_path for public_key"),
-                &message.hash_message(),
-            )
-            .expect("Expect a valid Signature.");
-            WitnessSet::from_list(&[signature], &[pub_key])
         };
 
         let tx = PublicTransaction::new(message, witness_set);

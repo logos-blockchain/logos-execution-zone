@@ -51,6 +51,20 @@ impl From<Account> for HumanReadableAccount {
     }
 }
 
+/// Read the Keycard PIN without echoing it.
+///
+/// Checks `KEYCARD_PIN` first so non-interactive callers (CI, scripts) can
+/// supply it via the environment. Falls back to a TTY prompt via `rpassword`
+/// so the value never appears in argv, shell history, or `ps` output.
+pub fn read_pin() -> Result<zeroize::Zeroizing<String>> {
+    if let Ok(pin) = std::env::var("KEYCARD_PIN") {
+        return Ok(zeroize::Zeroizing::new(pin));
+    }
+    rpassword::prompt_password("Keycard PIN: ")
+        .map(zeroize::Zeroizing::new)
+        .map_err(Into::into)
+}
+
 /// Resolve an account id-or-label pair to a `Privacy/id` string.
 ///
 /// Exactly one of `id` or `label` must be `Some`. If `id` is provided it is
@@ -61,16 +75,16 @@ pub fn resolve_id_or_label(
     label: Option<String>,
     labels: &HashMap<String, Label>,
     user_data: &NSSAUserData,
-    pin: &Option<String>,
-    key_path: &Option<String>,
+    key_path: Option<&str>,
 ) -> Result<String> {
-    match (id, label, pin) {
+    match (id, label, key_path) {
         (Some(id), None, None) => Ok(id),
         (None, Some(label), None) => resolve_account_label(&label, labels, user_data),
-        (None, None, Some(pin)) => Ok(KeycardWallet::get_account_id_for_path_with_connect(
-            pin,
-            key_path.as_ref().expect("Expect a key path String."),
-        )),
+        (None, None, Some(key_path)) => {
+            let pin = read_pin()?;
+            KeycardWallet::get_account_id_for_path_with_connect(&pin, key_path)
+                .map_err(anyhow::Error::from)
+        }
         _ => anyhow::bail!("provide exactly one of account id, account label or keycard path"),
     }
 }

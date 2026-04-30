@@ -24,7 +24,6 @@ async fn successful_transfer_to_existing_account() -> Result<()> {
         to_npk: None,
         to_vpk: None,
         amount: 100,
-        pin: None,
         from_key_path: None,
         to_key_path: None,
     });
@@ -85,7 +84,6 @@ pub async fn successful_transfer_to_new_account() -> Result<()> {
         to_npk: None,
         to_vpk: None,
         amount: 100,
-        pin: None,
         from_key_path: None,
         to_key_path: None,
     });
@@ -126,7 +124,6 @@ async fn failed_transfer_with_insufficient_balance() -> Result<()> {
         to_npk: None,
         to_vpk: None,
         amount: 1_000_000,
-        pin: None,
         from_key_path: None,
         to_key_path: None,
     });
@@ -169,7 +166,6 @@ async fn two_consecutive_successful_transfers() -> Result<()> {
         to_npk: None,
         to_vpk: None,
         amount: 100,
-        pin: None,
         from_key_path: None,
         to_key_path: None,
     });
@@ -206,7 +202,6 @@ async fn two_consecutive_successful_transfers() -> Result<()> {
         to_npk: None,
         to_vpk: None,
         amount: 100,
-        pin: None,
         from_key_path: None,
         to_key_path: None,
     });
@@ -253,7 +248,6 @@ async fn initialize_public_account() -> Result<()> {
     let command = Command::AuthTransfer(AuthTransferSubcommand::Init {
         account_id: Some(format_public_account_id(account_id)),
         account_label: None,
-        pin: None,
         key_path: None,
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
@@ -296,7 +290,6 @@ async fn successful_transfer_using_from_label() -> Result<()> {
         to_npk: None,
         to_vpk: None,
         amount: 100,
-        pin: None,
         from_key_path: None,
         to_key_path: None,
     });
@@ -346,7 +339,6 @@ async fn successful_transfer_using_to_label() -> Result<()> {
         to_npk: None,
         to_vpk: None,
         amount: 100,
-        pin: None,
         from_key_path: None,
         to_key_path: None,
     });

@@ -135,7 +135,6 @@ async fn create_and_transfer_public_token() -> Result<()> {
         to_npk: None,
         to_vpk: None,
         amount: transfer_amount,
-        pin: None,
         from_key_path: None,
     };
 
@@ -182,7 +181,6 @@ async fn create_and_transfer_public_token() -> Result<()> {
         holder: Some(format_public_account_id(recipient_account_id)),
         holder_label: None,
         amount: burn_amount,
-        holder_pin: None,
         holder_key_path: None,
     };
 
@@ -377,7 +375,6 @@ async fn create_and_transfer_token_with_private_supply() -> Result<()> {
         to_npk: None,
         to_vpk: None,
         amount: transfer_amount,
-        pin: None,
         from_key_path: None,
     };
 
@@ -406,7 +403,6 @@ async fn create_and_transfer_token_with_private_supply() -> Result<()> {
         holder: Some(format_private_account_id(recipient_account_id)),
         holder_label: None,
         amount: burn_amount,
-        holder_pin: None,
         holder_key_path: None,
     };
 
@@ -765,7 +761,6 @@ async fn create_token_with_private_definition_and_supply() -> Result<()> {
         to_npk: None,
         to_vpk: None,
         amount: transfer_amount,
-        pin: None,
         from_key_path: None,
     };
 
@@ -898,7 +893,6 @@ async fn shielded_token_transfer() -> Result<()> {
         to_npk: None,
         to_vpk: None,
         amount: transfer_amount,
-        pin: None,
         from_key_path: None,
     };
 
@@ -1026,7 +1020,6 @@ async fn deshielded_token_transfer() -> Result<()> {
         to_npk: None,
         to_vpk: None,
         amount: transfer_amount,
-        pin: None,
         from_key_path: None,
     };
 
@@ -1366,7 +1359,6 @@ async fn transfer_token_using_from_label() -> Result<()> {
         to_npk: None,
         to_vpk: None,
         amount: transfer_amount,
-        pin: None,
         from_key_path: None,
     };
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
