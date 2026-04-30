@@ -29,6 +29,9 @@ pub const DB_NSSA_STATE_KEY: &str = "nssa_state";
 /// Name of state column family.
 pub const CF_NSSA_STATE_NAME: &str = "cf_nssa_state";
 
+/// Name of the rejected-transaction column family.
+pub const CF_REJECTED_TX_NAME: &str = "cf_rejected_tx";
+
 pub struct RocksDBIO {
     pub db: DBWithThreadMode<MultiThreaded>,
 }
@@ -51,6 +54,7 @@ impl RocksDBIO {
         let cfb = ColumnFamilyDescriptor::new(CF_BLOCK_NAME, cf_opts.clone());
         let cfmeta = ColumnFamilyDescriptor::new(CF_META_NAME, cf_opts.clone());
         let cfstate = ColumnFamilyDescriptor::new(CF_NSSA_STATE_NAME, cf_opts.clone());
+        let cfrejected = ColumnFamilyDescriptor::new(CF_REJECTED_TX_NAME, cf_opts.clone());
 
         let mut db_opts = Options::default();
         db_opts.create_missing_column_families(true);
@@ -58,7 +62,7 @@ impl RocksDBIO {
         let db = DBWithThreadMode::<MultiThreaded>::open_cf_descriptors(
             &db_opts,
             path,
-            vec![cfb, cfmeta, cfstate],
+            vec![cfb, cfmeta, cfstate, cfrejected],
         )
         .map_err(|err| DbError::RocksDbError {
             error: err,
@@ -117,6 +121,50 @@ impl RocksDBIO {
         self.db
             .cf_handle(CF_NSSA_STATE_NAME)
             .expect("State should exist")
+    }
+
+    pub fn rejected_tx_column(&self) -> Arc<BoundColumnFamily<'_>> {
+        self.db
+            .cf_handle(CF_REJECTED_TX_NAME)
+            .expect("Rejected TX column should exist")
+    }
+
+    pub fn put_rejected_tx(
+        &self,
+        hash: common::HashType,
+        record: &common::receipt::RejectedTxRecord,
+    ) -> crate::DbResult<()> {
+        let cf = self.rejected_tx_column();
+        let value = borsh::to_vec(record).map_err(|err| {
+            crate::error::DbError::borsh_cast_message(
+                err,
+                Some("Failed to serialize RejectedTxRecord".to_owned()),
+            )
+        })?;
+        self.db
+            .put_cf(&cf, hash.as_ref(), value)
+            .map_err(|err| crate::error::DbError::rocksdb_cast_message(err, None))
+    }
+
+    pub fn get_rejected_tx(
+        &self,
+        hash: common::HashType,
+    ) -> crate::DbResult<Option<common::receipt::RejectedTxRecord>> {
+        let cf = self.rejected_tx_column();
+        let bytes = self
+            .db
+            .get_cf(&cf, hash.as_ref())
+            .map_err(|err| crate::error::DbError::rocksdb_cast_message(err, None))?;
+        bytes
+            .map(|b| {
+                borsh::from_slice::<common::receipt::RejectedTxRecord>(&b).map_err(|err| {
+                    crate::error::DbError::borsh_cast_message(
+                        err,
+                        Some("Failed to deserialize RejectedTxRecord".to_owned()),
+                    )
+                })
+            })
+            .transpose()
     }
 
     // Meta

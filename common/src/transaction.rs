@@ -1,4 +1,5 @@
 use borsh::{BorshDeserialize, BorshSerialize};
+use jsonrpsee::types::{ErrorCode, ErrorObjectOwned};
 use log::warn;
 use nssa::{AccountId, V03State, ValidatedStateDiff};
 use nssa_core::{BlockId, Timestamp};
@@ -154,6 +155,12 @@ pub enum TransactionMalformationError {
     TransactionTooLarge { size: usize, max: usize },
 }
 
+impl From<TransactionMalformationError> for ErrorObjectOwned {
+    fn from(err: TransactionMalformationError) -> Self {
+        ErrorObjectOwned::owned(ErrorCode::InvalidParams.code(), err.to_string(), None::<()>)
+    }
+}
+
 /// Returns the canonical Clock Program invocation transaction for the given block timestamp.
 /// Every valid block must end with exactly one occurrence of this transaction.
 #[must_use]
@@ -169,4 +176,33 @@ pub fn clock_invocation(timestamp: clock_core::Instruction) -> nssa::PublicTrans
         message,
         nssa::public_transaction::WitnessSet::from_raw_parts(vec![]),
     )
+}
+
+#[cfg(test)]
+mod malformation_error_tests {
+    use jsonrpsee::types::ErrorCode;
+
+    use super::*;
+
+    #[test]
+    fn from_too_large_produces_invalid_params_code() {
+        let err = TransactionMalformationError::TransactionTooLarge { size: 100, max: 50 };
+        let rpc_err: jsonrpsee::types::ErrorObjectOwned = err.into();
+        assert_eq!(rpc_err.code(), ErrorCode::InvalidParams.code());
+        assert!(rpc_err.message().contains("exceeds maximum"));
+    }
+
+    #[test]
+    fn from_failed_decode_produces_invalid_params_code() {
+        let err = TransactionMalformationError::FailedToDecode { tx: crate::HashType([0; 32]) };
+        let rpc_err: jsonrpsee::types::ErrorObjectOwned = err.into();
+        assert_eq!(rpc_err.code(), ErrorCode::InvalidParams.code());
+    }
+
+    #[test]
+    fn from_invalid_signature_produces_invalid_params_code() {
+        let err = TransactionMalformationError::InvalidSignature;
+        let rpc_err: jsonrpsee::types::ErrorObjectOwned = err.into();
+        assert_eq!(rpc_err.code(), ErrorCode::InvalidParams.code());
+    }
 }

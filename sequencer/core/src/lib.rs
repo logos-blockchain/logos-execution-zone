@@ -251,6 +251,14 @@ impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerCore<BC, I
                     error!(
                         "Transaction with hash {tx_hash} failed execution check with error: {err:#?}, skipping it",
                     );
+                    if let Err(store_err) = self.store.store_rejected_tx(
+                        tx_hash,
+                        err.to_string(),
+                        new_block_height,
+                        new_block_timestamp,
+                    ) {
+                        error!("Failed to persist rejection record for {tx_hash}: {store_err:#}");
+                    }
                     continue;
                 }
             };
