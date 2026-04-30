@@ -169,7 +169,6 @@ pub fn sequencer_config(
     partial: SequencerPartialConfig,
     home: PathBuf,
     bedrock_addr: SocketAddr,
-    indexer_addr: SocketAddr,
     initial_data: &InitialData,
 ) -> Result<SequencerConfig> {
     let SequencerPartialConfig {
@@ -197,8 +196,6 @@ pub fn sequencer_config(
                 .context("Failed to convert bedrock addr to URL")?,
             auth: None,
         },
-        indexer_rpc_url: addr_to_url(UrlProtocol::Ws, indexer_addr)
-            .context("Failed to convert indexer addr to URL")?,
     })
 }
 

@@ -287,6 +287,22 @@ impl RocksDBIO {
         Ok(())
     }
 
+    /// Mark every pending block with `block_id <= last_finalized` as finalized.
+    /// Idempotent — already-finalized blocks are skipped.
+    pub fn clean_pending_blocks_up_to(&self, last_finalized: u64) -> DbResult<()> {
+        let pending_ids: Vec<u64> = self
+            .get_all_blocks()
+            .filter_map(Result::ok)
+            .filter(|b| matches!(b.bedrock_status, BedrockStatus::Pending))
+            .map(|b| b.header.block_id)
+            .filter(|id| *id <= last_finalized)
+            .collect();
+        for id in pending_ids {
+            self.mark_block_as_finalized(id)?;
+        }
+        Ok(())
+    }
+
     pub fn mark_block_as_finalized(&self, block_id: u64) -> DbResult<()> {
         let mut block = self.get_block(block_id)?.ok_or_else(|| {
             DbError::db_interaction_error(format!("Block with id {block_id} not found"))

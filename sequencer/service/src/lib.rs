@@ -5,8 +5,6 @@ use bytesize::ByteSize;
 use common::transaction::NSSATransaction;
 use futures::never::Never;
 use jsonrpsee::server::ServerHandle;
-#[cfg(not(feature = "standalone"))]
-use log::warn;
 use log::{error, info};
 use mempool::MemPoolHandle;
 #[cfg(not(feature = "standalone"))]
@@ -29,7 +27,6 @@ pub struct SequencerHandle {
     /// Option because of `Drop` which forbids to simply move out of `self` in `stopped()`.
     server_handle: Option<ServerHandle>,
     main_loop_handle: JoinHandle<Result<Never>>,
-    listen_for_bedrock_blocks_loop_handle: JoinHandle<Result<Never>>,
 }
 
 impl SequencerHandle {
@@ -37,13 +34,11 @@ impl SequencerHandle {
         addr: SocketAddr,
         server_handle: ServerHandle,
         main_loop_handle: JoinHandle<Result<Never>>,
-        listen_for_bedrock_blocks_loop_handle: JoinHandle<Result<Never>>,
     ) -> Self {
         Self {
             addr,
             server_handle: Some(server_handle),
             main_loop_handle,
-            listen_for_bedrock_blocks_loop_handle,
         }
     }
 
@@ -57,7 +52,6 @@ impl SequencerHandle {
             addr: _,
             server_handle,
             main_loop_handle,
-            listen_for_bedrock_blocks_loop_handle,
         } = &mut self;
 
         let server_handle = server_handle.take().expect("Server handle is set");
@@ -70,11 +64,6 @@ impl SequencerHandle {
                 res
                    .context("Main loop task panicked")?
                    .context("Main loop exited unexpectedly")
-            }
-            res = listen_for_bedrock_blocks_loop_handle => {
-                res
-                   .context("Listen for bedrock blocks loop task panicked")?
-                   .context("Listen for bedrock blocks loop exited unexpectedly")
             }
         }
     }
@@ -89,12 +78,10 @@ impl SequencerHandle {
             addr: _,
             server_handle,
             main_loop_handle,
-            listen_for_bedrock_blocks_loop_handle,
         } = self;
 
         let stopped = server_handle.as_ref().is_none_or(ServerHandle::is_stopped)
-            || main_loop_handle.is_finished()
-            || listen_for_bedrock_blocks_loop_handle.is_finished();
+            || main_loop_handle.is_finished();
         !stopped
     }
 
@@ -110,11 +97,9 @@ impl Drop for SequencerHandle {
             addr: _,
             server_handle,
             main_loop_handle,
-            listen_for_bedrock_blocks_loop_handle,
         } = self;
 
         main_loop_handle.abort();
-        listen_for_bedrock_blocks_loop_handle.abort();
 
         let Some(handle) = server_handle else {
             return;
@@ -146,18 +131,9 @@ pub async fn run(config: SequencerConfig, port: u16) -> Result<SequencerHandle> 
     info!("RPC server started");
 
     info!("Starting main sequencer loop");
-    let main_loop_handle = tokio::spawn(main_loop(Arc::clone(&seq_core_wrapped), block_timeout));
+    let main_loop_handle = tokio::spawn(main_loop(seq_core_wrapped, block_timeout));
 
-    info!("Starting bedrock block listening loop");
-    let listen_for_bedrock_blocks_loop_handle =
-        tokio::spawn(listen_for_bedrock_blocks_loop(seq_core_wrapped));
-
-    Ok(SequencerHandle::new(
-        addr,
-        server_handle,
-        main_loop_handle,
-        listen_for_bedrock_blocks_loop_handle,
-    ))
+    Ok(SequencerHandle::new(addr, server_handle, main_loop_handle))
 }
 
 async fn run_server(
@@ -205,46 +181,4 @@ async fn main_loop(seq_core: Arc<Mutex<SequencerCore>>, block_timeout: Duration)
 
         info!("Waiting for new transactions");
     }
-}
-
-#[cfg(not(feature = "standalone"))]
-async fn listen_for_bedrock_blocks_loop(seq_core: Arc<Mutex<SequencerCore>>) -> Result<Never> {
-    use indexer_service_rpc::RpcClient as _;
-
-    let indexer_client = seq_core.lock().await.indexer_client();
-
-    let retry_delay = Duration::from_secs(5);
-
-    loop {
-        // TODO: Subscribe from the first pending block ID?
-        let mut subscription = indexer_client
-            .subscribe_to_finalized_blocks()
-            .await
-            .context("Failed to subscribe to finalized blocks")?;
-
-        while let Some(block_id) = subscription.next().await {
-            let block_id = block_id.context("Failed to get next block from subscription")?;
-
-            info!("Received new L2 block with ID {block_id}");
-
-            seq_core
-                .lock()
-                .await
-                .clean_finalized_blocks_from_db(block_id)
-                .with_context(|| {
-                    format!("Failed to clean finalized blocks from DB for block ID {block_id}")
-                })?;
-        }
-
-        warn!(
-            "Block subscription closed unexpectedly, reason: {:?}, retrying after {retry_delay:?}",
-            subscription.close_reason()
-        );
-        tokio::time::sleep(retry_delay).await;
-    }
-}
-
-#[cfg(feature = "standalone")]
-async fn listen_for_bedrock_blocks_loop(_seq_core: Arc<Mutex<SequencerCore>>) -> Result<Never> {
-    std::future::pending::<Result<Never>>().await
 }

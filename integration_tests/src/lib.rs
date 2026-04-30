@@ -77,14 +77,10 @@ impl TestContext {
             .await
             .context("Failed to setup Indexer")?;
 
-        let (sequencer_handle, temp_sequencer_dir) = setup_sequencer(
-            sequencer_partial_config,
-            bedrock_addr,
-            indexer_handle.addr(),
-            &initial_data,
-        )
-        .await
-        .context("Failed to setup Sequencer")?;
+        let (sequencer_handle, temp_sequencer_dir) =
+            setup_sequencer(sequencer_partial_config, bedrock_addr, &initial_data)
+                .await
+                .context("Failed to setup Sequencer")?;
 
         let (wallet, temp_wallet_dir, wallet_password) =
             setup_wallet(sequencer_handle.addr(), &initial_data)

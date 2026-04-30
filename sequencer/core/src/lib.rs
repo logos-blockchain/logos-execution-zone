@@ -21,31 +21,29 @@ use testnet_initial_state::initial_state;
 use crate::{
     block_publisher::{BlockPublisherTrait, ZoneSdkPublisher},
     block_store::SequencerStore,
-    indexer_client::{IndexerClient, IndexerClientTrait},
 };
 
 pub mod block_publisher;
 pub mod block_store;
 pub mod config;
+// Kept as a thin client lib for callers that want to query the indexer
+// directly (e.g. integration tests). The sequencer no longer depends on the
+// indexer at runtime — finalization comes from zone-sdk events.
 pub mod indexer_client;
 
 #[cfg(feature = "mock")]
 pub mod mock;
 
-pub struct SequencerCore<
-    BP: BlockPublisherTrait = ZoneSdkPublisher,
-    IC: IndexerClientTrait = IndexerClient,
-> {
+pub struct SequencerCore<BP: BlockPublisherTrait = ZoneSdkPublisher> {
     state: nssa::V03State,
     store: SequencerStore,
     mempool: MemPool<NSSATransaction>,
     sequencer_config: SequencerConfig,
     chain_height: u64,
     block_publisher: BP,
-    indexer_client: IC,
 }
 
-impl<BP: BlockPublisherTrait, IC: IndexerClientTrait> SequencerCore<BP, IC> {
+impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     /// Starts the sequencer using the provided configuration.
     /// If an existing database is found, the sequencer state is loaded from it and
     /// assumed to represent the correct latest state consistent with Bedrock-finalized data.
@@ -68,10 +66,6 @@ impl<BP: BlockPublisherTrait, IC: IndexerClientTrait> SequencerCore<BP, IC> {
         let bedrock_signing_key =
             load_or_create_signing_key(&config.home.join("bedrock_signing_key"))
                 .expect("Failed to load or create bedrock signing key");
-
-        let indexer_client = IC::new(&config.indexer_rpc_url)
-            .await
-            .expect("Failed to create Indexer Client");
 
         // TODO: Remove msg_id from BlockMeta — it is no longer needed now that
         // zone-sdk manages L1 settlement state via its own checkpoint.
@@ -109,12 +103,20 @@ impl<BP: BlockPublisherTrait, IC: IndexerClientTrait> SequencerCore<BP, IC> {
             }
         });
 
+        let dbio_for_finalized = store.dbio();
+        let on_finalized_block: block_publisher::FinalizedBlockSink = Box::new(move |block_id| {
+            if let Err(err) = dbio_for_finalized.clean_pending_blocks_up_to(block_id) {
+                error!("Failed to mark pending blocks finalized up to {block_id}: {err:#}");
+            }
+        });
+
         let block_publisher = BP::new(
             &config.bedrock_config,
             bedrock_signing_key,
             config.retry_pending_blocks_timeout,
             initial_checkpoint,
             on_checkpoint,
+            on_finalized_block,
         )
         .await
         .expect("Failed to initialize Block Publisher");
@@ -192,7 +194,6 @@ impl<BP: BlockPublisherTrait, IC: IndexerClientTrait> SequencerCore<BP, IC> {
             chain_height: latest_block_meta.id,
             sequencer_config: config,
             block_publisher,
-            indexer_client,
         };
 
         (sequencer_core, mempool_handle)
@@ -341,22 +342,19 @@ impl<BP: BlockPublisherTrait, IC: IndexerClientTrait> SequencerCore<BP, IC> {
         &self.sequencer_config
     }
 
-    /// Deletes finalized blocks from the sequencer's pending block list.
-    /// This method must be called when new blocks are finalized on Bedrock.
-    /// All pending blocks with an ID less than or equal to `last_finalized_block_id`
-    /// are removed from the database.
-    pub fn clean_finalized_blocks_from_db(&mut self, last_finalized_block_id: u64) -> Result<()> {
-        self.get_pending_blocks()?
-            .iter()
-            .map(|block| block.header.block_id)
-            .min()
-            .map_or(Ok(()), |first_pending_block_id| {
-                info!("Clearing pending blocks up to id: {last_finalized_block_id}");
-                // TODO: Delete blocks instead of marking them as finalized.
-                // Current approach is used because we still have `GetBlockDataRequest`.
-                (first_pending_block_id..=last_finalized_block_id)
-                    .try_for_each(|id| self.store.mark_block_as_finalized(id))
-            })
+    /// Marks all pending blocks with `block_id <= last_finalized_block_id` as
+    /// finalized. Idempotent. Production callers don't invoke this directly —
+    /// it's wired up in `start_from_config` to the publisher's
+    /// `on_finalized_block` sink, which fires on `Event::TxsFinalized` /
+    /// `Event::FinalizedInscriptions`. Kept on the type for tests.
+    // TODO: Delete blocks instead of marking them as finalized. Current
+    // approach is used because we still have `GetBlockDataRequest`.
+    pub fn clean_finalized_blocks_from_db(&self, last_finalized_block_id: u64) -> Result<()> {
+        info!("Clearing pending blocks up to id: {last_finalized_block_id}");
+        self.store
+            .dbio()
+            .clean_pending_blocks_up_to(last_finalized_block_id)?;
+        Ok(())
     }
 
     /// Returns the list of stored pending blocks.
@@ -372,10 +370,6 @@ impl<BP: BlockPublisherTrait, IC: IndexerClientTrait> SequencerCore<BP, IC> {
 
     pub fn block_publisher(&self) -> BP {
         self.block_publisher.clone()
-    }
-
-    pub fn indexer_client(&self) -> IC {
-        self.indexer_client.clone()
     }
 
     fn next_block_id(&self) -> u64 {
@@ -446,7 +440,6 @@ mod tests {
                 auth: None,
             },
             retry_pending_blocks_timeout: Duration::from_mins(4),
-            indexer_rpc_url: "ws://localhost:8779".parse().unwrap(),
             initial_public_accounts: None,
             initial_private_accounts: None,
         }

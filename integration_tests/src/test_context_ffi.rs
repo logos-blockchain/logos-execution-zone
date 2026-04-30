@@ -85,8 +85,6 @@ impl TestContextFFI {
             .block_on(setup_sequencer(
                 sequencer_partial_config,
                 bedrock_addr,
-                // SAFETY: addr is valid if indexer_ffi is valid.
-                unsafe { indexer_ffi.addr() },
                 initial_data,
             ))
             .context("Failed to setup Sequencer")?;
