@@ -8402,7 +8402,6 @@ dependencies = [
  "common",
  "env_logger",
  "futures",
- "indexer_service_rpc",
  "jsonrpsee",
  "log",
  "mempool",
