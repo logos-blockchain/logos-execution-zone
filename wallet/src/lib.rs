@@ -390,7 +390,7 @@ impl WalletCore {
         let (output, proof) = nssa::privacy_preserving_transaction::circuit::execute_and_prove(
             pre_states,
             instruction_data,
-            acc_manager.accounts(),
+            acc_manager.account_identities(),
             &program.to_owned(),
         )
         .unwrap();

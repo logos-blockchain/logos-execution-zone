@@ -1075,7 +1075,7 @@ mod tests {
             program::Program,
         };
         use nssa_core::{
-            PrivacyPreservingCircuitInputAccount, SharedSecretKey,
+            InputAccountIdentity, SharedSecretKey,
             account::AccountWithMetadata,
             encryption::{EphemeralPublicKey, EphemeralSecretKey, ViewingPublicKey},
         };
@@ -1110,7 +1110,7 @@ mod tests {
             vec![AccountWithMetadata::new(Account::default(), true, &npk)],
             Program::serialize_instruction(0_u128).unwrap(),
             vec![
-                PrivacyPreservingCircuitInputAccount::PrivateAuthorizedInit {
+                InputAccountIdentity::PrivateAuthorizedInit {
                     ssk: shared_secret,
                     nsk,
                 },

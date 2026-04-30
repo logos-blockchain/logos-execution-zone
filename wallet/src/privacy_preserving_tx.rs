@@ -2,7 +2,7 @@ use anyhow::Result;
 use key_protocol::key_management::ephemeral_key_holder::EphemeralKeyHolder;
 use nssa::{AccountId, PrivateKey};
 use nssa_core::{
-    MembershipProof, NullifierPublicKey, NullifierSecretKey, PrivacyPreservingCircuitInputAccount,
+    MembershipProof, NullifierPublicKey, NullifierSecretKey, InputAccountIdentity,
     SharedSecretKey,
     account::{AccountWithMetadata, Nonce},
     encryption::{EphemeralPublicKey, ViewingPublicKey},
@@ -144,26 +144,26 @@ impl AccountManager {
     /// exactly the fields the circuit's code path for that account needs, with the ephemeral
     /// keys (`ssk`) drawn from the cached values that `private_account_keys` and the message
     /// construction also use, so all three views agree on the same ephemeral key.
-    pub fn accounts(&self) -> Vec<PrivacyPreservingCircuitInputAccount> {
+    pub fn account_identities(&self) -> Vec<InputAccountIdentity> {
         self.states
             .iter()
             .map(|state| match state {
-                State::Public { .. } => PrivacyPreservingCircuitInputAccount::Public,
+                State::Public { .. } => InputAccountIdentity::Public,
                 State::Private(pre) => match (pre.nsk, pre.proof.clone()) {
                     (Some(nsk), Some(membership_proof)) => {
-                        PrivacyPreservingCircuitInputAccount::PrivateAuthorizedUpdate {
+                        InputAccountIdentity::PrivateAuthorizedUpdate {
                             ssk: pre.ssk,
                             nsk,
                             membership_proof,
                         }
                     }
                     (Some(nsk), None) => {
-                        PrivacyPreservingCircuitInputAccount::PrivateAuthorizedInit {
+                        InputAccountIdentity::PrivateAuthorizedInit {
                             ssk: pre.ssk,
                             nsk,
                         }
                     }
-                    (None, _) => PrivacyPreservingCircuitInputAccount::PrivateUnauthorized {
+                    (None, _) => InputAccountIdentity::PrivateUnauthorized {
                         npk: pre.npk,
                         ssk: pre.ssk,
                     },

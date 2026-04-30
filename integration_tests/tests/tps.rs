@@ -27,7 +27,7 @@ use nssa::{
     public_transaction as putx,
 };
 use nssa_core::{
-    MembershipProof, NullifierPublicKey, PrivacyPreservingCircuitInputAccount,
+    MembershipProof, NullifierPublicKey, InputAccountIdentity,
     account::{AccountWithMetadata, Nonce, data::Data},
     encryption::ViewingPublicKey,
 };
@@ -249,12 +249,12 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
         vec![sender_pre, recipient_pre],
         Program::serialize_instruction(balance_to_move).unwrap(),
         vec![
-            PrivacyPreservingCircuitInputAccount::PrivateAuthorizedUpdate {
+            InputAccountIdentity::PrivateAuthorizedUpdate {
                 ssk: sender_ss,
                 nsk: sender_nsk,
                 membership_proof: proof,
             },
-            PrivacyPreservingCircuitInputAccount::PrivateUnauthorized {
+            InputAccountIdentity::PrivateUnauthorized {
                 npk: recipient_npk,
                 ssk: recipient_ss,
             },

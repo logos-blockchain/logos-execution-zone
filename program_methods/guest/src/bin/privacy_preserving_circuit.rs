@@ -6,7 +6,7 @@ use std::{
 use nssa_core::{
     Commitment, CommitmentSetDigest, DUMMY_COMMITMENT_HASH, EncryptionScheme, MembershipProof,
     Nullifier, NullifierPublicKey, NullifierSecretKey, PrivacyPreservingCircuitInput,
-    PrivacyPreservingCircuitInputAccount, PrivacyPreservingCircuitOutput, SharedSecretKey,
+    InputAccountIdentity, PrivacyPreservingCircuitOutput, SharedSecretKey,
     account::{Account, AccountId, AccountWithMetadata, Nonce},
     compute_digest_for_path,
     program::{
@@ -23,16 +23,16 @@ struct ExecutionState {
     post_states: HashMap<AccountId, Account>,
     block_validity_window: BlockValidityWindow,
     timestamp_validity_window: TimestampValidityWindow,
-    /// Positions (in `pre_states`) of mask-3 accounts whose supplied npk has been bound to
-    /// their `AccountId` via a proven `AccountId::for_private_pda(program_id, seed, npk)`
+    /// Positions (in `pre_states`) of private-PDA accounts whose supplied npk has been bound
+    /// to their `AccountId` via a proven `AccountId::for_private_pda(program_id, seed, npk)`
     /// check.
     /// Two proof paths populate this set: a `Claim::Pda(seed)` in a program's `post_state` on
     /// that `pre_state`, or a caller's `ChainedCall.pda_seeds` entry matching that `pre_state`
     /// under the private derivation. Binding is an idempotent property, not an event: the same
     /// position can legitimately be bound through both paths in the same tx (e.g. a program
     /// claims a private PDA and then delegates it to a callee), and the set uses `contains`,
-    /// not `assert!(insert)`. After the main loop, every mask-3 position must appear in this
-    /// set; otherwise the npk is unbound and the circuit rejects.
+    /// not `assert!(insert)`. After the main loop, every private-PDA position must appear in
+    /// this set; otherwise the npk is unbound and the circuit rejects.
     private_pda_bound_positions: HashSet<usize>,
     /// Across the whole transaction, each `(program_id, seed)` pair may resolve to at most one
     /// `AccountId`. A seed under a program can derive a family of accounts, one public PDA and
@@ -43,9 +43,9 @@ struct ExecutionState {
     /// `AccountId` entry or as an equality check against the existing one, making the rule: one
     /// `(program, seed)` → one account per tx.
     pda_family_binding: HashMap<(ProgramId, PdaSeed), AccountId>,
-    /// Map from a private-PDA `pre_state`'s position in `accounts` to the npk that variant
-    /// supplies for that position. Populated once in `derive_from_outputs` by walking
-    /// `accounts` and consulting `npk_if_private_pda`. Used later by the claim and
+    /// Map from a private-PDA `pre_state`'s position in `account_identities` to the npk that
+    /// variant supplies for that position. Populated once in `derive_from_outputs` by walking
+    /// `account_identities` and consulting `npk_if_private_pda`. Used later by the claim and
     /// caller-seeds authorization paths to verify
     /// `AccountId::for_private_pda(program_id, seed, npk) == pre_state.account_id`.
     private_pda_npk_by_position: HashMap<usize, NullifierPublicKey>,
@@ -54,16 +54,17 @@ struct ExecutionState {
 impl ExecutionState {
     /// Validate program outputs and derive the overall execution state.
     pub fn derive_from_outputs(
-        accounts: &[PrivacyPreservingCircuitInputAccount],
+        account_identities: &[InputAccountIdentity],
         program_id: ProgramId,
         program_outputs: Vec<ProgramOutput>,
     ) -> Self {
-        // Build position → npk map for private-PDA pre_states, indexed by position in `accounts`.
-        // The `accounts` vec is documented as 1:1 with the program's pre_state order, so position
-        // here matches `pre_state_position` used downstream in `validate_and_sync_states`.
+        // Build position → npk map for private-PDA pre_states, indexed by position in
+        // `account_identities`. The vec is documented as 1:1 with the program's pre_state order,
+        // so position here matches `pre_state_position` used downstream in
+        // `validate_and_sync_states`.
         let mut private_pda_npk_by_position: HashMap<usize, NullifierPublicKey> = HashMap::new();
-        for (pos, account) in accounts.iter().enumerate() {
-            if let Some(npk) = account.npk_if_private_pda() {
+        for (pos, account_identity) in account_identities.iter().enumerate() {
+            if let Some(npk) = account_identity.npk_if_private_pda() {
                 private_pda_npk_by_position.insert(pos, npk);
             }
         }
@@ -181,7 +182,7 @@ impl ExecutionState {
             }
 
             execution_state.validate_and_sync_states(
-                accounts,
+                account_identities,
                 chained_call.program_id,
                 caller_program_id,
                 &chained_call.pda_seeds,
@@ -202,8 +203,8 @@ impl ExecutionState {
         // a `Claim::Pda(seed)` in some program's post_state or via a caller's `pda_seeds`
         // matching the private derivation. An unbound private-PDA pre_state has no
         // cryptographic link between the supplied npk and the account_id, and must be rejected.
-        for (pos, account) in accounts.iter().enumerate() {
-            if account.is_private_pda() {
+        for (pos, account_identity) in account_identities.iter().enumerate() {
+            if account_identity.is_private_pda() {
                 assert!(
                     execution_state.private_pda_bound_positions.contains(&pos),
                     "private PDA pre_state at position {pos} has no proven (seed, npk) binding via Claim::Pda or caller pda_seeds"
@@ -238,7 +239,7 @@ impl ExecutionState {
     /// Validate program pre and post states and populate the execution state.
     fn validate_and_sync_states(
         &mut self,
-        accounts: &[PrivacyPreservingCircuitInputAccount],
+        account_identities: &[InputAccountIdentity],
         program_id: ProgramId,
         caller_program_id: Option<ProgramId>,
         caller_pda_seeds: &[PdaSeed],
@@ -316,8 +317,8 @@ impl ExecutionState {
                     .position(|acc| acc.account_id == pre_account_id)
                     .expect("Pre state must exist at this point");
 
-                let account = &accounts[pre_state_position];
-                if account.is_public() {
+                let account_identity = &account_identities[pre_state_position];
+                if account_identity.is_public() {
                     match claim {
                         Claim::Authorized => {
                             // Note: no need to check authorized pdas because we have already
@@ -341,7 +342,7 @@ impl ExecutionState {
                             );
                         }
                     }
-                } else if account.is_private_pda() {
+                } else if account_identity.is_private_pda() {
                     match claim {
                         Claim::Authorized => {
                             assert!(
@@ -371,7 +372,7 @@ impl ExecutionState {
                         }
                     }
                 } else {
-                    // Standalone private accounts (mask 1/2): don't enforce the claim semantics.
+                    // Standalone private accounts: don't enforce the claim semantics.
                     // Unauthorized private claiming is intentionally allowed since operating
                     // these accounts requires the npk/nsk keypair anyway.
                 }
@@ -475,7 +476,7 @@ fn resolve_authorization_and_record_bindings(
 
 fn compute_circuit_output(
     execution_state: ExecutionState,
-    accounts: &[PrivacyPreservingCircuitInputAccount],
+    account_identities: &[InputAccountIdentity],
 ) -> PrivacyPreservingCircuitOutput {
     let mut output = PrivacyPreservingCircuitOutput {
         public_pre_states: Vec::new(),
@@ -488,16 +489,22 @@ fn compute_circuit_output(
     };
 
     let states_iter = execution_state.into_states_iter();
-    assert_eq!(accounts.len(), states_iter.len(), "Invalid accounts length");
+    assert_eq!(
+        account_identities.len(),
+        states_iter.len(),
+        "Invalid account_identities length"
+    );
 
     let mut output_index = 0;
-    for (account, (pre_state, post_state)) in accounts.iter().zip(states_iter) {
-        match account {
-            PrivacyPreservingCircuitInputAccount::Public => {
+    for (account_identity, (pre_state, post_state)) in
+        account_identities.iter().zip(states_iter)
+    {
+        match account_identity {
+            InputAccountIdentity::Public => {
                 output.public_pre_states.push(pre_state);
                 output.public_post_states.push(post_state);
             }
-            PrivacyPreservingCircuitInputAccount::PrivateAuthorizedInit { ssk, nsk } => {
+            InputAccountIdentity::PrivateAuthorizedInit { ssk, nsk } => {
                 let npk = NullifierPublicKey::from(nsk);
 
                 assert_eq!(
@@ -531,7 +538,7 @@ fn compute_circuit_output(
                     new_nonce,
                 );
             }
-            PrivacyPreservingCircuitInputAccount::PrivateAuthorizedUpdate {
+            InputAccountIdentity::PrivateAuthorizedUpdate {
                 ssk,
                 nsk,
                 membership_proof,
@@ -566,7 +573,7 @@ fn compute_circuit_output(
                     new_nonce,
                 );
             }
-            PrivacyPreservingCircuitInputAccount::PrivateUnauthorized { npk, ssk } => {
+            InputAccountIdentity::PrivateUnauthorized { npk, ssk } => {
                 assert_eq!(
                     AccountId::from(npk),
                     pre_state.account_id,
@@ -598,7 +605,7 @@ fn compute_circuit_output(
                     new_nonce,
                 );
             }
-            PrivacyPreservingCircuitInputAccount::PrivatePdaInit { npk, ssk } => {
+            InputAccountIdentity::PrivatePdaInit { npk, ssk } => {
                 // The npk-to-account_id binding is established upstream in
                 // `validate_and_sync_states` via `Claim::Pda(seed)` or a caller `pda_seeds`
                 // match. Here we only enforce the init pre-conditions.
@@ -628,7 +635,7 @@ fn compute_circuit_output(
                     new_nonce,
                 );
             }
-            PrivacyPreservingCircuitInputAccount::PrivatePdaUpdate {
+            InputAccountIdentity::PrivatePdaUpdate {
                 ssk,
                 nsk,
                 membership_proof,
@@ -712,14 +719,14 @@ fn compute_update_nullifier_and_set_digest(
 fn main() {
     let PrivacyPreservingCircuitInput {
         program_outputs,
-        accounts,
+        account_identities,
         program_id,
     } = env::read();
 
     let execution_state =
-        ExecutionState::derive_from_outputs(&accounts, program_id, program_outputs);
+        ExecutionState::derive_from_outputs(&account_identities, program_id, program_outputs);
 
-    let output = compute_circuit_output(execution_state, &accounts);
+    let output = compute_circuit_output(execution_state, &account_identities);
 
     env::commit(&output);
 }

@@ -16,7 +16,7 @@ pub struct PrivacyPreservingCircuitInput {
     /// Length must equal the number of `pre_states` derived from `program_outputs`.
     /// The guest's `private_pda_npk_by_position` and `private_pda_bound_positions`
     /// rely on this position alignment.
-    pub accounts: Vec<PrivacyPreservingCircuitInputAccount>,
+    pub account_identities: Vec<InputAccountIdentity>,
     /// Program ID.
     pub program_id: ProgramId,
 }
@@ -24,38 +24,39 @@ pub struct PrivacyPreservingCircuitInput {
 /// Per-account input to the privacy-preserving circuit. Each variant carries exactly the fields
 /// the guest needs for that account's code path.
 #[derive(Serialize, Deserialize, Clone)]
-pub enum PrivacyPreservingCircuitInputAccount {
+pub enum InputAccountIdentity {
     /// Public account. The guest reads pre/post state from `program_outputs` and emits no
     /// commitment, ciphertext, or nullifier.
     Public,
-    /// Init of an authorized standalone private account (mask 1, no membership proof). The
-    /// `pre_state` must be `Account::default()`. `npk` is derived from `nsk` and matched
-    /// against `pre_state.account_id` via `AccountId::from(npk)`.
+    /// Init of an authorized standalone private account: no membership proof. The `pre_state`
+    /// must be `Account::default()`. `npk` is derived from `nsk` and matched against
+    /// `pre_state.account_id` via `AccountId::from(npk)`.
     PrivateAuthorizedInit {
         ssk: SharedSecretKey,
         nsk: NullifierSecretKey,
     },
-    /// Update of an authorized standalone private account (mask 1, with membership proof).
+    /// Update of an authorized standalone private account: existing on-chain commitment, with
+    /// membership proof.
     PrivateAuthorizedUpdate {
         ssk: SharedSecretKey,
         nsk: NullifierSecretKey,
         membership_proof: MembershipProof,
     },
-    /// Unauthorized init of a standalone private account (mask 2). Used for recipients who
-    /// don't yet exist on chain. No `nsk`, no membership proof.
+    /// Init of a standalone private account the caller does not own (e.g. a recipient who
+    /// doesn't yet exist on chain). No `nsk`, no membership proof.
     PrivateUnauthorized {
         npk: NullifierPublicKey,
         ssk: SharedSecretKey,
     },
-    /// Init of a private PDA (mask 3, unauthorized). The npk-to-account_id binding is proven
-    /// upstream via `Claim::Pda(seed)` or a caller's `pda_seeds` match.
+    /// Init of a private PDA, unauthorized. The npk-to-account_id binding is proven upstream
+    /// via `Claim::Pda(seed)` or a caller's `pda_seeds` match.
     PrivatePdaInit {
         npk: NullifierPublicKey,
         ssk: SharedSecretKey,
     },
-    /// Update of an existing private PDA (mask 3, authorized, with membership proof). `npk` is
-    /// derived from `nsk`. Authorization is established upstream by a caller `pda_seeds` match
-    /// or a previously-seen authorization in a chained call.
+    /// Update of an existing private PDA, authorized, with membership proof. `npk` is derived
+    /// from `nsk`. Authorization is established upstream by a caller `pda_seeds` match or a
+    /// previously-seen authorization in a chained call.
     PrivatePdaUpdate {
         ssk: SharedSecretKey,
         nsk: NullifierSecretKey,
@@ -63,7 +64,7 @@ pub enum PrivacyPreservingCircuitInputAccount {
     },
 }
 
-impl PrivacyPreservingCircuitInputAccount {
+impl InputAccountIdentity {
     #[must_use]
     pub const fn is_public(&self) -> bool {
         matches!(self, Self::Public)
