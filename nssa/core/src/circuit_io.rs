@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Commitment, CommitmentSetDigest, MembershipProof, Nullifier, NullifierPublicKey,
+    Commitment, CommitmentSetDigest, Identifier, MembershipProof, Nullifier, NullifierPublicKey,
     NullifierSecretKey, SharedSecretKey,
     account::{Account, AccountWithMetadata},
     encryption::Ciphertext,
@@ -19,8 +19,8 @@ pub struct PrivacyPreservingCircuitInput {
     /// - `2` - private account without authentication
     /// - `3` - private PDA account
     pub visibility_mask: Vec<u8>,
-    /// Public keys of private accounts.
-    pub private_account_keys: Vec<(NullifierPublicKey, SharedSecretKey)>,
+    /// Public keys and identifiers of private accounts.
+    pub private_account_keys: Vec<(NullifierPublicKey, Identifier, SharedSecretKey)>,
     /// Nullifier secret keys for authorized private accounts.
     pub private_account_nsks: Vec<NullifierSecretKey>,
     /// Membership proofs for private accounts. Can be [`None`] for uninitialized accounts.
@@ -57,7 +57,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        Commitment, Nullifier, NullifierPublicKey,
+        Commitment, Nullifier,
         account::{Account, AccountId, AccountWithMetadata, Nonce},
     };
 
@@ -94,12 +94,12 @@ mod tests {
             }],
             ciphertexts: vec![Ciphertext(vec![255, 255, 1, 1, 2, 2])],
             new_commitments: vec![Commitment::new(
-                &NullifierPublicKey::from(&[1; 32]),
+                &AccountId::new([1; 32]),
                 &Account::default(),
             )],
             new_nullifiers: vec![(
                 Nullifier::for_account_update(
-                    &Commitment::new(&NullifierPublicKey::from(&[2; 32]), &Account::default()),
+                    &Commitment::new(&AccountId::new([2; 32]), &Account::default()),
                     &[1; 32],
                 ),
                 [0xab; 32],

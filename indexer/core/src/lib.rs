@@ -63,6 +63,7 @@ impl IndexerCore {
                     .iter()
                     .map(|init_comm_data| {
                         let npk = &init_comm_data.npk;
+                        let account_id = nssa::AccountId::from((npk, 0));
 
                         let mut acc = init_comm_data.account.clone();
 
@@ -70,8 +71,8 @@ impl IndexerCore {
                             nssa::program::Program::authenticated_transfer_program().id();
 
                         (
-                            nssa_core::Commitment::new(npk, &acc),
-                            nssa_core::Nullifier::for_account_initialization(npk),
+                            nssa_core::Commitment::new(&account_id, &acc),
+                            nssa_core::Nullifier::for_account_initialization(&account_id),
                         )
                     })
                     .collect()
@@ -143,23 +144,27 @@ impl IndexerCore {
                     l2_blocks_parsed_ids.sort_unstable();
                     info!("Parsed {} L2 blocks with ids {:?}", l2_block_vec.len(), l2_blocks_parsed_ids);
 
-                        for l2_block in l2_block_vec {
-                            // TODO: proper fix is to make the sequencer's genesis include a
-                            // trailing `clock_invocation(0)` (and have the indexer's
-                            // `open_db_with_genesis` not pre-apply state transitions) so the
-                            // inscribed genesis can flow through `put_block` like any other
-                            // block. For now we skip re-applying it.
-                            //
-                            // The channel-start (block_id == 1) is the sequencer's genesis
-                            // inscription that we re-discover during initial search. The
-                            // indexer already has its own locally-constructed genesis in
-                            // the store from `open_db_with_genesis`, so re-applying the
-                            // inscribed copy is both redundant and would fail the strict
-                            // block validation in `put_block` (the inscribed genesis lacks
-                            // the trailing clock invocation).
-                            if l2_block.header.block_id != 1 {
-                                self.store.put_block(l2_block.clone(), l1_header).await?;
-                            }
+                    for l2_block in l2_block_vec {
+                        // TODO: proper fix is to make the sequencer's genesis include a
+                        // trailing `clock_invocation(0)` (and have the indexer's
+                        // `open_db_with_genesis` not pre-apply state transitions) so the
+                        // inscribed genesis can flow through `put_block` like any other
+                        // block. For now we skip re-applying it.
+                        //
+                        // The channel-start (block_id == 1) is the sequencer's genesis
+                        // inscription that we re-discover during initial search. The
+                        // indexer already has its own locally-constructed genesis in
+                        // the store from `open_db_with_genesis`, so re-applying the
+                        // inscribed copy is both redundant and would fail the strict
+                        // block validation in `put_block` (the inscribed genesis lacks
+                        // the trailing clock invocation).
+                        if l2_block.header.block_id != 1 {
+                            self
+                            .store
+                            .put_block(l2_block.clone(), l1_header)
+                            .await
+                            .inspect_err(|err| error!("Failed to put block with err {err:?}"))?;
+                        }
 
                         yield Ok(l2_block);
                     }

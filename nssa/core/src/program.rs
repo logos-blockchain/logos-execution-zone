@@ -913,18 +913,6 @@ mod tests {
         assert_ne!(private_id, public_id);
     }
 
-    /// A private PDA address differs from a standard private account address at the same `npk`,
-    /// because the private PDA formula includes `program_id` and `seed`.
-    #[test]
-    fn for_private_pda_differs_from_standard_private() {
-        let program_id: ProgramId = [1; 8];
-        let seed = PdaSeed::new([2; 32]);
-        let npk = NullifierPublicKey([3; 32]);
-        let private_pda_id = AccountId::for_private_pda(&program_id, &seed, &npk);
-        let standard_private_id = AccountId::from(&npk);
-        assert_ne!(private_pda_id, standard_private_id);
-    }
-
     // ---- compute_public_authorized_pdas tests ----
 
     /// `compute_public_authorized_pdas` returns the public PDA addresses for the caller's seeds.

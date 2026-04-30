@@ -168,9 +168,11 @@ pub mod tests {
 
         let encrypted_private_post_states = Vec::new();
 
-        let new_commitments = vec![Commitment::new(&npk2, &account2)];
+        let account_id2 = nssa_core::account::AccountId::from((&npk2, 0));
+        let new_commitments = vec![Commitment::new(&account_id2, &account2)];
 
-        let old_commitment = Commitment::new(&npk1, &account1);
+        let account_id1 = nssa_core::account::AccountId::from((&npk1, 0));
+        let old_commitment = Commitment::new(&account_id1, &account1);
         let new_nullifiers = vec![(
             Nullifier::for_account_update(&old_commitment, &nsk1),
             [0; 32],
@@ -245,11 +247,12 @@ pub mod tests {
         let npk = NullifierPublicKey::from(&[1; 32]);
         let vpk = ViewingPublicKey::from_scalar([2; 32]);
         let account = Account::default();
-        let commitment = Commitment::new(&npk, &account);
+        let account_id = nssa_core::account::AccountId::from((&npk, 0));
+        let commitment = Commitment::new(&account_id, &account);
         let esk = [3; 32];
         let shared_secret = SharedSecretKey::new(&esk, &vpk);
         let epk = EphemeralPublicKey::from_scalar(esk);
-        let ciphertext = EncryptionScheme::encrypt(&account, &shared_secret, &commitment, 2);
+        let ciphertext = EncryptionScheme::encrypt(&account, 0, &shared_secret, &commitment, 2);
         let encrypted_account_data =
             EncryptedAccountData::new(ciphertext.clone(), &npk, &vpk, epk.clone());
 

@@ -1,23 +1,24 @@
 use k256::{Scalar, elliptic_curve::PrimeField as _};
-use nssa_core::{NullifierPublicKey, encryption::ViewingPublicKey};
+use nssa_core::{Identifier, NullifierPublicKey, encryption::ViewingPublicKey};
 use serde::{Deserialize, Serialize};
 
 use crate::key_management::{
     KeyChain,
-    key_tree::traits::KeyNode,
+    key_tree::traits::KeyTreeNode,
     secret_holders::{PrivateKeyHolder, SecretSpendingKey},
 };
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ChildKeysPrivate {
-    pub value: (KeyChain, nssa::Account),
+    pub value: (KeyChain, Vec<(Identifier, nssa::Account)>),
     pub ccc: [u8; 32],
     /// Can be [`None`] if root.
     pub cci: Option<u32>,
 }
 
-impl KeyNode for ChildKeysPrivate {
-    fn root(seed: [u8; 64]) -> Self {
+impl ChildKeysPrivate {
+    #[must_use]
+    pub fn root(seed: [u8; 64]) -> Self {
         let hash_value = hmac_sha512::HMAC::mac(seed, b"LEE_master_priv");
 
         let ssk = SecretSpendingKey(
@@ -46,14 +47,15 @@ impl KeyNode for ChildKeysPrivate {
                         viewing_secret_key: vsk,
                     },
                 },
-                nssa::Account::default(),
+                vec![],
             ),
             ccc,
             cci: None,
         }
     }
 
-    fn nth_child(&self, cci: u32) -> Self {
+    #[must_use]
+    pub fn nth_child(&self, cci: u32) -> Self {
         #[expect(clippy::arithmetic_side_effects, reason = "TODO: fix later")]
         let parent_pt =
             Scalar::from_repr(self.value.0.private_key_holder.nullifier_secret_key.into())
@@ -95,43 +97,27 @@ impl KeyNode for ChildKeysPrivate {
                         viewing_secret_key: vsk,
                     },
                 },
-                nssa::Account::default(),
+                vec![],
             ),
             ccc,
             cci: Some(cci),
         }
     }
-
-    fn chain_code(&self) -> &[u8; 32] {
-        &self.ccc
-    }
-
-    fn child_index(&self) -> Option<u32> {
-        self.cci
-    }
-
-    fn account_id(&self) -> nssa::AccountId {
-        nssa::AccountId::from(&self.value.0.nullifier_public_key)
-    }
 }
 
-#[expect(
-    clippy::single_char_lifetime_names,
-    reason = "TODO add meaningful name"
-)]
-impl<'a> From<&'a ChildKeysPrivate> for &'a (KeyChain, nssa::Account) {
-    fn from(value: &'a ChildKeysPrivate) -> Self {
-        &value.value
+impl KeyTreeNode for ChildKeysPrivate {
+    fn from_seed(seed: [u8; 64]) -> Self {
+        Self::root(seed)
     }
-}
 
-#[expect(
-    clippy::single_char_lifetime_names,
-    reason = "TODO add meaningful name"
-)]
-impl<'a> From<&'a mut ChildKeysPrivate> for &'a mut (KeyChain, nssa::Account) {
-    fn from(value: &'a mut ChildKeysPrivate) -> Self {
-        &mut value.value
+    fn derive_child(&self, cci: u32) -> Self {
+        self.nth_child(cci)
+    }
+
+    fn account_ids(&self) -> impl Iterator<Item = nssa::AccountId> {
+        self.value.1.iter().map(|(identifier, _)| {
+            nssa::AccountId::from((&self.value.0.nullifier_public_key, *identifier))
+        })
     }
 }
 
