@@ -29,7 +29,7 @@ pub enum InputAccountIdentity {
     /// commitment, ciphertext, or nullifier.
     Public,
     /// Init of an authorized standalone private account: no membership proof. The `pre_state`
-    /// must be `Account::default()`. The account_id is derived as
+    /// must be `Account::default()`. The `account_id` is derived as
     /// `AccountId::from((&NullifierPublicKey::from(nsk), identifier))` and matched against
     /// `pre_state.account_id`.
     PrivateAuthorizedInit {

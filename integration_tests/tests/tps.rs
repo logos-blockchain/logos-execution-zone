@@ -27,7 +27,7 @@ use nssa::{
     public_transaction as putx,
 };
 use nssa_core::{
-    MembershipProof, NullifierPublicKey, InputAccountIdentity,
+    InputAccountIdentity, MembershipProof, NullifierPublicKey,
     account::{AccountWithMetadata, Nonce, data::Data},
     encryption::ViewingPublicKey,
 };

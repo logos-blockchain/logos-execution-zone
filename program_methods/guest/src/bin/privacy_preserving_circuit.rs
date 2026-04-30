@@ -498,9 +498,7 @@ fn compute_circuit_output(
     );
 
     let mut output_index = 0;
-    for (account_identity, (pre_state, post_state)) in
-        account_identities.iter().zip(states_iter)
-    {
+    for (account_identity, (pre_state, post_state)) in account_identities.iter().zip(states_iter) {
         match account_identity {
             InputAccountIdentity::Public => {
                 output.public_pre_states.push(pre_state);
@@ -518,10 +516,7 @@ fn compute_circuit_output(
                 let npk = NullifierPublicKey::from(nsk);
                 let account_id = AccountId::from((&npk, *identifier));
 
-                assert_eq!(
-                    account_id, pre_state.account_id,
-                    "AccountId mismatch"
-                );
+                assert_eq!(account_id, pre_state.account_id, "AccountId mismatch");
                 assert!(
                     pre_state.is_authorized,
                     "Pre-state not authorized for authenticated private account"
@@ -562,10 +557,7 @@ fn compute_circuit_output(
                 let npk = NullifierPublicKey::from(nsk);
                 let account_id = AccountId::from((&npk, *identifier));
 
-                assert_eq!(
-                    account_id, pre_state.account_id,
-                    "AccountId mismatch"
-                );
+                assert_eq!(account_id, pre_state.account_id, "AccountId mismatch");
                 assert!(
                     pre_state.is_authorized,
                     "Pre-state not authorized for authenticated private account"
@@ -601,10 +593,7 @@ fn compute_circuit_output(
                 );
                 let account_id = AccountId::from((npk, *identifier));
 
-                assert_eq!(
-                    account_id, pre_state.account_id,
-                    "AccountId mismatch"
-                );
+                assert_eq!(account_id, pre_state.account_id, "AccountId mismatch");
                 assert_eq!(
                     pre_state.account,
                     Account::default(),

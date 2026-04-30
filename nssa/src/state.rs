@@ -2177,14 +2177,16 @@ pub mod tests {
         let private_pda_account =
             AccountWithMetadata::new(Account::default(), false, AccountId::new([1; 32]));
 
-        let visibility_mask = [0, 3];
         let result = execute_and_prove(
             vec![public_account_1, private_pda_account],
             Program::serialize_instruction(10_u128).unwrap(),
-            visibility_mask.to_vec(),
-            vec![(npk, 0, shared_secret)],
-            vec![],
-            vec![None],
+            vec![
+                InputAccountIdentity::Public,
+                InputAccountIdentity::PrivatePdaInit {
+                    npk,
+                    ssk: shared_secret,
+                },
+            ],
             &program.into(),
         );
 
