@@ -414,7 +414,7 @@ impl WalletCore {
             )
             .unwrap();
 
-        let witness_set = Self::sign_privacy_message(&message, &proof, &acc_manager);
+        let witness_set = Self::sign_privacy_message(&message, proof.clone(), &acc_manager);
         let tx = PrivacyPreservingTransaction::new(message, witness_set);
 
         let shared_secrets: Vec<_> = private_account_keys
@@ -572,12 +572,12 @@ impl WalletCore {
     #[must_use]
     pub fn sign_privacy_message(
         message: &nssa::privacy_preserving_transaction::Message,
-        proof: &Proof,
+        proof: Proof,
         acc_manager: &privacy_preserving_tx::AccountManager,
     ) -> nssa::privacy_preserving_transaction::witness_set::WitnessSet {
         nssa::privacy_preserving_transaction::witness_set::WitnessSet::for_message(
             message,
-            proof.clone(),
+            proof,
             &acc_manager.public_account_auth(),
         )
     }
