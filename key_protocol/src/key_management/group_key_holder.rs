@@ -42,14 +42,12 @@ pub type SealingSecretKey = Scalar;
 #[derive(Serialize, Deserialize, Clone)]
 pub struct GroupKeyHolder {
     gms: [u8; 32],
-    epoch: u32,
 }
 
 impl std::fmt::Debug for GroupKeyHolder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GroupKeyHolder")
             .field("gms", &"<redacted>")
-            .field("epoch", &self.epoch)
             .finish()
     }
 }
@@ -61,25 +59,18 @@ impl Default for GroupKeyHolder {
 }
 
 impl GroupKeyHolder {
-    /// Create a new group with a fresh random GMS at epoch 0.
+    /// Create a new group with a fresh random GMS.
     #[must_use]
     pub fn new() -> Self {
         let mut gms = [0_u8; 32];
         OsRng.fill_bytes(&mut gms);
-        Self { gms, epoch: 0 }
+        Self { gms }
     }
 
-    /// Restore from an existing GMS at epoch 0. Only valid for initial group creation;
-    /// post-ratchet restoration must use [`from_gms_and_epoch`](Self::from_gms_and_epoch).
+    /// Restore from an existing GMS (received via `unseal`).
     #[must_use]
     pub const fn from_gms(gms: [u8; 32]) -> Self {
-        Self { gms, epoch: 0 }
-    }
-
-    /// Restore from an existing GMS and epoch (received via `unseal`).
-    #[must_use]
-    pub const fn from_gms_and_epoch(gms: [u8; 32], epoch: u32) -> Self {
-        Self { gms, epoch }
+        Self { gms }
     }
 
     /// Returns the raw 32-byte GMS. The name reflects intent: only the sealed-distribution
@@ -88,32 +79,6 @@ impl GroupKeyHolder {
     #[must_use]
     pub const fn dangerous_raw_gms(&self) -> &[u8; 32] {
         &self.gms
-    }
-
-    /// Returns the current epoch. Starts at 0 and increments by 1 on each `ratchet` call.
-    #[must_use]
-    pub const fn epoch(&self) -> u32 {
-        self.epoch
-    }
-
-    /// Forward-ratchets the GMS so removed members cannot derive future keys.
-    ///
-    /// The new GMS is `SHA256(PREFIX || rotation_salt || old_gms)`. The rotation salt must
-    /// be a fresh 32-byte random value contributed by the member who initiates the rotation.
-    /// Reusing a salt from a previous ratchet produces the same GMS as that previous
-    /// ratchet, collapsing the key rotation. Callers must generate the salt from a secure random
-    /// source.
-    ///
-    /// After ratcheting, all remaining controllers must receive the new `GroupKeyHolder`
-    /// via `seal_for` / `unseal`.
-    pub fn ratchet(&mut self, rotation_salt: [u8; 32]) {
-        const PREFIX: &[u8; 32] = b"/LEE/v0.3/GroupKeyRatchet/GMS\x00\x00\x00";
-        let mut hasher = sha2::Sha256::new();
-        hasher.update(PREFIX);
-        hasher.update(rotation_salt);
-        hasher.update(self.gms);
-        self.gms = hasher.finalize_fixed().into();
-        self.epoch = self.epoch.checked_add(1).expect("epoch overflow");
     }
 
     /// Derive a per-PDA [`SecretSpendingKey`] by mixing the seed into the SHA-256 input.
@@ -140,11 +105,11 @@ impl GroupKeyHolder {
             .produce_private_key_holder(None)
     }
 
-    /// Encrypts this holder's GMS and epoch under the recipient's [`SealingPublicKey`].
+    /// Encrypts this holder's GMS under the recipient's [`SealingPublicKey`].
     ///
     /// Uses an ephemeral ECDH key exchange to derive a shared secret, then AES-256-GCM
     /// to encrypt the payload. The returned bytes are
-    /// `ephemeral_pubkey (33) || nonce (12) || ciphertext+tag (52)` = 97 bytes.
+    /// `ephemeral_pubkey (33) || nonce (12) || ciphertext+tag (48)` = 93 bytes.
     ///
     /// Each call generates a fresh ephemeral key, so two seals of the same holder produce
     /// different ciphertexts.
@@ -161,12 +126,8 @@ impl GroupKeyHolder {
         OsRng.fill_bytes(&mut nonce_bytes);
         let nonce = aes_gcm::Nonce::from(nonce_bytes);
 
-        let mut plaintext = [0_u8; 36];
-        plaintext[..32].copy_from_slice(&self.gms);
-        plaintext[32..].copy_from_slice(&self.epoch.to_le_bytes());
-
         let ciphertext = cipher
-            .encrypt(&nonce, plaintext.as_ref())
+            .encrypt(&nonce, self.gms.as_ref())
             .expect("AES-GCM encryption should not fail with valid key/nonce");
 
         let capacity = 33_usize
@@ -203,14 +164,13 @@ impl GroupKeyHolder {
             .decrypt(nonce, ciphertext)
             .map_err(|_err| SealError::DecryptionFailed)?;
 
-        if plaintext.len() != 36 {
+        if plaintext.len() != 32 {
             return Err(SealError::DecryptionFailed);
         }
 
         let mut gms = [0_u8; 32];
-        gms.copy_from_slice(&plaintext[..32]);
-        let epoch = u32::from_le_bytes(plaintext[32..36].try_into().unwrap());
-        Ok(Self::from_gms_and_epoch(gms, epoch))
+        gms.copy_from_slice(&plaintext);
+        Ok(Self::from_gms(gms))
     }
 
     /// Derives an AES-256 key from the ECDH shared secret via SHA-256 with a domain prefix.
@@ -352,8 +312,7 @@ mod tests {
     /// group-owned account.
     #[test]
     fn gms_serde_round_trip_preserves_derivation() {
-        let mut original = GroupKeyHolder::from_gms([7_u8; 32]);
-        original.ratchet([10_u8; 32]);
+        let original = GroupKeyHolder::from_gms([7_u8; 32]);
         let encoded = bincode::serialize(&original).expect("serialize");
         let restored: GroupKeyHolder = bincode::deserialize(&encoded).expect("deserialize");
 
@@ -367,7 +326,6 @@ mod tests {
 
         assert_eq!(npk_original, npk_restored);
         assert_eq!(original.dangerous_raw_gms(), restored.dangerous_raw_gms());
-        assert_eq!(original.epoch(), restored.epoch());
     }
 
     /// A `GroupKeyHolder` constructed from the same 32 bytes as a personal
@@ -391,105 +349,10 @@ mod tests {
         assert_ne!(group_npk, personal_npk);
     }
 
-    /// Ratcheting advances the epoch by 1.
-    #[test]
-    fn ratchet_advances_epoch() {
-        let mut holder = GroupKeyHolder::from_gms([42_u8; 32]);
-        assert_eq!(holder.epoch(), 0);
-        holder.ratchet([1_u8; 32]);
-        assert_eq!(holder.epoch(), 1);
-        holder.ratchet([2_u8; 32]);
-        assert_eq!(holder.epoch(), 2);
-    }
-
-    /// After ratcheting, the same PDA seed produces a different npk. A removed member
-    /// holding the old GMS cannot derive the new keys.
-    #[test]
-    fn ratchet_changes_derived_keys() {
-        let mut holder = GroupKeyHolder::from_gms([42_u8; 32]);
-        let seed = PdaSeed::new([1; 32]);
-        let npk_before = holder
-            .derive_keys_for_pda(&seed)
-            .generate_nullifier_public_key();
-        holder.ratchet([99_u8; 32]);
-        let npk_after = holder
-            .derive_keys_for_pda(&seed)
-            .generate_nullifier_public_key();
-        assert_ne!(npk_before, npk_after);
-    }
-
-    /// Two holders ratcheted with different salts diverge, even from the same starting GMS.
-    #[test]
-    fn different_salts_produce_different_ratcheted_keys() {
-        let mut holder_a = GroupKeyHolder::from_gms([42_u8; 32]);
-        let mut holder_b = GroupKeyHolder::from_gms([42_u8; 32]);
-        holder_a.ratchet([1_u8; 32]);
-        holder_b.ratchet([2_u8; 32]);
-        let seed = PdaSeed::new([1; 32]);
-        let npk_a = holder_a
-            .derive_keys_for_pda(&seed)
-            .generate_nullifier_public_key();
-        let npk_b = holder_b
-            .derive_keys_for_pda(&seed)
-            .generate_nullifier_public_key();
-        assert_ne!(npk_a, npk_b);
-    }
-
-    /// `from_gms_and_epoch` restores a holder at a specific epoch, matching the state
-    /// after that many ratchets.
-    #[test]
-    fn from_gms_and_epoch_restores_correctly() {
-        let mut holder = GroupKeyHolder::from_gms([42_u8; 32]);
-        holder.ratchet([1_u8; 32]);
-        let restored =
-            GroupKeyHolder::from_gms_and_epoch(*holder.dangerous_raw_gms(), holder.epoch());
-        assert_eq!(restored.epoch(), 1);
-        let seed = PdaSeed::new([1; 32]);
-        assert_eq!(
-            holder
-                .derive_keys_for_pda(&seed)
-                .generate_nullifier_public_key(),
-            restored
-                .derive_keys_for_pda(&seed)
-                .generate_nullifier_public_key(),
-        );
-    }
-
-    /// A removed member holding the pre-ratchet GMS cannot derive the post-ratchet
-    /// keys, even if they know the PDA seed. This is the forward-secrecy property of
-    /// the ratchet: the old GMS is a preimage of the new one under SHA-256, so
-    /// reversing the ratchet requires breaking preimage resistance.
-    #[test]
-    fn removed_member_cannot_derive_post_ratchet_keys() {
-        let original_gms = [42_u8; 32];
-        let seed = PdaSeed::new([1; 32]);
-
-        // Removed member's frozen state
-        let removed = GroupKeyHolder::from_gms(original_gms);
-        let removed_npk = removed
-            .derive_keys_for_pda(&seed)
-            .generate_nullifier_public_key();
-
-        // Remaining members ratchet twice
-        let mut active = GroupKeyHolder::from_gms(original_gms);
-        active.ratchet([10_u8; 32]);
-        active.ratchet([20_u8; 32]);
-        let active_npk = active
-            .derive_keys_for_pda(&seed)
-            .generate_nullifier_public_key();
-
-        // The removed member's keys are useless for the current epoch
-        assert_ne!(removed_npk, active_npk);
-        assert_ne!(removed.dangerous_raw_gms(), active.dangerous_raw_gms());
-        assert_eq!(removed.epoch(), 0);
-        assert_eq!(active.epoch(), 2);
-    }
-
-    /// Seal then unseal recovers the same GMS, epoch, and derived keys.
+    /// Seal then unseal recovers the same GMS and derived keys.
     #[test]
     fn seal_unseal_round_trip() {
-        let mut holder = GroupKeyHolder::from_gms([42_u8; 32]);
-        holder.ratchet([10_u8; 32]);
+        let holder = GroupKeyHolder::from_gms([42_u8; 32]);
 
         let recipient_ssk = SecretSpendingKey([7_u8; 32]);
         let recipient_keys = recipient_ssk.produce_private_key_holder(None);
@@ -500,7 +363,6 @@ mod tests {
         let restored = GroupKeyHolder::unseal(&sealed, &recipient_vsk).expect("unseal");
 
         assert_eq!(restored.dangerous_raw_gms(), holder.dangerous_raw_gms());
-        assert_eq!(restored.epoch(), holder.epoch());
 
         let seed = PdaSeed::new([1; 32]);
         assert_eq!(
@@ -606,14 +468,12 @@ mod tests {
         }
     }
 
-    /// Full lifecycle: create group, distribute GMS via seal/unseal, verify key
-    /// agreement, ratchet for forward secrecy.
+    /// Full lifecycle: create group, distribute GMS via seal/unseal, verify key agreement.
     #[test]
     fn group_pda_lifecycle() {
         use nssa_core::account::AccountId;
 
         let alice_holder = GroupKeyHolder::new();
-        assert_eq!(alice_holder.epoch(), 0);
         let pda_seed = PdaSeed::new([42_u8; 32]);
         let program_id: nssa_core::program::ProgramId = [1; 8];
 
@@ -640,38 +500,5 @@ mod tests {
         let alice_account_id = AccountId::for_private_pda(&program_id, &pda_seed, &alice_npk);
         let bob_account_id = AccountId::for_private_pda(&program_id, &pda_seed, &bob_npk);
         assert_eq!(alice_account_id, bob_account_id);
-
-        // Ratchet: forward secrecy
-        let mut ratcheted_holder = alice_holder;
-        ratcheted_holder.ratchet([99_u8; 32]);
-        assert_eq!(ratcheted_holder.epoch(), 1);
-
-        let ratcheted_npk = ratcheted_holder
-            .derive_keys_for_pda(&pda_seed)
-            .generate_nullifier_public_key();
-        let bob_stale_npk = bob_holder
-            .derive_keys_for_pda(&pda_seed)
-            .generate_nullifier_public_key();
-
-        assert_ne!(ratcheted_npk, bob_stale_npk);
-        assert_ne!(ratcheted_npk, alice_npk);
-
-        let new_account_id = AccountId::for_private_pda(&program_id, &pda_seed, &ratcheted_npk);
-        assert_ne!(alice_account_id, new_account_id);
-
-        // Bob's stale keys point to old address
-        let bob_stale_id = AccountId::for_private_pda(&program_id, &pda_seed, &bob_stale_npk);
-        assert_eq!(bob_stale_id, alice_account_id);
-        assert_ne!(bob_stale_id, new_account_id);
-
-        // Sealed round-trip of ratcheted GMS
-        let sealed_ratcheted = ratcheted_holder.seal_for(&bob_vpk);
-        let restored = GroupKeyHolder::unseal(&sealed_ratcheted, &bob_vsk)
-            .expect("Should unseal ratcheted GMS");
-        assert_eq!(
-            restored.dangerous_raw_gms(),
-            ratcheted_holder.dangerous_raw_gms()
-        );
-        assert_eq!(restored.epoch(), 1);
     }
 }

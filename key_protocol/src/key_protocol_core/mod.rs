@@ -254,7 +254,6 @@ mod tests {
             .group_key_holder("test-group")
             .expect("should exist");
         assert_eq!(retrieved.dangerous_raw_gms(), holder.dangerous_raw_gms());
-        assert_eq!(retrieved.epoch(), holder.epoch());
     }
 
     #[test]

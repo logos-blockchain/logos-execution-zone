@@ -284,7 +284,7 @@ async fn private_pda_preparation(
     Ok(AccountPreparedData {
         nsk: exists.then_some(nsk),
         npk,
-        identifier: 0,
+        identifier: u128::MAX,
         vpk,
         pre_state,
         proof,
