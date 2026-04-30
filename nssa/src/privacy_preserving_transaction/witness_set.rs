@@ -13,6 +13,7 @@ pub struct WitnessSet {
 
 impl WitnessSet {
     #[must_use]
+    // TODO: swap for Keycard signing path.
     pub fn for_message(message: &Message, proof: Proof, private_keys: &[&PrivateKey]) -> Self {
         let message_hash = message.hash();
         let signatures_and_public_keys = private_keys

@@ -20,7 +20,8 @@ use log::info;
 use nssa::{
     Account, AccountId, PrivacyPreservingTransaction,
     privacy_preserving_transaction::{
-        circuit::ProgramWithDependencies, message::EncryptedAccountData,
+        circuit::{ProgramWithDependencies, Proof},
+        message::EncryptedAccountData,
     },
 };
 use nssa_core::{
@@ -413,12 +414,7 @@ impl WalletCore {
             )
             .unwrap();
 
-        let witness_set =
-            nssa::privacy_preserving_transaction::witness_set::WitnessSet::for_message(
-                &message,
-                proof,
-                &acc_manager.public_account_auth(),
-            );
+        let witness_set = Self::sign_privacy_message(&message, proof.clone(), &acc_manager);
         let tx = PrivacyPreservingTransaction::new(message, witness_set);
 
         let shared_secrets: Vec<_> = private_account_keys
@@ -549,5 +545,49 @@ impl WalletCore {
     #[must_use]
     pub const fn config_overrides(&self) -> &Option<WalletConfigOverrides> {
         &self.config_overrides
+    }
+
+    pub fn sign_public_message(
+        &self,
+        message: &nssa::public_transaction::Message,
+        account_ids: &[AccountId],
+    ) -> Result<nssa::public_transaction::WitnessSet, ExecutionFailureKind> {
+        let mut private_keys = Vec::new();
+
+        for &account_id in account_ids {
+            let key = self
+                .storage
+                .user_data
+                .get_pub_account_signing_key(account_id)
+                .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
+            private_keys.push(key);
+        }
+
+        Ok(nssa::public_transaction::WitnessSet::for_message(
+            message,
+            &private_keys,
+        ))
+    }
+
+    #[must_use]
+    pub fn sign_privacy_message(
+        message: &nssa::privacy_preserving_transaction::Message,
+        proof: Proof,
+        acc_manager: &privacy_preserving_tx::AccountManager,
+    ) -> nssa::privacy_preserving_transaction::witness_set::WitnessSet {
+        nssa::privacy_preserving_transaction::witness_set::WitnessSet::for_message(
+            message,
+            proof,
+            &acc_manager.public_account_auth(),
+        )
+    }
+
+    #[must_use]
+    pub fn filter_owned_accounts(&self, account_ids: &[nssa::AccountId]) -> Vec<nssa::AccountId> {
+        account_ids
+            .iter()
+            .filter(|&&account_id| self.get_account_public_signing_key(account_id).is_some())
+            .copied()
+            .collect()
     }
 }

@@ -205,7 +205,7 @@ pub mod tests {
         let nonces_bytes: &[u8] = &[1, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
         // all remaining vec fields are empty: u32 len=0
         let empty_vec_bytes: &[u8] = &[0_u8; 4];
-        // validity windows: unbounded = {from: None (0u8), to: None (0u8)}
+        // validity windows: unbounded = {from: None (0_u8), to: None (0_u8)}
         let unbounded_window_bytes: &[u8] = &[0_u8; 2];
 
         let expected_borsh_vec: Vec<u8> = [
