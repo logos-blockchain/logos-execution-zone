@@ -10,7 +10,7 @@ pub struct WitnessSet {
 impl WitnessSet {
     #[must_use]
     pub fn for_message(message: &Message, private_keys: &[&PrivateKey]) -> Self {
-        let message_hash = message.hash_message();
+        let message_hash = message.hash();
         let signatures_and_public_keys = private_keys
             .iter()
             .map(|&key| {
@@ -27,7 +27,7 @@ impl WitnessSet {
 
     #[must_use]
     pub fn is_valid_for(&self, message: &Message) -> bool {
-        let message_hash = message.hash_message();
+        let message_hash = message.hash();
         for (signature, public_key) in self.signatures_and_public_keys() {
             if !signature.is_valid_for(&message_hash, public_key) {
                 return false;
@@ -75,7 +75,7 @@ mod tests {
 
         assert_eq!(witness_set.signatures_and_public_keys.len(), 2);
 
-        let message_bytes = message.hash_message();
+        let message_bytes = message.hash();
         for ((signature, public_key), expected_public_key) in witness_set
             .signatures_and_public_keys
             .into_iter()
