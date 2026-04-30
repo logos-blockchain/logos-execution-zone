@@ -48,6 +48,7 @@ impl IndexerCore {
                     .iter()
                     .map(|init_comm_data| {
                         let npk = &init_comm_data.npk;
+                        let account_id = nssa::AccountId::from((npk, 0));
 
                         let mut acc = init_comm_data.account.clone();
 
@@ -55,8 +56,8 @@ impl IndexerCore {
                             nssa::program::Program::authenticated_transfer_program().id();
 
                         (
-                            nssa_core::Commitment::new(npk, &acc),
-                            nssa_core::Nullifier::for_account_initialization(npk),
+                            nssa_core::Commitment::new(&account_id, &acc),
+                            nssa_core::Nullifier::for_account_initialization(&account_id),
                         )
                     })
                     .collect()

@@ -1,6 +1,6 @@
 use common::{HashType, transaction::NSSATransaction};
 use nssa::{AccountId, program::Program};
-use nssa_core::{NullifierPublicKey, SharedSecretKey, encryption::ViewingPublicKey};
+use nssa_core::{Identifier, NullifierPublicKey, SharedSecretKey, encryption::ViewingPublicKey};
 use sequencer_service_rpc::RpcClient as _;
 use token_core::Instruction;
 
@@ -247,6 +247,7 @@ impl Token<'_> {
         sender_account_id: AccountId,
         recipient_npk: NullifierPublicKey,
         recipient_vpk: ViewingPublicKey,
+        recipient_identifier: Identifier,
         amount: u128,
     ) -> Result<(HashType, [SharedSecretKey; 2]), ExecutionFailureKind> {
         let instruction = Instruction::Transfer {
@@ -262,6 +263,7 @@ impl Token<'_> {
                     PrivacyPreservingAccount::PrivateForeign {
                         npk: recipient_npk,
                         vpk: recipient_vpk,
+                        identifier: recipient_identifier,
                     },
                 ],
                 instruction_data,
@@ -343,6 +345,7 @@ impl Token<'_> {
         sender_account_id: AccountId,
         recipient_npk: NullifierPublicKey,
         recipient_vpk: ViewingPublicKey,
+        recipient_identifier: Identifier,
         amount: u128,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
         let instruction = Instruction::Transfer {
@@ -358,6 +361,7 @@ impl Token<'_> {
                     PrivacyPreservingAccount::PrivateForeign {
                         npk: recipient_npk,
                         vpk: recipient_vpk,
+                        identifier: recipient_identifier,
                     },
                 ],
                 instruction_data,
@@ -606,6 +610,7 @@ impl Token<'_> {
         definition_account_id: AccountId,
         holder_npk: NullifierPublicKey,
         holder_vpk: ViewingPublicKey,
+        holder_identifier: Identifier,
         amount: u128,
     ) -> Result<(HashType, [SharedSecretKey; 2]), ExecutionFailureKind> {
         let instruction = Instruction::Mint {
@@ -621,6 +626,7 @@ impl Token<'_> {
                     PrivacyPreservingAccount::PrivateForeign {
                         npk: holder_npk,
                         vpk: holder_vpk,
+                        identifier: holder_identifier,
                     },
                 ],
                 instruction_data,
@@ -702,6 +708,7 @@ impl Token<'_> {
         definition_account_id: AccountId,
         holder_npk: NullifierPublicKey,
         holder_vpk: ViewingPublicKey,
+        holder_identifier: Identifier,
         amount: u128,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
         let instruction = Instruction::Mint {
@@ -717,6 +724,7 @@ impl Token<'_> {
                     PrivacyPreservingAccount::PrivateForeign {
                         npk: holder_npk,
                         vpk: holder_vpk,
+                        identifier: holder_identifier,
                     },
                 ],
                 instruction_data,
