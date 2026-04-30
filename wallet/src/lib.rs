@@ -312,6 +312,41 @@ impl WalletCore {
             .get_pub_account_signing_key(account_id)
     }
 
+    /// Send an arbitrary public transaction to a program.
+    pub async fn send_public_transaction(
+        &self,
+        program_id: nssa_core::program::ProgramId,
+        account_ids: Vec<AccountId>,
+        instruction_data: InstructionData,
+        signer: AccountId,
+    ) -> Result<HashType, ExecutionFailureKind> {
+        let nonces = self
+            .get_accounts_nonces(vec![signer])
+            .await
+            .map_err(ExecutionFailureKind::SequencerError)?;
+
+        let message = nssa::public_transaction::Message::new_preserialized(
+            program_id,
+            account_ids,
+            nonces,
+            instruction_data,
+        );
+
+        let signing_key = self.storage.user_data.get_pub_account_signing_key(signer);
+        let Some(signing_key) = signing_key else {
+            return Err(ExecutionFailureKind::KeyNotFoundError);
+        };
+
+        let witness_set =
+            nssa::public_transaction::WitnessSet::for_message(&message, &[signing_key]);
+        let tx = nssa::PublicTransaction::new(message, witness_set);
+
+        Ok(self
+            .sequencer_client
+            .send_transaction(NSSATransaction::Public(tx))
+            .await?)
+    }
+
     #[must_use]
     pub fn get_account_private(&self, account_id: AccountId) -> Option<Account> {
         self.storage

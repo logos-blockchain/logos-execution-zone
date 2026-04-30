@@ -40,6 +40,8 @@ pub enum WalletFfiError {
     InvalidTypeConversion = 15,
     /// Invalid Key value.
     InvalidKeyValue = 16,
+    /// Invalid argument value.
+    InvalidArgument = 17,
     /// Internal error (catch-all).
     InternalError = 99,
 }
