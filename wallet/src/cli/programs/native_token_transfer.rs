@@ -59,6 +59,10 @@ pub enum AuthTransferSubcommand {
         /// `to_vpk` - valid 33 byte hex string.
         #[arg(long)]
         to_vpk: Option<String>,
+        /// Identifier for the recipient's private account (only used when sending to a foreign
+        /// private account via `--to-npk`/`--to-vpk`).
+        #[arg(long)]
+        to_identifier: Option<u128>,
         /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
@@ -132,6 +136,7 @@ impl WalletSubcommand for AuthTransferSubcommand {
                 to_label,
                 to_npk,
                 to_vpk,
+                to_identifier,
                 amount,
             } => {
                 let from = resolve_id_or_label(
@@ -210,6 +215,7 @@ impl WalletSubcommand for AuthTransferSubcommand {
                                         from,
                                         to_npk,
                                         to_vpk,
+                                        to_identifier,
                                         amount,
                                     },
                                 )
@@ -220,6 +226,7 @@ impl WalletSubcommand for AuthTransferSubcommand {
                                         from,
                                         to_npk,
                                         to_vpk,
+                                        to_identifier,
                                         amount,
                                     },
                                 )
@@ -304,6 +311,9 @@ pub enum NativeTokenTransferProgramSubcommandShielded {
         /// `to_vpk` - valid 33 byte hex string.
         #[arg(long)]
         to_vpk: String,
+        /// Identifier for the recipient's private account.
+        #[arg(long)]
+        to_identifier: Option<u128>,
         /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
@@ -341,6 +351,9 @@ pub enum NativeTokenTransferProgramSubcommandPrivate {
         /// `to_vpk` - valid 33 byte hex string.
         #[arg(long)]
         to_vpk: String,
+        /// Identifier for the recipient's private account.
+        #[arg(long)]
+        to_identifier: Option<u128>,
         /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
@@ -382,6 +395,7 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandPrivate {
                 from,
                 to_npk,
                 to_vpk,
+                to_identifier,
                 amount,
             } => {
                 let from: AccountId = from.parse().unwrap();
@@ -397,7 +411,13 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandPrivate {
                     nssa_core::encryption::shared_key_derivation::Secp256k1Point(to_vpk.to_vec());
 
                 let (tx_hash, [secret_from, _]) = NativeTokenTransfer(wallet_core)
-                    .send_private_transfer_to_outer_account(from, to_npk, to_vpk, amount)
+                    .send_private_transfer_to_outer_account(
+                        from,
+                        to_npk,
+                        to_vpk,
+                        to_identifier.unwrap_or_else(rand::random),
+                        amount,
+                    )
                     .await?;
 
                 println!("Transaction hash is {tx_hash}");
@@ -456,6 +476,7 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandShielded {
                 from,
                 to_npk,
                 to_vpk,
+                to_identifier,
                 amount,
             } => {
                 let from: AccountId = from.parse().unwrap();
@@ -472,7 +493,13 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandShielded {
                     nssa_core::encryption::shared_key_derivation::Secp256k1Point(to_vpk.to_vec());
 
                 let (tx_hash, _) = NativeTokenTransfer(wallet_core)
-                    .send_shielded_transfer_to_outer_account(from, to_npk, to_vpk, amount)
+                    .send_shielded_transfer_to_outer_account(
+                        from,
+                        to_npk,
+                        to_vpk,
+                        to_identifier.unwrap_or_else(rand::random),
+                        amount,
+                    )
                     .await?;
 
                 println!("Transaction hash is {tx_hash}");

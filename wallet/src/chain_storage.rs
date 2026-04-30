@@ -7,7 +7,7 @@ use key_protocol::{
         key_tree::{KeyTreePrivate, KeyTreePublic, chain_index::ChainIndex},
         secret_holders::SeedHolder,
     },
-    key_protocol_core::NSSAUserData,
+    key_protocol_core::{NSSAUserData, UserPrivateAccountData},
 };
 use log::debug;
 use nssa::program::Program;
@@ -76,15 +76,28 @@ impl WalletChainStore {
                     );
                 }
                 PersistentAccountData::Private(data) => {
-                    private_tree.insert(data.account_id, data.chain_index, data.data);
+                    let npk = data.data.value.0.nullifier_public_key;
+                    let chain_index = data.chain_index;
+                    for identifier in &data.identifiers {
+                        let account_id = nssa::AccountId::from((&npk, *identifier));
+                        private_tree
+                            .account_id_map
+                            .insert(account_id, chain_index.clone());
+                    }
+                    private_tree.key_map.insert(chain_index, data.data);
                 }
                 PersistentAccountData::Preconfigured(acc_data) => match acc_data {
                     InitialAccountData::Public(data) => {
                         public_init_acc_map.insert(data.account_id, data.pub_sign_key);
                     }
                     InitialAccountData::Private(data) => {
-                        private_init_acc_map
-                            .insert(data.account_id, (data.key_chain, data.account));
+                        private_init_acc_map.insert(
+                            data.account_id(),
+                            UserPrivateAccountData {
+                                key_chain: data.key_chain,
+                                accounts: vec![(data.identifier, data.account)],
+                            },
+                        );
                     }
                 },
             }
@@ -117,13 +130,20 @@ impl WalletChainStore {
                     public_init_acc_map.insert(data.account_id, data.pub_sign_key);
                 }
                 InitialAccountData::Private(data) => {
+                    let account_id = data.account_id();
                     let mut account = data.account;
                     // TODO: Program owner is only known after code is compiled and can't be set
                     // in the config. Therefore we overwrite it here on
                     // startup. Fix this when program id can be fetched
                     // from the node and queried from the wallet.
                     account.program_owner = Program::authenticated_transfer_program().id();
-                    private_init_acc_map.insert(data.account_id, (data.key_chain, account));
+                    private_init_acc_map.insert(
+                        account_id,
+                        UserPrivateAccountData {
+                            key_chain: data.key_chain,
+                            accounts: vec![(data.identifier, account)],
+                        },
+                    );
                 }
             }
         }
@@ -176,28 +196,71 @@ impl WalletChainStore {
     pub fn insert_private_account_data(
         &mut self,
         account_id: nssa::AccountId,
+        identifier: nssa_core::Identifier,
         account: nssa_core::account::Account,
     ) {
         debug!("inserting at address {account_id}, this account {account:?}");
 
-        let entry = self
+        // Update default accounts if present
+        if let Entry::Occupied(mut entry) = self
             .user_data
             .default_user_private_accounts
             .entry(account_id)
-            .and_modify(|data| data.1 = account.clone());
+        {
+            let entry = entry.get_mut();
+            if let Some((_, acc)) = entry.accounts.iter_mut().find(|(id, _)| *id == identifier) {
+                *acc = account;
+            } else {
+                entry.accounts.push((identifier, account));
+            }
+            return;
+        }
 
-        if matches!(entry, Entry::Vacant(_)) {
-            self.user_data
+        // Otherwise update the private key tree
+
+        // Find the node by iterating all tree nodes for this account_id
+        let chain_index = self
+            .user_data
+            .private_key_tree
+            .account_id_map
+            .get(&account_id)
+            .cloned();
+
+        if let Some(chain_index) = chain_index {
+            // Node already in account_id_map — update its entry
+            if let Some(node) = self
+                .user_data
                 .private_key_tree
-                .account_id_map
-                .get(&account_id)
-                .map(|chain_index| {
+                .key_map
+                .get_mut(&chain_index)
+            {
+                if let Some((_, acc)) = node.value.1.iter_mut().find(|(id, _)| *id == identifier) {
+                    *acc = account;
+                } else {
+                    node.value.1.push((identifier, account));
+                }
+            }
+        } else {
+            // Node not yet in account_id_map — find it by checking all nodes
+            for (ci, node) in &mut self.user_data.private_key_tree.key_map {
+                let expected_id =
+                    nssa::AccountId::from((&node.value.0.nullifier_public_key, identifier));
+                if expected_id == account_id {
+                    if let Some((_, acc)) =
+                        node.value.1.iter_mut().find(|(id, _)| *id == identifier)
+                    {
+                        *acc = account;
+                    } else {
+                        node.value.1.push((identifier, account));
+                    }
+                    // Register in account_id_map
                     self.user_data
                         .private_key_tree
-                        .key_map
-                        .entry(chain_index.clone())
-                        .and_modify(|data| data.value.1 = account)
-                });
+                        .account_id_map
+                        .insert(account_id, ci.clone());
+                    break;
+                }
+            }
         }
     }
 }
@@ -205,7 +268,7 @@ impl WalletChainStore {
 #[cfg(test)]
 mod tests {
     use key_protocol::key_management::key_tree::{
-        keys_private::ChildKeysPrivate, keys_public::ChildKeysPublic, traits::KeyNode as _,
+        keys_private::ChildKeysPrivate, keys_public::ChildKeysPublic,
     };
 
     use super::*;
@@ -234,7 +297,7 @@ mod tests {
                 data: Some(public_data),
             }),
             PersistentAccountData::Private(Box::new(PersistentAccountDataPrivate {
-                account_id: private_data.account_id(),
+                identifiers: vec![],
                 chain_index: ChainIndex::root(),
                 data: private_data,
             })),
