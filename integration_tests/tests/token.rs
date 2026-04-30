@@ -134,6 +134,7 @@ async fn create_and_transfer_public_token() -> Result<()> {
         to_label: None,
         to_npk: None,
         to_vpk: None,
+        to_identifier: Some(0),
         amount: transfer_amount,
         from_key_path: None,
     };
@@ -229,6 +230,7 @@ async fn create_and_transfer_public_token() -> Result<()> {
         holder_label: None,
         holder_npk: None,
         holder_vpk: None,
+        holder_identifier: None,
         amount: mint_amount,
     };
 
@@ -374,6 +376,7 @@ async fn create_and_transfer_token_with_private_supply() -> Result<()> {
         to_label: None,
         to_npk: None,
         to_vpk: None,
+        to_identifier: Some(0),
         amount: transfer_amount,
         from_key_path: None,
     };
@@ -570,6 +573,7 @@ async fn create_token_with_private_definition() -> Result<()> {
         holder_label: None,
         holder_npk: None,
         holder_vpk: None,
+        holder_identifier: None,
         amount: mint_amount_public,
     };
 
@@ -618,6 +622,7 @@ async fn create_token_with_private_definition() -> Result<()> {
         holder_label: None,
         holder_npk: None,
         holder_vpk: None,
+        holder_identifier: None,
         amount: mint_amount_private,
     };
 
@@ -760,6 +765,7 @@ async fn create_token_with_private_definition_and_supply() -> Result<()> {
         to_label: None,
         to_npk: None,
         to_vpk: None,
+        to_identifier: Some(0),
         amount: transfer_amount,
         from_key_path: None,
     };
@@ -892,6 +898,7 @@ async fn shielded_token_transfer() -> Result<()> {
         to_label: None,
         to_npk: None,
         to_vpk: None,
+        to_identifier: Some(0),
         amount: transfer_amount,
         from_key_path: None,
     };
@@ -1019,6 +1026,7 @@ async fn deshielded_token_transfer() -> Result<()> {
         to_label: None,
         to_npk: None,
         to_vpk: None,
+        to_identifier: Some(0),
         amount: transfer_amount,
         from_key_path: None,
     };
@@ -1138,12 +1146,11 @@ async fn token_claiming_path_with_private_accounts() -> Result<()> {
     };
 
     // Get keys for foreign mint (claiming path)
-    let (holder_keys, _) = ctx
+    let (holder_keys, _, holder_identifier) = ctx
         .wallet()
         .storage()
         .user_data
         .get_private_account(recipient_account_id)
-        .cloned()
         .context("Failed to get private account keys")?;
 
     // Mint using claiming path (foreign account)
@@ -1155,6 +1162,7 @@ async fn token_claiming_path_with_private_accounts() -> Result<()> {
         holder_label: None,
         holder_npk: Some(hex::encode(holder_keys.nullifier_public_key.0)),
         holder_vpk: Some(hex::encode(holder_keys.viewing_public_key.0)),
+        holder_identifier: Some(holder_identifier),
         amount: mint_amount,
     };
 
@@ -1358,6 +1366,7 @@ async fn transfer_token_using_from_label() -> Result<()> {
         to_label: None,
         to_npk: None,
         to_vpk: None,
+        to_identifier: Some(0),
         amount: transfer_amount,
         from_key_path: None,
     };

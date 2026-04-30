@@ -28,7 +28,7 @@ pub struct PersistentAccountDataPublic {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PersistentAccountDataPrivate {
-    pub account_id: nssa::AccountId,
+    pub identifiers: Vec<nssa_core::Identifier>,
     pub chain_index: ChainIndex,
     pub data: ChildKeysPrivate,
 }
@@ -44,10 +44,10 @@ pub enum InitialAccountData {
 
 impl InitialAccountData {
     #[must_use]
-    pub const fn account_id(&self) -> nssa::AccountId {
+    pub fn account_id(&self) -> nssa::AccountId {
         match &self {
             Self::Public(acc) => acc.account_id,
-            Self::Private(acc) => acc.account_id,
+            Self::Private(acc) => acc.account_id(),
         }
     }
 
@@ -119,17 +119,6 @@ impl PersistentStorage {
                     anyhow::bail!("IO error {err:#?}");
                 }
             },
-        }
-    }
-}
-
-impl PersistentAccountData {
-    #[must_use]
-    pub fn account_id(&self) -> nssa::AccountId {
-        match &self {
-            Self::Public(acc) => acc.account_id,
-            Self::Private(acc) => acc.account_id,
-            Self::Preconfigured(acc) => acc.account_id(),
         }
     }
 }

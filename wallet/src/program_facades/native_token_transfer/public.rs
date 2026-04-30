@@ -62,8 +62,9 @@ impl NativeTokenTransfer<'_> {
                 WitnessSet::from_list(&[from_sig], &[from_pk])
             }
         } else {
-            let sign_ids = self.0.filter_owned_accounts(&[from, to]);
-            WalletCore::sign_public_message(self.0, &message, &sign_ids)?
+            // Silently skips accounts without signing keys
+            let witness_set = WalletCore::sign_public_message(self.0, &message, &sign_ids)
+                .expect("`WalletCore::sign_public_message()` failed to produce a signature for a NativeTokenTransfer.");
         };
 
         let tx = PublicTransaction::new(message, witness_set);

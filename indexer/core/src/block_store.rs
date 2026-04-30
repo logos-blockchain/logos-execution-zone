@@ -243,14 +243,9 @@ mod tests {
                 &sign_key,
             );
             let block_id = u64::try_from(i).unwrap();
-            let block_timestamp = block_id.saturating_mul(100);
-            let clock_tx = NSSATransaction::Public(clock_invocation(block_timestamp));
 
-            let next_block = common::test_utils::produce_dummy_block(
-                block_id,
-                Some(prev_hash),
-                vec![tx, clock_tx],
-            );
+            let next_block =
+                common::test_utils::produce_dummy_block(block_id, Some(prev_hash), vec![tx]);
             prev_hash = next_block.header.hash;
 
             storage

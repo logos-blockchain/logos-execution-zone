@@ -30,6 +30,7 @@ async fn private_transfer_to_owned_account() -> Result<()> {
         to_label: None,
         to_npk: None,
         to_vpk: None,
+        to_identifier: Some(0),
         amount: 100,
         to_key_path: None,
         from_key_path: None,
@@ -73,6 +74,7 @@ async fn private_transfer_to_foreign_account() -> Result<()> {
         to_label: None,
         to_npk: Some(to_npk_string),
         to_vpk: Some(hex::encode(to_vpk.0)),
+        to_identifier: Some(0),
         amount: 100,
         to_key_path: None,
         from_key_path: None,
@@ -125,6 +127,7 @@ async fn deshielded_transfer_to_public_account() -> Result<()> {
         to_label: None,
         to_npk: None,
         to_vpk: None,
+        to_identifier: Some(0),
         amount: 100,
         to_key_path: None,
         from_key_path: None,
@@ -176,12 +179,11 @@ async fn private_transfer_to_owned_account_using_claiming_path() -> Result<()> {
     };
 
     // Get the keys for the newly created account
-    let (to_keys, _) = ctx
+    let (to_keys, _, to_identifier) = ctx
         .wallet()
         .storage()
         .user_data
         .get_private_account(to_account_id)
-        .cloned()
         .context("Failed to get private account")?;
 
     // Send to this account using claiming path (using npk and vpk instead of account ID)
@@ -192,6 +194,7 @@ async fn private_transfer_to_owned_account_using_claiming_path() -> Result<()> {
         to_label: None,
         to_npk: Some(hex::encode(to_keys.nullifier_public_key.0)),
         to_vpk: Some(hex::encode(to_keys.viewing_public_key.0)),
+        to_identifier: Some(to_identifier),
         amount: 100,
         to_key_path: None,
         from_key_path: None,
@@ -244,6 +247,7 @@ async fn shielded_transfer_to_owned_private_account() -> Result<()> {
         to_label: None,
         to_npk: None,
         to_vpk: None,
+        to_identifier: Some(0),
         amount: 100,
         to_key_path: None,
         from_key_path: None,
@@ -290,6 +294,7 @@ async fn shielded_transfer_to_foreign_account() -> Result<()> {
         to_label: None,
         to_npk: Some(to_npk_string),
         to_vpk: Some(hex::encode(to_vpk.0)),
+        to_identifier: Some(0),
         amount: 100,
         to_key_path: None,
         from_key_path: None,
@@ -348,12 +353,11 @@ async fn private_transfer_to_owned_account_continuous_run_path() -> Result<()> {
     };
 
     // Get the newly created account's keys
-    let (to_keys, _) = ctx
+    let (to_keys, _, to_identifier) = ctx
         .wallet()
         .storage()
         .user_data
         .get_private_account(to_account_id)
-        .cloned()
         .context("Failed to get private account")?;
 
     // Send transfer using nullifier and  viewing public keys
@@ -364,6 +368,7 @@ async fn private_transfer_to_owned_account_continuous_run_path() -> Result<()> {
         to_label: None,
         to_npk: Some(hex::encode(to_keys.nullifier_public_key.0)),
         to_vpk: Some(hex::encode(to_keys.viewing_public_key.0)),
+        to_identifier: Some(to_identifier),
         amount: 100,
         to_key_path: None,
         from_key_path: None,
@@ -470,6 +475,7 @@ async fn private_transfer_using_from_label() -> Result<()> {
         to_label: None,
         to_npk: None,
         to_vpk: None,
+        to_identifier: Some(0),
         amount: 100,
         from_key_path: None,
         to_key_path: None,
@@ -542,6 +548,115 @@ async fn initialize_private_account_using_label() -> Result<()> {
     );
 
     info!("Successfully initialized private account using label");
+
+    Ok(())
+}
+
+#[test]
+async fn shielded_transfers_to_two_identifiers_same_npk() -> Result<()> {
+    let mut ctx = TestContext::new().await?;
+
+    // Both transfers below will target this same node with distinct identifiers.
+    let chain_index = ctx.wallet_mut().create_private_accounts_key(None);
+    let (npk, vpk) = {
+        let node = ctx
+            .wallet()
+            .storage()
+            .user_data
+            .private_key_tree
+            .key_map
+            .get(&chain_index)
+            .expect("node was just inserted");
+        let key_chain = &node.value.0;
+        (
+            key_chain.nullifier_public_key,
+            key_chain.viewing_public_key.clone(),
+        )
+    };
+
+    let npk_hex = hex::encode(npk.0);
+    let vpk_hex = hex::encode(vpk.0);
+
+    let identifier_1 = 1_u128;
+    let identifier_2 = 2_u128;
+
+    let sender_0: AccountId = ctx.existing_public_accounts()[0];
+    let sender_1: AccountId = ctx.existing_public_accounts()[1];
+
+    wallet::cli::execute_subcommand(
+        ctx.wallet_mut(),
+        Command::AuthTransfer(AuthTransferSubcommand::Send {
+            from: Some(format_public_account_id(sender_0)),
+            from_label: None,
+            to: None,
+            to_label: None,
+            to_npk: Some(npk_hex.clone()),
+            to_vpk: Some(vpk_hex.clone()),
+            to_identifier: Some(identifier_1),
+            amount: 100,
+        }),
+    )
+    .await?;
+
+    wallet::cli::execute_subcommand(
+        ctx.wallet_mut(),
+        Command::AuthTransfer(AuthTransferSubcommand::Send {
+            from: Some(format_public_account_id(sender_1)),
+            from_label: None,
+            to: None,
+            to_label: None,
+            to_npk: Some(npk_hex),
+            to_vpk: Some(vpk_hex),
+            to_identifier: Some(identifier_2),
+            amount: 200,
+        }),
+    )
+    .await?;
+
+    info!("Waiting for next block creation");
+    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
+
+    wallet::cli::execute_subcommand(
+        ctx.wallet_mut(),
+        Command::Account(AccountSubcommand::SyncPrivate {}),
+    )
+    .await?;
+
+    // Both accounts must be discovered with the correct balances.
+    let account_id_1 = AccountId::from((&npk, identifier_1));
+    let acc_1 = ctx
+        .wallet()
+        .get_account_private(account_id_1)
+        .context("account for identifier 1 not found after sync")?;
+    assert_eq!(acc_1.balance, 100);
+
+    let account_id_2 = AccountId::from((&npk, identifier_2));
+    let acc_2 = ctx
+        .wallet()
+        .get_account_private(account_id_2)
+        .context("account for identifier 2 not found after sync")?;
+    assert_eq!(acc_2.balance, 200);
+
+    // Both account ids must resolve to the same key node.
+    let tree = &ctx.wallet().storage().user_data.private_key_tree;
+    let ci_1 = tree
+        .account_id_map
+        .get(&account_id_1)
+        .context("account_id_1 missing from private_key_tree.account_id_map")?;
+    let ci_2 = tree
+        .account_id_map
+        .get(&account_id_2)
+        .context("account_id_2 missing from private_key_tree.account_id_map")?;
+    assert_eq!(
+        ci_1, ci_2,
+        "identifiers 1 and 2 under the same NPK must share a single chain_index"
+    );
+    assert_eq!(
+        ci_1, &chain_index,
+        "both accounts must resolve to the key node created at the start of the test"
+    );
+
+    info!("Successfully transferred to two distinct identifiers under the same NPK");
 
     Ok(())
 }

@@ -19,7 +19,8 @@
         },
         {
             "Private": {
-                "account_id": "9DGDXnrNo4QhUUb2F8WDuDrPESja3eYDkZG5HkzvAvMC",
+                "account_id": "GoKB6RuE6pT2KxCqDXQqiCuuuYZaGdJNfctzyqRdGBCy",
+                "identifier": 0,
                 "account": {
                     "program_owner": [
                         0,
@@ -214,7 +215,8 @@
         },
         {
             "Private": {
-                "account_id": "A6AT9UvsgitUi8w4BH43n6DyX1bK37DtSCfjEWXQQUrQ",
+                "account_id": "BCdMnPkdH2DrVhe7cGdawkPU9iapsSboRvJpWX8pWnLq",
+                "identifier": 0,
                 "account": {
                     "program_owner": [
                         0,
