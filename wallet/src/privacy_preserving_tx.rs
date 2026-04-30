@@ -2,7 +2,7 @@ use anyhow::Result;
 use key_protocol::key_management::ephemeral_key_holder::EphemeralKeyHolder;
 use nssa::{AccountId, PrivateKey};
 use nssa_core::{
-    MembershipProof, NullifierPublicKey, NullifierSecretKey, InputAccountIdentity,
+    Identifier, InputAccountIdentity, MembershipProof, NullifierPublicKey, NullifierSecretKey,
     SharedSecretKey,
     account::{AccountWithMetadata, Nonce},
     encryption::{EphemeralPublicKey, ViewingPublicKey},
@@ -17,6 +17,7 @@ pub enum PrivacyPreservingAccount {
     PrivateForeign {
         npk: NullifierPublicKey,
         vpk: ViewingPublicKey,
+        identifier: Identifier,
     },
 }
 
@@ -30,7 +31,12 @@ impl PrivacyPreservingAccount {
     pub const fn is_private(&self) -> bool {
         matches!(
             &self,
-            Self::PrivateOwned(_) | Self::PrivateForeign { npk: _, vpk: _ }
+            Self::PrivateOwned(_)
+                | Self::PrivateForeign {
+                    npk: _,
+                    vpk: _,
+                    identifier: _,
+                }
         )
     }
 }
@@ -79,15 +85,20 @@ impl AccountManager {
 
                     State::Private(pre)
                 }
-                PrivacyPreservingAccount::PrivateForeign { npk, vpk } => {
+                PrivacyPreservingAccount::PrivateForeign {
+                    npk,
+                    vpk,
+                    identifier,
+                } => {
                     let acc = nssa_core::account::Account::default();
-                    let auth_acc = AccountWithMetadata::new(acc, false, &npk);
+                    let auth_acc = AccountWithMetadata::new(acc, false, (&npk, identifier));
                     let eph_holder = EphemeralKeyHolder::new(&npk);
                     let ssk = eph_holder.calculate_shared_secret_sender(&vpk);
                     let epk = eph_holder.generate_ephemeral_public_key();
                     let pre = AccountPreparedData {
                         nsk: None,
                         npk,
+                        identifier,
                         vpk,
                         pre_state: auth_acc,
                         proof: None,
@@ -155,17 +166,18 @@ impl AccountManager {
                             ssk: pre.ssk,
                             nsk,
                             membership_proof,
+                            identifier: pre.identifier,
                         }
                     }
-                    (Some(nsk), None) => {
-                        InputAccountIdentity::PrivateAuthorizedInit {
-                            ssk: pre.ssk,
-                            nsk,
-                        }
-                    }
+                    (Some(nsk), None) => InputAccountIdentity::PrivateAuthorizedInit {
+                        ssk: pre.ssk,
+                        nsk,
+                        identifier: pre.identifier,
+                    },
                     (None, _) => InputAccountIdentity::PrivateUnauthorized {
                         npk: pre.npk,
                         ssk: pre.ssk,
+                        identifier: pre.identifier,
                     },
                 },
             })
@@ -196,11 +208,12 @@ impl AccountManager {
 struct AccountPreparedData {
     nsk: Option<NullifierSecretKey>,
     npk: NullifierPublicKey,
+    identifier: Identifier,
     vpk: ViewingPublicKey,
     pre_state: AccountWithMetadata,
     proof: Option<MembershipProof>,
     /// Cached shared-secret key derived once at `AccountManager::new`. Reused for both the
-    /// circuit input variant (`accounts()`) and the message ephemeral-key tuples
+    /// circuit input variant (`account_identities()`) and the message ephemeral-key tuples
     /// (`private_account_keys()`), so all consumers see the same key. The corresponding
     /// `EphemeralKeyHolder` uses `OsRng` and would produce a different value on a second call.
     ssk: SharedSecretKey,
@@ -212,11 +225,8 @@ async fn private_acc_preparation(
     wallet: &WalletCore,
     account_id: AccountId,
 ) -> Result<AccountPreparedData, ExecutionFailureKind> {
-    let Some((from_keys, from_acc)) = wallet
-        .storage
-        .user_data
-        .get_private_account(account_id)
-        .cloned()
+    let Some((from_keys, from_acc, from_identifier)) =
+        wallet.storage.user_data.get_private_account(account_id)
     else {
         return Err(ExecutionFailureKind::KeyNotFoundError);
     };
@@ -234,7 +244,7 @@ async fn private_acc_preparation(
 
     // TODO: Technically we could allow unauthorized owned accounts, but currently we don't have
     // support from that in the wallet.
-    let sender_pre = AccountWithMetadata::new(from_acc.clone(), true, &from_npk);
+    let sender_pre = AccountWithMetadata::new(from_acc.clone(), true, (&from_npk, from_identifier));
 
     let eph_holder = EphemeralKeyHolder::new(&from_npk);
     let ssk = eph_holder.calculate_shared_secret_sender(&from_vpk);
@@ -243,6 +253,7 @@ async fn private_acc_preparation(
     Ok(AccountPreparedData {
         nsk: Some(nsk),
         npk: from_npk,
+        identifier: from_identifier,
         vpk: from_vpk,
         pre_state: sender_pre,
         proof,

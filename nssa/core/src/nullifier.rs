@@ -4,18 +4,24 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Commitment, account::AccountId};
 
+const PRIVATE_ACCOUNT_ID_PREFIX: &[u8; 32] = b"/LEE/v0.3/AccountId/Private/\x00\x00\x00\x00";
+
+pub type Identifier = u128;
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(any(feature = "host", test), derive(Hash))]
 pub struct NullifierPublicKey(pub [u8; 32]);
 
-impl From<&NullifierPublicKey> for AccountId {
-    fn from(value: &NullifierPublicKey) -> Self {
-        const PRIVATE_ACCOUNT_ID_PREFIX: &[u8; 32] =
-            b"/LEE/v0.3/AccountId/Private/\x00\x00\x00\x00";
+impl From<(&NullifierPublicKey, Identifier)> for AccountId {
+    fn from(value: (&NullifierPublicKey, Identifier)) -> Self {
+        let (npk, identifier) = value;
 
-        let mut bytes = [0; 64];
+        // 32 bytes prefix || 32 bytes npk || 16 bytes identifier
+        let mut bytes = [0; 80];
         bytes[0..32].copy_from_slice(PRIVATE_ACCOUNT_ID_PREFIX);
-        bytes[32..].copy_from_slice(&value.0);
+        bytes[32..64].copy_from_slice(&npk.0);
+        bytes[64..80].copy_from_slice(&identifier.to_le_bytes());
+
         Self::new(
             Impl::hash_bytes(&bytes)
                 .as_bytes()
@@ -85,10 +91,10 @@ impl Nullifier {
 
     /// Computes a nullifier for an account initialization.
     #[must_use]
-    pub fn for_account_initialization(npk: &NullifierPublicKey) -> Self {
+    pub fn for_account_initialization(account_id: &AccountId) -> Self {
         const INIT_PREFIX: &[u8; 32] = b"/LEE/v0.3/Nullifier/Initialize/\x00";
         let mut bytes = INIT_PREFIX.to_vec();
-        bytes.extend_from_slice(&npk.to_byte_array());
+        bytes.extend_from_slice(account_id.value());
         Self(Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap())
     }
 }
@@ -111,7 +117,7 @@ mod tests {
 
     #[test]
     fn constructor_for_account_initialization() {
-        let npk = NullifierPublicKey([
+        let account_id = AccountId::new([
             112, 188, 193, 129, 150, 55, 228, 67, 88, 168, 29, 151, 5, 92, 23, 190, 17, 162, 164,
             255, 29, 105, 42, 186, 43, 11, 157, 168, 132, 225, 17, 163,
         ]);
@@ -119,7 +125,7 @@ mod tests {
             149, 59, 95, 181, 2, 194, 20, 143, 72, 233, 104, 243, 59, 70, 67, 243, 110, 77, 109,
             132, 139, 111, 51, 125, 128, 92, 107, 46, 252, 4, 20, 149,
         ]);
-        let nullifier = Nullifier::for_account_initialization(&npk);
+        let nullifier = Nullifier::for_account_initialization(&account_id);
         assert_eq!(nullifier, expected_nullifier);
     }
 
@@ -145,11 +151,46 @@ mod tests {
         ];
         let npk = NullifierPublicKey::from(&nsk);
         let expected_account_id = AccountId::new([
-            139, 72, 194, 222, 215, 187, 147, 56, 55, 35, 222, 205, 156, 12, 204, 227, 166, 44, 30,
-            81, 186, 14, 167, 234, 28, 236, 32, 213, 125, 251, 193, 233,
+            165, 52, 40, 32, 231, 171, 113, 10, 65, 241, 156, 72, 154, 207, 122, 192, 15, 46, 50,
+            253, 105, 164, 89, 84, 40, 191, 182, 119, 64, 255, 67, 142,
         ]);
 
-        let account_id = AccountId::from(&npk);
+        let account_id = AccountId::from((&npk, 0));
+
+        assert_eq!(account_id, expected_account_id);
+    }
+
+    #[test]
+    fn account_id_from_nullifier_public_key_identifier_1() {
+        let nsk = [
+            57, 5, 64, 115, 153, 56, 184, 51, 207, 238, 99, 165, 147, 214, 213, 151, 30, 251, 30,
+            196, 134, 22, 224, 211, 237, 120, 136, 225, 188, 220, 249, 28,
+        ];
+        let npk = NullifierPublicKey::from(&nsk);
+        let expected_account_id = AccountId::new([
+            203, 201, 109, 245, 40, 54, 195, 12, 55, 33, 0, 86, 245, 65, 70, 156, 24, 249, 26, 95,
+            56, 247, 99, 121, 165, 182, 234, 255, 19, 127, 191, 72,
+        ]);
+
+        let account_id = AccountId::from((&npk, 1));
+
+        assert_eq!(account_id, expected_account_id);
+    }
+
+    #[test]
+    fn account_id_from_nullifier_public_key_byte_asymmetric_identifier() {
+        let identifier: u128 = 0x0123_4567_89AB_CDEF_FEDC_BA98_7654_3210;
+        let nsk = [
+            57, 5, 64, 115, 153, 56, 184, 51, 207, 238, 99, 165, 147, 214, 213, 151, 30, 251, 30,
+            196, 134, 22, 224, 211, 237, 120, 136, 225, 188, 220, 249, 28,
+        ];
+        let npk = NullifierPublicKey::from(&nsk);
+        let expected_account_id = AccountId::new([
+            178, 16, 226, 206, 217, 38, 38, 45, 155, 240, 226, 253, 168, 87, 146, 70, 72, 32, 174,
+            19, 245, 25, 214, 162, 209, 135, 252, 82, 27, 2, 174, 196,
+        ]);
+
+        let account_id = AccountId::from((&npk, identifier));
 
         assert_eq!(account_id, expected_account_id);
     }

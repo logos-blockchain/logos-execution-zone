@@ -93,6 +93,12 @@ Only `Public/2gJJjtG9UivBGEhA1Jz6waZQx1cwfYupC5yvKEweHaeH` is used for completio
    exec zsh
    ```
 
+> **Note:** After updating the completion script, re-run step 1 to copy the new file, then rebuild the cache:
+> ```sh
+> cp _wallet ~/.oh-my-zsh/custom/plugins/wallet/
+> rm -rf ~/.zcompdump* && exec zsh
+> ```
+
 ### Requirements
 
 The completion script calls `wallet account list` to dynamically fetch account IDs. Ensure the `wallet` command is in your `$PATH`.
@@ -197,8 +203,7 @@ wallet account get --account-id <TAB>
 2. Rebuild the completion cache:
 
    ```sh
-   rm -f ~/.zcompdump*
-   exec zsh
+   rm -rf ~/.zcompdump* && exec zsh
    ```
 
 ### Account IDs not completing

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Commitment, CommitmentSetDigest, MembershipProof, Nullifier, NullifierPublicKey,
+    Commitment, CommitmentSetDigest, Identifier, MembershipProof, Nullifier, NullifierPublicKey,
     NullifierSecretKey, SharedSecretKey,
     account::{Account, AccountWithMetadata},
     encryption::Ciphertext,
@@ -29,11 +29,13 @@ pub enum InputAccountIdentity {
     /// commitment, ciphertext, or nullifier.
     Public,
     /// Init of an authorized standalone private account: no membership proof. The `pre_state`
-    /// must be `Account::default()`. `npk` is derived from `nsk` and matched against
-    /// `pre_state.account_id` via `AccountId::from(npk)`.
+    /// must be `Account::default()`. The account_id is derived as
+    /// `AccountId::from((&NullifierPublicKey::from(nsk), identifier))` and matched against
+    /// `pre_state.account_id`.
     PrivateAuthorizedInit {
         ssk: SharedSecretKey,
         nsk: NullifierSecretKey,
+        identifier: Identifier,
     },
     /// Update of an authorized standalone private account: existing on-chain commitment, with
     /// membership proof.
@@ -41,22 +43,25 @@ pub enum InputAccountIdentity {
         ssk: SharedSecretKey,
         nsk: NullifierSecretKey,
         membership_proof: MembershipProof,
+        identifier: Identifier,
     },
     /// Init of a standalone private account the caller does not own (e.g. a recipient who
     /// doesn't yet exist on chain). No `nsk`, no membership proof.
     PrivateUnauthorized {
         npk: NullifierPublicKey,
         ssk: SharedSecretKey,
+        identifier: Identifier,
     },
     /// Init of a private PDA, unauthorized. The npk-to-account_id binding is proven upstream
-    /// via `Claim::Pda(seed)` or a caller's `pda_seeds` match.
+    /// via `Claim::Pda(seed)` or a caller's `pda_seeds` match. Identifier is fixed by
+    /// convention to `PRIVATE_PDA_FIXED_IDENTIFIER` and not carried per-input.
     PrivatePdaInit {
         npk: NullifierPublicKey,
         ssk: SharedSecretKey,
     },
     /// Update of an existing private PDA, authorized, with membership proof. `npk` is derived
     /// from `nsk`. Authorization is established upstream by a caller `pda_seeds` match or a
-    /// previously-seen authorization in a chained call.
+    /// previously-seen authorization in a chained call. Identifier is fixed.
     PrivatePdaUpdate {
         ssk: SharedSecretKey,
         nsk: NullifierSecretKey,
@@ -121,7 +126,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        Commitment, Nullifier, NullifierPublicKey,
+        Commitment, Nullifier,
         account::{Account, AccountId, AccountWithMetadata, Nonce},
     };
 
@@ -158,12 +163,12 @@ mod tests {
             }],
             ciphertexts: vec![Ciphertext(vec![255, 255, 1, 1, 2, 2])],
             new_commitments: vec![Commitment::new(
-                &NullifierPublicKey::from(&[1; 32]),
+                &AccountId::new([1; 32]),
                 &Account::default(),
             )],
             new_nullifiers: vec![(
                 Nullifier::for_account_update(
-                    &Commitment::new(&NullifierPublicKey::from(&[2; 32]), &Account::default()),
+                    &Commitment::new(&AccountId::new([2; 32]), &Account::default()),
                     &[1; 32],
                 ),
                 [0xab; 32],

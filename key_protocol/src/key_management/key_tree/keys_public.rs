@@ -1,7 +1,7 @@
 use k256::elliptic_curve::{PrimeField as _, sec1::ToEncodedPoint as _};
 use serde::{Deserialize, Serialize};
 
-use crate::key_management::key_tree::traits::KeyNode;
+use crate::key_management::key_tree::traits::KeyTreeNode;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ChildKeysPublic {
@@ -13,32 +13,8 @@ pub struct ChildKeysPublic {
 }
 
 impl ChildKeysPublic {
-    fn compute_hash_value(&self, cci: u32) -> [u8; 64] {
-        let mut hash_input = vec![];
-
-        if ((2_u32).pow(31)).cmp(&cci) == std::cmp::Ordering::Greater {
-            // Non-harden.
-            // BIP-032 compatibility requires 1-byte header from the public_key;
-            // Not stored in `self.cpk.value()`.
-            let sk = k256::SecretKey::from_bytes(self.csk.value().into())
-                .expect("32 bytes, within curve order");
-            let pk = sk.public_key();
-            hash_input.extend_from_slice(pk.to_encoded_point(true).as_bytes());
-        } else {
-            // Harden.
-            hash_input.extend_from_slice(&[0_u8]);
-            hash_input.extend_from_slice(self.csk.value());
-        }
-
-        #[expect(clippy::big_endian_bytes, reason = "BIP-032 uses big endian")]
-        hash_input.extend_from_slice(&cci.to_be_bytes());
-
-        hmac_sha512::HMAC::mac(hash_input, self.ccc)
-    }
-}
-
-impl KeyNode for ChildKeysPublic {
-    fn root(seed: [u8; 64]) -> Self {
+    #[must_use]
+    pub fn root(seed: [u8; 64]) -> Self {
         let hash_value = hmac_sha512::HMAC::mac(seed, "LEE_master_pub");
 
         let csk = nssa::PrivateKey::try_new(
@@ -58,7 +34,8 @@ impl KeyNode for ChildKeysPublic {
         }
     }
 
-    fn nth_child(&self, cci: u32) -> Self {
+    #[must_use]
+    pub fn nth_child(&self, cci: u32) -> Self {
         let hash_value = self.compute_hash_value(cci);
 
         let csk = nssa::PrivateKey::try_new({
@@ -90,16 +67,32 @@ impl KeyNode for ChildKeysPublic {
         }
     }
 
-    fn chain_code(&self) -> &[u8; 32] {
-        &self.ccc
-    }
-
-    fn child_index(&self) -> Option<u32> {
-        self.cci
-    }
-
-    fn account_id(&self) -> nssa::AccountId {
+    #[must_use]
+    pub fn account_id(&self) -> nssa::AccountId {
         nssa::AccountId::from(&self.cpk)
+    }
+
+    fn compute_hash_value(&self, cci: u32) -> [u8; 64] {
+        let mut hash_input = vec![];
+
+        if ((2_u32).pow(31)).cmp(&cci) == std::cmp::Ordering::Greater {
+            // Non-harden.
+            // BIP-032 compatibility requires 1-byte header from the public_key;
+            // Not stored in `self.cpk.value()`.
+            let sk = k256::SecretKey::from_bytes(self.csk.value().into())
+                .expect("32 bytes, within curve order");
+            let pk = sk.public_key();
+            hash_input.extend_from_slice(pk.to_encoded_point(true).as_bytes());
+        } else {
+            // Harden.
+            hash_input.extend_from_slice(&[0_u8]);
+            hash_input.extend_from_slice(self.csk.value());
+        }
+
+        #[expect(clippy::big_endian_bytes, reason = "BIP-032 uses big endian")]
+        hash_input.extend_from_slice(&cci.to_be_bytes());
+
+        hmac_sha512::HMAC::mac(hash_input, self.ccc)
     }
 }
 
@@ -110,6 +103,20 @@ impl KeyNode for ChildKeysPublic {
 impl<'a> From<&'a ChildKeysPublic> for &'a nssa::PrivateKey {
     fn from(value: &'a ChildKeysPublic) -> Self {
         &value.csk
+    }
+}
+
+impl KeyTreeNode for ChildKeysPublic {
+    fn from_seed(seed: [u8; 64]) -> Self {
+        Self::root(seed)
+    }
+
+    fn derive_child(&self, cci: u32) -> Self {
+        self.nth_child(cci)
+    }
+
+    fn account_ids(&self) -> impl Iterator<Item = nssa::AccountId> {
+        std::iter::once(self.account_id())
     }
 }
 

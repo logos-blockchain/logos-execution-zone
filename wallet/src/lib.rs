@@ -15,7 +15,7 @@ use bip39::Mnemonic;
 use chain_storage::WalletChainStore;
 use common::{HashType, transaction::NSSATransaction};
 use config::WalletConfig;
-use key_protocol::key_management::key_tree::{chain_index::ChainIndex, traits::KeyNode as _};
+use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use log::info;
 use nssa::{
     Account, AccountId, PrivacyPreservingTransaction,
@@ -256,13 +256,35 @@ impl WalletCore {
             .generate_new_public_transaction_private_key(chain_index)
     }
 
+    pub fn create_private_accounts_key(&mut self, chain_index: Option<ChainIndex>) -> ChainIndex {
+        self.storage
+            .user_data
+            .create_private_accounts_key(chain_index)
+    }
+
     pub fn create_new_account_private(
         &mut self,
         chain_index: Option<ChainIndex>,
     ) -> (AccountId, ChainIndex) {
-        self.storage
+        let cci = self
+            .storage
             .user_data
-            .generate_new_privacy_preserving_transaction_key_chain(chain_index)
+            .create_private_accounts_key(chain_index);
+        let identifier: nssa_core::Identifier = rand::random();
+        let npk = self
+            .storage
+            .user_data
+            .private_key_tree
+            .key_map
+            .get(&cci)
+            .expect("Node was just inserted")
+            .value
+            .0
+            .nullifier_public_key;
+        let account_id = AccountId::from((&npk, identifier));
+        self.storage
+            .insert_private_account_data(account_id, identifier, Account::default());
+        (account_id, cci)
     }
 
     /// Get account balance.
@@ -295,13 +317,14 @@ impl WalletCore {
         self.storage
             .user_data
             .get_private_account(account_id)
-            .map(|value| value.1.clone())
+            .map(|(_keys, account, _identifier)| account)
     }
 
     #[must_use]
     pub fn get_private_account_commitment(&self, account_id: AccountId) -> Option<Commitment> {
-        let (keys, account) = self.storage.user_data.get_private_account(account_id)?;
-        Some(Commitment::new(&keys.nullifier_public_key, account))
+        let (_keys, account, _identifier) =
+            self.storage.user_data.get_private_account(account_id)?;
+        Some(Commitment::new(&account_id, &account))
     }
 
     /// Poll transactions.
@@ -334,7 +357,7 @@ impl WalletCore {
                     let acc_ead = tx.message.encrypted_private_post_states[output_index].clone();
                     let acc_comm = tx.message.new_commitments[output_index].clone();
 
-                    let res_acc = nssa_core::EncryptionScheme::decrypt(
+                    let (identifier, res_acc) = nssa_core::EncryptionScheme::decrypt(
                         &acc_ead.ciphertext,
                         secret,
                         &acc_comm,
@@ -347,7 +370,7 @@ impl WalletCore {
                     println!("Received new acc {res_acc:#?}");
 
                     self.storage
-                        .insert_private_account_data(*acc_account_id, res_acc);
+                        .insert_private_account_data(*acc_account_id, identifier, res_acc);
                 }
                 AccDecodeData::Skip => {}
             }
@@ -477,33 +500,33 @@ impl WalletCore {
             .storage
             .user_data
             .default_user_private_accounts
-            .iter()
-            .map(|(acc_account_id, (key_chain, _))| (*acc_account_id, key_chain, None))
-            .chain(self.storage.user_data.private_key_tree.key_map.iter().map(
-                |(chain_index, keys_node)| {
-                    (
-                        keys_node.account_id(),
-                        &keys_node.value.0,
-                        chain_index.index(),
-                    )
-                },
-            ));
+            .values()
+            .map(|entry| (&entry.key_chain, None))
+            .chain(
+                self.storage
+                    .user_data
+                    .private_key_tree
+                    .key_map
+                    .iter()
+                    .map(|(chain_index, keys_node)| (&keys_node.value.0, chain_index.index())),
+            );
 
         let affected_accounts = private_account_key_chains
-            .flat_map(|(acc_account_id, key_chain, index)| {
+            .flat_map(|(key_chain, index)| {
                 let view_tag = EncryptedAccountData::compute_view_tag(
                     &key_chain.nullifier_public_key,
                     &key_chain.viewing_public_key,
                 );
+                let new_commitments = &tx.message.new_commitments;
 
                 tx.message()
                     .encrypted_private_post_states
                     .iter()
                     .enumerate()
                     .filter(move |(_, encrypted_data)| encrypted_data.view_tag == view_tag)
-                    .filter_map(|(ciph_id, encrypted_data)| {
+                    .filter_map(move |(ciph_id, encrypted_data)| {
                         let ciphertext = &encrypted_data.ciphertext;
-                        let commitment = &tx.message.new_commitments[ciph_id];
+                        let commitment = &new_commitments[ciph_id];
                         let shared_secret =
                             key_chain.calculate_shared_secret_receiver(&encrypted_data.epk, index);
 
@@ -515,18 +538,24 @@ impl WalletCore {
                                 .try_into()
                                 .expect("Ciphertext ID is expected to fit in u32"),
                         )
+                        .map(|(identifier, res_acc)| {
+                            let account_id = nssa::AccountId::from((
+                                &key_chain.nullifier_public_key,
+                                identifier,
+                            ));
+                            (account_id, identifier, res_acc)
+                        })
                     })
-                    .map(move |res_acc| (acc_account_id, res_acc))
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
 
-        for (affected_account_id, new_acc) in affected_accounts {
+        for (affected_account_id, identifier, new_acc) in affected_accounts {
             info!(
                 "Received new account for account_id {affected_account_id:#?} with account object {new_acc:#?}"
             );
             self.storage
-                .insert_private_account_data(affected_account_id, new_acc);
+                .insert_private_account_data(affected_account_id, identifier, new_acc);
         }
     }
 

@@ -4,9 +4,9 @@ use std::{
 };
 
 use nssa_core::{
-    Commitment, CommitmentSetDigest, DUMMY_COMMITMENT_HASH, EncryptionScheme, MembershipProof,
-    Nullifier, NullifierPublicKey, NullifierSecretKey, PrivacyPreservingCircuitInput,
-    InputAccountIdentity, PrivacyPreservingCircuitOutput, SharedSecretKey,
+    Commitment, CommitmentSetDigest, DUMMY_COMMITMENT_HASH, EncryptionScheme, Identifier,
+    InputAccountIdentity, MembershipProof, Nullifier, NullifierPublicKey, NullifierSecretKey,
+    PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput, SharedSecretKey,
     account::{Account, AccountId, AccountWithMetadata, Nonce},
     compute_digest_for_path,
     program::{
@@ -16,6 +16,8 @@ use nssa_core::{
     },
 };
 use risc0_zkvm::{guest::env, serde::to_vec};
+
+const PRIVATE_PDA_FIXED_IDENTIFIER: Identifier = u128::MAX;
 
 /// State of the involved accounts before and after program execution.
 struct ExecutionState {
@@ -504,12 +506,20 @@ fn compute_circuit_output(
                 output.public_pre_states.push(pre_state);
                 output.public_post_states.push(post_state);
             }
-            InputAccountIdentity::PrivateAuthorizedInit { ssk, nsk } => {
+            InputAccountIdentity::PrivateAuthorizedInit {
+                ssk,
+                nsk,
+                identifier,
+            } => {
+                assert_ne!(
+                    *identifier, PRIVATE_PDA_FIXED_IDENTIFIER,
+                    "Identifier must be different from {PRIVATE_PDA_FIXED_IDENTIFIER}. This is reserved for private PDA."
+                );
                 let npk = NullifierPublicKey::from(nsk);
+                let account_id = AccountId::from((&npk, *identifier));
 
                 assert_eq!(
-                    AccountId::from(&npk),
-                    pre_state.account_id,
+                    account_id, pre_state.account_id,
                     "AccountId mismatch"
                 );
                 assert!(
@@ -523,7 +533,7 @@ fn compute_circuit_output(
                 );
 
                 let new_nullifier = (
-                    Nullifier::for_account_initialization(&npk),
+                    Nullifier::for_account_initialization(&account_id),
                     DUMMY_COMMITMENT_HASH,
                 );
                 let new_nonce = pre_state.account.nonce.private_account_nonce_increment(nsk);
@@ -532,7 +542,8 @@ fn compute_circuit_output(
                     &mut output,
                     &mut output_index,
                     post_state,
-                    &npk,
+                    &account_id,
+                    *identifier,
                     ssk,
                     new_nullifier,
                     new_nonce,
@@ -542,12 +553,17 @@ fn compute_circuit_output(
                 ssk,
                 nsk,
                 membership_proof,
+                identifier,
             } => {
+                assert_ne!(
+                    *identifier, PRIVATE_PDA_FIXED_IDENTIFIER,
+                    "Identifier must be different from {PRIVATE_PDA_FIXED_IDENTIFIER}. This is reserved for private PDA."
+                );
                 let npk = NullifierPublicKey::from(nsk);
+                let account_id = AccountId::from((&npk, *identifier));
 
                 assert_eq!(
-                    AccountId::from(&npk),
-                    pre_state.account_id,
+                    account_id, pre_state.account_id,
                     "AccountId mismatch"
                 );
                 assert!(
@@ -558,7 +574,7 @@ fn compute_circuit_output(
                 let new_nullifier = compute_update_nullifier_and_set_digest(
                     membership_proof,
                     &pre_state.account,
-                    &npk,
+                    &account_id,
                     nsk,
                 );
                 let new_nonce = pre_state.account.nonce.private_account_nonce_increment(nsk);
@@ -567,16 +583,26 @@ fn compute_circuit_output(
                     &mut output,
                     &mut output_index,
                     post_state,
-                    &npk,
+                    &account_id,
+                    *identifier,
                     ssk,
                     new_nullifier,
                     new_nonce,
                 );
             }
-            InputAccountIdentity::PrivateUnauthorized { npk, ssk } => {
+            InputAccountIdentity::PrivateUnauthorized {
+                npk,
+                ssk,
+                identifier,
+            } => {
+                assert_ne!(
+                    *identifier, PRIVATE_PDA_FIXED_IDENTIFIER,
+                    "Identifier must be different from {PRIVATE_PDA_FIXED_IDENTIFIER}. This is reserved for private PDA."
+                );
+                let account_id = AccountId::from((npk, *identifier));
+
                 assert_eq!(
-                    AccountId::from(npk),
-                    pre_state.account_id,
+                    account_id, pre_state.account_id,
                     "AccountId mismatch"
                 );
                 assert_eq!(
@@ -590,25 +616,29 @@ fn compute_circuit_output(
                 );
 
                 let new_nullifier = (
-                    Nullifier::for_account_initialization(npk),
+                    Nullifier::for_account_initialization(&account_id),
                     DUMMY_COMMITMENT_HASH,
                 );
-                let new_nonce = Nonce::private_account_nonce_init(npk);
+                let new_nonce = Nonce::private_account_nonce_init(&account_id);
 
                 emit_private_output(
                     &mut output,
                     &mut output_index,
                     post_state,
-                    npk,
+                    &account_id,
+                    *identifier,
                     ssk,
                     new_nullifier,
                     new_nonce,
                 );
             }
-            InputAccountIdentity::PrivatePdaInit { npk, ssk } => {
+            InputAccountIdentity::PrivatePdaInit { npk: _, ssk } => {
                 // The npk-to-account_id binding is established upstream in
                 // `validate_and_sync_states` via `Claim::Pda(seed)` or a caller `pda_seeds`
-                // match. Here we only enforce the init pre-conditions.
+                // match. Here we only enforce the init pre-conditions. The supplied npk on
+                // the variant has been recorded into `private_pda_npk_by_position` and used
+                // for the binding check; we use `pre_state.account_id` directly for nullifier
+                // and commitment derivation.
                 assert!(
                     !pre_state.is_authorized,
                     "PrivatePdaInit requires unauthorized pre_state"
@@ -620,16 +650,18 @@ fn compute_circuit_output(
                 );
 
                 let new_nullifier = (
-                    Nullifier::for_account_initialization(npk),
+                    Nullifier::for_account_initialization(&pre_state.account_id),
                     DUMMY_COMMITMENT_HASH,
                 );
-                let new_nonce = Nonce::private_account_nonce_init(npk);
+                let new_nonce = Nonce::private_account_nonce_init(&pre_state.account_id);
 
+                let account_id = pre_state.account_id;
                 emit_private_output(
                     &mut output,
                     &mut output_index,
                     post_state,
-                    npk,
+                    &account_id,
+                    PRIVATE_PDA_FIXED_IDENTIFIER,
                     ssk,
                     new_nullifier,
                     new_nonce,
@@ -640,8 +672,6 @@ fn compute_circuit_output(
                 nsk,
                 membership_proof,
             } => {
-                let npk = NullifierPublicKey::from(nsk);
-
                 // The npk binding is established upstream. Authorization must already be set;
                 // an unauthorized PrivatePdaUpdate would mean the prover supplied an nsk for an
                 // unbound PDA, which the upstream binding check would have rejected anyway,
@@ -654,16 +684,18 @@ fn compute_circuit_output(
                 let new_nullifier = compute_update_nullifier_and_set_digest(
                     membership_proof,
                     &pre_state.account,
-                    &npk,
+                    &pre_state.account_id,
                     nsk,
                 );
                 let new_nonce = pre_state.account.nonce.private_account_nonce_increment(nsk);
 
+                let account_id = pre_state.account_id;
                 emit_private_output(
                     &mut output,
                     &mut output_index,
                     post_state,
-                    &npk,
+                    &account_id,
+                    PRIVATE_PDA_FIXED_IDENTIFIER,
                     ssk,
                     new_nullifier,
                     new_nonce,
@@ -675,11 +707,16 @@ fn compute_circuit_output(
     output
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "All seven inputs are distinct concerns from the variant arms; bundling would be artificial"
+)]
 fn emit_private_output(
     output: &mut PrivacyPreservingCircuitOutput,
     output_index: &mut u32,
     post_state: Account,
-    npk: &NullifierPublicKey,
+    account_id: &AccountId,
+    identifier: Identifier,
     shared_secret: &SharedSecretKey,
     new_nullifier: (Nullifier, CommitmentSetDigest),
     new_nonce: Nonce,
@@ -689,9 +726,10 @@ fn emit_private_output(
     let mut post_with_updated_nonce = post_state;
     post_with_updated_nonce.nonce = new_nonce;
 
-    let commitment_post = Commitment::new(npk, &post_with_updated_nonce);
+    let commitment_post = Commitment::new(account_id, &post_with_updated_nonce);
     let encrypted_account = EncryptionScheme::encrypt(
         &post_with_updated_nonce,
+        identifier,
         shared_secret,
         &commitment_post,
         *output_index,
@@ -707,10 +745,10 @@ fn emit_private_output(
 fn compute_update_nullifier_and_set_digest(
     membership_proof: &MembershipProof,
     pre_account: &Account,
-    npk: &NullifierPublicKey,
+    account_id: &AccountId,
     nsk: &NullifierSecretKey,
 ) -> (Nullifier, CommitmentSetDigest) {
-    let commitment_pre = Commitment::new(npk, pre_account);
+    let commitment_pre = Commitment::new(account_id, pre_account);
     let set_digest = compute_digest_for_path(&commitment_pre, membership_proof);
     let nullifier = Nullifier::for_account_update(&commitment_pre, nsk);
     (nullifier, set_digest)
