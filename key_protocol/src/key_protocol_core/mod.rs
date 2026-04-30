@@ -29,12 +29,12 @@ pub struct NSSAUserData {
     /// An older wallet binary that re-serializes this struct will drop the field.
     #[serde(default)]
     pub group_key_holders: BTreeMap<String, GroupKeyHolder>,
-    /// Cached plaintext state of group private PDA accounts, keyed by `AccountId`.
-    /// Updated after each group PDA transaction by decrypting the circuit output.
+    /// Cached plaintext state of private PDA accounts, keyed by `AccountId`.
+    /// Updated after each private PDA transaction by decrypting the circuit output.
     /// The sequencer only stores encrypted commitments, so this local cache is the
-    /// only source of plaintext state for group PDAs.
-    #[serde(default)]
-    pub group_pda_accounts: BTreeMap<nssa::AccountId, nssa_core::account::Account>,
+    /// only source of plaintext state for private PDAs.
+    #[serde(default, alias = "group_pda_accounts")]
+    pub pda_accounts: BTreeMap<nssa::AccountId, nssa_core::account::Account>,
 }
 
 impl NSSAUserData {
@@ -94,7 +94,7 @@ impl NSSAUserData {
             public_key_tree,
             private_key_tree,
             group_key_holders: BTreeMap::new(),
-            group_pda_accounts: BTreeMap::new(),
+            pda_accounts: BTreeMap::new(),
         })
     }
 

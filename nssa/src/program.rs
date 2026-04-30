@@ -313,12 +313,12 @@ mod tests {
         }
 
         #[must_use]
-        pub fn group_pda_spender() -> Self {
-            use test_program_methods::{GROUP_PDA_SPENDER_ELF, GROUP_PDA_SPENDER_ID};
+        pub fn private_pda_spender() -> Self {
+            use test_program_methods::{PRIVATE_PDA_SPENDER_ELF, PRIVATE_PDA_SPENDER_ID};
 
             Self {
-                id: GROUP_PDA_SPENDER_ID,
-                elf: GROUP_PDA_SPENDER_ELF.to_vec(),
+                id: PRIVATE_PDA_SPENDER_ID,
+                elf: PRIVATE_PDA_SPENDER_ELF.to_vec(),
             }
         }
 

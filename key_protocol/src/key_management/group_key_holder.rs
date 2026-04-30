@@ -1,14 +1,24 @@
 use aes_gcm::{Aes256Gcm, KeyInit as _, aead::Aead as _};
 use nssa_core::{
     SharedSecretKey,
-    encryption::{Scalar, ViewingPublicKey, shared_key_derivation::Secp256k1Point},
+    encryption::{Scalar, shared_key_derivation::Secp256k1Point},
     program::PdaSeed,
 };
 use rand::{RngCore as _, rngs::OsRng};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, digest::FixedOutput as _};
 
-use super::secret_holders::{PrivateKeyHolder, SecretSpendingKey, ViewingSecretKey};
+use super::secret_holders::{PrivateKeyHolder, SecretSpendingKey};
+
+/// Public key used to seal a `GroupKeyHolder` for distribution to a recipient.
+///
+/// Structurally identical to `ViewingPublicKey` (both are secp256k1 points), but given
+/// a distinct alias to clarify intent: viewing keys encrypt account state, sealing keys
+/// encrypt the GMS for off-chain distribution.
+pub type SealingPublicKey = Secp256k1Point;
+
+/// Secret key used to unseal a `GroupKeyHolder` received from another member.
+pub type SealingSecretKey = Scalar;
 
 /// Manages shared viewing keys for a group of controllers owning private PDAs.
 ///
@@ -19,7 +29,7 @@ use super::secret_holders::{PrivateKeyHolder, SecretSpendingKey, ViewingSecretKe
 /// # Distribution
 ///
 /// The GMS is a long-term secret and must never cross a trust boundary in raw form.
-/// Controllers share it off-chain by sealing it under each recipient's [`ViewingPublicKey`]
+/// Controllers share it off-chain by sealing it under each recipient's [`SealingPublicKey`]
 /// (see `seal_for` / `unseal`). Wallets persisting a `GroupKeyHolder` must encrypt it at
 /// rest; the raw bytes are exposed only via [`GroupKeyHolder::dangerous_raw_gms`], which
 /// is intended for the sealing path exclusively.
@@ -130,7 +140,7 @@ impl GroupKeyHolder {
             .produce_private_key_holder(None)
     }
 
-    /// Encrypts this holder's GMS and epoch under the recipient's [`ViewingPublicKey`].
+    /// Encrypts this holder's GMS and epoch under the recipient's [`SealingPublicKey`].
     ///
     /// Uses an ephemeral ECDH key exchange to derive a shared secret, then AES-256-GCM
     /// to encrypt the payload. The returned bytes are
@@ -139,11 +149,11 @@ impl GroupKeyHolder {
     /// Each call generates a fresh ephemeral key, so two seals of the same holder produce
     /// different ciphertexts.
     #[must_use]
-    pub fn seal_for(&self, recipient_vpk: &ViewingPublicKey) -> Vec<u8> {
+    pub fn seal_for(&self, recipient_key: &SealingPublicKey) -> Vec<u8> {
         let mut ephemeral_scalar: Scalar = [0_u8; 32];
         OsRng.fill_bytes(&mut ephemeral_scalar);
-        let ephemeral_pubkey = ViewingPublicKey::from_scalar(ephemeral_scalar);
-        let shared = SharedSecretKey::new(&ephemeral_scalar, recipient_vpk);
+        let ephemeral_pubkey = Secp256k1Point::from_scalar(ephemeral_scalar);
+        let shared = SharedSecretKey::new(&ephemeral_scalar, recipient_key);
         let aes_key = Self::seal_kdf(&shared);
         let cipher = Aes256Gcm::new(&aes_key.into());
 
@@ -170,11 +180,11 @@ impl GroupKeyHolder {
         out
     }
 
-    /// Decrypts a sealed `GroupKeyHolder` using the recipient's `ViewingSecretKey`.
+    /// Decrypts a sealed `GroupKeyHolder` using the recipient's [`SealingSecretKey`].
     ///
     /// Returns `Err` if the ciphertext is too short, the ECDH point is invalid, or the
     /// AES-GCM authentication tag doesn't verify (wrong key or tampered data).
-    pub fn unseal(sealed: &[u8], own_vsk: &ViewingSecretKey) -> Result<Self, SealError> {
+    pub fn unseal(sealed: &[u8], own_key: &SealingSecretKey) -> Result<Self, SealError> {
         const HEADER_LEN: usize = 33 + 12;
         const MIN_LEN: usize = HEADER_LEN + 16;
         if sealed.len() < MIN_LEN {
@@ -185,7 +195,7 @@ impl GroupKeyHolder {
         let nonce = aes_gcm::Nonce::from_slice(&sealed[33..HEADER_LEN]);
         let ciphertext = &sealed[HEADER_LEN..];
 
-        let shared = SharedSecretKey::new(own_vsk, &ephemeral_pubkey);
+        let shared = SharedSecretKey::new(own_key, &ephemeral_pubkey);
         let aes_key = Self::seal_kdf(&shared);
         let cipher = Aes256Gcm::new(&aes_key.into());
 
@@ -560,7 +570,7 @@ mod tests {
     /// Sealed payload is too short.
     #[test]
     fn unseal_too_short_fails() {
-        let vsk: ViewingSecretKey = [7_u8; 32];
+        let vsk: SealingSecretKey = [7_u8; 32];
         let result = GroupKeyHolder::unseal(&[0_u8; 10], &vsk);
         assert!(matches!(result, Err(super::SealError::TooShort)));
     }

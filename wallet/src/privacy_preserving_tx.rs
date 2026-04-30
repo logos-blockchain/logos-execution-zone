@@ -18,11 +18,13 @@ pub enum PrivacyPreservingAccount {
         npk: NullifierPublicKey,
         vpk: ViewingPublicKey,
     },
-    /// A private PDA owned by a group. The wallet derives keys from the
-    /// `GroupKeyHolder` stored under `group_label`, then computes the
-    /// `AccountId` via `AccountId::for_private_pda(program_id, seed, npk)`.
-    PrivateGroupPda {
-        group_label: String,
+    /// A private PDA with externally-provided keys. The caller resolves the keys
+    /// (e.g. via `GroupKeyHolder::derive_keys_for_pda`) before constructing this variant.
+    /// The wallet computes the `AccountId` via `AccountId::for_private_pda(program_id, seed, npk)`.
+    PrivatePda {
+        nsk: NullifierSecretKey,
+        npk: NullifierPublicKey,
+        vpk: ViewingPublicKey,
         program_id: ProgramId,
         seed: PdaSeed,
     },
@@ -40,7 +42,7 @@ impl PrivacyPreservingAccount {
             &self,
             Self::PrivateOwned(_)
                 | Self::PrivateForeign { npk: _, vpk: _ }
-                | Self::PrivateGroupPda { .. }
+                | Self::PrivatePda { .. }
         )
     }
 }
@@ -105,13 +107,15 @@ impl AccountManager {
 
                     (State::Private(pre), 2)
                 }
-                PrivacyPreservingAccount::PrivateGroupPda {
-                    group_label,
+                PrivacyPreservingAccount::PrivatePda {
+                    nsk,
+                    npk,
+                    vpk,
                     program_id,
                     seed,
                 } => {
                     let pre =
-                        group_pda_preparation(wallet, &group_label, &program_id, &seed).await?;
+                        private_pda_preparation(wallet, nsk, npk, vpk, &program_id, &seed).await?;
 
                     (State::Private(pre), 3)
                 }
@@ -227,22 +231,14 @@ struct AccountPreparedData {
     proof: Option<MembershipProof>,
 }
 
-async fn group_pda_preparation(
+async fn private_pda_preparation(
     wallet: &WalletCore,
-    group_label: &str,
+    nsk: NullifierSecretKey,
+    npk: NullifierPublicKey,
+    vpk: ViewingPublicKey,
     program_id: &ProgramId,
     seed: &PdaSeed,
 ) -> Result<AccountPreparedData, ExecutionFailureKind> {
-    let holder = wallet
-        .storage
-        .user_data
-        .group_key_holder(group_label)
-        .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
-
-    let keys = holder.derive_keys_for_pda(seed);
-    let npk = keys.generate_nullifier_public_key();
-    let vpk = keys.generate_viewing_public_key();
-    let nsk = keys.nullifier_secret_key;
     let account_id = nssa::AccountId::for_private_pda(program_id, seed, &npk);
 
     // Check local cache first (private PDA state is encrypted on-chain, the sequencer
@@ -250,7 +246,7 @@ async fn group_pda_preparation(
     let acc = wallet
         .storage
         .user_data
-        .group_pda_accounts
+        .pda_accounts
         .get(&account_id)
         .cloned()
         .unwrap_or_default();
@@ -260,8 +256,7 @@ async fn group_pda_preparation(
     // is_authorized tracks whether the account existed on-chain before this tx.
     // NSK is only provided for existing accounts: the circuit consumes NSKs sequentially
     // from an iterator and asserts none are left over, so supplying an NSK for a new
-    // (unauthorized) account would trigger the over-supply assertion. This matches the
-    // PrivateForeign path (nsk: None for unauthorized accounts).
+    // (unauthorized) account would trigger the over-supply assertion.
     let pre_state = AccountWithMetadata::new(acc, exists, account_id);
 
     let proof = if exists {
@@ -324,11 +319,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn private_group_pda_is_private() {
-        let acc = PrivacyPreservingAccount::PrivateGroupPda {
-            group_label: String::from("test"),
-            program_id: [1; 8],
-            seed: PdaSeed::new([2; 32]),
+    fn private_pda_is_private() {
+        let acc = PrivacyPreservingAccount::PrivatePda {
+            nsk: [0; 32],
+            npk: NullifierPublicKey([1; 32]),
+            vpk: ViewingPublicKey::from_scalar([2; 32]),
+            program_id: [3; 8],
+            seed: PdaSeed::new([4; 32]),
         };
         assert!(acc.is_private());
         assert!(!acc.is_public());

@@ -420,10 +420,10 @@ mod tests {
     }
 
     /// Group PDA deposit: creates a new PDA and transfers balance from the
-    /// counterparty. Both accounts owned by `group_pda_spender`.
+    /// counterparty. Both accounts owned by `private_pda_spender`.
     #[test]
     fn group_pda_deposit() {
-        let program = Program::group_pda_spender();
+        let program = Program::private_pda_spender();
         let noop = Program::noop();
         let keys = test_private_account_keys_1();
         let npk = keys.npk();
@@ -475,7 +475,7 @@ mod tests {
     /// testing with a pre-funded PDA requires a two-tx sequence with membership proofs.
     #[test]
     fn group_pda_spend_binding() {
-        let program = Program::group_pda_spender();
+        let program = Program::private_pda_spender();
         let noop = Program::noop();
         let keys = test_private_account_keys_1();
         let npk = keys.npk();

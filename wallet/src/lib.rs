@@ -201,12 +201,6 @@ impl WalletCore {
         &self.storage
     }
 
-    /// Get mutable storage (e.g. for inserting group key holders).
-    #[must_use]
-    pub const fn storage_mut(&mut self) -> &mut WalletChainStore {
-        &mut self.storage
-    }
-
     /// Restore storage from an existing mnemonic phrase.
     pub fn restore_storage(&mut self, mnemonic: &Mnemonic, password: &str) -> Result<()> {
         self.storage = WalletChainStore::restore_storage(
