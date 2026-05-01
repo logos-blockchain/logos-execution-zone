@@ -94,11 +94,12 @@ pub enum TokenProgramAgnosticSubcommand {
         #[arg(
             long,
             conflicts_with = "from_label",
-            required_unless_present = "from_label"
+            conflicts_with = "from_key_path",
+            required_unless_present_any = ["from_label", "from_key_path"]
         )]
         from: Option<String>,
         /// From account label (alternative to --from).
-        #[arg(long, conflicts_with = "from")]
+        #[arg(long, conflicts_with = "from", conflicts_with = "from_key_path")]
         from_label: Option<String>,
         /// to - valid 32 byte base58 string with privacy prefix.
         #[arg(long, conflicts_with = "to_label")]
@@ -179,11 +180,14 @@ pub enum TokenProgramAgnosticSubcommand {
         #[arg(long, conflicts_with = "definition", conflicts_with = "definition_label")]
         definition_key_path: Option<String>,
         /// holder - valid 32 byte base58 string with privacy prefix.
-        #[arg(long, conflicts_with = "holder_label", required_unless_present_any = ["holder_label", "holder_key_path"])]
+        #[arg(long, conflicts_with = "holder_label", conflicts_with = "holder_key_path", required_unless_present_any = ["holder_label", "holder_key_path"])]
         holder: Option<String>,
         /// Holder account label (alternative to --holder).
-        #[arg(long, conflicts_with = "holder")]
+        #[arg(long, conflicts_with = "holder", conflicts_with = "holder_key_path")]
         holder_label: Option<String>,
+        /// Key path for the holder account (uses Keycard, for account ID resolution only).
+        #[arg(long, conflicts_with = "holder", conflicts_with = "holder_label")]
+        holder_key_path: Option<String>,
         /// `holder_npk` - valid 32 byte hex string.
         #[arg(long)]
         holder_npk: Option<String>,
@@ -234,6 +238,26 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
 
                 let definition_account_id: AccountId = definition_id.parse()?;
                 let holder_account_id: AccountId = holder_id.parse()?;
+
+                // Skip if the holder is already initialised — prevents a ZK-prove panic when
+                // the account already has token data (e.g. on re-runs against the same chain).
+                let already_initialized = match holder_privacy {
+                    AccountPrivacyKind::Public => {
+                        let account = wallet_core.get_account_public(holder_account_id).await?;
+                        account != nssa::Account::default()
+                    }
+                    AccountPrivacyKind::Private => wallet_core
+                        .storage
+                        .user_data
+                        .get_private_account(holder_account_id)
+                        .is_some_and(|(_, acct, _)| acct != nssa::Account::default()),
+                };
+                if already_initialized {
+                    println!(
+                        "Holder {holder_id} is already initialized as a token holding. Skipping."
+                    );
+                    return Ok(SubcommandReturnValue::Empty);
+                }
 
                 let definition_account = match definition_privacy {
                     AccountPrivacyKind::Public => {
@@ -453,6 +477,7 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                                         sender_account_id: from,
                                         recipient_account_id: to,
                                         balance_to_move: amount,
+                                        sender_key_path: from_key_path,
                                     },
                                 )
                             }
@@ -561,6 +586,7 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                 definition_key_path,
                 holder,
                 holder_label,
+                holder_key_path,
                 holder_npk,
                 holder_vpk,
                 holder_identifier,
@@ -573,15 +599,16 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                     &wallet_core.storage.user_data,
                     definition_key_path.as_deref(),
                 )?;
-                let holder = match (holder, holder_label) {
-                    (v, None) => v,
-                    (None, Some(label)) => Some(resolve_account_label(
+                let holder = match (holder, holder_label, holder_key_path.as_deref()) {
+                    (v, None, None) => v,
+                    (None, Some(label), None) => Some(resolve_account_label(
                         &label,
                         &wallet_core.storage.labels,
                         &wallet_core.storage.user_data,
                     )?),
-                    (Some(_), Some(_)) => {
-                        anyhow::bail!("Provide only one of --holder or --holder-label")
+                    (None, None, Some(kp)) => Some(resolve_keycard_id(kp)?),
+                    _ => {
+                        anyhow::bail!("Provide only one of --holder, --holder-label, or --holder-key-path")
                     }
                 };
                 let underlying_subcommand = match (holder, holder_npk, holder_vpk) {
@@ -839,6 +866,8 @@ pub enum TokenProgramSubcommandShielded {
         recipient_account_id: String,
         #[arg(short, long)]
         balance_to_move: u128,
+        #[arg(long)]
+        sender_key_path: Option<String>,
     },
     // Transfer tokens using the token program
     TransferTokenShieldedForeign {
@@ -1383,6 +1412,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                 sender_account_id,
                 recipient_account_id,
                 balance_to_move,
+                sender_key_path,
             } => {
                 let sender_account_id: AccountId = sender_account_id.parse().unwrap();
                 let recipient_account_id: AccountId = recipient_account_id.parse().unwrap();
@@ -1392,6 +1422,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                         sender_account_id,
                         recipient_account_id,
                         balance_to_move,
+                        sender_key_path,
                     )
                     .await?;
 

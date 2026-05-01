@@ -56,7 +56,7 @@ impl Token<'_> {
                 .user_data
                 .get_pub_account_signing_key(definition_account_id)
                 .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
-            (Signature::new(&sk, &msg_hash), PublicKey::new_from_private_key(&sk))
+            (Signature::new(sk, &msg_hash), PublicKey::new_from_private_key(sk))
         };
 
         let (sig_sup, pk_sup) = if let Some(kp) = supply_key_path {
@@ -68,7 +68,7 @@ impl Token<'_> {
                 .user_data
                 .get_pub_account_signing_key(supply_account_id)
                 .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
-            (Signature::new(&sk, &msg_hash), PublicKey::new_from_private_key(&sk))
+            (Signature::new(sk, &msg_hash), PublicKey::new_from_private_key(sk))
         };
 
         let witness_set = nssa::public_transaction::WitnessSet::from_list(
@@ -191,17 +191,13 @@ impl Token<'_> {
         let instruction = Instruction::Transfer {
             amount_to_transfer: amount,
         };
-        let mut nonces = self
+        // Only the sender authorises a token Transfer — the recipient holding must already be
+        // initialised (no recipient signature required, matching the burn pattern).
+        let nonces = self
             .0
             .get_accounts_nonces(vec![sender_account_id])
             .await
             .map_err(ExecutionFailureKind::SequencerError)?;
-        let recipient_nonces = self
-            .0
-            .get_accounts_nonces(vec![recipient_account_id])
-            .await
-            .map_err(ExecutionFailureKind::SequencerError)?;
-        nonces.extend(recipient_nonces);
 
         let message = nssa::public_transaction::Message::try_new(
             program_id,
@@ -210,6 +206,7 @@ impl Token<'_> {
             instruction,
         )
         .unwrap();
+
         let witness_set = if let Some(sender_key_path) = sender_key_path {
             let pin = crate::helperfunctions::read_pin().map_err(|e| {
                 ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(
@@ -220,39 +217,20 @@ impl Token<'_> {
                 &pin,
                 &sender_key_path,
                 &message.hash(),
-            )
-            .expect("Expect a valid signature");
+            )?;
             WitnessSet::from_list(&message, &[signature], &[public_key])
+                .map_err(ExecutionFailureKind::TransactionBuildError)?
         } else {
-            let mut private_keys = Vec::new();
             let sender_sk = self
                 .0
                 .storage
                 .user_data
                 .get_pub_account_signing_key(sender_account_id)
                 .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
-            private_keys.push(sender_sk);
-
-            if let Some(recipient_sk) = self
-                .0
-                .storage
-                .user_data
-                .get_pub_account_signing_key(recipient_account_id)
-            {
-                private_keys.push(recipient_sk);
-            } else {
-                println!(
-                    "Receiver's account ({recipient_account_id}) private key not found in wallet. Proceeding with only sender's key."
-                );
-            }
-
-            Ok(nssa::public_transaction::WitnessSet::for_message(
-                &message,
-                &private_keys,
-            ))
+            nssa::public_transaction::WitnessSet::for_message(&message, &[sender_sk])
         };
 
-        let tx = nssa::PublicTransaction::new(message, witness_set.unwrap()); //TODO: Marvin
+        let tx = nssa::PublicTransaction::new(message, witness_set);
 
         Ok(self
             .0
@@ -366,6 +344,7 @@ impl Token<'_> {
         sender_account_id: AccountId,
         recipient_account_id: AccountId,
         amount: u128,
+        sender_key_path: Option<String>,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
         let instruction = Instruction::Transfer {
             amount_to_transfer: amount,
@@ -381,7 +360,7 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                &None,
+                &sender_key_path,
             )
             .await
             .map(|(resp, secrets)| {
@@ -503,7 +482,6 @@ impl Token<'_> {
                     key_path,
                 )
                 .await
-                .map(|(resp, secrets)| (resp, secrets))
         }
     }
 

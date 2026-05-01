@@ -83,6 +83,8 @@ async fn create_and_transfer_public_token() -> Result<()> {
         definition_account_label: None,
         supply_account_id: Some(format_public_account_id(supply_account_id)),
         supply_account_label: None,
+        definition_key_path: None,
+        supply_key_path: None,
         name: name.clone(),
         total_supply,
     };
@@ -233,6 +235,8 @@ async fn create_and_transfer_public_token() -> Result<()> {
         holder_vpk: None,
         holder_identifier: None,
         amount: mint_amount,
+        definition_key_path: None,
+        holder_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
@@ -336,6 +340,8 @@ async fn create_and_transfer_token_with_private_supply() -> Result<()> {
         definition_account_label: None,
         supply_account_id: Some(format_private_account_id(supply_account_id)),
         supply_account_label: None,
+        definition_key_path: None,
+        supply_key_path: None,
         name: name.clone(),
         total_supply,
     };
@@ -502,6 +508,8 @@ async fn create_token_with_private_definition() -> Result<()> {
         definition_account_label: None,
         supply_account_id: Some(format_public_account_id(supply_account_id)),
         supply_account_label: None,
+        definition_key_path: None,
+        supply_key_path: None,
         name: name.clone(),
         total_supply,
     };
@@ -577,6 +585,8 @@ async fn create_token_with_private_definition() -> Result<()> {
         holder_vpk: None,
         holder_identifier: None,
         amount: mint_amount_public,
+        definition_key_path: None,
+        holder_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
@@ -626,6 +636,8 @@ async fn create_token_with_private_definition() -> Result<()> {
         holder_vpk: None,
         holder_identifier: None,
         amount: mint_amount_private,
+        definition_key_path: None,
+        holder_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
@@ -706,6 +718,8 @@ async fn create_token_with_private_definition_and_supply() -> Result<()> {
         supply_account_label: None,
         name,
         total_supply,
+        definition_key_path: None,
+        supply_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
@@ -885,6 +899,8 @@ async fn shielded_token_transfer() -> Result<()> {
         supply_account_label: None,
         name,
         total_supply,
+        definition_key_path: None,
+        supply_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
@@ -1014,6 +1030,8 @@ async fn deshielded_token_transfer() -> Result<()> {
         supply_account_label: None,
         name,
         total_supply,
+        definition_key_path: None,
+        supply_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
@@ -1127,6 +1145,8 @@ async fn token_claiming_path_with_private_accounts() -> Result<()> {
         supply_account_label: None,
         name,
         total_supply,
+        definition_key_path: None,
+        supply_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
@@ -1169,6 +1189,8 @@ async fn token_claiming_path_with_private_accounts() -> Result<()> {
         holder_vpk: Some(hex::encode(holder_keys.viewing_public_key.0)),
         holder_identifier: Some(holder_identifier),
         amount: mint_amount,
+        definition_key_path: None,
+        holder_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
@@ -1254,6 +1276,8 @@ async fn create_token_using_labels() -> Result<()> {
         supply_account_label: Some(supply_label),
         name: name.clone(),
         total_supply,
+        definition_key_path: None,
+        supply_key_path: None,
     };
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
 
@@ -1354,6 +1378,8 @@ async fn transfer_token_using_from_label() -> Result<()> {
         definition_account_label: None,
         supply_account_id: Some(format_public_account_id(supply_account_id)),
         supply_account_label: None,
+        definition_key_path: None,
+        supply_key_path: None,
         name: "LABEL TEST TOKEN".to_owned(),
         total_supply,
     };

@@ -95,9 +95,25 @@ impl WalletSubcommand for AuthTransferSubcommand {
 
                 let (account_id, addr_privacy) = parse_addr_with_privacy_prefix(&resolved)?;
 
+                // Skip if already registered — prevents a doomed on-chain rejection when the
+                // account already has nonce > 0 (which also avoids leaving the keycard in a
+                // mid-operation state that breaks subsequent signing calls).
+                let account_id_parsed: nssa::AccountId = account_id.parse()?;
+                let nonces = wallet_core
+                    .get_accounts_nonces(vec![account_id_parsed])
+                    .await?;
+                if nonces.first().is_some_and(|n| n.0 > 0) {
+                    println!(
+                        "Account {account_id} is already registered with the auth-transfer \
+                         program (nonce={}). Skipping.",
+                        nonces[0].0
+                    );
+                    return Ok(SubcommandReturnValue::Empty);
+                }
+
                 match addr_privacy {
                     AccountPrivacyKind::Public => {
-                        let account_id = account_id.parse()?;
+                        let account_id = account_id_parsed;
 
                         let tx_hash = NativeTokenTransfer(wallet_core)
                             .register_account(account_id, key_path.as_deref())
@@ -112,7 +128,7 @@ impl WalletSubcommand for AuthTransferSubcommand {
                         wallet_core.store_persistent_data().await?;
                     }
                     AccountPrivacyKind::Private => {
-                        let account_id = account_id.parse()?;
+                        let account_id = account_id_parsed;
 
                         let (tx_hash, secret) = NativeTokenTransfer(wallet_core)
                             .register_account_private(account_id, &key_path)

@@ -91,6 +91,17 @@ impl KeycardWallet {
             .call_method1("sign_message_for_path", (message, path))?
             .extract()?;
 
+        // The keycard Python library strips the leading zero from the S component when
+        // S < 2^248. Re-insert it so the slice is always the expected 64 bytes (R || S).
+        let py_signature = if py_signature.len() == 63 {
+            let mut padded = [0u8; 64];
+            padded[..32].copy_from_slice(&py_signature[..32]);
+            padded[33..].copy_from_slice(&py_signature[32..]);
+            padded.to_vec()
+        } else {
+            py_signature
+        };
+
         let signature: [u8; 64] = py_signature.try_into().map_err(|vec: Vec<u8>| {
             PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
                 "Invalid signature length: expected 64 bytes, got {} (bytes: {:02x?})",

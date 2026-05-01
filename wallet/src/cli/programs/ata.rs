@@ -146,7 +146,12 @@ impl WalletSubcommand for AtaSubcommand {
                 amount,
                 from_key_path,
             } => {
-                let (from_str, from_privacy) = parse_addr_with_privacy_prefix(&from)?;
+                let from_resolved = match (from, from_key_path.as_deref()) {
+                    (Some(f), _) => f,
+                    (None, Some(kp)) => resolve_keycard_id(kp)?,
+                    (None, None) => anyhow::bail!("Provide --from or --from-key-path"),
+                };
+                let (from_str, from_privacy) = parse_addr_with_privacy_prefix(&from_resolved)?;
                 let from_id: AccountId = from_str.parse()?;
                 let definition_id: AccountId = token_definition.parse()?;
                 let to_id: AccountId = to.parse()?;
@@ -182,9 +187,14 @@ impl WalletSubcommand for AtaSubcommand {
                 holder,
                 token_definition,
                 amount,
-                key_path
+                key_path,
             } => {
-                let (holder_str, holder_privacy) = parse_addr_with_privacy_prefix(&holder);
+                let holder_resolved = match (holder, key_path.as_deref()) {
+                    (Some(h), _) => h,
+                    (None, Some(kp)) => resolve_keycard_id(kp)?,
+                    (None, None) => anyhow::bail!("Provide --holder or --key-path"),
+                };
+                let (holder_str, holder_privacy) = parse_addr_with_privacy_prefix(&holder_resolved)?;
                 let holder_id: AccountId = holder_str.parse()?;
                 let definition_id: AccountId = token_definition.parse()?;
 

@@ -8,6 +8,7 @@ use crate::{ExecutionFailureKind, WalletCore};
 pub struct Amm<'wallet>(pub &'wallet WalletCore);
 
 impl Amm<'_> {
+    #[expect(clippy::too_many_arguments, reason = "each parameter is distinct; grouping into a struct would add unnecessary indirection")]
     pub async fn send_new_definition(
         &self,
         user_holding_a: AccountId,
@@ -118,7 +119,7 @@ impl Amm<'_> {
                 .user_data
                 .get_pub_account_signing_key(user_holding_a)
                 .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
-            (nssa::Signature::new(&sk, &msg_hash), nssa::PublicKey::new_from_private_key(&sk))
+            (nssa::Signature::new(sk, &msg_hash), nssa::PublicKey::new_from_private_key(sk))
         };
 
         let (sig_b, pk_b) = if let Some(kp) = key_path_b {
@@ -134,15 +135,15 @@ impl Amm<'_> {
                 .user_data
                 .get_pub_account_signing_key(user_holding_b)
                 .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
-            (nssa::Signature::new(&sk, &msg_hash), nssa::PublicKey::new_from_private_key(&sk))
+            (nssa::Signature::new(sk, &msg_hash), nssa::PublicKey::new_from_private_key(sk))
         };
 
         let mut sigs = vec![sig_a, sig_b];
         let mut pks = vec![pk_a, pk_b];
 
         if let Some(sk_lp) = lp_sk {
-            sigs.push(nssa::Signature::new(&sk_lp, &msg_hash));
-            pks.push(nssa::PublicKey::new_from_private_key(&sk_lp));
+            sigs.push(nssa::Signature::new(sk_lp, &msg_hash));
+            pks.push(nssa::PublicKey::new_from_private_key(sk_lp));
         }
 
         let witness_set = nssa::public_transaction::WitnessSet::from_list(&message, &sigs, &pks)
@@ -361,6 +362,7 @@ impl Amm<'_> {
             .await?)
     }
 
+    #[expect(clippy::too_many_arguments, reason = "each parameter is distinct; grouping into a struct would add unnecessary indirection")]
     pub async fn send_add_liquidity(
         &self,
         user_holding_a: AccountId,
@@ -452,7 +454,7 @@ impl Amm<'_> {
                 .user_data
                 .get_pub_account_signing_key(user_holding_a)
                 .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
-            (nssa::Signature::new(&sk, &msg_hash), nssa::PublicKey::new_from_private_key(&sk))
+            (nssa::Signature::new(sk, &msg_hash), nssa::PublicKey::new_from_private_key(sk))
         };
 
         let (sig_b, pk_b) = if let Some(kp) = key_path_b {
@@ -468,7 +470,7 @@ impl Amm<'_> {
                 .user_data
                 .get_pub_account_signing_key(user_holding_b)
                 .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
-            (nssa::Signature::new(&sk, &msg_hash), nssa::PublicKey::new_from_private_key(&sk))
+            (nssa::Signature::new(sk, &msg_hash), nssa::PublicKey::new_from_private_key(sk))
         };
 
         let witness_set =
@@ -484,6 +486,7 @@ impl Amm<'_> {
             .await?)
     }
 
+    #[expect(clippy::too_many_arguments, reason = "each parameter is distinct; grouping into a struct would add unnecessary indirection")]
     pub async fn send_remove_liquidity(
         &self,
         user_holding_a: AccountId,
