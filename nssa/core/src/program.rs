@@ -6,7 +6,7 @@ use risc0_zkvm::{DeserializeOwned, guest::env, serde::Deserializer};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    BlockId, NullifierPublicKey, Timestamp,
+    BlockId, Identifier, NullifierPublicKey, Timestamp,
     account::{Account, AccountId, AccountWithMetadata},
 };
 
@@ -59,27 +59,31 @@ impl AccountId {
         )
     }
 
-    /// Derives an [`AccountId`] for a private PDA from the program ID, seed, and nullifier
-    /// public key.
+    /// Derives an [`AccountId`] for a private PDA from the program ID, seed, nullifier public
+    /// key, and identifier.
     ///
     /// Unlike public PDAs ([`AccountId::for_public_pda`]), this includes the `npk` in the
     /// derivation, making the address unique per group of controllers sharing viewing keys.
+    /// The `identifier` further diversifies the address, so a single `(program_id, seed, npk)`
+    /// tuple controls a family of 2^128 addresses.
     #[must_use]
     pub fn for_private_pda(
         program_id: &ProgramId,
         seed: &PdaSeed,
         npk: &NullifierPublicKey,
+        identifier: Identifier,
     ) -> Self {
         use risc0_zkvm::sha::{Impl, Sha256 as _};
         const PRIVATE_PDA_PREFIX: &[u8; 32] = b"/LEE/v0.3/AccountId/PrivatePDA/\x00";
 
-        let mut bytes = [0_u8; 128];
+        let mut bytes = [0_u8; 144];
         bytes[0..32].copy_from_slice(PRIVATE_PDA_PREFIX);
         let program_id_bytes: &[u8] =
             bytemuck::try_cast_slice(program_id).expect("ProgramId should be castable to &[u8]");
         bytes[32..64].copy_from_slice(program_id_bytes);
         bytes[64..96].copy_from_slice(&seed.0);
         bytes[96..128].copy_from_slice(&npk.to_byte_array());
+        bytes[128..144].copy_from_slice(&identifier.to_le_bytes());
         Self::new(
             Impl::hash_bytes(&bytes)
                 .as_bytes()
@@ -845,19 +849,20 @@ mod tests {
     // ---- AccountId::for_private_pda tests ----
 
     /// Pins `AccountId::for_private_pda` against a hardcoded expected output for a specific
-    /// `(program_id, seed, npk)` triple. Any change to `PRIVATE_PDA_PREFIX`, byte ordering,
-    /// or the underlying hash breaks this test.
+    /// `(program_id, seed, npk, identifier)` tuple. Any change to `PRIVATE_PDA_PREFIX`, byte
+    /// ordering, or the underlying hash breaks this test.
     #[test]
     fn for_private_pda_matches_pinned_value() {
         let program_id: ProgramId = [1; 8];
         let seed = PdaSeed::new([2; 32]);
         let npk = NullifierPublicKey([3; 32]);
+        let identifier: Identifier = u128::MAX;
         let expected = AccountId::new([
-            132, 198, 103, 173, 244, 211, 188, 217, 249, 99, 126, 205, 152, 120, 192, 47, 13, 53,
-            133, 3, 17, 69, 92, 243, 140, 94, 182, 211, 218, 75, 215, 45,
+            59, 239, 182, 97, 14, 220, 96, 115, 238, 133, 143, 33, 234, 82, 237, 255, 148, 110,
+            54, 124, 98, 159, 245, 101, 146, 182, 150, 54, 37, 62, 25, 17,
         ]);
         assert_eq!(
-            AccountId::for_private_pda(&program_id, &seed, &npk),
+            AccountId::for_private_pda(&program_id, &seed, &npk, identifier),
             expected
         );
     }
@@ -870,8 +875,8 @@ mod tests {
         let npk_a = NullifierPublicKey([3; 32]);
         let npk_b = NullifierPublicKey([4; 32]);
         assert_ne!(
-            AccountId::for_private_pda(&program_id, &seed, &npk_a),
-            AccountId::for_private_pda(&program_id, &seed, &npk_b),
+            AccountId::for_private_pda(&program_id, &seed, &npk_a, u128::MAX),
+            AccountId::for_private_pda(&program_id, &seed, &npk_b, u128::MAX),
         );
     }
 
@@ -883,8 +888,8 @@ mod tests {
         let seed_b = PdaSeed::new([5; 32]);
         let npk = NullifierPublicKey([3; 32]);
         assert_ne!(
-            AccountId::for_private_pda(&program_id, &seed_a, &npk),
-            AccountId::for_private_pda(&program_id, &seed_b, &npk),
+            AccountId::for_private_pda(&program_id, &seed_a, &npk, u128::MAX),
+            AccountId::for_private_pda(&program_id, &seed_b, &npk, u128::MAX),
         );
     }
 
@@ -896,8 +901,8 @@ mod tests {
         let seed = PdaSeed::new([2; 32]);
         let npk = NullifierPublicKey([3; 32]);
         assert_ne!(
-            AccountId::for_private_pda(&program_id_a, &seed, &npk),
-            AccountId::for_private_pda(&program_id_b, &seed, &npk),
+            AccountId::for_private_pda(&program_id_a, &seed, &npk, u128::MAX),
+            AccountId::for_private_pda(&program_id_b, &seed, &npk, u128::MAX),
         );
     }
 
@@ -908,7 +913,7 @@ mod tests {
         let program_id: ProgramId = [1; 8];
         let seed = PdaSeed::new([2; 32]);
         let npk = NullifierPublicKey([3; 32]);
-        let private_id = AccountId::for_private_pda(&program_id, &seed, &npk);
+        let private_id = AccountId::for_private_pda(&program_id, &seed, &npk, u128::MAX);
         let public_id = AccountId::for_public_pda(&program_id, &seed);
         assert_ne!(private_id, public_id);
     }

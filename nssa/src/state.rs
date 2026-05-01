@@ -2395,7 +2395,7 @@ pub mod tests {
         let seed = PdaSeed::new([42; 32]);
         let shared_secret = SharedSecretKey::new(&[55; 32], &keys.vpk());
 
-        let account_id = AccountId::for_private_pda(&program.id(), &seed, &npk);
+        let account_id = AccountId::for_private_pda(&program.id(), &seed, &npk, u128::MAX);
         let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
         let result = execute_and_prove(
@@ -2433,7 +2433,7 @@ pub mod tests {
         // `account_id` is derived from `npk_a`, but `npk_b` is supplied for this pre_state.
         // `AccountId::for_private_pda(program, seed, npk_b) != account_id`, so the claim check in
         // the circuit must reject.
-        let account_id = AccountId::for_private_pda(&program.id(), &seed, &npk_a);
+        let account_id = AccountId::for_private_pda(&program.id(), &seed, &npk_a, u128::MAX);
         let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
         let result = execute_and_prove(
@@ -2463,7 +2463,7 @@ pub mod tests {
         let seed = PdaSeed::new([77; 32]);
         let shared_secret = SharedSecretKey::new(&[55; 32], &keys.vpk());
 
-        let account_id = AccountId::for_private_pda(&delegator.id(), &seed, &npk);
+        let account_id = AccountId::for_private_pda(&delegator.id(), &seed, &npk, u128::MAX);
         let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
         let callee_id = callee.id();
@@ -2500,7 +2500,7 @@ pub mod tests {
         let wrong_delegated_seed = PdaSeed::new([88; 32]);
         let shared_secret = SharedSecretKey::new(&[55; 32], &keys.vpk());
 
-        let account_id = AccountId::for_private_pda(&delegator.id(), &claim_seed, &npk);
+        let account_id = AccountId::for_private_pda(&delegator.id(), &claim_seed, &npk, u128::MAX);
         let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
         let callee_id = callee.id();
@@ -2537,8 +2537,8 @@ pub mod tests {
         let shared_a = SharedSecretKey::new(&[66; 32], &keys_a.vpk());
         let shared_b = SharedSecretKey::new(&[77; 32], &keys_b.vpk());
 
-        let account_a = AccountId::for_private_pda(&program.id(), &seed, &keys_a.npk());
-        let account_b = AccountId::for_private_pda(&program.id(), &seed, &keys_b.npk());
+        let account_a = AccountId::for_private_pda(&program.id(), &seed, &keys_a.npk(), u128::MAX);
+        let account_b = AccountId::for_private_pda(&program.id(), &seed, &keys_b.npk(), u128::MAX);
 
         let pre_a = AccountWithMetadata::new(Account::default(), false, account_a);
         let pre_b = AccountWithMetadata::new(Account::default(), false, account_b);
@@ -2577,7 +2577,7 @@ pub mod tests {
 
         // Simulate a previously-claimed private PDA: program_owner != DEFAULT, is_authorized =
         // true, account_id derived via the private formula.
-        let account_id = AccountId::for_private_pda(&program.id(), &seed, &npk);
+        let account_id = AccountId::for_private_pda(&program.id(), &seed, &npk, u128::MAX);
         let owned_pre_state = AccountWithMetadata::new(
             Account {
                 program_owner: program.id(),

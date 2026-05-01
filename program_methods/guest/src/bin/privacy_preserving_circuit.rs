@@ -367,7 +367,7 @@ impl ExecutionState {
                                 .private_pda_npk_by_position
                                 .get(&pre_state_position)
                                 .expect("private PDA pre_state must have an npk in the position map");
-                                let pda = AccountId::for_private_pda(&program_id, &seed, npk);
+                                let pda = AccountId::for_private_pda(&program_id, &seed, npk, PRIVATE_PDA_FIXED_IDENTIFIER);
                                 assert_eq!(
                                     pre_account_id, pda,
                                     "Invalid private PDA claim for account {pre_account_id}"
@@ -468,7 +468,7 @@ fn resolve_authorization_and_record_bindings(
                     return Some((*seed, false, caller));
                 }
                 if let Some(npk) = private_pda_npk_by_position.get(&pre_state_position)
-                    && AccountId::for_private_pda(&caller, seed, npk) == pre_account_id
+                    && AccountId::for_private_pda(&caller, seed, npk, PRIVATE_PDA_FIXED_IDENTIFIER) == pre_account_id
                 {
                     return Some((*seed, true, caller));
                 }
