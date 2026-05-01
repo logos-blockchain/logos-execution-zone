@@ -17,7 +17,6 @@ use nssa_core::{
 };
 use risc0_zkvm::{guest::env, serde::to_vec};
 
-const PRIVATE_PDA_FIXED_IDENTIFIER: u128 = u128::MAX;
 
 /// State of the involved accounts before and after program execution.
 struct ExecutionState {
@@ -26,7 +25,7 @@ struct ExecutionState {
     block_validity_window: BlockValidityWindow,
     timestamp_validity_window: TimestampValidityWindow,
     /// Positions (in `pre_states`) of mask-3 accounts whose supplied npk has been bound to
-    /// their `AccountId` via a proven `AccountId::for_private_pda(program_id, seed, npk)`
+    /// their `AccountId` via a proven `AccountId::for_private_pda(program_id, seed, npk, identifier)`
     /// check.
     /// Two proof paths populate this set: a `Claim::Pda(seed)` in a program's `post_state` on
     /// that `pre_state`, or a caller's `ChainedCall.pda_seeds` entry matching that `pre_state`
@@ -367,7 +366,7 @@ impl ExecutionState {
                                 .private_pda_npk_by_position
                                 .get(&pre_state_position)
                                 .expect("private PDA pre_state must have an npk in the position map");
-                                let pda = AccountId::for_private_pda(&program_id, &seed, npk, PRIVATE_PDA_FIXED_IDENTIFIER);
+                                let pda = AccountId::for_private_pda(&program_id, &seed, npk, u128::MAX);
                                 assert_eq!(
                                     pre_account_id, pda,
                                     "Invalid private PDA claim for account {pre_account_id}"
@@ -468,7 +467,7 @@ fn resolve_authorization_and_record_bindings(
                     return Some((*seed, false, caller));
                 }
                 if let Some(npk) = private_pda_npk_by_position.get(&pre_state_position)
-                    && AccountId::for_private_pda(&caller, seed, npk, PRIVATE_PDA_FIXED_IDENTIFIER) == pre_account_id
+                    && AccountId::for_private_pda(&caller, seed, npk, u128::MAX) == pre_account_id
                 {
                     return Some((*seed, true, caller));
                 }
@@ -528,11 +527,6 @@ fn compute_circuit_output(
                 let Some((npk, identifier, shared_secret)) = private_keys_iter.next() else {
                     panic!("Missing private account key");
                 };
-                assert_ne!(
-                    *identifier, PRIVATE_PDA_FIXED_IDENTIFIER,
-                    "Identifier must be different from {PRIVATE_PDA_FIXED_IDENTIFIER}. This is reserved for private PDA."
-                );
-
                 let account_id = AccountId::from((npk, *identifier));
 
                 assert_eq!(account_id, pre_state.account_id, "AccountId mismatch");
@@ -628,7 +622,7 @@ fn compute_circuit_output(
                 // Private PDA account. The supplied npk has already been bound to
                 // `pre_state.account_id` upstream in `validate_and_sync_states`, either via a
                 // `Claim::Pda(seed)` match or via a caller `pda_seeds` match, both of which
-                // assert `AccountId::for_private_pda(owner, seed, npk) == account_id`. The
+                // assert `AccountId::for_private_pda(owner, seed, npk, identifier) == account_id`. The
                 // post-loop assertion in `derive_from_outputs` (see the
                 // `private_pda_bound_positions` check) guarantees that every mask-3
                 // position has been through at least one such binding, so this
@@ -636,11 +630,6 @@ fn compute_circuit_output(
                 let Some((npk, identifier, shared_secret)) = private_keys_iter.next() else {
                     panic!("Missing private account key");
                 };
-
-                assert_eq!(
-                    *identifier, PRIVATE_PDA_FIXED_IDENTIFIER,
-                    "Identifier for private PDAs must be {PRIVATE_PDA_FIXED_IDENTIFIER}."
-                );
 
                 let (new_nullifier, new_nonce) = if pre_state.is_authorized {
                     // Existing private PDA with authentication (like mask 1)
@@ -701,7 +690,7 @@ fn compute_circuit_output(
 
                 let encrypted_account = EncryptionScheme::encrypt(
                     &post_with_updated_nonce,
-                    PRIVATE_PDA_FIXED_IDENTIFIER,
+                    *identifier,
                     shared_secret,
                     &commitment_post,
                     output_index,
