@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet, VecDeque, hash_map::Entry},
+    collections::{HashMap, VecDeque, hash_map::Entry},
     convert::Infallible,
 };
 
@@ -34,7 +34,7 @@ struct ExecutionState {
     /// claims a private PDA and then delegates it to a callee), and the set uses `contains`,
     /// not `assert!(insert)`. After the main loop, every mask-3 position must appear in this
     /// set; otherwise the npk is unbound and the circuit rejects.
-    private_pda_bound_positions: HashSet<usize>,
+    private_pda_bound_positions: HashMap<usize, PdaSeed>,
     /// Across the whole transaction, each `(program_id, seed)` pair may resolve to at most one
     /// `AccountId`. A seed under a program can derive a family of accounts, one public PDA and
     /// one private PDA per distinct npk. Without this check, a single `pda_seeds: [S]` entry in
@@ -114,7 +114,7 @@ impl ExecutionState {
             post_states: HashMap::new(),
             block_validity_window,
             timestamp_validity_window,
-            private_pda_bound_positions: HashSet::new(),
+            private_pda_bound_positions: HashMap::new(),
             pda_family_binding: HashMap::new(),
             private_pda_npk_by_position,
         };
@@ -217,7 +217,7 @@ impl ExecutionState {
         for (pos, &mask) in visibility_mask.iter().enumerate() {
             if mask == 3 {
                 assert!(
-                    execution_state.private_pda_bound_positions.contains(&pos),
+                    execution_state.private_pda_bound_positions.contains_key(&pos),
                     "private PDA pre_state at position {pos} has no proven (seed, npk) binding via Claim::Pda or caller pda_seeds"
                 );
             }
@@ -371,7 +371,7 @@ impl ExecutionState {
                                     pre_account_id, pda,
                                     "Invalid private PDA claim for account {pre_account_id}"
                                 );
-                                self.private_pda_bound_positions.insert(pre_state_position);
+                                self.private_pda_bound_positions.insert(pre_state_position, seed);
                                 assert_family_binding(
                                     &mut self.pda_family_binding,
                                     program_id,
@@ -452,7 +452,7 @@ fn assert_family_binding(
 )]
 fn resolve_authorization_and_record_bindings(
     pda_family_binding: &mut HashMap<(ProgramId, PdaSeed), AccountId>,
-    private_pda_bound_positions: &mut HashSet<usize>,
+    private_pda_bound_positions: &mut HashMap<usize, PdaSeed>,
     private_pda_npk_by_position: &HashMap<usize, NullifierPublicKey>,
     pre_account_id: AccountId,
     pre_state_position: usize,
@@ -478,7 +478,7 @@ fn resolve_authorization_and_record_bindings(
     if let Some((seed, is_private_form, caller)) = matched_caller_seed {
         assert_family_binding(pda_family_binding, caller, seed, pre_account_id);
         if is_private_form {
-            private_pda_bound_positions.insert(pre_state_position);
+            private_pda_bound_positions.insert(pre_state_position, seed);
         }
     }
 
