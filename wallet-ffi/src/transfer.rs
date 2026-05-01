@@ -72,7 +72,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_public(
 
     let transfer = NativeTokenTransfer(&wallet);
 
-    match block_on(transfer.send_public_transfer(from_id, to_id, amount)) {
+    match block_on(transfer.send_public_transfer(from_id, to_id, amount, None, None)) {
         Ok(tx_hash) => {
             let tx_hash = CString::new(tx_hash.to_string())
                 .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
@@ -591,7 +591,7 @@ pub unsafe extern "C" fn wallet_ffi_register_public_account(
 
     let transfer = NativeTokenTransfer(&wallet);
 
-    match block_on(transfer.register_account(account_id)) {
+    match block_on(transfer.register_account(account_id, None)) {
         Ok(tx_hash) => {
             let tx_hash = CString::new(tx_hash.to_string())
                 .map_or(ptr::null_mut(), std::ffi::CString::into_raw);

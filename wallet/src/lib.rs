@@ -68,6 +68,8 @@ pub enum ExecutionFailureKind {
     AccountDataError(AccountId),
     #[error("Failed to build transaction: {0}")]
     TransactionBuildError(#[from] nssa::error::NssaError),
+    #[error(transparent)]
+    KeycardError(#[from] pyo3::PyErr),
 }
 
 #[expect(clippy::partial_pub_fields, reason = "TODO: make all fields private")]

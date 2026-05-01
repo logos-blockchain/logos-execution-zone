@@ -1,0 +1,13 @@
+[package]
+name = "keycard_wallet"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+nssa.workspace = true
+pyo3.workspace = true
+log.workspace = true

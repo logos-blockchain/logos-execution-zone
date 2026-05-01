@@ -76,6 +76,8 @@ async fn sync_private_account_with_non_zero_chain_index() -> Result<()> {
         to_vpk: Some(hex::encode(to_keys.viewing_public_key.0)),
         to_identifier: Some(to_identifier),
         amount: 100,
+        from_key_path: None,
+        to_key_path: None,
     });
 
     let sub_ret = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
@@ -153,6 +155,8 @@ async fn restore_keys_from_seed() -> Result<()> {
         to_vpk: None,
         to_identifier: Some(0),
         amount: 100,
+        from_key_path: None,
+        to_key_path: None,
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
@@ -166,6 +170,8 @@ async fn restore_keys_from_seed() -> Result<()> {
         to_vpk: None,
         to_identifier: Some(0),
         amount: 101,
+        from_key_path: None,
+        to_key_path: None,
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
@@ -207,6 +213,8 @@ async fn restore_keys_from_seed() -> Result<()> {
         to_vpk: None,
         to_identifier: Some(0),
         amount: 102,
+        from_key_path: None,
+        to_key_path: None,
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
@@ -220,6 +228,8 @@ async fn restore_keys_from_seed() -> Result<()> {
         to_vpk: None,
         to_identifier: Some(0),
         amount: 103,
+        from_key_path: None,
+        to_key_path: None,
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
@@ -286,6 +296,8 @@ async fn restore_keys_from_seed() -> Result<()> {
         to_vpk: None,
         to_identifier: Some(0),
         amount: 10,
+        from_key_path: None,
+        to_key_path: None,
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
@@ -298,6 +310,8 @@ async fn restore_keys_from_seed() -> Result<()> {
         to_vpk: None,
         to_identifier: Some(0),
         amount: 11,
+        from_key_path: None,
+        to_key_path: None,
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 

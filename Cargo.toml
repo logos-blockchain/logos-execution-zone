@@ -38,6 +38,7 @@ members = [
   "examples/program_deployment/methods/guest",
   "bedrock_client",
   "testnet_initial_state",
+  "keycard_wallet",
   "indexer_ffi",
 ]
 
@@ -56,9 +57,9 @@ indexer_core = { path = "indexer/core" }
 indexer_service = { path = "indexer/service" }
 indexer_service_protocol = { path = "indexer/service/protocol" }
 indexer_service_rpc = { path = "indexer/service/rpc" }
+indexer_ffi = { path = "indexer_ffi" }
 wallet = { path = "wallet" }
 wallet-ffi = { path = "wallet-ffi", default-features = false }
-indexer_ffi = { path = "indexer_ffi" }
 clock_core = { path = "programs/clock/core" }
 token_core = { path = "programs/token/core" }
 token_program = { path = "programs/token" }
@@ -69,6 +70,7 @@ ata_program = { path = "programs/associated_token_account" }
 test_program_methods = { path = "test_program_methods" }
 bedrock_client = { path = "bedrock_client" }
 testnet_initial_state = { path = "testnet_initial_state" }
+keycard_wallet = { path = "keycard_wallet" }
 
 tokio = { version = "1.50", features = [
   "net",
@@ -121,6 +123,7 @@ url = { version = "2.5.4", features = ["serde"] }
 tokio-retry = "0.3.0"
 schemars = "1.2"
 async-stream = "0.3.6"
+pyo3 = { version = "0.24", features = ["auto-initialize"] }
 
 logos-blockchain-common-http-client = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "1da154c74b911318fb853d37261f8a05ffe513b4" }
 logos-blockchain-key-management-system-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "1da154c74b911318fb853d37261f8a05ffe513b4" }

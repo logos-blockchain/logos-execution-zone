@@ -32,6 +32,8 @@ async fn private_transfer_to_owned_account() -> Result<()> {
         to_vpk: None,
         to_identifier: Some(0),
         amount: 100,
+        to_key_path: None,
+        from_key_path: None,
     });
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
@@ -74,6 +76,8 @@ async fn private_transfer_to_foreign_account() -> Result<()> {
         to_vpk: Some(hex::encode(to_vpk.0)),
         to_identifier: Some(0),
         amount: 100,
+        to_key_path: None,
+        from_key_path: None,
     });
 
     let result = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
@@ -125,6 +129,8 @@ async fn deshielded_transfer_to_public_account() -> Result<()> {
         to_vpk: None,
         to_identifier: Some(0),
         amount: 100,
+        to_key_path: None,
+        from_key_path: None,
     });
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
@@ -190,6 +196,8 @@ async fn private_transfer_to_owned_account_using_claiming_path() -> Result<()> {
         to_vpk: Some(hex::encode(to_keys.viewing_public_key.0)),
         to_identifier: Some(to_identifier),
         amount: 100,
+        to_key_path: None,
+        from_key_path: None,
     });
 
     let sub_ret = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
@@ -241,6 +249,8 @@ async fn shielded_transfer_to_owned_private_account() -> Result<()> {
         to_vpk: None,
         to_identifier: Some(0),
         amount: 100,
+        to_key_path: None,
+        from_key_path: None,
     });
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
@@ -286,6 +296,8 @@ async fn shielded_transfer_to_foreign_account() -> Result<()> {
         to_vpk: Some(hex::encode(to_vpk.0)),
         to_identifier: Some(0),
         amount: 100,
+        to_key_path: None,
+        from_key_path: None,
     });
 
     let result = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
@@ -358,6 +370,8 @@ async fn private_transfer_to_owned_account_continuous_run_path() -> Result<()> {
         to_vpk: Some(hex::encode(to_keys.viewing_public_key.0)),
         to_identifier: Some(to_identifier),
         amount: 100,
+        to_key_path: None,
+        from_key_path: None,
     });
 
     let sub_ret = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
@@ -404,6 +418,7 @@ async fn initialize_private_account() -> Result<()> {
     let command = Command::AuthTransfer(AuthTransferSubcommand::Init {
         account_id: Some(format_private_account_id(account_id)),
         account_label: None,
+        key_path: None,
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
@@ -462,6 +477,8 @@ async fn private_transfer_using_from_label() -> Result<()> {
         to_vpk: None,
         to_identifier: Some(0),
         amount: 100,
+        from_key_path: None,
+        to_key_path: None,
     });
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
@@ -505,6 +522,7 @@ async fn initialize_private_account_using_label() -> Result<()> {
     let command = Command::AuthTransfer(AuthTransferSubcommand::Init {
         account_id: None,
         account_label: Some(label),
+        key_path: None,
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
@@ -576,6 +594,8 @@ async fn shielded_transfers_to_two_identifiers_same_npk() -> Result<()> {
             to_vpk: Some(vpk_hex.clone()),
             to_identifier: Some(identifier_1),
             amount: 100,
+            from_key_path: None,
+            to_key_path: None,
         }),
     )
     .await?;
@@ -591,6 +611,8 @@ async fn shielded_transfers_to_two_identifiers_same_npk() -> Result<()> {
             to_vpk: Some(vpk_hex),
             to_identifier: Some(identifier_2),
             amount: 200,
+            from_key_path: None,
+            to_key_path: None,
         }),
     )
     .await?;

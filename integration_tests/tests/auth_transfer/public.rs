@@ -25,6 +25,8 @@ async fn successful_transfer_to_existing_account() -> Result<()> {
         to_vpk: None,
         to_identifier: Some(0),
         amount: 100,
+        from_key_path: None,
+        to_key_path: None,
     });
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
@@ -84,6 +86,8 @@ pub async fn successful_transfer_to_new_account() -> Result<()> {
         to_vpk: None,
         to_identifier: Some(0),
         amount: 100,
+        from_key_path: None,
+        to_key_path: None,
     });
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
@@ -123,6 +127,8 @@ async fn failed_transfer_with_insufficient_balance() -> Result<()> {
         to_vpk: None,
         to_identifier: Some(0),
         amount: 1_000_000,
+        from_key_path: None,
+        to_key_path: None,
     });
 
     let failed_send = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await;
@@ -164,6 +170,8 @@ async fn two_consecutive_successful_transfers() -> Result<()> {
         to_vpk: None,
         to_identifier: Some(0),
         amount: 100,
+        from_key_path: None,
+        to_key_path: None,
     });
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
@@ -199,6 +207,8 @@ async fn two_consecutive_successful_transfers() -> Result<()> {
         to_vpk: None,
         to_identifier: Some(0),
         amount: 100,
+        from_key_path: None,
+        to_key_path: None,
     });
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
@@ -243,6 +253,7 @@ async fn initialize_public_account() -> Result<()> {
     let command = Command::AuthTransfer(AuthTransferSubcommand::Init {
         account_id: Some(format_public_account_id(account_id)),
         account_label: None,
+        key_path: None,
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
@@ -285,6 +296,8 @@ async fn successful_transfer_using_from_label() -> Result<()> {
         to_vpk: None,
         to_identifier: Some(0),
         amount: 100,
+        from_key_path: None,
+        to_key_path: None,
     });
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
@@ -333,6 +346,8 @@ async fn successful_transfer_using_to_label() -> Result<()> {
         to_vpk: None,
         to_identifier: Some(0),
         amount: 100,
+        from_key_path: None,
+        to_key_path: None,
     });
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;

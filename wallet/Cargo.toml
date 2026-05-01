@@ -18,6 +18,9 @@ amm_core.workspace = true
 testnet_initial_state.workspace = true
 ata_core.workspace = true
 bip39.workspace = true
+pyo3.workspace = true
+rpassword = "7"
+zeroize = "1"
 
 anyhow.workspace = true
 thiserror.workspace = true
@@ -39,3 +42,4 @@ async-stream.workspace = true
 indicatif = { version = "0.18.3", features = ["improved_unicode"] }
 optfield = "0.4.0"
 url.workspace = true
+keycard_wallet.workspace = true

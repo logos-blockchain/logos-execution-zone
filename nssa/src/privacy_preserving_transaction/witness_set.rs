@@ -32,6 +32,22 @@ impl WitnessSet {
     }
 
     #[must_use]
+    pub fn from_list(proof: Proof, signatures: &[Signature], public_keys: &[PublicKey]) -> Self {
+        assert_eq!(signatures.len(), public_keys.len());
+
+        let signatures_and_public_keys = signatures
+            .iter()
+            .zip(public_keys.iter())
+            .map(|(sig, key)| (sig.clone(), key.clone()))
+            .collect();
+
+        Self {
+            signatures_and_public_keys,
+            proof,
+        }
+    }
+
+    #[must_use]
     pub fn signatures_are_valid_for(&self, message: &Message) -> bool {
         let message_hash = message.hash_message();
         for (signature, public_key) in self.signatures_and_public_keys() {

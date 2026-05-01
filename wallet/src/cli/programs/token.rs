@@ -80,6 +80,8 @@ pub enum TokenProgramAgnosticSubcommand {
         /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
+        #[arg(long, conflicts_with = "from", conflicts_with = "from_label")]
+        from_key_path: Option<String>,
     },
     /// Burn tokens on `holder`, modify `definition`.
     ///
@@ -99,11 +101,7 @@ pub enum TokenProgramAgnosticSubcommand {
         #[arg(long, conflicts_with = "definition")]
         definition_label: Option<String>,
         /// holder - valid 32 byte base58 string with privacy prefix.
-        #[arg(
-            long,
-            conflicts_with = "holder_label",
-            required_unless_present = "holder_label"
-        )]
+        #[arg(long, conflicts_with = "holder_label")]
         holder: Option<String>,
         /// Holder account label (alternative to --holder).
         #[arg(long, conflicts_with = "holder")]
@@ -111,6 +109,8 @@ pub enum TokenProgramAgnosticSubcommand {
         /// amount - amount of balance to burn.
         #[arg(long)]
         amount: u128,
+        #[arg(long, conflicts_with = "holder", conflicts_with = "holder_label")]
+        holder_key_path: Option<String>,
     },
     /// Mint tokens on `holder`, modify `definition`.
     ///
@@ -132,7 +132,7 @@ pub enum TokenProgramAgnosticSubcommand {
         #[arg(long, conflicts_with = "definition")]
         definition_label: Option<String>,
         /// holder - valid 32 byte base58 string with privacy prefix.
-        #[arg(long, conflicts_with = "holder_label")]
+        #[arg(long, conflicts_with = "holder_label", required_unless_present_any = ["holder_label", "holder_key_path"])]
         holder: Option<String>,
         /// Holder account label (alternative to --holder).
         #[arg(long, conflicts_with = "holder")]
@@ -172,12 +172,14 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                     definition_account_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
+                    None,
                 )?;
                 let supply_account_id = resolve_id_or_label(
                     supply_account_id,
                     supply_account_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
+                    None,
                 )?;
                 let (definition_account_id, definition_addr_privacy) =
                     parse_addr_with_privacy_prefix(&definition_account_id)?;
@@ -238,12 +240,14 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                 to_vpk,
                 to_identifier,
                 amount,
+                from_key_path,
             } => {
                 let from = resolve_id_or_label(
                     from,
                     from_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
+                    from_key_path.as_deref(),
                 )?;
                 let to = match (to, to_label) {
                     (v, None) => v,
@@ -347,24 +351,26 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                 holder,
                 holder_label,
                 amount,
+                holder_key_path,
             } => {
                 let definition = resolve_id_or_label(
                     definition,
                     definition_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
+                    None,
                 )?;
                 let holder = resolve_id_or_label(
                     holder,
                     holder_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
+                    holder_key_path.as_deref(),
                 )?;
                 let underlying_subcommand = {
                     let (definition, definition_privacy) =
                         parse_addr_with_privacy_prefix(&definition)?;
                     let (holder, holder_privacy) = parse_addr_with_privacy_prefix(&holder)?;
-
                     match (definition_privacy, holder_privacy) {
                         (AccountPrivacyKind::Public, AccountPrivacyKind::Public) => {
                             TokenProgramSubcommand::Public(
@@ -422,6 +428,7 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                     definition_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
+                    None,
                 )?;
                 let holder = match (holder, holder_label) {
                     (v, None) => v,

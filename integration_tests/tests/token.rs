@@ -136,6 +136,7 @@ async fn create_and_transfer_public_token() -> Result<()> {
         to_vpk: None,
         to_identifier: Some(0),
         amount: transfer_amount,
+        from_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
@@ -181,6 +182,7 @@ async fn create_and_transfer_public_token() -> Result<()> {
         holder: Some(format_public_account_id(recipient_account_id)),
         holder_label: None,
         amount: burn_amount,
+        holder_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
@@ -376,6 +378,7 @@ async fn create_and_transfer_token_with_private_supply() -> Result<()> {
         to_vpk: None,
         to_identifier: Some(0),
         amount: transfer_amount,
+        from_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
@@ -403,6 +406,7 @@ async fn create_and_transfer_token_with_private_supply() -> Result<()> {
         holder: Some(format_private_account_id(recipient_account_id)),
         holder_label: None,
         amount: burn_amount,
+        holder_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
@@ -763,6 +767,7 @@ async fn create_token_with_private_definition_and_supply() -> Result<()> {
         to_vpk: None,
         to_identifier: Some(0),
         amount: transfer_amount,
+        from_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
@@ -895,6 +900,7 @@ async fn shielded_token_transfer() -> Result<()> {
         to_vpk: None,
         to_identifier: Some(0),
         amount: transfer_amount,
+        from_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
@@ -1022,6 +1028,7 @@ async fn deshielded_token_transfer() -> Result<()> {
         to_vpk: None,
         to_identifier: Some(0),
         amount: transfer_amount,
+        from_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
@@ -1361,6 +1368,7 @@ async fn transfer_token_using_from_label() -> Result<()> {
         to_vpk: None,
         to_identifier: Some(0),
         amount: transfer_amount,
+        from_key_path: None,
     };
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
 

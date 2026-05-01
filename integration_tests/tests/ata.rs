@@ -270,6 +270,7 @@ async fn transfer_and_burn_via_ata() -> Result<()> {
             to_vpk: None,
             to_identifier: Some(0),
             amount: fund_amount,
+            from_key_path: None,
         }),
     )
     .await?;
@@ -503,6 +504,7 @@ async fn transfer_via_ata_private_owner() -> Result<()> {
             to_vpk: None,
             to_identifier: Some(0),
             amount: fund_amount,
+            from_key_path: None,
         }),
     )
     .await?;
@@ -618,6 +620,7 @@ async fn burn_via_ata_private_owner() -> Result<()> {
             to_vpk: None,
             to_identifier: Some(0),
             amount: fund_amount,
+            from_key_path: None,
         }),
     )
     .await?;

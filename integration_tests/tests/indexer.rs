@@ -113,6 +113,8 @@ async fn indexer_state_consistency() -> Result<()> {
         to_vpk: None,
         to_identifier: Some(0),
         amount: 100,
+        from_key_path: None,
+        to_key_path: None,
     });
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
@@ -150,6 +152,8 @@ async fn indexer_state_consistency() -> Result<()> {
         to_vpk: None,
         to_identifier: Some(0),
         amount: 100,
+        from_key_path: None,
+        to_key_path: None,
     });
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
@@ -237,6 +241,8 @@ async fn indexer_state_consistency_with_labels() -> Result<()> {
         to_vpk: None,
         to_identifier: Some(0),
         amount: 100,
+        from_key_path: None,
+        to_key_path: None,
     });
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
