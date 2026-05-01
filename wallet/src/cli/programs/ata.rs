@@ -8,7 +8,7 @@ use crate::{
     AccDecodeData::Decode,
     WalletCore,
     cli::{SubcommandReturnValue, WalletSubcommand},
-    helperfunctions::{AccountPrivacyKind, parse_addr_with_privacy_prefix},
+    helperfunctions::{AccountPrivacyKind, parse_addr_with_privacy_prefix, resolve_keycard_id},
     program_facades::ata::Ata,
 };
 
@@ -28,16 +28,19 @@ pub enum AtaSubcommand {
     Create {
         /// Owner account - valid 32 byte base58 string with privacy prefix.
         #[arg(long)]
-        owner: String,
+        owner: Option<String>,
         /// Token definition account - valid 32 byte base58 string WITHOUT privacy prefix.
         #[arg(long)]
         token_definition: String,
+        /// Key path for the owner account (uses Keycard).
+        #[arg(long)]
+        key_path: Option<String>,
     },
     /// Send tokens from owner's ATA to a recipient token holding account.
     Send {
         /// Sender account - valid 32 byte base58 string with privacy prefix.
         #[arg(long)]
-        from: String,
+        from: Option<String>,
         /// Token definition account - valid 32 byte base58 string WITHOUT privacy prefix.
         #[arg(long)]
         token_definition: String,
@@ -46,17 +49,23 @@ pub enum AtaSubcommand {
         to: String,
         #[arg(long)]
         amount: u128,
+        /// Key path for the sender account (uses Keycard).
+        #[arg(long)]
+        from_key_path: Option<String>,
     },
     /// Burn tokens from holder's ATA.
     Burn {
         /// Holder account - valid 32 byte base58 string with privacy prefix.
         #[arg(long)]
-        holder: String,
+        holder: Option<String>,
         /// Token definition account - valid 32 byte base58 string WITHOUT privacy prefix.
         #[arg(long)]
         token_definition: String,
         #[arg(long)]
         amount: u128,
+        /// Key path for the holder account (uses Keycard).
+        #[arg(long)]
+        key_path: Option<String>,
     },
     /// List all ATAs for a given owner across multiple token definitions.
     List {
@@ -92,15 +101,21 @@ impl WalletSubcommand for AtaSubcommand {
             Self::Create {
                 owner,
                 token_definition,
+                key_path,
             } => {
-                let (owner_str, owner_privacy) = parse_addr_with_privacy_prefix(&owner)?;
+                let owner_str = match (owner, key_path.as_deref()) {
+                    (Some(o), _) => o,
+                    (None, Some(kp)) => resolve_keycard_id(kp)?,
+                    (None, None) => anyhow::bail!("Provide --owner or --key-path"),
+                };
+                let (owner_str, owner_privacy) = parse_addr_with_privacy_prefix(&owner_str)?;
                 let owner_id: AccountId = owner_str.parse()?;
                 let definition_id: AccountId = token_definition.parse()?;
 
                 match owner_privacy {
                     AccountPrivacyKind::Public => {
                         Ata(wallet_core)
-                            .send_create(owner_id, definition_id)
+                            .send_create(owner_id, definition_id, key_path.as_deref())
                             .await?;
                         Ok(SubcommandReturnValue::Empty)
                     }
@@ -129,6 +144,7 @@ impl WalletSubcommand for AtaSubcommand {
                 token_definition,
                 to,
                 amount,
+                from_key_path,
             } => {
                 let (from_str, from_privacy) = parse_addr_with_privacy_prefix(&from)?;
                 let from_id: AccountId = from_str.parse()?;
@@ -138,7 +154,7 @@ impl WalletSubcommand for AtaSubcommand {
                 match from_privacy {
                     AccountPrivacyKind::Public => {
                         Ata(wallet_core)
-                            .send_transfer(from_id, definition_id, to_id, amount)
+                            .send_transfer(from_id, definition_id, to_id, amount, from_key_path.as_deref())
                             .await?;
                         Ok(SubcommandReturnValue::Empty)
                     }
@@ -166,15 +182,16 @@ impl WalletSubcommand for AtaSubcommand {
                 holder,
                 token_definition,
                 amount,
+                key_path
             } => {
-                let (holder_str, holder_privacy) = parse_addr_with_privacy_prefix(&holder)?;
+                let (holder_str, holder_privacy) = parse_addr_with_privacy_prefix(&holder);
                 let holder_id: AccountId = holder_str.parse()?;
                 let definition_id: AccountId = token_definition.parse()?;
 
                 match holder_privacy {
                     AccountPrivacyKind::Public => {
                         Ata(wallet_core)
-                            .send_burn(holder_id, definition_id, amount)
+                            .send_burn(holder_id, definition_id, amount, key_path.as_deref())
                             .await?;
                         Ok(SubcommandReturnValue::Empty)
                     }

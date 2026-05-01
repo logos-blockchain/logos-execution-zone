@@ -48,7 +48,7 @@ impl NativeTokenTransfer<'_> {
                     e.to_string(),
                 ))
             })?;
-            let msg_hash = message.hash_message();
+            let msg_hash = message.hash();
             let (from_sig, from_pk) =
                 KeycardWallet::sign_message_for_path_with_connect(&pin, from_key_path, &msg_hash)?;
             if let Some(to_key_path) = to_key_path {
@@ -99,11 +99,8 @@ impl NativeTokenTransfer<'_> {
                     e.to_string(),
                 ))
             })?;
-            let (signature, pub_key) = KeycardWallet::sign_message_for_path_with_connect(
-                &pin,
-                key_path,
-                &message.hash_message(),
-            )?;
+            let (signature, pub_key) =
+                KeycardWallet::sign_message_for_path_with_connect(&pin, key_path, &message.hash())?;
             WitnessSet::from_list(&message, &[signature], &[pub_key])
                 .map_err(ExecutionFailureKind::TransactionBuildError)?
         } else {

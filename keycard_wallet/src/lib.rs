@@ -1,4 +1,5 @@
 use nssa::{AccountId, PublicKey, Signature};
+use nssa_core::NullifierPublicKey;
 use pyo3::{prelude::*, types::PyAny};
 
 pub mod python_path;
@@ -55,7 +56,7 @@ impl KeycardWallet {
 
         PublicKey::try_new(public_key)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
-    }
+    }   
 
     pub fn get_public_key_for_path_with_connect(pin: &str, path: &str) -> PyResult<PublicKey> {
         Python::with_gil(|py| {
@@ -141,9 +142,68 @@ impl KeycardWallet {
         Ok(())
     }
 
-    pub fn get_account_id_for_path_with_connect(pin: &str, key_path: &str) -> PyResult<String> {
+    pub fn get_public_account_id_for_path_with_connect(pin: &str, key_path: &str) -> PyResult<String> {
         let public_key = Self::get_public_key_for_path_with_connect(pin, key_path)?;
 
         Ok(format!("Public/{}", AccountId::from(&public_key)))
+    }
+
+    pub fn get_private_keys_for_path(
+        &self,
+        py: Python,
+        path: &str,
+    ) -> PyResult<([u8; 32], [u8; 32])> {
+        let (raw_nsk, raw_vsk): (Vec<u8>, Vec<u8>) = self
+            .instance
+            .bind(py)
+            .call_method1("get_private_keys_for_path", (path,))?
+            .extract()?;
+
+        let nsk: [u8; 32] = raw_nsk.try_into().map_err(|vec: Vec<u8>| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "expected 32-byte NSK from keycard, got {} bytes",
+                vec.len()
+            ))
+        })?;
+
+        let vsk: [u8; 32] = raw_vsk.try_into().map_err(|vec: Vec<u8>| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "expected 32-byte VSK from keycard, got {} bytes",
+                vec.len()
+            ))
+        })?;
+
+        Ok((nsk, vsk))
+    }
+
+    pub fn get_private_keys_for_path_with_connect(
+        pin: &str,
+        path: &str,
+    ) -> PyResult<([u8; 32], [u8; 32])> {
+        Python::with_gil(|py| {
+            python_path::add_python_path(py)?;
+
+            let wallet = Self::new(py)?;
+
+            let is_connected = wallet.setup_communication(py, pin)?;
+
+            if is_connected {
+                log::info!("\u{2705} Keycard is now connected to wallet.");
+            } else {
+                log::info!("\u{274c} Keycard is not connected to wallet.");
+            }
+
+            let result = wallet.get_private_keys_for_path(py, path);
+
+            drop(wallet.disconnect(py));
+            result
+        })
+    }
+
+    pub fn get_private_account_id_for_path_with_connect(pin: &str, key_path: &str) -> PyResult<String> {
+        let (nsk, _vsk) = Self::get_private_keys_for_path_with_connect(pin, key_path)?;
+        let npk = NullifierPublicKey::from(&nsk);
+
+        Ok(format!("Private/{}", AccountId::from((&npk, 0_u128))))
     }
 }

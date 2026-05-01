@@ -17,6 +17,7 @@ impl Ata<'_> {
         &self,
         owner_id: AccountId,
         definition_id: AccountId,
+        key_path: Option<&str>,
     ) -> Result<HashType, ExecutionFailureKind> {
         let program = Program::ata();
         let ata_program_id = program.id();
@@ -33,15 +34,6 @@ impl Ata<'_> {
             .await
             .map_err(ExecutionFailureKind::SequencerError)?;
 
-        let Some(signing_key) = self
-            .0
-            .storage
-            .user_data
-            .get_pub_account_signing_key(owner_id)
-        else {
-            return Err(ExecutionFailureKind::KeyNotFoundError);
-        };
-
         let instruction = ata_core::Instruction::Create { ata_program_id };
 
         let message = nssa::public_transaction::Message::try_new(
@@ -51,8 +43,28 @@ impl Ata<'_> {
             instruction,
         )?;
 
-        let witness_set =
-            nssa::public_transaction::WitnessSet::for_message(&message, &[signing_key]);
+        let msg_hash = message.hash();
+        let witness_set = if let Some(kp) = key_path {
+            let pin = crate::helperfunctions::read_pin().map_err(|e| {
+                ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                    e.to_string(),
+                ))
+            })?;
+            let (sig, pk) =
+                keycard_wallet::KeycardWallet::sign_message_for_path_with_connect(&pin, kp, &msg_hash)?;
+            nssa::public_transaction::WitnessSet::from_list(&message, &[sig], &[pk])
+                .map_err(ExecutionFailureKind::TransactionBuildError)?
+        } else {
+            let Some(signing_key) = self
+                .0
+                .storage
+                .user_data
+                .get_pub_account_signing_key(owner_id)
+            else {
+                return Err(ExecutionFailureKind::KeyNotFoundError);
+            };
+            nssa::public_transaction::WitnessSet::for_message(&message, &[signing_key])
+        };
 
         let tx = nssa::PublicTransaction::new(message, witness_set);
 
@@ -69,6 +81,7 @@ impl Ata<'_> {
         definition_id: AccountId,
         recipient_id: AccountId,
         amount: u128,
+        key_path: Option<&str>,
     ) -> Result<HashType, ExecutionFailureKind> {
         let program = Program::ata();
         let ata_program_id = program.id();
@@ -85,15 +98,6 @@ impl Ata<'_> {
             .await
             .map_err(ExecutionFailureKind::SequencerError)?;
 
-        let Some(signing_key) = self
-            .0
-            .storage
-            .user_data
-            .get_pub_account_signing_key(owner_id)
-        else {
-            return Err(ExecutionFailureKind::KeyNotFoundError);
-        };
-
         let instruction = ata_core::Instruction::Transfer {
             ata_program_id,
             amount,
@@ -106,8 +110,28 @@ impl Ata<'_> {
             instruction,
         )?;
 
-        let witness_set =
-            nssa::public_transaction::WitnessSet::for_message(&message, &[signing_key]);
+        let msg_hash = message.hash();
+        let witness_set = if let Some(kp) = key_path {
+            let pin = crate::helperfunctions::read_pin().map_err(|e| {
+                ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                    e.to_string(),
+                ))
+            })?;
+            let (sig, pk) =
+                keycard_wallet::KeycardWallet::sign_message_for_path_with_connect(&pin, kp, &msg_hash)?;
+            nssa::public_transaction::WitnessSet::from_list(&message, &[sig], &[pk])
+                .map_err(ExecutionFailureKind::TransactionBuildError)?
+        } else {
+            let Some(signing_key) = self
+                .0
+                .storage
+                .user_data
+                .get_pub_account_signing_key(owner_id)
+            else {
+                return Err(ExecutionFailureKind::KeyNotFoundError);
+            };
+            nssa::public_transaction::WitnessSet::for_message(&message, &[signing_key])
+        };
 
         let tx = nssa::PublicTransaction::new(message, witness_set);
 
@@ -123,6 +147,7 @@ impl Ata<'_> {
         owner_id: AccountId,
         definition_id: AccountId,
         amount: u128,
+        key_path: Option<&str>,
     ) -> Result<HashType, ExecutionFailureKind> {
         let program = Program::ata();
         let ata_program_id = program.id();
@@ -139,15 +164,6 @@ impl Ata<'_> {
             .await
             .map_err(ExecutionFailureKind::SequencerError)?;
 
-        let Some(signing_key) = self
-            .0
-            .storage
-            .user_data
-            .get_pub_account_signing_key(owner_id)
-        else {
-            return Err(ExecutionFailureKind::KeyNotFoundError);
-        };
-
         let instruction = ata_core::Instruction::Burn {
             ata_program_id,
             amount,
@@ -160,8 +176,28 @@ impl Ata<'_> {
             instruction,
         )?;
 
-        let witness_set =
-            nssa::public_transaction::WitnessSet::for_message(&message, &[signing_key]);
+        let msg_hash = message.hash();
+        let witness_set = if let Some(kp) = key_path {
+            let pin = crate::helperfunctions::read_pin().map_err(|e| {
+                ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                    e.to_string(),
+                ))
+            })?;
+            let (sig, pk) =
+                keycard_wallet::KeycardWallet::sign_message_for_path_with_connect(&pin, kp, &msg_hash)?;
+            nssa::public_transaction::WitnessSet::from_list(&message, &[sig], &[pk])
+                .map_err(ExecutionFailureKind::TransactionBuildError)?
+        } else {
+            let Some(signing_key) = self
+                .0
+                .storage
+                .user_data
+                .get_pub_account_signing_key(owner_id)
+            else {
+                return Err(ExecutionFailureKind::KeyNotFoundError);
+            };
+            nssa::public_transaction::WitnessSet::for_message(&message, &[signing_key])
+        };
 
         let tx = nssa::PublicTransaction::new(message, witness_set);
 
@@ -198,7 +234,6 @@ impl Ata<'_> {
                 accounts,
                 instruction_data,
                 &ata_with_token_dependency(),
-                &None,
                 &None,
             )
             .await
@@ -240,7 +275,6 @@ impl Ata<'_> {
                 instruction_data,
                 &ata_with_token_dependency(),
                 &None,
-                &None,
             )
             .await
             .map(|(hash, mut secrets)| {
@@ -279,7 +313,6 @@ impl Ata<'_> {
                 accounts,
                 instruction_data,
                 &ata_with_token_dependency(),
-                &None,
                 &None,
             )
             .await

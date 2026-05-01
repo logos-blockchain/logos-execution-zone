@@ -9,5 +9,6 @@ workspace = true
 
 [dependencies]
 nssa.workspace = true
+nssa_core.workspace = true
 pyo3.workspace = true
 log.workspace = true

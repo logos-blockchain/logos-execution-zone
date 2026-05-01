@@ -122,7 +122,7 @@ impl Message {
     }
 
     #[must_use]
-    pub fn hash_message(&self) -> [u8; 32] {
+    pub fn hash(&self) -> [u8; 32] {
         let mut bytes = Vec::with_capacity(
             PREFIX
                 .len()
@@ -226,7 +226,7 @@ pub mod tests {
         assert_eq!(
             borsh::to_vec(&msg).unwrap(),
             expected_borsh,
-            "`privacy_preserving_transaction::hash_message()`: expected borsh order has changed"
+            "`privacy_preserving_transaction::hash()`: expected borsh order has changed"
         );
 
         let mut preimage = Vec::with_capacity(PREFIX.len() + expected_borsh.len());
@@ -235,9 +235,9 @@ pub mod tests {
         let expected_hash: [u8; 32] = Sha256::digest(&preimage).into();
 
         assert_eq!(
-            msg.hash_message(),
+            msg.hash(),
             expected_hash,
-            "`privacy_preserving_transaction::hash_message()`: serialization has changed"
+            "`privacy_preserving_transaction::hash()`: serialization has changed"
         );
     }
 

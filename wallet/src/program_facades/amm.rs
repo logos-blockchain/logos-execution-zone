@@ -15,6 +15,8 @@ impl Amm<'_> {
         user_holding_lp: AccountId,
         balance_a: u128,
         balance_b: u128,
+        key_path_a: Option<&str>,
+        key_path_b: Option<&str>,
     ) -> Result<HashType, ExecutionFailureKind> {
         let program = Program::amm();
         let amm_program_id = Program::amm().id();
@@ -58,37 +60,20 @@ impl Amm<'_> {
             user_holding_lp,
         ];
 
+        // Check if LP has a stored key to determine if LP nonce is needed — before message creation
+        let lp_sk = self
+            .0
+            .storage
+            .user_data
+            .get_pub_account_signing_key(user_holding_lp);
+
         let mut nonces = self
             .0
             .get_accounts_nonces(vec![user_holding_a, user_holding_b])
             .await
             .map_err(ExecutionFailureKind::SequencerError)?;
 
-        let mut private_keys = Vec::new();
-
-        let signing_key_a = self
-            .0
-            .storage
-            .user_data
-            .get_pub_account_signing_key(user_holding_a)
-            .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
-        private_keys.push(signing_key_a);
-
-        let signing_key_b = self
-            .0
-            .storage
-            .user_data
-            .get_pub_account_signing_key(user_holding_b)
-            .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
-        private_keys.push(signing_key_b);
-
-        if let Some(signing_key_lp) = self
-            .0
-            .storage
-            .user_data
-            .get_pub_account_signing_key(user_holding_lp)
-        {
-            private_keys.push(signing_key_lp);
+        if lp_sk.is_some() {
             let lp_nonces = self
                 .0
                 .get_accounts_nonces(vec![user_holding_lp])
@@ -109,8 +94,59 @@ impl Amm<'_> {
         )
         .unwrap();
 
-        let witness_set =
-            nssa::public_transaction::WitnessSet::for_message(&message, &private_keys);
+        let msg_hash = message.hash();
+        let pin = if key_path_a.is_some() || key_path_b.is_some() {
+            Some(crate::helperfunctions::read_pin().map_err(|e| {
+                ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                    e.to_string(),
+                ))
+            })?)
+        } else {
+            None
+        };
+
+        let (sig_a, pk_a) = if let Some(kp) = key_path_a {
+            keycard_wallet::KeycardWallet::sign_message_for_path_with_connect(
+                pin.as_ref().unwrap(),
+                kp,
+                &msg_hash,
+            )?
+        } else {
+            let sk = self
+                .0
+                .storage
+                .user_data
+                .get_pub_account_signing_key(user_holding_a)
+                .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
+            (nssa::Signature::new(&sk, &msg_hash), nssa::PublicKey::new_from_private_key(&sk))
+        };
+
+        let (sig_b, pk_b) = if let Some(kp) = key_path_b {
+            keycard_wallet::KeycardWallet::sign_message_for_path_with_connect(
+                pin.as_ref().unwrap(),
+                kp,
+                &msg_hash,
+            )?
+        } else {
+            let sk = self
+                .0
+                .storage
+                .user_data
+                .get_pub_account_signing_key(user_holding_b)
+                .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
+            (nssa::Signature::new(&sk, &msg_hash), nssa::PublicKey::new_from_private_key(&sk))
+        };
+
+        let mut sigs = vec![sig_a, sig_b];
+        let mut pks = vec![pk_a, pk_b];
+
+        if let Some(sk_lp) = lp_sk {
+            sigs.push(nssa::Signature::new(&sk_lp, &msg_hash));
+            pks.push(nssa::PublicKey::new_from_private_key(&sk_lp));
+        }
+
+        let witness_set = nssa::public_transaction::WitnessSet::from_list(&message, &sigs, &pks)
+            .map_err(ExecutionFailureKind::TransactionBuildError)?;
 
         let tx = nssa::PublicTransaction::new(message, witness_set);
 
@@ -128,6 +164,7 @@ impl Amm<'_> {
         swap_amount_in: u128,
         min_amount_out: u128,
         token_definition_id_in: AccountId,
+        key_path: Option<&str>,
     ) -> Result<HashType, ExecutionFailureKind> {
         let instruction = amm_core::Instruction::SwapExactInput {
             swap_amount_in,
@@ -184,13 +221,6 @@ impl Amm<'_> {
             .await
             .map_err(ExecutionFailureKind::SequencerError)?;
 
-        let signing_key = self
-            .0
-            .storage
-            .user_data
-            .get_pub_account_signing_key(account_id_auth)
-            .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
-
         let message = nssa::public_transaction::Message::try_new(
             program.id(),
             account_ids,
@@ -199,8 +229,26 @@ impl Amm<'_> {
         )
         .unwrap();
 
-        let witness_set =
-            nssa::public_transaction::WitnessSet::for_message(&message, &[signing_key]);
+        let msg_hash = message.hash();
+        let witness_set = if let Some(kp) = key_path {
+            let pin = crate::helperfunctions::read_pin().map_err(|e| {
+                ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                    e.to_string(),
+                ))
+            })?;
+            let (sig, pk) =
+                keycard_wallet::KeycardWallet::sign_message_for_path_with_connect(&pin, kp, &msg_hash)?;
+            nssa::public_transaction::WitnessSet::from_list(&message, &[sig], &[pk])
+                .map_err(ExecutionFailureKind::TransactionBuildError)?
+        } else {
+            let signing_key = self
+                .0
+                .storage
+                .user_data
+                .get_pub_account_signing_key(account_id_auth)
+                .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
+            nssa::public_transaction::WitnessSet::for_message(&message, &[signing_key])
+        };
 
         let tx = nssa::PublicTransaction::new(message, witness_set);
 
@@ -218,6 +266,7 @@ impl Amm<'_> {
         exact_amount_out: u128,
         max_amount_in: u128,
         token_definition_id_in: AccountId,
+        key_path: Option<&str>,
     ) -> Result<HashType, ExecutionFailureKind> {
         let instruction = amm_core::Instruction::SwapExactOutput {
             exact_amount_out,
@@ -274,13 +323,6 @@ impl Amm<'_> {
             .await
             .map_err(ExecutionFailureKind::SequencerError)?;
 
-        let signing_key = self
-            .0
-            .storage
-            .user_data
-            .get_pub_account_signing_key(account_id_auth)
-            .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
-
         let message = nssa::public_transaction::Message::try_new(
             program.id(),
             account_ids,
@@ -289,8 +331,26 @@ impl Amm<'_> {
         )
         .unwrap();
 
-        let witness_set =
-            nssa::public_transaction::WitnessSet::for_message(&message, &[signing_key]);
+        let msg_hash = message.hash();
+        let witness_set = if let Some(kp) = key_path {
+            let pin = crate::helperfunctions::read_pin().map_err(|e| {
+                ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                    e.to_string(),
+                ))
+            })?;
+            let (sig, pk) =
+                keycard_wallet::KeycardWallet::sign_message_for_path_with_connect(&pin, kp, &msg_hash)?;
+            nssa::public_transaction::WitnessSet::from_list(&message, &[sig], &[pk])
+                .map_err(ExecutionFailureKind::TransactionBuildError)?
+        } else {
+            let signing_key = self
+                .0
+                .storage
+                .user_data
+                .get_pub_account_signing_key(account_id_auth)
+                .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
+            nssa::public_transaction::WitnessSet::for_message(&message, &[signing_key])
+        };
 
         let tx = nssa::PublicTransaction::new(message, witness_set);
 
@@ -309,6 +369,8 @@ impl Amm<'_> {
         min_amount_liquidity: u128,
         max_amount_to_add_token_a: u128,
         max_amount_to_add_token_b: u128,
+        key_path_a: Option<&str>,
+        key_path_b: Option<&str>,
     ) -> Result<HashType, ExecutionFailureKind> {
         let instruction = amm_core::Instruction::AddLiquidity {
             min_amount_liquidity,
@@ -358,20 +420,6 @@ impl Amm<'_> {
             .await
             .map_err(ExecutionFailureKind::SequencerError)?;
 
-        let signing_key_a = self
-            .0
-            .storage
-            .user_data
-            .get_pub_account_signing_key(user_holding_a)
-            .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
-
-        let signing_key_b = self
-            .0
-            .storage
-            .user_data
-            .get_pub_account_signing_key(user_holding_b)
-            .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
-
         let message = nssa::public_transaction::Message::try_new(
             program.id(),
             account_ids,
@@ -380,10 +428,52 @@ impl Amm<'_> {
         )
         .unwrap();
 
-        let witness_set = nssa::public_transaction::WitnessSet::for_message(
-            &message,
-            &[signing_key_a, signing_key_b],
-        );
+        let msg_hash = message.hash();
+        let pin = if key_path_a.is_some() || key_path_b.is_some() {
+            Some(crate::helperfunctions::read_pin().map_err(|e| {
+                ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                    e.to_string(),
+                ))
+            })?)
+        } else {
+            None
+        };
+
+        let (sig_a, pk_a) = if let Some(kp) = key_path_a {
+            keycard_wallet::KeycardWallet::sign_message_for_path_with_connect(
+                pin.as_ref().unwrap(),
+                kp,
+                &msg_hash,
+            )?
+        } else {
+            let sk = self
+                .0
+                .storage
+                .user_data
+                .get_pub_account_signing_key(user_holding_a)
+                .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
+            (nssa::Signature::new(&sk, &msg_hash), nssa::PublicKey::new_from_private_key(&sk))
+        };
+
+        let (sig_b, pk_b) = if let Some(kp) = key_path_b {
+            keycard_wallet::KeycardWallet::sign_message_for_path_with_connect(
+                pin.as_ref().unwrap(),
+                kp,
+                &msg_hash,
+            )?
+        } else {
+            let sk = self
+                .0
+                .storage
+                .user_data
+                .get_pub_account_signing_key(user_holding_b)
+                .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
+            (nssa::Signature::new(&sk, &msg_hash), nssa::PublicKey::new_from_private_key(&sk))
+        };
+
+        let witness_set =
+            nssa::public_transaction::WitnessSet::from_list(&message, &[sig_a, sig_b], &[pk_a, pk_b])
+                .map_err(ExecutionFailureKind::TransactionBuildError)?;
 
         let tx = nssa::PublicTransaction::new(message, witness_set);
 
@@ -402,6 +492,7 @@ impl Amm<'_> {
         remove_liquidity_amount: u128,
         min_amount_to_remove_token_a: u128,
         min_amount_to_remove_token_b: u128,
+        key_path_lp: Option<&str>,
     ) -> Result<HashType, ExecutionFailureKind> {
         let instruction = amm_core::Instruction::RemoveLiquidity {
             remove_liquidity_amount,
@@ -451,13 +542,6 @@ impl Amm<'_> {
             .await
             .map_err(ExecutionFailureKind::SequencerError)?;
 
-        let signing_key_lp = self
-            .0
-            .storage
-            .user_data
-            .get_pub_account_signing_key(user_holding_lp)
-            .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
-
         let message = nssa::public_transaction::Message::try_new(
             program.id(),
             account_ids,
@@ -466,8 +550,26 @@ impl Amm<'_> {
         )
         .unwrap();
 
-        let witness_set =
-            nssa::public_transaction::WitnessSet::for_message(&message, &[signing_key_lp]);
+        let msg_hash = message.hash();
+        let witness_set = if let Some(kp) = key_path_lp {
+            let pin = crate::helperfunctions::read_pin().map_err(|e| {
+                ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+                    e.to_string(),
+                ))
+            })?;
+            let (sig, pk) =
+                keycard_wallet::KeycardWallet::sign_message_for_path_with_connect(&pin, kp, &msg_hash)?;
+            nssa::public_transaction::WitnessSet::from_list(&message, &[sig], &[pk])
+                .map_err(ExecutionFailureKind::TransactionBuildError)?
+        } else {
+            let signing_key_lp = self
+                .0
+                .storage
+                .user_data
+                .get_pub_account_signing_key(user_holding_lp)
+                .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
+            nssa::public_transaction::WitnessSet::for_message(&message, &[signing_key_lp])
+        };
 
         let tx = nssa::PublicTransaction::new(message, witness_set);
 

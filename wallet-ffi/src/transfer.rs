@@ -139,7 +139,6 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded(
     to_keys: *const FfiPrivateAccountKeys,
     to_identifier: *const FfiU128,
     amount: *const [u8; 16],
-    pin: *const c_char,
     key_path: *const c_char,
     out_result: *mut FfiTransferResult,
 ) -> WalletFfiError {
@@ -177,16 +176,18 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded(
     };
     let to_identifier = u128::from_le_bytes(unsafe { (*to_identifier).data });
     let amount = u128::from_le_bytes(unsafe { *amount });
-    let pin = optional_c_str(pin);
     let key_path = optional_c_str(key_path);
 
     let transfer = NativeTokenTransfer(&wallet);
 
-    match block_on(
-        transfer.send_shielded_transfer_to_outer_account(
-            from_id, to_npk, to_vpk, amount, &pin, &key_path,
-        ),
-    ) {
+    match block_on(transfer.send_shielded_transfer_to_outer_account(
+        from_id,
+        to_npk,
+        to_vpk,
+        to_identifier,
+        amount,
+        &key_path,
+    )) {
         Ok((tx_hash, _shared_key)) => {
             let tx_hash = CString::new(tx_hash.to_string())
                 .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
@@ -240,7 +241,6 @@ pub unsafe extern "C" fn wallet_ffi_transfer_deshielded(
     from: *const FfiBytes32,
     to: *const FfiBytes32,
     amount: *const [u8; 16],
-    pin: *const c_char,
     key_path: *const c_char,
     out_result: *mut FfiTransferResult,
 ) -> WalletFfiError {
@@ -265,12 +265,11 @@ pub unsafe extern "C" fn wallet_ffi_transfer_deshielded(
     let from_id = AccountId::new(unsafe { (*from).data });
     let to_id = AccountId::new(unsafe { (*to).data });
     let amount = u128::from_le_bytes(unsafe { *amount });
-    let pin = optional_c_str(pin);
     let key_path = optional_c_str(key_path);
 
     let transfer = NativeTokenTransfer(&wallet);
 
-    match block_on(transfer.send_deshielded_transfer(from_id, to_id, amount, &pin, &key_path)) {
+    match block_on(transfer.send_deshielded_transfer(from_id, to_id, amount, &key_path)) {
         Ok((tx_hash, _shared_key)) => {
             let tx_hash = CString::new(tx_hash.to_string())
                 .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
@@ -326,7 +325,6 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private(
     to_keys: *const FfiPrivateAccountKeys,
     to_identifier: *const FfiU128,
     amount: *const [u8; 16],
-    pin: *const c_char,
     key_path: *const c_char,
     out_result: *mut FfiTransferResult,
 ) -> WalletFfiError {
@@ -364,16 +362,18 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private(
     };
     let to_identifier = u128::from_le_bytes(unsafe { (*to_identifier).data });
     let amount = u128::from_le_bytes(unsafe { *amount });
-    let pin = optional_c_str(pin);
     let key_path = optional_c_str(key_path);
 
     let transfer = NativeTokenTransfer(&wallet);
 
-    match block_on(
-        transfer.send_private_transfer_to_outer_account(
-            from_id, to_npk, to_vpk, amount, &pin, &key_path,
-        ),
-    ) {
+    match block_on(transfer.send_private_transfer_to_outer_account(
+        from_id,
+        to_npk,
+        to_vpk,
+        to_identifier,
+        amount,
+        &key_path,
+    )) {
         Ok((tx_hash, _shared_key)) => {
             let tx_hash = CString::new(tx_hash.to_string())
                 .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
@@ -430,7 +430,6 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded_owned(
     from: *const FfiBytes32,
     to: *const FfiBytes32,
     amount: *const [u8; 16],
-    pin: *const c_char,
     key_path: *const c_char,
     out_result: *mut FfiTransferResult,
 ) -> WalletFfiError {
@@ -455,12 +454,11 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded_owned(
     let from_id = AccountId::new(unsafe { (*from).data });
     let to_id = AccountId::new(unsafe { (*to).data });
     let amount = u128::from_le_bytes(unsafe { *amount });
-    let pin = optional_c_str(pin);
     let key_path = optional_c_str(key_path);
 
     let transfer = NativeTokenTransfer(&wallet);
 
-    match block_on(transfer.send_shielded_transfer(from_id, to_id, amount, &pin, &key_path)) {
+    match block_on(transfer.send_shielded_transfer(from_id, to_id, amount, &key_path)) {
         Ok((tx_hash, _shared_key)) => {
             let tx_hash = CString::new(tx_hash.to_string())
                 .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
@@ -517,7 +515,6 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private_owned(
     from: *const FfiBytes32,
     to: *const FfiBytes32,
     amount: *const [u8; 16],
-    pin: *const c_char,
     key_path: *const c_char,
     out_result: *mut FfiTransferResult,
 ) -> WalletFfiError {
@@ -542,13 +539,12 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private_owned(
     let from_id = AccountId::new(unsafe { (*from).data });
     let to_id = AccountId::new(unsafe { (*to).data });
     let amount = u128::from_le_bytes(unsafe { *amount });
-    let pin = optional_c_str(pin);
     let key_path = optional_c_str(key_path);
 
     let transfer = NativeTokenTransfer(&wallet);
 
     match block_on(
-        transfer.send_private_transfer_to_owned_account(from_id, to_id, amount, &pin, &key_path),
+        transfer.send_private_transfer_to_owned_account(from_id, to_id, amount, &key_path),
     ) {
         Ok((tx_hash, _shared_keys)) => {
             let tx_hash = CString::new(tx_hash.to_string())
@@ -667,7 +663,6 @@ pub unsafe extern "C" fn wallet_ffi_register_public_account(
 pub unsafe extern "C" fn wallet_ffi_register_private_account(
     handle: *mut WalletHandle,
     account_id: *const FfiBytes32,
-    pin: *const c_char,
     key_path: *const c_char,
     out_result: *mut FfiTransferResult,
 ) -> WalletFfiError {
@@ -690,12 +685,11 @@ pub unsafe extern "C" fn wallet_ffi_register_private_account(
     };
 
     let account_id = AccountId::new(unsafe { (*account_id).data });
-    let pin = optional_c_str(pin);
     let key_path = optional_c_str(key_path);
 
     let transfer = NativeTokenTransfer(&wallet);
 
-    match block_on(transfer.register_account_private(account_id, &pin, &key_path)) {
+    match block_on(transfer.register_account_private(account_id, &key_path)) {
         Ok((tx_hash, _secret)) => {
             let tx_hash = CString::new(tx_hash.to_string())
                 .map_or(ptr::null_mut(), std::ffi::CString::into_raw);

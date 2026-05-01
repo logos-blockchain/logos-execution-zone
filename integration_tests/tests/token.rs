@@ -137,6 +137,7 @@ async fn create_and_transfer_public_token() -> Result<()> {
         to_identifier: Some(0),
         amount: transfer_amount,
         from_key_path: None,
+        to_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
@@ -379,6 +380,7 @@ async fn create_and_transfer_token_with_private_supply() -> Result<()> {
         to_identifier: Some(0),
         amount: transfer_amount,
         from_key_path: None,
+        to_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
@@ -768,6 +770,7 @@ async fn create_token_with_private_definition_and_supply() -> Result<()> {
         to_identifier: Some(0),
         amount: transfer_amount,
         from_key_path: None,
+        to_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
@@ -901,6 +904,7 @@ async fn shielded_token_transfer() -> Result<()> {
         to_identifier: Some(0),
         amount: transfer_amount,
         from_key_path: None,
+        to_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
@@ -1029,6 +1033,7 @@ async fn deshielded_token_transfer() -> Result<()> {
         to_identifier: Some(0),
         amount: transfer_amount,
         from_key_path: None,
+        to_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
@@ -1369,6 +1374,7 @@ async fn transfer_token_using_from_label() -> Result<()> {
         to_identifier: Some(0),
         amount: transfer_amount,
         from_key_path: None,
+        to_key_path: None,
     };
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
 

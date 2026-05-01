@@ -15,7 +15,7 @@ use bip39::Mnemonic;
 use chain_storage::WalletChainStore;
 use common::{HashType, transaction::NSSATransaction};
 use config::WalletConfig;
-use key_protocol::key_management::key_tree::{chain_index::ChainIndex, traits::KeyNode as _};
+use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use keycard_wallet::KeycardWallet;
 use log::info;
 use nssa::{
@@ -31,6 +31,7 @@ use nssa_core::{
     program::InstructionData,
 };
 pub use privacy_preserving_tx::PrivacyPreservingAccount;
+use pyo3::exceptions::PyRuntimeError;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
 use tokio::io::AsyncWriteExt as _;
 
@@ -391,7 +392,6 @@ impl WalletCore {
         accounts: Vec<PrivacyPreservingAccount>,
         instruction_data: InstructionData,
         program: &ProgramWithDependencies,
-        pin: &Option<String>,
         key_path: &Option<String>,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         self.send_privacy_preserving_tx_with_pre_check(
@@ -399,7 +399,6 @@ impl WalletCore {
             instruction_data,
             program,
             |_| Ok(()),
-            pin,
             key_path,
         )
         .await
@@ -411,28 +410,29 @@ impl WalletCore {
         instruction_data: InstructionData,
         program: &ProgramWithDependencies,
         tx_pre_check: impl FnOnce(&[&Account]) -> Result<(), ExecutionFailureKind>,
-        pin: &Option<String>,
         key_path: &Option<String>,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         let acc_manager = privacy_preserving_tx::AccountManager::new(self, accounts).await?;
 
         let mut pre_states = acc_manager.pre_states();
 
-        let keycard_account = if let Some(pin) = pin.as_ref() {
-            let account_id = KeycardWallet::get_account_id_for_path_with_connect(
-                pin,
-                key_path.as_ref().expect("Expect a key path String."),
-            );
-
+        let keycard_account = if let Some(key_path_str) = key_path.as_deref() {
+            let account_id = {
+                let pin = crate::helperfunctions::read_pin().map_err(|e| {
+                    ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<
+                        pyo3::exceptions::PyRuntimeError,
+                        _,
+                    >(e.to_string()))
+                })?;
+                KeycardWallet::get_public_account_id_for_path_with_connect(&pin, key_path_str)?
+            };
             let (acc_id, _) =
                 parse_addr_with_privacy_prefix(&account_id).expect("Valid parsing of account id");
-
-            let account_id = acc_id.parse().expect("Expect a valid Account Id");
+            let account_id: AccountId = acc_id.parse().expect("Expect a valid Account Id");
             let account = self
                 .get_account_public(account_id)
                 .await
                 .expect("Expect valid account");
-
             Some(AccountWithMetadata {
                 account,
                 is_authorized: true,
@@ -498,7 +498,8 @@ impl WalletCore {
             )
             .unwrap();
 
-        let witness_set = Self::sign_privacy_message(&message, proof.clone(), &acc_manager);
+        let witness_set =
+            Self::sign_privacy_message(&message, proof.clone(), &acc_manager, key_path)?;
         let tx = PrivacyPreservingTransaction::new(message, witness_set);
 
         let shared_secrets: Vec<_> = private_account_keys
@@ -663,65 +664,64 @@ impl WalletCore {
         message: &nssa::privacy_preserving_transaction::Message,
         proof: Proof,
         acc_manager: &privacy_preserving_tx::AccountManager,
-        pin: &Option<String>,
         key_path: &Option<String>,
     ) -> Result<nssa::privacy_preserving_transaction::witness_set::WitnessSet, ExecutionFailureKind>
     {
-        pin.as_ref().map_or_else(
-            || {
-                Ok(
-                    nssa::privacy_preserving_transaction::witness_set::WitnessSet::for_message(
-                        message,
-                        proof.clone(),
-                        &acc_manager.public_account_auth(),
-                    ),
-                )
-            },
-            |pin| {
-                let public_key = KeycardWallet::get_public_key_for_path_with_connect(
-                    pin,
-                    key_path.as_ref().expect("Expect a key path String."),
-                );
-                let signature = KeycardWallet::sign_message_for_path_with_connect(
-                    pin,
-                    key_path.as_ref().expect("Expect a key path String."),
-                    &message.hash_message(),
-                )
-                .expect("Expect a valid signature");
-                Ok(
-                    nssa::privacy_preserving_transaction::witness_set::WitnessSet::from_list(
-                        proof.clone(),
-                        &[signature],
-                        &[public_key],
-                    ),
-                )
-            },
-        )
+        if let Some(key_path_str) = key_path.as_deref() {
+            let (signature, public_key) = {
+                let pin = crate::helperfunctions::read_pin().map_err(|e| {
+                    ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<
+                        pyo3::exceptions::PyRuntimeError,
+                        _,
+                    >(e.to_string()))
+                })?;
+                KeycardWallet::sign_message_for_path_with_connect(
+                    &pin,
+                    key_path_str,
+                    &message.hash(),
+                )?
+            };
+            Ok(
+                nssa::privacy_preserving_transaction::witness_set::WitnessSet::from_list(
+                    proof,
+                    &[signature],
+                    &[public_key],
+                ),
+            )
+        } else {
+            Ok(
+                nssa::privacy_preserving_transaction::witness_set::WitnessSet::for_message(
+                    message,
+                    proof,
+                    &acc_manager.public_account_auth(),
+                ),
+            )
+        }
     }
 
     pub fn sign_privacy_message_with_keycard(
         message: &nssa::privacy_preserving_transaction::Message,
         proof: Proof,
-        pin: &str,
         key_paths: &[String],
     ) -> Result<nssa::privacy_preserving_transaction::witness_set::WitnessSet, ExecutionFailureKind>
     {
-        let mut signatures = Vec::<Signature>::new();
-        let mut public_keys = Vec::<PublicKey>::new();
+        let mut signatures_and_public_keys = Vec::<(Signature, PublicKey)>::new();
 
         for path in key_paths {
-            public_keys.push(KeycardWallet::get_public_key_for_path_with_connect(
-                pin, path,
-            ));
-            signatures.push(
-                KeycardWallet::sign_message_for_path_with_connect(
-                    pin,
-                    path,
-                    &message.hash_message(),
-                )
-                .expect("Expect a valid signature"),
+            let pin = crate::helperfunctions::read_pin().map_err(|e| {
+                ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(
+                    e.to_string(),
+                ))
+            })?;
+
+            signatures_and_public_keys.push(
+                KeycardWallet::sign_message_for_path_with_connect(&pin, path, &message.hash())
+                    .expect("Expect a valid signature"), // TODO: Marvin tautology
             );
         }
+
+        let (signatures, public_keys): (Vec<Signature>, Vec<PublicKey>) =
+            signatures_and_public_keys.into_iter().unzip();
 
         Ok(
             nssa::privacy_preserving_transaction::witness_set::WitnessSet::from_list(

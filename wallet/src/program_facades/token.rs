@@ -1,7 +1,8 @@
 use common::{HashType, transaction::NSSATransaction};
 use keycard_wallet::KeycardWallet;
-use nssa::{AccountId, program::Program, public_transaction::WitnessSet};
-use nssa_core::{NullifierPublicKey, SharedSecretKey, encryption::ViewingPublicKey};
+use nssa::{AccountId, Signature, PublicKey, program::Program, public_transaction::WitnessSet};
+use nssa_core::{Identifier, NullifierPublicKey, SharedSecretKey, encryption::ViewingPublicKey};
+use pyo3::exceptions::PyRuntimeError;
 use sequencer_service_rpc::RpcClient as _;
 use token_core::Instruction;
 
@@ -16,6 +17,8 @@ impl Token<'_> {
         supply_account_id: AccountId,
         name: String,
         total_supply: u128,
+        definition_key_path: Option<&str>,
+        supply_key_path: Option<&str>,
     ) -> Result<HashType, ExecutionFailureKind> {
         let account_ids = vec![definition_account_id, supply_account_id];
         let program_id = nssa::program::Program::token().id();
@@ -33,23 +36,47 @@ impl Token<'_> {
         )
         .unwrap();
 
-        let def_private_key = self
-            .0
-            .storage
-            .user_data
-            .get_pub_account_signing_key(definition_account_id)
-            .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
-        let supply_private_key = self
-            .0
-            .storage
-            .user_data
-            .get_pub_account_signing_key(supply_account_id)
-            .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
+        let msg_hash = message.hash();
+        let pin = if definition_key_path.is_some() || supply_key_path.is_some() {
+            Some(crate::helperfunctions::read_pin().map_err(|e| {
+                ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(
+                    e.to_string(),
+                ))
+            })?)
+        } else {
+            None
+        };
 
-        let witness_set = nssa::public_transaction::WitnessSet::for_message(
+        let (sig_def, pk_def) = if let Some(kp) = definition_key_path {
+            KeycardWallet::sign_message_for_path_with_connect(pin.as_ref().unwrap(), kp, &msg_hash)?
+        } else {
+            let sk = self
+                .0
+                .storage
+                .user_data
+                .get_pub_account_signing_key(definition_account_id)
+                .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
+            (Signature::new(&sk, &msg_hash), PublicKey::new_from_private_key(&sk))
+        };
+
+        let (sig_sup, pk_sup) = if let Some(kp) = supply_key_path {
+            KeycardWallet::sign_message_for_path_with_connect(pin.as_ref().unwrap(), kp, &msg_hash)?
+        } else {
+            let sk = self
+                .0
+                .storage
+                .user_data
+                .get_pub_account_signing_key(supply_account_id)
+                .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
+            (Signature::new(&sk, &msg_hash), PublicKey::new_from_private_key(&sk))
+        };
+
+        let witness_set = nssa::public_transaction::WitnessSet::from_list(
             &message,
-            &[def_private_key, supply_private_key],
-        );
+            &[sig_def, sig_sup],
+            &[pk_def, pk_sup],
+        )
+        .map_err(ExecutionFailureKind::TransactionBuildError)?;
 
         let tx = nssa::PublicTransaction::new(message, witness_set);
 
@@ -79,7 +106,6 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                &None,
                 &None,
             )
             .await
@@ -112,7 +138,6 @@ impl Token<'_> {
                 instruction_data,
                 &Program::token().into(),
                 &None,
-                &None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -144,7 +169,6 @@ impl Token<'_> {
                 instruction_data,
                 &Program::token().into(),
                 &None,
-                &None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -160,7 +184,6 @@ impl Token<'_> {
         sender_account_id: AccountId,
         recipient_account_id: AccountId,
         amount: u128,
-        pin: Option<String>,
         sender_key_path: Option<String>,
     ) -> Result<HashType, ExecutionFailureKind> {
         let account_ids = vec![sender_account_id, recipient_account_id];
@@ -187,19 +210,19 @@ impl Token<'_> {
             instruction,
         )
         .unwrap();
-
-        let witness_set = if let Some(pin) = pin {
-            let sender_public_key = KeycardWallet::get_public_key_for_path_with_connect(
+        let witness_set = if let Some(sender_key_path) = sender_key_path {
+            let pin = crate::helperfunctions::read_pin().map_err(|e| {
+                ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(
+                    e.to_string(),
+                ))
+            })?;
+            let (signature, public_key) = KeycardWallet::sign_message_for_path_with_connect(
                 &pin,
-                sender_key_path.as_ref().expect("Expect a key path String."),
-            );
-            let signature = KeycardWallet::sign_message_for_path_with_connect(
-                &pin,
-                sender_key_path.as_ref().expect("Expect a key path String."),
-                &message.hash_message(),
+                &sender_key_path,
+                &message.hash(),
             )
             .expect("Expect a valid signature");
-            WitnessSet::from_list(&[signature], &[sender_public_key])
+            WitnessSet::from_list(&message, &[signature], &[public_key])
         } else {
             let mut private_keys = Vec::new();
             let sender_sk = self
@@ -223,10 +246,13 @@ impl Token<'_> {
                 );
             }
 
-            nssa::public_transaction::WitnessSet::for_message(&message, &private_keys)
+            Ok(nssa::public_transaction::WitnessSet::for_message(
+                &message,
+                &private_keys,
+            ))
         };
 
-        let tx = nssa::PublicTransaction::new(message, witness_set);
+        let tx = nssa::PublicTransaction::new(message, witness_set.unwrap()); //TODO: Marvin
 
         Ok(self
             .0
@@ -255,7 +281,6 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                &None,
                 &None,
             )
             .await
@@ -294,7 +319,6 @@ impl Token<'_> {
                 instruction_data,
                 &Program::token().into(),
                 &None,
-                &None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -325,7 +349,6 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                &None,
                 &None,
             )
             .await
@@ -358,7 +381,6 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                &None,
                 &None,
             )
             .await
@@ -398,7 +420,6 @@ impl Token<'_> {
                 instruction_data,
                 &Program::token().into(),
                 &None,
-                &None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -410,11 +431,88 @@ impl Token<'_> {
             })
     }
 
+    pub async fn send_initialize_account(
+        &self,
+        definition_account: PrivacyPreservingAccount,
+        holder_account: PrivacyPreservingAccount,
+        key_path: &Option<String>,
+    ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
+        let instruction = Instruction::InitializeAccount;
+
+        if definition_account.is_public() && holder_account.is_public() {
+            let PrivacyPreservingAccount::Public(definition_account_id) = definition_account else {
+                unreachable!()
+            };
+            let PrivacyPreservingAccount::Public(holder_account_id) = holder_account else {
+                unreachable!()
+            };
+
+            let nonces = self
+                .0
+                .get_accounts_nonces(vec![holder_account_id])
+                .await
+                .map_err(ExecutionFailureKind::SequencerError)?;
+            let message = nssa::public_transaction::Message::try_new(
+                Program::token().id(),
+                vec![definition_account_id, holder_account_id],
+                nonces,
+                instruction,
+            )
+            .expect("Instruction should serialize");
+
+            let witness_set = if let Some(key_path) = key_path {
+                let pin = crate::helperfunctions::read_pin().map_err(|e| {
+                    ExecutionFailureKind::KeycardError(
+                        pyo3::PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()),
+                    )
+                })?;
+                let (signature, pub_key) = keycard_wallet::KeycardWallet::sign_message_for_path_with_connect(
+                    &pin,
+                    key_path,
+                    &message.hash(),
+                )?;
+                nssa::public_transaction::WitnessSet::from_list(&message, &[signature], &[pub_key])
+                    .map_err(ExecutionFailureKind::TransactionBuildError)?
+            } else {
+                let signing_key = self
+                    .0
+                    .storage
+                    .user_data
+                    .get_pub_account_signing_key(holder_account_id)
+                    .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
+                nssa::public_transaction::WitnessSet::for_message(&message, &[signing_key])
+            };
+
+            let tx = nssa::PublicTransaction::new(message, witness_set);
+
+            let hash = self
+                .0
+                .sequencer_client
+                .send_transaction(NSSATransaction::Public(tx))
+                .await?;
+            Ok((hash, vec![]))
+        } else {
+            let instruction_data =
+                Program::serialize_instruction(instruction).expect("Instruction should serialize");
+
+            self.0
+                .send_privacy_preserving_tx(
+                    vec![definition_account, holder_account],
+                    instruction_data,
+                    &Program::token().into(),
+                    key_path,
+                )
+                .await
+                .map(|(resp, secrets)| (resp, secrets))
+        }
+    }
+
     pub async fn send_burn_transaction(
         &self,
         definition_account_id: AccountId,
         holder_account_id: AccountId,
         amount: u128,
+        holder_key_path: Option<&str>,
     ) -> Result<HashType, ExecutionFailureKind> {
         let account_ids = vec![definition_account_id, holder_account_id];
         let instruction = Instruction::Burn {
@@ -434,14 +532,26 @@ impl Token<'_> {
         )
         .expect("Instruction should serialize");
 
-        let signing_key = self
-            .0
-            .storage
-            .user_data
-            .get_pub_account_signing_key(holder_account_id)
-            .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
-        let witness_set =
-            nssa::public_transaction::WitnessSet::for_message(&message, &[signing_key]);
+        let msg_hash = message.hash();
+        let witness_set = if let Some(kp) = holder_key_path {
+            let pin = crate::helperfunctions::read_pin().map_err(|e| {
+                ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(
+                    e.to_string(),
+                ))
+            })?;
+            let (sig, pk) =
+                KeycardWallet::sign_message_for_path_with_connect(&pin, kp, &msg_hash)?;
+            nssa::public_transaction::WitnessSet::from_list(&message, &[sig], &[pk])
+                .map_err(ExecutionFailureKind::TransactionBuildError)?
+        } else {
+            let signing_key = self
+                .0
+                .storage
+                .user_data
+                .get_pub_account_signing_key(holder_account_id)
+                .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
+            nssa::public_transaction::WitnessSet::for_message(&message, &[signing_key])
+        };
 
         let tx = nssa::PublicTransaction::new(message, witness_set);
 
@@ -473,7 +583,6 @@ impl Token<'_> {
                 instruction_data,
                 &Program::token().into(),
                 &None,
-                &None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -504,7 +613,6 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                &None,
                 &None,
             )
             .await
@@ -538,7 +646,6 @@ impl Token<'_> {
                 instruction_data,
                 &Program::token().into(),
                 &None,
-                &None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -555,6 +662,7 @@ impl Token<'_> {
         definition_account_id: AccountId,
         holder_account_id: AccountId,
         amount: u128,
+        definition_key_path: Option<&str>,
     ) -> Result<HashType, ExecutionFailureKind> {
         let account_ids = vec![definition_account_id, holder_account_id];
         let instruction = Instruction::Mint {
@@ -567,22 +675,13 @@ impl Token<'_> {
             .await
             .map_err(ExecutionFailureKind::SequencerError)?;
 
-        let mut private_keys = Vec::new();
-        let definition_sk = self
-            .0
-            .storage
-            .user_data
-            .get_pub_account_signing_key(definition_account_id)
-            .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
-        private_keys.push(definition_sk);
-
-        if let Some(holder_sk) = self
+        if self
             .0
             .storage
             .user_data
             .get_pub_account_signing_key(holder_account_id)
+            .is_some()
         {
-            private_keys.push(holder_sk);
             let recipient_nonces = self
                 .0
                 .get_accounts_nonces(vec![holder_account_id])
@@ -602,8 +701,27 @@ impl Token<'_> {
             instruction,
         )
         .unwrap();
-        let witness_set =
-            nssa::public_transaction::WitnessSet::for_message(&message, &private_keys);
+
+        let msg_hash = message.hash();
+        let witness_set = if let Some(kp) = definition_key_path {
+            let pin = crate::helperfunctions::read_pin().map_err(|e| {
+                ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(
+                    e.to_string(),
+                ))
+            })?;
+            let (sig, pk) =
+                KeycardWallet::sign_message_for_path_with_connect(&pin, kp, &msg_hash)?;
+            nssa::public_transaction::WitnessSet::from_list(&message, &[sig], &[pk])
+                .map_err(ExecutionFailureKind::TransactionBuildError)?
+        } else {
+            let signing_key = self
+                .0
+                .storage
+                .user_data
+                .get_pub_account_signing_key(definition_account_id)
+                .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
+            nssa::public_transaction::WitnessSet::for_message(&message, &[signing_key])
+        };
 
         let tx = nssa::PublicTransaction::new(message, witness_set);
 
@@ -634,7 +752,6 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                &None,
                 &None,
             )
             .await
@@ -673,7 +790,6 @@ impl Token<'_> {
                 instruction_data,
                 &Program::token().into(),
                 &None,
-                &None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -704,7 +820,6 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                &None,
                 &None,
             )
             .await
@@ -737,7 +852,6 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                &None,
                 &None,
             )
             .await
@@ -776,7 +890,6 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                &None,
                 &None,
             )
             .await
