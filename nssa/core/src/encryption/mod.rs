@@ -8,11 +8,39 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "host")]
 pub use shared_key_derivation::{EphemeralPublicKey, EphemeralSecretKey, ViewingPublicKey};
 
-use crate::{Commitment, Identifier, account::Account};
+use crate::{
+    Commitment, Identifier,
+    account::Account,
+    program::{PdaSeed, ProgramId},
+};
 #[cfg(feature = "host")]
 pub mod shared_key_derivation;
 
 pub type Scalar = [u8; 32];
+
+/// Discriminates the type of private account a ciphertext belongs to, carrying the data needed
+/// to reconstruct the account's [`AccountId`] on the receiver side.
+///
+/// [`AccountId`]: crate::account::AccountId
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PrivateAccountKind {
+    Account(Identifier),
+    Pda {
+        program_id: ProgramId,
+        seed: PdaSeed,
+        identifier: Identifier,
+    },
+}
+
+impl PrivateAccountKind {
+    #[must_use]
+    pub fn identifier(&self) -> Identifier {
+        match self {
+            Self::Account(identifier) => *identifier,
+            Self::Pda { identifier, .. } => *identifier,
+        }
+    }
+}
 
 #[derive(Serialize, Deserialize, Clone, Copy)]
 pub struct SharedSecretKey(pub [u8; 32]);
