@@ -39,6 +39,7 @@ members = [
   "bedrock_client",
   "testnet_initial_state",
   "keycard_wallet",
+  "indexer_ffi",
 ]
 
 [workspace.dependencies]
@@ -56,6 +57,7 @@ indexer_core = { path = "indexer/core" }
 indexer_service = { path = "indexer/service" }
 indexer_service_protocol = { path = "indexer/service/protocol" }
 indexer_service_rpc = { path = "indexer/service/rpc" }
+indexer_ffi = { path = "indexer_ffi" }
 wallet = { path = "wallet" }
 wallet-ffi = { path = "wallet-ffi", default-features = false }
 clock_core = { path = "programs/clock/core" }

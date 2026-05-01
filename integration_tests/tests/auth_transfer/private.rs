@@ -594,6 +594,8 @@ async fn shielded_transfers_to_two_identifiers_same_npk() -> Result<()> {
             to_vpk: Some(vpk_hex.clone()),
             to_identifier: Some(identifier_1),
             amount: 100,
+            from_key_path: None,
+            to_key_path: None,
         }),
     )
     .await?;
@@ -609,6 +611,8 @@ async fn shielded_transfers_to_two_identifiers_same_npk() -> Result<()> {
             to_vpk: Some(vpk_hex),
             to_identifier: Some(identifier_2),
             amount: 200,
+            from_key_path: None,
+            to_key_path: None,
         }),
     )
     .await?;

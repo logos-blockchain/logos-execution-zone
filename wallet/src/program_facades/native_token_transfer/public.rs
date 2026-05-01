@@ -9,7 +9,7 @@ use pyo3::exceptions::PyRuntimeError;
 use sequencer_service_rpc::RpcClient as _;
 
 use super::NativeTokenTransfer;
-use crate::{ExecutionFailureKind, WalletCore};
+use crate::ExecutionFailureKind;
 
 impl NativeTokenTransfer<'_> {
     pub async fn send_public_transfer(
@@ -57,14 +57,14 @@ impl NativeTokenTransfer<'_> {
                     to_key_path,
                     &msg_hash,
                 )?;
-                WitnessSet::from_list(&[from_sig, to_sig], &[from_pk, to_pk])
+                WitnessSet::from_list(&message, &[from_sig, to_sig], &[from_pk, to_pk])
+                    .map_err(ExecutionFailureKind::TransactionBuildError)?
             } else {
-                WitnessSet::from_list(&[from_sig], &[from_pk])
+                WitnessSet::from_list(&message, &[from_sig], &[from_pk])
+                    .map_err(ExecutionFailureKind::TransactionBuildError)?
             }
         } else {
-            // Silently skips accounts without signing keys
-            let witness_set = WalletCore::sign_public_message(self.0, &message, &sign_ids)
-                .expect("`WalletCore::sign_public_message()` failed to produce a signature for a NativeTokenTransfer.");
+            self.0.sign_public_message(&message, &message.account_ids)?
         };
 
         let tx = PublicTransaction::new(message, witness_set);
@@ -104,7 +104,8 @@ impl NativeTokenTransfer<'_> {
                 key_path,
                 &message.hash_message(),
             )?;
-            WitnessSet::from_list(&[signature], &[pub_key])
+            WitnessSet::from_list(&message, &[signature], &[pub_key])
+                .map_err(ExecutionFailureKind::TransactionBuildError)?
         } else {
             let signing_key = self.0.storage.user_data.get_pub_account_signing_key(from);
 

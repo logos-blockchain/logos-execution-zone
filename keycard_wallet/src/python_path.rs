@@ -6,9 +6,14 @@ use pyo3::{prelude::*, types::PyList};
 pub fn add_python_path(py: Python<'_>) -> PyResult<()> {
     let current_dir = env::current_dir().expect("Failed to get current working directory");
 
+    let python_base = env::var("VIRTUAL_ENV")
+        .ok()
+        .and_then(|v| PathBuf::from(v).parent().map(PathBuf::from))
+        .unwrap_or_else(|| current_dir.clone());
+
     let mut paths_to_add: Vec<PathBuf> = vec![
-        current_dir.join("python"),
-        current_dir.join("python").join("keycard-py"),
+        python_base.join("python"),
+        python_base.join("python").join("keycard-py"),
     ];
 
     // If a virtualenv is active, add its site-packages so that dependencies
