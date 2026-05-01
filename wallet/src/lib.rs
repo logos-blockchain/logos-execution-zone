@@ -357,7 +357,7 @@ impl WalletCore {
                     let acc_ead = tx.message.encrypted_private_post_states[output_index].clone();
                     let acc_comm = tx.message.new_commitments[output_index].clone();
 
-                    let (identifier, res_acc) = nssa_core::EncryptionScheme::decrypt(
+                    let (kind, res_acc) = nssa_core::EncryptionScheme::decrypt(
                         &acc_ead.ciphertext,
                         secret,
                         &acc_comm,
@@ -370,7 +370,7 @@ impl WalletCore {
                     println!("Received new acc {res_acc:#?}");
 
                     self.storage
-                        .insert_private_account_data(*acc_account_id, identifier, res_acc);
+                        .insert_private_account_data(*acc_account_id, kind.identifier(), res_acc);
                 }
                 AccDecodeData::Skip => {}
             }
@@ -544,7 +544,8 @@ impl WalletCore {
                                 .try_into()
                                 .expect("Ciphertext ID is expected to fit in u32"),
                         )
-                        .map(|(identifier, res_acc)| {
+                        .map(|(kind, res_acc)| {
+                            let identifier = kind.identifier();
                             let account_id = nssa::AccountId::from((
                                 &key_chain.nullifier_public_key,
                                 identifier,

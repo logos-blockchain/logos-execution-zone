@@ -5,6 +5,7 @@ use std::{
 
 use nssa_core::{
     Commitment, CommitmentSetDigest, DUMMY_COMMITMENT_HASH, EncryptionScheme, Identifier,
+    PrivateAccountKind,
     MembershipProof, Nullifier, NullifierPublicKey, NullifierSecretKey,
     PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput, SharedSecretKey,
     account::{Account, AccountId, AccountWithMetadata, Nonce},
@@ -606,7 +607,7 @@ fn compute_circuit_output(
                 // Encrypt and push post state
                 let encrypted_account = EncryptionScheme::encrypt(
                     &post_with_updated_nonce,
-                    *identifier,
+                    &PrivateAccountKind::Account(*identifier),
                     shared_secret,
                     &commitment_post,
                     output_index,
@@ -690,7 +691,7 @@ fn compute_circuit_output(
 
                 let encrypted_account = EncryptionScheme::encrypt(
                     &post_with_updated_nonce,
-                    *identifier,
+                    &PrivateAccountKind::Account(*identifier),
                     shared_secret,
                     &commitment_post,
                     output_index,

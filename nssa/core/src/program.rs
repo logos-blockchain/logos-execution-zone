@@ -35,6 +35,11 @@ impl PdaSeed {
     pub const fn new(value: [u8; 32]) -> Self {
         Self(value)
     }
+
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
 }
 
 impl AccountId {
