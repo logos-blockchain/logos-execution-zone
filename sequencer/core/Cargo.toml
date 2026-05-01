@@ -30,7 +30,6 @@ rand.workspace = true
 borsh.workspace = true
 bytesize.workspace = true
 url.workspace = true
-jsonrpsee = { workspace = true, features = ["ws-client"] }
 
 [features]
 default = []

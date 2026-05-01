@@ -26,10 +26,6 @@ use crate::{
 pub mod block_publisher;
 pub mod block_store;
 pub mod config;
-// Kept as a thin client lib for callers that want to query the indexer
-// directly (e.g. integration tests). The sequencer no longer depends on the
-// indexer at runtime — finalization comes from zone-sdk events.
-pub mod indexer_client;
 
 #[cfg(feature = "mock")]
 pub mod mock;

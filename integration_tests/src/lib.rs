@@ -9,16 +9,19 @@ use indexer_service::IndexerHandle;
 use log::{debug, error};
 use nssa::{AccountId, PrivacyPreservingTransaction};
 use nssa_core::Commitment;
-use sequencer_core::indexer_client::{IndexerClient, IndexerClientTrait as _};
 use sequencer_service::SequencerHandle;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
 use tempfile::TempDir;
 use testcontainers::compose::DockerCompose;
 use wallet::WalletCore;
 
-use crate::setup::{setup_bedrock_node, setup_indexer, setup_sequencer, setup_wallet};
+use crate::{
+    indexer_client::IndexerClient,
+    setup::{setup_bedrock_node, setup_indexer, setup_sequencer, setup_wallet},
+};
 
 pub mod config;
+pub mod indexer_client;
 pub mod setup;
 pub mod test_context_ffi;
 
