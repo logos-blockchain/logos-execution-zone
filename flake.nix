@@ -130,9 +130,26 @@
               '';
             }
           );
+
+          indexerFfiPackage = craneLib.buildPackage (
+            commonArgs
+            // {
+              pname = "logos-execution-zone-indexer-ffi";
+              version = "0.1.0";
+              cargoExtraArgs = "-p indexer_ffi";
+              postInstall = ''
+                mkdir -p $out/include
+                cp indexer_ffi/indexer_ffi.h $out/include/
+              ''
+              + pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
+                install_name_tool -id @rpath/libindexer_ffi.dylib $out/lib/libindexer_ffi.dylib
+              '';
+            }
+          );
         in
         {
           wallet = walletFfiPackage;
+          indexer = indexerFfiPackage;
           default = walletFfiPackage;
         }
       );
@@ -144,9 +161,14 @@
           walletFfiShell = pkgs.mkShell {
             inputsFrom = [ walletFfiPackage ];
           };
+          indexerFfiPackage = self.packages.${system}.indexer;
+          indexerFfiShell = pkgs.mkShell {
+            inputsFrom = [ indexerFfiPackage ];
+          };
         in
         {
           wallet = walletFfiShell;
+          indexer = indexerFfiShell;
           default = walletFfiShell;
         }
       );

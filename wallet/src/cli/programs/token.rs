@@ -73,11 +73,13 @@ pub enum TokenProgramAgnosticSubcommand {
         /// `to_vpk` - valid 33 byte hex string.
         #[arg(long)]
         to_vpk: Option<String>,
+        /// Identifier for the recipient's private account (only used when sending to a foreign
+        /// private account via `--to-npk`/`--to-vpk`).
+        #[arg(long)]
+        to_identifier: Option<u128>,
         /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
-        #[arg(long)]
-        pin: Option<String>,
         #[arg(long, conflicts_with = "from", conflicts_with = "from_label")]
         from_key_path: Option<String>,
     },
@@ -108,8 +110,6 @@ pub enum TokenProgramAgnosticSubcommand {
         #[arg(long)]
         amount: u128,
         #[arg(long, conflicts_with = "holder", conflicts_with = "holder_label")]
-        holder_pin: Option<String>,
-        #[arg(long, conflicts_with = "holder", conflicts_with = "holder_label")]
         holder_key_path: Option<String>,
     },
     /// Mint tokens on `holder`, modify `definition`.
@@ -132,7 +132,7 @@ pub enum TokenProgramAgnosticSubcommand {
         #[arg(long, conflicts_with = "definition")]
         definition_label: Option<String>,
         /// holder - valid 32 byte base58 string with privacy prefix.
-        #[arg(long, conflicts_with = "holder_label", required_unless_present_any = ["holder_label", "pin"])]
+        #[arg(long, conflicts_with = "holder_label", required_unless_present_any = ["holder_label", "holder_key_path"])]
         holder: Option<String>,
         /// Holder account label (alternative to --holder).
         #[arg(long, conflicts_with = "holder")]
@@ -143,6 +143,10 @@ pub enum TokenProgramAgnosticSubcommand {
         /// `to_vpk` - valid 33 byte hex string.
         #[arg(long)]
         holder_vpk: Option<String>,
+        /// Identifier for the holder's private account (only used when minting to a foreign
+        /// private account via `--holder-npk`/`--holder-vpk`).
+        #[arg(long)]
+        holder_identifier: Option<u128>,
         /// amount - amount of balance to mint.
         #[arg(long)]
         amount: u128,
@@ -168,16 +172,14 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                     definition_account_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
-                    &None,
-                    &None,
+                    None,
                 )?;
                 let supply_account_id = resolve_id_or_label(
                     supply_account_id,
                     supply_account_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
-                    &None,
-                    &None,
+                    None,
                 )?;
                 let (definition_account_id, definition_addr_privacy) =
                     parse_addr_with_privacy_prefix(&definition_account_id)?;
@@ -236,8 +238,8 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                 to_label,
                 to_npk,
                 to_vpk,
+                to_identifier,
                 amount,
-                pin,
                 from_key_path,
             } => {
                 let from = resolve_id_or_label(
@@ -245,8 +247,7 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                     from_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
-                    &pin,
-                    &from_key_path,
+                    from_key_path.as_deref(),
                 )?;
                 let to = match (to, to_label) {
                     (v, None) => v,
@@ -327,6 +328,7 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                                     sender_account_id: from,
                                     recipient_npk: to_npk,
                                     recipient_vpk: to_vpk,
+                                    recipient_identifier: to_identifier,
                                     balance_to_move: amount,
                                 },
                             ),
@@ -335,6 +337,7 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                                     sender_account_id: from,
                                     recipient_npk: to_npk,
                                     recipient_vpk: to_vpk,
+                                    recipient_identifier: to_identifier,
                                     balance_to_move: amount,
                                 },
                             ),
@@ -350,7 +353,6 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                 holder,
                 holder_label,
                 amount,
-                holder_pin,
                 holder_key_path,
             } => {
                 let definition = resolve_id_or_label(
@@ -358,16 +360,14 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                     definition_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
-                    &None,
-                    &None,
+                    None,
                 )?;
                 let holder = resolve_id_or_label(
                     holder,
                     holder_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
-                    &holder_pin,
-                    &holder_key_path,
+                    holder_key_path.as_deref(),
                 )?;
                 let underlying_subcommand = {
                     let (definition, definition_privacy) =
@@ -422,6 +422,7 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                 holder_label,
                 holder_npk,
                 holder_vpk,
+                holder_identifier,
                 amount,
             } => {
                 let definition = resolve_id_or_label(
@@ -429,8 +430,7 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                     definition_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
-                    &None,
-                    &None,
+                    None,
                 )?;
                 let holder = match (holder, holder_label) {
                     (v, None) => v,
@@ -511,6 +511,7 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                                     definition_account_id: definition,
                                     holder_npk,
                                     holder_vpk,
+                                    holder_identifier,
                                     amount,
                                 },
                             ),
@@ -519,6 +520,7 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                                     definition_account_id: definition,
                                     holder_npk,
                                     holder_vpk,
+                                    holder_identifier,
                                     amount,
                                 },
                             ),
@@ -610,6 +612,9 @@ pub enum TokenProgramSubcommandPrivate {
         /// `recipient_vpk` - valid 33 byte hex string.
         #[arg(long)]
         recipient_vpk: String,
+        /// Identifier for the recipient's private account.
+        #[arg(long)]
+        recipient_identifier: Option<u128>,
         #[arg(short, long)]
         balance_to_move: u128,
     },
@@ -639,6 +644,9 @@ pub enum TokenProgramSubcommandPrivate {
         holder_npk: String,
         #[arg(short, long)]
         holder_vpk: String,
+        /// Identifier for the holder's private account.
+        #[arg(long)]
+        holder_identifier: Option<u128>,
         #[arg(short, long)]
         amount: u128,
     },
@@ -698,6 +706,9 @@ pub enum TokenProgramSubcommandShielded {
         /// `recipient_vpk` - valid 33 byte hex string.
         #[arg(long)]
         recipient_vpk: String,
+        /// Identifier for the recipient's private account.
+        #[arg(long)]
+        recipient_identifier: Option<u128>,
         #[arg(short, long)]
         balance_to_move: u128,
     },
@@ -727,6 +738,9 @@ pub enum TokenProgramSubcommandShielded {
         holder_npk: String,
         #[arg(short, long)]
         holder_vpk: String,
+        /// Identifier for the holder's private account.
+        #[arg(long)]
+        holder_identifier: Option<u128>,
         #[arg(short, long)]
         amount: u128,
     },
@@ -891,6 +905,7 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                 sender_account_id,
                 recipient_npk,
                 recipient_vpk,
+                recipient_identifier,
                 balance_to_move,
             } => {
                 let sender_account_id: AccountId = sender_account_id.parse().unwrap();
@@ -911,6 +926,7 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                         sender_account_id,
                         recipient_npk,
                         recipient_vpk,
+                        recipient_identifier.unwrap_or_else(rand::random),
                         balance_to_move,
                     )
                     .await?;
@@ -1008,6 +1024,7 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                 definition_account_id,
                 holder_npk,
                 holder_vpk,
+                holder_identifier,
                 amount,
             } => {
                 let definition_account_id: AccountId = definition_account_id.parse().unwrap();
@@ -1029,6 +1046,7 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                         definition_account_id,
                         holder_npk,
                         holder_vpk,
+                        holder_identifier.unwrap_or_else(rand::random),
                         amount,
                     )
                     .await?;
@@ -1173,6 +1191,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                 sender_account_id,
                 recipient_npk,
                 recipient_vpk,
+                recipient_identifier,
                 balance_to_move,
             } => {
                 let sender_account_id: AccountId = sender_account_id.parse().unwrap();
@@ -1193,6 +1212,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                         sender_account_id,
                         recipient_npk,
                         recipient_vpk,
+                        recipient_identifier.unwrap_or_else(rand::random),
                         balance_to_move,
                     )
                     .await?;
@@ -1312,6 +1332,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                 definition_account_id,
                 holder_npk,
                 holder_vpk,
+                holder_identifier,
                 amount,
             } => {
                 let definition_account_id: AccountId = definition_account_id.parse().unwrap();
@@ -1333,6 +1354,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                         definition_account_id,
                         holder_npk,
                         holder_vpk,
+                        holder_identifier.unwrap_or_else(rand::random),
                         amount,
                     )
                     .await?;

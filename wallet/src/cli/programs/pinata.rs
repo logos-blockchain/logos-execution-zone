@@ -17,19 +17,13 @@ pub enum PinataProgramAgnosticSubcommand {
     /// Claim pinata.
     Claim {
         /// to - valid 32 byte base58 string with privacy prefix.
-        #[arg(long, conflicts_with = "to_label", required_unless_present_any = ["to_label", "pin"])]
+        #[arg(long, conflicts_with = "to_label", required_unless_present_any = ["to_label", "key_path"])]
         to: Option<String>,
         /// To account label (alternative to --to).
         #[arg(long, conflicts_with = "to")]
         to_label: Option<String>,
-        #[arg(
-            long,
-            conflicts_with = "to",
-            conflicts_with = "to_label",
-            requires = "key_path"
-        )]
-        pin: Option<String>,
-        #[arg(long)]
+        /// To key path (alternative to --to) uses Keycard.
+        #[arg(long, conflicts_with = "to", conflicts_with = "to_label")]
         key_path: Option<String>,
     },
 }
@@ -43,7 +37,6 @@ impl WalletSubcommand for PinataProgramAgnosticSubcommand {
             Self::Claim {
                 to,
                 to_label,
-                pin,
                 key_path,
             } => {
                 let to = resolve_id_or_label(
@@ -51,8 +44,7 @@ impl WalletSubcommand for PinataProgramAgnosticSubcommand {
                     to_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
-                    &pin,
-                    &key_path,
+                    key_path.as_deref(),
                 )?;
 
                 let (to, to_addr_privacy) = parse_addr_with_privacy_prefix(&to)?;

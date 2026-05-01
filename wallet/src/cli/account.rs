@@ -28,19 +28,12 @@ pub enum AccountSubcommand {
         #[arg(short, long)]
         keys: bool,
         /// Valid 32 byte base58 string with privacy prefix.
-        #[arg(short, long, conflicts_with = "account_label", required_unless_present_any = ["account_label", "pin"])]
+        #[arg(short, long, conflicts_with = "account_label", required_unless_present_any = ["account_label", "key_path"])]
         account_id: Option<String>,
         /// Account label (alternative to --account-id).
         #[arg(long, conflicts_with = "account_id")]
         account_label: Option<String>,
-        #[arg(
-            long,
-            conflicts_with = "account_id",
-            conflicts_with = "account_label",
-            requires = "key_path"
-        )]
-        pin: Option<String>,
-        #[arg(long)]
+        #[arg(long, conflicts_with = "account_id", conflicts_with = "account_label")]
         key_path: Option<String>,
     },
     /// Produce new public or private account.
@@ -86,7 +79,8 @@ pub enum NewSubcommand {
         /// Label to assign to the new account.
         label: Option<String>,
     },
-    /// Register new private account.
+    /// Single-account convenience: creates a key node and auto-registers one account with a random
+    /// identifier.
     Private {
         #[arg(long)]
         /// Chain index of a parent node.
@@ -94,6 +88,13 @@ pub enum NewSubcommand {
         #[arg(short, long)]
         /// Label to assign to the new account.
         label: Option<String>,
+    },
+    /// Recommended for receiving from multiple senders: creates a key node (npk + vpk) without
+    /// registering any account.
+    PrivateAccountsKey {
+        #[arg(long)]
+        /// Chain index of a parent node.
+        cci: Option<ChainIndex>,
     },
 }
 
@@ -153,6 +154,15 @@ impl WalletSubcommand for NewSubcommand {
 
                 let (account_id, chain_index) = wallet_core.create_new_account_private(cci);
 
+                let node = wallet_core
+                    .storage
+                    .user_data
+                    .private_key_tree
+                    .key_map
+                    .get(&chain_index)
+                    .expect("Node was just inserted");
+                let key = &node.value.0;
+
                 if let Some(label) = label {
                     wallet_core
                         .storage
@@ -160,14 +170,8 @@ impl WalletSubcommand for NewSubcommand {
                         .insert(account_id.to_string(), Label::new(label));
                 }
 
-                let (key, _) = wallet_core
-                    .storage
-                    .user_data
-                    .get_private_account(account_id)
-                    .unwrap();
-
                 println!(
-                    "Generated new account with account_id Private/{account_id} at path {chain_index}",
+                    "Generated new account with account_id Private/{account_id} at path {chain_index}"
                 );
                 println!("With npk {}", hex::encode(key.nullifier_public_key.0));
                 println!(
@@ -178,6 +182,29 @@ impl WalletSubcommand for NewSubcommand {
                 wallet_core.store_persistent_data().await?;
 
                 Ok(SubcommandReturnValue::RegisterAccount { account_id })
+            }
+            Self::PrivateAccountsKey { cci } => {
+                let chain_index = wallet_core.create_private_accounts_key(cci);
+
+                let node = wallet_core
+                    .storage
+                    .user_data
+                    .private_key_tree
+                    .key_map
+                    .get(&chain_index)
+                    .expect("Node was just inserted");
+                let key = &node.value.0;
+
+                println!("Generated new private key node at path {chain_index}");
+                println!("With npk {}", hex::encode(key.nullifier_public_key.0));
+                println!(
+                    "With vpk {}",
+                    hex::encode(key.viewing_public_key.to_bytes())
+                );
+
+                wallet_core.store_persistent_data().await?;
+
+                Ok(SubcommandReturnValue::Empty)
             }
         }
     }
@@ -195,7 +222,6 @@ impl WalletSubcommand for AccountSubcommand {
                 keys,
                 account_id,
                 account_label,
-                pin,
                 key_path,
             } => {
                 let resolved = resolve_id_or_label(
@@ -203,8 +229,7 @@ impl WalletSubcommand for AccountSubcommand {
                     account_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
-                    &pin,
-                    &key_path,
+                    key_path.as_deref(),
                 )?;
                 let (account_id_str, addr_kind) = parse_addr_with_privacy_prefix(&resolved)?;
 
@@ -240,7 +265,7 @@ impl WalletSubcommand for AccountSubcommand {
                             println!("pk {}", hex::encode(public_key.value()));
                         }
                         AccountPrivacyKind::Private => {
-                            let (key, _) = wallet_core
+                            let (key, _, _) = wallet_core
                                 .storage
                                 .user_data
                                 .get_private_account(account_id)
@@ -283,21 +308,7 @@ impl WalletSubcommand for AccountSubcommand {
             Self::New(new_subcommand) => new_subcommand.handle_subcommand(wallet_core).await,
             Self::SyncPrivate => {
                 let curr_last_block = wallet_core.sequencer_client.get_last_block_id().await?;
-
-                if wallet_core
-                    .storage
-                    .user_data
-                    .private_key_tree
-                    .account_id_map
-                    .is_empty()
-                {
-                    wallet_core.last_synced_block = curr_last_block;
-
-                    wallet_core.store_persistent_data().await?;
-                } else {
-                    wallet_core.sync_to_block(curr_last_block).await?;
-                }
-
+                wallet_core.sync_to_block(curr_last_block).await?;
                 Ok(SubcommandReturnValue::SyncedToBlock(curr_last_block))
             }
             Self::List { long } => {
@@ -418,8 +429,7 @@ impl WalletSubcommand for AccountSubcommand {
                     account_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
-                    &None,
-                    &None,
+                    None,
                 )?;
                 let (account_id_str, _) = parse_addr_with_privacy_prefix(&resolved)?;
 

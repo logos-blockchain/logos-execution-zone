@@ -9,17 +9,11 @@ from keycard import constants
   
 import keycard
 
-PIN = '123456'
-PUK = '123456123456'
 DEFAULT_PAIRING_PASSWORD = "KeycardDefaultPairing"
-DEFAULT_MNEMONIC = "fashion degree mountain wool question damp current pond grow dolphin chronic then"
-DEFAULT_PASSPHRASE = ""
 
 class KeycardWallet:
     def __init__(self):
         self.card = KeyCard()
-        self.pairing_index = None
-        self.pairing_key = None
 
     def _is_smart_card_reader_detected(self) -> bool:  
         try:  
@@ -35,7 +29,6 @@ class KeycardWallet:
             # No readers, no card, or card doesn't respond.  
             return False
   
-    # Wrapped
     def is_unpaired_keycard_available(self) -> bool:
         if not self._is_smart_card_reader_detected():
             return False
@@ -43,20 +36,16 @@ class KeycardWallet:
             return False
         return True
 
-    # Wrapped
-    def setup_communication(self, pin = PIN, password = DEFAULT_PAIRING_PASSWORD) -> bool:
+    def setup_communication(self, pin: str, password = DEFAULT_PAIRING_PASSWORD) -> bool:
         try:   
             self.card.select()  
                 
             if not self.card.is_initialized:
                 return False
             
-            if self.pairing_index is None: 
-                pairing_index, pairing_key = self.card.pair(password)   
-                self.pairing_index = pairing_index
-                self.pairing_key = pairing_key 
+            pairing_index, pairing_key = self.card.pair(password)
+            self.pairing_index = pairing_index
 
-               
             self.card.open_secure_channel(pairing_index, pairing_key)  
             self.card.verify_pin(pin)
 
@@ -65,11 +54,11 @@ class KeycardWallet:
             print(f"Error: {e}")  
             return False
 
-    def load_mnemonic(self, mnemonic = DEFAULT_MNEMONIC, passphrase = DEFAULT_PASSPHRASE) -> bool:
+    def load_mnemonic(self, mnemonic: str) -> bool:
         try:
             # Convert mnemonic to seed  
             mnemo = Mnemonic("english")  
-            seed = mnemo.to_seed(mnemonic, passphrase)  
+            seed = mnemo.to_seed(mnemonic)  
 
             # Load the LEE seed onto the card  
             result = self.card.load_key(  
@@ -77,6 +66,7 @@ class KeycardWallet:
                 lee_seed = seed  
             )
 
+            #TODO: this appears to be the issue.
             return True
         except Exception as e:
             print(f"Error during disconnect: {e}")
@@ -88,8 +78,6 @@ class KeycardWallet:
                 return None
             
             self.card.unpair(self.pairing_index)
-            self.pairing_index = None
-            self.pairing_key = None
 
             return True
         except Exception as e:
@@ -118,7 +106,7 @@ class KeycardWallet:
             return None
 
 
-    def sign_message_for_path(self, message: bytes = b"DefaultMessageTestDefaultMessage", path: str = "m/44'/60'/0'/0/0") -> bytes | None:
+    def sign_message_for_path(self, message: bytes, path: str = "m/44'/60'/0'/0/0") -> bytes | None:
         try:
             if not self.card.is_secure_channel_open or not self.card.is_pin_verified:
                 return None

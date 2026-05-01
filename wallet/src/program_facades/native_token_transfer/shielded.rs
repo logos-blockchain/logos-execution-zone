@@ -1,6 +1,6 @@
 use common::HashType;
 use nssa::AccountId;
-use nssa_core::{NullifierPublicKey, SharedSecretKey, encryption::ViewingPublicKey};
+use nssa_core::{Identifier, NullifierPublicKey, SharedSecretKey, encryption::ViewingPublicKey};
 
 use super::{NativeTokenTransfer, auth_transfer_preparation};
 use crate::{ExecutionFailureKind, PrivacyPreservingAccount};
@@ -43,6 +43,7 @@ impl NativeTokenTransfer<'_> {
         from: AccountId,
         to_npk: NullifierPublicKey,
         to_vpk: ViewingPublicKey,
+        to_identifier: Identifier,
         balance_to_move: u128,
         pin: &Option<String>,
         from_key_path: &Option<String>,
@@ -56,6 +57,7 @@ impl NativeTokenTransfer<'_> {
                     PrivacyPreservingAccount::PrivateForeign {
                         npk: to_npk,
                         vpk: to_vpk,
+                        identifier: to_identifier,
                     },
                 ],
                 instruction_data,

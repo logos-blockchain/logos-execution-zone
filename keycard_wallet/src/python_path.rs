@@ -6,10 +6,31 @@ use pyo3::{prelude::*, types::PyList};
 pub fn add_python_path(py: Python<'_>) -> PyResult<()> {
     let current_dir = env::current_dir().expect("Failed to get current working directory");
 
-    let paths_to_add: Vec<PathBuf> = vec![
-        current_dir.join("python"),
-        current_dir.join("python").join("keycard-py"),
+    let python_base = env::var("VIRTUAL_ENV")
+        .ok()
+        .and_then(|v| PathBuf::from(v).parent().map(PathBuf::from))
+        .unwrap_or_else(|| current_dir.clone());
+
+    let mut paths_to_add: Vec<PathBuf> = vec![
+        python_base.join("python"),
+        python_base.join("python").join("keycard-py"),
     ];
+
+    // If a virtualenv is active, add its site-packages so that dependencies
+    // installed in the venv (e.g. smartcard, ecdsa) are importable by the
+    // pyo3 embedded interpreter, which does not inherit sys.path from the
+    // shell's `python3` executable.
+    if let Ok(venv) = env::var("VIRTUAL_ENV") {
+        let lib = PathBuf::from(&venv).join("lib");
+        if let Ok(entries) = std::fs::read_dir(&lib) {
+            for entry in entries.flatten() {
+                let site_packages = entry.path().join("site-packages");
+                if site_packages.exists() {
+                    paths_to_add.push(site_packages);
+                }
+            }
+        }
+    }
 
     // Sanity check — warns early if a path doesn't exist
     for path in &paths_to_add {

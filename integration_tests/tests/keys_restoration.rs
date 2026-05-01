@@ -59,12 +59,11 @@ async fn sync_private_account_with_non_zero_chain_index() -> Result<()> {
     };
 
     // Get the keys for the newly created account
-    let (to_keys, _) = ctx
+    let (to_keys, _, to_identifier) = ctx
         .wallet()
         .storage()
         .user_data
         .get_private_account(to_account_id)
-        .cloned()
         .context("Failed to get private account")?;
 
     // Send to this account using claiming path (using npk and vpk instead of account ID)
@@ -75,8 +74,8 @@ async fn sync_private_account_with_non_zero_chain_index() -> Result<()> {
         to_label: None,
         to_npk: Some(hex::encode(to_keys.nullifier_public_key.0)),
         to_vpk: Some(hex::encode(to_keys.viewing_public_key.0)),
+        to_identifier: Some(to_identifier),
         amount: 100,
-        pin: None,
         from_key_path: None,
         to_key_path: None,
     });
@@ -154,8 +153,8 @@ async fn restore_keys_from_seed() -> Result<()> {
         to_label: None,
         to_npk: None,
         to_vpk: None,
+        to_identifier: Some(0),
         amount: 100,
-        pin: None,
         from_key_path: None,
         to_key_path: None,
     });
@@ -169,8 +168,8 @@ async fn restore_keys_from_seed() -> Result<()> {
         to_label: None,
         to_npk: None,
         to_vpk: None,
+        to_identifier: Some(0),
         amount: 101,
-        pin: None,
         from_key_path: None,
         to_key_path: None,
     });
@@ -212,8 +211,8 @@ async fn restore_keys_from_seed() -> Result<()> {
         to_label: None,
         to_npk: None,
         to_vpk: None,
+        to_identifier: Some(0),
         amount: 102,
-        pin: None,
         from_key_path: None,
         to_key_path: None,
     });
@@ -227,8 +226,8 @@ async fn restore_keys_from_seed() -> Result<()> {
         to_label: None,
         to_npk: None,
         to_vpk: None,
+        to_identifier: Some(0),
         amount: 103,
-        pin: None,
         from_key_path: None,
         to_key_path: None,
     });
@@ -274,16 +273,16 @@ async fn restore_keys_from_seed() -> Result<()> {
         .expect("Acc 4 should be restored");
 
     assert_eq!(
-        acc1.value.1.program_owner,
+        acc1.value.1[0].1.program_owner,
         Program::authenticated_transfer_program().id()
     );
     assert_eq!(
-        acc2.value.1.program_owner,
+        acc2.value.1[0].1.program_owner,
         Program::authenticated_transfer_program().id()
     );
 
-    assert_eq!(acc1.value.1.balance, 100);
-    assert_eq!(acc2.value.1.balance, 101);
+    assert_eq!(acc1.value.1[0].1.balance, 100);
+    assert_eq!(acc2.value.1[0].1.balance, 101);
 
     info!("Tree checks passed, testing restored accounts can transact");
 
@@ -295,8 +294,8 @@ async fn restore_keys_from_seed() -> Result<()> {
         to_label: None,
         to_npk: None,
         to_vpk: None,
+        to_identifier: Some(0),
         amount: 10,
-        pin: None,
         from_key_path: None,
         to_key_path: None,
     });
@@ -309,8 +308,8 @@ async fn restore_keys_from_seed() -> Result<()> {
         to_label: None,
         to_npk: None,
         to_vpk: None,
+        to_identifier: Some(0),
         amount: 11,
-        pin: None,
         from_key_path: None,
         to_key_path: None,
     });

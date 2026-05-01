@@ -14,7 +14,6 @@ use integration_tests::{
 };
 use log::info;
 use nssa::AccountId;
-use tokio::test;
 use wallet::cli::{Command, programs::native_token_transfer::AuthTransferSubcommand};
 
 /// Maximum time to wait for the indexer to catch up to the sequencer.
@@ -53,7 +52,7 @@ async fn wait_for_indexer_to_catch_up(ctx: &TestContext) -> u64 {
         })
 }
 
-#[test]
+#[tokio::test]
 async fn indexer_test_run() -> Result<()> {
     let ctx = TestContext::new().await?;
 
@@ -70,7 +69,7 @@ async fn indexer_test_run() -> Result<()> {
     Ok(())
 }
 
-#[test]
+#[tokio::test]
 async fn indexer_block_batching() -> Result<()> {
     let ctx = TestContext::new().await?;
 
@@ -101,7 +100,7 @@ async fn indexer_block_batching() -> Result<()> {
     Ok(())
 }
 
-#[test]
+#[tokio::test]
 async fn indexer_state_consistency() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
@@ -112,8 +111,8 @@ async fn indexer_state_consistency() -> Result<()> {
         to_label: None,
         to_npk: None,
         to_vpk: None,
+        to_identifier: Some(0),
         amount: 100,
-        pin: None,
         from_key_path: None,
         to_key_path: None,
     });
@@ -151,8 +150,8 @@ async fn indexer_state_consistency() -> Result<()> {
         to_label: None,
         to_npk: None,
         to_vpk: None,
+        to_identifier: Some(0),
         amount: 100,
-        pin: None,
         from_key_path: None,
         to_key_path: None,
     });
@@ -210,7 +209,7 @@ async fn indexer_state_consistency() -> Result<()> {
     Ok(())
 }
 
-#[test]
+#[tokio::test]
 async fn indexer_state_consistency_with_labels() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
@@ -240,8 +239,8 @@ async fn indexer_state_consistency_with_labels() -> Result<()> {
         to_label: Some(to_label_str),
         to_npk: None,
         to_vpk: None,
+        to_identifier: Some(0),
         amount: 100,
-        pin: None,
         from_key_path: None,
         to_key_path: None,
     });

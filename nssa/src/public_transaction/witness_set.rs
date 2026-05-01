@@ -1,6 +1,6 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 
-use crate::{PrivateKey, PublicKey, Signature, public_transaction::Message};
+use crate::{PrivateKey, PublicKey, Signature, error::NssaError, public_transaction::Message};
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct WitnessSet {
@@ -8,19 +8,35 @@ pub struct WitnessSet {
 }
 
 impl WitnessSet {
-    #[must_use]
-    pub fn from_list(signatures: &[Signature], pub_keys: &[PublicKey]) -> Self {
-        assert_eq!(signatures.len(), pub_keys.len());
+    pub fn from_list(
+        message: &Message,
+        signatures: &[Signature],
+        pub_keys: &[PublicKey],
+    ) -> Result<Self, NssaError> {
+        if signatures.len() != pub_keys.len() {
+            return Err(NssaError::InvalidInput(
+                "`nssa::public_transaction::witness_set::from_list()`: mismatch in signature and public key counts".to_owned(),
+            ));
+        }
 
+        let message_hash = message.hash_message();
         let signatures_and_public_keys = signatures
             .iter()
             .zip(pub_keys.iter())
-            .map(|(sig, key)| (sig.clone(), key.clone()))
-            .collect();
+            .map(|(sig, key)| {
+                if sig.is_valid_for(&message_hash, key) {
+                    Ok((sig.clone(), key.clone()))
+                } else {
+                    Err(NssaError::InvalidInput(
+                        "`nssa::public_transaction::witness_set::from_list()`: signature does not correspond to public key".to_owned(),
+                    ))
+                }
+            })
+            .collect::<Result<_, _>>()?;
 
-        Self {
+        Ok(Self {
             signatures_and_public_keys,
-        }
+        })
     }
 
     #[must_use]
@@ -73,6 +89,73 @@ impl WitnessSet {
 mod tests {
     use super::*;
     use crate::AccountId;
+
+    #[test]
+    fn from_list_accepts_valid_pairs() {
+        let key1 = PrivateKey::try_new([42; 32]).unwrap();
+        let key2 = PrivateKey::try_new([13; 32]).unwrap();
+        let pubkey1 = PublicKey::new_from_private_key(&key1);
+        let pubkey2 = PublicKey::new_from_private_key(&key2);
+        let addr1 = AccountId::from(&pubkey1);
+        let addr2 = AccountId::from(&pubkey2);
+        let message = Message::try_new::<Vec<u8>>(
+            [1_u32; 8],
+            vec![addr1, addr2],
+            vec![1_u128.into(), 2_u128.into()],
+            vec![],
+        )
+        .unwrap();
+
+        let WitnessSet {
+            signatures_and_public_keys,
+        } = WitnessSet::for_message(&message, &[&key1, &key2]);
+        let (sigs, keys): (Vec<_>, Vec<_>) = signatures_and_public_keys.into_iter().unzip();
+
+        assert!(WitnessSet::from_list(&message, &sigs, &keys).is_ok());
+    }
+
+    #[test]
+    fn from_list_rejects_mismatched_pairs() {
+        let key1 = PrivateKey::try_new([42; 32]).unwrap();
+        let key2 = PrivateKey::try_new([13; 32]).unwrap();
+        let pubkey1 = PublicKey::new_from_private_key(&key1);
+        let pubkey2 = PublicKey::new_from_private_key(&key2);
+        let addr1 = AccountId::from(&pubkey1);
+        let addr2 = AccountId::from(&pubkey2);
+        let message = Message::try_new::<Vec<u8>>(
+            [1_u32; 8],
+            vec![addr1, addr2],
+            vec![1_u128.into(), 2_u128.into()],
+            vec![],
+        )
+        .unwrap();
+
+        let WitnessSet {
+            signatures_and_public_keys,
+        } = WitnessSet::for_message(&message, &[&key1, &key2]);
+        let (sigs, keys): (Vec<_>, Vec<_>) = signatures_and_public_keys.into_iter().unzip();
+
+        // Swapped keys should be rejected.
+        assert!(
+            WitnessSet::from_list(&message, &sigs, &[keys[1].clone(), keys[0].clone()]).is_err()
+        );
+    }
+
+    #[test]
+    fn from_list_rejects_length_mismatch() {
+        let key1 = PrivateKey::try_new([1_u8; 32]).unwrap();
+        let pubkey1 = PublicKey::new_from_private_key(&key1);
+        let addr1 = AccountId::from(&pubkey1);
+        let message =
+            Message::try_new::<Vec<u8>>([0; 8], vec![addr1], vec![1_u128.into()], vec![]).unwrap();
+
+        let WitnessSet {
+            signatures_and_public_keys,
+        } = WitnessSet::for_message(&message, &[&key1]);
+        let (sigs, _keys): (Vec<_>, Vec<_>) = signatures_and_public_keys.into_iter().unzip();
+
+        assert!(WitnessSet::from_list(&message, &sigs, &[]).is_err());
+    }
 
     #[test]
     fn for_message_constructor() {

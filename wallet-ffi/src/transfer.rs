@@ -12,7 +12,7 @@ use crate::{
     block_on,
     error::{print_error, WalletFfiError},
     map_execution_error,
-    types::{FfiBytes32, FfiTransferResult, WalletHandle},
+    types::{FfiBytes32, FfiTransferResult, FfiU128, WalletHandle},
     wallet::get_wallet,
     FfiPrivateAccountKeys,
 };
@@ -83,7 +83,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_public(
 
     let transfer = NativeTokenTransfer(&wallet);
 
-    match block_on(transfer.send_public_transfer(from_id, to_id, amount, &None, &None)) {
+    match block_on(transfer.send_public_transfer(from_id, to_id, amount, None, None)) {
         Ok(tx_hash) => {
             let tx_hash = CString::new(tx_hash.to_string())
                 .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
@@ -113,6 +113,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_public(
 /// - `handle`: Valid wallet handle
 /// - `from`: Source account ID (must be owned by this wallet)
 /// - `to_keys`: Destination account keys
+/// - `to_identifier`: Identifier for the recipient's private account
 /// - `amount`: Amount to transfer as little-endian [u8; 16]
 /// - `out_result`: Output pointer for transfer result
 ///
@@ -136,6 +137,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded(
     handle: *mut WalletHandle,
     from: *const FfiBytes32,
     to_keys: *const FfiPrivateAccountKeys,
+    to_identifier: *const FfiU128,
     amount: *const [u8; 16],
     pin: *const c_char,
     key_path: *const c_char,
@@ -146,7 +148,12 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded(
         Err(e) => return e,
     };
 
-    if from.is_null() || to_keys.is_null() || amount.is_null() || out_result.is_null() {
+    if from.is_null()
+        || to_keys.is_null()
+        || to_identifier.is_null()
+        || amount.is_null()
+        || out_result.is_null()
+    {
         print_error("Null pointer argument");
         return WalletFfiError::NullPointer;
     }
@@ -168,6 +175,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded(
             return e;
         }
     };
+    let to_identifier = u128::from_le_bytes(unsafe { (*to_identifier).data });
     let amount = u128::from_le_bytes(unsafe { *amount });
     let pin = optional_c_str(pin);
     let key_path = optional_c_str(key_path);
@@ -292,6 +300,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_deshielded(
 /// - `handle`: Valid wallet handle
 /// - `from`: Source account ID (must be owned by this wallet)
 /// - `to_keys`: Destination account keys
+/// - `to_identifier`: Identifier for the recipient's private account
 /// - `amount`: Amount to transfer as little-endian [u8; 16]
 /// - `out_result`: Output pointer for transfer result
 ///
@@ -315,6 +324,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private(
     handle: *mut WalletHandle,
     from: *const FfiBytes32,
     to_keys: *const FfiPrivateAccountKeys,
+    to_identifier: *const FfiU128,
     amount: *const [u8; 16],
     pin: *const c_char,
     key_path: *const c_char,
@@ -325,7 +335,12 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private(
         Err(e) => return e,
     };
 
-    if from.is_null() || to_keys.is_null() || amount.is_null() || out_result.is_null() {
+    if from.is_null()
+        || to_keys.is_null()
+        || to_identifier.is_null()
+        || amount.is_null()
+        || out_result.is_null()
+    {
         print_error("Null pointer argument");
         return WalletFfiError::NullPointer;
     }
@@ -347,6 +362,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private(
             return e;
         }
     };
+    let to_identifier = u128::from_le_bytes(unsafe { (*to_identifier).data });
     let amount = u128::from_le_bytes(unsafe { *amount });
     let pin = optional_c_str(pin);
     let key_path = optional_c_str(key_path);
@@ -604,7 +620,7 @@ pub unsafe extern "C" fn wallet_ffi_register_public_account(
 
     let transfer = NativeTokenTransfer(&wallet);
 
-    match block_on(transfer.register_account(account_id, &None, &None)) {
+    match block_on(transfer.register_account(account_id, None)) {
         Ok(tx_hash) => {
             let tx_hash = CString::new(tx_hash.to_string())
                 .map_or(ptr::null_mut(), std::ffi::CString::into_raw);

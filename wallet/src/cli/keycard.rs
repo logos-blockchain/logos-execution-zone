@@ -5,7 +5,7 @@ use pyo3::prelude::*;
 
 use crate::{
     WalletCore,
-    cli::{SubcommandReturnValue, WalletSubcommand},
+    cli::{SubcommandReturnValue, WalletSubcommand, read_pin},
 };
 
 /// Represents generic chain CLI subcommand.
@@ -15,8 +15,6 @@ pub enum KeycardSubcommand {
     Load {
         #[arg(short, long)]
         mnemonic: Option<String>,
-        #[arg(short, long)]
-        pin: Option<String>,
     },
 }
 
@@ -45,7 +43,9 @@ impl WalletSubcommand for KeycardSubcommand {
 
                 Ok(SubcommandReturnValue::Empty)
             }
-            Self::Load { mnemonic, pin } => {
+            Self::Load { mnemonic } => {
+                let pin = read_pin()?;
+
                 Python::with_gil(|py| {
                     python_path::add_python_path(py).expect("keycard_wallet.py not found");
 
@@ -53,10 +53,7 @@ impl WalletSubcommand for KeycardSubcommand {
                         .expect("`wallet::keycard::load`: invalid keycard wallet provided");
 
                     let is_connected = wallet
-                        .setup_communication(
-                            py,
-                            &pin.expect("`wallet::keycard::load`: invalid data received for pin"),
-                        )
+                        .setup_communication(py, &pin)
                         .expect("Expect a Boolean.");
 
                     if is_connected {

@@ -19,6 +19,8 @@ testnet_initial_state.workspace = true
 ata_core.workspace = true
 bip39.workspace = true
 pyo3.workspace = true
+rpassword = "7"
+zeroize = "1"
 
 anyhow.workspace = true
 thiserror.workspace = true
