@@ -1,0 +1,21 @@
+[package]
+name = "membership_registry"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+program_methods = { path = "../../program_methods" }
+nssa_core = { path = "../../nssa/core" }
+nssa = { path = "../../nssa" }
+
+borsh.workspace = true 
+serde.workspace = true
+sha2.workspace = true
+risc0-zkvm.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "forum_membership_proof"
+path = "src/bin/forum_membership_proof.rs"
