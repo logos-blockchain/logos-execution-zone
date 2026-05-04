@@ -24,7 +24,8 @@ use nssa::{
     },
 };
 use nssa_core::{
-    Commitment, MembershipProof, SharedSecretKey, account::Nonce, program::InstructionData,
+    Commitment, MembershipProof, PrivateAccountKind, SharedSecretKey, account::Nonce,
+    program::InstructionData,
 };
 pub use privacy_preserving_tx::PrivacyPreservingAccount;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
@@ -545,11 +546,15 @@ impl WalletCore {
                                 .expect("Ciphertext ID is expected to fit in u32"),
                         )
                         .map(|(kind, res_acc)| {
-                            let identifier = kind.identifier();
-                            let account_id = nssa::AccountId::from((
-                                &key_chain.nullifier_public_key,
-                                identifier,
-                            ));
+                            let npk = &key_chain.nullifier_public_key;
+                            let (account_id, identifier) = match kind {
+                                PrivateAccountKind::Account(identifier) => {
+                                    (nssa::AccountId::from((npk, identifier)), identifier)
+                                }
+                                PrivateAccountKind::Pda { program_id, seed, identifier } => {
+                                    (nssa::AccountId::for_private_pda(&program_id, &seed, npk, identifier), identifier)
+                                }
+                            };
                             (account_id, identifier, res_acc)
                         })
                     })
