@@ -11,6 +11,7 @@ use key_protocol::{
 };
 use log::debug;
 use nssa::program::Program;
+use nssa_core::PrivateAccountKind;
 
 use crate::config::{InitialAccountData, Label, PersistentAccountData, WalletConfig};
 
@@ -190,10 +191,11 @@ impl WalletChainStore {
     pub fn insert_private_account_data(
         &mut self,
         account_id: nssa::AccountId,
-        identifier: nssa_core::Identifier,
+        kind: &PrivateAccountKind,
         account: nssa_core::account::Account,
     ) {
         debug!("inserting at address {account_id}, this account {account:?}");
+        let identifier = kind.identifier();
 
         // Update default accounts if present
         if let Entry::Occupied(mut entry) = self
@@ -237,8 +239,13 @@ impl WalletChainStore {
         } else {
             // Node not yet in account_id_map — find it by checking all nodes
             for (ci, node) in &mut self.user_data.private_key_tree.key_map {
-                let expected_id =
-                    nssa::AccountId::from((&node.value.0.nullifier_public_key, identifier));
+                let npk = &node.value.0.nullifier_public_key;
+                let expected_id = match kind {
+                    PrivateAccountKind::Account(id) => nssa::AccountId::from((npk, *id)),
+                    PrivateAccountKind::Pda { program_id, seed, identifier: id } => {
+                        nssa::AccountId::for_private_pda(program_id, seed, npk, *id)
+                    }
+                };
                 if expected_id == account_id {
                     if let Some((_, acc)) =
                         node.value.1.iter_mut().find(|(id, _)| *id == identifier)

@@ -284,7 +284,7 @@ impl WalletCore {
             .nullifier_public_key;
         let account_id = AccountId::from((&npk, identifier));
         self.storage
-            .insert_private_account_data(account_id, identifier, Account::default());
+            .insert_private_account_data(account_id, &PrivateAccountKind::Account(identifier), Account::default());
         (account_id, cci)
     }
 
@@ -371,7 +371,7 @@ impl WalletCore {
                     println!("Received new acc {res_acc:#?}");
 
                     self.storage
-                        .insert_private_account_data(*acc_account_id, kind.identifier(), res_acc);
+                        .insert_private_account_data(*acc_account_id, &kind, res_acc);
                 }
                 AccDecodeData::Skip => {}
             }
@@ -547,27 +547,27 @@ impl WalletCore {
                         )
                         .map(|(kind, res_acc)| {
                             let npk = &key_chain.nullifier_public_key;
-                            let (account_id, identifier) = match kind {
+                            let account_id = match &kind {
                                 PrivateAccountKind::Account(identifier) => {
-                                    (nssa::AccountId::from((npk, identifier)), identifier)
+                                    nssa::AccountId::from((npk, *identifier))
                                 }
                                 PrivateAccountKind::Pda { program_id, seed, identifier } => {
-                                    (nssa::AccountId::for_private_pda(&program_id, &seed, npk, identifier), identifier)
+                                    nssa::AccountId::for_private_pda(program_id, seed, npk, *identifier)
                                 }
                             };
-                            (account_id, identifier, res_acc)
+                            (account_id, kind, res_acc)
                         })
                     })
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
 
-        for (affected_account_id, identifier, new_acc) in affected_accounts {
+        for (affected_account_id, kind, new_acc) in affected_accounts {
             info!(
                 "Received new account for account_id {affected_account_id:#?} with account object {new_acc:#?}"
             );
             self.storage
-                .insert_private_account_data(affected_account_id, identifier, new_acc);
+                .insert_private_account_data(affected_account_id, &kind, new_acc);
         }
     }
 
