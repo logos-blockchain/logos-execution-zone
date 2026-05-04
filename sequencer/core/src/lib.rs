@@ -1076,7 +1076,7 @@ mod tests {
             program::Program,
         };
         use nssa_core::{
-            SharedSecretKey,
+            InputAccountIdentity, SharedSecretKey,
             account::AccountWithMetadata,
             encryption::{EphemeralPublicKey, EphemeralSecretKey, ViewingPublicKey},
         };
@@ -1114,10 +1114,11 @@ mod tests {
                 (&npk, 0),
             )],
             Program::serialize_instruction(0_u128).unwrap(),
-            vec![1],
-            vec![(npk, 0, shared_secret)],
-            vec![nsk],
-            vec![None],
+            vec![InputAccountIdentity::PrivateAuthorizedInit {
+                ssk: shared_secret,
+                nsk,
+                identifier: 0,
+            }],
             &Program::authenticated_transfer_program().into(),
         )
         .unwrap();
