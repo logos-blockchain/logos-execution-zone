@@ -35,7 +35,7 @@ struct ExecutionState {
     /// claims a private PDA and then delegates it to a callee), and the set uses `contains`,
     /// not `assert!(insert)`. After the main loop, every mask-3 position must appear in this
     /// set; otherwise the npk is unbound and the circuit rejects.
-    private_pda_bound_positions: HashMap<usize, PdaSeed>,
+    private_pda_bound_positions: HashMap<usize, (ProgramId, PdaSeed)>,
     /// Across the whole transaction, each `(program_id, seed)` pair may resolve to at most one
     /// `AccountId`. A seed under a program can derive a family of accounts, one public PDA and
     /// one private PDA per distinct npk. Without this check, a single `pda_seeds: [S]` entry in
@@ -372,7 +372,7 @@ impl ExecutionState {
                                     pre_account_id, pda,
                                     "Invalid private PDA claim for account {pre_account_id}"
                                 );
-                                self.private_pda_bound_positions.insert(pre_state_position, seed);
+                                self.private_pda_bound_positions.insert(pre_state_position, (program_id, seed));
                                 assert_family_binding(
                                     &mut self.pda_family_binding,
                                     program_id,
@@ -453,7 +453,7 @@ fn assert_family_binding(
 )]
 fn resolve_authorization_and_record_bindings(
     pda_family_binding: &mut HashMap<(ProgramId, PdaSeed), AccountId>,
-    private_pda_bound_positions: &mut HashMap<usize, PdaSeed>,
+    private_pda_bound_positions: &mut HashMap<usize, (ProgramId, PdaSeed)>,
     private_pda_npk_by_position: &HashMap<usize, NullifierPublicKey>,
     pre_account_id: AccountId,
     pre_state_position: usize,
@@ -479,7 +479,7 @@ fn resolve_authorization_and_record_bindings(
     if let Some((seed, is_private_form, caller)) = matched_caller_seed {
         assert_family_binding(pda_family_binding, caller, seed, pre_account_id);
         if is_private_form {
-            private_pda_bound_positions.insert(pre_state_position, seed);
+            private_pda_bound_positions.insert(pre_state_position, (caller, seed));
         }
     }
 
@@ -487,7 +487,7 @@ fn resolve_authorization_and_record_bindings(
 }
 
 fn compute_circuit_output(
-    execution_state: ExecutionState,
+    mut execution_state: ExecutionState,
     visibility_mask: &[u8],
     private_account_keys: &[(NullifierPublicKey, Identifier, SharedSecretKey)],
     private_account_nsks: &[NullifierSecretKey],
@@ -503,6 +503,7 @@ fn compute_circuit_output(
         timestamp_validity_window: execution_state.timestamp_validity_window,
     };
 
+    let pda_seed_by_position = std::mem::take(&mut execution_state.private_pda_bound_positions);
     let states_iter = execution_state.into_states_iter();
     assert_eq!(
         visibility_mask.len(),
@@ -515,8 +516,8 @@ fn compute_circuit_output(
     let mut private_membership_proofs_iter = private_account_membership_proofs.iter();
 
     let mut output_index = 0;
-    for (account_visibility_mask, (pre_state, post_state)) in
-        visibility_mask.iter().copied().zip(states_iter)
+    for (pos, (account_visibility_mask, (pre_state, post_state))) in
+        visibility_mask.iter().copied().zip(states_iter).enumerate()
     {
         match account_visibility_mask {
             0 => {
@@ -689,9 +690,16 @@ fn compute_circuit_output(
                 let commitment_post =
                     Commitment::new(&pre_state.account_id, &post_with_updated_nonce);
 
+                let (pda_program_id, seed) = pda_seed_by_position
+                    .get(&pos)
+                    .expect("mask-3 position must be in pda_seed_by_position");
                 let encrypted_account = EncryptionScheme::encrypt(
                     &post_with_updated_nonce,
-                    &PrivateAccountKind::Account(*identifier),
+                    &PrivateAccountKind::Pda {
+                        program_id: *pda_program_id,
+                        seed: *seed,
+                        identifier: *identifier,
+                    },
                     shared_secret,
                     &commitment_post,
                     output_index,

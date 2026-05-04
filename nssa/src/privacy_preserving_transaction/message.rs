@@ -140,7 +140,8 @@ impl Message {
 #[cfg(test)]
 pub mod tests {
     use nssa_core::{
-        Commitment, EncryptionScheme, Nullifier, NullifierPublicKey, SharedSecretKey,
+        Commitment, EncryptionScheme, Nullifier, NullifierPublicKey, PrivateAccountKind,
+        SharedSecretKey,
         account::{Account, AccountId, Nonce},
         encryption::{EphemeralPublicKey, ViewingPublicKey},
         program::{BlockValidityWindow, TimestampValidityWindow},
@@ -252,7 +253,7 @@ pub mod tests {
         let esk = [3; 32];
         let shared_secret = SharedSecretKey::new(&esk, &vpk);
         let epk = EphemeralPublicKey::from_scalar(esk);
-        let ciphertext = EncryptionScheme::encrypt(&account, 0, &shared_secret, &commitment, 2);
+        let ciphertext = EncryptionScheme::encrypt(&account, &PrivateAccountKind::Account(0), &shared_secret, &commitment, 2);
         let encrypted_account_data =
             EncryptedAccountData::new(ciphertext.clone(), &npk, &vpk, epk.clone());
 
