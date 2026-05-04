@@ -27,10 +27,18 @@ pub enum AmmProgramAgnosticSubcommand {
         )]
         user_holding_a: Option<String>,
         /// User holding A account label (alternative to --user-holding-a).
-        #[arg(long, conflicts_with = "user_holding_a", conflicts_with = "user_holding_a_key_path")]
+        #[arg(
+            long,
+            conflicts_with = "user_holding_a",
+            conflicts_with = "user_holding_a_key_path"
+        )]
         user_holding_a_label: Option<String>,
         /// Key path for user holding A (uses Keycard, alternative to --user-holding-a/label).
-        #[arg(long, conflicts_with = "user_holding_a", conflicts_with = "user_holding_a_label")]
+        #[arg(
+            long,
+            conflicts_with = "user_holding_a",
+            conflicts_with = "user_holding_a_label"
+        )]
         user_holding_a_key_path: Option<String>,
         /// `user_holding_b` - valid 32 byte base58 string with privacy prefix.
         #[arg(
@@ -41,10 +49,18 @@ pub enum AmmProgramAgnosticSubcommand {
         )]
         user_holding_b: Option<String>,
         /// User holding B account label (alternative to --user-holding-b).
-        #[arg(long, conflicts_with = "user_holding_b", conflicts_with = "user_holding_b_key_path")]
+        #[arg(
+            long,
+            conflicts_with = "user_holding_b",
+            conflicts_with = "user_holding_b_key_path"
+        )]
         user_holding_b_label: Option<String>,
         /// Key path for user holding B (uses Keycard, alternative to --user-holding-b/label).
-        #[arg(long, conflicts_with = "user_holding_b", conflicts_with = "user_holding_b_label")]
+        #[arg(
+            long,
+            conflicts_with = "user_holding_b",
+            conflicts_with = "user_holding_b_label"
+        )]
         user_holding_b_key_path: Option<String>,
         /// `user_holding_lp` - valid 32 byte base58 string with privacy prefix.
         #[arg(
@@ -136,10 +152,18 @@ pub enum AmmProgramAgnosticSubcommand {
         )]
         user_holding_a: Option<String>,
         /// User holding A account label (alternative to --user-holding-a).
-        #[arg(long, conflicts_with = "user_holding_a", conflicts_with = "user_holding_a_key_path")]
+        #[arg(
+            long,
+            conflicts_with = "user_holding_a",
+            conflicts_with = "user_holding_a_key_path"
+        )]
         user_holding_a_label: Option<String>,
         /// Key path for user holding A (uses Keycard).
-        #[arg(long, conflicts_with = "user_holding_a", conflicts_with = "user_holding_a_label")]
+        #[arg(
+            long,
+            conflicts_with = "user_holding_a",
+            conflicts_with = "user_holding_a_label"
+        )]
         user_holding_a_key_path: Option<String>,
         /// `user_holding_b` - valid 32 byte base58 string with privacy prefix.
         #[arg(
@@ -150,10 +174,18 @@ pub enum AmmProgramAgnosticSubcommand {
         )]
         user_holding_b: Option<String>,
         /// User holding B account label (alternative to --user-holding-b).
-        #[arg(long, conflicts_with = "user_holding_b", conflicts_with = "user_holding_b_key_path")]
+        #[arg(
+            long,
+            conflicts_with = "user_holding_b",
+            conflicts_with = "user_holding_b_key_path"
+        )]
         user_holding_b_label: Option<String>,
         /// Key path for user holding B (uses Keycard).
-        #[arg(long, conflicts_with = "user_holding_b", conflicts_with = "user_holding_b_label")]
+        #[arg(
+            long,
+            conflicts_with = "user_holding_b",
+            conflicts_with = "user_holding_b_label"
+        )]
         user_holding_b_key_path: Option<String>,
         /// `user_holding_lp` - valid 32 byte base58 string with privacy prefix.
         #[arg(
@@ -207,10 +239,18 @@ pub enum AmmProgramAgnosticSubcommand {
         )]
         user_holding_lp: Option<String>,
         /// User holding LP account label (alternative to --user-holding-lp).
-        #[arg(long, conflicts_with = "user_holding_lp", conflicts_with = "user_holding_lp_key_path")]
+        #[arg(
+            long,
+            conflicts_with = "user_holding_lp",
+            conflicts_with = "user_holding_lp_key_path"
+        )]
         user_holding_lp_label: Option<String>,
         /// Key path for user holding LP (uses Keycard).
-        #[arg(long, conflicts_with = "user_holding_lp", conflicts_with = "user_holding_lp_label")]
+        #[arg(
+            long,
+            conflicts_with = "user_holding_lp",
+            conflicts_with = "user_holding_lp_label"
+        )]
         user_holding_lp_key_path: Option<String>,
         #[arg(long)]
         balance_lp: u128,

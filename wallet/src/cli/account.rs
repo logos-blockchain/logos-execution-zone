@@ -67,7 +67,7 @@ pub enum AccountSubcommand {
     },
     /// Print the raw account ID (without privacy prefix) for shell scripting.
     ///
-    /// Example: LEE_DEF=$(wallet account id --account-label lee-def)
+    /// Example: `LEE_DEF=$(wallet account id --account-label lee-def)`.
     Id {
         /// Account label.
         #[arg(long, conflicts_with = "account_id", required_unless_present_any = ["account_id", "key_path"])]

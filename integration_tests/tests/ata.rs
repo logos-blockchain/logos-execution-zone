@@ -89,7 +89,7 @@ async fn create_ata_initializes_holding_account() -> Result<()> {
         Command::Ata(AtaSubcommand::Create {
             owner: Some(format_public_account_id(owner_account_id)),
             token_definition: definition_account_id.to_string(),
-        key_path: None,
+            key_path: None,
         }),
     )
     .await?;
@@ -156,7 +156,7 @@ async fn create_ata_is_idempotent() -> Result<()> {
         Command::Ata(AtaSubcommand::Create {
             owner: Some(format_public_account_id(owner_account_id)),
             token_definition: definition_account_id.to_string(),
-        key_path: None,
+            key_path: None,
         }),
     )
     .await?;
@@ -170,7 +170,7 @@ async fn create_ata_is_idempotent() -> Result<()> {
         Command::Ata(AtaSubcommand::Create {
             owner: Some(format_public_account_id(owner_account_id)),
             token_definition: definition_account_id.to_string(),
-        key_path: None,
+            key_path: None,
         }),
     )
     .await?;
@@ -251,7 +251,7 @@ async fn transfer_and_burn_via_ata() -> Result<()> {
         Command::Ata(AtaSubcommand::Create {
             owner: Some(format_public_account_id(sender_account_id)),
             token_definition: definition_account_id.to_string(),
-        key_path: None,
+            key_path: None,
         }),
     )
     .await?;
@@ -260,7 +260,7 @@ async fn transfer_and_burn_via_ata() -> Result<()> {
         Command::Ata(AtaSubcommand::Create {
             owner: Some(format_public_account_id(recipient_account_id)),
             token_definition: definition_account_id.to_string(),
-        key_path: None,
+            key_path: None,
         }),
     )
     .await?;
@@ -282,7 +282,7 @@ async fn transfer_and_burn_via_ata() -> Result<()> {
             to_identifier: Some(0),
             amount: fund_amount,
             from_key_path: None,
-        to_key_path: None,
+            to_key_path: None,
         }),
     )
     .await?;
@@ -299,7 +299,7 @@ async fn transfer_and_burn_via_ata() -> Result<()> {
             token_definition: definition_account_id.to_string(),
             to: recipient_ata_id.to_string(),
             amount: transfer_amount,
-        from_key_path: None,
+            from_key_path: None,
         }),
     )
     .await?;
@@ -337,7 +337,7 @@ async fn transfer_and_burn_via_ata() -> Result<()> {
             holder: Some(format_public_account_id(sender_account_id)),
             token_definition: definition_account_id.to_string(),
             amount: burn_amount,
-        key_path: None,
+            key_path: None,
         }),
     )
     .await?;
@@ -407,7 +407,7 @@ async fn create_ata_with_private_owner() -> Result<()> {
         Command::Ata(AtaSubcommand::Create {
             owner: Some(format_private_account_id(owner_account_id)),
             token_definition: definition_account_id.to_string(),
-        key_path: None,
+            key_path: None,
         }),
     )
     .await?;
@@ -495,7 +495,7 @@ async fn transfer_via_ata_private_owner() -> Result<()> {
         Command::Ata(AtaSubcommand::Create {
             owner: Some(format_private_account_id(sender_account_id)),
             token_definition: definition_account_id.to_string(),
-        key_path: None,
+            key_path: None,
         }),
     )
     .await?;
@@ -504,7 +504,7 @@ async fn transfer_via_ata_private_owner() -> Result<()> {
         Command::Ata(AtaSubcommand::Create {
             owner: Some(format_public_account_id(recipient_account_id)),
             token_definition: definition_account_id.to_string(),
-        key_path: None,
+            key_path: None,
         }),
     )
     .await?;
@@ -543,7 +543,7 @@ async fn transfer_via_ata_private_owner() -> Result<()> {
             token_definition: definition_account_id.to_string(),
             to: recipient_ata_id.to_string(),
             amount: transfer_amount,
-        from_key_path: None,
+            from_key_path: None,
         }),
     )
     .await?;
@@ -625,7 +625,7 @@ async fn burn_via_ata_private_owner() -> Result<()> {
         Command::Ata(AtaSubcommand::Create {
             owner: Some(format_private_account_id(holder_account_id)),
             token_definition: definition_account_id.to_string(),
-        key_path: None,
+            key_path: None,
         }),
     )
     .await?;
@@ -663,7 +663,7 @@ async fn burn_via_ata_private_owner() -> Result<()> {
             holder: Some(format_private_account_id(holder_account_id)),
             token_definition: definition_account_id.to_string(),
             amount: burn_amount,
-        key_path: None,
+            key_path: None,
         }),
     )
     .await?;

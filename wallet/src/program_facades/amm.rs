@@ -8,7 +8,10 @@ use crate::{ExecutionFailureKind, WalletCore};
 pub struct Amm<'wallet>(pub &'wallet WalletCore);
 
 impl Amm<'_> {
-    #[expect(clippy::too_many_arguments, reason = "each parameter is distinct; grouping into a struct would add unnecessary indirection")]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each parameter is distinct; grouping into a struct would add unnecessary indirection"
+    )]
     pub async fn send_new_definition(
         &self,
         user_holding_a: AccountId,
@@ -98,9 +101,10 @@ impl Amm<'_> {
         let msg_hash = message.hash();
         let pin = if key_path_a.is_some() || key_path_b.is_some() {
             Some(crate::helperfunctions::read_pin().map_err(|e| {
-                ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                    e.to_string(),
-                ))
+                ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<
+                    pyo3::exceptions::PyRuntimeError,
+                    _,
+                >(e.to_string()))
             })?)
         } else {
             None
@@ -119,7 +123,10 @@ impl Amm<'_> {
                 .user_data
                 .get_pub_account_signing_key(user_holding_a)
                 .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
-            (nssa::Signature::new(sk, &msg_hash), nssa::PublicKey::new_from_private_key(sk))
+            (
+                nssa::Signature::new(sk, &msg_hash),
+                nssa::PublicKey::new_from_private_key(sk),
+            )
         };
 
         let (sig_b, pk_b) = if let Some(kp) = key_path_b {
@@ -135,7 +142,10 @@ impl Amm<'_> {
                 .user_data
                 .get_pub_account_signing_key(user_holding_b)
                 .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
-            (nssa::Signature::new(sk, &msg_hash), nssa::PublicKey::new_from_private_key(sk))
+            (
+                nssa::Signature::new(sk, &msg_hash),
+                nssa::PublicKey::new_from_private_key(sk),
+            )
         };
 
         let mut sigs = vec![sig_a, sig_b];
@@ -233,12 +243,14 @@ impl Amm<'_> {
         let msg_hash = message.hash();
         let witness_set = if let Some(kp) = key_path {
             let pin = crate::helperfunctions::read_pin().map_err(|e| {
-                ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                    e.to_string(),
-                ))
+                ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<
+                    pyo3::exceptions::PyRuntimeError,
+                    _,
+                >(e.to_string()))
             })?;
-            let (sig, pk) =
-                keycard_wallet::KeycardWallet::sign_message_for_path_with_connect(&pin, kp, &msg_hash)?;
+            let (sig, pk) = keycard_wallet::KeycardWallet::sign_message_for_path_with_connect(
+                &pin, kp, &msg_hash,
+            )?;
             nssa::public_transaction::WitnessSet::from_list(&message, &[sig], &[pk])
                 .map_err(ExecutionFailureKind::TransactionBuildError)?
         } else {
@@ -335,12 +347,14 @@ impl Amm<'_> {
         let msg_hash = message.hash();
         let witness_set = if let Some(kp) = key_path {
             let pin = crate::helperfunctions::read_pin().map_err(|e| {
-                ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                    e.to_string(),
-                ))
+                ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<
+                    pyo3::exceptions::PyRuntimeError,
+                    _,
+                >(e.to_string()))
             })?;
-            let (sig, pk) =
-                keycard_wallet::KeycardWallet::sign_message_for_path_with_connect(&pin, kp, &msg_hash)?;
+            let (sig, pk) = keycard_wallet::KeycardWallet::sign_message_for_path_with_connect(
+                &pin, kp, &msg_hash,
+            )?;
             nssa::public_transaction::WitnessSet::from_list(&message, &[sig], &[pk])
                 .map_err(ExecutionFailureKind::TransactionBuildError)?
         } else {
@@ -362,7 +376,10 @@ impl Amm<'_> {
             .await?)
     }
 
-    #[expect(clippy::too_many_arguments, reason = "each parameter is distinct; grouping into a struct would add unnecessary indirection")]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each parameter is distinct; grouping into a struct would add unnecessary indirection"
+    )]
     pub async fn send_add_liquidity(
         &self,
         user_holding_a: AccountId,
@@ -433,9 +450,10 @@ impl Amm<'_> {
         let msg_hash = message.hash();
         let pin = if key_path_a.is_some() || key_path_b.is_some() {
             Some(crate::helperfunctions::read_pin().map_err(|e| {
-                ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                    e.to_string(),
-                ))
+                ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<
+                    pyo3::exceptions::PyRuntimeError,
+                    _,
+                >(e.to_string()))
             })?)
         } else {
             None
@@ -454,7 +472,10 @@ impl Amm<'_> {
                 .user_data
                 .get_pub_account_signing_key(user_holding_a)
                 .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
-            (nssa::Signature::new(sk, &msg_hash), nssa::PublicKey::new_from_private_key(sk))
+            (
+                nssa::Signature::new(sk, &msg_hash),
+                nssa::PublicKey::new_from_private_key(sk),
+            )
         };
 
         let (sig_b, pk_b) = if let Some(kp) = key_path_b {
@@ -470,12 +491,18 @@ impl Amm<'_> {
                 .user_data
                 .get_pub_account_signing_key(user_holding_b)
                 .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
-            (nssa::Signature::new(sk, &msg_hash), nssa::PublicKey::new_from_private_key(sk))
+            (
+                nssa::Signature::new(sk, &msg_hash),
+                nssa::PublicKey::new_from_private_key(sk),
+            )
         };
 
-        let witness_set =
-            nssa::public_transaction::WitnessSet::from_list(&message, &[sig_a, sig_b], &[pk_a, pk_b])
-                .map_err(ExecutionFailureKind::TransactionBuildError)?;
+        let witness_set = nssa::public_transaction::WitnessSet::from_list(
+            &message,
+            &[sig_a, sig_b],
+            &[pk_a, pk_b],
+        )
+        .map_err(ExecutionFailureKind::TransactionBuildError)?;
 
         let tx = nssa::PublicTransaction::new(message, witness_set);
 
@@ -486,7 +513,10 @@ impl Amm<'_> {
             .await?)
     }
 
-    #[expect(clippy::too_many_arguments, reason = "each parameter is distinct; grouping into a struct would add unnecessary indirection")]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "each parameter is distinct; grouping into a struct would add unnecessary indirection"
+    )]
     pub async fn send_remove_liquidity(
         &self,
         user_holding_a: AccountId,
@@ -556,12 +586,14 @@ impl Amm<'_> {
         let msg_hash = message.hash();
         let witness_set = if let Some(kp) = key_path_lp {
             let pin = crate::helperfunctions::read_pin().map_err(|e| {
-                ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                    e.to_string(),
-                ))
+                ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<
+                    pyo3::exceptions::PyRuntimeError,
+                    _,
+                >(e.to_string()))
             })?;
-            let (sig, pk) =
-                keycard_wallet::KeycardWallet::sign_message_for_path_with_connect(&pin, kp, &msg_hash)?;
+            let (sig, pk) = keycard_wallet::KeycardWallet::sign_message_for_path_with_connect(
+                &pin, kp, &msg_hash,
+            )?;
             nssa::public_transaction::WitnessSet::from_list(&message, &[sig], &[pk])
                 .map_err(ExecutionFailureKind::TransactionBuildError)?
         } else {

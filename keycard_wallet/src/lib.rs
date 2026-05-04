@@ -56,7 +56,7 @@ impl KeycardWallet {
 
         PublicKey::try_new(public_key)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
-    }   
+    }
 
     pub fn get_public_key_for_path_with_connect(pin: &str, path: &str) -> PyResult<PublicKey> {
         Python::with_gil(|py| {
@@ -94,7 +94,7 @@ impl KeycardWallet {
         // The keycard Python library strips the leading zero from the S component when
         // S < 2^248. Re-insert it so the slice is always the expected 64 bytes (R || S).
         let py_signature = if py_signature.len() == 63 {
-            let mut padded = [0u8; 64];
+            let mut padded = [0_u8; 64];
             padded[..32].copy_from_slice(&py_signature[..32]);
             padded[33..].copy_from_slice(&py_signature[32..]);
             padded.to_vec()
@@ -153,7 +153,10 @@ impl KeycardWallet {
         Ok(())
     }
 
-    pub fn get_public_account_id_for_path_with_connect(pin: &str, key_path: &str) -> PyResult<String> {
+    pub fn get_public_account_id_for_path_with_connect(
+        pin: &str,
+        key_path: &str,
+    ) -> PyResult<String> {
         let public_key = Self::get_public_key_for_path_with_connect(pin, key_path)?;
 
         Ok(format!("Public/{}", AccountId::from(&public_key)))
@@ -211,7 +214,10 @@ impl KeycardWallet {
         })
     }
 
-    pub fn get_private_account_id_for_path_with_connect(pin: &str, key_path: &str) -> PyResult<String> {
+    pub fn get_private_account_id_for_path_with_connect(
+        pin: &str,
+        key_path: &str,
+    ) -> PyResult<String> {
         let (nsk, _vsk) = Self::get_private_keys_for_path_with_connect(pin, key_path)?;
         let npk = NullifierPublicKey::from(&nsk);
 

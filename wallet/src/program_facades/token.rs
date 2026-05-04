@@ -1,6 +1,6 @@
 use common::{HashType, transaction::NSSATransaction};
 use keycard_wallet::KeycardWallet;
-use nssa::{AccountId, Signature, PublicKey, program::Program, public_transaction::WitnessSet};
+use nssa::{AccountId, PublicKey, Signature, program::Program, public_transaction::WitnessSet};
 use nssa_core::{Identifier, NullifierPublicKey, SharedSecretKey, encryption::ViewingPublicKey};
 use pyo3::exceptions::PyRuntimeError;
 use sequencer_service_rpc::RpcClient as _;
@@ -56,7 +56,10 @@ impl Token<'_> {
                 .user_data
                 .get_pub_account_signing_key(definition_account_id)
                 .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
-            (Signature::new(sk, &msg_hash), PublicKey::new_from_private_key(sk))
+            (
+                Signature::new(sk, &msg_hash),
+                PublicKey::new_from_private_key(sk),
+            )
         };
 
         let (sig_sup, pk_sup) = if let Some(kp) = supply_key_path {
@@ -68,7 +71,10 @@ impl Token<'_> {
                 .user_data
                 .get_pub_account_signing_key(supply_account_id)
                 .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
-            (Signature::new(sk, &msg_hash), PublicKey::new_from_private_key(sk))
+            (
+                Signature::new(sk, &msg_hash),
+                PublicKey::new_from_private_key(sk),
+            )
         };
 
         let witness_set = nssa::public_transaction::WitnessSet::from_list(
@@ -441,15 +447,17 @@ impl Token<'_> {
 
             let witness_set = if let Some(key_path) = key_path {
                 let pin = crate::helperfunctions::read_pin().map_err(|e| {
-                    ExecutionFailureKind::KeycardError(
-                        pyo3::PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()),
-                    )
+                    ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<
+                        pyo3::exceptions::PyRuntimeError,
+                        _,
+                    >(e.to_string()))
                 })?;
-                let (signature, pub_key) = keycard_wallet::KeycardWallet::sign_message_for_path_with_connect(
-                    &pin,
-                    key_path,
-                    &message.hash(),
-                )?;
+                let (signature, pub_key) =
+                    keycard_wallet::KeycardWallet::sign_message_for_path_with_connect(
+                        &pin,
+                        key_path,
+                        &message.hash(),
+                    )?;
                 nssa::public_transaction::WitnessSet::from_list(&message, &[signature], &[pub_key])
                     .map_err(ExecutionFailureKind::TransactionBuildError)?
             } else {
@@ -517,8 +525,7 @@ impl Token<'_> {
                     e.to_string(),
                 ))
             })?;
-            let (sig, pk) =
-                KeycardWallet::sign_message_for_path_with_connect(&pin, kp, &msg_hash)?;
+            let (sig, pk) = KeycardWallet::sign_message_for_path_with_connect(&pin, kp, &msg_hash)?;
             nssa::public_transaction::WitnessSet::from_list(&message, &[sig], &[pk])
                 .map_err(ExecutionFailureKind::TransactionBuildError)?
         } else {
@@ -687,8 +694,7 @@ impl Token<'_> {
                     e.to_string(),
                 ))
             })?;
-            let (sig, pk) =
-                KeycardWallet::sign_message_for_path_with_connect(&pin, kp, &msg_hash)?;
+            let (sig, pk) = KeycardWallet::sign_message_for_path_with_connect(&pin, kp, &msg_hash)?;
             nssa::public_transaction::WitnessSet::from_list(&message, &[sig], &[pk])
                 .map_err(ExecutionFailureKind::TransactionBuildError)?
         } else {

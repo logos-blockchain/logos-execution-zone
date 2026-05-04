@@ -46,12 +46,14 @@ impl Ata<'_> {
         let msg_hash = message.hash();
         let witness_set = if let Some(kp) = key_path {
             let pin = crate::helperfunctions::read_pin().map_err(|e| {
-                ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                    e.to_string(),
-                ))
+                ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<
+                    pyo3::exceptions::PyRuntimeError,
+                    _,
+                >(e.to_string()))
             })?;
-            let (sig, pk) =
-                keycard_wallet::KeycardWallet::sign_message_for_path_with_connect(&pin, kp, &msg_hash)?;
+            let (sig, pk) = keycard_wallet::KeycardWallet::sign_message_for_path_with_connect(
+                &pin, kp, &msg_hash,
+            )?;
             nssa::public_transaction::WitnessSet::from_list(&message, &[sig], &[pk])
                 .map_err(ExecutionFailureKind::TransactionBuildError)?
         } else {
@@ -113,12 +115,14 @@ impl Ata<'_> {
         let msg_hash = message.hash();
         let witness_set = if let Some(kp) = key_path {
             let pin = crate::helperfunctions::read_pin().map_err(|e| {
-                ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                    e.to_string(),
-                ))
+                ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<
+                    pyo3::exceptions::PyRuntimeError,
+                    _,
+                >(e.to_string()))
             })?;
-            let (sig, pk) =
-                keycard_wallet::KeycardWallet::sign_message_for_path_with_connect(&pin, kp, &msg_hash)?;
+            let (sig, pk) = keycard_wallet::KeycardWallet::sign_message_for_path_with_connect(
+                &pin, kp, &msg_hash,
+            )?;
             nssa::public_transaction::WitnessSet::from_list(&message, &[sig], &[pk])
                 .map_err(ExecutionFailureKind::TransactionBuildError)?
         } else {
@@ -179,12 +183,14 @@ impl Ata<'_> {
         let msg_hash = message.hash();
         let witness_set = if let Some(kp) = key_path {
             let pin = crate::helperfunctions::read_pin().map_err(|e| {
-                ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-                    e.to_string(),
-                ))
+                ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<
+                    pyo3::exceptions::PyRuntimeError,
+                    _,
+                >(e.to_string()))
             })?;
-            let (sig, pk) =
-                keycard_wallet::KeycardWallet::sign_message_for_path_with_connect(&pin, kp, &msg_hash)?;
+            let (sig, pk) = keycard_wallet::KeycardWallet::sign_message_for_path_with_connect(
+                &pin, kp, &msg_hash,
+            )?;
             nssa::public_transaction::WitnessSet::from_list(&message, &[sig], &[pk])
                 .map_err(ExecutionFailureKind::TransactionBuildError)?
         } else {

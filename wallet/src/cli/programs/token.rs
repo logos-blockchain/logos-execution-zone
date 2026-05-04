@@ -5,8 +5,7 @@ use nssa::AccountId;
 
 use crate::{
     AccDecodeData::Decode,
-    PrivacyPreservingAccount,
-    WalletCore,
+    PrivacyPreservingAccount, WalletCore,
     cli::{SubcommandReturnValue, WalletSubcommand},
     helperfunctions::{
         AccountPrivacyKind, parse_addr_with_privacy_prefix, resolve_account_label,
@@ -29,10 +28,18 @@ pub enum TokenProgramAgnosticSubcommand {
         )]
         definition_account_id: Option<String>,
         /// Definition account label (alternative to --definition-account-id).
-        #[arg(long, conflicts_with = "definition_account_id", conflicts_with = "definition_key_path")]
+        #[arg(
+            long,
+            conflicts_with = "definition_account_id",
+            conflicts_with = "definition_key_path"
+        )]
         definition_account_label: Option<String>,
         /// Key path for the definition account (uses Keycard).
-        #[arg(long, conflicts_with = "definition_account_id", conflicts_with = "definition_account_label")]
+        #[arg(
+            long,
+            conflicts_with = "definition_account_id",
+            conflicts_with = "definition_account_label"
+        )]
         definition_key_path: Option<String>,
         /// `supply_account_id` - valid 32 byte base58 string with privacy prefix.
         #[arg(
@@ -43,10 +50,18 @@ pub enum TokenProgramAgnosticSubcommand {
         )]
         supply_account_id: Option<String>,
         /// Supply account label (alternative to --supply-account-id).
-        #[arg(long, conflicts_with = "supply_account_id", conflicts_with = "supply_key_path")]
+        #[arg(
+            long,
+            conflicts_with = "supply_account_id",
+            conflicts_with = "supply_key_path"
+        )]
         supply_account_label: Option<String>,
         /// Key path for the supply account (uses Keycard).
-        #[arg(long, conflicts_with = "supply_account_id", conflicts_with = "supply_account_label")]
+        #[arg(
+            long,
+            conflicts_with = "supply_account_id",
+            conflicts_with = "supply_account_label"
+        )]
         supply_key_path: Option<String>,
         #[arg(short, long)]
         name: String,
@@ -121,10 +136,20 @@ pub enum TokenProgramAgnosticSubcommand {
         #[arg(long)]
         amount: u128,
         /// `from_key_path` (alternative to --from) uses Keycard.
-        #[arg(long, conflicts_with = "from", conflicts_with = "from", conflicts_with = "from_label")]
+        #[arg(
+            long,
+            conflicts_with = "from",
+            conflicts_with = "from",
+            conflicts_with = "from_label"
+        )]
         from_key_path: Option<String>,
         /// `to_key_path` (alternative to --to) uses Keycard.
-        #[arg(long, conflicts_with = "to", conflicts_with = "to", conflicts_with = "to_label")]
+        #[arg(
+            long,
+            conflicts_with = "to",
+            conflicts_with = "to",
+            conflicts_with = "to_label"
+        )]
         to_key_path: Option<String>,
     },
     /// Burn tokens on `holder`, modify `definition`.
@@ -174,10 +199,18 @@ pub enum TokenProgramAgnosticSubcommand {
         )]
         definition: Option<String>,
         /// Definition account label (alternative to --definition).
-        #[arg(long, conflicts_with = "definition", conflicts_with = "definition_key_path")]
+        #[arg(
+            long,
+            conflicts_with = "definition",
+            conflicts_with = "definition_key_path"
+        )]
         definition_label: Option<String>,
         /// Key path for the definition account (uses Keycard).
-        #[arg(long, conflicts_with = "definition", conflicts_with = "definition_label")]
+        #[arg(
+            long,
+            conflicts_with = "definition",
+            conflicts_with = "definition_label"
+        )]
         definition_key_path: Option<String>,
         /// holder - valid 32 byte base58 string with privacy prefix.
         #[arg(long, conflicts_with = "holder_label", conflicts_with = "holder_key_path", required_unless_present_any = ["holder_label", "holder_key_path"])]
@@ -417,9 +450,7 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                         &wallet_core.storage.labels,
                         &wallet_core.storage.user_data,
                     )?),
-                    (None, None, Some(to_key_path)) => {
-                        Some(resolve_keycard_id(&to_key_path)?)
-                    }
+                    (None, None, Some(to_key_path)) => Some(resolve_keycard_id(&to_key_path)?),
                     _ => {
                         anyhow::bail!("Provide only one of --to or --to-label")
                     }
@@ -608,7 +639,9 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                     )?),
                     (None, None, Some(kp)) => Some(resolve_keycard_id(kp)?),
                     _ => {
-                        anyhow::bail!("Provide only one of --holder, --holder-label, or --holder-key-path")
+                        anyhow::bail!(
+                            "Provide only one of --holder, --holder-label, or --holder-key-path"
+                        )
                     }
                 };
                 let underlying_subcommand = match (holder, holder_npk, holder_vpk) {

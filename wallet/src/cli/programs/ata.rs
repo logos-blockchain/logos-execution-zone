@@ -159,7 +159,13 @@ impl WalletSubcommand for AtaSubcommand {
                 match from_privacy {
                     AccountPrivacyKind::Public => {
                         Ata(wallet_core)
-                            .send_transfer(from_id, definition_id, to_id, amount, from_key_path.as_deref())
+                            .send_transfer(
+                                from_id,
+                                definition_id,
+                                to_id,
+                                amount,
+                                from_key_path.as_deref(),
+                            )
                             .await?;
                         Ok(SubcommandReturnValue::Empty)
                     }
@@ -194,7 +200,8 @@ impl WalletSubcommand for AtaSubcommand {
                     (None, Some(kp)) => resolve_keycard_id(kp)?,
                     (None, None) => anyhow::bail!("Provide --holder or --key-path"),
                 };
-                let (holder_str, holder_privacy) = parse_addr_with_privacy_prefix(&holder_resolved)?;
+                let (holder_str, holder_privacy) =
+                    parse_addr_with_privacy_prefix(&holder_resolved)?;
                 let holder_id: AccountId = holder_str.parse()?;
                 let definition_id: AccountId = token_definition.parse()?;
 

@@ -136,7 +136,7 @@ impl AccountManager {
         self.states
             .iter()
             .filter_map(|state| match state {
-                State::Public { account, .. } => Some(account.account.nonce),
+                State::Public { account, sk } => sk.as_ref().map(|_| account.account.nonce),
                 State::Private(_) => None,
             })
             .collect()
