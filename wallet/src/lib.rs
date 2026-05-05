@@ -287,6 +287,41 @@ impl WalletCore {
         (account_id, cci)
     }
 
+    /// Insert a group key holder into storage.
+    pub fn insert_group_key_holder(
+        &mut self,
+        name: String,
+        holder: key_protocol::key_management::group_key_holder::GroupKeyHolder,
+    ) {
+        self.storage.user_data.insert_group_key_holder(name, holder);
+    }
+
+    /// Remove a group key holder from storage. Returns the removed holder if it existed.
+    pub fn remove_group_key_holder(
+        &mut self,
+        name: &str,
+    ) -> Option<key_protocol::key_management::group_key_holder::GroupKeyHolder> {
+        self.storage.user_data.group_key_holders.remove(name)
+    }
+
+    /// Register a shared account in storage for sync tracking.
+    pub fn register_shared_account(
+        &mut self,
+        account_id: AccountId,
+        group_label: String,
+        identifier: nssa_core::Identifier,
+    ) {
+        use key_protocol::key_protocol_core::SharedAccountEntry;
+        self.storage.user_data.shared_accounts.insert(
+            account_id,
+            SharedAccountEntry {
+                group_label,
+                identifier,
+                account: Account::default(),
+            },
+        );
+    }
+
     /// Get account balance.
     pub async fn get_account_balance(&self, acc: AccountId) -> Result<u128> {
         Ok(self.sequencer_client.get_account_balance(acc).await?)

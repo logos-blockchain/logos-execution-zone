@@ -21,6 +21,15 @@ pub struct UserPrivateAccountData {
     pub accounts: Vec<(Identifier, Account)>,
 }
 
+/// Metadata for a shared account (GMS-derived), stored alongside the cached plaintext state.
+/// The group label and identifier are needed to re-derive keys during sync.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SharedAccountEntry {
+    pub group_label: String,
+    pub identifier: Identifier,
+    pub account: Account,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct NSSAUserData {
     /// Default public accounts.
@@ -37,11 +46,12 @@ pub struct NSSAUserData {
     #[serde(default)]
     pub group_key_holders: BTreeMap<String, GroupKeyHolder>,
     /// Cached plaintext state of shared accounts (PDAs and regular shared accounts),
-    /// keyed by `AccountId`. Updated after each transaction by decrypting the circuit output.
-    /// The sequencer only stores encrypted commitments, so this local cache is the
-    /// only source of plaintext state for these accounts.
-    #[serde(default, alias = "group_pda_accounts", alias = "pda_accounts")]
-    pub shared_accounts: BTreeMap<nssa::AccountId, nssa_core::account::Account>,
+    /// keyed by `AccountId`. Each entry stores the group label and identifier needed
+    /// to re-derive keys during sync.
+    /// Old wallet files with `pda_accounts` (plain Account values) are incompatible with
+    /// this type. The `default` attribute ensures they deserialize as empty rather than failing.
+    #[serde(default)]
+    pub shared_accounts: BTreeMap<nssa::AccountId, SharedAccountEntry>,
 }
 
 impl NSSAUserData {

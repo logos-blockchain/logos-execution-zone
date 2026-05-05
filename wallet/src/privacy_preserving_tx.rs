@@ -337,7 +337,7 @@ async fn private_pda_preparation(
         .user_data
         .shared_accounts
         .get(&account_id)
-        .cloned()
+        .map(|e| e.account.clone())
         .unwrap_or_default();
 
     let exists = acc != nssa_core::account::Account::default();
@@ -388,7 +388,7 @@ async fn private_shared_preparation(
         .user_data
         .shared_accounts
         .get(&account_id)
-        .cloned()
+        .map(|e| e.account.clone())
         .unwrap_or_default();
 
     let exists = acc != nssa_core::account::Account::default();
