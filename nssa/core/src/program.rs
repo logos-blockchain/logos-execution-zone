@@ -37,6 +37,12 @@ impl PdaSeed {
     }
 }
 
+impl AsRef<[u8]> for PdaSeed {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
 impl AccountId {
     /// Derives an [`AccountId`] for a public PDA from the program ID and seed.
     #[must_use]

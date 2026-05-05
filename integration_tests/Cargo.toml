@@ -35,4 +35,4 @@ hex.workspace = true
 tempfile.workspace = true
 bytesize.workspace = true
 futures.workspace = true
-testcontainers = { version = "0.27.0", features = ["docker-compose"] }
+testcontainers = { version = "0.27.3", features = ["docker-compose"] }
