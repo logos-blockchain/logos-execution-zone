@@ -1,76 +1,34 @@
-use anyhow::{Result, anyhow};
-use bedrock_client::SignedMantleTx;
-use logos_blockchain_core::mantle::ops::channel::ChannelId;
+use std::time::Duration;
+
+use anyhow::Result;
+use common::block::Block;
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
-use url::Url;
 
 use crate::{
-    block_settlement_client::BlockSettlementClientTrait, config::BedrockConfig,
-    indexer_client::IndexerClientTrait,
+    block_publisher::{
+        BlockPublisherTrait, CheckpointSink, FinalizedBlockSink, SequencerCheckpoint,
+    },
+    config::BedrockConfig,
 };
 
-pub type SequencerCoreWithMockClients =
-    crate::SequencerCore<MockBlockSettlementClient, MockIndexerClient>;
+pub type SequencerCoreWithMockClients = crate::SequencerCore<MockBlockPublisher>;
 
 #[derive(Clone)]
-pub struct MockBlockSettlementClient {
-    bedrock_channel_id: ChannelId,
-    bedrock_signing_key: Ed25519Key,
-}
+pub struct MockBlockPublisher;
 
-impl BlockSettlementClientTrait for MockBlockSettlementClient {
-    fn new(config: &BedrockConfig, signing_key: Ed25519Key) -> Result<Self> {
-        Ok(Self {
-            bedrock_channel_id: config.channel_id,
-            bedrock_signing_key: signing_key,
-        })
-    }
-
-    fn bedrock_channel_id(&self) -> ChannelId {
-        self.bedrock_channel_id
-    }
-
-    fn bedrock_signing_key(&self) -> &Ed25519Key {
-        &self.bedrock_signing_key
-    }
-
-    async fn submit_inscribe_tx_to_bedrock(&self, _tx: SignedMantleTx) -> Result<()> {
-        Ok(())
-    }
-}
-
-#[derive(Clone)]
-pub struct MockBlockSettlementClientWithError {
-    bedrock_channel_id: ChannelId,
-    bedrock_signing_key: Ed25519Key,
-}
-
-impl BlockSettlementClientTrait for MockBlockSettlementClientWithError {
-    fn new(config: &BedrockConfig, signing_key: Ed25519Key) -> Result<Self> {
-        Ok(Self {
-            bedrock_channel_id: config.channel_id,
-            bedrock_signing_key: signing_key,
-        })
-    }
-
-    fn bedrock_channel_id(&self) -> ChannelId {
-        self.bedrock_channel_id
-    }
-
-    fn bedrock_signing_key(&self) -> &Ed25519Key {
-        &self.bedrock_signing_key
-    }
-
-    async fn submit_inscribe_tx_to_bedrock(&self, _tx: SignedMantleTx) -> Result<()> {
-        Err(anyhow!("Mock error"))
-    }
-}
-
-#[derive(Copy, Clone)]
-pub struct MockIndexerClient;
-
-impl IndexerClientTrait for MockIndexerClient {
-    async fn new(_indexer_url: &Url) -> Result<Self> {
+impl BlockPublisherTrait for MockBlockPublisher {
+    async fn new(
+        _config: &BedrockConfig,
+        _bedrock_signing_key: Ed25519Key,
+        _resubmit_interval: Duration,
+        _initial_checkpoint: Option<SequencerCheckpoint>,
+        _on_checkpoint: CheckpointSink,
+        _on_finalized_block: FinalizedBlockSink,
+    ) -> Result<Self> {
         Ok(Self)
+    }
+
+    async fn publish_block(&self, _block: &Block) -> Result<()> {
+        Ok(())
     }
 }
