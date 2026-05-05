@@ -18,6 +18,17 @@ pub enum PrivacyPreservingAccount {
         vpk: ViewingPublicKey,
         identifier: Identifier,
     },
+    /// An owned private PDA: wallet holds the nsk/npk; account_id was derived via
+    /// `AccountId::for_private_pda`. Produces visibility mask 3.
+    PrivatePdaOwned(AccountId),
+    /// A foreign private PDA: wallet knows the recipient's npk/vpk but not their nsk.
+    /// Produces visibility mask 3 with a default (uninitialised) account.
+    PrivatePdaForeign {
+        account_id: AccountId,
+        npk: NullifierPublicKey,
+        vpk: ViewingPublicKey,
+        identifier: Identifier,
+    },
 }
 
 impl PrivacyPreservingAccount {
@@ -31,11 +42,9 @@ impl PrivacyPreservingAccount {
         matches!(
             &self,
             Self::PrivateOwned(_)
-                | Self::PrivateForeign {
-                    npk: _,
-                    vpk: _,
-                    identifier: _
-                }
+                | Self::PrivateForeign { .. }
+                | Self::PrivatePdaOwned(_)
+                | Self::PrivatePdaForeign { .. }
         )
     }
 }
@@ -105,6 +114,28 @@ impl AccountManager {
                     };
 
                     (State::Private(pre), 2)
+                }
+                PrivacyPreservingAccount::PrivatePdaOwned(account_id) => {
+                    let pre = private_acc_preparation(wallet, account_id).await?;
+                    (State::Private(pre), 3)
+                }
+                PrivacyPreservingAccount::PrivatePdaForeign {
+                    account_id,
+                    npk,
+                    vpk,
+                    identifier,
+                } => {
+                    let acc = nssa_core::account::Account::default();
+                    let auth_acc = AccountWithMetadata::new(acc, false, account_id);
+                    let pre = AccountPreparedData {
+                        nsk: None,
+                        npk,
+                        identifier,
+                        vpk,
+                        pre_state: auth_acc,
+                        proof: None,
+                    };
+                    (State::Private(pre), 3)
                 }
             };
 
@@ -235,7 +266,7 @@ async fn private_acc_preparation(
 
     // TODO: Technically we could allow unauthorized owned accounts, but currently we don't have
     // support from that in the wallet.
-    let sender_pre = AccountWithMetadata::new(from_acc.clone(), true, (&from_npk, from_identifier));
+    let sender_pre = AccountWithMetadata::new(from_acc.clone(), true, account_id);
 
     Ok(AccountPreparedData {
         nsk: Some(nsk),

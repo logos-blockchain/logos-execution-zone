@@ -22,9 +22,9 @@ pub type Scalar = [u8; 32];
 /// to reconstruct the account's [`AccountId`] on the receiver side.
 ///
 /// [`AccountId`]: crate::account::AccountId
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PrivateAccountKind {
-    Account(Identifier),
+    Regular(Identifier),
     Pda {
         program_id: ProgramId,
         seed: PdaSeed,
@@ -33,14 +33,14 @@ pub enum PrivateAccountKind {
 }
 
 impl PrivateAccountKind {
-    ///   Account(ident):                  0x00 || ident (16 LE) || [0u8; 64]
+    ///   Regular(ident):                  0x00 || ident (16 LE) || [0u8; 64]
     ///   Pda { program_id, seed, ident }: 0x01 || program_id (32 LE) || seed (32) || ident (16 LE)
     pub const HEADER_LEN: usize = 81;
 
     #[must_use]
     pub fn identifier(&self) -> Identifier {
         match self {
-            Self::Account(identifier) => *identifier,
+            Self::Regular(identifier) => *identifier,
             Self::Pda { identifier, .. } => *identifier,
         }
     }
@@ -49,7 +49,7 @@ impl PrivateAccountKind {
     pub fn to_header_bytes(&self) -> [u8; Self::HEADER_LEN] {
         let mut bytes = [0u8; Self::HEADER_LEN];
         match self {
-            Self::Account(identifier) => {
+            Self::Regular(identifier) => {
                 bytes[0] = 0x00;
                 bytes[1..17].copy_from_slice(&identifier.to_le_bytes());
                 // bytes[17..81] are zero padding
@@ -72,7 +72,7 @@ impl PrivateAccountKind {
         match bytes[0] {
             0x00 => {
                 let identifier = Identifier::from_le_bytes(bytes[1..17].try_into().unwrap());
-                Some(Self::Account(identifier))
+                Some(Self::Regular(identifier))
             }
             0x01 => {
                 let mut program_id = [0u32; 8];
@@ -208,7 +208,7 @@ mod tests {
 
         let account_ct = EncryptionScheme::encrypt(
             &account,
-            &PrivateAccountKind::Account(42),
+            &PrivateAccountKind::Regular(42),
             &secret,
             &commitment,
             0,

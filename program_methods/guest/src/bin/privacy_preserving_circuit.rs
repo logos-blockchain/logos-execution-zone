@@ -45,11 +45,11 @@ struct ExecutionState {
     /// `AccountId` entry or as an equality check against the existing one, making the rule: one
     /// `(program, seed)` → one account per tx.
     pda_family_binding: HashMap<(ProgramId, PdaSeed), AccountId>,
-    /// Map from a mask-3 `pre_state`'s position in `visibility_mask` to the npk supplied for
-    /// that position in `private_account_keys`. Built once in `derive_from_outputs` by walking
-    /// `visibility_mask` in lock-step with `private_account_keys`, used later by the claim and
-    /// caller-seeds authorization paths.
-    private_pda_npk_by_position: HashMap<usize, NullifierPublicKey>,
+    /// Map from a mask-3 `pre_state`'s position in `visibility_mask` to the (npk, identifier)
+    /// supplied for that position in `private_account_keys`. Built once in `derive_from_outputs`
+    /// by walking `visibility_mask` in lock-step with `private_account_keys`, used later by the
+    /// claim and caller-seeds authorization paths.
+    private_pda_npk_by_position: HashMap<usize, (NullifierPublicKey, Identifier)>,
 }
 
 impl ExecutionState {
@@ -64,18 +64,18 @@ impl ExecutionState {
         // pre_state order across all masks 1/2/3, so walk `visibility_mask` in lock-step. The
         // downstream `compute_circuit_output` also consumes the same iterator and its trailing
         // assertions catch an over-supply of keys; under-supply surfaces here.
-        let mut private_pda_npk_by_position: HashMap<usize, NullifierPublicKey> = HashMap::new();
+        let mut private_pda_npk_by_position: HashMap<usize, (NullifierPublicKey, Identifier)> = HashMap::new();
         {
             let mut keys_iter = private_account_keys.iter();
             for (pos, &mask) in visibility_mask.iter().enumerate() {
                 if matches!(mask, 1..=3) {
-                    let (npk, _, _) = keys_iter.next().unwrap_or_else(|| {
+                    let (npk, identifier, _) = keys_iter.next().unwrap_or_else(|| {
                         panic!(
                             "private_account_keys shorter than visibility_mask demands: no key for masked position {pos} (mask {mask})"
                         )
                     });
                     if mask == 3 {
-                        private_pda_npk_by_position.insert(pos, *npk);
+                        private_pda_npk_by_position.insert(pos, (*npk, *identifier));
                     }
                 }
             }
@@ -363,11 +363,11 @@ impl ExecutionState {
                                 );
                             }
                             Claim::Pda(seed) => {
-                                let npk = self
+                                let (npk, identifier) = self
                                 .private_pda_npk_by_position
                                 .get(&pre_state_position)
                                 .expect("private PDA pre_state must have an npk in the position map");
-                                let pda = AccountId::for_private_pda(&program_id, &seed, npk, u128::MAX);
+                                let pda = AccountId::for_private_pda(&program_id, &seed, npk, *identifier);
                                 assert_eq!(
                                     pre_account_id, pda,
                                     "Invalid private PDA claim for account {pre_account_id}"
@@ -454,7 +454,7 @@ fn assert_family_binding(
 fn resolve_authorization_and_record_bindings(
     pda_family_binding: &mut HashMap<(ProgramId, PdaSeed), AccountId>,
     private_pda_bound_positions: &mut HashMap<usize, (ProgramId, PdaSeed)>,
-    private_pda_npk_by_position: &HashMap<usize, NullifierPublicKey>,
+    private_pda_npk_by_position: &HashMap<usize, (NullifierPublicKey, Identifier)>,
     pre_account_id: AccountId,
     pre_state_position: usize,
     caller_program_id: Option<ProgramId>,
@@ -467,8 +467,8 @@ fn resolve_authorization_and_record_bindings(
                 if AccountId::for_public_pda(&caller, seed) == pre_account_id {
                     return Some((*seed, false, caller));
                 }
-                if let Some(npk) = private_pda_npk_by_position.get(&pre_state_position)
-                    && AccountId::for_private_pda(&caller, seed, npk, u128::MAX) == pre_account_id
+                if let Some((npk, identifier)) = private_pda_npk_by_position.get(&pre_state_position)
+                    && AccountId::for_private_pda(&caller, seed, npk, *identifier) == pre_account_id
                 {
                     return Some((*seed, true, caller));
                 }
@@ -608,7 +608,7 @@ fn compute_circuit_output(
                 // Encrypt and push post state
                 let encrypted_account = EncryptionScheme::encrypt(
                     &post_with_updated_nonce,
-                    &PrivateAccountKind::Account(*identifier),
+                    &PrivateAccountKind::Regular(*identifier),
                     shared_secret,
                     &commitment_post,
                     output_index,

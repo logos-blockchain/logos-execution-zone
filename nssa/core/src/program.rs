@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     BlockId, Identifier, NullifierPublicKey, Timestamp,
     account::{Account, AccountId, AccountWithMetadata},
+    encryption::PrivateAccountKind,
 };
 
 pub const DEFAULT_PROGRAM_ID: ProgramId = [0; 8];
@@ -95,6 +96,17 @@ impl AccountId {
                 .try_into()
                 .expect("Hash output must be exactly 32 bytes long"),
         )
+    }
+
+    /// Derives the [`AccountId`] for a private account from the nullifier public key and kind.
+    #[must_use]
+    pub fn for_private_account(npk: &NullifierPublicKey, kind: &PrivateAccountKind) -> Self {
+        match kind {
+            PrivateAccountKind::Regular(identifier) => Self::from((npk, *identifier)),
+            PrivateAccountKind::Pda { program_id, seed, identifier } => {
+                Self::for_private_pda(program_id, seed, npk, *identifier)
+            }
+        }
     }
 }
 

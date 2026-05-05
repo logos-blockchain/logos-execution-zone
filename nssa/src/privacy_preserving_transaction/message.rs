@@ -253,7 +253,7 @@ pub mod tests {
         let esk = [3; 32];
         let shared_secret = SharedSecretKey::new(&esk, &vpk);
         let epk = EphemeralPublicKey::from_scalar(esk);
-        let ciphertext = EncryptionScheme::encrypt(&account, &PrivateAccountKind::Account(0), &shared_secret, &commitment, 2);
+        let ciphertext = EncryptionScheme::encrypt(&account, &PrivateAccountKind::Regular(0), &shared_secret, &commitment, 2);
         let encrypted_account_data =
             EncryptedAccountData::new(ciphertext.clone(), &npk, &vpk, epk.clone());
 

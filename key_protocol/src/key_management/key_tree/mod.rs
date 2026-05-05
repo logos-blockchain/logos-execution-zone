@@ -319,6 +319,7 @@ mod tests {
     use std::{collections::HashSet, str::FromStr as _};
 
     use nssa::AccountId;
+    use nssa_core::PrivateAccountKind;
 
     use super::*;
 
@@ -532,7 +533,7 @@ mod tests {
             .get_mut(&ChainIndex::from_str("/1").unwrap())
             .unwrap();
         acc.value.1.push((
-            0,
+            PrivateAccountKind::Regular(0),
             nssa::Account {
                 balance: 2,
                 ..nssa::Account::default()
@@ -544,7 +545,7 @@ mod tests {
             .get_mut(&ChainIndex::from_str("/2").unwrap())
             .unwrap();
         acc.value.1.push((
-            0,
+            PrivateAccountKind::Regular(0),
             nssa::Account {
                 balance: 3,
                 ..nssa::Account::default()
@@ -556,7 +557,7 @@ mod tests {
             .get_mut(&ChainIndex::from_str("/0/1").unwrap())
             .unwrap();
         acc.value.1.push((
-            0,
+            PrivateAccountKind::Regular(0),
             nssa::Account {
                 balance: 5,
                 ..nssa::Account::default()
@@ -568,7 +569,7 @@ mod tests {
             .get_mut(&ChainIndex::from_str("/1/0").unwrap())
             .unwrap();
         acc.value.1.push((
-            0,
+            PrivateAccountKind::Regular(0),
             nssa::Account {
                 balance: 6,
                 ..nssa::Account::default()
