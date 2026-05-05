@@ -1,6 +1,5 @@
 use std::{ffi::c_char, path::PathBuf};
 
-use sequencer_core::indexer_client::{IndexerClient, IndexerClientTrait as _};
 use tokio::runtime::Runtime;
 
 use crate::{
@@ -9,6 +8,7 @@ use crate::{
         PointerResult,
         client::{UrlProtocol, addr_to_url},
     },
+    client::{IndexerClient, IndexerClientTrait as _},
     errors::OperationStatus,
 };
 

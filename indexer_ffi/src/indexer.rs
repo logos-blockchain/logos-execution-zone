@@ -1,8 +1,9 @@
 use std::{ffi::c_void, net::SocketAddr};
 
 use indexer_service::IndexerHandle;
-use sequencer_core::indexer_client::IndexerClient;
 use tokio::runtime::Runtime;
+
+use crate::client::IndexerClient;
 
 #[repr(C)]
 pub struct IndexerServiceFFI {

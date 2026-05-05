@@ -14,6 +14,8 @@ ignore = [
   { id = "RUSTSEC-2025-0141", reason = "`bincode` is unmaintained but continuing to use it." },
   { id = "RUSTSEC-2023-0089", reason = "atomic-polyfill is pulled transitively via risc0-zkvm; waiting on upstream fix (see https://github.com/risc0/risc0/issues/3453)" },
   { id = "RUSTSEC-2026-0097", reason = "`rand` v0.8.5 is present transitively from logos crates, modification may break integration" },
+  { id = "RUSTSEC-2026-0118", reason = "`hickory-proto` v0.25.0-alpha.5 is present transitively from logos crates, modification may break integration"},
+  { id = "RUSTSEC-2026-0119", reason = "`hickory-proto` v0.25.0-alpha.5 is present transitively from logos crates, modification may break integration"},
 ]
 yanked = "deny"
 unused-ignored-advisory = "deny"
