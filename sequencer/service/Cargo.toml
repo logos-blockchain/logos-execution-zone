@@ -14,7 +14,6 @@ mempool.workspace = true
 sequencer_core = { workspace = true, features = ["testnet"] }
 sequencer_service_protocol.workspace = true
 sequencer_service_rpc = { workspace = true, features = ["server"] }
-indexer_service_rpc = { workspace = true, features = ["client"] }
 
 clap = { workspace = true, features = ["derive", "env"] }
 anyhow.workspace = true

@@ -2,8 +2,7 @@ use std::collections::{HashMap, VecDeque};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use nssa_core::{
-    MembershipProof, NullifierPublicKey, NullifierSecretKey, PrivacyPreservingCircuitInput,
-    PrivacyPreservingCircuitOutput, SharedSecretKey,
+    InputAccountIdentity, PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput,
     account::AccountWithMetadata,
     program::{ChainedCall, InstructionData, ProgramId, ProgramOutput},
 };
@@ -63,14 +62,10 @@ impl From<Program> for ProgramWithDependencies {
 
 /// Generates a proof of the execution of a NSSA program inside the privacy preserving execution
 /// circuit.
-/// TODO: too many parameters.
 pub fn execute_and_prove(
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: InstructionData,
-    visibility_mask: Vec<u8>,
-    private_account_keys: Vec<(NullifierPublicKey, SharedSecretKey)>,
-    private_account_nsks: Vec<NullifierSecretKey>,
-    private_account_membership_proofs: Vec<Option<MembershipProof>>,
+    account_identities: Vec<InputAccountIdentity>,
     program_with_dependencies: &ProgramWithDependencies,
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), NssaError> {
     let ProgramWithDependencies {
@@ -128,10 +123,7 @@ pub fn execute_and_prove(
 
     let circuit_input = PrivacyPreservingCircuitInput {
         program_outputs,
-        visibility_mask,
-        private_account_keys,
-        private_account_nsks,
-        private_account_membership_proofs,
+        account_identities,
         program_id: program_with_dependencies.program.id(),
     };
 
@@ -186,6 +178,7 @@ mod tests {
     use nssa_core::{
         Commitment, DUMMY_COMMITMENT_HASH, EncryptionScheme, Nullifier, SharedSecretKey,
         account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
+        program::PdaSeed,
     };
 
     use super::*;
@@ -213,11 +206,8 @@ mod tests {
             AccountId::new([0; 32]),
         );
 
-        let recipient = AccountWithMetadata::new(
-            Account::default(),
-            false,
-            AccountId::from(&recipient_keys.npk()),
-        );
+        let recipient_account_id = AccountId::from((&recipient_keys.npk(), 0));
+        let recipient = AccountWithMetadata::new(Account::default(), false, recipient_account_id);
 
         let balance_to_move: u128 = 37;
 
@@ -231,7 +221,7 @@ mod tests {
         let expected_recipient_post = Account {
             program_owner: program.id(),
             balance: balance_to_move,
-            nonce: Nonce::private_account_nonce_init(&recipient_keys.npk()),
+            nonce: Nonce::private_account_nonce_init(&recipient_account_id),
             data: Data::default(),
         };
 
@@ -243,10 +233,14 @@ mod tests {
         let (output, proof) = execute_and_prove(
             vec![sender, recipient],
             Program::serialize_instruction(balance_to_move).unwrap(),
-            vec![0, 2],
-            vec![(recipient_keys.npk(), shared_secret)],
-            vec![],
-            vec![None],
+            vec![
+                InputAccountIdentity::Public,
+                InputAccountIdentity::PrivateUnauthorized {
+                    npk: recipient_keys.npk(),
+                    ssk: shared_secret,
+                    identifier: 0,
+                },
+            ],
             &Program::authenticated_transfer_program().into(),
         )
         .unwrap();
@@ -261,7 +255,7 @@ mod tests {
         assert_eq!(output.new_nullifiers.len(), 1);
         assert_eq!(output.ciphertexts.len(), 1);
 
-        let recipient_post = EncryptionScheme::decrypt(
+        let (_identifier, recipient_post) = EncryptionScheme::decrypt(
             &output.ciphertexts[0],
             &shared_secret,
             &output.new_commitments[0],
@@ -286,27 +280,24 @@ mod tests {
                 data: Data::default(),
             },
             true,
-            AccountId::from(&sender_keys.npk()),
+            AccountId::from((&sender_keys.npk(), 0)),
         );
-        let commitment_sender = Commitment::new(&sender_keys.npk(), &sender_pre.account);
+        let sender_account_id = AccountId::from((&sender_keys.npk(), 0));
+        let commitment_sender = Commitment::new(&sender_account_id, &sender_pre.account);
 
-        let recipient = AccountWithMetadata::new(
-            Account::default(),
-            false,
-            AccountId::from(&recipient_keys.npk()),
-        );
+        let recipient_account_id = AccountId::from((&recipient_keys.npk(), 0));
+        let recipient = AccountWithMetadata::new(Account::default(), false, recipient_account_id);
         let balance_to_move: u128 = 37;
 
         let mut commitment_set = CommitmentSet::with_capacity(2);
         commitment_set.extend(std::slice::from_ref(&commitment_sender));
-
         let expected_new_nullifiers = vec![
             (
                 Nullifier::for_account_update(&commitment_sender, &sender_keys.nsk),
                 commitment_set.digest(),
             ),
             (
-                Nullifier::for_account_initialization(&recipient_keys.npk()),
+                Nullifier::for_account_initialization(&recipient_account_id),
                 DUMMY_COMMITMENT_HASH,
             ),
         ];
@@ -322,12 +313,12 @@ mod tests {
         let expected_private_account_2 = Account {
             program_owner: program.id(),
             balance: balance_to_move,
-            nonce: Nonce::private_account_nonce_init(&recipient_keys.npk()),
+            nonce: Nonce::private_account_nonce_init(&recipient_account_id),
             ..Default::default()
         };
         let expected_new_commitments = vec![
-            Commitment::new(&sender_keys.npk(), &expected_private_account_1),
-            Commitment::new(&recipient_keys.npk(), &expected_private_account_2),
+            Commitment::new(&sender_account_id, &expected_private_account_1),
+            Commitment::new(&recipient_account_id, &expected_private_account_2),
         ];
 
         let esk_1 = [3; 32];
@@ -339,13 +330,21 @@ mod tests {
         let (output, proof) = execute_and_prove(
             vec![sender_pre, recipient],
             Program::serialize_instruction(balance_to_move).unwrap(),
-            vec![1, 2],
             vec![
-                (sender_keys.npk(), shared_secret_1),
-                (recipient_keys.npk(), shared_secret_2),
+                InputAccountIdentity::PrivateAuthorizedUpdate {
+                    ssk: shared_secret_1,
+                    nsk: sender_keys.nsk,
+                    membership_proof: commitment_set
+                        .get_proof_for(&commitment_sender)
+                        .expect("sender's commitment must be in the set"),
+                    identifier: 0,
+                },
+                InputAccountIdentity::PrivateUnauthorized {
+                    npk: recipient_keys.npk(),
+                    ssk: shared_secret_2,
+                    identifier: 0,
+                },
             ],
-            vec![sender_keys.nsk],
-            vec![commitment_set.get_proof_for(&commitment_sender), None],
             &program.into(),
         )
         .unwrap();
@@ -357,7 +356,7 @@ mod tests {
         assert_eq!(output.new_nullifiers, expected_new_nullifiers);
         assert_eq!(output.ciphertexts.len(), 2);
 
-        let sender_post = EncryptionScheme::decrypt(
+        let (_identifier, sender_post) = EncryptionScheme::decrypt(
             &output.ciphertexts[0],
             &shared_secret_1,
             &expected_new_commitments[0],
@@ -366,7 +365,7 @@ mod tests {
         .unwrap();
         assert_eq!(sender_post, expected_private_account_1);
 
-        let recipient_post = EncryptionScheme::decrypt(
+        let (_identifier, recipient_post) = EncryptionScheme::decrypt(
             &output.ciphertexts[1],
             &shared_secret_2,
             &expected_new_commitments[1],
@@ -382,7 +381,7 @@ mod tests {
         let pre = AccountWithMetadata::new(
             Account::default(),
             false,
-            AccountId::from(&account_keys.npk()),
+            AccountId::from((&account_keys.npk(), 0)),
         );
 
         let validity_window_chain_caller = Program::validity_window_chain_caller();
@@ -408,13 +407,116 @@ mod tests {
         let result = execute_and_prove(
             vec![pre],
             instruction,
-            vec![2],
-            vec![(account_keys.npk(), shared_secret)],
-            vec![],
-            vec![None],
+            vec![InputAccountIdentity::PrivateUnauthorized {
+                npk: account_keys.npk(),
+                ssk: shared_secret,
+                identifier: 0,
+            }],
             &program_with_deps,
         );
 
         assert!(matches!(result, Err(NssaError::CircuitProvingError(_))));
+    }
+
+    /// Group PDA deposit: creates a new PDA and transfers balance from the
+    /// counterparty. Both accounts owned by `private_pda_spender`.
+    #[test]
+    fn group_pda_deposit() {
+        let program = Program::private_pda_spender();
+        let noop = Program::noop();
+        let keys = test_private_account_keys_1();
+        let npk = keys.npk();
+        let seed = PdaSeed::new([42; 32]);
+        let shared_secret_pda = SharedSecretKey::new(&[55; 32], &keys.vpk());
+
+        // PDA (new, mask 3)
+        let pda_id = AccountId::for_private_pda(&program.id(), &seed, &npk);
+        let pda_pre = AccountWithMetadata::new(Account::default(), false, pda_id);
+
+        // Sender (mask 0, public, owned by this program, has balance)
+        let sender_id = AccountId::new([99; 32]);
+        let sender_pre = AccountWithMetadata::new(
+            Account {
+                program_owner: program.id(),
+                balance: 10000,
+                ..Account::default()
+            },
+            true,
+            sender_id,
+        );
+
+        let noop_id = noop.id();
+        let program_with_deps = ProgramWithDependencies::new(program, [(noop_id, noop)].into());
+
+        let instruction = Program::serialize_instruction((seed, noop_id, 500_u128, true)).unwrap();
+
+        // PDA is mask 3 (private PDA), sender is mask 0 (public).
+        // The noop chained call is required to establish the mask-3 (seed, npk) binding
+        // that the circuit enforces for private PDAs. Without a caller providing pda_seeds,
+        // the circuit's binding check rejects the account.
+        let result = execute_and_prove(
+            vec![pda_pre, sender_pre],
+            instruction,
+            vec![
+                InputAccountIdentity::PrivatePdaInit {
+                    npk,
+                    ssk: shared_secret_pda,
+                },
+                InputAccountIdentity::Public,
+            ],
+            &program_with_deps,
+        );
+
+        let (output, _proof) = result.expect("group PDA deposit should succeed");
+        // Only PDA (mask 3) produces a commitment; sender (mask 0) is public.
+        assert_eq!(output.new_commitments.len(), 1);
+    }
+
+    /// Group PDA spend binding: the noop chained call with `pda_seeds` establishes
+    /// the mask-3 binding for an existing-but-default PDA. Uses amount=0 because
+    /// testing with a pre-funded PDA requires a two-tx sequence with membership proofs.
+    #[test]
+    fn group_pda_spend_binding() {
+        let program = Program::private_pda_spender();
+        let noop = Program::noop();
+        let keys = test_private_account_keys_1();
+        let npk = keys.npk();
+        let seed = PdaSeed::new([42; 32]);
+        let shared_secret_pda = SharedSecretKey::new(&[55; 32], &keys.vpk());
+
+        let pda_id = AccountId::for_private_pda(&program.id(), &seed, &npk);
+        let pda_pre = AccountWithMetadata::new(Account::default(), false, pda_id);
+
+        let bob_id = AccountId::new([88; 32]);
+        let bob_pre = AccountWithMetadata::new(
+            Account {
+                program_owner: program.id(),
+                balance: 10000,
+                ..Account::default()
+            },
+            true,
+            bob_id,
+        );
+
+        let noop_id = noop.id();
+        let program_with_deps = ProgramWithDependencies::new(program, [(noop_id, noop)].into());
+
+        let instruction = Program::serialize_instruction((seed, noop_id, 0_u128, false)).unwrap();
+
+        let result = execute_and_prove(
+            vec![pda_pre, bob_pre],
+            instruction,
+            vec![
+                InputAccountIdentity::PrivatePdaInit {
+                    npk,
+                    ssk: shared_secret_pda,
+                },
+                InputAccountIdentity::Public,
+            ],
+            &program_with_deps,
+        );
+
+        let (output, _proof) = result.expect("group PDA spend binding should succeed");
+        assert_eq!(output.new_commitments.len(), 1);
     }
 }

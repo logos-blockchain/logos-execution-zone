@@ -4,6 +4,7 @@ use crate::{
     cells::shared_cells::{FirstBlockSetCell, LastBlockCell},
     indexer::indexer_cells::{
         BreakpointCellRef, LastBreakpointIdCell, LastObservedL1LibHeaderCell,
+        ZoneSdkIndexerCursorCellRef,
     },
 };
 
@@ -28,6 +29,10 @@ impl RocksDBIO {
 
     pub fn put_meta_is_first_block_set(&self) -> DbResult<()> {
         self.put(&FirstBlockSetCell(true), ())
+    }
+
+    pub fn put_zone_sdk_indexer_cursor_bytes(&self, bytes: &[u8]) -> DbResult<()> {
+        self.put(&ZoneSdkIndexerCursorCellRef(bytes), ())
     }
 
     // State

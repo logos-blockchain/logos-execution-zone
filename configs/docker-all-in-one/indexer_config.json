@@ -1,12 +1,8 @@
 {
     "home": "./indexer/service",
     "consensus_info_polling_interval": "1s",
-    "bedrock_client_config": {
-        "addr": "http://logos-blockchain-node-0:18080",
-        "backoff": {
-            "start_delay": "100ms",
-            "max_retries": 5
-        }
+    "bedrock_config": {
+        "addr": "http://logos-blockchain-node-0:18080"
     },
     "channel_id": "0101010101010101010101010101010101010101010101010101010101010101",
     "initial_accounts": [

@@ -6,7 +6,6 @@ use indexer_ffi::IndexerServiceFFI;
 use indexer_service_rpc::RpcClient as _;
 use log::{debug, error};
 use nssa::AccountId;
-use sequencer_core::indexer_client::{IndexerClient, IndexerClientTrait as _};
 use sequencer_service::SequencerHandle;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
 use tempfile::TempDir;
@@ -15,6 +14,7 @@ use wallet::WalletCore;
 
 use crate::{
     BEDROCK_SERVICE_WITH_OPEN_PORT, LOGGER, TestContextBuilder, config,
+    indexer_client::IndexerClient,
     setup::{setup_bedrock_node, setup_indexer_ffi, setup_sequencer, setup_wallet},
 };
 
@@ -85,8 +85,6 @@ impl TestContextFFI {
             .block_on(setup_sequencer(
                 sequencer_partial_config,
                 bedrock_addr,
-                // SAFETY: addr is valid if indexer_ffi is valid.
-                unsafe { indexer_ffi.addr() },
                 initial_data,
             ))
             .context("Failed to setup Sequencer")?;

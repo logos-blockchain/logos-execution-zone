@@ -37,6 +37,12 @@ impl PdaSeed {
     }
 }
 
+impl AsRef<[u8]> for PdaSeed {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
 impl AccountId {
     /// Derives an [`AccountId`] for a public PDA from the program ID and seed.
     #[must_use]
@@ -911,18 +917,6 @@ mod tests {
         let private_id = AccountId::for_private_pda(&program_id, &seed, &npk);
         let public_id = AccountId::for_public_pda(&program_id, &seed);
         assert_ne!(private_id, public_id);
-    }
-
-    /// A private PDA address differs from a standard private account address at the same `npk`,
-    /// because the private PDA formula includes `program_id` and `seed`.
-    #[test]
-    fn for_private_pda_differs_from_standard_private() {
-        let program_id: ProgramId = [1; 8];
-        let seed = PdaSeed::new([2; 32]);
-        let npk = NullifierPublicKey([3; 32]);
-        let private_pda_id = AccountId::for_private_pda(&program_id, &seed, &npk);
-        let standard_private_id = AccountId::from(&npk);
-        assert_ne!(private_pda_id, standard_private_id);
     }
 
     // ---- compute_public_authorized_pdas tests ----

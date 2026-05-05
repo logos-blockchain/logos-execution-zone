@@ -6,7 +6,6 @@ use std::{
 };
 
 use anyhow::Result;
-use bedrock_client::BackoffConfig;
 use bytesize::ByteSize;
 use common::config::BasicAuth;
 use humantime_serde;
@@ -42,8 +41,6 @@ pub struct SequencerConfig {
     pub signing_key: [u8; 32],
     /// Bedrock configuration options.
     pub bedrock_config: BedrockConfig,
-    /// Indexer RPC URL.
-    pub indexer_rpc_url: Url,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub initial_public_accounts: Option<Vec<PublicAccountPublicInitialData>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -52,9 +49,6 @@ pub struct SequencerConfig {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct BedrockConfig {
-    /// Fibonacci backoff retry strategy configuration.
-    #[serde(default)]
-    pub backoff: BackoffConfig,
     /// Bedrock channel ID.
     pub channel_id: ChannelId,
     /// Bedrock Url.

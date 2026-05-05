@@ -9,16 +9,19 @@ use indexer_service::IndexerHandle;
 use log::{debug, error};
 use nssa::{AccountId, PrivacyPreservingTransaction};
 use nssa_core::Commitment;
-use sequencer_core::indexer_client::{IndexerClient, IndexerClientTrait as _};
 use sequencer_service::SequencerHandle;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
 use tempfile::TempDir;
 use testcontainers::compose::DockerCompose;
 use wallet::WalletCore;
 
-use crate::setup::{setup_bedrock_node, setup_indexer, setup_sequencer, setup_wallet};
+use crate::{
+    indexer_client::IndexerClient,
+    setup::{setup_bedrock_node, setup_indexer, setup_sequencer, setup_wallet},
+};
 
 pub mod config;
+pub mod indexer_client;
 pub mod setup;
 pub mod test_context_ffi;
 
@@ -77,14 +80,10 @@ impl TestContext {
             .await
             .context("Failed to setup Indexer")?;
 
-        let (sequencer_handle, temp_sequencer_dir) = setup_sequencer(
-            sequencer_partial_config,
-            bedrock_addr,
-            indexer_handle.addr(),
-            &initial_data,
-        )
-        .await
-        .context("Failed to setup Sequencer")?;
+        let (sequencer_handle, temp_sequencer_dir) =
+            setup_sequencer(sequencer_partial_config, bedrock_addr, &initial_data)
+                .await
+                .context("Failed to setup Sequencer")?;
 
         let (wallet, temp_wallet_dir, wallet_password) =
             setup_wallet(sequencer_handle.addr(), &initial_data)

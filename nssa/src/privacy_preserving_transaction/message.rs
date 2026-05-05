@@ -9,6 +9,8 @@ use sha2::{Digest as _, Sha256};
 
 use crate::{AccountId, error::NssaError};
 
+const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Privacy/\x00\x00\x00\x00\x00\x00";
+
 pub type ViewTag = u8;
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -118,22 +120,34 @@ impl Message {
             timestamp_validity_window: output.timestamp_validity_window,
         })
     }
+
+    #[must_use]
+    pub fn hash(&self) -> [u8; 32] {
+        let msg = self.to_bytes();
+        let mut bytes = Vec::with_capacity(
+            PREFIX
+                .len()
+                .checked_add(msg.len())
+                .expect("length overflow"),
+        );
+        bytes.extend_from_slice(PREFIX);
+        bytes.extend_from_slice(&msg);
+
+        Sha256::digest(bytes).into()
+    }
 }
 
 #[cfg(test)]
 pub mod tests {
     use nssa_core::{
         Commitment, EncryptionScheme, Nullifier, NullifierPublicKey, SharedSecretKey,
-        account::Account,
+        account::{Account, AccountId, Nonce},
         encryption::{EphemeralPublicKey, ViewingPublicKey},
         program::{BlockValidityWindow, TimestampValidityWindow},
     };
     use sha2::{Digest as _, Sha256};
 
-    use crate::{
-        AccountId,
-        privacy_preserving_transaction::message::{EncryptedAccountData, Message},
-    };
+    use super::{EncryptedAccountData, Message, PREFIX};
 
     #[must_use]
     pub fn message_for_tests() -> Message {
@@ -154,9 +168,11 @@ pub mod tests {
 
         let encrypted_private_post_states = Vec::new();
 
-        let new_commitments = vec![Commitment::new(&npk2, &account2)];
+        let account_id2 = nssa_core::account::AccountId::from((&npk2, 0));
+        let new_commitments = vec![Commitment::new(&account_id2, &account2)];
 
-        let old_commitment = Commitment::new(&npk1, &account1);
+        let account_id1 = nssa_core::account::AccountId::from((&npk1, 0));
+        let old_commitment = Commitment::new(&account_id1, &account1);
         let new_nullifiers = vec![(
             Nullifier::for_account_update(&old_commitment, &nsk1),
             [0; 32],
@@ -175,15 +191,68 @@ pub mod tests {
     }
 
     #[test]
+    fn hash_privacy_pinned() {
+        let msg = Message {
+            public_account_ids: vec![AccountId::new([42_u8; 32])],
+            nonces: vec![Nonce(5)],
+            public_post_states: vec![],
+            encrypted_private_post_states: vec![],
+            new_commitments: vec![],
+            new_nullifiers: vec![],
+            block_validity_window: BlockValidityWindow::new_unbounded(),
+            timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
+        };
+
+        let public_account_ids_bytes: &[u8] = &[42_u8; 32];
+        let nonces_bytes: &[u8] = &[1, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        // all remaining vec fields are empty: u32 len=0
+        let empty_vec_bytes: &[u8] = &[0_u8; 4];
+        // validity windows: unbounded = {from: None (0u8), to: None (0u8)}
+        let unbounded_window_bytes: &[u8] = &[0_u8; 2];
+
+        let expected_borsh_vec: Vec<u8> = [
+            &[1_u8, 0, 0, 0], // public_account_ids
+            public_account_ids_bytes,
+            nonces_bytes,
+            empty_vec_bytes,        // public_post_state
+            empty_vec_bytes,        // encrypted_private_post_states
+            empty_vec_bytes,        // new_commitments
+            empty_vec_bytes,        // new_nullifiers
+            unbounded_window_bytes, // block_validity_window
+            unbounded_window_bytes, // timestamp_validity_window
+        ]
+        .concat();
+        let expected_borsh: &[u8] = &expected_borsh_vec;
+
+        assert_eq!(
+            borsh::to_vec(&msg).unwrap(),
+            expected_borsh,
+            "`privacy_preserving_transaction::hash()`: expected borsh order has changed"
+        );
+
+        let mut preimage = Vec::with_capacity(PREFIX.len() + expected_borsh.len());
+        preimage.extend_from_slice(PREFIX);
+        preimage.extend_from_slice(expected_borsh);
+        let expected_hash: [u8; 32] = Sha256::digest(&preimage).into();
+
+        assert_eq!(
+            msg.hash(),
+            expected_hash,
+            "`privacy_preserving_transaction::hash()`: serialization has changed"
+        );
+    }
+
+    #[test]
     fn encrypted_account_data_constructor() {
         let npk = NullifierPublicKey::from(&[1; 32]);
         let vpk = ViewingPublicKey::from_scalar([2; 32]);
         let account = Account::default();
-        let commitment = Commitment::new(&npk, &account);
+        let account_id = nssa_core::account::AccountId::from((&npk, 0));
+        let commitment = Commitment::new(&account_id, &account);
         let esk = [3; 32];
         let shared_secret = SharedSecretKey::new(&esk, &vpk);
         let epk = EphemeralPublicKey::from_scalar(esk);
-        let ciphertext = EncryptionScheme::encrypt(&account, &shared_secret, &commitment, 2);
+        let ciphertext = EncryptionScheme::encrypt(&account, 0, &shared_secret, &commitment, 2);
         let encrypted_account_data =
             EncryptedAccountData::new(ciphertext.clone(), &npk, &vpk, epk.clone());
 

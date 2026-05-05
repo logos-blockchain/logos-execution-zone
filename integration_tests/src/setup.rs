@@ -119,7 +119,6 @@ pub(crate) async fn setup_indexer(
 pub(crate) async fn setup_sequencer(
     partial: config::SequencerPartialConfig,
     bedrock_addr: SocketAddr,
-    indexer_addr: SocketAddr,
     initial_data: &config::InitialData,
 ) -> Result<(SequencerHandle, TempDir)> {
     let temp_sequencer_dir =
@@ -134,7 +133,6 @@ pub(crate) async fn setup_sequencer(
         partial,
         temp_sequencer_dir.path().to_owned(),
         bedrock_addr,
-        indexer_addr,
         initial_data,
     )
     .context("Failed to create Sequencer config")?;

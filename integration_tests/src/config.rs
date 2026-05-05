@@ -2,7 +2,7 @@ use std::{net::SocketAddr, path::PathBuf, time::Duration};
 
 use anyhow::{Context as _, Result};
 use bytesize::ByteSize;
-use indexer_service::{BackoffConfig, ChannelId, ClientConfig, IndexerConfig};
+use indexer_service::{ChannelId, ClientConfig, IndexerConfig};
 use key_protocol::key_management::KeyChain;
 use nssa::{Account, AccountId, PrivateKey, PublicKey};
 use nssa_core::{account::Data, program::DEFAULT_PROGRAM_ID};
@@ -60,11 +60,11 @@ impl InitialData {
 
         let mut private_charlie_key_chain = KeyChain::new_os_random();
         let mut private_charlie_account_id =
-            AccountId::from(&private_charlie_key_chain.nullifier_public_key);
+            AccountId::from((&private_charlie_key_chain.nullifier_public_key, 0));
 
         let mut private_david_key_chain = KeyChain::new_os_random();
         let mut private_david_account_id =
-            AccountId::from(&private_david_key_chain.nullifier_public_key);
+            AccountId::from((&private_david_key_chain.nullifier_public_key, 0));
 
         // Ensure consistent ordering
         if private_charlie_account_id > private_david_account_id {
@@ -139,11 +139,10 @@ impl InitialData {
                 })
             })
             .chain(self.private_accounts.iter().map(|(key_chain, account)| {
-                let account_id = AccountId::from(&key_chain.nullifier_public_key);
                 InitialAccountData::Private(Box::new(PrivateAccountPrivateInitialData {
-                    account_id,
                     account: account.clone(),
                     key_chain: key_chain.clone(),
+                    identifier: 0,
                 }))
             }))
             .collect()
@@ -165,35 +164,10 @@ impl std::fmt::Display for UrlProtocol {
     }
 }
 
-pub fn indexer_config(
-    bedrock_addr: SocketAddr,
-    home: PathBuf,
-    initial_data: &InitialData,
-) -> Result<IndexerConfig> {
-    Ok(IndexerConfig {
-        home,
-        consensus_info_polling_interval: Duration::from_secs(1),
-        bedrock_client_config: ClientConfig {
-            addr: addr_to_url(UrlProtocol::Http, bedrock_addr)
-                .context("Failed to convert bedrock addr to URL")?,
-            auth: None,
-            backoff: BackoffConfig {
-                start_delay: Duration::from_millis(100),
-                max_retries: 10,
-            },
-        },
-        initial_public_accounts: Some(initial_data.sequencer_initial_public_accounts()),
-        initial_private_accounts: Some(initial_data.sequencer_initial_private_accounts()),
-        signing_key: [37; 32],
-        channel_id: bedrock_channel_id(),
-    })
-}
-
 pub fn sequencer_config(
     partial: SequencerPartialConfig,
     home: PathBuf,
     bedrock_addr: SocketAddr,
-    indexer_addr: SocketAddr,
     initial_data: &InitialData,
 ) -> Result<SequencerConfig> {
     let SequencerPartialConfig {
@@ -216,17 +190,11 @@ pub fn sequencer_config(
         initial_private_accounts: Some(initial_data.sequencer_initial_private_accounts()),
         signing_key: [37; 32],
         bedrock_config: BedrockConfig {
-            backoff: BackoffConfig {
-                start_delay: Duration::from_millis(100),
-                max_retries: 5,
-            },
             channel_id: bedrock_channel_id(),
             node_url: addr_to_url(UrlProtocol::Http, bedrock_addr)
                 .context("Failed to convert bedrock addr to URL")?,
             auth: None,
         },
-        indexer_rpc_url: addr_to_url(UrlProtocol::Ws, indexer_addr)
-            .context("Failed to convert indexer addr to URL")?,
     })
 }
 
@@ -243,6 +211,26 @@ pub fn wallet_config(
         seq_block_poll_max_amount: 100,
         initial_accounts: Some(initial_data.wallet_initial_accounts()),
         basic_auth: None,
+    })
+}
+
+pub fn indexer_config(
+    bedrock_addr: SocketAddr,
+    home: PathBuf,
+    initial_data: &InitialData,
+) -> Result<IndexerConfig> {
+    Ok(IndexerConfig {
+        home,
+        consensus_info_polling_interval: Duration::from_secs(1),
+        bedrock_config: ClientConfig {
+            addr: addr_to_url(UrlProtocol::Http, bedrock_addr)
+                .context("Failed to convert bedrock addr to URL")?,
+            auth: None,
+        },
+        initial_public_accounts: Some(initial_data.sequencer_initial_public_accounts()),
+        initial_private_accounts: Some(initial_data.sequencer_initial_private_accounts()),
+        signing_key: [37; 32],
+        channel_id: bedrock_channel_id(),
     })
 }
 

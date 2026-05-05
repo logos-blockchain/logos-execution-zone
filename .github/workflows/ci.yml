@@ -225,7 +225,7 @@ jobs:
       - uses: ./.github/actions/install-risc0
 
       - name: Install just
-        run: cargo install just
+        run: cargo install --locked just
 
       - name: Build artifacts
         run: just build-artifacts
