@@ -30,6 +30,7 @@ risc0-binfmt = "3.0.2"
 
 [dev-dependencies]
 token_core.workspace = true
+authenticated_transfer_core.workspace = true
 test_program_methods.workspace = true
 
 env_logger.workspace = true

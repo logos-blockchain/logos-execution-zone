@@ -1,17 +1,20 @@
 //! Account management functions.
 
-use std::ptr;
+use std::{ffi::c_char, ptr, str::FromStr as _};
 
+use key_protocol::key_management::{key_tree::chain_index::ChainIndex, KeyChain};
 use nssa::AccountId;
+use wallet::account::{AccountIdWithPrivacy, HumanReadableAccount};
 
 use crate::{
-    block_on,
+    block_on, c_str_to_string,
     error::{print_error, WalletFfiError},
     types::{
         FfiAccount, FfiAccountList, FfiAccountListEntry, FfiBytes32, FfiPrivateAccountKeys,
         WalletHandle,
     },
     wallet::get_wallet,
+    FfiU128,
 };
 
 /// Create a new public account.
@@ -162,16 +165,12 @@ pub unsafe extern "C" fn wallet_ffi_create_private_accounts_key(
     };
 
     let chain_index = wallet.create_private_accounts_key(None);
-
-    let node = wallet
+    let key_chain = wallet
         .storage()
-        .user_data
-        .private_key_tree
-        .key_map
-        .get(&chain_index)
+        .key_chain()
+        .private_account_key_chain_by_index(&chain_index)
         .expect("Node was just inserted");
 
-    let key_chain = &node.value.0;
     let npk_bytes = key_chain.nullifier_public_key.0;
     let vpk_bytes = key_chain.viewing_public_key.to_bytes();
     let vpk_len = vpk_bytes.len();
@@ -231,40 +230,21 @@ pub unsafe extern "C" fn wallet_ffi_list_accounts(
         }
     };
 
-    let user_data = &wallet.storage().user_data;
-    let mut entries = Vec::new();
-
-    // Public accounts from default signing keys (preconfigured)
-    for account_id in user_data.default_pub_account_signing_keys.keys() {
-        entries.push(FfiAccountListEntry {
-            account_id: FfiBytes32::from_account_id(account_id),
-            is_public: true,
-        });
-    }
-
-    // Public accounts from key tree (generated)
-    for account_id in user_data.public_key_tree.account_id_map.keys() {
-        entries.push(FfiAccountListEntry {
-            account_id: FfiBytes32::from_account_id(account_id),
-            is_public: true,
-        });
-    }
-
-    // Private accounts from default accounts (preconfigured)
-    for account_id in user_data.default_user_private_accounts.keys() {
-        entries.push(FfiAccountListEntry {
-            account_id: FfiBytes32::from_account_id(account_id),
-            is_public: false,
-        });
-    }
-
-    // Private accounts from key tree (generated)
-    for account_id in user_data.private_key_tree.account_id_map.keys() {
-        entries.push(FfiAccountListEntry {
-            account_id: FfiBytes32::from_account_id(account_id),
-            is_public: false,
-        });
-    }
+    let entries = wallet
+        .storage()
+        .key_chain()
+        .account_ids()
+        .map(|(account_id, _idx)| match account_id {
+            AccountIdWithPrivacy::Public(account_id) => FfiAccountListEntry {
+                account_id: FfiBytes32::from_account_id(account_id),
+                is_public: true,
+            },
+            AccountIdWithPrivacy::Private(account_id) => FfiAccountListEntry {
+                account_id: FfiBytes32::from_account_id(account_id),
+                is_public: false,
+            },
+        })
+        .collect::<Vec<_>>();
 
     let count = entries.len();
 
@@ -505,6 +485,171 @@ pub unsafe extern "C" fn wallet_ffi_free_account_data(account: *mut FfiAccount) 
         if !account.data.is_null() && account.data_len > 0 {
             let slice = std::slice::from_raw_parts_mut(account.data.cast_mut(), account.data_len);
             drop(Box::from_raw(std::ptr::from_mut::<[u8]>(slice)));
+        }
+    }
+}
+
+/// Import a public account private key into wallet storage.
+///
+/// # Parameters
+/// - `handle`: Valid wallet handle
+/// - `private_key_hex`: Hex-encoded private key string
+///
+/// # Returns
+/// - `Success` on successful import
+/// - Error code on failure
+///
+/// # Safety
+/// - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+/// - `private_key_hex` must be a valid pointer to a null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn wallet_ffi_import_public_account(
+    handle: *mut WalletHandle,
+    private_key_hex: *const c_char,
+) -> WalletFfiError {
+    let wrapper = match get_wallet(handle) {
+        Ok(w) => w,
+        Err(e) => return e,
+    };
+
+    let private_key_hex = match c_str_to_string(private_key_hex, "private_key_hex") {
+        Ok(value) => value,
+        Err(e) => return e,
+    };
+
+    let private_key = match nssa::PrivateKey::from_str(&private_key_hex) {
+        Ok(value) => value,
+        Err(e) => {
+            print_error(format!("Invalid public account private key: {e}"));
+            return WalletFfiError::InvalidKeyValue;
+        }
+    };
+
+    let mut wallet = match wrapper.core.lock() {
+        Ok(w) => w,
+        Err(e) => {
+            print_error(format!("Failed to lock wallet: {e}"));
+            return WalletFfiError::InternalError;
+        }
+    };
+
+    wallet
+        .storage_mut()
+        .key_chain_mut()
+        .add_imported_public_account(private_key);
+
+    match wallet.store_persistent_data() {
+        Ok(()) => WalletFfiError::Success,
+        Err(e) => {
+            print_error(format!("Failed to save wallet after public import: {e}"));
+            WalletFfiError::StorageError
+        }
+    }
+}
+
+/// Import a private account keychain and account state into wallet storage.
+///
+/// # Parameters
+/// - `handle`: Valid wallet handle
+/// - `key_chain_json`: JSON-encoded `key_protocol::key_management::KeyChain`
+/// - `chain_index`: Optional chain index string (for example `/0/1`, `NULL` if unknown)
+/// - `identifier`: Identifier for this private account as little-endian u128 bytes
+/// - `account_state_json`: JSON-encoded `wallet::account::HumanReadableAccount`
+///
+/// # Returns
+/// - `Success` on successful import
+/// - Error code on failure
+///
+/// # Safety
+/// - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+/// - `key_chain_json` must be a valid pointer to a null-terminated C string
+/// - `identifier` must be a valid pointer to a `FfiU128` struct
+/// - `account_state_json` must be a valid pointer to a null-terminated C string
+#[no_mangle]
+pub unsafe extern "C" fn wallet_ffi_import_private_account(
+    handle: *mut WalletHandle,
+    key_chain_json: *const c_char,
+    chain_index: *const c_char,
+    identifier: *const FfiU128,
+    account_state_json: *const c_char,
+) -> WalletFfiError {
+    let wrapper = match get_wallet(handle) {
+        Ok(w) => w,
+        Err(e) => return e,
+    };
+
+    if identifier.is_null() {
+        print_error("Null pointer for identifier");
+        return WalletFfiError::NullPointer;
+    }
+
+    let key_chain_json = match c_str_to_string(key_chain_json, "key_chain_json") {
+        Ok(value) => value,
+        Err(e) => return e,
+    };
+
+    let account_state_json = match c_str_to_string(account_state_json, "account_state_json") {
+        Ok(value) => value,
+        Err(e) => return e,
+    };
+
+    let key_chain: KeyChain = match serde_json::from_str(&key_chain_json) {
+        Ok(value) => value,
+        Err(e) => {
+            print_error(format!("Invalid key chain JSON: {e}"));
+            return WalletFfiError::SerializationError;
+        }
+    };
+
+    let account_state: HumanReadableAccount = match serde_json::from_str(&account_state_json) {
+        Ok(value) => value,
+        Err(e) => {
+            print_error(format!("Invalid account state JSON: {e}"));
+            return WalletFfiError::SerializationError;
+        }
+    };
+
+    let account = nssa::Account::from(account_state);
+
+    let mut wallet = match wrapper.core.lock() {
+        Ok(w) => w,
+        Err(e) => {
+            print_error(format!("Failed to lock wallet: {e}"));
+            return WalletFfiError::InternalError;
+        }
+    };
+
+    let chain_index = if chain_index.is_null() {
+        None
+    } else {
+        let chain_index_path = match c_str_to_string(chain_index, "chain_index") {
+            Ok(value) => value,
+            Err(e) => return e,
+        };
+
+        let parsed_chain_index = match ChainIndex::from_str(&chain_index_path) {
+            Ok(value) => value,
+            Err(e) => {
+                print_error(format!("Invalid chain index string: {e}"));
+                return WalletFfiError::InvalidTypeConversion;
+            }
+        };
+
+        Some(parsed_chain_index)
+    };
+
+    let identifier = u128::from_le_bytes(unsafe { (*identifier).data });
+
+    wallet
+        .storage_mut()
+        .key_chain_mut()
+        .add_imported_private_account(key_chain, chain_index, identifier, account);
+
+    match wallet.store_persistent_data() {
+        Ok(()) => WalletFfiError::Success,
+        Err(e) => {
+            print_error(format!("Failed to save wallet after private import: {e}"));
+            WalletFfiError::StorageError
         }
     }
 }

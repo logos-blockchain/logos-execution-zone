@@ -25,10 +25,20 @@ impl IndexerServiceFFI {
     /// The caller must ensure that:
     /// - `self` is a valid object(contains valid pointers in all fields)
     #[must_use]
-    pub unsafe fn into_parts(self) -> (Box<IndexerHandle>, Box<Runtime>) {
-        let indexer_handle = unsafe { Box::from_raw(self.indexer_handle.cast::<IndexerHandle>()) };
-        let runtime = unsafe { Box::from_raw(self.runtime.cast::<Runtime>()) };
-        (indexer_handle, runtime)
+    pub unsafe fn into_parts(mut self) -> (Box<IndexerHandle>, Box<Runtime>) {
+        let Self {
+            indexer_handle,
+            runtime,
+        } = &mut self;
+
+        let indexer_handle_boxed = unsafe { Box::from_raw(indexer_handle.cast::<IndexerHandle>()) };
+        let runtime_boxed = unsafe { Box::from_raw(runtime.cast::<Runtime>()) };
+
+        // Assigning nulls to prevent double free on drop, since ownership is transferred to caller
+        *indexer_handle = std::ptr::null_mut();
+        *runtime = std::ptr::null_mut();
+
+        (indexer_handle_boxed, runtime_boxed)
     }
 
     /// Helper to get indexer handle addr.
@@ -74,13 +84,11 @@ impl Drop for IndexerServiceFFI {
             runtime,
         } = self;
 
-        if indexer_handle.is_null() {
-            log::error!("Attempted to drop a null indexer pointer. This is a bug");
+        if !indexer_handle.is_null() {
+            drop(unsafe { Box::from_raw(indexer_handle.cast::<IndexerHandle>()) });
         }
-        if runtime.is_null() {
-            log::error!("Attempted to drop a null tokio runtime pointer. This is a bug");
+        if !runtime.is_null() {
+            drop(unsafe { Box::from_raw(runtime.cast::<Runtime>()) });
         }
-        drop(unsafe { Box::from_raw(indexer_handle.cast::<IndexerHandle>()) });
-        drop(unsafe { Box::from_raw(runtime.cast::<Runtime>()) });
     }
 }

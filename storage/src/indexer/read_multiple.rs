@@ -12,7 +12,10 @@ impl RocksDBIO {
             before_id.saturating_sub(1)
         } else {
             // Get the latest block ID
-            self.get_meta_last_block_in_db()?
+            let Some(last) = self.get_meta_last_block_id_in_db()? else {
+                return Ok(vec![]); // No blocks in the database
+            };
+            last
         };
 
         for i in 0..limit {

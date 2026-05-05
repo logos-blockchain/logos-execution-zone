@@ -1,3 +1,5 @@
+use authenticated_transfer_core::Instruction;
+use clock_core::{CLOCK_01_PROGRAM_ACCOUNT_ID, ClockAccountData};
 use nssa_core::{
     account::{Account, AccountWithMetadata},
     program::{
@@ -8,16 +10,12 @@ use nssa_core::{
 /// Initializes a default account under the ownership of this program.
 fn initialize_account(pre_state: AccountWithMetadata) -> AccountPostState {
     let account_to_claim = AccountPostState::new_claimed(pre_state.account, Claim::Authorized);
-    let is_authorized = pre_state.is_authorized;
 
     // Continue only if the account to claim has default values
     assert!(
         account_to_claim.account() == &Account::default(),
         "Account must be uninitialized"
     );
-
-    // Continue only if the owner authorized this operation
-    assert!(is_authorized, "Account must be authorized");
 
     account_to_claim
 }
@@ -61,6 +59,39 @@ fn transfer(
     vec![sender_post, recipient_post]
 }
 
+/// Mints `balance` into a new account at genesis (`block_id` == 0).
+///
+/// Claims the target account and sets its balance in a single operation.
+fn mint(
+    target: AccountWithMetadata,
+    clock: AccountWithMetadata,
+    balance: u128,
+) -> Vec<AccountPostState> {
+    assert_eq!(
+        clock.account_id, CLOCK_01_PROGRAM_ACCOUNT_ID,
+        "Second account must be the clock account"
+    );
+
+    let clock_data = ClockAccountData::from_bytes(&clock.account.data.clone().into_inner());
+    assert_eq!(
+        clock_data.block_id, 0,
+        "Mint can only execute at genesis (block_id must be 0)"
+    );
+
+    assert!(
+        target.account == Account::default(),
+        "Target account must be uninitialized"
+    );
+
+    let mut target_post_account = target.account;
+    target_post_account.balance = balance;
+    let target_post = AccountPostState::new_claimed(target_post_account, Claim::Authorized);
+
+    let clock_post = AccountPostState::new(clock.account);
+
+    vec![target_post, clock_post]
+}
+
 /// A transfer of balance program.
 /// To be used both in public and private contexts.
 fn main() {
@@ -70,20 +101,29 @@ fn main() {
             self_program_id,
             caller_program_id,
             pre_states,
-            instruction: balance_to_move,
+            instruction,
         },
         instruction_words,
-    ) = read_nssa_inputs();
+    ) = read_nssa_inputs::<Instruction>();
 
-    let post_states = match (pre_states.as_slice(), balance_to_move) {
-        ([account_to_claim], 0) => {
-            let post = initialize_account(account_to_claim.clone());
-            vec![post]
+    let post_states = match instruction {
+        Instruction::Initialize => {
+            let [account_to_claim] = <[_; 1]>::try_from(pre_states.clone())
+                .expect("Initialize requires exactly 1 account");
+            vec![initialize_account(account_to_claim)]
         }
-        ([sender, recipient], balance_to_move) => {
-            transfer(sender.clone(), recipient.clone(), balance_to_move)
+        Instruction::Transfer {
+            amount: balance_to_move,
+        } => {
+            let [sender, recipient] = <[_; 2]>::try_from(pre_states.clone())
+                .expect("Transfer requires exactly 2 accounts");
+            transfer(sender, recipient, balance_to_move)
         }
-        _ => panic!("invalid params"),
+        Instruction::Mint { amount: balance } => {
+            let [target, clock] = <[_; 2]>::try_from(pre_states.clone())
+                .expect("Mint requires exactly 2 accounts: target, clock");
+            mint(target, clock, balance)
+        }
     };
 
     ProgramOutput::new(

@@ -63,7 +63,10 @@ fn main() {
         // Mark the receiver as authorized since it will be PDA-authorized in this chained call.
         let mut receiver_authorized = receiver_pre.clone();
         receiver_authorized.is_authorized = true;
-        let transfer_instruction = risc0_zkvm::serde::to_vec(&instruction.amount)
+        let transfer_instruction =
+            risc0_zkvm::serde::to_vec(&authenticated_transfer_core::Instruction::Transfer {
+                amount: instruction.amount,
+            })
             .expect("transfer instruction serialization");
 
         chained_calls.push(ChainedCall {

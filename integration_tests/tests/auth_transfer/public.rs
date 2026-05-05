@@ -1,15 +1,18 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use integration_tests::{TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, format_public_account_id};
+use integration_tests::{TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, public_mention};
 use log::info;
 use nssa::program::Program;
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
-use wallet::cli::{
-    Command, SubcommandReturnValue,
-    account::{AccountSubcommand, NewSubcommand},
-    programs::native_token_transfer::AuthTransferSubcommand,
+use wallet::{
+    account::Label,
+    cli::{
+        CliAccountMention, Command, SubcommandReturnValue,
+        account::{AccountSubcommand, NewSubcommand},
+        programs::native_token_transfer::AuthTransferSubcommand,
+    },
 };
 
 #[test]
@@ -17,10 +20,8 @@ async fn successful_transfer_to_existing_account() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: Some(format_public_account_id(ctx.existing_public_accounts()[0])),
-        from_label: None,
-        to: Some(format_public_account_id(ctx.existing_public_accounts()[1])),
-        to_label: None,
+        from: public_mention(ctx.existing_public_accounts()[0]),
+        to: Some(public_mention(ctx.existing_public_accounts()[1])),
         to_npk: None,
         to_vpk: None,
         to_identifier: Some(0),
@@ -67,8 +68,9 @@ pub async fn successful_transfer_to_new_account() -> Result<()> {
     let new_persistent_account_id = ctx
         .wallet()
         .storage()
-        .user_data
-        .account_ids()
+        .key_chain()
+        .public_account_ids()
+        .map(|(account_id, _)| account_id)
         .find(|acc_id| {
             *acc_id != ctx.existing_public_accounts()[0]
                 && *acc_id != ctx.existing_public_accounts()[1]
@@ -76,10 +78,8 @@ pub async fn successful_transfer_to_new_account() -> Result<()> {
         .expect("Failed to find newly created account in the wallet storage");
 
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: Some(format_public_account_id(ctx.existing_public_accounts()[0])),
-        from_label: None,
-        to: Some(format_public_account_id(new_persistent_account_id)),
-        to_label: None,
+        from: public_mention(ctx.existing_public_accounts()[0]),
+        to: Some(public_mention(new_persistent_account_id)),
         to_npk: None,
         to_vpk: None,
         to_identifier: Some(0),
@@ -115,10 +115,8 @@ async fn failed_transfer_with_insufficient_balance() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: Some(format_public_account_id(ctx.existing_public_accounts()[0])),
-        from_label: None,
-        to: Some(format_public_account_id(ctx.existing_public_accounts()[1])),
-        to_label: None,
+        from: public_mention(ctx.existing_public_accounts()[0]),
+        to: Some(public_mention(ctx.existing_public_accounts()[1])),
         to_npk: None,
         to_vpk: None,
         to_identifier: Some(0),
@@ -156,10 +154,8 @@ async fn two_consecutive_successful_transfers() -> Result<()> {
 
     // First transfer
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: Some(format_public_account_id(ctx.existing_public_accounts()[0])),
-        from_label: None,
-        to: Some(format_public_account_id(ctx.existing_public_accounts()[1])),
-        to_label: None,
+        from: public_mention(ctx.existing_public_accounts()[0]),
+        to: Some(public_mention(ctx.existing_public_accounts()[1])),
         to_npk: None,
         to_vpk: None,
         to_identifier: Some(0),
@@ -191,10 +187,8 @@ async fn two_consecutive_successful_transfers() -> Result<()> {
 
     // Second transfer
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: Some(format_public_account_id(ctx.existing_public_accounts()[0])),
-        from_label: None,
-        to: Some(format_public_account_id(ctx.existing_public_accounts()[1])),
-        to_label: None,
+        from: public_mention(ctx.existing_public_accounts()[0]),
+        to: Some(public_mention(ctx.existing_public_accounts()[1])),
         to_npk: None,
         to_vpk: None,
         to_identifier: Some(0),
@@ -241,8 +235,7 @@ async fn initialize_public_account() -> Result<()> {
     };
 
     let command = Command::AuthTransfer(AuthTransferSubcommand::Init {
-        account_id: Some(format_public_account_id(account_id)),
-        account_label: None,
+        account_id: public_mention(account_id),
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
@@ -267,20 +260,17 @@ async fn successful_transfer_using_from_label() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
     // Assign a label to the sender account
-    let label = "sender-label".to_owned();
+    let label = Label::new("sender-label");
     let command = Command::Account(AccountSubcommand::Label {
-        account_id: Some(format_public_account_id(ctx.existing_public_accounts()[0])),
-        account_label: None,
+        account_id: public_mention(ctx.existing_public_accounts()[0]),
         label: label.clone(),
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
     // Send using the label instead of account ID
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: None,
-        from_label: Some(label),
-        to: Some(format_public_account_id(ctx.existing_public_accounts()[1])),
-        to_label: None,
+        from: CliAccountMention::Label(label),
+        to: Some(public_mention(ctx.existing_public_accounts()[1])),
         to_npk: None,
         to_vpk: None,
         to_identifier: Some(0),
@@ -315,20 +305,17 @@ async fn successful_transfer_using_to_label() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
     // Assign a label to the receiver account
-    let label = "receiver-label".to_owned();
+    let label = Label::new("receiver-label");
     let command = Command::Account(AccountSubcommand::Label {
-        account_id: Some(format_public_account_id(ctx.existing_public_accounts()[1])),
-        account_label: None,
+        account_id: public_mention(ctx.existing_public_accounts()[1]),
         label: label.clone(),
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
     // Send using the label for the recipient
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: Some(format_public_account_id(ctx.existing_public_accounts()[0])),
-        from_label: None,
-        to: None,
-        to_label: Some(label),
+        from: public_mention(ctx.existing_public_accounts()[0]),
+        to: Some(CliAccountMention::Label(label)),
         to_npk: None,
         to_vpk: None,
         to_identifier: Some(0),

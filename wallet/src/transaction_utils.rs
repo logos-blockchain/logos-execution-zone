@@ -30,7 +30,7 @@ impl WalletCore {
     ) -> Result<AccountPreparedData, ExecutionFailureKind> {
         let Some((from_keys, from_acc)) = self
             .storage
-            .user_data
+            .key_chain()
             .get_private_account(&account_id)
             .cloned()
         else {
@@ -102,8 +102,7 @@ impl WalletCore {
         let eph_holder_to = EphemeralKeyHolder::new(&to_npk);
         let shared_secret_to = eph_holder_to.calculate_shared_secret_sender(&to_vpk);
 
-        let (output, proof) = circuit::execute_and_prove(
-            &[sender_pre, recipient_pre],
+        let (output, proof) = circuit::execute_and_prove(&[sender_pre, recipient_pre], false,
             &instruction_data,
             &[1, 1],
             &produce_random_nonces(2),
@@ -179,8 +178,7 @@ impl WalletCore {
         let eph_holder_to = EphemeralKeyHolder::new(&to_npk);
         let shared_secret_to = eph_holder_to.calculate_shared_secret_sender(&to_vpk);
 
-        let (output, proof) = circuit::execute_and_prove(
-            &[sender_pre, recipient_pre],
+        let (output, proof) = circuit::execute_and_prove(&[sender_pre, recipient_pre], false,
             &instruction_data,
             &[1, 2],
             &produce_random_nonces(2),
@@ -249,8 +247,7 @@ impl WalletCore {
         let shared_secret_from = eph_holder.calculate_shared_secret_sender(&from_vpk);
         let shared_secret_to = eph_holder.calculate_shared_secret_sender(&to_vpk);
 
-        let (output, proof) = circuit::execute_and_prove(
-            &[sender_pre, recipient_pre],
+        let (output, proof) = circuit::execute_and_prove(&[sender_pre, recipient_pre], false,
             &instruction_data,
             &[1, 2],
             &produce_random_nonces(2),
@@ -319,8 +316,7 @@ impl WalletCore {
         let eph_holder = EphemeralKeyHolder::new(&from_npk);
         let shared_secret = eph_holder.calculate_shared_secret_sender(&from_vpk);
 
-        let (output, proof) = circuit::execute_and_prove(
-            &[sender_pre, recipient_pre],
+        let (output, proof) = circuit::execute_and_prove(&[sender_pre, recipient_pre], false,
             &instruction_data,
             &[1, 0],
             &produce_random_nonces(1),
@@ -380,8 +376,7 @@ impl WalletCore {
         let eph_holder = EphemeralKeyHolder::new(&to_npk);
         let shared_secret = eph_holder.calculate_shared_secret_sender(&to_vpk);
 
-        let (output, proof) = circuit::execute_and_prove(
-            &[sender_pre, recipient_pre],
+        let (output, proof) = circuit::execute_and_prove(&[sender_pre, recipient_pre], false,
             &instruction_data,
             &[0, 1],
             &produce_random_nonces(1),
@@ -403,7 +398,7 @@ impl WalletCore {
         )
         .unwrap();
 
-        let signing_key = self.storage.user_data.get_pub_account_signing_key(&from);
+        let signing_key = self.storage.key_chain().get_pub_account_signing_key(&from);
 
         let Some(signing_key) = signing_key else {
             return Err(ExecutionFailureKind::KeyNotFoundError);
@@ -446,8 +441,7 @@ impl WalletCore {
         let eph_holder = EphemeralKeyHolder::new(&to_npk);
         let shared_secret = eph_holder.calculate_shared_secret_sender(&to_vpk);
 
-        let (output, proof) = circuit::execute_and_prove(
-            &[sender_pre, recipient_pre],
+        let (output, proof) = circuit::execute_and_prove(&[sender_pre, recipient_pre], false,
             &instruction_data,
             &[0, 2],
             &produce_random_nonces(1),
@@ -469,7 +463,7 @@ impl WalletCore {
         )
         .unwrap();
 
-        let signing_key = self.storage.user_data.get_pub_account_signing_key(&from);
+        let signing_key = self.storage.key_chain().get_pub_account_signing_key(&from);
 
         let Some(signing_key) = signing_key else {
             return Err(ExecutionFailureKind::KeyNotFoundError);
@@ -508,8 +502,7 @@ impl WalletCore {
         let eph_holder = EphemeralKeyHolder::new(&to_npk);
         let shared_secret = eph_holder.calculate_shared_secret_sender(&to_vpk);
 
-        let (output, proof) = circuit::execute_and_prove(
-            &[sender_pre, recipient_pre],
+        let (output, proof) = circuit::execute_and_prove(&[sender_pre, recipient_pre], false,
             &instruction_data,
             &[0, 2],
             &produce_random_nonces(1),
@@ -531,7 +524,7 @@ impl WalletCore {
         )
         .unwrap();
 
-        let signing_key = self.storage.user_data.get_pub_account_signing_key(&from);
+        let signing_key = self.storage.key_chain().get_pub_account_signing_key(&from);
 
         let Some(signing_key) = signing_key else {
             return Err(ExecutionFailureKind::KeyNotFoundError);
@@ -560,9 +553,7 @@ impl WalletCore {
 
         let instruction: u128 = 0;
 
-        let (output, proof) = circuit::execute_and_prove(
-            &[sender_pre],
-            &Program::serialize_instruction(instruction).unwrap(),
+        let (output, proof) = circuit::execute_and_prove(&[sender_pre], &Program::serialize_instruction(instruction).unwrap(), false,
             &[2],
             &produce_random_nonces(1),
             &[(from_npk, shared_secret_from.clone())],

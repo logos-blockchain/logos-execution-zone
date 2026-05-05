@@ -86,7 +86,7 @@ pub async fn get_block_by_id(block_id: BlockId) -> Result<Block, ServerFnError> 
 
 /// Get latest block ID
 #[server]
-pub async fn get_latest_block_id() -> Result<BlockId, ServerFnError> {
+pub async fn get_latest_block_id() -> Result<Option<BlockId>, ServerFnError> {
     use indexer_service_rpc::RpcClient as _;
     let client = expect_context::<IndexerRpcClient>();
     client

@@ -1,15 +1,17 @@
-use std::{io::Write as _, path::PathBuf, str::FromStr as _};
+use std::{io::Write as _, path::PathBuf, str::FromStr};
 
 use anyhow::{Context as _, Result};
 use bip39::Mnemonic;
 use clap::{Parser, Subcommand};
 use common::{HashType, transaction::NSSATransaction};
+use derive_more::Display;
 use futures::TryFutureExt as _;
 use nssa::{ProgramDeploymentTransaction, program::Program};
 use sequencer_service_rpc::RpcClient as _;
 
 use crate::{
     WalletCore,
+    account::{AccountIdWithPrivacy, Label},
     cli::{
         account::AccountSubcommand,
         chain::ChainSubcommand,
@@ -20,6 +22,7 @@ use crate::{
             token::TokenProgramAgnosticSubcommand,
         },
     },
+    storage::Storage,
 };
 
 pub mod account;
@@ -102,6 +105,41 @@ pub enum SubcommandReturnValue {
     Account(nssa::Account),
     Empty,
     SyncedToBlock(u64),
+}
+
+#[derive(Debug, Display, Clone, PartialEq, Eq, Hash)]
+#[display("{_0}")]
+pub enum CliAccountMention {
+    Id(AccountIdWithPrivacy),
+    Label(Label),
+}
+
+impl CliAccountMention {
+    pub fn resolve(&self, storage: &Storage) -> Result<AccountIdWithPrivacy> {
+        match self {
+            Self::Id(account_id) => Ok(*account_id),
+            Self::Label(label) => storage
+                .resolve_label(label)
+                .ok_or_else(|| anyhow::anyhow!("No account found for label `{label}`")),
+        }
+    }
+}
+
+impl FromStr for CliAccountMention {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        AccountIdWithPrivacy::from_str(s).map_or_else(
+            |_| Ok(Self::Label(Label::new(s.to_owned()))),
+            |account_id| Ok(Self::Id(account_id)),
+        )
+    }
+}
+
+impl From<Label> for CliAccountMention {
+    fn from(label: Label) -> Self {
+        Self::Label(label)
+    }
 }
 
 pub async fn execute_subcommand(
@@ -197,9 +235,7 @@ pub async fn execute_subcommand(
 
 pub async fn execute_continuous_run(wallet_core: &mut WalletCore) -> Result<()> {
     loop {
-        let latest_block_num = wallet_core.sequencer_client.get_last_block_id().await?;
-        wallet_core.sync_to_block(latest_block_num).await?;
-
+        wallet_core.sync_to_latest_block().await?;
         tokio::time::sleep(wallet_core.config().seq_poll_timeout).await;
     }
 }
@@ -227,25 +263,20 @@ pub fn read_mnemonic_from_stdin() -> Result<Mnemonic> {
 pub async fn execute_keys_restoration(wallet_core: &mut WalletCore, depth: u32) -> Result<()> {
     wallet_core
         .storage
-        .user_data
-        .public_key_tree
-        .generate_tree_for_depth(depth);
+        .key_chain_mut()
+        .generate_trees_for_depth(depth);
 
-    println!("Public tree generated");
+    println!(
+        "Public tree generated\n\
+         Private tree generated"
+    );
 
-    wallet_core
-        .storage
-        .user_data
-        .private_key_tree
-        .generate_tree_for_depth(depth);
-
-    println!("Private tree generated");
+    wallet_core.sync_to_latest_block().await?;
 
     wallet_core
         .storage
-        .user_data
-        .public_key_tree
-        .cleanup_tree_remove_uninit_layered(depth, |account_id| {
+        .key_chain_mut()
+        .cleanup_trees_remove_uninit_layered(depth, |account_id| {
             wallet_core
                 .sequencer_client
                 .get_account(account_id)
@@ -253,25 +284,12 @@ pub async fn execute_keys_restoration(wallet_core: &mut WalletCore, depth: u32) 
         })
         .await?;
 
-    println!("Public tree cleaned up");
+    println!(
+        "Public tree cleaned up\n\
+         Private tree cleaned up"
+    );
 
-    let last_block = wallet_core.sequencer_client.get_last_block_id().await?;
-
-    println!("Last block is {last_block}");
-
-    wallet_core.sync_to_block(last_block).await?;
-
-    println!("Private tree clean up start");
-
-    wallet_core
-        .storage
-        .user_data
-        .private_key_tree
-        .cleanup_tree_remove_uninit_layered(depth);
-
-    println!("Private tree cleaned up");
-
-    wallet_core.store_persistent_data().await?;
+    wallet_core.store_persistent_data()?;
 
     Ok(())
 }

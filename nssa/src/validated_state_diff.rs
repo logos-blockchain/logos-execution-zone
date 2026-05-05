@@ -1,14 +1,14 @@
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, HashSet},
     hash::Hash,
 };
 
-use log::debug;
 use nssa_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, Timestamp,
     account::{Account, AccountId, AccountWithMetadata},
     program::{
-        ChainedCall, Claim, DEFAULT_PROGRAM_ID, compute_public_authorized_pdas, validate_execution,
+        ChainedCall, Claim, DEFAULT_PROGRAM_ID, ProgramId, ProgramOutput,
+        compute_public_authorized_pdas, validate_execution,
     },
 };
 
@@ -45,237 +45,11 @@ impl ValidatedStateDiff {
         block_id: BlockId,
         timestamp: Timestamp,
     ) -> Result<Self, NssaError> {
-        let message = tx.message();
-        let witness_set = tx.witness_set();
-
-        // All account_ids must be different
-        ensure!(
-            message.account_ids.iter().collect::<HashSet<_>>().len() == message.account_ids.len(),
-            NssaError::InvalidInput("Duplicate account_ids found in message".into(),)
-        );
-
-        // Check exactly one nonce is provided for each signature
-        ensure!(
-            message.nonces.len() == witness_set.signatures_and_public_keys.len(),
-            NssaError::InvalidInput(
-                "Mismatch between number of nonces and signatures/public keys".into(),
-            )
-        );
-
-        // Check the signatures are valid
-        ensure!(
-            witness_set.is_valid_for(message),
-            NssaError::InvalidInput("Invalid signature for given message and public key".into())
-        );
-
-        let signer_account_ids = tx.signer_account_ids();
-        // Check nonces corresponds to the current nonces on the public state.
-        for (account_id, nonce) in signer_account_ids.iter().zip(&message.nonces) {
-            let current_nonce = state.get_account_by_id(*account_id).nonce;
-            ensure!(
-                current_nonce == *nonce,
-                NssaError::InvalidInput("Nonce mismatch".into())
-            );
-        }
-
-        // Build pre_states for execution
-        let input_pre_states: Vec<_> = message
-            .account_ids
-            .iter()
-            .map(|account_id| {
-                AccountWithMetadata::new(
-                    state.get_account_by_id(*account_id),
-                    signer_account_ids.contains(account_id),
-                    *account_id,
-                )
-            })
-            .collect();
-
-        let mut state_diff: HashMap<AccountId, Account> = HashMap::new();
-
-        let initial_call = ChainedCall {
-            program_id: message.program_id,
-            instruction_data: message.instruction_data.clone(),
-            pre_states: input_pre_states,
-            pda_seeds: vec![],
-        };
-
-        let mut chained_calls = VecDeque::from_iter([(initial_call, None)]);
-        let mut chain_calls_counter = 0;
-
-        while let Some((chained_call, caller_program_id)) = chained_calls.pop_front() {
-            ensure!(
-                chain_calls_counter <= MAX_NUMBER_CHAINED_CALLS,
-                NssaError::MaxChainedCallsDepthExceeded
-            );
-
-            // Check that the `program_id` corresponds to a deployed program
-            let Some(program) = state.programs().get(&chained_call.program_id) else {
-                return Err(NssaError::InvalidInput("Unknown program".into()));
-            };
-
-            debug!(
-                "Program {:?} pre_states: {:?}, instruction_data: {:?}",
-                chained_call.program_id, chained_call.pre_states, chained_call.instruction_data
-            );
-            let mut program_output = program.execute(
-                caller_program_id,
-                &chained_call.pre_states,
-                &chained_call.instruction_data,
-            )?;
-            debug!(
-                "Program {:?} output: {:?}",
-                chained_call.program_id, program_output
-            );
-
-            let authorized_pdas =
-                compute_public_authorized_pdas(caller_program_id, &chained_call.pda_seeds);
-
-            let is_authorized = |account_id: &AccountId| {
-                signer_account_ids.contains(account_id) || authorized_pdas.contains(account_id)
-            };
-
-            for pre in &program_output.pre_states {
-                let account_id = pre.account_id;
-                // Check that the program output pre_states coincide with the values in the public
-                // state or with any modifications to those values during the chain of calls.
-                let expected_pre = state_diff
-                    .get(&account_id)
-                    .cloned()
-                    .unwrap_or_else(|| state.get_account_by_id(account_id));
-                ensure!(
-                    pre.account == expected_pre,
-                    InvalidProgramBehaviorError::InconsistentAccountPreState {
-                        account_id,
-                        expected: Box::new(expected_pre),
-                        actual: Box::new(pre.account.clone())
-                    }
-                );
-
-                // Check that authorization flags are consistent with the provided ones or
-                // authorized by program through the PDA mechanism
-                let expected_is_authorized = is_authorized(&account_id);
-                ensure!(
-                    pre.is_authorized == expected_is_authorized,
-                    InvalidProgramBehaviorError::InconsistentAccountAuthorization {
-                        account_id,
-                        expected_authorization: expected_is_authorized,
-                        actual_authorization: pre.is_authorized
-                    }
-                );
-            }
-
-            // Verify that the program output's self_program_id matches the expected program ID.
-            ensure!(
-                program_output.self_program_id == chained_call.program_id,
-                InvalidProgramBehaviorError::MismatchedProgramId {
-                    expected: chained_call.program_id,
-                    actual: program_output.self_program_id
-                }
-            );
-
-            // Verify that the program output's caller_program_id matches the actual caller.
-            ensure!(
-                program_output.caller_program_id == caller_program_id,
-                InvalidProgramBehaviorError::MismatchedCallerProgramId {
-                    expected: caller_program_id,
-                    actual: program_output.caller_program_id,
-                }
-            );
-
-            // Verify execution corresponds to a well-behaved program.
-            // See the # Programs section for the definition of the `validate_execution` method.
-            validate_execution(
-                &program_output.pre_states,
-                &program_output.post_states,
-                chained_call.program_id,
-            )
-            .map_err(InvalidProgramBehaviorError::ExecutionValidationFailed)?;
-
-            // Verify validity window
-            ensure!(
-                program_output.block_validity_window.is_valid_for(block_id)
-                    && program_output
-                        .timestamp_validity_window
-                        .is_valid_for(timestamp),
-                NssaError::OutOfValidityWindow
-            );
-
-            for (i, post) in program_output.post_states.iter_mut().enumerate() {
-                let Some(claim) = post.required_claim() else {
-                    continue;
-                };
-                let account_id = program_output.pre_states[i].account_id;
-
-                // The invoked program can only claim accounts with default program id.
-                ensure!(
-                    post.account().program_owner == DEFAULT_PROGRAM_ID,
-                    InvalidProgramBehaviorError::ClaimedNonDefaultAccount { account_id }
-                );
-
-                match claim {
-                    Claim::Authorized => {
-                        // The program can only claim accounts that were authorized by the signer.
-                        ensure!(
-                            is_authorized(&account_id),
-                            InvalidProgramBehaviorError::ClaimedUnauthorizedAccount { account_id }
-                        );
-                    }
-                    Claim::Pda(seed) => {
-                        // The program can only claim accounts that correspond to the PDAs it is
-                        // authorized to claim. The public-execution path only sees public
-                        // accounts, so the public-PDA derivation is the correct formula here.
-                        let pda = AccountId::for_public_pda(&chained_call.program_id, &seed);
-                        ensure!(
-                            account_id == pda,
-                            InvalidProgramBehaviorError::MismatchedPdaClaim {
-                                expected: pda,
-                                actual: account_id
-                            }
-                        );
-                    }
-                }
-
-                post.account_mut().program_owner = chained_call.program_id;
-            }
-
-            // Update the state diff
-            for (pre, post) in program_output
-                .pre_states
-                .iter()
-                .zip(program_output.post_states.iter())
-            {
-                state_diff.insert(pre.account_id, post.account().clone());
-            }
-
-            for new_call in program_output.chained_calls.into_iter().rev() {
-                chained_calls.push_front((new_call, Some(chained_call.program_id)));
-            }
-
-            chain_calls_counter = chain_calls_counter
-                .checked_add(1)
-                .expect("we check the max depth at the beginning of the loop");
-        }
-
-        // Check that all modified uninitialized accounts where claimed
-        for (account_id, post) in state_diff.iter().filter_map(|(account_id, post)| {
-            let pre = state.get_account_by_id(*account_id);
-            if pre.program_owner != DEFAULT_PROGRAM_ID {
-                return None;
-            }
-            if pre == *post {
-                return None;
-            }
-            Some((*account_id, post))
-        }) {
-            ensure!(
-                post.program_owner != DEFAULT_PROGRAM_ID,
-                InvalidProgramBehaviorError::DefaultAccountModifiedWithoutClaim { account_id }
-            );
-        }
+        let validator = PublicTransactionValidator::new(tx, state, block_id, timestamp);
+        let state_diff = crate::public_transaction::execute(validator, tx, state)?;
 
         Ok(Self(StateDiff {
-            signer_account_ids,
+            signer_account_ids: tx.signer_account_ids(),
             public_diff: state_diff,
             new_commitments: vec![],
             new_nullifiers: vec![],
@@ -293,63 +67,62 @@ impl ValidatedStateDiff {
         let witness_set = &tx.witness_set;
 
         // 1. Commitments or nullifiers are non empty
-        if message.new_commitments.is_empty() && message.new_nullifiers.is_empty() {
-            return Err(NssaError::InvalidInput(
+        ensure!(
+            !message.new_commitments.is_empty() || !message.new_nullifiers.is_empty(),
+            NssaError::InvalidInput(
                 "Empty commitments and empty nullifiers found in message".into(),
-            ));
-        }
+            )
+        );
 
         // 2. Check there are no duplicate account_ids in the public_account_ids list.
-        if n_unique(&message.public_account_ids) != message.public_account_ids.len() {
-            return Err(NssaError::InvalidInput(
-                "Duplicate account_ids found in message".into(),
-            ));
-        }
+        ensure!(
+            n_unique(&message.public_account_ids) == message.public_account_ids.len(),
+            NssaError::InvalidInput("Duplicate account_ids found in message".into())
+        );
 
         // Check there are no duplicate nullifiers in the new_nullifiers list
-        if n_unique(&message.new_nullifiers) != message.new_nullifiers.len() {
-            return Err(NssaError::InvalidInput(
-                "Duplicate nullifiers found in message".into(),
-            ));
-        }
+        ensure!(
+            n_unique(&message.new_nullifiers) == message.new_nullifiers.len(),
+            NssaError::InvalidInput("Duplicate nullifiers found in message".into())
+        );
 
         // Check there are no duplicate commitments in the new_commitments list
-        if n_unique(&message.new_commitments) != message.new_commitments.len() {
-            return Err(NssaError::InvalidInput(
-                "Duplicate commitments found in message".into(),
-            ));
-        }
+        ensure!(
+            n_unique(&message.new_commitments) == message.new_commitments.len(),
+            NssaError::InvalidInput("Duplicate commitments found in message".into())
+        );
 
         // 3. Nonce checks and Valid signatures
         // Check exactly one nonce is provided for each signature
-        if message.nonces.len() != witness_set.signatures_and_public_keys.len() {
-            return Err(NssaError::InvalidInput(
+        ensure!(
+            message.nonces.len() == witness_set.signatures_and_public_keys.len(),
+            NssaError::InvalidInput(
                 "Mismatch between number of nonces and signatures/public keys".into(),
-            ));
-        }
+            )
+        );
 
         // Check the signatures are valid
-        if !witness_set.signatures_are_valid_for(message) {
-            return Err(NssaError::InvalidInput(
-                "Invalid signature for given message and public key".into(),
-            ));
-        }
+        ensure!(
+            witness_set.signatures_are_valid_for(message),
+            NssaError::InvalidInput("Invalid signature for given message and public key".into())
+        );
 
         let signer_account_ids = tx.signer_account_ids();
         // Check nonces corresponds to the current nonces on the public state.
         for (account_id, nonce) in signer_account_ids.iter().zip(&message.nonces) {
             let current_nonce = state.get_account_by_id(*account_id).nonce;
-            if current_nonce != *nonce {
-                return Err(NssaError::InvalidInput("Nonce mismatch".into()));
-            }
+            ensure!(
+                current_nonce == *nonce,
+                NssaError::InvalidInput("Nonce mismatch".into())
+            );
         }
 
         // Verify validity window
-        if !message.block_validity_window.is_valid_for(block_id)
-            || !message.timestamp_validity_window.is_valid_for(timestamp)
-        {
-            return Err(NssaError::OutOfValidityWindow);
-        }
+        ensure!(
+            message.block_validity_window.is_valid_for(block_id)
+                && message.timestamp_validity_window.is_valid_for(timestamp),
+            NssaError::OutOfValidityWindow
+        );
 
         // Build pre_states for proof verification
         let public_pre_states: Vec<_> = message
@@ -417,6 +190,22 @@ impl ValidatedStateDiff {
         }))
     }
 
+    pub fn from_public_genesis_transaction(
+        tx: &PublicTransaction,
+        state: &V03State,
+    ) -> Result<Self, NssaError> {
+        let validator = GenesisPublicTransactionValidator;
+        let state_diff = crate::public_transaction::execute(validator, tx, state)?;
+
+        Ok(Self(StateDiff {
+            signer_account_ids: tx.signer_account_ids(),
+            public_diff: state_diff,
+            new_commitments: vec![],
+            new_nullifiers: vec![],
+            program: None,
+        }))
+    }
+
     /// Returns the public account changes produced by this transaction.
     ///
     /// Used by callers (e.g. the sequencer) to inspect the diff before committing it, for example
@@ -428,6 +217,256 @@ impl ValidatedStateDiff {
 
     pub(crate) fn into_state_diff(self) -> StateDiff {
         self.0
+    }
+}
+
+pub struct PublicTransactionValidator<'tx, 'state> {
+    tx: &'tx PublicTransaction,
+    state: &'state V03State,
+    block_id: BlockId,
+    timestamp: Timestamp,
+    chain_calls_counter: usize,
+}
+
+impl<'tx, 'state> PublicTransactionValidator<'tx, 'state> {
+    pub const fn new(
+        tx: &'tx PublicTransaction,
+        state: &'state V03State,
+        block_id: BlockId,
+        timestamp: Timestamp,
+    ) -> Self {
+        Self {
+            tx,
+            state,
+            block_id,
+            timestamp,
+            chain_calls_counter: 0,
+        }
+    }
+}
+
+impl crate::public_transaction::Validator for PublicTransactionValidator<'_, '_> {
+    fn validate_pre_execution(&mut self) -> Result<(), NssaError> {
+        let message = self.tx.message();
+        let witness_set = self.tx.witness_set();
+
+        // All account_ids must be different
+        ensure!(
+            message.account_ids.iter().collect::<HashSet<_>>().len() == message.account_ids.len(),
+            NssaError::InvalidInput("Duplicate account_ids found in message".into(),)
+        );
+
+        // Check exactly one nonce is provided for each signature
+        ensure!(
+            message.nonces.len() == witness_set.signatures_and_public_keys.len(),
+            NssaError::InvalidInput(
+                "Mismatch between number of nonces and signatures/public keys".into(),
+            )
+        );
+
+        // Check the signatures are valid
+        ensure!(
+            witness_set.is_valid_for(message),
+            NssaError::InvalidInput("Invalid signature for given message and public key".into())
+        );
+
+        let signer_account_ids = self.tx.signer_account_ids();
+        // Check nonces corresponds to the current nonces on the public state.
+        for (account_id, nonce) in signer_account_ids.iter().zip(&message.nonces) {
+            let current_nonce = self.state.get_account_by_id(*account_id).nonce;
+            ensure!(
+                current_nonce == *nonce,
+                NssaError::InvalidInput("Nonce mismatch".into())
+            );
+        }
+
+        Ok(())
+    }
+
+    fn on_chained_call(&mut self) -> Result<(), NssaError> {
+        self.chain_calls_counter = self
+            .chain_calls_counter
+            .checked_add(1)
+            .ok_or(NssaError::MaxChainedCallsDepthExceeded)?;
+        ensure!(
+            self.chain_calls_counter <= MAX_NUMBER_CHAINED_CALLS,
+            NssaError::MaxChainedCallsDepthExceeded
+        );
+        Ok(())
+    }
+
+    fn validate_output(
+        &mut self,
+        state_diff: &HashMap<AccountId, Account>,
+        caller_program_id: Option<ProgramId>,
+        chained_call: &ChainedCall,
+        program_output: &ProgramOutput,
+    ) -> Result<(), NssaError> {
+        let authorized_pdas =
+            compute_public_authorized_pdas(caller_program_id, &chained_call.pda_seeds);
+
+        let is_authorized = |account_id: &AccountId| {
+            self.tx.signer_account_ids().contains(account_id)
+                || authorized_pdas.contains(account_id)
+        };
+
+        for pre in &program_output.pre_states {
+            let account_id = pre.account_id;
+            // Check that the program output pre_states coincide with the values in the public
+            // state or with any modifications to those values during the chain of calls.
+            let expected_pre = state_diff
+                .get(&account_id)
+                .cloned()
+                .unwrap_or_else(|| self.state.get_account_by_id(account_id));
+            ensure!(
+                pre.account == expected_pre,
+                InvalidProgramBehaviorError::InconsistentAccountPreState {
+                    account_id,
+                    expected: Box::new(expected_pre),
+                    actual: Box::new(pre.account.clone())
+                }
+            );
+
+            // Check that authorization flags are consistent with the provided ones or
+            // authorized by program through the PDA mechanism
+            let expected_is_authorized = is_authorized(&account_id);
+            ensure!(
+                pre.is_authorized == expected_is_authorized,
+                InvalidProgramBehaviorError::InconsistentAccountAuthorization {
+                    account_id,
+                    expected_authorization: expected_is_authorized,
+                    actual_authorization: pre.is_authorized
+                }
+            );
+        }
+
+        // Verify that the program output's self_program_id matches the expected program ID.
+        ensure!(
+            program_output.self_program_id == chained_call.program_id,
+            InvalidProgramBehaviorError::MismatchedProgramId {
+                expected: chained_call.program_id,
+                actual: program_output.self_program_id
+            }
+        );
+
+        // Verify that the program output's caller_program_id matches the actual caller.
+        ensure!(
+            program_output.caller_program_id == caller_program_id,
+            InvalidProgramBehaviorError::MismatchedCallerProgramId {
+                expected: caller_program_id,
+                actual: program_output.caller_program_id,
+            }
+        );
+
+        // Verify execution corresponds to a well-behaved program.
+        // See the # Programs section for the definition of the `validate_execution` method.
+        validate_execution(
+            &program_output.pre_states,
+            &program_output.post_states,
+            chained_call.program_id,
+        )
+        .map_err(InvalidProgramBehaviorError::ExecutionValidationFailed)?;
+
+        // Verify validity window
+        ensure!(
+            program_output
+                .block_validity_window
+                .is_valid_for(self.block_id)
+                && program_output
+                    .timestamp_validity_window
+                    .is_valid_for(self.timestamp),
+            NssaError::OutOfValidityWindow
+        );
+
+        for (i, post) in program_output.post_states.iter().enumerate() {
+            let Some(claim) = post.required_claim() else {
+                continue;
+            };
+            let account_id = program_output.pre_states[i].account_id;
+
+            // The invoked program can only claim accounts with default program id.
+            ensure!(
+                post.account().program_owner == DEFAULT_PROGRAM_ID,
+                InvalidProgramBehaviorError::ClaimedNonDefaultAccount { account_id }
+            );
+
+            match claim {
+                Claim::Authorized => {
+                    // The program can only claim accounts that were authorized by the signer.
+                    ensure!(
+                        is_authorized(&account_id),
+                        InvalidProgramBehaviorError::ClaimedUnauthorizedAccount { account_id }
+                    );
+                }
+                Claim::Pda(seed) => {
+                    // The program can only claim accounts that correspond to the PDAs it is
+                    // authorized to claim.
+                    let pda = AccountId::for_public_pda(&chained_call.program_id, &seed);
+                    ensure!(
+                        account_id == pda,
+                        InvalidProgramBehaviorError::MismatchedPdaClaim {
+                            expected: pda,
+                            actual: account_id
+                        }
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn validate_post_execution(
+        &mut self,
+        state_diff: &HashMap<AccountId, Account>,
+    ) -> Result<(), NssaError> {
+        // Check that all modified uninitialized accounts where claimed
+        for (account_id, post) in state_diff.iter().filter_map(|(account_id, post)| {
+            let pre = self.state.get_account_by_id(*account_id);
+            if pre.program_owner != DEFAULT_PROGRAM_ID {
+                return None;
+            }
+            if pre == *post {
+                return None;
+            }
+            Some((*account_id, post))
+        }) {
+            ensure!(
+                post.program_owner != DEFAULT_PROGRAM_ID,
+                InvalidProgramBehaviorError::DefaultAccountModifiedWithoutClaim { account_id }
+            );
+        }
+
+        Ok(())
+    }
+}
+
+pub struct GenesisPublicTransactionValidator;
+
+impl crate::public_transaction::Validator for GenesisPublicTransactionValidator {
+    fn validate_pre_execution(&mut self) -> Result<(), NssaError> {
+        Ok(())
+    }
+
+    fn on_chained_call(&mut self) -> Result<(), NssaError> {
+        Ok(())
+    }
+
+    fn validate_output(
+        &mut self,
+        _state_diff: &HashMap<AccountId, Account>,
+        _caller_program_id: Option<ProgramId>,
+        _chained_call: &ChainedCall,
+        _program_output: &ProgramOutput,
+    ) -> Result<(), NssaError> {
+        Ok(())
+    }
+
+    fn validate_post_execution(
+        &mut self,
+        _state_diff: &HashMap<AccountId, Account>,
+    ) -> Result<(), NssaError> {
+        Ok(())
     }
 }
 

@@ -232,7 +232,10 @@ mod tests {
 
         let (output, proof) = execute_and_prove(
             vec![sender, recipient],
-            Program::serialize_instruction(balance_to_move).unwrap(),
+            Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
+                amount: balance_to_move,
+            })
+            .unwrap(),
             vec![
                 InputAccountIdentity::Public,
                 InputAccountIdentity::PrivateUnauthorized {
@@ -329,7 +332,10 @@ mod tests {
 
         let (output, proof) = execute_and_prove(
             vec![sender_pre, recipient],
-            Program::serialize_instruction(balance_to_move).unwrap(),
+            Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
+                amount: balance_to_move,
+            })
+            .unwrap(),
             vec![
                 InputAccountIdentity::PrivateAuthorizedUpdate {
                     ssk: shared_secret_1,

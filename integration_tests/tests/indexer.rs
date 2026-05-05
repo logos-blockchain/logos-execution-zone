@@ -9,54 +9,61 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 use indexer_service_rpc::RpcClient as _;
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, format_private_account_id,
-    format_public_account_id, verify_commitment_is_in_state,
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, private_mention, public_mention,
+    verify_commitment_is_in_state,
 };
 use log::info;
 use nssa::AccountId;
-use wallet::cli::{Command, programs::native_token_transfer::AuthTransferSubcommand};
+use wallet::{
+    account::Label,
+    cli::{CliAccountMention, Command, programs::native_token_transfer::AuthTransferSubcommand},
+};
 
 /// Maximum time to wait for the indexer to catch up to the sequencer.
 const L2_TO_L1_TIMEOUT_MILLIS: u64 = 180_000;
 
 /// Poll the indexer until its last finalized block id reaches the sequencer's
-/// current last block id (and at least the genesis block has been advanced past),
-/// or until [`L2_TO_L1_TIMEOUT_MILLIS`] elapses. Returns the last indexer block
-/// id observed.
-async fn wait_for_indexer_to_catch_up(ctx: &TestContext) -> u64 {
+/// current last block id or until [`L2_TO_L1_TIMEOUT_MILLIS`] elapses.
+/// Returns the last indexer block id observed.
+async fn wait_for_indexer_to_catch_up(ctx: &TestContext) -> Result<u64> {
     let timeout = Duration::from_millis(L2_TO_L1_TIMEOUT_MILLIS);
+    let block_id_to_catch_up =
+        sequencer_service_rpc::RpcClient::get_last_block_id(ctx.sequencer_client()).await?;
     let mut last_ind: u64 = 1;
     let inner = async {
         loop {
-            let seq = sequencer_service_rpc::RpcClient::get_last_block_id(ctx.sequencer_client())
-                .await
-                .unwrap_or(0);
             let ind = ctx
                 .indexer_client()
                 .get_last_finalized_block_id()
-                .await
-                .unwrap_or(1);
+                .await?
+                .unwrap_or(0);
             last_ind = ind;
-            if ind >= seq && ind > 1 {
-                info!("Indexer caught up: seq={seq}, ind={ind}");
-                return ind;
+            if ind >= block_id_to_catch_up {
+                let last_seq =
+                    sequencer_service_rpc::RpcClient::get_last_block_id(ctx.sequencer_client())
+                        .await?;
+                info!(
+                    "Indexer caught up. Indexer last block id: {ind}. Current sequencer last block id: {last_seq}"
+                );
+                return Ok(ind);
             }
             tokio::time::sleep(Duration::from_secs(2)).await;
         }
     };
     tokio::time::timeout(timeout, inner)
         .await
-        .unwrap_or_else(|_| {
-            info!("Indexer catch-up timed out: ind={last_ind}");
-            last_ind
-        })
+        .with_context(|| {
+            format!(
+                "Indexer failed to catch up within {L2_TO_L1_TIMEOUT_MILLIS} milliseconds. Last indexer block id observed: {last_ind}, but needed to catch up to at least {block_id_to_catch_up}"
+            )
+        })?
 }
 
 #[tokio::test]
 async fn indexer_test_run() -> Result<()> {
     let ctx = TestContext::new().await?;
 
-    let last_block_indexer = wait_for_indexer_to_catch_up(&ctx).await;
+    let last_block_indexer = wait_for_indexer_to_catch_up(&ctx).await?;
 
     let last_block_seq =
         sequencer_service_rpc::RpcClient::get_last_block_id(ctx.sequencer_client()).await?;
@@ -64,7 +71,7 @@ async fn indexer_test_run() -> Result<()> {
     info!("Last block on seq now is {last_block_seq}");
     info!("Last block on ind now is {last_block_indexer}");
 
-    assert!(last_block_indexer > 1);
+    assert!(last_block_indexer > 0);
 
     Ok(())
 }
@@ -74,11 +81,11 @@ async fn indexer_block_batching() -> Result<()> {
     let ctx = TestContext::new().await?;
 
     info!("Waiting for indexer to parse blocks");
-    let last_block_indexer = wait_for_indexer_to_catch_up(&ctx).await;
+    let last_block_indexer = wait_for_indexer_to_catch_up(&ctx).await?;
 
     info!("Last block on ind now is {last_block_indexer}");
 
-    assert!(last_block_indexer > 1);
+    assert!(last_block_indexer > 0);
 
     // Getting wide batch to fit all blocks (from latest backwards)
     let mut block_batch = ctx.indexer_client().get_blocks(None, 100).await.unwrap();
@@ -105,10 +112,8 @@ async fn indexer_state_consistency() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: Some(format_public_account_id(ctx.existing_public_accounts()[0])),
-        from_label: None,
-        to: Some(format_public_account_id(ctx.existing_public_accounts()[1])),
-        to_label: None,
+        from: public_mention(ctx.existing_public_accounts()[0]),
+        to: Some(public_mention(ctx.existing_public_accounts()[1])),
         to_npk: None,
         to_vpk: None,
         to_identifier: Some(0),
@@ -142,10 +147,8 @@ async fn indexer_state_consistency() -> Result<()> {
     let to: AccountId = ctx.existing_private_accounts()[1];
 
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: Some(format_private_account_id(from)),
-        from_label: None,
-        to: Some(format_private_account_id(to)),
-        to_label: None,
+        from: private_mention(from),
+        to: Some(private_mention(to)),
         to_npk: None,
         to_vpk: None,
         to_identifier: Some(0),
@@ -172,7 +175,7 @@ async fn indexer_state_consistency() -> Result<()> {
     info!("Successfully transferred privately to owned account");
 
     info!("Waiting for indexer to parse blocks");
-    wait_for_indexer_to_catch_up(&ctx).await;
+    wait_for_indexer_to_catch_up(&ctx).await?;
 
     let acc1_ind_state = ctx
         .indexer_client()
@@ -210,29 +213,25 @@ async fn indexer_state_consistency_with_labels() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
     // Assign labels to both accounts
-    let from_label = "idx-sender-label".to_owned();
-    let to_label_str = "idx-receiver-label".to_owned();
+    let from_label = Label::new("idx-sender-label");
+    let to_label = Label::new("idx-receiver-label");
 
     let label_cmd = Command::Account(wallet::cli::account::AccountSubcommand::Label {
-        account_id: Some(format_public_account_id(ctx.existing_public_accounts()[0])),
-        account_label: None,
+        account_id: public_mention(ctx.existing_public_accounts()[0]),
         label: from_label.clone(),
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), label_cmd).await?;
 
     let label_cmd = Command::Account(wallet::cli::account::AccountSubcommand::Label {
-        account_id: Some(format_public_account_id(ctx.existing_public_accounts()[1])),
-        account_label: None,
-        label: to_label_str.clone(),
+        account_id: public_mention(ctx.existing_public_accounts()[1]),
+        label: to_label.clone(),
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), label_cmd).await?;
 
     // Send using labels instead of account IDs
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: None,
-        from_label: Some(from_label),
-        to: None,
-        to_label: Some(to_label_str),
+        from: CliAccountMention::Label(from_label),
+        to: Some(CliAccountMention::Label(to_label)),
         to_npk: None,
         to_vpk: None,
         to_identifier: Some(0),
@@ -259,7 +258,7 @@ async fn indexer_state_consistency_with_labels() -> Result<()> {
     assert_eq!(acc_2_balance, 20100);
 
     info!("Waiting for indexer to parse blocks");
-    wait_for_indexer_to_catch_up(&ctx).await;
+    wait_for_indexer_to_catch_up(&ctx).await?;
 
     let acc1_ind_state = ctx
         .indexer_client()

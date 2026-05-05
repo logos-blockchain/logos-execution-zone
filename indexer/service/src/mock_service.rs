@@ -190,18 +190,16 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
         Ok(())
     }
 
-    async fn get_last_finalized_block_id(&self) -> Result<BlockId, ErrorObjectOwned> {
-        self.state
+    async fn get_last_finalized_block_id(&self) -> Result<Option<BlockId>, ErrorObjectOwned> {
+        Ok(self
+            .state
             .read()
             .await
             .blocks
             .iter()
             .rev()
             .find(|block| block.bedrock_status == BedrockStatus::Finalized)
-            .map(|block| block.header.block_id)
-            .ok_or_else(|| {
-                ErrorObjectOwned::owned(-32001, "Last block not found".to_owned(), None::<()>)
-            })
+            .map(|block| block.header.block_id))
     }
 
     async fn get_block_by_id(&self, block_id: BlockId) -> Result<Option<Block>, ErrorObjectOwned> {

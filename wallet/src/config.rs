@@ -1,157 +1,11 @@
-use std::{
-    collections::HashMap,
-    io::{BufReader, Write as _},
-    path::Path,
-    time::Duration,
-};
+use std::{io::Write as _, path::Path, time::Duration};
 
 use anyhow::{Context as _, Result};
 use common::config::BasicAuth;
 use humantime_serde;
-use key_protocol::key_management::key_tree::{
-    chain_index::ChainIndex, keys_private::ChildKeysPrivate, keys_public::ChildKeysPublic,
-};
 use log::warn;
 use serde::{Deserialize, Serialize};
-use testnet_initial_state::{
-    PrivateAccountPrivateInitialData, PublicAccountPrivateInitialData,
-    initial_priv_accounts_private_keys, initial_pub_accounts_private_keys,
-};
 use url::Url;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PersistentAccountDataPublic {
-    pub account_id: nssa::AccountId,
-    pub chain_index: ChainIndex,
-    pub data: ChildKeysPublic,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PersistentAccountDataPrivate {
-    pub identifiers: Vec<nssa_core::Identifier>,
-    pub chain_index: ChainIndex,
-    pub data: ChildKeysPrivate,
-}
-
-// Big difference in enum variants sizes
-// however it is improbable, that we will have that much accounts, that it will substantialy affect
-// memory
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum InitialAccountData {
-    Public(PublicAccountPrivateInitialData),
-    Private(Box<PrivateAccountPrivateInitialData>),
-}
-
-impl InitialAccountData {
-    #[must_use]
-    pub fn account_id(&self) -> nssa::AccountId {
-        match &self {
-            Self::Public(acc) => acc.account_id,
-            Self::Private(acc) => acc.account_id(),
-        }
-    }
-
-    pub(crate) fn create_initial_accounts_data() -> Vec<Self> {
-        let pub_data = initial_pub_accounts_private_keys();
-        let priv_data = initial_priv_accounts_private_keys();
-
-        pub_data
-            .into_iter()
-            .map(Into::into)
-            .chain(priv_data.into_iter().map(Into::into))
-            .collect()
-    }
-}
-
-// Big difference in enum variants sizes
-// however it is improbable, that we will have that much accounts, that it will substantialy affect
-// memory
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum PersistentAccountData {
-    Public(PersistentAccountDataPublic),
-    Private(Box<PersistentAccountDataPrivate>),
-    Preconfigured(InitialAccountData),
-}
-
-/// A human-readable label for an account.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Label(String);
-
-impl Label {
-    #[must_use]
-    pub const fn new(label: String) -> Self {
-        Self(label)
-    }
-}
-
-impl std::fmt::Display for Label {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PersistentStorage {
-    pub accounts: Vec<PersistentAccountData>,
-    pub last_synced_block: u64,
-    /// Account labels keyed by account ID string (e.g.,
-    /// "2rnKprXqWGWJTkDZKsQbFXa4ctKRbapsdoTKQFnaVGG8").
-    #[serde(default)]
-    pub labels: HashMap<String, Label>,
-}
-
-impl PersistentStorage {
-    pub fn from_path(path: &Path) -> Result<Self> {
-        #[expect(
-            clippy::wildcard_enum_match_arm,
-            reason = "We want to provide a specific error message for not found case"
-        )]
-        match std::fs::File::open(path) {
-            Ok(file) => {
-                let storage_content = BufReader::new(file);
-                Ok(serde_json::from_reader(storage_content)?)
-            }
-            Err(err) => match err.kind() {
-                std::io::ErrorKind::NotFound => {
-                    anyhow::bail!("Not found, please setup roots from config command beforehand");
-                }
-                _ => {
-                    anyhow::bail!("IO error {err:#?}");
-                }
-            },
-        }
-    }
-}
-
-impl From<PublicAccountPrivateInitialData> for InitialAccountData {
-    fn from(value: PublicAccountPrivateInitialData) -> Self {
-        Self::Public(value)
-    }
-}
-
-impl From<PrivateAccountPrivateInitialData> for InitialAccountData {
-    fn from(value: PrivateAccountPrivateInitialData) -> Self {
-        Self::Private(Box::new(value))
-    }
-}
-
-impl From<PersistentAccountDataPublic> for PersistentAccountData {
-    fn from(value: PersistentAccountDataPublic) -> Self {
-        Self::Public(value)
-    }
-}
-
-impl From<PersistentAccountDataPrivate> for PersistentAccountData {
-    fn from(value: PersistentAccountDataPrivate) -> Self {
-        Self::Private(Box::new(value))
-    }
-}
-
-impl From<InitialAccountData> for PersistentAccountData {
-    fn from(value: InitialAccountData) -> Self {
-        Self::Preconfigured(value)
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GasConfig {
@@ -188,8 +42,6 @@ pub struct WalletConfig {
     /// Basic authentication credentials
     #[serde(skip_serializing_if = "Option::is_none")]
     pub basic_auth: Option<BasicAuth>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub initial_accounts: Option<Vec<InitialAccountData>>,
 }
 
 impl Default for WalletConfig {
@@ -201,7 +53,6 @@ impl Default for WalletConfig {
             seq_poll_max_retries: 5,
             seq_block_poll_max_amount: 100,
             basic_auth: None,
-            initial_accounts: None,
         }
     }
 }
@@ -252,7 +103,6 @@ impl WalletConfig {
             seq_poll_max_retries,
             seq_block_poll_max_amount,
             basic_auth,
-            initial_accounts,
         } = self;
 
         let WalletConfigOverrides {
@@ -262,7 +112,6 @@ impl WalletConfig {
             seq_poll_max_retries: o_seq_poll_max_retries,
             seq_block_poll_max_amount: o_seq_block_poll_max_amount,
             basic_auth: o_basic_auth,
-            initial_accounts: o_initial_accounts,
         } = overrides;
 
         if let Some(v) = o_sequencer_addr {
@@ -288,10 +137,6 @@ impl WalletConfig {
         if let Some(v) = o_basic_auth {
             warn!("Overriding wallet config 'basic_auth' to {v:#?}");
             *basic_auth = v;
-        }
-        if let Some(v) = o_initial_accounts {
-            warn!("Overriding wallet config 'initial_accounts' to {v:#?}");
-            *initial_accounts = v;
         }
     }
 }

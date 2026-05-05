@@ -12,12 +12,14 @@ use crate::{
 impl RocksDBIO {
     // Meta
 
-    pub fn get_meta_first_block_in_db(&self) -> DbResult<u64> {
-        self.get::<FirstBlockCell>(()).map(|cell| cell.0)
+    pub fn get_meta_first_block_id_in_db(&self) -> DbResult<Option<u64>> {
+        self.get_opt::<FirstBlockCell>(())
+            .map(|opt| opt.map(|cell| cell.0))
     }
 
-    pub fn get_meta_last_block_in_db(&self) -> DbResult<u64> {
-        self.get::<LastBlockCell>(()).map(|cell| cell.0)
+    pub fn get_meta_last_block_id_in_db(&self) -> DbResult<Option<u64>> {
+        self.get_opt::<LastBlockCell>(())
+            .map(|opt| opt.map(|cell| cell.0))
     }
 
     pub fn get_meta_last_observed_l1_lib_header_in_db(&self) -> DbResult<Option<[u8; 32]>> {
@@ -29,8 +31,9 @@ impl RocksDBIO {
         Ok(self.get_opt::<FirstBlockSetCell>(())?.is_some())
     }
 
-    pub fn get_meta_last_breakpoint_id(&self) -> DbResult<u64> {
-        self.get::<LastBreakpointIdCell>(()).map(|cell| cell.0)
+    pub fn get_meta_last_breakpoint_id(&self) -> DbResult<Option<u64>> {
+        self.get_opt::<LastBreakpointIdCell>(())
+            .map(|opt| opt.map(|cell| cell.0))
     }
 
     // Block

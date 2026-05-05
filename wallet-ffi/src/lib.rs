@@ -26,9 +26,13 @@
     reason = "TODO: fix later"
 )]
 
-use std::sync::OnceLock;
+use std::{
+    ffi::{c_char, CStr},
+    sync::OnceLock,
+};
 
 use ::wallet::ExecutionFailureKind;
+use error::WalletFfiError;
 // Re-export public types for cbindgen
 pub use error::WalletFfiError as FfiError;
 use tokio::runtime::Handle;
@@ -86,5 +90,22 @@ pub(crate) fn map_execution_error(e: ExecutionFailureKind) -> FfiError {
             FfiError::NetworkError
         }
         _ => FfiError::InternalError,
+    }
+}
+
+/// Helper to convert a C string to a Rust String.
+fn c_str_to_string(ptr: *const c_char, name: &str) -> Result<String, WalletFfiError> {
+    if ptr.is_null() {
+        print_error(format!("Null pointer for {name}"));
+        return Err(WalletFfiError::NullPointer);
+    }
+
+    let c_str = unsafe { CStr::from_ptr(ptr) };
+    match c_str.to_str() {
+        Ok(s) => Ok(s.to_owned()),
+        Err(e) => {
+            print_error(format!("Invalid UTF-8 in {name}: {e}"));
+            Err(WalletFfiError::InvalidUtf8)
+        }
     }
 }

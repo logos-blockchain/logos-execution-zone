@@ -32,7 +32,8 @@ fn main() {
         ..sender.clone()
     };
 
-    let instruction_data = to_vec(&balance).unwrap();
+    let instruction_data =
+        to_vec(&authenticated_transfer_core::Instruction::Transfer { amount: balance }).unwrap();
 
     let chained_call = ChainedCall {
         program_id: transfer_program_id,

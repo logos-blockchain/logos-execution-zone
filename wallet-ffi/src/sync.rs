@@ -93,7 +93,7 @@ pub unsafe extern "C" fn wallet_ffi_get_last_synced_block(
     };
 
     unsafe {
-        *out_block_id = wallet.last_synced_block;
+        *out_block_id = wallet.storage().last_synced_block();
     }
 
     WalletFfiError::Success

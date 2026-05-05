@@ -16,6 +16,8 @@ nssa.workspace = true
 nssa_core.workspace = true
 sequencer_service_rpc = { workspace = true, features = ["client"] }
 tokio.workspace = true
+key_protocol.workspace = true
+serde_json.workspace = true
 
 [build-dependencies]
 cbindgen = "0.29"

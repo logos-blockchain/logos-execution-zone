@@ -39,7 +39,7 @@ pub type SealingSecretKey = Scalar;
 /// `Debug` is implemented manually to redact the GMS; formatting this value with `{:?}`
 /// will not leak the secret. Code that formats through `{:#?}` on containing types is
 /// safe for the same reason.
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GroupKeyHolder {
     gms: [u8; 32],
 }

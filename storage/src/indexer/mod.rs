@@ -4,7 +4,7 @@ use common::{
     block::Block,
     transaction::{NSSATransaction, clock_invocation},
 };
-use nssa::V03State;
+use nssa::{GENESIS_BLOCK_ID, V03State, ValidatedStateDiff};
 use rocksdb::{
     BoundColumnFamily, ColumnFamilyDescriptor, DBWithThreadMode, MultiThreaded, Options,
 };
@@ -56,11 +56,8 @@ impl DBIO for RocksDBIO {
 }
 
 impl RocksDBIO {
-    pub fn open_or_create(
-        path: &Path,
-        genesis_block: &Block,
-        initial_state: &V03State,
-    ) -> DbResult<Self> {
+    // TODO: Remove initial state when it will be included in genesis block
+    pub fn open_or_create(path: &Path, initial_state: &V03State) -> DbResult<Self> {
         let mut cf_opts = Options::default();
         cf_opts.set_max_write_buffer_number(16);
         // ToDo: Add more column families for different data
@@ -87,17 +84,9 @@ impl RocksDBIO {
 
         let dbio = Self { db };
 
-        let is_start_set = dbio.get_meta_is_first_block_set()?;
-        if !is_start_set {
-            let block_id = genesis_block.header.block_id;
-            dbio.put_meta_last_block_in_db(block_id)?;
-            dbio.put_meta_first_block_in_db_batch(genesis_block)?;
-            dbio.put_meta_is_first_block_set()?;
-
-            // First breakpoint setup
-            dbio.put_breakpoint(0, initial_state)?;
-            dbio.put_meta_last_breakpoint_id(0)?;
-        }
+        // First breakpoint setup
+        dbio.put_breakpoint(0, initial_state)?;
+        dbio.put_meta_last_breakpoint_id(0)?;
 
         Ok(dbio)
     }
@@ -155,86 +144,107 @@ impl RocksDBIO {
     // State
 
     pub fn calculate_state_for_id(&self, block_id: u64) -> DbResult<V03State> {
-        let last_block = self.get_meta_last_block_in_db()?;
+        let last_block_id = self.get_meta_last_block_id_in_db()?.unwrap_or(0);
 
-        if block_id <= last_block {
-            let br_id = closest_breakpoint_id(block_id);
-            let mut breakpoint = self.get_breakpoint(br_id)?;
+        if block_id > last_block_id {
+            return Err(DbError::db_interaction_error(
+                "Block on this id not found".to_owned(),
+            ));
+        }
 
-            // ToDo: update it to handle any genesis id
-            // right now works correctly only if genesis_id < BREAKPOINT_INTERVAL
-            let start = if br_id != 0 {
-                u64::from(BREAKPOINT_INTERVAL)
-                    .checked_mul(br_id)
-                    .expect("Reached maximum breakpoint id")
-            } else {
-                self.get_meta_first_block_in_db()?
-            };
+        let br_id = closest_breakpoint_id(block_id);
+        let mut breakpoint = self.get_breakpoint(br_id)?;
 
-            for block in self.get_block_batch_seq(
-                start.checked_add(1).expect("Will be lesser that u64::MAX")..=block_id,
-            )? {
-                let expected_clock =
-                    NSSATransaction::Public(clock_invocation(block.header.timestamp));
+        let start = u64::from(BREAKPOINT_INTERVAL)
+            .checked_mul(br_id)
+            .expect("Reached maximum breakpoint id");
 
-                if let Some((clock_tx, user_txs)) = block.body.transactions.split_last() {
-                    if *clock_tx != expected_clock {
-                        return Err(DbError::db_interaction_error(
-                            "Last transaction in block must be the clock invocation for the block timestamp"
-                                .to_owned(),
-                        ));
-                    }
-                    for transaction in user_txs {
-                        transaction
-                            .clone()
-                            .transaction_stateless_check()
-                            .map_err(|err| {
-                                DbError::db_interaction_error(format!(
-                                    "transaction pre check failed with err {err:?}"
-                                ))
-                            })?
-                            .execute_check_on_state(
-                                &mut breakpoint,
-                                block.header.block_id,
-                                block.header.timestamp,
-                            )
-                            .map_err(|err| {
-                                DbError::db_interaction_error(format!(
-                                    "transaction execution failed with err {err:?}"
-                                ))
-                            })?;
-                    }
+        for mut block in self.get_block_batch_seq(
+            start.checked_add(1).expect("Will be lesser that u64::MAX")..=block_id,
+        )? {
+            let expected_clock = NSSATransaction::Public(clock_invocation(block.header.timestamp));
 
-                    let NSSATransaction::Public(clock_public_tx) = clock_tx else {
-                        return Err(DbError::db_interaction_error(
-                            "Clock invocation must be a public transaction".to_owned(),
-                        ));
+            let clock_tx = block.body.transactions.pop().ok_or_else(|| {
+                DbError::db_interaction_error(
+                    "Block must contain clock transaction at the end".to_owned(),
+                )
+            })?;
+            let user_txs = block.body.transactions;
+
+            if clock_tx != expected_clock {
+                return Err(DbError::db_interaction_error(
+                        "Last transaction in block must be the clock invocation for the block timestamp"
+                            .to_owned(),
+                    ));
+            }
+            for transaction in user_txs {
+                let is_genesis = block.header.block_id == GENESIS_BLOCK_ID;
+                if is_genesis {
+                    let genesis_tx = match transaction {
+                        NSSATransaction::Public(public_tx) => public_tx,
+                        NSSATransaction::PrivacyPreserving(_)
+                        | NSSATransaction::ProgramDeployment(_) => {
+                            return Err(DbError::db_interaction_error(
+                                "Genesis block should contain only public transactions".to_owned(),
+                            ));
+                        }
                     };
-
-                    breakpoint
-                        .transition_from_public_transaction(
-                            clock_public_tx,
+                    let state_diff = ValidatedStateDiff::from_public_genesis_transaction(
+                        &genesis_tx,
+                        &breakpoint,
+                    )
+                    .map_err(|err| {
+                        DbError::db_interaction_error(format!(
+                            "Failed to create state diff from genesis transaction with err {err:?}"
+                        ))
+                    })?;
+                    breakpoint.apply_state_diff(state_diff);
+                } else {
+                    transaction
+                        .transaction_stateless_check()
+                        .map_err(|err| {
+                            DbError::db_interaction_error(format!(
+                                "transaction pre check failed with err {err:?}"
+                            ))
+                        })?
+                        .execute_check_on_state(
+                            &mut breakpoint,
                             block.header.block_id,
                             block.header.timestamp,
                         )
                         .map_err(|err| {
                             DbError::db_interaction_error(format!(
-                                "clock transaction execution failed with err {err:?}"
+                                "transaction execution failed with err {err:?}"
                             ))
                         })?;
                 }
             }
 
-            Ok(breakpoint)
-        } else {
-            Err(DbError::db_interaction_error(
-                "Block on this id not found".to_owned(),
-            ))
+            let NSSATransaction::Public(clock_public_tx) = clock_tx else {
+                return Err(DbError::db_interaction_error(
+                    "Clock invocation must be a public transaction".to_owned(),
+                ));
+            };
+
+            breakpoint
+                .transition_from_public_transaction(
+                    &clock_public_tx,
+                    block.header.block_id,
+                    block.header.timestamp,
+                )
+                .map_err(|err| {
+                    DbError::db_interaction_error(format!(
+                        "clock transaction execution failed with err {err:?}"
+                    ))
+                })?;
         }
+
+        Ok(breakpoint)
     }
 
     pub fn final_state(&self) -> DbResult<V03State> {
-        self.calculate_state_for_id(self.get_meta_last_block_in_db()?)
+        let last_block_id = self.get_meta_last_block_id_in_db()?.unwrap_or(0);
+        self.calculate_state_for_id(last_block_id)
     }
 }
 
@@ -255,7 +265,7 @@ mod tests {
     use super::*;
 
     fn genesis_block() -> Block {
-        common::test_utils::produce_dummy_block(1, None, vec![])
+        produce_dummy_block(1, None, vec![])
     }
 
     fn acc1_sign_key() -> nssa::PrivateKey {
@@ -281,7 +291,6 @@ mod tests {
 
         let dbio = RocksDBIO::open_or_create(
             temdir_path,
-            &genesis_block(),
             &nssa::V03State::new_with_genesis_accounts(
                 &[(acc1(), 10000), (acc2(), 20000)],
                 vec![],
@@ -290,21 +299,21 @@ mod tests {
         )
         .unwrap();
 
-        let last_id = dbio.get_meta_last_block_in_db().unwrap();
-        let first_id = dbio.get_meta_first_block_in_db().unwrap();
+        let last_id = dbio.get_meta_last_block_id_in_db().unwrap();
+        let first_id = dbio.get_meta_first_block_id_in_db().unwrap();
         let is_first_set = dbio.get_meta_is_first_block_set().unwrap();
         let last_observed_l1_header = dbio.get_meta_last_observed_l1_lib_header_in_db().unwrap();
         let last_br_id = dbio.get_meta_last_breakpoint_id().unwrap();
-        let last_block = dbio.get_block(1).unwrap().unwrap();
+        let last_block = dbio.get_block(1).unwrap();
         let breakpoint = dbio.get_breakpoint(0).unwrap();
         let final_state = dbio.final_state().unwrap();
 
-        assert_eq!(last_id, 1);
-        assert_eq!(first_id, 1);
+        assert_eq!(last_id, None);
+        assert_eq!(first_id, None);
         assert_eq!(last_observed_l1_header, None);
-        assert!(is_first_set);
-        assert_eq!(last_br_id, 0);
-        assert_eq!(last_block.header.hash, genesis_block().header.hash);
+        assert!(!is_first_set);
+        assert_eq!(last_br_id, Some(0)); // TODO: Will be None after we remove hardcoded testnet state
+        assert!(last_block.is_none());
         assert_eq!(
             breakpoint.get_account_by_id(acc1()),
             final_state.get_account_by_id(acc1())
@@ -322,7 +331,6 @@ mod tests {
 
         let dbio = RocksDBIO::open_or_create(
             temdir_path,
-            &genesis_block(),
             &nssa::V03State::new_with_genesis_accounts(
                 &[(acc1(), 10000), (acc2(), 20000)],
                 vec![],
@@ -331,7 +339,10 @@ mod tests {
         )
         .unwrap();
 
-        let prev_hash = genesis_block().header.hash;
+        let genesis_block = genesis_block();
+        dbio.put_block(&genesis_block, [0; 32]).unwrap();
+
+        let prev_hash = genesis_block.header.hash;
         let from = acc1();
         let to = acc2();
         let sign_key = acc1_sign_key();
@@ -342,8 +353,8 @@ mod tests {
 
         dbio.put_block(&block, [1; 32]).unwrap();
 
-        let last_id = dbio.get_meta_last_block_in_db().unwrap();
-        let first_id = dbio.get_meta_first_block_in_db().unwrap();
+        let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
+        let first_id = dbio.get_meta_first_block_id_in_db().unwrap();
         let last_observed_l1_header = dbio
             .get_meta_last_observed_l1_lib_header_in_db()
             .unwrap()
@@ -355,11 +366,11 @@ mod tests {
         let final_state = dbio.final_state().unwrap();
 
         assert_eq!(last_id, 2);
-        assert_eq!(first_id, 1);
+        assert_eq!(first_id, Some(1));
         assert_eq!(last_observed_l1_header, [1; 32]);
         assert!(is_first_set);
-        assert_eq!(last_br_id, 0);
-        assert_ne!(last_block.header.hash, genesis_block().header.hash);
+        assert_eq!(last_br_id, Some(0));
+        assert_eq!(last_block.header.hash, block.header.hash);
         assert_eq!(
             breakpoint.get_account_by_id(acc1()).balance
                 - final_state.get_account_by_id(acc1()).balance,
@@ -379,7 +390,6 @@ mod tests {
 
         let dbio = RocksDBIO::open_or_create(
             temdir_path,
-            &genesis_block(),
             &nssa::V03State::new_with_genesis_accounts(
                 &[(acc1(), 10000), (acc2(), 20000)],
                 vec![],
@@ -392,11 +402,11 @@ mod tests {
         let to = acc2();
         let sign_key = acc1_sign_key();
 
-        for i in 1..=BREAKPOINT_INTERVAL {
-            let last_id = dbio.get_meta_last_block_in_db().unwrap();
-            let last_block = dbio.get_block(last_id).unwrap().unwrap();
-
-            let prev_hash = last_block.header.hash;
+        for i in 1..=BREAKPOINT_INTERVAL + 1 {
+            let prev_hash = dbio.get_meta_last_block_id_in_db().unwrap().map(|last_id| {
+                let last_block = dbio.get_block(last_id).unwrap().unwrap();
+                last_block.header.hash
+            });
 
             let transfer_tx = common::test_utils::create_transaction_native_token_transfer(
                 from,
@@ -405,12 +415,12 @@ mod tests {
                 1,
                 &sign_key,
             );
-            let block = produce_dummy_block((i + 1).into(), Some(prev_hash), vec![transfer_tx]);
+            let block = produce_dummy_block(i.into(), prev_hash, vec![transfer_tx]);
             dbio.put_block(&block, [i; 32]).unwrap();
         }
 
-        let last_id = dbio.get_meta_last_block_in_db().unwrap();
-        let first_id = dbio.get_meta_first_block_in_db().unwrap();
+        let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
+        let first_id = dbio.get_meta_first_block_id_in_db().unwrap();
         let is_first_set = dbio.get_meta_is_first_block_set().unwrap();
         let last_br_id = dbio.get_meta_last_breakpoint_id().unwrap();
         let last_block = dbio.get_block(last_id).unwrap().unwrap();
@@ -419,19 +429,19 @@ mod tests {
         let final_state = dbio.final_state().unwrap();
 
         assert_eq!(last_id, 101);
-        assert_eq!(first_id, 1);
+        assert_eq!(first_id, Some(1));
         assert!(is_first_set);
-        assert_eq!(last_br_id, 1);
+        assert_eq!(last_br_id, Some(1));
         assert_ne!(last_block.header.hash, genesis_block().header.hash);
         assert_eq!(
             prev_breakpoint.get_account_by_id(acc1()).balance
                 - final_state.get_account_by_id(acc1()).balance,
-            100
+            101
         );
         assert_eq!(
             final_state.get_account_by_id(acc2()).balance
                 - prev_breakpoint.get_account_by_id(acc2()).balance,
-            100
+            101
         );
         assert_eq!(
             breakpoint.get_account_by_id(acc1()).balance
@@ -452,7 +462,6 @@ mod tests {
 
         let dbio = RocksDBIO::open_or_create(
             temdir_path,
-            &genesis_block(),
             &nssa::V03State::new_with_genesis_accounts(
                 &[(acc1(), 10000), (acc2(), 20000)],
                 vec![],
@@ -465,31 +474,27 @@ mod tests {
         let to = acc2();
         let sign_key = acc1_sign_key();
 
-        let last_id = dbio.get_meta_last_block_in_db().unwrap();
-        let last_block = dbio.get_block(last_id).unwrap().unwrap();
-
-        let prev_hash = last_block.header.hash;
         let transfer_tx =
             common::test_utils::create_transaction_native_token_transfer(from, 0, to, 1, &sign_key);
-        let block = produce_dummy_block(2, Some(prev_hash), vec![transfer_tx]);
+        let block = produce_dummy_block(1, None, vec![transfer_tx]);
 
         let control_hash1 = block.header.hash;
 
         dbio.put_block(&block, [1; 32]).unwrap();
 
-        let last_id = dbio.get_meta_last_block_in_db().unwrap();
+        let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
         let last_block = dbio.get_block(last_id).unwrap().unwrap();
 
         let prev_hash = last_block.header.hash;
         let transfer_tx =
             common::test_utils::create_transaction_native_token_transfer(from, 1, to, 1, &sign_key);
-        let block = produce_dummy_block(3, Some(prev_hash), vec![transfer_tx]);
+        let block = produce_dummy_block(2, Some(prev_hash), vec![transfer_tx]);
 
         let control_hash2 = block.header.hash;
 
         dbio.put_block(&block, [2; 32]).unwrap();
 
-        let last_id = dbio.get_meta_last_block_in_db().unwrap();
+        let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
         let last_block = dbio.get_block(last_id).unwrap().unwrap();
 
         let prev_hash = last_block.header.hash;
@@ -498,10 +503,10 @@ mod tests {
 
         let control_tx_hash1 = transfer_tx.hash();
 
-        let block = produce_dummy_block(4, Some(prev_hash), vec![transfer_tx]);
+        let block = produce_dummy_block(3, Some(prev_hash), vec![transfer_tx]);
         dbio.put_block(&block, [3; 32]).unwrap();
 
-        let last_id = dbio.get_meta_last_block_in_db().unwrap();
+        let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
         let last_block = dbio.get_block(last_id).unwrap().unwrap();
 
         let prev_hash = last_block.header.hash;
@@ -510,7 +515,7 @@ mod tests {
 
         let control_tx_hash2 = transfer_tx.hash();
 
-        let block = produce_dummy_block(5, Some(prev_hash), vec![transfer_tx]);
+        let block = produce_dummy_block(4, Some(prev_hash), vec![transfer_tx]);
         dbio.put_block(&block, [4; 32]).unwrap();
 
         let control_block_id1 = dbio.get_block_id_by_hash(control_hash1.0).unwrap().unwrap();
@@ -524,10 +529,10 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        assert_eq!(control_block_id1, 2);
-        assert_eq!(control_block_id2, 3);
-        assert_eq!(control_block_id3, 4);
-        assert_eq!(control_block_id4, 5);
+        assert_eq!(control_block_id1, 1);
+        assert_eq!(control_block_id2, 2);
+        assert_eq!(control_block_id3, 3);
+        assert_eq!(control_block_id4, 4);
     }
 
     #[test]
@@ -539,7 +544,6 @@ mod tests {
 
         let dbio = RocksDBIO::open_or_create(
             temdir_path,
-            &genesis_block(),
             &nssa::V03State::new_with_genesis_accounts(
                 &[(acc1(), 10000), (acc2(), 20000)],
                 vec![],
@@ -552,56 +556,52 @@ mod tests {
         let to = acc2();
         let sign_key = acc1_sign_key();
 
-        let last_id = dbio.get_meta_last_block_in_db().unwrap();
-        let last_block = dbio.get_block(last_id).unwrap().unwrap();
-
-        let prev_hash = last_block.header.hash;
         let transfer_tx =
             common::test_utils::create_transaction_native_token_transfer(from, 0, to, 1, &sign_key);
-        let block = produce_dummy_block(2, Some(prev_hash), vec![transfer_tx]);
+        let block = produce_dummy_block(1, None, vec![transfer_tx]);
 
         block_res.push(block.clone());
         dbio.put_block(&block, [1; 32]).unwrap();
 
-        let last_id = dbio.get_meta_last_block_in_db().unwrap();
+        let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
         let last_block = dbio.get_block(last_id).unwrap().unwrap();
 
         let prev_hash = last_block.header.hash;
         let transfer_tx =
             common::test_utils::create_transaction_native_token_transfer(from, 1, to, 1, &sign_key);
-        let block = produce_dummy_block(3, Some(prev_hash), vec![transfer_tx]);
+        let block = produce_dummy_block(2, Some(prev_hash), vec![transfer_tx]);
 
         block_res.push(block.clone());
         dbio.put_block(&block, [2; 32]).unwrap();
 
-        let last_id = dbio.get_meta_last_block_in_db().unwrap();
+        let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
         let last_block = dbio.get_block(last_id).unwrap().unwrap();
 
         let prev_hash = last_block.header.hash;
         let transfer_tx =
             common::test_utils::create_transaction_native_token_transfer(from, 2, to, 1, &sign_key);
 
-        let block = produce_dummy_block(4, Some(prev_hash), vec![transfer_tx]);
+        let block = produce_dummy_block(3, Some(prev_hash), vec![transfer_tx]);
         block_res.push(block.clone());
         dbio.put_block(&block, [3; 32]).unwrap();
 
-        let last_id = dbio.get_meta_last_block_in_db().unwrap();
+        let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
         let last_block = dbio.get_block(last_id).unwrap().unwrap();
 
         let prev_hash = last_block.header.hash;
         let transfer_tx =
             common::test_utils::create_transaction_native_token_transfer(from, 3, to, 1, &sign_key);
 
-        let block = produce_dummy_block(5, Some(prev_hash), vec![transfer_tx]);
+        let block = produce_dummy_block(4, Some(prev_hash), vec![transfer_tx]);
         block_res.push(block.clone());
         dbio.put_block(&block, [4; 32]).unwrap();
 
         let block_hashes_mem: Vec<[u8; 32]> =
             block_res.into_iter().map(|bl| bl.header.hash.0).collect();
 
-        // Get blocks before ID 6 (i.e., starting from 5 going backwards), limit 4
-        // This should return blocks 5, 4, 3, 2 in descending order
-        let mut batch_res = dbio.get_block_batch(Some(6), 4).unwrap();
+        // Get blocks before ID 5 (i.e., starting from 4 going backwards), limit 4
+        // This should return blocks 4, 3, 2, 1 in descending order
+        let mut batch_res = dbio.get_block_batch(Some(5), 4).unwrap();
         batch_res.reverse(); // Reverse to match ascending order for comparison
 
         let block_hashes_db: Vec<[u8; 32]> =
@@ -611,9 +611,9 @@ mod tests {
 
         let block_hashes_mem_limited = &block_hashes_mem[1..];
 
-        // Get blocks before ID 6, limit 3
-        // This should return blocks 5, 4, 3 in descending order
-        let mut batch_res_limited = dbio.get_block_batch(Some(6), 3).unwrap();
+        // Get blocks before ID 5, limit 3
+        // This should return blocks 4, 3, 2 in descending order
+        let mut batch_res_limited = dbio.get_block_batch(Some(5), 3).unwrap();
         batch_res_limited.reverse(); // Reverse to match ascending order for comparison
 
         let block_hashes_db_limited: Vec<[u8; 32]> = batch_res_limited
@@ -629,7 +629,7 @@ mod tests {
             .map(|block| block.header.block_id)
             .collect::<Vec<_>>();
 
-        assert_eq!(block_batch_ids, vec![1, 2, 3, 4, 5]);
+        assert_eq!(block_batch_ids, vec![1, 2, 3, 4]);
     }
 
     #[test]
@@ -639,7 +639,6 @@ mod tests {
 
         let dbio = RocksDBIO::open_or_create(
             temdir_path,
-            &genesis_block(),
             &nssa::V03State::new_with_genesis_accounts(
                 &[(acc1(), 10000), (acc2(), 20000)],
                 vec![],
@@ -654,10 +653,6 @@ mod tests {
 
         let mut tx_hash_res = vec![];
 
-        let last_id = dbio.get_meta_last_block_in_db().unwrap();
-        let last_block = dbio.get_block(last_id).unwrap().unwrap();
-
-        let prev_hash = last_block.header.hash;
         let transfer_tx1 =
             common::test_utils::create_transaction_native_token_transfer(from, 0, to, 1, &sign_key);
         let transfer_tx2 =
@@ -665,11 +660,11 @@ mod tests {
         tx_hash_res.push(transfer_tx1.hash().0);
         tx_hash_res.push(transfer_tx2.hash().0);
 
-        let block = produce_dummy_block(2, Some(prev_hash), vec![transfer_tx1, transfer_tx2]);
+        let block = produce_dummy_block(1, None, vec![transfer_tx1, transfer_tx2]);
 
         dbio.put_block(&block, [1; 32]).unwrap();
 
-        let last_id = dbio.get_meta_last_block_in_db().unwrap();
+        let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
         let last_block = dbio.get_block(last_id).unwrap().unwrap();
 
         let prev_hash = last_block.header.hash;
@@ -680,11 +675,11 @@ mod tests {
         tx_hash_res.push(transfer_tx1.hash().0);
         tx_hash_res.push(transfer_tx2.hash().0);
 
-        let block = produce_dummy_block(3, Some(prev_hash), vec![transfer_tx1, transfer_tx2]);
+        let block = produce_dummy_block(2, Some(prev_hash), vec![transfer_tx1, transfer_tx2]);
 
         dbio.put_block(&block, [2; 32]).unwrap();
 
-        let last_id = dbio.get_meta_last_block_in_db().unwrap();
+        let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
         let last_block = dbio.get_block(last_id).unwrap().unwrap();
 
         let prev_hash = last_block.header.hash;
@@ -695,11 +690,11 @@ mod tests {
         tx_hash_res.push(transfer_tx1.hash().0);
         tx_hash_res.push(transfer_tx2.hash().0);
 
-        let block = produce_dummy_block(4, Some(prev_hash), vec![transfer_tx1, transfer_tx2]);
+        let block = produce_dummy_block(3, Some(prev_hash), vec![transfer_tx1, transfer_tx2]);
 
         dbio.put_block(&block, [3; 32]).unwrap();
 
-        let last_id = dbio.get_meta_last_block_in_db().unwrap();
+        let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
         let last_block = dbio.get_block(last_id).unwrap().unwrap();
 
         let prev_hash = last_block.header.hash;
@@ -707,7 +702,7 @@ mod tests {
             common::test_utils::create_transaction_native_token_transfer(from, 6, to, 1, &sign_key);
         tx_hash_res.push(transfer_tx.hash().0);
 
-        let block = produce_dummy_block(5, Some(prev_hash), vec![transfer_tx]);
+        let block = produce_dummy_block(4, Some(prev_hash), vec![transfer_tx]);
 
         dbio.put_block(&block, [4; 32]).unwrap();
 

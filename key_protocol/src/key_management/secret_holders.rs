@@ -17,14 +17,14 @@ pub struct SeedHolder {
 }
 
 /// Secret spending key object. Can produce `PrivateKeyHolder` objects.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SecretSpendingKey(pub [u8; 32]);
 
 pub type ViewingSecretKey = Scalar;
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
 /// Private key holder. Produces public keys. Can produce `account_id`. Can produce shared secret
 /// for recepient.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PrivateKeyHolder {
     pub nullifier_secret_key: NullifierSecretKey,
     pub viewing_secret_key: ViewingSecretKey,

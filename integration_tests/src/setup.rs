@@ -1,27 +1,30 @@
-use std::{
-    ffi::{CString, c_char},
-    fs::File,
-    io::Write as _,
-    net::SocketAddr,
-    path::PathBuf,
-};
+use std::{net::SocketAddr, path::PathBuf};
 
 use anyhow::{Context as _, Result, bail};
-use indexer_ffi::{IndexerServiceFFI, api::lifecycle::InitializedIndexerServiceFFIResult};
 use indexer_service::IndexerHandle;
 use log::{debug, warn};
-use sequencer_service::SequencerHandle;
+use nssa::PrivateKey;
+use sequencer_service::{GenesisTransaction, SequencerHandle};
 use tempfile::TempDir;
 use testcontainers::compose::DockerCompose;
-use wallet::{WalletCore, config::WalletConfigOverrides};
+use wallet::{
+    WalletCore,
+    cli::{
+        Command, SubcommandReturnValue,
+        account::{AccountSubcommand, NewSubcommand},
+        execute_subcommand,
+        programs::native_token_transfer::AuthTransferSubcommand,
+    },
+    config::WalletConfigOverrides,
+};
 
-use crate::{BEDROCK_SERVICE_PORT, BEDROCK_SERVICE_WITH_OPEN_PORT, config};
+use crate::{
+    BEDROCK_SERVICE_PORT, BEDROCK_SERVICE_WITH_OPEN_PORT,
+    config::{self, INITIAL_PRIVATE_BALANCES_FOR_WALLET},
+    private_mention, public_mention,
+};
 
-unsafe extern "C" {
-    fn start_indexer(config_path: *const c_char, port: u16) -> InitializedIndexerServiceFFIResult;
-}
-
-pub(crate) async fn setup_bedrock_node() -> Result<(DockerCompose, SocketAddr)> {
+pub async fn setup_bedrock_node() -> Result<(DockerCompose, SocketAddr)> {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let bedrock_compose_path = PathBuf::from(manifest_dir).join("../bedrock/docker-compose.yml");
 
@@ -91,10 +94,7 @@ pub(crate) async fn setup_bedrock_node() -> Result<(DockerCompose, SocketAddr)> 
     Ok((compose, addr))
 }
 
-pub(crate) async fn setup_indexer(
-    bedrock_addr: SocketAddr,
-    initial_data: &config::InitialData,
-) -> Result<(IndexerHandle, TempDir)> {
+pub async fn setup_indexer(bedrock_addr: SocketAddr) -> Result<(IndexerHandle, TempDir)> {
     let temp_indexer_dir =
         tempfile::tempdir().context("Failed to create temp dir for indexer home")?;
 
@@ -103,12 +103,8 @@ pub(crate) async fn setup_indexer(
         temp_indexer_dir.path().display()
     );
 
-    let indexer_config = config::indexer_config(
-        bedrock_addr,
-        temp_indexer_dir.path().to_owned(),
-        initial_data,
-    )
-    .context("Failed to create Indexer config")?;
+    let indexer_config = config::indexer_config(bedrock_addr, temp_indexer_dir.path().to_owned())
+        .context("Failed to create Indexer config")?;
 
     indexer_service::run_server(indexer_config, 0)
         .await
@@ -116,10 +112,10 @@ pub(crate) async fn setup_indexer(
         .map(|handle| (handle, temp_indexer_dir))
 }
 
-pub(crate) async fn setup_sequencer(
+pub async fn setup_sequencer(
     partial: config::SequencerPartialConfig,
     bedrock_addr: SocketAddr,
-    initial_data: &config::InitialData,
+    genesis_transactions: Vec<GenesisTransaction>,
 ) -> Result<(SequencerHandle, TempDir)> {
     let temp_sequencer_dir =
         tempfile::tempdir().context("Failed to create temp dir for sequencer home")?;
@@ -133,7 +129,7 @@ pub(crate) async fn setup_sequencer(
         partial,
         temp_sequencer_dir.path().to_owned(),
         bedrock_addr,
-        initial_data,
+        genesis_transactions,
     )
     .context("Failed to create Sequencer config")?;
 
@@ -142,12 +138,11 @@ pub(crate) async fn setup_sequencer(
     Ok((sequencer_handle, temp_sequencer_dir))
 }
 
-pub(crate) async fn setup_wallet(
+pub fn setup_wallet(
     sequencer_addr: SocketAddr,
-    initial_data: &config::InitialData,
+    initial_public_accounts: &[(PrivateKey, u128)],
 ) -> Result<(WalletCore, TempDir, String)> {
-    let config = config::wallet_config(sequencer_addr, initial_data)
-        .context("Failed to create Wallet config")?;
+    let config = config::wallet_config(sequencer_addr).context("Failed to create Wallet config")?;
     let config_serialized =
         serde_json::to_string_pretty(&config).context("Failed to serialize Wallet config")?;
 
@@ -162,57 +157,94 @@ pub(crate) async fn setup_wallet(
     let config_overrides = WalletConfigOverrides::default();
 
     let wallet_password = "test_pass".to_owned();
-    let (wallet, _mnemonic) = WalletCore::new_init_storage(
+    let (mut wallet, _mnemonic) = WalletCore::new_init_storage(
         config_path,
         storage_path,
         Some(config_overrides),
         &wallet_password,
     )
     .context("Failed to init wallet")?;
+
+    for (private_key, _balance) in initial_public_accounts {
+        wallet
+            .storage_mut()
+            .key_chain_mut()
+            .add_imported_public_account(private_key.clone());
+    }
+
     wallet
         .store_persistent_data()
-        .await
         .context("Failed to store wallet persistent data")?;
 
     Ok((wallet, temp_wallet_dir, wallet_password))
 }
 
-pub(crate) fn setup_indexer_ffi(
-    bedrock_addr: SocketAddr,
-    initial_data: &config::InitialData,
-) -> Result<(IndexerServiceFFI, TempDir)> {
-    let temp_indexer_dir =
-        tempfile::tempdir().context("Failed to create temp dir for indexer home")?;
-
-    debug!(
-        "Using temp indexer home at {}",
-        temp_indexer_dir.path().display()
-    );
-
-    let indexer_config = config::indexer_config(
-        bedrock_addr,
-        temp_indexer_dir.path().to_owned(),
-        initial_data,
-    )
-    .context("Failed to create Indexer config")?;
-
-    let config_json = serde_json::to_vec(&indexer_config)?;
-    let config_path = temp_indexer_dir.path().join("indexer_config.json");
-    let mut file = File::create(config_path.as_path())?;
-    file.write_all(&config_json)?;
-    file.flush()?;
-
-    let res =
-            // SAFETY: lib function ensures validity of value.
-            unsafe { start_indexer(CString::new(config_path.to_str().unwrap())?.as_ptr(), 0) };
-
-    if res.error.is_error() {
-        anyhow::bail!("Indexer FFI error {:?}", res.error);
+pub async fn setup_private_accounts_with_initial_supply(wallet: &mut WalletCore) -> Result<()> {
+    for _ in INITIAL_PRIVATE_BALANCES_FOR_WALLET {
+        let result = execute_subcommand(
+            wallet,
+            Command::Account(AccountSubcommand::New(NewSubcommand::Private {
+                cci: None,
+                label: None,
+            })),
+        )
+        .await
+        .context("Failed to create a private account")?;
+        let SubcommandReturnValue::RegisterAccount { account_id: _ } = result else {
+            bail!("Expected RegisterAccount return value when creating private account");
+        };
     }
 
-    Ok((
-        // SAFETY: lib function ensures validity of value.
-        unsafe { std::ptr::read(res.value) },
-        temp_indexer_dir,
-    ))
+    let public_account_ids: Vec<_> = wallet
+        .storage()
+        .key_chain()
+        .public_account_ids()
+        .map(|(account_id, _idx)| account_id)
+        .collect();
+
+    if public_account_ids.len() < INITIAL_PRIVATE_BALANCES_FOR_WALLET.len() {
+        bail!(
+            "Expected at least {} public accounts in wallet storage, found {}",
+            INITIAL_PRIVATE_BALANCES_FOR_WALLET.len(),
+            public_account_ids.len()
+        );
+    }
+
+    let private_account_ids: Vec<_> = wallet
+        .storage()
+        .key_chain()
+        .private_account_ids()
+        .map(|(account_id, _idx)| account_id)
+        .collect();
+
+    for ((from, to), amount) in public_account_ids
+        .into_iter()
+        .zip(private_account_ids.into_iter())
+        .zip(INITIAL_PRIVATE_BALANCES_FOR_WALLET)
+    {
+        let result = execute_subcommand(
+            wallet,
+            Command::AuthTransfer(AuthTransferSubcommand::Send {
+                from: public_mention(from),
+                to: Some(private_mention(to)),
+                to_npk: None,
+                to_vpk: None,
+                to_identifier: None,
+                amount,
+            }),
+        )
+        .await
+        .context("Failed to perform initial shielded transfer to private account")?;
+
+        if !matches!(
+            result,
+            SubcommandReturnValue::PrivacyPreservingTransfer { .. }
+        ) {
+            bail!(
+                "Expected PrivacyPreservingTransfer return value when shielding initial private funds"
+            );
+        }
+    }
+
+    Ok(())
 }

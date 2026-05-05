@@ -10,17 +10,25 @@ use bytesize::ByteSize;
 use common::config::BasicAuth;
 use humantime_serde;
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
+use nssa::AccountId;
 use serde::{Deserialize, Serialize};
-use testnet_initial_state::{PrivateAccountPublicInitialData, PublicAccountPublicInitialData};
 use url::Url;
+
+/// A transaction to be applied at genesis to supply initial balances.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GenesisTransaction {
+    SupplyPublicAccount {
+        account_id: AccountId,
+        balance: u128,
+    },
+}
 
 // TODO: Provide default values
 #[derive(Clone, Serialize, Deserialize)]
 pub struct SequencerConfig {
     /// Home dir of sequencer storage.
     pub home: PathBuf,
-    /// Genesis id.
-    pub genesis_id: u64,
     /// If `True`, then adds random sequence of bytes to genesis block.
     pub is_genesis_random: bool,
     /// Maximum number of user transactions in a block (excludes the mandatory clock transaction).
@@ -41,10 +49,9 @@ pub struct SequencerConfig {
     pub signing_key: [u8; 32],
     /// Bedrock configuration options.
     pub bedrock_config: BedrockConfig,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub initial_public_accounts: Option<Vec<PublicAccountPublicInitialData>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub initial_private_accounts: Option<Vec<PrivateAccountPublicInitialData>>,
+    /// Genesis configuration.
+    #[serde(default)]
+    pub genesis: Vec<GenesisTransaction>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]

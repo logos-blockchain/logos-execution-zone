@@ -122,7 +122,22 @@ pub struct V03State {
     programs: HashMap<ProgramId, Program>,
 }
 
+impl Default for V03State {
+    fn default() -> Self {
+        Self {
+            public_state: HashMap::new(),
+            private_state: (CommitmentSet::with_capacity(32), NullifierSet::new()),
+            programs: HashMap::new(),
+        }
+    }
+}
+
 impl V03State {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
     #[must_use]
     pub fn new_with_genesis_accounts(
         initial_data: &[(AccountId, u128)],
@@ -361,6 +376,7 @@ pub mod tests {
 
     use std::collections::HashMap;
 
+    use authenticated_transfer_core::Instruction as AuthTransferInstruction;
     use nssa_core::{
         BlockId, Commitment, InputAccountIdentity, Nullifier, NullifierPublicKey,
         NullifierSecretKey, SharedSecretKey, Timestamp,
@@ -525,8 +541,13 @@ pub mod tests {
         let account_ids = vec![from, to];
         let nonces = vec![Nonce(from_nonce), Nonce(to_nonce)];
         let program_id = Program::authenticated_transfer_program().id();
-        let message =
-            public_transaction::Message::try_new(program_id, account_ids, nonces, balance).unwrap();
+        let message = public_transaction::Message::try_new(
+            program_id,
+            account_ids,
+            nonces,
+            AuthTransferInstruction::Transfer { amount: balance },
+        )
+        .unwrap();
         let witness_set =
             public_transaction::WitnessSet::for_message(&message, &[from_key, to_key]);
         PublicTransaction::new(message, witness_set)
@@ -1206,7 +1227,7 @@ pub mod tests {
         let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
         let tx = PublicTransaction::new(message, witness_set);
 
-        let result = state.transition_from_public_transaction(&tx, 1, 0);
+        let result = state.transition_from_public_transaction(&tx, 2, 0);
 
         assert!(matches!(
             result,
@@ -1240,7 +1261,7 @@ pub mod tests {
         .unwrap();
         let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
         let tx = PublicTransaction::new(message, witness_set);
-        let result = state.transition_from_public_transaction(&tx, 1, 0);
+        let result = state.transition_from_public_transaction(&tx, 2, 0);
 
         assert!(matches!(
             result,
@@ -1293,7 +1314,10 @@ pub mod tests {
 
         let (output, proof) = circuit::execute_and_prove(
             vec![sender, recipient],
-            Program::serialize_instruction(balance_to_move).unwrap(),
+            Program::serialize_instruction(AuthTransferInstruction::Transfer {
+                amount: balance_to_move,
+            })
+            .unwrap(),
             vec![
                 InputAccountIdentity::Public,
                 InputAccountIdentity::PrivateUnauthorized {
@@ -1346,7 +1370,10 @@ pub mod tests {
 
         let (output, proof) = circuit::execute_and_prove(
             vec![sender_pre, recipient_pre],
-            Program::serialize_instruction(balance_to_move).unwrap(),
+            Program::serialize_instruction(AuthTransferInstruction::Transfer {
+                amount: balance_to_move,
+            })
+            .unwrap(),
             vec![
                 InputAccountIdentity::PrivateAuthorizedUpdate {
                     ssk: shared_secret_1,
@@ -1409,7 +1436,10 @@ pub mod tests {
 
         let (output, proof) = circuit::execute_and_prove(
             vec![sender_pre, recipient_pre],
-            Program::serialize_instruction(balance_to_move).unwrap(),
+            Program::serialize_instruction(AuthTransferInstruction::Transfer {
+                amount: balance_to_move,
+            })
+            .unwrap(),
             vec![
                 InputAccountIdentity::PrivateAuthorizedUpdate {
                     ssk: shared_secret,
@@ -2538,7 +2568,7 @@ pub mod tests {
             program.id(),
             vec![from, to],
             vec![Nonce(0), Nonce(0)],
-            amount,
+            AuthTransferInstruction::Transfer { amount },
         )
         .unwrap();
         let witness_set =
@@ -2561,15 +2591,19 @@ pub mod tests {
 
         assert_eq!(state.get_account_by_id(account_id), Account::default());
 
-        let message =
-            public_transaction::Message::try_new(program.id(), vec![account_id], vec![], 0_u128)
-                .unwrap();
+        let message = public_transaction::Message::try_new(
+            program.id(),
+            vec![account_id],
+            vec![],
+            AuthTransferInstruction::Initialize,
+        )
+        .unwrap();
         let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
         let tx = PublicTransaction::new(message, witness_set);
 
-        let result = state.transition_from_public_transaction(&tx, 1, 0);
+        let result = state.transition_from_public_transaction(&tx, 2, 0);
 
-        assert!(matches!(result, Err(NssaError::ProgramExecutionFailed(_))));
+        assert!(matches!(result, Err(NssaError::InvalidProgramBehavior(_))));
         assert_eq!(state.get_account_by_id(account_id), Account::default());
     }
 
@@ -2586,7 +2620,7 @@ pub mod tests {
             program.id(),
             vec![account_id],
             vec![Nonce(0)],
-            0_u128,
+            AuthTransferInstruction::Initialize,
         )
         .unwrap();
         let witness_set = public_transaction::WitnessSet::for_message(&message, &[&account_key]);
@@ -2794,12 +2828,12 @@ pub mod tests {
 
         let result = execute_and_prove(
             vec![public_account],
-            Program::serialize_instruction(0_u128).unwrap(),
+            Program::serialize_instruction(AuthTransferInstruction::Initialize).unwrap(),
             vec![InputAccountIdentity::Public],
             &program.into(),
         );
 
-        assert!(matches!(result, Err(NssaError::ProgramProveFailed(_))));
+        assert!(matches!(result, Err(NssaError::CircuitProvingError(_))));
     }
 
     #[test]
@@ -2831,9 +2865,14 @@ pub mod tests {
         let shared_secret = SharedSecretKey::new(&esk, &sender_keys.vpk());
         let epk = EphemeralPublicKey::from_scalar(esk);
 
+        let balance = 37;
+
         let (output, proof) = execute_and_prove(
             vec![sender_pre, recipient_pre],
-            Program::serialize_instruction(37_u128).unwrap(),
+            Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
+                amount: balance,
+            })
+            .unwrap(),
             vec![
                 InputAccountIdentity::PrivateAuthorizedUpdate {
                     ssk: shared_secret,
@@ -2871,7 +2910,7 @@ pub mod tests {
             state.get_account_by_id(recipient_account_id),
             Account {
                 program_owner: program_id,
-                balance: 37,
+                balance,
                 nonce: Nonce(1),
                 ..Account::default()
             }
@@ -3139,7 +3178,7 @@ pub mod tests {
     /// This test ensures that even if a malicious program tries to perform overflow of balances
     /// it will not be able to break the balance validation.
     #[test]
-    fn malicious_program_cannot_break_balance_validation() {
+    fn malicious_program_cannot_break_balance_validation_if_not_in_genesis() {
         let sender_key = PrivateKey::try_new([37; 32]).unwrap();
         let sender_id = AccountId::from(&PublicKey::new_from_private_key(&sender_key));
         let sender_init_balance: u128 = 10;
@@ -3178,7 +3217,7 @@ pub mod tests {
 
         let witness_set = public_transaction::WitnessSet::for_message(&message, &[&sender_key]);
         let tx = PublicTransaction::new(message, witness_set);
-        let res = state.transition_from_public_transaction(&tx, 1, 0);
+        let res = state.transition_from_public_transaction(&tx, 2, 0);
         let expected_total_balance_pre_states = WrappedBalanceSum::from_balances(
             [sender_init_balance, recipient_init_balance].into_iter(),
         )
@@ -3235,13 +3274,12 @@ pub mod tests {
         let shared_secret = SharedSecretKey::new(&esk, &private_keys.vpk());
         let epk = EphemeralPublicKey::from_scalar(esk);
 
-        // Balance to initialize the account with (0 for a new account)
-        let balance: u128 = 0;
+        let instruction = authenticated_transfer_core::Instruction::Initialize;
 
         // Execute and prove the circuit with the authorized account but no commitment proof
         let (output, proof) = execute_and_prove(
             vec![authorized_account],
-            Program::serialize_instruction(balance).unwrap(),
+            Program::serialize_instruction(instruction).unwrap(),
             vec![InputAccountIdentity::PrivateAuthorizedInit {
                 ssk: shared_secret,
                 nsk: private_keys.nsk,
@@ -3338,12 +3376,12 @@ pub mod tests {
         let shared_secret = SharedSecretKey::new(&esk, &private_keys.vpk());
         let epk = EphemeralPublicKey::from_scalar(esk);
 
-        let balance: u128 = 0;
+        let instruction = authenticated_transfer_core::Instruction::Initialize;
 
         // Step 2: Execute claimer program to claim the account with authentication
         let (output, proof) = execute_and_prove(
             vec![authorized_account.clone()],
-            Program::serialize_instruction(balance).unwrap(),
+            Program::serialize_instruction(instruction).unwrap(),
             vec![InputAccountIdentity::PrivateAuthorizedInit {
                 ssk: shared_secret,
                 nsk: private_keys.nsk,
