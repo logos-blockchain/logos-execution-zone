@@ -1,0 +1,49 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate this-release section
+        uses: orhun/git-cliff-action@v3
+        id: cliff_latest
+        with:
+          config: cliff.toml
+          args: --latest --strip header
+
+      - name: Generate full CHANGELOG.md
+        uses: orhun/git-cliff-action@v3
+        with:
+          config: cliff.toml
+          args: --output CHANGELOG.md
+
+      - name: Commit CHANGELOG.md to main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git checkout main
+          git add CHANGELOG.md
+          if git diff --cached --quiet; then
+            echo "No changelog changes"
+          else
+            git commit -m "chore: update CHANGELOG.md for ${{ github.ref_name }}"
+            git push origin main
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body: ${{ steps.cliff_latest.outputs.content }}
+          token: ${{ secrets.GITHUB_TOKEN }}
