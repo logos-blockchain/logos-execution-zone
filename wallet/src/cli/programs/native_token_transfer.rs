@@ -174,6 +174,13 @@ impl WalletSubcommand for AuthTransferSubcommand {
                         let (from, from_privacy) = parse_addr_with_privacy_prefix(&from)?;
                         let (to, to_privacy) = parse_addr_with_privacy_prefix(&to)?;
 
+                        if from == to {
+                            anyhow::bail!(
+                                "Invalid transfer: --from and --to cannot be the same account ({})",
+                                from
+                            );
+                        }
+
                         match (from_privacy, to_privacy) {
                             (AccountPrivacyKind::Public, AccountPrivacyKind::Public) => {
                                 NativeTokenTransferProgramSubcommand::Public { from, to, amount }
