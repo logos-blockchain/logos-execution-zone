@@ -5,9 +5,16 @@ name = "indexer_ffi"
 version = "0.1.0"
 
 [dependencies]
+nssa.workspace = true
 indexer_service.workspace = true
+indexer_service_rpc.workspace = true
+indexer_service_protocol.workspace = true
+
+url.workspace = true
 log = { workspace = true }
 tokio = { features = ["rt-multi-thread"], workspace = true }
+jsonrpsee.workspace = true
+anyhow.workspace = true
 
 [build-dependencies]
 cbindgen = "0.29"

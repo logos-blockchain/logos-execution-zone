@@ -1,11 +1,18 @@
 #![expect(
     clippy::shadow_unrelated,
     clippy::tests_outside_test_module,
+    clippy::undocumented_unsafe_blocks,
     reason = "We don't care about these in tests"
 )]
 
 use anyhow::{Context as _, Result};
-use indexer_service_rpc::RpcClient as _;
+use indexer_ffi::{
+    IndexerServiceFFI, OperationStatus,
+    api::{
+        PointerResult,
+        types::{FfiAccountId, FfiOption, FfiVec, account::FfiAccount, block::FfiBlock},
+    },
+};
 use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, format_private_account_id, format_public_account_id,
     test_context_ffi::BlockingTestContextFFI, verify_commitment_is_in_state,
@@ -16,6 +23,23 @@ use wallet::cli::{Command, programs::native_token_transfer::AuthTransferSubcomma
 
 /// Maximum time to wait for the indexer to catch up to the sequencer.
 const L2_TO_L1_TIMEOUT_MILLIS: u64 = 180_000;
+
+unsafe extern "C" {
+    unsafe fn query_last_block(
+        indexer: *const IndexerServiceFFI,
+    ) -> PointerResult<u64, OperationStatus>;
+
+    unsafe fn query_block_vec(
+        indexer: *const IndexerServiceFFI,
+        before: FfiOption<u64>,
+        limit: u64,
+    ) -> PointerResult<FfiVec<FfiBlock>, OperationStatus>;
+
+    unsafe fn query_account(
+        indexer: *const IndexerServiceFFI,
+        account_id: FfiAccountId,
+    ) -> PointerResult<FfiAccount, OperationStatus>;
+}
 
 #[test]
 fn indexer_test_run_ffi() -> Result<()> {
@@ -28,10 +52,19 @@ fn indexer_test_run_ffi() -> Result<()> {
     });
 
     let last_block_indexer = blocking_ctx.ctx().get_last_block_indexer(runtime_wrapped)?;
+    let last_block_indexer_ffi_res = unsafe { query_last_block(blocking_ctx.indexer_ffi()) };
+
+    assert!(last_block_indexer_ffi_res.error.is_ok());
+
+    let last_block_indexer_ffi = unsafe { *last_block_indexer_ffi_res.value };
 
     info!("Last block on ind now is {last_block_indexer}");
+    info!("Last block on ind ffi now is {last_block_indexer_ffi}");
 
     assert!(last_block_indexer > 1);
+    assert!(last_block_indexer_ffi > 1);
+
+    assert_eq!(last_block_indexer, last_block_indexer_ffi);
 
     Ok(())
 }
@@ -40,7 +73,6 @@ fn indexer_test_run_ffi() -> Result<()> {
 fn indexer_ffi_block_batching() -> Result<()> {
     let blocking_ctx = BlockingTestContextFFI::new()?;
     let runtime_wrapped = blocking_ctx.runtime();
-    let ctx = blocking_ctx.ctx();
 
     // WAIT
     info!("Waiting for indexer to parse blocks");
@@ -48,31 +80,36 @@ fn indexer_ffi_block_batching() -> Result<()> {
         tokio::time::sleep(std::time::Duration::from_millis(L2_TO_L1_TIMEOUT_MILLIS)).await;
     });
 
-    let last_block_indexer = runtime_wrapped
-        .block_on(ctx.indexer_client().get_last_finalized_block_id())
-        .unwrap();
+    let last_block_indexer_ffi_res = unsafe { query_last_block(blocking_ctx.indexer_ffi()) };
+
+    assert!(last_block_indexer_ffi_res.error.is_ok());
+
+    let last_block_indexer = unsafe { *last_block_indexer_ffi_res.value };
 
     info!("Last block on ind now is {last_block_indexer}");
 
     assert!(last_block_indexer > 1);
 
-    // Getting wide batch to fit all blocks (from latest backwards)
-    let mut block_batch = runtime_wrapped
-        .block_on(ctx.indexer_client().get_blocks(None, 100))
-        .unwrap();
+    let before_ffi = FfiOption::<u64>::from_none();
+    let limit = 100;
 
-    // Reverse to check chain consistency from oldest to newest
-    block_batch.reverse();
+    let block_batch_ffi_res =
+        unsafe { query_block_vec(blocking_ctx.indexer_ffi(), before_ffi, limit) };
 
-    // Checking chain consistency
-    let mut prev_block_hash = block_batch.first().unwrap().header.hash;
+    assert!(block_batch_ffi_res.error.is_ok());
 
-    for block in &block_batch[1..] {
-        assert_eq!(block.header.prev_block_hash, prev_block_hash);
+    let block_batch = unsafe { &*block_batch_ffi_res.value };
+
+    let mut last_block_prev_hash = unsafe { block_batch.get(0) }.header.prev_block_hash.data;
+
+    for i in 1..block_batch.len {
+        let block = unsafe { block_batch.get(i) };
+
+        assert_eq!(last_block_prev_hash, block.header.hash.data);
 
         info!("Block {} chain-consistent", block.header.block_id);
 
-        prev_block_hash = block.header.hash;
+        last_block_prev_hash = block.header.prev_block_hash.data;
     }
 
     Ok(())
@@ -82,6 +119,7 @@ fn indexer_ffi_block_batching() -> Result<()> {
 fn indexer_ffi_state_consistency() -> Result<()> {
     let mut blocking_ctx = BlockingTestContextFFI::new()?;
     let runtime_wrapped = blocking_ctx.runtime_clone();
+    let indexer_ffi = blocking_ctx.indexer_ffi();
     let ctx = blocking_ctx.ctx_mut();
 
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
@@ -175,14 +213,21 @@ fn indexer_ffi_state_consistency() -> Result<()> {
         tokio::time::sleep(std::time::Duration::from_millis(L2_TO_L1_TIMEOUT_MILLIS)).await;
     });
 
-    let acc1_ind_state = runtime_wrapped.block_on(
-        ctx.indexer_client()
-            .get_account(ctx.existing_public_accounts()[0].into()),
-    )?;
-    let acc2_ind_state = runtime_wrapped.block_on(
-        ctx.indexer_client()
-            .get_account(ctx.existing_public_accounts()[1].into()),
-    )?;
+    let acc1_ind_state_ffi =
+        unsafe { query_account(indexer_ffi, (&ctx.existing_public_accounts()[0]).into()) };
+
+    assert!(acc1_ind_state_ffi.error.is_ok());
+
+    let acc1_ind_state_pre = unsafe { &*acc1_ind_state_ffi.value }.clone();
+    let acc1_ind_state: indexer_service_protocol::Account = acc1_ind_state_pre.into();
+
+    let acc2_ind_state_ffi =
+        unsafe { query_account(indexer_ffi, (&ctx.existing_public_accounts()[1]).into()) };
+
+    assert!(acc2_ind_state_ffi.error.is_ok());
+
+    let acc2_ind_state_pre = unsafe { &*acc2_ind_state_ffi.value }.clone();
+    let acc2_ind_state: indexer_service_protocol::Account = acc2_ind_state_pre.into();
 
     info!("Checking correct state transition");
     let acc1_seq_state =
@@ -208,6 +253,7 @@ fn indexer_ffi_state_consistency() -> Result<()> {
 fn indexer_ffi_state_consistency_with_labels() -> Result<()> {
     let mut blocking_ctx = BlockingTestContextFFI::new()?;
     let runtime_wrapped = blocking_ctx.runtime_clone();
+    let indexer_ffi = blocking_ctx.indexer_ffi();
     let ctx = blocking_ctx.ctx_mut();
 
     // Assign labels to both accounts
@@ -269,10 +315,14 @@ fn indexer_ffi_state_consistency_with_labels() -> Result<()> {
         tokio::time::sleep(std::time::Duration::from_millis(L2_TO_L1_TIMEOUT_MILLIS)).await;
     });
 
-    let acc1_ind_state = runtime_wrapped.block_on(
-        ctx.indexer_client()
-            .get_account(ctx.existing_public_accounts()[0].into()),
-    )?;
+    let acc1_ind_state_ffi =
+        unsafe { query_account(indexer_ffi, (&ctx.existing_public_accounts()[0]).into()) };
+
+    assert!(acc1_ind_state_ffi.error.is_ok());
+
+    let acc1_ind_state_pre = unsafe { &*acc1_ind_state_ffi.value }.clone();
+    let acc1_ind_state: indexer_service_protocol::Account = acc1_ind_state_pre.into();
+
     let acc1_seq_state =
         runtime_wrapped.block_on(sequencer_service_rpc::RpcClient::get_account(
             ctx.sequencer_client(),

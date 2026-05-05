@@ -4,5 +4,6 @@ pub use errors::OperationStatus;
 pub use indexer::IndexerServiceFFI;
 
 pub mod api;
+mod client;
 mod errors;
 mod indexer;

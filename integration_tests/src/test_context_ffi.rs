@@ -266,6 +266,11 @@ impl BlockingTestContextFFI {
     pub fn runtime_clone(&self) -> Arc<tokio::runtime::Runtime> {
         Arc::<tokio::runtime::Runtime>::clone(&self.runtime)
     }
+
+    #[must_use]
+    pub const fn indexer_ffi(&self) -> *const IndexerServiceFFI {
+        &raw const (self.indexer_ffi)
+    }
 }
 
 impl Drop for BlockingTestContextFFI {
