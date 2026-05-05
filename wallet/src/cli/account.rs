@@ -220,6 +220,7 @@ impl WalletSubcommand for NewSubcommand {
                             account_id,
                             group_name.clone(),
                             u128::MAX,
+                            Some(pda_seed),
                         );
 
                         println!("PDA shared account from group '{group_name}'");
@@ -259,6 +260,7 @@ impl WalletSubcommand for NewSubcommand {
                             account_id,
                             group_name.clone(),
                             identifier,
+                            None,
                         );
 
                         println!("Shared account from group '{group_name}'");

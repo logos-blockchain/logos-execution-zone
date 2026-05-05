@@ -22,11 +22,15 @@ pub struct UserPrivateAccountData {
 }
 
 /// Metadata for a shared account (GMS-derived), stored alongside the cached plaintext state.
-/// The group label and identifier are needed to re-derive keys during sync.
+/// The group label and identifier (or PDA seed) are needed to re-derive keys during sync.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SharedAccountEntry {
     pub group_label: String,
     pub identifier: Identifier,
+    /// For PDA accounts, the seed used to derive keys via `derive_keys_for_pda`.
+    /// `None` for regular shared accounts (keys derived from identifier via tag).
+    #[serde(default)]
+    pub pda_seed: Option<nssa_core::program::PdaSeed>,
     pub account: Account,
 }
 
