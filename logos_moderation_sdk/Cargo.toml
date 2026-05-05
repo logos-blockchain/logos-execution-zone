@@ -1,0 +1,21 @@
+[package]
+name = "logos_moderation_sdk"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+sharks = "0.5.0"
+sha2.workspace = true 
+serde.workspace = true 
+serde_with.workspace = true
+serde-wasm-bindgen.workspace = true 
+hex.workspace = true
+k256.workspace = true
+borsh.workspace = true 
+js-sys.workspace = true
+wasm-bindgen.workspace = true
+getrandom.workspace = true
+rand.workspace = true

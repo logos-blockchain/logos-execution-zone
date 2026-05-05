@@ -16,5 +16,11 @@ amm_core.workspace = true
 amm_program.workspace = true
 ata_core.workspace = true
 ata_program.workspace = true
+
 risc0-zkvm.workspace = true
+borsh.workspace = true 
 serde = { workspace = true, default-features = false }
+
+[[bin]]
+name = "forum_membership_proof"
+path = "src/bin/forum_membership_proof.rs"

@@ -15,7 +15,7 @@ pub use nullifier::{Identifier, Nullifier, NullifierPublicKey, NullifierSecretKe
 
 pub mod account;
 mod circuit_io;
-mod commitment;
+pub mod commitment;
 mod encoding;
 pub mod encryption;
 mod nullifier;

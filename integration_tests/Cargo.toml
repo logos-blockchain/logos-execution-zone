@@ -8,31 +8,43 @@ license = { workspace = true }
 workspace = true
 
 [dependencies]
-nssa_core = { workspace = true, features = ["host"] }
+logos_moderation_sdk = { path = "../logos_moderation_sdk" }
+membership_registry = { path = "../programs/membership_registry" }
+program_methods = { path = "../program_methods" }
+
 nssa.workspace = true
+nssa_core = { workspace = true, features = ["host"] }
+
 sequencer_core = { workspace = true, features = ["default", "testnet"] }
+sequencer_service_rpc = { workspace = true, features = ["client"] }
 sequencer_service.workspace = true
+
+indexer_service.workspace = true
+indexer_service_rpc.workspace = true
+
+token_core.workspace = true
+ata_core.workspace = true
+
 wallet.workspace = true
 common.workspace = true
 key_protocol.workspace = true
-indexer_service.workspace = true
-serde_json.workspace = true
-token_core.workspace = true
-ata_core.workspace = true
-indexer_service_rpc.workspace = true
-sequencer_service_rpc = { workspace = true, features = ["client"] }
+
 wallet-ffi.workspace = true
 indexer_ffi.workspace = true
 testnet_initial_state.workspace = true
-
+sha2.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 url.workspace = true
-
+rand.workspace = true 
+risc0-zkvm.workspace = true
+borsh.workspace = true
 anyhow.workspace = true
 env_logger.workspace = true
 log.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 hex.workspace = true
 tempfile.workspace = true
 bytesize.workspace = true
 futures.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 testcontainers = { version = "0.27.0", features = ["docker-compose"] }

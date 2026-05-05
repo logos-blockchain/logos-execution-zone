@@ -7,6 +7,7 @@ members = [
   "integration_tests",
   "storage",
   "key_protocol",
+  "logos_moderation_sdk",
   "mempool",
   "wallet",
   "wallet-ffi",
@@ -20,6 +21,7 @@ members = [
   "programs/token",
   "programs/associated_token_account/core",
   "programs/associated_token_account",
+  "programs/membership_registry",
   "sequencer/core",
   "sequencer/service",
   "sequencer/service/protocol",
@@ -146,6 +148,10 @@ actix-web = { version = "4.13.0", default-features = false, features = [
 ] }
 clap = { version = "4.5.42", features = ["derive", "env"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"] }
+wasm-bindgen = "0.2"
+serde-wasm-bindgen = "0.6.5"
+getrandom = { version = "0.2", features = ["js"] }
+js-sys = "0.3"
 
 # Profile for leptos WASM release builds
 [profile.wasm-release]
