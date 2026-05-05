@@ -106,6 +106,7 @@ async fn main() {
                     accounts,
                     Program::serialize_instruction(instruction).unwrap(),
                     &program.into(),
+                    &None,
                 )
                 .await
                 .unwrap();
@@ -147,6 +148,7 @@ async fn main() {
                     accounts,
                     Program::serialize_instruction(instruction).unwrap(),
                     &program.into(),
+                    &None,
                 )
                 .await
                 .unwrap();

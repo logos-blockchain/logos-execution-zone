@@ -65,6 +65,20 @@ pub enum AccountSubcommand {
         #[arg(short, long)]
         label: String,
     },
+    /// Print the raw account ID (without privacy prefix) for shell scripting.
+    ///
+    /// Example: `LEE_DEF=$(wallet account id --account-label lee-def)`.
+    Id {
+        /// Account label.
+        #[arg(long, conflicts_with = "account_id", required_unless_present_any = ["account_id", "key_path"])]
+        account_label: Option<String>,
+        /// Valid 32 byte base58 string with privacy prefix.
+        #[arg(long, conflicts_with = "account_label")]
+        account_id: Option<String>,
+        /// Key path (uses Keycard).
+        #[arg(long, conflicts_with = "account_id", conflicts_with = "account_label")]
+        key_path: Option<String>,
+    },
 }
 
 /// Represents generic register CLI subcommand.
@@ -459,6 +473,22 @@ impl WalletSubcommand for AccountSubcommand {
                 }
                 println!("Label '{label}' set for account {account_id_str}");
 
+                Ok(SubcommandReturnValue::Empty)
+            }
+            Self::Id {
+                account_label,
+                account_id,
+                key_path,
+            } => {
+                let resolved = resolve_id_or_label(
+                    account_id,
+                    account_label,
+                    &wallet_core.storage.labels,
+                    &wallet_core.storage.user_data,
+                    key_path.as_deref(),
+                )?;
+                let (raw_id, _) = parse_addr_with_privacy_prefix(&resolved)?;
+                println!("{raw_id}");
                 Ok(SubcommandReturnValue::Empty)
             }
         }

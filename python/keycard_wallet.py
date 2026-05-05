@@ -3,7 +3,7 @@ from keycard.exceptions import APDUError, TransportError
 from ecdsa import VerifyingKey, SECP256k1  
 
 from keycard.keycard import KeyCard
-
+from keycard.commands.export_lee_key import export_lee_key
 from mnemonic import Mnemonic  
 from keycard import constants  
   
@@ -122,4 +122,25 @@ class KeycardWallet:
 
         except Exception as e:
             print(f"Error signing message: {e}")
+            return None
+
+    def get_private_keys_for_path(self, path: str = "m/44'/60'/0'/0/0") -> bytes | None:
+        try:
+            if not self.card.is_secure_channel_open or not self.card.is_pin_verified:
+                return None
+
+            private_keys = export_lee_key(
+                self.card,
+                constants.DerivationOption.DERIVE,
+                path
+            )
+
+            nsk = private_keys.lee_nsk
+            vsk = private_keys.lee_vsk
+
+            return (nsk, vsk)
+        
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
             return None

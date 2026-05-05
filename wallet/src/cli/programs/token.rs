@@ -5,11 +5,11 @@ use nssa::AccountId;
 
 use crate::{
     AccDecodeData::Decode,
-    WalletCore,
+    PrivacyPreservingAccount, WalletCore,
     cli::{SubcommandReturnValue, WalletSubcommand},
     helperfunctions::{
         AccountPrivacyKind, parse_addr_with_privacy_prefix, resolve_account_label,
-        resolve_id_or_label,
+        resolve_id_or_label, resolve_keycard_id,
     },
     program_facades::token::Token,
 };
@@ -23,26 +23,80 @@ pub enum TokenProgramAgnosticSubcommand {
         #[arg(
             long,
             conflicts_with = "definition_account_label",
+            conflicts_with = "definition_key_path",
+            required_unless_present_any = ["definition_account_label", "definition_key_path"]
+        )]
+        definition_account_id: Option<String>,
+        /// Definition account label (alternative to --definition-account-id).
+        #[arg(
+            long,
+            conflicts_with = "definition_account_id",
+            conflicts_with = "definition_key_path"
+        )]
+        definition_account_label: Option<String>,
+        /// Key path for the definition account (uses Keycard).
+        #[arg(
+            long,
+            conflicts_with = "definition_account_id",
+            conflicts_with = "definition_account_label"
+        )]
+        definition_key_path: Option<String>,
+        /// `supply_account_id` - valid 32 byte base58 string with privacy prefix.
+        #[arg(
+            long,
+            conflicts_with = "supply_account_label",
+            conflicts_with = "supply_key_path",
+            required_unless_present_any = ["supply_account_label", "supply_key_path"]
+        )]
+        supply_account_id: Option<String>,
+        /// Supply account label (alternative to --supply-account-id).
+        #[arg(
+            long,
+            conflicts_with = "supply_account_id",
+            conflicts_with = "supply_key_path"
+        )]
+        supply_account_label: Option<String>,
+        /// Key path for the supply account (uses Keycard).
+        #[arg(
+            long,
+            conflicts_with = "supply_account_id",
+            conflicts_with = "supply_account_label"
+        )]
+        supply_key_path: Option<String>,
+        #[arg(short, long)]
+        name: String,
+        #[arg(short, long)]
+        total_supply: u128,
+    },
+    /// Initialize a token holding account for a given token definition.
+    Init {
+        /// `definition_account_id` - valid 32 byte base58 string with privacy prefix.
+        #[arg(
+            long,
+            conflicts_with = "definition_account_label",
             required_unless_present = "definition_account_label"
         )]
         definition_account_id: Option<String>,
         /// Definition account label (alternative to --definition-account-id).
         #[arg(long, conflicts_with = "definition_account_id")]
         definition_account_label: Option<String>,
-        /// `supply_account_id` - valid 32 byte base58 string with privacy prefix.
+        /// `holder_account_id` - valid 32 byte base58 string with privacy prefix.
         #[arg(
             long,
-            conflicts_with = "supply_account_label",
-            required_unless_present = "supply_account_label"
+            conflicts_with = "holder_account_label",
+            required_unless_present_any = ["holder_account_label", "holder_key_path"]
         )]
-        supply_account_id: Option<String>,
-        /// Supply account label (alternative to --supply-account-id).
-        #[arg(long, conflicts_with = "supply_account_id")]
-        supply_account_label: Option<String>,
-        #[arg(short, long)]
-        name: String,
-        #[arg(short, long)]
-        total_supply: u128,
+        holder_account_id: Option<String>,
+        /// Holder account label (alternative to --holder-account-id).
+        #[arg(long, conflicts_with = "holder_account_id")]
+        holder_account_label: Option<String>,
+        /// `holder_key_path` (alternative to --holder-account-id) uses Keycard.
+        #[arg(
+            long,
+            conflicts_with = "holder_account_id",
+            conflicts_with = "holder_account_label"
+        )]
+        holder_key_path: Option<String>,
     },
     /// Send tokens from one account to another with variable privacy.
     ///
@@ -55,11 +109,12 @@ pub enum TokenProgramAgnosticSubcommand {
         #[arg(
             long,
             conflicts_with = "from_label",
-            required_unless_present = "from_label"
+            conflicts_with = "from_key_path",
+            required_unless_present_any = ["from_label", "from_key_path"]
         )]
         from: Option<String>,
         /// From account label (alternative to --from).
-        #[arg(long, conflicts_with = "from")]
+        #[arg(long, conflicts_with = "from", conflicts_with = "from_key_path")]
         from_label: Option<String>,
         /// to - valid 32 byte base58 string with privacy prefix.
         #[arg(long, conflicts_with = "to_label")]
@@ -80,8 +135,22 @@ pub enum TokenProgramAgnosticSubcommand {
         /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
-        #[arg(long, conflicts_with = "from", conflicts_with = "from_label")]
+        /// `from_key_path` (alternative to --from) uses Keycard.
+        #[arg(
+            long,
+            conflicts_with = "from",
+            conflicts_with = "from",
+            conflicts_with = "from_label"
+        )]
         from_key_path: Option<String>,
+        /// `to_key_path` (alternative to --to) uses Keycard.
+        #[arg(
+            long,
+            conflicts_with = "to",
+            conflicts_with = "to",
+            conflicts_with = "to_label"
+        )]
+        to_key_path: Option<String>,
     },
     /// Burn tokens on `holder`, modify `definition`.
     ///
@@ -125,18 +194,33 @@ pub enum TokenProgramAgnosticSubcommand {
         #[arg(
             long,
             conflicts_with = "definition_label",
-            required_unless_present = "definition_label"
+            conflicts_with = "definition_key_path",
+            required_unless_present_any = ["definition_label", "definition_key_path"]
         )]
         definition: Option<String>,
         /// Definition account label (alternative to --definition).
-        #[arg(long, conflicts_with = "definition")]
+        #[arg(
+            long,
+            conflicts_with = "definition",
+            conflicts_with = "definition_key_path"
+        )]
         definition_label: Option<String>,
+        /// Key path for the definition account (uses Keycard).
+        #[arg(
+            long,
+            conflicts_with = "definition",
+            conflicts_with = "definition_label"
+        )]
+        definition_key_path: Option<String>,
         /// holder - valid 32 byte base58 string with privacy prefix.
-        #[arg(long, conflicts_with = "holder_label", required_unless_present_any = ["holder_label", "holder_key_path"])]
+        #[arg(long, conflicts_with = "holder_label", conflicts_with = "holder_key_path", required_unless_present_any = ["holder_label", "holder_key_path"])]
         holder: Option<String>,
         /// Holder account label (alternative to --holder).
-        #[arg(long, conflicts_with = "holder")]
+        #[arg(long, conflicts_with = "holder", conflicts_with = "holder_key_path")]
         holder_label: Option<String>,
+        /// Key path for the holder account (uses Keycard, for account ID resolution only).
+        #[arg(long, conflicts_with = "holder", conflicts_with = "holder_label")]
+        holder_key_path: Option<String>,
         /// `holder_npk` - valid 32 byte hex string.
         #[arg(long)]
         holder_npk: Option<String>,
@@ -159,11 +243,118 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         match self {
+            Self::Init {
+                definition_account_id,
+                definition_account_label,
+                holder_account_id,
+                holder_account_label,
+                holder_key_path,
+            } => {
+                let definition_str = resolve_id_or_label(
+                    definition_account_id,
+                    definition_account_label,
+                    &wallet_core.storage.labels,
+                    &wallet_core.storage.user_data,
+                    None,
+                )?;
+                let holder_str = resolve_id_or_label(
+                    holder_account_id,
+                    holder_account_label,
+                    &wallet_core.storage.labels,
+                    &wallet_core.storage.user_data,
+                    holder_key_path.as_deref(),
+                )?;
+
+                let (definition_id, definition_privacy) =
+                    parse_addr_with_privacy_prefix(&definition_str)?;
+                let (holder_id, holder_privacy) = parse_addr_with_privacy_prefix(&holder_str)?;
+
+                let definition_account_id: AccountId = definition_id.parse()?;
+                let holder_account_id: AccountId = holder_id.parse()?;
+
+                // Skip if the holder is already initialised — prevents a ZK-prove panic when
+                // the account already has token data (e.g. on re-runs against the same chain).
+                let already_initialized = match holder_privacy {
+                    AccountPrivacyKind::Public => {
+                        let account = wallet_core.get_account_public(holder_account_id).await?;
+                        account != nssa::Account::default()
+                    }
+                    AccountPrivacyKind::Private => wallet_core
+                        .storage
+                        .user_data
+                        .get_private_account(holder_account_id)
+                        .is_some_and(|(_, acct, _)| acct != nssa::Account::default()),
+                };
+                if already_initialized {
+                    println!(
+                        "Holder {holder_id} is already initialized as a token holding. Skipping."
+                    );
+                    return Ok(SubcommandReturnValue::Empty);
+                }
+
+                let definition_account = match definition_privacy {
+                    AccountPrivacyKind::Public => {
+                        PrivacyPreservingAccount::Public(definition_account_id)
+                    }
+                    AccountPrivacyKind::Private => {
+                        PrivacyPreservingAccount::PrivateOwned(definition_account_id)
+                    }
+                };
+                let holder_account = match holder_privacy {
+                    AccountPrivacyKind::Public => {
+                        PrivacyPreservingAccount::Public(holder_account_id)
+                    }
+                    AccountPrivacyKind::Private => {
+                        PrivacyPreservingAccount::PrivateOwned(holder_account_id)
+                    }
+                };
+
+                let (tx_hash, secrets) = Token(wallet_core)
+                    .send_initialize_account(definition_account, holder_account, &holder_key_path)
+                    .await?;
+
+                println!("Transaction hash is {tx_hash}");
+
+                if secrets.is_empty() {
+                    return Ok(SubcommandReturnValue::Empty);
+                }
+
+                let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
+
+                if let NSSATransaction::PrivacyPreserving(tx) = transfer_tx {
+                    let mut secrets_iter = secrets.into_iter();
+                    let mut acc_decode_data = Vec::new();
+
+                    if matches!(definition_privacy, AccountPrivacyKind::Private) {
+                        acc_decode_data.push(Decode(
+                            secrets_iter.next().expect("expected definition's secret"),
+                            definition_account_id,
+                        ));
+                    }
+                    if matches!(holder_privacy, AccountPrivacyKind::Private) {
+                        acc_decode_data.push(Decode(
+                            secrets_iter.next().expect("expected holder's secret"),
+                            holder_account_id,
+                        ));
+                    }
+
+                    wallet_core.decode_insert_privacy_preserving_transaction_results(
+                        &tx,
+                        &acc_decode_data,
+                    )?;
+                }
+
+                wallet_core.store_persistent_data().await?;
+
+                Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
+            }
             Self::New {
                 definition_account_id,
                 definition_account_label,
+                definition_key_path,
                 supply_account_id,
                 supply_account_label,
+                supply_key_path,
                 name,
                 total_supply,
             } => {
@@ -172,19 +363,33 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                     definition_account_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
-                    None,
+                    definition_key_path.as_deref(),
                 )?;
                 let supply_account_id = resolve_id_or_label(
                     supply_account_id,
                     supply_account_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
-                    None,
+                    supply_key_path.as_deref(),
                 )?;
                 let (definition_account_id, definition_addr_privacy) =
                     parse_addr_with_privacy_prefix(&definition_account_id)?;
                 let (supply_account_id, supply_addr_privacy) =
                     parse_addr_with_privacy_prefix(&supply_account_id)?;
+
+                // Skip if already created — prevents a doomed on-chain rejection when the
+                // definition account is already initialised (e.g. on re-runs against the same
+                // chain).
+                if definition_addr_privacy == AccountPrivacyKind::Public {
+                    let def_id: nssa::AccountId = definition_account_id.parse()?;
+                    let def_account = wallet_core.get_account_public(def_id).await?;
+                    if def_account != nssa::Account::default() {
+                        println!(
+                            "Token definition at {definition_account_id} is already initialized. Skipping."
+                        );
+                        return Ok(SubcommandReturnValue::Empty);
+                    }
+                }
 
                 let underlying_subcommand = match (definition_addr_privacy, supply_addr_privacy) {
                     (AccountPrivacyKind::Public, AccountPrivacyKind::Public) => {
@@ -194,6 +399,8 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                                 supply_account_id,
                                 name,
                                 total_supply,
+                                definition_key_path,
+                                supply_key_path,
                             },
                         )
                     }
@@ -241,6 +448,7 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                 to_identifier,
                 amount,
                 from_key_path,
+                to_key_path,
             } => {
                 let from = resolve_id_or_label(
                     from,
@@ -249,14 +457,15 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                     &wallet_core.storage.user_data,
                     from_key_path.as_deref(),
                 )?;
-                let to = match (to, to_label) {
-                    (v, None) => v,
-                    (None, Some(label)) => Some(resolve_account_label(
+                let to = match (to, to_label, to_key_path) {
+                    (v, None, None) => v,
+                    (None, Some(label), None) => Some(resolve_account_label(
                         &label,
                         &wallet_core.storage.labels,
                         &wallet_core.storage.user_data,
                     )?),
-                    (Some(_), Some(_)) => {
+                    (None, None, Some(to_key_path)) => Some(resolve_keycard_id(&to_key_path)?),
+                    _ => {
                         anyhow::bail!("Provide only one of --to or --to-label")
                     }
                 };
@@ -285,6 +494,7 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                                         sender_account_id: from,
                                         recipient_account_id: to,
                                         balance_to_move: amount,
+                                        sender_key_path: from_key_path,
                                     },
                                 )
                             }
@@ -312,6 +522,7 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                                         sender_account_id: from,
                                         recipient_account_id: to,
                                         balance_to_move: amount,
+                                        sender_key_path: from_key_path,
                                     },
                                 )
                             }
@@ -378,6 +589,7 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                                     definition_account_id: definition,
                                     holder_account_id: holder,
                                     amount,
+                                    holder_key_path,
                                 },
                             )
                         }
@@ -416,8 +628,10 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
             Self::Mint {
                 definition,
                 definition_label,
+                definition_key_path,
                 holder,
                 holder_label,
+                holder_key_path,
                 holder_npk,
                 holder_vpk,
                 holder_identifier,
@@ -428,17 +642,20 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                     definition_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
-                    None,
+                    definition_key_path.as_deref(),
                 )?;
-                let holder = match (holder, holder_label) {
-                    (v, None) => v,
-                    (None, Some(label)) => Some(resolve_account_label(
+                let holder = match (holder, holder_label, holder_key_path.as_deref()) {
+                    (v, None, None) => v,
+                    (None, Some(label), None) => Some(resolve_account_label(
                         &label,
                         &wallet_core.storage.labels,
                         &wallet_core.storage.user_data,
                     )?),
-                    (Some(_), Some(_)) => {
-                        anyhow::bail!("Provide only one of --holder or --holder-label")
+                    (None, None, Some(kp)) => Some(resolve_keycard_id(kp)?),
+                    _ => {
+                        anyhow::bail!(
+                            "Provide only one of --holder, --holder-label, or --holder-key-path"
+                        )
                     }
                 };
                 let underlying_subcommand = match (holder, holder_npk, holder_vpk) {
@@ -467,6 +684,7 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                                         definition_account_id: definition,
                                         holder_account_id: holder,
                                         amount,
+                                        definition_key_path: definition_key_path.clone(),
                                     },
                                 )
                             }
@@ -563,6 +781,8 @@ pub enum TokenProgramSubcommandPublic {
         recipient_account_id: String,
         #[arg(short, long)]
         balance_to_move: u128,
+        #[arg(long)]
+        sender_key_path: Option<String>,
     },
     // Burn tokens using the token program
     BurnToken {
@@ -572,6 +792,8 @@ pub enum TokenProgramSubcommandPublic {
         holder_account_id: String,
         #[arg(short, long)]
         amount: u128,
+        #[arg(skip)]
+        holder_key_path: Option<String>,
     },
     // Transfer tokens using the token program
     MintToken {
@@ -581,6 +803,8 @@ pub enum TokenProgramSubcommandPublic {
         holder_account_id: String,
         #[arg(short, long)]
         amount: u128,
+        #[arg(skip)]
+        definition_key_path: Option<String>,
     },
 }
 
@@ -689,6 +913,8 @@ pub enum TokenProgramSubcommandShielded {
         recipient_account_id: String,
         #[arg(short, long)]
         balance_to_move: u128,
+        #[arg(long)]
+        sender_key_path: Option<String>,
     },
     // Transfer tokens using the token program
     TransferTokenShieldedForeign {
@@ -755,6 +981,10 @@ pub enum CreateNewTokenProgramSubcommand {
         name: String,
         #[arg(short, long)]
         total_supply: u128,
+        #[arg(skip)]
+        definition_key_path: Option<String>,
+        #[arg(skip)]
+        supply_key_path: Option<String>,
     },
     /// Create a new token using the token program.
     ///
@@ -807,26 +1037,37 @@ impl WalletSubcommand for TokenProgramSubcommandPublic {
                 sender_account_id,
                 recipient_account_id,
                 balance_to_move,
+                sender_key_path,
             } => {
-                Token(wallet_core)
+                let tx_hash = Token(wallet_core)
                     .send_transfer_transaction(
                         sender_account_id.parse().unwrap(),
                         recipient_account_id.parse().unwrap(),
                         balance_to_move,
+                        sender_key_path,
                     )
                     .await?;
+
+                println!("Transaction hash is {tx_hash}");
+
+                wallet_core.poll_native_token_transfer(tx_hash).await?;
+
+                wallet_core.store_persistent_data().await?;
+
                 Ok(SubcommandReturnValue::Empty)
             }
             Self::BurnToken {
                 definition_account_id,
                 holder_account_id,
                 amount,
+                holder_key_path,
             } => {
                 Token(wallet_core)
                     .send_burn_transaction(
                         definition_account_id.parse().unwrap(),
                         holder_account_id.parse().unwrap(),
                         amount,
+                        holder_key_path.as_deref(),
                     )
                     .await?;
                 Ok(SubcommandReturnValue::Empty)
@@ -835,12 +1076,14 @@ impl WalletSubcommand for TokenProgramSubcommandPublic {
                 definition_account_id,
                 holder_account_id,
                 amount,
+                definition_key_path,
             } => {
                 Token(wallet_core)
                     .send_mint_transaction(
                         definition_account_id.parse().unwrap(),
                         holder_account_id.parse().unwrap(),
                         amount,
+                        definition_key_path.as_deref(),
                     )
                     .await?;
                 Ok(SubcommandReturnValue::Empty)
@@ -1223,6 +1466,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                 sender_account_id,
                 recipient_account_id,
                 balance_to_move,
+                sender_key_path,
             } => {
                 let sender_account_id: AccountId = sender_account_id.parse().unwrap();
                 let recipient_account_id: AccountId = recipient_account_id.parse().unwrap();
@@ -1232,6 +1476,7 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                         sender_account_id,
                         recipient_account_id,
                         balance_to_move,
+                        sender_key_path,
                     )
                     .await?;
 
@@ -1484,15 +1729,26 @@ impl WalletSubcommand for CreateNewTokenProgramSubcommand {
                 supply_account_id,
                 name,
                 total_supply,
+                definition_key_path,
+                supply_key_path,
             } => {
-                Token(wallet_core)
+                let tx_hash = Token(wallet_core)
                     .send_new_definition(
                         definition_account_id.parse().unwrap(),
                         supply_account_id.parse().unwrap(),
                         name,
                         total_supply,
+                        definition_key_path.as_deref(),
+                        supply_key_path.as_deref(),
                     )
                     .await?;
+
+                println!("Transaction hash is {tx_hash}");
+
+                wallet_core.poll_native_token_transfer(tx_hash).await?;
+
+                wallet_core.store_persistent_data().await?;
+
                 Ok(SubcommandReturnValue::Empty)
             }
         }

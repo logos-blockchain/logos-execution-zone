@@ -80,13 +80,15 @@ pub fn resolve_id_or_label(
     match (id, label, key_path) {
         (Some(id), None, None) => Ok(id),
         (None, Some(label), None) => resolve_account_label(&label, labels, user_data),
-        (None, None, Some(key_path)) => {
-            let pin = read_pin()?;
-            KeycardWallet::get_account_id_for_path_with_connect(&pin, key_path)
-                .map_err(anyhow::Error::from)
-        }
+        (None, None, Some(key_path)) => resolve_keycard_id(key_path),
         _ => anyhow::bail!("provide exactly one of account id, account label or keycard path"),
     }
+}
+
+pub fn resolve_keycard_id(key_path: &str) -> Result<String> {
+    let pin = read_pin()?;
+    KeycardWallet::get_public_account_id_for_path_with_connect(&pin, key_path)
+        .map_err(anyhow::Error::from)
 }
 
 /// Resolve an account label to its full `Privacy/id` string representation.

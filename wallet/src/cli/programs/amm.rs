@@ -22,32 +22,68 @@ pub enum AmmProgramAgnosticSubcommand {
         #[arg(
             long,
             conflicts_with = "user_holding_a_label",
-            required_unless_present = "user_holding_a_label"
+            conflicts_with = "user_holding_a_key_path",
+            required_unless_present_any = ["user_holding_a_label", "user_holding_a_key_path"]
         )]
         user_holding_a: Option<String>,
         /// User holding A account label (alternative to --user-holding-a).
-        #[arg(long, conflicts_with = "user_holding_a")]
+        #[arg(
+            long,
+            conflicts_with = "user_holding_a",
+            conflicts_with = "user_holding_a_key_path",
+            required_unless_present_any = ["user_holding_a_label", "user_holding_a_key_path"]
+        )]
         user_holding_a_label: Option<String>,
+        /// Key path for user holding A (uses Keycard, alternative to --user-holding-a/label).
+        #[arg(
+            long,
+            conflicts_with = "user_holding_a",
+            conflicts_with = "user_holding_a_label"
+        )]
+        user_holding_a_key_path: Option<String>,
         /// `user_holding_b` - valid 32 byte base58 string with privacy prefix.
         #[arg(
             long,
             conflicts_with = "user_holding_b_label",
-            required_unless_present = "user_holding_b_label"
+            conflicts_with = "user_holding_b_key_path",
+            required_unless_present_any = ["user_holding_b_label", "user_holding_b_key_path"]
         )]
         user_holding_b: Option<String>,
         /// User holding B account label (alternative to --user-holding-b).
-        #[arg(long, conflicts_with = "user_holding_b")]
+        #[arg(
+            long,
+            conflicts_with = "user_holding_b",
+            conflicts_with = "user_holding_b_key_path"
+        )]
         user_holding_b_label: Option<String>,
+        /// Key path for user holding B (uses Keycard, alternative to --user-holding-b/label).
+        #[arg(
+            long,
+            conflicts_with = "user_holding_b",
+            conflicts_with = "user_holding_b_label"
+        )]
+        user_holding_b_key_path: Option<String>,
         /// `user_holding_lp` - valid 32 byte base58 string with privacy prefix.
         #[arg(
             long,
             conflicts_with = "user_holding_lp_label",
-            required_unless_present = "user_holding_lp_label"
+            conflicts_with = "user_holding_lp_key_path"
         )]
         user_holding_lp: Option<String>,
         /// User holding LP account label (alternative to --user-holding-lp).
-        #[arg(long, conflicts_with = "user_holding_lp")]
+        #[arg(
+            long,
+            conflicts_with = "user_holding_lp",
+            conflicts_with = "user_holding_lp_key_path"
+        )]
         user_holding_lp_label: Option<String>,
+        /// User holding LP key path (alternative to --user-holding-lp) for Keycard.
+        #[arg(
+            long,
+            conflicts_with = "user_holding_lp",
+            conflicts_with = "user_holding_lp_label"
+        )]
+        user_holding_lp_key_path: Option<String>,
         #[arg(long)]
         balance_a: u128,
         #[arg(long)]
@@ -63,7 +99,8 @@ pub enum AmmProgramAgnosticSubcommand {
         #[arg(
             long,
             conflicts_with = "user_holding_a_label",
-            required_unless_present = "user_holding_a_label"
+            conflicts_with = "user_holding_a_key_path",
+            required_unless_present_any = ["user_holding_a_label", "user_holding_a_key_path"]
         )]
         user_holding_a: Option<String>,
         /// User holding A account label (alternative to --user-holding-a).
@@ -73,11 +110,16 @@ pub enum AmmProgramAgnosticSubcommand {
         #[arg(
             long,
             conflicts_with = "user_holding_b_label",
-            required_unless_present = "user_holding_b_label"
+            conflicts_with = "user_holding_b_key_path",
+            required_unless_present_any = ["user_holding_b_label", "user_holding_b_key_path"]
         )]
         user_holding_b: Option<String>,
         /// User holding B account label (alternative to --user-holding-b).
-        #[arg(long, conflicts_with = "user_holding_b")]
+        #[arg(
+            long,
+            conflicts_with = "user_holding_b",
+            conflicts_with = "user_holding_b_key_path"
+        )]
         user_holding_b_label: Option<String>,
         #[arg(long)]
         amount_in: u128,
@@ -86,6 +128,12 @@ pub enum AmmProgramAgnosticSubcommand {
         /// `token_definition` - valid 32 byte base58 string WITHOUT privacy prefix.
         #[arg(long)]
         token_definition: String,
+        /// Key path for the input token's holding account (uses Keycard).
+        #[arg(long, conflicts_with = "user_holding_a")]
+        user_holding_a_key_path: Option<String>,
+        /// Key path for the input token's holding account (uses Keycard).
+        #[arg(long, conflicts_with = "user_holding_b")]
+        user_holding_b_key_path: Option<String>,
     },
     /// Swap specifying exact output amount.
     ///
@@ -106,6 +154,12 @@ pub enum AmmProgramAgnosticSubcommand {
         /// `token_definition` - valid 32 byte base58 string WITHOUT privacy prefix.
         #[arg(long)]
         token_definition: String,
+        /// Key path for the input token's holding account (uses Keycard).
+        #[arg(long, conflicts_with = "user_holding_a")]
+        user_holding_a_key_path: Option<String>,
+        /// Key path for the input token's holding account (uses Keycard).
+        #[arg(long, conflicts_with = "user_holding_b")]
+        user_holding_b_key_path: Option<String>,
     },
     /// Add liquidity.
     ///
@@ -117,22 +171,46 @@ pub enum AmmProgramAgnosticSubcommand {
         #[arg(
             long,
             conflicts_with = "user_holding_a_label",
-            required_unless_present = "user_holding_a_label"
+            conflicts_with = "user_holding_a_key_path",
+            required_unless_present_any = ["user_holding_a_label", "user_holding_a_key_path"]
         )]
         user_holding_a: Option<String>,
         /// User holding A account label (alternative to --user-holding-a).
-        #[arg(long, conflicts_with = "user_holding_a")]
+        #[arg(
+            long,
+            conflicts_with = "user_holding_a",
+            conflicts_with = "user_holding_a_key_path"
+        )]
         user_holding_a_label: Option<String>,
+        /// Key path for user holding A (uses Keycard).
+        #[arg(
+            long,
+            conflicts_with = "user_holding_a",
+            conflicts_with = "user_holding_a_label"
+        )]
+        user_holding_a_key_path: Option<String>,
         /// `user_holding_b` - valid 32 byte base58 string with privacy prefix.
         #[arg(
             long,
             conflicts_with = "user_holding_b_label",
-            required_unless_present = "user_holding_b_label"
+            conflicts_with = "user_holding_b_key_path",
+            required_unless_present_any = ["user_holding_b_label", "user_holding_b_key_path"]
         )]
         user_holding_b: Option<String>,
         /// User holding B account label (alternative to --user-holding-b).
-        #[arg(long, conflicts_with = "user_holding_b")]
+        #[arg(
+            long,
+            conflicts_with = "user_holding_b",
+            conflicts_with = "user_holding_b_key_path"
+        )]
         user_holding_b_label: Option<String>,
+        /// Key path for user holding B (uses Keycard).
+        #[arg(
+            long,
+            conflicts_with = "user_holding_b",
+            conflicts_with = "user_holding_b_label"
+        )]
+        user_holding_b_key_path: Option<String>,
         /// `user_holding_lp` - valid 32 byte base58 string with privacy prefix.
         #[arg(
             long,
@@ -141,8 +219,18 @@ pub enum AmmProgramAgnosticSubcommand {
         )]
         user_holding_lp: Option<String>,
         /// User holding LP account label (alternative to --user-holding-lp).
-        #[arg(long, conflicts_with = "user_holding_lp")]
+        #[arg(
+            long,
+            conflicts_with = "user_holding_lp",
+            conflicts_with = "user_holding_lp_key_path"
+        )]
         user_holding_lp_label: Option<String>,
+        #[arg(
+            long,
+            conflicts_with = "user_holding_lp",
+            conflicts_with = "user_holding_lp_label"
+        )]
+        user_holding_lp_key_path: Option<String>,
         #[arg(long)]
         min_amount_lp: u128,
         #[arg(long)]
@@ -166,6 +254,13 @@ pub enum AmmProgramAgnosticSubcommand {
         /// User holding A account label (alternative to --user-holding-a).
         #[arg(long, conflicts_with = "user_holding_a")]
         user_holding_a_label: Option<String>,
+        /// Key path for user holding a (uses Keycard).
+        #[arg(
+            long,
+            conflicts_with = "user_holding_a",
+            conflicts_with = "user_holding_a_label"
+        )]
+        user_holding_a_key_path: Option<String>,
         /// `user_holding_b` - valid 32 byte base58 string with privacy prefix.
         #[arg(
             long,
@@ -176,16 +271,35 @@ pub enum AmmProgramAgnosticSubcommand {
         /// User holding B account label (alternative to --user-holding-b).
         #[arg(long, conflicts_with = "user_holding_b")]
         user_holding_b_label: Option<String>,
+        /// Key path for user holding B (uses Keycard).
+        #[arg(
+            long,
+            conflicts_with = "user_holding_b",
+            conflicts_with = "user_holding_b_label"
+        )]
+        user_holding_b_key_path: Option<String>,
         /// `user_holding_lp` - valid 32 byte base58 string with privacy prefix.
         #[arg(
             long,
             conflicts_with = "user_holding_lp_label",
-            required_unless_present = "user_holding_lp_label"
+            conflicts_with = "user_holding_lp_key_path",
+            required_unless_present_any = ["user_holding_lp_label", "user_holding_lp_key_path"]
         )]
         user_holding_lp: Option<String>,
         /// User holding LP account label (alternative to --user-holding-lp).
-        #[arg(long, conflicts_with = "user_holding_lp")]
+        #[arg(
+            long,
+            conflicts_with = "user_holding_lp",
+            conflicts_with = "user_holding_lp_key_path"
+        )]
         user_holding_lp_label: Option<String>,
+        /// Key path for user holding LP (uses Keycard).
+        #[arg(
+            long,
+            conflicts_with = "user_holding_lp",
+            conflicts_with = "user_holding_lp_label"
+        )]
+        user_holding_lp_key_path: Option<String>,
         #[arg(long)]
         balance_lp: u128,
         #[arg(long)]
@@ -204,10 +318,13 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
             Self::New {
                 user_holding_a,
                 user_holding_a_label,
+                user_holding_a_key_path,
                 user_holding_b,
                 user_holding_b_label,
+                user_holding_b_key_path,
                 user_holding_lp,
                 user_holding_lp_label,
+                user_holding_lp_key_path,
                 balance_a,
                 balance_b,
             } => {
@@ -216,21 +333,21 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
                     user_holding_a_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
-                    None,
+                    user_holding_a_key_path.as_deref(),
                 )?;
                 let user_holding_b = resolve_id_or_label(
                     user_holding_b,
                     user_holding_b_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
-                    None,
+                    user_holding_b_key_path.as_deref(),
                 )?;
                 let user_holding_lp = resolve_id_or_label(
                     user_holding_lp,
                     user_holding_lp_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
-                    None,
+                    user_holding_lp_key_path.as_deref(),
                 )?;
                 let (user_holding_a, user_holding_a_privacy) =
                     parse_addr_with_privacy_prefix(&user_holding_a)?;
@@ -260,6 +377,8 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
                                 user_holding_lp,
                                 balance_a,
                                 balance_b,
+                                user_holding_a_key_path.as_deref(),
+                                user_holding_b_key_path.as_deref(),
                             )
                             .await?;
 
@@ -274,8 +393,10 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
             Self::SwapExactInput {
                 user_holding_a,
                 user_holding_a_label,
+                user_holding_a_key_path,
                 user_holding_b,
                 user_holding_b_label,
+                user_holding_b_key_path,
                 amount_in,
                 min_amount_out,
                 token_definition,
@@ -285,14 +406,14 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
                     user_holding_a_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
-                    None,
+                    user_holding_a_key_path.as_deref(),
                 )?;
                 let user_holding_b = resolve_id_or_label(
                     user_holding_b,
                     user_holding_b_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
-                    None,
+                    user_holding_b_key_path.as_deref(),
                 )?;
                 let (user_holding_a, user_holding_a_privacy) =
                     parse_addr_with_privacy_prefix(&user_holding_a)?;
@@ -311,6 +432,8 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
                                 amount_in,
                                 min_amount_out,
                                 token_definition.parse()?,
+                                user_holding_a_key_path.as_deref(),
+                                user_holding_b_key_path.as_deref(),
                             )
                             .await?;
 
@@ -328,6 +451,8 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
                 exact_amount_out,
                 max_amount_in,
                 token_definition,
+                user_holding_a_key_path,
+                user_holding_b_key_path,
             } => {
                 let (user_holding_a, user_holding_a_privacy) =
                     parse_addr_with_privacy_prefix(&user_holding_a)?;
@@ -346,6 +471,8 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
                                 exact_amount_out,
                                 max_amount_in,
                                 token_definition.parse()?,
+                                user_holding_a_key_path.as_deref(),
+                                user_holding_b_key_path.as_deref(),
                             )
                             .await?;
 
@@ -360,10 +487,13 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
             Self::AddLiquidity {
                 user_holding_a,
                 user_holding_a_label,
+                user_holding_a_key_path,
                 user_holding_b,
                 user_holding_b_label,
+                user_holding_b_key_path,
                 user_holding_lp,
                 user_holding_lp_label,
+                user_holding_lp_key_path,
                 min_amount_lp,
                 max_amount_a,
                 max_amount_b,
@@ -373,21 +503,21 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
                     user_holding_a_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
-                    None,
+                    user_holding_a_key_path.as_deref(),
                 )?;
                 let user_holding_b = resolve_id_or_label(
                     user_holding_b,
                     user_holding_b_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
-                    None,
+                    user_holding_b_key_path.as_deref(),
                 )?;
                 let user_holding_lp = resolve_id_or_label(
                     user_holding_lp,
                     user_holding_lp_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
-                    None,
+                    user_holding_lp_key_path.as_deref(),
                 )?;
                 let (user_holding_a, user_holding_a_privacy) =
                     parse_addr_with_privacy_prefix(&user_holding_a)?;
@@ -418,6 +548,8 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
                                 min_amount_lp,
                                 max_amount_a,
                                 max_amount_b,
+                                user_holding_a_key_path.as_deref(),
+                                user_holding_b_key_path.as_deref(),
                             )
                             .await?;
 
@@ -432,10 +564,13 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
             Self::RemoveLiquidity {
                 user_holding_a,
                 user_holding_a_label,
+                user_holding_a_key_path,
                 user_holding_b,
                 user_holding_b_label,
+                user_holding_b_key_path,
                 user_holding_lp,
                 user_holding_lp_label,
+                user_holding_lp_key_path,
                 balance_lp,
                 min_amount_a,
                 min_amount_b,
@@ -445,21 +580,21 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
                     user_holding_a_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
-                    None,
+                    user_holding_a_key_path.as_deref(),
                 )?;
                 let user_holding_b = resolve_id_or_label(
                     user_holding_b,
                     user_holding_b_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
-                    None,
+                    user_holding_b_key_path.as_deref(),
                 )?;
                 let user_holding_lp = resolve_id_or_label(
                     user_holding_lp,
                     user_holding_lp_label,
                     &wallet_core.storage.labels,
                     &wallet_core.storage.user_data,
-                    None,
+                    user_holding_lp_key_path.as_deref(),
                 )?;
                 let (user_holding_a, user_holding_a_privacy) =
                     parse_addr_with_privacy_prefix(&user_holding_a)?;
@@ -490,6 +625,7 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
                                 balance_lp,
                                 min_amount_a,
                                 min_amount_b,
+                                user_holding_lp_key_path.as_deref(),
                             )
                             .await?;
 

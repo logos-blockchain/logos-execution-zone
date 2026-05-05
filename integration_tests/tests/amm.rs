@@ -120,6 +120,8 @@ async fn amm_public() -> Result<()> {
         name: "A NAM1".to_owned(),
 
         total_supply: 37,
+        definition_key_path: None,
+        supply_key_path: None,
     };
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
     info!("Waiting for next block creation");
@@ -136,6 +138,7 @@ async fn amm_public() -> Result<()> {
         to_identifier: Some(0),
         amount: 7,
         from_key_path: None,
+        to_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
@@ -151,6 +154,8 @@ async fn amm_public() -> Result<()> {
         name: "A NAM2".to_owned(),
 
         total_supply: 37,
+        definition_key_path: None,
+        supply_key_path: None,
     };
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
     info!("Waiting for next block creation");
@@ -167,6 +172,7 @@ async fn amm_public() -> Result<()> {
         to_identifier: Some(0),
         amount: 7,
         from_key_path: None,
+        to_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
@@ -203,6 +209,9 @@ async fn amm_public() -> Result<()> {
         user_holding_lp_label: None,
         balance_a: 3,
         balance_b: 3,
+        user_holding_a_key_path: None,
+        user_holding_b_key_path: None,
+        user_holding_lp_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::AMM(subcommand)).await?;
@@ -248,6 +257,8 @@ async fn amm_public() -> Result<()> {
         amount_in: 2,
         min_amount_out: 1,
         token_definition: definition_account_id_1.to_string(),
+        user_holding_a_key_path: None,
+        user_holding_b_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::AMM(subcommand)).await?;
@@ -293,6 +304,8 @@ async fn amm_public() -> Result<()> {
         amount_in: 2,
         min_amount_out: 1,
         token_definition: definition_account_id_2.to_string(),
+        user_holding_a_key_path: None,
+        user_holding_b_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::AMM(subcommand)).await?;
@@ -340,6 +353,9 @@ async fn amm_public() -> Result<()> {
         min_amount_lp: 1,
         max_amount_a: 2,
         max_amount_b: 2,
+        user_holding_a_key_path: None,
+        user_holding_b_key_path: None,
+        user_holding_lp_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::AMM(subcommand)).await?;
@@ -387,6 +403,9 @@ async fn amm_public() -> Result<()> {
         balance_lp: 2,
         min_amount_a: 1,
         min_amount_b: 1,
+        user_holding_a_key_path: None,
+        user_holding_b_key_path: None,
+        user_holding_lp_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::AMM(subcommand)).await?;
@@ -543,6 +562,8 @@ async fn amm_new_pool_using_labels() -> Result<()> {
         supply_account_label: None,
         name: "TOKEN1".to_owned(),
         total_supply: 10,
+        definition_key_path: None,
+        supply_key_path: None,
     };
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
@@ -557,6 +578,7 @@ async fn amm_new_pool_using_labels() -> Result<()> {
         to_identifier: Some(0),
         amount: 5,
         from_key_path: None,
+        to_key_path: None,
     };
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
@@ -569,6 +591,8 @@ async fn amm_new_pool_using_labels() -> Result<()> {
         supply_account_label: None,
         name: "TOKEN2".to_owned(),
         total_supply: 10,
+        definition_key_path: None,
+        supply_key_path: None,
     };
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
@@ -583,6 +607,7 @@ async fn amm_new_pool_using_labels() -> Result<()> {
         to_identifier: Some(0),
         amount: 5,
         from_key_path: None,
+        to_key_path: None,
     };
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
@@ -597,6 +622,9 @@ async fn amm_new_pool_using_labels() -> Result<()> {
         user_holding_lp_label: Some(holding_lp_label),
         balance_a: 3,
         balance_b: 3,
+        user_holding_a_key_path: None,
+        user_holding_b_key_path: None,
+        user_holding_lp_key_path: None,
     };
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::AMM(subcommand)).await?;
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;

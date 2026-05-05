@@ -11,6 +11,7 @@ impl NativeTokenTransfer<'_> {
         from: AccountId,
         to: AccountId,
         balance_to_move: u128,
+        from_key_path: &Option<String>,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
         let (instruction_data, program, tx_pre_check) = auth_transfer_preparation(balance_to_move);
 
@@ -23,6 +24,7 @@ impl NativeTokenTransfer<'_> {
                 instruction_data,
                 &program.into(),
                 tx_pre_check,
+                from_key_path,
             )
             .await
             .map(|(resp, secrets)| {
@@ -41,6 +43,7 @@ impl NativeTokenTransfer<'_> {
         to_vpk: ViewingPublicKey,
         to_identifier: Identifier,
         balance_to_move: u128,
+        from_key_path: &Option<String>,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
         let (instruction_data, program, tx_pre_check) = auth_transfer_preparation(balance_to_move);
 
@@ -57,6 +60,7 @@ impl NativeTokenTransfer<'_> {
                 instruction_data,
                 &program.into(),
                 tx_pre_check,
+                from_key_path,
             )
             .await
             .map(|(resp, secrets)| {

@@ -60,6 +60,7 @@ async fn main() {
             accounts,
             Program::serialize_instruction(instruction).unwrap(),
             &program_with_dependencies,
+            &None,
         )
         .await
         .unwrap();
