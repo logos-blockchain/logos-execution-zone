@@ -456,6 +456,7 @@ impl WalletCore {
                 {
                     pre.is_authorized = true;
                 }
+                nonces.push(acc.account.nonce);
             } else {
                 nonces.push(acc.account.nonce);
                 account_ids.push(acc.account_id);
@@ -716,7 +717,9 @@ impl WalletCore {
 
             signatures_and_public_keys.push(
                 KeycardWallet::sign_message_for_path_with_connect(&pin, path, &message.hash())
-                    .expect("Expect a valid signature"), // TODO: Marvin tautology
+                    .expect(
+                        "`wallet::lib::sign_privacy_message_with_keycard()`: Invalid signature",
+                    ),
             );
         }
 

@@ -184,5 +184,7 @@ wallet amm remove-liquidity \
   --min-amount-b 1
 echo "Remove liquidity complete"
 
+
+
 echo ""
 echo "=== All keycard tests finished ==="

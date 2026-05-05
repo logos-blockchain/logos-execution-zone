@@ -16,6 +16,12 @@ pub enum KeycardSubcommand {
         #[arg(short, long)]
         mnemonic: Option<String>,
     },
+    /// Export the private account keys (nsk, vsk) for the given key derivation path.
+    GetPrivateKeys {
+        /// BIP-32 key derivation path (e.g. `m/44'/60'/0'/0/0`).
+        #[arg(long)]
+        key_path: String,
+    },
 }
 
 impl WalletSubcommand for KeycardSubcommand {
@@ -41,6 +47,15 @@ impl WalletSubcommand for KeycardSubcommand {
                     }
                 });
 
+                Ok(SubcommandReturnValue::Empty)
+            }
+            Self::GetPrivateKeys { key_path } => {
+                let pin = read_pin()?;
+                let (nsk, vsk) =
+                    KeycardWallet::get_private_keys_for_path_with_connect(&pin, &key_path)
+                        .map_err(anyhow::Error::from)?;
+                println!("nsk: {}", hex::encode(nsk));
+                println!("vsk: {}", hex::encode(vsk));
                 Ok(SubcommandReturnValue::Empty)
             }
             Self::Load { mnemonic } => {

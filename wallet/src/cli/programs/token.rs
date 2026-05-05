@@ -377,6 +377,20 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                 let (supply_account_id, supply_addr_privacy) =
                     parse_addr_with_privacy_prefix(&supply_account_id)?;
 
+                // Skip if already created — prevents a doomed on-chain rejection when the
+                // definition account is already initialised (e.g. on re-runs against the same
+                // chain).
+                if definition_addr_privacy == AccountPrivacyKind::Public {
+                    let def_id: nssa::AccountId = definition_account_id.parse()?;
+                    let def_account = wallet_core.get_account_public(def_id).await?;
+                    if def_account != nssa::Account::default() {
+                        println!(
+                            "Token definition at {definition_account_id} is already initialized. Skipping."
+                        );
+                        return Ok(SubcommandReturnValue::Empty);
+                    }
+                }
+
                 let underlying_subcommand = match (definition_addr_privacy, supply_addr_privacy) {
                     (AccountPrivacyKind::Public, AccountPrivacyKind::Public) => {
                         TokenProgramSubcommand::Create(
@@ -1025,7 +1039,7 @@ impl WalletSubcommand for TokenProgramSubcommandPublic {
                 balance_to_move,
                 sender_key_path,
             } => {
-                Token(wallet_core)
+                let tx_hash = Token(wallet_core)
                     .send_transfer_transaction(
                         sender_account_id.parse().unwrap(),
                         recipient_account_id.parse().unwrap(),
@@ -1033,6 +1047,13 @@ impl WalletSubcommand for TokenProgramSubcommandPublic {
                         sender_key_path,
                     )
                     .await?;
+
+                println!("Transaction hash is {tx_hash}");
+
+                wallet_core.poll_native_token_transfer(tx_hash).await?;
+
+                wallet_core.store_persistent_data().await?;
+
                 Ok(SubcommandReturnValue::Empty)
             }
             Self::BurnToken {
@@ -1711,7 +1732,7 @@ impl WalletSubcommand for CreateNewTokenProgramSubcommand {
                 definition_key_path,
                 supply_key_path,
             } => {
-                Token(wallet_core)
+                let tx_hash = Token(wallet_core)
                     .send_new_definition(
                         definition_account_id.parse().unwrap(),
                         supply_account_id.parse().unwrap(),
@@ -1721,6 +1742,13 @@ impl WalletSubcommand for CreateNewTokenProgramSubcommand {
                         supply_key_path.as_deref(),
                     )
                     .await?;
+
+                println!("Transaction hash is {tx_hash}");
+
+                wallet_core.poll_native_token_transfer(tx_hash).await?;
+
+                wallet_core.store_persistent_data().await?;
+
                 Ok(SubcommandReturnValue::Empty)
             }
         }

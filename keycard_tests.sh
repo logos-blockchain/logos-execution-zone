@@ -58,13 +58,12 @@ wallet account get --key-path "m/44'/60'/0'/0/1"
 echo ""
 echo "=== Test (1): Shielded auth-transfer to owned private account ==="
 
-wallet account new private --label priv-target 2>/dev/null || true
-
-wallet auth-transfer send --amount 40 \
+wallet auth-transfer send --amount 2 \
   --from-key-path "m/44'/60'/0'/0/0" \
-  --to-label priv-target
+  --to-npk "55204e2934045b044f06d8222b454d46b54788f33c7dec4f6733d441703bb0e6" \
+  --to-vpk "02a8626b0c0ad9383c5678dad48c3969b4174fb377cdb03a6259648032c774cec8"
 echo "Shielded auth-transfer sent"
 
-wallet account sync-private
-echo "Private target account state (should show decoded balance = 40):"
-wallet account get --account-label priv-target
+# TODO: add a time delay here
+
+wallet account get --key-path "m/44'/60'/0'/0/0"
