@@ -168,6 +168,7 @@ impl Amm<'_> {
             .await?)
     }
 
+    #[expect(clippy::too_many_arguments, reason = "To fix later")]
     pub async fn send_swap_exact_input(
         &self,
         user_holding_a: AccountId,
@@ -175,7 +176,8 @@ impl Amm<'_> {
         swap_amount_in: u128,
         min_amount_out: u128,
         token_definition_id_in: AccountId,
-        key_path: Option<&str>,
+        user_holding_a_key_path: Option<&str>,
+        user_holding_b_key_path: Option<&str>,
     ) -> Result<HashType, ExecutionFailureKind> {
         let instruction = amm_core::Instruction::SwapExactInput {
             swap_amount_in,
@@ -241,17 +243,22 @@ impl Amm<'_> {
         .unwrap();
 
         let msg_hash = message.hash();
-        let witness_set = if let Some(kp) = key_path {
+        let witness_set = if let (Some(kp_a), Some(kp_b)) =
+            (user_holding_a_key_path, user_holding_b_key_path)
+        {
             let pin = crate::helperfunctions::read_pin().map_err(|e| {
                 ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<
                     pyo3::exceptions::PyRuntimeError,
                     _,
                 >(e.to_string()))
             })?;
-            let (sig, pk) = keycard_wallet::KeycardWallet::sign_message_for_path_with_connect(
-                &pin, kp, &msg_hash,
+            let (sig1, pk1) = keycard_wallet::KeycardWallet::sign_message_for_path_with_connect(
+                &pin, kp_a, &msg_hash,
             )?;
-            nssa::public_transaction::WitnessSet::from_list(&message, &[sig], &[pk])
+            let (sig2, pk2) = keycard_wallet::KeycardWallet::sign_message_for_path_with_connect(
+                &pin, kp_b, &msg_hash,
+            )?;
+            nssa::public_transaction::WitnessSet::from_list(&message, &[sig1, sig2], &[pk1, pk2])
                 .map_err(ExecutionFailureKind::TransactionBuildError)?
         } else {
             let signing_key = self
@@ -272,6 +279,7 @@ impl Amm<'_> {
             .await?)
     }
 
+    #[expect(clippy::too_many_arguments, reason = "To fix later")]
     pub async fn send_swap_exact_output(
         &self,
         user_holding_a: AccountId,
@@ -279,7 +287,8 @@ impl Amm<'_> {
         exact_amount_out: u128,
         max_amount_in: u128,
         token_definition_id_in: AccountId,
-        key_path: Option<&str>,
+        user_holding_a_key_path: Option<&str>,
+        user_holding_b_key_path: Option<&str>,
     ) -> Result<HashType, ExecutionFailureKind> {
         let instruction = amm_core::Instruction::SwapExactOutput {
             exact_amount_out,
@@ -345,18 +354,27 @@ impl Amm<'_> {
         .unwrap();
 
         let msg_hash = message.hash();
-        let witness_set = if let Some(kp) = key_path {
+        let witness_set = if let (Some(kp_a), Some(kp_b)) =
+            (user_holding_a_key_path, user_holding_b_key_path)
+        {
             let pin = crate::helperfunctions::read_pin().map_err(|e| {
                 ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<
                     pyo3::exceptions::PyRuntimeError,
                     _,
                 >(e.to_string()))
             })?;
-            let (sig, pk) = keycard_wallet::KeycardWallet::sign_message_for_path_with_connect(
-                &pin, kp, &msg_hash,
+            let (sig_1, pk_1) = keycard_wallet::KeycardWallet::sign_message_for_path_with_connect(
+                &pin, kp_a, &msg_hash,
             )?;
-            nssa::public_transaction::WitnessSet::from_list(&message, &[sig], &[pk])
-                .map_err(ExecutionFailureKind::TransactionBuildError)?
+            let (sig_2, pk_2) = keycard_wallet::KeycardWallet::sign_message_for_path_with_connect(
+                &pin, kp_b, &msg_hash,
+            )?;
+            nssa::public_transaction::WitnessSet::from_list(
+                &message,
+                &[sig_1, sig_2],
+                &[pk_1, pk_2],
+            )
+            .map_err(ExecutionFailureKind::TransactionBuildError)?
         } else {
             let signing_key = self
                 .0

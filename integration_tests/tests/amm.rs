@@ -211,6 +211,7 @@ async fn amm_public() -> Result<()> {
         balance_b: 3,
         user_holding_a_key_path: None,
         user_holding_b_key_path: None,
+        user_holding_lp_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::AMM(subcommand)).await?;
@@ -256,7 +257,8 @@ async fn amm_public() -> Result<()> {
         amount_in: 2,
         min_amount_out: 1,
         token_definition: definition_account_id_1.to_string(),
-        key_path: None,
+        user_holding_a_key_path: None,
+        user_holding_b_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::AMM(subcommand)).await?;
@@ -302,7 +304,8 @@ async fn amm_public() -> Result<()> {
         amount_in: 2,
         min_amount_out: 1,
         token_definition: definition_account_id_2.to_string(),
-        key_path: None,
+        user_holding_a_key_path: None,
+        user_holding_b_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::AMM(subcommand)).await?;
@@ -352,6 +355,7 @@ async fn amm_public() -> Result<()> {
         max_amount_b: 2,
         user_holding_a_key_path: None,
         user_holding_b_key_path: None,
+        user_holding_lp_key_path: None,
     };
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::AMM(subcommand)).await?;
@@ -399,6 +403,8 @@ async fn amm_public() -> Result<()> {
         balance_lp: 2,
         min_amount_a: 1,
         min_amount_b: 1,
+        user_holding_a_key_path: None,
+        user_holding_b_key_path: None,
         user_holding_lp_key_path: None,
     };
 
@@ -618,6 +624,7 @@ async fn amm_new_pool_using_labels() -> Result<()> {
         balance_b: 3,
         user_holding_a_key_path: None,
         user_holding_b_key_path: None,
+        user_holding_lp_key_path: None,
     };
     wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::AMM(subcommand)).await?;
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;

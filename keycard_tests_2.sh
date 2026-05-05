@@ -167,7 +167,7 @@ echo "=== Test (6c): Add liquidity (path 4 LEZ + path 3 LEE) ==="
 wallet amm add-liquidity \
   --user-holding-a-key-path "m/44'/60'/0'/0/4" \
   --user-holding-b-key-path "m/44'/60'/0'/0/3" \
-  --user-holding-lp-label   amm-lp-lp-holding \
+  --user-holding-lp-label   "m/44'/60'/0'/0/5" \
   --min-amount-lp 1 \
   --max-amount-a  200 \
   --max-amount-b  200
@@ -176,8 +176,8 @@ echo "Add liquidity complete via keycard"
 echo ""
 echo "=== Test (6d): Remove liquidity (LP from amm-lp-lp-holding) ==="
 wallet amm remove-liquidity \
-  --user-holding-a-label  amm-lp-lez-holding \
-  --user-holding-b-label  amm-lp-lee-holding \
+  --user-holding-a-label  "m/44'/60'/0'/0/4"\
+  --user-holding-b-label  "m/44'/60'/0'/0/3" \
   --user-holding-lp-label amm-lp-lp-holding \
   --balance-lp  1000 \
   --min-amount-a 1 \
