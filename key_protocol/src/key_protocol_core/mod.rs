@@ -274,6 +274,89 @@ mod tests {
     fn group_key_holders_default_empty() {
         let user_data = NSSAUserData::default();
         assert!(user_data.group_key_holders.is_empty());
+        assert!(user_data.shared_accounts.is_empty());
+    }
+
+    #[test]
+    fn shared_account_entry_serde_round_trip() {
+        use nssa_core::program::PdaSeed;
+
+        let entry = SharedAccountEntry {
+            group_label: String::from("test-group"),
+            identifier: 42,
+            pda_seed: None,
+            account: nssa_core::account::Account::default(),
+        };
+        let encoded = bincode::serialize(&entry).expect("serialize");
+        let decoded: SharedAccountEntry = bincode::deserialize(&encoded).expect("deserialize");
+        assert_eq!(decoded.group_label, "test-group");
+        assert_eq!(decoded.identifier, 42);
+        assert!(decoded.pda_seed.is_none());
+
+        let pda_entry = SharedAccountEntry {
+            group_label: String::from("pda-group"),
+            identifier: u128::MAX,
+            pda_seed: Some(PdaSeed::new([7_u8; 32])),
+            account: nssa_core::account::Account::default(),
+        };
+        let pda_encoded = bincode::serialize(&pda_entry).expect("serialize pda");
+        let pda_decoded: SharedAccountEntry =
+            bincode::deserialize(&pda_encoded).expect("deserialize pda");
+        assert_eq!(pda_decoded.group_label, "pda-group");
+        assert_eq!(pda_decoded.identifier, u128::MAX);
+        assert_eq!(pda_decoded.pda_seed.unwrap(), PdaSeed::new([7_u8; 32]));
+    }
+
+    #[test]
+    fn shared_account_entry_none_pda_seed_round_trips() {
+        // Verify that an entry with pda_seed=None serializes and deserializes correctly,
+        // confirming the #[serde(default)] attribute works for backward compatibility.
+        let entry = SharedAccountEntry {
+            group_label: String::from("old"),
+            identifier: 1,
+            pda_seed: None,
+            account: nssa_core::account::Account::default(),
+        };
+        let encoded = bincode::serialize(&entry).expect("serialize");
+        let decoded: SharedAccountEntry = bincode::deserialize(&encoded).expect("deserialize");
+        assert_eq!(decoded.group_label, "old");
+        assert_eq!(decoded.identifier, 1);
+        assert!(decoded.pda_seed.is_none());
+    }
+
+    #[test]
+    fn shared_account_derives_consistent_keys_from_group() {
+        use nssa_core::program::PdaSeed;
+
+        let mut user_data = NSSAUserData::default();
+        let gms_holder = GroupKeyHolder::from_gms([42_u8; 32]);
+        user_data.insert_group_key_holder(String::from("my-group"), gms_holder);
+
+        let holder = user_data.group_key_holder("my-group").unwrap();
+
+        // Regular shared account: derive via tag
+        let tag = [1_u8; 32];
+        let keys_a = holder.derive_keys_for_shared_account(&tag);
+        let keys_b = holder.derive_keys_for_shared_account(&tag);
+        assert_eq!(
+            keys_a.generate_nullifier_public_key(),
+            keys_b.generate_nullifier_public_key(),
+        );
+
+        // PDA shared account: derive via seed
+        let seed = PdaSeed::new([2_u8; 32]);
+        let pda_keys_a = holder.derive_keys_for_pda(&seed);
+        let pda_keys_b = holder.derive_keys_for_pda(&seed);
+        assert_eq!(
+            pda_keys_a.generate_nullifier_public_key(),
+            pda_keys_b.generate_nullifier_public_key(),
+        );
+
+        // PDA and shared derivations don't collide
+        assert_ne!(
+            keys_a.generate_nullifier_public_key(),
+            pda_keys_a.generate_nullifier_public_key(),
+        );
     }
 
     #[test]
