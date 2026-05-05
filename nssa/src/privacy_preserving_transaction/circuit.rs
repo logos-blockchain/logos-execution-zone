@@ -186,6 +186,8 @@ mod tests {
     use nssa_core::{
         Commitment, DUMMY_COMMITMENT_HASH, EncryptionScheme, Nullifier, SharedSecretKey,
         account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
+        encryption::PrivateAccountKind,
+        program::PdaSeed,
     };
 
     use super::*;
@@ -410,5 +412,193 @@ mod tests {
         );
 
         assert!(matches!(result, Err(NssaError::CircuitProvingError(_))));
+    }
+
+    /// A private PDA claimed with a non-default identifier produces a ciphertext that decrypts
+    /// to `PrivateAccountKind::Pda` carrying the correct `(program_id, seed, identifier)`.
+    #[test]
+    fn private_pda_claim_with_custom_identifier_encrypts_correct_kind() {
+        let program = Program::pda_claimer();
+        let keys = test_private_account_keys_1();
+        let npk = keys.npk();
+        let seed = PdaSeed::new([42; 32]);
+        let identifier: u128 = 99;
+        let shared_secret = SharedSecretKey::new(&[55; 32], &keys.vpk());
+
+        let account_id = AccountId::for_private_pda(&program.id(), &seed, &npk, identifier);
+        let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
+
+        let (output, _proof) = execute_and_prove(
+            vec![pre_state],
+            Program::serialize_instruction(seed).unwrap(),
+            vec![3],
+            vec![(npk, identifier, shared_secret.clone())],
+            vec![],
+            vec![None],
+            &program.clone().into(),
+        )
+        .unwrap();
+
+        let commitment = output.new_commitments[0].clone();
+        let (kind, _account) =
+            EncryptionScheme::decrypt(&output.ciphertexts[0], &shared_secret, &commitment, 0)
+                .unwrap();
+
+        assert_eq!(
+            kind,
+            PrivateAccountKind::Pda { program_id: program.id(), seed, identifier },
+        );
+    }
+
+    /// A private PDA family has two members (identifier=0 and identifier=1, same seed/npk).
+    /// Each is funded in a separate transaction; commitments must be distinct and ciphertexts
+    /// must carry the correct `PrivateAccountKind::Pda { identifier }`. Alice then spends both.
+    #[test]
+    fn two_private_pda_family_members_receive_and_spend() {
+        let alice_keys = test_private_account_keys_1();
+        let alice_npk = alice_keys.npk();
+        let recipient_keys = test_private_account_keys_2();
+
+        let proxy = Program::auth_transfer_proxy();
+        let auth_transfer = Program::authenticated_transfer_program();
+        let proxy_id = proxy.id();
+        let auth_transfer_id = auth_transfer.id();
+        let seed = PdaSeed::new([42; 32]);
+        let amount: u128 = 100;
+
+        let program_with_deps = ProgramWithDependencies::new(
+            proxy,
+            [(auth_transfer_id, auth_transfer)].into(),
+        );
+
+        let alice_pda_0_id = AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, 0);
+        let alice_pda_1_id = AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, 1);
+
+        // Public funder account: already owned by auth_transfer so its balance can be debited.
+        let funder = AccountWithMetadata::new(
+            Account { program_owner: auth_transfer_id, balance: 500, ..Account::default() },
+            true,
+            AccountId::new([0xAB; 32]),
+        );
+
+        let alice_shared_0 = SharedSecretKey::new(&[10; 32], &alice_keys.vpk());
+        let alice_shared_1 = SharedSecretKey::new(&[11; 32], &alice_keys.vpk());
+
+        // ── Receive 0: fund alice_pda_0 (identifier = 0) ────────────────────────────────────────
+        let (output_recv_0, _) = execute_and_prove(
+            vec![
+                AccountWithMetadata::new(Account::default(), false, alice_pda_0_id),
+                funder.clone(),
+            ],
+            Program::serialize_instruction((seed, amount, auth_transfer_id)).unwrap(),
+            vec![3, 0],
+            vec![(alice_npk, 0, alice_shared_0.clone())],
+            vec![],
+            vec![None],
+            &program_with_deps,
+        )
+        .unwrap();
+
+        assert_eq!(output_recv_0.new_commitments.len(), 1);
+        let commitment_pda_0 = output_recv_0.new_commitments[0].clone();
+
+        let (kind_0, alice_pda_0_account) = EncryptionScheme::decrypt(
+            &output_recv_0.ciphertexts[0],
+            &alice_shared_0,
+            &commitment_pda_0,
+            0,
+        )
+        .unwrap();
+        assert_eq!(
+            kind_0,
+            PrivateAccountKind::Pda { program_id: proxy_id, seed, identifier: 0 },
+        );
+        assert_eq!(alice_pda_0_account.balance, amount);
+
+        // ── Receive 1: fund alice_pda_1 (identifier = 1, same seed) ─────────────────────────────
+        let (output_recv_1, _) = execute_and_prove(
+            vec![
+                AccountWithMetadata::new(Account::default(), false, alice_pda_1_id),
+                funder.clone(),
+            ],
+            Program::serialize_instruction((seed, amount, auth_transfer_id)).unwrap(),
+            vec![3, 0],
+            vec![(alice_npk, 1, alice_shared_1.clone())],
+            vec![],
+            vec![None],
+            &program_with_deps,
+        )
+        .unwrap();
+
+        assert_eq!(output_recv_1.new_commitments.len(), 1);
+        let commitment_pda_1 = output_recv_1.new_commitments[0].clone();
+
+        let (kind_1, alice_pda_1_account) = EncryptionScheme::decrypt(
+            &output_recv_1.ciphertexts[0],
+            &alice_shared_1,
+            &commitment_pda_1,
+            0,
+        )
+        .unwrap();
+        assert_eq!(
+            kind_1,
+            PrivateAccountKind::Pda { program_id: proxy_id, seed, identifier: 1 },
+        );
+        assert_eq!(alice_pda_1_account.balance, amount);
+
+        // Different identifiers produce distinct commitments.
+        assert_ne!(commitment_pda_0, commitment_pda_1);
+
+        // ── Spend 0: alice spends alice_pda_0 ───────────────────────────────────────────────────
+        let mut cs_0 = CommitmentSet::with_capacity(1);
+        cs_0.extend(std::slice::from_ref(&commitment_pda_0));
+        let proof_pda_0 = cs_0.get_proof_for(&commitment_pda_0);
+
+        let recipient_0_id = AccountId::from((&recipient_keys.npk(), 0u128));
+        let (output_spend_0, _) = execute_and_prove(
+            vec![
+                AccountWithMetadata::new(alice_pda_0_account, true, alice_pda_0_id),
+                AccountWithMetadata::new(Account::default(), false, recipient_0_id),
+            ],
+            Program::serialize_instruction((seed, amount, auth_transfer_id)).unwrap(),
+            vec![3, 2],
+            vec![
+                (alice_npk, 0, alice_shared_0.clone()),
+                (recipient_keys.npk(), 0, SharedSecretKey::new(&[20; 32], &recipient_keys.vpk())),
+            ],
+            vec![alice_keys.nsk],
+            vec![proof_pda_0, None],
+            &program_with_deps,
+        )
+        .unwrap();
+
+        assert_eq!(output_spend_0.new_commitments.len(), 2);
+        assert_eq!(output_spend_0.new_nullifiers.len(), 2);
+
+        // ── Spend 1: alice spends alice_pda_1 ───────────────────────────────────────────────────
+        let mut cs_1 = CommitmentSet::with_capacity(1);
+        cs_1.extend(std::slice::from_ref(&commitment_pda_1));
+        let proof_pda_1 = cs_1.get_proof_for(&commitment_pda_1);
+
+        let recipient_1_id = AccountId::from((&recipient_keys.npk(), 1u128));
+        let (output_spend_1, _) = execute_and_prove(
+            vec![
+                AccountWithMetadata::new(alice_pda_1_account, true, alice_pda_1_id),
+                AccountWithMetadata::new(Account::default(), false, recipient_1_id),
+            ],
+            Program::serialize_instruction((seed, amount, auth_transfer_id)).unwrap(),
+            vec![3, 2],
+            vec![
+                (alice_npk, 1, alice_shared_1.clone()),
+                (recipient_keys.npk(), 1, SharedSecretKey::new(&[21; 32], &recipient_keys.vpk())),
+            ],
+            vec![alice_keys.nsk],
+            vec![proof_pda_1, None],
+            &program_with_deps,
+        )
+        .unwrap();
+
+        assert_eq!(output_spend_1.new_commitments.len(), 2);
+        assert_eq!(output_spend_1.new_nullifiers.len(), 2);
     }
 }

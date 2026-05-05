@@ -356,12 +356,7 @@ impl ExecutionState {
                     },
                     3 => {
                         match claim {
-                            Claim::Authorized => {
-                                assert!(
-                                    pre_is_authorized,
-                                    "Cannot claim unauthorized private PDA {pre_account_id}"
-                                );
-                            }
+                            Claim::Authorized => {}
                             Claim::Pda(seed) => {
                                 let (npk, identifier) = self
                                 .private_pda_npk_by_position

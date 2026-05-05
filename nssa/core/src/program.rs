@@ -923,6 +923,23 @@ mod tests {
         );
     }
 
+    /// Different identifiers produce different addresses for the same (program_id, seed, npk),
+    /// confirming that each (program_id, seed, npk) controls a family of 2^128 addresses.
+    #[test]
+    fn for_private_pda_differs_for_different_identifier() {
+        let program_id: ProgramId = [1; 8];
+        let seed = PdaSeed::new([2; 32]);
+        let npk = NullifierPublicKey([3; 32]);
+        assert_ne!(
+            AccountId::for_private_pda(&program_id, &seed, &npk, 0),
+            AccountId::for_private_pda(&program_id, &seed, &npk, 1),
+        );
+        assert_ne!(
+            AccountId::for_private_pda(&program_id, &seed, &npk, 0),
+            AccountId::for_private_pda(&program_id, &seed, &npk, u128::MAX),
+        );
+    }
+
     /// A private PDA at the same (program, seed) has a different address than a public PDA,
     /// because the private formula uses a different prefix and includes npk.
     #[test]
