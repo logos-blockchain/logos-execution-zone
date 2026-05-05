@@ -27,7 +27,7 @@ use nssa::{
     public_transaction as putx,
 };
 use nssa_core::{
-    MembershipProof, NullifierPublicKey,
+    InputAccountIdentity, MembershipProof, NullifierPublicKey,
     account::{AccountWithMetadata, Nonce, data::Data},
     encryption::ViewingPublicKey,
 };
@@ -251,10 +251,19 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
     let (output, proof) = circuit::execute_and_prove(
         vec![sender_pre, recipient_pre],
         Program::serialize_instruction(balance_to_move).unwrap(),
-        vec![1, 2],
-        vec![(sender_npk, 0, sender_ss), (recipient_npk, 0, recipient_ss)],
-        vec![sender_nsk],
-        vec![Some(proof)],
+        vec![
+            InputAccountIdentity::PrivateAuthorizedUpdate {
+                ssk: sender_ss,
+                nsk: sender_nsk,
+                membership_proof: proof,
+                identifier: 0,
+            },
+            InputAccountIdentity::PrivateUnauthorized {
+                npk: recipient_npk,
+                ssk: recipient_ss,
+                identifier: 0,
+            },
+        ],
         &program.into(),
     )
     .unwrap();

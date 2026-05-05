@@ -36,8 +36,10 @@ impl FromStr for Signature {
 }
 
 impl Signature {
+    /// This function expects the incoming message to be prehashed to be pre-2022 BIP-340/Keycard
+    /// compatible.
     #[must_use]
-    pub fn new(key: &PrivateKey, message: &[u8]) -> Self {
+    pub fn new(key: &PrivateKey, message: &[u8; 32]) -> Self {
         let mut aux_random = [0_u8; 32];
         OsRng.fill_bytes(&mut aux_random);
         Self::new_with_aux_random(key, message, aux_random)
@@ -45,14 +47,14 @@ impl Signature {
 
     pub(crate) fn new_with_aux_random(
         key: &PrivateKey,
-        message: &[u8],
+        message: &[u8; 32],
         aux_random: [u8; 32],
     ) -> Self {
         let value = {
             let signing_key = k256::schnorr::SigningKey::from_bytes(key.value())
                 .expect("Expect valid signing key");
             signing_key
-                .sign_raw(message, &aux_random)
+                .sign_prehash_with_aux_rand(message, &aux_random)
                 .expect("Expect to produce a valid signature")
                 .to_bytes()
         };
@@ -61,7 +63,7 @@ impl Signature {
     }
 
     #[must_use]
-    pub fn is_valid_for(&self, bytes: &[u8], public_key: &PublicKey) -> bool {
+    pub fn is_valid_for(&self, bytes: &[u8; 32], public_key: &PublicKey) -> bool {
         let Ok(pk) = k256::schnorr::VerifyingKey::from_bytes(public_key.value()) else {
             return false;
         };
@@ -97,9 +99,8 @@ mod tests {
             let Some(aux_random) = test_vector.aux_rand else {
                 continue;
             };
-            let Some(message) = test_vector.message else {
-                continue;
-            };
+            let message = test_vector.message;
+
             if !test_vector.verification_result {
                 continue;
             }
@@ -114,7 +115,7 @@ mod tests {
     #[test]
     fn signature_verification_from_bip340_test_vectors() {
         for (i, test_vector) in bip340_test_vectors::test_vectors().into_iter().enumerate() {
-            let message = test_vector.message.unwrap_or(vec![]);
+            let message = test_vector.message;
             let expected_result = test_vector.verification_result;
 
             let result = test_vector

@@ -2,7 +2,8 @@ use anyhow::Result;
 use key_protocol::key_management::ephemeral_key_holder::EphemeralKeyHolder;
 use nssa::{AccountId, PrivateKey};
 use nssa_core::{
-    Identifier, MembershipProof, NullifierPublicKey, NullifierSecretKey, SharedSecretKey,
+    Identifier, InputAccountIdentity, MembershipProof, NullifierPublicKey, NullifierSecretKey,
+    SharedSecretKey,
     account::{AccountWithMetadata, Nonce},
     encryption::{EphemeralPublicKey, ViewingPublicKey},
     program::{PdaSeed, ProgramId},
@@ -54,7 +55,6 @@ impl PrivacyPreservingAccount {
 
 pub struct PrivateAccountKeys {
     pub npk: NullifierPublicKey,
-    pub identifier: Identifier,
     pub ssk: SharedSecretKey,
     pub vpk: ViewingPublicKey,
     pub epk: EphemeralPublicKey,
@@ -70,7 +70,6 @@ enum State {
 
 pub struct AccountManager {
     states: Vec<State>,
-    visibility_mask: Vec<u8>,
 }
 
 impl AccountManager {
@@ -78,11 +77,10 @@ impl AccountManager {
         wallet: &WalletCore,
         accounts: Vec<PrivacyPreservingAccount>,
     ) -> Result<Self, ExecutionFailureKind> {
-        let mut pre_states = Vec::with_capacity(accounts.len());
-        let mut visibility_mask = Vec::with_capacity(accounts.len());
+        let mut states = Vec::with_capacity(accounts.len());
 
         for account in accounts {
-            let (state, mask) = match account {
+            let state = match account {
                 PrivacyPreservingAccount::Public(account_id) => {
                     let acc = wallet
                         .get_account_public(account_id)
@@ -92,13 +90,12 @@ impl AccountManager {
                     let sk = wallet.get_account_public_signing_key(account_id).cloned();
                     let account = AccountWithMetadata::new(acc.clone(), sk.is_some(), account_id);
 
-                    (State::Public { account, sk }, 0)
+                    State::Public { account, sk }
                 }
                 PrivacyPreservingAccount::PrivateOwned(account_id) => {
                     let pre = private_acc_preparation(wallet, account_id).await?;
-                    let mask = if pre.pre_state.is_authorized { 1 } else { 2 };
 
-                    (State::Private(pre), mask)
+                    State::Private(pre)
                 }
                 PrivacyPreservingAccount::PrivateForeign {
                     npk,
@@ -107,6 +104,9 @@ impl AccountManager {
                 } => {
                     let acc = nssa_core::account::Account::default();
                     let auth_acc = AccountWithMetadata::new(acc, false, (&npk, identifier));
+                    let eph_holder = EphemeralKeyHolder::new(&npk);
+                    let ssk = eph_holder.calculate_shared_secret_sender(&vpk);
+                    let epk = eph_holder.generate_ephemeral_public_key();
                     let pre = AccountPreparedData {
                         nsk: None,
                         npk,
@@ -114,9 +114,11 @@ impl AccountManager {
                         vpk,
                         pre_state: auth_acc,
                         proof: None,
+                        ssk,
+                        epk,
                     };
 
-                    (State::Private(pre), 2)
+                    State::Private(pre)
                 }
                 PrivacyPreservingAccount::PrivatePda {
                     nsk,
@@ -128,21 +130,16 @@ impl AccountManager {
                     let pre =
                         private_pda_preparation(wallet, nsk, npk, vpk, &program_id, &seed).await?;
 
-                    (State::Private(pre), 3)
+                    State::Private(pre)
                 }
             };
 
-            pre_states.push(state);
-            visibility_mask.push(mask);
+            states.push(state);
         }
 
-        Ok(Self {
-            states: pre_states,
-            visibility_mask,
-        })
+        Ok(Self { states })
     }
 
-    #[must_use]
     pub fn pre_states(&self) -> Vec<AccountWithMetadata> {
         self.states
             .iter()
@@ -153,12 +150,6 @@ impl AccountManager {
             .collect()
     }
 
-    #[must_use]
-    pub fn visibility_mask(&self) -> &[u8] {
-        &self.visibility_mask
-    }
-
-    #[must_use]
     pub fn public_account_nonces(&self) -> Vec<Nonce> {
         self.states
             .iter()
@@ -169,50 +160,70 @@ impl AccountManager {
             .collect()
     }
 
-    #[must_use]
     pub fn private_account_keys(&self) -> Vec<PrivateAccountKeys> {
         self.states
             .iter()
             .filter_map(|state| match state {
-                State::Private(pre) => {
-                    let eph_holder = EphemeralKeyHolder::new(&pre.npk);
+                State::Private(pre) => Some(PrivateAccountKeys {
+                    npk: pre.npk,
+                    ssk: pre.ssk,
+                    vpk: pre.vpk.clone(),
+                    epk: pre.epk.clone(),
+                }),
+                State::Public { .. } => None,
+            })
+            .collect()
+    }
 
-                    Some(PrivateAccountKeys {
-                        npk: pre.npk,
-                        identifier: pre.identifier,
-                        ssk: eph_holder.calculate_shared_secret_sender(&pre.vpk),
-                        vpk: pre.vpk.clone(),
-                        epk: eph_holder.generate_ephemeral_public_key(),
-                    })
+    /// Build the per-account input vec for the privacy-preserving circuit. Each variant carries
+    /// exactly the fields the circuit's code path for that account needs, with the ephemeral
+    /// keys (`ssk`) drawn from the cached values that `private_account_keys` and the message
+    /// construction also use, so all three views agree on the same ephemeral key.
+    pub fn account_identities(&self) -> Vec<InputAccountIdentity> {
+        self.states
+            .iter()
+            .map(|state| match state {
+                State::Public { .. } => InputAccountIdentity::Public,
+                State::Private(pre) if pre.identifier == u128::MAX => {
+                    // Private PDA account
+                    match (pre.nsk, pre.proof.clone()) {
+                        (Some(nsk), Some(membership_proof)) => {
+                            InputAccountIdentity::PrivatePdaUpdate {
+                                ssk: pre.ssk,
+                                nsk,
+                                membership_proof,
+                            }
+                        }
+                        _ => InputAccountIdentity::PrivatePdaInit {
+                            npk: pre.npk,
+                            ssk: pre.ssk,
+                        },
+                    }
                 }
-                State::Public { .. } => None,
+                State::Private(pre) => match (pre.nsk, pre.proof.clone()) {
+                    (Some(nsk), Some(membership_proof)) => {
+                        InputAccountIdentity::PrivateAuthorizedUpdate {
+                            ssk: pre.ssk,
+                            nsk,
+                            membership_proof,
+                            identifier: pre.identifier,
+                        }
+                    }
+                    (Some(nsk), None) => InputAccountIdentity::PrivateAuthorizedInit {
+                        ssk: pre.ssk,
+                        nsk,
+                        identifier: pre.identifier,
+                    },
+                    (None, _) => InputAccountIdentity::PrivateUnauthorized {
+                        npk: pre.npk,
+                        ssk: pre.ssk,
+                        identifier: pre.identifier,
+                    },
+                },
             })
             .collect()
     }
 
-    #[must_use]
-    pub fn private_account_auth(&self) -> Vec<NullifierSecretKey> {
-        self.states
-            .iter()
-            .filter_map(|state| match state {
-                State::Private(pre) => pre.nsk,
-                State::Public { .. } => None,
-            })
-            .collect()
-    }
-
-    #[must_use]
-    pub fn private_account_membership_proofs(&self) -> Vec<Option<MembershipProof>> {
-        self.states
-            .iter()
-            .filter_map(|state| match state {
-                State::Private(pre) => Some(pre.proof.clone()),
-                State::Public { .. } => None,
-            })
-            .collect()
-    }
-
-    #[must_use]
     pub fn public_account_ids(&self) -> Vec<AccountId> {
         self.states
             .iter()
@@ -223,7 +234,6 @@ impl AccountManager {
             .collect()
     }
 
-    #[must_use]
     pub fn public_account_auth(&self) -> Vec<&PrivateKey> {
         self.states
             .iter()
@@ -242,6 +252,54 @@ struct AccountPreparedData {
     vpk: ViewingPublicKey,
     pre_state: AccountWithMetadata,
     proof: Option<MembershipProof>,
+    /// Cached shared-secret key derived once at `AccountManager::new`. Reused for both the
+    /// circuit input variant (`account_identities()`) and the message ephemeral-key tuples
+    /// (`private_account_keys()`), so all consumers see the same key. The corresponding
+    /// `EphemeralKeyHolder` uses `OsRng` and would produce a different value on a second call.
+    ssk: SharedSecretKey,
+    /// Cached ephemeral public key, paired with `ssk`.
+    epk: EphemeralPublicKey,
+}
+
+async fn private_acc_preparation(
+    wallet: &WalletCore,
+    account_id: AccountId,
+) -> Result<AccountPreparedData, ExecutionFailureKind> {
+    let Some((from_keys, from_acc, from_identifier)) =
+        wallet.storage.user_data.get_private_account(account_id)
+    else {
+        return Err(ExecutionFailureKind::KeyNotFoundError);
+    };
+
+    let nsk = from_keys.private_key_holder.nullifier_secret_key;
+
+    let from_npk = from_keys.nullifier_public_key;
+    let from_vpk = from_keys.viewing_public_key;
+
+    // TODO: Remove this unwrap, error types must be compatible
+    let proof = wallet
+        .check_private_account_initialized(account_id)
+        .await
+        .unwrap();
+
+    // TODO: Technically we could allow unauthorized owned accounts, but currently we don't have
+    // support from that in the wallet.
+    let sender_pre = AccountWithMetadata::new(from_acc.clone(), true, (&from_npk, from_identifier));
+
+    let eph_holder = EphemeralKeyHolder::new(&from_npk);
+    let ssk = eph_holder.calculate_shared_secret_sender(&from_vpk);
+    let epk = eph_holder.generate_ephemeral_public_key();
+
+    Ok(AccountPreparedData {
+        nsk: Some(nsk),
+        npk: from_npk,
+        identifier: from_identifier,
+        vpk: from_vpk,
+        pre_state: sender_pre,
+        proof,
+        ssk,
+        epk,
+    })
 }
 
 async fn private_pda_preparation(
@@ -281,6 +339,10 @@ async fn private_pda_preparation(
         None
     };
 
+    let eph_holder = EphemeralKeyHolder::new(&npk);
+    let ssk = eph_holder.calculate_shared_secret_sender(&vpk);
+    let epk = eph_holder.generate_ephemeral_public_key();
+
     Ok(AccountPreparedData {
         nsk: exists.then_some(nsk),
         npk,
@@ -288,58 +350,7 @@ async fn private_pda_preparation(
         vpk,
         pre_state,
         proof,
+        ssk,
+        epk,
     })
-}
-
-async fn private_acc_preparation(
-    wallet: &WalletCore,
-    account_id: AccountId,
-) -> Result<AccountPreparedData, ExecutionFailureKind> {
-    let Some((from_keys, from_acc, from_identifier)) =
-        wallet.storage.user_data.get_private_account(account_id)
-    else {
-        return Err(ExecutionFailureKind::KeyNotFoundError);
-    };
-
-    let nsk = from_keys.private_key_holder.nullifier_secret_key;
-
-    let from_npk = from_keys.nullifier_public_key;
-    let from_vpk = from_keys.viewing_public_key;
-
-    // TODO: Remove this unwrap, error types must be compatible
-    let proof = wallet
-        .check_private_account_initialized(account_id)
-        .await
-        .unwrap();
-
-    // TODO: Technically we could allow unauthorized owned accounts, but currently we don't have
-    // support from that in the wallet.
-    let sender_pre = AccountWithMetadata::new(from_acc.clone(), true, (&from_npk, from_identifier));
-
-    Ok(AccountPreparedData {
-        nsk: Some(nsk),
-        npk: from_npk,
-        identifier: from_identifier,
-        vpk: from_vpk,
-        pre_state: sender_pre,
-        proof,
-    })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn private_pda_is_private() {
-        let acc = PrivacyPreservingAccount::PrivatePda {
-            nsk: [0; 32],
-            npk: NullifierPublicKey([1; 32]),
-            vpk: ViewingPublicKey::from_scalar([2; 32]),
-            program_id: [3; 8],
-            seed: PdaSeed::new([4; 32]),
-        };
-        assert!(acc.is_private());
-        assert!(!acc.is_public());
-    }
 }
