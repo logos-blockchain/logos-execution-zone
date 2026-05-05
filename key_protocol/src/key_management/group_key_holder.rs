@@ -105,6 +105,21 @@ impl GroupKeyHolder {
             .produce_private_key_holder(None)
     }
 
+    /// Derive keys for a shared regular (non-PDA) private account.
+    ///
+    /// Uses a distinct domain separator from `derive_keys_for_pda` to prevent cross-domain
+    /// key collisions. The `tag` should be a stable, unique 32-byte value (e.g. derived from
+    /// a random identifier at account creation time).
+    #[must_use]
+    pub fn derive_keys_for_shared_account(&self, tag: &[u8; 32]) -> PrivateKeyHolder {
+        const PREFIX: &[u8; 32] = b"/LEE/v0.3/GroupKeyDerivation/SHA";
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(PREFIX);
+        hasher.update(self.gms);
+        hasher.update(tag);
+        SecretSpendingKey(hasher.finalize_fixed().into()).produce_private_key_holder(None)
+    }
+
     /// Encrypts this holder's GMS under the recipient's [`SealingPublicKey`].
     ///
     /// Uses an ephemeral ECDH key exchange to derive a shared secret, then AES-256-GCM
@@ -500,5 +515,53 @@ mod tests {
         let alice_account_id = AccountId::for_private_pda(&program_id, &pda_seed, &alice_npk);
         let bob_account_id = AccountId::for_private_pda(&program_id, &pda_seed, &bob_npk);
         assert_eq!(alice_account_id, bob_account_id);
+    }
+
+    /// Same GMS + same tag produces same keys for shared accounts.
+    #[test]
+    fn shared_account_same_gms_same_tag_produces_same_keys() {
+        let gms = [42_u8; 32];
+        let tag = [1_u8; 32];
+        let holder_a = GroupKeyHolder::from_gms(gms);
+        let holder_b = GroupKeyHolder::from_gms(gms);
+
+        let npk_a = holder_a
+            .derive_keys_for_shared_account(&tag)
+            .generate_nullifier_public_key();
+        let npk_b = holder_b
+            .derive_keys_for_shared_account(&tag)
+            .generate_nullifier_public_key();
+
+        assert_eq!(npk_a, npk_b);
+    }
+
+    /// Different tags produce different keys for shared accounts.
+    #[test]
+    fn shared_account_different_tags_produce_different_keys() {
+        let holder = GroupKeyHolder::from_gms([42_u8; 32]);
+        let npk_a = holder
+            .derive_keys_for_shared_account(&[1_u8; 32])
+            .generate_nullifier_public_key();
+        let npk_b = holder
+            .derive_keys_for_shared_account(&[2_u8; 32])
+            .generate_nullifier_public_key();
+
+        assert_ne!(npk_a, npk_b);
+    }
+
+    /// PDA and shared account derivations from the same GMS + same bytes never collide.
+    #[test]
+    fn pda_and_shared_derivations_do_not_collide() {
+        let holder = GroupKeyHolder::from_gms([42_u8; 32]);
+        let bytes = [1_u8; 32];
+
+        let pda_npk = holder
+            .derive_keys_for_pda(&PdaSeed::new(bytes))
+            .generate_nullifier_public_key();
+        let shared_npk = holder
+            .derive_keys_for_shared_account(&bytes)
+            .generate_nullifier_public_key();
+
+        assert_ne!(pda_npk, shared_npk);
     }
 }

@@ -30,6 +30,15 @@ pub enum PrivacyPreservingAccount {
         program_id: ProgramId,
         seed: PdaSeed,
     },
+    /// A shared regular private account with externally-provided keys (e.g. from GMS).
+    /// Uses standard `AccountId = from((&npk, identifier))` and mask 1/2.
+    /// Works with `authenticated_transfer` and all existing programs out of the box.
+    PrivateShared {
+        nsk: NullifierSecretKey,
+        npk: NullifierPublicKey,
+        vpk: ViewingPublicKey,
+        identifier: Identifier,
+    },
 }
 
 impl PrivacyPreservingAccount {
@@ -49,6 +58,7 @@ impl PrivacyPreservingAccount {
                     identifier: _,
                 }
                 | Self::PrivatePda { .. }
+                | Self::PrivateShared { .. }
         )
     }
 }
@@ -111,6 +121,7 @@ impl AccountManager {
                         nsk: None,
                         npk,
                         identifier,
+                        is_pda: false,
                         vpk,
                         pre_state: auth_acc,
                         proof: None,
@@ -129,6 +140,16 @@ impl AccountManager {
                 } => {
                     let pre =
                         private_pda_preparation(wallet, nsk, npk, vpk, &program_id, &seed).await?;
+
+                    State::Private(pre)
+                }
+                PrivacyPreservingAccount::PrivateShared {
+                    nsk,
+                    npk,
+                    vpk,
+                    identifier,
+                } => {
+                    let pre = private_shared_preparation(wallet, nsk, npk, vpk, identifier).await?;
 
                     State::Private(pre)
                 }
@@ -184,22 +205,17 @@ impl AccountManager {
             .iter()
             .map(|state| match state {
                 State::Public { .. } => InputAccountIdentity::Public,
-                State::Private(pre) if pre.identifier == u128::MAX => {
-                    // Private PDA account
-                    match (pre.nsk, pre.proof.clone()) {
-                        (Some(nsk), Some(membership_proof)) => {
-                            InputAccountIdentity::PrivatePdaUpdate {
-                                ssk: pre.ssk,
-                                nsk,
-                                membership_proof,
-                            }
-                        }
-                        _ => InputAccountIdentity::PrivatePdaInit {
-                            npk: pre.npk,
-                            ssk: pre.ssk,
-                        },
-                    }
-                }
+                State::Private(pre) if pre.is_pda => match (pre.nsk, pre.proof.clone()) {
+                    (Some(nsk), Some(membership_proof)) => InputAccountIdentity::PrivatePdaUpdate {
+                        ssk: pre.ssk,
+                        nsk,
+                        membership_proof,
+                    },
+                    _ => InputAccountIdentity::PrivatePdaInit {
+                        npk: pre.npk,
+                        ssk: pre.ssk,
+                    },
+                },
                 State::Private(pre) => match (pre.nsk, pre.proof.clone()) {
                     (Some(nsk), Some(membership_proof)) => {
                         InputAccountIdentity::PrivateAuthorizedUpdate {
@@ -249,6 +265,7 @@ struct AccountPreparedData {
     nsk: Option<NullifierSecretKey>,
     npk: NullifierPublicKey,
     identifier: Identifier,
+    is_pda: bool,
     vpk: ViewingPublicKey,
     pre_state: AccountWithMetadata,
     proof: Option<MembershipProof>,
@@ -294,6 +311,7 @@ async fn private_acc_preparation(
         nsk: Some(nsk),
         npk: from_npk,
         identifier: from_identifier,
+        is_pda: false,
         vpk: from_vpk,
         pre_state: sender_pre,
         proof,
@@ -317,9 +335,9 @@ async fn private_pda_preparation(
     let acc = wallet
         .storage
         .user_data
-        .pda_accounts
+        .shared_accounts
         .get(&account_id)
-        .cloned()
+        .map(|e| e.account.clone())
         .unwrap_or_default();
 
     let exists = acc != nssa_core::account::Account::default();
@@ -347,10 +365,74 @@ async fn private_pda_preparation(
         nsk: exists.then_some(nsk),
         npk,
         identifier: u128::MAX,
+        is_pda: true,
         vpk,
         pre_state,
         proof,
         ssk,
         epk,
     })
+}
+
+async fn private_shared_preparation(
+    wallet: &WalletCore,
+    nsk: NullifierSecretKey,
+    npk: NullifierPublicKey,
+    vpk: ViewingPublicKey,
+    identifier: Identifier,
+) -> Result<AccountPreparedData, ExecutionFailureKind> {
+    let account_id = nssa::AccountId::from((&npk, identifier));
+
+    let acc = wallet
+        .storage
+        .user_data
+        .shared_accounts
+        .get(&account_id)
+        .map(|e| e.account.clone())
+        .unwrap_or_default();
+
+    let exists = acc != nssa_core::account::Account::default();
+    let pre_state = AccountWithMetadata::new(acc, exists, (&npk, identifier));
+
+    let proof = if exists {
+        wallet
+            .check_private_account_initialized(account_id)
+            .await
+            .unwrap_or(None)
+    } else {
+        None
+    };
+
+    let eph_holder = EphemeralKeyHolder::new(&npk);
+    let ssk = eph_holder.calculate_shared_secret_sender(&vpk);
+    let epk = eph_holder.generate_ephemeral_public_key();
+
+    Ok(AccountPreparedData {
+        nsk: exists.then_some(nsk),
+        npk,
+        identifier,
+        is_pda: false,
+        vpk,
+        pre_state,
+        proof,
+        ssk,
+        epk,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn private_shared_is_private() {
+        let acc = PrivacyPreservingAccount::PrivateShared {
+            nsk: [0; 32],
+            npk: NullifierPublicKey([1; 32]),
+            vpk: ViewingPublicKey::from_scalar([2; 32]),
+            identifier: 42,
+        };
+        assert!(acc.is_private());
+        assert!(!acc.is_public());
+    }
 }

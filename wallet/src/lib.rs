@@ -287,6 +287,43 @@ impl WalletCore {
         (account_id, cci)
     }
 
+    /// Insert a group key holder into storage.
+    pub fn insert_group_key_holder(
+        &mut self,
+        name: String,
+        holder: key_protocol::key_management::group_key_holder::GroupKeyHolder,
+    ) {
+        self.storage.user_data.insert_group_key_holder(name, holder);
+    }
+
+    /// Remove a group key holder from storage. Returns the removed holder if it existed.
+    pub fn remove_group_key_holder(
+        &mut self,
+        name: &str,
+    ) -> Option<key_protocol::key_management::group_key_holder::GroupKeyHolder> {
+        self.storage.user_data.group_key_holders.remove(name)
+    }
+
+    /// Register a shared account in storage for sync tracking.
+    pub fn register_shared_account(
+        &mut self,
+        account_id: AccountId,
+        group_label: String,
+        identifier: nssa_core::Identifier,
+        pda_seed: Option<nssa_core::program::PdaSeed>,
+    ) {
+        use key_protocol::key_protocol_core::SharedAccountEntry;
+        self.storage.user_data.shared_accounts.insert(
+            account_id,
+            SharedAccountEntry {
+                group_label,
+                identifier,
+                pda_seed,
+                account: Account::default(),
+            },
+        );
+    }
+
     /// Get account balance.
     pub async fn get_account_balance(&self, acc: AccountId) -> Result<u128> {
         Ok(self.sequencer_client.get_account_balance(acc).await?)
@@ -556,6 +593,77 @@ impl WalletCore {
             );
             self.storage
                 .insert_private_account_data(affected_account_id, identifier, new_acc);
+        }
+
+        // Scan for updates to shared accounts (GMS-derived).
+        self.sync_shared_accounts_with_tx(&tx);
+    }
+
+    fn sync_shared_accounts_with_tx(&mut self, tx: &PrivacyPreservingTransaction) {
+        let shared_keys: Vec<_> = self
+            .storage
+            .user_data
+            .shared_accounts
+            .iter()
+            .filter_map(|(&account_id, entry)| {
+                let holder = self
+                    .storage
+                    .user_data
+                    .group_key_holders
+                    .get(&entry.group_label)?;
+
+                let keys = entry.pda_seed.as_ref().map_or_else(
+                    || {
+                        let tag = {
+                            use sha2::Digest as _;
+                            let mut hasher = sha2::Sha256::new();
+                            hasher.update(b"/LEE/v0.3/SharedAccountTag/\x00\x00\x00\x00\x00");
+                            hasher.update(entry.identifier.to_le_bytes());
+                            let result: [u8; 32] = hasher.finalize().into();
+                            result
+                        };
+                        holder.derive_keys_for_shared_account(&tag)
+                    },
+                    |pda_seed| holder.derive_keys_for_pda(pda_seed),
+                );
+                let npk = keys.generate_nullifier_public_key();
+                let vpk = keys.generate_viewing_public_key();
+                let vsk = keys.viewing_secret_key;
+                Some((account_id, npk, vpk, vsk))
+            })
+            .collect();
+
+        for (account_id, npk, vpk, vsk) in shared_keys {
+            let view_tag = EncryptedAccountData::compute_view_tag(&npk, &vpk);
+
+            for (ciph_id, encrypted_data) in tx
+                .message()
+                .encrypted_private_post_states
+                .iter()
+                .enumerate()
+            {
+                if encrypted_data.view_tag != view_tag {
+                    continue;
+                }
+
+                let shared_secret = SharedSecretKey::new(&vsk, &encrypted_data.epk);
+                let commitment = &tx.message.new_commitments[ciph_id];
+
+                if let Some((_decrypted_identifier, new_acc)) = nssa_core::EncryptionScheme::decrypt(
+                    &encrypted_data.ciphertext,
+                    &shared_secret,
+                    commitment,
+                    ciph_id
+                        .try_into()
+                        .expect("Ciphertext ID is expected to fit in u32"),
+                ) {
+                    info!("Synced shared account {account_id:#?} with new state {new_acc:#?}");
+                    if let Some(entry) = self.storage.user_data.shared_accounts.get_mut(&account_id)
+                    {
+                        entry.account = new_acc;
+                    }
+                }
+            }
         }
     }
 
