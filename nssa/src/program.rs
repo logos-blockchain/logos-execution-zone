@@ -168,6 +168,7 @@ impl Program {
             elf: PINATA_TOKEN_ELF.to_vec(),
         }
     }
+
 }
 
 #[cfg(test)]
@@ -331,6 +332,17 @@ mod tests {
                 elf: TWO_PDA_CLAIMER_ELF.to_vec(),
             }
         }
+
+        #[must_use]
+        pub fn auth_transfer_proxy() -> Self {
+            use test_program_methods::{AUTH_TRANSFER_PROXY_ELF, AUTH_TRANSFER_PROXY_ID};
+
+            Self {
+                id: AUTH_TRANSFER_PROXY_ID,
+                elf: AUTH_TRANSFER_PROXY_ELF.to_vec(),
+            }
+        }
+
 
         #[must_use]
         pub fn changer_claimer() -> Self {

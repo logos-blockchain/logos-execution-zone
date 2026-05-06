@@ -28,7 +28,7 @@ pub struct PersistentAccountDataPublic {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PersistentAccountDataPrivate {
-    pub identifiers: Vec<nssa_core::Identifier>,
+    pub kinds: Vec<nssa_core::PrivateAccountKind>,
     pub chain_index: ChainIndex,
     pub data: ChildKeysPrivate,
 }

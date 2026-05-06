@@ -291,15 +291,16 @@ mod tests {
         let npk = holder
             .derive_keys_for_pda(&seed)
             .generate_nullifier_public_key();
-        let account_id = AccountId::for_private_pda(&program_id, &seed, &npk);
+        let account_id = AccountId::for_private_pda(&program_id, &seed, &npk, u128::MAX);
 
         let expected_npk = NullifierPublicKey([
             185, 161, 225, 224, 20, 156, 173, 0, 6, 173, 74, 136, 16, 88, 71, 154, 101, 160, 224,
             162, 247, 98, 183, 210, 118, 130, 143, 237, 20, 112, 111, 114,
         ]);
+
         let expected_account_id = AccountId::new([
-            236, 138, 175, 184, 194, 233, 144, 109, 157, 51, 193, 120, 83, 110, 147, 90, 154, 57,
-            148, 236, 12, 92, 135, 38, 253, 79, 88, 143, 161, 175, 46, 144,
+            251, 228, 245, 3, 160, 134, 97, 69, 187, 157, 170, 192, 165, 216, 166, 79, 179, 187,
+            125, 146, 36, 192, 232, 110, 198, 47, 24, 10, 223, 25, 108, 5,
         ]);
 
         assert_eq!(npk, expected_npk);
@@ -497,8 +498,8 @@ mod tests {
             .generate_nullifier_public_key();
         assert_eq!(alice_npk, bob_npk);
 
-        let alice_account_id = AccountId::for_private_pda(&program_id, &pda_seed, &alice_npk);
-        let bob_account_id = AccountId::for_private_pda(&program_id, &pda_seed, &bob_npk);
+        let alice_account_id = AccountId::for_private_pda(&program_id, &pda_seed, &alice_npk, 0);
+        let bob_account_id = AccountId::for_private_pda(&program_id, &pda_seed, &bob_npk, 0);
         assert_eq!(alice_account_id, bob_account_id);
     }
 }

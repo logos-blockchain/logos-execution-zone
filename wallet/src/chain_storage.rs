@@ -11,6 +11,7 @@ use key_protocol::{
 };
 use log::debug;
 use nssa::program::Program;
+use nssa_core::PrivateAccountKind;
 
 use crate::config::{InitialAccountData, Label, PersistentAccountData, WalletConfig};
 
@@ -72,8 +73,8 @@ impl WalletChainStore {
                 PersistentAccountData::Private(data) => {
                     let npk = data.data.value.0.nullifier_public_key;
                     let chain_index = data.chain_index;
-                    for identifier in &data.identifiers {
-                        let account_id = nssa::AccountId::from((&npk, *identifier));
+                    for kind in &data.kinds {
+                        let account_id = nssa::AccountId::for_private_account(&npk, kind);
                         private_tree
                             .account_id_map
                             .insert(account_id, chain_index.clone());
@@ -89,7 +90,7 @@ impl WalletChainStore {
                             data.account_id(),
                             UserPrivateAccountData {
                                 key_chain: data.key_chain,
-                                accounts: vec![(data.identifier, data.account)],
+                                accounts: vec![(PrivateAccountKind::Regular(data.identifier), data.account)],
                             },
                         );
                     }
@@ -135,7 +136,7 @@ impl WalletChainStore {
                         account_id,
                         UserPrivateAccountData {
                             key_chain: data.key_chain,
-                            accounts: vec![(data.identifier, account)],
+                            accounts: vec![(PrivateAccountKind::Regular(data.identifier), account)],
                         },
                     );
                 }
@@ -190,7 +191,7 @@ impl WalletChainStore {
     pub fn insert_private_account_data(
         &mut self,
         account_id: nssa::AccountId,
-        identifier: nssa_core::Identifier,
+        kind: &PrivateAccountKind,
         account: nssa_core::account::Account,
     ) {
         debug!("inserting at address {account_id}, this account {account:?}");
@@ -202,10 +203,10 @@ impl WalletChainStore {
             .entry(account_id)
         {
             let entry = entry.get_mut();
-            if let Some((_, acc)) = entry.accounts.iter_mut().find(|(id, _)| *id == identifier) {
+            if let Some((_, acc)) = entry.accounts.iter_mut().find(|(k, _)| k == kind) {
                 *acc = account;
             } else {
-                entry.accounts.push((identifier, account));
+                entry.accounts.push((kind.clone(), account));
             }
             return;
         }
@@ -228,24 +229,21 @@ impl WalletChainStore {
                 .key_map
                 .get_mut(&chain_index)
             {
-                if let Some((_, acc)) = node.value.1.iter_mut().find(|(id, _)| *id == identifier) {
+                if let Some((_, acc)) = node.value.1.iter_mut().find(|(k, _)| k == kind) {
                     *acc = account;
                 } else {
-                    node.value.1.push((identifier, account));
+                    node.value.1.push((kind.clone(), account));
                 }
             }
         } else {
             // Node not yet in account_id_map — find it by checking all nodes
             for (ci, node) in &mut self.user_data.private_key_tree.key_map {
-                let expected_id =
-                    nssa::AccountId::from((&node.value.0.nullifier_public_key, identifier));
-                if expected_id == account_id {
-                    if let Some((_, acc)) =
-                        node.value.1.iter_mut().find(|(id, _)| *id == identifier)
-                    {
+                let npk = &node.value.0.nullifier_public_key;
+                if nssa::AccountId::for_private_account(npk, kind) == account_id {
+                    if let Some((_, acc)) = node.value.1.iter_mut().find(|(k, _)| k == kind) {
                         *acc = account;
                     } else {
-                        node.value.1.push((identifier, account));
+                        node.value.1.push((kind.clone(), account));
                     }
                     // Register in account_id_map
                     self.user_data
@@ -291,7 +289,7 @@ mod tests {
                 data: public_data,
             }),
             PersistentAccountData::Private(Box::new(PersistentAccountDataPrivate {
-                identifiers: vec![],
+                kinds: vec![],
                 chain_index: ChainIndex::root(),
                 data: private_data,
             })),

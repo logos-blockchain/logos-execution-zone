@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use anyhow::Result;
 use k256::AffinePoint;
 use nssa::{Account, AccountId};
-use nssa_core::Identifier;
+use nssa_core::{Identifier, PrivateAccountKind};
 use serde::{Deserialize, Serialize};
 
 use crate::key_management::{
@@ -18,7 +18,7 @@ pub type PublicKey = AffinePoint;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct UserPrivateAccountData {
     pub key_chain: KeyChain,
-    pub accounts: Vec<(Identifier, Account)>,
+    pub accounts: Vec<(PrivateAccountKind, Account)>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -65,9 +65,9 @@ impl NSSAUserData {
     ) -> bool {
         let mut check_res = true;
         for (account_id, entry) in accounts_keys_map {
-            let any_match = entry.accounts.iter().any(|(identifier, _)| {
-                nssa::AccountId::from((&entry.key_chain.nullifier_public_key, *identifier))
-                    == *account_id
+            let npk = &entry.key_chain.nullifier_public_key;
+            let any_match = entry.accounts.iter().any(|(kind, _)| {
+                nssa::AccountId::for_private_account(npk, kind) == *account_id
             });
             if !any_match {
                 println!("No matching entry found for account_id {account_id}");
@@ -169,24 +169,22 @@ impl NSSAUserData {
     ) -> Option<(KeyChain, nssa_core::account::Account, Identifier)> {
         // Check default accounts
         if let Some(entry) = self.default_user_private_accounts.get(&account_id) {
-            for (identifier, account) in &entry.accounts {
-                let expected_id =
-                    nssa::AccountId::from((&entry.key_chain.nullifier_public_key, *identifier));
-                if expected_id == account_id {
-                    return Some((entry.key_chain.clone(), account.clone(), *identifier));
-                }
+            let npk = &entry.key_chain.nullifier_public_key;
+            if let Some((kind, account)) =
+                entry.accounts.iter().find(|(kind, _)| nssa::AccountId::for_private_account(npk, kind) == account_id)
+            {
+                return Some((entry.key_chain.clone(), account.clone(), kind.identifier()));
             }
             return None;
         }
         // Check tree
         if let Some(node) = self.private_key_tree.get_node(account_id) {
             let key_chain = &node.value.0;
-            for (identifier, account) in &node.value.1 {
-                let expected_id =
-                    nssa::AccountId::from((&key_chain.nullifier_public_key, *identifier));
-                if expected_id == account_id {
-                    return Some((key_chain.clone(), account.clone(), *identifier));
-                }
+            let npk = &key_chain.nullifier_public_key;
+            if let Some((kind, account)) =
+                node.value.1.iter().find(|(kind, _)| nssa::AccountId::for_private_account(npk, kind) == account_id)
+            {
+                return Some((key_chain.clone(), account.clone(), kind.identifier()));
             }
         }
         None

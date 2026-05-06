@@ -24,7 +24,8 @@ use nssa::{
     },
 };
 use nssa_core::{
-    Commitment, MembershipProof, SharedSecretKey, account::Nonce, program::InstructionData,
+    Commitment, MembershipProof, PrivateAccountKind, SharedSecretKey, account::Nonce,
+    program::InstructionData,
 };
 pub use privacy_preserving_tx::PrivacyPreservingAccount;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
@@ -283,7 +284,7 @@ impl WalletCore {
             .nullifier_public_key;
         let account_id = AccountId::from((&npk, identifier));
         self.storage
-            .insert_private_account_data(account_id, identifier, Account::default());
+            .insert_private_account_data(account_id, &PrivateAccountKind::Regular(identifier), Account::default());
         (account_id, cci)
     }
 
@@ -357,7 +358,7 @@ impl WalletCore {
                     let acc_ead = tx.message.encrypted_private_post_states[output_index].clone();
                     let acc_comm = tx.message.new_commitments[output_index].clone();
 
-                    let (identifier, res_acc) = nssa_core::EncryptionScheme::decrypt(
+                    let (kind, res_acc) = nssa_core::EncryptionScheme::decrypt(
                         &acc_ead.ciphertext,
                         secret,
                         &acc_comm,
@@ -370,7 +371,7 @@ impl WalletCore {
                     println!("Received new acc {res_acc:#?}");
 
                     self.storage
-                        .insert_private_account_data(*acc_account_id, identifier, res_acc);
+                        .insert_private_account_data(*acc_account_id, &kind, res_acc);
                 }
                 AccDecodeData::Skip => {}
             }
@@ -538,24 +539,29 @@ impl WalletCore {
                                 .try_into()
                                 .expect("Ciphertext ID is expected to fit in u32"),
                         )
-                        .map(|(identifier, res_acc)| {
-                            let account_id = nssa::AccountId::from((
-                                &key_chain.nullifier_public_key,
-                                identifier,
-                            ));
-                            (account_id, identifier, res_acc)
+                        .map(|(kind, res_acc)| {
+                            let npk = &key_chain.nullifier_public_key;
+                            let account_id = match &kind {
+                                PrivateAccountKind::Regular(identifier) => {
+                                    nssa::AccountId::from((npk, *identifier))
+                                }
+                                PrivateAccountKind::Pda { program_id, seed, identifier } => {
+                                    nssa::AccountId::for_private_pda(program_id, seed, npk, *identifier)
+                                }
+                            };
+                            (account_id, kind, res_acc)
                         })
                     })
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
 
-        for (affected_account_id, identifier, new_acc) in affected_accounts {
+        for (affected_account_id, kind, new_acc) in affected_accounts {
             info!(
                 "Received new account for account_id {affected_account_id:#?} with account object {new_acc:#?}"
             );
             self.storage
-                .insert_private_account_data(affected_account_id, identifier, new_acc);
+                .insert_private_account_data(affected_account_id, &kind, new_acc);
         }
     }
 

@@ -1,5 +1,5 @@
 use k256::{Scalar, elliptic_curve::PrimeField as _};
-use nssa_core::{Identifier, NullifierPublicKey, encryption::ViewingPublicKey};
+use nssa_core::{NullifierPublicKey, PrivateAccountKind, encryption::ViewingPublicKey};
 use serde::{Deserialize, Serialize};
 
 use crate::key_management::{
@@ -10,7 +10,7 @@ use crate::key_management::{
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ChildKeysPrivate {
-    pub value: (KeyChain, Vec<(Identifier, nssa::Account)>),
+    pub value: (KeyChain, Vec<(PrivateAccountKind, nssa::Account)>),
     pub ccc: [u8; 32],
     /// Can be [`None`] if root.
     pub cci: Option<u32>,
@@ -115,9 +115,8 @@ impl KeyTreeNode for ChildKeysPrivate {
     }
 
     fn account_ids(&self) -> impl Iterator<Item = nssa::AccountId> {
-        self.value.1.iter().map(|(identifier, _)| {
-            nssa::AccountId::from((&self.value.0.nullifier_public_key, *identifier))
-        })
+        let npk = self.value.0.nullifier_public_key;
+        self.value.1.iter().map(move |(kind, _)| nssa::AccountId::for_private_account(&npk, kind))
     }
 }
 
