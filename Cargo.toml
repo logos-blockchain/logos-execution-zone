@@ -36,7 +36,6 @@ members = [
   "examples/program_deployment",
   "examples/program_deployment/methods",
   "examples/program_deployment/methods/guest",
-  "bedrock_client",
   "testnet_initial_state",
   "indexer_ffi",
 ]
@@ -67,7 +66,6 @@ amm_program = { path = "programs/amm" }
 ata_core = { path = "programs/associated_token_account/core" }
 ata_program = { path = "programs/associated_token_account" }
 test_program_methods = { path = "test_program_methods" }
-bedrock_client = { path = "bedrock_client" }
 testnet_initial_state = { path = "testnet_initial_state" }
 
 tokio = { version = "1.50", features = [
@@ -122,11 +120,12 @@ tokio-retry = "0.3.0"
 schemars = "1.2"
 async-stream = "0.3.6"
 
-logos-blockchain-common-http-client = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "1da154c74b911318fb853d37261f8a05ffe513b4" }
-logos-blockchain-key-management-system-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "1da154c74b911318fb853d37261f8a05ffe513b4" }
-logos-blockchain-core = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "1da154c74b911318fb853d37261f8a05ffe513b4" }
-logos-blockchain-chain-broadcast-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "1da154c74b911318fb853d37261f8a05ffe513b4" }
-logos-blockchain-chain-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "1da154c74b911318fb853d37261f8a05ffe513b4" }
+logos-blockchain-common-http-client = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "ee281a447d95a951752461ee0a6e88eb4a0f17cf" }
+logos-blockchain-key-management-system-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "ee281a447d95a951752461ee0a6e88eb4a0f17cf" }
+logos-blockchain-core = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "ee281a447d95a951752461ee0a6e88eb4a0f17cf" }
+logos-blockchain-chain-broadcast-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "ee281a447d95a951752461ee0a6e88eb4a0f17cf" }
+logos-blockchain-chain-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "ee281a447d95a951752461ee0a6e88eb4a0f17cf" }
+logos-blockchain-zone-sdk = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "ee281a447d95a951752461ee0a6e88eb4a0f17cf" }
 
 rocksdb = { version = "0.24.0", default-features = false, features = [
   "snappy",

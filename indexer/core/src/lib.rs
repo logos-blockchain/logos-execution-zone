@@ -1,15 +1,14 @@
-use std::collections::VecDeque;
+use std::sync::Arc;
 
 use anyhow::Result;
-use bedrock_client::{BedrockClient, HeaderId};
-use common::{
-    HashType, PINATA_BASE58,
-    block::{Block, HashableBlockData},
-};
-use log::{debug, error, info};
-use logos_blockchain_core::mantle::{
-    Op, SignedMantleTx,
-    ops::channel::{ChannelId, inscribe::InscriptionOp},
+use common::block::{Block, HashableBlockData};
+// ToDo: Remove after testnet
+use common::{HashType, PINATA_BASE58};
+use futures::StreamExt as _;
+use log::{error, info, warn};
+use logos_blockchain_core::header::HeaderId;
+use logos_blockchain_zone_sdk::{
+    CommonHttpClient, ZoneMessage, adapter::NodeHttpClient, indexer::ZoneIndexer,
 };
 use nssa::V03State;
 use testnet_initial_state::initial_state_testnet;
@@ -21,23 +20,9 @@ pub mod config;
 
 #[derive(Clone)]
 pub struct IndexerCore {
-    pub bedrock_client: BedrockClient,
+    pub zone_indexer: Arc<ZoneIndexer<NodeHttpClient>>,
     pub config: IndexerConfig,
     pub store: IndexerStore,
-}
-
-#[derive(Clone)]
-/// This struct represents one L1 block data fetched from backfilling.
-pub struct BackfillBlockData {
-    l2_blocks: Vec<Block>,
-    l1_header: HeaderId,
-}
-
-#[derive(Clone)]
-/// This struct represents data fetched fom backfilling in one iteration.
-pub struct BackfillData {
-    block_data: VecDeque<BackfillBlockData>,
-    curr_fin_l1_lib_header: HeaderId,
 }
 
 impl IndexerCore {
@@ -107,279 +92,88 @@ impl IndexerCore {
 
         let home = config.home.join("rocksdb");
 
+        let basic_auth = config.bedrock_config.auth.clone().map(Into::into);
+        let node = NodeHttpClient::new(
+            CommonHttpClient::new(basic_auth),
+            config.bedrock_config.addr.clone(),
+        );
+        let zone_indexer = ZoneIndexer::new(config.channel_id, node);
+
         Ok(Self {
-            bedrock_client: BedrockClient::new(
-                config.bedrock_client_config.backoff,
-                config.bedrock_client_config.addr.clone(),
-                config.bedrock_client_config.auth.clone(),
-            )?,
+            zone_indexer: Arc::new(zone_indexer),
             config,
             store: IndexerStore::open_db_with_genesis(&home, &genesis_block, &state)?,
         })
     }
 
-    pub fn subscribe_parse_block_stream(&self) -> impl futures::Stream<Item = Result<Block>> {
+    pub fn subscribe_parse_block_stream(&self) -> impl futures::Stream<Item = Result<Block>> + '_ {
+        let poll_interval = self.config.consensus_info_polling_interval;
+        let initial_cursor = self
+            .store
+            .get_zone_cursor()
+            .expect("Failed to load zone-sdk indexer cursor");
+
         async_stream::stream! {
-            info!("Searching for initial header");
+            let mut cursor = initial_cursor;
 
-            let last_stored_l1_lib_header = self.store.last_observed_l1_lib_header()?;
-
-            let mut prev_last_l1_lib_header = if let Some(last_l1_lib_header) = last_stored_l1_lib_header {
-                info!("Last l1 lib header found: {last_l1_lib_header}");
-                last_l1_lib_header
+            if cursor.is_some() {
+                info!("Resuming indexer from cursor {cursor:?}");
             } else {
-                info!("Last l1 lib header not found in DB");
-                info!("Searching for the start of a channel");
-
-                let BackfillData {
-                    block_data: start_buff,
-                    curr_fin_l1_lib_header: last_l1_lib_header,
-                } = self.search_for_channel_start().await?;
-
-                for BackfillBlockData {
-                    l2_blocks: l2_block_vec,
-                    l1_header,
-                } in start_buff {
-                    let mut l2_blocks_parsed_ids: Vec<_> = l2_block_vec.iter().map(|block| block.header.block_id).collect();
-                    l2_blocks_parsed_ids.sort_unstable();
-                    info!("Parsed {} L2 blocks with ids {:?}", l2_block_vec.len(), l2_blocks_parsed_ids);
-
-                    for l2_block in l2_block_vec {
-                        // TODO: proper fix is to make the sequencer's genesis include a
-                        // trailing `clock_invocation(0)` (and have the indexer's
-                        // `open_db_with_genesis` not pre-apply state transitions) so the
-                        // inscribed genesis can flow through `put_block` like any other
-                        // block. For now we skip re-applying it.
-                        //
-                        // The channel-start (block_id == 1) is the sequencer's genesis
-                        // inscription that we re-discover during initial search. The
-                        // indexer already has its own locally-constructed genesis in
-                        // the store from `open_db_with_genesis`, so re-applying the
-                        // inscribed copy is both redundant and would fail the strict
-                        // block validation in `put_block` (the inscribed genesis lacks
-                        // the trailing clock invocation).
-                        if l2_block.header.block_id != 1 {
-                            self
-                            .store
-                            .put_block(l2_block.clone(), l1_header)
-                            .await
-                            .inspect_err(|err| error!("Failed to put block with err {err:?}"))?;
-                        }
-
-                        yield Ok(l2_block);
-                    }
-                }
-
-                last_l1_lib_header
-            };
-
-            info!("Searching for initial header finished");
-
-            info!("Starting backfilling from {prev_last_l1_lib_header}");
+                info!("Starting indexer from beginning of channel");
+            }
 
             loop {
-                let BackfillData {
-                    block_data: buff,
-                    curr_fin_l1_lib_header,
-                } = self
-                    .backfill_to_last_l1_lib_header_id(prev_last_l1_lib_header, &self.config.channel_id)
-                    .await
-                    .inspect_err(|err| error!("Failed to backfill to last l1 lib header id with err {err:#?}"))?;
-
-                prev_last_l1_lib_header = curr_fin_l1_lib_header;
-
-                for BackfillBlockData {
-                    l2_blocks: l2_block_vec,
-                    l1_header: header,
-                } in buff {
-                    let mut l2_blocks_parsed_ids: Vec<_> = l2_block_vec.iter().map(|block| block.header.block_id).collect();
-                    l2_blocks_parsed_ids.sort_unstable();
-                    info!("Parsed {} L2 blocks with ids {:?}", l2_block_vec.len(), l2_blocks_parsed_ids);
-
-                    for l2_block in l2_block_vec {
-                        self.store.put_block(l2_block.clone(), header).await?;
-
-                        yield Ok(l2_block);
+                let stream = match self.zone_indexer.next_messages(cursor).await {
+                    Ok(s) => s,
+                    Err(err) => {
+                        error!("Failed to start zone-sdk next_messages stream: {err}");
+                        tokio::time::sleep(poll_interval).await;
+                        continue;
                     }
-                }
-            }
-        }
-    }
-
-    async fn get_lib(&self) -> Result<HeaderId> {
-        Ok(self.bedrock_client.get_consensus_info().await?.lib)
-    }
-
-    async fn get_next_lib(&self, prev_lib: HeaderId) -> Result<HeaderId> {
-        loop {
-            let next_lib = self.get_lib().await?;
-            if next_lib == prev_lib {
-                info!(
-                    "Wait {:?} to not spam the node",
-                    self.config.consensus_info_polling_interval
-                );
-                tokio::time::sleep(self.config.consensus_info_polling_interval).await;
-            } else {
-                break Ok(next_lib);
-            }
-        }
-    }
-
-    /// WARNING: depending on channel state,
-    /// may take indefinite amount of time.
-    pub async fn search_for_channel_start(&self) -> Result<BackfillData> {
-        let mut curr_last_l1_lib_header = self.get_lib().await?;
-        let mut backfill_start = curr_last_l1_lib_header;
-        // ToDo: How to get root?
-        let mut backfill_limit = HeaderId::from([0; 32]);
-        // ToDo: Not scalable, initial buffer should be stored in DB to not run out of memory
-        // Don't want to complicate DB even more right now.
-        let mut block_buffer = VecDeque::new();
-
-        'outer: loop {
-            let mut cycle_header = curr_last_l1_lib_header;
-
-            loop {
-                let Some(cycle_block) = self.bedrock_client.get_block_by_id(cycle_header).await?
-                else {
-                    // First run can reach root easily
-                    // so here we are optimistic about L1
-                    // failing to get parent.
-                    break;
                 };
+                let mut stream = std::pin::pin!(stream);
 
-                // It would be better to have id, but block does not have it, so slot will do.
-                info!(
-                    "INITIAL SEARCH: Observed L1 block at slot {}",
-                    cycle_block.header().slot().into_inner()
-                );
-                debug!(
-                    "INITIAL SEARCH: This block header is {}",
-                    cycle_block.header().id()
-                );
-                debug!(
-                    "INITIAL SEARCH: This block parent is {}",
-                    cycle_block.header().parent()
-                );
+                while let Some((msg, slot)) = stream.next().await {
+                    let zone_block = match msg {
+                        ZoneMessage::Block(b) => b,
+                        // Non-block messages don't carry a cursor position; the
+                        // next ZoneBlock advances past them implicitly.
+                        ZoneMessage::Deposit(_) | ZoneMessage::Withdraw(_) => continue,
+                    };
 
-                let (l2_block_vec, l1_header) =
-                    parse_block_owned(&cycle_block, &self.config.channel_id);
+                    let block: Block = match borsh::from_slice(&zone_block.data) {
+                        Ok(b) => b,
+                        Err(e) => {
+                            error!("Failed to deserialize L2 block from zone-sdk: {e}");
+                            // Advance past the broken inscription so we don't
+                            // re-process it on restart.
+                            cursor = Some((zone_block.id, slot));
+                            if let Err(err) = self.store.set_zone_cursor(&(zone_block.id, slot)) {
+                                warn!("Failed to persist indexer cursor: {err:#}");
+                            }
+                            continue;
+                        }
+                    };
 
-                info!("Parsed {} L2 blocks", l2_block_vec.len());
+                    info!("Indexed L2 block {}", block.header.block_id);
 
-                if !l2_block_vec.is_empty() {
-                    block_buffer.push_front(BackfillBlockData {
-                        l2_blocks: l2_block_vec.clone(),
-                        l1_header,
-                    });
-                }
-
-                if let Some(first_l2_block) = l2_block_vec.first()
-                    && first_l2_block.header.block_id == 1
-                {
-                    info!("INITIAL_SEARCH: Found channel start");
-                    break 'outer;
-                }
-
-                // Step back to parent
-                let parent = cycle_block.header().parent();
-
-                if parent == backfill_limit {
-                    break;
-                }
-
-                cycle_header = parent;
-            }
-
-            info!("INITIAL_SEARCH: Reached backfill limit, refetching last l1 lib header");
-
-            block_buffer.clear();
-            backfill_limit = backfill_start;
-            curr_last_l1_lib_header = self.get_next_lib(curr_last_l1_lib_header).await?;
-            backfill_start = curr_last_l1_lib_header;
-        }
-
-        Ok(BackfillData {
-            block_data: block_buffer,
-            curr_fin_l1_lib_header: curr_last_l1_lib_header,
-        })
-    }
-
-    pub async fn backfill_to_last_l1_lib_header_id(
-        &self,
-        last_fin_l1_lib_header: HeaderId,
-        channel_id: &ChannelId,
-    ) -> Result<BackfillData> {
-        let curr_fin_l1_lib_header = self.get_next_lib(last_fin_l1_lib_header).await?;
-        // ToDo: Not scalable, buffer should be stored in DB to not run out of memory
-        // Don't want to complicate DB even more right now.
-        let mut block_buffer = VecDeque::new();
-
-        let mut cycle_header = curr_fin_l1_lib_header;
-        loop {
-            let Some(cycle_block) = self.bedrock_client.get_block_by_id(cycle_header).await? else {
-                return Err(anyhow::anyhow!("Parent not found"));
-            };
-
-            if cycle_block.header().id() == last_fin_l1_lib_header {
-                break;
-            }
-            // Step back to parent
-            cycle_header = cycle_block.header().parent();
-
-            // It would be better to have id, but block does not have it, so slot will do.
-            info!(
-                "Observed L1 block at slot {}",
-                cycle_block.header().slot().into_inner()
-            );
-
-            let (l2_block_vec, l1_header) = parse_block_owned(&cycle_block, channel_id);
-
-            info!("Parsed {} L2 blocks", l2_block_vec.len());
-
-            if !l2_block_vec.is_empty() {
-                block_buffer.push_front(BackfillBlockData {
-                    l2_blocks: l2_block_vec,
-                    l1_header,
-                });
-            }
-        }
-
-        Ok(BackfillData {
-            block_data: block_buffer,
-            curr_fin_l1_lib_header,
-        })
-    }
-}
-
-fn parse_block_owned(
-    l1_block: &bedrock_client::Block<SignedMantleTx>,
-    decoded_channel_id: &ChannelId,
-) -> (Vec<Block>, HeaderId) {
-    (
-        #[expect(
-            clippy::wildcard_enum_match_arm,
-            reason = "We are only interested in channel inscription ops, so it's fine to ignore the rest"
-        )]
-        l1_block
-            .transactions()
-            .flat_map(|tx| {
-                tx.mantle_tx.ops.iter().filter_map(|op| match op {
-                    Op::ChannelInscribe(InscriptionOp {
-                        channel_id,
-                        inscription,
-                        ..
-                    }) if channel_id == decoded_channel_id => {
-                        borsh::from_slice::<Block>(inscription)
-                            .inspect_err(|err| {
-                                error!("Failed to deserialize our inscription with err: {err:#?}");
-                            })
-                            .ok()
+                    // TODO: Remove l1_header placeholder once storage layer
+                    // no longer requires it. Zone-sdk handles L1 tracking internally.
+                    let placeholder_l1_header = HeaderId::from([0_u8; 32]);
+                    if let Err(err) = self.store.put_block(block.clone(), placeholder_l1_header).await {
+                        error!("Failed to store block {}: {err:#}", block.header.block_id);
                     }
-                    _ => None,
-                })
-            })
-            .collect(),
-        l1_block.header().id(),
-    )
+
+                    cursor = Some((zone_block.id, slot));
+                    if let Err(err) = self.store.set_zone_cursor(&(zone_block.id, slot)) {
+                        warn!("Failed to persist indexer cursor: {err:#}");
+                    }
+                    yield Ok(block);
+                }
+
+                // Stream ended (caught up to LIB). Sleep then poll again.
+                tokio::time::sleep(poll_interval).await;
+            }
+        }
+    }
 }

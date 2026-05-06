@@ -2,8 +2,7 @@ use std::collections::{HashMap, VecDeque};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use nssa_core::{
-    Identifier, MembershipProof, NullifierPublicKey, NullifierSecretKey,
-    PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput, SharedSecretKey,
+    InputAccountIdentity, PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput,
     account::AccountWithMetadata,
     program::{ChainedCall, InstructionData, ProgramId, ProgramOutput},
 };
@@ -63,14 +62,10 @@ impl From<Program> for ProgramWithDependencies {
 
 /// Generates a proof of the execution of a NSSA program inside the privacy preserving execution
 /// circuit.
-/// TODO: too many parameters.
 pub fn execute_and_prove(
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: InstructionData,
-    visibility_mask: Vec<u8>,
-    private_account_keys: Vec<(NullifierPublicKey, Identifier, SharedSecretKey)>,
-    private_account_nsks: Vec<NullifierSecretKey>,
-    private_account_membership_proofs: Vec<Option<MembershipProof>>,
+    account_identities: Vec<InputAccountIdentity>,
     program_with_dependencies: &ProgramWithDependencies,
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), NssaError> {
     let ProgramWithDependencies {
@@ -128,10 +123,7 @@ pub fn execute_and_prove(
 
     let circuit_input = PrivacyPreservingCircuitInput {
         program_outputs,
-        visibility_mask,
-        private_account_keys,
-        private_account_nsks,
-        private_account_membership_proofs,
+        account_identities,
         program_id: program_with_dependencies.program.id(),
     };
 
@@ -184,7 +176,8 @@ mod tests {
     #![expect(clippy::shadow_unrelated, reason = "We don't care about it in tests")]
 
     use nssa_core::{
-        Commitment, DUMMY_COMMITMENT_HASH, EncryptionScheme, Nullifier, SharedSecretKey,
+        Commitment, DUMMY_COMMITMENT_HASH, EncryptionScheme, Nullifier,
+        SharedSecretKey,
         account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
         encryption::PrivateAccountKind,
         program::PdaSeed,
@@ -242,10 +235,14 @@ mod tests {
         let (output, proof) = execute_and_prove(
             vec![sender, recipient],
             Program::serialize_instruction(balance_to_move).unwrap(),
-            vec![0, 2],
-            vec![(recipient_keys.npk(), 0, shared_secret)],
-            vec![],
-            vec![None],
+            vec![
+                InputAccountIdentity::Public,
+                InputAccountIdentity::PrivateUnauthorized {
+                    npk: recipient_keys.npk(),
+                    ssk: shared_secret,
+                    identifier: 0,
+                },
+            ],
             &Program::authenticated_transfer_program().into(),
         )
         .unwrap();
@@ -335,13 +332,21 @@ mod tests {
         let (output, proof) = execute_and_prove(
             vec![sender_pre, recipient],
             Program::serialize_instruction(balance_to_move).unwrap(),
-            vec![1, 2],
             vec![
-                (sender_keys.npk(), 0, shared_secret_1),
-                (recipient_keys.npk(), 0, shared_secret_2),
+                InputAccountIdentity::PrivateAuthorizedUpdate {
+                    ssk: shared_secret_1,
+                    nsk: sender_keys.nsk,
+                    membership_proof: commitment_set
+                        .get_proof_for(&commitment_sender)
+                        .expect("sender's commitment must be in the set"),
+                    identifier: 0,
+                },
+                InputAccountIdentity::PrivateUnauthorized {
+                    npk: recipient_keys.npk(),
+                    ssk: shared_secret_2,
+                    identifier: 0,
+                },
             ],
-            vec![sender_keys.nsk],
-            vec![commitment_set.get_proof_for(&commitment_sender), None],
             &program.into(),
         )
         .unwrap();
@@ -404,10 +409,11 @@ mod tests {
         let result = execute_and_prove(
             vec![pre],
             instruction,
-            vec![2],
-            vec![(account_keys.npk(), 0, shared_secret)],
-            vec![],
-            vec![None],
+            vec![InputAccountIdentity::PrivateUnauthorized {
+                npk: account_keys.npk(),
+                ssk: shared_secret,
+                identifier: 0,
+            }],
             &program_with_deps,
         );
 
@@ -431,10 +437,11 @@ mod tests {
         let (output, _proof) = execute_and_prove(
             vec![pre_state],
             Program::serialize_instruction(seed).unwrap(),
-            vec![3],
-            vec![(npk, identifier, shared_secret.clone())],
-            vec![],
-            vec![None],
+            vec![InputAccountIdentity::PrivatePdaInit {
+                npk,
+                ssk: shared_secret.clone(),
+                identifier,
+            }],
             &program.clone().into(),
         )
         .unwrap();
@@ -491,10 +498,14 @@ mod tests {
                 funder.clone(),
             ],
             Program::serialize_instruction((seed, amount, auth_transfer_id)).unwrap(),
-            vec![3, 0],
-            vec![(alice_npk, 0, alice_shared_0.clone())],
-            vec![],
-            vec![None],
+            vec![
+                InputAccountIdentity::PrivatePdaInit {
+                    npk: alice_npk,
+                    ssk: alice_shared_0.clone(),
+                    identifier: 0,
+                },
+                InputAccountIdentity::Public,
+            ],
             &program_with_deps,
         )
         .unwrap();
@@ -522,10 +533,14 @@ mod tests {
                 funder.clone(),
             ],
             Program::serialize_instruction((seed, amount, auth_transfer_id)).unwrap(),
-            vec![3, 0],
-            vec![(alice_npk, 1, alice_shared_1.clone())],
-            vec![],
-            vec![None],
+            vec![
+                InputAccountIdentity::PrivatePdaInit {
+                    npk: alice_npk,
+                    ssk: alice_shared_1.clone(),
+                    identifier: 1,
+                },
+                InputAccountIdentity::Public,
+            ],
             &program_with_deps,
         )
         .unwrap();
@@ -561,13 +576,19 @@ mod tests {
                 AccountWithMetadata::new(Account::default(), false, recipient_0_id),
             ],
             Program::serialize_instruction((seed, amount, auth_transfer_id)).unwrap(),
-            vec![3, 2],
             vec![
-                (alice_npk, 0, alice_shared_0.clone()),
-                (recipient_keys.npk(), 0, SharedSecretKey::new(&[20; 32], &recipient_keys.vpk())),
+                InputAccountIdentity::PrivatePdaUpdate {
+                    ssk: alice_shared_0.clone(),
+                    nsk: alice_keys.nsk,
+                    membership_proof: proof_pda_0.expect("pda_0 commitment must be in the set"),
+                    identifier: 0,
+                },
+                InputAccountIdentity::PrivateUnauthorized {
+                    npk: recipient_keys.npk(),
+                    ssk: SharedSecretKey::new(&[20; 32], &recipient_keys.vpk()),
+                    identifier: 0,
+                },
             ],
-            vec![alice_keys.nsk],
-            vec![proof_pda_0, None],
             &program_with_deps,
         )
         .unwrap();
@@ -587,18 +608,128 @@ mod tests {
                 AccountWithMetadata::new(Account::default(), false, recipient_1_id),
             ],
             Program::serialize_instruction((seed, amount, auth_transfer_id)).unwrap(),
-            vec![3, 2],
             vec![
-                (alice_npk, 1, alice_shared_1.clone()),
-                (recipient_keys.npk(), 1, SharedSecretKey::new(&[21; 32], &recipient_keys.vpk())),
+                InputAccountIdentity::PrivatePdaUpdate {
+                    ssk: alice_shared_1.clone(),
+                    nsk: alice_keys.nsk,
+                    membership_proof: proof_pda_1.expect("pda_1 commitment must be in the set"),
+                    identifier: 1,
+                },
+                InputAccountIdentity::PrivateUnauthorized {
+                    npk: recipient_keys.npk(),
+                    ssk: SharedSecretKey::new(&[21; 32], &recipient_keys.vpk()),
+                    identifier: 1,
+                },
             ],
-            vec![alice_keys.nsk],
-            vec![proof_pda_1, None],
             &program_with_deps,
         )
         .unwrap();
 
         assert_eq!(output_spend_1.new_commitments.len(), 2);
         assert_eq!(output_spend_1.new_nullifiers.len(), 2);
+    }
+
+    /// Group PDA deposit: creates a new PDA and transfers balance from the
+    /// counterparty. Both accounts owned by `private_pda_spender`.
+    #[test]
+    fn group_pda_deposit() {
+        let program = Program::private_pda_spender();
+        let noop = Program::noop();
+        let keys = test_private_account_keys_1();
+        let npk = keys.npk();
+        let seed = PdaSeed::new([42; 32]);
+        let shared_secret_pda = SharedSecretKey::new(&[55; 32], &keys.vpk());
+
+        // PDA (new, mask 3)
+        let pda_id = AccountId::for_private_pda(&program.id(), &seed, &npk, 0);
+        let pda_pre = AccountWithMetadata::new(Account::default(), false, pda_id);
+
+        // Sender (mask 0, public, owned by this program, has balance)
+        let sender_id = AccountId::new([99; 32]);
+        let sender_pre = AccountWithMetadata::new(
+            Account {
+                program_owner: program.id(),
+                balance: 10000,
+                ..Account::default()
+            },
+            true,
+            sender_id,
+        );
+
+        let noop_id = noop.id();
+        let program_with_deps = ProgramWithDependencies::new(program, [(noop_id, noop)].into());
+
+        let instruction = Program::serialize_instruction((seed, noop_id, 500_u128, true)).unwrap();
+
+        // PDA is mask 3 (private PDA), sender is mask 0 (public).
+        // The noop chained call is required to establish the mask-3 (seed, npk) binding
+        // that the circuit enforces for private PDAs. Without a caller providing pda_seeds,
+        // the circuit's binding check rejects the account.
+        let result = execute_and_prove(
+            vec![pda_pre, sender_pre],
+            instruction,
+            vec![
+                InputAccountIdentity::PrivatePdaInit {
+                    npk,
+                    ssk: shared_secret_pda,
+                    identifier: 0,
+                },
+                InputAccountIdentity::Public,
+            ],
+            &program_with_deps,
+        );
+
+        let (output, _proof) = result.expect("group PDA deposit should succeed");
+        // Only PDA (mask 3) produces a commitment; sender (mask 0) is public.
+        assert_eq!(output.new_commitments.len(), 1);
+    }
+
+    /// Group PDA spend binding: the noop chained call with `pda_seeds` establishes
+    /// the mask-3 binding for an existing-but-default PDA. Uses amount=0 because
+    /// testing with a pre-funded PDA requires a two-tx sequence with membership proofs.
+    #[test]
+    fn group_pda_spend_binding() {
+        let program = Program::private_pda_spender();
+        let noop = Program::noop();
+        let keys = test_private_account_keys_1();
+        let npk = keys.npk();
+        let seed = PdaSeed::new([42; 32]);
+        let shared_secret_pda = SharedSecretKey::new(&[55; 32], &keys.vpk());
+
+        let pda_id = AccountId::for_private_pda(&program.id(), &seed, &npk, 0);
+        let pda_pre = AccountWithMetadata::new(Account::default(), false, pda_id);
+
+        let bob_id = AccountId::new([88; 32]);
+        let bob_pre = AccountWithMetadata::new(
+            Account {
+                program_owner: program.id(),
+                balance: 10000,
+                ..Account::default()
+            },
+            true,
+            bob_id,
+        );
+
+        let noop_id = noop.id();
+        let program_with_deps = ProgramWithDependencies::new(program, [(noop_id, noop)].into());
+
+        let instruction = Program::serialize_instruction((seed, noop_id, 0_u128, false)).unwrap();
+
+        let result = execute_and_prove(
+            vec![pda_pre, bob_pre],
+            instruction,
+            vec![
+                InputAccountIdentity::PrivatePdaInit {
+                    npk,
+                    ssk: shared_secret_pda,
+                    identifier: 0,
+                },
+                InputAccountIdentity::Public,
+            ],
+            &program_with_deps,
+        );
+
+        let (output, _proof) = result.expect("group PDA spend binding should succeed");
+        assert_eq!(output.new_commitments.len(), 1);
     }
 }
