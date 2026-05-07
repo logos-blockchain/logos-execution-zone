@@ -117,7 +117,7 @@ pub enum TokenProgramAgnosticSubcommand {
         #[arg(long, conflicts_with = "from", conflicts_with = "from_key_path")]
         from_label: Option<String>,
         /// to - valid 32 byte base58 string with privacy prefix.
-        #[arg(long, conflicts_with = "to_label")]
+        #[arg(long, conflicts_with = "to_label", conflicts_with = "to_key_path")]
         to: Option<String>,
         /// To account label (alternative to --to).
         #[arg(long, conflicts_with = "to")]
@@ -136,20 +136,10 @@ pub enum TokenProgramAgnosticSubcommand {
         #[arg(long)]
         amount: u128,
         /// `from_key_path` (alternative to --from) uses Keycard.
-        #[arg(
-            long,
-            conflicts_with = "from",
-            conflicts_with = "from",
-            conflicts_with = "from_label"
-        )]
+        #[arg(long, conflicts_with = "from", conflicts_with = "from_label")]
         from_key_path: Option<String>,
         /// `to_key_path` (alternative to --to) uses Keycard.
-        #[arg(
-            long,
-            conflicts_with = "to",
-            conflicts_with = "to",
-            conflicts_with = "to_label"
-        )]
+        #[arg(long, conflicts_with = "to", conflicts_with = "to_label")]
         to_key_path: Option<String>,
     },
     /// Burn tokens on `holder`, modify `definition`.

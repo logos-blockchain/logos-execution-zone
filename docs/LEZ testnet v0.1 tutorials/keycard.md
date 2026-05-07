@@ -178,6 +178,33 @@ Account owned by authenticated transfer program
 | `wallet token burn`    | ChainIndex (key path) for holding account                           |
 | `wallet token mint`    | ChainIndices (key paths) for definition and holding public accounts |
 
+These commands work as expected, but uses `key-path` features to use a public account via Keycard.
+
+1. Initialize new Token
+```bash
+wallet token new \
+  --definition-key-path "m/44'/60'/0'/1/0" \
+  --supply-key-path     "m/44'/60'/0'/1/1" \
+  --total-supply 100000 \
+  --name SNT
+
+ # Output:
+Keycard PIN: 
+Transaction hash is 2f0ddd9ad46e1c8cde8dac4eb69ebb5d8fdf167647e421aa79900adaaa9b34d0 
+```
+
+2. Initialize new token holding
+```bash
+wallet token init \
+  --definition-account-id "Public/$LEE_DEF_ID" \
+  --holder-key-path "m/44'/60'/0'/0/2"
+
+# Output
+Keycard PIN:
+Transaction hash is d4442e32bf33efbac03672e3c5f6e181bc7e34f0911cf00ef915eeaee6787a5b
+LEE holding initialized for keycard m/44'/60'/0'/0/2
+``` 
+
 ### AMM program
 | Command                        | Description                                                         |
 |--------------------------------|---------------------------------------------------------------------|
@@ -185,4 +212,6 @@ Account owned by authenticated transfer program
 | `wallet amm swap-exact-input`  | ChaindIndex (key path) to initialize Keycard public account         |
 | `wallet amm swap-exact-output` | ChainIndices (key paths) for `from` and `to` public accounts        |
 | `wallet amm add-liquidity`     | ChainIndex (key path) for holding account                           |
-| `wallet amm reemove-liquidity` | ChainIndices (key paths) for definition and holding public accounts |
+| `wallet amm remove-liquidity` | ChainIndices (key paths) for definition and holding public accounts  |
+
+These commands work as expected, but uses `key-path` features to use a public account via Keycard.

@@ -30,8 +30,7 @@ pub enum AmmProgramAgnosticSubcommand {
         #[arg(
             long,
             conflicts_with = "user_holding_a",
-            conflicts_with = "user_holding_a_key_path",
-            required_unless_present_any = ["user_holding_a_label", "user_holding_a_key_path"]
+            conflicts_with = "user_holding_a_key_path"
         )]
         user_holding_a_label: Option<String>,
         /// Key path for user holding A (uses Keycard, alternative to --user-holding-a/label).
@@ -67,7 +66,8 @@ pub enum AmmProgramAgnosticSubcommand {
         #[arg(
             long,
             conflicts_with = "user_holding_lp_label",
-            conflicts_with = "user_holding_lp_key_path"
+            conflicts_with = "user_holding_lp_key_path",
+            required_unless_present_any = ["user_holding_lp_label", "user_holding_lp_key_path"]
         )]
         user_holding_lp: Option<String>,
         /// User holding LP account label (alternative to --user-holding-lp).
@@ -128,11 +128,19 @@ pub enum AmmProgramAgnosticSubcommand {
         /// `token_definition` - valid 32 byte base58 string WITHOUT privacy prefix.
         #[arg(long)]
         token_definition: String,
-        /// Key path for the input token's holding account (uses Keycard).
-        #[arg(long, conflicts_with = "user_holding_a")]
+        /// Key path for user token's holding account fpr Token A (uses Keycard).
+        #[arg(
+            long,
+            conflicts_with = "user_holding_a",
+            conflicts_with = "user_holding_a_label"
+        )]
         user_holding_a_key_path: Option<String>,
-        /// Key path for the input token's holding account (uses Keycard).
-        #[arg(long, conflicts_with = "user_holding_b")]
+        /// Key path for user token's holding account fpr Token B (uses Keycard).
+        #[arg(
+            long,
+            conflicts_with = "user_holding_b",
+            conflicts_with = "user_holding_b_label"
+        )]
         user_holding_b_key_path: Option<String>,
     },
     /// Swap specifying exact output amount.

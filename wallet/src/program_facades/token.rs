@@ -197,13 +197,45 @@ impl Token<'_> {
         let instruction = Instruction::Transfer {
             amount_to_transfer: amount,
         };
-        // Only the sender authorises a token Transfer — the recipient holding must already be
-        // initialised (no recipient signature required, matching the burn pattern).
-        let nonces = self
+
+        let mut nonces = self
             .0
             .get_accounts_nonces(vec![sender_account_id])
             .await
             .map_err(ExecutionFailureKind::SequencerError)?;
+
+        let private_keys = if sender_key_path.is_none() {
+            let mut private_keys = Vec::new();
+            let sender_sk = self
+                .0
+                .storage
+                .user_data
+                .get_pub_account_signing_key(sender_account_id)
+                .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
+            private_keys.push(sender_sk);
+
+            if let Some(recipient_sk) = self
+                .0
+                .storage
+                .user_data
+                .get_pub_account_signing_key(recipient_account_id)
+            {
+                private_keys.push(recipient_sk);
+                let recipient_nonces = self
+                    .0
+                    .get_accounts_nonces(vec![recipient_account_id])
+                    .await
+                    .map_err(ExecutionFailureKind::SequencerError)?;
+                nonces.extend(recipient_nonces);
+            } else {
+                println!(
+                    "Receiver's account ({recipient_account_id}) private key not found in wallet. Proceeding with only sender's key."
+                );
+            }
+            private_keys
+        } else {
+            Vec::new()
+        };
 
         let message = nssa::public_transaction::Message::try_new(
             program_id,
@@ -227,13 +259,7 @@ impl Token<'_> {
             WitnessSet::from_list(&message, &[signature], &[public_key])
                 .map_err(ExecutionFailureKind::TransactionBuildError)?
         } else {
-            let sender_sk = self
-                .0
-                .storage
-                .user_data
-                .get_pub_account_signing_key(sender_account_id)
-                .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
-            nssa::public_transaction::WitnessSet::for_message(&message, &[sender_sk])
+            nssa::public_transaction::WitnessSet::for_message(&message, &private_keys)
         };
 
         let tx = nssa::PublicTransaction::new(message, witness_set);
@@ -660,24 +686,38 @@ impl Token<'_> {
             .await
             .map_err(ExecutionFailureKind::SequencerError)?;
 
-        if self
-            .0
-            .storage
-            .user_data
-            .get_pub_account_signing_key(holder_account_id)
-            .is_some()
-        {
-            let recipient_nonces = self
+        let private_keys = if definition_key_path.is_none() {
+            let mut private_keys = Vec::new();
+            let definition_sk = self
                 .0
-                .get_accounts_nonces(vec![holder_account_id])
-                .await
-                .map_err(ExecutionFailureKind::SequencerError)?;
-            nonces.extend(recipient_nonces);
+                .storage
+                .user_data
+                .get_pub_account_signing_key(definition_account_id)
+                .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
+            private_keys.push(definition_sk);
+
+            if let Some(holder_sk) = self
+                .0
+                .storage
+                .user_data
+                .get_pub_account_signing_key(holder_account_id)
+            {
+                private_keys.push(holder_sk);
+                let holder_nonce: Vec<nssa_core::account::Nonce> = self
+                    .0
+                    .get_accounts_nonces(vec![holder_account_id])
+                    .await
+                    .map_err(ExecutionFailureKind::SequencerError)?;
+                nonces.extend(holder_nonce);
+            } else {
+                println!(
+                    "Holder's account ({holder_account_id}) private key not found in wallet. Proceeding with only definition's key."
+                );
+            }
+            private_keys
         } else {
-            println!(
-                "Holder's account ({holder_account_id}) private key not found in wallet. Proceeding with only definition's key."
-            );
-        }
+            Vec::new()
+        };
 
         let message = nssa::public_transaction::Message::try_new(
             Program::token().id(),
@@ -687,24 +727,21 @@ impl Token<'_> {
         )
         .unwrap();
 
-        let msg_hash = message.hash();
-        let witness_set = if let Some(kp) = definition_key_path {
+        let witness_set = if let Some(definition_key_path) = definition_key_path {
             let pin = crate::helperfunctions::read_pin().map_err(|e| {
                 ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(
                     e.to_string(),
                 ))
             })?;
-            let (sig, pk) = KeycardWallet::sign_message_for_path_with_connect(&pin, kp, &msg_hash)?;
-            nssa::public_transaction::WitnessSet::from_list(&message, &[sig], &[pk])
+            let (signature, public_key) = KeycardWallet::sign_message_for_path_with_connect(
+                &pin,
+                definition_key_path,
+                &message.hash(),
+            )?;
+            WitnessSet::from_list(&message, &[signature], &[public_key])
                 .map_err(ExecutionFailureKind::TransactionBuildError)?
         } else {
-            let signing_key = self
-                .0
-                .storage
-                .user_data
-                .get_pub_account_signing_key(definition_account_id)
-                .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
-            nssa::public_transaction::WitnessSet::for_message(&message, &[signing_key])
+            nssa::public_transaction::WitnessSet::for_message(&message, &private_keys)
         };
 
         let tx = nssa::PublicTransaction::new(message, witness_set);
