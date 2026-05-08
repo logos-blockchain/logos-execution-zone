@@ -43,7 +43,7 @@ While Section 1 guarantees absolute unlinkability for actors operating within th
 ### 2.1. The Deanonymization Trigger (NSK Exposure)
 The anonymity of a user is strictly bound to the secrecy of their Nullifier Secret Key ($NSK$). The moderation subsystem utilizes a Two-Tier Shamir's Secret Sharing scheme. When a member accumulates $K$ valid moderation strikes, the `SlashAggregator` collects enough shares to satisfy the threshold. 
 
-Through Lagrange interpolation, the aggregator reconstructs the underlying polynomial $f(x)$ at the y-intercept $f(0)$, which perfectly outputs the member's $NSK$. This $NSK$ is then submitted on-chain via the `MembershipInstruction::Slash` transaction. Once executed and finalized in a block, the $NSK$ transitions from a local private secret to globally accessible public knowledge.
+Through Lagrange interpolation, the aggregator reconstructs the underlying polynomial $f(x)$ at the y-intercept $f(0)$, which perfectly outputs the member's $NSK$. This $NSK$ is then submitted on-chain via the `slash_member` instruction. Once executed and finalized in a block, the $NSK$ transitions from a local private secret to globally accessible public knowledge.
 
 ### 2.2. Mathematical Verification of Historical Posts
 Upon the public exposure of an $NSK$, the anonymity set for that specific user immediately collapses to zero. Any third-party observer, indexer, or forum participant can retroactively evaluate the entire public ledger to identify every single post previously authored by the slashed member.
@@ -95,8 +95,8 @@ A robust cryptographic protocol must anticipate and neutralize adversarial actio
 ### 4.1. Sybil Attacks and Financial Exhaustion
 **Threat:** An adversary attempts to overwhelm the forum by creating thousands of fake identities (Sybil nodes) to post spam, manipulate sentiment, or exhaust the moderation committee's resources, effectively bypassing the $K$-strike limitation by constantly rotating identities.
 
-**Mitigation:** The protocol enforces an economic barrier to entry. Every $Commitment$ registered in the `MembershipRegistry` requires a minimum locked stake of 1,000 tokens (`MembershipInstruction::Register`). 
-Because the $NSK$ is irrecoverably exposed and the stake is fully confiscated upon a successful slash (`MembershipInstruction::Slash`), a Sybil attack becomes prohibitively expensive. The attacker faces a linear financial penalty $C = S \times I_{slashed}$ (where $S$ is the stake per account and $I$ is the number of burned identities), neutralizing the economic viability of infinite identity generation.
+**Mitigation:** The protocol enforces an economic barrier to entry. Every $Commitment$ registered in the `MembershipRegistry` requires a minimum locked stake of 1,000 tokens (`register_member` instruction).
+Because the $NSK$ is irrecoverably exposed and the stake is fully confiscated upon a successful slash (`slash_member` instruction), a Sybil attack becomes prohibitively expensive. The attacker faces a linear financial penalty $C = S \times I_{slashed}$ (where $S$ is the stake per account and $I$ is the number of burned identities), neutralizing the economic viability of infinite identity generation.
 
 ### 4.2. ZK Proof Forgery and State Manipulation
 **Threat:** A revoked user (blacklisted) or a non-member attempts to bypass the `VerifyPost` instruction by forging a RISC Zero ZK receipt, or by manipulating the Sparse Merkle Tree (SMT) path to prove membership without a valid $NSK$.

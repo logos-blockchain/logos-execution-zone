@@ -134,6 +134,7 @@ rocksdb = { version = "0.24.0", default-features = false, features = [
 ] }
 rand = { version = "0.8.5", features = ["std", "std_rng", "getrandom"] }
 k256 = { version = "0.13.3", features = [
+  "ecdh",
   "ecdsa-core",
   "arithmetic",
   "expose-field",
@@ -304,3 +305,7 @@ clippy.cargo-common-metadata = "allow"
 # Reason: hard to address right now and mostly comes from dependencies
 # so the fix would be just a long list of exceptions.
 clippy.multiple-crate-versions = "allow"
+
+[patch."https://github.com/logos-blockchain/logos-execution-zone.git"]
+nssa_core = { path = "nssa/core" }
+nssa = { path = "nssa" }
