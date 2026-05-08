@@ -1,4 +1,4 @@
-use nssa::merkle_tree::MerkleTree;
+use nssa_core::merkle_tree::MerkleTree;
 use crate::state::ForumInstance;
 
 pub fn process_initialize(
@@ -19,13 +19,16 @@ pub fn process_initialize(
     let empty_registry = MerkleTree::with_capacity(1024);
 
     let new_forum = ForumInstance {
-        admin_pubkey: [0; 32], 
+        admin_pubkey: [0; 32],
         k_strikes,
         n_moderators,
         m_moderators,
-        registry: empty_registry,  
+        registry: empty_registry,
+        registered_commitments: Vec::new(),
         revoked_commitments: Vec::new(),
         total_staked: 0,
+        member_stakes: Vec::new(),
+        used_tracing_tags: Vec::new(),
     };
 
     Ok(new_forum)
