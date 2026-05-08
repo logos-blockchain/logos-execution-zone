@@ -9,13 +9,13 @@ pub use clock_core::{
 use nssa_core::{
     BlockId, Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, MembershipProof, Nullifier,
     Timestamp,
+    merkle_tree::MerkleTree,
     account::{Account, AccountId, Nonce},
     program::ProgramId,
 };
 
 use crate::{
     error::NssaError,
-    merkle_tree::MerkleTree,
     privacy_preserving_transaction::PrivacyPreservingTransaction,
     program::Program,
     program_deployment_transaction::ProgramDeploymentTransaction,

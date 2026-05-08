@@ -21,6 +21,7 @@ pub mod program;
 
 #[cfg(feature = "host")]
 pub mod error;
+pub mod merkle_tree;
 
 pub type BlockId = u64;
 /// Unix timestamp in milliseconds.
