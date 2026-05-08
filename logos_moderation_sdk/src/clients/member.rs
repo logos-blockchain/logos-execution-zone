@@ -1,6 +1,7 @@
 use sha2::{Sha256, Digest};
 use rand::RngCore;
 use sharks::Sharks;
+use k256::elliptic_curve::sec1::ToEncodedPoint as _;
 
 use crate::types::{EncryptedSharePerPost, PostPayload};
 use crate::crypto::sss::split_secret; 
@@ -17,7 +18,6 @@ impl MemberClient {
         let sharks = Sharks(k_strikes_threshold as u8);
         let dealer = sharks.dealer(&nsk);
         
-        // Take and store all 255 possible shares (GF(256) limit)
         let tier2_shares: Vec<Vec<u8>> = dealer.take(255).map(|s| Vec::from(&s)).collect();
         
         Self {
@@ -42,25 +42,19 @@ impl MemberClient {
 
         let tracing_tag = Self::generate_tracing_tag(&self.nsk, &message_hash, post_salt);
         let x_index = self.post_counter;
-        self.post_counter += 1;
 
-        // Extract the S_post point from the stored polynomial
         let s_post = self.evaluate_tier2_polynomial(x_index);
         let raw_shares = split_secret(&s_post, n_moderator_threshold, moderator_pubkeys.len() as u32)?;
 
-        let mut ephemeral_sk = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut ephemeral_sk);
-        let ephemeral_pk = ephemeral_sk.clone(); 
+        let ephemeral_scalar = Self::generate_ephemeral_scalar();
+        let ephemeral_pk = Self::derive_xonly_pubkey(&ephemeral_scalar);
 
         let mut encrypted_shares = Vec::new();
         for (i, mod_pk) in moderator_pubkeys.iter().enumerate() {
-            let mut ss_hasher = Sha256::new();
-            ss_hasher.update(&ephemeral_sk);
-            ss_hasher.update(mod_pk);
-            let shared_secret: [u8; 32] = ss_hasher.finalize().into();
+            let shared_secret = Self::compute_ecdh_shared_secret(&ephemeral_scalar, mod_pk)?;
             
             let mut buffer = raw_shares[i].clone();
-            Self::encrypt_raw_share(&mut buffer, &shared_secret, i as u32);
+            Self::xor_with_keystream(&mut buffer, &shared_secret, i as u32);
 
             encrypted_shares.push(EncryptedSharePerPost {
                 moderator_pubkey: *mod_pk,
@@ -68,6 +62,8 @@ impl MemberClient {
                 ciphertext: buffer,
             });
         }
+
+        self.post_counter += 1;
 
         Ok(PostPayload {
             message: message.to_vec(),
@@ -86,14 +82,58 @@ impl MemberClient {
     }
 
     fn evaluate_tier2_polynomial(&self, x: u8) -> [u8; 32] {
-        // Since x ranges from 1-255, the array index is x - 1
         let share_bytes = &self.tier2_shares[(x - 1) as usize];
         let mut s_post = [0u8; 32];
         s_post.copy_from_slice(&share_bytes[1..33]);
         s_post
     }
 
-    fn encrypt_raw_share(buffer: &mut [u8], shared_secret: &[u8; 32], index: u32) {
+    fn generate_ephemeral_scalar() -> [u8; 32] {
+        loop {
+            let mut sk = [0u8; 32];
+            rand::thread_rng().fill_bytes(&mut sk);
+            if k256::SecretKey::from_bytes(&sk.into()).is_ok() {
+                return sk;
+            }
+        }
+    }
+
+    fn derive_xonly_pubkey(scalar_bytes: &[u8; 32]) -> [u8; 32] {
+        let sk = k256::SecretKey::from_bytes(&(*scalar_bytes).into())
+            .expect("Scalar was already validated");
+        let encoded = sk.public_key().to_encoded_point(false);
+        let x_coord = encoded.x().expect("Valid EC point has x-coordinate");
+        let mut pk = [0u8; 32];
+        pk.copy_from_slice(x_coord);
+        pk
+    }
+
+    fn compute_ecdh_shared_secret(
+        ephemeral_sk: &[u8; 32], 
+        mod_xonly_pk: &[u8; 32],
+    ) -> Result<[u8; 32], &'static str> {
+        let mut sec1_compressed = [0u8; 33];
+        sec1_compressed[0] = 0x02; 
+        sec1_compressed[1..33].copy_from_slice(mod_xonly_pk);
+
+        let mod_pubkey = k256::PublicKey::from_sec1_bytes(&sec1_compressed)
+            .map_err(|_| "Invalid moderator public key for ECDH")?;
+
+        let ephemeral_secret = k256::SecretKey::from_bytes(&(*ephemeral_sk).into())
+            .map_err(|_| "Invalid ephemeral secret key")?;
+    
+        let shared_point = k256::ecdh::diffie_hellman(
+            ephemeral_secret.to_nonzero_scalar(),
+            mod_pubkey.as_affine(),
+        );
+
+        let mut hasher = Sha256::new();
+        hasher.update(b"LOGOS/v1/ECDH/");
+        hasher.update(shared_point.raw_secret_bytes());
+        Ok(hasher.finalize().into())
+    }
+
+    fn xor_with_keystream(buffer: &mut [u8], shared_secret: &[u8; 32], index: u32) {
         let mut hasher = Sha256::new();
         hasher.update(shared_secret);
         hasher.update(index.to_le_bytes());
