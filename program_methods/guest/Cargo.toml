@@ -17,6 +17,9 @@ amm_program.workspace = true
 ata_core.workspace = true
 ata_program.workspace = true
 
+membership_registry = { path = "../../programs/membership_registry" }
+spel-framework = { git = "https://github.com/logos-co/spel", branch = "main" }
+
 risc0-zkvm.workspace = true
 borsh.workspace = true 
 serde = { workspace = true, default-features = false }
@@ -24,3 +27,7 @@ serde = { workspace = true, default-features = false }
 [[bin]]
 name = "forum_membership_proof"
 path = "src/bin/forum_membership_proof.rs"
+
+[[bin]]
+name = "membership_registry"
+path = "src/bin/membership_registry.rs"
