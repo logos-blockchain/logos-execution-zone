@@ -83,7 +83,11 @@ impl Amm<'_> {
                 .get_accounts_nonces(vec![user_holding_lp])
                 .await
                 .map_err(ExecutionFailureKind::SequencerError)?;
-            nonces.extend(lp_nonces);
+            if lp_nonces.is_empty() {
+                nonces.push(nssa_core::account::Nonce(0));
+            } else {
+                nonces.extend(lp_nonces);
+            }
         } else {
             println!(
                 "Liquidity pool tokens receiver's account ({user_holding_lp}) private key not found in wallet. Proceeding with only liquidity provider's keys."
@@ -243,22 +247,22 @@ impl Amm<'_> {
         .unwrap();
 
         let msg_hash = message.hash();
-        let witness_set = if let (Some(kp_a), Some(kp_b)) =
-            (user_holding_a_key_path, user_holding_b_key_path)
-        {
+        let seller_key_path = if definition_token_a_id == token_definition_id_in {
+            user_holding_a_key_path
+        } else {
+            user_holding_b_key_path
+        };
+        let witness_set = if let Some(kp) = seller_key_path {
             let pin = crate::helperfunctions::read_pin().map_err(|e| {
                 ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<
                     pyo3::exceptions::PyRuntimeError,
                     _,
                 >(e.to_string()))
             })?;
-            let (sig1, pk1) = keycard_wallet::KeycardWallet::sign_message_for_path_with_connect(
-                &pin, kp_a, &msg_hash,
+            let (sig, pk) = keycard_wallet::KeycardWallet::sign_message_for_path_with_connect(
+                &pin, kp, &msg_hash,
             )?;
-            let (sig2, pk2) = keycard_wallet::KeycardWallet::sign_message_for_path_with_connect(
-                &pin, kp_b, &msg_hash,
-            )?;
-            nssa::public_transaction::WitnessSet::from_list(&message, &[sig1, sig2], &[pk1, pk2])
+            nssa::public_transaction::WitnessSet::from_list(&message, &[sig], &[pk])
                 .map_err(ExecutionFailureKind::TransactionBuildError)?
         } else {
             let signing_key = self

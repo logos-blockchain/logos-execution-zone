@@ -223,7 +223,8 @@ pub enum AmmProgramAgnosticSubcommand {
         #[arg(
             long,
             conflicts_with = "user_holding_lp_label",
-            required_unless_present = "user_holding_lp_label"
+            conflicts_with = "user_holding_lp_key_path",
+            required_unless_present_any = ["user_holding_lp_label", "user_holding_lp_key_path"]
         )]
         user_holding_lp: Option<String>,
         /// User holding LP account label (alternative to --user-holding-lp).
@@ -256,7 +257,8 @@ pub enum AmmProgramAgnosticSubcommand {
         #[arg(
             long,
             conflicts_with = "user_holding_a_label",
-            required_unless_present = "user_holding_a_label"
+            conflicts_with = "user_holding_a_key_path",
+            required_unless_present_any = ["user_holding_a_label", "user_holding_a_key_path"]
         )]
         user_holding_a: Option<String>,
         /// User holding A account label (alternative to --user-holding-a).
@@ -273,7 +275,8 @@ pub enum AmmProgramAgnosticSubcommand {
         #[arg(
             long,
             conflicts_with = "user_holding_b_label",
-            required_unless_present = "user_holding_b_label"
+            conflicts_with = "user_holding_b_key_path",
+            required_unless_present_any = ["user_holding_b_label", "user_holding_b_key_path"]
         )]
         user_holding_b: Option<String>,
         /// User holding B account label (alternative to --user-holding-b).
