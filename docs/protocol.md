@@ -119,3 +119,41 @@ Because the $NSK$ is irrecoverably exposed and the stake is fully confiscated up
 * It cannot fabricate a strike because each share is encrypted and cryptographically bound to the moderator's Schnorr Signature.
 * It cannot prematurely reconstruct the $NSK$ because Lagrange interpolation over a finite field mathematically requires at least $N$ points. Attempting to guess the polynomial with $N-1$ shares provides no probabilistic advantage.
 * Furthermore, any observer or the smart contract can independently verify the legitimacy of the exposed $NSK$ by deriving the corresponding $Commitment$ and checking its existence in the Merkle Tree before executing the stake confiscation.
+
+## 5. Logos Basecamp Integration Architecture
+
+The protocol is deployed as a native Logos Basecamp application via a three-layer architecture that bridges the Rust cryptographic SDK to the Qt/QML runtime.
+
+### 5.1. FFI Bridge Layer
+
+The `logos_moderation_sdk` crate exposes a C-ABI foreign function interface (`ffi.rs`) compiled to a shared library (`liblogos_moderation_sdk.so`). A C header is generated via `cbindgen`, providing type-safe function signatures for `FfiMemberClient`, `FfiModeratorClient`, and `FfiSlashAggregator`.
+
+**Security boundary:** All cryptographic operations (key derivation, ECDH encryption, Shamir share splitting, Schnorr signing) execute entirely within the Rust shared library. The C++ layer handles only serialization/deserialization and Qt signal routing — it never touches raw key material beyond passing opaque byte pointers to the FFI functions.
+
+### 5.2. Core Module (`anonymous_forum_core`)
+
+A C++ Qt plugin built with `logos-module-builder` that wraps each FFI function as a `Q_INVOKABLE` method. The plugin is loaded by the Logos Core runtime as an isolated process, published via Qt RemoteObjects IPC under the name `"anonymous_forum_core"`.
+
+The core module maintains three opaque FFI handles (`FfiMemberClient*`, `FfiModeratorClient*`, `FfiSlashAggregator*`) as private state. All input/output is serialized as JSON strings or hex-encoded byte arrays, ensuring clean IPC boundaries.
+
+### 5.3. UI Module (`anonymous_forum_ui`)
+
+A pure QML module built with `mkLogosQmlModule` that provides three views:
+1. **Register** — Member creation and aggregator setup
+2. **Post** — Anonymous post preparation with proof generation
+3. **Moderate** — Strike issuance and NSK reconstruction
+
+All UI-to-backend communication flows through `logos.callModule("anonymous_forum_core", "<method>", [args])`, which the standalone app resolves via Qt RemoteObjects IPC to the core module process.
+
+### 5.4. Trust Boundaries
+
+```
+┌─────────────────┐     ┌──────────────────┐     ┌────────────────────┐
+│   QML UI Layer  │────►│  C++ Core Module │────►│  Rust SDK (.so)    │
+│   (untrusted)   │ IPC │  (serialization) │ FFI │  (trusted crypto)  │
+└─────────────────┘     └──────────────────┘     └────────────────────┘
+```
+
+- **QML UI**: Untrusted input layer. All user input is passed as strings to the core module.
+- **C++ Core Module**: Serialization boundary. Validates argument counts and types, delegates all cryptographic logic to Rust.
+- **Rust SDK**: Trusted cryptographic core. All secret key operations, share splitting, and signature verification execute here.
