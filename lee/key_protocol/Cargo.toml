@@ -19,6 +19,7 @@ common.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 k256.workspace = true
+ml-kem.workspace = true
 sha2.workspace = true
 rand.workspace = true
 hex.workspace = true

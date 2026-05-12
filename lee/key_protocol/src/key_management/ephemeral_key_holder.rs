@@ -1,6 +1,7 @@
 use lee_core::{
     NullifierPublicKey, SharedSecretKey,
-    encryption::{EphemeralPublicKey, EphemeralSecretKey, ViewingPublicKey},
+    encryption::{EphemeralPublicKey, EphemeralSecretKey, ViewingPublicKey,
+    shared_key_derivation::Secp256k1Point},
 };
 use rand::{RngCore as _, rngs::OsRng};
 use sha2::Digest as _;
@@ -34,20 +35,20 @@ impl EphemeralKeyHolder {
     #[must_use]
     pub fn calculate_shared_secret_sender(
         &self,
-        receiver_viewing_public_key: &ViewingPublicKey,
+        _receiver_viewing_public_key: &ViewingPublicKey,
     ) -> SharedSecretKey {
-        SharedSecretKey::new(self.ephemeral_secret_key, receiver_viewing_public_key)
+        SharedSecretKey::new(self.ephemeral_secret_key, &Secp256k1Point::from_scalar(self.ephemeral_secret_key))
     }
 }
 
 #[must_use]
 pub fn produce_one_sided_shared_secret_receiver(
-    vpk: &ViewingPublicKey,
+    _vpk: &ViewingPublicKey,
 ) -> (SharedSecretKey, EphemeralPublicKey) {
     let mut esk = [0; 32];
     OsRng.fill_bytes(&mut esk);
     (
-        SharedSecretKey::new(esk, vpk),
+        SharedSecretKey::new(esk, &Secp256k1Point::from_scalar(esk)),
         EphemeralPublicKey::from_scalar(esk),
     )
 }

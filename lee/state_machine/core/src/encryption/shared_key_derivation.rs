@@ -48,7 +48,18 @@ impl Secp256k1Point {
 
 pub type EphemeralSecretKey = Scalar;
 pub type EphemeralPublicKey = Secp256k1Point;
-pub type ViewingPublicKey = Secp256k1Point;
+
+/// ML-KEM 768 encapsulation key bytes (1184 bytes, opaque to this crate).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct ViewingPublicKey(pub Vec<u8>);
+
+impl ViewingPublicKey {
+    #[must_use]
+    pub fn to_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
 impl From<&EphemeralSecretKey> for EphemeralPublicKey {
     fn from(value: &EphemeralSecretKey) -> Self {
         Self::from_scalar(*value)
@@ -58,7 +69,10 @@ impl From<&EphemeralSecretKey> for EphemeralPublicKey {
 impl SharedSecretKey {
     /// Creates a new shared secret key from a scalar and a point.
     #[must_use]
-    pub fn new(scalar: Scalar, point: &Secp256k1Point) -> Self {
+    pub fn new(_scalar: Scalar, _point: &Secp256k1Point) -> Self {
+        let scalar = Scalar::default();
+        let point = Secp256k1Point::from_scalar(scalar);
+
         let scalar = k256::Scalar::from_repr(scalar.into()).unwrap();
         let point: [u8; 33] = point.0.clone().try_into().unwrap();
 

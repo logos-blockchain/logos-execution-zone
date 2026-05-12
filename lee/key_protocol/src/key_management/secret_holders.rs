@@ -1,8 +1,9 @@
 use bip39::Mnemonic;
 use common::HashType;
+use ml_kem;
 use lee_core::{
     NullifierPublicKey, NullifierSecretKey,
-    encryption::{Scalar, ViewingPublicKey},
+    encryption::ViewingPublicKey,
 };
 use rand::{RngCore as _, rngs::OsRng};
 use serde::{Deserialize, Serialize};
@@ -19,12 +20,17 @@ pub struct SeedHolder {
 /// Secret spending key object. Can produce `PrivateKeyHolder` objects.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SecretSpendingKey(pub [u8; 32]);
-
-pub type ViewingSecretKey = Scalar;
+/// Viewing secret key: the KEM seed split into its two 32-byte halves `d` and `r` (= z in
+/// FIPS 203), from which the ML-KEM 768 decapsulation key is derived deterministically.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ViewingSecretKey {
+    pub d: [u8; 32],
+    pub r: [u8; 32],
+}
 
 /// Private key holder. Produces public keys. Can produce `account_id`. Can produce shared secret
 /// for recepient.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct PrivateKeyHolder {
     pub nullifier_secret_key: NullifierSecretKey,
     pub viewing_secret_key: ViewingSecretKey,
@@ -114,7 +120,7 @@ impl SecretSpendingKey {
 
     #[must_use]
     #[expect(clippy::big_endian_bytes, reason = "BIP-032 uses big endian")]
-    pub fn generate_viewing_secret_key(&self, index: Option<u32>) -> ViewingSecretKey {
+    pub fn generate_viewing_secret_seed_key(&self, index: Option<u32>) -> [u8; 64] {
         const PREFIX: &[u8; 8] = b"LEE/keys";
         const SUFFIX_1: &[u8; 1] = &[2];
         const SUFFIX_2: &[u8; 19] = &[0; 19];
@@ -124,22 +130,44 @@ impl SecretSpendingKey {
             _ => index.expect("Expect a valid u32"),
         };
 
-        let mut hasher = sha2::Sha256::new();
-        hasher.update(PREFIX);
-        hasher.update(self.0);
-        hasher.update(SUFFIX_1);
-        hasher.update(index.to_be_bytes());
-        hasher.update(SUFFIX_2);
+        let mut bytes: Vec<u8> = Vec::with_capacity(64);
+        bytes.extend_from_slice(PREFIX);
+        bytes.extend_from_slice(&self.0);
+        bytes.extend_from_slice(SUFFIX_1);
+        bytes.extend_from_slice(&index.to_be_bytes());
+        bytes.extend_from_slice(SUFFIX_2);
+        let bytes: [u8; 64] = bytes.try_into().expect("`generate_viewing_secret_key`: bytes must be exactly 64");
 
-        hasher.finalize_fixed().into()
+        hmac_sha512::HMAC::mac(bytes, b"LEE_viewing_seed")
+    }
+
+    #[must_use]
+    pub fn generate_viewing_secret_key(seed: [u8; 64]) -> ViewingSecretKey {
+        ViewingSecretKey {
+            d: *seed.first_chunk::<32>().expect("seed is 64 bytes"),
+            r: *seed.last_chunk::<32>().expect("seed is 64 bytes"),
+        }
     }
 
     #[must_use]
     pub fn produce_private_key_holder(&self, index: Option<u32>) -> PrivateKeyHolder {
         PrivateKeyHolder {
             nullifier_secret_key: self.generate_nullifier_secret_key(index),
-            viewing_secret_key: self.generate_viewing_secret_key(index),
+            viewing_secret_key: Self::generate_viewing_secret_key(
+                self.generate_viewing_secret_seed_key(index),
+            ),
         }
+    }
+}
+
+impl From<&ViewingSecretKey> for ViewingPublicKey {
+    fn from(sk: &ViewingSecretKey) -> Self {
+        use ml_kem::{Kem, KeyExport as _, MlKem768, Seed};
+        let mut seed_bytes = [0u8; 64];
+        seed_bytes[..32].copy_from_slice(&sk.d);
+        seed_bytes[32..].copy_from_slice(&sk.r);
+        let dk = <MlKem768 as Kem>::DecapsulationKey::from_seed(Seed::from(seed_bytes));
+        ViewingPublicKey(dk.encapsulation_key().to_bytes().to_vec())
     }
 }
 
@@ -151,7 +179,7 @@ impl PrivateKeyHolder {
 
     #[must_use]
     pub fn generate_viewing_public_key(&self) -> ViewingPublicKey {
-        ViewingPublicKey::from_scalar(self.viewing_secret_key)
+        ViewingPublicKey::from(&self.viewing_secret_key)
     }
 }
 
@@ -184,7 +212,9 @@ mod tests {
 
         let top_secret_key_holder = seed_holder.produce_top_secret_key_holder();
 
-        let _vsk = top_secret_key_holder.generate_viewing_secret_key(None);
+        let _vsk = SecretSpendingKey::generate_viewing_secret_key(
+            top_secret_key_holder.generate_viewing_secret_seed_key(None),
+        );
     }
 
     #[test]

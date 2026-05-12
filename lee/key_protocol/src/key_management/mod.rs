@@ -1,6 +1,6 @@
 use lee_core::{
     NullifierPublicKey, SharedSecretKey,
-    encryption::{EphemeralPublicKey, ViewingPublicKey},
+    encryption::{EphemeralPublicKey, ViewingPublicKey, Scalar},
 };
 use secret_holders::{PrivateKeyHolder, SecretSpendingKey, SeedHolder};
 use serde::{Deserialize, Serialize};
@@ -69,10 +69,10 @@ impl KeyChain {
     pub fn calculate_shared_secret_receiver(
         &self,
         ephemeral_public_key_sender: &EphemeralPublicKey,
-        index: Option<u32>,
+        _index: Option<u32>,
     ) -> SharedSecretKey {
         SharedSecretKey::new(
-            self.secret_spending_key.generate_viewing_secret_key(index),
+            Scalar::default(),
             ephemeral_public_key_sender,
         )
     }

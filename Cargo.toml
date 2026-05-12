@@ -159,6 +159,7 @@ k256 = { version = "0.13.3", features = [
   "serde",
   "pem",
 ] }
+ml-kem = { version = "0.3", features = ["hazmat"] }
 elliptic-curve = { version = "0.13.8", features = ["arithmetic"] }
 actix-web = { version = "4.13.0", default-features = false, features = [
   "macros",
