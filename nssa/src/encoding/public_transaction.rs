@@ -14,6 +14,6 @@ impl PublicTransaction {
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, NssaError> {
-        Ok(borsh::from_slice(bytes).expect("Autoderived borsh serialization failure"))
+        Ok(borsh::from_slice(bytes)?)
     }
 }

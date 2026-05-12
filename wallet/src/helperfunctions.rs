@@ -65,6 +65,19 @@ pub fn read_pin() -> Result<zeroize::Zeroizing<String>> {
         .map_err(Into::into)
 }
 
+/// Read the mnemonic phrase without echoing it.
+///
+/// Checks `KEYCARD_MNEMONIC` first for non-interactive callers. Falls back to
+/// a TTY prompt so the phrase never appears in argv, shell history, or `ps`.
+pub fn read_mnemonic() -> Result<zeroize::Zeroizing<String>> {
+    if let Ok(mnemonic) = std::env::var("KEYCARD_MNEMONIC") {
+        return Ok(zeroize::Zeroizing::new(mnemonic));
+    }
+    rpassword::prompt_password("Mnemonic phrase: ")
+        .map(zeroize::Zeroizing::new)
+        .map_err(Into::into)
+}
+
 /// Resolve an account id-or-label pair to a `Privacy/id` string.
 ///
 /// Exactly one of `id` or `label` must be `Some`. If `id` is provided it is

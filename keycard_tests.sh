@@ -10,8 +10,10 @@ echo "Test: wallet keycard available"
 wallet keycard available
 
 # Install a new mnemonic phrase to keycard
-echo 'Test: wallet keycard load --mnemonic "fashion degree mountain wool question damp current pond grow dolphin chronic then"'
-wallet keycard load --mnemonic "fashion degree mountain wool question damp current pond grow dolphin chronic then"
+echo "Test: wallet keycard load"
+export KEYCARD_MNEMONIC="fashion degree mountain wool question damp current pond grow dolphin chronic then"
+wallet keycard load
+unset KEYCARD_MNEMONIC
 
 echo "Test: wallet auth-transfer init --key-path \"m/44'/60'/0'/0/0\""
 wallet auth-transfer init --key-path "m/44'/60'/0'/0/0"
