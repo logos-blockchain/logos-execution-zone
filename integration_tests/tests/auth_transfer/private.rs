@@ -71,7 +71,7 @@ async fn private_transfer_to_foreign_account() -> Result<()> {
     let from: AccountId = ctx.existing_private_accounts()[0];
     let to_npk = NullifierPublicKey([42; 32]);
     let to_npk_string = hex::encode(to_npk.0);
-    let to_vpk = Secp256k1Point::from_scalar(to_npk.0);
+    let to_vpk = ViewingPublicKey::from_seed(&to_npk.0, &[0u8; 32]);
 
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
         from: private_mention(from),
@@ -274,7 +274,7 @@ async fn shielded_transfer_to_foreign_account() -> Result<()> {
 
     let to_npk = NullifierPublicKey([42; 32]);
     let to_npk_string = hex::encode(to_npk.0);
-    let to_vpk = Secp256k1Point::from_scalar(to_npk.0);
+    let to_vpk = ViewingPublicKey::from_seed(&to_npk.0, &[0u8; 32]);
     let from: AccountId = ctx.existing_public_accounts()[0];
 
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {

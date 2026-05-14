@@ -256,8 +256,7 @@ pub async fn tps_test() -> Result<()> {
 fn build_privacy_transaction() -> PrivacyPreservingTransaction {
     let program = Program::authenticated_transfer_program();
     let sender_nsk = [1; 32];
-    let sender_vsk = [99; 32];
-    let sender_vpk = ViewingPublicKey::from_scalar(sender_vsk);
+    let sender_vpk = ViewingPublicKey::from_seed(&[99u8; 32], &[100u8; 32]);
     let sender_npk = NullifierPublicKey::from(&sender_nsk);
     let sender_pre = AccountWithMetadata::new(
         Account {
@@ -270,8 +269,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
         AccountId::for_regular_private_account(&sender_npk, 0),
     );
     let recipient_nsk = [2; 32];
-    let recipient_vsk = [99; 32];
-    let recipient_vpk = ViewingPublicKey::from_scalar(recipient_vsk);
+    let recipient_vpk = ViewingPublicKey::from_seed(&[99u8; 32], &[100u8; 32]);
     let recipient_npk = NullifierPublicKey::from(&recipient_nsk);
     let recipient_pre = AccountWithMetadata::new(
         Account::default(),
@@ -279,13 +277,13 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
         AccountId::for_regular_private_account(&recipient_npk, 0),
     );
 
-    let eph_holder_from = EphemeralKeyHolder::new(&sender_npk);
-    let sender_ss = eph_holder_from.calculate_shared_secret_sender(&sender_vpk);
-    let sender_epk = eph_holder_from.generate_ephemeral_public_key();
+    let eph_holder_from = EphemeralKeyHolder::new(&sender_vpk);
+    let sender_ss = eph_holder_from.calculate_shared_secret_sender();
+    let sender_epk = eph_holder_from.ephemeral_public_key().clone();
 
-    let eph_holder_to = EphemeralKeyHolder::new(&recipient_npk);
-    let recipient_ss = eph_holder_to.calculate_shared_secret_sender(&recipient_vpk);
-    let recipient_epk = eph_holder_from.generate_ephemeral_public_key();
+    let eph_holder_to = EphemeralKeyHolder::new(&recipient_vpk);
+    let recipient_ss = eph_holder_to.calculate_shared_secret_sender();
+    let recipient_epk = eph_holder_to.ephemeral_public_key().clone();
 
     let balance_to_move: u128 = 1;
     let proof: MembershipProof = (

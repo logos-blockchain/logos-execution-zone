@@ -4,7 +4,6 @@ use core::slice;
 use std::{ffi::c_char, ptr};
 
 use lee::Data;
-use lee_core::encryption::shared_key_derivation::Secp256k1Point;
 
 use crate::error::WalletFfiError;
 
@@ -161,11 +160,11 @@ impl FfiPrivateAccountKeys {
     }
 
     pub fn vpk(&self) -> Result<lee_core::encryption::ViewingPublicKey, WalletFfiError> {
-        if self.viewing_public_key_len == 33 {
+        if self.viewing_public_key_len == 1184 {
             let slice = unsafe {
                 slice::from_raw_parts(self.viewing_public_key, self.viewing_public_key_len)
             };
-            Ok(Secp256k1Point(slice.to_vec()))
+            Ok(lee_core::encryption::ViewingPublicKey(slice.to_vec()))
         } else {
             Err(WalletFfiError::InvalidKeyValue)
         }

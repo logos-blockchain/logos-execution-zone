@@ -136,9 +136,9 @@ impl AccountManager {
                 } => {
                     let acc = lee_core::account::Account::default();
                     let auth_acc = AccountWithMetadata::new(acc, false, (&npk, identifier));
-                    let eph_holder = EphemeralKeyHolder::new(&npk);
-                    let ssk = eph_holder.calculate_shared_secret_sender(&vpk);
-                    let epk = eph_holder.generate_ephemeral_public_key();
+                    let eph_holder = EphemeralKeyHolder::new(&vpk);
+                    let ssk = eph_holder.calculate_shared_secret_sender();
+                    let epk = eph_holder.ephemeral_public_key().clone();
                     let pre = AccountPreparedData {
                         nsk: None,
                         npk,
@@ -165,9 +165,9 @@ impl AccountManager {
                 } => {
                     let acc = lee_core::account::Account::default();
                     let auth_acc = AccountWithMetadata::new(acc, false, account_id);
-                    let eph_holder = EphemeralKeyHolder::new(&npk);
-                    let ssk = eph_holder.calculate_shared_secret_sender(&vpk);
-                    let epk = eph_holder.generate_ephemeral_public_key();
+                    let eph_holder = EphemeralKeyHolder::new(&vpk);
+                    let ssk = eph_holder.calculate_shared_secret_sender();
+                    let epk = eph_holder.ephemeral_public_key().clone();
                     let pre = AccountPreparedData {
                         nsk: None,
                         npk,
@@ -365,9 +365,9 @@ async fn private_key_tree_acc_preparation(
     // support from that in the wallet.
     let sender_pre = AccountWithMetadata::new(from_acc.account.clone(), true, account_id);
 
-    let eph_holder = EphemeralKeyHolder::new(&from_npk);
-    let ssk = eph_holder.calculate_shared_secret_sender(&from_vpk);
-    let epk = eph_holder.generate_ephemeral_public_key();
+    let eph_holder = EphemeralKeyHolder::new(&from_vpk);
+    let ssk = eph_holder.calculate_shared_secret_sender();
+    let epk = eph_holder.ephemeral_public_key().clone();
 
     Ok(AccountPreparedData {
         nsk: Some(nsk),
@@ -405,9 +405,10 @@ async fn private_shared_acc_preparation(
         .await
         .unwrap_or(None);
 
-    let eph_holder = EphemeralKeyHolder::new(&npk);
-    let ssk = eph_holder.calculate_shared_secret_sender(&vpk);
-    let epk = eph_holder.generate_ephemeral_public_key();
+    let eph_holder = EphemeralKeyHolder::new(&vpk);
+    let ssk = eph_holder.calculate_shared_secret_sender();
+    let epk = eph_holder.ephemeral_public_key().clone();
+
     Ok(AccountPreparedData {
         nsk: Some(nsk),
         npk,
@@ -430,7 +431,7 @@ mod tests {
         let acc = AccountIdentity::PrivateShared {
             nsk: [0; 32],
             npk: NullifierPublicKey([1; 32]),
-            vpk: ViewingPublicKey::from_scalar([2; 32]),
+            vpk: ViewingPublicKey::from_seed(&[2u8; 32], &[3u8; 32]),
             identifier: 42,
         };
         assert!(acc.is_private());

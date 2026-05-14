@@ -120,7 +120,7 @@ impl SecretSpendingKey {
 
     #[must_use]
     #[expect(clippy::big_endian_bytes, reason = "BIP-032 uses big endian")]
-    pub fn generate_viewing_secret_seed_key(&self, index: Option<u32>) -> [u8; 64] {
+    pub fn generate_viewing_secret_seed_key(&self, index: Option<u32>) -> ViewingSecretKey {
         const PREFIX: &[u8; 8] = b"LEE/keys";
         const SUFFIX_1: &[u8; 1] = &[2];
         const SUFFIX_2: &[u8; 19] = &[0; 19];
@@ -136,9 +136,20 @@ impl SecretSpendingKey {
         bytes.extend_from_slice(SUFFIX_1);
         bytes.extend_from_slice(&index.to_be_bytes());
         bytes.extend_from_slice(SUFFIX_2);
-        let bytes: [u8; 64] = bytes.try_into().expect("`generate_viewing_secret_key`: bytes must be exactly 64");
+        let bytes: [u8; 64] = bytes
+            .try_into()
+            .expect("`generate_viewing_secret_key`: bytes must be exactly 64");
 
-        hmac_sha512::HMAC::mac(bytes, b"LEE_viewing_seed")
+        let full_seed = hmac_sha512::HMAC::mac(bytes, b"LEE_viewing_seed");
+
+        ViewingSecretKey {
+            d: *full_seed
+                .first_chunk::<32>()
+                .expect("hash_value is 64 bytes, must be safe to get first 32"),
+            r: *full_seed
+                .last_chunk::<32>()
+                .expect("hash_value is 64 bytes, must be safe to get last 32"),
+        }
     }
 
     #[must_use]
@@ -153,9 +164,7 @@ impl SecretSpendingKey {
     pub fn produce_private_key_holder(&self, index: Option<u32>) -> PrivateKeyHolder {
         PrivateKeyHolder {
             nullifier_secret_key: self.generate_nullifier_secret_key(index),
-            viewing_secret_key: Self::generate_viewing_secret_key(
-                self.generate_viewing_secret_seed_key(index),
-            ),
+            viewing_secret_key: self.generate_viewing_secret_seed_key(index),
         }
     }
 }
@@ -211,10 +220,8 @@ mod tests {
         assert_eq!(seed_holder.seed.len(), 64);
 
         let top_secret_key_holder = seed_holder.produce_top_secret_key_holder();
-
-        let _vsk = SecretSpendingKey::generate_viewing_secret_key(
-            top_secret_key_holder.generate_viewing_secret_seed_key(None),
-        );
+        // Marvin-pq should drop seed from the fucntion name
+        let _vsk = top_secret_key_holder.generate_viewing_secret_seed_key(None);
     }
 
     #[test]

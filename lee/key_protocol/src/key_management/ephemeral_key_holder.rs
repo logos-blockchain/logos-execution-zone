@@ -1,54 +1,61 @@
 use lee_core::{
-    NullifierPublicKey, SharedSecretKey,
-    encryption::{EphemeralPublicKey, EphemeralSecretKey, ViewingPublicKey,
-    shared_key_derivation::Secp256k1Point},
+    SharedSecretKey,
+    encryption::{EphemeralPublicKey, ViewingPublicKey},
 };
-use rand::{RngCore as _, rngs::OsRng};
-use sha2::Digest as _;
 
-#[derive(Debug)]
-/// Ephemeral secret key holder. Non-clonable as intended for one-time use. Produces ephemeral
-/// public keys. Can produce shared secret for sender.
+/// Ephemeral key holder for the sender side of a KEM-based shared-secret exchange.
+///
+/// Non-clonable as intended for one-time use: construction encapsulates once and
+/// stores both the shared secret and the ciphertext (EphemeralPublicKey) that must
+/// be sent to the receiver.
 pub struct EphemeralKeyHolder {
-    ephemeral_secret_key: EphemeralSecretKey,
+    shared_secret: SharedSecretKey,
+    ephemeral_public_key: EphemeralPublicKey,
+}
+
+// Marvin-pq: SharedSecretKey does not implement Debug (intentional — leaking key material via
+// debug output would be a security risk). We implement Debug manually here, redacting the
+// shared secret while still allowing the ephemeral public key (KEM ciphertext) to be inspected.
+impl std::fmt::Debug for EphemeralKeyHolder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EphemeralKeyHolder")
+            .field("shared_secret", &"<redacted>")
+            .field("ephemeral_public_key", &self.ephemeral_public_key)
+            .finish()
+    }
 }
 
 impl EphemeralKeyHolder {
     #[must_use]
-    pub fn new(receiver_nullifier_public_key: &NullifierPublicKey) -> Self {
-        let mut nonce_bytes = [0; 16];
-        OsRng.fill_bytes(&mut nonce_bytes);
-        let mut hasher = sha2::Sha256::new();
-        hasher.update(receiver_nullifier_public_key);
-        hasher.update(nonce_bytes);
-
+    pub fn new(receiver_viewing_public_key: &ViewingPublicKey) -> Self {
+        let (shared_secret, ephemeral_public_key) =
+            SharedSecretKey::encapsulate(receiver_viewing_public_key);
         Self {
-            ephemeral_secret_key: hasher.finalize().into(),
+            shared_secret,
+            ephemeral_public_key,
         }
     }
 
+    /// Returns the KEM ciphertext to be transmitted to the receiver as the EphemeralPublicKey.
     #[must_use]
-    pub fn generate_ephemeral_public_key(&self) -> EphemeralPublicKey {
-        EphemeralPublicKey::from_scalar(self.ephemeral_secret_key)
+    pub fn ephemeral_public_key(&self) -> &EphemeralPublicKey {
+        &self.ephemeral_public_key
     }
 
+    /// Returns the sender-side shared secret (established at construction time).
     #[must_use]
-    pub fn calculate_shared_secret_sender(
-        &self,
-        _receiver_viewing_public_key: &ViewingPublicKey,
-    ) -> SharedSecretKey {
-        SharedSecretKey::new(self.ephemeral_secret_key, &Secp256k1Point::from_scalar(self.ephemeral_secret_key))
+    pub fn calculate_shared_secret_sender(&self) -> SharedSecretKey {
+        self.shared_secret
     }
 }
 
+/// Encapsulates a fresh shared secret toward `vpk` and returns `(shared_secret, ciphertext)`.
+///
+/// Used when the local side is acting as an "ephemeral receiver" — i.e. generating a
+/// one-sided encryption that only the holder of the VSK can decrypt.
 #[must_use]
 pub fn produce_one_sided_shared_secret_receiver(
-    _vpk: &ViewingPublicKey,
+    vpk: &ViewingPublicKey,
 ) -> (SharedSecretKey, EphemeralPublicKey) {
-    let mut esk = [0; 32];
-    OsRng.fill_bytes(&mut esk);
-    (
-        SharedSecretKey::new(esk, &Secp256k1Point::from_scalar(esk)),
-        EphemeralPublicKey::from_scalar(esk),
-    )
+    SharedSecretKey::encapsulate(vpk)
 }

@@ -6,7 +6,7 @@ use chacha20::{
 use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "host")]
-pub use shared_key_derivation::{EphemeralPublicKey, EphemeralSecretKey, ViewingPublicKey};
+pub use shared_key_derivation::{EphemeralPublicKey, ViewingPublicKey};
 
 use crate::{Commitment, account::Account, program::PrivateAccountKind};
 #[cfg(feature = "host")]

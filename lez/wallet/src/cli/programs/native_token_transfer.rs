@@ -351,10 +351,7 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandPrivate {
                 let to_npk = lee_core::NullifierPublicKey(to_npk);
 
                 let to_vpk_res = hex::decode(to_vpk)?;
-                let mut to_vpk = [0_u8; 33];
-                to_vpk.copy_from_slice(&to_vpk_res);
-                let to_vpk =
-                    lee_core::encryption::shared_key_derivation::Secp256k1Point(to_vpk.to_vec());
+                let to_vpk = lee_core::encryption::ViewingPublicKey(to_vpk_res);
 
                 let (tx_hash, [secret_from, _]) = NativeTokenTransfer(wallet_core)
                     .send_private_transfer_to_outer_account(
@@ -428,10 +425,7 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandShielded {
                 let to_npk = lee_core::NullifierPublicKey(to_npk);
 
                 let to_vpk_res = hex::decode(to_vpk)?;
-                let mut to_vpk = [0_u8; 33];
-                to_vpk.copy_from_slice(&to_vpk_res);
-                let to_vpk =
-                    lee_core::encryption::shared_key_derivation::Secp256k1Point(to_vpk.to_vec());
+                let to_vpk = lee_core::encryption::ViewingPublicKey(to_vpk_res);
 
                 let (tx_hash, _) = NativeTokenTransfer(wallet_core)
                     .send_shielded_transfer_to_outer_account(

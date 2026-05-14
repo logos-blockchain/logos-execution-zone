@@ -1,6 +1,6 @@
 use lee_core::{
     NullifierPublicKey, SharedSecretKey,
-    encryption::{EphemeralPublicKey, ViewingPublicKey, Scalar},
+    encryption::{EphemeralPublicKey, ViewingPublicKey},
 };
 use secret_holders::{PrivateKeyHolder, SecretSpendingKey, SeedHolder};
 use serde::{Deserialize, Serialize};
@@ -71,19 +71,14 @@ impl KeyChain {
         ephemeral_public_key_sender: &EphemeralPublicKey,
         _index: Option<u32>,
     ) -> SharedSecretKey {
-        SharedSecretKey::new(
-            Scalar::default(),
-            ephemeral_public_key_sender,
-        )
+        let vsk = &self.private_key_holder.viewing_secret_key;
+        SharedSecretKey::decapsulate(ephemeral_public_key_sender, &vsk.d, &vsk.r)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use aes_gcm::aead::OsRng;
     use base58::ToBase58 as _;
-    use k256::{AffinePoint, elliptic_curve::group::GroupEncoding as _};
-    use rand::RngCore as _;
 
     use super::*;
     use crate::key_management::{
@@ -106,14 +101,10 @@ mod tests {
     fn calculate_shared_secret_receiver() {
         let account_id_key_holder = KeyChain::new_os_random();
 
-        // Generate a random ephemeral public key sender
-        let mut scalar = [0; 32];
-        OsRng.fill_bytes(&mut scalar);
-        let ephemeral_public_key_sender = EphemeralPublicKey::from_scalar(scalar);
+        // Create a proper KEM ciphertext by encapsulating toward this key chain's VPK.
+        let (_, epk) = SharedSecretKey::encapsulate(&account_id_key_holder.viewing_public_key);
 
-        // Calculate shared secret
-        let _shared_secret = account_id_key_holder
-            .calculate_shared_secret_receiver(&ephemeral_public_key_sender, None);
+        let _shared_secret = account_id_key_holder.calculate_shared_secret_receiver(&epk, None);
     }
 
     #[test]
@@ -133,12 +124,6 @@ mod tests {
         let account = lee::AccountId::from(&public_key);
 
         println!("======Prerequisites======");
-        println!();
-
-        println!(
-            "Group generator {:?}",
-            hex::encode(AffinePoint::GENERATOR.to_bytes())
-        );
         println!();
 
         println!("======Holders======");
@@ -188,13 +173,11 @@ mod tests {
     fn non_trivial_chain_index() {
         let keys = account_with_chain_index_2_for_tests();
 
-        let eph_key_holder = EphemeralKeyHolder::new(&keys.nullifier_public_key);
+        let eph_key_holder = EphemeralKeyHolder::new(&keys.viewing_public_key);
 
-        let key_sender = eph_key_holder.calculate_shared_secret_sender(&keys.viewing_public_key);
-        let key_receiver = keys.calculate_shared_secret_receiver(
-            &eph_key_holder.generate_ephemeral_public_key(),
-            Some(2),
-        );
+        let key_sender = eph_key_holder.calculate_shared_secret_sender();
+        let key_receiver =
+            keys.calculate_shared_secret_receiver(eph_key_holder.ephemeral_public_key(), Some(2));
 
         assert_eq!(key_sender.0, key_receiver.0);
     }

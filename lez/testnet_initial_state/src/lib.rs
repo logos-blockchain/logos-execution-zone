@@ -5,7 +5,8 @@ use key_protocol::key_management::{
     secret_holders::{PrivateKeyHolder, SecretSpendingKey},
 };
 use lee::{Account, AccountId, Data, PrivateKey, PublicKey, V03State};
-use lee_core::{NullifierPublicKey, encryption::shared_key_derivation::Secp256k1Point};
+use lee_core::{NullifierPublicKey, encryption::ViewingPublicKey};
+use key_protocol::key_management::secret_holders::ViewingSecretKey;
 use serde::{Deserialize, Serialize};
 
 const PRIVATE_KEY_PUB_ACC_A: [u8; 32] = [
@@ -48,15 +49,7 @@ const VSK_PRIV_ACC_B: [u8; 32] = [
     154, 161, 34, 208, 74, 27, 1, 119, 13, 88, 128,
 ];
 
-const VPK_PRIV_ACC_A: [u8; 33] = [
-    2, 210, 206, 38, 213, 4, 182, 198, 220, 47, 93, 148, 61, 84, 148, 250, 158, 45, 8, 81, 48, 80,
-    46, 230, 87, 210, 47, 204, 76, 58, 214, 167, 81,
-];
 
-const VPK_PRIV_ACC_B: [u8; 33] = [
-    2, 79, 110, 46, 203, 29, 206, 205, 18, 86, 27, 189, 104, 103, 113, 181, 110, 53, 78, 172, 11,
-    171, 190, 18, 126, 214, 81, 77, 192, 154, 58, 195, 238,
-];
 
 const NPK_PRIV_ACC_A: [u8; 32] = [
     167, 108, 50, 153, 74, 47, 151, 188, 140, 79, 195, 31, 181, 9, 40, 167, 201, 32, 175, 129, 45,
@@ -136,20 +129,20 @@ pub fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialD
         secret_spending_key: SecretSpendingKey(SSK_PRIV_ACC_A),
         private_key_holder: PrivateKeyHolder {
             nullifier_secret_key: NSK_PRIV_ACC_A,
-            viewing_secret_key: VSK_PRIV_ACC_A,
+            viewing_secret_key: ViewingSecretKey { d: VSK_PRIV_ACC_A, r: [0u8; 32] },
         },
         nullifier_public_key: NullifierPublicKey(NPK_PRIV_ACC_A),
-        viewing_public_key: Secp256k1Point(VPK_PRIV_ACC_A.to_vec()),
+        viewing_public_key: ViewingPublicKey::from_seed(&VSK_PRIV_ACC_A, &[0u8; 32]),
     };
 
     let key_chain_2 = KeyChain {
         secret_spending_key: SecretSpendingKey(SSK_PRIV_ACC_B),
         private_key_holder: PrivateKeyHolder {
             nullifier_secret_key: NSK_PRIV_ACC_B,
-            viewing_secret_key: VSK_PRIV_ACC_B,
+            viewing_secret_key: ViewingSecretKey { d: VSK_PRIV_ACC_B, r: [0u8; 32] },
         },
         nullifier_public_key: NullifierPublicKey(NPK_PRIV_ACC_B),
-        viewing_public_key: Secp256k1Point(VPK_PRIV_ACC_B.to_vec()),
+        viewing_public_key: ViewingPublicKey::from_seed(&VSK_PRIV_ACC_B, &[0u8; 32]),
     };
 
     vec![

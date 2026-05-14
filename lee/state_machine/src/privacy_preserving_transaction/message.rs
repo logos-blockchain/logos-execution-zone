@@ -143,7 +143,7 @@ pub mod tests {
         Commitment, EncryptionScheme, Nullifier, NullifierPublicKey, PrivateAccountKind,
         SharedSecretKey,
         account::{Account, AccountId, Nonce},
-        encryption::{EphemeralPublicKey, ViewingPublicKey},
+        encryption::ViewingPublicKey,
         program::{BlockValidityWindow, TimestampValidityWindow},
     };
     use sha2::{Digest as _, Sha256};
@@ -246,13 +246,11 @@ pub mod tests {
     #[test]
     fn encrypted_account_data_constructor() {
         let npk = NullifierPublicKey::from(&[1; 32]);
-        let vpk = ViewingPublicKey::from_scalar([2; 32]);
+        let vpk = ViewingPublicKey::from_seed(&[2u8; 32], &[3u8; 32]);
         let account = Account::default();
         let account_id = lee_core::account::AccountId::for_regular_private_account(&npk, 0);
         let commitment = Commitment::new(&account_id, &account);
-        let esk = [3; 32];
-        let shared_secret = SharedSecretKey::new(esk, &vpk);
-        let epk = EphemeralPublicKey::from_scalar(esk);
+        let (shared_secret, epk) = SharedSecretKey::encapsulate_deterministic(&vpk, &[0u8; 32], 0);
         let ciphertext = EncryptionScheme::encrypt(
             &account,
             &PrivateAccountKind::Regular(0),
