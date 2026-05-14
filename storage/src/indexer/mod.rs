@@ -22,6 +22,8 @@ pub const DB_META_LAST_OBSERVED_L1_LIB_HEADER_ID_IN_DB_KEY: &str =
     "last_observed_l1_lib_header_in_db";
 /// Key base for storing metainformation about the last breakpoint.
 pub const DB_META_LAST_BREAKPOINT_ID: &str = "last_breakpoint_id";
+/// Key base for storing the zone-sdk indexer cursor (opaque bytes).
+pub const DB_META_ZONE_SDK_INDEXER_CURSOR_KEY: &str = "zone_sdk_indexer_cursor";
 
 /// Cell name for a breakpoint.
 pub const BREAKPOINT_CELL_NAME: &str = "breakpoint";

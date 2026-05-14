@@ -12,7 +12,7 @@ use crate::{
     error::DbError,
     sequencer::sequencer_cells::{
         LastFinalizedBlockIdCell, LatestBlockMetaCellOwned, LatestBlockMetaCellRef,
-        NSSAStateCellOwned, NSSAStateCellRef,
+        NSSAStateCellOwned, NSSAStateCellRef, ZoneSdkCheckpointCellOwned, ZoneSdkCheckpointCellRef,
     },
 };
 
@@ -22,6 +22,8 @@ pub mod sequencer_cells;
 pub const DB_META_LAST_FINALIZED_BLOCK_ID: &str = "last_finalized_block_id";
 /// Key base for storing metainformation about the latest block meta.
 pub const DB_META_LATEST_BLOCK_META_KEY: &str = "latest_block_meta";
+/// Key base for storing the zone-sdk sequencer checkpoint (opaque bytes).
+pub const DB_META_ZONE_SDK_CHECKPOINT_KEY: &str = "zone_sdk_checkpoint";
 
 /// Key base for storing the NSSA state.
 pub const DB_NSSA_STATE_KEY: &str = "nssa_state";
@@ -205,6 +207,16 @@ impl RocksDBIO {
         self.get::<LatestBlockMetaCellOwned>(()).map(|val| val.0)
     }
 
+    pub fn get_zone_sdk_checkpoint_bytes(&self) -> DbResult<Option<Vec<u8>>> {
+        Ok(self
+            .get_opt::<ZoneSdkCheckpointCellOwned>(())?
+            .map(|cell| cell.0))
+    }
+
+    pub fn put_zone_sdk_checkpoint_bytes(&self, bytes: &[u8]) -> DbResult<()> {
+        self.put(&ZoneSdkCheckpointCellRef(bytes), ())
+    }
+
     pub fn put_block(
         &self,
         block: &Block,
@@ -272,6 +284,22 @@ impl RocksDBIO {
             .delete_cf(&cf_block, key)
             .map_err(|rerr| DbError::rocksdb_cast_message(rerr, None))?;
 
+        Ok(())
+    }
+
+    /// Mark every pending block with `block_id <= last_finalized` as finalized.
+    /// Idempotent — already-finalized blocks are skipped.
+    pub fn clean_pending_blocks_up_to(&self, last_finalized: u64) -> DbResult<()> {
+        let pending_ids: Vec<u64> = self
+            .get_all_blocks()
+            .filter_map(Result::ok)
+            .filter(|b| matches!(b.bedrock_status, BedrockStatus::Pending))
+            .map(|b| b.header.block_id)
+            .filter(|id| *id <= last_finalized)
+            .collect();
+        for id in pending_ids {
+            self.mark_block_as_finalized(id)?;
+        }
         Ok(())
     }
 

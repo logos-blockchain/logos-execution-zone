@@ -36,9 +36,9 @@ impl FromStr for Signature {
 }
 
 impl Signature {
-    #[must_use]
     /// This function expects the incoming message to be prehashed to be pre-2022 BIP-340/Keycard
     /// compatible.
+    #[must_use]
     pub fn new(key: &PrivateKey, message: &[u8; 32]) -> Self {
         let mut aux_random = [0_u8; 32];
         OsRng.fill_bytes(&mut aux_random);

@@ -103,7 +103,10 @@ pub struct PrivateAccountPrivateInitialData {
 impl PrivateAccountPrivateInitialData {
     #[must_use]
     pub fn account_id(&self) -> nssa::AccountId {
-        nssa::AccountId::from((&self.key_chain.nullifier_public_key, self.identifier))
+        nssa::AccountId::for_regular_private_account(
+            &self.key_chain.nullifier_public_key,
+            self.identifier,
+        )
     }
 }
 
@@ -208,7 +211,7 @@ pub fn initial_state() -> V03State {
             .iter()
             .map(|init_comm_data| {
                 let npk = &init_comm_data.npk;
-                let account_id = nssa::AccountId::from((npk, 0));
+                let account_id = nssa::AccountId::for_regular_private_account(npk, 0);
 
                 let mut acc = init_comm_data.account.clone();
 

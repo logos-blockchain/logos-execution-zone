@@ -8,7 +8,7 @@ use crate::{
     error::DbError,
     sequencer::{
         CF_NSSA_STATE_NAME, DB_META_LAST_FINALIZED_BLOCK_ID, DB_META_LATEST_BLOCK_META_KEY,
-        DB_NSSA_STATE_KEY,
+        DB_META_ZONE_SDK_CHECKPOINT_KEY, DB_NSSA_STATE_KEY,
     },
 };
 
@@ -91,6 +91,42 @@ impl SimpleWritableCell for LatestBlockMetaCellRef<'_> {
     fn value_constructor(&self) -> DbResult<Vec<u8>> {
         borsh::to_vec(&self).map_err(|err| {
             DbError::borsh_cast_message(err, Some("Failed to serialize last block meta".to_owned()))
+        })
+    }
+}
+
+/// Opaque bytes for the zone-sdk sequencer checkpoint. The caller is
+/// responsible for the actual encoding (we use `serde_json` since
+/// `SequencerCheckpoint` only derives serde, not borsh).
+#[derive(BorshDeserialize)]
+pub struct ZoneSdkCheckpointCellOwned(pub Vec<u8>);
+
+impl SimpleStorableCell for ZoneSdkCheckpointCellOwned {
+    type KeyParams = ();
+
+    const CELL_NAME: &'static str = DB_META_ZONE_SDK_CHECKPOINT_KEY;
+    const CF_NAME: &'static str = CF_META_NAME;
+}
+
+impl SimpleReadableCell for ZoneSdkCheckpointCellOwned {}
+
+#[derive(BorshSerialize)]
+pub struct ZoneSdkCheckpointCellRef<'bytes>(pub &'bytes [u8]);
+
+impl SimpleStorableCell for ZoneSdkCheckpointCellRef<'_> {
+    type KeyParams = ();
+
+    const CELL_NAME: &'static str = DB_META_ZONE_SDK_CHECKPOINT_KEY;
+    const CF_NAME: &'static str = CF_META_NAME;
+}
+
+impl SimpleWritableCell for ZoneSdkCheckpointCellRef<'_> {
+    fn value_constructor(&self) -> DbResult<Vec<u8>> {
+        borsh::to_vec(&self).map_err(|err| {
+            DbError::borsh_cast_message(
+                err,
+                Some("Failed to serialize zone-sdk checkpoint cell".to_owned()),
+            )
         })
     }
 }

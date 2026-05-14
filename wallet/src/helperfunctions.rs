@@ -200,10 +200,10 @@ pub fn produce_data_for_storage(
     }
 
     for (chain_index, node) in &user_data.private_key_tree.key_map {
-        let identifiers = node.value.1.iter().map(|(id, _)| *id).collect();
+        let kinds = node.value.1.iter().map(|(kind, _)| kind.clone()).collect();
         vec_for_storage.push(
             PersistentAccountDataPrivate {
-                identifiers,
+                kinds,
                 chain_index: chain_index.clone(),
                 data: node.clone(),
             }
@@ -222,12 +222,12 @@ pub fn produce_data_for_storage(
     }
 
     for entry in user_data.default_user_private_accounts.values() {
-        for (identifier, account) in &entry.accounts {
+        for (kind, account) in &entry.accounts {
             vec_for_storage.push(
                 InitialAccountData::Private(Box::new(PrivateAccountPrivateInitialData {
                     account: account.clone(),
                     key_chain: entry.key_chain.clone(),
-                    identifier: *identifier,
+                    identifier: kind.identifier(),
                 }))
                 .into(),
             );
@@ -238,6 +238,9 @@ pub fn produce_data_for_storage(
         accounts: vec_for_storage,
         last_synced_block,
         labels,
+        group_key_holders: user_data.group_key_holders.clone(),
+        shared_private_accounts: user_data.shared_private_accounts.clone(),
+        sealing_secret_key: user_data.sealing_secret_key,
     }
 }
 

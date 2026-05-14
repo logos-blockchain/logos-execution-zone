@@ -41,6 +41,13 @@ pub trait Rpc {
     #[method(name = "getAccount")]
     async fn get_account(&self, account_id: AccountId) -> Result<Account, ErrorObjectOwned>;
 
+    #[method(name = "getAccountAtBlock")]
+    async fn get_account_at_block(
+        &self,
+        account_id: AccountId,
+        block_id: BlockId,
+    ) -> Result<Account, ErrorObjectOwned>;
+
     #[method(name = "getTransaction")]
     async fn get_transaction(
         &self,

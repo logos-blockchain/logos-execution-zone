@@ -4,7 +4,7 @@ use crate::{
     cells::shared_cells::{BlockCell, FirstBlockCell, FirstBlockSetCell, LastBlockCell},
     indexer::indexer_cells::{
         AccNumTxCell, BlockHashToBlockIdMapCell, BreakpointCellOwned, LastBreakpointIdCell,
-        LastObservedL1LibHeaderCell, TxHashToBlockIdMapCell,
+        LastObservedL1LibHeaderCell, TxHashToBlockIdMapCell, ZoneSdkIndexerCursorCellOwned,
     },
 };
 
@@ -63,5 +63,11 @@ impl RocksDBIO {
     pub(crate) fn get_acc_meta_num_tx(&self, acc_id: [u8; 32]) -> DbResult<Option<u64>> {
         self.get_opt::<AccNumTxCell>(acc_id)
             .map(|opt| opt.map(|cell| cell.0))
+    }
+
+    pub fn get_zone_sdk_indexer_cursor_bytes(&self) -> DbResult<Option<Vec<u8>>> {
+        Ok(self
+            .get_opt::<ZoneSdkIndexerCursorCellOwned>(())?
+            .map(|cell| cell.0))
     }
 }

@@ -28,7 +28,7 @@ pub struct PersistentAccountDataPublic {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PersistentAccountDataPrivate {
-    pub identifiers: Vec<nssa_core::Identifier>,
+    pub kinds: Vec<nssa_core::PrivateAccountKind>,
     pub chain_index: ChainIndex,
     pub data: ChildKeysPrivate,
 }
@@ -98,6 +98,21 @@ pub struct PersistentStorage {
     /// "2rnKprXqWGWJTkDZKsQbFXa4ctKRbapsdoTKQFnaVGG8").
     #[serde(default)]
     pub labels: HashMap<String, Label>,
+    /// Group key holders for shared account management.
+    #[serde(default)]
+    pub group_key_holders: std::collections::BTreeMap<
+        String,
+        key_protocol::key_management::group_key_holder::GroupKeyHolder,
+    >,
+    /// Cached state of shared private accounts (PDA and regular).
+    #[serde(default)]
+    pub shared_private_accounts: std::collections::BTreeMap<
+        nssa::AccountId,
+        key_protocol::key_protocol_core::SharedAccountEntry,
+    >,
+    /// Dedicated sealing secret key for GMS distribution.
+    #[serde(default)]
+    pub sealing_secret_key: Option<nssa_core::encryption::Scalar>,
 }
 
 impl PersistentStorage {

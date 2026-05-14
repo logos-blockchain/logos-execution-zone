@@ -6,6 +6,7 @@ use secret_holders::{PrivateKeyHolder, SecretSpendingKey, SeedHolder};
 use serde::{Deserialize, Serialize};
 
 pub mod ephemeral_key_holder;
+pub mod group_key_holder;
 pub mod key_tree;
 pub mod secret_holders;
 

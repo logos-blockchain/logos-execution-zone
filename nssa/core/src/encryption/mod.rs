@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "host")]
 pub use shared_key_derivation::{EphemeralPublicKey, EphemeralSecretKey, ViewingPublicKey};
 
-use crate::{Commitment, Identifier, account::Account};
+use crate::{Commitment, account::Account, program::PrivateAccountKind};
 #[cfg(feature = "host")]
 pub mod shared_key_derivation;
 
@@ -40,13 +40,14 @@ impl EncryptionScheme {
     #[must_use]
     pub fn encrypt(
         account: &Account,
-        identifier: Identifier,
+        kind: &PrivateAccountKind,
         shared_secret: &SharedSecretKey,
         commitment: &Commitment,
         output_index: u32,
     ) -> Ciphertext {
-        // Plaintext: identifier (16 bytes, little-endian) || account bytes
-        let mut buffer = identifier.to_le_bytes().to_vec();
+        // Plaintext: PrivateAccountKind::HEADER_LEN bytes header || account bytes.
+        // Both variants produce the same header length — see PrivateAccountKind::to_header_bytes.
+        let mut buffer = kind.to_header_bytes().to_vec();
         buffer.extend_from_slice(&account.to_bytes());
         Self::symmetric_transform(&mut buffer, shared_secret, commitment, output_index);
         Ciphertext(buffer)
@@ -89,17 +90,19 @@ impl EncryptionScheme {
         shared_secret: &SharedSecretKey,
         commitment: &Commitment,
         output_index: u32,
-    ) -> Option<(Identifier, Account)> {
+    ) -> Option<(PrivateAccountKind, Account)> {
         use std::io::Cursor;
         let mut buffer = ciphertext.0.clone();
         Self::symmetric_transform(&mut buffer, shared_secret, commitment, output_index);
 
-        if buffer.len() < 16 {
+        if buffer.len() < PrivateAccountKind::HEADER_LEN {
             return None;
         }
-        let identifier = Identifier::from_le_bytes(buffer[..16].try_into().unwrap());
+        let header: &[u8; PrivateAccountKind::HEADER_LEN] =
+            buffer[..PrivateAccountKind::HEADER_LEN].try_into().unwrap();
+        let kind = PrivateAccountKind::from_header_bytes(header)?;
 
-        let mut cursor = Cursor::new(&buffer[16..]);
+        let mut cursor = Cursor::new(&buffer[PrivateAccountKind::HEADER_LEN..]);
         Account::from_cursor(&mut cursor)
             .inspect_err(|err| {
                 println!(
@@ -112,6 +115,43 @@ impl EncryptionScheme {
                 );
             })
             .ok()
-            .map(|account| (identifier, account))
+            .map(|account| (kind, account))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        account::{Account, AccountId},
+        program::PdaSeed,
+    };
+
+    #[test]
+    fn encrypt_same_length_for_account_and_pda() {
+        let account = Account::default();
+        let secret = SharedSecretKey([0_u8; 32]);
+        let commitment = crate::Commitment::new(&AccountId::new([0_u8; 32]), &Account::default());
+
+        let account_ct = EncryptionScheme::encrypt(
+            &account,
+            &PrivateAccountKind::Regular(42),
+            &secret,
+            &commitment,
+            0,
+        );
+        let pda_ct = EncryptionScheme::encrypt(
+            &account,
+            &PrivateAccountKind::Pda {
+                program_id: [1_u32; 8],
+                seed: PdaSeed::new([2_u8; 32]),
+                identifier: 42,
+            },
+            &secret,
+            &commitment,
+            0,
+        );
+
+        assert_eq!(account_ct.0.len(), pda_ct.0.len());
     }
 }

@@ -188,7 +188,9 @@ impl Ata<'_> {
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
         let accounts = vec![
-            PrivacyPreservingAccount::PrivateOwned(owner_id),
+            self.0
+                .resolve_private_account(owner_id)
+                .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
             PrivacyPreservingAccount::Public(definition_id),
             PrivacyPreservingAccount::Public(ata_id),
         ];
@@ -223,7 +225,9 @@ impl Ata<'_> {
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
         let accounts = vec![
-            PrivacyPreservingAccount::PrivateOwned(owner_id),
+            self.0
+                .resolve_private_account(owner_id)
+                .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
             PrivacyPreservingAccount::Public(sender_ata_id),
             PrivacyPreservingAccount::Public(recipient_id),
         ];
@@ -257,7 +261,9 @@ impl Ata<'_> {
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
         let accounts = vec![
-            PrivacyPreservingAccount::PrivateOwned(owner_id),
+            self.0
+                .resolve_private_account(owner_id)
+                .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
             PrivacyPreservingAccount::Public(holder_ata_id),
             PrivacyPreservingAccount::Public(definition_id),
         ];

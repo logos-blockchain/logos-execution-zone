@@ -14,9 +14,14 @@ impl NativeTokenTransfer<'_> {
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
         let instruction: u128 = 0;
 
+        let account = self
+            .0
+            .resolve_private_account(from)
+            .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
+
         self.0
             .send_privacy_preserving_tx(
-                vec![PrivacyPreservingAccount::PrivateOwned(from)],
+                vec![account],
                 Program::serialize_instruction(instruction).unwrap(),
                 &Program::authenticated_transfer_program().into(),
             )
@@ -41,7 +46,9 @@ impl NativeTokenTransfer<'_> {
         self.0
             .send_privacy_preserving_tx_with_pre_check(
                 vec![
-                    PrivacyPreservingAccount::PrivateOwned(from),
+                    self.0
+                        .resolve_private_account(from)
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
                     PrivacyPreservingAccount::PrivateForeign {
                         npk: to_npk,
                         vpk: to_vpk,
@@ -69,12 +76,18 @@ impl NativeTokenTransfer<'_> {
     ) -> Result<(HashType, [SharedSecretKey; 2]), ExecutionFailureKind> {
         let (instruction_data, program, tx_pre_check) = auth_transfer_preparation(balance_to_move);
 
+        let from_account = self
+            .0
+            .resolve_private_account(from)
+            .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
+        let to_account = self
+            .0
+            .resolve_private_account(to)
+            .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
+
         self.0
             .send_privacy_preserving_tx_with_pre_check(
-                vec![
-                    PrivacyPreservingAccount::PrivateOwned(from),
-                    PrivacyPreservingAccount::PrivateOwned(to),
-                ],
+                vec![from_account, to_account],
                 instruction_data,
                 &program.into(),
                 tx_pre_check,

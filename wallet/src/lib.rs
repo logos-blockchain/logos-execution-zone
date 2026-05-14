@@ -25,7 +25,8 @@ use nssa::{
     },
 };
 use nssa_core::{
-    Commitment, MembershipProof, SharedSecretKey, account::Nonce, program::InstructionData,
+    Commitment, MembershipProof, PrivateAccountKind, SharedSecretKey, account::Nonce,
+    program::InstructionData,
 };
 pub use privacy_preserving_tx::PrivacyPreservingAccount;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
@@ -50,6 +51,13 @@ pub const HOME_DIR_ENV_VAR: &str = "NSSA_WALLET_HOME_DIR";
 pub enum AccDecodeData {
     Skip,
     Decode(nssa_core::SharedSecretKey, AccountId),
+}
+
+/// Info returned when creating a shared account.
+pub struct SharedAccountInfo {
+    pub account_id: AccountId,
+    pub npk: nssa_core::NullifierPublicKey,
+    pub vpk: nssa_core::encryption::ViewingPublicKey,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -101,6 +109,9 @@ impl WalletCore {
             accounts: persistent_accounts,
             last_synced_block,
             labels,
+            group_key_holders,
+            shared_private_accounts,
+            sealing_secret_key,
         } = PersistentStorage::from_path(&storage_path).with_context(|| {
             format!(
                 "Failed to read persistent storage at {}",
@@ -112,7 +123,13 @@ impl WalletCore {
             config_path,
             storage_path,
             config_overrides,
-            |config| WalletChainStore::new(config, persistent_accounts, labels),
+            |config| {
+                let mut store = WalletChainStore::new(config, persistent_accounts, labels)?;
+                store.user_data.group_key_holders = group_key_holders;
+                store.user_data.shared_private_accounts = shared_private_accounts;
+                store.user_data.sealing_secret_key = sealing_secret_key;
+                Ok(store)
+            },
             last_synced_block,
         )
     }
@@ -284,10 +301,176 @@ impl WalletCore {
             .value
             .0
             .nullifier_public_key;
-        let account_id = AccountId::from((&npk, identifier));
-        self.storage
-            .insert_private_account_data(account_id, identifier, Account::default());
+        let account_id = AccountId::for_regular_private_account(&npk, identifier);
+        self.storage.insert_private_account_data(
+            account_id,
+            &PrivateAccountKind::Regular(identifier),
+            Account::default(),
+        );
         (account_id, cci)
+    }
+
+    /// Insert a group key holder into storage.
+    pub fn insert_group_key_holder(
+        &mut self,
+        name: String,
+        holder: key_protocol::key_management::group_key_holder::GroupKeyHolder,
+    ) {
+        self.storage.user_data.insert_group_key_holder(name, holder);
+    }
+
+    /// Set the wallet's dedicated sealing secret key.
+    pub const fn set_sealing_secret_key(&mut self, key: nssa_core::encryption::Scalar) {
+        self.storage.user_data.sealing_secret_key = Some(key);
+    }
+
+    /// Resolve an `AccountId` to the appropriate `PrivacyPreservingAccount` variant.
+    /// Checks the key tree first, then shared private accounts.
+    #[must_use]
+    pub fn resolve_private_account(
+        &self,
+        account_id: nssa::AccountId,
+    ) -> Option<PrivacyPreservingAccount> {
+        // Check key tree first
+        if self
+            .storage
+            .user_data
+            .get_private_account(account_id)
+            .is_some()
+        {
+            return Some(PrivacyPreservingAccount::PrivateOwned(account_id));
+        }
+
+        // Check shared private accounts
+        let entry = self.storage.user_data.shared_private_account(&account_id)?;
+        let holder = self
+            .storage
+            .user_data
+            .group_key_holder(&entry.group_label)?;
+
+        if let (Some(pda_seed), Some(program_id)) = (entry.pda_seed, entry.pda_program_id) {
+            let keys = holder.derive_keys_for_pda(&program_id, &pda_seed);
+            Some(PrivacyPreservingAccount::PrivatePdaShared {
+                account_id,
+                nsk: keys.nullifier_secret_key,
+                npk: keys.generate_nullifier_public_key(),
+                vpk: keys.generate_viewing_public_key(),
+                identifier: entry.identifier,
+            })
+        } else {
+            let derivation_seed = {
+                use sha2::Digest as _;
+                let mut hasher = sha2::Sha256::new();
+                hasher.update(b"/LEE/v0.3/SharedAccountTag/\x00\x00\x00\x00\x00");
+                hasher.update(entry.identifier.to_le_bytes());
+                let result: [u8; 32] = hasher.finalize().into();
+                result
+            };
+            let keys = holder.derive_keys_for_shared_account(&derivation_seed);
+            Some(PrivacyPreservingAccount::PrivateShared {
+                nsk: keys.nullifier_secret_key,
+                npk: keys.generate_nullifier_public_key(),
+                vpk: keys.generate_viewing_public_key(),
+                identifier: entry.identifier,
+            })
+        }
+    }
+
+    /// Remove a group key holder from storage. Returns the removed holder if it existed.
+    pub fn remove_group_key_holder(
+        &mut self,
+        name: &str,
+    ) -> Option<key_protocol::key_management::group_key_holder::GroupKeyHolder> {
+        self.storage.user_data.group_key_holders.remove(name)
+    }
+
+    /// Register a shared account in storage for sync tracking.
+    fn register_shared_account(
+        &mut self,
+        account_id: AccountId,
+        group_label: String,
+        identifier: nssa_core::Identifier,
+        pda_seed: Option<nssa_core::program::PdaSeed>,
+        pda_program_id: Option<nssa_core::program::ProgramId>,
+    ) {
+        use key_protocol::key_protocol_core::SharedAccountEntry;
+        self.storage.user_data.insert_shared_private_account(
+            account_id,
+            SharedAccountEntry {
+                group_label,
+                identifier,
+                pda_seed,
+                pda_program_id,
+                account: Account::default(),
+            },
+        );
+    }
+
+    /// Create a shared PDA account from a group's GMS. Returns the `AccountId` and derived keys.
+    pub fn create_shared_pda_account(
+        &mut self,
+        group_name: &str,
+        pda_seed: nssa_core::program::PdaSeed,
+        program_id: nssa_core::program::ProgramId,
+        identifier: nssa_core::Identifier,
+    ) -> Result<SharedAccountInfo> {
+        let holder = self
+            .storage
+            .user_data
+            .group_key_holder(group_name)
+            .context(format!("Group '{group_name}' not found"))?;
+
+        let keys = holder.derive_keys_for_pda(&program_id, &pda_seed);
+        let npk = keys.generate_nullifier_public_key();
+        let vpk = keys.generate_viewing_public_key();
+        let account_id = AccountId::for_private_pda(&program_id, &pda_seed, &npk, identifier);
+
+        self.register_shared_account(
+            account_id,
+            String::from(group_name),
+            identifier,
+            Some(pda_seed),
+            Some(program_id),
+        );
+
+        Ok(SharedAccountInfo {
+            account_id,
+            npk,
+            vpk,
+        })
+    }
+
+    /// Create a shared regular private account from a group's GMS. Returns the `AccountId` and
+    /// derived keys. The derivation seed is computed deterministically from a random identifier.
+    pub fn create_shared_regular_account(&mut self, group_name: &str) -> Result<SharedAccountInfo> {
+        let identifier: nssa_core::Identifier = rand::random();
+        let derivation_seed = {
+            use sha2::Digest as _;
+            let mut hasher = sha2::Sha256::new();
+            hasher.update(b"/LEE/v0.3/SharedAccountTag/\x00\x00\x00\x00\x00");
+            hasher.update(identifier.to_le_bytes());
+            let result: [u8; 32] = hasher.finalize().into();
+            result
+        };
+
+        let holder = self
+            .storage
+            .user_data
+            .group_key_holder(group_name)
+            .context(format!("Group '{group_name}' not found"))?;
+
+        let keys = holder.derive_keys_for_shared_account(&derivation_seed);
+        let npk = keys.generate_nullifier_public_key();
+        let vpk = keys.generate_viewing_public_key();
+        let account_id = AccountId::from((&npk, identifier));
+
+        self.register_shared_account(account_id, String::from(group_name), identifier, None, None);
+
+        Ok(SharedAccountInfo {
+            account_id,
+            npk,
+            vpk,
+        })
     }
 
     /// Get account balance.
@@ -325,8 +508,17 @@ impl WalletCore {
 
     #[must_use]
     pub fn get_private_account_commitment(&self, account_id: AccountId) -> Option<Commitment> {
-        let (_keys, account, _identifier) =
-            self.storage.user_data.get_private_account(account_id)?;
+        let account = self
+            .storage
+            .user_data
+            .get_private_account(account_id)
+            .map(|(_keys, account, _identifier)| account)
+            .or_else(|| {
+                self.storage
+                    .user_data
+                    .shared_private_account(&account_id)
+                    .map(|entry| entry.account.clone())
+            })?;
         Some(Commitment::new(&account_id, &account))
     }
 
@@ -360,7 +552,7 @@ impl WalletCore {
                     let acc_ead = tx.message.encrypted_private_post_states[output_index].clone();
                     let acc_comm = tx.message.new_commitments[output_index].clone();
 
-                    let (identifier, res_acc) = nssa_core::EncryptionScheme::decrypt(
+                    let (kind, res_acc) = nssa_core::EncryptionScheme::decrypt(
                         &acc_ead.ciphertext,
                         secret,
                         &acc_comm,
@@ -373,7 +565,7 @@ impl WalletCore {
                     println!("Received new acc {res_acc:#?}");
 
                     self.storage
-                        .insert_private_account_data(*acc_account_id, identifier, res_acc);
+                        .insert_private_account_data(*acc_account_id, &kind, res_acc);
                 }
                 AccDecodeData::Skip => {}
             }
@@ -416,13 +608,7 @@ impl WalletCore {
         let (output, proof) = nssa::privacy_preserving_transaction::circuit::execute_and_prove(
             pre_states,
             instruction_data,
-            acc_manager.visibility_mask().to_vec(),
-            private_account_keys
-                .iter()
-                .map(|keys| (keys.npk, keys.identifier, keys.ssk))
-                .collect::<Vec<_>>(),
-            acc_manager.private_account_auth(),
-            acc_manager.private_account_membership_proofs(),
+            acc_manager.account_identities(),
             &program.to_owned(),
         )
         .unwrap();
@@ -542,24 +728,93 @@ impl WalletCore {
                                 .try_into()
                                 .expect("Ciphertext ID is expected to fit in u32"),
                         )
-                        .map(|(identifier, res_acc)| {
-                            let account_id = nssa::AccountId::from((
-                                &key_chain.nullifier_public_key,
-                                identifier,
-                            ));
-                            (account_id, identifier, res_acc)
+                        .map(|(kind, res_acc)| {
+                            let npk = &key_chain.nullifier_public_key;
+                            let account_id = nssa::AccountId::for_private_account(npk, &kind);
+                            (account_id, kind, res_acc)
                         })
                     })
                     .collect::<Vec<_>>()
             })
             .collect::<Vec<_>>();
 
-        for (affected_account_id, identifier, new_acc) in affected_accounts {
+        for (affected_account_id, kind, new_acc) in affected_accounts {
             info!(
                 "Received new account for account_id {affected_account_id:#?} with account object {new_acc:#?}"
             );
             self.storage
-                .insert_private_account_data(affected_account_id, identifier, new_acc);
+                .insert_private_account_data(affected_account_id, &kind, new_acc);
+        }
+
+        // Scan for updates to shared accounts (GMS-derived).
+        self.sync_shared_private_accounts_with_tx(&tx);
+    }
+
+    fn sync_shared_private_accounts_with_tx(&mut self, tx: &PrivacyPreservingTransaction) {
+        let shared_keys: Vec<_> = self
+            .storage
+            .user_data
+            .shared_private_accounts_iter()
+            .filter_map(|(&account_id, entry)| {
+                let holder = self
+                    .storage
+                    .user_data
+                    .group_key_holder(&entry.group_label)?;
+
+                let keys = match (&entry.pda_seed, &entry.pda_program_id) {
+                    (Some(pda_seed), Some(program_id)) => {
+                        holder.derive_keys_for_pda(program_id, pda_seed)
+                    }
+                    (Some(_), None) => return None, // PDA without program_id, skip
+                    _ => {
+                        let derivation_seed = {
+                            use sha2::Digest as _;
+                            let mut hasher = sha2::Sha256::new();
+                            hasher.update(b"/LEE/v0.3/SharedAccountTag/\x00\x00\x00\x00\x00");
+                            hasher.update(entry.identifier.to_le_bytes());
+                            let result: [u8; 32] = hasher.finalize().into();
+                            result
+                        };
+                        holder.derive_keys_for_shared_account(&derivation_seed)
+                    }
+                };
+                let npk = keys.generate_nullifier_public_key();
+                let vpk = keys.generate_viewing_public_key();
+                let vsk = keys.viewing_secret_key;
+                Some((account_id, npk, vpk, vsk))
+            })
+            .collect();
+
+        for (account_id, npk, vpk, vsk) in shared_keys {
+            let view_tag = EncryptedAccountData::compute_view_tag(&npk, &vpk);
+
+            for (ciph_id, encrypted_data) in tx
+                .message()
+                .encrypted_private_post_states
+                .iter()
+                .enumerate()
+            {
+                if encrypted_data.view_tag != view_tag {
+                    continue;
+                }
+
+                let shared_secret = SharedSecretKey::new(&vsk, &encrypted_data.epk);
+                let commitment = &tx.message.new_commitments[ciph_id];
+
+                if let Some((_kind, new_acc)) = nssa_core::EncryptionScheme::decrypt(
+                    &encrypted_data.ciphertext,
+                    &shared_secret,
+                    commitment,
+                    ciph_id
+                        .try_into()
+                        .expect("Ciphertext ID is expected to fit in u32"),
+                ) {
+                    info!("Synced shared account {account_id:#?} with new state {new_acc:#?}");
+                    self.storage
+                        .user_data
+                        .update_shared_private_account_state(&account_id, new_acc);
+                }
+            }
         }
     }
 

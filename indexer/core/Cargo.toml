@@ -9,7 +9,7 @@ workspace = true
 
 [dependencies]
 common.workspace = true
-bedrock_client.workspace = true
+logos-blockchain-zone-sdk.workspace = true
 nssa.workspace = true
 nssa_core.workspace = true
 storage.workspace = true
@@ -19,13 +19,13 @@ anyhow.workspace = true
 log.workspace = true
 serde.workspace = true
 humantime-serde.workspace = true
-tokio.workspace = true
 borsh.workspace = true
 futures.workspace = true
 url.workspace = true
 logos-blockchain-core.workspace = true
 serde_json.workspace = true
 async-stream.workspace = true
+tokio.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

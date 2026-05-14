@@ -362,8 +362,8 @@ pub mod tests {
     use std::collections::HashMap;
 
     use nssa_core::{
-        BlockId, Commitment, Nullifier, NullifierPublicKey, NullifierSecretKey, SharedSecretKey,
-        Timestamp,
+        BlockId, Commitment, InputAccountIdentity, Nullifier, NullifierPublicKey,
+        NullifierSecretKey, SharedSecretKey, Timestamp,
         account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
         encryption::{EphemeralPublicKey, Scalar, ViewingPublicKey},
         program::{
@@ -459,7 +459,7 @@ pub mod tests {
 
         #[must_use]
         pub fn with_private_account(mut self, keys: &TestPrivateKeys, account: &Account) -> Self {
-            let account_id = AccountId::from((&keys.npk(), 0));
+            let account_id = AccountId::for_regular_private_account(&keys.npk(), 0);
             let commitment = Commitment::new(&account_id, account);
             self.private_state.0.extend(&[commitment]);
             self
@@ -618,8 +618,8 @@ pub mod tests {
             ..Account::default()
         };
 
-        let account_id1 = AccountId::from((&keys1.npk(), 0));
-        let account_id2 = AccountId::from((&keys2.npk(), 0));
+        let account_id1 = AccountId::for_regular_private_account(&keys1.npk(), 0);
+        let account_id2 = AccountId::for_regular_private_account(&keys2.npk(), 0);
 
         let init_commitment1 = Commitment::new(&account_id1, &account);
         let init_commitment2 = Commitment::new(&account_id2, &account);
@@ -1256,6 +1256,12 @@ pub mod tests {
         }
     }
 
+    fn test_public_account_keys_2() -> TestPublicKeys {
+        TestPublicKeys {
+            signing_key: PrivateKey::try_new([38; 32]).unwrap(),
+        }
+    }
+
     pub fn test_private_account_keys_1() -> TestPrivateKeys {
         TestPrivateKeys {
             nsk: [13; 32],
@@ -1294,10 +1300,14 @@ pub mod tests {
         let (output, proof) = circuit::execute_and_prove(
             vec![sender, recipient],
             Program::serialize_instruction(balance_to_move).unwrap(),
-            vec![0, 2],
-            vec![(recipient_keys.npk(), 0, shared_secret)],
-            vec![],
-            vec![None],
+            vec![
+                InputAccountIdentity::Public,
+                InputAccountIdentity::PrivateUnauthorized {
+                    npk: recipient_keys.npk(),
+                    ssk: shared_secret,
+                    identifier: 0,
+                },
+            ],
             &Program::authenticated_transfer_program().into(),
         )
         .unwrap();
@@ -1322,7 +1332,7 @@ pub mod tests {
         state: &V03State,
     ) -> PrivacyPreservingTransaction {
         let program = Program::authenticated_transfer_program();
-        let sender_account_id = AccountId::from((&sender_keys.npk(), 0));
+        let sender_account_id = AccountId::for_regular_private_account(&sender_keys.npk(), 0);
         let sender_commitment = Commitment::new(&sender_account_id, sender_private_account);
         let sender_pre = AccountWithMetadata::new(
             sender_private_account.clone(),
@@ -1343,13 +1353,21 @@ pub mod tests {
         let (output, proof) = circuit::execute_and_prove(
             vec![sender_pre, recipient_pre],
             Program::serialize_instruction(balance_to_move).unwrap(),
-            vec![1, 2],
             vec![
-                (sender_keys.npk(), 0, shared_secret_1),
-                (recipient_keys.npk(), 0, shared_secret_2),
+                InputAccountIdentity::PrivateAuthorizedUpdate {
+                    ssk: shared_secret_1,
+                    nsk: sender_keys.nsk,
+                    membership_proof: state
+                        .get_proof_for_commitment(&sender_commitment)
+                        .expect("sender's commitment must be in state"),
+                    identifier: 0,
+                },
+                InputAccountIdentity::PrivateUnauthorized {
+                    npk: recipient_keys.npk(),
+                    ssk: shared_secret_2,
+                    identifier: 0,
+                },
             ],
-            vec![sender_keys.nsk],
-            vec![state.get_proof_for_commitment(&sender_commitment), None],
             &program.into(),
         )
         .unwrap();
@@ -1378,7 +1396,7 @@ pub mod tests {
         state: &V03State,
     ) -> PrivacyPreservingTransaction {
         let program = Program::authenticated_transfer_program();
-        let sender_account_id = AccountId::from((&sender_keys.npk(), 0));
+        let sender_account_id = AccountId::for_regular_private_account(&sender_keys.npk(), 0);
         let sender_commitment = Commitment::new(&sender_account_id, sender_private_account);
         let sender_pre = AccountWithMetadata::new(
             sender_private_account.clone(),
@@ -1398,10 +1416,17 @@ pub mod tests {
         let (output, proof) = circuit::execute_and_prove(
             vec![sender_pre, recipient_pre],
             Program::serialize_instruction(balance_to_move).unwrap(),
-            vec![1, 0],
-            vec![(sender_keys.npk(), 0, shared_secret)],
-            vec![sender_keys.nsk],
-            vec![state.get_proof_for_commitment(&sender_commitment)],
+            vec![
+                InputAccountIdentity::PrivateAuthorizedUpdate {
+                    ssk: shared_secret,
+                    nsk: sender_keys.nsk,
+                    membership_proof: state
+                        .get_proof_for_commitment(&sender_commitment)
+                        .expect("sender's commitment must be in state"),
+                    identifier: 0,
+                },
+                InputAccountIdentity::Public,
+            ],
             &program.into(),
         )
         .unwrap();
@@ -1486,8 +1511,8 @@ pub mod tests {
             &state,
         );
 
-        let sender_account_id = AccountId::from((&sender_keys.npk(), 0));
-        let recipient_account_id = AccountId::from((&recipient_keys.npk(), 0));
+        let sender_account_id = AccountId::for_regular_private_account(&sender_keys.npk(), 0);
+        let recipient_account_id = AccountId::for_regular_private_account(&recipient_keys.npk(), 0);
         let expected_new_commitment_1 = Commitment::new(
             &sender_account_id,
             &Account {
@@ -1565,7 +1590,7 @@ pub mod tests {
             &state,
         );
 
-        let sender_account_id = AccountId::from((&sender_keys.npk(), 0));
+        let sender_account_id = AccountId::for_regular_private_account(&sender_keys.npk(), 0);
         let expected_new_commitment = Commitment::new(
             &sender_account_id,
             &Account {
@@ -1615,10 +1640,7 @@ pub mod tests {
         let result = execute_and_prove(
             vec![public_account],
             Program::serialize_instruction(10_u128).unwrap(),
-            vec![0],
-            vec![],
-            vec![],
-            vec![],
+            vec![InputAccountIdentity::Public],
             &program.into(),
         );
 
@@ -1641,10 +1663,7 @@ pub mod tests {
         let result = execute_and_prove(
             vec![public_account],
             Program::serialize_instruction(10_u128).unwrap(),
-            vec![0],
-            vec![],
-            vec![],
-            vec![],
+            vec![InputAccountIdentity::Public],
             &program.into(),
         );
 
@@ -1667,10 +1686,7 @@ pub mod tests {
         let result = execute_and_prove(
             vec![public_account],
             Program::serialize_instruction(()).unwrap(),
-            vec![0],
-            vec![],
-            vec![],
-            vec![],
+            vec![InputAccountIdentity::Public],
             &program.into(),
         );
 
@@ -1693,10 +1709,7 @@ pub mod tests {
         let result = execute_and_prove(
             vec![public_account],
             Program::serialize_instruction(vec![0]).unwrap(),
-            vec![0],
-            vec![],
-            vec![],
-            vec![],
+            vec![InputAccountIdentity::Public],
             &program.into(),
         );
 
@@ -1727,10 +1740,7 @@ pub mod tests {
         let result = execute_and_prove(
             vec![public_account],
             Program::serialize_instruction(large_data).unwrap(),
-            vec![0],
-            vec![],
-            vec![],
-            vec![],
+            vec![InputAccountIdentity::Public],
             &program.into(),
         );
 
@@ -1753,10 +1763,7 @@ pub mod tests {
         let result = execute_and_prove(
             vec![public_account],
             Program::serialize_instruction(()).unwrap(),
-            vec![0],
-            vec![],
-            vec![],
-            vec![],
+            vec![InputAccountIdentity::Public],
             &program.into(),
         );
 
@@ -1788,10 +1795,7 @@ pub mod tests {
         let result = execute_and_prove(
             vec![public_account_1, public_account_2],
             Program::serialize_instruction(()).unwrap(),
-            vec![0, 0],
-            vec![],
-            vec![],
-            vec![],
+            vec![InputAccountIdentity::Public, InputAccountIdentity::Public],
             &program.into(),
         );
 
@@ -1814,10 +1818,7 @@ pub mod tests {
         let result = execute_and_prove(
             vec![public_account],
             Program::serialize_instruction(()).unwrap(),
-            vec![0],
-            vec![],
-            vec![],
-            vec![],
+            vec![InputAccountIdentity::Public],
             &program.into(),
         );
 
@@ -1849,10 +1850,7 @@ pub mod tests {
         let result = execute_and_prove(
             vec![public_account_1, public_account_2],
             Program::serialize_instruction(10_u128).unwrap(),
-            vec![0, 0],
-            vec![],
-            vec![],
-            vec![],
+            vec![InputAccountIdentity::Public, InputAccountIdentity::Public],
             &program.into(),
         );
 
@@ -1881,177 +1879,11 @@ pub mod tests {
             AccountId::new([1; 32]),
         );
 
-        // Setting only one visibility mask for a circuit execution with two pre_state accounts.
-        let visibility_mask = [0];
+        // Single account_identity entry for a circuit execution with two pre_state accounts.
         let result = execute_and_prove(
             vec![public_account_1, public_account_2],
             Program::serialize_instruction(10_u128).unwrap(),
-            visibility_mask.to_vec(),
-            vec![],
-            vec![],
-            vec![],
-            &program.into(),
-        );
-
-        assert!(matches!(result, Err(NssaError::CircuitProvingError(_))));
-    }
-
-    #[test]
-    fn circuit_fails_if_insufficient_nonces_are_provided() {
-        let program = Program::simple_balance_transfer();
-        let sender_keys = test_private_account_keys_1();
-        let recipient_keys = test_private_account_keys_2();
-        let private_account_1 = AccountWithMetadata::new(
-            Account {
-                program_owner: program.id(),
-                balance: 100,
-                ..Account::default()
-            },
-            true,
-            (&sender_keys.npk(), 0),
-        );
-        let private_account_2 =
-            AccountWithMetadata::new(Account::default(), false, (&recipient_keys.npk(), 0));
-
-        let result = execute_and_prove(
-            vec![private_account_1, private_account_2],
-            Program::serialize_instruction(10_u128).unwrap(),
-            vec![1, 2],
-            vec![
-                (
-                    sender_keys.npk(),
-                    0,
-                    SharedSecretKey::new(&[55; 32], &sender_keys.vpk()),
-                ),
-                (
-                    recipient_keys.npk(),
-                    0,
-                    SharedSecretKey::new(&[56; 32], &recipient_keys.vpk()),
-                ),
-            ],
-            vec![sender_keys.nsk],
-            vec![Some((0, vec![]))],
-            &program.into(),
-        );
-
-        assert!(matches!(result, Err(NssaError::CircuitProvingError(_))));
-    }
-
-    #[test]
-    fn circuit_fails_if_insufficient_keys_are_provided() {
-        let program = Program::simple_balance_transfer();
-        let sender_keys = test_private_account_keys_1();
-        let private_account_1 = AccountWithMetadata::new(
-            Account {
-                program_owner: program.id(),
-                balance: 100,
-                ..Account::default()
-            },
-            true,
-            (&sender_keys.npk(), 0),
-        );
-        let private_account_2 =
-            AccountWithMetadata::new(Account::default(), false, AccountId::new([1; 32]));
-
-        // Setting only one key for an execution with two private accounts.
-        let private_account_keys = [(
-            sender_keys.npk(),
-            0,
-            SharedSecretKey::new(&[55; 32], &sender_keys.vpk()),
-        )];
-        let result = execute_and_prove(
-            vec![private_account_1, private_account_2],
-            Program::serialize_instruction(10_u128).unwrap(),
-            vec![1, 2],
-            private_account_keys.to_vec(),
-            vec![sender_keys.nsk],
-            vec![Some((0, vec![]))],
-            &program.into(),
-        );
-
-        assert!(matches!(result, Err(NssaError::CircuitProvingError(_))));
-    }
-
-    #[test]
-    fn circuit_fails_if_insufficient_commitment_proofs_are_provided() {
-        let program = Program::simple_balance_transfer();
-        let sender_keys = test_private_account_keys_1();
-        let recipient_keys = test_private_account_keys_2();
-        let private_account_1 = AccountWithMetadata::new(
-            Account {
-                program_owner: program.id(),
-                balance: 100,
-                ..Account::default()
-            },
-            true,
-            (&sender_keys.npk(), 0),
-        );
-        let private_account_2 =
-            AccountWithMetadata::new(Account::default(), false, (&recipient_keys.npk(), 0));
-
-        // Setting no second commitment proof.
-        let private_account_membership_proofs = [Some((0, vec![]))];
-        let result = execute_and_prove(
-            vec![private_account_1, private_account_2],
-            Program::serialize_instruction(10_u128).unwrap(),
-            vec![1, 2],
-            vec![
-                (
-                    sender_keys.npk(),
-                    0,
-                    SharedSecretKey::new(&[55; 32], &sender_keys.vpk()),
-                ),
-                (
-                    recipient_keys.npk(),
-                    0,
-                    SharedSecretKey::new(&[56; 32], &recipient_keys.vpk()),
-                ),
-            ],
-            vec![sender_keys.nsk],
-            private_account_membership_proofs.to_vec(),
-            &program.into(),
-        );
-
-        assert!(matches!(result, Err(NssaError::CircuitProvingError(_))));
-    }
-
-    #[test]
-    fn circuit_fails_if_insufficient_auth_keys_are_provided() {
-        let program = Program::simple_balance_transfer();
-        let sender_keys = test_private_account_keys_1();
-        let recipient_keys = test_private_account_keys_2();
-        let private_account_1 = AccountWithMetadata::new(
-            Account {
-                program_owner: program.id(),
-                balance: 100,
-                ..Account::default()
-            },
-            true,
-            (&sender_keys.npk(), 0),
-        );
-        let private_account_2 =
-            AccountWithMetadata::new(Account::default(), false, (&recipient_keys.npk(), 0));
-
-        // Setting no auth key for an execution with one non default private accounts.
-        let private_account_nsks = [];
-        let result = execute_and_prove(
-            vec![private_account_1, private_account_2],
-            Program::serialize_instruction(10_u128).unwrap(),
-            vec![1, 2],
-            vec![
-                (
-                    sender_keys.npk(),
-                    0,
-                    SharedSecretKey::new(&[55; 32], &sender_keys.vpk()),
-                ),
-                (
-                    recipient_keys.npk(),
-                    0,
-                    SharedSecretKey::new(&[56; 32], &recipient_keys.vpk()),
-                ),
-            ],
-            private_account_nsks.to_vec(),
-            vec![],
+            vec![InputAccountIdentity::Public],
             &program.into(),
         );
 
@@ -2075,33 +1907,26 @@ pub mod tests {
         let private_account_2 =
             AccountWithMetadata::new(Account::default(), false, (&recipient_keys.npk(), 0));
 
-        let private_account_keys = [
-            // First private account is the sender
-            (
-                sender_keys.npk(),
-                0,
-                SharedSecretKey::new(&[55; 32], &sender_keys.vpk()),
-            ),
-            // Second private account is the recipient
-            (
-                recipient_keys.npk(),
-                0,
-                SharedSecretKey::new(&[56; 32], &recipient_keys.vpk()),
-            ),
-        ];
-
-        // Setting the recipient key to authorize the sender.
-        // This should be set to the sender private account in
-        // a normal circumstance. The recipient can't authorize this.
-        let private_account_nsks = [recipient_keys.nsk];
-        let private_account_membership_proofs = [Some((0, vec![]))];
+        // Setting the recipient nsk to authorize the sender.
+        // This should be set to the sender private account in a normal circumstance.
+        // `PrivateAuthorizedUpdate` derives npk from nsk and asserts equality with
+        // `pre_state.account_id`, so a mismatched nsk fails that check.
         let result = execute_and_prove(
             vec![private_account_1, private_account_2],
             Program::serialize_instruction(10_u128).unwrap(),
-            vec![1, 2],
-            private_account_keys.to_vec(),
-            private_account_nsks.to_vec(),
-            private_account_membership_proofs.to_vec(),
+            vec![
+                InputAccountIdentity::PrivateAuthorizedUpdate {
+                    ssk: SharedSecretKey::new(&[55; 32], &sender_keys.vpk()),
+                    nsk: recipient_keys.nsk,
+                    membership_proof: (0, vec![]),
+                    identifier: 0,
+                },
+                InputAccountIdentity::PrivateUnauthorized {
+                    npk: recipient_keys.npk(),
+                    ssk: SharedSecretKey::new(&[56; 32], &recipient_keys.vpk()),
+                    identifier: 0,
+                },
+            ],
             &program.into(),
         );
 
@@ -2135,21 +1960,19 @@ pub mod tests {
         let result = execute_and_prove(
             vec![private_account_1, private_account_2],
             Program::serialize_instruction(10_u128).unwrap(),
-            vec![1, 2],
             vec![
-                (
-                    sender_keys.npk(),
-                    0,
-                    SharedSecretKey::new(&[55; 32], &sender_keys.vpk()),
-                ),
-                (
-                    recipient_keys.npk(),
-                    0,
-                    SharedSecretKey::new(&[56; 32], &recipient_keys.vpk()),
-                ),
+                InputAccountIdentity::PrivateAuthorizedUpdate {
+                    ssk: SharedSecretKey::new(&[55; 32], &sender_keys.vpk()),
+                    nsk: sender_keys.nsk,
+                    membership_proof: (0, vec![]),
+                    identifier: 0,
+                },
+                InputAccountIdentity::PrivateUnauthorized {
+                    npk: recipient_keys.npk(),
+                    ssk: SharedSecretKey::new(&[56; 32], &recipient_keys.vpk()),
+                    identifier: 0,
+                },
             ],
-            vec![sender_keys.nsk],
-            vec![Some((0, vec![]))],
             &program.into(),
         );
 
@@ -2183,21 +2006,19 @@ pub mod tests {
         let result = execute_and_prove(
             vec![private_account_1, private_account_2],
             Program::serialize_instruction(10_u128).unwrap(),
-            vec![1, 2],
             vec![
-                (
-                    sender_keys.npk(),
-                    0,
-                    SharedSecretKey::new(&[55; 32], &sender_keys.vpk()),
-                ),
-                (
-                    recipient_keys.npk(),
-                    0,
-                    SharedSecretKey::new(&[56; 32], &recipient_keys.vpk()),
-                ),
+                InputAccountIdentity::PrivateAuthorizedUpdate {
+                    ssk: SharedSecretKey::new(&[55; 32], &sender_keys.vpk()),
+                    nsk: sender_keys.nsk,
+                    membership_proof: (0, vec![]),
+                    identifier: 0,
+                },
+                InputAccountIdentity::PrivateUnauthorized {
+                    npk: recipient_keys.npk(),
+                    ssk: SharedSecretKey::new(&[56; 32], &recipient_keys.vpk()),
+                    identifier: 0,
+                },
             ],
-            vec![sender_keys.nsk],
-            vec![Some((0, vec![]))],
             &program.into(),
         );
 
@@ -2231,21 +2052,19 @@ pub mod tests {
         let result = execute_and_prove(
             vec![private_account_1, private_account_2],
             Program::serialize_instruction(10_u128).unwrap(),
-            vec![1, 2],
             vec![
-                (
-                    sender_keys.npk(),
-                    0,
-                    SharedSecretKey::new(&[55; 32], &sender_keys.vpk()),
-                ),
-                (
-                    recipient_keys.npk(),
-                    0,
-                    SharedSecretKey::new(&[56; 32], &recipient_keys.vpk()),
-                ),
+                InputAccountIdentity::PrivateAuthorizedUpdate {
+                    ssk: SharedSecretKey::new(&[55; 32], &sender_keys.vpk()),
+                    nsk: sender_keys.nsk,
+                    membership_proof: (0, vec![]),
+                    identifier: 0,
+                },
+                InputAccountIdentity::PrivateUnauthorized {
+                    npk: recipient_keys.npk(),
+                    ssk: SharedSecretKey::new(&[56; 32], &recipient_keys.vpk()),
+                    identifier: 0,
+                },
             ],
-            vec![sender_keys.nsk],
-            vec![Some((0, vec![]))],
             &program.into(),
         );
 
@@ -2279,21 +2098,19 @@ pub mod tests {
         let result = execute_and_prove(
             vec![private_account_1, private_account_2],
             Program::serialize_instruction(10_u128).unwrap(),
-            vec![1, 2],
             vec![
-                (
-                    sender_keys.npk(),
-                    0,
-                    SharedSecretKey::new(&[55; 32], &sender_keys.vpk()),
-                ),
-                (
-                    recipient_keys.npk(),
-                    0,
-                    SharedSecretKey::new(&[56; 32], &recipient_keys.vpk()),
-                ),
+                InputAccountIdentity::PrivateAuthorizedUpdate {
+                    ssk: SharedSecretKey::new(&[55; 32], &sender_keys.vpk()),
+                    nsk: sender_keys.nsk,
+                    membership_proof: (0, vec![]),
+                    identifier: 0,
+                },
+                InputAccountIdentity::PrivateUnauthorized {
+                    npk: recipient_keys.npk(),
+                    ssk: SharedSecretKey::new(&[56; 32], &recipient_keys.vpk()),
+                    identifier: 0,
+                },
             ],
-            vec![sender_keys.nsk],
-            vec![Some((0, vec![]))],
             &program.into(),
         );
 
@@ -2325,21 +2142,19 @@ pub mod tests {
         let result = execute_and_prove(
             vec![private_account_1, private_account_2],
             Program::serialize_instruction(10_u128).unwrap(),
-            vec![1, 2],
             vec![
-                (
-                    sender_keys.npk(),
-                    0,
-                    SharedSecretKey::new(&[55; 32], &sender_keys.vpk()),
-                ),
-                (
-                    recipient_keys.npk(),
-                    0,
-                    SharedSecretKey::new(&[56; 32], &recipient_keys.vpk()),
-                ),
+                InputAccountIdentity::PrivateAuthorizedUpdate {
+                    ssk: SharedSecretKey::new(&[55; 32], &sender_keys.vpk()),
+                    nsk: sender_keys.nsk,
+                    membership_proof: (0, vec![]),
+                    identifier: 0,
+                },
+                InputAccountIdentity::PrivateUnauthorized {
+                    npk: recipient_keys.npk(),
+                    ssk: SharedSecretKey::new(&[56; 32], &recipient_keys.vpk()),
+                    identifier: 0,
+                },
             ],
-            vec![sender_keys.nsk],
-            vec![Some((0, vec![]))],
             &program.into(),
         );
 
@@ -2368,14 +2183,17 @@ pub mod tests {
         let private_pda_account =
             AccountWithMetadata::new(Account::default(), false, AccountId::new([1; 32]));
 
-        let visibility_mask = [0, 3];
         let result = execute_and_prove(
             vec![public_account_1, private_pda_account],
             Program::serialize_instruction(10_u128).unwrap(),
-            visibility_mask.to_vec(),
-            vec![(npk, 0, shared_secret)],
-            vec![],
-            vec![None],
+            vec![
+                InputAccountIdentity::Public,
+                InputAccountIdentity::PrivatePdaInit {
+                    npk,
+                    ssk: shared_secret,
+                    identifier: u128::MAX,
+                },
+            ],
             &program.into(),
         );
 
@@ -2395,16 +2213,17 @@ pub mod tests {
         let seed = PdaSeed::new([42; 32]);
         let shared_secret = SharedSecretKey::new(&[55; 32], &keys.vpk());
 
-        let account_id = AccountId::for_private_pda(&program.id(), &seed, &npk);
+        let account_id = AccountId::for_private_pda(&program.id(), &seed, &npk, u128::MAX);
         let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
         let result = execute_and_prove(
             vec![pre_state],
             Program::serialize_instruction(seed).unwrap(),
-            vec![3],
-            vec![(npk, u128::MAX, shared_secret)],
-            vec![],
-            vec![None],
+            vec![InputAccountIdentity::PrivatePdaInit {
+                npk,
+                ssk: shared_secret,
+                identifier: u128::MAX,
+            }],
             &program.into(),
         );
 
@@ -2433,16 +2252,17 @@ pub mod tests {
         // `account_id` is derived from `npk_a`, but `npk_b` is supplied for this pre_state.
         // `AccountId::for_private_pda(program, seed, npk_b) != account_id`, so the claim check in
         // the circuit must reject.
-        let account_id = AccountId::for_private_pda(&program.id(), &seed, &npk_a);
+        let account_id = AccountId::for_private_pda(&program.id(), &seed, &npk_a, u128::MAX);
         let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
         let result = execute_and_prove(
             vec![pre_state],
             Program::serialize_instruction(seed).unwrap(),
-            vec![3],
-            vec![(npk_b, 0, shared_secret)],
-            vec![],
-            vec![None],
+            vec![InputAccountIdentity::PrivatePdaInit {
+                npk: npk_b,
+                ssk: shared_secret,
+                identifier: u128::MAX,
+            }],
             &program.into(),
         );
 
@@ -2463,7 +2283,7 @@ pub mod tests {
         let seed = PdaSeed::new([77; 32]);
         let shared_secret = SharedSecretKey::new(&[55; 32], &keys.vpk());
 
-        let account_id = AccountId::for_private_pda(&delegator.id(), &seed, &npk);
+        let account_id = AccountId::for_private_pda(&delegator.id(), &seed, &npk, u128::MAX);
         let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
         let callee_id = callee.id();
@@ -2473,10 +2293,11 @@ pub mod tests {
         let result = execute_and_prove(
             vec![pre_state],
             Program::serialize_instruction((seed, seed, callee_id)).unwrap(),
-            vec![3],
-            vec![(npk, u128::MAX, shared_secret)],
-            vec![],
-            vec![None],
+            vec![InputAccountIdentity::PrivatePdaInit {
+                npk,
+                ssk: shared_secret,
+                identifier: u128::MAX,
+            }],
             &program_with_deps,
         );
 
@@ -2500,7 +2321,7 @@ pub mod tests {
         let wrong_delegated_seed = PdaSeed::new([88; 32]);
         let shared_secret = SharedSecretKey::new(&[55; 32], &keys.vpk());
 
-        let account_id = AccountId::for_private_pda(&delegator.id(), &claim_seed, &npk);
+        let account_id = AccountId::for_private_pda(&delegator.id(), &claim_seed, &npk, u128::MAX);
         let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
         let callee_id = callee.id();
@@ -2510,10 +2331,11 @@ pub mod tests {
         let result = execute_and_prove(
             vec![pre_state],
             Program::serialize_instruction((claim_seed, wrong_delegated_seed, callee_id)).unwrap(),
-            vec![3],
-            vec![(npk, 0, shared_secret)],
-            vec![],
-            vec![None],
+            vec![InputAccountIdentity::PrivatePdaInit {
+                npk,
+                ssk: shared_secret,
+                identifier: u128::MAX,
+            }],
             &program_with_deps,
         );
 
@@ -2537,8 +2359,8 @@ pub mod tests {
         let shared_a = SharedSecretKey::new(&[66; 32], &keys_a.vpk());
         let shared_b = SharedSecretKey::new(&[77; 32], &keys_b.vpk());
 
-        let account_a = AccountId::for_private_pda(&program.id(), &seed, &keys_a.npk());
-        let account_b = AccountId::for_private_pda(&program.id(), &seed, &keys_b.npk());
+        let account_a = AccountId::for_private_pda(&program.id(), &seed, &keys_a.npk(), u128::MAX);
+        let account_b = AccountId::for_private_pda(&program.id(), &seed, &keys_b.npk(), u128::MAX);
 
         let pre_a = AccountWithMetadata::new(Account::default(), false, account_a);
         let pre_b = AccountWithMetadata::new(Account::default(), false, account_b);
@@ -2546,10 +2368,18 @@ pub mod tests {
         let result = execute_and_prove(
             vec![pre_a, pre_b],
             Program::serialize_instruction(seed).unwrap(),
-            vec![3, 3],
-            vec![(keys_a.npk(), 0, shared_a), (keys_b.npk(), 0, shared_b)],
-            vec![],
-            vec![None, None],
+            vec![
+                InputAccountIdentity::PrivatePdaInit {
+                    npk: keys_a.npk(),
+                    ssk: shared_a,
+                    identifier: u128::MAX,
+                },
+                InputAccountIdentity::PrivatePdaInit {
+                    npk: keys_b.npk(),
+                    ssk: shared_b,
+                    identifier: u128::MAX,
+                },
+            ],
             &program.into(),
         );
 
@@ -2577,7 +2407,7 @@ pub mod tests {
 
         // Simulate a previously-claimed private PDA: program_owner != DEFAULT, is_authorized =
         // true, account_id derived via the private formula.
-        let account_id = AccountId::for_private_pda(&program.id(), &seed, &npk);
+        let account_id = AccountId::for_private_pda(&program.id(), &seed, &npk, u128::MAX);
         let owned_pre_state = AccountWithMetadata::new(
             Account {
                 program_owner: program.id(),
@@ -2590,146 +2420,11 @@ pub mod tests {
         let result = execute_and_prove(
             vec![owned_pre_state],
             Program::serialize_instruction(()).unwrap(),
-            vec![3],
-            vec![(npk, 0, shared_secret)],
-            vec![],
-            vec![None],
-            &program.into(),
-        );
-
-        assert!(matches!(result, Err(NssaError::CircuitProvingError(_))));
-    }
-
-    #[test]
-    fn circuit_should_fail_with_too_many_nonces() {
-        let program = Program::simple_balance_transfer();
-        let sender_keys = test_private_account_keys_1();
-        let recipient_keys = test_private_account_keys_2();
-        let private_account_1 = AccountWithMetadata::new(
-            Account {
-                program_owner: program.id(),
-                balance: 100,
-                ..Account::default()
-            },
-            true,
-            (&sender_keys.npk(), 0),
-        );
-        let private_account_2 =
-            AccountWithMetadata::new(Account::default(), false, (&recipient_keys.npk(), 0));
-
-        let result = execute_and_prove(
-            vec![private_account_1, private_account_2],
-            Program::serialize_instruction(10_u128).unwrap(),
-            vec![1, 2],
-            vec![
-                (
-                    sender_keys.npk(),
-                    0,
-                    SharedSecretKey::new(&[55; 32], &sender_keys.vpk()),
-                ),
-                (
-                    recipient_keys.npk(),
-                    0,
-                    SharedSecretKey::new(&[56; 32], &recipient_keys.vpk()),
-                ),
-            ],
-            vec![sender_keys.nsk],
-            vec![Some((0, vec![]))],
-            &program.into(),
-        );
-
-        assert!(matches!(result, Err(NssaError::CircuitProvingError(_))));
-    }
-
-    #[test]
-    fn circuit_should_fail_with_too_many_private_account_keys() {
-        let program = Program::simple_balance_transfer();
-        let sender_keys = test_private_account_keys_1();
-        let recipient_keys = test_private_account_keys_2();
-        let private_account_1 = AccountWithMetadata::new(
-            Account {
-                program_owner: program.id(),
-                balance: 100,
-                ..Account::default()
-            },
-            true,
-            (&sender_keys.npk(), 0),
-        );
-        let private_account_2 =
-            AccountWithMetadata::new(Account::default(), false, (&recipient_keys.npk(), 0));
-
-        // Setting three private account keys for a circuit execution with only two private
-        // accounts.
-        let private_account_keys = [
-            (
-                sender_keys.npk(),
-                0,
-                SharedSecretKey::new(&[55; 32], &sender_keys.vpk()),
-            ),
-            (
-                recipient_keys.npk(),
-                0,
-                SharedSecretKey::new(&[56; 32], &recipient_keys.vpk()),
-            ),
-            (
-                sender_keys.npk(),
-                0,
-                SharedSecretKey::new(&[57; 32], &sender_keys.vpk()),
-            ),
-        ];
-        let result = execute_and_prove(
-            vec![private_account_1, private_account_2],
-            Program::serialize_instruction(10_u128).unwrap(),
-            vec![1, 2],
-            private_account_keys.to_vec(),
-            vec![sender_keys.nsk],
-            vec![Some((0, vec![]))],
-            &program.into(),
-        );
-
-        assert!(matches!(result, Err(NssaError::CircuitProvingError(_))));
-    }
-
-    #[test]
-    fn circuit_should_fail_with_too_many_private_account_auth_keys() {
-        let program = Program::simple_balance_transfer();
-        let sender_keys = test_private_account_keys_1();
-        let recipient_keys = test_private_account_keys_2();
-        let private_account_1 = AccountWithMetadata::new(
-            Account {
-                program_owner: program.id(),
-                balance: 100,
-                ..Account::default()
-            },
-            true,
-            (&sender_keys.npk(), 0),
-        );
-        let private_account_2 =
-            AccountWithMetadata::new(Account::default(), false, (&recipient_keys.npk(), 0));
-
-        // Setting two private account keys for a circuit execution with only one non default
-        // private account (visibility mask equal to 1 means that auth keys are expected).
-        let visibility_mask = [1, 2];
-        let private_account_nsks = [sender_keys.nsk, recipient_keys.nsk];
-        let private_account_membership_proofs = [Some((0, vec![])), Some((1, vec![]))];
-        let result = execute_and_prove(
-            vec![private_account_1, private_account_2],
-            Program::serialize_instruction(10_u128).unwrap(),
-            visibility_mask.to_vec(),
-            vec![
-                (
-                    sender_keys.npk(),
-                    0,
-                    SharedSecretKey::new(&[55; 32], &sender_keys.vpk()),
-                ),
-                (
-                    recipient_keys.npk(),
-                    0,
-                    SharedSecretKey::new(&[56; 32], &recipient_keys.vpk()),
-                ),
-            ],
-            private_account_nsks.to_vec(),
-            private_account_membership_proofs.to_vec(),
+            vec![InputAccountIdentity::PrivatePdaInit {
+                npk,
+                ssk: shared_secret,
+                identifier: u128::MAX,
+            }],
             &program.into(),
         );
 
@@ -2806,20 +2501,24 @@ pub mod tests {
             (&sender_keys.npk(), 0),
         );
 
-        let visibility_mask = [1, 1];
-        let private_account_nsks = [sender_keys.nsk, sender_keys.nsk];
-        let private_account_membership_proofs = [Some((1, vec![])), Some((1, vec![]))];
         let shared_secret = SharedSecretKey::new(&[55; 32], &sender_keys.vpk());
         let result = execute_and_prove(
             vec![private_account_1.clone(), private_account_1],
             Program::serialize_instruction(100_u128).unwrap(),
-            visibility_mask.to_vec(),
             vec![
-                (sender_keys.npk(), 0, shared_secret),
-                (sender_keys.npk(), 0, shared_secret),
+                InputAccountIdentity::PrivateAuthorizedUpdate {
+                    ssk: shared_secret,
+                    nsk: sender_keys.nsk,
+                    membership_proof: (1, vec![]),
+                    identifier: 0,
+                },
+                InputAccountIdentity::PrivateAuthorizedUpdate {
+                    ssk: shared_secret,
+                    nsk: sender_keys.nsk,
+                    membership_proof: (1, vec![]),
+                    identifier: 0,
+                },
             ],
-            private_account_nsks.to_vec(),
-            private_account_membership_proofs.to_vec(),
             &program.into(),
         );
 
@@ -3110,10 +2809,7 @@ pub mod tests {
         let result = execute_and_prove(
             vec![public_account],
             Program::serialize_instruction(0_u128).unwrap(),
-            vec![0],
-            vec![],
-            vec![],
-            vec![],
+            vec![InputAccountIdentity::Public],
             &program.into(),
         );
 
@@ -3130,7 +2826,7 @@ pub mod tests {
             balance: 100,
             ..Account::default()
         };
-        let sender_account_id = AccountId::from((&sender_keys.npk(), 0));
+        let sender_account_id = AccountId::for_regular_private_account(&sender_keys.npk(), 0);
         let sender_commitment = Commitment::new(&sender_account_id, &sender_private_account);
         let sender_init_nullifier = Nullifier::for_account_initialization(&sender_account_id);
         let mut state = V03State::new_with_genesis_accounts(
@@ -3152,10 +2848,17 @@ pub mod tests {
         let (output, proof) = execute_and_prove(
             vec![sender_pre, recipient_pre],
             Program::serialize_instruction(37_u128).unwrap(),
-            vec![1, 0],
-            vec![(sender_keys.npk(), 0, shared_secret)],
-            vec![sender_keys.nsk],
-            vec![state.get_proof_for_commitment(&sender_commitment)],
+            vec![
+                InputAccountIdentity::PrivateAuthorizedUpdate {
+                    ssk: shared_secret,
+                    nsk: sender_keys.nsk,
+                    membership_proof: state
+                        .get_proof_for_commitment(&sender_commitment)
+                        .expect("sender's commitment must be in state"),
+                    identifier: 0,
+                },
+                InputAccountIdentity::Public,
+            ],
             &program.into(),
         )
         .unwrap();
@@ -3216,8 +2919,8 @@ pub mod tests {
             (&to_keys.npk(), 0),
         );
 
-        let from_account_id = AccountId::from((&from_keys.npk(), 0));
-        let to_account_id = AccountId::from((&to_keys.npk(), 0));
+        let from_account_id = AccountId::for_regular_private_account(&from_keys.npk(), 0);
+        let to_account_id = AccountId::for_regular_private_account(&to_keys.npk(), 0);
         let from_commitment = Commitment::new(&from_account_id, &from_account.account);
         let to_commitment = Commitment::new(&to_account_id, &to_account.account);
         let from_init_nullifier = Nullifier::for_account_initialization(&from_account_id);
@@ -3273,12 +2976,23 @@ pub mod tests {
         let (output, proof) = execute_and_prove(
             vec![to_account, from_account],
             Program::serialize_instruction(instruction).unwrap(),
-            vec![1, 1],
-            vec![(from_keys.npk(), 0, to_ss), (to_keys.npk(), 0, from_ss)],
-            vec![from_keys.nsk, to_keys.nsk],
             vec![
-                state.get_proof_for_commitment(&from_commitment),
-                state.get_proof_for_commitment(&to_commitment),
+                InputAccountIdentity::PrivateAuthorizedUpdate {
+                    ssk: to_ss,
+                    nsk: from_keys.nsk,
+                    membership_proof: state
+                        .get_proof_for_commitment(&from_commitment)
+                        .expect("from's commitment must be in state"),
+                    identifier: 0,
+                },
+                InputAccountIdentity::PrivateAuthorizedUpdate {
+                    ssk: from_ss,
+                    nsk: to_keys.nsk,
+                    membership_proof: state
+                        .get_proof_for_commitment(&to_commitment)
+                        .expect("to's commitment must be in state"),
+                    identifier: 0,
+                },
             ],
             &program_with_deps,
         )
@@ -3542,10 +3256,11 @@ pub mod tests {
         let (output, proof) = execute_and_prove(
             vec![authorized_account],
             Program::serialize_instruction(balance).unwrap(),
-            vec![1],
-            vec![(private_keys.npk(), 0, shared_secret)],
-            vec![private_keys.nsk],
-            vec![None],
+            vec![InputAccountIdentity::PrivateAuthorizedInit {
+                ssk: shared_secret,
+                nsk: private_keys.nsk,
+                identifier: 0,
+            }],
             &program.into(),
         )
         .unwrap();
@@ -3565,7 +3280,7 @@ pub mod tests {
         let result = state.transition_from_privacy_preserving_transaction(&tx, 1, 0);
         assert!(result.is_ok());
 
-        let account_id = AccountId::from((&private_keys.npk(), 0));
+        let account_id = AccountId::for_regular_private_account(&private_keys.npk(), 0);
         let nullifier = Nullifier::for_account_initialization(&account_id);
         assert!(state.private_state.1.contains(&nullifier));
     }
@@ -3590,10 +3305,11 @@ pub mod tests {
         let (output, proof) = execute_and_prove(
             vec![unauthorized_account],
             Program::serialize_instruction(0_u128).unwrap(),
-            vec![2],
-            vec![(private_keys.npk(), 0, shared_secret)],
-            vec![],
-            vec![None],
+            vec![InputAccountIdentity::PrivateUnauthorized {
+                npk: private_keys.npk(),
+                ssk: shared_secret,
+                identifier: 0,
+            }],
             &program.into(),
         )
         .unwrap();
@@ -3613,7 +3329,7 @@ pub mod tests {
             .transition_from_privacy_preserving_transaction(&tx, 1, 0)
             .unwrap();
 
-        let account_id = AccountId::from((&private_keys.npk(), 0));
+        let account_id = AccountId::for_regular_private_account(&private_keys.npk(), 0);
         let nullifier = Nullifier::for_account_initialization(&account_id);
         assert!(state.private_state.1.contains(&nullifier));
     }
@@ -3642,10 +3358,11 @@ pub mod tests {
         let (output, proof) = execute_and_prove(
             vec![authorized_account.clone()],
             Program::serialize_instruction(balance).unwrap(),
-            vec![1],
-            vec![(private_keys.npk(), 0, shared_secret)],
-            vec![private_keys.nsk],
-            vec![None],
+            vec![InputAccountIdentity::PrivateAuthorizedInit {
+                ssk: shared_secret,
+                nsk: private_keys.nsk,
+                identifier: 0,
+            }],
             &claimer_program.into(),
         )
         .unwrap();
@@ -3669,7 +3386,7 @@ pub mod tests {
         );
 
         // Verify the account is now initialized (nullifier exists)
-        let account_id = AccountId::from((&private_keys.npk(), 0));
+        let account_id = AccountId::for_regular_private_account(&private_keys.npk(), 0);
         let nullifier = Nullifier::for_account_initialization(&account_id);
         assert!(state.private_state.1.contains(&nullifier));
 
@@ -3688,10 +3405,11 @@ pub mod tests {
         let res = execute_and_prove(
             vec![account_metadata],
             Program::serialize_instruction(()).unwrap(),
-            vec![1],
-            vec![(private_keys.npk(), 0, shared_secret2)],
-            vec![private_keys.nsk],
-            vec![None],
+            vec![InputAccountIdentity::PrivateAuthorizedInit {
+                ssk: shared_secret2,
+                nsk: private_keys.nsk,
+                identifier: 0,
+            }],
             &noop_program.into(),
         );
 
@@ -3764,14 +3482,12 @@ pub mod tests {
         let result = execute_and_prove(
             vec![private_account],
             Program::serialize_instruction(instruction).unwrap(),
-            vec![1],
-            vec![(
-                sender_keys.npk(),
-                0,
-                SharedSecretKey::new(&[3; 32], &sender_keys.vpk()),
-            )],
-            vec![sender_keys.nsk],
-            vec![Some((0, vec![]))],
+            vec![InputAccountIdentity::PrivateAuthorizedUpdate {
+                ssk: SharedSecretKey::new(&[3; 32], &sender_keys.vpk()),
+                nsk: sender_keys.nsk,
+                membership_proof: (0, vec![]),
+                identifier: 0,
+            }],
             &program.into(),
         );
 
@@ -3792,14 +3508,12 @@ pub mod tests {
         let result = execute_and_prove(
             vec![private_account],
             Program::serialize_instruction(instruction).unwrap(),
-            vec![1],
-            vec![(
-                sender_keys.npk(),
-                0,
-                SharedSecretKey::new(&[3; 32], &sender_keys.vpk()),
-            )],
-            vec![sender_keys.nsk],
-            vec![Some((0, vec![]))],
+            vec![InputAccountIdentity::PrivateAuthorizedUpdate {
+                ssk: SharedSecretKey::new(&[3; 32], &sender_keys.vpk()),
+                nsk: sender_keys.nsk,
+                membership_proof: (0, vec![]),
+                identifier: 0,
+            }],
             &program.into(),
         );
 
@@ -3827,7 +3541,7 @@ pub mod tests {
         let recipient_account =
             AccountWithMetadata::new(Account::default(), true, (&recipient_keys.npk(), 0));
 
-        let recipient_account_id = AccountId::from((&recipient_keys.npk(), 0));
+        let recipient_account_id = AccountId::for_regular_private_account(&recipient_keys.npk(), 0);
         let recipient_commitment =
             Commitment::new(&recipient_account_id, &recipient_account.account);
         let recipient_init_nullifier = Nullifier::for_account_initialization(&recipient_account_id);
@@ -3852,10 +3566,17 @@ pub mod tests {
         let result = execute_and_prove(
             vec![sender_account, recipient_account],
             Program::serialize_instruction(instruction).unwrap(),
-            vec![0, 1],
-            vec![(recipient_keys.npk(), 0, recipient)],
-            vec![recipient_keys.nsk],
-            vec![state.get_proof_for_commitment(&recipient_commitment)],
+            vec![
+                InputAccountIdentity::Public,
+                InputAccountIdentity::PrivateAuthorizedUpdate {
+                    ssk: recipient,
+                    nsk: recipient_keys.nsk,
+                    membership_proof: state
+                        .get_proof_for_commitment(&recipient_commitment)
+                        .expect("recipient's commitment must be in state"),
+                    identifier: 0,
+                },
+            ],
             &program_with_deps,
         );
 
@@ -4002,10 +3723,11 @@ pub mod tests {
             let (output, proof) = circuit::execute_and_prove(
                 vec![pre],
                 Program::serialize_instruction(instruction).unwrap(),
-                vec![2],
-                vec![(account_keys.npk(), 0, shared_secret)],
-                vec![],
-                vec![None],
+                vec![InputAccountIdentity::PrivateUnauthorized {
+                    npk: account_keys.npk(),
+                    ssk: shared_secret,
+                    identifier: 0,
+                }],
                 &validity_window_program.into(),
             )
             .unwrap();
@@ -4071,10 +3793,11 @@ pub mod tests {
             let (output, proof) = circuit::execute_and_prove(
                 vec![pre],
                 Program::serialize_instruction(instruction).unwrap(),
-                vec![2],
-                vec![(account_keys.npk(), 0, shared_secret)],
-                vec![],
-                vec![None],
+                vec![InputAccountIdentity::PrivateUnauthorized {
+                    npk: account_keys.npk(),
+                    ssk: shared_secret,
+                    identifier: 0,
+                }],
                 &validity_window_program.into(),
             )
             .unwrap();
@@ -4576,5 +4299,226 @@ pub mod tests {
             result.is_err(),
             "program with spoofed caller_program_id in output should be rejected"
         );
+    }
+
+    #[test]
+    fn two_private_pda_family_members_receive_and_spend() {
+        let funder_keys = test_public_account_keys_1();
+        let alice_keys = test_private_account_keys_1();
+        let alice_npk = alice_keys.npk();
+
+        let proxy = Program::pda_fund_spend_proxy();
+        let auth_transfer = Program::authenticated_transfer_program();
+        let proxy_id = proxy.id();
+        let auth_transfer_id = auth_transfer.id();
+        let seed = PdaSeed::new([42; 32]);
+        let amount: u128 = 100;
+
+        let program_with_deps =
+            ProgramWithDependencies::new(proxy, [(auth_transfer_id, auth_transfer)].into());
+
+        let funder_id = funder_keys.account_id();
+        let alice_pda_0_id = AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, 0);
+        let alice_pda_1_id = AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, 1);
+        let recipient_id = test_public_account_keys_2().account_id();
+        let recipient_signing_key = test_public_account_keys_2().signing_key;
+
+        let mut state = V03State::new_with_genesis_accounts(&[(funder_id, 500)], vec![], 0);
+
+        let alice_pda_0_account = Account {
+            program_owner: auth_transfer_id,
+            balance: amount,
+            nonce: Nonce::private_account_nonce_init(&alice_pda_0_id),
+            ..Account::default()
+        };
+        let alice_pda_1_account = Account {
+            program_owner: auth_transfer_id,
+            balance: amount,
+            nonce: Nonce::private_account_nonce_init(&alice_pda_1_id),
+            ..Account::default()
+        };
+
+        let alice_shared_0 = SharedSecretKey::new(&[10; 32], &alice_keys.vpk());
+        let alice_shared_1 = SharedSecretKey::new(&[11; 32], &alice_keys.vpk());
+
+        // Fund alice_pda_0
+        {
+            let funder_account = state.get_account_by_id(funder_id);
+            let funder_nonce = funder_account.nonce;
+            let (output, proof) = execute_and_prove(
+                vec![
+                    AccountWithMetadata::new(funder_account, true, funder_id),
+                    AccountWithMetadata::new(Account::default(), false, alice_pda_0_id),
+                ],
+                Program::serialize_instruction((seed, amount, auth_transfer_id, true)).unwrap(),
+                vec![
+                    InputAccountIdentity::Public,
+                    InputAccountIdentity::PrivatePdaInit {
+                        npk: alice_npk,
+                        ssk: alice_shared_0,
+                        identifier: 0,
+                    },
+                ],
+                &program_with_deps,
+            )
+            .unwrap();
+            let message = Message::try_from_circuit_output(
+                vec![funder_id],
+                vec![funder_nonce],
+                vec![(
+                    alice_npk,
+                    alice_keys.vpk(),
+                    EphemeralPublicKey::from_scalar([10; 32]),
+                )],
+                output,
+            )
+            .unwrap();
+            let witness_set = WitnessSet::for_message(&message, proof, &[&funder_keys.signing_key]);
+            state
+                .transition_from_privacy_preserving_transaction(
+                    &PrivacyPreservingTransaction::new(message, witness_set),
+                    1,
+                    0,
+                )
+                .unwrap();
+        }
+
+        // Fund alice_pda_1
+        {
+            let funder_account = state.get_account_by_id(funder_id);
+            let funder_nonce = funder_account.nonce;
+            let (output, proof) = execute_and_prove(
+                vec![
+                    AccountWithMetadata::new(funder_account, true, funder_id),
+                    AccountWithMetadata::new(Account::default(), false, alice_pda_1_id),
+                ],
+                Program::serialize_instruction((seed, amount, auth_transfer_id, true)).unwrap(),
+                vec![
+                    InputAccountIdentity::Public,
+                    InputAccountIdentity::PrivatePdaInit {
+                        npk: alice_npk,
+                        ssk: alice_shared_1,
+                        identifier: 1,
+                    },
+                ],
+                &program_with_deps,
+            )
+            .unwrap();
+            let message = Message::try_from_circuit_output(
+                vec![funder_id],
+                vec![funder_nonce],
+                vec![(
+                    alice_npk,
+                    alice_keys.vpk(),
+                    EphemeralPublicKey::from_scalar([11; 32]),
+                )],
+                output,
+            )
+            .unwrap();
+            let witness_set = WitnessSet::for_message(&message, proof, &[&funder_keys.signing_key]);
+            state
+                .transition_from_privacy_preserving_transaction(
+                    &PrivacyPreservingTransaction::new(message, witness_set),
+                    2,
+                    0,
+                )
+                .unwrap();
+        }
+
+        let commitment_pda_0 = Commitment::new(&alice_pda_0_id, &alice_pda_0_account);
+        let commitment_pda_1 = Commitment::new(&alice_pda_1_id, &alice_pda_1_account);
+
+        assert!(state.get_proof_for_commitment(&commitment_pda_0).is_some());
+        assert!(state.get_proof_for_commitment(&commitment_pda_1).is_some());
+
+        // Alice spends alice_pda_0 into the public recipient.
+        {
+            let recipient_account = state.get_account_by_id(recipient_id);
+            let (output, proof) = execute_and_prove(
+                vec![
+                    AccountWithMetadata::new(alice_pda_0_account, true, alice_pda_0_id),
+                    AccountWithMetadata::new(recipient_account, true, recipient_id),
+                ],
+                Program::serialize_instruction((seed, amount, auth_transfer_id, false)).unwrap(),
+                vec![
+                    InputAccountIdentity::PrivatePdaUpdate {
+                        ssk: alice_shared_0,
+                        nsk: alice_keys.nsk,
+                        membership_proof: state
+                            .get_proof_for_commitment(&commitment_pda_0)
+                            .expect("pda_0 must be in state"),
+                        identifier: 0,
+                    },
+                    InputAccountIdentity::Public,
+                ],
+                &program_with_deps,
+            )
+            .unwrap();
+            let message = Message::try_from_circuit_output(
+                vec![recipient_id],
+                vec![Nonce(0)],
+                vec![(
+                    alice_npk,
+                    alice_keys.vpk(),
+                    EphemeralPublicKey::from_scalar([10; 32]),
+                )],
+                output,
+            )
+            .unwrap();
+            let witness_set = WitnessSet::for_message(&message, proof, &[&recipient_signing_key]);
+            state
+                .transition_from_privacy_preserving_transaction(
+                    &PrivacyPreservingTransaction::new(message, witness_set),
+                    3,
+                    0,
+                )
+                .unwrap();
+        }
+
+        // Alice spends alice_pda_1 into the same public recipient.
+        {
+            let recipient_account = state.get_account_by_id(recipient_id);
+            let (output, proof) = execute_and_prove(
+                vec![
+                    AccountWithMetadata::new(alice_pda_1_account, true, alice_pda_1_id),
+                    AccountWithMetadata::new(recipient_account, false, recipient_id),
+                ],
+                Program::serialize_instruction((seed, amount, auth_transfer_id, false)).unwrap(),
+                vec![
+                    InputAccountIdentity::PrivatePdaUpdate {
+                        ssk: alice_shared_1,
+                        nsk: alice_keys.nsk,
+                        membership_proof: state
+                            .get_proof_for_commitment(&commitment_pda_1)
+                            .expect("pda_1 must be in state"),
+                        identifier: 1,
+                    },
+                    InputAccountIdentity::Public,
+                ],
+                &program_with_deps,
+            )
+            .unwrap();
+            let message = Message::try_from_circuit_output(
+                vec![recipient_id],
+                vec![],
+                vec![(
+                    alice_npk,
+                    alice_keys.vpk(),
+                    EphemeralPublicKey::from_scalar([11; 32]),
+                )],
+                output,
+            )
+            .unwrap();
+            let witness_set = WitnessSet::for_message(&message, proof, &[]);
+            state
+                .transition_from_privacy_preserving_transaction(
+                    &PrivacyPreservingTransaction::new(message, witness_set),
+                    4,
+                    0,
+                )
+                .unwrap();
+        }
+
+        assert_eq!(state.get_account_by_id(recipient_id).balance, 2 * amount);
     }
 }

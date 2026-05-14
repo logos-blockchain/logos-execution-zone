@@ -83,6 +83,19 @@ impl indexer_service_rpc::RpcServer for IndexerService {
             .into())
     }
 
+    async fn get_account_at_block(
+        &self,
+        account_id: AccountId,
+        block_id: BlockId,
+    ) -> Result<Account, ErrorObjectOwned> {
+        Ok(self
+            .indexer
+            .store
+            .account_state_at_block(&account_id.into(), block_id)
+            .map_err(db_error)?
+            .into())
+    }
+
     async fn get_transaction(
         &self,
         tx_hash: HashType,

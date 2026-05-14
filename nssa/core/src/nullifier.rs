@@ -12,10 +12,11 @@ pub type Identifier = u128;
 #[cfg_attr(any(feature = "host", test), derive(Hash))]
 pub struct NullifierPublicKey(pub [u8; 32]);
 
-impl From<(&NullifierPublicKey, Identifier)> for AccountId {
-    fn from(value: (&NullifierPublicKey, Identifier)) -> Self {
-        let (npk, identifier) = value;
-
+impl AccountId {
+    /// Derives an [`AccountId`] for a regular (non-PDA) private account from the nullifier public
+    /// key and identifier.
+    #[must_use]
+    pub fn for_regular_private_account(npk: &NullifierPublicKey, identifier: Identifier) -> Self {
         // 32 bytes prefix || 32 bytes npk || 16 bytes identifier
         let mut bytes = [0; 80];
         bytes[0..32].copy_from_slice(PRIVATE_ACCOUNT_ID_PREFIX);
@@ -28,6 +29,12 @@ impl From<(&NullifierPublicKey, Identifier)> for AccountId {
                 .try_into()
                 .expect("Conversion should not fail"),
         )
+    }
+}
+
+impl From<(&NullifierPublicKey, Identifier)> for AccountId {
+    fn from((npk, identifier): (&NullifierPublicKey, Identifier)) -> Self {
+        Self::for_regular_private_account(npk, identifier)
     }
 }
 
@@ -155,7 +162,7 @@ mod tests {
             253, 105, 164, 89, 84, 40, 191, 182, 119, 64, 255, 67, 142,
         ]);
 
-        let account_id = AccountId::from((&npk, 0));
+        let account_id = AccountId::for_regular_private_account(&npk, 0);
 
         assert_eq!(account_id, expected_account_id);
     }
@@ -172,7 +179,7 @@ mod tests {
             56, 247, 99, 121, 165, 182, 234, 255, 19, 127, 191, 72,
         ]);
 
-        let account_id = AccountId::from((&npk, 1));
+        let account_id = AccountId::for_regular_private_account(&npk, 1);
 
         assert_eq!(account_id, expected_account_id);
     }
@@ -190,7 +197,7 @@ mod tests {
             19, 245, 25, 214, 162, 209, 135, 252, 82, 27, 2, 174, 196,
         ]);
 
-        let account_id = AccountId::from((&npk, identifier));
+        let account_id = AccountId::for_regular_private_account(&npk, identifier);
 
         assert_eq!(account_id, expected_account_id);
     }

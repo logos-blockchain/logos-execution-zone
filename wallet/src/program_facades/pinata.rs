@@ -56,7 +56,9 @@ impl Pinata<'_> {
             .send_privacy_preserving_tx(
                 vec![
                     PrivacyPreservingAccount::Public(pinata_account_id),
-                    PrivacyPreservingAccount::PrivateOwned(winner_account_id),
+                    self.0
+                        .resolve_private_account(winner_account_id)
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
                 ],
                 nssa::program::Program::serialize_instruction(solution).unwrap(),
                 &nssa::program::Program::pinata().into(),

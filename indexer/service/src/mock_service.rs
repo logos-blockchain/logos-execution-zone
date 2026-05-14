@@ -239,6 +239,22 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
             .ok_or_else(|| ErrorObjectOwned::owned(-32001, "Account not found", None::<()>))
     }
 
+    async fn get_account_at_block(
+        &self,
+        account_id: AccountId,
+        _block_id: BlockId,
+    ) -> Result<Account, ErrorObjectOwned> {
+        // Mock service does not track historical state; returns current state regardless of
+        // block_id.
+        self.state
+            .read()
+            .await
+            .accounts
+            .get(&account_id)
+            .cloned()
+            .ok_or_else(|| ErrorObjectOwned::owned(-32001, "Account not found", None::<()>))
+    }
+
     async fn get_transaction(
         &self,
         tx_hash: HashType,

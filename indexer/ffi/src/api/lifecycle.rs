@@ -2,7 +2,15 @@ use std::{ffi::c_char, path::PathBuf};
 
 use tokio::runtime::Runtime;
 
-use crate::{IndexerServiceFFI, api::PointerResult, errors::OperationStatus};
+use crate::{
+    IndexerServiceFFI,
+    api::{
+        PointerResult,
+        client::{UrlProtocol, addr_to_url},
+    },
+    client::{IndexerClient, IndexerClientTrait as _},
+    errors::OperationStatus,
+};
 
 pub type InitializedIndexerServiceFFIResult = PointerResult<IndexerServiceFFI, OperationStatus>;
 
@@ -67,7 +75,13 @@ fn setup_indexer(
             OperationStatus::InitializationError
         })?;
 
-    Ok(IndexerServiceFFI::new(indexer_handle, rt))
+    let indexer_url = addr_to_url(UrlProtocol::Ws, indexer_handle.addr())?;
+    let indexer_client = rt.block_on(IndexerClient::new(&indexer_url)).map_err(|e| {
+        log::error!("Could not start indexer client: {e}");
+        OperationStatus::InitializationError
+    })?;
+
+    Ok(IndexerServiceFFI::new(indexer_handle, rt, indexer_client))
 }
 
 /// Stops and frees the resources associated with the given indexer service.

@@ -89,6 +89,27 @@ pub enum NewSubcommand {
         /// Label to assign to the new account.
         label: Option<String>,
     },
+    /// Create a shared private account from a group's GMS.
+    PrivateGms {
+        /// Group name to derive keys from.
+        group: String,
+        #[arg(short, long)]
+        /// Label to assign to the new account.
+        label: Option<String>,
+        #[arg(long)]
+        /// Create a PDA account (requires --seed and --program-id).
+        pda: bool,
+        #[arg(long, requires = "pda")]
+        /// PDA seed as 64-character hex string.
+        seed: Option<String>,
+        #[arg(long, requires = "pda")]
+        /// Program ID as hex string.
+        program_id: Option<String>,
+        #[arg(long, requires = "pda")]
+        /// Identifier that diversifies this PDA within the (`program_id`, seed, npk) family.
+        /// Defaults to a random value if not specified.
+        identifier: Option<u128>,
+    },
     /// Recommended for receiving from multiple senders: creates a key node (npk + vpk) without
     /// registering any account.
     PrivateAccountsKey {
@@ -180,8 +201,72 @@ impl WalletSubcommand for NewSubcommand {
                 );
 
                 wallet_core.store_persistent_data().await?;
-
                 Ok(SubcommandReturnValue::RegisterAccount { account_id })
+            }
+            Self::PrivateGms {
+                group,
+                label,
+                pda,
+                seed,
+                program_id,
+                identifier,
+            } => {
+                if let Some(label) = &label
+                    && wallet_core
+                        .storage
+                        .labels
+                        .values()
+                        .any(|l| l.to_string() == *label)
+                {
+                    anyhow::bail!("Label '{label}' is already in use by another account");
+                }
+
+                let info = if pda {
+                    let seed_hex = seed.context("--seed is required for PDA accounts")?;
+                    let pid_hex =
+                        program_id.context("--program-id is required for PDA accounts")?;
+
+                    let seed_bytes: [u8; 32] = hex::decode(&seed_hex)
+                        .context("Invalid seed hex")?
+                        .try_into()
+                        .map_err(|_err| anyhow::anyhow!("Seed must be exactly 32 bytes"))?;
+                    let pda_seed = nssa_core::program::PdaSeed::new(seed_bytes);
+
+                    let pid_bytes = hex::decode(&pid_hex).context("Invalid program ID hex")?;
+                    if pid_bytes.len() != 32 {
+                        anyhow::bail!("Program ID must be exactly 32 bytes");
+                    }
+                    let mut pid: nssa_core::program::ProgramId = [0; 8];
+                    for (i, chunk) in pid_bytes.chunks_exact(4).enumerate() {
+                        pid[i] = u32::from_le_bytes(chunk.try_into().unwrap());
+                    }
+
+                    wallet_core.create_shared_pda_account(
+                        &group,
+                        pda_seed,
+                        pid,
+                        identifier.unwrap_or_else(rand::random),
+                    )?
+                } else {
+                    wallet_core.create_shared_regular_account(&group)?
+                };
+
+                if let Some(label) = label {
+                    wallet_core
+                        .storage
+                        .labels
+                        .insert(info.account_id.to_string(), Label::new(label));
+                }
+
+                println!("Shared account from group '{group}'");
+                println!("AccountId: Private/{}", info.account_id);
+                println!("NPK: {}", hex::encode(info.npk.0));
+                println!("VPK: {}", hex::encode(&info.vpk.0));
+
+                wallet_core.store_persistent_data().await?;
+                Ok(SubcommandReturnValue::RegisterAccount {
+                    account_id: info.account_id,
+                })
             }
             Self::PrivateAccountsKey { cci } => {
                 let chain_index = wallet_core.create_private_accounts_key(cci);

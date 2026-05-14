@@ -627,14 +627,14 @@ async fn shielded_transfers_to_two_identifiers_same_npk() -> Result<()> {
     .await?;
 
     // Both accounts must be discovered with the correct balances.
-    let account_id_1 = AccountId::from((&npk, identifier_1));
+    let account_id_1 = AccountId::for_regular_private_account(&npk, identifier_1);
     let acc_1 = ctx
         .wallet()
         .get_account_private(account_id_1)
         .context("account for identifier 1 not found after sync")?;
     assert_eq!(acc_1.balance, 100);
 
-    let account_id_2 = AccountId::from((&npk, identifier_2));
+    let account_id_2 = AccountId::for_regular_private_account(&npk, identifier_2);
     let acc_2 = ctx
         .wallet()
         .get_account_private(account_id_2)
