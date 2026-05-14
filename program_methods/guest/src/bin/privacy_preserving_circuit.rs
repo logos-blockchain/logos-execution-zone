@@ -1,13 +1,12 @@
 use std::{
-    collections::{HashMap, VecDeque, hash_map::Entry},
+    collections::{HashMap, HashSet, VecDeque, hash_map::Entry},
     convert::Infallible,
 };
 
 use nssa_core::{
     Commitment, CommitmentSetDigest, DUMMY_COMMITMENT_HASH, EncryptionScheme, Identifier,
-    InputAccountIdentity, MembershipProof, Nullifier, NullifierPublicKey, NullifierSecretKey,
-    PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput, PrivateAccountKind,
-    SharedSecretKey,
+    MembershipProof, Nullifier, NullifierPublicKey, NullifierSecretKey,
+    PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput, SharedSecretKey,
     account::{Account, AccountId, AccountWithMetadata, Nonce},
     compute_digest_for_path,
     program::{
@@ -18,26 +17,25 @@ use nssa_core::{
 };
 use risc0_zkvm::{guest::env, serde::to_vec};
 
+const PRIVATE_PDA_FIXED_IDENTIFIER: u128 = u128::MAX;
+
 /// State of the involved accounts before and after program execution.
 struct ExecutionState {
     pre_states: Vec<AccountWithMetadata>,
     post_states: HashMap<AccountId, Account>,
     block_validity_window: BlockValidityWindow,
     timestamp_validity_window: TimestampValidityWindow,
-    /// Positions (in `pre_states`) of private-PDA accounts whose supplied npk has been bound to
-    /// their `AccountId` via a proven `AccountId::for_private_pda(program_id, seed, npk,
-    /// identifier)` check.
+    /// Positions (in `pre_states`) of mask-3 accounts whose supplied npk has been bound to
+    /// their `AccountId` via a proven `AccountId::for_private_pda(program_id, seed, npk)`
+    /// check.
     /// Two proof paths populate this set: a `Claim::Pda(seed)` in a program's `post_state` on
     /// that `pre_state`, or a caller's `ChainedCall.pda_seeds` entry matching that `pre_state`
     /// under the private derivation. Binding is an idempotent property, not an event: the same
     /// position can legitimately be bound through both paths in the same tx (e.g. a program
-    /// claims a private PDA and then delegates it to a callee), and the map uses `contains_key`,
-    /// not `assert!(insert)`. After the main loop, every private-PDA position must appear in this
-    /// map; otherwise the npk is unbound and the circuit rejects.
-    /// The stored `(ProgramId, PdaSeed)` is the owner program and seed, used in
-    /// `compute_circuit_output` to construct `PrivateAccountKind::Pda { program_id, seed,
-    /// identifier }`.
-    private_pda_bound_positions: HashMap<usize, (ProgramId, PdaSeed)>,
+    /// claims a private PDA and then delegates it to a callee), and the set uses `contains`,
+    /// not `assert!(insert)`. After the main loop, every mask-3 position must appear in this
+    /// set; otherwise the npk is unbound and the circuit rejects.
+    private_pda_bound_positions: HashSet<usize>,
     /// Across the whole transaction, each `(program_id, seed)` pair may resolve to at most one
     /// `AccountId`. A seed under a program can derive a family of accounts, one public PDA and
     /// one private PDA per distinct npk. Without this check, a single `pda_seeds: [S]` entry in
@@ -47,30 +45,39 @@ struct ExecutionState {
     /// `AccountId` entry or as an equality check against the existing one, making the rule: one
     /// `(program, seed)` → one account per tx.
     pda_family_binding: HashMap<(ProgramId, PdaSeed), AccountId>,
-    /// Map from a private-PDA `pre_state`'s position in `account_identities` to the (npk,
-    /// identifier) supplied for that position. Built once in `derive_from_outputs` by walking
-    /// `account_identities` and consulting `npk_if_private_pda`. Used later by the claim and
-    /// caller-seeds authorization paths to verify
-    /// `AccountId::for_private_pda(program_id, seed, npk, identifier) == pre_state.account_id`.
-    private_pda_npk_by_position: HashMap<usize, (NullifierPublicKey, Identifier)>,
+    /// Map from a mask-3 `pre_state`'s position in `visibility_mask` to the npk supplied for
+    /// that position in `private_account_keys`. Built once in `derive_from_outputs` by walking
+    /// `visibility_mask` in lock-step with `private_account_keys`, used later by the claim and
+    /// caller-seeds authorization paths.
+    private_pda_npk_by_position: HashMap<usize, NullifierPublicKey>,
 }
 
 impl ExecutionState {
     /// Validate program outputs and derive the overall execution state.
     pub fn derive_from_outputs(
-        account_identities: &[InputAccountIdentity],
+        visibility_mask: &[u8],
+        private_account_keys: &[(NullifierPublicKey, Identifier, SharedSecretKey)],
         program_id: ProgramId,
         program_outputs: Vec<ProgramOutput>,
     ) -> Self {
-        // Build position → (npk, identifier) map for private-PDA pre_states, indexed by position
-        // in `account_identities`. The vec is documented as 1:1 with the program's pre_state
-        // order, so position here matches `pre_state_position` used downstream in
-        // `validate_and_sync_states`.
-        let mut private_pda_npk_by_position: HashMap<usize, (NullifierPublicKey, Identifier)> =
-            HashMap::new();
-        for (pos, account_identity) in account_identities.iter().enumerate() {
-            if let Some((npk, identifier)) = account_identity.npk_if_private_pda() {
-                private_pda_npk_by_position.insert(pos, (npk, identifier));
+        // Build position → npk map for mask-3 pre_states. `private_account_keys` is consumed in
+        // pre_state order across all masks 1/2/3, so walk `visibility_mask` in lock-step. The
+        // downstream `compute_circuit_output` also consumes the same iterator and its trailing
+        // assertions catch an over-supply of keys; under-supply surfaces here.
+        let mut private_pda_npk_by_position: HashMap<usize, NullifierPublicKey> = HashMap::new();
+        {
+            let mut keys_iter = private_account_keys.iter();
+            for (pos, &mask) in visibility_mask.iter().enumerate() {
+                if matches!(mask, 1..=3) {
+                    let (npk, _, _) = keys_iter.next().unwrap_or_else(|| {
+                        panic!(
+                            "private_account_keys shorter than visibility_mask demands: no key for masked position {pos} (mask {mask})"
+                        )
+                    });
+                    if mask == 3 {
+                        private_pda_npk_by_position.insert(pos, *npk);
+                    }
+                }
             }
         }
 
@@ -108,7 +115,7 @@ impl ExecutionState {
             post_states: HashMap::new(),
             block_validity_window,
             timestamp_validity_window,
-            private_pda_bound_positions: HashMap::new(),
+            private_pda_bound_positions: HashSet::new(),
             pda_family_binding: HashMap::new(),
             private_pda_npk_by_position,
         };
@@ -187,7 +194,7 @@ impl ExecutionState {
             }
 
             execution_state.validate_and_sync_states(
-                account_identities,
+                visibility_mask,
                 chained_call.program_id,
                 caller_program_id,
                 &chained_call.pda_seeds,
@@ -204,16 +211,14 @@ impl ExecutionState {
             "Inner call without a chained call found",
         );
 
-        // Every private-PDA pre_state must have had its npk bound to its account_id, either via
-        // a `Claim::Pda(seed)` in some program's post_state or via a caller's `pda_seeds`
-        // matching the private derivation. An unbound private-PDA pre_state has no
-        // cryptographic link between the supplied npk and the account_id, and must be rejected.
-        for (pos, account_identity) in account_identities.iter().enumerate() {
-            if account_identity.is_private_pda() {
+        // Every mask-3 pre_state must have had its npk bound to its account_id, either via a
+        // `Claim::Pda(seed)` in some program's post_state or via a caller's `pda_seeds` matching
+        // the private derivation. An unbound mask-3 pre_state has no cryptographic link between
+        // the supplied npk and the account_id, and must be rejected.
+        for (pos, &mask) in visibility_mask.iter().enumerate() {
+            if mask == 3 {
                 assert!(
-                    execution_state
-                        .private_pda_bound_positions
-                        .contains_key(&pos),
+                    execution_state.private_pda_bound_positions.contains(&pos),
                     "private PDA pre_state at position {pos} has no proven (seed, npk) binding via Claim::Pda or caller pda_seeds"
                 );
             }
@@ -246,7 +251,7 @@ impl ExecutionState {
     /// Validate program pre and post states and populate the execution state.
     fn validate_and_sync_states(
         &mut self,
-        account_identities: &[InputAccountIdentity],
+        visibility_mask: &[u8],
         program_id: ProgramId,
         caller_program_id: Option<ProgramId>,
         caller_pda_seeds: &[PdaSeed],
@@ -324,9 +329,9 @@ impl ExecutionState {
                     .position(|acc| acc.account_id == pre_account_id)
                     .expect("Pre state must exist at this point");
 
-                let account_identity = &account_identities[pre_state_position];
-                if account_identity.is_public() {
-                    match claim {
+                let mask = visibility_mask[pre_state_position];
+                match mask {
+                    0 => match claim {
                         Claim::Authorized => {
                             // Note: no need to check authorized pdas because we have already
                             // checked consistency of authorization above.
@@ -348,46 +353,40 @@ impl ExecutionState {
                                 pre_account_id,
                             );
                         }
-                    }
-                } else if account_identity.is_private_pda() {
-                    match claim {
-                        Claim::Authorized => {
-                            assert!(
-                                pre_is_authorized,
-                                "Cannot claim unauthorized private PDA {pre_account_id}"
-                            );
-                        }
-                        Claim::Pda(seed) => {
-                            let (npk, identifier) = self
+                    },
+                    3 => {
+                        match claim {
+                            Claim::Authorized => {
+                                assert!(
+                                    pre_is_authorized,
+                                    "Cannot claim unauthorized private PDA {pre_account_id}"
+                                );
+                            }
+                            Claim::Pda(seed) => {
+                                let npk = self
                                 .private_pda_npk_by_position
                                 .get(&pre_state_position)
-                                .expect(
-                                    "private PDA pre_state must have an npk in the position map",
+                                .expect("private PDA pre_state must have an npk in the position map");
+                                let pda = AccountId::for_private_pda(&program_id, &seed, npk);
+                                assert_eq!(
+                                    pre_account_id, pda,
+                                    "Invalid private PDA claim for account {pre_account_id}"
                                 );
-                            let pda =
-                                AccountId::for_private_pda(&program_id, &seed, npk, *identifier);
-                            assert_eq!(
-                                pre_account_id, pda,
-                                "Invalid private PDA claim for account {pre_account_id}"
-                            );
-                            bind_private_pda_position(
-                                &mut self.private_pda_bound_positions,
-                                pre_state_position,
-                                program_id,
-                                seed,
-                            );
-                            assert_family_binding(
-                                &mut self.pda_family_binding,
-                                program_id,
-                                seed,
-                                pre_account_id,
-                            );
+                                self.private_pda_bound_positions.insert(pre_state_position);
+                                assert_family_binding(
+                                    &mut self.pda_family_binding,
+                                    program_id,
+                                    seed,
+                                    pre_account_id,
+                                );
+                            }
                         }
                     }
-                } else {
-                    // Standalone private accounts: don't enforce the claim semantics.
-                    // Unauthorized private claiming is intentionally allowed since operating
-                    // these accounts requires the npk/nsk keypair anyway.
+                    _ => {
+                        // Mask 1/2: standard private accounts don't enforce the claim semantics.
+                        // Unauthorized private claiming is intentionally allowed since operating
+                        // these accounts requires the npk/nsk keypair anyway.
+                    }
                 }
 
                 post.account_mut().program_owner = program_id;
@@ -439,24 +438,6 @@ fn assert_family_binding(
     }
 }
 
-fn bind_private_pda_position(
-    map: &mut HashMap<usize, (ProgramId, PdaSeed)>,
-    position: usize,
-    program_id: ProgramId,
-    seed: PdaSeed,
-) {
-    match map.entry(position) {
-        Entry::Occupied(e) => assert_eq!(
-            *e.get(),
-            (program_id, seed),
-            "Duplicate binding at position {position}: conflicting (program_id, seed)"
-        ),
-        Entry::Vacant(e) => {
-            e.insert((program_id, seed));
-        }
-    }
-}
-
 /// Resolve the authorization state of a `pre_state` seen again in a chained call and record
 /// any resulting bindings. Returns `true` if the `pre_state` is authorized through either a
 /// previously-seen authorization or a matching caller seed (under the public or private
@@ -472,8 +453,8 @@ fn bind_private_pda_position(
 )]
 fn resolve_authorization_and_record_bindings(
     pda_family_binding: &mut HashMap<(ProgramId, PdaSeed), AccountId>,
-    private_pda_bound_positions: &mut HashMap<usize, (ProgramId, PdaSeed)>,
-    private_pda_npk_by_position: &HashMap<usize, (NullifierPublicKey, Identifier)>,
+    private_pda_bound_positions: &mut HashSet<usize>,
+    private_pda_npk_by_position: &HashMap<usize, NullifierPublicKey>,
     pre_account_id: AccountId,
     pre_state_position: usize,
     caller_program_id: Option<ProgramId>,
@@ -486,9 +467,8 @@ fn resolve_authorization_and_record_bindings(
                 if AccountId::for_public_pda(&caller, seed) == pre_account_id {
                     return Some((*seed, false, caller));
                 }
-                if let Some((npk, identifier)) =
-                    private_pda_npk_by_position.get(&pre_state_position)
-                    && AccountId::for_private_pda(&caller, seed, npk, *identifier) == pre_account_id
+                if let Some(npk) = private_pda_npk_by_position.get(&pre_state_position)
+                    && AccountId::for_private_pda(&caller, seed, npk) == pre_account_id
                 {
                     return Some((*seed, true, caller));
                 }
@@ -499,12 +479,7 @@ fn resolve_authorization_and_record_bindings(
     if let Some((seed, is_private_form, caller)) = matched_caller_seed {
         assert_family_binding(pda_family_binding, caller, seed, pre_account_id);
         if is_private_form {
-            bind_private_pda_position(
-                private_pda_bound_positions,
-                pre_state_position,
-                caller,
-                seed,
-            );
+            private_pda_bound_positions.insert(pre_state_position);
         }
     }
 
@@ -512,8 +487,11 @@ fn resolve_authorization_and_record_bindings(
 }
 
 fn compute_circuit_output(
-    mut execution_state: ExecutionState,
-    account_identities: &[InputAccountIdentity],
+    execution_state: ExecutionState,
+    visibility_mask: &[u8],
+    private_account_keys: &[(NullifierPublicKey, Identifier, SharedSecretKey)],
+    private_account_nsks: &[NullifierSecretKey],
+    private_account_membership_proofs: &[Option<MembershipProof>],
 ) -> PrivacyPreservingCircuitOutput {
     let mut output = PrivacyPreservingCircuitOutput {
         public_pre_states: Vec::new(),
@@ -525,280 +503,292 @@ fn compute_circuit_output(
         timestamp_validity_window: execution_state.timestamp_validity_window,
     };
 
-    let pda_seed_by_position = std::mem::take(&mut execution_state.private_pda_bound_positions);
     let states_iter = execution_state.into_states_iter();
     assert_eq!(
-        account_identities.len(),
+        visibility_mask.len(),
         states_iter.len(),
-        "Invalid account_identities length"
+        "Invalid visibility mask length"
     );
 
+    let mut private_keys_iter = private_account_keys.iter();
+    let mut private_nsks_iter = private_account_nsks.iter();
+    let mut private_membership_proofs_iter = private_account_membership_proofs.iter();
+
     let mut output_index = 0;
-    for (pos, (account_identity, (pre_state, post_state))) in
-        account_identities.iter().zip(states_iter).enumerate()
+    for (account_visibility_mask, (pre_state, post_state)) in
+        visibility_mask.iter().copied().zip(states_iter)
     {
-        match account_identity {
-            InputAccountIdentity::Public => {
+        match account_visibility_mask {
+            0 => {
+                // Public account
                 output.public_pre_states.push(pre_state);
                 output.public_post_states.push(post_state);
             }
-            InputAccountIdentity::PrivateAuthorizedInit {
-                ssk,
-                nsk,
-                identifier,
-            } => {
-                let npk = NullifierPublicKey::from(nsk);
-                let account_id = AccountId::for_regular_private_account(&npk, *identifier);
+            1 | 2 => {
+                let Some((npk, identifier, shared_secret)) = private_keys_iter.next() else {
+                    panic!("Missing private account key");
+                };
+                assert_ne!(
+                    *identifier, PRIVATE_PDA_FIXED_IDENTIFIER,
+                    "Identifier must be different from {PRIVATE_PDA_FIXED_IDENTIFIER}. This is reserved for private PDA."
+                );
+
+                let account_id = AccountId::from((npk, *identifier));
 
                 assert_eq!(account_id, pre_state.account_id, "AccountId mismatch");
-                assert!(
-                    pre_state.is_authorized,
-                    "Pre-state not authorized for authenticated private account"
+
+                let (new_nullifier, new_nonce) = if account_visibility_mask == 1 {
+                    // Private account with authentication
+
+                    let Some(nsk) = private_nsks_iter.next() else {
+                        panic!("Missing private account nullifier secret key");
+                    };
+
+                    // Verify the nullifier public key
+                    assert_eq!(
+                        npk,
+                        &NullifierPublicKey::from(nsk),
+                        "Nullifier public key mismatch"
+                    );
+
+                    // Check pre_state authorization
+                    assert!(
+                        pre_state.is_authorized,
+                        "Pre-state not authorized for authenticated private account"
+                    );
+
+                    let Some(membership_proof_opt) = private_membership_proofs_iter.next() else {
+                        panic!("Missing membership proof");
+                    };
+
+                    let new_nullifier = compute_nullifier_and_set_digest(
+                        membership_proof_opt.as_ref(),
+                        &pre_state.account,
+                        &account_id,
+                        nsk,
+                    );
+
+                    let new_nonce = pre_state.account.nonce.private_account_nonce_increment(nsk);
+
+                    (new_nullifier, new_nonce)
+                } else {
+                    // Private account without authentication
+
+                    assert_eq!(
+                        pre_state.account,
+                        Account::default(),
+                        "Found new private account with non default values",
+                    );
+
+                    assert!(
+                        !pre_state.is_authorized,
+                        "Found new private account marked as authorized."
+                    );
+
+                    let Some(membership_proof_opt) = private_membership_proofs_iter.next() else {
+                        panic!("Missing membership proof");
+                    };
+
+                    assert!(
+                        membership_proof_opt.is_none(),
+                        "Membership proof must be None for unauthorized accounts"
+                    );
+
+                    let nullifier = Nullifier::for_account_initialization(&account_id);
+
+                    let new_nonce = Nonce::private_account_nonce_init(&account_id);
+
+                    ((nullifier, DUMMY_COMMITMENT_HASH), new_nonce)
+                };
+                output.new_nullifiers.push(new_nullifier);
+
+                // Update post-state with new nonce
+                let mut post_with_updated_nonce = post_state;
+                post_with_updated_nonce.nonce = new_nonce;
+
+                // Compute commitment
+                let commitment_post = Commitment::new(&account_id, &post_with_updated_nonce);
+
+                // Encrypt and push post state
+                let encrypted_account = EncryptionScheme::encrypt(
+                    &post_with_updated_nonce,
+                    *identifier,
+                    shared_secret,
+                    &commitment_post,
+                    output_index,
                 );
+
+                output.new_commitments.push(commitment_post);
+                output.ciphertexts.push(encrypted_account);
+                output_index = output_index
+                    .checked_add(1)
+                    .unwrap_or_else(|| panic!("Too many private accounts, output index overflow"));
+            }
+            3 => {
+                // Private PDA account. The supplied npk has already been bound to
+                // `pre_state.account_id` upstream in `validate_and_sync_states`, either via a
+                // `Claim::Pda(seed)` match or via a caller `pda_seeds` match, both of which
+                // assert `AccountId::for_private_pda(owner, seed, npk) == account_id`. The
+                // post-loop assertion in `derive_from_outputs` (see the
+                // `private_pda_bound_positions` check) guarantees that every mask-3
+                // position has been through at least one such binding, so this
+                // branch can safely use the wallet npk without re-verifying.
+                let Some((npk, identifier, shared_secret)) = private_keys_iter.next() else {
+                    panic!("Missing private account key");
+                };
+
                 assert_eq!(
-                    pre_state.account,
-                    Account::default(),
-                    "Found new private account with non default values"
+                    *identifier, PRIVATE_PDA_FIXED_IDENTIFIER,
+                    "Identifier for private PDAs must be {PRIVATE_PDA_FIXED_IDENTIFIER}."
                 );
 
-                let new_nullifier = (
-                    Nullifier::for_account_initialization(&account_id),
-                    DUMMY_COMMITMENT_HASH,
-                );
-                let new_nonce = pre_state.account.nonce.private_account_nonce_increment(nsk);
+                let (new_nullifier, new_nonce) = if pre_state.is_authorized {
+                    // Existing private PDA with authentication (like mask 1)
+                    let Some(nsk) = private_nsks_iter.next() else {
+                        panic!("Missing private account nullifier secret key");
+                    };
+                    assert_eq!(
+                        npk,
+                        &NullifierPublicKey::from(nsk),
+                        "Nullifier public key mismatch"
+                    );
 
-                emit_private_output(
-                    &mut output,
-                    &mut output_index,
-                    post_state,
-                    &account_id,
-                    &PrivateAccountKind::Regular(*identifier),
-                    ssk,
-                    new_nullifier,
-                    new_nonce,
+                    let Some(membership_proof_opt) = private_membership_proofs_iter.next() else {
+                        panic!("Missing membership proof");
+                    };
+
+                    let new_nullifier = compute_nullifier_and_set_digest(
+                        membership_proof_opt.as_ref(),
+                        &pre_state.account,
+                        &pre_state.account_id,
+                        nsk,
+                    );
+                    let new_nonce = pre_state.account.nonce.private_account_nonce_increment(nsk);
+                    (new_nullifier, new_nonce)
+                } else {
+                    // New private PDA (like mask 2). The default + unauthorized requirement
+                    // here rules out use cases like a fully-private multisig, which would need
+                    // a non-default, non-authorized private PDA input account.
+                    // TODO(private-pdas-pr-2/3): relax this once the wallet can supply a
+                    // `(seed, owner)` side input so the npk-to-account_id binding can be
+                    // re-verified for an existing private PDA without a `Claim::Pda` or caller
+                    // `pda_seeds` match.
+                    assert_eq!(
+                        pre_state.account,
+                        Account::default(),
+                        "New private PDA must be default"
+                    );
+
+                    let Some(membership_proof_opt) = private_membership_proofs_iter.next() else {
+                        panic!("Missing membership proof");
+                    };
+                    assert!(
+                        membership_proof_opt.is_none(),
+                        "Membership proof must be None for new accounts"
+                    );
+
+                    let nullifier = Nullifier::for_account_initialization(&pre_state.account_id);
+                    let new_nonce = Nonce::private_account_nonce_init(&pre_state.account_id);
+                    ((nullifier, DUMMY_COMMITMENT_HASH), new_nonce)
+                };
+                output.new_nullifiers.push(new_nullifier);
+
+                let mut post_with_updated_nonce = post_state;
+                post_with_updated_nonce.nonce = new_nonce;
+
+                let commitment_post =
+                    Commitment::new(&pre_state.account_id, &post_with_updated_nonce);
+
+                let encrypted_account = EncryptionScheme::encrypt(
+                    &post_with_updated_nonce,
+                    PRIVATE_PDA_FIXED_IDENTIFIER,
+                    shared_secret,
+                    &commitment_post,
+                    output_index,
                 );
+
+                output.new_commitments.push(commitment_post);
+                output.ciphertexts.push(encrypted_account);
+                output_index = output_index
+                    .checked_add(1)
+                    .unwrap_or_else(|| panic!("Too many private accounts, output index overflow"));
             }
-            InputAccountIdentity::PrivateAuthorizedUpdate {
-                ssk,
-                nsk,
-                membership_proof,
-                identifier,
-            } => {
-                let npk = NullifierPublicKey::from(nsk);
-                let account_id = AccountId::for_regular_private_account(&npk, *identifier);
-
-                assert_eq!(account_id, pre_state.account_id, "AccountId mismatch");
-                assert!(
-                    pre_state.is_authorized,
-                    "Pre-state not authorized for authenticated private account"
-                );
-
-                let new_nullifier = compute_update_nullifier_and_set_digest(
-                    membership_proof,
-                    &pre_state.account,
-                    &account_id,
-                    nsk,
-                );
-                let new_nonce = pre_state.account.nonce.private_account_nonce_increment(nsk);
-
-                emit_private_output(
-                    &mut output,
-                    &mut output_index,
-                    post_state,
-                    &account_id,
-                    &PrivateAccountKind::Regular(*identifier),
-                    ssk,
-                    new_nullifier,
-                    new_nonce,
-                );
-            }
-            InputAccountIdentity::PrivateUnauthorized {
-                npk,
-                ssk,
-                identifier,
-            } => {
-                let account_id = AccountId::for_regular_private_account(npk, *identifier);
-
-                assert_eq!(account_id, pre_state.account_id, "AccountId mismatch");
-                assert_eq!(
-                    pre_state.account,
-                    Account::default(),
-                    "Found new private account with non default values",
-                );
-                assert!(
-                    !pre_state.is_authorized,
-                    "Found new private account marked as authorized."
-                );
-
-                let new_nullifier = (
-                    Nullifier::for_account_initialization(&account_id),
-                    DUMMY_COMMITMENT_HASH,
-                );
-                let new_nonce = Nonce::private_account_nonce_init(&account_id);
-
-                emit_private_output(
-                    &mut output,
-                    &mut output_index,
-                    post_state,
-                    &account_id,
-                    &PrivateAccountKind::Regular(*identifier),
-                    ssk,
-                    new_nullifier,
-                    new_nonce,
-                );
-            }
-            InputAccountIdentity::PrivatePdaInit {
-                npk: _,
-                ssk,
-                identifier,
-            } => {
-                // The npk-to-account_id binding is established upstream in
-                // `validate_and_sync_states` via `Claim::Pda(seed)` or a caller `pda_seeds`
-                // match. Here we only enforce the init pre-conditions. The supplied npk on
-                // the variant has been recorded into `private_pda_npk_by_position` and used
-                // for the binding check; we use `pre_state.account_id` directly for nullifier
-                // and commitment derivation.
-                assert!(
-                    !pre_state.is_authorized,
-                    "PrivatePdaInit requires unauthorized pre_state"
-                );
-                assert_eq!(
-                    pre_state.account,
-                    Account::default(),
-                    "New private PDA must be default"
-                );
-
-                let new_nullifier = (
-                    Nullifier::for_account_initialization(&pre_state.account_id),
-                    DUMMY_COMMITMENT_HASH,
-                );
-                let new_nonce = Nonce::private_account_nonce_init(&pre_state.account_id);
-
-                let account_id = pre_state.account_id;
-                let (pda_program_id, seed) = pda_seed_by_position
-                    .get(&pos)
-                    .expect("PrivatePdaInit position must be in pda_seed_by_position");
-                emit_private_output(
-                    &mut output,
-                    &mut output_index,
-                    post_state,
-                    &account_id,
-                    &PrivateAccountKind::Pda {
-                        program_id: *pda_program_id,
-                        seed: *seed,
-                        identifier: *identifier,
-                    },
-                    ssk,
-                    new_nullifier,
-                    new_nonce,
-                );
-            }
-            InputAccountIdentity::PrivatePdaUpdate {
-                ssk,
-                nsk,
-                membership_proof,
-                identifier,
-            } => {
-                // The npk binding is established upstream. Authorization must already be set;
-                // an unauthorized PrivatePdaUpdate would mean the prover supplied an nsk for an
-                // unbound PDA, which the upstream binding check would have rejected anyway,
-                // but we assert here to fail fast and document the precondition.
-                assert!(
-                    pre_state.is_authorized,
-                    "PrivatePdaUpdate requires authorized pre_state"
-                );
-
-                let new_nullifier = compute_update_nullifier_and_set_digest(
-                    membership_proof,
-                    &pre_state.account,
-                    &pre_state.account_id,
-                    nsk,
-                );
-                let new_nonce = pre_state.account.nonce.private_account_nonce_increment(nsk);
-
-                let account_id = pre_state.account_id;
-                let (pda_program_id, seed) = pda_seed_by_position
-                    .get(&pos)
-                    .expect("PrivatePdaUpdate position must be in pda_seed_by_position");
-                emit_private_output(
-                    &mut output,
-                    &mut output_index,
-                    post_state,
-                    &account_id,
-                    &PrivateAccountKind::Pda {
-                        program_id: *pda_program_id,
-                        seed: *seed,
-                        identifier: *identifier,
-                    },
-                    ssk,
-                    new_nullifier,
-                    new_nonce,
-                );
-            }
+            _ => panic!("Invalid visibility mask value"),
         }
     }
+
+    assert!(
+        private_keys_iter.next().is_none(),
+        "Too many private account keys"
+    );
+
+    assert!(
+        private_nsks_iter.next().is_none(),
+        "Too many private account nullifier secret keys"
+    );
+
+    assert!(
+        private_membership_proofs_iter.next().is_none(),
+        "Too many private account membership proofs"
+    );
 
     output
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "All seven inputs are distinct concerns from the variant arms; bundling would be artificial"
-)]
-fn emit_private_output(
-    output: &mut PrivacyPreservingCircuitOutput,
-    output_index: &mut u32,
-    post_state: Account,
-    account_id: &AccountId,
-    kind: &PrivateAccountKind,
-    shared_secret: &SharedSecretKey,
-    new_nullifier: (Nullifier, CommitmentSetDigest),
-    new_nonce: Nonce,
-) {
-    output.new_nullifiers.push(new_nullifier);
-
-    let mut post_with_updated_nonce = post_state;
-    post_with_updated_nonce.nonce = new_nonce;
-
-    let commitment_post = Commitment::new(account_id, &post_with_updated_nonce);
-    let encrypted_account = EncryptionScheme::encrypt(
-        &post_with_updated_nonce,
-        kind,
-        shared_secret,
-        &commitment_post,
-        *output_index,
-    );
-
-    output.new_commitments.push(commitment_post);
-    output.ciphertexts.push(encrypted_account);
-    *output_index = output_index
-        .checked_add(1)
-        .unwrap_or_else(|| panic!("Too many private accounts, output index overflow"));
-}
-
-fn compute_update_nullifier_and_set_digest(
-    membership_proof: &MembershipProof,
+fn compute_nullifier_and_set_digest(
+    membership_proof_opt: Option<&MembershipProof>,
     pre_account: &Account,
     account_id: &AccountId,
     nsk: &NullifierSecretKey,
 ) -> (Nullifier, CommitmentSetDigest) {
-    let commitment_pre = Commitment::new(account_id, pre_account);
-    let set_digest = compute_digest_for_path(&commitment_pre, membership_proof);
-    let nullifier = Nullifier::for_account_update(&commitment_pre, nsk);
-    (nullifier, set_digest)
+    membership_proof_opt.as_ref().map_or_else(
+        || {
+            assert_eq!(
+                *pre_account,
+                Account::default(),
+                "Found new private account with non default values"
+            );
+
+            // Compute initialization nullifier
+            let nullifier = Nullifier::for_account_initialization(account_id);
+            (nullifier, DUMMY_COMMITMENT_HASH)
+        },
+        |membership_proof| {
+            // Compute commitment set digest associated with provided auth path
+            let commitment_pre = Commitment::new(account_id, pre_account);
+            let set_digest = compute_digest_for_path(&commitment_pre, membership_proof);
+
+            // Compute update nullifier
+            let nullifier = Nullifier::for_account_update(&commitment_pre, nsk);
+            (nullifier, set_digest)
+        },
+    )
 }
 
 fn main() {
     let PrivacyPreservingCircuitInput {
         program_outputs,
-        account_identities,
+        visibility_mask,
+        private_account_keys,
+        private_account_nsks,
+        private_account_membership_proofs,
         program_id,
     } = env::read();
 
-    let execution_state =
-        ExecutionState::derive_from_outputs(&account_identities, program_id, program_outputs);
+    let execution_state = ExecutionState::derive_from_outputs(
+        &visibility_mask,
+        &private_account_keys,
+        program_id,
+        program_outputs,
+    );
 
-    let output = compute_circuit_output(execution_state, &account_identities);
+    let output = compute_circuit_output(
+        execution_state,
+        &visibility_mask,
+        &private_account_keys,
+        &private_account_nsks,
+        &private_account_membership_proofs,
+    );
 
     env::commit(&output);
 }

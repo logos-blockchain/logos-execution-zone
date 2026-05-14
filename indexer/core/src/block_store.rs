@@ -1,12 +1,11 @@
 use std::{path::Path, sync::Arc};
 
-use anyhow::{Context as _, Result};
+use anyhow::Result;
+use bedrock_client::HeaderId;
 use common::{
     block::{BedrockStatus, Block},
     transaction::{NSSATransaction, clock_invocation},
 };
-use logos_blockchain_core::{header::HeaderId, mantle::ops::channel::MsgId};
-use logos_blockchain_zone_sdk::Slot;
 use nssa::{Account, AccountId, V03State};
 use nssa_core::BlockId;
 use storage::indexer::RocksDBIO;
@@ -104,22 +103,6 @@ impl IndexerStore {
         Ok(self.dbio.calculate_state_for_id(block_id)?)
     }
 
-    pub fn get_zone_cursor(&self) -> Result<Option<(MsgId, Slot)>> {
-        let Some(bytes) = self.dbio.get_zone_sdk_indexer_cursor_bytes()? else {
-            return Ok(None);
-        };
-        let cursor: (MsgId, Slot) = serde_json::from_slice(&bytes)
-            .context("Failed to deserialize stored zone-sdk indexer cursor")?;
-        Ok(Some(cursor))
-    }
-
-    pub fn set_zone_cursor(&self, cursor: &(MsgId, Slot)) -> Result<()> {
-        let bytes =
-            serde_json::to_vec(cursor).context("Failed to serialize zone-sdk indexer cursor")?;
-        self.dbio.put_zone_sdk_indexer_cursor_bytes(&bytes)?;
-        Ok(())
-    }
-
     /// Recalculation of final state directly from DB.
     ///
     /// Used for indexer healthcheck.
@@ -132,12 +115,6 @@ impl IndexerStore {
             .current_state
             .read()
             .await
-            .get_account_by_id(*account_id))
-    }
-
-    pub fn account_state_at_block(&self, account_id: &AccountId, block_id: u64) -> Result<Account> {
-        Ok(self
-            .get_state_at_block(block_id)?
             .get_account_by_id(*account_id))
     }
 
@@ -282,65 +259,5 @@ mod tests {
 
         assert_eq!(acc1_val.balance, 9920);
         assert_eq!(acc2_val.balance, 20080);
-    }
-
-    #[tokio::test]
-    async fn account_state_at_block() {
-        let home = tempdir().unwrap();
-
-        let storage = IndexerStore::open_db_with_genesis(
-            home.as_ref(),
-            &genesis_block(),
-            &nssa::V03State::new_with_genesis_accounts(
-                &[(acc1(), 10000), (acc2(), 20000)],
-                vec![],
-                0,
-            ),
-        )
-        .unwrap();
-
-        let mut prev_hash = genesis_block().header.hash;
-
-        let from = acc1();
-        let to = acc2();
-        let sign_key = acc1_sign_key();
-
-        for i in 2..10 {
-            let tx = common::test_utils::create_transaction_native_token_transfer(
-                from,
-                i - 2,
-                to,
-                10,
-                &sign_key,
-            );
-            let block_id = u64::try_from(i).unwrap();
-
-            let next_block =
-                common::test_utils::produce_dummy_block(block_id, Some(prev_hash), vec![tx]);
-            prev_hash = next_block.header.hash;
-
-            storage
-                .put_block(next_block, HeaderId::from([u8::try_from(i).unwrap(); 32]))
-                .await
-                .unwrap();
-        }
-
-        // Genesis block: no transfers applied yet.
-        let acc1_at_1 = storage.account_state_at_block(&acc1(), 1).unwrap();
-        let acc2_at_1 = storage.account_state_at_block(&acc2(), 1).unwrap();
-        assert_eq!(acc1_at_1.balance, 10000);
-        assert_eq!(acc2_at_1.balance, 20000);
-
-        // After block 5: 4 transfers of 10 applied (one each in blocks 2..=5).
-        let acc1_at_5 = storage.account_state_at_block(&acc1(), 5).unwrap();
-        let acc2_at_5 = storage.account_state_at_block(&acc2(), 5).unwrap();
-        assert_eq!(acc1_at_5.balance, 9960);
-        assert_eq!(acc2_at_5.balance, 20040);
-
-        // After final block 9: 8 transfers applied; should match current state.
-        let acc1_at_9 = storage.account_state_at_block(&acc1(), 9).unwrap();
-        let acc2_at_9 = storage.account_state_at_block(&acc2(), 9).unwrap();
-        assert_eq!(acc1_at_9.balance, 9920);
-        assert_eq!(acc2_at_9.balance, 20080);
     }
 }

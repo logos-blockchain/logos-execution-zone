@@ -6,6 +6,7 @@ use std::{
 };
 
 use anyhow::{Context as _, Result};
+pub use bedrock_client::BackoffConfig;
 use common::config::BasicAuth;
 use humantime_serde;
 pub use logos_blockchain_core::mantle::ops::channel::ChannelId;
@@ -15,6 +16,8 @@ use url::Url;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClientConfig {
+    /// For individual RPC requests we use Fibonacci backoff retry strategy.
+    pub backoff: BackoffConfig,
     pub addr: Url,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auth: Option<BasicAuth>,
@@ -28,7 +31,7 @@ pub struct IndexerConfig {
     pub signing_key: [u8; 32],
     #[serde(with = "humantime_serde")]
     pub consensus_info_polling_interval: Duration,
-    pub bedrock_config: ClientConfig,
+    pub bedrock_client_config: ClientConfig,
     pub channel_id: ChannelId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub initial_public_accounts: Option<Vec<PublicAccountPublicInitialData>>,

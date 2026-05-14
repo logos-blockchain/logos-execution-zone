@@ -16,7 +16,6 @@ use crate::{
         chain::ChainSubcommand,
         config::ConfigSubcommand,
         keycard::KeycardSubcommand,
-        group::GroupSubcommand,
         programs::{
             amm::AmmProgramAgnosticSubcommand, ata::AtaSubcommand,
             native_token_transfer::AuthTransferSubcommand, pinata::PinataProgramAgnosticSubcommand,
@@ -29,7 +28,6 @@ pub mod account;
 pub mod chain;
 pub mod config;
 pub mod keycard;
-pub mod group;
 pub mod programs;
 
 pub(crate) trait WalletSubcommand {
@@ -62,9 +60,6 @@ pub enum Command {
     /// Associated Token Account program interaction subcommand.
     #[command(subcommand)]
     Ata(AtaSubcommand),
-    /// Group key management (create, invite, join, derive keys).
-    #[command(subcommand)]
-    Group(GroupSubcommand),
     /// Check the wallet can connect to the node and builtin local programs
     /// match the remote versions.
     CheckHealth,
@@ -177,7 +172,6 @@ pub async fn execute_subcommand(
         Command::Token(token_subcommand) => token_subcommand.handle_subcommand(wallet_core).await?,
         Command::AMM(amm_subcommand) => amm_subcommand.handle_subcommand(wallet_core).await?,
         Command::Ata(ata_subcommand) => ata_subcommand.handle_subcommand(wallet_core).await?,
-        Command::Group(group_subcommand) => group_subcommand.handle_subcommand(wallet_core).await?,
         Command::Config(config_subcommand) => {
             config_subcommand.handle_subcommand(wallet_core).await?
         }

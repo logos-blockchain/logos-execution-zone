@@ -9,19 +9,16 @@ use indexer_service::IndexerHandle;
 use log::{debug, error};
 use nssa::{AccountId, PrivacyPreservingTransaction};
 use nssa_core::Commitment;
+use sequencer_core::indexer_client::{IndexerClient, IndexerClientTrait as _};
 use sequencer_service::SequencerHandle;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
 use tempfile::TempDir;
 use testcontainers::compose::DockerCompose;
 use wallet::WalletCore;
 
-use crate::{
-    indexer_client::IndexerClient,
-    setup::{setup_bedrock_node, setup_indexer, setup_sequencer, setup_wallet},
-};
+use crate::setup::{setup_bedrock_node, setup_indexer, setup_sequencer, setup_wallet};
 
 pub mod config;
-pub mod indexer_client;
 pub mod setup;
 pub mod test_context_ffi;
 
@@ -29,7 +26,6 @@ pub mod test_context_ffi;
 pub const TIME_TO_WAIT_FOR_BLOCK_SECONDS: u64 = 12;
 pub const NSSA_PROGRAM_FOR_TEST_DATA_CHANGER: &str = "data_changer.bin";
 pub const NSSA_PROGRAM_FOR_TEST_NOOP: &str = "noop.bin";
-pub const NSSA_PROGRAM_FOR_TEST_PDA_FUND_SPEND_PROXY: &str = "pda_fund_spend_proxy.bin";
 
 const BEDROCK_SERVICE_WITH_OPEN_PORT: &str = "logos-blockchain-node-0";
 const BEDROCK_SERVICE_PORT: u16 = 18080;
@@ -81,10 +77,14 @@ impl TestContext {
             .await
             .context("Failed to setup Indexer")?;
 
-        let (sequencer_handle, temp_sequencer_dir) =
-            setup_sequencer(sequencer_partial_config, bedrock_addr, &initial_data)
-                .await
-                .context("Failed to setup Sequencer")?;
+        let (sequencer_handle, temp_sequencer_dir) = setup_sequencer(
+            sequencer_partial_config,
+            bedrock_addr,
+            indexer_handle.addr(),
+            &initial_data,
+        )
+        .await
+        .context("Failed to setup Sequencer")?;
 
         let (wallet, temp_wallet_dir, wallet_password) =
             setup_wallet(sequencer_handle.addr(), &initial_data)

@@ -313,32 +313,12 @@ mod tests {
         }
 
         #[must_use]
-        pub fn auth_transfer_proxy() -> Self {
-            use test_program_methods::{AUTH_TRANSFER_PROXY_ELF, AUTH_TRANSFER_PROXY_ID};
-
-            Self {
-                id: AUTH_TRANSFER_PROXY_ID,
-                elf: AUTH_TRANSFER_PROXY_ELF.to_vec(),
-            }
-        }
-
-        #[must_use]
         pub fn two_pda_claimer() -> Self {
             use test_program_methods::{TWO_PDA_CLAIMER_ELF, TWO_PDA_CLAIMER_ID};
 
             Self {
                 id: TWO_PDA_CLAIMER_ID,
                 elf: TWO_PDA_CLAIMER_ELF.to_vec(),
-            }
-        }
-
-        #[must_use]
-        pub fn pda_fund_spend_proxy() -> Self {
-            use test_program_methods::{PDA_FUND_SPEND_PROXY_ELF, PDA_FUND_SPEND_PROXY_ID};
-
-            Self {
-                id: PDA_FUND_SPEND_PROXY_ID,
-                elf: PDA_FUND_SPEND_PROXY_ELF.to_vec(),
             }
         }
 

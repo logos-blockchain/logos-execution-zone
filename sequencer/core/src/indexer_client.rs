@@ -4,6 +4,7 @@ use anyhow::{Context as _, Result};
 use log::info;
 pub use url::Url;
 
+#[expect(async_fn_in_trait, reason = "We don't care about Send/Sync here")]
 pub trait IndexerClientTrait: Clone {
     async fn new(indexer_url: &Url) -> Result<Self>;
 }

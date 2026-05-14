@@ -27,7 +27,7 @@ use nssa::{
     public_transaction as putx,
 };
 use nssa_core::{
-    InputAccountIdentity, MembershipProof, NullifierPublicKey,
+    MembershipProof, NullifierPublicKey,
     account::{AccountWithMetadata, Nonce, data::Data},
     encryption::ViewingPublicKey,
 };
@@ -220,7 +220,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
             data: Data::default(),
         },
         true,
-        AccountId::for_regular_private_account(&sender_npk, 0),
+        AccountId::from((&sender_npk, 0)),
     );
     let recipient_nsk = [2; 32];
     let recipient_vsk = [99; 32];
@@ -229,7 +229,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
     let recipient_pre = AccountWithMetadata::new(
         Account::default(),
         false,
-        AccountId::for_regular_private_account(&recipient_npk, 0),
+        AccountId::from((&recipient_npk, 0)),
     );
 
     let eph_holder_from = EphemeralKeyHolder::new(&sender_npk);
@@ -251,19 +251,10 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
     let (output, proof) = circuit::execute_and_prove(
         vec![sender_pre, recipient_pre],
         Program::serialize_instruction(balance_to_move).unwrap(),
-        vec![
-            InputAccountIdentity::PrivateAuthorizedUpdate {
-                ssk: sender_ss,
-                nsk: sender_nsk,
-                membership_proof: proof,
-                identifier: 0,
-            },
-            InputAccountIdentity::PrivateUnauthorized {
-                npk: recipient_npk,
-                ssk: recipient_ss,
-                identifier: 0,
-            },
-        ],
+        vec![1, 2],
+        vec![(sender_npk, 0, sender_ss), (recipient_npk, 0, recipient_ss)],
+        vec![sender_nsk],
+        vec![Some(proof)],
         &program.into(),
     )
     .unwrap();

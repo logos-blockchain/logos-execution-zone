@@ -8,7 +8,10 @@ use jsonrpsee::{
 use log::warn;
 use mempool::MemPoolHandle;
 use nssa::{self, program::Program};
-use sequencer_core::{DbError, SequencerCore, block_publisher::BlockPublisherTrait};
+use sequencer_core::{
+    DbError, SequencerCore, block_settlement_client::BlockSettlementClientTrait,
+    indexer_client::IndexerClientTrait,
+};
 use sequencer_service_protocol::{
     Account, AccountId, Block, BlockId, Commitment, HashType, MembershipProof, Nonce, ProgramId,
 };
@@ -16,15 +19,15 @@ use tokio::sync::Mutex;
 
 const NOT_FOUND_ERROR_CODE: i32 = -31999;
 
-pub struct SequencerService<BC: BlockPublisherTrait> {
-    sequencer: Arc<Mutex<SequencerCore<BC>>>,
+pub struct SequencerService<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> {
+    sequencer: Arc<Mutex<SequencerCore<BC, IC>>>,
     mempool_handle: MemPoolHandle<NSSATransaction>,
     max_block_size: u64,
 }
 
-impl<BC: BlockPublisherTrait> SequencerService<BC> {
+impl<BC: BlockSettlementClientTrait, IC: IndexerClientTrait> SequencerService<BC, IC> {
     pub const fn new(
-        sequencer: Arc<Mutex<SequencerCore<BC>>>,
+        sequencer: Arc<Mutex<SequencerCore<BC, IC>>>,
         mempool_handle: MemPoolHandle<NSSATransaction>,
         max_block_size: u64,
     ) -> Self {
@@ -37,8 +40,8 @@ impl<BC: BlockPublisherTrait> SequencerService<BC> {
 }
 
 #[async_trait]
-impl<BC: BlockPublisherTrait + Send + 'static> sequencer_service_rpc::RpcServer
-    for SequencerService<BC>
+impl<BC: BlockSettlementClientTrait + Send + 'static, IC: IndexerClientTrait + Send + 'static>
+    sequencer_service_rpc::RpcServer for SequencerService<BC, IC>
 {
     async fn send_transaction(&self, tx: NSSATransaction) -> Result<HashType, ErrorObjectOwned> {
         // Reserve ~200 bytes for block header overhead

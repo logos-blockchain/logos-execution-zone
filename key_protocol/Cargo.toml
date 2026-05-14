@@ -26,4 +26,3 @@ itertools.workspace = true
 
 [dev-dependencies]
 base58.workspace = true
-bincode.workspace = true
