@@ -12,12 +12,12 @@ Installation:
 
 1. Install math applet on your keycard; this process only needs to be done once. In the root of repo:
     ```
-    cd python/keycard_applets
+    cd keycard_wallet/keycard_applets
     java -jar gp.jar --key c212e073ff8b4bbfaff4de8ab655221f --load math.cap
     ```
 2. Install `keycard-desktop` from [github](https://github.com/choppu/keycard-desktop)
     - Keycard Desktop is used to install the LEE key protocol to a blank keycard.
-    - Select (Re)Install Applet and upload the key binary (`python/keycard_applets/LEE_keycard.cap`).
+    - Select (Re)Install Applet and upload the key binary (`keycard_wallet/keycard_applets/LEE_keycard.cap`).
     ![keycard-desktop.png](keycard-desktop.png)
 
 ## Wallet with Keycard
@@ -25,13 +25,13 @@ Keycard functionality is available to Wallet CLI by setting up the following Pyt
 
 ```bash
 # Install appropriate version of `keycard-py`.
-git clone --branch lee-schnorr --single-branch https://github.com/bitgamma/keycard-py.git python/keycard-py
+git clone --branch lee-schnorr --single-branch https://github.com/bitgamma/keycard-py.git keycard_wallet/python/keycard-py
 
 # Set up virtual environment.
 python3 -m venv venv
 source venv/bin/activate
 pip install pyscard mnemonic ecdsa pyaes
-pip install -e python/keycard-py
+pip install -e keycard_wallet/python/keycard-py
 ```
 
 **Important**: Keycard wallet commands only work within the virtual environment.

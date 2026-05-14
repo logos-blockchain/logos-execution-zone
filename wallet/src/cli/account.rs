@@ -236,7 +236,7 @@ impl WalletSubcommand for AccountSubcommand {
                 let account_id: nssa::AccountId = account_id_str.parse()?;
 
                 // Add account id to the display for keycard users.
-                log::info!("Account Id: {resolved}");
+                println!("Account Id: {resolved}");
 
                 if let Some(label) = wallet_core.storage.labels.get(&account_id_str) {
                     println!("Label: {label}");
