@@ -35,14 +35,14 @@ impl Token<'_> {
         let def_private_key = self
             .0
             .storage
-            .user_data
-            .get_pub_account_signing_key(definition_account_id)
+            .key_chain()
+            .pub_account_signing_key(definition_account_id)
             .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
         let supply_private_key = self
             .0
             .storage
-            .user_data
-            .get_pub_account_signing_key(supply_account_id)
+            .key_chain()
+            .pub_account_signing_key(supply_account_id)
             .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
 
         let witness_set = nssa::public_transaction::WitnessSet::for_message(
@@ -74,7 +74,9 @@ impl Token<'_> {
             .send_privacy_preserving_tx(
                 vec![
                     PrivacyPreservingAccount::Public(definition_account_id),
-                    PrivacyPreservingAccount::PrivateOwned(supply_account_id),
+                    self.0
+                        .resolve_private_account(supply_account_id)
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
                 ],
                 instruction_data,
                 &Program::token().into(),
@@ -103,7 +105,9 @@ impl Token<'_> {
         self.0
             .send_privacy_preserving_tx(
                 vec![
-                    PrivacyPreservingAccount::PrivateOwned(definition_account_id),
+                    self.0
+                        .resolve_private_account(definition_account_id)
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
                     PrivacyPreservingAccount::Public(supply_account_id),
                 ],
                 instruction_data,
@@ -133,8 +137,12 @@ impl Token<'_> {
         self.0
             .send_privacy_preserving_tx(
                 vec![
-                    PrivacyPreservingAccount::PrivateOwned(definition_account_id),
-                    PrivacyPreservingAccount::PrivateOwned(supply_account_id),
+                    self.0
+                        .resolve_private_account(definition_account_id)
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
+                    self.0
+                        .resolve_private_account(supply_account_id)
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
                 ],
                 instruction_data,
                 &Program::token().into(),
@@ -169,16 +177,16 @@ impl Token<'_> {
         let sender_sk = self
             .0
             .storage
-            .user_data
-            .get_pub_account_signing_key(sender_account_id)
+            .key_chain()
+            .pub_account_signing_key(sender_account_id)
             .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
         private_keys.push(sender_sk);
 
         if let Some(recipient_sk) = self
             .0
             .storage
-            .user_data
-            .get_pub_account_signing_key(recipient_account_id)
+            .key_chain()
+            .pub_account_signing_key(recipient_account_id)
         {
             private_keys.push(recipient_sk);
             let recipient_nonces = self
@@ -227,8 +235,12 @@ impl Token<'_> {
         self.0
             .send_privacy_preserving_tx(
                 vec![
-                    PrivacyPreservingAccount::PrivateOwned(sender_account_id),
-                    PrivacyPreservingAccount::PrivateOwned(recipient_account_id),
+                    self.0
+                        .resolve_private_account(sender_account_id)
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
+                    self.0
+                        .resolve_private_account(recipient_account_id)
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
                 ],
                 instruction_data,
                 &Program::token().into(),
@@ -259,7 +271,9 @@ impl Token<'_> {
         self.0
             .send_privacy_preserving_tx(
                 vec![
-                    PrivacyPreservingAccount::PrivateOwned(sender_account_id),
+                    self.0
+                        .resolve_private_account(sender_account_id)
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
                     PrivacyPreservingAccount::PrivateForeign {
                         npk: recipient_npk,
                         vpk: recipient_vpk,
@@ -293,7 +307,9 @@ impl Token<'_> {
         self.0
             .send_privacy_preserving_tx(
                 vec![
-                    PrivacyPreservingAccount::PrivateOwned(sender_account_id),
+                    self.0
+                        .resolve_private_account(sender_account_id)
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
                     PrivacyPreservingAccount::Public(recipient_account_id),
                 ],
                 instruction_data,
@@ -325,7 +341,9 @@ impl Token<'_> {
             .send_privacy_preserving_tx(
                 vec![
                     PrivacyPreservingAccount::Public(sender_account_id),
-                    PrivacyPreservingAccount::PrivateOwned(recipient_account_id),
+                    self.0
+                        .resolve_private_account(recipient_account_id)
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
                 ],
                 instruction_data,
                 &Program::token().into(),
@@ -404,8 +422,8 @@ impl Token<'_> {
         let signing_key = self
             .0
             .storage
-            .user_data
-            .get_pub_account_signing_key(holder_account_id)
+            .key_chain()
+            .pub_account_signing_key(holder_account_id)
             .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
         let witness_set =
             nssa::public_transaction::WitnessSet::for_message(&message, &[signing_key]);
@@ -434,8 +452,12 @@ impl Token<'_> {
         self.0
             .send_privacy_preserving_tx(
                 vec![
-                    PrivacyPreservingAccount::PrivateOwned(definition_account_id),
-                    PrivacyPreservingAccount::PrivateOwned(holder_account_id),
+                    self.0
+                        .resolve_private_account(definition_account_id)
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
+                    self.0
+                        .resolve_private_account(holder_account_id)
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
                 ],
                 instruction_data,
                 &Program::token().into(),
@@ -464,7 +486,9 @@ impl Token<'_> {
         self.0
             .send_privacy_preserving_tx(
                 vec![
-                    PrivacyPreservingAccount::PrivateOwned(definition_account_id),
+                    self.0
+                        .resolve_private_account(definition_account_id)
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
                     PrivacyPreservingAccount::Public(holder_account_id),
                 ],
                 instruction_data,
@@ -496,7 +520,9 @@ impl Token<'_> {
             .send_privacy_preserving_tx(
                 vec![
                     PrivacyPreservingAccount::Public(definition_account_id),
-                    PrivacyPreservingAccount::PrivateOwned(holder_account_id),
+                    self.0
+                        .resolve_private_account(holder_account_id)
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
                 ],
                 instruction_data,
                 &Program::token().into(),
@@ -532,16 +558,16 @@ impl Token<'_> {
         let definition_sk = self
             .0
             .storage
-            .user_data
-            .get_pub_account_signing_key(definition_account_id)
+            .key_chain()
+            .pub_account_signing_key(definition_account_id)
             .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
         private_keys.push(definition_sk);
 
         if let Some(holder_sk) = self
             .0
             .storage
-            .user_data
-            .get_pub_account_signing_key(holder_account_id)
+            .key_chain()
+            .pub_account_signing_key(holder_account_id)
         {
             private_keys.push(holder_sk);
             let recipient_nonces = self
@@ -590,8 +616,12 @@ impl Token<'_> {
         self.0
             .send_privacy_preserving_tx(
                 vec![
-                    PrivacyPreservingAccount::PrivateOwned(definition_account_id),
-                    PrivacyPreservingAccount::PrivateOwned(holder_account_id),
+                    self.0
+                        .resolve_private_account(definition_account_id)
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
+                    self.0
+                        .resolve_private_account(holder_account_id)
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
                 ],
                 instruction_data,
                 &Program::token().into(),
@@ -622,7 +652,9 @@ impl Token<'_> {
         self.0
             .send_privacy_preserving_tx(
                 vec![
-                    PrivacyPreservingAccount::PrivateOwned(definition_account_id),
+                    self.0
+                        .resolve_private_account(definition_account_id)
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
                     PrivacyPreservingAccount::PrivateForeign {
                         npk: holder_npk,
                         vpk: holder_vpk,
@@ -656,7 +688,9 @@ impl Token<'_> {
         self.0
             .send_privacy_preserving_tx(
                 vec![
-                    PrivacyPreservingAccount::PrivateOwned(definition_account_id),
+                    self.0
+                        .resolve_private_account(definition_account_id)
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
                     PrivacyPreservingAccount::Public(holder_account_id),
                 ],
                 instruction_data,
@@ -688,7 +722,9 @@ impl Token<'_> {
             .send_privacy_preserving_tx(
                 vec![
                     PrivacyPreservingAccount::Public(definition_account_id),
-                    PrivacyPreservingAccount::PrivateOwned(holder_account_id),
+                    self.0
+                        .resolve_private_account(holder_account_id)
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
                 ],
                 instruction_data,
                 &Program::token().into(),

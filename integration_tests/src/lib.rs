@@ -1,6 +1,6 @@
 //! This library contains common code for integration tests.
 
-use std::sync::LazyLock;
+use std::{net::SocketAddr, sync::LazyLock};
 
 use anyhow::{Context as _, Result};
 use common::{HashType, transaction::NSSATransaction};
@@ -9,28 +9,55 @@ use indexer_service::IndexerHandle;
 use log::{debug, error};
 use nssa::{AccountId, PrivacyPreservingTransaction};
 use nssa_core::Commitment;
-use sequencer_core::indexer_client::{IndexerClient, IndexerClientTrait as _};
+use sequencer_core::config::GenesisAction;
 use sequencer_service::SequencerHandle;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
 use tempfile::TempDir;
 use testcontainers::compose::DockerCompose;
-use wallet::WalletCore;
+use wallet::{WalletCore, account::AccountIdWithPrivacy, cli::CliAccountMention};
 
-use crate::setup::{setup_bedrock_node, setup_indexer, setup_sequencer, setup_wallet};
+use crate::{
+    indexer_client::IndexerClient,
+    setup::{
+        setup_bedrock_node, setup_indexer, setup_private_accounts_with_initial_supply,
+        setup_public_accounts_with_initial_supply, setup_sequencer, setup_wallet,
+    },
+};
 
 pub mod config;
+pub mod indexer_client;
 pub mod setup;
-pub mod test_context_ffi;
 
 // TODO: Remove this and control time from tests
 pub const TIME_TO_WAIT_FOR_BLOCK_SECONDS: u64 = 12;
 pub const NSSA_PROGRAM_FOR_TEST_DATA_CHANGER: &str = "data_changer.bin";
 pub const NSSA_PROGRAM_FOR_TEST_NOOP: &str = "noop.bin";
+pub const NSSA_PROGRAM_FOR_TEST_PDA_FUND_SPEND_PROXY: &str = "pda_fund_spend_proxy.bin";
 
 const BEDROCK_SERVICE_WITH_OPEN_PORT: &str = "logos-blockchain-node-0";
 const BEDROCK_SERVICE_PORT: u16 = 18080;
 
 static LOGGER: LazyLock<()> = LazyLock::new(env_logger::init);
+
+struct IndexerComponents {
+    indexer_handle: IndexerHandle,
+    indexer_client: IndexerClient,
+    _temp_dir: TempDir,
+}
+
+impl Drop for IndexerComponents {
+    fn drop(&mut self) {
+        let Self {
+            indexer_handle,
+            indexer_client: _,
+            _temp_dir: _,
+        } = self;
+
+        if !indexer_handle.is_healthy() {
+            error!("Indexer handle has unexpectedly stopped before IndexerComponents drop");
+        }
+    }
+}
 
 /// Test context which sets up a sequencer and a wallet for integration tests.
 ///
@@ -39,14 +66,13 @@ static LOGGER: LazyLock<()> = LazyLock::new(env_logger::init);
 // NOTE: Order of fields is important for proper drop order.
 pub struct TestContext {
     sequencer_client: SequencerClient,
-    indexer_client: IndexerClient,
     wallet: WalletCore,
     wallet_password: String,
     /// Optional to move out value in Drop.
     sequencer_handle: Option<SequencerHandle>,
-    indexer_handle: IndexerHandle,
+    indexer_components: Option<IndexerComponents>,
     bedrock_compose: DockerCompose,
-    _temp_indexer_dir: TempDir,
+    bedrock_addr: SocketAddr,
     _temp_sequencer_dir: TempDir,
     _temp_wallet_dir: TempDir,
 }
@@ -57,63 +83,10 @@ impl TestContext {
         Self::builder().build().await
     }
 
+    /// Get a builder for the test context to customize its configuration.
     #[must_use]
     pub const fn builder() -> TestContextBuilder {
         TestContextBuilder::new()
-    }
-
-    async fn new_configured(
-        sequencer_partial_config: config::SequencerPartialConfig,
-        initial_data: config::InitialData,
-    ) -> Result<Self> {
-        // Ensure logger is initialized only once
-        *LOGGER;
-
-        debug!("Test context setup");
-
-        let (bedrock_compose, bedrock_addr) = setup_bedrock_node().await?;
-
-        let (indexer_handle, temp_indexer_dir) = setup_indexer(bedrock_addr, &initial_data)
-            .await
-            .context("Failed to setup Indexer")?;
-
-        let (sequencer_handle, temp_sequencer_dir) = setup_sequencer(
-            sequencer_partial_config,
-            bedrock_addr,
-            indexer_handle.addr(),
-            &initial_data,
-        )
-        .await
-        .context("Failed to setup Sequencer")?;
-
-        let (wallet, temp_wallet_dir, wallet_password) =
-            setup_wallet(sequencer_handle.addr(), &initial_data)
-                .await
-                .context("Failed to setup wallet")?;
-
-        let sequencer_url = config::addr_to_url(config::UrlProtocol::Http, sequencer_handle.addr())
-            .context("Failed to convert sequencer addr to URL")?;
-        let indexer_url = config::addr_to_url(config::UrlProtocol::Ws, indexer_handle.addr())
-            .context("Failed to convert indexer addr to URL")?;
-        let sequencer_client = SequencerClientBuilder::default()
-            .build(sequencer_url)
-            .context("Failed to create sequencer client")?;
-        let indexer_client = IndexerClient::new(&indexer_url)
-            .await
-            .context("Failed to create indexer client")?;
-
-        Ok(Self {
-            sequencer_client,
-            indexer_client,
-            wallet,
-            wallet_password,
-            bedrock_compose,
-            sequencer_handle: Some(sequencer_handle),
-            indexer_handle,
-            _temp_indexer_dir: temp_indexer_dir,
-            _temp_sequencer_dir: temp_sequencer_dir,
-            _temp_wallet_dir: temp_wallet_dir,
-        })
     }
 
     /// Get reference to the wallet.
@@ -138,10 +111,38 @@ impl TestContext {
         &self.sequencer_client
     }
 
-    /// Get reference to the indexer client.
+    /// Get the Bedrock Node address.
     #[must_use]
-    pub const fn indexer_client(&self) -> &IndexerClient {
-        &self.indexer_client
+    pub const fn bedrock_addr(&self) -> SocketAddr {
+        self.bedrock_addr
+    }
+
+    /// Get reference to the indexer.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the indexer is not enabled in the test context. See
+    /// [`TestContextBuilder::disable_indexer()`].
+    #[must_use]
+    pub fn indexer(&self) -> &IndexerHandle {
+        self.indexer_components
+            .as_ref()
+            .map(|components| &components.indexer_handle)
+            .expect("Called `TestContext::indexer()` on context with disabled indexer")
+    }
+
+    /// Get reference to the indexer client.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the indexer is not enabled in the test context. See
+    /// [`TestContextBuilder::disable_indexer()`].
+    #[must_use]
+    pub fn indexer_client(&self) -> &IndexerClient {
+        self.indexer_components
+            .as_ref()
+            .map(|components| &components.indexer_client)
+            .expect("Called `TestContext::indexer_client()` on context with disabled indexer")
     }
 
     /// Get existing public account IDs in the wallet.
@@ -149,8 +150,9 @@ impl TestContext {
     pub fn existing_public_accounts(&self) -> Vec<AccountId> {
         self.wallet
             .storage()
-            .user_data
+            .key_chain()
             .public_account_ids()
+            .map(|(account_id, _idx)| account_id)
             .collect()
     }
 
@@ -159,8 +161,9 @@ impl TestContext {
     pub fn existing_private_accounts(&self) -> Vec<AccountId> {
         self.wallet
             .storage()
-            .user_data
+            .key_chain()
             .private_account_ids()
+            .map(|(account_id, _idx)| account_id)
             .collect()
     }
 }
@@ -169,15 +172,14 @@ impl Drop for TestContext {
     fn drop(&mut self) {
         let Self {
             sequencer_handle,
-            indexer_handle,
             bedrock_compose,
-            _temp_indexer_dir: _,
-            _temp_sequencer_dir: _,
-            _temp_wallet_dir: _,
+            bedrock_addr: _,
+            indexer_components: _,
             sequencer_client: _,
-            indexer_client: _,
             wallet: _,
             wallet_password: _,
+            _temp_sequencer_dir: _,
+            _temp_wallet_dir: _,
         } = self;
 
         let sequencer_handle = sequencer_handle
@@ -191,10 +193,6 @@ impl Drop for TestContext {
             error!(
                 "Sequencer handle has unexpectedly stopped before TestContext drop with error: {err:#}"
             );
-        }
-
-        if !indexer_handle.is_healthy() {
-            error!("Indexer handle has unexpectedly stopped before TestContext drop");
         }
 
         let container = bedrock_compose
@@ -217,43 +215,24 @@ impl Drop for TestContext {
     }
 }
 
-/// A test context to be used in normal #[test] tests.
-pub struct BlockingTestContext {
-    ctx: Option<TestContext>,
-    runtime: tokio::runtime::Runtime,
-}
-
-impl BlockingTestContext {
-    pub fn new() -> Result<Self> {
-        let runtime = tokio::runtime::Runtime::new().unwrap();
-        let ctx = runtime.block_on(TestContext::new())?;
-        Ok(Self {
-            ctx: Some(ctx),
-            runtime,
-        })
-    }
-
-    pub const fn ctx(&self) -> &TestContext {
-        self.ctx.as_ref().expect("TestContext is set")
-    }
-}
-
 pub struct TestContextBuilder {
-    initial_data: Option<config::InitialData>,
+    genesis_transactions: Option<Vec<GenesisAction>>,
     sequencer_partial_config: Option<config::SequencerPartialConfig>,
+    enable_indexer: bool,
 }
 
 impl TestContextBuilder {
     const fn new() -> Self {
         Self {
-            initial_data: None,
+            genesis_transactions: None,
             sequencer_partial_config: None,
+            enable_indexer: true,
         }
     }
 
     #[must_use]
-    pub fn with_initial_data(mut self, initial_data: config::InitialData) -> Self {
-        self.initial_data = Some(initial_data);
+    pub fn with_genesis(mut self, genesis_transactions: Vec<GenesisAction>) -> Self {
+        self.genesis_transactions = Some(genesis_transactions);
         self
     }
 
@@ -266,14 +245,145 @@ impl TestContextBuilder {
         self
     }
 
+    /// Exclude Indexer from test context.
+    /// Indexer is enabled by default.
+    ///
+    /// Methods like [`TestContext::indexer()`] and [`TestContext::indexer_client()`] will panic if
+    /// called when indexer is disabled.
+    #[must_use]
+    pub const fn disable_indexer(mut self) -> Self {
+        self.enable_indexer = false;
+        self
+    }
+
     pub async fn build(self) -> Result<TestContext> {
-        TestContext::new_configured(
-            self.sequencer_partial_config.unwrap_or_default(),
-            self.initial_data.unwrap_or_else(|| {
-                config::InitialData::with_two_public_and_two_private_initialized_accounts()
+        let Self {
+            genesis_transactions,
+            sequencer_partial_config,
+            enable_indexer,
+        } = self;
+
+        // Ensure logger is initialized only once
+        *LOGGER;
+
+        debug!("Test context setup");
+
+        let (bedrock_compose, bedrock_addr) = setup_bedrock_node()
+            .await
+            .context("Failed to setup Bedrock node")?;
+
+        let indexer_components = if enable_indexer {
+            let (indexer_handle, temp_indexer_dir) = setup_indexer(bedrock_addr)
+                .await
+                .context("Failed to setup Indexer")?;
+            let indexer_url = config::addr_to_url(config::UrlProtocol::Ws, indexer_handle.addr())
+                .context("Failed to convert indexer addr to URL")?;
+            let indexer_client = IndexerClient::new(&indexer_url)
+                .await
+                .context("Failed to create indexer client")?;
+            Some(IndexerComponents {
+                indexer_handle,
+                indexer_client,
+                _temp_dir: temp_indexer_dir,
+            })
+        } else {
+            None
+        };
+
+        let initial_public_accounts = config::default_public_accounts_for_wallet();
+        let initial_private_accounts = config::default_private_accounts_for_wallet();
+        let (sequencer_handle, temp_sequencer_dir) = setup_sequencer(
+            sequencer_partial_config.unwrap_or_default(),
+            bedrock_addr,
+            genesis_transactions.unwrap_or_else(|| {
+                config::genesis_from_accounts(&initial_public_accounts, &initial_private_accounts)
             }),
         )
         .await
+        .context("Failed to setup Sequencer")?;
+
+        let (mut wallet, temp_wallet_dir, wallet_password) = setup_wallet(
+            sequencer_handle.addr(),
+            &initial_public_accounts,
+            &initial_private_accounts,
+        )
+        .context("Failed to setup wallet")?;
+
+        setup_public_accounts_with_initial_supply(&wallet, &initial_public_accounts)
+            .await
+            .context("Failed to initialize public accounts in wallet")?;
+
+        setup_private_accounts_with_initial_supply(&mut wallet, &initial_private_accounts)
+            .await
+            .context("Failed to initialize private accounts in wallet")?;
+
+        let sequencer_url = config::addr_to_url(config::UrlProtocol::Http, sequencer_handle.addr())
+            .context("Failed to convert sequencer addr to URL")?;
+        let sequencer_client = SequencerClientBuilder::default()
+            .build(sequencer_url)
+            .context("Failed to create sequencer client")?;
+
+        Ok(TestContext {
+            sequencer_client,
+            wallet,
+            wallet_password,
+            bedrock_compose,
+            bedrock_addr,
+            sequencer_handle: Some(sequencer_handle),
+            indexer_components,
+            _temp_sequencer_dir: temp_sequencer_dir,
+            _temp_wallet_dir: temp_wallet_dir,
+        })
+    }
+
+    pub fn build_blocking(self) -> Result<BlockingTestContext> {
+        let runtime = tokio::runtime::Runtime::new().context("Failed to create Tokio runtime")?;
+
+        let ctx = runtime.block_on(self.build())?;
+
+        Ok(BlockingTestContext {
+            ctx: Some(ctx),
+            runtime,
+        })
+    }
+}
+/// A test context to be used in normal #[test] tests.
+pub struct BlockingTestContext {
+    ctx: Option<TestContext>,
+    runtime: tokio::runtime::Runtime,
+}
+
+impl BlockingTestContext {
+    pub fn new() -> Result<Self> {
+        TestContext::builder().build_blocking()
+    }
+
+    pub const fn ctx(&self) -> &TestContext {
+        self.ctx.as_ref().expect("TestContext is set")
+    }
+
+    pub const fn runtime(&self) -> &tokio::runtime::Runtime {
+        &self.runtime
+    }
+
+    pub fn block_on<'ctx, F>(&'ctx self, f: impl FnOnce(&'ctx TestContext) -> F) -> F::Output
+    where
+        F: std::future::Future + 'ctx,
+    {
+        let future = f(self.ctx());
+        self.runtime.block_on(future)
+    }
+
+    pub fn block_on_mut<'ctx, F>(
+        &'ctx mut self,
+        f: impl FnOnce(&'ctx mut TestContext) -> F,
+    ) -> F::Output
+    where
+        F: std::future::Future + 'ctx,
+    {
+        let ctx_mut = self.ctx.as_mut().expect("TestContext is set");
+        let future = f(ctx_mut);
+        self.runtime.block_on(future)
     }
 }
 
@@ -291,13 +401,13 @@ impl Drop for BlockingTestContext {
 }
 
 #[must_use]
-pub fn format_public_account_id(account_id: AccountId) -> String {
-    format!("Public/{account_id}")
+pub const fn public_mention(account_id: AccountId) -> CliAccountMention {
+    CliAccountMention::Id(AccountIdWithPrivacy::Public(account_id))
 }
 
 #[must_use]
-pub fn format_private_account_id(account_id: AccountId) -> String {
-    format!("Private/{account_id}")
+pub const fn private_mention(account_id: AccountId) -> CliAccountMention {
+    CliAccountMention::Id(AccountIdWithPrivacy::Private(account_id))
 }
 
 #[expect(

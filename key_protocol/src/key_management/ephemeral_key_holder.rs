@@ -36,7 +36,7 @@ impl EphemeralKeyHolder {
         &self,
         receiver_viewing_public_key: &ViewingPublicKey,
     ) -> SharedSecretKey {
-        SharedSecretKey::new(&self.ephemeral_secret_key, receiver_viewing_public_key)
+        SharedSecretKey::new(self.ephemeral_secret_key, receiver_viewing_public_key)
     }
 }
 
@@ -47,7 +47,7 @@ pub fn produce_one_sided_shared_secret_receiver(
     let mut esk = [0; 32];
     OsRng.fill_bytes(&mut esk);
     (
-        SharedSecretKey::new(&esk, vpk),
+        SharedSecretKey::new(esk, vpk),
         EphemeralPublicKey::from_scalar(esk),
     )
 }

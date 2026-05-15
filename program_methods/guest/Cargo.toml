@@ -9,6 +9,7 @@ workspace = true
 
 [dependencies]
 nssa_core.workspace = true
+authenticated_transfer_core.workspace = true
 clock_core.workspace = true
 token_core.workspace = true
 token_program.workspace = true
@@ -16,5 +17,7 @@ amm_core.workspace = true
 amm_program.workspace = true
 ata_core.workspace = true
 ata_program.workspace = true
+faucet_core.workspace = true
+vault_core.workspace = true
 risc0-zkvm.workspace = true
 serde = { workspace = true, default-features = false }

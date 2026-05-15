@@ -2,17 +2,30 @@ use std::{net::SocketAddr, path::PathBuf, time::Duration};
 
 use anyhow::{Context as _, Result};
 use bytesize::ByteSize;
-use indexer_service::{BackoffConfig, ChannelId, ClientConfig, IndexerConfig};
+use indexer_service::{ChannelId, ClientConfig, IndexerConfig};
 use key_protocol::key_management::KeyChain;
-use nssa::{Account, AccountId, PrivateKey, PublicKey};
-use nssa_core::{account::Data, program::DEFAULT_PROGRAM_ID};
-use sequencer_core::config::{BedrockConfig, SequencerConfig};
-use testnet_initial_state::{
-    PrivateAccountPrivateInitialData, PrivateAccountPublicInitialData,
-    PublicAccountPrivateInitialData, PublicAccountPublicInitialData,
-};
+use nssa::{AccountId, PrivateKey, PublicKey};
+use nssa_core::Identifier;
+use sequencer_core::config::{BedrockConfig, GenesisAction, SequencerConfig};
 use url::Url;
-use wallet::config::{InitialAccountData, WalletConfig};
+use wallet::config::WalletConfig;
+
+pub const INITIAL_PUBLIC_BALANCES_FOR_WALLET: [u128; 2] = [10_000, 20_000];
+pub const INITIAL_PRIVATE_BALANCES_FOR_WALLET: [u128; 2] = [10_000, 20_000];
+
+#[derive(Clone)]
+pub struct InitialPrivateAccountForWallet {
+    pub key_chain: KeyChain,
+    pub identifier: Identifier,
+    pub balance: u128,
+}
+
+impl InitialPrivateAccountForWallet {
+    #[must_use]
+    pub fn account_id(&self) -> AccountId {
+        AccountId::from((&self.key_chain.nullifier_public_key, self.identifier))
+    }
+}
 
 /// Sequencer config options available for custom changes in integration tests.
 #[derive(Debug, Clone, Copy)]
@@ -34,121 +47,6 @@ impl Default for SequencerPartialConfig {
     }
 }
 
-pub struct InitialData {
-    pub public_accounts: Vec<(PrivateKey, u128)>,
-    pub private_accounts: Vec<(KeyChain, Account)>,
-}
-
-impl InitialData {
-    #[must_use]
-    pub fn with_two_public_and_two_private_initialized_accounts() -> Self {
-        let mut public_alice_private_key = PrivateKey::new_os_random();
-        let mut public_alice_public_key =
-            PublicKey::new_from_private_key(&public_alice_private_key);
-        let mut public_alice_account_id = AccountId::from(&public_alice_public_key);
-
-        let mut public_bob_private_key = PrivateKey::new_os_random();
-        let mut public_bob_public_key = PublicKey::new_from_private_key(&public_bob_private_key);
-        let mut public_bob_account_id = AccountId::from(&public_bob_public_key);
-
-        // Ensure consistent ordering
-        if public_alice_account_id > public_bob_account_id {
-            std::mem::swap(&mut public_alice_private_key, &mut public_bob_private_key);
-            std::mem::swap(&mut public_alice_public_key, &mut public_bob_public_key);
-            std::mem::swap(&mut public_alice_account_id, &mut public_bob_account_id);
-        }
-
-        let mut private_charlie_key_chain = KeyChain::new_os_random();
-        let mut private_charlie_account_id =
-            AccountId::from((&private_charlie_key_chain.nullifier_public_key, 0));
-
-        let mut private_david_key_chain = KeyChain::new_os_random();
-        let mut private_david_account_id =
-            AccountId::from((&private_david_key_chain.nullifier_public_key, 0));
-
-        // Ensure consistent ordering
-        if private_charlie_account_id > private_david_account_id {
-            std::mem::swap(&mut private_charlie_key_chain, &mut private_david_key_chain);
-            std::mem::swap(
-                &mut private_charlie_account_id,
-                &mut private_david_account_id,
-            );
-        }
-
-        Self {
-            public_accounts: vec![
-                (public_alice_private_key, 10_000),
-                (public_bob_private_key, 20_000),
-            ],
-            private_accounts: vec![
-                (
-                    private_charlie_key_chain,
-                    Account {
-                        balance: 10_000,
-                        data: Data::default(),
-                        program_owner: DEFAULT_PROGRAM_ID,
-                        nonce: 0_u128.into(),
-                    },
-                ),
-                (
-                    private_david_key_chain,
-                    Account {
-                        balance: 20_000,
-                        data: Data::default(),
-                        program_owner: DEFAULT_PROGRAM_ID,
-                        nonce: 0_u128.into(),
-                    },
-                ),
-            ],
-        }
-    }
-
-    fn sequencer_initial_public_accounts(&self) -> Vec<PublicAccountPublicInitialData> {
-        self.public_accounts
-            .iter()
-            .map(|(priv_key, balance)| {
-                let pub_key = PublicKey::new_from_private_key(priv_key);
-                let account_id = AccountId::from(&pub_key);
-                PublicAccountPublicInitialData {
-                    account_id,
-                    balance: *balance,
-                }
-            })
-            .collect()
-    }
-
-    fn sequencer_initial_private_accounts(&self) -> Vec<PrivateAccountPublicInitialData> {
-        self.private_accounts
-            .iter()
-            .map(|(key_chain, account)| PrivateAccountPublicInitialData {
-                npk: key_chain.nullifier_public_key,
-                account: account.clone(),
-            })
-            .collect()
-    }
-
-    fn wallet_initial_accounts(&self) -> Vec<InitialAccountData> {
-        self.public_accounts
-            .iter()
-            .map(|(priv_key, _)| {
-                let pub_key = PublicKey::new_from_private_key(priv_key);
-                let account_id = AccountId::from(&pub_key);
-                InitialAccountData::Public(PublicAccountPrivateInitialData {
-                    account_id,
-                    pub_sign_key: priv_key.clone(),
-                })
-            })
-            .chain(self.private_accounts.iter().map(|(key_chain, account)| {
-                InitialAccountData::Private(Box::new(PrivateAccountPrivateInitialData {
-                    account: account.clone(),
-                    key_chain: key_chain.clone(),
-                    identifier: 0,
-                }))
-            }))
-            .collect()
-    }
-}
-
 #[derive(Debug, Clone, Copy)]
 pub enum UrlProtocol {
     Http,
@@ -164,36 +62,11 @@ impl std::fmt::Display for UrlProtocol {
     }
 }
 
-pub fn indexer_config(
-    bedrock_addr: SocketAddr,
-    home: PathBuf,
-    initial_data: &InitialData,
-) -> Result<IndexerConfig> {
-    Ok(IndexerConfig {
-        home,
-        consensus_info_polling_interval: Duration::from_secs(1),
-        bedrock_client_config: ClientConfig {
-            addr: addr_to_url(UrlProtocol::Http, bedrock_addr)
-                .context("Failed to convert bedrock addr to URL")?,
-            auth: None,
-            backoff: BackoffConfig {
-                start_delay: Duration::from_millis(100),
-                max_retries: 10,
-            },
-        },
-        initial_public_accounts: Some(initial_data.sequencer_initial_public_accounts()),
-        initial_private_accounts: Some(initial_data.sequencer_initial_private_accounts()),
-        signing_key: [37; 32],
-        channel_id: bedrock_channel_id(),
-    })
-}
-
 pub fn sequencer_config(
     partial: SequencerPartialConfig,
     home: PathBuf,
     bedrock_addr: SocketAddr,
-    indexer_addr: SocketAddr,
-    initial_data: &InitialData,
+    genesis_transactions: Vec<GenesisAction>,
 ) -> Result<SequencerConfig> {
     let SequencerPartialConfig {
         max_num_tx_in_block,
@@ -204,35 +77,76 @@ pub fn sequencer_config(
 
     Ok(SequencerConfig {
         home,
-        genesis_id: 1,
-        is_genesis_random: true,
         max_num_tx_in_block,
         max_block_size,
         mempool_max_size,
         block_create_timeout,
         retry_pending_blocks_timeout: Duration::from_secs(5),
-        initial_public_accounts: Some(initial_data.sequencer_initial_public_accounts()),
-        initial_private_accounts: Some(initial_data.sequencer_initial_private_accounts()),
+        genesis: genesis_transactions,
         signing_key: [37; 32],
         bedrock_config: BedrockConfig {
-            backoff: BackoffConfig {
-                start_delay: Duration::from_millis(100),
-                max_retries: 5,
-            },
             channel_id: bedrock_channel_id(),
             node_url: addr_to_url(UrlProtocol::Http, bedrock_addr)
                 .context("Failed to convert bedrock addr to URL")?,
             auth: None,
         },
-        indexer_rpc_url: addr_to_url(UrlProtocol::Ws, indexer_addr)
-            .context("Failed to convert indexer addr to URL")?,
     })
 }
 
-pub fn wallet_config(
-    sequencer_addr: SocketAddr,
-    initial_data: &InitialData,
-) -> Result<WalletConfig> {
+#[must_use]
+pub fn default_public_accounts_for_wallet() -> Vec<(PrivateKey, u128)> {
+    let mut private_keys = vec![PrivateKey::new_os_random(), PrivateKey::new_os_random()];
+    private_keys.sort_unstable_by_key(|private_key| {
+        AccountId::from(&PublicKey::new_from_private_key(private_key))
+    });
+
+    private_keys
+        .into_iter()
+        .zip(INITIAL_PUBLIC_BALANCES_FOR_WALLET)
+        .collect()
+}
+
+#[must_use]
+pub fn default_private_accounts_for_wallet() -> Vec<InitialPrivateAccountForWallet> {
+    let mut key_chains = vec![KeyChain::new_os_random(), KeyChain::new_os_random()];
+    key_chains.sort_unstable();
+
+    key_chains
+        .into_iter()
+        .zip(INITIAL_PRIVATE_BALANCES_FOR_WALLET)
+        .map(|(key_chain, balance)| InitialPrivateAccountForWallet {
+            key_chain,
+            identifier: 0,
+            balance,
+        })
+        .collect()
+}
+
+#[must_use]
+pub fn genesis_from_accounts(
+    public_accounts: &[(PrivateKey, u128)],
+    private_accounts: &[InitialPrivateAccountForWallet],
+) -> Vec<GenesisAction> {
+    let public_genesis = public_accounts.iter().map(|(private_key, balance)| {
+        let public_key = PublicKey::new_from_private_key(private_key);
+        let account_id = AccountId::from(&public_key);
+        GenesisAction::SupplyAccount {
+            account_id,
+            balance: *balance,
+        }
+    });
+
+    let private_genesis = private_accounts
+        .iter()
+        .map(|account| GenesisAction::SupplyAccount {
+            account_id: account.account_id(),
+            balance: account.balance,
+        });
+
+    public_genesis.chain(private_genesis).collect()
+}
+
+pub fn wallet_config(sequencer_addr: SocketAddr) -> Result<WalletConfig> {
     Ok(WalletConfig {
         sequencer_addr: addr_to_url(UrlProtocol::Http, sequencer_addr)
             .context("Failed to convert sequencer addr to URL")?,
@@ -240,8 +154,20 @@ pub fn wallet_config(
         seq_tx_poll_max_blocks: 15,
         seq_poll_max_retries: 10,
         seq_block_poll_max_amount: 100,
-        initial_accounts: Some(initial_data.wallet_initial_accounts()),
         basic_auth: None,
+    })
+}
+
+pub fn indexer_config(bedrock_addr: SocketAddr, home: PathBuf) -> Result<IndexerConfig> {
+    Ok(IndexerConfig {
+        home,
+        consensus_info_polling_interval: Duration::from_secs(1),
+        bedrock_config: ClientConfig {
+            addr: addr_to_url(UrlProtocol::Http, bedrock_addr)
+                .context("Failed to convert bedrock addr to URL")?,
+            auth: None,
+        },
+        channel_id: bedrock_channel_id(),
     })
 }
 

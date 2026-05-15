@@ -1,13 +1,14 @@
-from smartcard.System import readers  
+from smartcard.System import readers
 from keycard.exceptions import APDUError, TransportError
-from ecdsa import VerifyingKey, SECP256k1  
+from ecdsa import VerifyingKey, SECP256k1
 
 from keycard.keycard import KeyCard
 
-from mnemonic import Mnemonic  
-from keycard import constants  
-  
+from mnemonic import Mnemonic
+from keycard import constants
+
 import keycard
+import secrets
 
 DEFAULT_PAIRING_PASSWORD = "KeycardDefaultPairing"
 
@@ -36,14 +37,30 @@ class KeycardWallet:
             return False
         return True
 
+    def initialize(self, pin: str) -> bool:
+        try:
+            self.card.select()
+
+            if self.card.is_initialized:
+                raise RuntimeError("Card is already initialized")
+
+            puk = ''.join(secrets.choice('0123456789') for _ in range(12))
+            self.card.init(pin, puk, DEFAULT_PAIRING_PASSWORD)
+            print(f"Keycard PUK: {puk}")
+            print("Record this PUK and store it somewhere safe. It cannot be recovered.")
+            return True
+        except Exception as e:
+            raise RuntimeError(f"Error initializing keycard: {e}") from e
+
     def setup_communication(self, pin: str, password = DEFAULT_PAIRING_PASSWORD) -> bool:
         self.card.select()
 
         if not self.card.is_initialized:
-            raise RuntimeError(f"Error setting up communication: uninitialized keycard")
+            raise RuntimeError("Card is not initialized — run 'wallet keycard init' first")
 
         pairing_index, pairing_key = self.card.pair(password)
         self.pairing_index = pairing_index
+        self.pairing_key = pairing_key
 
         try:
             self.card.open_secure_channel(pairing_index, pairing_key)
@@ -57,11 +74,36 @@ class KeycardWallet:
 
         return True
 
+    def get_pairing_data(self) -> tuple[int, bytes]:
+        return (self.pairing_index, self.pairing_key)
+
+    def setup_communication_with_pairing(self, pin: str, pairing_index: int, pairing_key: bytes) -> bool:
+        self.card.select()
+
+        if not self.card.is_initialized:
+            raise RuntimeError("Card is not initialized — run 'wallet keycard init' first")
+
+        self.pairing_index = pairing_index
+        self.pairing_key = pairing_key
+
+        try:
+            self.card.open_secure_channel(pairing_index, pairing_key)
+            self.card.verify_pin(pin)
+        except Exception as e:
+            raise RuntimeError(f"Error setting up communication with stored pairing: {e}") from e
+
+        return True
+
+    def close_session(self) -> bool:
+        return True
+
     def load_mnemonic(self, mnemonic: str) -> bool:
         try:
             # Convert mnemonic to seed  
-            mnemo = Mnemonic("english")  
-            seed = mnemo.to_seed(mnemonic)  
+            mnemo = Mnemonic("english")
+            if not mnemo.check(mnemonic):
+                raise RuntimeError("Invalid mnemonic phrase — check spelling and word count")
+            seed = mnemo.to_seed(mnemonic)
 
             # Load the LEE seed onto the card  
             result = self.card.load_key(  

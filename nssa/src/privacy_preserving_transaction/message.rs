@@ -122,15 +122,16 @@ impl Message {
     }
 
     #[must_use]
-    pub fn hash_message(&self) -> [u8; 32] {
+    pub fn hash(&self) -> [u8; 32] {
+        let msg = self.to_bytes();
         let mut bytes = Vec::with_capacity(
             PREFIX
                 .len()
-                .checked_add(self.to_bytes().len())
+                .checked_add(msg.len())
                 .expect("length overflow"),
         );
         bytes.extend_from_slice(PREFIX);
-        bytes.extend_from_slice(&self.to_bytes());
+        bytes.extend_from_slice(&msg);
 
         Sha256::digest(bytes).into()
     }
@@ -139,7 +140,8 @@ impl Message {
 #[cfg(test)]
 pub mod tests {
     use nssa_core::{
-        Commitment, EncryptionScheme, Nullifier, NullifierPublicKey, SharedSecretKey,
+        Commitment, EncryptionScheme, Nullifier, NullifierPublicKey, PrivateAccountKind,
+        SharedSecretKey,
         account::{Account, AccountId, Nonce},
         encryption::{EphemeralPublicKey, ViewingPublicKey},
         program::{BlockValidityWindow, TimestampValidityWindow},
@@ -167,10 +169,10 @@ pub mod tests {
 
         let encrypted_private_post_states = Vec::new();
 
-        let account_id2 = nssa_core::account::AccountId::from((&npk2, 0));
+        let account_id2 = nssa_core::account::AccountId::for_regular_private_account(&npk2, 0);
         let new_commitments = vec![Commitment::new(&account_id2, &account2)];
 
-        let account_id1 = nssa_core::account::AccountId::from((&npk1, 0));
+        let account_id1 = nssa_core::account::AccountId::for_regular_private_account(&npk1, 0);
         let old_commitment = Commitment::new(&account_id1, &account1);
         let new_nullifiers = vec![(
             Nullifier::for_account_update(&old_commitment, &nsk1),
@@ -190,7 +192,7 @@ pub mod tests {
     }
 
     #[test]
-    fn hash_message_privacy_pinned() {
+    fn hash_privacy_pinned() {
         let msg = Message {
             public_account_ids: vec![AccountId::new([42_u8; 32])],
             nonces: vec![Nonce(5)],
@@ -206,7 +208,7 @@ pub mod tests {
         let nonces_bytes: &[u8] = &[1, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
         // all remaining vec fields are empty: u32 len=0
         let empty_vec_bytes: &[u8] = &[0_u8; 4];
-        // validity windows: unbounded = {from: None (0_u8), to: None (0_u8)}
+        // validity windows: unbounded = {from: None (0u8), to: None (0u8)}
         let unbounded_window_bytes: &[u8] = &[0_u8; 2];
 
         let expected_borsh_vec: Vec<u8> = [
@@ -226,7 +228,7 @@ pub mod tests {
         assert_eq!(
             borsh::to_vec(&msg).unwrap(),
             expected_borsh,
-            "`privacy_preserving_transaction::hash_message()`: expected borsh order has changed"
+            "`privacy_preserving_transaction::hash()`: expected borsh order has changed"
         );
 
         let mut preimage = Vec::with_capacity(PREFIX.len() + expected_borsh.len());
@@ -235,9 +237,9 @@ pub mod tests {
         let expected_hash: [u8; 32] = Sha256::digest(&preimage).into();
 
         assert_eq!(
-            msg.hash_message(),
+            msg.hash(),
             expected_hash,
-            "`privacy_preserving_transaction::hash_message()`: serialization has changed"
+            "`privacy_preserving_transaction::hash()`: serialization has changed"
         );
     }
 
@@ -246,12 +248,18 @@ pub mod tests {
         let npk = NullifierPublicKey::from(&[1; 32]);
         let vpk = ViewingPublicKey::from_scalar([2; 32]);
         let account = Account::default();
-        let account_id = nssa_core::account::AccountId::from((&npk, 0));
+        let account_id = nssa_core::account::AccountId::for_regular_private_account(&npk, 0);
         let commitment = Commitment::new(&account_id, &account);
         let esk = [3; 32];
-        let shared_secret = SharedSecretKey::new(&esk, &vpk);
+        let shared_secret = SharedSecretKey::new(esk, &vpk);
         let epk = EphemeralPublicKey::from_scalar(esk);
-        let ciphertext = EncryptionScheme::encrypt(&account, 0, &shared_secret, &commitment, 2);
+        let ciphertext = EncryptionScheme::encrypt(
+            &account,
+            &PrivateAccountKind::Regular(0),
+            &shared_secret,
+            &commitment,
+            2,
+        );
         let encrypted_account_data =
             EncryptedAccountData::new(ciphertext.clone(), &npk, &vpk, epk.clone());
 

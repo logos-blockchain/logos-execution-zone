@@ -4,8 +4,8 @@ use rocksdb::WriteBatch;
 
 use super::{BREAKPOINT_INTERVAL, Block, DbError, DbResult, RocksDBIO};
 use crate::{
-    DB_META_FIRST_BLOCK_IN_DB_KEY, DBIO as _,
-    cells::shared_cells::{FirstBlockSetCell, LastBlockCell},
+    DBIO as _,
+    cells::shared_cells::{FirstBlockCell, FirstBlockSetCell, LastBlockCell},
     indexer::indexer_cells::{
         AccNumTxCell, BlockHashToBlockIdMapCell, LastBreakpointIdCell, LastObservedL1LibHeaderCell,
         TxHashToBlockIdMapCell,
@@ -143,28 +143,12 @@ impl RocksDBIO {
 
     // Meta
 
-    pub fn put_meta_first_block_in_db_batch(&self, block: &Block) -> DbResult<()> {
-        let cf_meta = self.meta_column();
-        self.db
-            .put_cf(
-                &cf_meta,
-                borsh::to_vec(&DB_META_FIRST_BLOCK_IN_DB_KEY).map_err(|err| {
-                    DbError::borsh_cast_message(
-                        err,
-                        Some("Failed to serialize DB_META_FIRST_BLOCK_IN_DB_KEY".to_owned()),
-                    )
-                })?,
-                borsh::to_vec(&block.header.block_id).map_err(|err| {
-                    DbError::borsh_cast_message(
-                        err,
-                        Some("Failed to serialize first block id".to_owned()),
-                    )
-                })?,
-            )
-            .map_err(|rerr| DbError::rocksdb_cast_message(rerr, None))?;
-
-        self.put_block(block, [0; 32])?;
-        Ok(())
+    pub fn put_meta_first_block_in_db_batch(
+        &self,
+        block: &Block,
+        write_batch: &mut WriteBatch,
+    ) -> DbResult<()> {
+        self.put_batch(&FirstBlockCell(block.header.block_id), (), write_batch)
     }
 
     pub fn put_meta_last_block_in_db_batch(
@@ -199,7 +183,7 @@ impl RocksDBIO {
 
     pub fn put_block(&self, block: &Block, l1_lib_header: [u8; 32]) -> DbResult<()> {
         let cf_block = self.block_column();
-        let last_curr_block = self.get_meta_last_block_in_db()?;
+        let last_curr_block = self.get_meta_last_block_id_in_db()?.unwrap_or(0);
         let mut write_batch = WriteBatch::default();
 
         write_batch.put_cf(
@@ -215,6 +199,10 @@ impl RocksDBIO {
         if block.header.block_id > last_curr_block {
             self.put_meta_last_block_in_db_batch(block.header.block_id, &mut write_batch)?;
             self.put_meta_last_observed_l1_lib_header_in_db_batch(l1_lib_header, &mut write_batch)?;
+        }
+        if last_curr_block == 0 {
+            self.put_meta_first_block_in_db_batch(block, &mut write_batch)?;
+            self.put_meta_is_first_block_set_batch(&mut write_batch)?;
         }
 
         self.put_block_id_by_hash_batch(

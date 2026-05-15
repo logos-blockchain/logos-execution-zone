@@ -20,6 +20,9 @@ members = [
   "programs/token",
   "programs/associated_token_account/core",
   "programs/associated_token_account",
+  "programs/authenticated_transfer/core",
+  "programs/faucet/core",
+  "programs/vault/core",
   "sequencer/core",
   "sequencer/service",
   "sequencer/service/protocol",
@@ -36,10 +39,9 @@ members = [
   "examples/program_deployment",
   "examples/program_deployment/methods",
   "examples/program_deployment/methods/guest",
-  "bedrock_client",
   "testnet_initial_state",
+  "indexer/ffi",
   "keycard_wallet",
-  "indexer_ffi",
 ]
 
 [workspace.dependencies]
@@ -57,9 +59,9 @@ indexer_core = { path = "indexer/core" }
 indexer_service = { path = "indexer/service" }
 indexer_service_protocol = { path = "indexer/service/protocol" }
 indexer_service_rpc = { path = "indexer/service/rpc" }
-indexer_ffi = { path = "indexer_ffi" }
 wallet = { path = "wallet" }
 wallet-ffi = { path = "wallet-ffi", default-features = false }
+indexer_ffi = { path = "indexer/ffi" }
 clock_core = { path = "programs/clock/core" }
 token_core = { path = "programs/token/core" }
 token_program = { path = "programs/token" }
@@ -67,8 +69,10 @@ amm_core = { path = "programs/amm/core" }
 amm_program = { path = "programs/amm" }
 ata_core = { path = "programs/associated_token_account/core" }
 ata_program = { path = "programs/associated_token_account" }
+authenticated_transfer_core = { path = "programs/authenticated_transfer/core" }
+faucet_core = { path = "programs/faucet/core" }
+vault_core = { path = "programs/vault/core" }
 test_program_methods = { path = "test_program_methods" }
-bedrock_client = { path = "bedrock_client" }
 testnet_initial_state = { path = "testnet_initial_state" }
 keycard_wallet = { path = "keycard_wallet" }
 
@@ -82,6 +86,7 @@ tokio-util = "0.7.18"
 risc0-zkvm = { version = "3.0.5", features = ['std'] }
 risc0-build = "3.0.5"
 anyhow = "1.0.98"
+derive_more = "2.1.1"
 num_cpus = "1.13.1"
 openssl = { version = "0.10", features = ["vendored"] }
 openssl-probe = { version = "0.1.2" }
@@ -123,13 +128,13 @@ url = { version = "2.5.4", features = ["serde"] }
 tokio-retry = "0.3.0"
 schemars = "1.2"
 async-stream = "0.3.6"
-pyo3 = { version = "0.24", features = ["auto-initialize"] }
 
-logos-blockchain-common-http-client = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "1da154c74b911318fb853d37261f8a05ffe513b4" }
-logos-blockchain-key-management-system-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "1da154c74b911318fb853d37261f8a05ffe513b4" }
-logos-blockchain-core = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "1da154c74b911318fb853d37261f8a05ffe513b4" }
-logos-blockchain-chain-broadcast-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "1da154c74b911318fb853d37261f8a05ffe513b4" }
-logos-blockchain-chain-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "1da154c74b911318fb853d37261f8a05ffe513b4" }
+logos-blockchain-common-http-client = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "ee281a447d95a951752461ee0a6e88eb4a0f17cf" }
+logos-blockchain-key-management-system-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "ee281a447d95a951752461ee0a6e88eb4a0f17cf" }
+logos-blockchain-core = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "ee281a447d95a951752461ee0a6e88eb4a0f17cf" }
+logos-blockchain-chain-broadcast-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "ee281a447d95a951752461ee0a6e88eb4a0f17cf" }
+logos-blockchain-chain-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "ee281a447d95a951752461ee0a6e88eb4a0f17cf" }
+logos-blockchain-zone-sdk = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "ee281a447d95a951752461ee0a6e88eb4a0f17cf" }
 
 rocksdb = { version = "0.24.0", default-features = false, features = [
   "snappy",
@@ -149,6 +154,7 @@ actix-web = { version = "4.13.0", default-features = false, features = [
 ] }
 clap = { version = "4.5.42", features = ["derive", "env"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"] }
+pyo3 = { version = "0.24", features = ["auto-initialize"] }
 
 # Profile for leptos WASM release builds
 [profile.wasm-release]

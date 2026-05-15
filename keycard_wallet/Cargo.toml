@@ -11,3 +11,5 @@ workspace = true
 nssa.workspace = true
 pyo3.workspace = true
 log.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true

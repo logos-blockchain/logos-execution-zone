@@ -3,7 +3,11 @@
 use std::{ffi::CString, ptr};
 
 use nssa::AccountId;
-use wallet::program_facades::native_token_transfer::NativeTokenTransfer;
+use wallet::{
+    account::AccountIdWithPrivacy,
+    cli::CliAccountMention,
+    program_facades::native_token_transfer::NativeTokenTransfer,
+};
 
 use crate::{
     block_on,
@@ -72,7 +76,10 @@ pub unsafe extern "C" fn wallet_ffi_transfer_public(
 
     let transfer = NativeTokenTransfer(&wallet);
 
-    match block_on(transfer.send_public_transfer(from_id, to_id, amount, None, None)) {
+    let from_mention = CliAccountMention::Id(AccountIdWithPrivacy::Public(from_id));
+    let to_mention = CliAccountMention::Id(AccountIdWithPrivacy::Public(to_id));
+
+    match block_on(transfer.send_public_transfer(from_id, to_id, amount, &from_mention, &to_mention)) {
         Ok(tx_hash) => {
             let tx_hash = CString::new(tx_hash.to_string())
                 .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
@@ -591,7 +598,9 @@ pub unsafe extern "C" fn wallet_ffi_register_public_account(
 
     let transfer = NativeTokenTransfer(&wallet);
 
-    match block_on(transfer.register_account(account_id, None)) {
+    let mention = CliAccountMention::Id(AccountIdWithPrivacy::Public(account_id));
+
+    match block_on(transfer.register_account(account_id, &mention)) {
         Ok(tx_hash) => {
             let tx_hash = CString::new(tx_hash.to_string())
                 .map_or(ptr::null_mut(), std::ffi::CString::into_raw);

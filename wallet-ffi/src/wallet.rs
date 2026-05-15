@@ -10,7 +10,7 @@ use std::{
 use wallet::WalletCore;
 
 use crate::{
-    block_on,
+    c_str_to_string,
     error::{print_error, WalletFfiError},
     types::WalletHandle,
 };
@@ -53,23 +53,6 @@ fn c_str_to_path(ptr: *const c_char, name: &str) -> Result<PathBuf, WalletFfiErr
     let c_str = unsafe { CStr::from_ptr(ptr) };
     match c_str.to_str() {
         Ok(s) => Ok(PathBuf::from(s)),
-        Err(e) => {
-            print_error(format!("Invalid UTF-8 in {name}: {e}"));
-            Err(WalletFfiError::InvalidUtf8)
-        }
-    }
-}
-
-/// Helper to convert a C string to a Rust String.
-fn c_str_to_string(ptr: *const c_char, name: &str) -> Result<String, WalletFfiError> {
-    if ptr.is_null() {
-        print_error(format!("Null pointer for {name}"));
-        return Err(WalletFfiError::NullPointer);
-    }
-
-    let c_str = unsafe { CStr::from_ptr(ptr) };
-    match c_str.to_str() {
-        Ok(s) => Ok(s.to_owned()),
         Err(e) => {
             print_error(format!("Invalid UTF-8 in {name}: {e}"));
             Err(WalletFfiError::InvalidUtf8)
@@ -212,7 +195,7 @@ pub unsafe extern "C" fn wallet_ffi_save(handle: *mut WalletHandle) -> WalletFfi
         }
     };
 
-    match block_on(wallet.store_persistent_data()) {
+    match wallet.store_persistent_data() {
         Ok(()) => WalletFfiError::Success,
         Err(e) => {
             print_error(format!("Failed to save wallet: {e}"));

@@ -67,13 +67,26 @@ impl NSSATransaction {
     }
 
     /// Validates the transaction against the current state and returns the resulting diff
-    /// without applying it. Rejects transactions that modify clock system accounts.
+    /// without applying it. Rejects transactions that modify clock system accounts and
+    /// rejects unsafe modifications of the system faucet account. Also rejects direct
+    /// invocation of the faucet program for user-submitted transactions.
+    ///
+    /// This check is required for all user transactions. Only sequencer transaction may bypass this
+    /// check.
     pub fn validate_on_state(
         &self,
         state: &V03State,
         block_id: BlockId,
         timestamp: Timestamp,
     ) -> Result<ValidatedStateDiff, nssa::error::NssaError> {
+        if let Self::Public(tx) = self
+            && tx.message().program_id == nssa::program::Program::faucet().id()
+        {
+            return Err(nssa::error::NssaError::InvalidInput(
+                "Transaction invokes restricted faucet program".into(),
+            ));
+        }
+
         let diff = match self {
             Self::Public(tx) => {
                 ValidatedStateDiff::from_public_transaction(tx, state, block_id, timestamp)

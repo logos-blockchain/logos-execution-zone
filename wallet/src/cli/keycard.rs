@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Subcommand;
-use keycard_wallet::{KeycardWallet, python_path};
+use keycard_wallet::{KeycardWallet, clear_pairing, python_path};
 use pyo3::prelude::*;
 
 use crate::{
@@ -12,6 +12,9 @@ use crate::{
 #[derive(Subcommand, Debug, Clone)]
 pub enum KeycardSubcommand {
     Available,
+    Connect,
+    Disconnect,
+    Init,
     Load,
 }
 
@@ -40,6 +43,65 @@ impl WalletSubcommand for KeycardSubcommand {
 
                 Ok(SubcommandReturnValue::Empty)
             }
+            Self::Connect => {
+                let pin = read_pin()?;
+
+                Python::with_gil(|py| {
+                    python_path::add_python_path(py).expect("keycard_wallet.py not found");
+
+                    let wallet = KeycardWallet::new(py)
+                        .expect("`wallet::keycard::connect`: invalid keycard wallet provided");
+
+                    wallet.connect(py, &pin)
+                        .expect("`wallet::keycard::connect`: failed to connect to keycard");
+
+                    println!("\u{2705} Keycard paired and ready.");
+                    drop(wallet.close_session(py));
+                });
+
+                Ok(SubcommandReturnValue::Empty)
+            }
+            Self::Disconnect => {
+                let pin = read_pin()?;
+
+                Python::with_gil(|py| {
+                    python_path::add_python_path(py).expect("keycard_wallet.py not found");
+
+                    let wallet = KeycardWallet::new(py)
+                        .expect("`wallet::keycard::disconnect`: invalid keycard wallet provided");
+
+                    wallet.connect(py, &pin)
+                        .expect("`wallet::keycard::disconnect`: failed to open session");
+
+                    wallet.disconnect(py)
+                        .expect("`wallet::keycard::disconnect`: failed to unpair keycard");
+
+                    clear_pairing();
+                    println!("\u{2705} Keycard unpaired and pairing cleared.");
+                });
+
+                Ok(SubcommandReturnValue::Empty)
+            }
+            Self::Init => {
+                let pin = read_pin()?;
+
+                Python::with_gil(|py| {
+                    python_path::add_python_path(py).expect("keycard_wallet.py not found");
+
+                    let wallet = KeycardWallet::new(py)
+                        .expect("`wallet::keycard::init`: invalid keycard wallet provided");
+
+                    let initialized = wallet.initialize(py, &pin)
+                        .expect("`wallet::keycard::init`: failed to initialize keycard");
+
+                    if initialized {
+                        clear_pairing();
+                        println!("\u{2705} Keycard initialized successfully.");
+                    }
+                });
+
+                Ok(SubcommandReturnValue::Empty)
+            }
             Self::Load => {
                 let pin = read_pin()?;
                 let mnemonic = read_mnemonic()?;
@@ -50,19 +112,16 @@ impl WalletSubcommand for KeycardSubcommand {
                     let wallet = KeycardWallet::new(py)
                         .expect("`wallet::keycard::load`: invalid keycard wallet provided");
 
-                    let is_connected = wallet
-                        .setup_communication(py, &pin)
-                        .expect("Expect a Boolean.");
+                    wallet.connect(py, &pin)
+                        .expect("`wallet::keycard::load`: failed to connect to keycard");
 
-                    if is_connected {
-                        println!("\u{2705} Keycard is now connected to wallet.");
+                    println!("\u{2705} Keycard is now connected to wallet.");
+                    if wallet.load_mnemonic(py, &mnemonic).is_ok() {
+                        println!("\u{2705} Mnemonic phrase loaded successfully.");
                     } else {
-                        println!("\u{274c} Keycard is not connected to wallet.");
+                        println!("\u{274c} Failed to load mnemonic phrase.");
                     }
-
-                    drop(wallet.load_mnemonic(py, &mnemonic));
-
-                    drop(wallet.disconnect(py));
+                    drop(wallet.close_session(py));
                 });
 
                 Ok(SubcommandReturnValue::Empty)

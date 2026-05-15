@@ -21,7 +21,11 @@ fn auth_transfer_preparation(
     Program,
     impl FnOnce(&[&Account]) -> Result<(), ExecutionFailureKind>,
 ) {
-    let instruction_data = Program::serialize_instruction(balance_to_move).unwrap();
+    let instruction_data =
+        Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
+            amount: balance_to_move,
+        })
+        .unwrap();
     let program = Program::authenticated_transfer_program();
 
     // TODO: handle large Err-variant properly

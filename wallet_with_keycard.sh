@@ -1,3 +1,5 @@
+#!/bin/bash
+
 cargo install --path wallet --force
 
 # Install appropriate version of `keycard-py`.

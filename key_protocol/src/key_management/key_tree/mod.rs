@@ -21,6 +21,7 @@ pub mod traits;
 pub const DEPTH_SOFT_CAP: u32 = 20;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[cfg_attr(any(test, feature = "test_utils"), derive(PartialEq, Eq))]
 pub struct KeyTree<N: KeyTreeNode> {
     pub key_map: BTreeMap<ChainIndex, N>,
     pub account_id_map: BTreeMap<nssa::AccountId, ChainIndex>,
@@ -274,7 +275,10 @@ impl KeyTree<ChildKeysPrivate> {
         identifier: Identifier,
     ) -> Option<nssa::AccountId> {
         let node = self.key_map.get(cci)?;
-        let account_id = nssa::AccountId::from((&node.value.0.nullifier_public_key, identifier));
+        let account_id = nssa::AccountId::for_regular_private_account(
+            &node.value.0.nullifier_public_key,
+            identifier,
+        );
         if self.account_id_map.contains_key(&account_id) {
             return None;
         }
@@ -297,7 +301,13 @@ impl KeyTree<ChildKeysPrivate> {
             println!("Cleanup of tree at depth {i}");
             for id in ChainIndex::chain_ids_at_depth(i) {
                 if let Some(node) = self.key_map.get(&id).cloned() {
-                    if node.value.1.is_empty() {
+                    if node.value.1.is_empty()
+                        || node
+                            .value
+                            .1
+                            .iter()
+                            .all(|(_, acc)| acc == &nssa::Account::default())
+                    {
                         let account_ids = node.account_ids();
                         self.key_map.remove(&id);
                         for addr in account_ids {
@@ -319,6 +329,7 @@ mod tests {
     use std::{collections::HashSet, str::FromStr as _};
 
     use nssa::AccountId;
+    use nssa_core::PrivateAccountKind;
 
     use super::*;
 
@@ -531,49 +542,49 @@ mod tests {
             .key_map
             .get_mut(&ChainIndex::from_str("/1").unwrap())
             .unwrap();
-        acc.value.1.push((
-            0,
+        acc.value.1.insert(
+            PrivateAccountKind::Regular(0),
             nssa::Account {
                 balance: 2,
                 ..nssa::Account::default()
             },
-        ));
+        );
 
         let acc = tree
             .key_map
             .get_mut(&ChainIndex::from_str("/2").unwrap())
             .unwrap();
-        acc.value.1.push((
-            0,
+        acc.value.1.insert(
+            PrivateAccountKind::Regular(0),
             nssa::Account {
                 balance: 3,
                 ..nssa::Account::default()
             },
-        ));
+        );
 
         let acc = tree
             .key_map
             .get_mut(&ChainIndex::from_str("/0/1").unwrap())
             .unwrap();
-        acc.value.1.push((
-            0,
+        acc.value.1.insert(
+            PrivateAccountKind::Regular(0),
             nssa::Account {
                 balance: 5,
                 ..nssa::Account::default()
             },
-        ));
+        );
 
         let acc = tree
             .key_map
             .get_mut(&ChainIndex::from_str("/1/0").unwrap())
             .unwrap();
-        acc.value.1.push((
-            0,
+        acc.value.1.insert(
+            PrivateAccountKind::Regular(0),
             nssa::Account {
                 balance: 6,
                 ..nssa::Account::default()
             },
-        ));
+        );
 
         // Update account_id_map for nodes that now have entries
         for chain_index_str in ["/1", "/2", "/0/1", "/1/0"] {
@@ -605,15 +616,15 @@ mod tests {
         assert_eq!(key_set, key_set_res);
 
         let acc = &tree.key_map[&ChainIndex::from_str("/1").unwrap()];
-        assert_eq!(acc.value.1[0].1.balance, 2);
+        assert_eq!(acc.value.1[&PrivateAccountKind::Regular(0)].balance, 2);
 
         let acc = &tree.key_map[&ChainIndex::from_str("/2").unwrap()];
-        assert_eq!(acc.value.1[0].1.balance, 3);
+        assert_eq!(acc.value.1[&PrivateAccountKind::Regular(0)].balance, 3);
 
         let acc = &tree.key_map[&ChainIndex::from_str("/0/1").unwrap()];
-        assert_eq!(acc.value.1[0].1.balance, 5);
+        assert_eq!(acc.value.1[&PrivateAccountKind::Regular(0)].balance, 5);
 
         let acc = &tree.key_map[&ChainIndex::from_str("/1/0").unwrap()];
-        assert_eq!(acc.value.1[0].1.balance, 6);
+        assert_eq!(acc.value.1[&PrivateAccountKind::Regular(0)].balance, 6);
     }
 }

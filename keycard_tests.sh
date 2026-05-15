@@ -1,3 +1,4 @@
+#!/bin/bash
 # Run wallet_with_keycard.sh first
 
 source venv/bin/activate # Load the appropriate virtual environment
@@ -15,24 +16,31 @@ export KEYCARD_MNEMONIC="fashion degree mountain wool question damp current pond
 wallet keycard load
 unset KEYCARD_MNEMONIC
 
-echo "Test: wallet auth-transfer init --key-path \"m/44'/60'/0'/0/0\""
-wallet auth-transfer init --key-path "m/44'/60'/0'/0/0"
+echo "Test: wallet auth-transfer init --account \"m/44'/60'/0'/0/0\""
+wallet auth-transfer init --account "m/44'/60'/0'/0/0"
 
-echo "Test: wallet account get --key-path \"m/44'/60'/0'/0/0\""
-wallet account get --key-path "m/44'/60'/0'/0/0"
+echo "Test: wallet account get --account-id \"m/44'/60'/0'/0/0\""
+wallet account get --account-id "m/44'/60'/0'/0/0"
 
-echo "Test: wallet pinata claim --key-path \"m/44'/60'/0'/0/0\""
-wallet pinata claim --key-path "m/44'/60'/0'/0/0"
+echo "Test: wallet pinata claim --to \"m/44'/60'/0'/0/0\""
+wallet pinata claim --to "m/44'/60'/0'/0/0"
 
-echo "Test: wallet account get --key-path \"m/44'/60'/0'/0/0\""
-wallet account get --key-path "m/44'/60'/0'/0/0"
+echo "Test: wallet account get --account-id \"m/44'/60'/0'/0/0\""
+wallet account get --account-id "m/44'/60'/0'/0/0"
 
-#echo "Initialize new account (auth-transfer init) and send"
-wallet auth-transfer init --key-path "m/44'/60'/0'/0/1"
-wallet auth-transfer send --amount 40 --from-key-path "m/44'/60'/0'/0/0" --to-key-path "m/44'/60'/0'/0/1"
+echo "Test: wallet auth-transfer init and send between two keycard accounts"
+wallet auth-transfer init --account "m/44'/60'/0'/0/1"
+wallet auth-transfer send --amount 40 --from "m/44'/60'/0'/0/0" --to "m/44'/60'/0'/0/1"
 
-echo "Test: wallet account get --key-path \"m/44'/60'/0'/0/0\""
-wallet account get --key-path "m/44'/60'/0'/0/0"
+echo "Test: wallet account get --account-id \"m/44'/60'/0'/0/0\""
+wallet account get --account-id "m/44'/60'/0'/0/0"
 
-echo "Test: wallet account get --key-path \"m/44'/60'/0'/0/1\""
-wallet account get --key-path "m/44'/60'/0'/0/1"
+echo "Test: wallet account get --account-id \"m/44'/60'/0'/0/1\""
+wallet account get --account-id "m/44'/60'/0'/0/1"
+
+# Send from keycard account to a local wallet account (foreign recipient — no signature needed)
+echo "Test: wallet auth-transfer send from keycard to local account"
+wallet auth-transfer send --amount 10 --from "m/44'/60'/0'/0/0" --to "Public/7wHg9sbJwc6h3NP1S9bekfAzB8CHifEcxKswCKUt3YQo"
+
+echo "Test: wallet account get --account-id \"m/44'/60'/0'/0/0\""
+wallet account get --account-id "m/44'/60'/0'/0/0"

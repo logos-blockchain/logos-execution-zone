@@ -123,7 +123,10 @@ fn main() {
             let mut vault_authorized = vault_pre.clone();
             vault_authorized.is_authorized = true;
             let transfer_instruction =
-                risc0_zkvm::serde::to_vec(&amount_out).expect("transfer instruction serialization");
+                risc0_zkvm::serde::to_vec(&authenticated_transfer_core::Instruction::Transfer {
+                    amount: amount_out,
+                })
+                .expect("transfer instruction serialization");
             let call_1 = ChainedCall {
                 program_id: token_program_id,
                 pre_states: vec![vault_authorized, receiver_pre.clone()],

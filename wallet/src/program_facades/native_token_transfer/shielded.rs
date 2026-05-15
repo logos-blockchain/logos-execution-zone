@@ -18,7 +18,9 @@ impl NativeTokenTransfer<'_> {
             .send_privacy_preserving_tx_with_pre_check(
                 vec![
                     PrivacyPreservingAccount::Public(from),
-                    PrivacyPreservingAccount::PrivateOwned(to),
+                    self.0
+                        .resolve_private_account(to)
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
                 ],
                 instruction_data,
                 &program.into(),

@@ -1,0 +1,11 @@
+[package]
+name = "authenticated_transfer_core"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+serde.workspace = true

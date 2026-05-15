@@ -4,6 +4,7 @@ use crate::{
     cells::shared_cells::{FirstBlockSetCell, LastBlockCell},
     indexer::indexer_cells::{
         BreakpointCellRef, LastBreakpointIdCell, LastObservedL1LibHeaderCell,
+        ZoneSdkIndexerCursorCellRef,
     },
 };
 
@@ -30,6 +31,10 @@ impl RocksDBIO {
         self.put(&FirstBlockSetCell(true), ())
     }
 
+    pub fn put_zone_sdk_indexer_cursor_bytes(&self, bytes: &[u8]) -> DbResult<()> {
+        self.put(&ZoneSdkIndexerCursorCellRef(bytes), ())
+    }
+
     // State
 
     pub fn put_breakpoint(&self, br_id: u64, breakpoint: &V03State) -> DbResult<()> {
@@ -37,9 +42,10 @@ impl RocksDBIO {
     }
 
     pub fn put_next_breakpoint(&self) -> DbResult<()> {
-        let last_block = self.get_meta_last_block_in_db()?;
+        let last_block = self.get_meta_last_block_id_in_db()?.unwrap_or(0);
         let next_breakpoint_id = self
             .get_meta_last_breakpoint_id()?
+            .unwrap_or(0)
             .checked_add(1)
             .expect("Breakpoint Id will be lesser than u64::MAX");
         let block_to_break_id = next_breakpoint_id

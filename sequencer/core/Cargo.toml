@@ -13,8 +13,10 @@ nssa_core.workspace = true
 common.workspace = true
 storage.workspace = true
 mempool.workspace = true
-bedrock_client.workspace = true
+logos-blockchain-zone-sdk.workspace = true
 testnet_initial_state.workspace = true
+faucet_core.workspace = true
+vault_core.workspace = true
 
 anyhow.workspace = true
 serde.workspace = true
@@ -30,7 +32,6 @@ rand.workspace = true
 borsh.workspace = true
 bytesize.workspace = true
 url.workspace = true
-jsonrpsee = { workspace = true, features = ["ws-client"] }
 
 [features]
 default = []

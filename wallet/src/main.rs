@@ -61,7 +61,7 @@ async fn main() -> Result<()> {
             println!("  {mnemonic}");
             println!();
 
-            wallet.store_persistent_data().await?;
+            wallet.store_persistent_data()?;
             wallet
         };
         let _output = execute_subcommand(&mut wallet, command).await?;

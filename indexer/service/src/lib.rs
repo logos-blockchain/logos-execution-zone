@@ -16,6 +16,7 @@ pub struct IndexerHandle {
     /// Option because of `Drop` which forbids to simply move out of `self` in `stopped()`.
     server_handle: Option<ServerHandle>,
 }
+
 impl IndexerHandle {
     const fn new(addr: SocketAddr, server_handle: ServerHandle) -> Self {
         Self {
