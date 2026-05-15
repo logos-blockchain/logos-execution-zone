@@ -52,7 +52,8 @@ impl WalletSubcommand for KeycardSubcommand {
                     let wallet = KeycardWallet::new(py)
                         .expect("`wallet::keycard::connect`: invalid keycard wallet provided");
 
-                    wallet.connect(py, &pin)
+                    wallet
+                        .connect(py, &pin)
                         .expect("`wallet::keycard::connect`: failed to connect to keycard");
 
                     println!("\u{2705} Keycard paired and ready.");
@@ -70,10 +71,12 @@ impl WalletSubcommand for KeycardSubcommand {
                     let wallet = KeycardWallet::new(py)
                         .expect("`wallet::keycard::disconnect`: invalid keycard wallet provided");
 
-                    wallet.connect(py, &pin)
+                    wallet
+                        .connect(py, &pin)
                         .expect("`wallet::keycard::disconnect`: failed to open session");
 
-                    wallet.disconnect(py)
+                    wallet
+                        .disconnect(py)
                         .expect("`wallet::keycard::disconnect`: failed to unpair keycard");
 
                     clear_pairing();
@@ -91,7 +94,8 @@ impl WalletSubcommand for KeycardSubcommand {
                     let wallet = KeycardWallet::new(py)
                         .expect("`wallet::keycard::init`: invalid keycard wallet provided");
 
-                    let initialized = wallet.initialize(py, &pin)
+                    let initialized = wallet
+                        .initialize(py, &pin)
                         .expect("`wallet::keycard::init`: failed to initialize keycard");
 
                     if initialized {
@@ -112,7 +116,8 @@ impl WalletSubcommand for KeycardSubcommand {
                     let wallet = KeycardWallet::new(py)
                         .expect("`wallet::keycard::load`: invalid keycard wallet provided");
 
-                    wallet.connect(py, &pin)
+                    wallet
+                        .connect(py, &pin)
                         .expect("`wallet::keycard::load`: failed to connect to keycard");
 
                     println!("\u{2705} Keycard is now connected to wallet.");

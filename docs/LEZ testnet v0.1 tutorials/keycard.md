@@ -64,14 +64,13 @@ unset KEYCARD_PIN
 
 ### Keycard
 
-| Command                           | Description                                                              |
-|-----------------------------------|--------------------------------------------------------------------------|
-| `wallet keycard available`        | Checks whether a Keycard reader and card are accessible                  |
-| `wallet keycard init`             | Initializes a blank Keycard with a PIN and a generated PUK               |
-| `wallet keycard connect`          | Establishes and saves a pairing with the Keycard                         |
-| `wallet keycard disconnect`       | Unpairs the Keycard and clears the saved pairing                         |
-| `wallet keycard load`             | Loads a mnemonic phrase onto the Keycard                                 |
-| `wallet keycard get-private-keys` | Retrieves private account keys (nsk, vsk) for a given BIP32 path        |
+| Command                     | Description                                                |
+|-----------------------------|------------------------------------------------------------|
+| `wallet keycard available`  | Checks whether a Keycard reader and card are accessible    |
+| `wallet keycard init`       | Initializes a blank Keycard with a PIN and a generated PUK |
+| `wallet keycard connect`    | Establishes and saves a pairing with the Keycard           |
+| `wallet keycard disconnect` | Unpairs the Keycard and clears the saved pairing           |
+| `wallet keycard load`       | Loads a mnemonic phrase onto the Keycard                   |
 
 1. Check keycard availability
 ```bash
@@ -114,17 +113,7 @@ Keycard PIN:
 ✅ Mnemonic phrase loaded successfully.
 ```
 
-5. Get private keys for a path
-```bash
-wallet keycard get-private-keys --key-path "m/44'/60'/0'/0/0"
-
-# Output:
-Keycard PIN:
-nsk: 55e505bf925e536c843a12ebc08c41ca5f4761eeeb7fa33725f0b44e6f1ac2e4
-vsk: 30f798893977a7b7263d1f77abf58e11e014428c92030d6a02fe363cceb41ffa
-```
-
-6. Disconnect (unpair and clear saved pairing)
+5. Disconnect (unpair and clear saved pairing)
 ```bash
 wallet keycard disconnect
 
@@ -172,7 +161,7 @@ Transaction hash is 2c8a4f1e903d5b76e80214c5b82e1d46a105e28930ad71bcce48f2d07b49
 | `wallet auth-transfer init` | Registers an account with the auth-transfer program                           |
 | `wallet auth-transfer send` | Sends native tokens between accounts                                          |
 
-`--account` (for `init`) and `--from`/`--to` (for `send`) each accept any of:
+`--account-id` (for `init`) and `--from`/`--to` (for `send`) each accept any of:
 - A BIP32 key path — uses Keycard (e.g. `m/44'/60'/0'/0/0`)
 - An account ID with privacy prefix (e.g. `Public/9bKm...`)
 - An account label (e.g. `my-account`)
@@ -181,7 +170,7 @@ For `send`, foreign recipient accounts (not in the local wallet and not a Keycar
 
 1. Initialize a Keycard public account
 ```bash
-wallet auth-transfer init --account "m/44'/60'/0'/0/0"
+wallet auth-transfer init --account-id "m/44'/60'/0'/0/0"
 
 # Output:
 Keycard PIN:

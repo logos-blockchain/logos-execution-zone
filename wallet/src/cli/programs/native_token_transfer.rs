@@ -58,9 +58,9 @@ impl WalletSubcommand for AuthTransferSubcommand {
             Self::Init { account_id } => {
                 let resolved = account_id.resolve(wallet_core.storage())?;
                 match resolved {
-                    AccountIdWithPrivacy::Public(account_id) => {
+                    AccountIdWithPrivacy::Public(pub_account_id) => {
                         let tx_hash = NativeTokenTransfer(wallet_core)
-                            .register_account(account_id, &account)
+                            .register_account(pub_account_id, &account_id)
                             .await?;
 
                         println!("Transaction hash is {tx_hash}");
@@ -124,7 +124,13 @@ impl WalletSubcommand for AuthTransferSubcommand {
                     }
                     (Some(to), None, None) => match (from, to) {
                         (AccountIdWithPrivacy::Public(from), AccountIdWithPrivacy::Public(to)) => {
-                            NativeTokenTransferProgramSubcommand::Public { from, to, amount }
+                            NativeTokenTransferProgramSubcommand::Public {
+                                from,
+                                to,
+                                amount,
+                                from_mention: from_account,
+                                to_mention: to_account.expect("matched Some branch"),
+                            }
                         }
                         (
                             AccountIdWithPrivacy::Private(from),
@@ -481,7 +487,13 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommand {
 
                 Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
             }
-            Self::Public { from, to, amount, from_mention, to_mention } => {
+            Self::Public {
+                from,
+                to,
+                amount,
+                from_mention,
+                to_mention,
+            } => {
                 let tx_hash = NativeTokenTransfer(wallet_core)
                     .send_public_transfer(from, to, amount, &from_mention, &to_mention)
                     .await?;

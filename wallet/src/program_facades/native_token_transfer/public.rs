@@ -10,9 +10,7 @@ use sequencer_service_rpc::RpcClient as _;
 
 use super::NativeTokenTransfer;
 use crate::{
-    ExecutionFailureKind,
-    cli::CliAccountMention,
-    helperfunctions::read_pin,
+    ExecutionFailureKind, cli::CliAccountMention, helperfunctions::read_pin,
     signing::KeycardSessionContext,
 };
 
@@ -25,13 +23,12 @@ impl NativeTokenTransfer<'_> {
         from_mention: &CliAccountMention,
         to_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
-
-        let from_signer = from_mention
-            .to_signer(self.0)
-            .map_err(|e| ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string())))?;
-        let to_signer = to_mention
-            .to_recipient_signer(self.0)
-            .map_err(|e| ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string())))?;
+        let from_signer = from_mention.to_signer(self.0).map_err(|e| {
+            ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string()))
+        })?;
+        let to_signer = to_mention.to_recipient_signer(self.0).map_err(|e| {
+            ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string()))
+        })?;
 
         let account_ids = vec![from, to];
         let signing_ids: Vec<AccountId> = if to_signer.needs_signature() {
@@ -51,13 +48,19 @@ impl NativeTokenTransfer<'_> {
             program_id,
             account_ids,
             nonces,
-            AuthTransferInstruction::Transfer { amount: balance_to_move },
+            AuthTransferInstruction::Transfer {
+                amount: balance_to_move,
+            },
         )
         .map_err(ExecutionFailureKind::TransactionBuildError)?;
 
         let pin = if from_mention.is_keycard() || to_mention.is_keycard() {
             read_pin()
-                .map_err(|e| ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string())))?
+                .map_err(|e| {
+                    ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(
+                        e.to_string(),
+                    ))
+                })?
                 .as_str()
                 .to_owned()
         } else {
@@ -93,34 +96,6 @@ impl NativeTokenTransfer<'_> {
             .sequencer_client
             .send_transaction(NSSATransaction::Public(tx))
             .await?)
-            } else {
-                println!(
-                    "Receiver's account ({to}) private key not found in wallet. Proceeding with only sender's key."
-                );
-            }
-
-            let message = Message::try_new(
-                program_id,
-                account_ids,
-                nonces,
-                AuthTransferInstruction::Transfer {
-                    amount: balance_to_move,
-                },
-            )
-            .unwrap();
-            let witness_set = WitnessSet::for_message(&message, &private_keys);
-
-            let tx = PublicTransaction::new(message, witness_set);
-
-            Ok(self
-                .0
-                .sequencer_client
-                .send_transaction(NSSATransaction::Public(tx))
-                .await?)
-        } else {
-            Err(ExecutionFailureKind::InsufficientFundsError)
-        }
-
     }
 
     pub async fn register_account(
@@ -144,13 +119,17 @@ impl NativeTokenTransfer<'_> {
         )
         .map_err(ExecutionFailureKind::TransactionBuildError)?;
 
-        let signer = account_mention
-            .to_signer(self.0)
-            .map_err(|e| ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string())))?;
+        let signer = account_mention.to_signer(self.0).map_err(|e| {
+            ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string()))
+        })?;
 
         let pin = if account_mention.is_keycard() {
             read_pin()
-                .map_err(|e| ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string())))?
+                .map_err(|e| {
+                    ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(
+                        e.to_string(),
+                    ))
+                })?
                 .as_str()
                 .to_owned()
         } else {

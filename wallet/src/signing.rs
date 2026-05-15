@@ -34,8 +34,19 @@ impl AccountSigner {
     ) -> Option<Result<(Signature, PublicKey)>> {
         match self {
             Self::Local(id) => {
-                let key = wallet_core.storage().key_chain().pub_account_signing_key(*id)?;
-                Some(Ok((Signature::new(key, hash), PublicKey::new_from_private_key(key))))
+                let key = wallet_core
+                    .storage()
+                    .key_chain()
+                    .pub_account_signing_key(*id);
+                Some(key.map_or_else(
+                    || Err(anyhow::anyhow!("signing key not found for account {id}")),
+                    |key| {
+                        Ok((
+                            Signature::new(key, hash),
+                            PublicKey::new_from_private_key(key),
+                        ))
+                    },
+                ))
             }
             Self::Keycard(path) => Some(
                 ctx.get_or_connect(py)
@@ -55,10 +66,16 @@ pub struct KeycardSessionContext {
 
 impl KeycardSessionContext {
     pub fn new(pin: impl Into<String>) -> Self {
-        Self { pin: pin.into(), wallet: None }
+        Self {
+            pin: pin.into(),
+            wallet: None,
+        }
     }
 
-    pub fn get_or_connect<'py>(&'py mut self, py: Python<'py>) -> pyo3::PyResult<&'py KeycardWallet> {
+    pub fn get_or_connect<'py>(
+        &'py mut self,
+        py: Python<'py>,
+    ) -> pyo3::PyResult<&'py KeycardWallet> {
         if self.wallet.is_none() {
             python_path::add_python_path(py)?;
             let wallet = KeycardWallet::new(py)?;

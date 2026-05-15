@@ -67,7 +67,10 @@ impl KeycardWallet {
     ) -> PyResult<bool> {
         self.instance
             .bind(py)
-            .call_method1("setup_communication_with_pairing", (pin, index, key.to_vec()))?
+            .call_method1(
+                "setup_communication_with_pairing",
+                (pin, index, key.to_vec()),
+            )?
             .extract()
     }
 
@@ -197,7 +200,11 @@ impl KeycardWallet {
 fn pairing_file_path() -> Option<PathBuf> {
     let home = std::env::var("NSSA_WALLET_HOME_DIR")
         .map(PathBuf::from)
-        .or_else(|_| std::env::home_dir().map(|h| h.join(".nssa").join("wallet")).ok_or(()))
+        .or_else(|_| {
+            std::env::home_dir()
+                .map(|h| h.join(".nssa").join("wallet"))
+                .ok_or(())
+        })
         .ok()?;
     Some(home.join("keycard_pairing.json"))
 }
