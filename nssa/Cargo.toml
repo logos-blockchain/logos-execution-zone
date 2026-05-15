@@ -14,7 +14,7 @@ faucet_core.workspace = true
 
 anyhow.workspace = true
 thiserror.workspace = true
-risc0-zkvm.workspace = true
+risc0-zkvm = { workspace = true, features = ["prove"] }
 serde.workspace = true
 serde_with.workspace = true
 sha2.workspace = true
