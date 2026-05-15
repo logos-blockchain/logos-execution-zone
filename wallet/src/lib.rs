@@ -14,6 +14,7 @@ use bip39::Mnemonic;
 use common::{HashType, transaction::NSSATransaction};
 use config::WalletConfig;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
+pub use lez_core::ExecutionFailureKind;
 use log::info;
 use nssa::{
     Account, AccountId, PrivacyPreservingTransaction,
@@ -57,24 +58,6 @@ pub struct SharedAccountInfo {
     pub account_id: AccountId,
     pub npk: nssa_core::NullifierPublicKey,
     pub vpk: nssa_core::encryption::ViewingPublicKey,
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum ExecutionFailureKind {
-    #[error("Failed to get data from sequencer")]
-    SequencerError(#[source] anyhow::Error),
-    #[error("Inputs amounts does not match outputs")]
-    AmountMismatchError,
-    #[error("Accounts key not found")]
-    KeyNotFoundError,
-    #[error("Sequencer client error")]
-    SequencerClientError(#[from] sequencer_service_rpc::ClientError),
-    #[error("Can not pay for operation")]
-    InsufficientFundsError,
-    #[error("Account {0} data is invalid")]
-    AccountDataError(AccountId),
-    #[error("Failed to build transaction: {0}")]
-    TransactionBuildError(#[from] nssa::error::NssaError),
 }
 
 #[expect(clippy::partial_pub_fields, reason = "TODO: make all fields private")]

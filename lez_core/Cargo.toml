@@ -1,0 +1,23 @@
+[package]
+name = "lez_core"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[dependencies]
+nssa_core.workspace = true
+nssa.workspace = true
+common.workspace = true
+key_protocol.workspace = true
+sequencer_service_rpc = { workspace = true, features = ["client"] }
+
+anyhow.workspace = true
+thiserror.workspace = true
+serde_json.workspace = true
+env_logger.workspace = true
+log.workspace = true
+serde.workspace = true
+hex.workspace = true
+
+[lints]
+workspace = true

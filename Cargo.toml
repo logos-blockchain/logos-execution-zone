@@ -40,7 +40,8 @@ members = [
   "examples/program_deployment/methods",
   "examples/program_deployment/methods/guest",
   "testnet_initial_state",
-  "indexer/ffi",
+  "indexer/ffi", 
+  "lez_core",
 ]
 
 [workspace.dependencies]
@@ -73,6 +74,7 @@ faucet_core = { path = "programs/faucet/core" }
 vault_core = { path = "programs/vault/core" }
 test_program_methods = { path = "test_program_methods" }
 testnet_initial_state = { path = "testnet_initial_state" }
+lez_core = { path = "lez_core" }
 
 tokio = { version = "1.50", features = [
   "net",

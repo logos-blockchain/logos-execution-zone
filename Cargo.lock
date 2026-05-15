@@ -4634,6 +4634,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "lez_core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "common",
+ "env_logger",
+ "hex",
+ "key_protocol",
+ "log",
+ "nssa",
+ "nssa_core",
+ "sequencer_service_rpc",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.183"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10143,6 +10161,7 @@ dependencies = [
  "indicatif",
  "itertools 0.14.0",
  "key_protocol",
+ "lez_core",
  "log",
  "nssa",
  "nssa_core",
