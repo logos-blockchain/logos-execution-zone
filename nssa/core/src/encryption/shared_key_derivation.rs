@@ -17,7 +17,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{SharedSecretKey, encryption::Scalar};
 
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(
+    Serialize, Deserialize, Clone, PartialEq, Eq, PartialOrd, Ord, BorshSerialize, BorshDeserialize,
+)]
 pub struct Secp256k1Point(pub Vec<u8>);
 
 impl std::fmt::Debug for Secp256k1Point {
@@ -56,8 +58,8 @@ impl From<&EphemeralSecretKey> for EphemeralPublicKey {
 impl SharedSecretKey {
     /// Creates a new shared secret key from a scalar and a point.
     #[must_use]
-    pub fn new(scalar: &Scalar, point: &Secp256k1Point) -> Self {
-        let scalar = k256::Scalar::from_repr((*scalar).into()).unwrap();
+    pub fn new(scalar: Scalar, point: &Secp256k1Point) -> Self {
+        let scalar = k256::Scalar::from_repr(scalar.into()).unwrap();
         let point: [u8; 33] = point.0.clone().try_into().unwrap();
 
         let encoded = EncodedPoint::from_bytes(point).unwrap();

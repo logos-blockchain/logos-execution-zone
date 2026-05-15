@@ -1,7 +1,7 @@
 services:
 
   logos-blockchain-node-0:
-    image: ghcr.io/logos-blockchain/logos-blockchain@sha256:c5243681b353278cabb562a176f0a5cfbefc2056f18cebc47fe0e3720c29fb12
+    image: ghcr.io/logos-blockchain/logos-blockchain@sha256:9f1829dea335c56f6ff68ae37ea872ed5313b96b69e8ffe143c02b7217de85fc
     ports:
       - "${PORT:-8080}:18080/tcp"
     volumes:

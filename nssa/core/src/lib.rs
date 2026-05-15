@@ -3,13 +3,16 @@
     reason = "We prefer to group methods by functionality rather than by type for encoding"
 )]
 
-pub use circuit_io::{PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput};
+pub use circuit_io::{
+    InputAccountIdentity, PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput,
+};
 pub use commitment::{
     Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, DUMMY_COMMITMENT_HASH, MembershipProof,
     compute_digest_for_path,
 };
 pub use encryption::{EncryptionScheme, SharedSecretKey};
 pub use nullifier::{Identifier, Nullifier, NullifierPublicKey, NullifierSecretKey};
+pub use program::PrivateAccountKind;
 
 pub mod account;
 mod circuit_io;
@@ -21,6 +24,8 @@ pub mod program;
 
 #[cfg(feature = "host")]
 pub mod error;
+
+pub const GENESIS_BLOCK_ID: BlockId = 1;
 
 pub type BlockId = u64;
 /// Unix timestamp in milliseconds.

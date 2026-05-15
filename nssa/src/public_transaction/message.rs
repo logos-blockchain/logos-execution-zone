@@ -90,7 +90,7 @@ mod tests {
     use super::{Message, PREFIX};
 
     #[test]
-    fn hash_message_public_pinned() {
+    fn hash_public_pinned() {
         let msg = Message::new_preserialized(
             [1_u32; 8],
             vec![AccountId::new([42_u8; 32])],

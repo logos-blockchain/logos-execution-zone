@@ -1,6 +1,7 @@
 use common::PINATA_BASE58;
 use key_protocol::key_management::{
     KeyChain,
+    key_tree::chain_index::ChainIndex,
     secret_holders::{PrivateKeyHolder, SecretSpendingKey},
 };
 use nssa::{Account, AccountId, Data, PrivateKey, PublicKey, V03State};
@@ -97,13 +98,17 @@ pub struct PublicAccountPrivateInitialData {
 pub struct PrivateAccountPrivateInitialData {
     pub account: nssa_core::account::Account,
     pub key_chain: KeyChain,
+    pub chain_index: Option<ChainIndex>,
     pub identifier: nssa_core::Identifier,
 }
 
 impl PrivateAccountPrivateInitialData {
     #[must_use]
     pub fn account_id(&self) -> nssa::AccountId {
-        nssa::AccountId::from((&self.key_chain.nullifier_public_key, self.identifier))
+        nssa::AccountId::for_regular_private_account(
+            &self.key_chain.nullifier_public_key,
+            self.identifier,
+        )
     }
 }
 
@@ -156,6 +161,7 @@ pub fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialD
                 nonce: 0.into(),
             },
             key_chain: key_chain_1,
+            chain_index: None,
             identifier: 0,
         },
         PrivateAccountPrivateInitialData {
@@ -166,6 +172,7 @@ pub fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialD
                 nonce: 0.into(),
             },
             key_chain: key_chain_2,
+            chain_index: None,
             identifier: 0,
         },
     ]
@@ -208,7 +215,7 @@ pub fn initial_state() -> V03State {
             .iter()
             .map(|init_comm_data| {
                 let npk = &init_comm_data.npk;
-                let account_id = nssa::AccountId::from((npk, 0));
+                let account_id = nssa::AccountId::for_regular_private_account(npk, 0);
 
                 let mut acc = init_comm_data.account.clone();
 

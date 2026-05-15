@@ -93,14 +93,8 @@ pub enum InvalidProgramBehaviorError {
         actual: Box<Account>,
     },
 
-    #[error(
-        "Inconsistent authorization for account {account_id} : expected {expected_authorization}, actual {actual_authorization}"
-    )]
-    InconsistentAccountAuthorization {
-        account_id: AccountId,
-        expected_authorization: bool,
-        actual_authorization: bool,
-    },
+    #[error("Unauthorized account marked as authorized")]
+    InvalidAccountAuthorization { account_id: AccountId },
 
     #[error("Program ID mismatch: expected {expected:?}, actual {actual:?}")]
     MismatchedProgramId {

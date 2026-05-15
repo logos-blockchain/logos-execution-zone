@@ -4,7 +4,6 @@ use clap::Subcommand;
 use crate::{
     WalletCore,
     cli::{SubcommandReturnValue, WalletSubcommand},
-    config::InitialAccountData,
 };
 
 /// Represents generic config CLI subcommand.
@@ -29,52 +28,32 @@ impl WalletSubcommand for ConfigSubcommand {
         self,
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
+        let config = wallet_core.config();
         match self {
             Self::Get { all, key } => {
                 if all {
-                    let config_str =
-                        serde_json::to_string_pretty(&wallet_core.storage.wallet_config)?;
+                    let config_str = serde_json::to_string_pretty(&config)?;
 
                     println!("{config_str}");
                 } else if let Some(key) = key {
                     match key.as_str() {
                         "sequencer_addr" => {
-                            println!("{}", wallet_core.storage.wallet_config.sequencer_addr);
+                            println!("{}", config.sequencer_addr);
                         }
                         "seq_poll_timeout" => {
-                            println!("{:?}", wallet_core.storage.wallet_config.seq_poll_timeout);
+                            println!("{:?}", config.seq_poll_timeout);
                         }
                         "seq_tx_poll_max_blocks" => {
-                            println!(
-                                "{}",
-                                wallet_core.storage.wallet_config.seq_tx_poll_max_blocks
-                            );
+                            println!("{}", config.seq_tx_poll_max_blocks);
                         }
                         "seq_poll_max_retries" => {
-                            println!("{}", wallet_core.storage.wallet_config.seq_poll_max_retries);
+                            println!("{}", config.seq_poll_max_retries);
                         }
                         "seq_block_poll_max_amount" => {
-                            println!(
-                                "{}",
-                                wallet_core.storage.wallet_config.seq_block_poll_max_amount
-                            );
-                        }
-                        "initial_accounts" => {
-                            println!(
-                                "{:#?}",
-                                wallet_core
-                                    .storage
-                                    .wallet_config
-                                    .initial_accounts
-                                    .clone()
-                                    .unwrap_or_else(
-                                        InitialAccountData::create_initial_accounts_data
-                                    )
-                            );
+                            println!("{}", config.seq_block_poll_max_amount);
                         }
                         "basic_auth" => {
-                            if let Some(basic_auth) = &wallet_core.storage.wallet_config.basic_auth
-                            {
+                            if let Some(basic_auth) = &config.basic_auth {
                                 println!("{basic_auth}");
                             } else {
                                 println!("Not set");
@@ -89,27 +68,26 @@ impl WalletSubcommand for ConfigSubcommand {
                 }
             }
             Self::Set { key, value } => {
+                let mut config = config.clone();
                 match key.as_str() {
                     "sequencer_addr" => {
-                        wallet_core.storage.wallet_config.sequencer_addr = value.parse()?;
+                        config.sequencer_addr = value.parse()?;
                     }
                     "seq_poll_timeout" => {
-                        wallet_core.storage.wallet_config.seq_poll_timeout =
-                            humantime::parse_duration(&value)
-                                .map_err(|e| anyhow::anyhow!("Invalid duration: {e}"))?;
+                        config.seq_poll_timeout = humantime::parse_duration(&value)
+                            .map_err(|e| anyhow::anyhow!("Invalid duration: {e}"))?;
                     }
                     "seq_tx_poll_max_blocks" => {
-                        wallet_core.storage.wallet_config.seq_tx_poll_max_blocks = value.parse()?;
+                        config.seq_tx_poll_max_blocks = value.parse()?;
                     }
                     "seq_poll_max_retries" => {
-                        wallet_core.storage.wallet_config.seq_poll_max_retries = value.parse()?;
+                        config.seq_poll_max_retries = value.parse()?;
                     }
                     "seq_block_poll_max_amount" => {
-                        wallet_core.storage.wallet_config.seq_block_poll_max_amount =
-                            value.parse()?;
+                        config.seq_block_poll_max_amount = value.parse()?;
                     }
                     "basic_auth" => {
-                        wallet_core.storage.wallet_config.basic_auth = Some(value.parse()?);
+                        config.basic_auth = Some(value.parse()?);
                     }
                     "initial_accounts" => {
                         anyhow::bail!("Setting this field from wallet is not supported");
@@ -119,6 +97,7 @@ impl WalletSubcommand for ConfigSubcommand {
                     }
                 }
 
+                wallet_core.set_config(config);
                 wallet_core.store_config_changes().await?;
             }
             Self::Description { key } => match key.as_str() {

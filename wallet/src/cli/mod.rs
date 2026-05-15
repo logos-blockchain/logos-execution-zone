@@ -1,20 +1,23 @@
-use std::{io::Write as _, path::PathBuf, str::FromStr as _};
+use std::{io::Write as _, path::PathBuf, str::FromStr};
 
 use anyhow::{Context as _, Result};
 use bip39::Mnemonic;
 use clap::{Parser, Subcommand};
 use common::{HashType, transaction::NSSATransaction};
+use derive_more::Display;
 use futures::TryFutureExt as _;
 use nssa::{ProgramDeploymentTransaction, program::Program};
 use sequencer_service_rpc::RpcClient as _;
 
-pub use crate::helperfunctions::read_pin;
+pub use crate::helperfunctions::{read_mnemonic, read_pin};
 use crate::{
     WalletCore,
+    account::{AccountIdWithPrivacy, Label},
     cli::{
         account::AccountSubcommand,
         chain::ChainSubcommand,
         config::ConfigSubcommand,
+        group::GroupSubcommand,
         keycard::KeycardSubcommand,
         programs::{
             amm::AmmProgramAgnosticSubcommand, ata::AtaSubcommand,
@@ -22,11 +25,13 @@ use crate::{
             token::TokenProgramAgnosticSubcommand,
         },
     },
+    storage::Storage,
 };
 
 pub mod account;
 pub mod chain;
 pub mod config;
+pub mod group;
 pub mod keycard;
 pub mod programs;
 
@@ -60,6 +65,9 @@ pub enum Command {
     /// Associated Token Account program interaction subcommand.
     #[command(subcommand)]
     Ata(AtaSubcommand),
+    /// Group key management (create, invite, join, derive keys).
+    #[command(subcommand)]
+    Group(GroupSubcommand),
     /// Check the wallet can connect to the node and builtin local programs
     /// match the remote versions.
     CheckHealth,
@@ -76,6 +84,7 @@ pub enum Command {
     },
     /// Deploy a program.
     DeployProgram { binary_filepath: PathBuf },
+    /// Keycard hardware wallet management.
     #[command(subcommand)]
     Keycard(KeycardSubcommand),
 }
@@ -109,6 +118,115 @@ pub enum SubcommandReturnValue {
     SyncedToBlock(u64),
 }
 
+#[derive(Debug, Display, Clone, PartialEq, Eq, Hash)]
+pub enum CliAccountMention {
+    #[display("{_0}")]
+    Id(AccountIdWithPrivacy),
+    #[display("{_0}")]
+    Label(Label),
+    #[display("{_0}")]
+    KeyPath(String),
+}
+
+impl CliAccountMention {
+    pub fn resolve(&self, storage: &Storage) -> Result<AccountIdWithPrivacy> {
+        match self {
+            Self::Id(account_id) => Ok(*account_id),
+            Self::Label(label) => storage
+                .resolve_label(label)
+                .ok_or_else(|| anyhow::anyhow!("No account found for label `{label}`")),
+            Self::KeyPath(path) => {
+                let pin = read_pin()?;
+                let id_str =
+                    keycard_wallet::KeycardWallet::get_account_id_for_path_with_connect(&pin, path)
+                        .map_err(anyhow::Error::from)?;
+                AccountIdWithPrivacy::from_str(&id_str)
+                    .map_err(|e| anyhow::anyhow!("Invalid account id from keycard: {e}"))
+            }
+        }
+    }
+
+    #[must_use]
+    pub const fn is_keycard(&self) -> bool {
+        matches!(self, Self::KeyPath(_))
+    }
+
+    #[must_use]
+    pub fn key_path(&self) -> Option<&str> {
+        match self {
+            Self::KeyPath(path) => Some(path),
+            Self::Id(_) | Self::Label(_) => None,
+        }
+    }
+
+    /// Resolve to an [`AccountSigner`] for a sender — must sign, never `Foreign`.
+    pub fn to_signer(&self, wallet_core: &WalletCore) -> Result<crate::signing::AccountSigner> {
+        if let Self::KeyPath(path) = self {
+            return Ok(crate::signing::AccountSigner::Keycard(path.clone()));
+        }
+        let account = self.resolve(wallet_core.storage())?;
+        match account {
+            AccountIdWithPrivacy::Public(id) => Ok(crate::signing::AccountSigner::Local(id)),
+            AccountIdWithPrivacy::Private(_) => {
+                anyhow::bail!("Private accounts not supported as senders here")
+            }
+        }
+    }
+
+    /// Resolve to an [`AccountSigner`] for a recipient — returns `Foreign` when the account
+    /// has no local key and no keycard path, meaning no signature or nonce is required.
+    pub fn to_recipient_signer(
+        &self,
+        wallet_core: &WalletCore,
+    ) -> Result<crate::signing::AccountSigner> {
+        if let Self::KeyPath(path) = self {
+            return Ok(crate::signing::AccountSigner::Keycard(path.clone()));
+        }
+        let account = self.resolve(wallet_core.storage())?;
+        match account {
+            AccountIdWithPrivacy::Public(id) => Ok(
+                match wallet_core
+                    .storage()
+                    .key_chain()
+                    .pub_account_signing_key(id)
+                {
+                    Some(_) => crate::signing::AccountSigner::Local(id),
+                    None => crate::signing::AccountSigner::Foreign,
+                },
+            ),
+            AccountIdWithPrivacy::Private(_) => {
+                anyhow::bail!("Private accounts not supported as recipients here")
+            }
+        }
+    }
+}
+
+impl FromStr for CliAccountMention {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        if s.starts_with("m/") {
+            return Ok(Self::KeyPath(s.to_owned()));
+        }
+        AccountIdWithPrivacy::from_str(s).map_or_else(
+            |_| Ok(Self::Label(Label::new(s.to_owned()))),
+            |account_id| Ok(Self::Id(account_id)),
+        )
+    }
+}
+
+impl From<Label> for CliAccountMention {
+    fn from(label: Label) -> Self {
+        Self::Label(label)
+    }
+}
+
+impl Default for CliAccountMention {
+    fn default() -> Self {
+        Self::Label(Label::new(String::new()))
+    }
+}
+
 pub async fn execute_subcommand(
     wallet_core: &mut WalletCore,
     command: Command,
@@ -125,9 +243,6 @@ pub async fn execute_subcommand(
         }
         Command::Pinata(pinata_subcommand) => {
             pinata_subcommand.handle_subcommand(wallet_core).await?
-        }
-        Command::Keycard(keycard_subcommand) => {
-            keycard_subcommand.handle_subcommand(wallet_core).await?
         }
         Command::CheckHealth => {
             let remote_program_ids = wallet_core
@@ -172,6 +287,10 @@ pub async fn execute_subcommand(
         Command::Token(token_subcommand) => token_subcommand.handle_subcommand(wallet_core).await?,
         Command::AMM(amm_subcommand) => amm_subcommand.handle_subcommand(wallet_core).await?,
         Command::Ata(ata_subcommand) => ata_subcommand.handle_subcommand(wallet_core).await?,
+        Command::Group(group_subcommand) => group_subcommand.handle_subcommand(wallet_core).await?,
+        Command::Keycard(keycard_subcommand) => {
+            keycard_subcommand.handle_subcommand(wallet_core).await?
+        }
         Command::Config(config_subcommand) => {
             config_subcommand.handle_subcommand(wallet_core).await?
         }
@@ -205,9 +324,7 @@ pub async fn execute_subcommand(
 
 pub async fn execute_continuous_run(wallet_core: &mut WalletCore) -> Result<()> {
     loop {
-        let latest_block_num = wallet_core.sequencer_client.get_last_block_id().await?;
-        wallet_core.sync_to_block(latest_block_num).await?;
-
+        wallet_core.sync_to_latest_block().await?;
         tokio::time::sleep(wallet_core.config().seq_poll_timeout).await;
     }
 }
@@ -235,25 +352,20 @@ pub fn read_mnemonic_from_stdin() -> Result<Mnemonic> {
 pub async fn execute_keys_restoration(wallet_core: &mut WalletCore, depth: u32) -> Result<()> {
     wallet_core
         .storage
-        .user_data
-        .public_key_tree
-        .generate_tree_for_depth(depth);
+        .key_chain_mut()
+        .generate_trees_for_depth(depth);
 
-    println!("Public tree generated");
+    println!(
+        "Public tree generated\n\
+         Private tree generated"
+    );
 
-    wallet_core
-        .storage
-        .user_data
-        .private_key_tree
-        .generate_tree_for_depth(depth);
-
-    println!("Private tree generated");
+    wallet_core.sync_to_latest_block().await?;
 
     wallet_core
         .storage
-        .user_data
-        .public_key_tree
-        .cleanup_tree_remove_uninit_layered(depth, |account_id| {
+        .key_chain_mut()
+        .cleanup_trees_remove_uninit_layered(depth, |account_id| {
             wallet_core
                 .sequencer_client
                 .get_account(account_id)
@@ -261,25 +373,12 @@ pub async fn execute_keys_restoration(wallet_core: &mut WalletCore, depth: u32) 
         })
         .await?;
 
-    println!("Public tree cleaned up");
+    println!(
+        "Public tree cleaned up\n\
+         Private tree cleaned up"
+    );
 
-    let last_block = wallet_core.sequencer_client.get_last_block_id().await?;
-
-    println!("Last block is {last_block}");
-
-    wallet_core.sync_to_block(last_block).await?;
-
-    println!("Private tree clean up start");
-
-    wallet_core
-        .storage
-        .user_data
-        .private_key_tree
-        .cleanup_tree_remove_uninit_layered(depth);
-
-    println!("Private tree cleaned up");
-
-    wallet_core.store_persistent_data().await?;
+    wallet_core.store_persistent_data()?;
 
     Ok(())
 }

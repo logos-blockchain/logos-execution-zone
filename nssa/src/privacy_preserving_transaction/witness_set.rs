@@ -13,7 +13,6 @@ pub struct WitnessSet {
 
 impl WitnessSet {
     #[must_use]
-    // TODO: swap for Keycard signing path.
     pub fn for_message(message: &Message, proof: Proof, private_keys: &[&PrivateKey]) -> Self {
         let message_hash = message.hash();
         let signatures_and_public_keys = private_keys
@@ -25,22 +24,6 @@ impl WitnessSet {
                 )
             })
             .collect();
-        Self {
-            signatures_and_public_keys,
-            proof,
-        }
-    }
-
-    #[must_use]
-    pub fn from_list(proof: Proof, signatures: &[Signature], public_keys: &[PublicKey]) -> Self {
-        assert_eq!(signatures.len(), public_keys.len());
-
-        let signatures_and_public_keys = signatures
-            .iter()
-            .zip(public_keys.iter())
-            .map(|(sig, key)| (sig.clone(), key.clone()))
-            .collect();
-
         Self {
             signatures_and_public_keys,
             proof,

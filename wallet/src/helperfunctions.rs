@@ -1,62 +1,17 @@
-use std::{collections::HashMap, path::PathBuf, str::FromStr as _};
+use std::{path::PathBuf, str::FromStr as _};
 
 use anyhow::{Context as _, Result};
-use base58::ToBase58 as _;
-use key_protocol::key_protocol_core::NSSAUserData;
-use keycard_wallet::KeycardWallet;
-use nssa::Account;
 use nssa_core::account::Nonce;
 use rand::{RngCore as _, rngs::OsRng};
-use serde::Serialize;
-use testnet_initial_state::{PrivateAccountPrivateInitialData, PublicAccountPrivateInitialData};
 
-use crate::{
-    HOME_DIR_ENV_VAR,
-    config::{
-        InitialAccountData, Label, PersistentAccountDataPrivate, PersistentAccountDataPublic,
-        PersistentStorage,
-    },
-};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AccountPrivacyKind {
-    Public,
-    Private,
-}
-
-/// Human-readable representation of an account.
-#[derive(Serialize)]
-pub(crate) struct HumanReadableAccount {
-    balance: u128,
-    program_owner: String,
-    data: String,
-    nonce: u128,
-}
-
-impl From<Account> for HumanReadableAccount {
-    fn from(account: Account) -> Self {
-        let program_owner = account
-            .program_owner
-            .iter()
-            .flat_map(|n| n.to_le_bytes())
-            .collect::<Vec<u8>>()
-            .to_base58();
-        let data = hex::encode(account.data);
-        Self {
-            balance: account.balance,
-            program_owner,
-            data,
-            nonce: account.nonce.0,
-        }
-    }
-}
+use crate::HOME_DIR_ENV_VAR;
 
 /// Read the Keycard PIN without echoing it.
 ///
 /// Checks `KEYCARD_PIN` first so non-interactive callers (CI, scripts) can
 /// supply it via the environment. Falls back to a TTY prompt via `rpassword`
 /// so the value never appears in argv, shell history, or `ps` output.
-pub fn read_pin() -> Result<zeroize::Zeroizing<String>> {
+pub fn read_pin() -> anyhow::Result<zeroize::Zeroizing<String>> {
     if let Ok(pin) = std::env::var("KEYCARD_PIN") {
         return Ok(zeroize::Zeroizing::new(pin));
     }
@@ -65,7 +20,7 @@ pub fn read_pin() -> Result<zeroize::Zeroizing<String>> {
         .map_err(Into::into)
 }
 
-/// Resolve an account id-or-label pair to a `Privacy/id` string.
+/// Read the mnemonic phrase without echoing it.
 ///
 /// Exactly one of `id` or `label` must be `Some`. If `id` is provided it is
 /// returned as-is; if `label` is provided it is resolved via
@@ -131,6 +86,15 @@ pub fn resolve_account_label(
     };
 
     Ok(format!("{privacy}/{account_id_str}"))
+/// Checks `KEYCARD_MNEMONIC` first for non-interactive callers. Falls back to
+/// a TTY prompt so the phrase never appears in argv, shell history, or `ps`.
+pub fn read_mnemonic() -> anyhow::Result<zeroize::Zeroizing<String>> {
+    if let Ok(mnemonic) = std::env::var("KEYCARD_MNEMONIC") {
+        return Ok(zeroize::Zeroizing::new(mnemonic));
+    }
+    rpassword::prompt_password("Mnemonic phrase: ")
+        .map(zeroize::Zeroizing::new)
+        .map_err(Into::into)
 }
 
 /// Get home dir for wallet. Env var `NSSA_WALLET_HOME_DIR` must be set before execution to succeed.
@@ -166,70 +130,6 @@ pub fn fetch_persistent_storage_path() -> Result<PathBuf> {
     Ok(accs_path)
 }
 
-/// Produces data for storage.
-#[must_use]
-pub fn produce_data_for_storage(
-    user_data: &NSSAUserData,
-    last_synced_block: u64,
-    labels: HashMap<String, Label>,
-) -> PersistentStorage {
-    let mut vec_for_storage = vec![];
-
-    for (account_id, key) in &user_data.public_key_tree.account_id_map {
-        if let Some(data) = user_data.public_key_tree.key_map.get(key) {
-            vec_for_storage.push(
-                PersistentAccountDataPublic {
-                    account_id: *account_id,
-                    chain_index: key.clone(),
-                    data: Some(data.clone()),
-                }
-                .into(),
-            );
-        }
-    }
-
-    for (chain_index, node) in &user_data.private_key_tree.key_map {
-        let identifiers = node.value.1.iter().map(|(id, _)| *id).collect();
-        vec_for_storage.push(
-            PersistentAccountDataPrivate {
-                identifiers,
-                chain_index: chain_index.clone(),
-                data: node.clone(),
-            }
-            .into(),
-        );
-    }
-
-    for (account_id, key) in &user_data.default_pub_account_signing_keys {
-        vec_for_storage.push(
-            InitialAccountData::Public(PublicAccountPrivateInitialData {
-                account_id: *account_id,
-                pub_sign_key: key.clone(),
-            })
-            .into(),
-        );
-    }
-
-    for entry in user_data.default_user_private_accounts.values() {
-        for (identifier, account) in &entry.accounts {
-            vec_for_storage.push(
-                InitialAccountData::Private(Box::new(PrivateAccountPrivateInitialData {
-                    account: account.clone(),
-                    key_chain: entry.key_chain.clone(),
-                    identifier: *identifier,
-                }))
-                .into(),
-            );
-        }
-    }
-
-    PersistentStorage {
-        accounts: vec_for_storage,
-        last_synced_block,
-        labels,
-    }
-}
-
 #[expect(dead_code, reason = "Maybe used later")]
 pub(crate) fn produce_random_nonces(size: usize) -> Vec<Nonce> {
     let mut result = vec![[0; 16]; size];
@@ -240,43 +140,4 @@ pub(crate) fn produce_random_nonces(size: usize) -> Vec<Nonce> {
         .into_iter()
         .map(|x| Nonce(u128::from_le_bytes(x)))
         .collect()
-}
-
-pub(crate) fn parse_addr_with_privacy_prefix(
-    account_base58: &str,
-) -> Result<(String, AccountPrivacyKind)> {
-    if account_base58.starts_with("Public/") {
-        Ok((
-            account_base58.strip_prefix("Public/").unwrap().to_owned(),
-            AccountPrivacyKind::Public,
-        ))
-    } else if account_base58.starts_with("Private/") {
-        Ok((
-            account_base58.strip_prefix("Private/").unwrap().to_owned(),
-            AccountPrivacyKind::Private,
-        ))
-    } else {
-        anyhow::bail!("Unsupported privacy kind, available variants is Public/ and Private/");
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn addr_parse_with_privacy() {
-        let addr_base58 = "Public/BLgCRDXYdQPMMWVHYRFGQZbgeHx9frkipa8GtpG2Syqy";
-        let (_, addr_kind) = parse_addr_with_privacy_prefix(addr_base58).unwrap();
-
-        assert_eq!(addr_kind, AccountPrivacyKind::Public);
-
-        let addr_base58 = "Private/BLgCRDXYdQPMMWVHYRFGQZbgeHx9frkipa8GtpG2Syqy";
-        let (_, addr_kind) = parse_addr_with_privacy_prefix(addr_base58).unwrap();
-
-        assert_eq!(addr_kind, AccountPrivacyKind::Private);
-
-        let addr_base58 = "asdsada/BLgCRDXYdQPMMWVHYRFGQZbgeHx9frkipa8GtpG2Syqy";
-        assert!(parse_addr_with_privacy_prefix(addr_base58).is_err());
-    }
 }

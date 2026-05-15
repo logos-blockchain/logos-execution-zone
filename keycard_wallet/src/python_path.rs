@@ -12,8 +12,11 @@ pub fn add_python_path(py: Python<'_>) -> PyResult<()> {
         .unwrap_or_else(|| current_dir.clone());
 
     let mut paths_to_add: Vec<PathBuf> = vec![
-        python_base.join("python"),
-        python_base.join("python").join("keycard-py"),
+        python_base.join("keycard_wallet").join("python"),
+        python_base
+            .join("keycard_wallet")
+            .join("python")
+            .join("keycard-py"),
     ];
 
     // If a virtualenv is active, add its site-packages so that dependencies

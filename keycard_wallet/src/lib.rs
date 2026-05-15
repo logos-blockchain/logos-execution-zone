@@ -1,8 +1,24 @@
+use std::path::PathBuf;
+
 use nssa::{AccountId, PublicKey, Signature};
 use nssa_core::NullifierPublicKey;
 use pyo3::{prelude::*, types::PyAny};
+use serde::{Deserialize, Serialize};
 
 pub mod python_path;
+
+// TODO: encrypt at rest alongside broader wallet storage encryption work.
+#[derive(Serialize, Deserialize)]
+pub struct KeycardPairingData {
+    pub index: u8,
+    pub key: Vec<u8>,
+}
+
+impl KeycardPairingData {
+    const fn is_valid(&self) -> bool {
+        self.key.len() == 32 && self.index <= 4
+    }
+}
 
 /// Rust wrapper around the Python `KeycardWallet` class.
 pub struct KeycardWallet {
@@ -27,6 +43,60 @@ impl KeycardWallet {
             .bind(py)
             .call_method0("is_unpaired_keycard_available")?
             .extract()
+    }
+
+    pub fn initialize(&self, py: Python<'_>, pin: &str) -> PyResult<bool> {
+        self.instance
+            .bind(py)
+            .call_method1("initialize", (pin,))?
+            .extract()
+    }
+
+    pub fn get_pairing_data(&self, py: Python<'_>) -> PyResult<(u8, Vec<u8>)> {
+        self.instance
+            .bind(py)
+            .call_method0("get_pairing_data")?
+            .extract()
+    }
+
+    pub fn setup_communication_with_pairing(
+        &self,
+        py: Python<'_>,
+        pin: &str,
+        index: u8,
+        key: &[u8],
+    ) -> PyResult<bool> {
+        self.instance
+            .bind(py)
+            .call_method1(
+                "setup_communication_with_pairing",
+                (pin, index, key.to_vec()),
+            )?
+            .extract()
+    }
+
+    pub fn close_session(&self, py: Python<'_>) -> PyResult<bool> {
+        self.instance
+            .bind(py)
+            .call_method0("close_session")?
+            .extract()
+    }
+
+    /// Connect using a stored pairing if available, falling back to a fresh pair.
+    /// Saves any newly established pairing to disk.
+    pub fn connect(&self, py: Python<'_>, pin: &str) -> PyResult<()> {
+        if let Some(pairing) = load_pairing().filter(KeycardPairingData::is_valid)
+            && self
+                .setup_communication_with_pairing(py, pin, pairing.index, &pairing.key)
+                .is_ok()
+        {
+            return Ok(());
+        }
+        self.setup_communication(py, pin)?;
+        if let Ok((index, key)) = self.get_pairing_data(py) {
+            save_pairing(&KeycardPairingData { index, key });
+        }
+        Ok(())
     }
 
     pub fn setup_communication(&self, py: Python<'_>, pin: &str) -> PyResult<bool> {
@@ -61,20 +131,10 @@ impl KeycardWallet {
     pub fn get_public_key_for_path_with_connect(pin: &str, path: &str) -> PyResult<PublicKey> {
         Python::with_gil(|py| {
             python_path::add_python_path(py)?;
-
             let wallet = Self::new(py)?;
-
-            let is_connected = wallet.setup_communication(py, pin)?;
-
-            if is_connected {
-                log::info!("\u{2705} Keycard is now connected to wallet.");
-            } else {
-                log::info!("\u{274c} Keycard is not connected to wallet.");
-            }
-
+            wallet.connect(py, pin)?;
             let pub_key = wallet.get_public_key_for_path(py, path);
-
-            drop(wallet.disconnect(py));
+            drop(wallet.close_session(py));
             pub_key
         })
     }
@@ -127,21 +187,10 @@ impl KeycardWallet {
     ) -> PyResult<(Signature, PublicKey)> {
         Python::with_gil(|py| {
             python_path::add_python_path(py)?;
-
             let wallet = Self::new(py)?;
-
-            let is_connected = wallet.setup_communication(py, pin)?;
-
-            if is_connected {
-                log::info!("\u{2705} Keycard is now connected to wallet.");
-            } else {
-                log::info!("\u{274c} Keycard is not connected to wallet.");
-            }
-
+            wallet.connect(py, pin)?;
             let result = wallet.sign_message_for_path(py, path, message);
-
-            drop(wallet.disconnect(py));
-
+            drop(wallet.close_session(py));
             result
         })
     }
@@ -222,5 +271,37 @@ impl KeycardWallet {
         let npk = NullifierPublicKey::from(&nsk);
 
         Ok(format!("Private/{}", AccountId::from((&npk, 0_u128))))
+    }
+}
+
+fn pairing_file_path() -> Option<PathBuf> {
+    let home = std::env::var("NSSA_WALLET_HOME_DIR")
+        .map(PathBuf::from)
+        .or_else(|_| {
+            std::env::home_dir()
+                .map(|h| h.join(".nssa").join("wallet"))
+                .ok_or(())
+        })
+        .ok()?;
+    Some(home.join("keycard_pairing.json"))
+}
+
+fn load_pairing() -> Option<KeycardPairingData> {
+    let path = pairing_file_path()?;
+    let file = std::fs::File::open(path).ok()?;
+    serde_json::from_reader(file).ok()
+}
+
+fn save_pairing(data: &KeycardPairingData) {
+    if let Some(path) = pairing_file_path()
+        && let Ok(json) = serde_json::to_vec_pretty(data)
+    {
+        drop(std::fs::write(path, json));
+    }
+}
+
+pub fn clear_pairing() {
+    if let Some(path) = pairing_file_path() {
+        drop(std::fs::remove_file(path));
     }
 }

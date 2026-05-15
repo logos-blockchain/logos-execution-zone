@@ -1,14 +1,7 @@
-#!/usr/bin/env bash
-# keycard_tests.sh — end-to-end keycard + token + AMM tests.
-#
-# Prerequisites:
-#   1. Run wallet_with_keycard.sh once to install dependencies.
-#   2. Reset the local chain so all accounts are uninitialized.
-#   3. Keycard reader inserted with card loaded (wallet keycard load has been run).
-#
-# Non-keycard account-creation commands use "|| true" because label conflicts are
-# harmless on re-runs against the same wallet storage — the existing labeled account
-# (which is uninitialized on a fresh chain) is reused.
+#!/bin/bash
+# Run wallet_with_keycard.sh first
+
+source venv/bin/activate # Load the appropriate virtual environment
 
 source venv/bin/activate
 export KEYCARD_PIN=111111
@@ -19,32 +12,75 @@ export KEYCARD_PIN=111111
 echo "=== Test: wallet keycard available ==="
 wallet keycard available
 
-echo "=== Test: wallet keycard load ==="
-wallet keycard load --mnemonic "fashion degree mountain wool question damp current pond grow dolphin chronic then"
+# Install a new mnemonic phrase to keycard
+echo "Test: wallet keycard load"
+export KEYCARD_MNEMONIC="fashion degree mountain wool question damp current pond grow dolphin chronic then"
+wallet keycard load
+unset KEYCARD_MNEMONIC
 
-# Register keycard account at path 0.
-# auth-transfer init is idempotent: skips gracefully if nonce > 0.
-echo "=== Test: auth-transfer init path 0 ==="
-wallet auth-transfer init --key-path "m/44'/60'/0'/0/0"
+echo "Test: wallet auth-transfer init --account-id \"m/44'/60'/0'/0/0\""
+wallet auth-transfer init --account-id "m/44'/60'/0'/0/0"
 
-echo "=== Test: account get path 0 ==="
-wallet account get --key-path "m/44'/60'/0'/0/0"
+echo "Test: wallet account get --account-id \"m/44'/60'/0'/0/0\""
+wallet account get --account-id "m/44'/60'/0'/0/0"
 
-echo "=== Test: pinata claim path 0 ==="
-wallet pinata claim --key-path "m/44'/60'/0'/0/0"
+echo "Test: wallet pinata claim --to \"m/44'/60'/0'/0/0\""
+wallet pinata claim --to "m/44'/60'/0'/0/0"
 
-sleep 5
+echo "Test: wallet account get --account-id \"m/44'/60'/0'/0/0\""
+wallet account get --account-id "m/44'/60'/0'/0/0"
 
-echo "=== Test: account get path 0 (after claim) ==="
-wallet account get --key-path "m/44'/60'/0'/0/0"
+echo "Test: wallet auth-transfer init and send between two keycard accounts"
+wallet auth-transfer init --account-id "m/44'/60'/0'/0/1"
+wallet auth-transfer send --amount 40 --from "m/44'/60'/0'/0/0" --to "m/44'/60'/0'/0/1"
 
-echo "=== Test: auth-transfer init path 1 ==="
-wallet auth-transfer init --key-path "m/44'/60'/0'/0/1"
+echo "Test: wallet account get --account-id \"m/44'/60'/0'/0/0\""
+wallet account get --account-id "m/44'/60'/0'/0/0"
 
-echo "=== Test: auth-transfer send path 0 → path 1 ==="
-wallet auth-transfer send --amount 40 \
-  --from-key-path "m/44'/60'/0'/0/0" \
-  --to-key-path   "m/44'/60'/0'/0/1"
+echo "Test: wallet account get --account-id \"m/44'/60'/0'/0/1\""
+wallet account get --account-id "m/44'/60'/0'/0/1"
+
+# Send from keycard account to a local wallet account
+echo "Test: create local wallet account"
+LOCAL_ACCOUNT_ID=$(wallet account new public 2>&1 | grep -oP '(?<=Public/)\S+')
+echo "Created local account: Public/${LOCAL_ACCOUNT_ID}"
+
+echo "Test: wallet auth-transfer init local account"
+wallet auth-transfer init --account-id "Public/${LOCAL_ACCOUNT_ID}"
+
+
+echo "Test: wallet auth-transfer send from keycard to local account"
+wallet auth-transfer send --amount 10 --from "m/44'/60'/0'/0/0" --to "Public/${LOCAL_ACCOUNT_ID}"
+
+echo "Test: wallet account get --account-id \"m/44'/60'/0'/0/0\""
+wallet account get --account-id "m/44'/60'/0'/0/0"
+
+echo "Test: wallet account get --account-id \"Public/${LOCAL_ACCOUNT_ID}\""
+wallet account get --account-id "Public/${LOCAL_ACCOUNT_ID}"
+
+# Create a local wallet account, fund it, and send to keycard account (co-signed: local key + keycard)
+
+echo "Test: wallet auth-transfer send from local account to keycard account"
+wallet auth-transfer send --amount 10 --from "Public/${LOCAL_ACCOUNT_ID}" --to "m/44'/60'/0'/0/1"
+
+echo "Test: wallet account get --account-id \"Public/${LOCAL_ACCOUNT_ID}\""
+wallet account get --account-id "Public/${LOCAL_ACCOUNT_ID}"
+
+echo "Test: wallet account get --account-id \"m/44'/60'/0'/0/1\""
+wallet account get --account-id "m/44'/60'/0'/0/1"
+
+# Send from keycard account to a local wallet account (foreign recipient — no signature needed)
+echo "Test: wallet account get --account-id \"m/44'/60'/0'/0/0\""
+wallet account get --account-id "Public/7wHg9sbJwc6h3NP1S9bekfAzB8CHifEcxKswCKUt3YQo"
+
+echo "Test: wallet auth-transfer send from keycard to local account"
+wallet auth-transfer send --amount 10 --from "m/44'/60'/0'/0/0" --to "Public/7wHg9sbJwc6h3NP1S9bekfAzB8CHifEcxKswCKUt3YQo"
+
+echo "Test: wallet account get --account-id \"m/44'/60'/0'/0/0\""
+wallet account get --account-id "m/44'/60'/0'/0/0"
+
+echo "Test: wallet account get --account-id \"m/44'/60'/0'/0/0\""
+wallet account get --account-id "Public/7wHg9sbJwc6h3NP1S9bekfAzB8CHifEcxKswCKUt3YQo"
 
 echo "=== Test: account get path 0 ==="
 wallet account get --key-path "m/44'/60'/0'/0/0"

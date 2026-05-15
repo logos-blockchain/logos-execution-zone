@@ -2,7 +2,9 @@
   description = "Logos Execution Zone";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    logos-liblogos.url = "github:logos-co/logos-liblogos";
+
+    nixpkgs.follows = "logos-liblogos/nixpkgs";
 
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
@@ -139,7 +141,7 @@
               cargoExtraArgs = "-p indexer_ffi";
               postInstall = ''
                 mkdir -p $out/include
-                cp indexer_ffi/indexer_ffi.h $out/include/
+                cp indexer/ffi/indexer_ffi.h $out/include/
               ''
               + pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
                 install_name_tool -id @rpath/libindexer_ffi.dylib $out/lib/libindexer_ffi.dylib

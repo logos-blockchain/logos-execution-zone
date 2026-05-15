@@ -1,27 +1,24 @@
-use std::{
-    ffi::{CString, c_char},
-    fs::File,
-    io::Write as _,
-    net::SocketAddr,
-    path::PathBuf,
-};
+use std::{collections::HashMap, net::SocketAddr, path::PathBuf};
 
 use anyhow::{Context as _, Result, bail};
-use indexer_ffi::{IndexerServiceFFI, api::lifecycle::InitializedIndexerServiceFFIResult};
+use common::transaction::NSSATransaction;
 use indexer_service::IndexerHandle;
 use log::{debug, warn};
-use sequencer_service::SequencerHandle;
+use nssa::{AccountId, PrivateKey, PublicKey, PublicTransaction, program::Program};
+use sequencer_service::{GenesisAction, SequencerHandle};
+use sequencer_service_rpc::RpcClient as _;
 use tempfile::TempDir;
 use testcontainers::compose::DockerCompose;
-use wallet::{WalletCore, config::WalletConfigOverrides};
+use wallet::{
+    AccDecodeData::Decode, PrivacyPreservingAccount, WalletCore, config::WalletConfigOverrides,
+};
 
-use crate::{BEDROCK_SERVICE_PORT, BEDROCK_SERVICE_WITH_OPEN_PORT, config};
+use crate::{
+    BEDROCK_SERVICE_PORT, BEDROCK_SERVICE_WITH_OPEN_PORT,
+    config::{self, InitialPrivateAccountForWallet},
+};
 
-unsafe extern "C" {
-    fn start_indexer(config_path: *const c_char, port: u16) -> InitializedIndexerServiceFFIResult;
-}
-
-pub(crate) async fn setup_bedrock_node() -> Result<(DockerCompose, SocketAddr)> {
+pub async fn setup_bedrock_node() -> Result<(DockerCompose, SocketAddr)> {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let bedrock_compose_path = PathBuf::from(manifest_dir).join("../bedrock/docker-compose.yml");
 
@@ -91,10 +88,7 @@ pub(crate) async fn setup_bedrock_node() -> Result<(DockerCompose, SocketAddr)> 
     Ok((compose, addr))
 }
 
-pub(crate) async fn setup_indexer(
-    bedrock_addr: SocketAddr,
-    initial_data: &config::InitialData,
-) -> Result<(IndexerHandle, TempDir)> {
+pub async fn setup_indexer(bedrock_addr: SocketAddr) -> Result<(IndexerHandle, TempDir)> {
     let temp_indexer_dir =
         tempfile::tempdir().context("Failed to create temp dir for indexer home")?;
 
@@ -103,12 +97,8 @@ pub(crate) async fn setup_indexer(
         temp_indexer_dir.path().display()
     );
 
-    let indexer_config = config::indexer_config(
-        bedrock_addr,
-        temp_indexer_dir.path().to_owned(),
-        initial_data,
-    )
-    .context("Failed to create Indexer config")?;
+    let indexer_config = config::indexer_config(bedrock_addr, temp_indexer_dir.path().to_owned())
+        .context("Failed to create Indexer config")?;
 
     indexer_service::run_server(indexer_config, 0)
         .await
@@ -116,11 +106,10 @@ pub(crate) async fn setup_indexer(
         .map(|handle| (handle, temp_indexer_dir))
 }
 
-pub(crate) async fn setup_sequencer(
+pub async fn setup_sequencer(
     partial: config::SequencerPartialConfig,
     bedrock_addr: SocketAddr,
-    indexer_addr: SocketAddr,
-    initial_data: &config::InitialData,
+    genesis_transactions: Vec<GenesisAction>,
 ) -> Result<(SequencerHandle, TempDir)> {
     let temp_sequencer_dir =
         tempfile::tempdir().context("Failed to create temp dir for sequencer home")?;
@@ -134,8 +123,7 @@ pub(crate) async fn setup_sequencer(
         partial,
         temp_sequencer_dir.path().to_owned(),
         bedrock_addr,
-        indexer_addr,
-        initial_data,
+        genesis_transactions,
     )
     .context("Failed to create Sequencer config")?;
 
@@ -144,12 +132,12 @@ pub(crate) async fn setup_sequencer(
     Ok((sequencer_handle, temp_sequencer_dir))
 }
 
-pub(crate) async fn setup_wallet(
+pub fn setup_wallet(
     sequencer_addr: SocketAddr,
-    initial_data: &config::InitialData,
+    initial_public_accounts: &[(PrivateKey, u128)],
+    initial_private_accounts: &[InitialPrivateAccountForWallet],
 ) -> Result<(WalletCore, TempDir, String)> {
-    let config = config::wallet_config(sequencer_addr, initial_data)
-        .context("Failed to create Wallet config")?;
+    let config = config::wallet_config(sequencer_addr).context("Failed to create Wallet config")?;
     let config_serialized =
         serde_json::to_string_pretty(&config).context("Failed to serialize Wallet config")?;
 
@@ -164,57 +152,176 @@ pub(crate) async fn setup_wallet(
     let config_overrides = WalletConfigOverrides::default();
 
     let wallet_password = "test_pass".to_owned();
-    let (wallet, _mnemonic) = WalletCore::new_init_storage(
+    let (mut wallet, _mnemonic) = WalletCore::new_init_storage(
         config_path,
         storage_path,
         Some(config_overrides),
         &wallet_password,
     )
     .context("Failed to init wallet")?;
+
+    for (private_key, _balance) in initial_public_accounts {
+        wallet
+            .storage_mut()
+            .key_chain_mut()
+            .add_imported_public_account(private_key.clone());
+    }
+
+    for private_account in initial_private_accounts {
+        wallet
+            .storage_mut()
+            .key_chain_mut()
+            .add_imported_private_account(
+                private_account.key_chain.clone(),
+                None,
+                private_account.identifier,
+                nssa::Account::default(),
+            );
+    }
+
     wallet
         .store_persistent_data()
-        .await
         .context("Failed to store wallet persistent data")?;
 
     Ok((wallet, temp_wallet_dir, wallet_password))
 }
 
-pub(crate) fn setup_indexer_ffi(
-    bedrock_addr: SocketAddr,
-    initial_data: &config::InitialData,
-) -> Result<(IndexerServiceFFI, TempDir)> {
-    let temp_indexer_dir =
-        tempfile::tempdir().context("Failed to create temp dir for indexer home")?;
-
-    debug!(
-        "Using temp indexer home at {}",
-        temp_indexer_dir.path().display()
-    );
-
-    let indexer_config = config::indexer_config(
-        bedrock_addr,
-        temp_indexer_dir.path().to_owned(),
-        initial_data,
-    )
-    .context("Failed to create Indexer config")?;
-
-    let config_json = serde_json::to_vec(&indexer_config)?;
-    let config_path = temp_indexer_dir.path().join("indexer_config.json");
-    let mut file = File::create(config_path.as_path())?;
-    file.write_all(&config_json)?;
-    file.flush()?;
-
-    let res =
-            // SAFETY: lib function ensures validity of value.
-            unsafe { start_indexer(CString::new(config_path.to_str().unwrap())?.as_ptr(), 0) };
-
-    if res.error.is_error() {
-        anyhow::bail!("Indexer FFI error {:?}", res.error);
+pub async fn setup_public_accounts_with_initial_supply(
+    wallet: &WalletCore,
+    initial_public_accounts: &[(PrivateKey, u128)],
+) -> Result<()> {
+    for (private_key, amount) in initial_public_accounts {
+        claim_funds_from_vault(
+            wallet,
+            AccountId::from(&PublicKey::new_from_private_key(private_key)),
+            *amount,
+        )
+        .await
+        .context("Failed to claim funds from vault into public account")?;
     }
 
-    Ok((
-        // SAFETY: lib function ensures validity of value.
-        unsafe { std::ptr::read(res.value) },
-        temp_indexer_dir,
-    ))
+    Ok(())
+}
+
+pub async fn setup_private_accounts_with_initial_supply(
+    wallet: &mut WalletCore,
+    initial_private_accounts: &[InitialPrivateAccountForWallet],
+) -> Result<()> {
+    for private_account in initial_private_accounts {
+        claim_funds_from_vault_to_private(
+            wallet,
+            private_account.account_id(),
+            private_account.balance,
+        )
+        .await
+        .context("Failed to claim funds from vault into private account")?;
+    }
+
+    Ok(())
+}
+
+async fn claim_funds_from_vault(
+    wallet: &WalletCore,
+    owner_id: AccountId,
+    amount: u128,
+) -> Result<()> {
+    let vault_program_id = Program::vault().id();
+    let owner_vault_id = vault_core::compute_vault_account_id(vault_program_id, owner_id);
+
+    let nonces = wallet
+        .get_accounts_nonces(vec![owner_id])
+        .await
+        .context("Failed to fetch owner nonce")?;
+
+    let signing_key = wallet
+        .storage()
+        .key_chain()
+        .pub_account_signing_key(owner_id)
+        .with_context(|| format!("Missing signing key for public account {owner_id}"))?;
+
+    let message = nssa::public_transaction::Message::try_new(
+        vault_program_id,
+        vec![owner_id, owner_vault_id],
+        nonces,
+        vault_core::Instruction::Claim { amount },
+    )
+    .context("Failed to build vault claim message")?;
+
+    let witness_set = nssa::public_transaction::WitnessSet::for_message(&message, &[signing_key]);
+    let tx = PublicTransaction::new(message, witness_set);
+
+    let tx_hash = wallet
+        .sequencer_client
+        .send_transaction(NSSATransaction::Public(tx))
+        .await
+        .context("Failed to submit vault claim transaction")?;
+
+    wallet
+        .poll_native_token_transfer(tx_hash)
+        .await
+        .context("Failed to confirm vault claim transaction")?;
+
+    Ok(())
+}
+
+async fn claim_funds_from_vault_to_private(
+    wallet: &mut WalletCore,
+    owner_id: AccountId,
+    amount: u128,
+) -> Result<()> {
+    let Some(_) = wallet.storage().key_chain().private_account(owner_id) else {
+        bail!("Missing private account in wallet key chain for account {owner_id}");
+    };
+
+    let vault_program = Program::vault();
+    let vault_program_id = vault_program.id();
+    let owner_vault_id = vault_core::compute_vault_account_id(vault_program_id, owner_id);
+
+    let instruction_data =
+        Program::serialize_instruction(vault_core::Instruction::Claim { amount })
+            .context("Failed to serialize vault private claim instruction")?;
+
+    let program_with_dependencies =
+        nssa::privacy_preserving_transaction::circuit::ProgramWithDependencies::new(
+            vault_program,
+            HashMap::from([(
+                Program::authenticated_transfer_program().id(),
+                Program::authenticated_transfer_program(),
+            )]),
+        );
+
+    let (tx_hash, mut secrets) = wallet
+        .send_privacy_preserving_tx(
+            vec![
+                PrivacyPreservingAccount::PrivateOwned(owner_id),
+                PrivacyPreservingAccount::Public(owner_vault_id),
+            ],
+            instruction_data,
+            &program_with_dependencies,
+        )
+        .await
+        .context("Failed to submit private vault claim transaction")?;
+
+    let secret = secrets
+        .pop()
+        .context("Expected one private output secret for vault claim")?;
+
+    let transfer_tx = wallet
+        .poll_native_token_transfer(tx_hash)
+        .await
+        .context("Failed to confirm private vault claim transaction")?;
+
+    let NSSATransaction::PrivacyPreserving(tx) = transfer_tx else {
+        bail!("Expected privacy preserving transaction result for private vault claim");
+    };
+
+    wallet
+        .decode_insert_privacy_preserving_transaction_results(&tx, &[Decode(secret, owner_id)])
+        .context("Failed to decode private vault claim transaction")?;
+
+    wallet
+        .store_persistent_data()
+        .context("Failed to store wallet data after private vault claim")?;
+
+    Ok(())
 }

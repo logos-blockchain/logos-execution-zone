@@ -10,8 +10,8 @@ use crate::{
     error::NssaError,
     program_methods::{
         AMM_ELF, AMM_ID, ASSOCIATED_TOKEN_ACCOUNT_ELF, ASSOCIATED_TOKEN_ACCOUNT_ID,
-        AUTHENTICATED_TRANSFER_ELF, AUTHENTICATED_TRANSFER_ID, CLOCK_ELF, CLOCK_ID, PINATA_ELF,
-        PINATA_ID, TOKEN_ELF, TOKEN_ID,
+        AUTHENTICATED_TRANSFER_ELF, AUTHENTICATED_TRANSFER_ID, CLOCK_ELF, CLOCK_ID, FAUCET_ELF,
+        FAUCET_ID, PINATA_ELF, PINATA_ID, TOKEN_ELF, TOKEN_ID, VAULT_ELF, VAULT_ID,
     },
 };
 
@@ -148,6 +148,22 @@ impl Program {
             elf: ASSOCIATED_TOKEN_ACCOUNT_ELF.to_vec(),
         }
     }
+
+    #[must_use]
+    pub fn vault() -> Self {
+        Self {
+            id: VAULT_ID,
+            elf: VAULT_ELF.to_vec(),
+        }
+    }
+
+    #[must_use]
+    pub fn faucet() -> Self {
+        Self {
+            id: FAUCET_ID,
+            elf: FAUCET_ELF.to_vec(),
+        }
+    }
 }
 
 // TODO: Testnet only. Refactor to prevent compilation on mainnet.
@@ -178,8 +194,9 @@ mod tests {
         program::Program,
         program_methods::{
             AMM_ELF, AMM_ID, ASSOCIATED_TOKEN_ACCOUNT_ELF, ASSOCIATED_TOKEN_ACCOUNT_ID,
-            AUTHENTICATED_TRANSFER_ELF, AUTHENTICATED_TRANSFER_ID, CLOCK_ELF, CLOCK_ID, PINATA_ELF,
-            PINATA_ID, PINATA_TOKEN_ELF, PINATA_TOKEN_ID, TOKEN_ELF, TOKEN_ID,
+            AUTHENTICATED_TRANSFER_ELF, AUTHENTICATED_TRANSFER_ID, CLOCK_ELF, CLOCK_ID, FAUCET_ELF,
+            FAUCET_ID, PINATA_ELF, PINATA_ID, PINATA_TOKEN_ELF, PINATA_TOKEN_ID, TOKEN_ELF,
+            TOKEN_ID, VAULT_ELF, VAULT_ID,
         },
     };
 
@@ -313,12 +330,32 @@ mod tests {
         }
 
         #[must_use]
+        pub fn auth_transfer_proxy() -> Self {
+            use test_program_methods::{AUTH_TRANSFER_PROXY_ELF, AUTH_TRANSFER_PROXY_ID};
+
+            Self {
+                id: AUTH_TRANSFER_PROXY_ID,
+                elf: AUTH_TRANSFER_PROXY_ELF.to_vec(),
+            }
+        }
+
+        #[must_use]
         pub fn two_pda_claimer() -> Self {
             use test_program_methods::{TWO_PDA_CLAIMER_ELF, TWO_PDA_CLAIMER_ID};
 
             Self {
                 id: TWO_PDA_CLAIMER_ID,
                 elf: TWO_PDA_CLAIMER_ELF.to_vec(),
+            }
+        }
+
+        #[must_use]
+        pub fn pda_fund_spend_proxy() -> Self {
+            use test_program_methods::{PDA_FUND_SPEND_PROXY_ELF, PDA_FUND_SPEND_PROXY_ID};
+
+            Self {
+                id: PDA_FUND_SPEND_PROXY_ID,
+                elf: PDA_FUND_SPEND_PROXY_ELF.to_vec(),
             }
         }
 
@@ -472,12 +509,18 @@ mod tests {
     fn builtin_programs() {
         let auth_transfer_program = Program::authenticated_transfer_program();
         let token_program = Program::token();
+        let vault_program = Program::vault();
+        let faucet_program = Program::faucet();
         let pinata_program = Program::pinata();
 
         assert_eq!(auth_transfer_program.id, AUTHENTICATED_TRANSFER_ID);
         assert_eq!(auth_transfer_program.elf, AUTHENTICATED_TRANSFER_ELF);
         assert_eq!(token_program.id, TOKEN_ID);
         assert_eq!(token_program.elf, TOKEN_ELF);
+        assert_eq!(vault_program.id, VAULT_ID);
+        assert_eq!(vault_program.elf, VAULT_ELF);
+        assert_eq!(faucet_program.id, FAUCET_ID);
+        assert_eq!(faucet_program.elf, FAUCET_ELF);
         assert_eq!(pinata_program.id, PINATA_ID);
         assert_eq!(pinata_program.elf, PINATA_ELF);
     }
@@ -489,9 +532,11 @@ mod tests {
             (AUTHENTICATED_TRANSFER_ELF, AUTHENTICATED_TRANSFER_ID),
             (ASSOCIATED_TOKEN_ACCOUNT_ELF, ASSOCIATED_TOKEN_ACCOUNT_ID),
             (CLOCK_ELF, CLOCK_ID),
+            (FAUCET_ELF, FAUCET_ID),
             (PINATA_ELF, PINATA_ID),
             (PINATA_TOKEN_ELF, PINATA_TOKEN_ID),
             (TOKEN_ELF, TOKEN_ID),
+            (VAULT_ELF, VAULT_ID),
         ];
         for (elf, expected_id) in cases {
             let program = Program::new(elf.to_vec()).unwrap();

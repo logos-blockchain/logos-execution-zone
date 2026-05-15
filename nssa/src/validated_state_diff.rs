@@ -8,7 +8,8 @@ use nssa_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, Timestamp,
     account::{Account, AccountId, AccountWithMetadata},
     program::{
-        ChainedCall, Claim, DEFAULT_PROGRAM_ID, compute_public_authorized_pdas, validate_execution,
+        ChainedCall, Claim, DEFAULT_PROGRAM_ID, ProgramId, compute_public_authorized_pdas,
+        validate_execution,
     },
 };
 
@@ -100,10 +101,26 @@ impl ValidatedStateDiff {
             pda_seeds: vec![],
         };
 
-        let mut chained_calls = VecDeque::from_iter([(initial_call, None)]);
+        #[expect(
+            clippy::items_after_statements,
+            reason = "More readable to keep it behind the place where it's used"
+        )]
+        #[derive(Debug)]
+        struct CallerData {
+            program_id: Option<ProgramId>,
+            authorized_accounts: HashSet<AccountId>,
+        }
+
+        let initial_caller_data = CallerData {
+            program_id: None,
+            authorized_accounts: signer_account_ids.iter().copied().collect(),
+        };
+
+        let mut chained_calls =
+            VecDeque::<(ChainedCall, CallerData)>::from_iter([(initial_call, initial_caller_data)]);
         let mut chain_calls_counter = 0;
 
-        while let Some((chained_call, caller_program_id)) = chained_calls.pop_front() {
+        while let Some((chained_call, caller_data)) = chained_calls.pop_front() {
             ensure!(
                 chain_calls_counter <= MAX_NUMBER_CHAINED_CALLS,
                 NssaError::MaxChainedCallsDepthExceeded
@@ -119,7 +136,7 @@ impl ValidatedStateDiff {
                 chained_call.program_id, chained_call.pre_states, chained_call.instruction_data
             );
             let mut program_output = program.execute(
-                caller_program_id,
+                caller_data.program_id,
                 &chained_call.pre_states,
                 &chained_call.instruction_data,
             )?;
@@ -129,10 +146,13 @@ impl ValidatedStateDiff {
             );
 
             let authorized_pdas =
-                compute_public_authorized_pdas(caller_program_id, &chained_call.pda_seeds);
+                compute_public_authorized_pdas(caller_data.program_id, &chained_call.pda_seeds);
 
+            // Account is authorized if it is either in the caller's authorized accounts or in the
+            // list of PDAs the caller has authorized.
             let is_authorized = |account_id: &AccountId| {
-                signer_account_ids.contains(account_id) || authorized_pdas.contains(account_id)
+                authorized_pdas.contains(account_id)
+                    || caller_data.authorized_accounts.contains(account_id)
             };
 
             for pre in &program_output.pre_states {
@@ -152,16 +172,12 @@ impl ValidatedStateDiff {
                     }
                 );
 
-                // Check that authorization flags are consistent with the provided ones or
-                // authorized by program through the PDA mechanism
-                let expected_is_authorized = is_authorized(&account_id);
+                // Check that the program output pre_states marked as authorized are indeed
+                // authorized.
+                let is_indeed_authorized = is_authorized(&account_id);
                 ensure!(
-                    pre.is_authorized == expected_is_authorized,
-                    InvalidProgramBehaviorError::InconsistentAccountAuthorization {
-                        account_id,
-                        expected_authorization: expected_is_authorized,
-                        actual_authorization: pre.is_authorized
-                    }
+                    !pre.is_authorized || is_indeed_authorized,
+                    InvalidProgramBehaviorError::InvalidAccountAuthorization { account_id }
                 );
             }
 
@@ -176,9 +192,9 @@ impl ValidatedStateDiff {
 
             // Verify that the program output's caller_program_id matches the actual caller.
             ensure!(
-                program_output.caller_program_id == caller_program_id,
+                program_output.caller_program_id == caller_data.program_id,
                 InvalidProgramBehaviorError::MismatchedCallerProgramId {
-                    expected: caller_program_id,
+                    expected: caller_data.program_id,
                     actual: program_output.caller_program_id,
                 }
             );
@@ -205,7 +221,8 @@ impl ValidatedStateDiff {
                 let Some(claim) = post.required_claim() else {
                     continue;
                 };
-                let account_id = program_output.pre_states[i].account_id;
+                let pre = &program_output.pre_states[i];
+                let account_id = pre.account_id;
 
                 // The invoked program can only claim accounts with default program id.
                 ensure!(
@@ -217,7 +234,7 @@ impl ValidatedStateDiff {
                     Claim::Authorized => {
                         // The program can only claim accounts that were authorized by the signer.
                         ensure!(
-                            is_authorized(&account_id),
+                            pre.is_authorized,
                             InvalidProgramBehaviorError::ClaimedUnauthorizedAccount { account_id }
                         );
                     }
@@ -248,8 +265,20 @@ impl ValidatedStateDiff {
                 state_diff.insert(pre.account_id, post.account().clone());
             }
 
+            let authorized_accounts: HashSet<_> = chained_call
+                .pre_states
+                .iter()
+                .filter(|pre| pre.is_authorized)
+                .map(|pre| pre.account_id)
+                .collect();
             for new_call in program_output.chained_calls.into_iter().rev() {
-                chained_calls.push_front((new_call, Some(chained_call.program_id)));
+                chained_calls.push_front((
+                    new_call,
+                    CallerData {
+                        program_id: Some(chained_call.program_id),
+                        authorized_accounts: authorized_accounts.clone(),
+                    },
+                ));
             }
 
             chain_calls_counter = chain_calls_counter
@@ -293,63 +322,62 @@ impl ValidatedStateDiff {
         let witness_set = &tx.witness_set;
 
         // 1. Commitments or nullifiers are non empty
-        if message.new_commitments.is_empty() && message.new_nullifiers.is_empty() {
-            return Err(NssaError::InvalidInput(
+        ensure!(
+            !message.new_commitments.is_empty() || !message.new_nullifiers.is_empty(),
+            NssaError::InvalidInput(
                 "Empty commitments and empty nullifiers found in message".into(),
-            ));
-        }
+            )
+        );
 
         // 2. Check there are no duplicate account_ids in the public_account_ids list.
-        if n_unique(&message.public_account_ids) != message.public_account_ids.len() {
-            return Err(NssaError::InvalidInput(
-                "Duplicate account_ids found in message".into(),
-            ));
-        }
+        ensure!(
+            n_unique(&message.public_account_ids) == message.public_account_ids.len(),
+            NssaError::InvalidInput("Duplicate account_ids found in message".into())
+        );
 
         // Check there are no duplicate nullifiers in the new_nullifiers list
-        if n_unique(&message.new_nullifiers) != message.new_nullifiers.len() {
-            return Err(NssaError::InvalidInput(
-                "Duplicate nullifiers found in message".into(),
-            ));
-        }
+        ensure!(
+            n_unique(&message.new_nullifiers) == message.new_nullifiers.len(),
+            NssaError::InvalidInput("Duplicate nullifiers found in message".into())
+        );
 
         // Check there are no duplicate commitments in the new_commitments list
-        if n_unique(&message.new_commitments) != message.new_commitments.len() {
-            return Err(NssaError::InvalidInput(
-                "Duplicate commitments found in message".into(),
-            ));
-        }
+        ensure!(
+            n_unique(&message.new_commitments) == message.new_commitments.len(),
+            NssaError::InvalidInput("Duplicate commitments found in message".into())
+        );
 
         // 3. Nonce checks and Valid signatures
         // Check exactly one nonce is provided for each signature
-        if message.nonces.len() != witness_set.signatures_and_public_keys.len() {
-            return Err(NssaError::InvalidInput(
+        ensure!(
+            message.nonces.len() == witness_set.signatures_and_public_keys.len(),
+            NssaError::InvalidInput(
                 "Mismatch between number of nonces and signatures/public keys".into(),
-            ));
-        }
+            )
+        );
 
         // Check the signatures are valid
-        if !witness_set.signatures_are_valid_for(message) {
-            return Err(NssaError::InvalidInput(
-                "Invalid signature for given message and public key".into(),
-            ));
-        }
+        ensure!(
+            witness_set.signatures_are_valid_for(message),
+            NssaError::InvalidInput("Invalid signature for given message and public key".into())
+        );
 
         let signer_account_ids = tx.signer_account_ids();
         // Check nonces corresponds to the current nonces on the public state.
         for (account_id, nonce) in signer_account_ids.iter().zip(&message.nonces) {
             let current_nonce = state.get_account_by_id(*account_id).nonce;
-            if current_nonce != *nonce {
-                return Err(NssaError::InvalidInput("Nonce mismatch".into()));
-            }
+            ensure!(
+                current_nonce == *nonce,
+                NssaError::InvalidInput("Nonce mismatch".into())
+            );
         }
 
         // Verify validity window
-        if !message.block_validity_window.is_valid_for(block_id)
-            || !message.timestamp_validity_window.is_valid_for(timestamp)
-        {
-            return Err(NssaError::OutOfValidityWindow);
-        }
+        ensure!(
+            message.block_validity_window.is_valid_for(block_id)
+                && message.timestamp_validity_window.is_valid_for(timestamp),
+            NssaError::OutOfValidityWindow
+        );
 
         // Build pre_states for proof verification
         let public_pre_states: Vec<_> = message

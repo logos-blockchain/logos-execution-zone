@@ -50,8 +50,8 @@ async fn main() {
     // Load signing keys to provide authorization
     let signing_key = wallet_core
         .storage()
-        .user_data
-        .get_pub_account_signing_key(account_id)
+        .key_chain()
+        .pub_account_signing_key(account_id)
         .expect("Input account should be a self owned public account");
 
     // Define the desired greeting in ASCII

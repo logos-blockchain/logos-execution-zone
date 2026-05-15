@@ -27,7 +27,7 @@ pub trait Rpc {
     async fn subscribe_to_finalized_blocks(&self) -> SubscriptionResult;
 
     #[method(name = "getLastFinalizedBlockId")]
-    async fn get_last_finalized_block_id(&self) -> Result<BlockId, ErrorObjectOwned>;
+    async fn get_last_finalized_block_id(&self) -> Result<Option<BlockId>, ErrorObjectOwned>;
 
     #[method(name = "getBlockById")]
     async fn get_block_by_id(&self, block_id: BlockId) -> Result<Option<Block>, ErrorObjectOwned>;
@@ -40,6 +40,13 @@ pub trait Rpc {
 
     #[method(name = "getAccount")]
     async fn get_account(&self, account_id: AccountId) -> Result<Account, ErrorObjectOwned>;
+
+    #[method(name = "getAccountAtBlock")]
+    async fn get_account_at_block(
+        &self,
+        account_id: AccountId,
+        block_id: BlockId,
+    ) -> Result<Account, ErrorObjectOwned>;
 
     #[method(name = "getTransaction")]
     async fn get_transaction(

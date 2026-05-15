@@ -63,6 +63,14 @@ impl SimpleStorableCell for FirstBlockCell {
 
 impl SimpleReadableCell for FirstBlockCell {}
 
+impl SimpleWritableCell for FirstBlockCell {
+    fn value_constructor(&self) -> DbResult<Vec<u8>> {
+        borsh::to_vec(&self).map_err(|err| {
+            DbError::borsh_cast_message(err, Some("Failed to serialize first block id".to_owned()))
+        })
+    }
+}
+
 #[derive(Debug, BorshSerialize, BorshDeserialize)]
 pub struct BlockCell(pub Block);
 

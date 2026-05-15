@@ -4,7 +4,7 @@
 )]
 
 pub use nssa_core::{
-    SharedSecretKey,
+    GENESIS_BLOCK_ID, SharedSecretKey,
     account::{Account, AccountId, Data},
     encryption::EphemeralPublicKey,
     program::ProgramId,
@@ -18,7 +18,7 @@ pub use public_transaction::PublicTransaction;
 pub use signature::{PrivateKey, PublicKey, Signature};
 pub use state::{
     CLOCK_01_PROGRAM_ACCOUNT_ID, CLOCK_10_PROGRAM_ACCOUNT_ID, CLOCK_50_PROGRAM_ACCOUNT_ID,
-    CLOCK_PROGRAM_ACCOUNT_IDS, V03State,
+    CLOCK_PROGRAM_ACCOUNT_IDS, V03State, system_faucet_account_id,
 };
 pub use validated_state_diff::ValidatedStateDiff;
 

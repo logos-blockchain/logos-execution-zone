@@ -6,11 +6,8 @@ use nssa::AccountId;
 use crate::{
     AccDecodeData::Decode,
     WalletCore,
-    cli::{SubcommandReturnValue, WalletSubcommand},
-    helperfunctions::{
-        AccountPrivacyKind, parse_addr_with_privacy_prefix, resolve_account_label,
-        resolve_id_or_label,
-    },
+    account::AccountIdWithPrivacy,
+    cli::{CliAccountMention, SubcommandReturnValue, WalletSubcommand},
     program_facades::native_token_transfer::NativeTokenTransfer,
 };
 
@@ -19,19 +16,9 @@ use crate::{
 pub enum AuthTransferSubcommand {
     /// Initialize account under authenticated transfer program.
     Init {
-        /// `account_id` - valid 32 byte base58 string with privacy prefix.
-        #[arg(
-            long,
-            conflicts_with = "account_label",
-            required_unless_present_any = ["account_label", "key_path"]
-        )]
-        account_id: Option<String>,
-        /// Account label (alternative to --account-id).
-        #[arg(long, conflicts_with = "account_id")]
-        account_label: Option<String>,
-        /// Key path (alternative to --account-id) is used to retrieve data from Keycard.
-        #[arg(long, conflicts_with = "account_id", conflicts_with = "account_label")]
-        key_path: Option<String>,
+        /// Either 32 byte base58 account id string with privacy prefix or a label.
+        #[arg(long)]
+        account_id: CliAccountMention,
     },
     /// Send native tokens from one account to another with variable privacy.
     ///
@@ -40,18 +27,12 @@ pub enum AuthTransferSubcommand {
     ///
     /// First is used for owned accounts, second otherwise.
     Send {
-        /// from - valid 32 byte base58 string with privacy prefix.
-        #[arg(long, conflicts_with = "from_label", required_unless_present_any = ["from_label", "from_key_path"])]
-        from: Option<String>,
-        /// From account label (alternative to --from).
-        #[arg(long, conflicts_with = "from")]
-        from_label: Option<String>,
-        /// to - valid 32 byte base58 string with privacy prefix.
-        #[arg(long, conflicts_with = "to_label")]
-        to: Option<String>,
-        /// To account label (alternative to --to).
-        #[arg(long, conflicts_with = "to")]
-        to_label: Option<String>,
+        /// Either 32 byte base58 account id string with privacy prefix or a label.
+        #[arg(long)]
+        from: CliAccountMention,
+        /// Either 32 byte base58 account id string with privacy prefix or a label.
+        #[arg(long)]
+        to: Option<CliAccountMention>,
         /// `to_npk` - valid 32 byte hex string.
         #[arg(long)]
         to_npk: Option<String>,
@@ -65,12 +46,6 @@ pub enum AuthTransferSubcommand {
         /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
-        /// `from_key_path` (alternative to --from) uses Keycard.
-        #[arg(long, conflicts_with = "from", conflicts_with = "from_label")]
-        from_key_path: Option<String>,
-        /// `to_key_path` (alternative to --to) uses Keycard.
-        #[arg(long, conflicts_with = "to", conflicts_with = "to_label")]
-        to_key_path: Option<String>,
     },
 }
 
@@ -80,43 +55,12 @@ impl WalletSubcommand for AuthTransferSubcommand {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         match self {
-            Self::Init {
-                account_id,
-                account_label,
-                key_path,
-            } => {
-                let resolved = resolve_id_or_label(
-                    account_id,
-                    account_label,
-                    &wallet_core.storage.labels,
-                    &wallet_core.storage.user_data,
-                    key_path.as_deref(),
-                )?;
-
-                let (account_id, addr_privacy) = parse_addr_with_privacy_prefix(&resolved)?;
-
-                // Skip if already registered — prevents a doomed on-chain rejection when the
-                // account already has nonce > 0 (which also avoids leaving the keycard in a
-                // mid-operation state that breaks subsequent signing calls).
-                let account_id_parsed: nssa::AccountId = account_id.parse()?;
-                let nonces = wallet_core
-                    .get_accounts_nonces(vec![account_id_parsed])
-                    .await?;
-                if nonces.first().is_some_and(|n| n.0 > 0) {
-                    println!(
-                        "Account {account_id} is already registered with the auth-transfer \
-                         program (nonce={}). Skipping.",
-                        nonces[0].0
-                    );
-                    return Ok(SubcommandReturnValue::Empty);
-                }
-
-                match addr_privacy {
-                    AccountPrivacyKind::Public => {
-                        let account_id = account_id_parsed;
-
+            Self::Init { account_id } => {
+                let resolved = account_id.resolve(wallet_core.storage())?;
+                match resolved {
+                    AccountIdWithPrivacy::Public(pub_account_id) => {
                         let tx_hash = NativeTokenTransfer(wallet_core)
-                            .register_account(account_id, key_path.as_deref())
+                            .register_account(pub_account_id, &account_id)
                             .await?;
 
                         println!("Transaction hash is {tx_hash}");
@@ -125,13 +69,11 @@ impl WalletSubcommand for AuthTransferSubcommand {
 
                         println!("Transaction data is {transfer_tx:?}");
 
-                        wallet_core.store_persistent_data().await?;
+                        wallet_core.store_persistent_data()?;
                     }
-                    AccountPrivacyKind::Private => {
-                        let account_id = account_id_parsed;
-
+                    AccountIdWithPrivacy::Private(account_id) => {
                         let (tx_hash, secret) = NativeTokenTransfer(wallet_core)
-                            .register_account_private(account_id, &key_path)
+                            .register_account_private(account_id)
                             .await?;
 
                         println!("Transaction hash is {tx_hash}");
@@ -147,52 +89,25 @@ impl WalletSubcommand for AuthTransferSubcommand {
                             )?;
                         }
 
-                        wallet_core.store_persistent_data().await?;
+                        wallet_core.store_persistent_data()?;
                     }
                 }
 
                 Ok(SubcommandReturnValue::Empty)
             }
             Self::Send {
-                from,
-                from_label,
-                to,
-                to_label,
+                from: from_account,
+                to: to_account,
                 to_npk,
                 to_vpk,
                 to_identifier,
                 amount,
-                from_key_path,
-                to_key_path,
             } => {
-                let from = resolve_id_or_label(
-                    from,
-                    from_label,
-                    &wallet_core.storage.labels,
-                    &wallet_core.storage.user_data,
-                    from_key_path.as_deref(),
-                )?;
-
-                let to_key_path_for_sign = to_key_path.clone();
-                let to = match (to, to_label, to_key_path) {
-                    (v, None, None) => v,
-                    (None, Some(label), None) => Some(resolve_account_label(
-                        &label,
-                        &wallet_core.storage.labels,
-                        &wallet_core.storage.user_data,
-                    )?),
-                    (None, None, Some(to_key_path)) => Some(resolve_id_or_label(
-                        None,
-                        None,
-                        &wallet_core.storage.labels,
-                        &wallet_core.storage.user_data,
-                        Some(&to_key_path),
-                    )?),
-                    _ => {
-                        anyhow::bail!("Provide only one of --to or --to-label")
-                    }
-                };
-
+                let from = from_account.resolve(wallet_core.storage())?;
+                let to = to_account
+                    .as_ref()
+                    .map(|m| m.resolve(wallet_core.storage()))
+                    .transpose()?;
                 let underlying_subcommand = match (to, to_npk, to_vpk) {
                     (None, None, None) => {
                         anyhow::bail!(
@@ -207,80 +122,63 @@ impl WalletSubcommand for AuthTransferSubcommand {
                     (_, Some(_), None) | (_, None, Some(_)) => {
                         anyhow::bail!("List of public keys is uncomplete");
                     }
-                    (Some(to), None, None) => {
-                        let (from, from_privacy) = parse_addr_with_privacy_prefix(&from)?;
-                        let (to, to_privacy) = parse_addr_with_privacy_prefix(&to)?;
-
-                        match (from_privacy, to_privacy) {
-                            (AccountPrivacyKind::Public, AccountPrivacyKind::Public) => {
-                                NativeTokenTransferProgramSubcommand::Public {
+                    (Some(to), None, None) => match (from, to) {
+                        (AccountIdWithPrivacy::Public(from), AccountIdWithPrivacy::Public(to)) => {
+                            NativeTokenTransferProgramSubcommand::Public {
+                                from,
+                                to,
+                                amount,
+                                from_mention: from_account,
+                                to_mention: to_account.expect("matched Some branch"),
+                            }
+                        }
+                        (
+                            AccountIdWithPrivacy::Private(from),
+                            AccountIdWithPrivacy::Private(to),
+                        ) => NativeTokenTransferProgramSubcommand::Private(
+                            NativeTokenTransferProgramSubcommandPrivate::PrivateOwned {
+                                from,
+                                to,
+                                amount,
+                            },
+                        ),
+                        (AccountIdWithPrivacy::Private(from), AccountIdWithPrivacy::Public(to)) => {
+                            NativeTokenTransferProgramSubcommand::Deshielded { from, to, amount }
+                        }
+                        (AccountIdWithPrivacy::Public(from), AccountIdWithPrivacy::Private(to)) => {
+                            NativeTokenTransferProgramSubcommand::Shielded(
+                                NativeTokenTransferProgramSubcommandShielded::ShieldedOwned {
                                     from,
                                     to,
                                     amount,
-                                    from_key_path,
-                                    to_key_path: to_key_path_for_sign,
-                                }
-                            }
-                            (AccountPrivacyKind::Private, AccountPrivacyKind::Private) => {
-                                NativeTokenTransferProgramSubcommand::Private(
-                                    NativeTokenTransferProgramSubcommandPrivate::PrivateOwned {
-                                        from,
-                                        to,
-                                        amount,
-                                        key_path: from_key_path.clone(),
-                                    },
-                                )
-                            }
-                            (AccountPrivacyKind::Private, AccountPrivacyKind::Public) => {
-                                NativeTokenTransferProgramSubcommand::Deshielded {
+                                },
+                            )
+                        }
+                    },
+                    (None, Some(to_npk), Some(to_vpk)) => match from {
+                        AccountIdWithPrivacy::Private(from) => {
+                            NativeTokenTransferProgramSubcommand::Private(
+                                NativeTokenTransferProgramSubcommandPrivate::PrivateForeign {
                                     from,
-                                    to,
+                                    to_npk,
+                                    to_vpk,
+                                    to_identifier,
                                     amount,
-                                    key_path: from_key_path.clone(),
-                                }
-                            }
-                            (AccountPrivacyKind::Public, AccountPrivacyKind::Private) => {
-                                NativeTokenTransferProgramSubcommand::Shielded(
-                                    NativeTokenTransferProgramSubcommandShielded::ShieldedOwned {
-                                        from,
-                                        to,
-                                        amount,
-                                        key_path: from_key_path,
-                                    },
-                                )
-                            }
+                                },
+                            )
                         }
-                    }
-                    (None, Some(to_npk), Some(to_vpk)) => {
-                        let (from, from_privacy) = parse_addr_with_privacy_prefix(&from)?;
-
-                        match from_privacy {
-                            AccountPrivacyKind::Private => {
-                                NativeTokenTransferProgramSubcommand::Private(
-                                    NativeTokenTransferProgramSubcommandPrivate::PrivateForeign {
-                                        from,
-                                        to_npk,
-                                        to_vpk,
-                                        to_identifier,
-                                        amount,
-                                        key_path: from_key_path.clone(),
-                                    },
-                                )
-                            }
-                            AccountPrivacyKind::Public => {
-                                NativeTokenTransferProgramSubcommand::Shielded(
-                                    NativeTokenTransferProgramSubcommandShielded::ShieldedForeign {
-                                        from,
-                                        to_npk,
-                                        to_vpk,
-                                        to_identifier,
-                                        amount,
-                                        key_path: from_key_path,
-                                    },
-                                )
-                            }
+                        AccountIdWithPrivacy::Public(from) => {
+                            NativeTokenTransferProgramSubcommand::Shielded(
+                                NativeTokenTransferProgramSubcommandShielded::ShieldedForeign {
+                                    from,
+                                    to_npk,
+                                    to_vpk,
+                                    to_identifier,
+                                    amount,
+                                },
+                            )
                         }
-                    }
+                    },
                 };
 
                 underlying_subcommand.handle_subcommand(wallet_core).await
@@ -298,17 +196,17 @@ pub enum NativeTokenTransferProgramSubcommand {
     Public {
         /// from - valid 32 byte hex string.
         #[arg(long)]
-        from: String,
+        from: AccountId,
         /// to - valid 32 byte hex string.
         #[arg(long)]
-        to: String,
+        to: AccountId,
         /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
-        #[arg(long)]
-        from_key_path: Option<String>,
         #[arg(skip)]
-        to_key_path: Option<String>,
+        from_mention: CliAccountMention,
+        #[arg(skip)]
+        to_mention: CliAccountMention,
     },
     /// Private execution.
     #[command(subcommand)]
@@ -319,15 +217,13 @@ pub enum NativeTokenTransferProgramSubcommand {
     Deshielded {
         /// from - valid 32 byte hex string.
         #[arg(long)]
-        from: String,
+        from: AccountId,
         /// to - valid 32 byte hex string.
         #[arg(long)]
-        to: String,
+        to: AccountId,
         /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
-        #[arg(long)]
-        key_path: Option<String>,
     },
     /// Shielded execution.
     #[command(subcommand)]
@@ -344,15 +240,13 @@ pub enum NativeTokenTransferProgramSubcommandShielded {
     ShieldedOwned {
         /// from - valid 32 byte hex string.
         #[arg(long)]
-        from: String,
+        from: AccountId,
         /// to - valid 32 byte hex string.
         #[arg(long)]
-        to: String,
+        to: AccountId,
         /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
-        #[arg(long)]
-        key_path: Option<String>,
     },
     /// Send native token transfer from `from` to `to` for `amount`.
     ///
@@ -360,7 +254,7 @@ pub enum NativeTokenTransferProgramSubcommandShielded {
     ShieldedForeign {
         /// from - valid 32 byte hex string.
         #[arg(long)]
-        from: String,
+        from: AccountId,
         /// `to_npk` - valid 32 byte hex string.
         #[arg(long)]
         to_npk: String,
@@ -373,8 +267,6 @@ pub enum NativeTokenTransferProgramSubcommandShielded {
         /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
-        #[arg(long)]
-        key_path: Option<String>,
     },
 }
 
@@ -388,15 +280,13 @@ pub enum NativeTokenTransferProgramSubcommandPrivate {
     PrivateOwned {
         /// from - valid 32 byte hex string.
         #[arg(long)]
-        from: String,
+        from: AccountId,
         /// to - valid 32 byte hex string.
         #[arg(long)]
-        to: String,
+        to: AccountId,
         /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
-        #[arg(long)]
-        key_path: Option<String>,
     },
     /// Send native token transfer from `from` to `to` for `amount`.
     ///
@@ -404,7 +294,7 @@ pub enum NativeTokenTransferProgramSubcommandPrivate {
     PrivateForeign {
         /// from - valid 32 byte hex string.
         #[arg(long)]
-        from: String,
+        from: AccountId,
         /// `to_npk` - valid 32 byte hex string.
         #[arg(long)]
         to_npk: String,
@@ -417,8 +307,6 @@ pub enum NativeTokenTransferProgramSubcommandPrivate {
         /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
-        #[arg(long)]
-        key_path: Option<String>,
     },
 }
 
@@ -428,17 +316,9 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandPrivate {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         match self {
-            Self::PrivateOwned {
-                from,
-                to,
-                amount,
-                key_path,
-            } => {
-                let from: AccountId = from.parse().unwrap();
-                let to: AccountId = to.parse().unwrap();
-
+            Self::PrivateOwned { from, to, amount } => {
                 let (tx_hash, [secret_from, secret_to]) = NativeTokenTransfer(wallet_core)
-                    .send_private_transfer_to_owned_account(from, to, amount, &key_path)
+                    .send_private_transfer_to_owned_account(from, to, amount)
                     .await?;
 
                 println!("Transaction hash is {tx_hash}");
@@ -454,7 +334,7 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandPrivate {
                     )?;
                 }
 
-                wallet_core.store_persistent_data().await?;
+                wallet_core.store_persistent_data()?;
 
                 Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
             }
@@ -464,9 +344,7 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandPrivate {
                 to_vpk,
                 to_identifier,
                 amount,
-                key_path,
             } => {
-                let from: AccountId = from.parse().unwrap();
                 let to_npk_res = hex::decode(to_npk)?;
                 let mut to_npk = [0; 32];
                 to_npk.copy_from_slice(&to_npk_res);
@@ -485,7 +363,6 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandPrivate {
                         to_vpk,
                         to_identifier.unwrap_or_else(rand::random),
                         amount,
-                        &key_path,
                     )
                     .await?;
 
@@ -502,7 +379,7 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandPrivate {
                     )?;
                 }
 
-                wallet_core.store_persistent_data().await?;
+                wallet_core.store_persistent_data()?;
 
                 Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
             }
@@ -516,17 +393,9 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandShielded {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         match self {
-            Self::ShieldedOwned {
-                from,
-                to,
-                amount,
-                key_path,
-            } => {
-                let from: AccountId = from.parse().unwrap();
-                let to: AccountId = to.parse().unwrap();
-
+            Self::ShieldedOwned { from, to, amount } => {
                 let (tx_hash, secret) = NativeTokenTransfer(wallet_core)
-                    .send_shielded_transfer(from, to, amount, &key_path)
+                    .send_shielded_transfer(from, to, amount)
                     .await?;
 
                 println!("Transaction hash is {tx_hash}");
@@ -542,7 +411,7 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandShielded {
                     )?;
                 }
 
-                wallet_core.store_persistent_data().await?;
+                wallet_core.store_persistent_data()?;
 
                 Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
             }
@@ -552,10 +421,7 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandShielded {
                 to_vpk,
                 to_identifier,
                 amount,
-                key_path,
             } => {
-                let from: AccountId = from.parse().unwrap();
-
                 let to_npk_res = hex::decode(to_npk)?;
                 let mut to_npk = [0; 32];
                 to_npk.copy_from_slice(&to_npk_res);
@@ -574,13 +440,12 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandShielded {
                         to_vpk,
                         to_identifier.unwrap_or_else(rand::random),
                         amount,
-                        &key_path,
                     )
                     .await?;
 
                 println!("Transaction hash is {tx_hash}");
 
-                wallet_core.store_persistent_data().await?;
+                wallet_core.store_persistent_data()?;
 
                 Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
             }
@@ -600,17 +465,9 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommand {
             Self::Shielded(shielded_subcommand) => {
                 shielded_subcommand.handle_subcommand(wallet_core).await
             }
-            Self::Deshielded {
-                from,
-                to,
-                amount,
-                key_path,
-            } => {
-                let from: AccountId = from.parse().unwrap();
-                let to: AccountId = to.parse().unwrap();
-
+            Self::Deshielded { from, to, amount } => {
                 let (tx_hash, secret) = NativeTokenTransfer(wallet_core)
-                    .send_deshielded_transfer(from, to, amount, &key_path)
+                    .send_deshielded_transfer(from, to, amount)
                     .await?;
 
                 println!("Transaction hash is {tx_hash}");
@@ -626,7 +483,7 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommand {
                     )?;
                 }
 
-                wallet_core.store_persistent_data().await?;
+                wallet_core.store_persistent_data()?;
 
                 Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
             }
@@ -634,20 +491,11 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommand {
                 from,
                 to,
                 amount,
-                from_key_path,
-                to_key_path,
+                from_mention,
+                to_mention,
             } => {
-                let from: AccountId = from.parse().unwrap();
-                let to: AccountId = to.parse().unwrap();
-
                 let tx_hash = NativeTokenTransfer(wallet_core)
-                    .send_public_transfer(
-                        from,
-                        to,
-                        amount,
-                        from_key_path.as_deref(),
-                        to_key_path.as_deref(),
-                    )
+                    .send_public_transfer(from, to, amount, &from_mention, &to_mention)
                     .await?;
 
                 println!("Transaction hash is {tx_hash}");
@@ -656,7 +504,7 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommand {
 
                 println!("Transaction data is {transfer_tx:?}");
 
-                wallet_core.store_persistent_data().await?;
+                wallet_core.store_persistent_data()?;
 
                 Ok(SubcommandReturnValue::Empty)
             }

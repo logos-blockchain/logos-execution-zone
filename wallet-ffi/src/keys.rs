@@ -116,12 +116,11 @@ pub unsafe extern "C" fn wallet_ffi_get_private_account_keys(
 
     let account_id = AccountId::new(unsafe { (*account_id).data });
 
-    let Some((key_chain, _account, _identifier)) =
-        wallet.storage().user_data.get_private_account(account_id)
-    else {
+    let Some(acc) = wallet.storage().key_chain().private_account(account_id) else {
         print_error("Private account not found in wallet");
         return WalletFfiError::AccountNotFound;
     };
+    let key_chain = acc.key_chain;
 
     // NPK is a 32-byte array
     let npk_bytes = key_chain.nullifier_public_key.0;

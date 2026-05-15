@@ -1,3 +1,4 @@
+use authenticated_transfer_core::Instruction;
 use nssa_core::{
     account::{Account, AccountWithMetadata},
     program::{
@@ -8,16 +9,12 @@ use nssa_core::{
 /// Initializes a default account under the ownership of this program.
 fn initialize_account(pre_state: AccountWithMetadata) -> AccountPostState {
     let account_to_claim = AccountPostState::new_claimed(pre_state.account, Claim::Authorized);
-    let is_authorized = pre_state.is_authorized;
 
     // Continue only if the account to claim has default values
     assert!(
         account_to_claim.account() == &Account::default(),
         "Account must be uninitialized"
     );
-
-    // Continue only if the owner authorized this operation
-    assert!(is_authorized, "Account must be authorized");
 
     account_to_claim
 }
@@ -28,7 +25,7 @@ fn transfer(
     recipient: AccountWithMetadata,
     balance_to_move: u128,
 ) -> Vec<AccountPostState> {
-    // Continue only if the sender has authorized this operation
+    // Continue only if the sender has authorized this operation.
     assert!(sender.is_authorized, "Sender must be authorized");
 
     // Create accounts post states, with updated balances
@@ -70,20 +67,24 @@ fn main() {
             self_program_id,
             caller_program_id,
             pre_states,
-            instruction: balance_to_move,
+            instruction,
         },
         instruction_words,
-    ) = read_nssa_inputs();
+    ) = read_nssa_inputs::<Instruction>();
 
-    let post_states = match (pre_states.as_slice(), balance_to_move) {
-        ([account_to_claim], 0) => {
-            let post = initialize_account(account_to_claim.clone());
-            vec![post]
+    let post_states = match instruction {
+        Instruction::Initialize => {
+            let [account_to_claim] = <[_; 1]>::try_from(pre_states.clone())
+                .expect("Initialize requires exactly 1 account");
+            vec![initialize_account(account_to_claim)]
         }
-        ([sender, recipient], balance_to_move) => {
-            transfer(sender.clone(), recipient.clone(), balance_to_move)
+        Instruction::Transfer {
+            amount: balance_to_move,
+        } => {
+            let [sender, recipient] = <[_; 2]>::try_from(pre_states.clone())
+                .expect("Transfer requires exactly 2 accounts");
+            transfer(sender, recipient, balance_to_move)
         }
-        _ => panic!("invalid params"),
     };
 
     ProgramOutput::new(

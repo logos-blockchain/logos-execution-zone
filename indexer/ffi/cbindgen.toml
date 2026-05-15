@@ -1,0 +1,2 @@
+language = "C"     # For increased compatibility
+no_includes = true

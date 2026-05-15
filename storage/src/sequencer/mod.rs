@@ -12,7 +12,7 @@ use crate::{
     error::DbError,
     sequencer::sequencer_cells::{
         LastFinalizedBlockIdCell, LatestBlockMetaCellOwned, LatestBlockMetaCellRef,
-        NSSAStateCellOwned, NSSAStateCellRef,
+        NSSAStateCellOwned, NSSAStateCellRef, ZoneSdkCheckpointCellOwned, ZoneSdkCheckpointCellRef,
     },
 };
 
@@ -22,6 +22,8 @@ pub mod sequencer_cells;
 pub const DB_META_LAST_FINALIZED_BLOCK_ID: &str = "last_finalized_block_id";
 /// Key base for storing metainformation about the latest block meta.
 pub const DB_META_LATEST_BLOCK_META_KEY: &str = "latest_block_meta";
+/// Key base for storing the zone-sdk sequencer checkpoint (opaque bytes).
+pub const DB_META_ZONE_SDK_CHECKPOINT_KEY: &str = "zone_sdk_checkpoint";
 
 /// Key base for storing the NSSA state.
 pub const DB_NSSA_STATE_KEY: &str = "nssa_state";
@@ -40,36 +42,26 @@ impl DBIO for RocksDBIO {
 }
 
 impl RocksDBIO {
-    pub fn open_or_create(
+    pub fn open(path: &Path) -> DbResult<Self> {
+        let db_opts = Options::default();
+        Self::open_inner(path, &db_opts)
+    }
+
+    pub fn create(
         path: &Path,
         genesis_block: &Block,
         genesis_msg_id: MantleMsgId,
+        genesis_state: &V03State,
     ) -> DbResult<Self> {
-        let mut cf_opts = Options::default();
-        cf_opts.set_max_write_buffer_number(16);
-        // ToDo: Add more column families for different data
-        let cfb = ColumnFamilyDescriptor::new(CF_BLOCK_NAME, cf_opts.clone());
-        let cfmeta = ColumnFamilyDescriptor::new(CF_META_NAME, cf_opts.clone());
-        let cfstate = ColumnFamilyDescriptor::new(CF_NSSA_STATE_NAME, cf_opts.clone());
-
         let mut db_opts = Options::default();
         db_opts.create_missing_column_families(true);
         db_opts.create_if_missing(true);
-        let db = DBWithThreadMode::<MultiThreaded>::open_cf_descriptors(
-            &db_opts,
-            path,
-            vec![cfb, cfmeta, cfstate],
-        )
-        .map_err(|err| DbError::RocksDbError {
-            error: err,
-            additional_info: Some("Failed to open or create DB".to_owned()),
-        })?;
-
-        let dbio = Self { db };
+        let dbio = Self::open_inner(path, &db_opts)?;
 
         let is_start_set = dbio.get_meta_is_first_block_set()?;
         if !is_start_set {
             let block_id = genesis_block.header.block_id;
+            // TODO: Shouldn't this be atomic (batched)?
             dbio.put_meta_first_block_in_db(genesis_block, genesis_msg_id)?;
             dbio.put_meta_is_first_block_set()?;
             dbio.put_meta_last_block_in_db(block_id)?;
@@ -79,8 +71,32 @@ impl RocksDBIO {
                 hash: genesis_block.header.hash,
                 msg_id: genesis_msg_id,
             })?;
+            dbio.put_nssa_state_in_db(genesis_state)?;
         }
 
+        Ok(dbio)
+    }
+
+    fn open_inner(path: &Path, db_opts: &Options) -> DbResult<Self> {
+        let mut cf_opts = Options::default();
+        cf_opts.set_max_write_buffer_number(16);
+
+        // ToDo: Add more column families for different data
+        let cfb = ColumnFamilyDescriptor::new(CF_BLOCK_NAME, cf_opts.clone());
+        let cfmeta = ColumnFamilyDescriptor::new(CF_META_NAME, cf_opts.clone());
+        let cfstate = ColumnFamilyDescriptor::new(CF_NSSA_STATE_NAME, cf_opts.clone());
+
+        let db = DBWithThreadMode::<MultiThreaded>::open_cf_descriptors(
+            db_opts,
+            path,
+            vec![cfb, cfmeta, cfstate],
+        )
+        .map_err(|err| DbError::RocksDbError {
+            error: err,
+            additional_info: Some("Failed to open or create DB".to_owned()),
+        })?;
+
+        let dbio = Self { db };
         Ok(dbio)
     }
 
@@ -133,7 +149,15 @@ impl RocksDBIO {
         Ok(self.get_opt::<FirstBlockSetCell>(())?.is_some())
     }
 
-    pub fn put_nssa_state_in_db(&self, state: &V03State, batch: &mut WriteBatch) -> DbResult<()> {
+    pub fn put_nssa_state_in_db(&self, state: &V03State) -> DbResult<()> {
+        self.put(&NSSAStateCellRef(state), ())
+    }
+
+    pub fn put_nssa_state_in_db_batch(
+        &self,
+        state: &V03State,
+        batch: &mut WriteBatch,
+    ) -> DbResult<()> {
         self.put_batch(&NSSAStateCellRef(state), (), batch)
     }
 
@@ -203,6 +227,16 @@ impl RocksDBIO {
 
     pub fn latest_block_meta(&self) -> DbResult<BlockMeta> {
         self.get::<LatestBlockMetaCellOwned>(()).map(|val| val.0)
+    }
+
+    pub fn get_zone_sdk_checkpoint_bytes(&self) -> DbResult<Option<Vec<u8>>> {
+        Ok(self
+            .get_opt::<ZoneSdkCheckpointCellOwned>(())?
+            .map(|cell| cell.0))
+    }
+
+    pub fn put_zone_sdk_checkpoint_bytes(&self, bytes: &[u8]) -> DbResult<()> {
+        self.put(&ZoneSdkCheckpointCellRef(bytes), ())
     }
 
     pub fn put_block(
@@ -275,6 +309,22 @@ impl RocksDBIO {
         Ok(())
     }
 
+    /// Mark every pending block with `block_id <= last_finalized` as finalized.
+    /// Idempotent — already-finalized blocks are skipped.
+    pub fn clean_pending_blocks_up_to(&self, last_finalized: u64) -> DbResult<()> {
+        let pending_ids: Vec<u64> = self
+            .get_all_blocks()
+            .filter_map(Result::ok)
+            .filter(|b| matches!(b.bedrock_status, BedrockStatus::Pending))
+            .map(|b| b.header.block_id)
+            .filter(|id| *id <= last_finalized)
+            .collect();
+        for id in pending_ids {
+            self.mark_block_as_finalized(id)?;
+        }
+        Ok(())
+    }
+
     pub fn mark_block_as_finalized(&self, block_id: u64) -> DbResult<()> {
         let mut block = self.get_block(block_id)?.ok_or_else(|| {
             DbError::db_interaction_error(format!("Block with id {block_id} not found"))
@@ -338,7 +388,7 @@ impl RocksDBIO {
         let block_id = block.header.block_id;
         let mut batch = WriteBatch::default();
         self.put_block(block, msg_id, false, &mut batch)?;
-        self.put_nssa_state_in_db(state, &mut batch)?;
+        self.put_nssa_state_in_db_batch(state, &mut batch)?;
         self.db.write(batch).map_err(|rerr| {
             DbError::rocksdb_cast_message(
                 rerr,
