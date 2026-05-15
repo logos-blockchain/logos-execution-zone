@@ -1,0 +1,268 @@
+{
+  "version": "0.1.0",
+  "name": "forum_registry",
+  "instructions": [
+    {
+      "name": "initialize_forum",
+      "accounts": [
+        {
+          "name": "state",
+          "writable": true,
+          "signer": false,
+          "init": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": "forum_state"
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "writable": false,
+          "signer": true,
+          "init": false
+        }
+      ],
+      "args": [
+        {
+          "name": "k_strikes",
+          "type": "u32"
+        },
+        {
+          "name": "n_moderators",
+          "type": "u32"
+        },
+        {
+          "name": "m_moderators",
+          "type": "u32"
+        }
+      ]
+    },
+    {
+      "name": "register_member",
+      "accounts": [
+        {
+          "name": "state",
+          "writable": true,
+          "signer": false,
+          "init": false,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": "forum_state"
+              }
+            ]
+          }
+        },
+        {
+          "name": "member",
+          "writable": false,
+          "signer": true,
+          "init": false
+        }
+      ],
+      "args": [
+        {
+          "name": "commitment",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "stake_amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "verify_post",
+      "accounts": [
+        {
+          "name": "state",
+          "writable": true,
+          "signer": false,
+          "init": false,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": "forum_state"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "registry_root",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "tracing_tag",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "slash_member",
+      "accounts": [
+        {
+          "name": "state",
+          "writable": true,
+          "signer": false,
+          "init": false,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": "forum_state"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "writable": false,
+          "signer": true,
+          "init": false
+        }
+      ],
+      "args": [
+        {
+          "name": "slashed_nsk",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "ForumInstance",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "admin_pubkey",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "k_strikes",
+            "type": "u32"
+          },
+          {
+            "name": "n_moderators",
+            "type": "u32"
+          },
+          {
+            "name": "m_moderators",
+            "type": "u32"
+          },
+          {
+            "name": "registry",
+            "type": {
+              "defined": "MerkleTree"
+            }
+          },
+          {
+            "name": "registered_commitments",
+            "type": {
+              "vec": {
+                "array": [
+                  "u8",
+                  32
+                ]
+              }
+            }
+          },
+          {
+            "name": "revoked_commitments",
+            "type": {
+              "vec": {
+                "array": [
+                  "u8",
+                  32
+                ]
+              }
+            }
+          },
+          {
+            "name": "total_staked",
+            "type": "u64"
+          },
+          {
+            "name": "member_stakes",
+            "type": {
+              "vec": "unknown"
+            }
+          },
+          {
+            "name": "used_tracing_tags",
+            "type": {
+              "vec": {
+                "array": [
+                  "u8",
+                  32
+                ]
+              }
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "types": [
+    {
+      "name": "MerkleTree",
+      "kind": "struct",
+      "fields": [
+        {
+          "name": "nodes",
+          "type": {
+            "vec": {
+              "defined": "Node"
+            }
+          }
+        },
+        {
+          "name": "capacity",
+          "type": {
+            "defined": "usize"
+          }
+        },
+        {
+          "name": "length",
+          "type": {
+            "defined": "usize"
+          }
+        }
+      ]
+    }
+  ]
+}
