@@ -146,59 +146,6 @@ impl CliAccountMention {
         }
     }
 
-    #[must_use]
-    pub const fn is_keycard(&self) -> bool {
-        matches!(self, Self::KeyPath(_))
-    }
-
-    #[must_use]
-    pub fn key_path(&self) -> Option<&str> {
-        match self {
-            Self::KeyPath(path) => Some(path),
-            Self::Id(_) | Self::Label(_) => None,
-        }
-    }
-
-    /// Resolve to an [`AccountSigner`] for a sender — must sign, never `Foreign`.
-    pub fn to_signer(&self, wallet_core: &WalletCore) -> Result<crate::signing::AccountSigner> {
-        if let Self::KeyPath(path) = self {
-            return Ok(crate::signing::AccountSigner::Keycard(path.clone()));
-        }
-        let account = self.resolve(wallet_core.storage())?;
-        match account {
-            AccountIdWithPrivacy::Public(id) => Ok(crate::signing::AccountSigner::Local(id)),
-            AccountIdWithPrivacy::Private(_) => {
-                anyhow::bail!("Private accounts not supported as senders here")
-            }
-        }
-    }
-
-    /// Resolve to an [`AccountSigner`] for a recipient — returns `Foreign` when the account
-    /// has no local key and no keycard path, meaning no signature or nonce is required.
-    pub fn to_recipient_signer(
-        &self,
-        wallet_core: &WalletCore,
-    ) -> Result<crate::signing::AccountSigner> {
-        if let Self::KeyPath(path) = self {
-            return Ok(crate::signing::AccountSigner::Keycard(path.clone()));
-        }
-        let account = self.resolve(wallet_core.storage())?;
-        match account {
-            AccountIdWithPrivacy::Public(id) => Ok(
-                match wallet_core
-                    .storage()
-                    .key_chain()
-                    .pub_account_signing_key(id)
-                {
-                    Some(_) => crate::signing::AccountSigner::Local(id),
-                    None => crate::signing::AccountSigner::Foreign,
-                },
-            ),
-            AccountIdWithPrivacy::Private(_) => {
-                anyhow::bail!("Private accounts not supported as recipients here")
-            }
-        }
-    }
 }
 
 impl FromStr for CliAccountMention {
