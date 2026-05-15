@@ -16,6 +16,18 @@ pub enum KeycardSubcommand {
     Disconnect,
     Init,
     Load,
+    /// Retrieve the private keys (NSK, VSK) for a given BIP-32 key path.
+    ///
+    /// Prints raw key material to stdout — intended for debugging only.
+    /// Requires --reveal to confirm intent.
+    GetPrivateKeys {
+        /// BIP-32 derivation path, e.g. `m/44'/60'/0'/0/0`.
+        #[arg(long)]
+        key_path: String,
+        /// Confirm that raw NSK and VSK should be disclosed on stdout.
+        #[arg(long)]
+        reveal: bool,
+    },
 }
 
 impl WalletSubcommand for KeycardSubcommand {
@@ -129,6 +141,26 @@ impl WalletSubcommand for KeycardSubcommand {
                     drop(wallet.close_session(py));
                 });
 
+                Ok(SubcommandReturnValue::Empty)
+            }
+            Self::GetPrivateKeys { key_path, reveal } => {
+                if !reveal {
+                    eprintln!(
+                        "WARNING: pass --reveal to print NSK and VSK. \
+                         Disclosing either key fully compromises the account's privacy."
+                    );
+                    return Ok(SubcommandReturnValue::Empty);
+                }
+                eprintln!(
+                    "WARNING: NSK and VSK are being printed to stdout. \
+                     Any terminal log, scrollback, or screen recording captures these keys."
+                );
+                let pin = read_pin()?;
+                let (nsk, vsk) =
+                    KeycardWallet::get_private_keys_for_path_with_connect(&pin, &key_path)
+                        .map_err(anyhow::Error::from)?;
+                println!("NSK: {}", hex::encode(&*nsk));
+                println!("VSK: {}", hex::encode(&*vsk));
                 Ok(SubcommandReturnValue::Empty)
             }
         }

@@ -11,7 +11,7 @@ use sequencer_service_rpc::RpcClient as _;
 use super::NativeTokenTransfer;
 use crate::{
     ExecutionFailureKind, cli::CliAccountMention, helperfunctions::read_pin,
-    signing::KeycardSessionContext,
+    signing::SigningGroups,
 };
 
 impl NativeTokenTransfer<'_> {
@@ -23,30 +23,26 @@ impl NativeTokenTransfer<'_> {
         from_mention: &CliAccountMention,
         to_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let from_signer = from_mention.to_signer(self.0).map_err(|e| {
-            ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string()))
-        })?;
-        let to_signer = to_mention.to_recipient_signer(self.0).map_err(|e| {
-            ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string()))
-        })?;
-
-        let account_ids = vec![from, to];
-        let signing_ids: Vec<AccountId> = if to_signer.needs_signature() {
-            vec![from, to]
-        } else {
-            vec![from]
-        };
+        let mut groups = SigningGroups::new();
+        groups
+            .add_sender(from_mention, from, self.0)
+            .and_then(|()| groups.add_recipient(to_mention, to, self.0))
+            .map_err(|e| {
+                ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(
+                    e.to_string(),
+                ))
+            })?;
 
         let program_id = Program::authenticated_transfer_program().id();
         let nonces = self
             .0
-            .get_accounts_nonces(signing_ids)
+            .get_accounts_nonces(groups.signing_ids())
             .await
             .map_err(ExecutionFailureKind::SequencerError)?;
 
         let message = Message::try_new(
             program_id,
-            account_ids,
+            vec![from, to],
             nonces,
             AuthTransferInstruction::Transfer {
                 amount: balance_to_move,
@@ -54,7 +50,7 @@ impl NativeTokenTransfer<'_> {
         )
         .map_err(ExecutionFailureKind::TransactionBuildError)?;
 
-        let pin = if from_mention.is_keycard() || to_mention.is_keycard() {
+        let pin = if groups.needs_pin() {
             read_pin()
                 .map_err(|e| {
                     ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(
@@ -67,30 +63,11 @@ impl NativeTokenTransfer<'_> {
             String::new()
         };
 
-        let witness_set = pyo3::Python::with_gil(|py| -> pyo3::PyResult<WitnessSet> {
-            let mut ctx = KeycardSessionContext::new(&pin);
-            let hash = message.hash();
+        let sigs = groups.sign_all(&message.hash(), &pin).map_err(|e| {
+            ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string()))
+        })?;
 
-            let (from_sig, from_pk) = from_signer
-                .sign(self.0, &mut ctx, py, &hash)
-                .expect("from signer always produces a signature")
-                .map_err(|e| pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string()))?;
-
-            let sigs_and_keys = match to_signer
-                .sign(self.0, &mut ctx, py, &hash)
-                .transpose()
-                .map_err(|e| pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string()))?
-            {
-                Some((to_sig, to_pk)) => vec![(from_sig, from_pk), (to_sig, to_pk)],
-                None => vec![(from_sig, from_pk)],
-            };
-
-            ctx.close(py);
-            Ok(WitnessSet::from_raw_parts(sigs_and_keys))
-        })
-        .map_err(ExecutionFailureKind::KeycardError)?;
-
-        let tx = PublicTransaction::new(message, witness_set);
+        let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(sigs));
         Ok(self
             .0
             .sequencer_client
@@ -119,11 +96,16 @@ impl NativeTokenTransfer<'_> {
         )
         .map_err(ExecutionFailureKind::TransactionBuildError)?;
 
-        let signer = account_mention.to_signer(self.0).map_err(|e| {
-            ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string()))
-        })?;
+        let mut groups = SigningGroups::new();
+        groups
+            .add_sender(account_mention, from, self.0)
+            .map_err(|e| {
+                ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(
+                    e.to_string(),
+                ))
+            })?;
 
-        let pin = if account_mention.is_keycard() {
+        let pin = if groups.needs_pin() {
             read_pin()
                 .map_err(|e| {
                     ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(
@@ -136,21 +118,11 @@ impl NativeTokenTransfer<'_> {
             String::new()
         };
 
-        let witness_set = pyo3::Python::with_gil(|py| -> pyo3::PyResult<WitnessSet> {
-            let mut ctx = KeycardSessionContext::new(&pin);
-            let hash = message.hash();
+        let sigs = groups.sign_all(&message.hash(), &pin).map_err(|e| {
+            ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string()))
+        })?;
 
-            let (sig, pk) = signer
-                .sign(self.0, &mut ctx, py, &hash)
-                .expect("account signer always produces a signature")
-                .map_err(|e| pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string()))?;
-
-            ctx.close(py);
-            Ok(WitnessSet::from_raw_parts(vec![(sig, pk)]))
-        })
-        .map_err(ExecutionFailureKind::KeycardError)?;
-
-        let tx = PublicTransaction::new(message, witness_set);
+        let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(sigs));
         Ok(self
             .0
             .sequencer_client

@@ -91,13 +91,13 @@ impl WalletSubcommand for AtaSubcommand {
                 owner,
                 token_definition,
             } => {
-                let owner = owner.resolve(wallet_core.storage())?;
+                let owner_resolved = owner.resolve(wallet_core.storage())?;
                 let definition_id = token_definition;
 
-                match owner {
+                match owner_resolved {
                     AccountIdWithPrivacy::Public(owner_id) => {
                         Ata(wallet_core)
-                            .send_create(owner_id, definition_id)
+                            .send_create(owner_id, definition_id, &owner)
                             .await?;
                         Ok(SubcommandReturnValue::Empty)
                     }
@@ -127,14 +127,14 @@ impl WalletSubcommand for AtaSubcommand {
                 to,
                 amount,
             } => {
-                let from = from.resolve(wallet_core.storage())?;
+                let from_resolved = from.resolve(wallet_core.storage())?;
                 let definition_id = token_definition;
                 let to_id = to;
 
-                match from {
+                match from_resolved {
                     AccountIdWithPrivacy::Public(from_id) => {
                         Ata(wallet_core)
-                            .send_transfer(from_id, definition_id, to_id, amount)
+                            .send_transfer(from_id, definition_id, to_id, amount, &from)
                             .await?;
                         Ok(SubcommandReturnValue::Empty)
                     }
@@ -163,13 +163,13 @@ impl WalletSubcommand for AtaSubcommand {
                 token_definition,
                 amount,
             } => {
-                let holder = holder.resolve(wallet_core.storage())?;
+                let holder_resolved = holder.resolve(wallet_core.storage())?;
                 let definition_id = token_definition;
 
-                match holder {
+                match holder_resolved {
                     AccountIdWithPrivacy::Public(holder_id) => {
                         Ata(wallet_core)
-                            .send_burn(holder_id, definition_id, amount)
+                            .send_burn(holder_id, definition_id, amount, &holder)
                             .await?;
                         Ok(SubcommandReturnValue::Empty)
                     }

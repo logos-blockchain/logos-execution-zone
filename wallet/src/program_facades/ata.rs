@@ -4,11 +4,18 @@ use ata_core::{compute_ata_seed, get_associated_token_account_id};
 use common::{HashType, transaction::NSSATransaction};
 use nssa::{
     AccountId, privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
+    public_transaction::WitnessSet,
 };
 use nssa_core::SharedSecretKey;
+use pyo3::exceptions::PyRuntimeError;
 use sequencer_service_rpc::RpcClient as _;
 
-use crate::{ExecutionFailureKind, PrivacyPreservingAccount, WalletCore};
+use crate::{
+    ExecutionFailureKind, PrivacyPreservingAccount, WalletCore,
+    cli::CliAccountMention,
+    helperfunctions::read_pin,
+    signing::SigningGroups,
+};
 
 pub struct Ata<'wallet>(pub &'wallet WalletCore);
 
@@ -17,7 +24,7 @@ impl Ata<'_> {
         &self,
         owner_id: AccountId,
         definition_id: AccountId,
-        key_path: Option<&str>,
+        owner_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
         let program = Program::ata();
         let ata_program_id = program.id();
@@ -27,54 +34,31 @@ impl Ata<'_> {
         );
 
         let account_ids = vec![owner_id, definition_id, ata_id];
-
-        let nonces = self
-            .0
-            .get_accounts_nonces(vec![owner_id])
-            .await
-            .map_err(ExecutionFailureKind::SequencerError)?;
-
         let instruction = ata_core::Instruction::Create { ata_program_id };
 
-        let message = nssa::public_transaction::Message::try_new(
-            program.id(),
-            account_ids,
-            nonces,
-            instruction,
-        )?;
+        let mut groups = SigningGroups::new();
+        groups
+            .add_sender(owner_mention, owner_id, self.0)
+            .map_err(|e| ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string())))?;
 
-        let msg_hash = message.hash();
-        let witness_set = if let Some(kp) = key_path {
-            let pin = crate::helperfunctions::read_pin().map_err(|e| {
-                ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<
-                    pyo3::exceptions::PyRuntimeError,
-                    _,
-                >(e.to_string()))
-            })?;
-            let (sig, pk) = keycard_wallet::KeycardWallet::sign_message_for_path_with_connect(
-                &pin, kp, &msg_hash,
-            )?;
-            nssa::public_transaction::WitnessSet::from_list(&message, &[sig], &[pk])
-                .map_err(ExecutionFailureKind::TransactionBuildError)?
+        let nonces = self.0.get_accounts_nonces(groups.signing_ids()).await
+            .map_err(ExecutionFailureKind::SequencerError)?;
+
+        let message = nssa::public_transaction::Message::try_new(program.id(), account_ids, nonces, instruction)?;
+
+        let pin = if groups.needs_pin() {
+            read_pin()
+                .map_err(|e| ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string())))?
+                .as_str()
+                .to_owned()
         } else {
-            let Some(signing_key) = self
-                .0
-                .storage
-                .user_data
-                .get_pub_account_signing_key(owner_id)
-            else {
-                return Err(ExecutionFailureKind::KeyNotFoundError);
-            };
-            nssa::public_transaction::WitnessSet::for_message(&message, &[signing_key])
+            String::new()
         };
+        let sigs = groups.sign_all(&message.hash(), &pin)
+            .map_err(|e| ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string())))?;
 
-        let tx = nssa::PublicTransaction::new(message, witness_set);
-
-        Ok(self
-            .0
-            .sequencer_client
-            .send_transaction(NSSATransaction::Public(tx))
-            .await?)
+        let tx = nssa::PublicTransaction::new(message, WitnessSet::from_raw_parts(sigs));
+        Ok(self.0.sequencer_client.send_transaction(NSSATransaction::Public(tx)).await?)
     }
 
     pub async fn send_transfer(
@@ -83,7 +67,7 @@ impl Ata<'_> {
         definition_id: AccountId,
         recipient_id: AccountId,
         amount: u128,
-        key_path: Option<&str>,
+        owner_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
         let program = Program::ata();
         let ata_program_id = program.id();
@@ -93,57 +77,31 @@ impl Ata<'_> {
         );
 
         let account_ids = vec![owner_id, sender_ata_id, recipient_id];
+        let instruction = ata_core::Instruction::Transfer { ata_program_id, amount };
 
-        let nonces = self
-            .0
-            .get_accounts_nonces(vec![owner_id])
-            .await
+        let mut groups = SigningGroups::new();
+        groups
+            .add_sender(owner_mention, owner_id, self.0)
+            .map_err(|e| ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string())))?;
+
+        let nonces = self.0.get_accounts_nonces(groups.signing_ids()).await
             .map_err(ExecutionFailureKind::SequencerError)?;
 
-        let instruction = ata_core::Instruction::Transfer {
-            ata_program_id,
-            amount,
-        };
+        let message = nssa::public_transaction::Message::try_new(program.id(), account_ids, nonces, instruction)?;
 
-        let message = nssa::public_transaction::Message::try_new(
-            program.id(),
-            account_ids,
-            nonces,
-            instruction,
-        )?;
-
-        let msg_hash = message.hash();
-        let witness_set = if let Some(kp) = key_path {
-            let pin = crate::helperfunctions::read_pin().map_err(|e| {
-                ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<
-                    pyo3::exceptions::PyRuntimeError,
-                    _,
-                >(e.to_string()))
-            })?;
-            let (sig, pk) = keycard_wallet::KeycardWallet::sign_message_for_path_with_connect(
-                &pin, kp, &msg_hash,
-            )?;
-            nssa::public_transaction::WitnessSet::from_list(&message, &[sig], &[pk])
-                .map_err(ExecutionFailureKind::TransactionBuildError)?
+        let pin = if groups.needs_pin() {
+            read_pin()
+                .map_err(|e| ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string())))?
+                .as_str()
+                .to_owned()
         } else {
-            let Some(signing_key) = self
-                .0
-                .storage
-                .user_data
-                .get_pub_account_signing_key(owner_id)
-            else {
-                return Err(ExecutionFailureKind::KeyNotFoundError);
-            };
-            nssa::public_transaction::WitnessSet::for_message(&message, &[signing_key])
+            String::new()
         };
+        let sigs = groups.sign_all(&message.hash(), &pin)
+            .map_err(|e| ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string())))?;
 
-        let tx = nssa::PublicTransaction::new(message, witness_set);
-
-        Ok(self
-            .0
-            .sequencer_client
-            .send_transaction(NSSATransaction::Public(tx))
-            .await?)
+        let tx = nssa::PublicTransaction::new(message, WitnessSet::from_raw_parts(sigs));
+        Ok(self.0.sequencer_client.send_transaction(NSSATransaction::Public(tx)).await?)
     }
 
     pub async fn send_burn(
@@ -151,7 +109,7 @@ impl Ata<'_> {
         owner_id: AccountId,
         definition_id: AccountId,
         amount: u128,
-        key_path: Option<&str>,
+        owner_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
         let program = Program::ata();
         let ata_program_id = program.id();
@@ -161,57 +119,31 @@ impl Ata<'_> {
         );
 
         let account_ids = vec![owner_id, holder_ata_id, definition_id];
+        let instruction = ata_core::Instruction::Burn { ata_program_id, amount };
 
-        let nonces = self
-            .0
-            .get_accounts_nonces(vec![owner_id])
-            .await
+        let mut groups = SigningGroups::new();
+        groups
+            .add_sender(owner_mention, owner_id, self.0)
+            .map_err(|e| ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string())))?;
+
+        let nonces = self.0.get_accounts_nonces(groups.signing_ids()).await
             .map_err(ExecutionFailureKind::SequencerError)?;
 
-        let instruction = ata_core::Instruction::Burn {
-            ata_program_id,
-            amount,
-        };
+        let message = nssa::public_transaction::Message::try_new(program.id(), account_ids, nonces, instruction)?;
 
-        let message = nssa::public_transaction::Message::try_new(
-            program.id(),
-            account_ids,
-            nonces,
-            instruction,
-        )?;
-
-        let msg_hash = message.hash();
-        let witness_set = if let Some(kp) = key_path {
-            let pin = crate::helperfunctions::read_pin().map_err(|e| {
-                ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<
-                    pyo3::exceptions::PyRuntimeError,
-                    _,
-                >(e.to_string()))
-            })?;
-            let (sig, pk) = keycard_wallet::KeycardWallet::sign_message_for_path_with_connect(
-                &pin, kp, &msg_hash,
-            )?;
-            nssa::public_transaction::WitnessSet::from_list(&message, &[sig], &[pk])
-                .map_err(ExecutionFailureKind::TransactionBuildError)?
+        let pin = if groups.needs_pin() {
+            read_pin()
+                .map_err(|e| ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string())))?
+                .as_str()
+                .to_owned()
         } else {
-            let Some(signing_key) = self
-                .0
-                .storage
-                .user_data
-                .get_pub_account_signing_key(owner_id)
-            else {
-                return Err(ExecutionFailureKind::KeyNotFoundError);
-            };
-            nssa::public_transaction::WitnessSet::for_message(&message, &[signing_key])
+            String::new()
         };
+        let sigs = groups.sign_all(&message.hash(), &pin)
+            .map_err(|e| ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string())))?;
 
-        let tx = nssa::PublicTransaction::new(message, witness_set);
-
-        Ok(self
-            .0
-            .sequencer_client
-            .send_transaction(NSSATransaction::Public(tx))
-            .await?)
+        let tx = nssa::PublicTransaction::new(message, WitnessSet::from_raw_parts(sigs));
+        Ok(self.0.sequencer_client.send_transaction(NSSATransaction::Public(tx)).await?)
     }
 
     pub async fn send_create_private_owner(
@@ -230,18 +162,15 @@ impl Ata<'_> {
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
         let accounts = vec![
-            PrivacyPreservingAccount::PrivateOwned(owner_id),
+            self.0
+                .resolve_private_account(owner_id)
+                .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
             PrivacyPreservingAccount::Public(definition_id),
             PrivacyPreservingAccount::Public(ata_id),
         ];
 
         self.0
-            .send_privacy_preserving_tx(
-                accounts,
-                instruction_data,
-                &ata_with_token_dependency(),
-                &None,
-            )
+            .send_privacy_preserving_tx(accounts, instruction_data, &ata_with_token_dependency(), &None)
             .await
             .map(|(hash, mut secrets)| {
                 let secret = secrets.pop().expect("expected owner's secret");
@@ -270,18 +199,15 @@ impl Ata<'_> {
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
         let accounts = vec![
-            PrivacyPreservingAccount::PrivateOwned(owner_id),
+            self.0
+                .resolve_private_account(owner_id)
+                .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
             PrivacyPreservingAccount::Public(sender_ata_id),
             PrivacyPreservingAccount::Public(recipient_id),
         ];
 
         self.0
-            .send_privacy_preserving_tx(
-                accounts,
-                instruction_data,
-                &ata_with_token_dependency(),
-                &None,
-            )
+            .send_privacy_preserving_tx(accounts, instruction_data, &ata_with_token_dependency(), &None)
             .await
             .map(|(hash, mut secrets)| {
                 let secret = secrets.pop().expect("expected owner's secret");
@@ -309,18 +235,15 @@ impl Ata<'_> {
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
         let accounts = vec![
-            PrivacyPreservingAccount::PrivateOwned(owner_id),
+            self.0
+                .resolve_private_account(owner_id)
+                .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
             PrivacyPreservingAccount::Public(holder_ata_id),
             PrivacyPreservingAccount::Public(definition_id),
         ];
 
         self.0
-            .send_privacy_preserving_tx(
-                accounts,
-                instruction_data,
-                &ata_with_token_dependency(),
-                &None,
-            )
+            .send_privacy_preserving_tx(accounts, instruction_data, &ata_with_token_dependency(), &None)
             .await
             .map(|(hash, mut secrets)| {
                 let secret = secrets.pop().expect("expected owner's secret");

@@ -73,7 +73,7 @@ impl WalletSubcommand for AuthTransferSubcommand {
                     }
                     AccountIdWithPrivacy::Private(account_id) => {
                         let (tx_hash, secret) = NativeTokenTransfer(wallet_core)
-                            .register_account_private(account_id)
+                            .register_account_private(account_id, &None)
                             .await?;
 
                         println!("Transaction hash is {tx_hash}");
@@ -151,6 +151,7 @@ impl WalletSubcommand for AuthTransferSubcommand {
                                     from,
                                     to,
                                     amount,
+                                    from_mention: from_account,
                                 },
                             )
                         }
@@ -175,6 +176,7 @@ impl WalletSubcommand for AuthTransferSubcommand {
                                     to_vpk,
                                     to_identifier,
                                     amount,
+                                    from_mention: from_account,
                                 },
                             )
                         }
@@ -247,6 +249,8 @@ pub enum NativeTokenTransferProgramSubcommandShielded {
         /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
+        #[arg(skip)]
+        from_mention: CliAccountMention,
     },
     /// Send native token transfer from `from` to `to` for `amount`.
     ///
@@ -267,6 +271,8 @@ pub enum NativeTokenTransferProgramSubcommandShielded {
         /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
+        #[arg(skip)]
+        from_mention: CliAccountMention,
     },
 }
 
@@ -318,7 +324,7 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandPrivate {
         match self {
             Self::PrivateOwned { from, to, amount } => {
                 let (tx_hash, [secret_from, secret_to]) = NativeTokenTransfer(wallet_core)
-                    .send_private_transfer_to_owned_account(from, to, amount)
+                    .send_private_transfer_to_owned_account(from, to, amount, &None)
                     .await?;
 
                 println!("Transaction hash is {tx_hash}");
@@ -363,6 +369,7 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandPrivate {
                         to_vpk,
                         to_identifier.unwrap_or_else(rand::random),
                         amount,
+                        &None,
                     )
                     .await?;
 
@@ -393,9 +400,9 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandShielded {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         match self {
-            Self::ShieldedOwned { from, to, amount } => {
+            Self::ShieldedOwned { from, to, amount, from_mention } => {
                 let (tx_hash, secret) = NativeTokenTransfer(wallet_core)
-                    .send_shielded_transfer(from, to, amount)
+                    .send_shielded_transfer(from, to, amount, &from_mention)
                     .await?;
 
                 println!("Transaction hash is {tx_hash}");
@@ -421,6 +428,7 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandShielded {
                 to_vpk,
                 to_identifier,
                 amount,
+                from_mention,
             } => {
                 let to_npk_res = hex::decode(to_npk)?;
                 let mut to_npk = [0; 32];
@@ -440,6 +448,7 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandShielded {
                         to_vpk,
                         to_identifier.unwrap_or_else(rand::random),
                         amount,
+                        &from_mention,
                     )
                     .await?;
 
@@ -467,7 +476,7 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommand {
             }
             Self::Deshielded { from, to, amount } => {
                 let (tx_hash, secret) = NativeTokenTransfer(wallet_core)
-                    .send_deshielded_transfer(from, to, amount)
+                    .send_deshielded_transfer(from, to, amount, &None)
                     .await?;
 
                 println!("Transaction hash is {tx_hash}");

@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use nssa::{AccountId, PublicKey, Signature};
 use nssa_core::NullifierPublicKey;
 use pyo3::{prelude::*, types::PyAny};
+use zeroize::Zeroizing;
 use serde::{Deserialize, Serialize};
 
 pub mod python_path;
@@ -215,26 +216,39 @@ impl KeycardWallet {
         &self,
         py: Python,
         path: &str,
-    ) -> PyResult<([u8; 32], [u8; 32])> {
+    ) -> PyResult<(Zeroizing<[u8; 32]>, Zeroizing<[u8; 32]>)> {
         let (raw_nsk, raw_vsk): (Vec<u8>, Vec<u8>) = self
             .instance
             .bind(py)
             .call_method1("get_private_keys_for_path", (path,))?
             .extract()?;
 
-        let nsk: [u8; 32] = raw_nsk.try_into().map_err(|vec: Vec<u8>| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "expected 32-byte NSK from keycard, got {} bytes",
-                vec.len()
-            ))
-        })?;
+        let raw_nsk = Zeroizing::new(raw_nsk);
+        let raw_vsk = Zeroizing::new(raw_vsk);
 
-        let vsk: [u8; 32] = raw_vsk.try_into().map_err(|vec: Vec<u8>| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "expected 32-byte VSK from keycard, got {} bytes",
-                vec.len()
-            ))
-        })?;
+        let nsk = {
+            if raw_nsk.len() != 32 {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                    "expected 32-byte NSK from keycard, got {} bytes",
+                    raw_nsk.len()
+                )));
+            }
+            let mut arr = Zeroizing::new([0u8; 32]);
+            arr.copy_from_slice(&raw_nsk);
+            arr
+        };
+
+        let vsk = {
+            if raw_vsk.len() != 32 {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                    "expected 32-byte VSK from keycard, got {} bytes",
+                    raw_vsk.len()
+                )));
+            }
+            let mut arr = Zeroizing::new([0u8; 32]);
+            arr.copy_from_slice(&raw_vsk);
+            arr
+        };
 
         Ok((nsk, vsk))
     }
@@ -242,7 +256,7 @@ impl KeycardWallet {
     pub fn get_private_keys_for_path_with_connect(
         pin: &str,
         path: &str,
-    ) -> PyResult<([u8; 32], [u8; 32])> {
+    ) -> PyResult<(Zeroizing<[u8; 32]>, Zeroizing<[u8; 32]>)> {
         Python::with_gil(|py| {
             python_path::add_python_path(py)?;
 
@@ -268,7 +282,7 @@ impl KeycardWallet {
         key_path: &str,
     ) -> PyResult<String> {
         let (nsk, _vsk) = Self::get_private_keys_for_path_with_connect(pin, key_path)?;
-        let npk = NullifierPublicKey::from(&nsk);
+        let npk = NullifierPublicKey::from(&*nsk);
 
         Ok(format!("Private/{}", AccountId::from((&npk, 0_u128))))
     }

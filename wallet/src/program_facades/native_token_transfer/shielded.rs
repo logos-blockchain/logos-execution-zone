@@ -3,7 +3,7 @@ use nssa::AccountId;
 use nssa_core::{Identifier, NullifierPublicKey, SharedSecretKey, encryption::ViewingPublicKey};
 
 use super::{NativeTokenTransfer, auth_transfer_preparation};
-use crate::{ExecutionFailureKind, PrivacyPreservingAccount};
+use crate::{ExecutionFailureKind, PrivacyPreservingAccount, cli::CliAccountMention};
 
 impl NativeTokenTransfer<'_> {
     pub async fn send_shielded_transfer(
@@ -11,9 +11,10 @@ impl NativeTokenTransfer<'_> {
         from: AccountId,
         to: AccountId,
         balance_to_move: u128,
-        from_key_path: &Option<String>,
+        from_mention: &CliAccountMention,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
         let (instruction_data, program, tx_pre_check) = auth_transfer_preparation(balance_to_move);
+        let key_path = from_mention.key_path().map(str::to_owned);
 
         self.0
             .send_privacy_preserving_tx_with_pre_check(
@@ -26,7 +27,7 @@ impl NativeTokenTransfer<'_> {
                 instruction_data,
                 &program.into(),
                 tx_pre_check,
-                from_key_path,
+                &key_path,
             )
             .await
             .map(|(resp, secrets)| {
@@ -45,9 +46,10 @@ impl NativeTokenTransfer<'_> {
         to_vpk: ViewingPublicKey,
         to_identifier: Identifier,
         balance_to_move: u128,
-        from_key_path: &Option<String>,
+        from_mention: &CliAccountMention,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
         let (instruction_data, program, tx_pre_check) = auth_transfer_preparation(balance_to_move);
+        let key_path = from_mention.key_path().map(str::to_owned);
 
         self.0
             .send_privacy_preserving_tx_with_pre_check(
@@ -62,7 +64,7 @@ impl NativeTokenTransfer<'_> {
                 instruction_data,
                 &program.into(),
                 tx_pre_check,
-                from_key_path,
+                &key_path,
             )
             .await
             .map(|(resp, secrets)| {

@@ -138,7 +138,7 @@ impl CliAccountMention {
             Self::KeyPath(path) => {
                 let pin = read_pin()?;
                 let id_str =
-                    keycard_wallet::KeycardWallet::get_account_id_for_path_with_connect(&pin, path)
+                    keycard_wallet::KeycardWallet::get_public_account_id_for_path_with_connect(&pin, path)
                         .map_err(anyhow::Error::from)?;
                 AccountIdWithPrivacy::from_str(&id_str)
                     .map_err(|e| anyhow::anyhow!("Invalid account id from keycard: {e}"))
@@ -159,46 +159,6 @@ impl CliAccountMention {
         }
     }
 
-    /// Resolve to an [`AccountSigner`] for a sender — must sign, never `Foreign`.
-    pub fn to_signer(&self, wallet_core: &WalletCore) -> Result<crate::signing::AccountSigner> {
-        if let Self::KeyPath(path) = self {
-            return Ok(crate::signing::AccountSigner::Keycard(path.clone()));
-        }
-        let account = self.resolve(wallet_core.storage())?;
-        match account {
-            AccountIdWithPrivacy::Public(id) => Ok(crate::signing::AccountSigner::Local(id)),
-            AccountIdWithPrivacy::Private(_) => {
-                anyhow::bail!("Private accounts not supported as senders here")
-            }
-        }
-    }
-
-    /// Resolve to an [`AccountSigner`] for a recipient — returns `Foreign` when the account
-    /// has no local key and no keycard path, meaning no signature or nonce is required.
-    pub fn to_recipient_signer(
-        &self,
-        wallet_core: &WalletCore,
-    ) -> Result<crate::signing::AccountSigner> {
-        if let Self::KeyPath(path) = self {
-            return Ok(crate::signing::AccountSigner::Keycard(path.clone()));
-        }
-        let account = self.resolve(wallet_core.storage())?;
-        match account {
-            AccountIdWithPrivacy::Public(id) => Ok(
-                match wallet_core
-                    .storage()
-                    .key_chain()
-                    .pub_account_signing_key(id)
-                {
-                    Some(_) => crate::signing::AccountSigner::Local(id),
-                    None => crate::signing::AccountSigner::Foreign,
-                },
-            ),
-            AccountIdWithPrivacy::Private(_) => {
-                anyhow::bail!("Private accounts not supported as recipients here")
-            }
-        }
-    }
 }
 
 impl FromStr for CliAccountMention {

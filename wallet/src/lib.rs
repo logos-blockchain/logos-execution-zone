@@ -28,7 +28,6 @@ use nssa_core::{
     program::InstructionData,
 };
 pub use privacy_preserving_tx::PrivacyPreservingAccount;
-use pyo3::exceptions::PyRuntimeError;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
 use storage::Storage;
 use tokio::io::AsyncWriteExt as _;
@@ -575,37 +574,40 @@ impl WalletCore {
 
         let mut pre_states = acc_manager.pre_states();
 
-        let keycard_account = if let Some(key_path_str) = key_path.as_deref() {
-            let account_id = {
-                let pin = crate::helperfunctions::read_pin().map_err(|e| {
-                    ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<
-                        pyo3::exceptions::PyRuntimeError,
-                        _,
-                    >(e.to_string()))
-                })?;
-                KeycardWallet::get_public_account_id_for_path_with_connect(&pin, key_path_str)?
-            };
-            let (acc_id, _) =
-                parse_addr_with_privacy_prefix(&account_id).expect("Valid parsing of account id");
-            let account_id: AccountId = acc_id.parse().expect("Expect a valid Account Id");
+        let (keycard_account, keycard_pin, keycard_path) = if let Some(key_path_str) = key_path.as_deref() {
+            let pin = crate::helperfunctions::read_pin().map_err(|e| {
+                ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<
+                    pyo3::exceptions::PyRuntimeError,
+                    _,
+                >(e.to_string()))
+            })?;
+            let account_id_str =
+                KeycardWallet::get_public_account_id_for_path_with_connect(&pin, key_path_str)?;
+            let account_id: AccountId =
+                match account_id_str.parse::<AccountIdWithPrivacy>().expect("Valid parsing of account id") {
+                    AccountIdWithPrivacy::Public(id) | AccountIdWithPrivacy::Private(id) => id,
+                };
             let account = self
                 .get_account_public(account_id)
                 .await
                 .expect("Expect valid account");
-            Some(AccountWithMetadata {
-                account,
-                is_authorized: true,
-                account_id,
-            })
+            let pin_str = pin.as_str().to_owned();
+            (
+                Some(AccountWithMetadata {
+                    account,
+                    is_authorized: true,
+                    account_id,
+                }),
+                Some(pin_str),
+                Some(key_path_str.to_owned()),
+            )
         } else {
-            None
+            (None, None, None)
         };
 
         let mut nonces: Vec<Nonce> = acc_manager.public_account_nonces().into_iter().collect();
 
         let mut account_ids: Vec<AccountId> = acc_manager.public_account_ids();
-
-        let mut visibility_mask = acc_manager.visibility_mask().to_vec();
 
         if let Some(acc) = keycard_account.as_ref() {
             if acc_manager.public_account_ids().contains(&acc.account_id) {
@@ -619,7 +621,6 @@ impl WalletCore {
             } else {
                 nonces.push(acc.account.nonce);
                 account_ids.push(acc.account_id);
-                visibility_mask.push(0);
                 pre_states.push(acc.clone());
             }
         }
@@ -652,12 +653,35 @@ impl WalletCore {
             )
             .unwrap();
 
-        let witness_set =
+        let witness_set = if let (Some(pin), Some(path)) =
+            (keycard_pin.as_deref(), keycard_path.as_deref())
+        {
+            let hash = message.hash();
+            let local_auth = acc_manager.public_account_auth();
+            let mut sigs: Vec<(Signature, PublicKey)> = local_auth
+                .iter()
+                .map(|&key| (Signature::new(key, &hash), PublicKey::new_from_private_key(key)))
+                .collect();
+            let keycard_sig = pyo3::Python::with_gil(|py| {
+                let mut ctx = crate::signing::KeycardSessionContext::new(pin);
+                let result = ctx
+                    .get_or_connect(py)
+                    .and_then(|w| w.sign_message_for_path(py, path, &hash));
+                ctx.close(py);
+                result
+            })
+            .map_err(ExecutionFailureKind::KeycardError)?;
+            sigs.push(keycard_sig);
+            nssa::privacy_preserving_transaction::witness_set::WitnessSet::from_raw_parts(
+                sigs, proof,
+            )
+        } else {
             nssa::privacy_preserving_transaction::witness_set::WitnessSet::for_message(
                 &message,
                 proof,
                 &acc_manager.public_account_auth(),
-            );
+            )
+        };
         let tx = PrivacyPreservingTransaction::new(message, witness_set);
 
         let shared_secrets: Vec<_> = private_account_keys

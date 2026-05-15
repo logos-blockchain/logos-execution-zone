@@ -9,10 +9,10 @@ source venv/bin/activate
 export KEYCARD_PIN=111111
 
 echo "=== Test: wallet keycard get-private-keys path 10 ==="
-wallet keycard get-private-keys --key-path "m/44'/60'/0'/0/10"
+wallet keycard get-private-keys --key-path "m/44'/60'/0'/0/10" --reveal
 
 echo "=== Test: wallet keycard get-private-keys path 11 ==="
-wallet keycard get-private-keys --key-path "m/44'/60'/0'/0/11"
+wallet keycard get-private-keys --key-path "m/44'/60'/0'/0/11" --reveal
 
 echo ""
 echo "=== All get-private-keys tests finished ==="

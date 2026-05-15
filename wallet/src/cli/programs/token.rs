@@ -114,16 +114,18 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                 name,
                 total_supply,
             } => {
+                let def_mention = definition_account_id.clone();
+                let sup_mention = supply_account_id.clone();
                 let definition_account_id = definition_account_id.resolve(wallet_core.storage())?;
                 let supply_account_id = supply_account_id.resolve(wallet_core.storage())?;
                 let underlying_subcommand = match (definition_account_id, supply_account_id) {
                     (
-                        AccountIdWithPrivacy::Public(definition_account_id),
-                        AccountIdWithPrivacy::Public(supply_account_id),
+                        AccountIdWithPrivacy::Public(_),
+                        AccountIdWithPrivacy::Public(_),
                     ) => TokenProgramSubcommand::Create(
                         CreateNewTokenProgramSubcommand::NewPublicDefPublicSupp {
-                            definition_account_id,
-                            supply_account_id,
+                            definition_account_id: def_mention,
+                            supply_account_id: sup_mention,
                             name,
                             total_supply,
                         },
@@ -173,6 +175,8 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                 to_identifier,
                 amount,
             } => {
+                let from_mention = from.clone();
+                let to_mention = to.clone();
                 let from = from.resolve(wallet_core.storage())?;
                 let to = to
                     .map(|account_mention| account_mention.resolve(wallet_core.storage()))
@@ -192,11 +196,11 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                         anyhow::bail!("List of public keys is uncomplete");
                     }
                     (Some(to), None, None) => match (from, to) {
-                        (AccountIdWithPrivacy::Public(from), AccountIdWithPrivacy::Public(to)) => {
+                        (AccountIdWithPrivacy::Public(_), AccountIdWithPrivacy::Public(_)) => {
                             TokenProgramSubcommand::Public(
                                 TokenProgramSubcommandPublic::TransferToken {
-                                    sender_account_id: from,
-                                    recipient_account_id: to,
+                                    sender_account_id: from_mention,
+                                    recipient_account_id: to_mention.expect("matched Some branch"),
                                     balance_to_move: amount,
                                 },
                             )
@@ -259,15 +263,16 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                 holder,
                 amount,
             } => {
+                let holder_mention = holder.clone();
                 let definition = definition.resolve(wallet_core.storage())?;
                 let holder = holder.resolve(wallet_core.storage())?;
                 let underlying_subcommand = match (definition, holder) {
                     (
                         AccountIdWithPrivacy::Public(definition),
-                        AccountIdWithPrivacy::Public(holder),
+                        AccountIdWithPrivacy::Public(_),
                     ) => TokenProgramSubcommand::Public(TokenProgramSubcommandPublic::BurnToken {
                         definition_account_id: definition,
-                        holder_account_id: holder,
+                        holder_account_id: holder_mention,
                         amount,
                     }),
                     (
@@ -312,6 +317,8 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                 holder_identifier,
                 amount,
             } => {
+                let def_mention = definition.clone();
+                let hol_mention = holder.clone();
                 let definition = definition.resolve(wallet_core.storage())?;
                 let holder = holder
                     .map(|account_mention| account_mention.resolve(wallet_core.storage()))
@@ -332,12 +339,12 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                     }
                     (Some(holder), None, None) => match (definition, holder) {
                         (
-                            AccountIdWithPrivacy::Public(definition),
-                            AccountIdWithPrivacy::Public(holder),
+                            AccountIdWithPrivacy::Public(_),
+                            AccountIdWithPrivacy::Public(_),
                         ) => TokenProgramSubcommand::Public(
                             TokenProgramSubcommandPublic::MintToken {
-                                definition_account_id: definition,
-                                holder_account_id: holder,
+                                definition_account_id: def_mention,
+                                holder_account_id: hol_mention.expect("matched Some branch"),
                                 amount,
                             },
                         ),
@@ -430,9 +437,9 @@ pub enum TokenProgramSubcommandPublic {
     // Transfer tokens using the token program
     TransferToken {
         #[arg(short, long)]
-        sender_account_id: AccountId,
+        sender_account_id: CliAccountMention,
         #[arg(short, long)]
-        recipient_account_id: AccountId,
+        recipient_account_id: CliAccountMention,
         #[arg(short, long)]
         balance_to_move: u128,
     },
@@ -441,16 +448,16 @@ pub enum TokenProgramSubcommandPublic {
         #[arg(short, long)]
         definition_account_id: AccountId,
         #[arg(short, long)]
-        holder_account_id: AccountId,
+        holder_account_id: CliAccountMention,
         #[arg(short, long)]
         amount: u128,
     },
     // Transfer tokens using the token program
     MintToken {
         #[arg(short, long)]
-        definition_account_id: AccountId,
+        definition_account_id: CliAccountMention,
         #[arg(short, long)]
-        holder_account_id: AccountId,
+        holder_account_id: CliAccountMention,
         #[arg(short, long)]
         amount: u128,
     },
@@ -620,9 +627,9 @@ pub enum CreateNewTokenProgramSubcommand {
     /// Definition - public, supply - public.
     NewPublicDefPublicSupp {
         #[arg(short, long)]
-        definition_account_id: AccountId,
+        definition_account_id: CliAccountMention,
         #[arg(short, long)]
-        supply_account_id: AccountId,
+        supply_account_id: CliAccountMention,
         #[arg(short, long)]
         name: String,
         #[arg(short, long)]
@@ -680,11 +687,18 @@ impl WalletSubcommand for TokenProgramSubcommandPublic {
                 recipient_account_id,
                 balance_to_move,
             } => {
+                let sender = sender_account_id.resolve(wallet_core.storage())?;
+                let recipient = recipient_account_id.resolve(wallet_core.storage())?;
+                let (AccountIdWithPrivacy::Public(sender_id), AccountIdWithPrivacy::Public(recipient_id)) = (sender, recipient) else {
+                    anyhow::bail!("Only public accounts supported for token transfer");
+                };
                 Token(wallet_core)
                     .send_transfer_transaction(
-                        sender_account_id,
-                        recipient_account_id,
+                        sender_id,
+                        recipient_id,
                         balance_to_move,
+                        &sender_account_id,
+                        &recipient_account_id,
                     )
                     .await?;
                 Ok(SubcommandReturnValue::Empty)
@@ -694,8 +708,12 @@ impl WalletSubcommand for TokenProgramSubcommandPublic {
                 holder_account_id,
                 amount,
             } => {
+                let holder = holder_account_id.resolve(wallet_core.storage())?;
+                let AccountIdWithPrivacy::Public(holder_id) = holder else {
+                    anyhow::bail!("Only public holder account supported for token burn");
+                };
                 Token(wallet_core)
-                    .send_burn_transaction(definition_account_id, holder_account_id, amount)
+                    .send_burn_transaction(definition_account_id, holder_id, amount, &holder_account_id)
                     .await?;
                 Ok(SubcommandReturnValue::Empty)
             }
@@ -704,8 +722,13 @@ impl WalletSubcommand for TokenProgramSubcommandPublic {
                 holder_account_id,
                 amount,
             } => {
+                let definition = definition_account_id.resolve(wallet_core.storage())?;
+                let holder = holder_account_id.resolve(wallet_core.storage())?;
+                let (AccountIdWithPrivacy::Public(def_id), AccountIdWithPrivacy::Public(holder_id)) = (definition, holder) else {
+                    anyhow::bail!("Only public accounts supported for token mint");
+                };
                 Token(wallet_core)
-                    .send_mint_transaction(definition_account_id, holder_account_id, amount)
+                    .send_mint_transaction(def_id, holder_id, amount, &definition_account_id, &holder_account_id)
                     .await?;
                 Ok(SubcommandReturnValue::Empty)
             }
@@ -1307,12 +1330,19 @@ impl WalletSubcommand for CreateNewTokenProgramSubcommand {
                 name,
                 total_supply,
             } => {
+                let definition = definition_account_id.resolve(wallet_core.storage())?;
+                let supply = supply_account_id.resolve(wallet_core.storage())?;
+                let (AccountIdWithPrivacy::Public(def_id), AccountIdWithPrivacy::Public(sup_id)) = (definition, supply) else {
+                    anyhow::bail!("Only public accounts supported for new token definition");
+                };
                 Token(wallet_core)
                     .send_new_definition(
-                        definition_account_id,
-                        supply_account_id,
+                        def_id,
+                        sup_id,
                         name,
                         total_supply,
+                        &definition_account_id,
+                        &supply_account_id,
                     )
                     .await?;
                 Ok(SubcommandReturnValue::Empty)

@@ -83,17 +83,17 @@ echo "Test: wallet account get --account-id \"m/44'/60'/0'/0/0\""
 wallet account get --account-id "Public/7wHg9sbJwc6h3NP1S9bekfAzB8CHifEcxKswCKUt3YQo"
 
 echo "=== Test: account get path 0 ==="
-wallet account get --key-path "m/44'/60'/0'/0/0"
+wallet account get --account-id "m/44'/60'/0'/0/0"
 echo "=== Test: account get path 1 ==="
-wallet account get --key-path "m/44'/60'/0'/0/1"
+wallet account get --account-id "m/44'/60'/0'/0/1"
 echo ""
 echo "=== Test (1): Shielded auth-transfer to owned private account ==="
 
 wallet auth-transfer send --amount 2 \
-  --from-key-path "m/44'/60'/0'/0/0" \
+  --from "m/44'/60'/0'/0/0" \
   --to-npk "55204e2934045b044f06d8222b454d46b54788f33c7dec4f6733d441703bb0e6" \
   --to-vpk "02a8626b0c0ad9383c5678dad48c3969b4174fb377cdb03a6259648032c774cec8"
 echo "Shielded auth-transfer sent"
 
-sleep 5
-wallet account get --key-path "m/44'/60'/0'/0/0"
+sleep 15
+wallet account get --account-id "m/44'/60'/0'/0/0"

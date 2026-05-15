@@ -15,6 +15,12 @@ use crate::{
 /// Represents generic chain CLI subcommand.
 #[derive(Subcommand, Debug, Clone)]
 pub enum AccountSubcommand {
+    /// Resolve an account mention and print just the account ID (no privacy prefix).
+    Id {
+        /// Account id with privacy prefix, label, or BIP-32 key path.
+        #[arg(long)]
+        account_id: CliAccountMention,
+    },
     /// Get account data.
     Get {
         /// Flag to get raw account data.
@@ -261,6 +267,14 @@ impl WalletSubcommand for AccountSubcommand {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         match self {
+            Self::Id { account_id } => {
+                let resolved = account_id.resolve(wallet_core.storage())?;
+                let id = match resolved {
+                    AccountIdWithPrivacy::Public(id) | AccountIdWithPrivacy::Private(id) => id,
+                };
+                println!("{id}");
+                Ok(SubcommandReturnValue::Empty)
+            }
             Self::Get {
                 raw,
                 keys,
