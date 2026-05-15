@@ -16,9 +16,9 @@ use crate::{
 pub enum AuthTransferSubcommand {
     /// Initialize account under authenticated transfer program.
     Init {
-        /// Account id, label, or Keycard key path (e.g. `Public/9bKm...`, `my-label`, `m/44'/60'/0'/0/0`).
+        /// Either 32 byte base58 account id string with privacy prefix or a label.
         #[arg(long)]
-        account: CliAccountMention,
+        account_id: CliAccountMention,
     },
     /// Send native tokens from one account to another with variable privacy.
     ///
@@ -55,8 +55,8 @@ impl WalletSubcommand for AuthTransferSubcommand {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         match self {
-            Self::Init { account } => {
-                let resolved = account.resolve(wallet_core.storage())?;
+            Self::Init { account_id } => {
+                let resolved = account_id.resolve(wallet_core.storage())?;
                 match resolved {
                     AccountIdWithPrivacy::Public(account_id) => {
                         let tx_hash = NativeTokenTransfer(wallet_core)
@@ -124,13 +124,7 @@ impl WalletSubcommand for AuthTransferSubcommand {
                     }
                     (Some(to), None, None) => match (from, to) {
                         (AccountIdWithPrivacy::Public(from), AccountIdWithPrivacy::Public(to)) => {
-                            NativeTokenTransferProgramSubcommand::Public {
-                                from,
-                                to,
-                                amount,
-                                from_mention: from_account,
-                                to_mention: to_account.expect("Some in this branch"),
-                            }
+                            NativeTokenTransferProgramSubcommand::Public { from, to, amount }
                         }
                         (
                             AccountIdWithPrivacy::Private(from),

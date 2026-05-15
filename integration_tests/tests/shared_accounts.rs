@@ -187,7 +187,7 @@ async fn fund_shared_account_from_public() -> Result<()> {
 
     // Initialize the shared account under auth-transfer
     let command = Command::AuthTransfer(AuthTransferSubcommand::Init {
-        account: private_mention(shared_id),
+        account_id: private_mention(shared_id),
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 

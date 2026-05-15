@@ -233,7 +233,7 @@ async fn claim_pinata_to_new_private_account() -> Result<()> {
 
     // Initialize account under auth transfer program
     let command = Command::AuthTransfer(AuthTransferSubcommand::Init {
-        account: private_mention(winner_account_id),
+        account_id: private_mention(winner_account_id),
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 

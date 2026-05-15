@@ -391,7 +391,7 @@ async fn initialize_private_account() -> Result<()> {
     };
 
     let command = Command::AuthTransfer(AuthTransferSubcommand::Init {
-        account: private_mention(account_id),
+        account_id: private_mention(account_id),
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
@@ -488,7 +488,7 @@ async fn initialize_private_account_using_label() -> Result<()> {
 
     // Initialize using the label instead of account ID
     let command = Command::AuthTransfer(AuthTransferSubcommand::Init {
-        account: label.into(),
+        account_id: label.into(),
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 

@@ -25,15 +25,6 @@ impl NativeTokenTransfer<'_> {
         from_mention: &CliAccountMention,
         to_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let balance = self
-            .0
-            .get_account_balance(from)
-            .await
-            .map_err(ExecutionFailureKind::SequencerError)?;
-
-        if balance < balance_to_move {
-            return Err(ExecutionFailureKind::InsufficientFundsError);
-        }
 
         let from_signer = from_mention
             .to_signer(self.0)
@@ -102,6 +93,34 @@ impl NativeTokenTransfer<'_> {
             .sequencer_client
             .send_transaction(NSSATransaction::Public(tx))
             .await?)
+            } else {
+                println!(
+                    "Receiver's account ({to}) private key not found in wallet. Proceeding with only sender's key."
+                );
+            }
+
+            let message = Message::try_new(
+                program_id,
+                account_ids,
+                nonces,
+                AuthTransferInstruction::Transfer {
+                    amount: balance_to_move,
+                },
+            )
+            .unwrap();
+            let witness_set = WitnessSet::for_message(&message, &private_keys);
+
+            let tx = PublicTransaction::new(message, witness_set);
+
+            Ok(self
+                .0
+                .sequencer_client
+                .send_transaction(NSSATransaction::Public(tx))
+                .await?)
+        } else {
+            Err(ExecutionFailureKind::InsufficientFundsError)
+        }
+
     }
 
     pub async fn register_account(

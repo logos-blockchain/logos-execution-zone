@@ -236,7 +236,7 @@ async fn initialize_public_account() -> Result<()> {
     };
 
     let command = Command::AuthTransfer(AuthTransferSubcommand::Init {
-        account: public_mention(account_id),
+        account_id: public_mention(account_id),
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
