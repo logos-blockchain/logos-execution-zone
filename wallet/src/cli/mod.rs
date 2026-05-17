@@ -145,7 +145,6 @@ impl CliAccountMention {
             }
         }
     }
-
 }
 
 impl FromStr for CliAccountMention {

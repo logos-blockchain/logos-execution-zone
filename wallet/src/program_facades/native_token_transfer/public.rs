@@ -10,8 +10,7 @@ use sequencer_service_rpc::RpcClient as _;
 
 use super::NativeTokenTransfer;
 use crate::{
-    ExecutionFailureKind, cli::CliAccountMention, helperfunctions::read_pin,
-    signing::SigningGroups,
+    ExecutionFailureKind, cli::CliAccountMention, helperfunctions::read_pin, signing::SigningGroups,
 };
 
 impl NativeTokenTransfer<'_> {
