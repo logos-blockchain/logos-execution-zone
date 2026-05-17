@@ -3,10 +3,13 @@ use std::path::PathBuf;
 use nssa::{AccountId, PublicKey, Signature};
 use nssa_core::NullifierPublicKey;
 use pyo3::{prelude::*, types::PyAny};
-use zeroize::Zeroizing;
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroizing;
 
 pub mod python_path;
+
+/// NSK and VSK as fixed-length zeroizing byte arrays.
+type PrivateKeyPair = (Zeroizing<[u8; 32]>, Zeroizing<[u8; 32]>);
 
 // TODO: encrypt at rest alongside broader wallet storage encryption work.
 #[derive(Serialize, Deserialize)]
@@ -140,6 +143,10 @@ impl KeycardWallet {
         })
     }
 
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "64 - s_stripped.len() is safe: s_stripped.len() ≤ 31 because py_signature.len() is in [32, 63]"
+    )]
     pub fn sign_message_for_path(
         &self,
         py: Python,
@@ -152,12 +159,19 @@ impl KeycardWallet {
             .call_method1("sign_message_for_path", (message, path))?
             .extract()?;
 
-        // The keycard Python library strips the leading zero from the S component when
-        // S < 2^248. Re-insert it so the slice is always the expected 64 bytes (R || S).
-        let py_signature = if py_signature.len() == 63 {
+        // The keycard Python library strips leading zeros from S when S < 2^(8k) for some k.
+        // Left-pad S back to 32 bytes so the full signature is always 64 bytes (R || S).
+        let py_signature = if py_signature.len() < 64 {
+            if py_signature.len() < 32 {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                    "signature from keycard too short: {} bytes",
+                    py_signature.len()
+                )));
+            }
+            let s_stripped = &py_signature[32..];
             let mut padded = [0_u8; 64];
             padded[..32].copy_from_slice(&py_signature[..32]);
-            padded[33..].copy_from_slice(&py_signature[32..]);
+            padded[(64 - s_stripped.len())..].copy_from_slice(s_stripped);
             padded.to_vec()
         } else {
             py_signature
@@ -212,11 +226,7 @@ impl KeycardWallet {
         Ok(format!("Public/{}", AccountId::from(&public_key)))
     }
 
-    pub fn get_private_keys_for_path(
-        &self,
-        py: Python,
-        path: &str,
-    ) -> PyResult<(Zeroizing<[u8; 32]>, Zeroizing<[u8; 32]>)> {
+    pub fn get_private_keys_for_path(&self, py: Python, path: &str) -> PyResult<PrivateKeyPair> {
         let (raw_nsk, raw_vsk): (Vec<u8>, Vec<u8>) = self
             .instance
             .bind(py)
@@ -233,7 +243,7 @@ impl KeycardWallet {
                     raw_nsk.len()
                 )));
             }
-            let mut arr = Zeroizing::new([0u8; 32]);
+            let mut arr = Zeroizing::new([0_u8; 32]);
             arr.copy_from_slice(&raw_nsk);
             arr
         };
@@ -245,7 +255,7 @@ impl KeycardWallet {
                     raw_vsk.len()
                 )));
             }
-            let mut arr = Zeroizing::new([0u8; 32]);
+            let mut arr = Zeroizing::new([0_u8; 32]);
             arr.copy_from_slice(&raw_vsk);
             arr
         };
@@ -256,7 +266,7 @@ impl KeycardWallet {
     pub fn get_private_keys_for_path_with_connect(
         pin: &str,
         path: &str,
-    ) -> PyResult<(Zeroizing<[u8; 32]>, Zeroizing<[u8; 32]>)> {
+    ) -> PyResult<PrivateKeyPair> {
         Python::with_gil(|py| {
             python_path::add_python_path(py)?;
 

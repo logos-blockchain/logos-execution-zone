@@ -138,8 +138,10 @@ impl CliAccountMention {
             Self::KeyPath(path) => {
                 let pin = read_pin()?;
                 let id_str =
-                    keycard_wallet::KeycardWallet::get_public_account_id_for_path_with_connect(&pin, path)
-                        .map_err(anyhow::Error::from)?;
+                    keycard_wallet::KeycardWallet::get_public_account_id_for_path_with_connect(
+                        &pin, path,
+                    )
+                    .map_err(anyhow::Error::from)?;
                 AccountIdWithPrivacy::from_str(&id_str)
                     .map_err(|e| anyhow::anyhow!("Invalid account id from keycard: {e}"))
             }
@@ -158,7 +160,6 @@ impl CliAccountMention {
             Self::Id(_) | Self::Label(_) => None,
         }
     }
-
 }
 
 impl FromStr for CliAccountMention {

@@ -1,21 +1,16 @@
-use common::{HashType, transaction::NSSATransaction};
-use nssa::{AccountId, program::Program, public_transaction::WitnessSet};
+use common::HashType;
+use nssa::{AccountId, program::Program};
 use nssa_core::{Identifier, NullifierPublicKey, SharedSecretKey, encryption::ViewingPublicKey};
-use pyo3::exceptions::PyRuntimeError;
-use sequencer_service_rpc::RpcClient as _;
 use token_core::Instruction;
 
 use crate::{
-    ExecutionFailureKind, PrivacyPreservingAccount, WalletCore,
-    cli::CliAccountMention,
-    helperfunctions::read_pin,
+    ExecutionFailureKind, PrivacyPreservingAccount, WalletCore, cli::CliAccountMention,
     signing::SigningGroups,
 };
 
 pub struct Token<'wallet>(pub &'wallet WalletCore);
 
 impl Token<'_> {
-    #[expect(clippy::too_many_arguments, reason = "each parameter is distinct")]
     pub async fn send_new_definition(
         &self,
         definition_account_id: AccountId,
@@ -26,37 +21,17 @@ impl Token<'_> {
         supply_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
         let account_ids = vec![definition_account_id, supply_account_id];
-        let program_id = nssa::program::Program::token().id();
         let instruction = Instruction::NewFungibleDefinition { name, total_supply };
 
         let mut groups = SigningGroups::new();
         groups
             .add_sender(definition_mention, definition_account_id, self.0)
             .and_then(|()| groups.add_sender(supply_mention, supply_account_id, self.0))
-            .map_err(|e| ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string())))?;
+            .map_err(ExecutionFailureKind::from_anyhow)?;
 
-        let nonces = self.0.get_accounts_nonces(groups.signing_ids()).await
-            .map_err(ExecutionFailureKind::SequencerError)?;
-        let message = nssa::public_transaction::Message::try_new(program_id, account_ids, nonces, instruction).unwrap();
-
-        let pin = if groups.needs_pin() {
-            read_pin()
-                .map_err(|e| ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string())))?
-                .as_str()
-                .to_owned()
-        } else {
-            String::new()
-        };
-        let sigs = groups.sign_all(&message.hash(), &pin)
-            .map_err(|e| ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string())))?;
-
-        let tx = nssa::PublicTransaction::new(message, WitnessSet::from_raw_parts(sigs));
-
-        Ok(self
-            .0
-            .sequencer_client
-            .send_transaction(NSSATransaction::Public(tx))
-            .await?)
+        self.0
+            .send_public_tx(&Program::token(), account_ids, instruction, groups)
+            .await
     }
 
     pub async fn send_new_definition_private_owned_supply(
@@ -168,38 +143,19 @@ impl Token<'_> {
         recipient_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
         let account_ids = vec![sender_account_id, recipient_account_id];
-        let program_id = nssa::program::Program::token().id();
-        let instruction = Instruction::Transfer { amount_to_transfer: amount };
+        let instruction = Instruction::Transfer {
+            amount_to_transfer: amount,
+        };
 
         let mut groups = SigningGroups::new();
         groups
             .add_sender(sender_mention, sender_account_id, self.0)
             .and_then(|()| groups.add_recipient(recipient_mention, recipient_account_id, self.0))
-            .map_err(|e| ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string())))?;
+            .map_err(ExecutionFailureKind::from_anyhow)?;
 
-        let nonces = self.0.get_accounts_nonces(groups.signing_ids()).await
-            .map_err(ExecutionFailureKind::SequencerError)?;
-
-        let message = nssa::public_transaction::Message::try_new(program_id, account_ids, nonces, instruction).unwrap();
-
-        let pin = if groups.needs_pin() {
-            read_pin()
-                .map_err(|e| ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string())))?
-                .as_str()
-                .to_owned()
-        } else {
-            String::new()
-        };
-        let sigs = groups.sign_all(&message.hash(), &pin)
-            .map_err(|e| ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string())))?;
-
-        let tx = nssa::PublicTransaction::new(message, WitnessSet::from_raw_parts(sigs));
-
-        Ok(self
-            .0
-            .sequencer_client
-            .send_transaction(NSSATransaction::Public(tx))
-            .await?)
+        self.0
+            .send_public_tx(&Program::token(), account_ids, instruction, groups)
+            .await
     }
 
     pub async fn send_transfer_transaction_private_owned_account(
@@ -315,12 +271,14 @@ impl Token<'_> {
         sender_account_id: AccountId,
         recipient_account_id: AccountId,
         amount: u128,
+        sender_mention: &CliAccountMention,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
         let instruction = Instruction::Transfer {
             amount_to_transfer: amount,
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
+        let key_path = sender_mention.key_path().map(str::to_owned);
 
         self.0
             .send_privacy_preserving_tx(
@@ -332,7 +290,7 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                &None,
+                &key_path,
             )
             .await
             .map(|(resp, secrets)| {
@@ -351,12 +309,14 @@ impl Token<'_> {
         recipient_vpk: ViewingPublicKey,
         recipient_identifier: Identifier,
         amount: u128,
+        sender_mention: &CliAccountMention,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
         let instruction = Instruction::Transfer {
             amount_to_transfer: amount,
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
+        let key_path = sender_mention.key_path().map(str::to_owned);
 
         self.0
             .send_privacy_preserving_tx(
@@ -370,7 +330,7 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                &None,
+                &key_path,
             )
             .await
             .map(|(resp, secrets)| {
@@ -397,31 +357,11 @@ impl Token<'_> {
         let mut groups = SigningGroups::new();
         groups
             .add_sender(holder_mention, holder_account_id, self.0)
-            .map_err(|e| ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string())))?;
+            .map_err(ExecutionFailureKind::from_anyhow)?;
 
-        let nonces = self.0.get_accounts_nonces(groups.signing_ids()).await
-            .map_err(ExecutionFailureKind::SequencerError)?;
-        let message = nssa::public_transaction::Message::try_new(Program::token().id(), account_ids, nonces, instruction)
-            .expect("Instruction should serialize");
-
-        let pin = if groups.needs_pin() {
-            read_pin()
-                .map_err(|e| ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string())))?
-                .as_str()
-                .to_owned()
-        } else {
-            String::new()
-        };
-        let sigs = groups.sign_all(&message.hash(), &pin)
-            .map_err(|e| ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string())))?;
-
-        let tx = nssa::PublicTransaction::new(message, WitnessSet::from_raw_parts(sigs));
-
-        Ok(self
-            .0
-            .sequencer_client
-            .send_transaction(NSSATransaction::Public(tx))
-            .await?)
+        self.0
+            .send_public_tx(&Program::token(), account_ids, instruction, groups)
+            .await
     }
 
     pub async fn send_burn_transaction_private_owned_account(
@@ -544,31 +484,11 @@ impl Token<'_> {
         groups
             .add_sender(definition_mention, definition_account_id, self.0)
             .and_then(|()| groups.add_recipient(holder_mention, holder_account_id, self.0))
-            .map_err(|e| ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string())))?;
+            .map_err(ExecutionFailureKind::from_anyhow)?;
 
-        let nonces = self.0.get_accounts_nonces(groups.signing_ids()).await
-            .map_err(ExecutionFailureKind::SequencerError)?;
-
-        let message = nssa::public_transaction::Message::try_new(Program::token().id(), account_ids, nonces, instruction).unwrap();
-
-        let pin = if groups.needs_pin() {
-            read_pin()
-                .map_err(|e| ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string())))?
-                .as_str()
-                .to_owned()
-        } else {
-            String::new()
-        };
-        let sigs = groups.sign_all(&message.hash(), &pin)
-            .map_err(|e| ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string())))?;
-
-        let tx = nssa::PublicTransaction::new(message, WitnessSet::from_raw_parts(sigs));
-
-        Ok(self
-            .0
-            .sequencer_client
-            .send_transaction(NSSATransaction::Public(tx))
-            .await?)
+        self.0
+            .send_public_tx(&Program::token(), account_ids, instruction, groups)
+            .await
     }
 
     pub async fn send_mint_transaction_private_owned_account(
@@ -750,5 +670,4 @@ impl Token<'_> {
                 (resp, first)
             })
     }
-
 }

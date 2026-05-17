@@ -171,10 +171,7 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
                 let a_id = user_holding_a.resolve(wallet_core.storage())?;
                 let b_id = user_holding_b.resolve(wallet_core.storage())?;
                 match (a_id, b_id) {
-                    (
-                        AccountIdWithPrivacy::Public(a),
-                        AccountIdWithPrivacy::Public(b),
-                    ) => {
+                    (AccountIdWithPrivacy::Public(a), AccountIdWithPrivacy::Public(b)) => {
                         Amm(wallet_core)
                             .send_swap_exact_input(
                                 a,
@@ -205,10 +202,7 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
                 let a_id = user_holding_a.resolve(wallet_core.storage())?;
                 let b_id = user_holding_b.resolve(wallet_core.storage())?;
                 match (a_id, b_id) {
-                    (
-                        AccountIdWithPrivacy::Public(a),
-                        AccountIdWithPrivacy::Public(b),
-                    ) => {
+                    (AccountIdWithPrivacy::Public(a), AccountIdWithPrivacy::Public(b)) => {
                         Amm(wallet_core)
                             .send_swap_exact_output(
                                 a,
@@ -256,6 +250,7 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
                                 max_amount_b,
                                 &user_holding_a,
                                 &user_holding_b,
+                                &user_holding_lp,
                             )
                             .await?;
 

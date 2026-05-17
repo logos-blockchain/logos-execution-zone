@@ -1,5 +1,6 @@
 #![expect(
     clippy::print_stdout,
+    clippy::print_stderr,
     reason = "This is a CLI application, printing to stdout and stderr is expected and convenient"
 )]
 #![expect(
@@ -17,10 +18,12 @@ use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use keycard_wallet::KeycardWallet;
 use log::info;
 use nssa::{
-    Account, AccountId, PrivacyPreservingTransaction, PublicKey, Signature,
+    Account, AccountId, PrivacyPreservingTransaction, PublicKey, PublicTransaction, Signature,
     privacy_preserving_transaction::{
         circuit::ProgramWithDependencies, message::EncryptedAccountData,
     },
+    program::Program,
+    public_transaction::WitnessSet as PublicWitnessSet,
 };
 use nssa_core::{
     Commitment, MembershipProof, SharedSecretKey,
@@ -36,6 +39,7 @@ use crate::{
     account::{AccountIdWithPrivacy, Label},
     config::WalletConfigOverrides,
     poller::TxPoller,
+    signing::SigningGroups,
     storage::key_chain::SharedAccountEntry,
 };
 
@@ -81,6 +85,20 @@ pub enum ExecutionFailureKind {
     TransactionBuildError(#[from] nssa::error::NssaError),
     #[error(transparent)]
     KeycardError(#[from] pyo3::PyErr),
+}
+
+impl ExecutionFailureKind {
+    /// Convert an [`anyhow::Error`] (e.g. from [`SigningGroups`]) into a keycard error.
+    #[must_use]
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "used as a method reference in map_err"
+    )]
+    pub fn from_anyhow(e: anyhow::Error) -> Self {
+        Self::KeycardError(pyo3::PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+            e.to_string(),
+        ))
+    }
 }
 
 #[expect(clippy::partial_pub_fields, reason = "TODO: make all fields private")]
@@ -545,6 +563,62 @@ impl WalletCore {
         Ok(())
     }
 
+    /// Send a public transaction, fetching nonces automatically from
+    /// [`SigningGroups::signing_ids`].
+    pub async fn send_public_tx<T: serde::Serialize>(
+        &self,
+        program: &Program,
+        account_ids: Vec<AccountId>,
+        instruction: T,
+        groups: SigningGroups,
+    ) -> Result<HashType, ExecutionFailureKind> {
+        let nonces = self
+            .get_accounts_nonces(groups.signing_ids())
+            .await
+            .map_err(ExecutionFailureKind::SequencerError)?;
+        self.send_public_tx_with_nonces(program, account_ids, nonces, instruction, groups)
+            .await
+    }
+
+    /// Send a public transaction with caller-supplied nonces.
+    ///
+    /// Use this when nonce fetching requires special handling (e.g. the AMM LP account
+    /// may not yet exist on-chain and needs a `Nonce(0)` fallback).
+    pub async fn send_public_tx_with_nonces<T: serde::Serialize>(
+        &self,
+        program: &Program,
+        account_ids: Vec<AccountId>,
+        nonces: Vec<Nonce>,
+        instruction: T,
+        groups: SigningGroups,
+    ) -> Result<HashType, ExecutionFailureKind> {
+        let message = nssa::public_transaction::Message::try_new(
+            program.id(),
+            account_ids,
+            nonces,
+            instruction,
+        )?;
+
+        let pin = if groups.needs_pin() {
+            crate::helperfunctions::read_pin()
+                .map_err(ExecutionFailureKind::from_anyhow)?
+                .as_str()
+                .to_owned()
+        } else {
+            String::new()
+        };
+
+        let sigs = groups
+            .sign_all(&message.hash(), &pin)
+            .map_err(ExecutionFailureKind::from_anyhow)?;
+
+        let tx = PublicTransaction::new(message, PublicWitnessSet::from_raw_parts(sigs));
+        Ok(self
+            .sequencer_client
+            .send_transaction(NSSATransaction::Public(tx))
+            .await?)
+    }
+
     pub async fn send_privacy_preserving_tx(
         &self,
         accounts: Vec<PrivacyPreservingAccount>,
@@ -574,36 +648,39 @@ impl WalletCore {
 
         let mut pre_states = acc_manager.pre_states();
 
-        let (keycard_account, keycard_pin, keycard_path) = if let Some(key_path_str) = key_path.as_deref() {
-            let pin = crate::helperfunctions::read_pin().map_err(|e| {
-                ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<
-                    pyo3::exceptions::PyRuntimeError,
-                    _,
-                >(e.to_string()))
-            })?;
-            let account_id_str =
-                KeycardWallet::get_public_account_id_for_path_with_connect(&pin, key_path_str)?;
-            let account_id: AccountId =
-                match account_id_str.parse::<AccountIdWithPrivacy>().expect("Valid parsing of account id") {
+        let (keycard_account, keycard_pin, keycard_path) =
+            if let Some(key_path_str) = key_path.as_deref() {
+                let pin = crate::helperfunctions::read_pin().map_err(|e| {
+                    ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<
+                        pyo3::exceptions::PyRuntimeError,
+                        _,
+                    >(e.to_string()))
+                })?;
+                let account_id_str =
+                    KeycardWallet::get_public_account_id_for_path_with_connect(&pin, key_path_str)?;
+                let account_id: AccountId = match account_id_str
+                    .parse::<AccountIdWithPrivacy>()
+                    .expect("Valid parsing of account id")
+                {
                     AccountIdWithPrivacy::Public(id) | AccountIdWithPrivacy::Private(id) => id,
                 };
-            let account = self
-                .get_account_public(account_id)
-                .await
-                .expect("Expect valid account");
-            let pin_str = pin.as_str().to_owned();
-            (
-                Some(AccountWithMetadata {
-                    account,
-                    is_authorized: true,
-                    account_id,
-                }),
-                Some(pin_str),
-                Some(key_path_str.to_owned()),
-            )
-        } else {
-            (None, None, None)
-        };
+                let account = self
+                    .get_account_public(account_id)
+                    .await
+                    .expect("Expect valid account");
+                let pin_str = pin.as_str().to_owned();
+                (
+                    Some(AccountWithMetadata {
+                        account,
+                        is_authorized: true,
+                        account_id,
+                    }),
+                    Some(pin_str),
+                    Some(key_path_str.to_owned()),
+                )
+            } else {
+                (None, None, None)
+            };
 
         let mut nonces: Vec<Nonce> = acc_manager.public_account_nonces().into_iter().collect();
 
@@ -653,35 +730,39 @@ impl WalletCore {
             )
             .unwrap();
 
-        let witness_set = if let (Some(pin), Some(path)) =
-            (keycard_pin.as_deref(), keycard_path.as_deref())
-        {
-            let hash = message.hash();
-            let local_auth = acc_manager.public_account_auth();
-            let mut sigs: Vec<(Signature, PublicKey)> = local_auth
-                .iter()
-                .map(|&key| (Signature::new(key, &hash), PublicKey::new_from_private_key(key)))
-                .collect();
-            let keycard_sig = pyo3::Python::with_gil(|py| {
-                let mut ctx = crate::signing::KeycardSessionContext::new(pin);
-                let result = ctx
-                    .get_or_connect(py)
-                    .and_then(|w| w.sign_message_for_path(py, path, &hash));
-                ctx.close(py);
-                result
-            })
-            .map_err(ExecutionFailureKind::KeycardError)?;
-            sigs.push(keycard_sig);
-            nssa::privacy_preserving_transaction::witness_set::WitnessSet::from_raw_parts(
-                sigs, proof,
-            )
-        } else {
-            nssa::privacy_preserving_transaction::witness_set::WitnessSet::for_message(
-                &message,
-                proof,
-                &acc_manager.public_account_auth(),
-            )
-        };
+        let witness_set =
+            if let (Some(pin), Some(path)) = (keycard_pin.as_deref(), keycard_path.as_deref()) {
+                let hash = message.hash();
+                let local_auth = acc_manager.public_account_auth();
+                let mut sigs: Vec<(Signature, PublicKey)> = local_auth
+                    .iter()
+                    .map(|&key| {
+                        (
+                            Signature::new(key, &hash),
+                            PublicKey::new_from_private_key(key),
+                        )
+                    })
+                    .collect();
+                let keycard_sig = pyo3::Python::with_gil(|py| {
+                    let mut ctx = crate::signing::KeycardSessionContext::new(pin);
+                    let result = ctx
+                        .get_or_connect(py)
+                        .and_then(|w| w.sign_message_for_path(py, path, &hash));
+                    ctx.close(py);
+                    result
+                })
+                .map_err(ExecutionFailureKind::KeycardError)?;
+                sigs.push(keycard_sig);
+                nssa::privacy_preserving_transaction::witness_set::WitnessSet::from_raw_parts(
+                    sigs, proof,
+                )
+            } else {
+                nssa::privacy_preserving_transaction::witness_set::WitnessSet::for_message(
+                    &message,
+                    proof,
+                    &acc_manager.public_account_auth(),
+                )
+            };
         let tx = PrivacyPreservingTransaction::new(message, witness_set);
 
         let shared_secrets: Vec<_> = private_account_keys

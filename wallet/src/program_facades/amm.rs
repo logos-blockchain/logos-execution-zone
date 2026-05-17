@@ -1,16 +1,9 @@
 use amm_core::{compute_liquidity_token_pda, compute_pool_pda, compute_vault_pda};
-use common::{HashType, transaction::NSSATransaction};
-use nssa::{AccountId, program::Program, public_transaction::WitnessSet};
-use pyo3::exceptions::PyRuntimeError;
-use sequencer_service_rpc::RpcClient as _;
+use common::HashType;
+use nssa::{AccountId, program::Program};
 use token_core::TokenHolding;
 
-use crate::{
-    ExecutionFailureKind, WalletCore,
-    cli::CliAccountMention,
-    helperfunctions::read_pin,
-    signing::SigningGroups,
-};
+use crate::{ExecutionFailureKind, WalletCore, cli::CliAccountMention, signing::SigningGroups};
 pub struct Amm<'wallet>(pub &'wallet WalletCore);
 
 impl Amm<'_> {
@@ -73,41 +66,35 @@ impl Amm<'_> {
             .add_sender(a_mention, user_holding_a, self.0)
             .and_then(|()| groups.add_sender(b_mention, user_holding_b, self.0))
             .and_then(|()| groups.add_recipient(lp_mention, user_holding_lp, self.0))
-            .map_err(|e| ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string())))?;
+            .map_err(ExecutionFailureKind::from_anyhow)?;
 
-        let mut nonces = self.0.get_accounts_nonces(vec![user_holding_a, user_holding_b]).await
+        let mut nonces = self
+            .0
+            .get_accounts_nonces(vec![user_holding_a, user_holding_b])
+            .await
             .map_err(ExecutionFailureKind::SequencerError)?;
 
         if groups.signing_ids().contains(&user_holding_lp) {
-            let lp_nonces = self.0.get_accounts_nonces(vec![user_holding_lp]).await
+            let lp_nonces = self
+                .0
+                .get_accounts_nonces(vec![user_holding_lp])
+                .await
                 .map_err(ExecutionFailureKind::SequencerError)?;
-            nonces.push(lp_nonces.into_iter().next().unwrap_or(nssa_core::account::Nonce(0)));
+            nonces.push(
+                lp_nonces
+                    .into_iter()
+                    .next()
+                    .unwrap_or(nssa_core::account::Nonce(0)),
+            );
         } else {
             println!(
                 "Liquidity pool tokens receiver's account ({user_holding_lp}) private key not found in wallet. Proceeding with only liquidity provider's keys."
             );
         }
 
-        let message = nssa::public_transaction::Message::try_new(program.id(), account_ids, nonces, instruction).unwrap();
-
-        let pin = if groups.needs_pin() {
-            read_pin()
-                .map_err(|e| ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string())))?
-                .as_str()
-                .to_owned()
-        } else {
-            String::new()
-        };
-        let sigs = groups.sign_all(&message.hash(), &pin)
-            .map_err(|e| ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string())))?;
-
-        let tx = nssa::PublicTransaction::new(message, WitnessSet::from_raw_parts(sigs));
-
-        Ok(self
-            .0
-            .sequencer_client
-            .send_transaction(NSSATransaction::Public(tx))
-            .await?)
+        self.0
+            .send_public_tx_with_nonces(&program, account_ids, nonces, instruction, groups)
+            .await
     }
 
     #[expect(clippy::too_many_arguments, reason = "each parameter is distinct")]
@@ -165,37 +152,18 @@ impl Amm<'_> {
         } else if definition_token_b_id == token_definition_id_in {
             (user_holding_b, b_mention)
         } else {
-            return Err(ExecutionFailureKind::AccountDataError(token_definition_id_in));
+            return Err(ExecutionFailureKind::AccountDataError(
+                token_definition_id_in,
+            ));
         };
 
         let mut groups = SigningGroups::new();
         groups
             .add_sender(seller_mention, account_id_auth, self.0)
-            .map_err(|e| ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string())))?;
-
-        let nonces = self.0.get_accounts_nonces(groups.signing_ids()).await
-            .map_err(ExecutionFailureKind::SequencerError)?;
-
-        let message = nssa::public_transaction::Message::try_new(program.id(), account_ids, nonces, instruction).unwrap();
-
-        let pin = if groups.needs_pin() {
-            read_pin()
-                .map_err(|e| ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string())))?
-                .as_str()
-                .to_owned()
-        } else {
-            String::new()
-        };
-        let sigs = groups.sign_all(&message.hash(), &pin)
-            .map_err(|e| ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string())))?;
-
-        let tx = nssa::PublicTransaction::new(message, WitnessSet::from_raw_parts(sigs));
-
-        Ok(self
-            .0
-            .sequencer_client
-            .send_transaction(NSSATransaction::Public(tx))
-            .await?)
+            .map_err(ExecutionFailureKind::from_anyhow)?;
+        self.0
+            .send_public_tx(&program, account_ids, instruction, groups)
+            .await
     }
 
     #[expect(clippy::too_many_arguments, reason = "each parameter is distinct")]
@@ -253,37 +221,18 @@ impl Amm<'_> {
         } else if definition_token_b_id == token_definition_id_in {
             (user_holding_b, b_mention)
         } else {
-            return Err(ExecutionFailureKind::AccountDataError(token_definition_id_in));
+            return Err(ExecutionFailureKind::AccountDataError(
+                token_definition_id_in,
+            ));
         };
 
         let mut groups = SigningGroups::new();
         groups
             .add_sender(seller_mention, account_id_auth, self.0)
-            .map_err(|e| ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string())))?;
-
-        let nonces = self.0.get_accounts_nonces(groups.signing_ids()).await
-            .map_err(ExecutionFailureKind::SequencerError)?;
-
-        let message = nssa::public_transaction::Message::try_new(program.id(), account_ids, nonces, instruction).unwrap();
-
-        let pin = if groups.needs_pin() {
-            read_pin()
-                .map_err(|e| ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string())))?
-                .as_str()
-                .to_owned()
-        } else {
-            String::new()
-        };
-        let sigs = groups.sign_all(&message.hash(), &pin)
-            .map_err(|e| ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string())))?;
-
-        let tx = nssa::PublicTransaction::new(message, WitnessSet::from_raw_parts(sigs));
-
-        Ok(self
-            .0
-            .sequencer_client
-            .send_transaction(NSSATransaction::Public(tx))
-            .await?)
+            .map_err(ExecutionFailureKind::from_anyhow)?;
+        self.0
+            .send_public_tx(&program, account_ids, instruction, groups)
+            .await
     }
 
     #[expect(clippy::too_many_arguments, reason = "each parameter is distinct")]
@@ -297,6 +246,7 @@ impl Amm<'_> {
         max_amount_to_add_token_b: u128,
         a_mention: &CliAccountMention,
         b_mention: &CliAccountMention,
+        lp_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
         let instruction = amm_core::Instruction::AddLiquidity {
             min_amount_liquidity,
@@ -344,31 +294,36 @@ impl Amm<'_> {
         groups
             .add_sender(a_mention, user_holding_a, self.0)
             .and_then(|()| groups.add_sender(b_mention, user_holding_b, self.0))
-            .map_err(|e| ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string())))?;
+            .and_then(|()| groups.add_recipient(lp_mention, user_holding_lp, self.0))
+            .map_err(ExecutionFailureKind::from_anyhow)?;
 
-        let nonces = self.0.get_accounts_nonces(groups.signing_ids()).await
+        let mut nonces = self
+            .0
+            .get_accounts_nonces(vec![user_holding_a, user_holding_b])
+            .await
             .map_err(ExecutionFailureKind::SequencerError)?;
 
-        let message = nssa::public_transaction::Message::try_new(program.id(), account_ids, nonces, instruction).unwrap();
-
-        let pin = if groups.needs_pin() {
-            read_pin()
-                .map_err(|e| ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string())))?
-                .as_str()
-                .to_owned()
+        if groups.signing_ids().contains(&user_holding_lp) {
+            let lp_nonces = self
+                .0
+                .get_accounts_nonces(vec![user_holding_lp])
+                .await
+                .map_err(ExecutionFailureKind::SequencerError)?;
+            nonces.push(
+                lp_nonces
+                    .into_iter()
+                    .next()
+                    .unwrap_or(nssa_core::account::Nonce(0)),
+            );
         } else {
-            String::new()
-        };
-        let sigs = groups.sign_all(&message.hash(), &pin)
-            .map_err(|e| ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string())))?;
+            println!(
+                "LP holder's account ({user_holding_lp}) private key not found in wallet. Proceeding with only liquidity providers' keys."
+            );
+        }
 
-        let tx = nssa::PublicTransaction::new(message, WitnessSet::from_raw_parts(sigs));
-
-        Ok(self
-            .0
-            .sequencer_client
-            .send_transaction(NSSATransaction::Public(tx))
-            .await?)
+        self.0
+            .send_public_tx_with_nonces(&program, account_ids, nonces, instruction, groups)
+            .await
     }
 
     #[expect(clippy::too_many_arguments, reason = "each parameter is distinct")]
@@ -427,30 +382,9 @@ impl Amm<'_> {
         let mut groups = SigningGroups::new();
         groups
             .add_sender(lp_mention, user_holding_lp, self.0)
-            .map_err(|e| ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string())))?;
-
-        let nonces = self.0.get_accounts_nonces(groups.signing_ids()).await
-            .map_err(ExecutionFailureKind::SequencerError)?;
-
-        let message = nssa::public_transaction::Message::try_new(program.id(), account_ids, nonces, instruction).unwrap();
-
-        let pin = if groups.needs_pin() {
-            read_pin()
-                .map_err(|e| ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string())))?
-                .as_str()
-                .to_owned()
-        } else {
-            String::new()
-        };
-        let sigs = groups.sign_all(&message.hash(), &pin)
-            .map_err(|e| ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<PyRuntimeError, _>(e.to_string())))?;
-
-        let tx = nssa::PublicTransaction::new(message, WitnessSet::from_raw_parts(sigs));
-
-        Ok(self
-            .0
-            .sequencer_client
-            .send_transaction(NSSATransaction::Public(tx))
-            .await?)
+            .map_err(ExecutionFailureKind::from_anyhow)?;
+        self.0
+            .send_public_tx(&program, account_ids, instruction, groups)
+            .await
     }
 }

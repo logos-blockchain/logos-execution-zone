@@ -400,7 +400,12 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandShielded {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         match self {
-            Self::ShieldedOwned { from, to, amount, from_mention } => {
+            Self::ShieldedOwned {
+                from,
+                to,
+                amount,
+                from_mention,
+            } => {
                 let (tx_hash, secret) = NativeTokenTransfer(wallet_core)
                     .send_shielded_transfer(from, to, amount, &from_mention)
                     .await?;

@@ -159,8 +159,8 @@ impl WalletSubcommand for KeycardSubcommand {
                 let (nsk, vsk) =
                     KeycardWallet::get_private_keys_for_path_with_connect(&pin, &key_path)
                         .map_err(anyhow::Error::from)?;
-                println!("NSK: {}", hex::encode(&*nsk));
-                println!("VSK: {}", hex::encode(&*vsk));
+                println!("NSK: {}", hex::encode(*nsk));
+                println!("VSK: {}", hex::encode(*vsk));
                 Ok(SubcommandReturnValue::Empty)
             }
         }

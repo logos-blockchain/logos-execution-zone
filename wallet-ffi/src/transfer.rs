@@ -188,7 +188,10 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded(
     };
     let to_identifier = u128::from_le_bytes(unsafe { (*to_identifier).data });
     let amount = u128::from_le_bytes(unsafe { *amount });
-    let key_path = optional_c_str(key_path);
+    let from_mention = optional_c_str(key_path).map_or_else(
+        || CliAccountMention::Id(AccountIdWithPrivacy::Public(from_id)),
+        CliAccountMention::KeyPath,
+    );
 
     let transfer = NativeTokenTransfer(&wallet);
 
@@ -198,7 +201,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded(
         to_vpk,
         to_identifier,
         amount,
-        &key_path,
+        &from_mention,
     )) {
         Ok((tx_hash, _shared_key)) => {
             let tx_hash = CString::new(tx_hash.to_string())
@@ -466,11 +469,14 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded_owned(
     let from_id = AccountId::new(unsafe { (*from).data });
     let to_id = AccountId::new(unsafe { (*to).data });
     let amount = u128::from_le_bytes(unsafe { *amount });
-    let key_path = optional_c_str(key_path);
+    let from_mention = optional_c_str(key_path).map_or_else(
+        || CliAccountMention::Id(AccountIdWithPrivacy::Public(from_id)),
+        CliAccountMention::KeyPath,
+    );
 
     let transfer = NativeTokenTransfer(&wallet);
 
-    match block_on(transfer.send_shielded_transfer(from_id, to_id, amount, &key_path)) {
+    match block_on(transfer.send_shielded_transfer(from_id, to_id, amount, &from_mention)) {
         Ok((tx_hash, _shared_key)) => {
             let tx_hash = CString::new(tx_hash.to_string())
                 .map_or(ptr::null_mut(), std::ffi::CString::into_raw);

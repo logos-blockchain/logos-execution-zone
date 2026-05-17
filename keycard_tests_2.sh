@@ -100,28 +100,37 @@ wallet token mint \
   --amount 0
 echo "LEZ holding initialized for keycard path 6"
 
-# Keycard path 7: LEE holding
+# Keycard path 7: LEE holding (different definition — safe to submit immediately)
 wallet token mint \
   --definition "m/44'/60'/0'/0/4" \
   --holder     "m/44'/60'/0'/0/7" \
   --amount 0
 echo "LEE holding initialized for keycard path 7"
 
-# pub-receiver: public LEZ holding (for token transfer test)
+# Wait for path2 (LEZ def) and path4 (LEE def) nonces to be confirmed before reusing them
+sleep 15
+
+# pub-receiver: public LEZ holding
 wallet token mint \
   --definition "m/44'/60'/0'/0/2" \
   --holder     pub-receiver \
   --amount 0
 echo "LEZ holding initialized for pub-receiver"
 
-# AMM seed accounts
-wallet token mint \
-  --definition "m/44'/60'/0'/0/2" \
-  --holder     amm-lez-fund \
-  --amount 0
+# amm-lee-fund: LEE holding (different definition — safe to submit with pub-receiver)
 wallet token mint \
   --definition "m/44'/60'/0'/0/4" \
   --holder     amm-lee-fund \
+  --amount 0
+echo "LEE holding initialized for amm-lee-fund"
+
+# Wait for path2 nonce to be confirmed before the third LEZ mint
+sleep 15
+
+# amm-lez-fund: LEZ holding
+wallet token mint \
+  --definition "m/44'/60'/0'/0/2" \
+  --holder     amm-lez-fund \
   --amount 0
 echo "AMM seed holdings initialized"
 
@@ -142,6 +151,9 @@ wallet token send \
   --to     "m/44'/60'/0'/0/7" \
   --amount 20000
 echo "Transferred 20000 LEE → keycard path 7"
+
+# Wait for path3 and path5 nonces to be confirmed before reusing them
+sleep 15
 
 wallet token send \
   --from   "m/44'/60'/0'/0/3" \
@@ -292,19 +304,6 @@ wallet account get --account-id "m/44'/60'/0'/0/7"
 # =============================================================================
 # (9) Add liquidity — keycard accounts for holding A (path 6), B (path 7), LP (path 8)
 # =============================================================================
-echo ""
-echo "=== (9) Initialize LP holding (keycard path 8) before add-liquidity ==="
-wallet token mint \
-  --definition "Public/$LP_DEF_ID" \
-  --holder     "m/44'/60'/0'/0/8" \
-  --amount 0
-echo "Keycard path 8 (LP holding) initialized"
-
-sleep 15
-
-echo "Keycard path 8 (LP holding) state (after init):"
-wallet account get --account-id "m/44'/60'/0'/0/8"
-
 echo ""
 echo "=== (9) Add liquidity (keycard path 6=LEZ, path 7=LEE, path 8=LP) ==="
 wallet amm add-liquidity \
