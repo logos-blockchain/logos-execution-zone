@@ -3,7 +3,9 @@ use common::HashType;
 use nssa::{AccountId, program::Program};
 
 use super::NativeTokenTransfer;
-use crate::{ExecutionFailureKind, cli::CliAccountMention, signing::SigningGroups};
+use crate::{
+    ExecutionFailureKind, cli::CliAccountMention, helperfunctions::read_pin, signing::SigningGroups,
+};
 
 impl NativeTokenTransfer<'_> {
     pub async fn send_public_transfer(
