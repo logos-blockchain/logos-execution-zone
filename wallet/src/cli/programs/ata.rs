@@ -96,9 +96,13 @@ impl WalletSubcommand for AtaSubcommand {
 
                 match owner_resolved {
                     AccountIdWithPrivacy::Public(owner_id) => {
-                        Ata(wallet_core)
+                        let tx_hash = Ata(wallet_core)
                             .send_create(owner_id, definition_id, &owner)
                             .await?;
+                        println!("Transaction hash is {tx_hash}");
+                        let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
+                        println!("Transaction data is {transfer_tx:?}");
+                        wallet_core.store_persistent_data()?;
                         Ok(SubcommandReturnValue::Empty)
                     }
                     AccountIdWithPrivacy::Private(owner_id) => {
@@ -133,9 +137,13 @@ impl WalletSubcommand for AtaSubcommand {
 
                 match from_resolved {
                     AccountIdWithPrivacy::Public(from_id) => {
-                        Ata(wallet_core)
+                        let tx_hash = Ata(wallet_core)
                             .send_transfer(from_id, definition_id, to_id, amount, &from)
                             .await?;
+                        println!("Transaction hash is {tx_hash}");
+                        let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
+                        println!("Transaction data is {transfer_tx:?}");
+                        wallet_core.store_persistent_data()?;
                         Ok(SubcommandReturnValue::Empty)
                     }
                     AccountIdWithPrivacy::Private(from_id) => {
@@ -168,9 +176,13 @@ impl WalletSubcommand for AtaSubcommand {
 
                 match holder_resolved {
                     AccountIdWithPrivacy::Public(holder_id) => {
-                        Ata(wallet_core)
+                        let tx_hash = Ata(wallet_core)
                             .send_burn(holder_id, definition_id, amount, &holder)
                             .await?;
+                        println!("Transaction hash is {tx_hash}");
+                        let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
+                        println!("Transaction data is {transfer_tx:?}");
+                        wallet_core.store_persistent_data()?;
                         Ok(SubcommandReturnValue::Empty)
                     }
                     AccountIdWithPrivacy::Private(holder_id) => {

@@ -63,37 +63,13 @@ impl Amm<'_> {
 
         let mut groups = SigningGroups::new();
         groups
-            .add_sender(a_mention, user_holding_a, self.0)
-            .and_then(|()| groups.add_sender(b_mention, user_holding_b, self.0))
-            .and_then(|()| groups.add_recipient(lp_mention, user_holding_lp, self.0))
+            .add_required(a_mention, user_holding_a, self.0)
+            .and_then(|()| groups.add_required(b_mention, user_holding_b, self.0))
+            .and_then(|()| groups.add_optional(lp_mention, user_holding_lp, self.0))
             .map_err(ExecutionFailureKind::from_anyhow)?;
 
-        let mut nonces = self
-            .0
-            .get_accounts_nonces(vec![user_holding_a, user_holding_b])
-            .await
-            .map_err(ExecutionFailureKind::SequencerError)?;
-
-        if groups.signing_ids().contains(&user_holding_lp) {
-            let lp_nonces = self
-                .0
-                .get_accounts_nonces(vec![user_holding_lp])
-                .await
-                .map_err(ExecutionFailureKind::SequencerError)?;
-            nonces.push(
-                lp_nonces
-                    .into_iter()
-                    .next()
-                    .unwrap_or(nssa_core::account::Nonce(0)),
-            );
-        } else {
-            println!(
-                "Liquidity pool tokens receiver's account ({user_holding_lp}) private key not found in wallet. Proceeding with only liquidity provider's keys."
-            );
-        }
-
         self.0
-            .send_public_tx_with_nonces(&program, account_ids, nonces, instruction, groups)
+            .send_public_tx(&program, account_ids, instruction, groups)
             .await
     }
 
@@ -159,7 +135,7 @@ impl Amm<'_> {
 
         let mut groups = SigningGroups::new();
         groups
-            .add_sender(seller_mention, account_id_auth, self.0)
+            .add_required(seller_mention, account_id_auth, self.0)
             .map_err(ExecutionFailureKind::from_anyhow)?;
         self.0
             .send_public_tx(&program, account_ids, instruction, groups)
@@ -228,7 +204,7 @@ impl Amm<'_> {
 
         let mut groups = SigningGroups::new();
         groups
-            .add_sender(seller_mention, account_id_auth, self.0)
+            .add_required(seller_mention, account_id_auth, self.0)
             .map_err(ExecutionFailureKind::from_anyhow)?;
         self.0
             .send_public_tx(&program, account_ids, instruction, groups)
@@ -292,37 +268,13 @@ impl Amm<'_> {
 
         let mut groups = SigningGroups::new();
         groups
-            .add_sender(a_mention, user_holding_a, self.0)
-            .and_then(|()| groups.add_sender(b_mention, user_holding_b, self.0))
-            .and_then(|()| groups.add_recipient(lp_mention, user_holding_lp, self.0))
+            .add_required(a_mention, user_holding_a, self.0)
+            .and_then(|()| groups.add_required(b_mention, user_holding_b, self.0))
+            .and_then(|()| groups.add_optional(lp_mention, user_holding_lp, self.0))
             .map_err(ExecutionFailureKind::from_anyhow)?;
 
-        let mut nonces = self
-            .0
-            .get_accounts_nonces(vec![user_holding_a, user_holding_b])
-            .await
-            .map_err(ExecutionFailureKind::SequencerError)?;
-
-        if groups.signing_ids().contains(&user_holding_lp) {
-            let lp_nonces = self
-                .0
-                .get_accounts_nonces(vec![user_holding_lp])
-                .await
-                .map_err(ExecutionFailureKind::SequencerError)?;
-            nonces.push(
-                lp_nonces
-                    .into_iter()
-                    .next()
-                    .unwrap_or(nssa_core::account::Nonce(0)),
-            );
-        } else {
-            println!(
-                "LP holder's account ({user_holding_lp}) private key not found in wallet. Proceeding with only liquidity providers' keys."
-            );
-        }
-
         self.0
-            .send_public_tx_with_nonces(&program, account_ids, nonces, instruction, groups)
+            .send_public_tx(&program, account_ids, instruction, groups)
             .await
     }
 
@@ -381,7 +333,7 @@ impl Amm<'_> {
 
         let mut groups = SigningGroups::new();
         groups
-            .add_sender(lp_mention, user_holding_lp, self.0)
+            .add_required(lp_mention, user_holding_lp, self.0)
             .map_err(ExecutionFailureKind::from_anyhow)?;
         self.0
             .send_public_tx(&program, account_ids, instruction, groups)

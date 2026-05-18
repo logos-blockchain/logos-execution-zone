@@ -73,7 +73,7 @@ impl WalletSubcommand for AuthTransferSubcommand {
                     }
                     AccountIdWithPrivacy::Private(account_id) => {
                         let (tx_hash, secret) = NativeTokenTransfer(wallet_core)
-                            .register_account_private(account_id, &None)
+                            .register_account_private(account_id)
                             .await?;
 
                         println!("Transaction hash is {tx_hash}");
@@ -324,7 +324,7 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandPrivate {
         match self {
             Self::PrivateOwned { from, to, amount } => {
                 let (tx_hash, [secret_from, secret_to]) = NativeTokenTransfer(wallet_core)
-                    .send_private_transfer_to_owned_account(from, to, amount, &None)
+                    .send_private_transfer_to_owned_account(from, to, amount)
                     .await?;
 
                 println!("Transaction hash is {tx_hash}");
@@ -369,7 +369,6 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandPrivate {
                         to_vpk,
                         to_identifier.unwrap_or_else(rand::random),
                         amount,
-                        &None,
                     )
                     .await?;
 
@@ -481,7 +480,7 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommand {
             }
             Self::Deshielded { from, to, amount } => {
                 let (tx_hash, secret) = NativeTokenTransfer(wallet_core)
-                    .send_deshielded_transfer(from, to, amount, &None)
+                    .send_deshielded_transfer(from, to, amount)
                     .await?;
 
                 println!("Transaction hash is {tx_hash}");

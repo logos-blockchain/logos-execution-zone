@@ -220,10 +220,34 @@ echo "priv-receiver state (balance should be 500):"
 wallet account get --account-id "$PRIV_RECEIVER"
 
 # =============================================================================
-# (5) Token mint with keycard — definition signed by keycard path 2
+# (5) Token transfer: private account → keycard path 6 (deshielded)
+#     Uses priv-receiver from test (4) which holds 500 LEZ.
+#     The private sender is handled by the ZK circuit; the keycard recipient
+#     does not sign — resolve() derives its account ID from the card only.
 # =============================================================================
 echo ""
-echo "=== (5) Token mint: keycard def path 2 mints 2000 LEZ to keycard path 6 ==="
+echo "=== (5) Token transfer: priv-receiver (private) → keycard path 6 (deshielded) ==="
+
+wallet token send \
+  --from   "$PRIV_RECEIVER" \
+  --to     "m/44'/60'/0'/0/6" \
+  --amount 300
+echo "Deshielded transfer of 300 LEZ: $PRIV_RECEIVER → keycard path 6"
+
+wallet account sync-private
+
+sleep 15
+
+echo "priv-receiver state (balance should be 200):"
+wallet account get --account-id "$PRIV_RECEIVER"
+echo "Keycard path 6 (LEZ) state (balance should be 18800):"
+wallet account get --account-id "m/44'/60'/0'/0/6"
+
+# =============================================================================
+# (6) Token mint with keycard — definition signed by keycard path 2
+# =============================================================================
+echo ""
+echo "=== (6) Token mint: keycard def path 2 mints 2000 LEZ to keycard path 6 ==="
 wallet token mint \
   --definition "m/44'/60'/0'/0/2" \
   --holder     "m/44'/60'/0'/0/6" \
@@ -238,10 +262,10 @@ echo "Keycard path 6 (LEZ holding) state (balance should be 20500):"
 wallet account get --account-id "m/44'/60'/0'/0/6"
 
 # =============================================================================
-# (6) Token burn with keycard — holder is keycard path 6
+# (7) Token burn with keycard — holder is keycard path 6
 # =============================================================================
 echo ""
-echo "=== (6) Token burn: keycard path 6 burns 500 LEZ ==="
+echo "=== (7) Token burn: keycard path 6 burns 500 LEZ ==="
 wallet token burn \
   --definition "Public/$LEZ_DEF_ID" \
   --holder     "m/44'/60'/0'/0/6" \
@@ -256,10 +280,10 @@ echo "Keycard path 6 (LEZ holding) state (balance should be 20000):"
 wallet account get --account-id "m/44'/60'/0'/0/6"
 
 # =============================================================================
-# (7) Create AMM pool for LEZ/LEE — without keycard
+# (8) Create AMM pool for LEZ/LEE — without keycard
 # =============================================================================
 echo ""
-echo "=== (7) Create AMM pool for LEZ/LEE (without keycard) ==="
+echo "=== (8) Create AMM pool for LEZ/LEE (without keycard) ==="
 
 wallet amm new \
   --user-holding-a  amm-lez-fund \
@@ -281,11 +305,11 @@ LP_DEF_ID=$(wallet account get --account-id amm-lp-fund | grep -o '"definition_i
 echo "LP token definition ID: $LP_DEF_ID"
 
 # =============================================================================
-# (8) Swap tokens owned by keycard accounts
+# (9) Swap tokens owned by keycard accounts
 #     keycard path 7 (LEE) sells 500 LEE; keycard path 6 (LEZ) receives LEZ
 # =============================================================================
 echo ""
-echo "=== (8) Swap: keycard path 7 sells 500 LEE, keycard path 6 receives LEZ ==="
+echo "=== (9) Swap: keycard path 7 sells 500 LEE, keycard path 6 receives LEZ ==="
 wallet amm swap-exact-input \
   --user-holding-a "m/44'/60'/0'/0/6" \
   --user-holding-b "m/44'/60'/0'/0/7" \
@@ -302,10 +326,10 @@ echo "Keycard path 7 (LEE holding) state (balance should have decreased by 500):
 wallet account get --account-id "m/44'/60'/0'/0/7"
 
 # =============================================================================
-# (9) Add liquidity — keycard accounts for holding A (path 6), B (path 7), LP (path 8)
+# (10) Add liquidity — keycard accounts for holding A (path 6), B (path 7), LP (path 8)
 # =============================================================================
 echo ""
-echo "=== (9) Add liquidity (keycard path 6=LEZ, path 7=LEE, path 8=LP) ==="
+echo "=== (10) Add liquidity (keycard path 6=LEZ, path 7=LEE, path 8=LP) ==="
 wallet amm add-liquidity \
   --user-holding-a  "m/44'/60'/0'/0/6" \
   --user-holding-b  "m/44'/60'/0'/0/7" \
@@ -325,10 +349,10 @@ echo "Keycard path 8 (LP holding) state (should have received LP tokens):"
 wallet account get --account-id "m/44'/60'/0'/0/8"
 
 # =============================================================================
-# (10) Remove liquidity — keycard accounts for holding A (path 6), B (path 7), LP (path 8)
+# (11) Remove liquidity — keycard accounts for holding A (path 6), B (path 7), LP (path 8)
 # =============================================================================
 echo ""
-echo "=== (10) Remove liquidity (keycard path 6=LEZ, path 7=LEE, path 8=LP) ==="
+echo "=== (11) Remove liquidity (keycard path 6=LEZ, path 7=LEE, path 8=LP) ==="
 wallet amm remove-liquidity \
   --user-holding-a  "m/44'/60'/0'/0/6" \
   --user-holding-b  "m/44'/60'/0'/0/7" \
@@ -348,10 +372,10 @@ echo "Keycard path 8 (LP holding) state (balance should have decreased):"
 wallet account get --account-id "m/44'/60'/0'/0/8"
 
 # =============================================================================
-# (11) ATA create — keycard path 9 as owner for LEZ
+# (12) ATA create — keycard path 9 as owner for LEZ
 # =============================================================================
 echo ""
-echo "=== (11) ATA create: keycard path 9 as owner, LEZ token ==="
+echo "=== (12) ATA create: keycard path 9 as owner, LEZ token ==="
 ATA_OWNER_ID=$(wallet account id --account-id "m/44'/60'/0'/0/9")
 echo "ATA owner (keycard path 9): $ATA_OWNER_ID"
 
@@ -380,10 +404,10 @@ echo "ATA state after funding (balance should be 3000):"
 wallet account get --account-id "Public/$LEZ_ATA_ID"
 
 # =============================================================================
-# (12) ATA send — keycard path 9's ATA → pub-receiver's ATA
+# (13) ATA send — keycard path 9's ATA → pub-receiver's ATA
 # =============================================================================
 echo ""
-echo "=== (12) ATA send: keycard path 9's ATA → pub-receiver's ATA ==="
+echo "=== (13) ATA send: keycard path 9's ATA → pub-receiver's ATA ==="
 PUB_RECEIVER_ID=$(wallet account id --account-id pub-receiver)
 wallet ata create \
   --owner           "Public/$PUB_RECEIVER_ID" \
@@ -412,10 +436,10 @@ echo "pub-receiver ATA state (balance should be 500):"
 wallet account get --account-id "Public/$PUB_RECEIVER_ATA_ID"
 
 # =============================================================================
-# (13) ATA burn — keycard path 9's ATA burns 200 LEZ
+# (14) ATA burn — keycard path 9's ATA burns 200 LEZ
 # =============================================================================
 echo ""
-echo "=== (13) ATA burn: keycard path 9's ATA burns 200 LEZ ==="
+echo "=== (14) ATA burn: keycard path 9's ATA burns 200 LEZ ==="
 wallet ata burn \
   --holder           "m/44'/60'/0'/0/9" \
   --token-definition "$LEZ_DEF_ID" \

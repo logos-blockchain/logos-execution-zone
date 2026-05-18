@@ -3,9 +3,7 @@ use common::HashType;
 use nssa::{AccountId, program::Program};
 
 use super::NativeTokenTransfer;
-use crate::{
-    ExecutionFailureKind, cli::CliAccountMention, signing::SigningGroups,
-};
+use crate::{ExecutionFailureKind, cli::CliAccountMention, signing::SigningGroups};
 
 impl NativeTokenTransfer<'_> {
     pub async fn send_public_transfer(
@@ -18,8 +16,8 @@ impl NativeTokenTransfer<'_> {
     ) -> Result<HashType, ExecutionFailureKind> {
         let mut groups = SigningGroups::new();
         groups
-            .add_sender(from_mention, from, self.0)
-            .and_then(|()| groups.add_recipient(to_mention, to, self.0))
+            .add_required(from_mention, from, self.0)
+            .and_then(|()| groups.add_optional(to_mention, to, self.0))
             .map_err(ExecutionFailureKind::from_anyhow)?;
 
         self.0
@@ -41,7 +39,7 @@ impl NativeTokenTransfer<'_> {
     ) -> Result<HashType, ExecutionFailureKind> {
         let mut groups = SigningGroups::new();
         groups
-            .add_sender(account_mention, from, self.0)
+            .add_required(account_mention, from, self.0)
             .map_err(ExecutionFailureKind::from_anyhow)?;
 
         self.0

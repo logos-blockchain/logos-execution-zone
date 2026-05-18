@@ -699,7 +699,7 @@ impl WalletSubcommand for TokenProgramSubcommandPublic {
                 else {
                     anyhow::bail!("Only public accounts supported for token transfer");
                 };
-                Token(wallet_core)
+                let tx_hash = Token(wallet_core)
                     .send_transfer_transaction(
                         sender_id,
                         recipient_id,
@@ -708,6 +708,10 @@ impl WalletSubcommand for TokenProgramSubcommandPublic {
                         &recipient_account_id,
                     )
                     .await?;
+                println!("Transaction hash is {tx_hash}");
+                let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
+                println!("Transaction data is {transfer_tx:?}");
+                wallet_core.store_persistent_data()?;
                 Ok(SubcommandReturnValue::Empty)
             }
             Self::BurnToken {
@@ -719,7 +723,7 @@ impl WalletSubcommand for TokenProgramSubcommandPublic {
                 let AccountIdWithPrivacy::Public(holder_id) = holder else {
                     anyhow::bail!("Only public holder account supported for token burn");
                 };
-                Token(wallet_core)
+                let tx_hash = Token(wallet_core)
                     .send_burn_transaction(
                         definition_account_id,
                         holder_id,
@@ -727,6 +731,10 @@ impl WalletSubcommand for TokenProgramSubcommandPublic {
                         &holder_account_id,
                     )
                     .await?;
+                println!("Transaction hash is {tx_hash}");
+                let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
+                println!("Transaction data is {transfer_tx:?}");
+                wallet_core.store_persistent_data()?;
                 Ok(SubcommandReturnValue::Empty)
             }
             Self::MintToken {
@@ -741,7 +749,7 @@ impl WalletSubcommand for TokenProgramSubcommandPublic {
                 else {
                     anyhow::bail!("Only public accounts supported for token mint");
                 };
-                Token(wallet_core)
+                let tx_hash = Token(wallet_core)
                     .send_mint_transaction(
                         def_id,
                         holder_id,
@@ -750,6 +758,10 @@ impl WalletSubcommand for TokenProgramSubcommandPublic {
                         &holder_account_id,
                     )
                     .await?;
+                println!("Transaction hash is {tx_hash}");
+                let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
+                println!("Transaction data is {transfer_tx:?}");
+                wallet_core.store_persistent_data()?;
                 Ok(SubcommandReturnValue::Empty)
             }
         }
@@ -1361,7 +1373,7 @@ impl WalletSubcommand for CreateNewTokenProgramSubcommand {
                 else {
                     anyhow::bail!("Only public accounts supported for new token definition");
                 };
-                Token(wallet_core)
+                let tx_hash = Token(wallet_core)
                     .send_new_definition(
                         def_id,
                         sup_id,
@@ -1371,6 +1383,10 @@ impl WalletSubcommand for CreateNewTokenProgramSubcommand {
                         &supply_account_id,
                     )
                     .await?;
+                println!("Transaction hash is {tx_hash}");
+                let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
+                println!("Transaction data is {transfer_tx:?}");
+                wallet_core.store_persistent_data()?;
                 Ok(SubcommandReturnValue::Empty)
             }
         }

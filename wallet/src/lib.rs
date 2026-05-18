@@ -37,6 +37,7 @@ use tokio::io::AsyncWriteExt as _;
 
 use crate::{
     account::{AccountIdWithPrivacy, Label},
+    cli::CliAccountMention,
     config::WalletConfigOverrides,
     poller::TxPoller,
     signing::SigningGroups,
@@ -582,8 +583,8 @@ impl WalletCore {
 
     /// Send a public transaction with caller-supplied nonces.
     ///
-    /// Use this when nonce fetching requires special handling (e.g. the AMM LP account
-    /// may not yet exist on-chain and needs a `Nonce(0)` fallback).
+    /// Use this when the caller needs to assemble or augment nonces before submission
+    /// (e.g. injecting a keycard account nonce that was fetched separately).
     pub async fn send_public_tx_with_nonces<T: serde::Serialize>(
         &self,
         program: &Program,
@@ -624,14 +625,14 @@ impl WalletCore {
         accounts: Vec<PrivacyPreservingAccount>,
         instruction_data: InstructionData,
         program: &ProgramWithDependencies,
-        key_path: &Option<String>,
+        mention: Option<&CliAccountMention>,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         self.send_privacy_preserving_tx_with_pre_check(
             accounts,
             instruction_data,
             program,
             |_| Ok(()),
-            key_path,
+            mention,
         )
         .await
     }
@@ -642,14 +643,14 @@ impl WalletCore {
         instruction_data: InstructionData,
         program: &ProgramWithDependencies,
         tx_pre_check: impl FnOnce(&[&Account]) -> Result<(), ExecutionFailureKind>,
-        key_path: &Option<String>,
+        mention: Option<&CliAccountMention>,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         let acc_manager = privacy_preserving_tx::AccountManager::new(self, accounts).await?;
 
         let mut pre_states = acc_manager.pre_states();
 
         let (keycard_account, keycard_pin, keycard_path) =
-            if let Some(key_path_str) = key_path.as_deref() {
+            if let Some(key_path_str) = mention.and_then(CliAccountMention::key_path) {
                 let pin = crate::helperfunctions::read_pin().map_err(|e| {
                     ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<
                         pyo3::exceptions::PyRuntimeError,

@@ -149,11 +149,6 @@ impl CliAccountMention {
     }
 
     #[must_use]
-    pub const fn is_keycard(&self) -> bool {
-        matches!(self, Self::KeyPath(_))
-    }
-
-    #[must_use]
     pub fn key_path(&self) -> Option<&str> {
         match self {
             Self::KeyPath(path) => Some(path),

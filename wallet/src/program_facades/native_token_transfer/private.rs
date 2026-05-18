@@ -11,7 +11,6 @@ impl NativeTokenTransfer<'_> {
     pub async fn register_account_private(
         &self,
         from: AccountId,
-        key_path: &Option<String>,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
         let instruction = authenticated_transfer_core::Instruction::Initialize;
 
@@ -25,7 +24,7 @@ impl NativeTokenTransfer<'_> {
                 vec![account],
                 Program::serialize_instruction(instruction).unwrap(),
                 &Program::authenticated_transfer_program().into(),
-                key_path,
+                None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -42,7 +41,6 @@ impl NativeTokenTransfer<'_> {
         to_vpk: ViewingPublicKey,
         to_identifier: Identifier,
         balance_to_move: u128,
-        key_path: &Option<String>,
     ) -> Result<(HashType, [SharedSecretKey; 2]), ExecutionFailureKind> {
         let (instruction_data, program, tx_pre_check) = auth_transfer_preparation(balance_to_move);
 
@@ -61,7 +59,7 @@ impl NativeTokenTransfer<'_> {
                 instruction_data,
                 &program.into(),
                 tx_pre_check,
-                key_path,
+                None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -77,7 +75,6 @@ impl NativeTokenTransfer<'_> {
         from: AccountId,
         to: AccountId,
         balance_to_move: u128,
-        key_path: &Option<String>,
     ) -> Result<(HashType, [SharedSecretKey; 2]), ExecutionFailureKind> {
         let (instruction_data, program, tx_pre_check) = auth_transfer_preparation(balance_to_move);
 
@@ -96,7 +93,7 @@ impl NativeTokenTransfer<'_> {
                 instruction_data,
                 &program.into(),
                 tx_pre_check,
-                key_path,
+                None,
             )
             .await
             .map(|(resp, secrets)| {

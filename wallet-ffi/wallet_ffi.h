@@ -822,7 +822,6 @@ enum WalletFfiError wallet_ffi_transfer_deshielded(struct WalletHandle *handle,
                                                    const struct FfiBytes32 *from,
                                                    const struct FfiBytes32 *to,
                                                    const uint8_t (*amount)[16],
-                                                   const char *key_path,
                                                    struct FfiTransferResult *out_result);
 
 /**
@@ -859,7 +858,6 @@ enum WalletFfiError wallet_ffi_transfer_private(struct WalletHandle *handle,
                                                 const struct FfiPrivateAccountKeys *to_keys,
                                                 const struct FfiU128 *to_identifier,
                                                 const uint8_t (*amount)[16],
-                                                const char *key_path,
                                                 struct FfiTransferResult *out_result);
 
 /**
@@ -935,7 +933,6 @@ enum WalletFfiError wallet_ffi_transfer_private_owned(struct WalletHandle *handl
                                                       const struct FfiBytes32 *from,
                                                       const struct FfiBytes32 *to,
                                                       const uint8_t (*amount)[16],
-                                                      const char *key_path,
                                                       struct FfiTransferResult *out_result);
 
 /**
@@ -990,7 +987,6 @@ enum WalletFfiError wallet_ffi_register_public_account(struct WalletHandle *hand
  */
 enum WalletFfiError wallet_ffi_register_private_account(struct WalletHandle *handle,
                                                         const struct FfiBytes32 *account_id,
-                                                        const char *key_path,
                                                         struct FfiTransferResult *out_result);
 
 /**

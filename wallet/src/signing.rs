@@ -23,7 +23,7 @@ impl SigningGroups {
 
     /// Add a sender. Keycard paths are queued for the hardware session; local accounts
     /// have their signing key resolved eagerly. Errors if no key is found.
-    pub fn add_sender(
+    pub fn add_required(
         &mut self,
         mention: &CliAccountMention,
         account_id: AccountId,
@@ -43,9 +43,9 @@ impl SigningGroups {
         Ok(())
     }
 
-    /// Add a recipient. Same as [`add_sender`] but silently skips accounts with no local
+    /// Add a recipient. Same as [`add_required`] but silently skips accounts with no local
     /// key and no keycard path — they are foreign and require neither a signature nor a nonce.
-    pub fn add_recipient(
+    pub fn add_optional(
         &mut self,
         mention: &CliAccountMention,
         account_id: AccountId,

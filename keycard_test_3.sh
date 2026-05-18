@@ -6,6 +6,9 @@
 #   2. Keycard reader inserted with card loaded (wallet keycard load has been run).
 
 source venv/bin/activate
+
+cargo install --path wallet --force --features keycard-debug
+
 export KEYCARD_PIN=111111
 
 echo "=== Test: wallet keycard get-private-keys path 10 ==="

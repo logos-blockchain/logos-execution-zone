@@ -33,7 +33,7 @@ impl Ata<'_> {
 
         let mut groups = SigningGroups::new();
         groups
-            .add_sender(owner_mention, owner_id, self.0)
+            .add_required(owner_mention, owner_id, self.0)
             .map_err(ExecutionFailureKind::from_anyhow)?;
         self.0
             .send_public_tx(&program, account_ids, instruction, groups)
@@ -63,7 +63,7 @@ impl Ata<'_> {
 
         let mut groups = SigningGroups::new();
         groups
-            .add_sender(owner_mention, owner_id, self.0)
+            .add_required(owner_mention, owner_id, self.0)
             .map_err(ExecutionFailureKind::from_anyhow)?;
         self.0
             .send_public_tx(&program, account_ids, instruction, groups)
@@ -92,7 +92,7 @@ impl Ata<'_> {
 
         let mut groups = SigningGroups::new();
         groups
-            .add_sender(owner_mention, owner_id, self.0)
+            .add_required(owner_mention, owner_id, self.0)
             .map_err(ExecutionFailureKind::from_anyhow)?;
         self.0
             .send_public_tx(&program, account_ids, instruction, groups)
@@ -127,7 +127,7 @@ impl Ata<'_> {
                 accounts,
                 instruction_data,
                 &ata_with_token_dependency(),
-                &None,
+                None,
             )
             .await
             .map(|(hash, mut secrets)| {
@@ -169,7 +169,7 @@ impl Ata<'_> {
                 accounts,
                 instruction_data,
                 &ata_with_token_dependency(),
-                &None,
+                None,
             )
             .await
             .map(|(hash, mut secrets)| {
@@ -210,7 +210,7 @@ impl Ata<'_> {
                 accounts,
                 instruction_data,
                 &ata_with_token_dependency(),
-                &None,
+                None,
             )
             .await
             .map(|(hash, mut secrets)| {

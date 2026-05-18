@@ -21,7 +21,7 @@ ata_core.workspace = true
 bip39.workspace = true
 pyo3.workspace = true
 rpassword = "7"
-zeroize = "1"
+zeroize.workspace = true
 keycard_wallet.workspace = true
 
 anyhow.workspace = true
@@ -45,6 +45,9 @@ indicatif = { version = "0.18.3", features = ["improved_unicode"] }
 optfield = "0.4.0"
 url.workspace = true
 derive_more = { workspace = true, features = ["display"] }
+
+[features]
+keycard-debug = []
 
 [dev-dependencies]
 tempfile.workspace = true

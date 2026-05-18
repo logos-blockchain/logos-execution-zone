@@ -14,8 +14,6 @@ impl NativeTokenTransfer<'_> {
         from_mention: &CliAccountMention,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
         let (instruction_data, program, tx_pre_check) = auth_transfer_preparation(balance_to_move);
-        let key_path = from_mention.key_path().map(str::to_owned);
-
         self.0
             .send_privacy_preserving_tx_with_pre_check(
                 vec![
@@ -27,7 +25,7 @@ impl NativeTokenTransfer<'_> {
                 instruction_data,
                 &program.into(),
                 tx_pre_check,
-                &key_path,
+                Some(from_mention),
             )
             .await
             .map(|(resp, secrets)| {
@@ -49,8 +47,6 @@ impl NativeTokenTransfer<'_> {
         from_mention: &CliAccountMention,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
         let (instruction_data, program, tx_pre_check) = auth_transfer_preparation(balance_to_move);
-        let key_path = from_mention.key_path().map(str::to_owned);
-
         self.0
             .send_privacy_preserving_tx_with_pre_check(
                 vec![
@@ -64,7 +60,7 @@ impl NativeTokenTransfer<'_> {
                 instruction_data,
                 &program.into(),
                 tx_pre_check,
-                &key_path,
+                Some(from_mention),
             )
             .await
             .map(|(resp, secrets)| {

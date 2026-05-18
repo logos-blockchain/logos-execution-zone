@@ -20,6 +20,8 @@ pub enum KeycardSubcommand {
     ///
     /// Prints raw key material to stdout — intended for debugging only.
     /// Requires --reveal to confirm intent.
+    /// Only available when built with the `keycard-debug` feature.
+    #[cfg(feature = "keycard-debug")]
     GetPrivateKeys {
         /// BIP-32 derivation path, e.g. `m/44'/60'/0'/0/0`.
         #[arg(long)]
@@ -143,6 +145,7 @@ impl WalletSubcommand for KeycardSubcommand {
 
                 Ok(SubcommandReturnValue::Empty)
             }
+            #[cfg(feature = "keycard-debug")]
             Self::GetPrivateKeys { key_path, reveal } => {
                 if !reveal {
                     eprintln!(

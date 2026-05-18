@@ -97,3 +97,38 @@ echo "Shielded auth-transfer sent"
 
 sleep 15
 wallet account get --account-id "m/44'/60'/0'/0/0"
+
+# =============================================================================
+# Test (2): Deshielded auth-transfer — private account → keycard recipient
+#     A fresh private account is funded, then sends native tokens to keycard
+#     path 1. The private sender is handled by the ZK circuit; the keycard
+#     recipient does not sign — resolve() derives its account ID from the card.
+# =============================================================================
+echo ""
+echo "=== Test (2): Deshielded auth-transfer: private account → keycard path 1 ==="
+
+PRIV_SENDER=$(wallet account new private | grep -o 'Private/[^[:space:]]*' | head -1)
+echo "Fresh private sender account: $PRIV_SENDER"
+
+wallet auth-transfer init --account-id "$PRIV_SENDER"
+
+echo "Test: wallet pinata claim to private sender"
+wallet pinata claim --to "$PRIV_SENDER"
+
+sleep 15
+
+echo "priv-sender state after claim:"
+wallet account get --account-id "$PRIV_SENDER"
+
+wallet auth-transfer send \
+  --from   "$PRIV_SENDER" \
+  --to     "m/44'/60'/0'/0/1" \
+  --amount 5
+echo "Deshielded transfer of 5: $PRIV_SENDER → keycard path 1"
+
+sleep 15
+
+echo "priv-sender state (balance should have decreased by 5):"
+wallet account get --account-id "$PRIV_SENDER"
+echo "Keycard path 1 state (balance should have increased by 5):"
+wallet account get --account-id "m/44'/60'/0'/0/1"

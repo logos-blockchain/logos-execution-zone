@@ -25,8 +25,8 @@ impl Token<'_> {
 
         let mut groups = SigningGroups::new();
         groups
-            .add_sender(definition_mention, definition_account_id, self.0)
-            .and_then(|()| groups.add_sender(supply_mention, supply_account_id, self.0))
+            .add_required(definition_mention, definition_account_id, self.0)
+            .and_then(|()| groups.add_required(supply_mention, supply_account_id, self.0))
             .map_err(ExecutionFailureKind::from_anyhow)?;
 
         self.0
@@ -55,7 +55,7 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                &None,
+                None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -88,7 +88,7 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                &None,
+                None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -123,7 +123,7 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                &None,
+                None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -149,8 +149,8 @@ impl Token<'_> {
 
         let mut groups = SigningGroups::new();
         groups
-            .add_sender(sender_mention, sender_account_id, self.0)
-            .and_then(|()| groups.add_recipient(recipient_mention, recipient_account_id, self.0))
+            .add_required(sender_mention, sender_account_id, self.0)
+            .and_then(|()| groups.add_optional(recipient_mention, recipient_account_id, self.0))
             .map_err(ExecutionFailureKind::from_anyhow)?;
 
         self.0
@@ -182,7 +182,7 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                &None,
+                None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -221,7 +221,7 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                &None,
+                None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -254,7 +254,7 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                &None,
+                None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -278,8 +278,6 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
-        let key_path = sender_mention.key_path().map(str::to_owned);
-
         self.0
             .send_privacy_preserving_tx(
                 vec![
@@ -290,7 +288,7 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                &key_path,
+                Some(sender_mention),
             )
             .await
             .map(|(resp, secrets)| {
@@ -316,8 +314,6 @@ impl Token<'_> {
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
-        let key_path = sender_mention.key_path().map(str::to_owned);
-
         self.0
             .send_privacy_preserving_tx(
                 vec![
@@ -330,7 +326,7 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                &key_path,
+                Some(sender_mention),
             )
             .await
             .map(|(resp, secrets)| {
@@ -356,7 +352,7 @@ impl Token<'_> {
 
         let mut groups = SigningGroups::new();
         groups
-            .add_sender(holder_mention, holder_account_id, self.0)
+            .add_required(holder_mention, holder_account_id, self.0)
             .map_err(ExecutionFailureKind::from_anyhow)?;
 
         self.0
@@ -388,7 +384,7 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                &None,
+                None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -421,7 +417,7 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                &None,
+                None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -455,7 +451,7 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                &None,
+                None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -482,8 +478,8 @@ impl Token<'_> {
 
         let mut groups = SigningGroups::new();
         groups
-            .add_sender(definition_mention, definition_account_id, self.0)
-            .and_then(|()| groups.add_recipient(holder_mention, holder_account_id, self.0))
+            .add_required(definition_mention, definition_account_id, self.0)
+            .and_then(|()| groups.add_optional(holder_mention, holder_account_id, self.0))
             .map_err(ExecutionFailureKind::from_anyhow)?;
 
         self.0
@@ -515,7 +511,7 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                &None,
+                None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -554,7 +550,7 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                &None,
+                None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -587,7 +583,7 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                &None,
+                None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -621,7 +617,7 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                &None,
+                None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -659,7 +655,7 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                &None,
+                None,
             )
             .await
             .map(|(resp, secrets)| {

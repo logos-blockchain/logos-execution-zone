@@ -298,7 +298,7 @@ async fn claim_funds_from_vault_to_private(
             ],
             instruction_data,
             &program_with_dependencies,
-            &None,
+            None,
         )
         .await
         .context("Failed to submit private vault claim transaction")?;

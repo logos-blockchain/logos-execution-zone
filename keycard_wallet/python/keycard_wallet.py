@@ -180,7 +180,5 @@ class KeycardWallet:
             return (nsk, vsk)
         
         except Exception as e:
-            import traceback
-            traceback.print_exc()
-            return None
+            raise RuntimeError(f"Error getting private keys: {e}") from e
             
