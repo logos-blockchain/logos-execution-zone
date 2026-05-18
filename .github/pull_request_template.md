@@ -41,3 +41,4 @@ TO COMPLETE IF APPLICABLE
 - [ ] Implement the core functionality
 - [ ] Add/update tests
 - [ ] Add/update documentation and inline comments
+- [ ] Update specs if the PR introduces changes to the protocol
