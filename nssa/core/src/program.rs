@@ -89,7 +89,7 @@ impl PrivateAccountKind {
     /// Borsh layout (all integers little-endian, variant index is u8):
     ///
     /// ```text
-    /// Regular(ident):                  0x00 || ident (16 LE) || [0_u8; 64]
+    /// Regular(ident):                  0x00 || ident (16 LE) || [0u8; 64]
     /// Pda { program_id, seed, ident }: 0x01 || program_id (32) || seed (32) || ident (16 LE)
     /// ```
     ///
