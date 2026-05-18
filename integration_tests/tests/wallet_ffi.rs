@@ -146,7 +146,6 @@ unsafe extern "C" {
         from: *const FfiBytes32,
         to: *const FfiBytes32,
         amount: *const [u8; 16],
-        key_path: *const c_char,
         out_result: *mut FfiTransferResult,
     ) -> error::WalletFfiError;
 
@@ -156,7 +155,6 @@ unsafe extern "C" {
         to_keys: *const FfiPrivateAccountKeys,
         to_identifier: *const FfiU128,
         amount: *const [u8; 16],
-        key_path: *const c_char,
         out_result: *mut FfiTransferResult,
     ) -> error::WalletFfiError;
 
@@ -171,7 +169,6 @@ unsafe extern "C" {
     fn wallet_ffi_register_private_account(
         handle: *mut WalletHandle,
         account_id: *const FfiBytes32,
-        key_path: *const c_char,
         out_result: *mut FfiTransferResult,
     ) -> error::WalletFfiError;
 
@@ -767,7 +764,6 @@ fn wallet_ffi_init_private_account_auth_transfer() -> Result<()> {
         wallet_ffi_register_private_account(
             wallet_ffi_handle,
             &raw const out_account_id,
-            std::ptr::null(),
             &raw mut transfer_result,
         )
         .unwrap();
@@ -953,7 +949,6 @@ fn test_wallet_ffi_transfer_deshielded() -> Result<()> {
             &raw const from,
             &raw const to,
             &raw const amount,
-            std::ptr::null(),
             &raw mut transfer_result,
         )
     }
@@ -1026,7 +1021,6 @@ fn test_wallet_ffi_transfer_private() -> Result<()> {
             &raw const to_keys,
             &raw const to_identifier,
             &raw const amount,
-            std::ptr::null(),
             &raw mut transfer_result,
         )
         .unwrap();
