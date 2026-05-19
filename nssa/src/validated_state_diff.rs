@@ -265,7 +265,7 @@ impl ValidatedStateDiff {
                 state_diff.insert(pre.account_id, post.account().clone());
             }
 
-            let authorized_accounts: HashSet<_> = chained_call
+            let authorized_accounts: HashSet<_> = program_output
                 .pre_states
                 .iter()
                 .filter(|pre| pre.is_authorized)
@@ -487,4 +487,114 @@ fn check_privacy_preserving_circuit_proof_is_valid(
 fn n_unique<T: Eq + Hash>(data: &[T]) -> usize {
     let set: HashSet<&T> = data.iter().collect();
     set.len()
+}
+
+#[cfg(test)]
+mod tests {
+    use nssa_core::account::{AccountId, Nonce};
+
+    use crate::{
+        PrivateKey, PublicKey, V03State,
+        program::Program,
+        public_transaction::{Message, WitnessSet},
+        validated_state_diff::ValidatedStateDiff,
+    };
+
+    /// Demonstrates the authorization-injection vulnerability:
+    /// two malicious programs (injector + launderer) drain a victim's balance
+    /// without the victim signing anything.
+    ///
+    /// Attack flow:
+    ///   Transaction (attacker signs) → P1 (`malicious_injector`)
+    ///     → injects `victim(is_authorized=true)` into chained call `pre_states` for P2
+    ///   P2 (`malicious_launderer`)
+    ///     → outputs empty pre/post states (victim never checked against authorized set)
+    ///     → `authorized_accounts` for `authenticated_transfer` built from
+    /// `program_output.pre_states` = {victim}   `authenticated_transfer`
+    ///     → `victim.is_authorized=true` passes check ({victim}.contains(victim))
+    ///     → transfer executes.
+    #[test]
+    fn malicious_programs_drain_victim_without_signature() {
+        // p2_id, auth_transfer_id, victim_id_raw, victim_balance, victim_nonce,
+        // victim_program_owner, recipient_id_raw, amount.
+        // Primitives only — AccountId/Account cannot round-trip through instruction_data
+        // via risc0_zkvm::serde (SerializeDisplay issue).
+        type InjectorInstruction = (
+            nssa_core::program::ProgramId, // p2_id
+            nssa_core::program::ProgramId, // auth_transfer_id
+            [u8; 32],                      // victim_id_raw
+            u128,                          // victim_balance
+            u128,                          // victim_nonce
+            nssa_core::program::ProgramId, // victim_program_owner
+            [u8; 32],                      // recipient_id_raw
+            u128,                          // amount
+        );
+
+        let attacker_key = PrivateKey::try_new([10; 32]).unwrap();
+        let attacker_id = AccountId::from(&PublicKey::new_from_private_key(&attacker_key));
+
+        let victim_key = PrivateKey::try_new([20; 32]).unwrap();
+        let victim_id = AccountId::from(&PublicKey::new_from_private_key(&victim_key));
+
+        let recipient_id = AccountId::new([42; 32]);
+
+        let victim_balance = 5_000_u128;
+        let mut state = V03State::new_with_genesis_accounts(
+            &[
+                (attacker_id, 100),
+                (victim_id, victim_balance),
+                (recipient_id, 0),
+            ],
+            vec![],
+            0,
+        );
+
+        state.insert_program(Program::malicious_injector());
+        state.insert_program(Program::malicious_launderer());
+
+        // Read victim state from chain, exactly as the attacker would.
+        let victim_account = state.get_account_by_id(victim_id);
+
+        let instruction: InjectorInstruction = (
+            Program::malicious_launderer().id(),
+            Program::authenticated_transfer_program().id(),
+            *victim_id.value(),
+            victim_account.balance,
+            victim_account.nonce.0,
+            victim_account.program_owner,
+            *recipient_id.value(),
+            victim_balance,
+        );
+
+        let message = Message::try_new(
+            Program::malicious_injector().id(),
+            vec![attacker_id],
+            vec![Nonce(0)],
+            instruction,
+        )
+        .unwrap();
+
+        let witness_set = WitnessSet::for_message(&message, &[&attacker_key]);
+        let tx = crate::PublicTransaction::new(message, witness_set);
+
+        let result = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0);
+
+        assert!(
+            result.is_err(),
+            "attack transaction should be rejected by the fixed validator"
+        );
+
+        // Confirm the victim's balance is untouched.
+        let victim_balance_after = state.get_account_by_id(victim_id).balance;
+        let recipient_balance_after = state.get_account_by_id(recipient_id).balance;
+
+        assert_eq!(
+            victim_balance_after, victim_balance,
+            "victim balance should be unchanged"
+        );
+        assert_eq!(
+            recipient_balance_after, 0,
+            "recipient should receive nothing"
+        );
+    }
 }

@@ -469,6 +469,24 @@ mod tests {
             use test_program_methods::PINATA_COOLDOWN_ELF;
             Self::new(PINATA_COOLDOWN_ELF.to_vec()).unwrap()
         }
+
+        #[must_use]
+        pub fn malicious_injector() -> Self {
+            use test_program_methods::{MALICIOUS_INJECTOR_ELF, MALICIOUS_INJECTOR_ID};
+            Self {
+                id: MALICIOUS_INJECTOR_ID,
+                elf: MALICIOUS_INJECTOR_ELF.to_vec(),
+            }
+        }
+
+        #[must_use]
+        pub fn malicious_launderer() -> Self {
+            use test_program_methods::{MALICIOUS_LAUNDERER_ELF, MALICIOUS_LAUNDERER_ID};
+            Self {
+                id: MALICIOUS_LAUNDERER_ID,
+                elf: MALICIOUS_LAUNDERER_ELF.to_vec(),
+            }
+        }
     }
 
     #[test]
