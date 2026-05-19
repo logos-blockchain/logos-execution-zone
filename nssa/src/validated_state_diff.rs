@@ -500,6 +500,146 @@ mod tests {
         validated_state_diff::ValidatedStateDiff,
     };
 
+    /// Privacy-path version of the authorization-injection attack.
+    ///
+    /// `execute_and_prove` succeeds: all inner receipts are valid, and the outer circuit
+    /// honestly commits `victim(is_authorized=true)` to its journal.
+    /// `from_privacy_preserving_transaction` rejects the proof because the NSSA validator
+    /// independently reconstructs `public_pre_states` from chain state using
+    /// `signer_account_ids.contains(victim_id) = false`, producing `victim(is_authorized=false)`.
+    /// The committed journal and the expected output diverge, so `receipt.verify` fails.
+    #[test]
+    fn privacy_malicious_programs_cannot_drain_public_victim() {
+        use nssa_core::{
+            Commitment, InputAccountIdentity, SharedSecretKey,
+            account::{Account, AccountWithMetadata},
+            encryption::EphemeralPublicKey,
+        };
+
+        use crate::{
+            PrivacyPreservingTransaction,
+            privacy_preserving_transaction::{
+                circuit::{ProgramWithDependencies, execute_and_prove},
+                message::Message,
+                witness_set::WitnessSet,
+            },
+            state::{CommitmentSet, tests::test_private_account_keys_1},
+        };
+
+        type InjectorInstruction = (
+            nssa_core::program::ProgramId, // p2_id
+            nssa_core::program::ProgramId, // auth_transfer_id
+            [u8; 32],                      // victim_id_raw
+            u128,                          // victim_balance
+            u128,                          // victim_nonce
+            nssa_core::program::ProgramId, // victim_program_owner
+            [u8; 32],                      // recipient_id_raw
+            u128,                          // amount
+        );
+
+        // Attacker controls a private account.
+        let attacker_keys = test_private_account_keys_1();
+        let attacker_id = AccountId::for_regular_private_account(&attacker_keys.npk(), 0);
+        let attacker_esk = [12_u8; 32];
+        let attacker_ssk = SharedSecretKey::new(attacker_esk, &attacker_keys.vpk());
+        let attacker_epk = EphemeralPublicKey::from_scalar(attacker_esk);
+
+        let victim_id = AccountId::new([20_u8; 32]);
+        let recipient_id = AccountId::new([42_u8; 32]);
+        let victim_balance = 5_000_u128;
+
+        // genesis sets program_owner = authenticated_transfer_program.id() on all accounts.
+        let mut state = V03State::new_with_genesis_accounts(
+            &[(victim_id, victim_balance), (recipient_id, 0)],
+            vec![],
+            0,
+        );
+        state.insert_program(Program::malicious_injector());
+        state.insert_program(Program::malicious_launderer());
+
+        // Build attacker's private account and its local commitment tree.
+        let attacker_account = Account {
+            program_owner: Program::authenticated_transfer_program().id(),
+            balance: 100,
+            ..Account::default()
+        };
+        let attacker_commitment = Commitment::new(&attacker_id, &attacker_account);
+        let mut commitment_set = CommitmentSet::with_capacity(1);
+        commitment_set.extend(std::slice::from_ref(&attacker_commitment));
+        let membership_proof = commitment_set
+            .get_proof_for(&attacker_commitment)
+            .expect("attacker commitment must be in the set");
+
+        let attacker_pre = AccountWithMetadata::new(attacker_account, true, attacker_id);
+
+        let victim_account = state.get_account_by_id(victim_id);
+        let instruction: InjectorInstruction = (
+            Program::malicious_launderer().id(),
+            Program::authenticated_transfer_program().id(),
+            *victim_id.value(),
+            victim_account.balance,
+            victim_account.nonce.0,
+            victim_account.program_owner,
+            *recipient_id.value(),
+            victim_balance,
+        );
+        let instruction_data = Program::serialize_instruction(instruction).unwrap();
+
+        let p2 = Program::malicious_launderer();
+        let at = Program::authenticated_transfer_program();
+        let program_with_deps = ProgramWithDependencies::new(
+            Program::malicious_injector(),
+            [(p2.id(), p2), (at.id(), at)].into(),
+        );
+
+        // account_identities order must match self.pre_states as built by the circuit:
+        //   [0] attacker — first seen in P1's program_output.pre_states
+        //   [1] victim   — first seen in authenticated_transfer's program_output.pre_states
+        //   [2] recipient — first seen in authenticated_transfer's program_output.pre_states
+        let account_identities = vec![
+            InputAccountIdentity::PrivateAuthorizedUpdate {
+                ssk: attacker_ssk,
+                nsk: attacker_keys.nsk,
+                membership_proof,
+                identifier: 0,
+            },
+            InputAccountIdentity::Public, // victim
+            InputAccountIdentity::Public, // recipient
+        ];
+
+        // execute_and_prove succeeds: all inner receipts are valid.
+        // The outer circuit commits victim(is_authorized=true) to its journal.
+        let (circuit_output, proof) = execute_and_prove(
+            vec![attacker_pre],
+            instruction_data,
+            account_identities,
+            &program_with_deps,
+        )
+        .expect("execute_and_prove should succeed \u{2014} the programs execute correctly");
+
+        // public_account_ids lists the Public entries from account_identities, in order.
+        // The single ciphertext belongs to attacker's private account update.
+        let message = Message::try_from_circuit_output(
+            vec![victim_id, recipient_id],
+            vec![], // no public signers, no nonces
+            vec![(attacker_keys.npk(), attacker_keys.vpk(), attacker_epk)],
+            circuit_output,
+        )
+        .unwrap();
+
+        let witness_set = WitnessSet::for_message(&message, proof, &[]); // no signatures
+        let tx = PrivacyPreservingTransaction::new(message, witness_set);
+
+        let result = ValidatedStateDiff::from_privacy_preserving_transaction(&tx, &state, 1, 0);
+
+        assert!(
+            result.is_err(),
+            "attack privacy transaction should be rejected by the validator"
+        );
+        assert_eq!(state.get_account_by_id(victim_id).balance, victim_balance);
+        assert_eq!(state.get_account_by_id(recipient_id).balance, 0);
+    }
+
     /// Demonstrates the authorization-injection vulnerability:
     /// two malicious programs (injector + launderer) drain a victim's balance
     /// without the victim signing anything.
@@ -514,7 +654,7 @@ mod tests {
     ///     → `victim.is_authorized=true` passes check ({victim}.contains(victim))
     ///     → transfer executes.
     #[test]
-    fn malicious_programs_drain_victim_without_signature() {
+    fn malicious_programs_cannot_drain_victim_without_signature() {
         // p2_id, auth_transfer_id, victim_id_raw, victim_balance, victim_nonce,
         // victim_program_owner, recipient_id_raw, amount.
         // Primitives only — AccountId/Account cannot round-trip through instruction_data
