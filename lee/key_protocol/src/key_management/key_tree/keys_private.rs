@@ -167,7 +167,6 @@ mod tests {
             247, 155, 113, 122, 246, 192, 0, 70, 61, 76, 71, 70, 2,
         ]);
 
-        // Marvin-pq double check the d, r labels
         let expected_vsk: ViewingSecretKey = ViewingSecretKey {
             d: [
                 187, 143, 146, 12, 68, 148, 25, 203, 21, 92, 131, 2, 221, 81, 117, 62, 98, 194,
@@ -282,7 +281,6 @@ mod tests {
             219, 114, 113, 16, 42, 27, 220, 96, 151, 124, 8, 65,
         ]);
 
-        // Marvin-pq double check the d, r labels
         let expected_vsk: ViewingSecretKey = ViewingSecretKey {
             d: [
                 81, 154, 68, 152, 72, 163, 82, 17, 125, 156, 193, 135, 129, 93, 227, 55, 224, 104,

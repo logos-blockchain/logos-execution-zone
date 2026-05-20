@@ -272,10 +272,10 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
 
     // Fresh recipients — hardcoded npks not in any wallet.
     let recipient_npk_0 = NullifierPublicKey([0xAA; 32]);
-    let recipient_vpk_0 = ViewingPublicKey::from_seed(&recipient_npk_0.0, &[0_u8; 32]);
+    let recipient_vpk_0 = ViewingPublicKey::from_seed(&[0_u8; 32], &[1_u8; 32]);
 
     let recipient_npk_1 = NullifierPublicKey([0xBB; 32]);
-    let recipient_vpk_1 = ViewingPublicKey::from_seed(&recipient_npk_1.0, &[0_u8; 32]);
+    let recipient_vpk_1 = ViewingPublicKey::from_seed(&[2_u8; 32], &[3_u8; 32]);
 
     let amount_spend_0: u128 = 13;
     let amount_spend_1: u128 = 37;

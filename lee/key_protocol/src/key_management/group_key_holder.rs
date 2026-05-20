@@ -146,13 +146,6 @@ impl GroupKeyHolder {
         SecretSpendingKey(hasher.finalize_fixed().into()).produce_private_key_holder(None)
     }
 
-    // Marvin-pq: seal_for/unseal switched from ECDH (Secp256k1) to ML-KEM-768.
-    // Wire format changed from:
-    //   ephemeral_pubkey (33) || nonce (12) || ciphertext+tag (48)  = 93 bytes
-    // to:
-    //   kem_ciphertext (1088) || nonce (12) || ciphertext+tag (48)  = 1148 bytes
-    // SealingSecretKey is now the FIPS 203 seed pair (d, r) = ViewingSecretKey.
-
     /// Encrypts this holder's GMS under the recipient's [`SealingPublicKey`].
     ///
     /// Uses ML-KEM-768 encapsulation to derive a shared secret, then AES-256-GCM to encrypt
@@ -192,7 +185,7 @@ impl GroupKeyHolder {
     /// Returns `Err` if the ciphertext is too short or the AES-GCM authentication tag
     /// doesn't verify (wrong key or tampered data).
     pub fn unseal(sealed: &[u8], own_key: &SealingSecretKey) -> Result<Self, SealError> {
-        // Marvin-pq: kem_ciphertext (1088) + nonce (12) = header, then AES-GCM tag (16) minimum.
+        // kem_ciphertext (1088) + nonce (12) = header, then AES-GCM tag (16) minimum.
         const KEM_CT_LEN: usize = 1088;
         const HEADER_LEN: usize = KEM_CT_LEN + 12;
         const MIN_LEN: usize = HEADER_LEN + 16;
@@ -328,7 +321,8 @@ mod tests {
 
     /// Pins the end-to-end derivation for a fixed (GMS, `ProgramId`, `PdaSeed`). Any change
     /// to `secret_spending_key_for_pda`, the `PrivateKeyHolder` nsk/npk chain, or the
-    /// `AccountId::for_private_pda` formula breaks this test.
+    /// `AccountId::for_private_pda` formula breaks this test. Mirrors the pinned-value
+    /// pattern from `for_private_pda_matches_pinned_value` in `nssa_core`.
     #[test]
     fn pinned_end_to_end_derivation_for_private_pda() {
         use lee_core::{account::AccountId, program::ProgramId};
@@ -347,6 +341,8 @@ mod tests {
             136, 176, 234, 71, 208, 8, 143, 142, 126, 155, 132, 18, 71, 27, 88, 56, 100, 90, 79,
             215, 76, 92, 60, 166, 104, 35, 51, 91, 16, 114, 188, 112,
         ]);
+        // AccountId is derived from (program_id, seed, npk), so it changes when npk changes.
+        // We verify npk is pinned, and AccountId is deterministically derived from it.
         let expected_account_id =
             AccountId::for_private_pda(&program_id, &seed, &expected_npk, u128::MAX);
 
@@ -354,7 +350,10 @@ mod tests {
         assert_eq!(account_id, expected_account_id);
     }
 
-    /// Wallets persist `GroupKeyHolder` to disk and reload it on startup.
+    /// Wallets persist `GroupKeyHolder` to disk and reload it on startup. This test pins
+    /// the serde round-trip: serialize, deserialize, and assert the derived keys for a
+    /// sample seed match on both sides. A silent encoding drift would corrupt every
+    /// group-owned account.
     #[test]
     fn gms_serde_round_trip_preserves_derivation() {
         let original = GroupKeyHolder::from_gms([7_u8; 32]);
@@ -374,7 +373,10 @@ mod tests {
     }
 
     /// A `GroupKeyHolder` constructed from the same 32 bytes as a personal
-    /// `SecretSpendingKey` must not derive the same `NullifierPublicKey`.
+    /// `SecretSpendingKey` must not derive the same `NullifierPublicKey` as the personal
+    /// path, so a private PDA cannot be spent by a personal nullifier even under
+    /// adversarial key-material reuse. The safety rests on the group path's distinct
+    /// domain-separation prefix plus the seed mix-in (see `secret_spending_key_for_pda`).
     #[test]
     fn group_derivation_does_not_collide_with_personal_path_at_shared_bytes() {
         let shared_bytes = [13_u8; 32];

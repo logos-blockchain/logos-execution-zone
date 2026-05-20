@@ -138,7 +138,7 @@ impl SecretSpendingKey {
         bytes.extend_from_slice(SUFFIX_2);
         let bytes: [u8; 64] = bytes
             .try_into()
-            .expect("`generate_viewing_secret_key`: bytes must be exactly 64");
+            .expect("`generate_viewing_secret_seed_key`: bytes must be exactly 64");
 
         let full_seed = hmac_sha512::HMAC::mac(bytes, b"LEE_viewing_seed");
 
@@ -220,7 +220,6 @@ mod tests {
         assert_eq!(seed_holder.seed.len(), 64);
 
         let top_secret_key_holder = seed_holder.produce_top_secret_key_holder();
-        // Marvin-pq should drop seed from the fucntion name
         let _vsk = top_secret_key_holder.generate_viewing_secret_seed_key(None);
     }
 

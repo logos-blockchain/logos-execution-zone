@@ -13,7 +13,7 @@ pub struct EphemeralKeyHolder {
     ephemeral_public_key: EphemeralPublicKey,
 }
 
-// Marvin-pq: SharedSecretKey does not implement Debug (intentional — leaking key material via
+// SharedSecretKey does not implement Debug (intentional — leaking key material via
 // debug output would be a security risk). We implement Debug manually here, redacting the
 // shared secret while still allowing the ephemeral public key (KEM ciphertext) to be inspected.
 impl std::fmt::Debug for EphemeralKeyHolder {
