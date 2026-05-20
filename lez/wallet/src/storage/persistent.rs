@@ -5,6 +5,7 @@ use key_protocol::key_management::{
     key_tree::{
         chain_index::ChainIndex, keys_private::ChildKeysPrivate, keys_public::ChildKeysPublic,
     },
+    secret_holders::ViewingSecretKey,
 };
 use serde::{Deserialize, Serialize};
 use testnet_initial_state::{PrivateAccountPrivateInitialData, PublicAccountPrivateInitialData};
@@ -26,7 +27,7 @@ pub struct PersistentStorage {
 pub struct KeyChainPersistentData {
     pub accounts: Vec<PersistentAccountData>,
     #[serde(default)]
-    pub sealing_secret_key: Option<lee_core::encryption::Scalar>,
+    pub sealing_secret_key: Option<ViewingSecretKey>,
     #[serde(default)]
     pub group_key_holders: BTreeMap<Label, GroupKeyHolder>,
     #[serde(default)]

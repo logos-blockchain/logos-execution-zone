@@ -62,7 +62,7 @@ impl ChildKeysPrivate {
     pub fn nth_child(&self, cci: u32) -> Self {
         let mut parent_hash = sha2::Sha256::new();
         parent_hash.update(b"LEE/keys");
-        parent_hash.update([0u8; 16]);
+        parent_hash.update([0_u8; 16]);
         parent_hash.update([9_u8]);
         parent_hash.update(self.value.0.private_key_holder.nullifier_secret_key);
         parent_hash.update(self.value.0.private_key_holder.viewing_secret_key.d);
@@ -147,7 +147,7 @@ mod tests {
 
         let keys = ChildKeysPrivate::root(seed);
 
-        let expected_ssk: SecretSpendingKey = key_management::secret_holders::SecretSpendingKey([
+        let expected_ssk = key_management::secret_holders::SecretSpendingKey([
             246, 79, 26, 124, 135, 95, 52, 51, 201, 27, 48, 194, 2, 144, 51, 219, 245, 128, 139,
             222, 42, 195, 105, 33, 115, 97, 186, 0, 97, 14, 218, 191,
         ]);
@@ -260,11 +260,10 @@ mod tests {
             114, 39, 38, 118, 197, 205, 225,
         ];
 
-        // Marvin-pq this test currently fails
         let root_node = ChildKeysPrivate::root(seed);
         let child_node = ChildKeysPrivate::nth_child(&root_node, 42_u32);
 
-        let expected_ssk: SecretSpendingKey = key_management::secret_holders::SecretSpendingKey([
+        let expected_ssk = key_management::secret_holders::SecretSpendingKey([
             215, 207, 70, 52, 161, 220, 88, 88, 241, 149, 81, 130, 217, 214, 252, 170, 51, 232,
             230, 158, 195, 173, 174, 37, 27, 101, 49, 35, 79, 13, 44, 225,
         ]);

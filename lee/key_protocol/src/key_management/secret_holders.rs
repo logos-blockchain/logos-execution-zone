@@ -22,7 +22,7 @@ pub struct SeedHolder {
 pub struct SecretSpendingKey(pub [u8; 32]);
 /// Viewing secret key: the KEM seed split into its two 32-byte halves `d` and `r` (= z in
 /// FIPS 203), from which the ML-KEM 768 decapsulation key is derived deterministically.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ViewingSecretKey {
     pub d: [u8; 32],
     pub r: [u8; 32],
@@ -30,7 +30,7 @@ pub struct ViewingSecretKey {
 
 /// Private key holder. Produces public keys. Can produce `account_id`. Can produce shared secret
 /// for recepient.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PrivateKeyHolder {
     pub nullifier_secret_key: NullifierSecretKey,
     pub viewing_secret_key: ViewingSecretKey,
@@ -153,7 +153,7 @@ impl SecretSpendingKey {
     }
 
     #[must_use]
-    pub fn generate_viewing_secret_key(seed: [u8; 64]) -> ViewingSecretKey {
+    pub const fn generate_viewing_secret_key(seed: [u8; 64]) -> ViewingSecretKey {
         ViewingSecretKey {
             d: *seed.first_chunk::<32>().expect("seed is 64 bytes"),
             r: *seed.last_chunk::<32>().expect("seed is 64 bytes"),
@@ -172,11 +172,11 @@ impl SecretSpendingKey {
 impl From<&ViewingSecretKey> for ViewingPublicKey {
     fn from(sk: &ViewingSecretKey) -> Self {
         use ml_kem::{Kem, KeyExport as _, MlKem768, Seed};
-        let mut seed_bytes = [0u8; 64];
+        let mut seed_bytes = [0_u8; 64];
         seed_bytes[..32].copy_from_slice(&sk.d);
         seed_bytes[32..].copy_from_slice(&sk.r);
         let dk = <MlKem768 as Kem>::DecapsulationKey::from_seed(Seed::from(seed_bytes));
-        ViewingPublicKey(dk.encapsulation_key().to_bytes().to_vec())
+        Self(dk.encapsulation_key().to_bytes().to_vec())
     }
 }
 

@@ -1,48 +1,8 @@
-#![expect(
-    clippy::arithmetic_side_effects,
-    reason = "Multiplication of finite field elements can't overflow"
-)]
-
-use std::fmt::Write as _;
-
 use borsh::{BorshDeserialize, BorshSerialize};
-use k256::{
-    AffinePoint, FieldBytes, ProjectivePoint,
-    elliptic_curve::{PrimeField as _, sec1::ToEncodedPoint as _},
-};
 use ml_kem::{Decapsulate as _, Encapsulate as _, KeyExport as _, Seed};
 use serde::{Deserialize, Serialize};
 
-use crate::{SharedSecretKey, encryption::Scalar};
-
-/// A compressed secp256k1 point (33 bytes).
-/// Kept for backward compatibility with Phase-2+ callers; no longer used as `EphemeralPublicKey`.
-#[derive(Serialize, Deserialize, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct Secp256k1Point(pub Vec<u8>);
-
-impl std::fmt::Debug for Secp256k1Point {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let hex: String = self.0.iter().fold(String::new(), |mut acc, b| {
-            write!(acc, "{b:02x}").expect("writing to string should not fail");
-            acc
-        });
-        write!(f, "Secp256k1Point({hex})")
-    }
-}
-
-impl Secp256k1Point {
-    #[must_use]
-    pub fn from_scalar(value: Scalar) -> Self {
-        let x_bytes: FieldBytes = value.into();
-        let x = k256::Scalar::from_repr(x_bytes).unwrap();
-
-        let p = ProjectivePoint::GENERATOR * x;
-        let q = AffinePoint::from(p);
-        let enc = q.to_encoded_point(true);
-
-        Self(enc.as_bytes().to_vec())
-    }
-}
+use crate::SharedSecretKey;
 
 /// The ML-KEM-768 ciphertext produced during encapsulation; transmitted on-wire in place of the
 /// former ECDH ephemeral public key.  Always 1088 bytes for ML-KEM-768.
@@ -50,7 +10,7 @@ impl Secp256k1Point {
 pub struct EphemeralPublicKey(pub Vec<u8>);
 
 /// ML-KEM-768 encapsulation key bytes (1184 bytes, opaque to this crate).
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, BorshSerialize, BorshDeserialize)]
 pub struct ViewingPublicKey(pub Vec<u8>);
 
 impl ViewingPublicKey {
@@ -113,7 +73,7 @@ impl SharedSecretKey {
         input.extend_from_slice(message_hash);
         input.extend_from_slice(&output_index.to_le_bytes());
         let hash = Impl::hash_bytes(&input);
-        let m: ml_kem::B32 = ml_kem::array::Array::try_from(hash.as_bytes() as &[u8])
+        let m: ml_kem::B32 = ml_kem::array::Array::try_from(hash.as_bytes())
             .expect("SHA-256 output is 32 bytes");
 
         let ek_bytes: ml_kem::kem::Key<ml_kem::EncapsulationKey768> = vpk
@@ -159,8 +119,8 @@ mod tests {
 
     #[test]
     fn encapsulate_decapsulate_round_trip() {
-        let d = [1u8; 32];
-        let r = [2u8; 32];
+        let d = [1_u8; 32];
+        let r = [2_u8; 32];
 
         let mut seed = Seed::default();
         seed[..32].copy_from_slice(&d);
@@ -184,8 +144,8 @@ mod tests {
 
     #[test]
     fn different_vpks_produce_different_shared_secrets() {
-        let (d1, r1) = ([1u8; 32], [2u8; 32]);
-        let (d2, r2) = ([3u8; 32], [4u8; 32]);
+        let (d1, r1) = ([1_u8; 32], [2_u8; 32]);
+        let (d2, r2) = ([3_u8; 32], [4_u8; 32]);
 
         let vpk1 = {
             let mut seed = Seed::default();

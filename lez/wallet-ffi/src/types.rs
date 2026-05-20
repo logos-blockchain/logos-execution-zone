@@ -71,9 +71,9 @@ impl Default for FfiAccount {
 pub struct FfiPrivateAccountKeys {
     /// Nullifier public key (32 bytes).
     pub nullifier_public_key: FfiBytes32,
-    /// viewing public key (compressed secp256k1 point).
+    /// Viewing public key (ML-KEM-768 encapsulation key, 1184 bytes).
     pub viewing_public_key: *const u8,
-    /// Length of viewing public key (typically 33 bytes).
+    /// Length of viewing public key (always 1184 bytes for ML-KEM-768).
     pub viewing_public_key_len: usize,
 }
 

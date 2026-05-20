@@ -208,7 +208,7 @@ pub mod tests {
         let nonces_bytes: &[u8] = &[1, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
         // all remaining vec fields are empty: u32 len=0
         let empty_vec_bytes: &[u8] = &[0_u8; 4];
-        // validity windows: unbounded = {from: None (0u8), to: None (0u8)}
+        // validity windows: unbounded = {from: None (0_u8), to: None (0_u8)}
         let unbounded_window_bytes: &[u8] = &[0_u8; 2];
 
         let expected_borsh_vec: Vec<u8> = [
@@ -246,11 +246,11 @@ pub mod tests {
     #[test]
     fn encrypted_account_data_constructor() {
         let npk = NullifierPublicKey::from(&[1; 32]);
-        let vpk = ViewingPublicKey::from_seed(&[2u8; 32], &[3u8; 32]);
+        let vpk = ViewingPublicKey::from_seed(&[2_u8; 32], &[3_u8; 32]);
         let account = Account::default();
         let account_id = lee_core::account::AccountId::for_regular_private_account(&npk, 0);
         let commitment = Commitment::new(&account_id, &account);
-        let (shared_secret, epk) = SharedSecretKey::encapsulate_deterministic(&vpk, &[0u8; 32], 0);
+        let (shared_secret, epk) = SharedSecretKey::encapsulate_deterministic(&vpk, &[0_u8; 32], 0);
         let ciphertext = EncryptionScheme::encrypt(
             &account,
             &PrivateAccountKind::Regular(0),

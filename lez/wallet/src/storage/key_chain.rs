@@ -6,7 +6,7 @@ use key_protocol::key_management::{
     KeyChain,
     group_key_holder::GroupKeyHolder,
     key_tree::{KeyTreePrivate, KeyTreePublic, chain_index::ChainIndex, traits::KeyTreeNode as _},
-    secret_holders::SeedHolder,
+    secret_holders::{SeedHolder, ViewingSecretKey},
 };
 use lee::{Account, AccountId};
 use lee_core::{Identifier, PrivateAccountKind};
@@ -79,7 +79,7 @@ pub struct UserKeyChain {
     /// Dedicated sealing secret key for GMS distribution. Generated once via
     /// `wallet group new-sealing-key`. The corresponding public key is shared with
     /// group members so they can seal GMS for this wallet.
-    sealing_secret_key: Option<lee_core::encryption::Scalar>,
+    sealing_secret_key: Option<ViewingSecretKey>,
 }
 
 impl UserKeyChain {
@@ -509,12 +509,12 @@ impl UserKeyChain {
 
     /// Returns the sealing secret key for GMS distribution, if it exists.
     #[must_use]
-    pub const fn sealing_secret_key(&self) -> Option<lee_core::encryption::Scalar> {
-        self.sealing_secret_key
+    pub const fn sealing_secret_key(&self) -> Option<&ViewingSecretKey> {
+        self.sealing_secret_key.as_ref()
     }
 
     /// Sets the sealing secret key for GMS distribution.
-    pub const fn set_sealing_secret_key(&mut self, key: lee_core::encryption::Scalar) {
+    pub const fn set_sealing_secret_key(&mut self, key: ViewingSecretKey) {
         self.sealing_secret_key = Some(key);
     }
 
@@ -584,7 +584,7 @@ impl UserKeyChain {
 
         KeyChainPersistentData {
             accounts,
-            sealing_secret_key: *sealing_secret_key,
+            sealing_secret_key: sealing_secret_key.clone(),
             group_key_holders: group_key_holders.clone(),
             shared_private_accounts: shared_private_accounts.clone(),
         }

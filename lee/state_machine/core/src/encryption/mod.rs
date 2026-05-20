@@ -154,4 +154,41 @@ mod tests {
 
         assert_eq!(account_ct.0.len(), pda_ct.0.len());
     }
+
+    /// Verifies the full account-note pipeline: ML-KEM-768 encapsulation/decapsulation
+    /// feeds the correct shared secret into the SHA-256 KDF and ChaCha20 round-trip.
+    #[cfg(feature = "host")]
+    #[test]
+    fn kem_to_chacha20_round_trip() {
+        let d = [1_u8; 32];
+        let r = [2_u8; 32];
+        let vpk = shared_key_derivation::ViewingPublicKey::from_seed(&d, &r);
+
+        let (sender_ss, epk) = SharedSecretKey::encapsulate(&vpk);
+        let receiver_ss = SharedSecretKey::decapsulate(&epk, &d, &r);
+
+        let account = Account {
+            program_owner: [12_u32; 8],
+            balance: 999,
+            ..Account::default()
+        };
+        let kind = PrivateAccountKind::Regular(0);
+        let commitment = crate::Commitment::new(&AccountId::new([7_u8; 32]), &account);
+
+        let ct = EncryptionScheme::encrypt(&account, &kind, &sender_ss, &commitment, 0);
+        let (decoded_kind, decoded_account) =
+            EncryptionScheme::decrypt(&ct, &receiver_ss, &commitment, 0)
+                .expect("decryption must succeed with correct shared secret");
+
+        assert_eq!(decoded_account, account);
+        assert_eq!(decoded_kind, kind);
+
+        // Wrong shared secret must not decrypt correctly.
+        let wrong_ss = SharedSecretKey([0_u8; 32]);
+        let bad = EncryptionScheme::decrypt(&ct, &wrong_ss, &commitment, 0);
+        assert!(
+            bad.is_none() || bad.is_some_and(|(_, a)| a.balance != 999),
+            "wrong shared secret must not produce the correct plaintext"
+        );
+    }
 }

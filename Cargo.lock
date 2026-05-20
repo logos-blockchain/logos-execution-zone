@@ -2357,7 +2357,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1dd6dbb5841937940781866fa1281a1ff7bd3bf827091440879f9994983d5c2"
 dependencies = [
  "block-buffer 0.12.0",
- "crypto-common 0.2.1",
+ "crypto-common 0.2.2",
 ]
 
 [[package]]
@@ -4570,7 +4570,7 @@ version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "01737161ba802849cfd486b5bd209d38ba4943494c249a8126005170c7621edd"
 dependencies = [
- "crypto-common 0.2.1",
+ "crypto-common 0.2.2",
  "rand_core 0.10.1",
 ]
 
@@ -4700,6 +4700,7 @@ dependencies = [
  "bytesize",
  "chacha20",
  "k256",
+ "ml-kem",
  "risc0-zkvm",
  "serde",
  "serde_json",

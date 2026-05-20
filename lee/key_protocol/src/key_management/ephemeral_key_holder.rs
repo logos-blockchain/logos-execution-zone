@@ -6,7 +6,7 @@ use lee_core::{
 /// Ephemeral key holder for the sender side of a KEM-based shared-secret exchange.
 ///
 /// Non-clonable as intended for one-time use: construction encapsulates once and
-/// stores both the shared secret and the ciphertext (EphemeralPublicKey) that must
+/// stores both the shared secret and the ciphertext (`EphemeralPublicKey`) that must
 /// be sent to the receiver.
 pub struct EphemeralKeyHolder {
     shared_secret: SharedSecretKey,
@@ -36,15 +36,15 @@ impl EphemeralKeyHolder {
         }
     }
 
-    /// Returns the KEM ciphertext to be transmitted to the receiver as the EphemeralPublicKey.
+    /// Returns the KEM ciphertext to be transmitted to the receiver as the `EphemeralPublicKey`.
     #[must_use]
-    pub fn ephemeral_public_key(&self) -> &EphemeralPublicKey {
+    pub const fn ephemeral_public_key(&self) -> &EphemeralPublicKey {
         &self.ephemeral_public_key
     }
 
     /// Returns the sender-side shared secret (established at construction time).
     #[must_use]
-    pub fn calculate_shared_secret_sender(&self) -> SharedSecretKey {
+    pub const fn calculate_shared_secret_sender(&self) -> SharedSecretKey {
         self.shared_secret
     }
 }

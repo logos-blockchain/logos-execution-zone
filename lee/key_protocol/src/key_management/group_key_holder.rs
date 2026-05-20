@@ -328,6 +328,80 @@ mod tests {
 
     /// Pins the end-to-end derivation for a fixed (GMS, `ProgramId`, `PdaSeed`). Any change
     /// to `secret_spending_key_for_pda`, the `PrivateKeyHolder` nsk/npk chain, or the
+    /// `AccountId::for_private_pda` formula breaks this test.
+    #[test]
+    fn pinned_end_to_end_derivation_for_private_pda() {
+        use lee_core::{account::AccountId, program::ProgramId};
+
+        let gms = [42_u8; 32];
+        let seed = PdaSeed::new([1; 32]);
+        let program_id: ProgramId = [9; 8];
+
+        let holder = GroupKeyHolder::from_gms(gms);
+        let npk = holder
+            .derive_keys_for_pda(&TEST_PROGRAM_ID, &seed)
+            .generate_nullifier_public_key();
+        let account_id = AccountId::for_private_pda(&program_id, &seed, &npk, u128::MAX);
+
+        let expected_npk = NullifierPublicKey([
+            136, 176, 234, 71, 208, 8, 143, 142, 126, 155, 132, 18, 71, 27, 88, 56, 100, 90, 79,
+            215, 76, 92, 60, 166, 104, 35, 51, 91, 16, 114, 188, 112,
+        ]);
+        let expected_account_id =
+            AccountId::for_private_pda(&program_id, &seed, &expected_npk, u128::MAX);
+
+        assert_eq!(npk, expected_npk);
+        assert_eq!(account_id, expected_account_id);
+    }
+
+    /// Wallets persist `GroupKeyHolder` to disk and reload it on startup.
+    #[test]
+    fn gms_serde_round_trip_preserves_derivation() {
+        let original = GroupKeyHolder::from_gms([7_u8; 32]);
+        let encoded = bincode::serialize(&original).expect("serialize");
+        let restored: GroupKeyHolder = bincode::deserialize(&encoded).expect("deserialize");
+
+        let seed = PdaSeed::new([1; 32]);
+        let npk_original = original
+            .derive_keys_for_pda(&TEST_PROGRAM_ID, &seed)
+            .generate_nullifier_public_key();
+        let npk_restored = restored
+            .derive_keys_for_pda(&TEST_PROGRAM_ID, &seed)
+            .generate_nullifier_public_key();
+
+        assert_eq!(npk_original, npk_restored);
+        assert_eq!(original.dangerous_raw_gms(), restored.dangerous_raw_gms());
+    }
+
+    /// A `GroupKeyHolder` constructed from the same 32 bytes as a personal
+    /// `SecretSpendingKey` must not derive the same `NullifierPublicKey`.
+    #[test]
+    fn group_derivation_does_not_collide_with_personal_path_at_shared_bytes() {
+        let shared_bytes = [13_u8; 32];
+        let seed = PdaSeed::new([5; 32]);
+
+        let group_npk = GroupKeyHolder::from_gms(shared_bytes)
+            .derive_keys_for_pda(&TEST_PROGRAM_ID, &seed)
+            .generate_nullifier_public_key();
+
+        let personal_npk = SecretSpendingKey(shared_bytes)
+            .produce_private_key_holder(None)
+            .generate_nullifier_public_key();
+
+        assert_ne!(group_npk, personal_npk);
+    }
+
+    /// Seal then unseal recovers the same GMS and derived keys.
+    #[test]
+    fn seal_unseal_round_trip() {
+        let holder = GroupKeyHolder::from_gms([42_u8; 32]);
+
+        let recipient_ssk = SecretSpendingKey([7_u8; 32]);
+        let recipient_keys = recipient_ssk.produce_private_key_holder(None);
+        let recipient_vpk = recipient_keys.generate_viewing_public_key();
+        let recipient_vsk = recipient_keys.viewing_secret_key;
+
+        let sealed = holder.seal_for(&SealingPublicKey::from_bytes(recipient_vpk.0));
         let restored = GroupKeyHolder::unseal(&sealed, &recipient_vsk).expect("unseal");
 
         assert_eq!(restored.dangerous_raw_gms(), holder.dangerous_raw_gms());
@@ -355,8 +429,7 @@ mod tests {
 
         let wrong_vsk = SecretSpendingKey([99_u8; 32])
             .produce_private_key_holder(None)
-            .viewing_secret_key
-            .clone();
+            .viewing_secret_key;
 
         let sealed = holder.seal_for(&SealingPublicKey::from_bytes(recipient_vpk.0));
         let result = GroupKeyHolder::unseal(&sealed, &wrong_vsk);
@@ -371,7 +444,7 @@ mod tests {
         let recipient_ssk = SecretSpendingKey([7_u8; 32]);
         let recipient_keys = recipient_ssk.produce_private_key_holder(None);
         let recipient_vpk = recipient_keys.generate_viewing_public_key();
-        let recipient_vsk = recipient_keys.viewing_secret_key.clone();
+        let recipient_vsk = recipient_keys.viewing_secret_key;
 
         let mut sealed = holder.seal_for(&SealingPublicKey::from_bytes(recipient_vpk.0));
         // Flip a byte in the AES-GCM ciphertext portion (after KEM ciphertext + nonce).
@@ -453,7 +526,7 @@ mod tests {
         let bob_ssk = SecretSpendingKey([77_u8; 32]);
         let bob_keys = bob_ssk.produce_private_key_holder(None);
         let bob_vpk = bob_keys.generate_viewing_public_key();
-        let bob_vsk = bob_keys.viewing_secret_key.clone();
+        let bob_vsk = bob_keys.viewing_secret_key;
 
         let sealed = alice_holder.seal_for(&SealingPublicKey::from_bytes(bob_vpk.0));
         let bob_holder =

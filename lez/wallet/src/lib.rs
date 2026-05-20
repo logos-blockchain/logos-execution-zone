@@ -269,7 +269,7 @@ impl WalletCore {
     }
 
     /// Set the wallet's dedicated sealing secret key.
-    pub fn set_sealing_secret_key(&mut self, key: key_protocol::key_management::secret_holders::ViewingSecretKey) {
+    pub const fn set_sealing_secret_key(&mut self, key: key_protocol::key_management::secret_holders::ViewingSecretKey) {
         self.storage.key_chain_mut().set_sealing_secret_key(key);
     }
 

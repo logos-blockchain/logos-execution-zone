@@ -135,11 +135,11 @@ typedef struct FfiPrivateAccountKeys {
    */
   struct FfiBytes32 nullifier_public_key;
   /**
-   * viewing public key (compressed secp256k1 point).
+   * Viewing public key (ML-KEM-768 encapsulation key, 1184 bytes).
    */
   const uint8_t *viewing_public_key;
   /**
-   * Length of viewing public key (typically 33 bytes).
+   * Length of viewing public key (always 1184 bytes for ML-KEM-768).
    */
   uintptr_t viewing_public_key_len;
 } FfiPrivateAccountKeys;
