@@ -2,11 +2,10 @@ use common::PINATA_BASE58;
 use key_protocol::key_management::{
     KeyChain,
     key_tree::chain_index::ChainIndex,
-    secret_holders::{PrivateKeyHolder, SecretSpendingKey},
+    secret_holders::{PrivateKeyHolder, SecretSpendingKey, ViewingSecretKey},
 };
 use lee::{Account, AccountId, Data, PrivateKey, PublicKey, V03State};
 use lee_core::{NullifierPublicKey, encryption::ViewingPublicKey};
-use key_protocol::key_management::secret_holders::ViewingSecretKey;
 use serde::{Deserialize, Serialize};
 
 const PRIVATE_KEY_PUB_ACC_A: [u8; 32] = [
@@ -48,8 +47,6 @@ const VSK_PRIV_ACC_B: [u8; 32] = [
     205, 32, 76, 251, 255, 236, 96, 119, 61, 111, 65, 100, 75, 218, 12, 22, 17, 170, 55, 226, 21,
     154, 161, 34, 208, 74, 27, 1, 119, 13, 88, 128,
 ];
-
-
 
 const NPK_PRIV_ACC_A: [u8; 32] = [
     167, 108, 50, 153, 74, 47, 151, 188, 140, 79, 195, 31, 181, 9, 40, 167, 201, 32, 175, 129, 45,
@@ -129,7 +126,10 @@ pub fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialD
         secret_spending_key: SecretSpendingKey(SSK_PRIV_ACC_A),
         private_key_holder: PrivateKeyHolder {
             nullifier_secret_key: NSK_PRIV_ACC_A,
-            viewing_secret_key: ViewingSecretKey { d: VSK_PRIV_ACC_A, r: [0_u8; 32] },
+            viewing_secret_key: ViewingSecretKey {
+                d: VSK_PRIV_ACC_A,
+                r: [0_u8; 32],
+            },
         },
         nullifier_public_key: NullifierPublicKey(NPK_PRIV_ACC_A),
         viewing_public_key: ViewingPublicKey::from_seed(&VSK_PRIV_ACC_A, &[0_u8; 32]),
@@ -139,7 +139,10 @@ pub fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialD
         secret_spending_key: SecretSpendingKey(SSK_PRIV_ACC_B),
         private_key_holder: PrivateKeyHolder {
             nullifier_secret_key: NSK_PRIV_ACC_B,
-            viewing_secret_key: ViewingSecretKey { d: VSK_PRIV_ACC_B, r: [0_u8; 32] },
+            viewing_secret_key: ViewingSecretKey {
+                d: VSK_PRIV_ACC_B,
+                r: [0_u8; 32],
+            },
         },
         nullifier_public_key: NullifierPublicKey(NPK_PRIV_ACC_B),
         viewing_public_key: ViewingPublicKey::from_seed(&VSK_PRIV_ACC_B, &[0_u8; 32]),

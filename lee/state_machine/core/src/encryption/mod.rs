@@ -156,7 +156,7 @@ mod tests {
     }
 
     /// Verifies the full account-note pipeline: ML-KEM-768 encapsulation/decapsulation
-    /// feeds the correct shared secret into the SHA-256 KDF and ChaCha20 round-trip.
+    /// feeds the correct shared secret into the SHA-256 KDF and `ChaCha20` round-trip.
     #[cfg(feature = "host")]
     #[test]
     fn kem_to_chacha20_round_trip() {

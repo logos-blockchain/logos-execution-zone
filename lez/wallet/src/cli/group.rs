@@ -1,6 +1,9 @@
 use anyhow::{Context as _, Result};
 use clap::Subcommand;
-use key_protocol::key_management::{group_key_holder::{GroupKeyHolder, SealingPublicKey}, secret_holders::ViewingSecretKey};
+use key_protocol::key_management::{
+    group_key_holder::{GroupKeyHolder, SealingPublicKey},
+    secret_holders::ViewingSecretKey,
+};
 
 use crate::{
     WalletCore,

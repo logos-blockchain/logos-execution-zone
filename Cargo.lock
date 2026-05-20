@@ -2041,8 +2041,14 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "key_protocol",
+<<<<<<< HEAD
  "lee_core",
  "rand 0.8.6",
+=======
+ "nssa_core",
+ "serde",
+ "serde_json",
+>>>>>>> 8492f995 (ci fixes)
 ]
 
 [[package]]
@@ -2203,7 +2209,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ccc2776f0c61eca1ca32528f85548abd1a4be8fb53d1b21c013e4f18da1e7090"
 dependencies = [
  "data-encoding",
- "syn 2.0.117",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -2387,7 +2393,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -2707,7 +2713,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3714,8 +3720,12 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
+<<<<<<< HEAD
  "socket2 0.6.4",
  "system-configuration 0.7.0",
+=======
+ "socket2 0.5.10",
+>>>>>>> 8492f995 (ci fixes)
  "tokio",
  "tower-service",
  "tracing",
@@ -6706,12 +6716,60 @@ dependencies = [
 ]
 
 [[package]]
+<<<<<<< HEAD
+=======
+name = "nssa"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "authenticated_transfer_core",
+ "borsh",
+ "clock_core",
+ "env_logger",
+ "faucet_core",
+ "hex",
+ "hex-literal 1.1.0",
+ "k256",
+ "log",
+ "nssa_core",
+ "rand 0.8.5",
+ "risc0-binfmt",
+ "risc0-build",
+ "risc0-zkvm",
+ "serde",
+ "serde_with",
+ "sha2",
+ "test-case",
+ "test_program_methods",
+ "thiserror 2.0.18",
+ "token_core",
+]
+
+[[package]]
+name = "nssa_core"
+version = "0.1.0"
+dependencies = [
+ "base58",
+ "borsh",
+ "bytemuck",
+ "bytesize",
+ "chacha20",
+ "ml-kem",
+ "risc0-zkvm",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+>>>>>>> 8492f995 (ci fixes)
 name = "nu-ansi-term"
 version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -7738,7 +7796,11 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls",
+<<<<<<< HEAD
  "socket2 0.6.4",
+=======
+ "socket2 0.5.10",
+>>>>>>> 8492f995 (ci fixes)
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -7775,7 +7837,11 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
+<<<<<<< HEAD
  "socket2 0.6.4",
+=======
+ "socket2 0.5.10",
+>>>>>>> 8492f995 (ci fixes)
  "tracing",
  "windows-sys 0.60.2",
 ]
@@ -8688,7 +8754,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -9688,7 +9754,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -11110,7 +11176,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

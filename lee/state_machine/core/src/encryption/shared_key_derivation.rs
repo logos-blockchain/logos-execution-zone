@@ -10,7 +10,18 @@ use crate::SharedSecretKey;
 pub struct EphemeralPublicKey(pub Vec<u8>);
 
 /// ML-KEM-768 encapsulation key bytes (1184 bytes, opaque to this crate).
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, BorshSerialize, BorshDeserialize)]
+#[derive(
+    Serialize,
+    Deserialize,
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    BorshSerialize,
+    BorshDeserialize,
+)]
 pub struct ViewingPublicKey(pub Vec<u8>);
 
 impl ViewingPublicKey {
@@ -73,8 +84,8 @@ impl SharedSecretKey {
         input.extend_from_slice(message_hash);
         input.extend_from_slice(&output_index.to_le_bytes());
         let hash = Impl::hash_bytes(&input);
-        let m: ml_kem::B32 = ml_kem::array::Array::try_from(hash.as_bytes())
-            .expect("SHA-256 output is 32 bytes");
+        let m: ml_kem::B32 =
+            ml_kem::array::Array::try_from(hash.as_bytes()).expect("SHA-256 output is 32 bytes");
 
         let ek_bytes: ml_kem::kem::Key<ml_kem::EncapsulationKey768> = vpk
             .0
