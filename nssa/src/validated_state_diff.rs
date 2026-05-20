@@ -265,6 +265,10 @@ impl ValidatedStateDiff {
                 state_diff.insert(pre.account_id, post.account().clone());
             }
 
+            // Source from `program_output.pre_states`, not `chained_call.pre_states`:
+            // the loop above already gates program_output's `is_authorized` via the
+            // `!pre.is_authorized || is_indeed_authorized` check, while `chained_call.
+            // pre_states` is caller-controlled and can be forged (audit-issue 91).
             let authorized_accounts: HashSet<_> = program_output
                 .pre_states
                 .iter()
@@ -495,19 +499,25 @@ mod tests {
 
     use crate::{
         PrivateKey, PublicKey, V03State,
+        error::{InvalidProgramBehaviorError, NssaError},
         program::Program,
         public_transaction::{Message, WitnessSet},
         validated_state_diff::ValidatedStateDiff,
     };
 
-    /// Privacy-path version of the authorization-injection attack.
+    /// Privacy-path version of the authorization-injection attack. The test passes when the
+    /// attack is rejected and the victim's balance is left untouched.
     ///
-    /// `execute_and_prove` succeeds: all inner receipts are valid, and the outer circuit
-    /// honestly commits `victim(is_authorized=true)` to its journal.
-    /// `from_privacy_preserving_transaction` rejects the proof because the NSSA validator
-    /// independently reconstructs `public_pre_states` from chain state using
-    /// `signer_account_ids.contains(victim_id) = false`, producing `victim(is_authorized=false)`.
-    /// The committed journal and the expected output diverge, so `receipt.verify` fails.
+    /// `execute_and_prove` succeeds because each inner receipt is individually valid and the
+    /// outer circuit faithfully commits whatever the attacker's program output says, including
+    /// `victim(is_authorized=true)`. The circuit has no access to chain state and cannot know
+    /// the victim never signed.
+    ///
+    /// The host-side validator is what catches the attack: it independently reconstructs
+    /// `public_pre_states` from chain state using `signer_account_ids.contains(victim_id) = false`,
+    /// so it expects `victim(is_authorized=false)`. The committed journal and the reconstructed
+    /// expected output diverge, `receipt.verify` fails, and `from_privacy_preserving_transaction`
+    /// returns an error before any state is applied.
     #[test]
     fn privacy_malicious_programs_cannot_drain_public_victim() {
         use nssa_core::{
@@ -633,26 +643,189 @@ mod tests {
         let result = ValidatedStateDiff::from_privacy_preserving_transaction(&tx, &state, 1, 0);
 
         assert!(
-            result.is_err(),
-            "attack privacy transaction should be rejected by the validator"
+            matches!(result, Err(NssaError::InvalidPrivacyPreservingProof)),
+            "attack privacy transaction should be rejected with InvalidPrivacyPreservingProof"
         );
         assert_eq!(state.get_account_by_id(victim_id).balance, victim_balance);
         assert_eq!(state.get_account_by_id(recipient_id).balance, 0);
     }
 
-    /// Demonstrates the authorization-injection vulnerability:
-    /// two malicious programs (injector + launderer) drain a victim's balance
-    /// without the victim signing anything.
+    /// Private-victim variant of the authorization-injection attack. The test passes when the
+    /// attack is rejected and the recipient's balance remains zero.
+    ///
+    /// After the circuit's Vacant branch accepts the injected `victim(is_authorized=true)`
+    /// verbatim, the attacker must choose how to declare the victim in `account_identities`.
+    /// There are two routes, both closed:
+    ///
+    /// - **mask=1 (`PrivateAuthorizedUpdate`)**: the circuit derives `account_id =
+    ///   AccountId::for_regular_private_account(&npk_from(nsk), identifier)` and asserts it matches
+    ///   `pre_state.account_id`. Passing this check requires the victim's `nsk`, which the attacker
+    ///   does not have. `execute_and_prove` panics inside the ZKVM and no proof is produced.
+    ///
+    /// - **mask=0 (`Public`)**: the circuit places the account in `public_pre_states` and
+    ///   `execute_and_prove` succeeds. The host-side validator then reconstructs
+    ///   `public_pre_states` from chain state; `state.get_account_by_id(victim_id)` returns the
+    ///   default account (balance=0) because the victim has no public state entry. The committed
+    ///   journal and the reconstructed expected output diverge, `receipt.verify` fails, and
+    ///   `from_privacy_preserving_transaction` returns an error before any state is applied. This
+    ///   test exercises this route.
+    #[test]
+    fn privacy_malicious_programs_cannot_drain_private_victim() {
+        use nssa_core::{
+            Commitment, InputAccountIdentity, SharedSecretKey,
+            account::{Account, AccountWithMetadata},
+            encryption::EphemeralPublicKey,
+        };
+
+        use crate::{
+            PrivacyPreservingTransaction,
+            privacy_preserving_transaction::{
+                circuit::{ProgramWithDependencies, execute_and_prove},
+                message::Message,
+                witness_set::WitnessSet,
+            },
+            state::{
+                CommitmentSet,
+                tests::{test_private_account_keys_1, test_private_account_keys_2},
+            },
+        };
+
+        type InjectorInstruction = (
+            nssa_core::program::ProgramId, // p2_id
+            nssa_core::program::ProgramId, // auth_transfer_id
+            [u8; 32],                      // victim_id_raw
+            u128,                          // victim_balance
+            u128,                          // victim_nonce
+            nssa_core::program::ProgramId, // victim_program_owner
+            [u8; 32],                      // recipient_id_raw
+            u128,                          // amount
+        );
+
+        // Attacker controls a private account.
+        let attacker_keys = test_private_account_keys_1();
+        let attacker_id = AccountId::for_regular_private_account(&attacker_keys.npk(), 0);
+        let attacker_esk = [12_u8; 32];
+        let attacker_ssk = SharedSecretKey::new(attacker_esk, &attacker_keys.vpk());
+        let attacker_epk = EphemeralPublicKey::from_scalar(attacker_esk);
+
+        // Victim is a private account — not registered in public chain state.
+        let victim_keys = test_private_account_keys_2();
+        let victim_id = AccountId::for_regular_private_account(&victim_keys.npk(), 0);
+        let victim_balance = 5_000_u128;
+
+        let recipient_id = AccountId::new([42_u8; 32]);
+
+        // Victim has no public state entry; only recipient is registered at genesis.
+        let mut state = V03State::new_with_genesis_accounts(&[(recipient_id, 0)], vec![], 0);
+        state.insert_program(Program::malicious_injector());
+        state.insert_program(Program::malicious_launderer());
+
+        // Build attacker's private account and its local commitment tree.
+        let attacker_account = Account {
+            program_owner: Program::authenticated_transfer_program().id(),
+            balance: 100,
+            ..Account::default()
+        };
+        let attacker_commitment = Commitment::new(&attacker_id, &attacker_account);
+        let mut commitment_set = CommitmentSet::with_capacity(1);
+        commitment_set.extend(std::slice::from_ref(&attacker_commitment));
+        let membership_proof = commitment_set
+            .get_proof_for(&attacker_commitment)
+            .expect("attacker commitment must be in the set");
+
+        let attacker_pre = AccountWithMetadata::new(attacker_account, true, attacker_id);
+
+        // The attacker supplies the victim's account data directly — it cannot be read from
+        // public state. The injected balance and program_owner allow authenticated_transfer
+        // to succeed inside the circuit, which has no access to chain state and cannot detect
+        // that these values are fabricated.
+        let instruction: InjectorInstruction = (
+            Program::malicious_launderer().id(),
+            Program::authenticated_transfer_program().id(),
+            *victim_id.value(),
+            victim_balance,
+            0_u128,                                         // nonce
+            Program::authenticated_transfer_program().id(), // program_owner
+            *recipient_id.value(),
+            victim_balance,
+        );
+        let instruction_data = Program::serialize_instruction(instruction).unwrap();
+
+        let p2 = Program::malicious_launderer();
+        let at = Program::authenticated_transfer_program();
+        let program_with_deps = ProgramWithDependencies::new(
+            Program::malicious_injector(),
+            [(p2.id(), p2), (at.id(), at)].into(),
+        );
+
+        // account_identities order must match self.pre_states as built by the circuit:
+        //   [0] attacker  — first seen in P1's program_output.pre_states
+        //   [1] victim    — first seen in authenticated_transfer's program_output.pre_states
+        //   [2] recipient — first seen in authenticated_transfer's program_output.pre_states
+        //
+        // Victim is marked Public: the attacker has no nsk for the victim's private account,
+        // so PrivateAuthorizedUpdate is not an option.
+        let account_identities = vec![
+            InputAccountIdentity::PrivateAuthorizedUpdate {
+                ssk: attacker_ssk,
+                nsk: attacker_keys.nsk,
+                membership_proof,
+                identifier: 0,
+            },
+            InputAccountIdentity::Public, // victim — attacker lacks victim's nsk
+            InputAccountIdentity::Public, // recipient
+        ];
+
+        // execute_and_prove succeeds: authenticated_transfer runs against the injected
+        // victim(balance=5000, is_authorized=true) and produces valid inner receipts.
+        // The outer circuit commits victim(is_authorized=true) to public_pre_states.
+        let (circuit_output, proof) = execute_and_prove(
+            vec![attacker_pre],
+            instruction_data,
+            account_identities,
+            &program_with_deps,
+        )
+        .expect("execute_and_prove should succeed \u{2014} the programs execute correctly");
+
+        // public_account_ids lists the Public entries from account_identities, in order.
+        // The single ciphertext belongs to attacker's private account update.
+        let message = Message::try_from_circuit_output(
+            vec![victim_id, recipient_id],
+            vec![], // no public signers, no nonces
+            vec![(attacker_keys.npk(), attacker_keys.vpk(), attacker_epk)],
+            circuit_output,
+        )
+        .unwrap();
+
+        let witness_set = WitnessSet::for_message(&message, proof, &[]); // no signatures
+        let tx = PrivacyPreservingTransaction::new(message, witness_set);
+
+        let result = ValidatedStateDiff::from_privacy_preserving_transaction(&tx, &state, 1, 0);
+
+        assert!(
+            matches!(result, Err(NssaError::InvalidPrivacyPreservingProof)),
+            "attack on private victim should be rejected with InvalidPrivacyPreservingProof"
+        );
+        // Victim has no public balance to check; confirming the recipient received nothing
+        // is sufficient to show no funds moved.
+        assert_eq!(state.get_account_by_id(recipient_id).balance, 0);
+    }
+
+    /// Two malicious programs (injector + launderer) attempt to drain a victim's balance
+    /// without the victim signing anything. The test passes when the attack is rejected
+    /// and the victim's balance is left untouched.
     ///
     /// Attack flow:
     ///   Transaction (attacker signs) → P1 (`malicious_injector`)
-    ///     → injects `victim(is_authorized=true)` into chained call `pre_states` for P2
+    ///     → injects `victim(is_authorized=true)` into chained-call `pre_states` for P2
     ///   P2 (`malicious_launderer`)
-    ///     → outputs empty pre/post states (victim never checked against authorized set)
-    ///     → `authorized_accounts` for `authenticated_transfer` built from
-    /// `program_output.pre_states` = {victim}   `authenticated_transfer`
-    ///     → `victim.is_authorized=true` passes check ({victim}.contains(victim))
-    ///     → transfer executes.
+    ///     → outputs empty pre/post states, forwarding the forged flag to `authenticated_transfer`
+    ///     → if `authorized_accounts` were built from the injected `pre_states`,
+    ///       `{victim}.contains(victim)` would pass and the transfer would execute.
+    ///
+    /// The validator must reject this: `authorized_accounts` must be derived from the
+    /// parent program's own validated `program_output.pre_states`, not from the chained-call
+    /// input, so a forged `is_authorized=true` flag is never trusted.
     #[test]
     fn malicious_programs_cannot_drain_victim_without_signature() {
         // p2_id, auth_transfer_id, victim_id_raw, victim_balance, victim_nonce,
@@ -720,8 +893,13 @@ mod tests {
         let result = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0);
 
         assert!(
-            result.is_err(),
-            "attack transaction should be rejected by the fixed validator"
+            matches!(
+                result,
+                Err(NssaError::InvalidProgramBehavior(
+                    InvalidProgramBehaviorError::InvalidAccountAuthorization { account_id }
+                )) if account_id == victim_id
+            ),
+            "attack transaction should be rejected with InvalidAccountAuthorization for the victim"
         );
 
         // Confirm the victim's balance is untouched.
