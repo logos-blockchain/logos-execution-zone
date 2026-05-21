@@ -1,0 +1,29 @@
+[package]
+name = "cycle_bench"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+publish = false
+
+[lints]
+workspace = true
+
+[features]
+default = []
+prove = ["nssa/prove", "risc0-zkvm/prove"]
+ppe = ["prove"]
+
+[dependencies]
+nssa = { workspace = true }
+nssa_core = { workspace = true, features = ["host"] }
+clock_core.workspace = true
+token_core.workspace = true
+amm_core.workspace = true
+ata_core.workspace = true
+
+risc0-zkvm.workspace = true
+borsh.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+clap = { workspace = true }

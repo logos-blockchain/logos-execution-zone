@@ -40,7 +40,7 @@ fn main() {
         } => {
             let [sender, recipient_vault] = pre_states
                 .try_into()
-                .expect("Transfer requires exactly 3 accounts");
+                .expect("Transfer requires exactly 2 accounts");
 
             let seed = vault_core::compute_vault_seed(recipient_id);
 

@@ -1,0 +1,34 @@
+[package]
+name = "test_fixtures"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+common.workspace = true
+indexer_service.workspace = true
+key_protocol.workspace = true
+nssa.workspace = true
+nssa_core = { workspace = true, features = ["host"] }
+sequencer_core = { workspace = true, features = ["default", "testnet"] }
+sequencer_service.workspace = true
+sequencer_service_rpc = { workspace = true, features = ["client"] }
+vault_core.workspace = true
+wallet.workspace = true
+
+anyhow.workspace = true
+bytesize.workspace = true
+env_logger.workspace = true
+futures.workspace = true
+jsonrpsee = { workspace = true, features = ["ws-client"] }
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+testcontainers = { version = "0.27.3", features = ["docker-compose"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+url.workspace = true

@@ -42,6 +42,10 @@ members = [
   "testnet_initial_state",
   "indexer/ffi",
   "keycard_wallet",
+  "test_fixtures",
+  "tools/cycle_bench",
+  "tools/crypto_primitives_bench",
+  "tools/integration_bench",
 ]
 
 [workspace.dependencies]
@@ -75,6 +79,7 @@ vault_core = { path = "programs/vault/core" }
 test_program_methods = { path = "test_program_methods" }
 testnet_initial_state = { path = "testnet_initial_state" }
 keycard_wallet = { path = "keycard_wallet" }
+test_fixtures = { path = "test_fixtures" }
 
 tokio = { version = "1.50", features = [
   "net",
@@ -83,7 +88,7 @@ tokio = { version = "1.50", features = [
   "fs",
 ] }
 tokio-util = "0.7.18"
-risc0-zkvm = { version = "3.0.5", features = ['std'] }
+risc0-zkvm = { version = "3.0.5", default-features = false, features = ['std'] }
 risc0-build = "3.0.5"
 anyhow = "1.0.98"
 derive_more = "2.1.1"

@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{path::PathBuf, time::Duration};
 
 use anyhow::Result;
 use common::transaction::NSSATransaction;
@@ -398,44 +398,6 @@ async fn cannot_transfer_funds_from_system_faucet_account() -> Result<()> {
 }
 
 #[test]
-async fn can_transfer_funds_to_system_faucet_account() -> Result<()> {
-    let mut ctx = TestContext::new().await?;
-    let faucet_account_id = system_faucet_account_id();
-
-    let sender = ctx.existing_public_accounts()[0];
-    let sender_balance_before = ctx.sequencer_client().get_account_balance(sender).await?;
-    let faucet_balance_before = ctx
-        .sequencer_client()
-        .get_account_balance(faucet_account_id)
-        .await?;
-
-    let amount = 100_u128;
-    let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: public_mention(sender),
-        to: Some(public_mention(faucet_account_id)),
-        to_npk: None,
-        to_vpk: None,
-        to_identifier: Some(0),
-        amount,
-    });
-    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
-
-    info!("Waiting for next block creation");
-    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
-
-    let sender_balance_after = ctx.sequencer_client().get_account_balance(sender).await?;
-    let faucet_balance_after = ctx
-        .sequencer_client()
-        .get_account_balance(faucet_account_id)
-        .await?;
-
-    assert_eq!(sender_balance_after, sender_balance_before - amount);
-    assert_eq!(faucet_balance_after, faucet_balance_before + amount);
-
-    Ok(())
-}
-
-#[test]
 async fn cannot_execute_faucet_program() -> Result<()> {
     let ctx = TestContext::new().await?;
     let faucet_account_id = system_faucet_account_id();
@@ -488,6 +450,72 @@ async fn cannot_execute_faucet_program() -> Result<()> {
 
     assert_eq!(recipient_balance_after, recipient_balance_before);
     assert_eq!(faucet_balance_after, faucet_balance_before);
+    assert!(tx_on_chain.is_none());
+
+    Ok(())
+}
+
+#[test]
+async fn user_tx_that_chain_calls_faucet_is_dropped() -> Result<()> {
+    let ctx = TestContext::new().await?;
+
+    let binary = std::fs::read(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../artifacts/test_program_methods/faucet_chain_caller.bin"),
+    )?;
+    let faucet_chain_caller_id = Program::new(binary.clone())?.id();
+    let deploy_tx = NSSATransaction::ProgramDeployment(nssa::ProgramDeploymentTransaction::new(
+        nssa::program_deployment_transaction::Message::new(binary),
+    ));
+    ctx.sequencer_client().send_transaction(deploy_tx).await?;
+
+    info!("Waiting for deploy block creation");
+    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
+
+    let faucet_account_id = system_faucet_account_id();
+    let attacker = ctx.existing_public_accounts()[0];
+    let faucet_program_id = Program::faucet().id();
+    let vault_program_id = Program::vault().id();
+    let attacker_vault_id = vault_core::compute_vault_account_id(vault_program_id, attacker);
+    let amount: u128 = 1;
+
+    let message = public_transaction::Message::try_new(
+        faucet_chain_caller_id,
+        vec![faucet_account_id, attacker_vault_id],
+        vec![],
+        (faucet_program_id, vault_program_id, attacker, amount),
+    )?;
+    let attack_tx = NSSATransaction::Public(nssa::PublicTransaction::new(
+        message,
+        nssa::public_transaction::WitnessSet::from_raw_parts(vec![]),
+    ));
+
+    let faucet_balance_before = ctx
+        .sequencer_client()
+        .get_account_balance(faucet_account_id)
+        .await?;
+    let vault_balance_before = ctx
+        .sequencer_client()
+        .get_account_balance(attacker_vault_id)
+        .await?;
+
+    let tx_hash = ctx.sequencer_client().send_transaction(attack_tx).await?;
+
+    info!("Waiting for next block creation");
+    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
+
+    let faucet_balance_after = ctx
+        .sequencer_client()
+        .get_account_balance(faucet_account_id)
+        .await?;
+    let vault_balance_after = ctx
+        .sequencer_client()
+        .get_account_balance(attacker_vault_id)
+        .await?;
+    let tx_on_chain = ctx.sequencer_client().get_transaction(tx_hash).await?;
+
+    assert_eq!(faucet_balance_after, faucet_balance_before);
+    assert_eq!(vault_balance_after, vault_balance_before);
     assert!(tx_on_chain.is_none());
 
     Ok(())

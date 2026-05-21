@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, VecDeque, hash_map::Entry},
+    collections::{HashMap, HashSet, VecDeque, hash_map::Entry},
     convert::Infallible,
 };
 
@@ -49,6 +49,7 @@ pub struct ExecutionState {
     /// caller-seeds authorization paths to verify
     /// `AccountId::for_private_pda(program_id, seed, npk, identifier) == pre_state.account_id`.
     private_pda_npk_by_position: HashMap<usize, (NullifierPublicKey, Identifier)>,
+    authorized_accounts: HashSet<AccountId>,
 }
 
 impl ExecutionState {
@@ -107,6 +108,7 @@ impl ExecutionState {
             private_pda_bound_positions: HashMap::new(),
             pda_family_binding: HashMap::new(),
             private_pda_npk_by_position,
+            authorized_accounts: HashSet::new(),
         };
 
         let Some(first_output) = program_outputs.first() else {
@@ -246,10 +248,10 @@ impl ExecutionState {
         program_id: ProgramId,
         caller_program_id: Option<ProgramId>,
         caller_pda_seeds: &[PdaSeed],
-        pre_states: Vec<AccountWithMetadata>,
-        post_states: Vec<AccountPostState>,
+        output_pre_states: Vec<AccountWithMetadata>,
+        output_post_states: Vec<AccountPostState>,
     ) {
-        for (pre, mut post) in pre_states.into_iter().zip(post_states) {
+        for (pre, mut post) in output_pre_states.into_iter().zip(output_post_states) {
             let pre_account_id = pre.account_id;
             let pre_is_authorized = pre.is_authorized;
             let post_states_entry = self.post_states.entry(pre.account_id);
@@ -288,6 +290,7 @@ impl ExecutionState {
                         &mut self.pda_family_binding,
                         &mut self.private_pda_bound_positions,
                         &self.private_pda_npk_by_position,
+                        &mut self.authorized_accounts,
                         pre_account_id,
                         pre_state_position,
                         caller_program_id,
@@ -491,6 +494,7 @@ fn resolve_authorization_and_record_bindings(
     pda_family_binding: &mut HashMap<(ProgramId, PdaSeed), AccountId>,
     private_pda_bound_positions: &mut HashMap<usize, (ProgramId, PdaSeed)>,
     private_pda_npk_by_position: &HashMap<usize, (NullifierPublicKey, Identifier)>,
+    authorized_accounts: &mut HashSet<AccountId>,
     pre_account_id: AccountId,
     pre_state_position: usize,
     caller_program_id: Option<ProgramId>,
@@ -525,5 +529,13 @@ fn resolve_authorization_and_record_bindings(
         }
     }
 
-    previous_is_authorized || matched_caller_seed.is_some()
+    if authorized_accounts.contains(&pre_account_id) {
+        return true;
+    }
+
+    let authorized = previous_is_authorized || matched_caller_seed.is_some();
+    if authorized {
+        authorized_accounts.insert(pre_account_id);
+    }
+    authorized
 }
