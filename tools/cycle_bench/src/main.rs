@@ -9,15 +9,11 @@
 
 #![expect(
     clippy::arithmetic_side_effects,
-    clippy::as_conversions,
-    clippy::cast_precision_loss,
     clippy::float_arithmetic,
     clippy::missing_const_for_fn,
     clippy::non_ascii_literal,
-    clippy::print_literal,
     clippy::print_stderr,
     clippy::print_stdout,
-    clippy::ref_patterns,
     reason = "Bench tool: matches test-style fixture code"
 )]
 
@@ -31,6 +27,7 @@ use clock_core::{
     CLOCK_01_PROGRAM_ACCOUNT_ID, CLOCK_10_PROGRAM_ACCOUNT_ID, CLOCK_50_PROGRAM_ACCOUNT_ID,
     ClockAccountData,
 };
+use cycle_bench::{ppe, stats::Stats};
 use nssa::program_methods::{
     AMM_ELF, AMM_ID, ASSOCIATED_TOKEN_ACCOUNT_ELF, ASSOCIATED_TOKEN_ACCOUNT_ID,
     AUTHENTICATED_TRANSFER_ELF, AUTHENTICATED_TRANSFER_ID, CLOCK_ELF, CLOCK_ID, TOKEN_ELF,
@@ -43,11 +40,7 @@ use nssa_core::{
 };
 use risc0_zkvm::{ExecutorEnv, default_executor, default_prover};
 use serde::Serialize;
-use stats::Stats;
 use token_core::{TokenDefinition, TokenHolding};
-
-mod ppe;
-mod stats;
 
 #[derive(Parser, Debug)]
 #[command(about = "Per-program executor and (optionally) prover cycle measurements")]
@@ -61,16 +54,6 @@ struct Cli {
     /// with depth N=1,3,5,9. Requires --features ppe at build time. Very slow.
     #[arg(long)]
     ppe: bool,
-
-    /// After running --ppe-style proving once for auth_transfer-in-PPE, time
-    /// `receipt.verify(PRIVACY_PRESERVING_CIRCUIT_ID)` over many iterations.
-    /// Produces `G_verify` for the fee model. Requires --features ppe.
-    #[arg(long)]
-    verify: bool,
-
-    /// Iterations for --verify. Default matches the fee-model handoff target.
-    #[arg(long, default_value_t = 1000)]
-    verify_iters: usize,
 
     /// Iterations for executor wall-time sampling per case. First iter is
     /// discarded as warmup, remaining N feed the stats.
@@ -428,7 +411,7 @@ fn main() -> Result<()> {
             AUTHENTICATED_TRANSFER_ELF,
             AUTHENTICATED_TRANSFER_ID,
             authenticated_transfer_transfer(),
-            &5_000_u128,
+            &authenticated_transfer_core::Instruction::Transfer { amount: 5_000 },
         )?,
         Case::new(
             "authenticated_transfer",
@@ -436,7 +419,7 @@ fn main() -> Result<()> {
             AUTHENTICATED_TRANSFER_ELF,
             AUTHENTICATED_TRANSFER_ID,
             authenticated_transfer_init(),
-            &0_u128,
+            &authenticated_transfer_core::Instruction::Initialize,
         )?,
         Case::new(
             "token",
@@ -532,23 +515,6 @@ fn main() -> Result<()> {
         ppe::print_table(&ppe_results);
     }
 
-    #[cfg(feature = "ppe")]
-    let verify_result = if cli.verify {
-        Some(ppe::run_verify(cli.verify_iters)?)
-    } else {
-        None
-    };
-    #[cfg(not(feature = "ppe"))]
-    let verify_result: Option<ppe::VerifyBenchResult> = {
-        if cli.verify {
-            eprintln!("cycle_bench: --verify requires --features ppe at build time. Ignoring.");
-        }
-        None
-    };
-    if let Some(ref vr) = verify_result {
-        ppe::print_verify(vr);
-    }
-
     let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")
@@ -560,7 +526,6 @@ fn main() -> Result<()> {
     let combined = serde_json::json!({
         "standalone": results,
         "ppe": ppe_results,
-        "verify": verify_result,
     });
     std::fs::write(&out_path, serde_json::to_string_pretty(&combined)?)?;
     println!("\nJSON written to {}", out_path.display());

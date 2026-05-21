@@ -23,6 +23,12 @@ test:
     @echo "🧪 Running tests"
     RISC0_DEV_MODE=1 cargo nextest run --no-fail-fast
 
+# Run criterion benches: fast crypto primitives, then the slow PPE verify (real proving setup).
+bench:
+    @echo "📊 Running criterion benches"
+    cargo bench -p crypto_primitives_bench --bench primitives
+    cargo bench -p cycle_bench --features ppe --bench verify
+
 # Run Bedrock node in docker
 [working-directory: 'bedrock']
 run-bedrock:

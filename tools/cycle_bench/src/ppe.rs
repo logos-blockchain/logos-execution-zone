@@ -5,23 +5,22 @@
 //! that wraps the same program in the privacy circuit. Chained-call depth sweep
 //! uses the `chain_caller` test program (loaded from artifacts/) with N=1, 3, 5, 9.
 //!
-//! `run_verify` produces `G_verify` for the fee model: it generates one PPE
-//! receipt (`auth_transfer` Transfer in PPE) and times `Receipt::verify` over
-//! `iters` iterations. The proof bytes captured here are also the on-wire
-//! "outer proof" payload (`S_agg` in the fee model).
+//! `Receipt::verify(PRIVACY_PRESERVING_CIRCUIT_ID)` timings (the `G_verify` fee-model
+//! parameter) are measured by the `verify` criterion bench under `benches/verify.rs`,
+//! which reuses the `prove_auth_transfer_in_ppe` setup helper re-exported below.
 
 #![allow(
     dead_code,
     reason = "Stubs are used when the `ppe` feature is disabled."
 )]
 
-use anyhow::Result;
 use serde::Serialize;
-
-use crate::stats::Stats;
 
 #[cfg(feature = "ppe")]
 mod ppe_impl;
+
+#[cfg(feature = "ppe")]
+pub use ppe_impl::prove_auth_transfer_in_ppe;
 
 #[derive(Debug, Serialize, Clone)]
 pub struct PpeBenchResult {
@@ -33,20 +32,14 @@ pub struct PpeBenchResult {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Serialize, Clone)]
-pub struct VerifyBenchResult {
-    pub label: String,
-    pub stats: Stats,
-    pub proof_bytes: usize,
-    pub journal_bytes: usize,
-}
-
 #[cfg(not(feature = "ppe"))]
-pub fn run_all() -> Vec<PpeBenchResult> {
+#[must_use]
+pub const fn run_all() -> Vec<PpeBenchResult> {
     Vec::new()
 }
 
 #[cfg(feature = "ppe")]
+#[must_use]
 pub fn run_all() -> Vec<PpeBenchResult> {
     let mut results = Vec::new();
 
@@ -59,16 +52,6 @@ pub fn run_all() -> Vec<PpeBenchResult> {
     }
 
     results
-}
-
-#[cfg(not(feature = "ppe"))]
-pub fn run_verify(_iters: usize) -> Result<VerifyBenchResult> {
-    anyhow::bail!("--verify requires --features ppe at build time")
-}
-
-#[cfg(feature = "ppe")]
-pub fn run_verify(iters: usize) -> Result<VerifyBenchResult> {
-    ppe_impl::run_verify(iters)
 }
 
 pub fn print_table(results: &[PpeBenchResult]) {
@@ -108,15 +91,4 @@ pub fn print_table(results: &[PpeBenchResult]) {
             lw = lw,
         );
     }
-}
-
-pub fn print_verify(r: &VerifyBenchResult) {
-    println!("\nVerify (G_verify):");
-    println!("  case          : {}", r.label);
-    println!(
-        "  proof_bytes   : {} (borsh InnerReceipt, S_agg)",
-        r.proof_bytes
-    );
-    println!("  journal_bytes : {}", r.journal_bytes);
-    println!("  verify_ms     : {}", r.stats);
 }

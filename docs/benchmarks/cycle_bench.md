@@ -63,23 +63,24 @@ Same `auth_transfer Transfer` instruction, standalone vs wrapped in the privacy 
 
 Linear fit depth=1..9: ≈ 53 s per additional chained call, intercept ≈ 73 s. Composition tax (single program PPE − standalone): ≈ 48 s. `proof_bytes` is constant: the outer succinct proof has fixed size; the journal carried alongside it scales with public state and is reported separately by `--verify`.
 
-## Verifier (`--verify`)
+## Verifier (criterion bench)
 
-One PPE receipt generated once (auth_transfer Transfer in PPE), then `Receipt::verify(PRIVACY_PRESERVING_CIRCUIT_ID)` measured over 1000 iterations.
+One PPE receipt generated once (auth_transfer Transfer in PPE), then `Receipt::verify(PRIVACY_PRESERVING_CIRCUIT_ID)` measured under criterion's statistical sampler. Bench file: `tools/cycle_bench/benches/verify.rs`. Setup (one full PPE prove) is outside the timed `iter` loop.
 
-| Field | Value |
-|---|---|
-| case | auth_transfer Transfer in PPE |
-| proof_bytes (S_agg) | 223,551 |
-| journal_bytes | 412 |
-| verify_ms (best / mean ± stdev, n=1000) | 11.71 / 12.06 ± 1.99 |
+Numbers from the most recent local run on the machine listed above. Criterion sample_size = 100, measurement_time = 15 s, warm_up_time = 2 s. Slope-regression point estimate in the middle column; 95% CI bounds on either side. Run `cargo bench -p cycle_bench --features ppe --bench verify` to refresh.
+
+| Bench | low | point | high | outliers (mild + severe) |
+|---|---:|---:|---:|---:|
+| ppe/verify_auth_transfer | 12.016 ms | 12.215 ms | 12.469 ms | 1 + 10 |
+
+The corresponding `proof_bytes` (S_agg) for the bench receipt is captured by `--ppe` above; the verify bench itself only times the verify call.
 
 ## Findings
 
 - Proving cost scales with po2-bucketed `total_cycles`, not raw `user_cycles`. Trimming user_cycles only helps if it crosses a 2^N boundary.
 - Single-program PPE composition tax on M2 Pro CPU: ≈ 48 s (61.5 − 13.7).
 - Chained-call cost is linear at ≈ 53 s per call. A max-depth chain (10) would take ≈ 600 s standalone on this CPU.
-- `G_verify` is ≈ 12 ms and roughly constant per outer receipt (1000-iter stdev ≈ 2 ms). The succinct outer proof is fixed at 223,551 bytes (S_agg); verify is not on the latency critical path.
+- `G_verify` is ≈ 12 ms (criterion CI: 12.0–12.5 ms over 100 samples) and roughly constant per outer receipt. The succinct outer proof is fixed at 223,551 bytes (S_agg); verify is not on the latency critical path.
 
 ## Reproduce
 
@@ -87,10 +88,12 @@ One PPE receipt generated once (auth_transfer Transfer in PPE), then `Receipt::v
 cargo run --release -p cycle_bench
 cargo run --release -p cycle_bench --features prove -- --prove
 cargo run --release -p cycle_bench --features ppe -- --prove --ppe
-cargo run --release -p cycle_bench --features ppe -- --verify --verify-iters 1000
+
+# Verifier microbench via criterion:
+cargo bench -p cycle_bench --features ppe --bench verify
 ```
 
-JSON output: `target/cycle_bench.json`.
+JSON output: `target/cycle_bench.json` (bin), `target/criterion/ppe/verify_auth_transfer/` (verify bench).
 
 ## Caveats
 

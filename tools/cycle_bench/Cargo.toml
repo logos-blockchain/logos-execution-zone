@@ -16,6 +16,7 @@ ppe = ["prove"]
 [dependencies]
 nssa = { workspace = true }
 nssa_core = { workspace = true, features = ["host"] }
+authenticated_transfer_core.workspace = true
 clock_core.workspace = true
 token_core.workspace = true
 amm_core.workspace = true
@@ -27,3 +28,11 @@ serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
 clap = { workspace = true }
+
+[dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "verify"
+harness = false
+required-features = ["ppe"]

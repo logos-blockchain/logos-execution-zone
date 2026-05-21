@@ -14,15 +14,17 @@ Cryptographic primitives used by client/wallet code. Measures the per-call cost 
 
 ## Results
 
-100 timed iterations per operation, 2 warmup discarded.
+Criterion sample_size = 50, warm_up_time = 2 s, measurement_time = 10 s. Slope-regression point estimate in the middle column; 95% confidence interval bounds in the outer columns.
 
-| Operation | best (µs) | mean (µs) | stdev (µs) |
-|---|---:|---:|---:|
-| KeyChain::new_os_random | 2,979.62 (2.98 ms) | 3,138.18 (3.14 ms) | 258.59 (0.26 ms) |
-| KeyChain::new_mnemonic | 2,979.12 (2.98 ms) | 3,012.76 (3.01 ms) | 46.09 (0.05 ms) |
-| SharedSecretKey::new (sender DH) | 74.17 (0.07 ms) | 74.48 (0.07 ms) | 0.22 (<0.01 ms) |
-| EncryptionScheme::encrypt | 0.88 (<0.01 ms) | 0.92 (<0.01 ms) | 0.03 (<0.01 ms) |
-| EncryptionScheme::decrypt | 0.75 (<0.01 ms) | 0.78 (<0.01 ms) | 0.04 (<0.01 ms) |
+| Operation | low | point | high | outliers (mild + severe) |
+|---|---:|---:|---:|---:|
+| keychain/new_os_random | 3.11 ms | 3.21 ms | 3.34 ms | 3 + 5 |
+| keychain/new_mnemonic | 3.05 ms | 3.11 ms | 3.23 ms | 0 + 2 |
+| shared_secret_key/sender_dh | 76.7 µs | 78.4 µs | 80.6 µs | 3 + 4 |
+| encryption/encrypt | 1.11 µs | 1.17 µs | 1.25 µs | 1 + 5 |
+| encryption/decrypt | 907 ns | 928 ns | 954 ns | 0 + 3 |
+
+Numbers from a single M2 Pro dev box. For full estimates (slope, mean, median, MAD, std-dev) and the noise model, see `target/criterion/<group>/<bench>/estimates.json` after running locally.
 
 ## Findings
 
@@ -33,10 +35,21 @@ Cryptographic primitives used by client/wallet code. Measures the per-call cost 
 ## Reproduce
 
 ```sh
-cargo run --release -p crypto_primitives_bench
+cargo bench -p crypto_primitives_bench --bench primitives
 ```
 
-JSON output: `target/crypto_primitives_bench.json`.
+JSON estimates: `target/criterion/<group>/<bench>/estimates.json`. HTML report: `target/criterion/report/index.html`.
+
+## Baseline comparison
+
+```sh
+# On main:
+cargo bench -p crypto_primitives_bench --bench primitives -- --save-baseline main
+# On your branch:
+cargo bench -p crypto_primitives_bench --bench primitives -- --baseline main
+```
+
+Criterion reports per-bench change as a percentage with a 95% confidence interval; deltas within the CI are reported as "no significant change" rather than red.
 
 ## Caveats
 
