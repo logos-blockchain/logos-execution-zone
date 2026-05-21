@@ -7,8 +7,9 @@ use crate::account::{Account, AccountId};
 /// A commitment to all zero data.
 /// ```python
 /// from hashlib import sha256
+/// prefix = b"/LEE/v0.3/Commitment/\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
 /// hasher = sha256()
-/// hasher.update(bytes([0] * 32 + [0] * 32 + [0] * 16 + [0] * 16 + list(sha256().digest())))
+/// hasher.update(prefix + bytes([0] * 32 + [0] * 32 + [0] * 16 + [0] * 16 + list(sha256().digest())))
 /// DUMMY_COMMITMENT = hasher.digest()
 /// ```
 pub const DUMMY_COMMITMENT: Commitment = Commitment([
