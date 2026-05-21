@@ -326,12 +326,21 @@ impl TestContextBuilder {
 
         let initial_public_accounts = config::default_public_accounts_for_wallet();
         let initial_private_accounts = config::default_private_accounts_for_wallet();
+        // Wallet genesis must always be present so that setup_public/private_accounts_with_initial_supply
+        // can claim from the vault PDAs. When a test supplies custom genesis, merge rather than replace.
+        let wallet_genesis =
+            config::genesis_from_accounts(&initial_public_accounts, &initial_private_accounts);
+        let genesis = match genesis_transactions {
+            Some(mut custom) => {
+                custom.extend(wallet_genesis);
+                custom
+            }
+            None => wallet_genesis,
+        };
         let (sequencer_handle, temp_sequencer_dir) = setup_sequencer(
             sequencer_partial_config.unwrap_or_default(),
             bedrock_addr,
-            genesis_transactions.unwrap_or_else(|| {
-                config::genesis_from_accounts(&initial_public_accounts, &initial_private_accounts)
-            }),
+            genesis,
         )
         .await
         .context("Failed to setup Sequencer")?;
