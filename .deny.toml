@@ -16,7 +16,6 @@ ignore = [
   { id = "RUSTSEC-2026-0097", reason = "`rand` v0.8.5 is present transitively from logos crates, modification may break integration" },
   { id = "RUSTSEC-2026-0118", reason = "`hickory-proto` v0.25.0-alpha.5 is present transitively from logos crates, modification may break integration" },
   { id = "RUSTSEC-2026-0119", reason = "`hickory-proto` v0.25.0-alpha.5 is present transitively from logos crates, modification may break integration" },
-  { id = "RUSTSEC-2026-0145", reason = "`astral-tokio-tar` v0.6.1 is pulled transitively via testcontainers (integration_tests dev/test path); waiting on upstream fix" },
 ]
 yanked = "deny"
 unused-ignored-advisory = "deny"
