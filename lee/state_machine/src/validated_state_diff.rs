@@ -544,7 +544,6 @@ mod tests {
         use lee_core::{
             Commitment, InputAccountIdentity, SharedSecretKey,
             account::{Account, AccountWithMetadata},
-            encryption::EphemeralPublicKey,
         };
 
         use crate::{
@@ -571,9 +570,7 @@ mod tests {
         // Attacker controls a private account.
         let attacker_keys = test_private_account_keys_1();
         let attacker_id = AccountId::for_regular_private_account(&attacker_keys.npk(), 0);
-        let attacker_esk = [12_u8; 32];
-        let attacker_ssk = SharedSecretKey::new(attacker_esk, &attacker_keys.vpk());
-        let attacker_epk = EphemeralPublicKey::from_scalar(attacker_esk);
+        let (attacker_ssk, attacker_epk) = SharedSecretKey::encapsulate(&attacker_keys.vpk());
 
         let victim_id = AccountId::new([20_u8; 32]);
         let recipient_id = AccountId::new([42_u8; 32]);
@@ -695,7 +692,6 @@ mod tests {
         use lee_core::{
             Commitment, InputAccountIdentity, SharedSecretKey,
             account::{Account, AccountWithMetadata},
-            encryption::EphemeralPublicKey,
         };
 
         use crate::{
@@ -725,9 +721,7 @@ mod tests {
         // Attacker controls a private account.
         let attacker_keys = test_private_account_keys_1();
         let attacker_id = AccountId::for_regular_private_account(&attacker_keys.npk(), 0);
-        let attacker_esk = [12_u8; 32];
-        let attacker_ssk = SharedSecretKey::new(attacker_esk, &attacker_keys.vpk());
-        let attacker_epk = EphemeralPublicKey::from_scalar(attacker_esk);
+        let (attacker_ssk, attacker_epk) = SharedSecretKey::encapsulate(&attacker_keys.vpk());
 
         // Victim is a private account — not registered in public chain state.
         let victim_keys = test_private_account_keys_2();
