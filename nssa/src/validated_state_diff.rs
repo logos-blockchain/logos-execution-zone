@@ -356,7 +356,13 @@ impl ValidatedStateDiff {
 
         // Check there are no duplicate nullifiers in the new_nullifiers list
         ensure!(
-            n_unique(&message.new_nullifiers) == message.new_nullifiers.len(),
+            n_unique(
+                &message
+                    .new_nullifiers
+                    .iter()
+                    .map(|(n, _)| n)
+                    .collect::<Vec<_>>()
+            ) == message.new_nullifiers.len(),
             NssaError::InvalidInput("Duplicate nullifiers found in message".into())
         );
 
