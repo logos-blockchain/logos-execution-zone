@@ -3,18 +3,6 @@
 #
 # Forces a card power cycle before each keycard-backed wallet command to verify
 # commands survive mid-session power loss.
-#
-# On Linux: pcscd re-powers the card automatically on the next connection, so
-# commands will succeed without triggering the retry path. This tests resilience
-# to power cycles, not the retry wrapper itself.
-#
-# On Mac (affected driver): the card stays unpowered after force_unpower.py,
-# triggering TransportError. You should see "Retry succeeded after card reset."
-# in the output of each command, confirming the retry wrapper fires and recovers.
-#
-# Prerequisites:
-#   - Run wallet_with_keycard.sh first to set up the venv and dependencies.
-#   - Run `wallet keycard init` and `wallet keycard connect` before this script.
 
 source venv/bin/activate
 
