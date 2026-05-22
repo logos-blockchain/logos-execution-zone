@@ -631,6 +631,7 @@ After execution, the runtime processes each post-state's optional `claim`:
 
 Authorization for private PDAs in chained calls is established by the caller including the PDA seed in `pda_seeds`. In privacy-preserving transactions, the ZK proof additionally verifies that the address matches `AccountId::for_private_pda` using the NPK supplied for that pre-state.
 
+
 ### Validity windows
 
 Programs can constrain when their outputs are accepted by the sequencer:
@@ -816,6 +817,34 @@ The circuit takes as private inputs a `PrivacyPreservingCircuitInput`: the seque
    - Private init: verify pre-state is default; derive account_id; compute init nullifier; set nonce via `nonce_init`; encrypt post-state.
    - Private update: verify membership proof; compute update nullifier; increment nonce via `nonce_increment`; encrypt post-state.
 5. Emit `PrivacyPreservingCircuitOutput`.
+
+**Transaction-wide private PDA family binding.** The same `(program_id, seed)` pair can produce different program-derived account IDs for different `npk` and `identifier`. This creates a subtle authorization hazard: a caller that places seed `S` in `pda_seeds` intends to authorize exactly one account to the callee. Without an additional constraint, however, a callee could present two private PDA pre-states that both derive from `(caller_program_id, S)` and the single seed entry would authorize both.
+
+To close this, the circuit enforces the following rule across an entire transaction:
+
+> Each `(program_id, seed)` pair may resolve to **at most one** account ID for the duration of the transaction.
+
+The rule applies to both the `Claim::Pda(seed)` path and the `pda_seeds` authorization path. Every time either path resolves an account under a given `(program_id, seed)`, the resolved account ID is recorded. A later resolution of the same pair must agree with the recorded account ID, or the transaction is rejected.
+
+In pseudocode:
+
+```rust
+// Checked at every Claim::Pda(seed) and at every pda_seeds match, for both public and private PDAs.
+fn record_or_assert_pda_binding(
+    bindings: &mut Map<(ProgramId, Seed), AccountId>,
+    program_id: ProgramId,
+    seed: Seed,
+    resolved_account_id: AccountId,
+) {
+    match bindings.get((program_id, seed)) {
+        None => bindings.insert((program_id, seed), resolved_account_id),
+        Some(existing) => assert_eq!(
+            existing, resolved_account_id,
+            "two different accounts resolved under (program_id, seed) in one transaction",
+        ),
+    }
+}
+```
 
 ### Circuit input
 
