@@ -750,7 +750,7 @@ The message hash is `SHA256(PREFIX || borsh_serialize(message))`.
 
 ### Witness set
 
-A list of `(signature, public_key)` pairs. Each pair must produce a valid BIP-340 Schnorr signature over the message hash. The accounts derived from each `public_key` (via `AccountId::from(&public_key)`) form the *authorized signer set*. The program receives `is_authorized = true` for any pre-state account in this set (programs use the flag to decide whether to permit user-driven actions like transfers). Programs may also gain authorization for additional accounts via the PDA mechanism in chained calls. Authorization propagates down the call chain: any account that was `is_authorized` in a program's verified pre-states is passed as an authorized account to that program's chained calls, so PDAs authorized at hop N remain authorized at hop N+1 if the hop-N program includes them in its chained call's pre-states. Upon acceptance, each signing account's nonce is incremented by 1.
+A list of `(signature, public_key)` pairs. Each pair must produce a valid BIP-340 Schnorr signature over the message hash. The accounts derived from each `public_key` (via `AccountId::from(&public_key)`) form the *authorized signer set*. The program receives `is_authorized = true` for any pre-state account in this set (programs use the flag to decide whether to permit user-driven actions like transfers). Programs may also gain authorization for additional accounts via the PDA mechanism in chained calls. Authorization propagates down the call chain monotonically: the authorized set passed to each child call is the union of the parent's own authorized set and the parent's verified authorized pre-states, so an account authorized at any hop remains authorized for all subsequent calls even if an intermediate hop does not include it in its pre-states. Upon acceptance, each signing account's nonce is incremented by 1.
 
 ## Structure of a privacy-preserving transaction
 
@@ -1092,9 +1092,10 @@ fn validate_and_produce_public_state_diff(
             let expected_pre = state_diff.get(pre.account_id)
                 .unwrap_or(nssa_state.public_state.get(pre.account_id));
             assert_eq!(pre.account, expected_pre);
-            // Programs may under-report authorization (flag false on a truly-authorized account)
-            // but may never forge it (flag true on an unauthorized account).
-            assert!(!pre.is_authorized || is_authorized(pre.account_id));
+            // The is_authorized flag must exactly match the actual authorization status:
+            // programs cannot forge it (flag true on an unauthorized account) nor
+            // under-report it (flag false on a truly-authorized account).
+            assert_eq!(pre.is_authorized, is_authorized(pre.account_id));
         }
 
         // Verify the output identifies its own program ID and caller correctly.
@@ -1127,13 +1128,19 @@ fn validate_and_produce_public_state_diff(
             state_diff.insert(pre.account_id, post.account);
         }
 
-        // Build the authorized set for child calls from the verified pre-states of this call.
-        // Using program_output.pre_states (not call.pre_states) ensures the set is derived
-        // from already-validated data and cannot be forged by a caller-supplied input.
-        // This propagates both signer and PDA authorization down the call chain.
-        let authorized_accounts = program_output.pre_states
-            .filter(|pre| pre.is_authorized)
-            .map(|pre| pre.account_id);
+        // Build the authorized set for child calls: the union of the caller's authorized set
+        // and the verified authorized pre-states of this call. Using program_output.pre_states
+        // (not call.pre_states) ensures the new entries are derived from already-validated data
+        // and cannot be forged by a caller-supplied input. Authorization is monotonically
+        // growing — once an account is authorized at any point in the chain it remains
+        // authorized for all subsequent calls, even if an intermediate hop does not include
+        // it in its own pre-states.
+        let authorized_accounts = caller_data.authorized_accounts
+            .union(
+                program_output.pre_states
+                    .filter(|pre| pre.is_authorized)
+                    .map(|pre| pre.account_id)
+            );
 
         // Push chained calls (in declared order). Pushing them to the front of the queue
         // produces a depth-first traversal.

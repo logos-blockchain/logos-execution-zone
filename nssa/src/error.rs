@@ -96,6 +96,9 @@ pub enum InvalidProgramBehaviorError {
     #[error("Unauthorized account marked as authorized")]
     InvalidAccountAuthorization { account_id: AccountId },
 
+    #[error("Authorized account marked as not authorized")]
+    AuthorizedAccountMarkedAsNotAuthorized { account_id: AccountId },
+
     #[error("Program ID mismatch: expected {expected:?}, actual {actual:?}")]
     MismatchedProgramId {
         expected: ProgramId,

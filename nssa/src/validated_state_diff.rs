@@ -173,11 +173,17 @@ impl ValidatedStateDiff {
                 );
 
                 // Check that the program output pre_states marked as authorized are indeed
-                // authorized.
+                // authorized, and vice-versa.
                 let is_indeed_authorized = is_authorized(&account_id);
                 ensure!(
                     !pre.is_authorized || is_indeed_authorized,
                     InvalidProgramBehaviorError::InvalidAccountAuthorization { account_id }
+                );
+                ensure!(
+                    pre.is_authorized || !is_indeed_authorized,
+                    InvalidProgramBehaviorError::AuthorizedAccountMarkedAsNotAuthorized {
+                        account_id
+                    }
                 );
             }
 
@@ -269,11 +275,20 @@ impl ValidatedStateDiff {
             // the loop above already gates program_output's `is_authorized` via the
             // `!pre.is_authorized || is_indeed_authorized` check, while `chained_call.
             // pre_states` is caller-controlled and can be forged (audit-issue 91).
-            let authorized_accounts: HashSet<_> = program_output
-                .pre_states
-                .iter()
-                .filter(|pre| pre.is_authorized)
-                .map(|pre| pre.account_id)
+            //
+            // Union with the caller's authorized set so that authorization is monotonically
+            // growing: once an account is authorized at any point in the chain it remains
+            // authorized for all subsequent calls.
+            let authorized_accounts: HashSet<_> = caller_data
+                .authorized_accounts
+                .into_iter()
+                .chain(
+                    program_output
+                        .pre_states
+                        .iter()
+                        .filter(|pre| pre.is_authorized)
+                        .map(|pre| pre.account_id),
+                )
                 .collect();
             for new_call in program_output.chained_calls.into_iter().rev() {
                 chained_calls.push_front((
