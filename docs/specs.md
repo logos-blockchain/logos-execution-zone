@@ -811,7 +811,7 @@ The circuit takes as private inputs a `PrivacyPreservingCircuitInput`: the seque
 
 1. Verify that each `ProgramOutput` in the chain has a valid proof of execution for the corresponding program.
 2. Verify that `validate_execution` passes for each program call.
-3. Check that chained-call instruction data, accounts, and `is_authorized` flags are consistent across caller/callee boundaries, using the same `CallerData`-based authorization propagation as the public execution path: the initial `authorized_accounts` is the set of public accounts whose `is_authorized` flag is `true` in the top-level `public_pre_states` (i.e. the signers), and each hop propagates its authorized pre-states to child calls.
+3. Check that chained-call instruction data, accounts, and `is_authorized` flags are consistent across caller/callee boundaries, using the same `CallerData`-based authorization propagation as the public execution path: the initial `authorized_accounts` is the set of public accounts whose `is_authorized` flag is `true` in the top-level `public_pre_states` (i.e. the signers), and each hop propagates its authorized pre-states to child calls. The total number of calls must not exceed `MAX_NUMBER_CHAINED_CALLS` (same bound enforced in the public acceptance criteria).
 4. For each account:
    - Public: collect pre/post state; increment nonce if authorized.
    - Private init: verify pre-state is default; derive account_id; compute init nullifier; set nonce via `nonce_init`; encrypt post-state.
