@@ -618,9 +618,9 @@ impl AccountPostState {
 After execution, the runtime processes each post-state's optional `claim`:
 
 - `Claim::Authorized` — the standard claim path: sets `program_owner = executing_program_id` (when currently default) for all account kinds except self-owned PDAs. Whether `is_authorized` is required depends on the account kind:
-  - **Plain public accounts:** `is_authorized` must be `true`, set when the transaction signer included the account in the authorized set.
+  - **Public accounts:** `is_authorized` must be `true`, set when the transaction signer included the account in the authorized set.
   - **Public and private PDAs:** `is_authorized` must be `true`, set when the caller included the matching seed in `ChainedCall.pda_seeds`.
-  - **Standalone private accounts** (`Regular` kind): `is_authorized` is not enforced. For accounts the caller owns, possession of the `nsk` is already implicit proof of ownership.
+  - **Regular private accounts**: there's no extra enforcement for claiming. The circuit already imposes that `is_authorized` must be true for the `PrivateAuthorizedInit` and `PrivateAuthorizedUpdate` variants, and false for `PrivateUnauthorized`.
 - `Claim::Pda(seed)` — sets `program_owner = executing_program_id` (when currently default) by proving the account's ID is structurally derived from the executing program's own ID and the given seed, with no user authorization required. Unlike `Claim::Authorized`, the claim is not backed by a signature or nullifier key proof; instead, the program demonstrates ownership by construction: if the address was computed from `(self_program_id, seed)`, then no other program could have produced that same address. The derivation formula depends on the account kind: for public accounts it is `AccountId::for_public_pda(executing_program_id, seed)`; for private PDAs it is `AccountId::for_private_pda(executing_program_id, seed, npk, identifier)` using the npk supplied for that pre-state, making the claim user-specific. `Claim::Pda` is not applicable to standalone private accounts.
 
 ### Program-derived account IDs (PDAs)
@@ -811,7 +811,7 @@ The circuit takes as private inputs a `PrivacyPreservingCircuitInput`: the seque
 
 1. Verify that each `ProgramOutput` in the chain has a valid proof of execution for the corresponding program.
 2. Verify that `validate_execution` passes for each program call.
-3. Check that chained-call instruction data, accounts, and `is_authorized` flags are consistent across caller/callee boundaries, using the same `CallerData`-based authorization propagation as the public execution path: the initial `authorized_accounts` is the set of public accounts whose `is_authorized` flag is `true` in the top-level `public_pre_states` (i.e. the signers), and each hop propagates its authorized pre-states to child calls. The total number of calls must not exceed `MAX_NUMBER_CHAINED_CALLS` (same bound enforced in the public acceptance criteria).
+3. Check that chained-call instruction data, accounts, and `is_authorized` flags are consistent across caller/callee boundaries, using the same `CallerData`-based authorization propagation as the public execution path: the initial `authorized_accounts` is the set of public accounts whose `is_authorized` flag is `true` in the top-level `public_pre_states` (i.e. the signers), and each hop propagates its authorized pre-states to child calls. The total number of calls must not exceed `MAX_NUMBER_CHAINED_CALLS + 1` (same bound enforced in the public acceptance criteria).
 4. For each account:
    - Public: collect pre/post state; increment nonce if authorized.
    - Private init: verify pre-state is default; derive account_id; compute init nullifier; set nonce via `nonce_init`; encrypt post-state.
@@ -1030,7 +1030,7 @@ For a public transaction to be accepted and applied to the state:
 - **Pre-state consistency:** Each `program_output.pre_states[i]` must equal the current state of `pre_states[i].account_id` (or the diffed value from earlier chained calls). The `is_authorized` flag in each pre-state must match the actual authorization status.
 - **Program identity consistency:** Each program output's `self_program_id` must equal the program ID it was invoked under, and its `caller_program_id` must equal the caller (or `None` for the top-level call).
 - **Validity window enforcement:** For *each* `ProgramOutput` in the chain (top-level and chained calls), the current `block_id` must fall within `program_output.block_validity_window` and the current `timestamp` must fall within `program_output.timestamp_validity_window`. Out-of-window outputs are rejected.
-- **Maximum chained-call depth:** The total number of program executions (including the top-level call) must not exceed `MAX_NUMBER_CHAINED_CALLS` (10).
+- **Maximum chained-call depth:** The total number of chained call executions (not including the top-level call) must not exceed `MAX_NUMBER_CHAINED_CALLS`.
 - **Claiming:** Any `AccountPostState` with a `Claim` causes the runtime to set `program_owner = executing_program_id` for that account, but only if the account's current `program_owner == DEFAULT_PROGRAM_ID`. In the public path all accounts are public, so `Claim::Authorized` always requires `is_authorized == true` (signature, or PDA via caller's `pda_seeds`), and `Claim::Pda(seed)` requires the account ID to match `AccountId::for_public_pda(executing_program_id, seed)`. (The privacy path relaxes the `Claim::Authorized` precondition for standalone private accounts — see the Programs section.)
 - **No silent default-account modifications:** Any account whose pre-state has `program_owner == DEFAULT_PROGRAM_ID` and whose post-state differs from the pre-state must have been claimed (i.e. its post-state `program_owner` is no longer the default).
 
