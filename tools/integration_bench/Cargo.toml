@@ -1,0 +1,25 @@
+[package]
+name = "integration_bench"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+common.workspace = true
+indexer_service_rpc = { workspace = true, features = ["client"] }
+nssa.workspace = true
+sequencer_service_rpc = { workspace = true, features = ["client"] }
+test_fixtures.workspace = true
+wallet.workspace = true
+
+anyhow.workspace = true
+borsh.workspace = true
+clap.workspace = true
+jsonrpsee = { workspace = true, features = ["ws-client"] }
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

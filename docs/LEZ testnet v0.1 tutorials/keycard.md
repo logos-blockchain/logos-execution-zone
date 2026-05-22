@@ -27,7 +27,7 @@ Installation:
     - **Important:** keycard can only connect with one application at a time; if Keycard-Desktop is using keycard then Wallet CLI cannot access the same keycard, and vice-versa.
 
 ## Wallet with Keycard
-Keycard functionality is available to Wallet CLI by setting up the following Python virtual environment:
+Keycard functionality is available to Wallet CLI by setting up the following Python virtual environment. The steps below can also be run via `keycard_wallet/wallet_with_keycard.sh`.
 
 ```bash
 # Install appropriate version of `keycard-py`.
@@ -469,4 +469,28 @@ wallet ata burn \
 Keycard PIN:
 Transaction hash is l4o6n9j1038m7i56kn2i175m4njj36o1ip9345930mn61loo95j3o8jm5k0o8o22
 Transaction data is ...
+```
+
+## Testing
+
+Tests for Keycard commands are in `keycard_wallet/tests/keycard_tests.sh`. Run from the repo root with a Keycard connected:
+
+```bash
+bash keycard_wallet/tests/keycard_tests.sh
+```
+
+## SigningGroups
+
+`SigningGroups` (`wallet/src/signing.rs`) partitions a transaction's signers into two buckets — local accounts and Keycard accounts. This ensures that Python GIL is only used at most once per transaction, regardless of how many Keycard accounts are involved.
+
+Local signers are resolved and signed in pure Rust. Keycard signers store only their BIP32 key path; all of them are signed inside a single Python session (`connect` / `close_session`) when `sign_all` is called. The command calls `needs_pin` to decide whether to prompt for a PIN before signing.
+
+Foreign recipient accounts — those with no local key and no Keycard path — are silently skipped and require neither a signature nor a nonce.
+
+```
+SigningGroups {
+    local:   [(AccountId, PrivateKey)],   // signed in pure Rust
+    keycard: [(AccountId, BIP32Path)],    // signed via a single Python/Keycard session
+}
+```
 ```

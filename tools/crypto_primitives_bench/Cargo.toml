@@ -1,0 +1,19 @@
+[package]
+name = "crypto_primitives_bench"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+publish = false
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+key_protocol.workspace = true
+nssa_core = { workspace = true, features = ["host"] }
+rand = { workspace = true }
+criterion.workspace = true
+
+[[bench]]
+name = "primitives"
+harness = false
