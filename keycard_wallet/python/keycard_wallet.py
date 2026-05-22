@@ -7,7 +7,6 @@ from keycard.commands.export_lee_key import export_lee_key
 from mnemonic import Mnemonic
 from keycard import constants
 
-import keycard
 import os
 import secrets
 

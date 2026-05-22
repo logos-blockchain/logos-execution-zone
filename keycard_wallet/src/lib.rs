@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 
 use nssa::{AccountId, PublicKey, Signature};
-use nssa_core::NullifierPublicKey;
 use pyo3::{prelude::*, types::PyAny};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
@@ -268,15 +267,6 @@ impl KeycardWallet {
         })
     }
 
-    pub fn get_private_account_id_for_path_with_connect(
-        pin: &str,
-        key_path: &str,
-    ) -> PyResult<String> {
-        let (nsk, _vsk) = Self::get_private_keys_for_path_with_connect(pin, key_path)?;
-        let npk = NullifierPublicKey::from(&*nsk);
-
-        Ok(format!("Private/{}", AccountId::from((&npk, 0_u128))))
-    }
 }
 
 fn pairing_file_path() -> Option<PathBuf> {
