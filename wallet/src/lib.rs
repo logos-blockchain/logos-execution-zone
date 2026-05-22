@@ -40,7 +40,7 @@ use crate::{
     cli::CliAccountMention,
     config::WalletConfigOverrides,
     poller::TxPoller,
-    signing::SigningGroups,
+    signing::SigningGroup,
     storage::key_chain::SharedAccountEntry,
 };
 
@@ -89,7 +89,7 @@ pub enum ExecutionFailureKind {
 }
 
 impl ExecutionFailureKind {
-    /// Convert an [`anyhow::Error`] (e.g. from [`SigningGroups`]) into a keycard error.
+    /// Convert an [`anyhow::Error`] (e.g. from [`SigningGroup`]) into a keycard error.
     #[must_use]
     #[expect(
         clippy::needless_pass_by_value,
@@ -565,13 +565,13 @@ impl WalletCore {
     }
 
     /// Send a public transaction, fetching nonces automatically from
-    /// [`SigningGroups::signing_ids`].
+    /// [`SigningGroup::signing_ids`].
     pub async fn send_public_tx<T: serde::Serialize>(
         &self,
         program: &Program,
         account_ids: Vec<AccountId>,
         instruction: T,
-        groups: SigningGroups,
+        groups: SigningGroup,
     ) -> Result<HashType, ExecutionFailureKind> {
         let nonces = self
             .get_accounts_nonces(groups.signing_ids())
@@ -591,7 +591,7 @@ impl WalletCore {
         account_ids: Vec<AccountId>,
         nonces: Vec<Nonce>,
         instruction: T,
-        groups: SigningGroups,
+        groups: SigningGroup,
     ) -> Result<HashType, ExecutionFailureKind> {
         let message = nssa::public_transaction::Message::try_new(
             program.id(),
@@ -661,14 +661,14 @@ impl WalletCore {
                     KeycardWallet::get_public_account_id_for_path_with_connect(&pin, key_path_str)?;
                 let account_id: AccountId = match account_id_str
                     .parse::<AccountIdWithPrivacy>()
-                    .expect("Valid parsing of account id")
+                    .expect("`wallet::lib::send_privacy_preserving_tx_with_pre_check`: invalid account id parsed")
                 {
                     AccountIdWithPrivacy::Public(id) | AccountIdWithPrivacy::Private(id) => id,
                 };
                 let account = self
                     .get_account_public(account_id)
                     .await
-                    .expect("Expect valid account");
+                    .expect("`wallet::lib::send_privacy_preserving_tx_with_pre_check`: unable to retrieve public account");
                 let pin_str = pin.as_str().to_owned();
                 (
                     Some(AccountWithMetadata {

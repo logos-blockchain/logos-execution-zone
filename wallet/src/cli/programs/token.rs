@@ -199,7 +199,7 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                             TokenProgramSubcommand::Public(
                                 TokenProgramSubcommandPublic::TransferToken {
                                     sender_account_id: from_mention,
-                                    recipient_account_id: to_mention.expect("matched Some branch"),
+                                    recipient_account_id: to_mention.expect("`wallet::cli::programs::token::Send`: Invalid to_mention account provided"),
                                     balance_to_move: amount,
                                 },
                             )
@@ -318,7 +318,7 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                 amount,
             } => {
                 let def_mention = definition.clone();
-                let hol_mention = holder.clone();
+                let holder_mention = holder.clone();
                 let definition = definition.resolve(wallet_core.storage())?;
                 let holder = holder
                     .map(|account_mention| account_mention.resolve(wallet_core.storage()))
@@ -342,7 +342,7 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                             TokenProgramSubcommand::Public(
                                 TokenProgramSubcommandPublic::MintToken {
                                     definition_account_id: def_mention,
-                                    holder_account_id: hol_mention.expect("matched Some branch"),
+                                    holder_account_id: holder_mention.expect("`wallet::cli::programs::token::Mint`: Invalid holder_mention account provided"),
                                     amount,
                                 },
                             )

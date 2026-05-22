@@ -10,12 +10,12 @@ use crate::{WalletCore, cli::CliAccountMention};
 /// Local signers are signed in pure Rust; all keycard signers share a single Python session
 /// with one `connect` / `close_session` pair.
 #[derive(Default)]
-pub struct SigningGroups {
+pub struct SigningGroup {
     local: Vec<(AccountId, PrivateKey)>,
     keycard: Vec<(AccountId, String)>,
 }
 
-impl SigningGroups {
+impl SigningGroup {
     #[must_use]
     pub fn new() -> Self {
         Self::default()

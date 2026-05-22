@@ -12,3 +12,6 @@ result
 wallet-ffi/wallet_ffi.h
 bedrock_signing_key
 integration_tests/configs/debug/
+venv/
+keycard_wallet/python/__pycache__/
+keycard_wallet/python/keycard-py/

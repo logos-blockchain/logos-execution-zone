@@ -56,10 +56,10 @@ impl KeycardWallet {
             .extract()
     }
 
-    pub fn get_pairing_data(&self, py: Python<'_>) -> PyResult<(u8, Vec<u8>)> {
+    pub fn pair(&self, py: Python<'_>, pin: &str) -> PyResult<(u8, Vec<u8>)> {
         self.instance
             .bind(py)
-            .call_method0("get_pairing_data")?
+            .call_method1("pair", (pin,))?
             .extract()
     }
 
@@ -96,18 +96,9 @@ impl KeycardWallet {
         {
             return Ok(());
         }
-        self.setup_communication(py, pin)?;
-        if let Ok((index, key)) = self.get_pairing_data(py) {
-            save_pairing(&KeycardPairingData { index, key });
-        }
+        let (index, key) = self.pair(py, pin)?;
+        save_pairing(&KeycardPairingData { index, key });
         Ok(())
-    }
-
-    pub fn setup_communication(&self, py: Python<'_>, pin: &str) -> PyResult<bool> {
-        self.instance
-            .bind(py)
-            .call_method1("setup_communication", (pin,))?
-            .extract()
     }
 
     pub fn disconnect(&self, py: Python) -> PyResult<bool> {
@@ -269,19 +260,9 @@ impl KeycardWallet {
     ) -> PyResult<PrivateKeyPair> {
         Python::with_gil(|py| {
             python_path::add_python_path(py)?;
-
             let wallet = Self::new(py)?;
-
-            let is_connected = wallet.setup_communication(py, pin)?;
-
-            if is_connected {
-                log::info!("\u{2705} Keycard is now connected to wallet.");
-            } else {
-                log::info!("\u{274c} Keycard is not connected to wallet.");
-            }
-
+            wallet.connect(py, pin)?;
             let result = wallet.get_private_keys_for_path(py, path);
-
             drop(wallet.disconnect(py));
             result
         })

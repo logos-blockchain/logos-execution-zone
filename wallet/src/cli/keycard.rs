@@ -40,7 +40,7 @@ impl WalletSubcommand for KeycardSubcommand {
         match self {
             Self::Available => {
                 Python::with_gil(|py| {
-                    python_path::add_python_path(py).expect("keycard_wallet.py not found");
+                    python_path::add_python_path(py).expect("`wallet::keycard::available`: unable to setup python path");
 
                     let wallet = KeycardWallet::new(py)
                         .expect("`wallet::keycard::available`: invalid data received for pin");
@@ -61,7 +61,7 @@ impl WalletSubcommand for KeycardSubcommand {
                 let pin = read_pin()?;
 
                 Python::with_gil(|py| {
-                    python_path::add_python_path(py).expect("keycard_wallet.py not found");
+                    python_path::add_python_path(py).expect("`wallet::keycard::connect`: unable to setup python path");
 
                     let wallet = KeycardWallet::new(py)
                         .expect("`wallet::keycard::connect`: invalid keycard wallet provided");
@@ -80,7 +80,7 @@ impl WalletSubcommand for KeycardSubcommand {
                 let pin = read_pin()?;
 
                 Python::with_gil(|py| {
-                    python_path::add_python_path(py).expect("keycard_wallet.py not found");
+                    python_path::add_python_path(py).expect("`wallet::keycard::disconnect`: unable to setup python path");
 
                     let wallet = KeycardWallet::new(py)
                         .expect("`wallet::keycard::disconnect`: invalid keycard wallet provided");
@@ -103,7 +103,7 @@ impl WalletSubcommand for KeycardSubcommand {
                 let pin = read_pin()?;
 
                 Python::with_gil(|py| {
-                    python_path::add_python_path(py).expect("keycard_wallet.py not found");
+                    python_path::add_python_path(py).expect("`wallet::keycard::init`: unable to setup python path");
 
                     let wallet = KeycardWallet::new(py)
                         .expect("`wallet::keycard::init`: invalid keycard wallet provided");
@@ -125,7 +125,7 @@ impl WalletSubcommand for KeycardSubcommand {
                 let mnemonic = read_mnemonic()?;
 
                 Python::with_gil(|py| {
-                    python_path::add_python_path(py).expect("keycard_wallet.py not found");
+                    python_path::add_python_path(py).expect("`wallet::keycard::load`: unable to setup python path");
 
                     let wallet = KeycardWallet::new(py)
                         .expect("`wallet::keycard::load`: invalid keycard wallet provided");

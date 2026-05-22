@@ -60,6 +60,29 @@ Unset it when done:
 unset KEYCARD_PIN
 ```
 
+## Pairing password
+
+The pairing password is used to establish a secure channel between the wallet and the card. It is set permanently on the card during `wallet keycard init` and must match on every subsequent re-pair.
+
+The default password (`KeycardDefaultPairing`) is [recommended](https://docs.keycard.tech/en/developers/core) for most users. Wallet CLI allows advance users the flexibility to set their own pairing password.
+
+To use a custom pairing password, set it before `init`:
+
+```bash
+export KEYCARD_PAIRING_PASSWORD=my-custom-password
+wallet keycard init
+```
+
+After a successful initializaation, subsequent commands (`connect`, transfers) use the cached pairing index and key — the pairing password is not needed again until the pairing is cleared.
+
+**Important:** if you initialized with a custom password, `KEYCARD_PAIRING_PASSWORD` must be set in every session where re-pairing can occur (after `disconnect`, or on a new machine). If the env var is missing then wallet CLI will attempt to use the default password. As a result, pairing will fail.
+
+Unset the pairing password variable when done:
+
+```bash
+unset KEYCARD_PAIRING_PASSWORD
+```
+
 ## Keycard Commands
 
 ### Keycard
@@ -473,22 +496,34 @@ Transaction data is ...
 
 ## Testing
 
-Tests for Keycard commands are in `keycard_wallet/tests/keycard_tests.sh`. Run from the repo root with a Keycard connected:
+Tests for Keycard commands are in `keycard_wallet/tests/`.
+
+| Test file | Description |
+|---|---|
+| `keycard_tests.sh` | Core Keycard wallet commands and `auth-transfer` commands |
+| `keycard_tests_2.sh` | Tests Keycard wallet commands for `amma`, `token` and `ata` programs |
+| `keycard_test_3.sh` |  Demonstrates retrieving private account keys from keycard |
+| `keycard_power_recovery_tests.sh` | Modified test file of `keycard_tests.sh` to test power recovery paths |
+
+Run from the repo root with a Keycard connected:
 
 ```bash
 bash keycard_wallet/tests/keycard_tests.sh
+bash keycard_wallet/tests/keycard_tests_2.sh
+bash keycard_wallet/tests/keycard_test_3.sh
+bash keycard_wallet/tests/keycard_power_recovery_tests.sh
 ```
 
-## SigningGroups
+## SigningGroup
 
-`SigningGroups` (`wallet/src/signing.rs`) partitions a transaction's signers into two buckets — local accounts and Keycard accounts. This ensures that Python GIL is only used at most once per transaction, regardless of how many Keycard accounts are involved.
+`SigningGroup` (`wallet/src/signing.rs`) partitions a transaction's signers into two buckets — local accounts and Keycard accounts. This ensures that Python GIL is only used at most once per transaction, regardless of how many Keycard accounts are involved.
 
 Local signers are resolved and signed in pure Rust. Keycard signers store only their BIP32 key path; all of them are signed inside a single Python session (`connect` / `close_session`) when `sign_all` is called. The command calls `needs_pin` to decide whether to prompt for a PIN before signing.
 
 Foreign recipient accounts — those with no local key and no Keycard path — are silently skipped and require neither a signature nor a nonce.
 
 ```
-SigningGroups {
+SigningGroup {
     local:   [(AccountId, PrivateKey)],   // signed in pure Rust
     keycard: [(AccountId, BIP32Path)],    // signed via a single Python/Keycard session
 }

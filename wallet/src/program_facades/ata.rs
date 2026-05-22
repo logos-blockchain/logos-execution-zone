@@ -9,7 +9,7 @@ use nssa_core::SharedSecretKey;
 
 use crate::{
     ExecutionFailureKind, PrivacyPreservingAccount, WalletCore, cli::CliAccountMention,
-    signing::SigningGroups,
+    signing::SigningGroup,
 };
 
 pub struct Ata<'wallet>(pub &'wallet WalletCore);
@@ -31,7 +31,7 @@ impl Ata<'_> {
         let account_ids = vec![owner_id, definition_id, ata_id];
         let instruction = ata_core::Instruction::Create { ata_program_id };
 
-        let mut groups = SigningGroups::new();
+        let mut groups = SigningGroup::new();
         groups
             .add_required(owner_mention, owner_id, self.0)
             .map_err(ExecutionFailureKind::from_anyhow)?;
@@ -61,7 +61,7 @@ impl Ata<'_> {
             amount,
         };
 
-        let mut groups = SigningGroups::new();
+        let mut groups = SigningGroup::new();
         groups
             .add_required(owner_mention, owner_id, self.0)
             .map_err(ExecutionFailureKind::from_anyhow)?;
@@ -90,7 +90,7 @@ impl Ata<'_> {
             amount,
         };
 
-        let mut groups = SigningGroups::new();
+        let mut groups = SigningGroup::new();
         groups
             .add_required(owner_mention, owner_id, self.0)
             .map_err(ExecutionFailureKind::from_anyhow)?;

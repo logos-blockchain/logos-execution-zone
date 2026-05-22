@@ -5,7 +5,7 @@ use token_core::Instruction;
 
 use crate::{
     ExecutionFailureKind, PrivacyPreservingAccount, WalletCore, cli::CliAccountMention,
-    signing::SigningGroups,
+    signing::SigningGroup,
 };
 
 pub struct Token<'wallet>(pub &'wallet WalletCore);
@@ -23,7 +23,7 @@ impl Token<'_> {
         let account_ids = vec![definition_account_id, supply_account_id];
         let instruction = Instruction::NewFungibleDefinition { name, total_supply };
 
-        let mut groups = SigningGroups::new();
+        let mut groups = SigningGroup::new();
         groups
             .add_required(definition_mention, definition_account_id, self.0)
             .and_then(|()| groups.add_required(supply_mention, supply_account_id, self.0))
@@ -147,7 +147,7 @@ impl Token<'_> {
             amount_to_transfer: amount,
         };
 
-        let mut groups = SigningGroups::new();
+        let mut groups = SigningGroup::new();
         groups
             .add_required(sender_mention, sender_account_id, self.0)
             .and_then(|()| groups.add_optional(recipient_mention, recipient_account_id, self.0))
@@ -350,7 +350,7 @@ impl Token<'_> {
             amount_to_burn: amount,
         };
 
-        let mut groups = SigningGroups::new();
+        let mut groups = SigningGroup::new();
         groups
             .add_required(holder_mention, holder_account_id, self.0)
             .map_err(ExecutionFailureKind::from_anyhow)?;
@@ -476,7 +476,7 @@ impl Token<'_> {
             amount_to_mint: amount,
         };
 
-        let mut groups = SigningGroups::new();
+        let mut groups = SigningGroup::new();
         groups
             .add_required(definition_mention, definition_account_id, self.0)
             .and_then(|()| groups.add_optional(holder_mention, holder_account_id, self.0))

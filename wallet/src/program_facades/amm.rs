@@ -3,7 +3,7 @@ use common::HashType;
 use nssa::{AccountId, program::Program};
 use token_core::TokenHolding;
 
-use crate::{ExecutionFailureKind, WalletCore, cli::CliAccountMention, signing::SigningGroups};
+use crate::{ExecutionFailureKind, WalletCore, cli::CliAccountMention, signing::SigningGroup};
 pub struct Amm<'wallet>(pub &'wallet WalletCore);
 
 impl Amm<'_> {
@@ -61,7 +61,7 @@ impl Amm<'_> {
             user_holding_lp,
         ];
 
-        let mut groups = SigningGroups::new();
+        let mut groups = SigningGroup::new();
         groups
             .add_required(a_mention, user_holding_a, self.0)
             .and_then(|()| groups.add_required(b_mention, user_holding_b, self.0))
@@ -133,7 +133,7 @@ impl Amm<'_> {
             ));
         };
 
-        let mut groups = SigningGroups::new();
+        let mut groups = SigningGroup::new();
         groups
             .add_required(seller_mention, account_id_auth, self.0)
             .map_err(ExecutionFailureKind::from_anyhow)?;
@@ -202,7 +202,7 @@ impl Amm<'_> {
             ));
         };
 
-        let mut groups = SigningGroups::new();
+        let mut groups = SigningGroup::new();
         groups
             .add_required(seller_mention, account_id_auth, self.0)
             .map_err(ExecutionFailureKind::from_anyhow)?;
@@ -266,7 +266,7 @@ impl Amm<'_> {
             user_holding_lp,
         ];
 
-        let mut groups = SigningGroups::new();
+        let mut groups = SigningGroup::new();
         groups
             .add_required(a_mention, user_holding_a, self.0)
             .and_then(|()| groups.add_required(b_mention, user_holding_b, self.0))
@@ -331,7 +331,7 @@ impl Amm<'_> {
             user_holding_lp,
         ];
 
-        let mut groups = SigningGroups::new();
+        let mut groups = SigningGroup::new();
         groups
             .add_required(lp_mention, user_holding_lp, self.0)
             .map_err(ExecutionFailureKind::from_anyhow)?;
