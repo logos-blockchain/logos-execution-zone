@@ -266,7 +266,6 @@ impl KeycardWallet {
             result
         })
     }
-
 }
 
 fn pairing_file_path() -> Option<PathBuf> {

@@ -649,39 +649,40 @@ impl WalletCore {
 
         let mut pre_states = acc_manager.pre_states();
 
-        let (keycard_account, keycard_pin, keycard_path) =
-            if let Some(key_path_str) = mention.and_then(CliAccountMention::key_path) {
-                let pin = crate::helperfunctions::read_pin().map_err(|e| {
-                    ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<
-                        pyo3::exceptions::PyRuntimeError,
-                        _,
-                    >(e.to_string()))
-                })?;
-                let account_id_str =
-                    KeycardWallet::get_public_account_id_for_path_with_connect(&pin, key_path_str)?;
-                let account_id: AccountId = match account_id_str
+        let (keycard_account, keycard_pin, keycard_path) = if let Some(key_path_str) =
+            mention.and_then(CliAccountMention::key_path)
+        {
+            let pin = crate::helperfunctions::read_pin().map_err(|e| {
+                ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<
+                    pyo3::exceptions::PyRuntimeError,
+                    _,
+                >(e.to_string()))
+            })?;
+            let account_id_str =
+                KeycardWallet::get_public_account_id_for_path_with_connect(&pin, key_path_str)?;
+            let account_id: AccountId = match account_id_str
                     .parse::<AccountIdWithPrivacy>()
                     .expect("`wallet::lib::send_privacy_preserving_tx_with_pre_check`: invalid account id parsed")
                 {
                     AccountIdWithPrivacy::Public(id) | AccountIdWithPrivacy::Private(id) => id,
                 };
-                let account = self
+            let account = self
                     .get_account_public(account_id)
                     .await
                     .expect("`wallet::lib::send_privacy_preserving_tx_with_pre_check`: unable to retrieve public account");
-                let pin_str = pin.as_str().to_owned();
-                (
-                    Some(AccountWithMetadata {
-                        account,
-                        is_authorized: true,
-                        account_id,
-                    }),
-                    Some(pin_str),
-                    Some(key_path_str.to_owned()),
-                )
-            } else {
-                (None, None, None)
-            };
+            let pin_str = pin.as_str().to_owned();
+            (
+                Some(AccountWithMetadata {
+                    account,
+                    is_authorized: true,
+                    account_id,
+                }),
+                Some(pin_str),
+                Some(key_path_str.to_owned()),
+            )
+        } else {
+            (None, None, None)
+        };
 
         let mut nonces: Vec<Nonce> = acc_manager.public_account_nonces().into_iter().collect();
 
