@@ -6,7 +6,7 @@ This document describes the guidelines for contributing to the project. We will 
 
 If you have any questions, come say hi to our [Discord](https://discord.gg/tGJwgGrSPN)!
 
-## Commit and PR title format
+## Commit title format
 
 We use [Conventional Commits](https://www.conventionalcommits.org/).
 
@@ -33,11 +33,22 @@ Examples:
 
 Breaking changes:
 - Mark with `!` in the title.
-- Optionally add a `BREAKING CHANGE:` footer in the PR body with migration notes.
 
 `CHANGELOG.md` is generated from these markers on every `v*` tag via `git-cliff`, and GitHub Releases are created from the same content.
 
-Before merging PR consider squashing non-meaningful commits. E.g.:
+## Pull requests
+
+PR titles should follow the same Conventional Commits format:
+- `type(scope): description`
+- `type(scope)!: description` for breaking changes
+
+Before marking a PR as ready for review:
+- Fill out the PR template.
+
+Breaking changes in PRs:
+- Optionally add a `BREAKING CHANGE:` footer in the PR body with migration notes.
+
+Before merging a PR, consider squashing non-meaningful commits. E.g.:
 
 ```
 - refactor(wallet): move user keys to a separate module

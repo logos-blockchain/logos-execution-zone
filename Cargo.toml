@@ -88,7 +88,7 @@ tokio = { version = "1.50", features = [
   "fs",
 ] }
 tokio-util = "0.7.18"
-risc0-zkvm = { version = "3.0.5", features = ['std'] }
+risc0-zkvm = { version = "3.0.5", default-features = false, features = ['std'] }
 risc0-build = "3.0.5"
 anyhow = "1.0.98"
 derive_more = "2.1.1"
