@@ -3,7 +3,7 @@ use nssa::AccountId;
 use nssa_core::{Identifier, NullifierPublicKey, SharedSecretKey, encryption::ViewingPublicKey};
 
 use super::{NativeTokenTransfer, auth_transfer_preparation};
-use crate::{AccountIdentity, ExecutionFailureKind};
+use crate::{AccountIdentity, ExecutionFailureKind, cli::CliAccountMention};
 
 impl NativeTokenTransfer<'_> {
     pub async fn send_shielded_transfer(

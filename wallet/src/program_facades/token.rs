@@ -3,7 +3,7 @@ use nssa::{AccountId, program::Program};
 use nssa_core::{Identifier, NullifierPublicKey, SharedSecretKey, encryption::ViewingPublicKey};
 use token_core::Instruction;
 
-use crate::{AccountIdentity, ExecutionFailureKind, WalletCore};
+use crate::{AccountIdentity, ExecutionFailureKind, WalletCore, cli::CliAccountMention};
 
 pub struct Token<'wallet>(pub &'wallet WalletCore);
 
@@ -14,8 +14,8 @@ impl Token<'_> {
         supply_account_id: AccountId,
         name: String,
         total_supply: u128,
-        definition_mention: &CliAccountMention,
-        supply_mention: &CliAccountMention,
+        _definition_mention: &CliAccountMention,
+        _supply_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
         let program = Program::token();
         let instruction = Instruction::NewFungibleDefinition { name, total_supply };
@@ -139,8 +139,8 @@ impl Token<'_> {
         sender_account_id: AccountId,
         recipient_account_id: AccountId,
         amount: u128,
-        sender_mention: &CliAccountMention,
-        recipient_mention: &CliAccountMention,
+        _sender_mention: &CliAccountMention,
+        _recipient_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
         let program = Program::token();
         let instruction = Instruction::Transfer {
@@ -346,7 +346,7 @@ impl Token<'_> {
         definition_account_id: AccountId,
         holder_account_id: AccountId,
         amount: u128,
-        holder_mention: &CliAccountMention,
+        _holder_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
         let program = Program::token();
         let instruction = Instruction::Burn {
@@ -475,8 +475,8 @@ impl Token<'_> {
         definition_account_id: AccountId,
         holder_account_id: AccountId,
         amount: u128,
-        definition_mention: &CliAccountMention,
-        holder_mention: &CliAccountMention,
+        _definition_mention: &CliAccountMention,
+        _holder_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
         let program = Program::token();
         let instruction = Instruction::Mint {

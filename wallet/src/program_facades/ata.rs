@@ -7,7 +7,7 @@ use nssa::{
 };
 use nssa_core::SharedSecretKey;
 
-use crate::{AccountIdentity, ExecutionFailureKind, WalletCore};
+use crate::{AccountIdentity, ExecutionFailureKind, WalletCore, cli::CliAccountMention};
 
 pub struct Ata<'wallet>(pub &'wallet WalletCore);
 
@@ -16,7 +16,7 @@ impl Ata<'_> {
         &self,
         owner_id: AccountId,
         definition_id: AccountId,
-        owner_mention: &CliAccountMention,
+        _owner_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
         let program = Program::ata();
         let ata_program_id = program.id();
@@ -47,7 +47,7 @@ impl Ata<'_> {
         definition_id: AccountId,
         recipient_id: AccountId,
         amount: u128,
-        owner_mention: &CliAccountMention,
+        _owner_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
         let program = Program::ata();
         let ata_program_id = program.id();
@@ -80,7 +80,7 @@ impl Ata<'_> {
         owner_id: AccountId,
         definition_id: AccountId,
         amount: u128,
-        owner_mention: &CliAccountMention,
+        _owner_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
         let program = Program::ata();
         let ata_program_id = program.id();

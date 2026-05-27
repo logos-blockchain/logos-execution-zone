@@ -3,7 +3,7 @@ use common::HashType;
 use nssa::{AccountId, program::Program};
 use token_core::TokenHolding;
 
-use crate::{AccountIdentity, ExecutionFailureKind, WalletCore};
+use crate::{AccountIdentity, ExecutionFailureKind, WalletCore, cli::CliAccountMention};
 pub struct Amm<'wallet>(pub &'wallet WalletCore);
 
 impl Amm<'_> {
@@ -15,9 +15,9 @@ impl Amm<'_> {
         user_holding_lp: AccountId,
         balance_a: u128,
         balance_b: u128,
-        a_mention: &CliAccountMention,
-        b_mention: &CliAccountMention,
-        lp_mention: &CliAccountMention,
+        _a_mention: &CliAccountMention,
+        _b_mention: &CliAccountMention,
+        _lp_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
         let program = Program::amm();
         let amm_program_id = Program::amm().id();
@@ -77,8 +77,8 @@ impl Amm<'_> {
         swap_amount_in: u128,
         min_amount_out: u128,
         token_definition_id_in: AccountId,
-        a_mention: &CliAccountMention,
-        b_mention: &CliAccountMention,
+        _a_mention: &CliAccountMention,
+        _b_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
         let program = Program::amm();
         let amm_program_id = Program::amm().id();
@@ -155,8 +155,8 @@ impl Amm<'_> {
         exact_amount_out: u128,
         max_amount_in: u128,
         token_definition_id_in: AccountId,
-        a_mention: &CliAccountMention,
-        b_mention: &CliAccountMention,
+        _a_mention: &CliAccountMention,
+        _b_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
         let program = Program::amm();
         let amm_program_id = Program::amm().id();
@@ -234,9 +234,9 @@ impl Amm<'_> {
         min_amount_liquidity: u128,
         max_amount_to_add_token_a: u128,
         max_amount_to_add_token_b: u128,
-        a_mention: &CliAccountMention,
-        b_mention: &CliAccountMention,
-        lp_mention: &CliAccountMention,
+        _a_mention: &CliAccountMention,
+        _b_mention: &CliAccountMention,
+        _lp_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
         let program = Program::amm();
         let amm_program_id = Program::amm().id();
@@ -297,7 +297,7 @@ impl Amm<'_> {
         remove_liquidity_amount: u128,
         min_amount_to_remove_token_a: u128,
         min_amount_to_remove_token_b: u128,
-        lp_mention: &CliAccountMention,
+        _lp_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
         let program = Program::amm();
         let amm_program_id = Program::amm().id();
