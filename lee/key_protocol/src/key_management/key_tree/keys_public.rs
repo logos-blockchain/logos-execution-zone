@@ -1,4 +1,4 @@
-use k256::elliptic_curve::{PrimeField as _, sec1::ToEncodedPoint as _};
+use k256::elliptic_curve::PrimeField as _;
 use serde::{Deserialize, Serialize};
 
 use crate::key_management::key_tree::traits::KeyTreeNode;
@@ -25,8 +25,11 @@ impl ChildKeysPublic {
                 .expect("hash_value is 64 bytes, must be safe to get first 32"),
         )
         .expect("Expect a valid Private Key");
-        let csk = lee::PrivateKey::tweak(cssk.value()).expect("Expect a valid Private Key");
-        let ccc = *hash_value.last_chunk::<32>().unwrap();
+        let csk = lee::PrivateKey::tweak(cssk.value()).expect("`key_protocol::key_management::keys_public::root()`: Invalid private key produced from `tweak`");
+
+        let ccc = *hash_value
+            .last_chunk::<32>()
+            .expect("hash_value is 64 bytes, must be safe to get last 32");
         let cpk = lee::PublicKey::new_from_private_key(&csk);
 
         Self {
@@ -42,20 +45,18 @@ impl ChildKeysPublic {
     pub fn nth_child(&self, cci: u32) -> Self {
         let hash_value = self.compute_hash_value(cci);
 
-        let cssk = lee::PrivateKey::try_new({
-            let hash_value = hash_value
+        let lhs = k256::Scalar::from_repr(
+            (*hash_value
                 .first_chunk::<32>()
-                .expect("hash_value is 64 bytes, must be safe to get first 32");
+                .expect("hash_value is 64 bytes, must be safe to get first 32"))
+            .into(),
+        )
+        .expect("Expect a valid k256 scalar");
+        let rhs = k256::Scalar::from_repr((*self.cssk.value()).into())
+            .expect("Expect a valid k256 scalar");
 
-            let value_1 =
-                k256::Scalar::from_repr((*hash_value).into()).expect("Expect a valid k256 scalar");
-            let value_2 = k256::Scalar::from_repr((*self.cssk.value()).into())
-                .expect("Expect a valid k256 scalar");
-
-            let sum = value_1.add(&value_2);
-            sum.to_bytes().into()
-        })
-        .expect("Expect a valid private key");
+        let cssk = lee::PrivateKey::try_new(lhs.add(&rhs).to_bytes().into())
+            .expect("Expect a valid private key");
 
         let csk = lee::PrivateKey::tweak(cssk.value()).expect("Expect a valid Private Key");
 
@@ -81,20 +82,11 @@ impl ChildKeysPublic {
 
     fn compute_hash_value(&self, cci: u32) -> [u8; 64] {
         let mut hash_input = vec![];
-
-        if ((2_u32).pow(31)).cmp(&cci) == std::cmp::Ordering::Greater {
-            // Non-harden.
-            // BIP-032 compatibility requires 1-byte header from the public_key;
-            // Not stored in `self.cpk.value()`.
-            let sk = k256::SecretKey::from_bytes(self.cssk.value().into())
-                .expect("32 bytes, within curve order");
-            let pk = sk.public_key();
-            hash_input.extend_from_slice(pk.to_encoded_point(true).as_bytes());
-        } else {
-            // Harden.
-            hash_input.extend_from_slice(&[0_u8]);
-            hash_input.extend_from_slice(self.cssk.value());
-        }
+        // Simplified key logic by only supporting harden keys.
+        // Non-harden keys would require access to untweaked public keys associated to `cssk`s.
+        // Thus, not PQ secure.
+        hash_input.extend_from_slice(&[0_u8]);
+        hash_input.extend_from_slice(self.cssk.value());
 
         #[expect(clippy::big_endian_bytes, reason = "BIP-032 uses big endian")]
         hash_input.extend_from_slice(&cci.to_be_bytes());
@@ -134,7 +126,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_master_keys_generation() {
+    fn master_keys_generation() {
         let seed = [
             88, 189, 37, 237, 199, 125, 151, 226, 69, 153, 165, 113, 191, 69, 188, 221, 9, 34, 173,
             134, 61, 109, 34, 103, 121, 39, 237, 14, 107, 194, 24, 194, 191, 14, 237, 185, 12, 87,
@@ -173,7 +165,7 @@ mod tests {
     }
 
     #[test]
-    fn test_harden_child_keys_generation() {
+    fn child_keys_generation() {
         let seed = [
             88, 189, 37, 237, 199, 125, 151, 226, 69, 153, 165, 113, 191, 69, 188, 221, 9, 34, 173,
             134, 61, 109, 34, 103, 121, 39, 237, 14, 107, 194, 24, 194, 191, 14, 237, 185, 12, 87,
@@ -181,7 +173,7 @@ mod tests {
             187, 148, 92, 44, 253, 210, 37,
         ];
         let root_keys = ChildKeysPublic::root(seed);
-        let cci = (2u32).pow(31) + 13;
+        let cci = (2_u32).pow(31) + 13;
         let child_keys = ChildKeysPublic::nth_child(&root_keys, cci);
 
         let expected_ccc = [
@@ -204,88 +196,6 @@ mod tests {
         let expected_cpk: PublicKey = PublicKey::try_new([
             210, 59, 119, 137, 21, 153, 82, 22, 195, 82, 12, 16, 80, 156, 125, 199, 19, 173, 46,
             224, 213, 144, 165, 126, 70, 129, 171, 141, 77, 212, 108, 233,
-        ])
-        .unwrap();
-
-        assert!(expected_ccc == child_keys.ccc);
-        assert!(expected_cssk == child_keys.cssk);
-        assert!(expected_csk == child_keys.csk);
-        assert!(expected_cpk == child_keys.cpk);
-    }
-
-    #[test]
-    fn test_nonharden_child_keys_generation() {
-        let seed = [
-            88, 189, 37, 237, 199, 125, 151, 226, 69, 153, 165, 113, 191, 69, 188, 221, 9, 34, 173,
-            134, 61, 109, 34, 103, 121, 39, 237, 14, 107, 194, 24, 194, 191, 14, 237, 185, 12, 87,
-            22, 227, 38, 71, 17, 144, 251, 118, 217, 115, 33, 222, 201, 61, 203, 246, 121, 214, 6,
-            187, 148, 92, 44, 253, 210, 37,
-        ];
-        let root_keys = ChildKeysPublic::root(seed);
-        let cci = 13;
-        let child_keys = ChildKeysPublic::nth_child(&root_keys, cci);
-
-        let expected_ccc = [
-            79, 228, 242, 119, 211, 203, 198, 175, 95, 36, 4, 234, 139, 45, 137, 138, 54, 211, 187,
-            16, 28, 79, 80, 232, 216, 101, 145, 19, 101, 220, 217, 141,
-        ];
-
-        let expected_cssk: PrivateKey = PrivateKey::try_new([
-            185, 147, 32, 242, 145, 91, 123, 77, 42, 33, 134, 84, 12, 165, 117, 70, 158, 201, 95,
-            153, 14, 12, 92, 235, 128, 156, 194, 169, 68, 35, 165, 127,
-        ])
-        .unwrap();
-
-        let expected_csk: PrivateKey = PrivateKey::try_new([
-            215, 157, 181, 165, 200, 92, 8, 103, 239, 104, 39, 41, 150, 199, 17, 205, 77, 179, 188,
-            27, 168, 216, 198, 12, 94, 11, 72, 131, 148, 44, 166, 128,
-        ])
-        .unwrap();
-
-        let expected_cpk: PublicKey = PublicKey::try_new([
-            210, 66, 25, 100, 233, 50, 82, 94, 139, 83, 39, 52, 196, 241, 123, 248, 177, 10, 249,
-            206, 71, 167, 198, 5, 202, 184, 178, 148, 106, 231, 214, 235,
-        ])
-        .unwrap();
-
-        assert!(expected_ccc == child_keys.ccc);
-        assert!(expected_cssk == child_keys.cssk);
-        assert!(expected_csk == child_keys.csk);
-        assert!(expected_cpk == child_keys.cpk);
-    }
-
-    #[test]
-    fn test_edge_case_child_keys_generation_2_power_31() {
-        let seed = [
-            88, 189, 37, 237, 199, 125, 151, 226, 69, 153, 165, 113, 191, 69, 188, 221, 9, 34, 173,
-            134, 61, 109, 34, 103, 121, 39, 237, 14, 107, 194, 24, 194, 191, 14, 237, 185, 12, 87,
-            22, 227, 38, 71, 17, 144, 251, 118, 217, 115, 33, 222, 201, 61, 203, 246, 121, 214, 6,
-            187, 148, 92, 44, 253, 210, 37,
-        ];
-        let root_keys = ChildKeysPublic::root(seed);
-        let cci = (2u32).pow(31); //equivant to 0, thus non-harden.
-        let child_keys = ChildKeysPublic::nth_child(&root_keys, cci);
-
-        let expected_ccc = [
-            221, 208, 47, 189, 174, 152, 33, 25, 151, 114, 233, 191, 57, 15, 40, 140, 46, 87, 126,
-            58, 215, 40, 246, 111, 166, 113, 183, 145, 173, 11, 27, 182,
-        ];
-
-        let expected_cssk: PrivateKey = PrivateKey::try_new([
-            223, 29, 87, 189, 126, 24, 117, 225, 190, 57, 0, 143, 207, 168, 231, 139, 170, 192, 81,
-            254, 126, 10, 115, 42, 141, 157, 70, 171, 199, 231, 198, 132,
-        ])
-        .unwrap();
-
-        let expected_csk: PrivateKey = PrivateKey::try_new([
-            35, 70, 190, 115, 134, 106, 151, 84, 164, 16, 139, 204, 100, 203, 36, 219, 91, 200, 6,
-            52, 120, 67, 35, 82, 14, 197, 163, 27, 248, 162, 129, 159,
-        ])
-        .unwrap();
-
-        let expected_cpk: PublicKey = PublicKey::try_new([
-            61, 182, 68, 167, 177, 158, 173, 101, 79, 212, 191, 179, 169, 131, 220, 232, 123, 203,
-            235, 244, 72, 251, 159, 98, 215, 85, 103, 49, 124, 137, 98, 39,
         ])
         .unwrap();
 
