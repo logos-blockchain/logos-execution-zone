@@ -1,0 +1,44 @@
+on:
+  pull_request:
+    paths:
+      - "tools/crypto_primitives_bench/**"
+      - "key_protocol/**"
+      - "nssa/core/**"
+      - ".github/workflows/bench-regression.yml"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+name: bench-regression
+
+jobs:
+  crypto-primitives:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.head_ref }}
+          # criterion-compare-action checks out the base branch in a second
+          # working tree, so we need the full history.
+          fetch-depth: 0
+
+      - uses: ./.github/actions/install-system-deps
+
+      - uses: ./.github/actions/install-risc0
+
+      - uses: ./.github/actions/install-logos-blockchain-circuits
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install active toolchain
+        run: rustup install
+
+      - name: Run criterion-compare against base branch
+        uses: boa-dev/criterion-compare-action@v3
+        with:
+          branchName: ${{ github.base_ref }}
+          cwd: tools/crypto_primitives_bench
+          benchName: primitives
+          token: ${{ secrets.GITHUB_TOKEN }}

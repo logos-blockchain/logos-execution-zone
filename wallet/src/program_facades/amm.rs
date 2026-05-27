@@ -3,7 +3,7 @@ use common::HashType;
 use nssa::{AccountId, program::Program};
 use token_core::TokenHolding;
 
-use crate::{ExecutionFailureKind, WalletCore, cli::CliAccountMention, signing::SigningGroup};
+use crate::{AccountIdentity, ExecutionFailureKind, WalletCore, cli::CliAccountMention};
 pub struct Amm<'wallet>(pub &'wallet WalletCore);
 
 impl Amm<'_> {
@@ -15,18 +15,36 @@ impl Amm<'_> {
         user_holding_lp: AccountId,
         balance_a: u128,
         balance_b: u128,
-        a_mention: &CliAccountMention,
-        b_mention: &CliAccountMention,
-        lp_mention: &CliAccountMention,
+        user_holding_a_mention: &CliAccountMention,
+        user_holding_b_mention: &CliAccountMention,
+        user_holding_lp_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
+        let user_holding_a_identity = user_holding_a_mention.key_path().map_or(
+            AccountIdentity::Public(user_holding_a),
+            |key_path| AccountIdentity::PublicKeycard {
+                account_id: user_holding_a,
+                key_path: key_path.to_owned(),
+            },
+        );
+
+        let user_holding_b_identity = user_holding_b_mention.key_path().map_or(
+            AccountIdentity::Public(user_holding_b),
+            |key_path| AccountIdentity::PublicKeycard {
+                account_id: user_holding_b,
+                key_path: key_path.to_owned(),
+            },
+        );
+
+        let user_holding_lp_identity = user_holding_lp_mention.key_path().map_or(
+            AccountIdentity::Public(user_holding_lp),
+            |key_path| AccountIdentity::PublicKeycard {
+                account_id: user_holding_lp,
+                key_path: key_path.to_owned(),
+            },
+        );
+
         let program = Program::amm();
         let amm_program_id = Program::amm().id();
-        let instruction = amm_core::Instruction::NewDefinition {
-            token_a_amount: balance_a,
-            token_b_amount: balance_b,
-            amm_program_id,
-        };
-
         let user_a_acc = self
             .0
             .get_account_public(user_holding_a)
@@ -50,26 +68,28 @@ impl Amm<'_> {
         let vault_holding_a = compute_vault_pda(amm_program_id, amm_pool, definition_token_a_id);
         let vault_holding_b = compute_vault_pda(amm_program_id, amm_pool, definition_token_b_id);
         let pool_lp = compute_liquidity_token_pda(amm_program_id, amm_pool);
-
-        let account_ids = vec![
-            amm_pool,
-            vault_holding_a,
-            vault_holding_b,
-            pool_lp,
-            user_holding_a,
-            user_holding_b,
-            user_holding_lp,
-        ];
-
-        let mut groups = SigningGroup::new();
-        groups
-            .add_required(a_mention, user_holding_a, self.0)
-            .and_then(|()| groups.add_required(b_mention, user_holding_b, self.0))
-            .and_then(|()| groups.add_optional(lp_mention, user_holding_lp, self.0))
-            .map_err(ExecutionFailureKind::from_anyhow)?;
+        let instruction = amm_core::Instruction::NewDefinition {
+            token_a_amount: balance_a,
+            token_b_amount: balance_b,
+            amm_program_id,
+        };
+        let instruction_data =
+            Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
         self.0
-            .send_public_tx(&program, account_ids, instruction, groups)
+            .send_pub_tx(
+                vec![
+                    AccountIdentity::PublicNoSign(amm_pool),
+                    AccountIdentity::PublicNoSign(vault_holding_a),
+                    AccountIdentity::PublicNoSign(vault_holding_b),
+                    AccountIdentity::PublicNoSign(pool_lp),
+                    user_holding_a_identity,
+                    user_holding_b_identity,
+                    user_holding_lp_identity,
+                ],
+                instruction_data,
+                &program.into(),
+            )
             .await
     }
 
@@ -81,17 +101,11 @@ impl Amm<'_> {
         swap_amount_in: u128,
         min_amount_out: u128,
         token_definition_id_in: AccountId,
-        a_mention: &CliAccountMention,
-        b_mention: &CliAccountMention,
+        user_holding_a_mention: &CliAccountMention,
+        user_holding_b_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let instruction = amm_core::Instruction::SwapExactInput {
-            swap_amount_in,
-            min_amount_out,
-            token_definition_id_in,
-        };
         let program = Program::amm();
         let amm_program_id = Program::amm().id();
-
         let user_a_acc = self
             .0
             .get_account_public(user_holding_a)
@@ -114,31 +128,58 @@ impl Amm<'_> {
             compute_pool_pda(amm_program_id, definition_token_a_id, definition_token_b_id);
         let vault_holding_a = compute_vault_pda(amm_program_id, amm_pool, definition_token_a_id);
         let vault_holding_b = compute_vault_pda(amm_program_id, amm_pool, definition_token_b_id);
+        let instruction = amm_core::Instruction::SwapExactInput {
+            swap_amount_in,
+            min_amount_out,
+            token_definition_id_in,
+        };
+        let instruction_data =
+            Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
-        let account_ids = vec![
-            amm_pool,
-            vault_holding_a,
-            vault_holding_b,
-            user_holding_a,
-            user_holding_b,
-        ];
-
-        let (account_id_auth, seller_mention) = if definition_token_a_id == token_definition_id_in {
-            (user_holding_a, a_mention)
-        } else if definition_token_b_id == token_definition_id_in {
-            (user_holding_b, b_mention)
-        } else {
+        if (token_definition_id_in != definition_token_a_id)
+            && (token_definition_id_in != definition_token_b_id)
+        {
             return Err(ExecutionFailureKind::AccountDataError(
                 token_definition_id_in,
             ));
+        }
+
+        let user_a_signing_identity = if token_definition_id_in == definition_token_a_id {
+            user_holding_a_mention.key_path().map_or(
+                AccountIdentity::Public(user_holding_a),
+                |key_path| AccountIdentity::PublicKeycard {
+                    account_id: user_holding_a,
+                    key_path: key_path.to_owned(),
+                },
+            )
+        } else {
+            AccountIdentity::PublicNoSign(user_holding_a)
         };
 
-        let mut groups = SigningGroup::new();
-        groups
-            .add_required(seller_mention, account_id_auth, self.0)
-            .map_err(ExecutionFailureKind::from_anyhow)?;
+        let user_b_signing_identity = if token_definition_id_in == definition_token_b_id {
+            user_holding_b_mention.key_path().map_or(
+                AccountIdentity::Public(user_holding_b),
+                |key_path| AccountIdentity::PublicKeycard {
+                    account_id: user_holding_b,
+                    key_path: key_path.to_owned(),
+                },
+            )
+        } else {
+            AccountIdentity::PublicNoSign(user_holding_b)
+        };
+
         self.0
-            .send_public_tx(&program, account_ids, instruction, groups)
+            .send_pub_tx(
+                vec![
+                    AccountIdentity::PublicNoSign(amm_pool),
+                    AccountIdentity::PublicNoSign(vault_holding_a),
+                    AccountIdentity::PublicNoSign(vault_holding_b),
+                    user_a_signing_identity,
+                    user_b_signing_identity,
+                ],
+                instruction_data,
+                &program.into(),
+            )
             .await
     }
 
@@ -150,17 +191,11 @@ impl Amm<'_> {
         exact_amount_out: u128,
         max_amount_in: u128,
         token_definition_id_in: AccountId,
-        a_mention: &CliAccountMention,
-        b_mention: &CliAccountMention,
+        user_holding_a_mention: &CliAccountMention,
+        user_holding_b_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let instruction = amm_core::Instruction::SwapExactOutput {
-            exact_amount_out,
-            max_amount_in,
-            token_definition_id_in,
-        };
         let program = Program::amm();
         let amm_program_id = Program::amm().id();
-
         let user_a_acc = self
             .0
             .get_account_public(user_holding_a)
@@ -183,31 +218,58 @@ impl Amm<'_> {
             compute_pool_pda(amm_program_id, definition_token_a_id, definition_token_b_id);
         let vault_holding_a = compute_vault_pda(amm_program_id, amm_pool, definition_token_a_id);
         let vault_holding_b = compute_vault_pda(amm_program_id, amm_pool, definition_token_b_id);
+        let instruction = amm_core::Instruction::SwapExactOutput {
+            exact_amount_out,
+            max_amount_in,
+            token_definition_id_in,
+        };
+        let instruction_data =
+            Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
-        let account_ids = vec![
-            amm_pool,
-            vault_holding_a,
-            vault_holding_b,
-            user_holding_a,
-            user_holding_b,
-        ];
-
-        let (account_id_auth, seller_mention) = if definition_token_a_id == token_definition_id_in {
-            (user_holding_a, a_mention)
-        } else if definition_token_b_id == token_definition_id_in {
-            (user_holding_b, b_mention)
-        } else {
+        if (token_definition_id_in != definition_token_a_id)
+            && (token_definition_id_in != definition_token_b_id)
+        {
             return Err(ExecutionFailureKind::AccountDataError(
                 token_definition_id_in,
             ));
+        }
+
+        let user_a_signing_identity = if token_definition_id_in == definition_token_a_id {
+            user_holding_a_mention.key_path().map_or(
+                AccountIdentity::Public(user_holding_a),
+                |key_path| AccountIdentity::PublicKeycard {
+                    account_id: user_holding_a,
+                    key_path: key_path.to_owned(),
+                },
+            )
+        } else {
+            AccountIdentity::PublicNoSign(user_holding_a)
         };
 
-        let mut groups = SigningGroup::new();
-        groups
-            .add_required(seller_mention, account_id_auth, self.0)
-            .map_err(ExecutionFailureKind::from_anyhow)?;
+        let user_b_signing_identity = if token_definition_id_in == definition_token_b_id {
+            user_holding_b_mention.key_path().map_or(
+                AccountIdentity::Public(user_holding_b),
+                |key_path| AccountIdentity::PublicKeycard {
+                    account_id: user_holding_b,
+                    key_path: key_path.to_owned(),
+                },
+            )
+        } else {
+            AccountIdentity::PublicNoSign(user_holding_b)
+        };
+
         self.0
-            .send_public_tx(&program, account_ids, instruction, groups)
+            .send_pub_tx(
+                vec![
+                    AccountIdentity::PublicNoSign(amm_pool),
+                    AccountIdentity::PublicNoSign(vault_holding_a),
+                    AccountIdentity::PublicNoSign(vault_holding_b),
+                    user_a_signing_identity,
+                    user_b_signing_identity,
+                ],
+                instruction_data,
+                &program.into(),
+            )
             .await
     }
 
@@ -220,18 +282,36 @@ impl Amm<'_> {
         min_amount_liquidity: u128,
         max_amount_to_add_token_a: u128,
         max_amount_to_add_token_b: u128,
-        a_mention: &CliAccountMention,
-        b_mention: &CliAccountMention,
-        lp_mention: &CliAccountMention,
+        user_holding_a_mention: &CliAccountMention,
+        user_holding_b_mention: &CliAccountMention,
+        user_holding_lp_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let instruction = amm_core::Instruction::AddLiquidity {
-            min_amount_liquidity,
-            max_amount_to_add_token_a,
-            max_amount_to_add_token_b,
-        };
+        let user_holding_a_identity = user_holding_a_mention.key_path().map_or(
+            AccountIdentity::Public(user_holding_a),
+            |key_path| AccountIdentity::PublicKeycard {
+                account_id: user_holding_a,
+                key_path: key_path.to_owned(),
+            },
+        );
+
+        let user_holding_b_identity = user_holding_b_mention.key_path().map_or(
+            AccountIdentity::Public(user_holding_b),
+            |key_path| AccountIdentity::PublicKeycard {
+                account_id: user_holding_b,
+                key_path: key_path.to_owned(),
+            },
+        );
+
+        let user_holding_lp_identity = user_holding_lp_mention.key_path().map_or(
+            AccountIdentity::Public(user_holding_lp),
+            |key_path| AccountIdentity::PublicKeycard {
+                account_id: user_holding_lp,
+                key_path: key_path.to_owned(),
+            },
+        );
+
         let program = Program::amm();
         let amm_program_id = Program::amm().id();
-
         let user_a_acc = self
             .0
             .get_account_public(user_holding_a)
@@ -255,26 +335,28 @@ impl Amm<'_> {
         let vault_holding_a = compute_vault_pda(amm_program_id, amm_pool, definition_token_a_id);
         let vault_holding_b = compute_vault_pda(amm_program_id, amm_pool, definition_token_b_id);
         let pool_lp = compute_liquidity_token_pda(amm_program_id, amm_pool);
-
-        let account_ids = vec![
-            amm_pool,
-            vault_holding_a,
-            vault_holding_b,
-            pool_lp,
-            user_holding_a,
-            user_holding_b,
-            user_holding_lp,
-        ];
-
-        let mut groups = SigningGroup::new();
-        groups
-            .add_required(a_mention, user_holding_a, self.0)
-            .and_then(|()| groups.add_required(b_mention, user_holding_b, self.0))
-            .and_then(|()| groups.add_optional(lp_mention, user_holding_lp, self.0))
-            .map_err(ExecutionFailureKind::from_anyhow)?;
+        let instruction = amm_core::Instruction::AddLiquidity {
+            min_amount_liquidity,
+            max_amount_to_add_token_a,
+            max_amount_to_add_token_b,
+        };
+        let instruction_data =
+            Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
         self.0
-            .send_public_tx(&program, account_ids, instruction, groups)
+            .send_pub_tx(
+                vec![
+                    AccountIdentity::PublicNoSign(amm_pool),
+                    AccountIdentity::PublicNoSign(vault_holding_a),
+                    AccountIdentity::PublicNoSign(vault_holding_b),
+                    AccountIdentity::PublicNoSign(pool_lp),
+                    user_holding_a_identity,
+                    user_holding_b_identity,
+                    user_holding_lp_identity,
+                ],
+                instruction_data,
+                &program.into(),
+            )
             .await
     }
 
@@ -287,16 +369,18 @@ impl Amm<'_> {
         remove_liquidity_amount: u128,
         min_amount_to_remove_token_a: u128,
         min_amount_to_remove_token_b: u128,
-        lp_mention: &CliAccountMention,
+        user_holding_lp_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let instruction = amm_core::Instruction::RemoveLiquidity {
-            remove_liquidity_amount,
-            min_amount_to_remove_token_a,
-            min_amount_to_remove_token_b,
-        };
+        let user_holding_lp_identity = user_holding_lp_mention.key_path().map_or(
+            AccountIdentity::Public(user_holding_lp),
+            |key_path| AccountIdentity::PublicKeycard {
+                account_id: user_holding_lp,
+                key_path: key_path.to_owned(),
+            },
+        );
+
         let program = Program::amm();
         let amm_program_id = Program::amm().id();
-
         let user_a_acc = self
             .0
             .get_account_public(user_holding_a)
@@ -320,23 +404,28 @@ impl Amm<'_> {
         let vault_holding_a = compute_vault_pda(amm_program_id, amm_pool, definition_token_a_id);
         let vault_holding_b = compute_vault_pda(amm_program_id, amm_pool, definition_token_b_id);
         let pool_lp = compute_liquidity_token_pda(amm_program_id, amm_pool);
+        let instruction = amm_core::Instruction::RemoveLiquidity {
+            remove_liquidity_amount,
+            min_amount_to_remove_token_a,
+            min_amount_to_remove_token_b,
+        };
+        let instruction_data =
+            Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
-        let account_ids = vec![
-            amm_pool,
-            vault_holding_a,
-            vault_holding_b,
-            pool_lp,
-            user_holding_a,
-            user_holding_b,
-            user_holding_lp,
-        ];
-
-        let mut groups = SigningGroup::new();
-        groups
-            .add_required(lp_mention, user_holding_lp, self.0)
-            .map_err(ExecutionFailureKind::from_anyhow)?;
         self.0
-            .send_public_tx(&program, account_ids, instruction, groups)
+            .send_pub_tx(
+                vec![
+                    AccountIdentity::PublicNoSign(amm_pool),
+                    AccountIdentity::PublicNoSign(vault_holding_a),
+                    AccountIdentity::PublicNoSign(vault_holding_b),
+                    AccountIdentity::PublicNoSign(pool_lp),
+                    AccountIdentity::PublicNoSign(user_holding_a),
+                    AccountIdentity::PublicNoSign(user_holding_b),
+                    user_holding_lp_identity,
+                ],
+                instruction_data,
+                &program.into(),
+            )
             .await
     }
 }

@@ -10,46 +10,39 @@
 
 use std::path::PathBuf;
 
+pub use account_manager::AccountIdentity;
 use anyhow::{Context as _, Result};
 use bip39::Mnemonic;
 use common::{HashType, transaction::NSSATransaction};
 use config::WalletConfig;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
-use keycard_wallet::KeycardWallet;
 use log::info;
 use nssa::{
-    Account, AccountId, PrivacyPreservingTransaction, PublicKey, PublicTransaction, Signature,
+    Account, AccountId, PrivacyPreservingTransaction,
     privacy_preserving_transaction::{
         circuit::ProgramWithDependencies, message::EncryptedAccountData,
     },
-    program::Program,
-    public_transaction::WitnessSet as PublicWitnessSet,
 };
 use nssa_core::{
-    Commitment, MembershipProof, SharedSecretKey,
-    account::{AccountWithMetadata, Nonce},
-    program::InstructionData,
+    Commitment, MembershipProof, SharedSecretKey, account::Nonce, program::InstructionData,
 };
-pub use privacy_preserving_tx::PrivacyPreservingAccount;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
 use storage::Storage;
 use tokio::io::AsyncWriteExt as _;
 
 use crate::{
     account::{AccountIdWithPrivacy, Label},
-    cli::CliAccountMention,
     config::WalletConfigOverrides,
     poller::TxPoller,
-    signing::SigningGroup,
     storage::key_chain::SharedAccountEntry,
 };
 
 pub mod account;
+mod account_manager;
 pub mod cli;
 pub mod config;
 pub mod helperfunctions;
 pub mod poller;
-mod privacy_preserving_tx;
 pub mod program_facades;
 pub mod signing;
 pub mod storage;
@@ -295,13 +288,10 @@ impl WalletCore {
         self.storage.key_chain_mut().set_sealing_secret_key(key);
     }
 
-    /// Resolve an `AccountId` to the appropriate `PrivacyPreservingAccount` variant.
+    /// Resolve an `AccountId` to the appropriate `AccountIdentity` variant.
     /// Checks the key tree first, then shared private accounts.
     #[must_use]
-    pub fn resolve_private_account(
-        &self,
-        account_id: nssa::AccountId,
-    ) -> Option<PrivacyPreservingAccount> {
+    pub fn resolve_private_account(&self, account_id: nssa::AccountId) -> Option<AccountIdentity> {
         // Check key tree first
         if self
             .storage
@@ -309,7 +299,7 @@ impl WalletCore {
             .private_account(account_id)
             .is_some()
         {
-            return Some(PrivacyPreservingAccount::PrivateOwned(account_id));
+            return Some(AccountIdentity::PrivateOwned(account_id));
         }
 
         // Check shared private accounts
@@ -322,9 +312,9 @@ impl WalletCore {
             .key_chain()
             .group_key_holder(&entry.group_label)?;
 
-        if let (Some(pda_seed), Some(program_id)) = (entry.pda_seed, entry.pda_program_id) {
+        if let (Some(pda_seed), Some(program_id)) = (entry.pda_seed, entry.authority_program_id) {
             let keys = holder.derive_keys_for_pda(&program_id, &pda_seed);
-            Some(PrivacyPreservingAccount::PrivatePdaShared {
+            Some(AccountIdentity::PrivatePdaShared {
                 account_id,
                 nsk: keys.nullifier_secret_key,
                 npk: keys.generate_nullifier_public_key(),
@@ -341,7 +331,7 @@ impl WalletCore {
                 result
             };
             let keys = holder.derive_keys_for_shared_account(&derivation_seed);
-            Some(PrivacyPreservingAccount::PrivateShared {
+            Some(AccountIdentity::PrivateShared {
                 nsk: keys.nullifier_secret_key,
                 npk: keys.generate_nullifier_public_key(),
                 vpk: keys.generate_viewing_public_key(),
@@ -365,7 +355,7 @@ impl WalletCore {
         group_label: Label,
         identifier: nssa_core::Identifier,
         pda_seed: Option<nssa_core::program::PdaSeed>,
-        pda_program_id: Option<nssa_core::program::ProgramId>,
+        authority_program_id: Option<nssa_core::program::ProgramId>,
     ) {
         self.storage.key_chain_mut().insert_shared_private_account(
             account_id,
@@ -373,7 +363,7 @@ impl WalletCore {
                 group_label,
                 identifier,
                 pda_seed,
-                pda_program_id,
+                authority_program_id,
                 account: Account::default(),
             },
         );
@@ -564,145 +554,28 @@ impl WalletCore {
         Ok(())
     }
 
-    /// Send a public transaction, fetching nonces automatically from
-    /// [`SigningGroup::signing_ids`].
-    pub async fn send_public_tx<T: serde::Serialize>(
-        &self,
-        program: &Program,
-        account_ids: Vec<AccountId>,
-        instruction: T,
-        groups: SigningGroup,
-    ) -> Result<HashType, ExecutionFailureKind> {
-        let nonces = self
-            .get_accounts_nonces(groups.signing_ids())
-            .await
-            .map_err(ExecutionFailureKind::SequencerError)?;
-        self.send_public_tx_with_nonces(program, account_ids, nonces, instruction, groups)
-            .await
-    }
-
-    /// Send a public transaction with caller-supplied nonces.
-    ///
-    /// Use this when the caller needs to assemble or augment nonces before submission
-    /// (e.g. injecting a keycard account nonce that was fetched separately).
-    pub async fn send_public_tx_with_nonces<T: serde::Serialize>(
-        &self,
-        program: &Program,
-        account_ids: Vec<AccountId>,
-        nonces: Vec<Nonce>,
-        instruction: T,
-        groups: SigningGroup,
-    ) -> Result<HashType, ExecutionFailureKind> {
-        let message = nssa::public_transaction::Message::try_new(
-            program.id(),
-            account_ids,
-            nonces,
-            instruction,
-        )?;
-
-        let pin = if groups.needs_pin() {
-            crate::helperfunctions::read_pin()
-                .map_err(ExecutionFailureKind::from_anyhow)?
-                .as_str()
-                .to_owned()
-        } else {
-            String::new()
-        };
-
-        let sigs = groups
-            .sign_all(&message.hash(), &pin)
-            .map_err(ExecutionFailureKind::from_anyhow)?;
-
-        let tx = PublicTransaction::new(message, PublicWitnessSet::from_raw_parts(sigs));
-        Ok(self
-            .sequencer_client
-            .send_transaction(NSSATransaction::Public(tx))
-            .await?)
-    }
-
     pub async fn send_privacy_preserving_tx(
         &self,
-        accounts: Vec<PrivacyPreservingAccount>,
+        accounts: Vec<AccountIdentity>,
         instruction_data: InstructionData,
         program: &ProgramWithDependencies,
-        mention: Option<&CliAccountMention>,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
-        self.send_privacy_preserving_tx_with_pre_check(
-            accounts,
-            instruction_data,
-            program,
-            |_| Ok(()),
-            mention,
-        )
+        self.send_privacy_preserving_tx_with_pre_check(accounts, instruction_data, program, |_| {
+            Ok(())
+        })
         .await
     }
 
     pub async fn send_privacy_preserving_tx_with_pre_check(
         &self,
-        accounts: Vec<PrivacyPreservingAccount>,
+        accounts: Vec<AccountIdentity>,
         instruction_data: InstructionData,
         program: &ProgramWithDependencies,
         tx_pre_check: impl FnOnce(&[&Account]) -> Result<(), ExecutionFailureKind>,
-        mention: Option<&CliAccountMention>,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
-        let acc_manager = privacy_preserving_tx::AccountManager::new(self, accounts).await?;
+        let acc_manager = account_manager::AccountManager::new(self, accounts).await?;
 
-        let mut pre_states = acc_manager.pre_states();
-
-        let (keycard_account, keycard_pin, keycard_path) = if let Some(key_path_str) =
-            mention.and_then(CliAccountMention::key_path)
-        {
-            let pin = crate::helperfunctions::read_pin().map_err(|e| {
-                ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<
-                    pyo3::exceptions::PyRuntimeError,
-                    _,
-                >(e.to_string()))
-            })?;
-            let account_id_str =
-                KeycardWallet::get_public_account_id_for_path_with_connect(&pin, key_path_str)?;
-            let account_id: AccountId = match account_id_str
-                    .parse::<AccountIdWithPrivacy>()
-                    .expect("`wallet::lib::send_privacy_preserving_tx_with_pre_check`: invalid account id parsed")
-                {
-                    AccountIdWithPrivacy::Public(id) | AccountIdWithPrivacy::Private(id) => id,
-                };
-            let account = self
-                    .get_account_public(account_id)
-                    .await
-                    .expect("`wallet::lib::send_privacy_preserving_tx_with_pre_check`: unable to retrieve public account");
-            let pin_str = pin.as_str().to_owned();
-            (
-                Some(AccountWithMetadata {
-                    account,
-                    is_authorized: true,
-                    account_id,
-                }),
-                Some(pin_str),
-                Some(key_path_str.to_owned()),
-            )
-        } else {
-            (None, None, None)
-        };
-
-        let mut nonces: Vec<Nonce> = acc_manager.public_account_nonces().into_iter().collect();
-
-        let mut account_ids: Vec<AccountId> = acc_manager.public_account_ids();
-
-        if let Some(acc) = keycard_account.as_ref() {
-            if acc_manager.public_account_ids().contains(&acc.account_id) {
-                if let Some(pre) = pre_states
-                    .iter_mut()
-                    .find(|p| p.account_id == acc.account_id)
-                {
-                    pre.is_authorized = true;
-                }
-                nonces.push(acc.account.nonce);
-            } else {
-                nonces.push(acc.account.nonce);
-                account_ids.push(acc.account_id);
-                pre_states.push(acc.clone());
-            }
-        }
+        let pre_states = acc_manager.pre_states();
 
         tx_pre_check(
             &pre_states
@@ -717,54 +590,30 @@ impl WalletCore {
             instruction_data,
             acc_manager.account_identities(),
             &program.to_owned(),
-        )
-        .unwrap();
+        )?;
 
         let message =
             nssa::privacy_preserving_transaction::message::Message::try_from_circuit_output(
-                account_ids,
-                nonces,
+                acc_manager.public_account_ids(),
+                acc_manager.public_account_nonces(),
                 private_account_keys
                     .iter()
                     .map(|keys| (keys.npk, keys.vpk.clone(), keys.epk.clone()))
                     .collect(),
                 output,
-            )
-            .unwrap();
+            )?;
+
+        let message_hash = message.hash();
+        let signatures_public_keys = acc_manager
+            .sign_message(message_hash)
+            .map_err(ExecutionFailureKind::from_anyhow)?;
 
         let witness_set =
-            if let (Some(pin), Some(path)) = (keycard_pin.as_deref(), keycard_path.as_deref()) {
-                let hash = message.hash();
-                let local_auth = acc_manager.public_account_auth();
-                let mut sigs: Vec<(Signature, PublicKey)> = local_auth
-                    .iter()
-                    .map(|&key| {
-                        (
-                            Signature::new(key, &hash),
-                            PublicKey::new_from_private_key(key),
-                        )
-                    })
-                    .collect();
-                let keycard_sig = pyo3::Python::with_gil(|py| {
-                    let mut ctx = crate::signing::KeycardSessionContext::new(pin);
-                    let result = ctx
-                        .get_or_connect(py)
-                        .and_then(|w| w.sign_message_for_path(py, path, &hash));
-                    ctx.close(py);
-                    result
-                })
-                .map_err(ExecutionFailureKind::KeycardError)?;
-                sigs.push(keycard_sig);
-                nssa::privacy_preserving_transaction::witness_set::WitnessSet::from_raw_parts(
-                    sigs, proof,
-                )
-            } else {
-                nssa::privacy_preserving_transaction::witness_set::WitnessSet::for_message(
-                    &message,
-                    proof,
-                    &acc_manager.public_account_auth(),
-                )
-            };
+            nssa::privacy_preserving_transaction::witness_set::WitnessSet::from_raw_parts(
+                signatures_public_keys,
+                proof,
+            );
+
         let tx = PrivacyPreservingTransaction::new(message, witness_set);
 
         let shared_secrets: Vec<_> = private_account_keys
@@ -778,6 +627,69 @@ impl WalletCore {
                 .await?,
             shared_secrets,
         ))
+    }
+
+    pub async fn send_pub_tx(
+        &self,
+        accounts: Vec<AccountIdentity>,
+        instruction_data: InstructionData,
+        program: &ProgramWithDependencies,
+    ) -> Result<HashType, ExecutionFailureKind> {
+        self.send_pub_tx_with_pre_check(accounts, instruction_data, program, |_| Ok(()))
+            .await
+    }
+
+    pub async fn send_pub_tx_with_pre_check(
+        &self,
+        accounts: Vec<AccountIdentity>,
+        instruction_data: InstructionData,
+        program: &ProgramWithDependencies,
+        tx_pre_check: impl FnOnce(&[&Account]) -> Result<(), ExecutionFailureKind>,
+    ) -> Result<HashType, ExecutionFailureKind> {
+        // Public transaction, all accounts must be public
+        if accounts.iter().any(AccountIdentity::is_private) {
+            return Err(ExecutionFailureKind::TransactionBuildError(
+                nssa::error::NssaError::InvalidInput(
+                    "Private accounts are not allowed in public transactions".to_owned(),
+                ),
+            ));
+        }
+
+        let acc_manager = account_manager::AccountManager::new(self, accounts).await?;
+
+        let pre_states = acc_manager.pre_states();
+        tx_pre_check(
+            &pre_states
+                .iter()
+                .map(|pre| &pre.account)
+                .collect::<Vec<_>>(),
+        )?;
+
+        let account_ids = acc_manager.public_account_ids();
+        let program_id = program.program.id();
+        let nonces = acc_manager.public_account_nonces();
+
+        let message = nssa::public_transaction::Message::new_preserialized(
+            program_id,
+            account_ids,
+            nonces,
+            instruction_data,
+        );
+
+        let message_hash = message.hash();
+        let signatures_public_keys = acc_manager
+            .sign_message(message_hash)
+            .map_err(ExecutionFailureKind::from_anyhow)?;
+
+        let witness_set =
+            nssa::public_transaction::WitnessSet::from_raw_parts(signatures_public_keys);
+
+        let tx = nssa::public_transaction::PublicTransaction::new(message, witness_set);
+
+        Ok(self
+            .sequencer_client
+            .send_transaction(NSSATransaction::Public(tx))
+            .await?)
     }
 
     pub async fn sync_to_latest_block(&mut self) -> Result<u64> {
@@ -899,7 +811,7 @@ impl WalletCore {
                     .key_chain()
                     .group_key_holder(&entry.group_label)?;
 
-                let keys = match (&entry.pda_seed, &entry.pda_program_id) {
+                let keys = match (&entry.pda_seed, &entry.authority_program_id) {
                     (Some(pda_seed), Some(program_id)) => {
                         holder.derive_keys_for_pda(program_id, pda_seed)
                     }

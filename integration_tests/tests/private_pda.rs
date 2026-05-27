@@ -6,27 +6,37 @@
 use std::{path::PathBuf, time::Duration};
 
 use anyhow::{Context as _, Result};
+use authenticated_transfer_core::Instruction as AuthTransferInstruction;
+use common::transaction::NSSATransaction;
 use integration_tests::{
-    NSSA_PROGRAM_FOR_TEST_PDA_FUND_SPEND_PROXY, TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext,
+    NSSA_PROGRAM_FOR_TEST_PDA_SPEND_PROXY, TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext,
     verify_commitment_is_in_state,
 };
+use key_protocol::key_management::ephemeral_key_holder::EphemeralKeyHolder;
 use log::info;
 use nssa::{
-    AccountId, ProgramId, privacy_preserving_transaction::circuit::ProgramWithDependencies,
+    AccountId, PrivacyPreservingTransaction, ProgramId,
+    privacy_preserving_transaction::{
+        circuit::{ProgramWithDependencies, execute_and_prove},
+        message::Message,
+        witness_set::WitnessSet,
+    },
     program::Program,
 };
-use nssa_core::{NullifierPublicKey, encryption::ViewingPublicKey, program::PdaSeed};
+use nssa_core::{
+    InputAccountIdentity, NullifierPublicKey,
+    account::{Account, AccountWithMetadata},
+    encryption::ViewingPublicKey,
+    program::PdaSeed,
+};
+use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 use wallet::{
-    PrivacyPreservingAccount, WalletCore,
+    AccountIdentity, WalletCore,
     cli::{Command, account::AccountSubcommand},
 };
 
-/// Funds a private PDA via the proxy program with a chained call to `auth_transfer`.
-///
-/// A direct call to `auth_transfer` cannot establish the PDA-to-npk binding because it uses
-/// `Claim::Authorized` rather than `Claim::Pda`. Routing through the proxy provides the binding
-/// via `pda_seeds` in the chained call to `auth_transfer`.
+/// Funds a private PDA by calling `auth_transfer` directly.
 #[expect(
     clippy::too_many_arguments,
     reason = "test helper — grouping args would obscure intent"
@@ -34,33 +44,68 @@ use wallet::{
 async fn fund_private_pda(
     wallet: &WalletCore,
     sender: AccountId,
-    pda_account_id: AccountId,
     npk: NullifierPublicKey,
     vpk: ViewingPublicKey,
     identifier: u128,
     seed: PdaSeed,
+    authority_program_id: ProgramId,
     amount: u128,
-    proxy_program: &ProgramWithDependencies,
-    auth_transfer_id: ProgramId,
+    auth_transfer: &ProgramWithDependencies,
 ) -> Result<()> {
-    wallet
-        .send_privacy_preserving_tx(
-            vec![
-                PrivacyPreservingAccount::Public(sender),
-                PrivacyPreservingAccount::PrivatePdaForeign {
-                    account_id: pda_account_id,
-                    npk,
-                    vpk,
-                    identifier,
-                },
-            ],
-            Program::serialize_instruction((seed, amount, auth_transfer_id, true))
-                .context("failed to serialize pda_fund_spend_proxy fund instruction")?,
-            proxy_program,
-            None,
-        )
+    let pda_account_id = AccountId::for_private_pda(&authority_program_id, &seed, &npk, identifier);
+    let sender_account = wallet
+        .get_account_public(sender)
         .await
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+        .map_err(|e| anyhow::anyhow!("failed to get sender account: {e}"))?;
+    let sender_sk = wallet
+        .get_account_public_signing_key(sender)
+        .context("sender signing key not found")?;
+
+    let sender_pre = AccountWithMetadata::new(sender_account.clone(), true, sender);
+    let pda_pre = AccountWithMetadata::new(Account::default(), false, pda_account_id);
+
+    let eph_holder = EphemeralKeyHolder::new(&npk);
+    let ssk = eph_holder.calculate_shared_secret_sender(&vpk);
+    let epk = eph_holder.generate_ephemeral_public_key();
+
+    let instruction = Program::serialize_instruction(AuthTransferInstruction::Transfer { amount })
+        .context("failed to serialize auth_transfer instruction")?;
+
+    let account_identities = vec![
+        InputAccountIdentity::Public,
+        InputAccountIdentity::PrivatePdaInit {
+            npk,
+            ssk,
+            identifier,
+            seed: Some((seed, authority_program_id)),
+        },
+    ];
+
+    let (output, proof) = execute_and_prove(
+        vec![sender_pre, pda_pre],
+        instruction,
+        account_identities,
+        auth_transfer,
+    )
+    .map_err(|e| anyhow::anyhow!("circuit proving failed: {e}"))?;
+
+    let message = Message::try_from_circuit_output(
+        vec![sender],
+        vec![sender_account.nonce],
+        vec![(npk, vpk, epk)],
+        output,
+    )
+    .map_err(|e| anyhow::anyhow!("message build failed: {e}"))?;
+
+    let witness_set = WitnessSet::for_message(&message, proof, &[sender_sk]);
+    let tx = PrivacyPreservingTransaction::new(message, witness_set);
+
+    wallet
+        .sequencer_client
+        .send_transaction(NSSATransaction::PrivacyPreserving(tx))
+        .await
+        .map_err(|e| anyhow::anyhow!("send transaction failed: {e}"))?;
+
     Ok(())
 }
 
@@ -79,22 +124,21 @@ async fn spend_private_pda(
     seed: PdaSeed,
     amount: u128,
     spend_program: &ProgramWithDependencies,
-    auth_transfer_id: nssa::ProgramId,
+    auth_transfer_id: ProgramId,
 ) -> Result<()> {
     wallet
         .send_privacy_preserving_tx(
             vec![
-                PrivacyPreservingAccount::PrivatePdaOwned(pda_account_id),
-                PrivacyPreservingAccount::PrivateForeign {
+                AccountIdentity::PrivatePdaOwned(pda_account_id),
+                AccountIdentity::PrivateForeign {
                     npk: recipient_npk,
                     vpk: recipient_vpk,
                     identifier: 0,
                 },
             ],
-            Program::serialize_instruction((seed, amount, auth_transfer_id, false))
-                .context("failed to serialize pda_fund_spend_proxy instruction")?,
+            Program::serialize_instruction((seed, amount, auth_transfer_id))
+                .context("failed to serialize pda_spend_proxy instruction")?,
             spend_program,
-            None,
         )
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;
@@ -126,9 +170,9 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
     let proxy = {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../artifacts/test_program_methods")
-            .join(NSSA_PROGRAM_FOR_TEST_PDA_FUND_SPEND_PROXY);
+            .join(NSSA_PROGRAM_FOR_TEST_PDA_SPEND_PROXY);
         Program::new(std::fs::read(&path).with_context(|| format!("reading {path:?}"))?)
-            .context("invalid pda_fund_spend_proxy binary")?
+            .context("invalid pda_spend_proxy binary")?
     };
     let auth_transfer = Program::authenticated_transfer_program();
     let proxy_id = proxy.id();
@@ -136,6 +180,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
     let seed = PdaSeed::new([42; 32]);
     let amount: u128 = 100;
 
+    let auth_transfer_program = ProgramWithDependencies::new(auth_transfer.clone(), [].into());
     let spend_program =
         ProgramWithDependencies::new(proxy, [(auth_transfer_id, auth_transfer)].into());
 
@@ -153,14 +198,13 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
     fund_private_pda(
         ctx.wallet(),
         sender_0,
-        alice_pda_0_id,
         alice_npk,
         alice_vpk.clone(),
         0,
         seed,
+        proxy_id,
         amount,
-        &spend_program,
-        auth_transfer_id,
+        &auth_transfer_program,
     )
     .await?;
 
@@ -168,14 +212,13 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
     fund_private_pda(
         ctx.wallet(),
         sender_1,
-        alice_pda_1_id,
         alice_npk,
         alice_vpk.clone(),
         1,
         seed,
+        proxy_id,
         amount,
-        &spend_program,
-        auth_transfer_id,
+        &auth_transfer_program,
     )
     .await?;
 

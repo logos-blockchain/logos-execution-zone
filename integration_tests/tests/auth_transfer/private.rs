@@ -704,6 +704,7 @@ async fn ppt_that_chain_calls_faucet_is_dropped() -> Result<()> {
                 npk,
                 ssk,
                 identifier: 1337,
+                seed: None,
             },
         ],
         &program_with_deps,

@@ -2218,7 +2218,7 @@ pub mod tests {
         assert!(matches!(result, Err(NssaError::CircuitProvingError(_))));
     }
 
-    /// A mask-3 account that no program claims via `Claim::Pda` and no caller authorizes via
+    /// A private PDA account that no program claims via `Claim::Pda` and no caller authorizes via
     /// `ChainedCall.pda_seeds` has no binding between its supplied npk and its `account_id`,
     /// so the circuit must reject. Here `simple_balance_transfer` emits no claim for the
     /// second account, leaving position 1 unbound.
@@ -2249,6 +2249,7 @@ pub mod tests {
                     npk,
                     ssk: shared_secret,
                     identifier: u128::MAX,
+                    seed: None,
                 },
             ],
             &program.into(),
@@ -2257,7 +2258,7 @@ pub mod tests {
         assert!(matches!(result, Err(NssaError::CircuitProvingError(_))));
     }
 
-    /// Happy path: a program claims a new mask-3 account via `Claim::Pda(seed)`. The circuit
+    /// Happy path: a program claims a new private PDA via `Claim::Pda(seed)`. The circuit
     /// reads the npk for that `pre_state` from `private_account_keys` at the `pre_state`'s
     /// position, derives `AccountId` via `AccountId::for_private_pda(program_id, seed, npk)`, and
     /// asserts it equals the `pre_state`'s `account_id`. The equality both validates the claim
@@ -2280,11 +2281,12 @@ pub mod tests {
                 npk,
                 ssk: shared_secret,
                 identifier: u128::MAX,
+                seed: None,
             }],
             &program.into(),
         );
 
-        let (output, _proof) = result.expect("mask-3 private PDA claim should succeed");
+        let (output, _proof) = result.expect("private PDA claim should succeed");
         assert_eq!(output.new_nullifiers.len(), 1);
         assert_eq!(output.new_commitments.len(), 1);
         assert_eq!(output.ciphertexts.len(), 1);
@@ -2319,6 +2321,7 @@ pub mod tests {
                 npk: npk_b,
                 ssk: shared_secret,
                 identifier: u128::MAX,
+                seed: None,
             }],
             &program.into(),
         );
@@ -2326,7 +2329,7 @@ pub mod tests {
         assert!(matches!(result, Err(NssaError::CircuitProvingError(_))));
     }
 
-    /// Happy path for the caller-seeds authorization of a mask-3 PDA. The delegator claims a
+    /// Happy path for the caller-seeds authorization of a private PDA. The delegator claims a
     /// private PDA via `Claim::Pda(seed)`, then chains to a callee (`noop`) delegating the same
     /// seed via `ChainedCall.pda_seeds`. In the callee's step, the `pre_state`'s authorization
     /// is established via the private derivation
@@ -2354,12 +2357,13 @@ pub mod tests {
                 npk,
                 ssk: shared_secret,
                 identifier: u128::MAX,
+                seed: None,
             }],
             &program_with_deps,
         );
 
         let (output, _proof) =
-            result.expect("caller-seeds authorization of mask-3 private PDA should succeed");
+            result.expect("caller-seeds authorization of private PDA should succeed");
         assert_eq!(output.new_commitments.len(), 1);
         assert_eq!(output.new_nullifiers.len(), 1);
     }
@@ -2392,6 +2396,7 @@ pub mod tests {
                 npk,
                 ssk: shared_secret,
                 identifier: u128::MAX,
+                seed: None,
             }],
             &program_with_deps,
         );
@@ -2401,8 +2406,8 @@ pub mod tests {
 
     /// Exploit-scenario pin. A single `(program_id, seed)` pair can derive a family of
     /// `AccountId`s, one public PDA and one private PDA per distinct npk. Without the tx-wide
-    /// family-binding check, a program could claim `PDA_alice` (mask-3, `alice_npk`) and
-    /// `PDA_bob` (mask-3, `bob_npk`) under the same seed in one transaction, and once reuse
+    /// family-binding check, a program could claim `PDA_alice` (`alice_npk`) and
+    /// `PDA_bob` (`bob_npk`) under the same seed in one transaction, and once reuse
     /// is supported a later chained call could delegate both to a callee via
     /// `pda_seeds: [S]` and mix balances across them. The binding check rejects the setup
     /// here: after the first claim records `(program, seed) → PDA_alice`, the second claim
@@ -2430,11 +2435,13 @@ pub mod tests {
                     npk: keys_a.npk(),
                     ssk: shared_a,
                     identifier: u128::MAX,
+                    seed: None,
                 },
                 InputAccountIdentity::PrivatePdaInit {
                     npk: keys_b.npk(),
                     ssk: shared_b,
                     identifier: u128::MAX,
+                    seed: None,
                 },
             ],
             &program.into(),
@@ -2443,17 +2450,11 @@ pub mod tests {
         assert!(matches!(result, Err(NssaError::CircuitProvingError(_))));
     }
 
-    /// Pins the current limitation: a mask-3 PDA that was claimed in a previous transaction
-    /// cannot be re-used in a new transaction as-is. This PR only binds supplied npks via a
-    /// fresh `Claim::Pda` or a caller's `ChainedCall.pda_seeds`, neither is present when a
-    /// program operates on an already-owned private PDA at top level. The reject site is the
-    /// post-loop `private_pda_bound_positions` assertion in
-    /// `privacy_preserving_circuit.rs`: `noop` emits no `Claim::Pda` and there is no caller
+    /// A private PDA that is reused at top level without an external seed in the identity still
+    /// fails binding. The noop program emits no `Claim::Pda` and there is no caller
     /// `ChainedCall.pda_seeds`, so position 0 is never bound and the assertion fires.
-    // TODO: a follow-up PR in the Private PDAs series needs to let the wallet supply a
-    // `(seed, original_owner_program_id)` side input per mask-3 `pre_state` so the circuit
-    // can re-verify `AccountId::for_private_pda(owner, seed, npk) == pre.account_id` without a
-    // claim.
+    /// Supplying `seed: Some((seed, owner_program_id))` in the `PrivatePdaUpdate` identity is
+    /// the correct path for top-level reuse; this test pins the failure when no seed is provided.
     #[test]
     fn private_pda_top_level_reuse_rejected_by_binding_check() {
         let program = Program::noop();
@@ -2481,6 +2482,7 @@ pub mod tests {
                 npk,
                 ssk: shared_secret,
                 identifier: u128::MAX,
+                seed: None,
             }],
             &program.into(),
         );
@@ -4372,15 +4374,15 @@ pub mod tests {
         let alice_keys = test_private_account_keys_1();
         let alice_npk = alice_keys.npk();
 
-        let proxy = Program::pda_fund_spend_proxy();
+        let proxy = Program::pda_spend_proxy();
         let auth_transfer = Program::authenticated_transfer_program();
         let proxy_id = proxy.id();
         let auth_transfer_id = auth_transfer.id();
         let seed = PdaSeed::new([42; 32]);
         let amount: u128 = 100;
 
-        let program_with_deps =
-            ProgramWithDependencies::new(proxy, [(auth_transfer_id, auth_transfer)].into());
+        let spend_with_deps =
+            ProgramWithDependencies::new(proxy, [(auth_transfer_id, auth_transfer.clone())].into());
 
         let funder_id = funder_keys.account_id();
         let alice_pda_0_id = AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, 0);
@@ -4406,7 +4408,7 @@ pub mod tests {
         let alice_shared_0 = SharedSecretKey::new([10; 32], &alice_keys.vpk());
         let alice_shared_1 = SharedSecretKey::new([11; 32], &alice_keys.vpk());
 
-        // Fund alice_pda_0
+        // Fund alice_pda_0 via authenticated_transfer directly.
         {
             let funder_account = state.get_account_by_id(funder_id);
             let funder_nonce = funder_account.nonce;
@@ -4415,16 +4417,18 @@ pub mod tests {
                     AccountWithMetadata::new(funder_account, true, funder_id),
                     AccountWithMetadata::new(Account::default(), false, alice_pda_0_id),
                 ],
-                Program::serialize_instruction((seed, amount, auth_transfer_id, true)).unwrap(),
+                Program::serialize_instruction(AuthTransferInstruction::Transfer { amount })
+                    .unwrap(),
                 vec![
                     InputAccountIdentity::Public,
                     InputAccountIdentity::PrivatePdaInit {
                         npk: alice_npk,
                         ssk: alice_shared_0,
                         identifier: 0,
+                        seed: Some((seed, proxy_id)),
                     },
                 ],
-                &program_with_deps,
+                &auth_transfer.clone().into(),
             )
             .unwrap();
             let message = Message::try_from_circuit_output(
@@ -4448,7 +4452,7 @@ pub mod tests {
                 .unwrap();
         }
 
-        // Fund alice_pda_1
+        // Fund alice_pda_1 the same way with identifier 1.
         {
             let funder_account = state.get_account_by_id(funder_id);
             let funder_nonce = funder_account.nonce;
@@ -4457,16 +4461,18 @@ pub mod tests {
                     AccountWithMetadata::new(funder_account, true, funder_id),
                     AccountWithMetadata::new(Account::default(), false, alice_pda_1_id),
                 ],
-                Program::serialize_instruction((seed, amount, auth_transfer_id, true)).unwrap(),
+                Program::serialize_instruction(AuthTransferInstruction::Transfer { amount })
+                    .unwrap(),
                 vec![
                     InputAccountIdentity::Public,
                     InputAccountIdentity::PrivatePdaInit {
                         npk: alice_npk,
                         ssk: alice_shared_1,
                         identifier: 1,
+                        seed: Some((seed, proxy_id)),
                     },
                 ],
-                &program_with_deps,
+                &auth_transfer.into(),
             )
             .unwrap();
             let message = Message::try_from_circuit_output(
@@ -4504,7 +4510,7 @@ pub mod tests {
                     AccountWithMetadata::new(alice_pda_0_account, true, alice_pda_0_id),
                     AccountWithMetadata::new(recipient_account, true, recipient_id),
                 ],
-                Program::serialize_instruction((seed, amount, auth_transfer_id, false)).unwrap(),
+                Program::serialize_instruction((seed, amount, auth_transfer_id)).unwrap(),
                 vec![
                     InputAccountIdentity::PrivatePdaUpdate {
                         ssk: alice_shared_0,
@@ -4513,10 +4519,11 @@ pub mod tests {
                             .get_proof_for_commitment(&commitment_pda_0)
                             .expect("pda_0 must be in state"),
                         identifier: 0,
+                        seed: None,
                     },
                     InputAccountIdentity::Public,
                 ],
-                &program_with_deps,
+                &spend_with_deps,
             )
             .unwrap();
             let message = Message::try_from_circuit_output(
@@ -4545,10 +4552,10 @@ pub mod tests {
             let recipient_account = state.get_account_by_id(recipient_id);
             let (output, proof) = execute_and_prove(
                 vec![
-                    AccountWithMetadata::new(alice_pda_1_account, true, alice_pda_1_id),
+                    AccountWithMetadata::new(alice_pda_1_account.clone(), true, alice_pda_1_id),
                     AccountWithMetadata::new(recipient_account, false, recipient_id),
                 ],
-                Program::serialize_instruction((seed, amount, auth_transfer_id, false)).unwrap(),
+                Program::serialize_instruction((seed, amount, auth_transfer_id)).unwrap(),
                 vec![
                     InputAccountIdentity::PrivatePdaUpdate {
                         ssk: alice_shared_1,
@@ -4557,10 +4564,11 @@ pub mod tests {
                             .get_proof_for_commitment(&commitment_pda_1)
                             .expect("pda_1 must be in state"),
                         identifier: 1,
+                        seed: None,
                     },
                     InputAccountIdentity::Public,
                 ],
-                &program_with_deps,
+                &spend_with_deps,
             )
             .unwrap();
             let message = Message::try_from_circuit_output(
@@ -4585,5 +4593,70 @@ pub mod tests {
         }
 
         assert_eq!(state.get_account_by_id(recipient_id).balance, 2 * amount);
+
+        // Re-fund alice_pda_1 top-level via auth_transfer using PrivatePdaUpdate with an
+        // external seed.
+        let alice_pda_1_account_after_spend = Account {
+            program_owner: auth_transfer_id,
+            balance: 0,
+            nonce: alice_pda_1_account
+                .nonce
+                .private_account_nonce_increment(&alice_keys.nsk),
+            ..Account::default()
+        };
+        let commitment_pda_1_after_spend =
+            Commitment::new(&alice_pda_1_id, &alice_pda_1_account_after_spend);
+        let alice_shared_1_refund = SharedSecretKey::new([12; 32], &alice_keys.vpk());
+        {
+            let recipient_account = state.get_account_by_id(recipient_id);
+            let recipient_nonce = recipient_account.nonce;
+            let (output, proof) = execute_and_prove(
+                vec![
+                    AccountWithMetadata::new(recipient_account, true, recipient_id),
+                    AccountWithMetadata::new(
+                        alice_pda_1_account_after_spend,
+                        false,
+                        alice_pda_1_id,
+                    ),
+                ],
+                Program::serialize_instruction(AuthTransferInstruction::Transfer { amount })
+                    .unwrap(),
+                vec![
+                    InputAccountIdentity::Public,
+                    InputAccountIdentity::PrivatePdaUpdate {
+                        nsk: alice_keys.nsk,
+                        ssk: alice_shared_1_refund,
+                        membership_proof: state
+                            .get_proof_for_commitment(&commitment_pda_1_after_spend)
+                            .expect("pda_1 after spend must be in state"),
+                        identifier: 1,
+                        seed: Some((seed, proxy_id)),
+                    },
+                ],
+                &Program::authenticated_transfer_program().into(),
+            )
+            .unwrap();
+            let message = Message::try_from_circuit_output(
+                vec![recipient_id],
+                vec![recipient_nonce],
+                vec![(
+                    alice_npk,
+                    alice_keys.vpk(),
+                    EphemeralPublicKey::from_scalar([12; 32]),
+                )],
+                output,
+            )
+            .unwrap();
+            let witness_set = WitnessSet::for_message(&message, proof, &[&recipient_signing_key]);
+            state
+                .transition_from_privacy_preserving_transaction(
+                    &PrivacyPreservingTransaction::new(message, witness_set),
+                    5,
+                    0,
+                )
+                .unwrap();
+        }
+
+        assert_eq!(state.get_account_by_id(recipient_id).balance, amount);
     }
 }

@@ -1,5 +1,5 @@
 use nssa::{AccountId, program::Program};
-use wallet::{PrivacyPreservingAccount, WalletCore};
+use wallet::{AccountIdentity, WalletCore};
 
 // Before running this example, compile the `hello_world.rs` guest program with:
 //
@@ -44,7 +44,7 @@ async fn main() {
     // Define the desired greeting in ASCII
     let greeting: Vec<u8> = vec![72, 111, 108, 97, 32, 109, 117, 110, 100, 111, 33];
 
-    let accounts = vec![PrivacyPreservingAccount::PrivateOwned(account_id)];
+    let accounts = vec![AccountIdentity::PrivateOwned(account_id)];
 
     // Construct and submit the privacy-preserving transaction
     wallet_core
@@ -52,7 +52,6 @@ async fn main() {
             accounts,
             Program::serialize_instruction(greeting).unwrap(),
             &program.into(),
-            None,
         )
         .await
         .unwrap();

@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 use common::transaction::NSSATransaction;
 use nssa::{PublicTransaction, program::Program, public_transaction};
 use sequencer_service_rpc::RpcClient as _;
-use wallet::{PrivacyPreservingAccount, WalletCore};
+use wallet::{AccountIdentity, WalletCore};
 
 // Before running this example, compile the `hello_world_with_move_function.rs` guest program with:
 //
@@ -99,14 +99,13 @@ async fn main() {
         } => {
             let instruction: Instruction = (WRITE_FUNCTION_ID, greeting.into_bytes());
             let account_id = account_id.parse().unwrap();
-            let accounts = vec![PrivacyPreservingAccount::PrivateOwned(account_id)];
+            let accounts = vec![AccountIdentity::PrivateOwned(account_id)];
 
             wallet_core
                 .send_privacy_preserving_tx(
                     accounts,
                     Program::serialize_instruction(instruction).unwrap(),
                     &program.into(),
-                    None,
                 )
                 .await
                 .unwrap();
@@ -139,8 +138,8 @@ async fn main() {
             let to = to.parse().unwrap();
 
             let accounts = vec![
-                PrivacyPreservingAccount::Public(from),
-                PrivacyPreservingAccount::PrivateOwned(to),
+                AccountIdentity::Public(from),
+                AccountIdentity::PrivateOwned(to),
             ];
 
             wallet_core
@@ -148,7 +147,6 @@ async fn main() {
                     accounts,
                     Program::serialize_instruction(instruction).unwrap(),
                     &program.into(),
-                    None,
                 )
                 .await
                 .unwrap();

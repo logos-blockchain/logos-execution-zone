@@ -5,7 +5,7 @@ use crate::{
     NullifierSecretKey, SharedSecretKey,
     account::{Account, AccountWithMetadata},
     encryption::Ciphertext,
-    program::{BlockValidityWindow, ProgramId, ProgramOutput, TimestampValidityWindow},
+    program::{BlockValidityWindow, PdaSeed, ProgramId, ProgramOutput, TimestampValidityWindow},
 };
 
 #[derive(Serialize, Deserialize)]
@@ -60,15 +60,28 @@ pub enum InputAccountIdentity {
         npk: NullifierPublicKey,
         ssk: SharedSecretKey,
         identifier: Identifier,
+        /// When `Some((seed, authority_program_id))`, the circuit binds this position via the
+        /// external derivation check
+        /// `AccountId::for_private_pda(authority_program_id, seed, npk, identifier) ==
+        /// pre_state.account_id` rather than requiring a `Claim::Pda` or caller
+        /// `pda_seeds` to establish the binding. The `pre_state` must have `is_authorized
+        /// == false`.
+        seed: Option<(PdaSeed, ProgramId)>,
     },
-    /// Update of an existing private PDA, authorized, with membership proof. `npk` is derived
-    /// from `nsk`. Authorization is established upstream by a caller `pda_seeds` match or a
+    /// Update of an existing private PDA, with membership proof. `npk` is derived
+    /// from `nsk`. Authorization may be established upstream by a caller `pda_seeds` match or a
     /// previously-seen authorization in a chained call.
     PrivatePdaUpdate {
         ssk: SharedSecretKey,
         nsk: NullifierSecretKey,
         membership_proof: MembershipProof,
         identifier: Identifier,
+        /// When `Some((seed, authority_program_id))`, the circuit binds this position via the
+        /// external derivation check
+        /// `AccountId::for_private_pda(authority_program_id, seed, npk, identifier) ==
+        /// pre_state.account_id` rather than requiring a caller `pda_seeds` to establish
+        /// the binding. The `pre_state` must have `is_authorized == false`.
+        seed: Option<(PdaSeed, ProgramId)>,
     },
 }
 

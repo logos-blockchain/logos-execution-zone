@@ -7,10 +7,7 @@ use nssa::{
 };
 use nssa_core::SharedSecretKey;
 
-use crate::{
-    ExecutionFailureKind, PrivacyPreservingAccount, WalletCore, cli::CliAccountMention,
-    signing::SigningGroup,
-};
+use crate::{AccountIdentity, ExecutionFailureKind, WalletCore, cli::CliAccountMention};
 
 pub struct Ata<'wallet>(pub &'wallet WalletCore);
 
@@ -21,22 +18,36 @@ impl Ata<'_> {
         definition_id: AccountId,
         owner_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
+        let owner_identity =
+            owner_mention
+                .key_path()
+                .map_or(AccountIdentity::Public(owner_id), |key_path| {
+                    AccountIdentity::PublicKeycard {
+                        account_id: owner_id,
+                        key_path: key_path.to_owned(),
+                    }
+                });
+
         let program = Program::ata();
         let ata_program_id = program.id();
         let ata_id = get_associated_token_account_id(
             &ata_program_id,
             &compute_ata_seed(owner_id, definition_id),
         );
-
-        let account_ids = vec![owner_id, definition_id, ata_id];
         let instruction = ata_core::Instruction::Create { ata_program_id };
+        let instruction_data =
+            Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
-        let mut groups = SigningGroup::new();
-        groups
-            .add_required(owner_mention, owner_id, self.0)
-            .map_err(ExecutionFailureKind::from_anyhow)?;
         self.0
-            .send_public_tx(&program, account_ids, instruction, groups)
+            .send_pub_tx(
+                vec![
+                    owner_identity,
+                    AccountIdentity::PublicNoSign(definition_id),
+                    AccountIdentity::PublicNoSign(ata_id),
+                ],
+                instruction_data,
+                &program.into(),
+            )
             .await
     }
 
@@ -48,25 +59,39 @@ impl Ata<'_> {
         amount: u128,
         owner_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
+        let owner_identity =
+            owner_mention
+                .key_path()
+                .map_or(AccountIdentity::Public(owner_id), |key_path| {
+                    AccountIdentity::PublicKeycard {
+                        account_id: owner_id,
+                        key_path: key_path.to_owned(),
+                    }
+                });
+
         let program = Program::ata();
         let ata_program_id = program.id();
         let sender_ata_id = get_associated_token_account_id(
             &ata_program_id,
             &compute_ata_seed(owner_id, definition_id),
         );
-
-        let account_ids = vec![owner_id, sender_ata_id, recipient_id];
         let instruction = ata_core::Instruction::Transfer {
             ata_program_id,
             amount,
         };
+        let instruction_data =
+            Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
-        let mut groups = SigningGroup::new();
-        groups
-            .add_required(owner_mention, owner_id, self.0)
-            .map_err(ExecutionFailureKind::from_anyhow)?;
         self.0
-            .send_public_tx(&program, account_ids, instruction, groups)
+            .send_pub_tx(
+                vec![
+                    owner_identity,
+                    AccountIdentity::PublicNoSign(sender_ata_id),
+                    AccountIdentity::PublicNoSign(recipient_id),
+                ],
+                instruction_data,
+                &program.into(),
+            )
             .await
     }
 
@@ -77,25 +102,39 @@ impl Ata<'_> {
         amount: u128,
         owner_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
+        let owner_identity =
+            owner_mention
+                .key_path()
+                .map_or(AccountIdentity::Public(owner_id), |key_path| {
+                    AccountIdentity::PublicKeycard {
+                        account_id: owner_id,
+                        key_path: key_path.to_owned(),
+                    }
+                });
+
         let program = Program::ata();
         let ata_program_id = program.id();
         let holder_ata_id = get_associated_token_account_id(
             &ata_program_id,
             &compute_ata_seed(owner_id, definition_id),
         );
-
-        let account_ids = vec![owner_id, holder_ata_id, definition_id];
         let instruction = ata_core::Instruction::Burn {
             ata_program_id,
             amount,
         };
+        let instruction_data =
+            Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
-        let mut groups = SigningGroup::new();
-        groups
-            .add_required(owner_mention, owner_id, self.0)
-            .map_err(ExecutionFailureKind::from_anyhow)?;
         self.0
-            .send_public_tx(&program, account_ids, instruction, groups)
+            .send_pub_tx(
+                vec![
+                    owner_identity,
+                    AccountIdentity::PublicNoSign(holder_ata_id),
+                    AccountIdentity::PublicNoSign(definition_id),
+                ],
+                instruction_data,
+                &program.into(),
+            )
             .await
     }
 
@@ -118,17 +157,12 @@ impl Ata<'_> {
             self.0
                 .resolve_private_account(owner_id)
                 .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
-            PrivacyPreservingAccount::Public(definition_id),
-            PrivacyPreservingAccount::Public(ata_id),
+            AccountIdentity::Public(definition_id),
+            AccountIdentity::Public(ata_id),
         ];
 
         self.0
-            .send_privacy_preserving_tx(
-                accounts,
-                instruction_data,
-                &ata_with_token_dependency(),
-                None,
-            )
+            .send_privacy_preserving_tx(accounts, instruction_data, &ata_with_token_dependency())
             .await
             .map(|(hash, mut secrets)| {
                 let secret = secrets.pop().expect("expected owner's secret");
@@ -160,17 +194,12 @@ impl Ata<'_> {
             self.0
                 .resolve_private_account(owner_id)
                 .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
-            PrivacyPreservingAccount::Public(sender_ata_id),
-            PrivacyPreservingAccount::Public(recipient_id),
+            AccountIdentity::Public(sender_ata_id),
+            AccountIdentity::Public(recipient_id),
         ];
 
         self.0
-            .send_privacy_preserving_tx(
-                accounts,
-                instruction_data,
-                &ata_with_token_dependency(),
-                None,
-            )
+            .send_privacy_preserving_tx(accounts, instruction_data, &ata_with_token_dependency())
             .await
             .map(|(hash, mut secrets)| {
                 let secret = secrets.pop().expect("expected owner's secret");
@@ -201,17 +230,12 @@ impl Ata<'_> {
             self.0
                 .resolve_private_account(owner_id)
                 .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
-            PrivacyPreservingAccount::Public(holder_ata_id),
-            PrivacyPreservingAccount::Public(definition_id),
+            AccountIdentity::Public(holder_ata_id),
+            AccountIdentity::Public(definition_id),
         ];
 
         self.0
-            .send_privacy_preserving_tx(
-                accounts,
-                instruction_data,
-                &ata_with_token_dependency(),
-                None,
-            )
+            .send_privacy_preserving_tx(accounts, instruction_data, &ata_with_token_dependency())
             .await
             .map(|(hash, mut secrets)| {
                 let secret = secrets.pop().expect("expected owner's secret");

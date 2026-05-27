@@ -181,7 +181,7 @@ async fn measure_bedrock_finality(ctx: &TestContext) -> Result<Duration> {
         .context("connect indexer WS")?;
     let sequencer_tip = ctx.sequencer_client().get_last_block_id().await?;
 
-    let timeout = Duration::from_secs(60);
+    let timeout = Duration::from_mins(1);
     let started = std::time::Instant::now();
     let poll = async {
         loop {

@@ -9,9 +9,7 @@ use sequencer_service::{GenesisAction, SequencerHandle};
 use sequencer_service_rpc::RpcClient as _;
 use tempfile::TempDir;
 use testcontainers::compose::DockerCompose;
-use wallet::{
-    AccDecodeData::Decode, PrivacyPreservingAccount, WalletCore, config::WalletConfigOverrides,
-};
+use wallet::{AccDecodeData::Decode, AccountIdentity, WalletCore, config::WalletConfigOverrides};
 
 use crate::{
     BEDROCK_SERVICE_PORT, BEDROCK_SERVICE_WITH_OPEN_PORT,
@@ -293,12 +291,11 @@ async fn claim_funds_from_vault_to_private(
     let (tx_hash, mut secrets) = wallet
         .send_privacy_preserving_tx(
             vec![
-                PrivacyPreservingAccount::PrivateOwned(owner_id),
-                PrivacyPreservingAccount::Public(owner_vault_id),
+                AccountIdentity::PrivateOwned(owner_id),
+                AccountIdentity::Public(owner_vault_id),
             ],
             instruction_data,
             &program_with_dependencies,
-            None,
         )
         .await
         .context("Failed to submit private vault claim transaction")?;

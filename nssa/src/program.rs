@@ -350,12 +350,12 @@ mod tests {
         }
 
         #[must_use]
-        pub fn pda_fund_spend_proxy() -> Self {
-            use test_program_methods::{PDA_FUND_SPEND_PROXY_ELF, PDA_FUND_SPEND_PROXY_ID};
+        pub fn pda_spend_proxy() -> Self {
+            use test_program_methods::{PDA_SPEND_PROXY_ELF, PDA_SPEND_PROXY_ID};
 
             Self {
-                id: PDA_FUND_SPEND_PROXY_ID,
-                elf: PDA_FUND_SPEND_PROXY_ELF.to_vec(),
+                id: PDA_SPEND_PROXY_ID,
+                elf: PDA_SPEND_PROXY_ELF.to_vec(),
             }
         }
 
