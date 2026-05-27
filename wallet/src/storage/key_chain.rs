@@ -55,7 +55,7 @@ pub struct SharedAccountEntry {
     /// For PDA accounts, the seed and program ID used to derive keys via `derive_keys_for_pda`.
     /// `None` for regular shared accounts (keys derived from identifier via derivation seed).
     pub pda_seed: Option<nssa_core::program::PdaSeed>,
-    pub pda_program_id: Option<nssa_core::program::ProgramId>,
+    pub authority_program_id: Option<nssa_core::program::ProgramId>,
     pub account: Account,
 }
 
@@ -858,7 +858,7 @@ mod tests {
             group_label: Label::new("test-group"),
             identifier: 42,
             pda_seed: None,
-            pda_program_id: None,
+            authority_program_id: None,
             account: nssa_core::account::Account::default(),
         };
         let encoded = bincode::serialize(&entry).expect("serialize");
@@ -871,7 +871,7 @@ mod tests {
             group_label: Label::new("pda-group"),
             identifier: u128::MAX,
             pda_seed: Some(PdaSeed::new([7_u8; 32])),
-            pda_program_id: Some([9; 8]),
+            authority_program_id: Some([9; 8]),
             account: nssa_core::account::Account::default(),
         };
         let pda_encoded = bincode::serialize(&pda_entry).expect("serialize pda");
@@ -890,7 +890,7 @@ mod tests {
             group_label: Label::new("old"),
             identifier: 1,
             pda_seed: None,
-            pda_program_id: None,
+            authority_program_id: None,
             account: nssa_core::account::Account::default(),
         };
         let encoded = bincode::serialize(&entry).expect("serialize");

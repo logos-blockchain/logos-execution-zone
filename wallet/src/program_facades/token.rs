@@ -3,10 +3,7 @@ use nssa::{AccountId, program::Program};
 use nssa_core::{Identifier, NullifierPublicKey, SharedSecretKey, encryption::ViewingPublicKey};
 use token_core::Instruction;
 
-use crate::{
-    ExecutionFailureKind, PrivacyPreservingAccount, WalletCore, cli::CliAccountMention,
-    signing::SigningGroup,
-};
+use crate::{AccountIdentity, ExecutionFailureKind, WalletCore};
 
 pub struct Token<'wallet>(pub &'wallet WalletCore);
 
@@ -20,17 +17,20 @@ impl Token<'_> {
         definition_mention: &CliAccountMention,
         supply_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let account_ids = vec![definition_account_id, supply_account_id];
+        let program = Program::token();
         let instruction = Instruction::NewFungibleDefinition { name, total_supply };
-
-        let mut groups = SigningGroup::new();
-        groups
-            .add_required(definition_mention, definition_account_id, self.0)
-            .and_then(|()| groups.add_required(supply_mention, supply_account_id, self.0))
-            .map_err(ExecutionFailureKind::from_anyhow)?;
+        let instruction_data =
+            Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
         self.0
-            .send_public_tx(&Program::token(), account_ids, instruction, groups)
+            .send_pub_tx(
+                vec![
+                    AccountIdentity::Public(definition_account_id),
+                    AccountIdentity::Public(supply_account_id),
+                ],
+                instruction_data,
+                &program.into(),
+            )
             .await
     }
 
@@ -48,7 +48,7 @@ impl Token<'_> {
         self.0
             .send_privacy_preserving_tx(
                 vec![
-                    PrivacyPreservingAccount::Public(definition_account_id),
+                    AccountIdentity::Public(definition_account_id),
                     self.0
                         .resolve_private_account(supply_account_id)
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
@@ -84,7 +84,7 @@ impl Token<'_> {
                     self.0
                         .resolve_private_account(definition_account_id)
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
-                    PrivacyPreservingAccount::Public(supply_account_id),
+                    AccountIdentity::Public(supply_account_id),
                 ],
                 instruction_data,
                 &Program::token().into(),
@@ -142,19 +142,22 @@ impl Token<'_> {
         sender_mention: &CliAccountMention,
         recipient_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let account_ids = vec![sender_account_id, recipient_account_id];
+        let program = Program::token();
         let instruction = Instruction::Transfer {
             amount_to_transfer: amount,
         };
-
-        let mut groups = SigningGroup::new();
-        groups
-            .add_required(sender_mention, sender_account_id, self.0)
-            .and_then(|()| groups.add_optional(recipient_mention, recipient_account_id, self.0))
-            .map_err(ExecutionFailureKind::from_anyhow)?;
+        let instruction_data =
+            Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
         self.0
-            .send_public_tx(&Program::token(), account_ids, instruction, groups)
+            .send_pub_tx(
+                vec![
+                    AccountIdentity::Public(sender_account_id),
+                    AccountIdentity::Public(recipient_account_id),
+                ],
+                instruction_data,
+                &program.into(),
+            )
             .await
     }
 
@@ -213,7 +216,7 @@ impl Token<'_> {
                     self.0
                         .resolve_private_account(sender_account_id)
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
-                    PrivacyPreservingAccount::PrivateForeign {
+                    AccountIdentity::PrivateForeign {
                         npk: recipient_npk,
                         vpk: recipient_vpk,
                         identifier: recipient_identifier,
@@ -250,7 +253,7 @@ impl Token<'_> {
                     self.0
                         .resolve_private_account(sender_account_id)
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
-                    PrivacyPreservingAccount::Public(recipient_account_id),
+                    AccountIdentity::Public(recipient_account_id),
                 ],
                 instruction_data,
                 &Program::token().into(),
@@ -281,7 +284,7 @@ impl Token<'_> {
         self.0
             .send_privacy_preserving_tx(
                 vec![
-                    PrivacyPreservingAccount::Public(sender_account_id),
+                    AccountIdentity::Public(sender_account_id),
                     self.0
                         .resolve_private_account(recipient_account_id)
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
@@ -317,8 +320,8 @@ impl Token<'_> {
         self.0
             .send_privacy_preserving_tx(
                 vec![
-                    PrivacyPreservingAccount::Public(sender_account_id),
-                    PrivacyPreservingAccount::PrivateForeign {
+                    AccountIdentity::Public(sender_account_id),
+                    AccountIdentity::PrivateForeign {
                         npk: recipient_npk,
                         vpk: recipient_vpk,
                         identifier: recipient_identifier,
@@ -345,18 +348,22 @@ impl Token<'_> {
         amount: u128,
         holder_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let account_ids = vec![definition_account_id, holder_account_id];
+        let program = Program::token();
         let instruction = Instruction::Burn {
             amount_to_burn: amount,
         };
-
-        let mut groups = SigningGroup::new();
-        groups
-            .add_required(holder_mention, holder_account_id, self.0)
-            .map_err(ExecutionFailureKind::from_anyhow)?;
+        let instruction_data =
+            Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
         self.0
-            .send_public_tx(&Program::token(), account_ids, instruction, groups)
+            .send_pub_tx(
+                vec![
+                    AccountIdentity::PublicNoSign(definition_account_id),
+                    AccountIdentity::Public(holder_account_id),
+                ],
+                instruction_data,
+                &program.into(),
+            )
             .await
     }
 
@@ -413,7 +420,7 @@ impl Token<'_> {
                     self.0
                         .resolve_private_account(definition_account_id)
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
-                    PrivacyPreservingAccount::Public(holder_account_id),
+                    AccountIdentity::Public(holder_account_id),
                 ],
                 instruction_data,
                 &Program::token().into(),
@@ -444,7 +451,7 @@ impl Token<'_> {
         self.0
             .send_privacy_preserving_tx(
                 vec![
-                    PrivacyPreservingAccount::Public(definition_account_id),
+                    AccountIdentity::Public(definition_account_id),
                     self.0
                         .resolve_private_account(holder_account_id)
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
@@ -471,19 +478,22 @@ impl Token<'_> {
         definition_mention: &CliAccountMention,
         holder_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let account_ids = vec![definition_account_id, holder_account_id];
+        let program = Program::token();
         let instruction = Instruction::Mint {
             amount_to_mint: amount,
         };
-
-        let mut groups = SigningGroup::new();
-        groups
-            .add_required(definition_mention, definition_account_id, self.0)
-            .and_then(|()| groups.add_optional(holder_mention, holder_account_id, self.0))
-            .map_err(ExecutionFailureKind::from_anyhow)?;
+        let instruction_data =
+            Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
         self.0
-            .send_public_tx(&Program::token(), account_ids, instruction, groups)
+            .send_pub_tx(
+                vec![
+                    AccountIdentity::Public(definition_account_id),
+                    AccountIdentity::Public(holder_account_id),
+                ],
+                instruction_data,
+                &program.into(),
+            )
             .await
     }
 
@@ -542,7 +552,7 @@ impl Token<'_> {
                     self.0
                         .resolve_private_account(definition_account_id)
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
-                    PrivacyPreservingAccount::PrivateForeign {
+                    AccountIdentity::PrivateForeign {
                         npk: holder_npk,
                         vpk: holder_vpk,
                         identifier: holder_identifier,
@@ -579,7 +589,7 @@ impl Token<'_> {
                     self.0
                         .resolve_private_account(definition_account_id)
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
-                    PrivacyPreservingAccount::Public(holder_account_id),
+                    AccountIdentity::Public(holder_account_id),
                 ],
                 instruction_data,
                 &Program::token().into(),
@@ -610,7 +620,7 @@ impl Token<'_> {
         self.0
             .send_privacy_preserving_tx(
                 vec![
-                    PrivacyPreservingAccount::Public(definition_account_id),
+                    AccountIdentity::Public(definition_account_id),
                     self.0
                         .resolve_private_account(holder_account_id)
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
@@ -646,8 +656,8 @@ impl Token<'_> {
         self.0
             .send_privacy_preserving_tx(
                 vec![
-                    PrivacyPreservingAccount::Public(definition_account_id),
-                    PrivacyPreservingAccount::PrivateForeign {
+                    AccountIdentity::Public(definition_account_id),
+                    AccountIdentity::PrivateForeign {
                         npk: holder_npk,
                         vpk: holder_vpk,
                         identifier: holder_identifier,

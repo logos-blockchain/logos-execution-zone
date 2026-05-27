@@ -461,6 +461,7 @@ mod tests {
                 npk,
                 ssk: shared_secret,
                 identifier,
+                seed: None,
             }],
             &program.clone().into(),
         )
@@ -488,7 +489,7 @@ mod tests {
         let seed = PdaSeed::new([42; 32]);
         let shared_secret_pda = SharedSecretKey::new([55; 32], &keys.vpk());
 
-        // PDA (new, mask 3)
+        // PDA (new, private PDA)
         let pda_id = AccountId::for_private_pda(&program.id(), &seed, &npk, 0);
         let pda_pre = AccountWithMetadata::new(Account::default(), false, pda_id);
 
@@ -506,6 +507,7 @@ mod tests {
                 npk,
                 ssk: shared_secret_pda,
                 identifier: 0,
+                seed: None,
             }],
             &program_with_deps,
         );
@@ -557,6 +559,7 @@ mod tests {
                     npk,
                     ssk: shared_secret_pda,
                     identifier: 0,
+                    seed: None,
                 },
                 InputAccountIdentity::Public,
             ],
@@ -747,7 +750,7 @@ mod tests {
     /// to `PrivateAccountKind::Pda` carrying the correct `(program_id, seed, identifier)`.
     #[test]
     fn private_pda_update_encrypts_pda_kind_with_identifier() {
-        let program = Program::pda_fund_spend_proxy();
+        let program = Program::pda_spend_proxy();
         let auth_transfer = Program::authenticated_transfer_program();
         let keys = test_private_account_keys_1();
         let npk = keys.npk();
@@ -784,6 +787,7 @@ mod tests {
                     nsk: keys.nsk,
                     membership_proof: commitment_set.get_proof_for(&pda_commitment).unwrap(),
                     identifier,
+                    seed: None,
                 },
                 InputAccountIdentity::Public,
             ],
@@ -819,6 +823,7 @@ mod tests {
                 npk,
                 ssk: shared_secret,
                 identifier: 99,
+                seed: None,
             }],
             &program.into(),
         );
@@ -828,7 +833,7 @@ mod tests {
 
     #[test]
     fn private_pda_update_identifier_mismatch_fails() {
-        let program = Program::pda_fund_spend_proxy();
+        let program = Program::pda_spend_proxy();
         let auth_transfer = Program::authenticated_transfer_program();
         let keys = test_private_account_keys_1();
         let npk = keys.npk();
@@ -862,6 +867,7 @@ mod tests {
                     nsk: keys.nsk,
                     membership_proof: commitment_set.get_proof_for(&pda_commitment).unwrap(),
                     identifier: 99,
+                    seed: None,
                 },
                 InputAccountIdentity::Public,
             ],

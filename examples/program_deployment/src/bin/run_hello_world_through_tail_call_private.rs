@@ -4,7 +4,7 @@ use nssa::{
     AccountId, ProgramId, privacy_preserving_transaction::circuit::ProgramWithDependencies,
     program::Program,
 };
-use wallet::{PrivacyPreservingAccount, WalletCore};
+use wallet::{AccountIdentity, WalletCore};
 
 // Before running this example, compile the `simple_tail_call.rs` guest program with:
 //
@@ -51,7 +51,7 @@ async fn main() {
         std::iter::once((hello_world.id(), hello_world)).collect();
     let program_with_dependencies = ProgramWithDependencies::new(simple_tail_call, dependencies);
 
-    let accounts = vec![PrivacyPreservingAccount::PrivateOwned(account_id)];
+    let accounts = vec![AccountIdentity::PrivateOwned(account_id)];
 
     // Construct and submit the privacy-preserving transaction
     let instruction = ();

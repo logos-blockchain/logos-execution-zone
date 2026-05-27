@@ -15,7 +15,7 @@ use test_fixtures::{DiskSizes, TestContext};
 use wallet::cli::SubcommandReturnValue;
 
 const TX_INCLUSION_POLL_INTERVAL: Duration = Duration::from_millis(250);
-const TX_INCLUSION_TIMEOUT: Duration = Duration::from_secs(120);
+const TX_INCLUSION_TIMEOUT: Duration = Duration::from_mins(2);
 
 /// Borsh-serialized sizes for one zone block fetched after a step. `block_bytes`
 /// is the full Block (header + body + bedrock metadata) and is the closest

@@ -2,7 +2,7 @@ use common::HashType;
 use nssa::AccountId;
 
 use super::{NativeTokenTransfer, auth_transfer_preparation};
-use crate::{ExecutionFailureKind, PrivacyPreservingAccount};
+use crate::{AccountIdentity, ExecutionFailureKind};
 
 impl NativeTokenTransfer<'_> {
     pub async fn send_deshielded_transfer(
@@ -19,7 +19,7 @@ impl NativeTokenTransfer<'_> {
                     self.0
                         .resolve_private_account(from)
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
-                    PrivacyPreservingAccount::Public(to),
+                    AccountIdentity::Public(to),
                 ],
                 instruction_data,
                 &program.into(),

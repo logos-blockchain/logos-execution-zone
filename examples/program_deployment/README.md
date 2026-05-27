@@ -332,7 +332,7 @@ Unlike the public version, `run_hello_world_private.rs` must:
 
 Luckily all that complexity is hidden behind the `wallet_core.send_privacy_preserving_tx` function:
 ```rust
-    let accounts = vec![PrivacyPreservingAccount::PrivateOwned(account_id)];
+    let accounts = vec![AccountIdentity::PrivateOwned(account_id)];
 
     // Construct and submit the privacy-preserving transaction
     wallet_core

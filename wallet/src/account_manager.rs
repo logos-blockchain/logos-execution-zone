@@ -11,8 +11,10 @@ use nssa_core::{
 use crate::{ExecutionFailureKind, WalletCore};
 
 #[derive(Clone)]
-pub enum PrivacyPreservingAccount {
+pub enum AccountIdentity {
     Public(AccountId),
+    /// A public account without signing. Would not try to sign, even if account is owned.
+    PublicNoSign(AccountId),
     PrivateOwned(AccountId),
     PrivateForeign {
         npk: NullifierPublicKey,
@@ -50,10 +52,12 @@ pub enum PrivacyPreservingAccount {
     },
 }
 
-impl PrivacyPreservingAccount {
+impl AccountIdentity {
     #[must_use]
+    /// Note: `PublicNoSign` still counts as public, the variant just suppresses the signing-key
+    /// lookup.
     pub const fn is_public(&self) -> bool {
-        matches!(&self, Self::Public(_))
+        matches!(&self, Self::Public(_) | Self::PublicNoSign(_))
     }
 
     #[must_use]
@@ -92,13 +96,13 @@ pub struct AccountManager {
 impl AccountManager {
     pub async fn new(
         wallet: &WalletCore,
-        accounts: Vec<PrivacyPreservingAccount>,
+        accounts: Vec<AccountIdentity>,
     ) -> Result<Self, ExecutionFailureKind> {
         let mut states = Vec::with_capacity(accounts.len());
 
         for account in accounts {
             let state = match account {
-                PrivacyPreservingAccount::Public(account_id) => {
+                AccountIdentity::Public(account_id) => {
                     let acc = wallet
                         .get_account_public(account_id)
                         .await
@@ -109,12 +113,23 @@ impl AccountManager {
 
                     State::Public { account, sk }
                 }
-                PrivacyPreservingAccount::PrivateOwned(account_id) => {
+                AccountIdentity::PublicNoSign(account_id) => {
+                    let acc = wallet
+                        .get_account_public(account_id)
+                        .await
+                        .map_err(ExecutionFailureKind::SequencerError)?;
+
+                    let sk = None;
+                    let account = AccountWithMetadata::new(acc.clone(), sk.is_some(), account_id);
+
+                    State::Public { account, sk }
+                }
+                AccountIdentity::PrivateOwned(account_id) => {
                     let pre = private_key_tree_acc_preparation(wallet, account_id, false).await?;
 
                     State::Private(pre)
                 }
-                PrivacyPreservingAccount::PrivateForeign {
+                AccountIdentity::PrivateForeign {
                     npk,
                     vpk,
                     identifier,
@@ -138,11 +153,11 @@ impl AccountManager {
 
                     State::Private(pre)
                 }
-                PrivacyPreservingAccount::PrivatePdaOwned(account_id) => {
+                AccountIdentity::PrivatePdaOwned(account_id) => {
                     let pre = private_key_tree_acc_preparation(wallet, account_id, true).await?;
                     State::Private(pre)
                 }
-                PrivacyPreservingAccount::PrivatePdaForeign {
+                AccountIdentity::PrivatePdaForeign {
                     account_id,
                     npk,
                     vpk,
@@ -166,7 +181,7 @@ impl AccountManager {
                     };
                     State::Private(pre)
                 }
-                PrivacyPreservingAccount::PrivateShared {
+                AccountIdentity::PrivateShared {
                     nsk,
                     npk,
                     vpk,
@@ -180,7 +195,7 @@ impl AccountManager {
 
                     State::Private(pre)
                 }
-                PrivacyPreservingAccount::PrivatePdaShared {
+                AccountIdentity::PrivatePdaShared {
                     account_id,
                     nsk,
                     npk,
@@ -252,11 +267,13 @@ impl AccountManager {
                         nsk,
                         membership_proof,
                         identifier: pre.identifier,
+                        seed: None,
                     },
                     _ => InputAccountIdentity::PrivatePdaInit {
                         npk: pre.npk,
                         ssk: pre.ssk,
                         identifier: pre.identifier,
+                        seed: None,
                     },
                 },
                 State::Private(pre) => match (pre.nsk, pre.proof.clone()) {
@@ -410,7 +427,7 @@ mod tests {
 
     #[test]
     fn private_shared_is_private() {
-        let acc = PrivacyPreservingAccount::PrivateShared {
+        let acc = AccountIdentity::PrivateShared {
             nsk: [0; 32],
             npk: NullifierPublicKey([1; 32]),
             vpk: ViewingPublicKey::from_scalar([2; 32]),

@@ -10,6 +10,7 @@
 
 use std::path::PathBuf;
 
+pub use account_manager::AccountIdentity;
 use anyhow::{Context as _, Result};
 use bip39::Mnemonic;
 use common::{HashType, transaction::NSSATransaction};
@@ -30,7 +31,6 @@ use nssa_core::{
     account::{AccountWithMetadata, Nonce},
     program::InstructionData,
 };
-pub use privacy_preserving_tx::PrivacyPreservingAccount;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
 use storage::Storage;
 use tokio::io::AsyncWriteExt as _;
@@ -45,11 +45,11 @@ use crate::{
 };
 
 pub mod account;
+mod account_manager;
 pub mod cli;
 pub mod config;
 pub mod helperfunctions;
 pub mod poller;
-mod privacy_preserving_tx;
 pub mod program_facades;
 pub mod signing;
 pub mod storage;
@@ -295,13 +295,10 @@ impl WalletCore {
         self.storage.key_chain_mut().set_sealing_secret_key(key);
     }
 
-    /// Resolve an `AccountId` to the appropriate `PrivacyPreservingAccount` variant.
+    /// Resolve an `AccountId` to the appropriate `AccountIdentity` variant.
     /// Checks the key tree first, then shared private accounts.
     #[must_use]
-    pub fn resolve_private_account(
-        &self,
-        account_id: nssa::AccountId,
-    ) -> Option<PrivacyPreservingAccount> {
+    pub fn resolve_private_account(&self, account_id: nssa::AccountId) -> Option<AccountIdentity> {
         // Check key tree first
         if self
             .storage
@@ -309,7 +306,7 @@ impl WalletCore {
             .private_account(account_id)
             .is_some()
         {
-            return Some(PrivacyPreservingAccount::PrivateOwned(account_id));
+            return Some(AccountIdentity::PrivateOwned(account_id));
         }
 
         // Check shared private accounts
@@ -322,9 +319,9 @@ impl WalletCore {
             .key_chain()
             .group_key_holder(&entry.group_label)?;
 
-        if let (Some(pda_seed), Some(program_id)) = (entry.pda_seed, entry.pda_program_id) {
+        if let (Some(pda_seed), Some(program_id)) = (entry.pda_seed, entry.authority_program_id) {
             let keys = holder.derive_keys_for_pda(&program_id, &pda_seed);
-            Some(PrivacyPreservingAccount::PrivatePdaShared {
+            Some(AccountIdentity::PrivatePdaShared {
                 account_id,
                 nsk: keys.nullifier_secret_key,
                 npk: keys.generate_nullifier_public_key(),
@@ -341,7 +338,7 @@ impl WalletCore {
                 result
             };
             let keys = holder.derive_keys_for_shared_account(&derivation_seed);
-            Some(PrivacyPreservingAccount::PrivateShared {
+            Some(AccountIdentity::PrivateShared {
                 nsk: keys.nullifier_secret_key,
                 npk: keys.generate_nullifier_public_key(),
                 vpk: keys.generate_viewing_public_key(),
@@ -365,7 +362,7 @@ impl WalletCore {
         group_label: Label,
         identifier: nssa_core::Identifier,
         pda_seed: Option<nssa_core::program::PdaSeed>,
-        pda_program_id: Option<nssa_core::program::ProgramId>,
+        authority_program_id: Option<nssa_core::program::ProgramId>,
     ) {
         self.storage.key_chain_mut().insert_shared_private_account(
             account_id,
@@ -373,7 +370,7 @@ impl WalletCore {
                 group_label,
                 identifier,
                 pda_seed,
-                pda_program_id,
+                authority_program_id,
                 account: Account::default(),
             },
         );
@@ -622,7 +619,7 @@ impl WalletCore {
 
     pub async fn send_privacy_preserving_tx(
         &self,
-        accounts: Vec<PrivacyPreservingAccount>,
+        accounts: Vec<AccountIdentity>,
         instruction_data: InstructionData,
         program: &ProgramWithDependencies,
         mention: Option<&CliAccountMention>,
@@ -639,13 +636,13 @@ impl WalletCore {
 
     pub async fn send_privacy_preserving_tx_with_pre_check(
         &self,
-        accounts: Vec<PrivacyPreservingAccount>,
+        accounts: Vec<AccountIdentity>,
         instruction_data: InstructionData,
         program: &ProgramWithDependencies,
         tx_pre_check: impl FnOnce(&[&Account]) -> Result<(), ExecutionFailureKind>,
         mention: Option<&CliAccountMention>,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
-        let acc_manager = privacy_preserving_tx::AccountManager::new(self, accounts).await?;
+        let acc_manager = account_manager::AccountManager::new(self, accounts).await?;
 
         let mut pre_states = acc_manager.pre_states();
 
@@ -780,6 +777,65 @@ impl WalletCore {
         ))
     }
 
+    pub async fn send_pub_tx(
+        &self,
+        accounts: Vec<AccountIdentity>,
+        instruction_data: InstructionData,
+        program: &ProgramWithDependencies,
+    ) -> Result<HashType, ExecutionFailureKind> {
+        self.send_pub_tx_with_pre_check(accounts, instruction_data, program, |_| Ok(()))
+            .await
+    }
+
+    pub async fn send_pub_tx_with_pre_check(
+        &self,
+        accounts: Vec<AccountIdentity>,
+        instruction_data: InstructionData,
+        program: &ProgramWithDependencies,
+        tx_pre_check: impl FnOnce(&[&Account]) -> Result<(), ExecutionFailureKind>,
+    ) -> Result<HashType, ExecutionFailureKind> {
+        // Public transaction, all accounts must be public
+        if accounts.iter().any(AccountIdentity::is_private) {
+            return Err(ExecutionFailureKind::TransactionBuildError(
+                nssa::error::NssaError::InvalidInput(
+                    "Private accounts are not allowed in public transactions".to_owned(),
+                ),
+            ));
+        }
+
+        let acc_manager = account_manager::AccountManager::new(self, accounts).await?;
+
+        let pre_states = acc_manager.pre_states();
+        tx_pre_check(
+            &pre_states
+                .iter()
+                .map(|pre| &pre.account)
+                .collect::<Vec<_>>(),
+        )?;
+
+        let account_ids = acc_manager.public_account_ids();
+        let program_id = program.program.id();
+        let nonces = acc_manager.public_account_nonces();
+        let private_keys = acc_manager.public_account_auth();
+
+        let message = nssa::public_transaction::Message::new_preserialized(
+            program_id,
+            account_ids,
+            nonces,
+            instruction_data,
+        );
+
+        let witness_set =
+            nssa::public_transaction::WitnessSet::for_message(&message, &private_keys);
+
+        let tx = nssa::public_transaction::PublicTransaction::new(message, witness_set);
+
+        Ok(self
+            .sequencer_client
+            .send_transaction(NSSATransaction::Public(tx))
+            .await?)
+    }
+
     pub async fn sync_to_latest_block(&mut self) -> Result<u64> {
         let latest_block_id = self.sequencer_client.get_last_block_id().await?;
         println!("Latest block is {latest_block_id}");
@@ -899,7 +955,7 @@ impl WalletCore {
                     .key_chain()
                     .group_key_holder(&entry.group_label)?;
 
-                let keys = match (&entry.pda_seed, &entry.pda_program_id) {
+                let keys = match (&entry.pda_seed, &entry.authority_program_id) {
                     (Some(pda_seed), Some(program_id)) => {
                         holder.derive_keys_for_pda(program_id, pda_seed)
                     }

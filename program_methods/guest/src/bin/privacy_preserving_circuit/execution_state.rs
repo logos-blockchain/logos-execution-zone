@@ -305,6 +305,68 @@ impl ExecutionState {
                 }
                 Entry::Vacant(_) => {
                     // Pre state for the initial call
+                    let pre_state_position = self.pre_states.len();
+                    let external_seed = match account_identities.get(pre_state_position) {
+                        Some(InputAccountIdentity::PrivatePdaInit {
+                            npk,
+                            identifier,
+                            seed: Some((seed, authority_program_id)),
+                            ..
+                        }) => {
+                            let expected = AccountId::for_private_pda(
+                                authority_program_id,
+                                seed,
+                                npk,
+                                *identifier,
+                            );
+                            assert_eq!(
+                                pre_account_id, expected,
+                                "External seed mismatch for PrivatePdaInit at position {pre_state_position}"
+                            );
+                            Some((*seed, *authority_program_id))
+                        }
+                        Some(InputAccountIdentity::PrivatePdaUpdate {
+                            nsk,
+                            identifier,
+                            seed: Some((seed, authority_program_id)),
+                            ..
+                        }) => {
+                            let npk = NullifierPublicKey::from(nsk);
+                            let expected = AccountId::for_private_pda(
+                                authority_program_id,
+                                seed,
+                                &npk,
+                                *identifier,
+                            );
+                            assert_eq!(
+                                pre_account_id, expected,
+                                "External seed mismatch for PrivatePdaUpdate at position {pre_state_position}"
+                            );
+                            Some((*seed, *authority_program_id))
+                        }
+                        _ => None,
+                    };
+                    // External seed is only consulted the first time the account is seen.
+                    // Subsequent calls need no re-check because the entry is already recorded on
+                    // private_pda_bound_positions.
+                    if let Some((seed, authority_program_id)) = external_seed {
+                        assert!(
+                            !pre.is_authorized,
+                            "Private PDA with externally-provided seed must not be authorized at position {pre_state_position}"
+                        );
+                        bind_private_pda_position(
+                            &mut self.private_pda_bound_positions,
+                            pre_state_position,
+                            authority_program_id,
+                            seed,
+                        );
+                        assert_family_binding(
+                            &mut self.pda_family_binding,
+                            authority_program_id,
+                            seed,
+                            pre_account_id,
+                        );
+                    }
                     self.pre_states.push(pre);
                 }
             }
@@ -348,14 +410,11 @@ impl ExecutionState {
                             );
                         }
                     }
-                } else if account_identity.is_private_pda() {
+                } else {
+                    // Private accounts: don't enforce the claim semantics. Unauthorized private
+                    // claiming is intentionally allowed
                     match claim {
-                        Claim::Authorized => {
-                            assert!(
-                                pre_is_authorized,
-                                "Cannot claim unauthorized private PDA {pre_account_id}"
-                            );
-                        }
+                        Claim::Authorized => {}
                         Claim::Pda(seed) => {
                             let (npk, identifier) = self
                                 .private_pda_npk_by_position
@@ -383,10 +442,6 @@ impl ExecutionState {
                             );
                         }
                     }
-                } else {
-                    // Standalone private accounts: don't enforce the claim semantics.
-                    // Unauthorized private claiming is intentionally allowed since operating
-                    // these accounts requires the npk/nsk keypair anyway.
                 }
 
                 post.account_mut().program_owner = program_id;

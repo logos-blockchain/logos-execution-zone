@@ -148,6 +148,7 @@ pub fn compute_circuit_output(
                 npk: _,
                 ssk,
                 identifier,
+                seed: _,
             } => {
                 // The npk-to-account_id binding is established upstream in
                 // `validate_and_sync_states` via `Claim::Pda(seed)` or a caller `pda_seeds`
@@ -172,7 +173,7 @@ pub fn compute_circuit_output(
                 let new_nonce = Nonce::private_account_nonce_init(&pre_state.account_id);
 
                 let account_id = pre_state.account_id;
-                let (pda_program_id, seed) = pda_seed_by_position
+                let (authority_program_id, seed) = pda_seed_by_position
                     .get(&pos)
                     .expect("PrivatePdaInit position must be in pda_seed_by_position");
                 emit_private_output(
@@ -181,7 +182,7 @@ pub fn compute_circuit_output(
                     post_state,
                     &account_id,
                     &PrivateAccountKind::Pda {
-                        program_id: *pda_program_id,
+                        program_id: *authority_program_id,
                         seed: *seed,
                         identifier: *identifier,
                     },
@@ -195,14 +196,16 @@ pub fn compute_circuit_output(
                 nsk,
                 membership_proof,
                 identifier,
+                seed: external_seed,
             } => {
-                // The npk binding is established upstream. Authorization must already be set;
-                // an unauthorized PrivatePdaUpdate would mean the prover supplied an nsk for an
-                // unbound PDA, which the upstream binding check would have rejected anyway,
-                // but we assert here to fail fast and document the precondition.
+                // With an external seed the binding comes from the circuit input and the
+                // pre_state is intentionally unauthorized; without one the binding comes from
+                // a Claim or caller pda_seeds, so the pre_state must already be authorized.
+                // When `external_seed` is `Some`, execution_state already asserted
+                // `!pre_state.is_authorized`.
                 assert!(
-                    pre_state.is_authorized,
-                    "PrivatePdaUpdate requires authorized pre_state"
+                    pre_state.is_authorized ^ external_seed.is_some(),
+                    "PrivatePdaUpdate requires authorized pre_state or external seed"
                 );
 
                 let new_nullifier = compute_update_nullifier_and_set_digest(
@@ -214,7 +217,7 @@ pub fn compute_circuit_output(
                 let new_nonce = pre_state.account.nonce.private_account_nonce_increment(nsk);
 
                 let account_id = pre_state.account_id;
-                let (pda_program_id, seed) = pda_seed_by_position
+                let (authority_program_id, seed) = pda_seed_by_position
                     .get(&pos)
                     .expect("PrivatePdaUpdate position must be in pda_seed_by_position");
                 emit_private_output(
@@ -223,7 +226,7 @@ pub fn compute_circuit_output(
                     post_state,
                     &account_id,
                     &PrivateAccountKind::Pda {
-                        program_id: *pda_program_id,
+                        program_id: *authority_program_id,
                         seed: *seed,
                         identifier: *identifier,
                     },

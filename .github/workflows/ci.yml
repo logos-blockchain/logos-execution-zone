@@ -94,6 +94,12 @@ jobs:
       - name: Install active toolchain
         run: rustup install
 
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-rust-cache
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
       - name: Lint workspace
         env:
           RISC0_SKIP_BUILD: "1"
@@ -123,6 +129,12 @@ jobs:
       - name: Install active toolchain
         run: rustup install
 
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-rust-cache
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
       - name: Install nextest
         run: cargo install --locked cargo-nextest
 
@@ -132,9 +144,10 @@ jobs:
           RUST_LOG: "info"
         run: cargo nextest run --workspace --exclude integration_tests --all-features
 
-  integration-tests:
+  integration-tests-prebuild:
     runs-on: ubuntu-latest
-    timeout-minutes: 90 # TODO: Apply CI cache to speed this up
+    outputs:
+      targets: ${{ steps.discover-targets.outputs.targets }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -151,6 +164,75 @@ jobs:
       - name: Install active toolchain
         run: rustup install
 
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-rust-cache
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install nextest
+        run: cargo install --locked cargo-nextest
+
+      - name: Build integration test archive
+        env:
+          RISC0_DEV_MODE: "1"
+        run: cargo nextest archive -p integration_tests --archive-file integration-tests.tar.zst --no-pager
+
+      - name: Upload integration test archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-tests-archive
+          path: integration-tests.tar.zst
+
+      - name: Discover integration test targets from archive
+        id: discover-targets
+        run: |
+          cargo nextest list \
+            --archive-file integration-tests.tar.zst \
+            --list-type binaries-only \
+            --message-format json \
+            --no-pager > integration-tests-binaries.json
+
+          targets_json="$(jq -c '[."rust-binaries" | to_entries[] | select(.value.kind == "test" and .value."binary-name" != "tps") | .value."binary-name"] | sort | unique' integration-tests-binaries.json)"
+
+          if [[ "$targets_json" == "[]" ]]; then
+            echo "No integration test targets were discovered." >&2
+            exit 1
+          fi
+
+          echo "targets=$targets_json" >> "$GITHUB_OUTPUT"
+          echo "Discovered integration targets: $targets_json"
+
+  integration-tests:
+    needs: integration-tests-prebuild
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJson(needs.integration-tests-prebuild.outputs.targets) }}
+    name: integration-tests (${{ matrix.target }})
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.head_ref }}
+
+      - uses: ./.github/actions/install-system-deps
+
+      - uses: ./.github/actions/install-risc0
+
+      - uses: ./.github/actions/install-logos-blockchain-circuits
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install active toolchain
+        run: rustup install
+
+      - name: Download integration test archive
+        uses: actions/download-artifact@v4
+        with:
+          name: integration-tests-archive
+
       - name: Install nextest
         run: cargo install --locked cargo-nextest
 
@@ -158,7 +240,7 @@ jobs:
         env:
           RISC0_DEV_MODE: "1"
           RUST_LOG: "info"
-        run: cargo nextest run -p integration_tests -- --skip tps_test
+        run: cargo nextest run --archive-file integration-tests.tar.zst -E "binary(${{ matrix.target }})"
 
   valid-proof-test:
     runs-on: ubuntu-latest
@@ -179,6 +261,12 @@ jobs:
       - name: Install active toolchain
         run: rustup install
 
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-rust-cache
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
       - name: Test valid proof
         env:
           RUST_LOG: "info"
@@ -195,6 +283,12 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.head_ref }}
 
       - uses: ./.github/actions/install-risc0
+
+      - name: Restore Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ci-rust-cache
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install just
         run: cargo install --locked just

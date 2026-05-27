@@ -7,10 +7,7 @@ use nssa::{
 };
 use nssa_core::SharedSecretKey;
 
-use crate::{
-    ExecutionFailureKind, PrivacyPreservingAccount, WalletCore, cli::CliAccountMention,
-    signing::SigningGroup,
-};
+use crate::{AccountIdentity, ExecutionFailureKind, WalletCore};
 
 pub struct Ata<'wallet>(pub &'wallet WalletCore);
 
@@ -27,16 +24,20 @@ impl Ata<'_> {
             &ata_program_id,
             &compute_ata_seed(owner_id, definition_id),
         );
-
-        let account_ids = vec![owner_id, definition_id, ata_id];
         let instruction = ata_core::Instruction::Create { ata_program_id };
+        let instruction_data =
+            Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
-        let mut groups = SigningGroup::new();
-        groups
-            .add_required(owner_mention, owner_id, self.0)
-            .map_err(ExecutionFailureKind::from_anyhow)?;
         self.0
-            .send_public_tx(&program, account_ids, instruction, groups)
+            .send_pub_tx(
+                vec![
+                    AccountIdentity::Public(owner_id),
+                    AccountIdentity::PublicNoSign(definition_id),
+                    AccountIdentity::PublicNoSign(ata_id),
+                ],
+                instruction_data,
+                &program.into(),
+            )
             .await
     }
 
@@ -54,19 +55,23 @@ impl Ata<'_> {
             &ata_program_id,
             &compute_ata_seed(owner_id, definition_id),
         );
-
-        let account_ids = vec![owner_id, sender_ata_id, recipient_id];
         let instruction = ata_core::Instruction::Transfer {
             ata_program_id,
             amount,
         };
+        let instruction_data =
+            Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
-        let mut groups = SigningGroup::new();
-        groups
-            .add_required(owner_mention, owner_id, self.0)
-            .map_err(ExecutionFailureKind::from_anyhow)?;
         self.0
-            .send_public_tx(&program, account_ids, instruction, groups)
+            .send_pub_tx(
+                vec![
+                    AccountIdentity::Public(owner_id),
+                    AccountIdentity::PublicNoSign(sender_ata_id),
+                    AccountIdentity::PublicNoSign(recipient_id),
+                ],
+                instruction_data,
+                &program.into(),
+            )
             .await
     }
 
@@ -83,19 +88,23 @@ impl Ata<'_> {
             &ata_program_id,
             &compute_ata_seed(owner_id, definition_id),
         );
-
-        let account_ids = vec![owner_id, holder_ata_id, definition_id];
         let instruction = ata_core::Instruction::Burn {
             ata_program_id,
             amount,
         };
+        let instruction_data =
+            Program::serialize_instruction(instruction).expect("Instruction should serialize");
 
-        let mut groups = SigningGroup::new();
-        groups
-            .add_required(owner_mention, owner_id, self.0)
-            .map_err(ExecutionFailureKind::from_anyhow)?;
         self.0
-            .send_public_tx(&program, account_ids, instruction, groups)
+            .send_pub_tx(
+                vec![
+                    AccountIdentity::Public(owner_id),
+                    AccountIdentity::PublicNoSign(holder_ata_id),
+                    AccountIdentity::PublicNoSign(definition_id),
+                ],
+                instruction_data,
+                &program.into(),
+            )
             .await
     }
 
@@ -118,8 +127,8 @@ impl Ata<'_> {
             self.0
                 .resolve_private_account(owner_id)
                 .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
-            PrivacyPreservingAccount::Public(definition_id),
-            PrivacyPreservingAccount::Public(ata_id),
+            AccountIdentity::Public(definition_id),
+            AccountIdentity::Public(ata_id),
         ];
 
         self.0
@@ -160,8 +169,8 @@ impl Ata<'_> {
             self.0
                 .resolve_private_account(owner_id)
                 .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
-            PrivacyPreservingAccount::Public(sender_ata_id),
-            PrivacyPreservingAccount::Public(recipient_id),
+            AccountIdentity::Public(sender_ata_id),
+            AccountIdentity::Public(recipient_id),
         ];
 
         self.0
@@ -201,8 +210,8 @@ impl Ata<'_> {
             self.0
                 .resolve_private_account(owner_id)
                 .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
-            PrivacyPreservingAccount::Public(holder_ata_id),
-            PrivacyPreservingAccount::Public(definition_id),
+            AccountIdentity::Public(holder_ata_id),
+            AccountIdentity::Public(definition_id),
         ];
 
         self.0
