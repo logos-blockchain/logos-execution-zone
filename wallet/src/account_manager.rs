@@ -1,6 +1,7 @@
 use anyhow::Result;
 use key_protocol::key_management::ephemeral_key_holder::EphemeralKeyHolder;
-use nssa::{AccountId, PrivateKey};
+use keycard_wallet::{KeycardWallet, python_path};
+use nssa::{AccountId, PrivateKey, PublicKey, Signature};
 use nssa_core::{
     Identifier, InputAccountIdentity, MembershipProof, NullifierPublicKey, NullifierSecretKey,
     SharedSecretKey,
@@ -15,6 +16,11 @@ pub enum AccountIdentity {
     Public(AccountId),
     /// A public account without signing. Would not try to sign, even if account is owned.
     PublicNoSign(AccountId),
+    /// A public account from keycard. Mandatory signing.
+    PublicKeycard {
+        account_id: AccountId,
+        key_path: String,
+    },
     PrivateOwned(AccountId),
     PrivateForeign {
         npk: NullifierPublicKey,
@@ -57,7 +63,10 @@ impl AccountIdentity {
     /// Note: `PublicNoSign` still counts as public, the variant just suppresses the signing-key
     /// lookup.
     pub const fn is_public(&self) -> bool {
-        matches!(&self, Self::Public(_) | Self::PublicNoSign(_))
+        matches!(
+            &self,
+            Self::Public(_) | Self::PublicNoSign(_) | Self::PublicKeycard { .. }
+        )
     }
 
     #[must_use]
@@ -86,11 +95,16 @@ enum State {
         account: AccountWithMetadata,
         sk: Option<PrivateKey>,
     },
+    PublicKeycard {
+        account: AccountWithMetadata,
+        key_path: String,
+    },
     Private(AccountPreparedData),
 }
 
 pub struct AccountManager {
     states: Vec<State>,
+    pin: Option<String>,
 }
 
 impl AccountManager {
@@ -99,6 +113,7 @@ impl AccountManager {
         accounts: Vec<AccountIdentity>,
     ) -> Result<Self, ExecutionFailureKind> {
         let mut states = Vec::with_capacity(accounts.len());
+        let mut pin = None;
 
         for account in accounts {
             let state = match account {
@@ -123,6 +138,35 @@ impl AccountManager {
                     let account = AccountWithMetadata::new(acc.clone(), sk.is_some(), account_id);
 
                     State::Public { account, sk }
+                }
+                AccountIdentity::PublicKeycard {
+                    account_id,
+                    key_path,
+                } => {
+                    let acc = wallet
+                        .get_account_public(account_id)
+                        .await
+                        .map_err(ExecutionFailureKind::SequencerError)?;
+
+                    let account = AccountWithMetadata::new(acc.clone(), true, account_id);
+
+                    if pin.is_none() {
+                        pin = Some(
+                            crate::helperfunctions::read_pin()
+                                .map_err(|e| {
+                                    ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<
+                                        pyo3::exceptions::PyRuntimeError,
+                                        _,
+                                    >(
+                                        e.to_string()
+                                    ))
+                                })?
+                                .as_str()
+                                .to_owned(),
+                        );
+                    }
+
+                    State::PublicKeycard { account, key_path }
                 }
                 AccountIdentity::PrivateOwned(account_id) => {
                     let pre = private_key_tree_acc_preparation(wallet, account_id, false).await?;
@@ -214,14 +258,16 @@ impl AccountManager {
             states.push(state);
         }
 
-        Ok(Self { states })
+        Ok(Self { states, pin })
     }
 
     pub fn pre_states(&self) -> Vec<AccountWithMetadata> {
         self.states
             .iter()
             .map(|state| match state {
-                State::Public { account, .. } => account.clone(),
+                State::Public { account, .. } | State::PublicKeycard { account, .. } => {
+                    account.clone()
+                }
                 State::Private(pre) => pre.pre_state.clone(),
             })
             .collect()
@@ -232,6 +278,7 @@ impl AccountManager {
             .iter()
             .filter_map(|state| match state {
                 State::Public { account, sk } => sk.as_ref().map(|_| account.account.nonce),
+                State::PublicKeycard { account, .. } => Some(account.account.nonce),
                 State::Private(_) => None,
             })
             .collect()
@@ -247,7 +294,7 @@ impl AccountManager {
                     vpk: pre.vpk.clone(),
                     epk: pre.epk.clone(),
                 }),
-                State::Public { .. } => None,
+                State::Public { .. } | State::PublicKeycard { .. } => None,
             })
             .collect()
     }
@@ -260,7 +307,7 @@ impl AccountManager {
         self.states
             .iter()
             .map(|state| match state {
-                State::Public { .. } => InputAccountIdentity::Public,
+                State::Public { .. } | State::PublicKeycard { .. } => InputAccountIdentity::Public,
                 State::Private(pre) if pre.is_pda => match (pre.nsk, pre.proof.clone()) {
                     (Some(nsk), Some(membership_proof)) => InputAccountIdentity::PrivatePdaUpdate {
                         ssk: pre.ssk,
@@ -304,20 +351,65 @@ impl AccountManager {
         self.states
             .iter()
             .filter_map(|state| match state {
-                State::Public { account, .. } => Some(account.account_id),
+                State::Public { account, .. } | State::PublicKeycard { account, .. } => {
+                    Some(account.account_id)
+                }
                 State::Private(_) => None,
             })
             .collect()
     }
 
-    pub fn public_account_auth(&self) -> Vec<&PrivateKey> {
+    pub fn public_non_keycard_account_auth(&self) -> Vec<&PrivateKey> {
         self.states
             .iter()
             .filter_map(|state| match state {
                 State::Public { sk, .. } => sk.as_ref(),
-                State::Private(_) => None,
+                State::PublicKeycard { .. } | State::Private(_) => None,
             })
             .collect()
+    }
+
+    pub fn sign_message(&self, message_hash: [u8; 32]) -> Result<Vec<(Signature, PublicKey)>> {
+        let mut sigs: Vec<(Signature, PublicKey)> = self
+            .public_non_keycard_account_auth()
+            .into_iter()
+            .map(|key| {
+                (
+                    Signature::new(key, &message_hash),
+                    PublicKey::new_from_private_key(key),
+                )
+            })
+            .collect();
+
+        let keycard_paths = self
+            .states
+            .iter()
+            .fold(vec![], |mut acc, state| match state {
+                State::Private(_) | State::Public { .. } => acc,
+                State::PublicKeycard {
+                    account: _,
+                    key_path,
+                } => {
+                    acc.push(key_path.as_str());
+                    acc
+                }
+            });
+
+        if let Some(pin) = self.pin.clone() {
+            pyo3::Python::with_gil(|py| -> pyo3::PyResult<()> {
+                python_path::add_python_path(py)?;
+                let wallet = KeycardWallet::new(py)?;
+                wallet.connect(py, &pin)?;
+                for path in keycard_paths {
+                    sigs.push(wallet.sign_message_for_path(py, path, &message_hash)?);
+                }
+                drop(wallet.close_session(py));
+                Ok(())
+            })
+            .map_err(anyhow::Error::from)?;
+        }
+
+        Ok(sigs)
     }
 }
 

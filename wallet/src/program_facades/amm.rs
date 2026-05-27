@@ -15,10 +15,34 @@ impl Amm<'_> {
         user_holding_lp: AccountId,
         balance_a: u128,
         balance_b: u128,
-        _a_mention: &CliAccountMention,
-        _b_mention: &CliAccountMention,
-        _lp_mention: &CliAccountMention,
+        user_holding_a_mention: &CliAccountMention,
+        user_holding_b_mention: &CliAccountMention,
+        user_holding_lp_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
+        let user_holding_a_identity = user_holding_a_mention.key_path().map_or(
+            AccountIdentity::Public(user_holding_a),
+            |key_path| AccountIdentity::PublicKeycard {
+                account_id: user_holding_a,
+                key_path: key_path.to_owned(),
+            },
+        );
+
+        let user_holding_b_identity = user_holding_b_mention.key_path().map_or(
+            AccountIdentity::Public(user_holding_b),
+            |key_path| AccountIdentity::PublicKeycard {
+                account_id: user_holding_b,
+                key_path: key_path.to_owned(),
+            },
+        );
+
+        let user_holding_lp_identity = user_holding_lp_mention.key_path().map_or(
+            AccountIdentity::Public(user_holding_lp),
+            |key_path| AccountIdentity::PublicKeycard {
+                account_id: user_holding_lp,
+                key_path: key_path.to_owned(),
+            },
+        );
+
         let program = Program::amm();
         let amm_program_id = Program::amm().id();
         let user_a_acc = self
@@ -59,9 +83,9 @@ impl Amm<'_> {
                     AccountIdentity::PublicNoSign(vault_holding_a),
                     AccountIdentity::PublicNoSign(vault_holding_b),
                     AccountIdentity::PublicNoSign(pool_lp),
-                    AccountIdentity::Public(user_holding_a),
-                    AccountIdentity::Public(user_holding_b),
-                    AccountIdentity::Public(user_holding_lp),
+                    user_holding_a_identity,
+                    user_holding_b_identity,
+                    user_holding_lp_identity,
                 ],
                 instruction_data,
                 &program.into(),
@@ -77,8 +101,8 @@ impl Amm<'_> {
         swap_amount_in: u128,
         min_amount_out: u128,
         token_definition_id_in: AccountId,
-        _a_mention: &CliAccountMention,
-        _b_mention: &CliAccountMention,
+        user_holding_a_mention: &CliAccountMention,
+        user_holding_b_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
         let program = Program::amm();
         let amm_program_id = Program::amm().id();
@@ -121,13 +145,25 @@ impl Amm<'_> {
         }
 
         let user_a_signing_identity = if token_definition_id_in == definition_token_a_id {
-            AccountIdentity::Public(user_holding_a)
+            user_holding_a_mention.key_path().map_or(
+                AccountIdentity::Public(user_holding_a),
+                |key_path| AccountIdentity::PublicKeycard {
+                    account_id: user_holding_a,
+                    key_path: key_path.to_owned(),
+                },
+            )
         } else {
             AccountIdentity::PublicNoSign(user_holding_a)
         };
 
         let user_b_signing_identity = if token_definition_id_in == definition_token_b_id {
-            AccountIdentity::Public(user_holding_b)
+            user_holding_b_mention.key_path().map_or(
+                AccountIdentity::Public(user_holding_b),
+                |key_path| AccountIdentity::PublicKeycard {
+                    account_id: user_holding_b,
+                    key_path: key_path.to_owned(),
+                },
+            )
         } else {
             AccountIdentity::PublicNoSign(user_holding_b)
         };
@@ -155,8 +191,8 @@ impl Amm<'_> {
         exact_amount_out: u128,
         max_amount_in: u128,
         token_definition_id_in: AccountId,
-        _a_mention: &CliAccountMention,
-        _b_mention: &CliAccountMention,
+        user_holding_a_mention: &CliAccountMention,
+        user_holding_b_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
         let program = Program::amm();
         let amm_program_id = Program::amm().id();
@@ -199,13 +235,25 @@ impl Amm<'_> {
         }
 
         let user_a_signing_identity = if token_definition_id_in == definition_token_a_id {
-            AccountIdentity::Public(user_holding_a)
+            user_holding_a_mention.key_path().map_or(
+                AccountIdentity::Public(user_holding_a),
+                |key_path| AccountIdentity::PublicKeycard {
+                    account_id: user_holding_a,
+                    key_path: key_path.to_owned(),
+                },
+            )
         } else {
             AccountIdentity::PublicNoSign(user_holding_a)
         };
 
         let user_b_signing_identity = if token_definition_id_in == definition_token_b_id {
-            AccountIdentity::Public(user_holding_b)
+            user_holding_b_mention.key_path().map_or(
+                AccountIdentity::Public(user_holding_b),
+                |key_path| AccountIdentity::PublicKeycard {
+                    account_id: user_holding_b,
+                    key_path: key_path.to_owned(),
+                },
+            )
         } else {
             AccountIdentity::PublicNoSign(user_holding_b)
         };
@@ -234,10 +282,25 @@ impl Amm<'_> {
         min_amount_liquidity: u128,
         max_amount_to_add_token_a: u128,
         max_amount_to_add_token_b: u128,
-        _a_mention: &CliAccountMention,
-        _b_mention: &CliAccountMention,
-        _lp_mention: &CliAccountMention,
+        user_holding_a_mention: &CliAccountMention,
+        user_holding_b_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
+        let user_holding_a_identity = user_holding_a_mention.key_path().map_or(
+            AccountIdentity::Public(user_holding_a),
+            |key_path| AccountIdentity::PublicKeycard {
+                account_id: user_holding_a,
+                key_path: key_path.to_owned(),
+            },
+        );
+
+        let user_holding_b_identity = user_holding_b_mention.key_path().map_or(
+            AccountIdentity::Public(user_holding_b),
+            |key_path| AccountIdentity::PublicKeycard {
+                account_id: user_holding_b,
+                key_path: key_path.to_owned(),
+            },
+        );
+
         let program = Program::amm();
         let amm_program_id = Program::amm().id();
         let user_a_acc = self
@@ -278,8 +341,8 @@ impl Amm<'_> {
                     AccountIdentity::PublicNoSign(vault_holding_a),
                     AccountIdentity::PublicNoSign(vault_holding_b),
                     AccountIdentity::PublicNoSign(pool_lp),
-                    AccountIdentity::Public(user_holding_a),
-                    AccountIdentity::Public(user_holding_b),
+                    user_holding_a_identity,
+                    user_holding_b_identity,
                     AccountIdentity::PublicNoSign(user_holding_lp),
                 ],
                 instruction_data,
@@ -297,8 +360,16 @@ impl Amm<'_> {
         remove_liquidity_amount: u128,
         min_amount_to_remove_token_a: u128,
         min_amount_to_remove_token_b: u128,
-        _lp_mention: &CliAccountMention,
+        user_holding_lp_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
+        let user_holding_lp_identity = user_holding_lp_mention.key_path().map_or(
+            AccountIdentity::Public(user_holding_lp),
+            |key_path| AccountIdentity::PublicKeycard {
+                account_id: user_holding_lp,
+                key_path: key_path.to_owned(),
+            },
+        );
+
         let program = Program::amm();
         let amm_program_id = Program::amm().id();
         let user_a_acc = self
@@ -341,7 +412,7 @@ impl Amm<'_> {
                     AccountIdentity::PublicNoSign(pool_lp),
                     AccountIdentity::PublicNoSign(user_holding_a),
                     AccountIdentity::PublicNoSign(user_holding_b),
-                    AccountIdentity::Public(user_holding_lp),
+                    user_holding_lp_identity,
                 ],
                 instruction_data,
                 &program.into(),

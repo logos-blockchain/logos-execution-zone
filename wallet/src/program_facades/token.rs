@@ -14,9 +14,25 @@ impl Token<'_> {
         supply_account_id: AccountId,
         name: String,
         total_supply: u128,
-        _definition_mention: &CliAccountMention,
-        _supply_mention: &CliAccountMention,
+        definition_mention: &CliAccountMention,
+        supply_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
+        let definition_identity = definition_mention.key_path().map_or(
+            AccountIdentity::Public(definition_account_id),
+            |key_path| AccountIdentity::PublicKeycard {
+                account_id: definition_account_id,
+                key_path: key_path.to_owned(),
+            },
+        );
+
+        let supply_identity = supply_mention.key_path().map_or(
+            AccountIdentity::Public(supply_account_id),
+            |key_path| AccountIdentity::PublicKeycard {
+                account_id: supply_account_id,
+                key_path: key_path.to_owned(),
+            },
+        );
+
         let program = Program::token();
         let instruction = Instruction::NewFungibleDefinition { name, total_supply };
         let instruction_data =
@@ -24,10 +40,7 @@ impl Token<'_> {
 
         self.0
             .send_pub_tx(
-                vec![
-                    AccountIdentity::Public(definition_account_id),
-                    AccountIdentity::Public(supply_account_id),
-                ],
+                vec![definition_identity, supply_identity],
                 instruction_data,
                 &program.into(),
             )
@@ -55,7 +68,6 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -88,7 +100,6 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -123,7 +134,6 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -139,9 +149,25 @@ impl Token<'_> {
         sender_account_id: AccountId,
         recipient_account_id: AccountId,
         amount: u128,
-        _sender_mention: &CliAccountMention,
-        _recipient_mention: &CliAccountMention,
+        sender_mention: &CliAccountMention,
+        recipient_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
+        let sender_identity = sender_mention.key_path().map_or(
+            AccountIdentity::Public(sender_account_id),
+            |key_path| AccountIdentity::PublicKeycard {
+                account_id: sender_account_id,
+                key_path: key_path.to_owned(),
+            },
+        );
+
+        let recipient_identity = recipient_mention.key_path().map_or(
+            AccountIdentity::Public(recipient_account_id),
+            |key_path| AccountIdentity::PublicKeycard {
+                account_id: recipient_account_id,
+                key_path: key_path.to_owned(),
+            },
+        );
+
         let program = Program::token();
         let instruction = Instruction::Transfer {
             amount_to_transfer: amount,
@@ -151,10 +177,7 @@ impl Token<'_> {
 
         self.0
             .send_pub_tx(
-                vec![
-                    AccountIdentity::Public(sender_account_id),
-                    AccountIdentity::Public(recipient_account_id),
-                ],
+                vec![sender_identity, recipient_identity],
                 instruction_data,
                 &program.into(),
             )
@@ -185,7 +208,6 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -224,7 +246,6 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -257,7 +278,6 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -276,6 +296,14 @@ impl Token<'_> {
         amount: u128,
         sender_mention: &CliAccountMention,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
+        let sender_identity = sender_mention.key_path().map_or(
+            AccountIdentity::Public(sender_account_id),
+            |key_path| AccountIdentity::PublicKeycard {
+                account_id: sender_account_id,
+                key_path: key_path.to_owned(),
+            },
+        );
+
         let instruction = Instruction::Transfer {
             amount_to_transfer: amount,
         };
@@ -284,14 +312,13 @@ impl Token<'_> {
         self.0
             .send_privacy_preserving_tx(
                 vec![
-                    AccountIdentity::Public(sender_account_id),
+                    sender_identity,
                     self.0
                         .resolve_private_account(recipient_account_id)
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
                 ],
                 instruction_data,
                 &Program::token().into(),
-                Some(sender_mention),
             )
             .await
             .map(|(resp, secrets)| {
@@ -312,6 +339,14 @@ impl Token<'_> {
         amount: u128,
         sender_mention: &CliAccountMention,
     ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
+        let sender_identity = sender_mention.key_path().map_or(
+            AccountIdentity::Public(sender_account_id),
+            |key_path| AccountIdentity::PublicKeycard {
+                account_id: sender_account_id,
+                key_path: key_path.to_owned(),
+            },
+        );
+
         let instruction = Instruction::Transfer {
             amount_to_transfer: amount,
         };
@@ -320,7 +355,7 @@ impl Token<'_> {
         self.0
             .send_privacy_preserving_tx(
                 vec![
-                    AccountIdentity::Public(sender_account_id),
+                    sender_identity,
                     AccountIdentity::PrivateForeign {
                         npk: recipient_npk,
                         vpk: recipient_vpk,
@@ -329,7 +364,6 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                Some(sender_mention),
             )
             .await
             .map(|(resp, secrets)| {
@@ -346,8 +380,16 @@ impl Token<'_> {
         definition_account_id: AccountId,
         holder_account_id: AccountId,
         amount: u128,
-        _holder_mention: &CliAccountMention,
+        holder_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
+        let holder_identity = holder_mention.key_path().map_or(
+            AccountIdentity::Public(holder_account_id),
+            |key_path| AccountIdentity::PublicKeycard {
+                account_id: holder_account_id,
+                key_path: key_path.to_owned(),
+            },
+        );
+
         let program = Program::token();
         let instruction = Instruction::Burn {
             amount_to_burn: amount,
@@ -359,7 +401,7 @@ impl Token<'_> {
             .send_pub_tx(
                 vec![
                     AccountIdentity::PublicNoSign(definition_account_id),
-                    AccountIdentity::Public(holder_account_id),
+                    holder_identity,
                 ],
                 instruction_data,
                 &program.into(),
@@ -391,7 +433,6 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -424,7 +465,6 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -458,7 +498,6 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -475,9 +514,25 @@ impl Token<'_> {
         definition_account_id: AccountId,
         holder_account_id: AccountId,
         amount: u128,
-        _definition_mention: &CliAccountMention,
-        _holder_mention: &CliAccountMention,
+        definition_mention: &CliAccountMention,
+        holder_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
+        let definition_identity = definition_mention.key_path().map_or(
+            AccountIdentity::Public(definition_account_id),
+            |key_path| AccountIdentity::PublicKeycard {
+                account_id: definition_account_id,
+                key_path: key_path.to_owned(),
+            },
+        );
+
+        let holder_identity = holder_mention.key_path().map_or(
+            AccountIdentity::Public(holder_account_id),
+            |key_path| AccountIdentity::PublicKeycard {
+                account_id: holder_account_id,
+                key_path: key_path.to_owned(),
+            },
+        );
+
         let program = Program::token();
         let instruction = Instruction::Mint {
             amount_to_mint: amount,
@@ -487,10 +542,7 @@ impl Token<'_> {
 
         self.0
             .send_pub_tx(
-                vec![
-                    AccountIdentity::Public(definition_account_id),
-                    AccountIdentity::Public(holder_account_id),
-                ],
+                vec![definition_identity, holder_identity],
                 instruction_data,
                 &program.into(),
             )
@@ -521,7 +573,6 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -560,7 +611,6 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -593,7 +643,6 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -627,7 +676,6 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -665,7 +713,6 @@ impl Token<'_> {
                 ],
                 instruction_data,
                 &Program::token().into(),
-                None,
             )
             .await
             .map(|(resp, secrets)| {

@@ -16,20 +16,15 @@ use bip39::Mnemonic;
 use common::{HashType, transaction::NSSATransaction};
 use config::WalletConfig;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
-use keycard_wallet::KeycardWallet;
 use log::info;
 use nssa::{
-    Account, AccountId, PrivacyPreservingTransaction, PublicKey, PublicTransaction, Signature,
+    Account, AccountId, PrivacyPreservingTransaction,
     privacy_preserving_transaction::{
         circuit::ProgramWithDependencies, message::EncryptedAccountData,
     },
-    program::Program,
-    public_transaction::WitnessSet as PublicWitnessSet,
 };
 use nssa_core::{
-    Commitment, MembershipProof, SharedSecretKey,
-    account::{AccountWithMetadata, Nonce},
-    program::InstructionData,
+    Commitment, MembershipProof, SharedSecretKey, account::Nonce, program::InstructionData,
 };
 use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
 use storage::Storage;
@@ -37,10 +32,8 @@ use tokio::io::AsyncWriteExt as _;
 
 use crate::{
     account::{AccountIdWithPrivacy, Label},
-    cli::CliAccountMention,
     config::WalletConfigOverrides,
     poller::TxPoller,
-    signing::SigningGroup,
     storage::key_chain::SharedAccountEntry,
 };
 
@@ -561,76 +554,15 @@ impl WalletCore {
         Ok(())
     }
 
-    /// Send a public transaction, fetching nonces automatically from
-    /// [`SigningGroup::signing_ids`].
-    pub async fn send_public_tx<T: serde::Serialize>(
-        &self,
-        program: &Program,
-        account_ids: Vec<AccountId>,
-        instruction: T,
-        groups: SigningGroup,
-    ) -> Result<HashType, ExecutionFailureKind> {
-        let nonces = self
-            .get_accounts_nonces(groups.signing_ids())
-            .await
-            .map_err(ExecutionFailureKind::SequencerError)?;
-        self.send_public_tx_with_nonces(program, account_ids, nonces, instruction, groups)
-            .await
-    }
-
-    /// Send a public transaction with caller-supplied nonces.
-    ///
-    /// Use this when the caller needs to assemble or augment nonces before submission
-    /// (e.g. injecting a keycard account nonce that was fetched separately).
-    pub async fn send_public_tx_with_nonces<T: serde::Serialize>(
-        &self,
-        program: &Program,
-        account_ids: Vec<AccountId>,
-        nonces: Vec<Nonce>,
-        instruction: T,
-        groups: SigningGroup,
-    ) -> Result<HashType, ExecutionFailureKind> {
-        let message = nssa::public_transaction::Message::try_new(
-            program.id(),
-            account_ids,
-            nonces,
-            instruction,
-        )?;
-
-        let pin = if groups.needs_pin() {
-            crate::helperfunctions::read_pin()
-                .map_err(ExecutionFailureKind::from_anyhow)?
-                .as_str()
-                .to_owned()
-        } else {
-            String::new()
-        };
-
-        let sigs = groups
-            .sign_all(&message.hash(), &pin)
-            .map_err(ExecutionFailureKind::from_anyhow)?;
-
-        let tx = PublicTransaction::new(message, PublicWitnessSet::from_raw_parts(sigs));
-        Ok(self
-            .sequencer_client
-            .send_transaction(NSSATransaction::Public(tx))
-            .await?)
-    }
-
     pub async fn send_privacy_preserving_tx(
         &self,
         accounts: Vec<AccountIdentity>,
         instruction_data: InstructionData,
         program: &ProgramWithDependencies,
-        mention: Option<&CliAccountMention>,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
-        self.send_privacy_preserving_tx_with_pre_check(
-            accounts,
-            instruction_data,
-            program,
-            |_| Ok(()),
-            mention,
-        )
+        self.send_privacy_preserving_tx_with_pre_check(accounts, instruction_data, program, |_| {
+            Ok(())
+        })
         .await
     }
 
@@ -640,66 +572,10 @@ impl WalletCore {
         instruction_data: InstructionData,
         program: &ProgramWithDependencies,
         tx_pre_check: impl FnOnce(&[&Account]) -> Result<(), ExecutionFailureKind>,
-        mention: Option<&CliAccountMention>,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         let acc_manager = account_manager::AccountManager::new(self, accounts).await?;
 
-        let mut pre_states = acc_manager.pre_states();
-
-        let (keycard_account, keycard_pin, keycard_path) = if let Some(key_path_str) =
-            mention.and_then(CliAccountMention::key_path)
-        {
-            let pin = crate::helperfunctions::read_pin().map_err(|e| {
-                ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<
-                    pyo3::exceptions::PyRuntimeError,
-                    _,
-                >(e.to_string()))
-            })?;
-            let account_id_str =
-                KeycardWallet::get_public_account_id_for_path_with_connect(&pin, key_path_str)?;
-            let account_id: AccountId = match account_id_str
-                    .parse::<AccountIdWithPrivacy>()
-                    .expect("`wallet::lib::send_privacy_preserving_tx_with_pre_check`: invalid account id parsed")
-                {
-                    AccountIdWithPrivacy::Public(id) | AccountIdWithPrivacy::Private(id) => id,
-                };
-            let account = self
-                    .get_account_public(account_id)
-                    .await
-                    .expect("`wallet::lib::send_privacy_preserving_tx_with_pre_check`: unable to retrieve public account");
-            let pin_str = pin.as_str().to_owned();
-            (
-                Some(AccountWithMetadata {
-                    account,
-                    is_authorized: true,
-                    account_id,
-                }),
-                Some(pin_str),
-                Some(key_path_str.to_owned()),
-            )
-        } else {
-            (None, None, None)
-        };
-
-        let mut nonces: Vec<Nonce> = acc_manager.public_account_nonces().into_iter().collect();
-
-        let mut account_ids: Vec<AccountId> = acc_manager.public_account_ids();
-
-        if let Some(acc) = keycard_account.as_ref() {
-            if acc_manager.public_account_ids().contains(&acc.account_id) {
-                if let Some(pre) = pre_states
-                    .iter_mut()
-                    .find(|p| p.account_id == acc.account_id)
-                {
-                    pre.is_authorized = true;
-                }
-                nonces.push(acc.account.nonce);
-            } else {
-                nonces.push(acc.account.nonce);
-                account_ids.push(acc.account_id);
-                pre_states.push(acc.clone());
-            }
-        }
+        let pre_states = acc_manager.pre_states();
 
         tx_pre_check(
             &pre_states
@@ -714,54 +590,30 @@ impl WalletCore {
             instruction_data,
             acc_manager.account_identities(),
             &program.to_owned(),
-        )
-        .unwrap();
+        )?;
 
         let message =
             nssa::privacy_preserving_transaction::message::Message::try_from_circuit_output(
-                account_ids,
-                nonces,
+                acc_manager.public_account_ids(),
+                acc_manager.public_account_nonces(),
                 private_account_keys
                     .iter()
                     .map(|keys| (keys.npk, keys.vpk.clone(), keys.epk.clone()))
                     .collect(),
                 output,
-            )
-            .unwrap();
+            )?;
+
+        let message_hash = message.hash();
+        let signatures_public_keys = acc_manager
+            .sign_message(message_hash)
+            .map_err(ExecutionFailureKind::from_anyhow)?;
 
         let witness_set =
-            if let (Some(pin), Some(path)) = (keycard_pin.as_deref(), keycard_path.as_deref()) {
-                let hash = message.hash();
-                let local_auth = acc_manager.public_account_auth();
-                let mut sigs: Vec<(Signature, PublicKey)> = local_auth
-                    .iter()
-                    .map(|&key| {
-                        (
-                            Signature::new(key, &hash),
-                            PublicKey::new_from_private_key(key),
-                        )
-                    })
-                    .collect();
-                let keycard_sig = pyo3::Python::with_gil(|py| {
-                    let mut ctx = crate::signing::KeycardSessionContext::new(pin);
-                    let result = ctx
-                        .get_or_connect(py)
-                        .and_then(|w| w.sign_message_for_path(py, path, &hash));
-                    ctx.close(py);
-                    result
-                })
-                .map_err(ExecutionFailureKind::KeycardError)?;
-                sigs.push(keycard_sig);
-                nssa::privacy_preserving_transaction::witness_set::WitnessSet::from_raw_parts(
-                    sigs, proof,
-                )
-            } else {
-                nssa::privacy_preserving_transaction::witness_set::WitnessSet::for_message(
-                    &message,
-                    proof,
-                    &acc_manager.public_account_auth(),
-                )
-            };
+            nssa::privacy_preserving_transaction::witness_set::WitnessSet::from_raw_parts(
+                signatures_public_keys,
+                proof,
+            );
+
         let tx = PrivacyPreservingTransaction::new(message, witness_set);
 
         let shared_secrets: Vec<_> = private_account_keys
@@ -816,7 +668,6 @@ impl WalletCore {
         let account_ids = acc_manager.public_account_ids();
         let program_id = program.program.id();
         let nonces = acc_manager.public_account_nonces();
-        let private_keys = acc_manager.public_account_auth();
 
         let message = nssa::public_transaction::Message::new_preserialized(
             program_id,
@@ -825,8 +676,13 @@ impl WalletCore {
             instruction_data,
         );
 
+        let message_hash = message.hash();
+        let signatures_public_keys = acc_manager
+            .sign_message(message_hash)
+            .map_err(ExecutionFailureKind::from_anyhow)?;
+
         let witness_set =
-            nssa::public_transaction::WitnessSet::for_message(&message, &private_keys);
+            nssa::public_transaction::WitnessSet::from_raw_parts(signatures_public_keys);
 
         let tx = nssa::public_transaction::PublicTransaction::new(message, witness_set);
 

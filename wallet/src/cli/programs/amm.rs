@@ -259,7 +259,6 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
                                 max_amount_b,
                                 &user_holding_a,
                                 &user_holding_b,
-                                &user_holding_lp,
                             )
                             .await?;
                         println!("Transaction hash is {tx_hash}");

@@ -16,8 +16,18 @@ impl Ata<'_> {
         &self,
         owner_id: AccountId,
         definition_id: AccountId,
-        _owner_mention: &CliAccountMention,
+        owner_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
+        let owner_identity =
+            owner_mention
+                .key_path()
+                .map_or(AccountIdentity::Public(owner_id), |key_path| {
+                    AccountIdentity::PublicKeycard {
+                        account_id: owner_id,
+                        key_path: key_path.to_owned(),
+                    }
+                });
+
         let program = Program::ata();
         let ata_program_id = program.id();
         let ata_id = get_associated_token_account_id(
@@ -31,7 +41,7 @@ impl Ata<'_> {
         self.0
             .send_pub_tx(
                 vec![
-                    AccountIdentity::Public(owner_id),
+                    owner_identity,
                     AccountIdentity::PublicNoSign(definition_id),
                     AccountIdentity::PublicNoSign(ata_id),
                 ],
@@ -47,8 +57,18 @@ impl Ata<'_> {
         definition_id: AccountId,
         recipient_id: AccountId,
         amount: u128,
-        _owner_mention: &CliAccountMention,
+        owner_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
+        let owner_identity =
+            owner_mention
+                .key_path()
+                .map_or(AccountIdentity::Public(owner_id), |key_path| {
+                    AccountIdentity::PublicKeycard {
+                        account_id: owner_id,
+                        key_path: key_path.to_owned(),
+                    }
+                });
+
         let program = Program::ata();
         let ata_program_id = program.id();
         let sender_ata_id = get_associated_token_account_id(
@@ -65,7 +85,7 @@ impl Ata<'_> {
         self.0
             .send_pub_tx(
                 vec![
-                    AccountIdentity::Public(owner_id),
+                    owner_identity,
                     AccountIdentity::PublicNoSign(sender_ata_id),
                     AccountIdentity::PublicNoSign(recipient_id),
                 ],
@@ -80,8 +100,18 @@ impl Ata<'_> {
         owner_id: AccountId,
         definition_id: AccountId,
         amount: u128,
-        _owner_mention: &CliAccountMention,
+        owner_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
+        let owner_identity =
+            owner_mention
+                .key_path()
+                .map_or(AccountIdentity::Public(owner_id), |key_path| {
+                    AccountIdentity::PublicKeycard {
+                        account_id: owner_id,
+                        key_path: key_path.to_owned(),
+                    }
+                });
+
         let program = Program::ata();
         let ata_program_id = program.id();
         let holder_ata_id = get_associated_token_account_id(
@@ -98,7 +128,7 @@ impl Ata<'_> {
         self.0
             .send_pub_tx(
                 vec![
-                    AccountIdentity::Public(owner_id),
+                    owner_identity,
                     AccountIdentity::PublicNoSign(holder_ata_id),
                     AccountIdentity::PublicNoSign(definition_id),
                 ],
@@ -132,12 +162,7 @@ impl Ata<'_> {
         ];
 
         self.0
-            .send_privacy_preserving_tx(
-                accounts,
-                instruction_data,
-                &ata_with_token_dependency(),
-                None,
-            )
+            .send_privacy_preserving_tx(accounts, instruction_data, &ata_with_token_dependency())
             .await
             .map(|(hash, mut secrets)| {
                 let secret = secrets.pop().expect("expected owner's secret");
@@ -174,12 +199,7 @@ impl Ata<'_> {
         ];
 
         self.0
-            .send_privacy_preserving_tx(
-                accounts,
-                instruction_data,
-                &ata_with_token_dependency(),
-                None,
-            )
+            .send_privacy_preserving_tx(accounts, instruction_data, &ata_with_token_dependency())
             .await
             .map(|(hash, mut secrets)| {
                 let secret = secrets.pop().expect("expected owner's secret");
@@ -215,12 +235,7 @@ impl Ata<'_> {
         ];
 
         self.0
-            .send_privacy_preserving_tx(
-                accounts,
-                instruction_data,
-                &ata_with_token_dependency(),
-                None,
-            )
+            .send_privacy_preserving_tx(accounts, instruction_data, &ata_with_token_dependency())
             .await
             .map(|(hash, mut secrets)| {
                 let secret = secrets.pop().expect("expected owner's secret");

@@ -139,7 +139,6 @@ async fn spend_private_pda(
             Program::serialize_instruction((seed, amount, auth_transfer_id))
                 .context("failed to serialize pda_spend_proxy instruction")?,
             spend_program,
-            None,
         )
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))?;

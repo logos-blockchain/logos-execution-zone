@@ -24,7 +24,6 @@ impl NativeTokenTransfer<'_> {
                 vec![account],
                 Program::serialize_instruction(instruction).unwrap(),
                 &Program::authenticated_transfer_program().into(),
-                None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -59,7 +58,6 @@ impl NativeTokenTransfer<'_> {
                 instruction_data,
                 &program.into(),
                 tx_pre_check,
-                None,
             )
             .await
             .map(|(resp, secrets)| {
@@ -93,7 +91,6 @@ impl NativeTokenTransfer<'_> {
                 instruction_data,
                 &program.into(),
                 tx_pre_check,
-                None,
             )
             .await
             .map(|(resp, secrets)| {
