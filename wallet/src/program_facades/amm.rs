@@ -284,6 +284,7 @@ impl Amm<'_> {
         max_amount_to_add_token_b: u128,
         user_holding_a_mention: &CliAccountMention,
         user_holding_b_mention: &CliAccountMention,
+        user_holding_lp_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
         let user_holding_a_identity = user_holding_a_mention.key_path().map_or(
             AccountIdentity::Public(user_holding_a),
@@ -297,6 +298,14 @@ impl Amm<'_> {
             AccountIdentity::Public(user_holding_b),
             |key_path| AccountIdentity::PublicKeycard {
                 account_id: user_holding_b,
+                key_path: key_path.to_owned(),
+            },
+        );
+
+        let user_holding_lp_identity = user_holding_lp_mention.key_path().map_or(
+            AccountIdentity::Public(user_holding_lp),
+            |key_path| AccountIdentity::PublicKeycard {
+                account_id: user_holding_lp,
                 key_path: key_path.to_owned(),
             },
         );
@@ -343,7 +352,7 @@ impl Amm<'_> {
                     AccountIdentity::PublicNoSign(pool_lp),
                     user_holding_a_identity,
                     user_holding_b_identity,
-                    AccountIdentity::PublicNoSign(user_holding_lp),
+                    user_holding_lp_identity,
                 ],
                 instruction_data,
                 &program.into(),

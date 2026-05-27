@@ -274,14 +274,17 @@ impl AccountManager {
     }
 
     pub fn public_account_nonces(&self) -> Vec<Nonce> {
-        self.states
-            .iter()
-            .filter_map(|state| match state {
-                State::Public { account, sk } => sk.as_ref().map(|_| account.account.nonce),
-                State::PublicKeycard { account, .. } => Some(account.account.nonce),
-                State::Private(_) => None,
-            })
-            .collect()
+        // Must match the signature order produced by sign_message(): local accounts first,
+        // keycard accounts second.
+        let local = self.states.iter().filter_map(|state| match state {
+            State::Public { account, sk } => sk.as_ref().map(|_| account.account.nonce),
+            State::PublicKeycard { .. } | State::Private(_) => None,
+        });
+        let keycard = self.states.iter().filter_map(|state| match state {
+            State::PublicKeycard { account, .. } => Some(account.account.nonce),
+            State::Public { .. } | State::Private(_) => None,
+        });
+        local.chain(keycard).collect()
     }
 
     pub fn private_account_keys(&self) -> Vec<PrivateAccountKeys> {
