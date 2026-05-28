@@ -619,8 +619,8 @@ After execution, the runtime processes each post-state's optional `claim`:
 
 - `Claim::Authorized` — the standard claim path: sets `program_owner = executing_program_id` (when currently default) for all account kinds except self-owned PDAs. Whether `is_authorized` is required depends on the account kind:
   - **Public accounts:** `is_authorized` must be `true`, set when the transaction signer included the account in the authorized set.
-  - **Public and private PDAs:** `is_authorized` must be `true`, set when the caller included the matching seed in `ChainedCall.pda_seeds`.
-  - **Regular private accounts**: there's no extra enforcement for claiming. The circuit already imposes that `is_authorized` must be true for the `PrivateAuthorizedInit` and `PrivateAuthorizedUpdate` variants, and false for `PrivateUnauthorized`.
+  - **Public PDAs:** `is_authorized` must be `true`, set when the caller included the matching seed in `ChainedCall.pda_seeds`.
+  - **Private accounts (regular and PDA)**: there's no enforcement for claiming. For regular accounts the circuit ensures the right authorization posture via the `PrivateAuthorizedInit`/`PrivateAuthorizedUpdate`/`PrivateUnauthorized` variant selection.
 - `Claim::Pda(seed)` — sets `program_owner = executing_program_id` (when currently default) by proving the account's ID is structurally derived from the executing program's own ID and the given seed, with no user authorization required. Unlike `Claim::Authorized`, the claim is not backed by a signature or nullifier key proof; instead, the program demonstrates ownership by construction: if the address was computed from `(self_program_id, seed)`, then no other program could have produced that same address. The derivation formula depends on the account kind: for public accounts it is `AccountId::for_public_pda(executing_program_id, seed)`; for private PDAs it is `AccountId::for_private_pda(executing_program_id, seed, npk, identifier)` using the npk supplied for that pre-state, making the claim user-specific. `Claim::Pda` is not applicable to standalone private accounts.
 
 ### Program-derived account IDs (PDAs)
@@ -629,7 +629,7 @@ After execution, the runtime processes each post-state's optional `claim`:
 
 **Private PDA:** derived from `(program_id, seed, npk, identifier)`. Unlike public PDAs, private PDAs are per-user: two users at the same `(program_id, seed)` get different addresses. Within a single user's namespace the `identifier` diversifies further.
 
-Authorization for private PDAs in chained calls is established by the caller including the PDA seed in `pda_seeds`. In privacy-preserving transactions, the ZK proof additionally verifies that the address matches `AccountId::for_private_pda` using the NPK supplied for that pre-state.
+Authorization for private PDAs in chained calls is established by the caller including the PDA seed in `pda_seeds`, or via `Claim::Pda(seed)` for the owning program itself. When neither mechanism is available the seed can be externally supplied. For external seed the circuit verifies `AccountId::for_private_pda(authority_program_id, seed, npk, identifier) == pre_state.account_id` directly. In such case the pre-state must have `is_authorized == false`..
 
 
 ### Validity windows
@@ -896,6 +896,12 @@ pub enum InputAccountIdentity {
         npk: NullifierPublicKey,
         ssk: SharedSecretKey,
         identifier: Identifier,
+        /// When `Some((seed, authority_program_id))`, the circuit verifies
+        /// `AccountId::for_private_pda(authority_program_id, seed, npk, identifier) ==
+        /// pre_state.account_id` directly, binding the position without requiring a
+        /// `Claim::Pda` or caller `pda_seeds`. The `pre_state` must have
+        /// `is_authorized == false`; a seed in this field does not provide authorization.
+        seed: Option<(PdaSeed, ProgramId)>,
     },
 
     /// Update of an existing private PDA. npk is derived from nsk.
@@ -905,6 +911,12 @@ pub enum InputAccountIdentity {
         nsk: NullifierSecretKey,
         membership_proof: MembershipProof,
         identifier: Identifier,
+        /// When `Some((seed, authority_program_id))`, the circuit verifies
+        /// `AccountId::for_private_pda(authority_program_id, seed, npk(nsk), identifier) ==
+        /// pre_state.account_id` directly, binding the position without requiring a
+        /// caller `pda_seeds`. The `pre_state` must have `is_authorized == false`. A seed in
+        /// this field does not provide authorization.
+        seed: Option<(PdaSeed, ProgramId)>,
     },
 }
 ```
@@ -934,18 +946,18 @@ pub struct PrivacyPreservingCircuitOutput {
 
 For each `InputAccountIdentity` the circuit performs the following:
 
-| Variant | AccountId derivation | Nonce init | Nullifier emitted | Auth required | `Claim::Authorized` precondition |
+| Variant | AccountId derivation | Nonce init | Nullifier emitted | Auth requires | `Claim::Authorized` precondition |
 |---------|---------------------|------------|-------------------|---------------|-----------------------------------|
 | `Public` | from pre-state | +1 if authorized | none | signature | `is_authorized` must be `true` |
-| `PrivateAuthorizedInit` | `from_private(npk(nsk), ident)` | `nonce_init(account_id)` | init nullifier | nsk | `is_authorized` must be `true` |
+| `PrivateAuthorizedInit` | `from_private(npk(nsk), ident)` | `nonce_init(account_id)` | init nullifier | nsk | **not enforced** (skipped) |
 | `PrivateAuthorizedUpdate` | `from_private(npk(nsk), ident)` | `nonce_increment(nsk)` | update nullifier | nsk + membership proof | **not enforced** (skipped) |
 | `PrivateUnauthorized` | `from_private(npk, ident)` | `nonce_init(account_id)` | init nullifier | none | **not enforced** (skipped) |
-| `PrivatePdaInit` | `for_private_pda(prog, seed, npk, ident)` | `nonce_init(account_id)` | init nullifier | pda_seeds/Claim::Pda, or CallerData propagation | `is_authorized` must be `true` |
-| `PrivatePdaUpdate` | `for_private_pda(prog, seed, npk(nsk), ident)` | `nonce_increment(nsk)` | update nullifier | (pda_seeds or CallerData) + nsk + membership proof | `is_authorized` must be `true` |
+| `PrivatePdaInit` | `for_private_pda(prog, seed, npk, ident)` | `nonce_init(account_id)` | init nullifier | chained call pda_seed or Claim::Pda | **not enforced** (skipped) |
+| `PrivatePdaUpdate` | `for_private_pda(prog, seed, npk(nsk), ident)` | `nonce_increment(nsk)` | update nullifier | chained call pda_seed + nsk + membership proof | **not enforced** (skipped) |
 
 For each private account the post-state commitment is `Commitment::new(account_id, post_account)` (with the new nonce applied). The ciphertext is `EncryptionScheme::encrypt(post_account, kind, ssk, commitment, output_index)`.
 
-The chain-of-calls logic and `validate_execution` rules are identical to the public execution path. The claiming rules diverge for **standalone private accounts only**: `Claim::Authorized` on a `Regular` private kind is allowed unconditionally (no `is_authorized` check). For public accounts and private PDAs, `Claim::Authorized` enforcement matches the public path.
+The chain-of-calls logic and `validate_execution` rules are identical to the public execution path. The claiming rules diverge for **all private accounts**: `Claim::Authorized` on any private kind (regular or PDA) is allowed unconditionally. No `is_authorized` check is performed for claiming. For public accounts, `Claim::Authorized` still requires `is_authorized == true`.
 
 
 ## Encrypted private account discovery and tagging
