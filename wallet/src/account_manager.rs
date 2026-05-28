@@ -11,7 +11,7 @@ use nssa_core::{
 
 use crate::{ExecutionFailureKind, WalletCore};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum AccountIdentity {
     Public(AccountId),
     /// A public account without signing. Would not try to sign, even if account is owned.
@@ -67,6 +67,22 @@ impl AccountIdentity {
             &self,
             Self::Public(_) | Self::PublicNoSign(_) | Self::PublicKeycard { .. }
         )
+    }
+
+    /// Returns the `AccountId` for public variants. Used by facades that need the raw ID
+    /// for derived-address computation alongside the identity.
+    #[must_use]
+    pub const fn public_account_id(&self) -> Option<nssa::AccountId> {
+        match self {
+            Self::Public(id) | Self::PublicNoSign(id) => Some(*id),
+            Self::PublicKeycard { account_id, .. } => Some(*account_id),
+            Self::PrivateOwned(_)
+            | Self::PrivateForeign { .. }
+            | Self::PrivatePdaOwned(_)
+            | Self::PrivatePdaForeign { .. }
+            | Self::PrivateShared { .. }
+            | Self::PrivatePdaShared { .. } => None,
+        }
     }
 
     #[must_use]
@@ -384,19 +400,14 @@ impl AccountManager {
             })
             .collect();
 
-        let keycard_paths = self
+        let keycard_paths: Vec<&str> = self
             .states
             .iter()
-            .fold(vec![], |mut acc, state| match state {
-                State::Private(_) | State::Public { .. } => acc,
-                State::PublicKeycard {
-                    account: _,
-                    key_path,
-                } => {
-                    acc.push(key_path.as_str());
-                    acc
-                }
-            });
+            .filter_map(|state| match state {
+                State::PublicKeycard { key_path, .. } => Some(key_path.as_str()),
+                State::Private(_) | State::Public { .. } => None,
+            })
+            .collect();
 
         if let Some(pin) = self.pin.clone() {
             pyo3::Python::with_gil(|py| -> pyo3::PyResult<()> {

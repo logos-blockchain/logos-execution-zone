@@ -77,22 +77,10 @@ pub enum ExecutionFailureKind {
     AccountDataError(AccountId),
     #[error("Failed to build transaction: {0}")]
     TransactionBuildError(#[from] nssa::error::NssaError),
+    #[error("Failed to sign transaction: {0}")]
+    SignError(anyhow::Error),
     #[error(transparent)]
     KeycardError(#[from] pyo3::PyErr),
-}
-
-impl ExecutionFailureKind {
-    /// Convert an [`anyhow::Error`] (e.g. from [`SigningGroup`]) into a keycard error.
-    #[must_use]
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "used as a method reference in map_err"
-    )]
-    pub fn from_anyhow(e: anyhow::Error) -> Self {
-        Self::KeycardError(pyo3::PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-            e.to_string(),
-        ))
-    }
 }
 
 #[expect(clippy::partial_pub_fields, reason = "TODO: make all fields private")]
@@ -606,7 +594,7 @@ impl WalletCore {
         let message_hash = message.hash();
         let signatures_public_keys = acc_manager
             .sign_message(message_hash)
-            .map_err(ExecutionFailureKind::from_anyhow)?;
+            .map_err(ExecutionFailureKind::SignError)?;
 
         let witness_set =
             nssa::privacy_preserving_transaction::witness_set::WitnessSet::from_raw_parts(
@@ -679,7 +667,7 @@ impl WalletCore {
         let message_hash = message.hash();
         let signatures_public_keys = acc_manager
             .sign_message(message_hash)
-            .map_err(ExecutionFailureKind::from_anyhow)?;
+            .map_err(ExecutionFailureKind::SignError)?;
 
         let witness_set =
             nssa::public_transaction::WitnessSet::from_raw_parts(signatures_public_keys);

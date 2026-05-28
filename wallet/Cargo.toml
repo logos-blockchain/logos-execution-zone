@@ -47,6 +47,8 @@ url.workspace = true
 derive_more = { workspace = true, features = ["display"] }
 
 [features]
+# Enables `keycard get-private-keys` command that prints sensitive secret keys to terminal.
+# Never enable in production builds.
 keycard-debug = []
 
 [dev-dependencies]

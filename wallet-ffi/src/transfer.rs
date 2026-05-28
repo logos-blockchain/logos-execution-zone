@@ -8,7 +8,7 @@ use std::{
 use nssa::AccountId;
 use wallet::{
     account::AccountIdWithPrivacy, cli::CliAccountMention,
-    program_facades::native_token_transfer::NativeTokenTransfer,
+    program_facades::native_token_transfer::NativeTokenTransfer, AccountIdentity,
 };
 
 use crate::{
@@ -86,15 +86,10 @@ pub unsafe extern "C" fn wallet_ffi_transfer_public(
 
     let transfer = NativeTokenTransfer(&wallet);
 
-    let from_mention = CliAccountMention::Id(AccountIdWithPrivacy::Public(from_id));
-    let to_mention = CliAccountMention::Id(AccountIdWithPrivacy::Public(to_id));
-
     match block_on(transfer.send_public_transfer(
-        from_id,
-        to_id,
+        AccountIdentity::Public(from_id),
+        AccountIdentity::Public(to_id),
         amount,
-        &from_mention,
-        &to_mention,
     )) {
         Ok(tx_hash) => {
             let tx_hash = CString::new(tx_hash.to_string())
@@ -196,12 +191,11 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded(
     let transfer = NativeTokenTransfer(&wallet);
 
     match block_on(transfer.send_shielded_transfer_to_outer_account(
-        from_id,
+        from_mention.into_public_identity(from_id),
         to_npk,
         to_vpk,
         to_identifier,
         amount,
-        &from_mention,
     )) {
         Ok((tx_hash, _shared_key)) => {
             let tx_hash = CString::new(tx_hash.to_string())
@@ -469,7 +463,11 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded_owned(
 
     let transfer = NativeTokenTransfer(&wallet);
 
-    match block_on(transfer.send_shielded_transfer(from_id, to_id, amount, &from_mention)) {
+    match block_on(transfer.send_shielded_transfer(
+        from_mention.into_public_identity(from_id),
+        to_id,
+        amount,
+    )) {
         Ok((tx_hash, _shared_key)) => {
             let tx_hash = CString::new(tx_hash.to_string())
                 .map_or(ptr::null_mut(), std::ffi::CString::into_raw);
@@ -622,9 +620,7 @@ pub unsafe extern "C" fn wallet_ffi_register_public_account(
 
     let transfer = NativeTokenTransfer(&wallet);
 
-    let mention = CliAccountMention::Id(AccountIdWithPrivacy::Public(account_id));
-
-    match block_on(transfer.register_account(account_id, &mention)) {
+    match block_on(transfer.register_account(AccountIdentity::Public(account_id))) {
         Ok(tx_hash) => {
             let tx_hash = CString::new(tx_hash.to_string())
                 .map_or(ptr::null_mut(), std::ffi::CString::into_raw);

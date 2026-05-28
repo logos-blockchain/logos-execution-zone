@@ -142,14 +142,11 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
                     ) => {
                         let tx_hash = Amm(wallet_core)
                             .send_new_definition(
-                                a,
-                                b,
-                                lp,
+                                user_holding_a.into_public_identity(a),
+                                user_holding_b.into_public_identity(b),
+                                user_holding_lp.into_public_identity(lp),
                                 balance_a,
                                 balance_b,
-                                &user_holding_a,
-                                &user_holding_b,
-                                &user_holding_lp,
                             )
                             .await?;
                         println!("Transaction hash is {tx_hash}");
@@ -177,13 +174,11 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
                     (AccountIdWithPrivacy::Public(a), AccountIdWithPrivacy::Public(b)) => {
                         let tx_hash = Amm(wallet_core)
                             .send_swap_exact_input(
-                                a,
-                                b,
+                                user_holding_a.into_public_identity(a),
+                                user_holding_b.into_public_identity(b),
                                 amount_in,
                                 min_amount_out,
                                 token_definition,
-                                &user_holding_a,
-                                &user_holding_b,
                             )
                             .await?;
                         println!("Transaction hash is {tx_hash}");
@@ -211,13 +206,11 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
                     (AccountIdWithPrivacy::Public(a), AccountIdWithPrivacy::Public(b)) => {
                         let tx_hash = Amm(wallet_core)
                             .send_swap_exact_output(
-                                a,
-                                b,
+                                user_holding_a.into_public_identity(a),
+                                user_holding_b.into_public_identity(b),
                                 exact_amount_out,
                                 max_amount_in,
                                 token_definition,
-                                &user_holding_a,
-                                &user_holding_b,
                             )
                             .await?;
                         println!("Transaction hash is {tx_hash}");
@@ -251,15 +244,12 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
                     ) => {
                         let tx_hash = Amm(wallet_core)
                             .send_add_liquidity(
-                                a,
-                                b,
-                                lp,
+                                user_holding_a.into_public_identity(a),
+                                user_holding_b.into_public_identity(b),
+                                user_holding_lp.into_public_identity(lp),
                                 min_amount_lp,
                                 max_amount_a,
                                 max_amount_b,
-                                &user_holding_a,
-                                &user_holding_b,
-                                &user_holding_lp,
                             )
                             .await?;
                         println!("Transaction hash is {tx_hash}");
@@ -295,11 +285,10 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
                             .send_remove_liquidity(
                                 a,
                                 b,
-                                lp,
+                                user_holding_lp.into_public_identity(lp),
                                 balance_lp,
                                 min_amount_a,
                                 min_amount_b,
-                                &user_holding_lp,
                             )
                             .await?;
                         println!("Transaction hash is {tx_hash}");

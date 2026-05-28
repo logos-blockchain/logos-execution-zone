@@ -15,17 +15,14 @@ impl KeycardSessionContext {
         }
     }
 
-    pub fn get_or_connect<'py>(
-        &'py mut self,
-        py: Python<'py>,
-    ) -> pyo3::PyResult<&'py KeycardWallet> {
+    pub fn get_or_connect(&mut self, py: Python<'_>) -> pyo3::PyResult<&KeycardWallet> {
         if self.wallet.is_none() {
             python_path::add_python_path(py)?;
             let wallet = KeycardWallet::new(py)?;
             wallet.connect(py, &self.pin)?;
             self.wallet = Some(wallet);
         }
-        Ok(self.wallet.as_ref().unwrap())
+        Ok(self.wallet.as_ref().expect("wallet was just inserted"))
     }
 
     pub fn close(self, py: Python<'_>) {

@@ -7,26 +7,19 @@ use nssa::{
 };
 use nssa_core::SharedSecretKey;
 
-use crate::{AccountIdentity, ExecutionFailureKind, WalletCore, cli::CliAccountMention};
+use crate::{AccountIdentity, ExecutionFailureKind, WalletCore};
 
 pub struct Ata<'wallet>(pub &'wallet WalletCore);
 
 impl Ata<'_> {
     pub async fn send_create(
         &self,
-        owner_id: AccountId,
+        owner: AccountIdentity,
         definition_id: AccountId,
-        owner_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let owner_identity =
-            owner_mention
-                .key_path()
-                .map_or(AccountIdentity::Public(owner_id), |key_path| {
-                    AccountIdentity::PublicKeycard {
-                        account_id: owner_id,
-                        key_path: key_path.to_owned(),
-                    }
-                });
+        let owner_id = owner
+            .public_account_id()
+            .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
 
         let program = Program::ata();
         let ata_program_id = program.id();
@@ -41,7 +34,7 @@ impl Ata<'_> {
         self.0
             .send_pub_tx(
                 vec![
-                    owner_identity,
+                    owner,
                     AccountIdentity::PublicNoSign(definition_id),
                     AccountIdentity::PublicNoSign(ata_id),
                 ],
@@ -53,21 +46,14 @@ impl Ata<'_> {
 
     pub async fn send_transfer(
         &self,
-        owner_id: AccountId,
+        owner: AccountIdentity,
         definition_id: AccountId,
         recipient_id: AccountId,
         amount: u128,
-        owner_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let owner_identity =
-            owner_mention
-                .key_path()
-                .map_or(AccountIdentity::Public(owner_id), |key_path| {
-                    AccountIdentity::PublicKeycard {
-                        account_id: owner_id,
-                        key_path: key_path.to_owned(),
-                    }
-                });
+        let owner_id = owner
+            .public_account_id()
+            .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
 
         let program = Program::ata();
         let ata_program_id = program.id();
@@ -85,7 +71,7 @@ impl Ata<'_> {
         self.0
             .send_pub_tx(
                 vec![
-                    owner_identity,
+                    owner,
                     AccountIdentity::PublicNoSign(sender_ata_id),
                     AccountIdentity::PublicNoSign(recipient_id),
                 ],
@@ -97,20 +83,13 @@ impl Ata<'_> {
 
     pub async fn send_burn(
         &self,
-        owner_id: AccountId,
+        owner: AccountIdentity,
         definition_id: AccountId,
         amount: u128,
-        owner_mention: &CliAccountMention,
     ) -> Result<HashType, ExecutionFailureKind> {
-        let owner_identity =
-            owner_mention
-                .key_path()
-                .map_or(AccountIdentity::Public(owner_id), |key_path| {
-                    AccountIdentity::PublicKeycard {
-                        account_id: owner_id,
-                        key_path: key_path.to_owned(),
-                    }
-                });
+        let owner_id = owner
+            .public_account_id()
+            .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
 
         let program = Program::ata();
         let ata_program_id = program.id();
@@ -128,7 +107,7 @@ impl Ata<'_> {
         self.0
             .send_pub_tx(
                 vec![
-                    owner_identity,
+                    owner,
                     AccountIdentity::PublicNoSign(holder_ata_id),
                     AccountIdentity::PublicNoSign(definition_id),
                 ],

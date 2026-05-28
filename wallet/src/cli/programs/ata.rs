@@ -97,7 +97,7 @@ impl WalletSubcommand for AtaSubcommand {
                 match owner_resolved {
                     AccountIdWithPrivacy::Public(owner_id) => {
                         let tx_hash = Ata(wallet_core)
-                            .send_create(owner_id, definition_id, &owner)
+                            .send_create(owner.into_public_identity(owner_id), definition_id)
                             .await?;
                         println!("Transaction hash is {tx_hash}");
                         let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
@@ -138,7 +138,12 @@ impl WalletSubcommand for AtaSubcommand {
                 match from_resolved {
                     AccountIdWithPrivacy::Public(from_id) => {
                         let tx_hash = Ata(wallet_core)
-                            .send_transfer(from_id, definition_id, to_id, amount, &from)
+                            .send_transfer(
+                                from.into_public_identity(from_id),
+                                definition_id,
+                                to_id,
+                                amount,
+                            )
                             .await?;
                         println!("Transaction hash is {tx_hash}");
                         let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
@@ -177,7 +182,11 @@ impl WalletSubcommand for AtaSubcommand {
                 match holder_resolved {
                     AccountIdWithPrivacy::Public(holder_id) => {
                         let tx_hash = Ata(wallet_core)
-                            .send_burn(holder_id, definition_id, amount, &holder)
+                            .send_burn(
+                                holder.into_public_identity(holder_id),
+                                definition_id,
+                                amount,
+                            )
                             .await?;
                         println!("Transaction hash is {tx_hash}");
                         let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
