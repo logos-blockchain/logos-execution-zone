@@ -58,7 +58,7 @@ impl ChildKeysPublic {
         let cssk = lee::PrivateKey::try_new(lhs.add(&rhs).to_bytes().into())
             .expect("Expect a valid private key");
 
-        let csk = lee::PrivateKey::tweak(cssk.value()).expect("Expect a valid Private Key");
+        let csk = lee::PrivateKey::tweak(cssk.value()).expect("`key_protocol::key_management::keys_public::nth_child()`: Invalid private key produced from `tweak`");
 
         let ccc = *hash_value
             .last_chunk::<32>()
