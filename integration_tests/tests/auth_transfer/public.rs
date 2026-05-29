@@ -25,6 +25,7 @@ async fn successful_transfer_to_existing_account() -> Result<()> {
         to: Some(public_mention(ctx.existing_public_accounts()[1])),
         to_npk: None,
         to_vpk: None,
+        to_keys: None,
         to_identifier: Some(0),
         amount: 100,
     });
@@ -83,6 +84,7 @@ pub async fn successful_transfer_to_new_account() -> Result<()> {
         to: Some(public_mention(new_persistent_account_id)),
         to_npk: None,
         to_vpk: None,
+        to_keys: None,
         to_identifier: Some(0),
         amount: 100,
     });
@@ -120,6 +122,7 @@ async fn failed_transfer_with_insufficient_balance() -> Result<()> {
         to: Some(public_mention(ctx.existing_public_accounts()[1])),
         to_npk: None,
         to_vpk: None,
+        to_keys: None,
         to_identifier: Some(0),
         amount: 1_000_000,
     });
@@ -159,6 +162,7 @@ async fn two_consecutive_successful_transfers() -> Result<()> {
         to: Some(public_mention(ctx.existing_public_accounts()[1])),
         to_npk: None,
         to_vpk: None,
+        to_keys: None,
         to_identifier: Some(0),
         amount: 100,
     });
@@ -192,6 +196,7 @@ async fn two_consecutive_successful_transfers() -> Result<()> {
         to: Some(public_mention(ctx.existing_public_accounts()[1])),
         to_npk: None,
         to_vpk: None,
+        to_keys: None,
         to_identifier: Some(0),
         amount: 100,
     });
@@ -274,6 +279,7 @@ async fn successful_transfer_using_from_label() -> Result<()> {
         to: Some(public_mention(ctx.existing_public_accounts()[1])),
         to_npk: None,
         to_vpk: None,
+        to_keys: None,
         to_identifier: Some(0),
         amount: 100,
     });
@@ -319,6 +325,7 @@ async fn successful_transfer_using_to_label() -> Result<()> {
         to: Some(CliAccountMention::Label(label)),
         to_npk: None,
         to_vpk: None,
+        to_keys: None,
         to_identifier: Some(0),
         amount: 100,
     });

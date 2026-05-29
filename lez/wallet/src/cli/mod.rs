@@ -285,6 +285,31 @@ pub fn read_password_from_stdin() -> Result<String> {
     Ok(password.trim().to_owned())
 }
 
+/// Parse a keys file exported by `wallet account show-keys`.
+///
+/// The file format is two lines:
+/// - Line 1: npk as hex (64 chars, 32 bytes).
+/// - Line 2: vpk as hex (2368 chars, 1184 bytes).
+///
+/// Returns `(npk_bytes, vpk_bytes)`.
+pub fn read_keys_file(path: &str) -> Result<(Vec<u8>, Vec<u8>)> {
+    let content = std::fs::read_to_string(path).with_context(|| {
+        format!("wallet::cli::read_keys_file: failed to read keys file: {path}")
+    })?;
+    let mut lines = content.lines().filter(|l| !l.trim().is_empty());
+    let npk_hex = lines.next().ok_or_else(|| {
+        anyhow::anyhow!("wallet::cli::read_keys_file: keys file is missing npk (line 1)")
+    })?;
+    let vpk_hex = lines.next().ok_or_else(|| {
+        anyhow::anyhow!("wallet::cli::read_keys_file: keys file is missing vpk (line 2)")
+    })?;
+    let npk = hex::decode(npk_hex.trim())
+        .context("wallet::cli::read_keys_file: npk in keys file must be valid hex")?;
+    let vpk = hex::decode(vpk_hex.trim())
+        .context("wallet::cli::read_keys_file: vpk in keys file must be valid hex")?;
+    Ok((npk, vpk))
+}
+
 pub fn read_mnemonic_from_stdin() -> Result<Mnemonic> {
     let mut phrase = String::new();
 
@@ -327,4 +352,78 @@ pub async fn execute_keys_restoration(wallet_core: &mut WalletCore, depth: u32) 
     wallet_core.store_persistent_data()?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_keys_file_roundtrip() {
+        let npk = [0xab_u8; 32];
+        let vpk = [0xcd_u8; 1184];
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.keys");
+
+        // Simulate what `wallet account show-keys` writes.
+        std::fs::write(
+            &path,
+            format!("{}\n{}\n", hex::encode(npk), hex::encode(vpk)),
+        )
+        .unwrap();
+
+        let (parsed_npk, parsed_vpk) = read_keys_file(path.to_str().unwrap()).unwrap();
+
+        assert_eq!(parsed_npk, npk, "npk must round-trip through the keys file");
+        assert_eq!(
+            parsed_vpk,
+            vpk.to_vec(),
+            "vpk must round-trip through the keys file"
+        );
+    }
+
+    #[test]
+    fn read_keys_file_missing_vpk_returns_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("incomplete.keys");
+        std::fs::write(&path, format!("{}\n", hex::encode([0xab_u8; 32]))).unwrap();
+
+        let result = read_keys_file(path.to_str().unwrap());
+        assert!(result.is_err(), "missing vpk line must return an error");
+        assert!(
+            result.unwrap_err().to_string().contains("missing vpk"),
+            "error must mention missing vpk"
+        );
+    }
+
+    #[test]
+    fn read_keys_file_invalid_hex_returns_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("badhex.keys");
+        std::fs::write(&path, "not-hex\nalso-not-hex\n").unwrap();
+
+        let result = read_keys_file(path.to_str().unwrap());
+        assert!(result.is_err(), "invalid hex must return an error");
+    }
+
+    #[test]
+    fn read_keys_file_ignores_blank_lines() {
+        let npk = [0x11_u8; 32];
+        let vpk = [0x22_u8; 1184];
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("blanks.keys");
+
+        // Extra blank lines around the data should be tolerated.
+        std::fs::write(
+            &path,
+            format!("\n{}\n\n{}\n\n", hex::encode(npk), hex::encode(vpk)),
+        )
+        .unwrap();
+
+        let (parsed_npk, parsed_vpk) = read_keys_file(path.to_str().unwrap()).unwrap();
+        assert_eq!(parsed_npk, npk);
+        assert_eq!(parsed_vpk, vpk.to_vec());
+    }
 }

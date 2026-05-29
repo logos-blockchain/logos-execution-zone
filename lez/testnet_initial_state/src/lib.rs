@@ -136,10 +136,7 @@ pub fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialD
         secret_spending_key: SecretSpendingKey(SSK_PRIV_ACC_A),
         private_key_holder: PrivateKeyHolder {
             nullifier_secret_key: NSK_PRIV_ACC_A,
-            viewing_secret_key: ViewingSecretKey {
-                d: VSK_D_PRIV_ACC_A,
-                z: VSK_Z_PRIV_ACC_A,
-            },
+            viewing_secret_key: ViewingSecretKey::new(VSK_D_PRIV_ACC_A, VSK_Z_PRIV_ACC_A),
         },
         nullifier_public_key: NullifierPublicKey(NPK_PRIV_ACC_A),
         viewing_public_key: ViewingPublicKey::from_seed(&VSK_D_PRIV_ACC_A, &VSK_Z_PRIV_ACC_A),
@@ -149,10 +146,7 @@ pub fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialD
         secret_spending_key: SecretSpendingKey(SSK_PRIV_ACC_B),
         private_key_holder: PrivateKeyHolder {
             nullifier_secret_key: NSK_PRIV_ACC_B,
-            viewing_secret_key: ViewingSecretKey {
-                d: VSK_D_PRIV_ACC_B,
-                z: VSK_Z_PRIV_ACC_B,
-            },
+            viewing_secret_key: ViewingSecretKey::new(VSK_D_PRIV_ACC_B, VSK_Z_PRIV_ACC_B),
         },
         nullifier_public_key: NullifierPublicKey(NPK_PRIV_ACC_B),
         viewing_public_key: ViewingPublicKey::from_seed(&VSK_D_PRIV_ACC_B, &VSK_Z_PRIV_ACC_B),

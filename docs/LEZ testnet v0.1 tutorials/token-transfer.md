@@ -155,7 +155,7 @@ wallet account new private
 # Output:
 Generated new account with account_id Private/HacPU3hakLYzWtSqUPw6TUr8fqoMieVWovsUR6sJf7cL
 With npk e6366f79d026c8bd64ae6b3d601f0506832ec682ab54897f205fffe64ec0d951
-With vpk 02ddc96d0eb56e00ce14994cfdaec5ae1f76244180a919545983156e3519940a17
+With vpk <1184-byte ML-KEM-768 encapsulation key, hex-encoded>
 ```
 
 > [!Tip]
@@ -231,19 +231,29 @@ wallet account new private-accounts-key
 # Output:
 Generated new private accounts key at path /1
 With npk 0c95ebc4b3830f53da77bb0b80a276a776cdcf6410932acc718dcdb3f788a00e
-With vpk 039fd12a3674a880d3e917804129141e4170d419d1f9e28a3dcf979c1f2369cb72
+With vpk <1184-byte ML-KEM-768 encapsulation key, hex-encoded>
 ```
 
-> [!Tip]
-> Ignore the account ID here and use the `npk` and `vpk` values to send to a foreign private account.
+> [!Important]
+> The VPK is now a 1184-byte ML-KEM-768 encapsulation key — too large to copy-paste into a command.
+> The recommended workflow is:
+>
+> **Recipient:** export both keys to a single file and send the file to the sender (e.g. as an email attachment):
+> ```bash
+> wallet account show-keys --account-id Private/<account-id> > recipient.keys
+> # Send recipient.keys to the sender out-of-band
+> ```
+> The file contains two lines: the npk (hex) on line 1, the vpk (hex) on line 2.
+>
+> **Sender:** reference the received file with `--to-keys`:
 
-### b. Send 3 tokens using the recipient’s npk and vpk
+### b. Send 3 tokens using the recipient’s keys file
 
 ```bash
+# The sender has received recipient.keys from the recipient out-of-band
 wallet auth-transfer send \
     --from Public/Ev1JprP9BmhbFVQyBcbznU8bAXcwrzwRoPTetXdQPAWS \
-    --to-npk 0c95ebc4b3830f53da77bb0b80a276a776cdcf6410932acc718dcdb3f788a00e \
-    --to-vpk 039fd12a3674a880d3e917804129141e4170d419d1f9e28a3dcf979c1f2369cb72 \
+    --to-keys recipient.keys \
     --amount 3
 ```
 
@@ -270,18 +280,19 @@ wallet account new private-accounts-key
 # Output:
 Generated new private accounts key at path /2
 With npk a3f7c21b8e905d4f6a1bc783d0e2f94c1d5a6b7e8f9012345678abcdef012345
-With vpk 03b1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6071819202122232425262728292a2b2c
+With vpk <1184-byte ML-KEM-768 encapsulation key, hex-encoded>
 ```
 
 Alice shares the `npk` and `vpk` values with Bob and Charlie out of band.
 
 ### b. Bob sends 10 tokens to Alice using identifier 1
 
+Bob uses the received `alice.keys` file:
+
 ```bash
 wallet auth-transfer send \
     --from Public/BobXqJprP9BmhbFVQyBcbznU8bAXcwrzwRoPTetXdQPA \
-    --to-npk a3f7c21b8e905d4f6a1bc783d0e2f94c1d5a6b7e8f9012345678abcdef012345 \
-    --to-vpk 03b1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6071819202122232425262728292a2b2c \
+    --to-keys alice.keys \
     --to-identifier 1 \
     --amount 10
 ```
@@ -291,8 +302,7 @@ wallet auth-transfer send \
 ```bash
 wallet auth-transfer send \
     --from Public/CharlieYrP9BmhbFVQyBcbznU8bAXcwrzwRoPTetXdQPB \
-    --to-npk a3f7c21b8e905d4f6a1bc783d0e2f94c1d5a6b7e8f9012345678abcdef012345 \
-    --to-vpk 03b1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6071819202122232425262728292a2b2c \
+    --to-keys alice.keys \
     --to-identifier 2 \
     --amount 5
 ```

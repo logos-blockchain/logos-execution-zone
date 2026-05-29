@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use clap::Subcommand;
 use common::transaction::LeeTransaction;
 use lee::AccountId;
@@ -41,13 +41,17 @@ pub enum TokenProgramAgnosticSubcommand {
         #[arg(long)]
         to: Option<CliAccountMention>,
         /// `to_npk` - valid 32 byte hex string.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "to_keys")]
         to_npk: Option<String>,
-        /// `to_vpk` - valid 33 byte hex string.
-        #[arg(long)]
+        /// `to_vpk` - valid hex-encoded ML-KEM-768 encapsulation key (1184 bytes).
+        #[arg(long, conflicts_with = "to_keys")]
         to_vpk: Option<String>,
+        /// Path to a keys file exported by `wallet account show-keys`, containing npk
+        /// and vpk on separate lines. Replaces `--to-npk` and `--to-vpk`.
+        #[arg(long, conflicts_with_all = ["to_npk", "to_vpk"])]
+        to_keys: Option<String>,
         /// Identifier for the recipient's private account (only used when sending to a foreign
-        /// private account via `--to-npk`/`--to-vpk`).
+        /// private account via `--to-npk`/`--to-vpk` or `--to-keys`).
         #[arg(long)]
         to_identifier: Option<u128>,
         /// amount - amount of balance to move.
@@ -87,13 +91,17 @@ pub enum TokenProgramAgnosticSubcommand {
         #[arg(long)]
         holder: Option<CliAccountMention>,
         /// `holder_npk` - valid 32 byte hex string.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "holder_keys")]
         holder_npk: Option<String>,
-        /// `to_vpk` - valid 33 byte hex string.
-        #[arg(long)]
+        /// `holder_vpk` - valid hex-encoded ML-KEM-768 encapsulation key (1184 bytes).
+        #[arg(long, conflicts_with = "holder_keys")]
         holder_vpk: Option<String>,
+        /// Path to a keys file exported by `wallet account show-keys`, containing npk
+        /// and vpk on separate lines. Replaces `--holder-npk` and `--holder-vpk`.
+        #[arg(long, conflicts_with_all = ["holder_npk", "holder_vpk"])]
+        holder_keys: Option<String>,
         /// Identifier for the holder's private account (only used when minting to a foreign
-        /// private account via `--holder-npk`/`--holder-vpk`).
+        /// private account via `--holder-npk`/`--holder-vpk` or `--holder-keys`).
         #[arg(long)]
         holder_identifier: Option<u128>,
         /// amount - amount of balance to mint.
@@ -170,9 +178,17 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                 to,
                 to_npk,
                 to_vpk,
+                to_keys,
                 to_identifier,
                 amount,
             } => {
+                let (to_npk, to_vpk) = if let Some(path) = to_keys {
+                    let (npk_bytes, vpk_bytes) = crate::cli::read_keys_file(&path)?;
+                    (Some(hex::encode(npk_bytes)), Some(hex::encode(vpk_bytes)))
+                } else {
+                    (to_npk, to_vpk)
+                };
+
                 let from = from.resolve(wallet_core.storage())?;
                 let to = to
                     .map(|account_mention| account_mention.resolve(wallet_core.storage()))
@@ -309,9 +325,17 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                 holder,
                 holder_npk,
                 holder_vpk,
+                holder_keys,
                 holder_identifier,
                 amount,
             } => {
+                let (holder_npk, holder_vpk) = if let Some(path) = holder_keys {
+                    let (npk_bytes, vpk_bytes) = crate::cli::read_keys_file(&path)?;
+                    (Some(hex::encode(npk_bytes)), Some(hex::encode(vpk_bytes)))
+                } else {
+                    (holder_npk, holder_vpk)
+                };
+
                 let definition = definition.resolve(wallet_core.storage())?;
                 let holder = holder
                     .map(|account_mention| account_mention.resolve(wallet_core.storage()))
@@ -475,7 +499,7 @@ pub enum TokenProgramSubcommandPrivate {
         /// `recipient_npk` - valid 32 byte hex string.
         #[arg(long)]
         recipient_npk: String,
-        /// `recipient_vpk` - valid 33 byte hex string.
+        /// `recipient_vpk` - valid hex-encoded ML-KEM-768 encapsulation key (1184 bytes).
         #[arg(long)]
         recipient_vpk: String,
         /// Identifier for the recipient's private account.
@@ -569,7 +593,7 @@ pub enum TokenProgramSubcommandShielded {
         /// `recipient_npk` - valid 32 byte hex string.
         #[arg(long)]
         recipient_npk: String,
-        /// `recipient_vpk` - valid 33 byte hex string.
+        /// `recipient_vpk` - valid hex-encoded ML-KEM-768 encapsulation key (1184 bytes).
         #[arg(long)]
         recipient_vpk: String,
         /// Identifier for the recipient's private account.
@@ -764,7 +788,9 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                 recipient_npk.copy_from_slice(&recipient_npk_res);
                 let recipient_npk = lee_core::NullifierPublicKey(recipient_npk);
 
-                let recipient_vpk_res = hex::decode(recipient_vpk)?;
+                let recipient_vpk_res = hex::decode(&recipient_vpk).context(
+                    "wallet::cli::programs::token: recipient_vpk must be a valid hex string",
+                )?;
                 let recipient_vpk = lee_core::encryption::ViewingPublicKey(recipient_vpk_res);
 
                 let (tx_hash, [secret_sender, _]) = Token(wallet_core)
@@ -872,7 +898,9 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                 holder_npk.copy_from_slice(&holder_npk_res);
                 let holder_npk = lee_core::NullifierPublicKey(holder_npk);
 
-                let holder_vpk_res = hex::decode(holder_vpk)?;
+                let holder_vpk_res = hex::decode(&holder_vpk).context(
+                    "wallet::cli::programs::token: holder_vpk must be a valid hex string",
+                )?;
                 let holder_vpk = lee_core::encryption::ViewingPublicKey(holder_vpk_res);
 
                 let (tx_hash, [secret_definition, _]) = Token(wallet_core)
@@ -1024,7 +1052,9 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                 recipient_npk.copy_from_slice(&recipient_npk_res);
                 let recipient_npk = lee_core::NullifierPublicKey(recipient_npk);
 
-                let recipient_vpk_res = hex::decode(recipient_vpk)?;
+                let recipient_vpk_res = hex::decode(&recipient_vpk).context(
+                    "wallet::cli::programs::token: recipient_vpk must be a valid hex string",
+                )?;
                 let recipient_vpk = lee_core::encryption::ViewingPublicKey(recipient_vpk_res);
 
                 let (tx_hash, _) = Token(wallet_core)
@@ -1151,7 +1181,9 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                 holder_npk.copy_from_slice(&holder_npk_res);
                 let holder_npk = lee_core::NullifierPublicKey(holder_npk);
 
-                let holder_vpk_res = hex::decode(holder_vpk)?;
+                let holder_vpk_res = hex::decode(&holder_vpk).context(
+                    "wallet::cli::programs::token: holder_vpk must be a valid hex string",
+                )?;
                 let holder_vpk = lee_core::encryption::ViewingPublicKey(holder_vpk_res);
 
                 let (tx_hash, _) = Token(wallet_core)

@@ -25,3 +25,4 @@ serde_json.workspace = true
 [features]
 default = []
 host = ["dep:ml-kem"]
+test_utils = ["host"]

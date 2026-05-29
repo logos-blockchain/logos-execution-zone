@@ -15,6 +15,14 @@ use lee_core::{
     encryption::{EphemeralPublicKey, ViewingPublicKey},
 };
 use log::info;
+<<<<<<< HEAD
+=======
+use nssa::{AccountId, program::Program};
+use nssa_core::{
+    NullifierPublicKey,
+    encryption::{MlKem768EncapsulationKey, ViewingPublicKey},
+};
+>>>>>>> f4315d18 (addressed comments)
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 use wallet::{
@@ -38,6 +46,7 @@ async fn private_transfer_to_owned_account() -> Result<()> {
         to: Some(private_mention(to)),
         to_npk: None,
         to_vpk: None,
+        to_keys: None,
         to_identifier: Some(0),
         amount: 100,
     });
@@ -77,7 +86,8 @@ async fn private_transfer_to_foreign_account() -> Result<()> {
         from: private_mention(from),
         to: None,
         to_npk: Some(to_npk_string),
-        to_vpk: Some(hex::encode(to_vpk.0)),
+        to_vpk: Some(hex::encode(to_vpk.to_bytes())),
+        to_keys: None,
         to_identifier: Some(0),
         amount: 100,
     });
@@ -127,6 +137,7 @@ async fn deshielded_transfer_to_public_account() -> Result<()> {
         to: Some(public_mention(to)),
         to_npk: None,
         to_vpk: None,
+        to_keys: None,
         to_identifier: Some(0),
         amount: 100,
     });
@@ -189,7 +200,8 @@ async fn private_transfer_to_owned_account_using_claiming_path() -> Result<()> {
         from: private_mention(from),
         to: None,
         to_npk: Some(hex::encode(to.key_chain.nullifier_public_key.0)),
-        to_vpk: Some(hex::encode(&to.key_chain.viewing_public_key.0)),
+        to_vpk: Some(hex::encode(to.key_chain.viewing_public_key.to_bytes())),
+        to_keys: None,
         to_identifier: Some(to.kind.identifier()),
         amount: 100,
     });
@@ -239,6 +251,7 @@ async fn shielded_transfer_to_owned_private_account() -> Result<()> {
         to: Some(private_mention(to)),
         to_npk: None,
         to_vpk: None,
+        to_keys: None,
         to_identifier: Some(0),
         amount: 100,
     });
@@ -281,7 +294,8 @@ async fn shielded_transfer_to_foreign_account() -> Result<()> {
         from: public_mention(from),
         to: None,
         to_npk: Some(to_npk_string),
-        to_vpk: Some(hex::encode(to_vpk.0)),
+        to_vpk: Some(hex::encode(to_vpk.to_bytes())),
+        to_keys: None,
         to_identifier: Some(0),
         amount: 100,
     });
@@ -351,7 +365,8 @@ async fn private_transfer_to_owned_account_continuous_run_path() -> Result<()> {
         from: private_mention(from),
         to: None,
         to_npk: Some(hex::encode(to.key_chain.nullifier_public_key.0)),
-        to_vpk: Some(hex::encode(&to.key_chain.viewing_public_key.0)),
+        to_vpk: Some(hex::encode(to.key_chain.viewing_public_key.to_bytes())),
+        to_keys: None,
         to_identifier: Some(to.kind.identifier()),
         amount: 100,
     });
@@ -452,6 +467,7 @@ async fn private_transfer_using_from_label() -> Result<()> {
         to: Some(private_mention(to)),
         to_npk: None,
         to_vpk: None,
+        to_keys: None,
         to_identifier: Some(0),
         amount: 100,
     });
@@ -545,7 +561,7 @@ async fn shielded_transfers_to_two_identifiers_same_npk() -> Result<()> {
     };
 
     let npk_hex = hex::encode(npk.0);
-    let vpk_hex = hex::encode(vpk.0);
+    let vpk_hex = hex::encode(vpk.to_bytes());
 
     let identifier_1 = 1_u128;
     let identifier_2 = 2_u128;
@@ -560,6 +576,7 @@ async fn shielded_transfers_to_two_identifiers_same_npk() -> Result<()> {
             to: None,
             to_npk: Some(npk_hex.clone()),
             to_vpk: Some(vpk_hex.clone()),
+            to_keys: None,
             to_identifier: Some(identifier_1),
             amount: 100,
         }),
@@ -573,6 +590,7 @@ async fn shielded_transfers_to_two_identifiers_same_npk() -> Result<()> {
             to: None,
             to_npk: Some(npk_hex),
             to_vpk: Some(vpk_hex),
+            to_keys: None,
             to_identifier: Some(identifier_2),
             amount: 200,
         }),
@@ -654,7 +672,7 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
     let auth_transfer_program_id = Program::authenticated_transfer_program().id();
     let nsk: lee_core::NullifierSecretKey = [3; 32];
     let npk = NullifierPublicKey::from(&nsk);
-    let vpk = ViewingPublicKey(vec![4_u8; 1184]);
+    let vpk = MlKem768EncapsulationKey::from_bytes(vec![4_u8; 1184]).unwrap();
     let ssk = SharedSecretKey([55_u8; 32]);
     let epk = EphemeralPublicKey(vec![55_u8; 1088]);
     let attacker_vault_id = {

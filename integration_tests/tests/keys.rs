@@ -71,7 +71,10 @@ async fn sync_private_account_with_non_zero_chain_index() -> Result<()> {
         from: private_mention(from),
         to: None,
         to_npk: Some(hex::encode(to_account.key_chain.nullifier_public_key.0)),
-        to_vpk: Some(hex::encode(&to_account.key_chain.viewing_public_key.0)),
+        to_vpk: Some(hex::encode(
+            to_account.key_chain.viewing_public_key.to_bytes(),
+        )),
+        to_keys: None,
         to_identifier: Some(to_account.kind.identifier()),
         amount: 100,
     });
@@ -147,6 +150,7 @@ async fn restore_keys_from_seed() -> Result<()> {
         to: Some(private_mention(to_account_id1)),
         to_npk: None,
         to_vpk: None,
+        to_keys: None,
         to_identifier: Some(0),
         amount: 100,
     });
@@ -158,6 +162,7 @@ async fn restore_keys_from_seed() -> Result<()> {
         to: Some(private_mention(to_account_id2)),
         to_npk: None,
         to_vpk: None,
+        to_keys: None,
         to_identifier: Some(0),
         amount: 101,
     });
@@ -197,6 +202,7 @@ async fn restore_keys_from_seed() -> Result<()> {
         to: Some(public_mention(to_account_id3)),
         to_npk: None,
         to_vpk: None,
+        to_keys: None,
         to_identifier: Some(0),
         amount: 102,
     });
@@ -208,6 +214,7 @@ async fn restore_keys_from_seed() -> Result<()> {
         to: Some(public_mention(to_account_id4)),
         to_npk: None,
         to_vpk: None,
+        to_keys: None,
         to_identifier: Some(0),
         amount: 103,
     });
@@ -268,6 +275,7 @@ async fn restore_keys_from_seed() -> Result<()> {
         to: Some(private_mention(to_account_id2)),
         to_npk: None,
         to_vpk: None,
+        to_keys: None,
         to_identifier: Some(0),
         amount: 10,
     });
@@ -278,6 +286,7 @@ async fn restore_keys_from_seed() -> Result<()> {
         to: Some(public_mention(to_account_id4)),
         to_npk: None,
         to_vpk: None,
+        to_keys: None,
         to_identifier: Some(0),
         amount: 11,
     });

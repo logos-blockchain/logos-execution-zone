@@ -50,6 +50,7 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
                         to: Some(public_mention(recipient_id)),
                         to_npk: None,
                         to_vpk: None,
+                        to_keys: None,
                         to_identifier: Some(0),
                         amount: AMOUNT_PER_TRANSFER,
                     }),

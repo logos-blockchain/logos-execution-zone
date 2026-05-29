@@ -107,6 +107,27 @@ mod tests {
     }
 
     #[test]
+    fn calculate_shared_secret_receiver_returns_none_for_malformed_epk() {
+        let key_chain = KeyChain::new_os_random();
+
+        let short_epk = EphemeralPublicKey(vec![42_u8; 100]);
+        assert!(
+            key_chain
+                .calculate_shared_secret_receiver(&short_epk)
+                .is_none(),
+            "short EphemeralPublicKey must return None"
+        );
+
+        let long_epk = EphemeralPublicKey(vec![42_u8; 1089]);
+        assert!(
+            key_chain
+                .calculate_shared_secret_receiver(&long_epk)
+                .is_none(),
+            "long EphemeralPublicKey must return None"
+        );
+    }
+
+    #[test]
     fn key_generation_test() {
         let seed_holder = SeedHolder::new_os_random();
         let top_secret_key_holder = seed_holder.produce_top_secret_key_holder();

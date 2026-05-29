@@ -741,8 +741,8 @@ impl WalletCore {
                     .filter_map(move |(ciph_id, encrypted_data)| {
                         let ciphertext = &encrypted_data.ciphertext;
                         let commitment = &new_commitments[ciph_id];
-                        let shared_secret = key_chain
-                            .calculate_shared_secret_receiver(&encrypted_data.epk)?;
+                        let shared_secret =
+                            key_chain.calculate_shared_secret_receiver(&encrypted_data.epk)?;
 
                         lee_core::EncryptionScheme::decrypt(
                             ciphertext,

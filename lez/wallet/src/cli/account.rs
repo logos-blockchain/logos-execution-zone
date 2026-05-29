@@ -51,6 +51,20 @@ pub enum AccountSubcommand {
     /// Import external account.
     #[command(subcommand)]
     Import(ImportSubcommand),
+    /// Print the npk and vpk for a private account, one per line.
+    ///
+    /// Outputs two lines: npk (hex) then vpk (hex). Save to a file and share it
+    /// with senders so they can reference it with `--to-keys /path/to/file`.
+    ///
+    /// ```text
+    /// wallet account show-keys --account-id Private/... > alice.keys
+    /// ```
+    #[command(name = "show-keys")]
+    ShowKeys {
+        /// Either 32 byte base58 account id string with privacy prefix or a label.
+        #[arg(long)]
+        account_id: CliAccountMention,
+    },
 }
 
 /// Represents generic register CLI subcommand.
@@ -225,7 +239,7 @@ impl WalletSubcommand for NewSubcommand {
                 println!("Shared account from group '{group}'");
                 println!("AccountId: Private/{}", info.account_id);
                 println!("NPK: {}", hex::encode(info.npk.0));
-                println!("VPK: {}", hex::encode(&info.vpk.0));
+                println!("VPK: {}", hex::encode(info.vpk.to_bytes()));
 
                 wallet_core.store_persistent_data()?;
                 Ok(SubcommandReturnValue::RegisterAccount {
@@ -418,6 +432,25 @@ impl WalletSubcommand for AccountSubcommand {
             }
             Self::Import(import_subcommand) => {
                 import_subcommand.handle_subcommand(wallet_core).await
+            }
+            Self::ShowKeys { account_id } => {
+                let resolved = account_id.resolve(wallet_core.storage())?;
+                let AccountIdWithPrivacy::Private(account_id) = resolved else {
+                    anyhow::bail!(
+                        "wallet::cli::account::AccountSubcommand::ShowKeys: show-keys is only available for private accounts"
+                    );
+                };
+                let entry = wallet_core
+                    .storage()
+                    .key_chain()
+                    .private_account(account_id)
+                    .ok_or_else(|| anyhow::anyhow!("wallet::cli::account::AccountSubcommand::ShowKeys: private account not found in wallet"))?;
+                println!("{}", hex::encode(entry.key_chain.nullifier_public_key.0));
+                println!(
+                    "{}",
+                    hex::encode(entry.key_chain.viewing_public_key.to_bytes())
+                );
+                Ok(SubcommandReturnValue::Empty)
             }
         }
     }

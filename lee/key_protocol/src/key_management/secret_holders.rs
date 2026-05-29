@@ -28,6 +28,13 @@ pub struct ViewingSecretKey {
     pub z: [u8; 32],
 }
 
+impl ViewingSecretKey {
+    #[must_use]
+    pub const fn new(d: [u8; 32], z: [u8; 32]) -> Self {
+        Self { d, z }
+    }
+}
+
 /// Private key holder. Produces public keys. Can produce `account_id`. Can produce shared secret
 /// for recepient.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -142,22 +149,22 @@ impl SecretSpendingKey {
 
         let full_seed = hmac_sha512::HMAC::mac(bytes, b"LEE_viewing_seed");
 
-        ViewingSecretKey {
-            d: *full_seed
+        ViewingSecretKey::new(
+            *full_seed
                 .first_chunk::<32>()
                 .expect("hash_value is 64 bytes, must be safe to get first 32"),
-            z: *full_seed
+            *full_seed
                 .last_chunk::<32>()
                 .expect("hash_value is 64 bytes, must be safe to get last 32"),
-        }
+        )
     }
 
     #[must_use]
     pub const fn generate_viewing_secret_key(seed: [u8; 64]) -> ViewingSecretKey {
-        ViewingSecretKey {
-            d: *seed.first_chunk::<32>().expect("seed is 64 bytes"),
-            z: *seed.last_chunk::<32>().expect("seed is 64 bytes"),
-        }
+        ViewingSecretKey::new(
+            *seed.first_chunk::<32>().expect("seed is 64 bytes"),
+            *seed.last_chunk::<32>().expect("seed is 64 bytes"),
+        )
     }
 
     #[must_use]
@@ -169,14 +176,15 @@ impl SecretSpendingKey {
     }
 }
 
-impl From<&ViewingSecretKey> for ViewingPublicKey {
+impl From<&ViewingSecretKey> for MlKem768EncapsulationKey {
     fn from(sk: &ViewingSecretKey) -> Self {
         use ml_kem::{Kem, KeyExport as _, MlKem768, Seed};
         let mut seed_bytes = [0_u8; 64];
         seed_bytes[..32].copy_from_slice(&sk.d);
         seed_bytes[32..].copy_from_slice(&sk.z);
         let dk = <MlKem768 as Kem>::DecapsulationKey::from_seed(Seed::from(seed_bytes));
-        Self(dk.encapsulation_key().to_bytes().to_vec())
+        Self::from_bytes(dk.encapsulation_key().to_bytes().to_vec())
+            .expect("key_protocol::secret_holders::From<&ViewingSecretKey>: ML-KEM-768 encapsulation key is always 1184 bytes")
     }
 }
 
@@ -187,8 +195,8 @@ impl PrivateKeyHolder {
     }
 
     #[must_use]
-    pub fn generate_viewing_public_key(&self) -> ViewingPublicKey {
-        ViewingPublicKey::from(&self.viewing_secret_key)
+    pub fn generate_viewing_public_key(&self) -> MlKem768EncapsulationKey {
+        MlKem768EncapsulationKey::from(&self.viewing_secret_key)
     }
 }
 

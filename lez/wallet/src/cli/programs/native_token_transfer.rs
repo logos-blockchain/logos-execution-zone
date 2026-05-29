@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use clap::Subcommand;
 use common::transaction::LeeTransaction;
 use lee::AccountId;
@@ -34,13 +34,17 @@ pub enum AuthTransferSubcommand {
         #[arg(long)]
         to: Option<CliAccountMention>,
         /// `to_npk` - valid 32 byte hex string.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "to_keys")]
         to_npk: Option<String>,
-        /// `to_vpk` - valid 33 byte hex string.
-        #[arg(long)]
+        /// `to_vpk` - valid hex-encoded ML-KEM-768 encapsulation key (1184 bytes).
+        #[arg(long, conflicts_with = "to_keys")]
         to_vpk: Option<String>,
+        /// Path to a keys file exported by `wallet account show-keys`, containing npk
+        /// and vpk on separate lines. Replaces `--to-npk` and `--to-vpk`.
+        #[arg(long, conflicts_with_all = ["to_npk", "to_vpk"])]
+        to_keys: Option<String>,
         /// Identifier for the recipient's private account (only used when sending to a foreign
-        /// private account via `--to-npk`/`--to-vpk`).
+        /// private account via `--to-npk`/`--to-vpk` or `--to-keys`).
         #[arg(long)]
         to_identifier: Option<u128>,
         /// amount - amount of balance to move.
@@ -100,9 +104,18 @@ impl WalletSubcommand for AuthTransferSubcommand {
                 to: to_account,
                 to_npk,
                 to_vpk,
+                to_keys,
                 to_identifier,
                 amount,
             } => {
+                // Resolve --to-keys into --to-npk / --to-vpk equivalents.
+                let (to_npk, to_vpk) = if let Some(path) = to_keys {
+                    let (npk_bytes, vpk_bytes) = crate::cli::read_keys_file(&path)?;
+                    (Some(hex::encode(npk_bytes)), Some(hex::encode(vpk_bytes)))
+                } else {
+                    (to_npk, to_vpk)
+                };
+
                 let from = from_account.resolve(wallet_core.storage())?;
                 let to = to_account
                     .as_ref()
@@ -258,7 +271,7 @@ pub enum NativeTokenTransferProgramSubcommandShielded {
         /// `to_npk` - valid 32 byte hex string.
         #[arg(long)]
         to_npk: String,
-        /// `to_vpk` - valid 33 byte hex string.
+        /// `to_vpk` - valid hex-encoded ML-KEM-768 encapsulation key (1184 bytes).
         #[arg(long)]
         to_vpk: String,
         /// Identifier for the recipient's private account.
@@ -298,7 +311,7 @@ pub enum NativeTokenTransferProgramSubcommandPrivate {
         /// `to_npk` - valid 32 byte hex string.
         #[arg(long)]
         to_npk: String,
-        /// `to_vpk` - valid 33 byte hex string.
+        /// `to_vpk` - valid hex-encoded ML-KEM-768 encapsulation key (1184 bytes).
         #[arg(long)]
         to_vpk: String,
         /// Identifier for the recipient's private account.
@@ -350,7 +363,8 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandPrivate {
                 to_npk.copy_from_slice(&to_npk_res);
                 let to_npk = lee_core::NullifierPublicKey(to_npk);
 
-                let to_vpk_res = hex::decode(to_vpk)?;
+                let to_vpk_res = hex::decode(&to_vpk)
+                    .context("wallet::cli::programs::native_token_transfer: to_vpk must be a valid hex string")?;
                 let to_vpk = lee_core::encryption::ViewingPublicKey(to_vpk_res);
 
                 let (tx_hash, [secret_from, _]) = NativeTokenTransfer(wallet_core)
@@ -424,7 +438,8 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandShielded {
                 to_npk.copy_from_slice(&to_npk_res);
                 let to_npk = lee_core::NullifierPublicKey(to_npk);
 
-                let to_vpk_res = hex::decode(to_vpk)?;
+                let to_vpk_res = hex::decode(&to_vpk)
+                    .context("wallet::cli::programs::native_token_transfer: to_vpk must be a valid hex string")?;
                 let to_vpk = lee_core::encryption::ViewingPublicKey(to_vpk_res);
 
                 let (tx_hash, _) = NativeTokenTransfer(wallet_core)

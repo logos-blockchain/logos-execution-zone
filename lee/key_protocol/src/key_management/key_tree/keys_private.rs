@@ -38,7 +38,7 @@ impl ChildKeysPrivate {
         let vsk = ssk.generate_viewing_secret_seed_key(None);
 
         let npk = NullifierPublicKey::from(&nsk);
-        let vpk = ViewingPublicKey::from(&vsk);
+        let vpk = MlKem768EncapsulationKey::from(&vsk);
 
         Self {
             value: (
@@ -60,15 +60,17 @@ impl ChildKeysPrivate {
 
     #[must_use]
     pub fn nth_child(&self, cci: u32) -> Self {
+        // `parent_hash`` is used to incorporate entropy based on the parent node's keys
+        // to generate the `ssk` and `ccc` values.
         let mut parent_hash = sha2::Sha256::new();
         parent_hash.update(b"LEE/keys");
-        parent_hash.update([0_u8; 16]);
-        parent_hash.update([9_u8]);
         parent_hash.update(self.value.0.private_key_holder.nullifier_secret_key);
         parent_hash.update(self.value.0.private_key_holder.viewing_secret_key.d);
         parent_hash.update(self.value.0.private_key_holder.viewing_secret_key.z);
         let parent_pt = parent_hash.finalize();
 
+        // Each child (of the same parent node) share the same `parent_pt`.
+        // To ensure that each child generates unique keys, we include the child index.
         let mut input = vec![];
         input.extend_from_slice(b"LEE_seed_priv");
         input.extend_from_slice(&parent_pt);
@@ -90,7 +92,7 @@ impl ChildKeysPrivate {
         let vsk = ssk.generate_viewing_secret_seed_key(Some(cci));
 
         let npk = NullifierPublicKey::from(&nsk);
-        let vpk = ViewingPublicKey::from(&vsk);
+        let vpk = MlKem768EncapsulationKey::from(&vsk);
 
         Self {
             value: (
@@ -167,16 +169,16 @@ mod tests {
             247, 155, 113, 122, 246, 192, 0, 70, 61, 76, 71, 70, 2,
         ]);
 
-        let expected_vsk: ViewingSecretKey = ViewingSecretKey {
-            d: [
+        let expected_vsk = ViewingSecretKey::new(
+            [
                 187, 143, 146, 12, 68, 148, 25, 203, 21, 92, 131, 2, 221, 81, 117, 62, 98, 194,
                 159, 177, 102, 254, 236, 182, 76, 242, 116, 219, 17, 166, 99, 36,
             ],
-            z: [
+            [
                 80, 97, 83, 209, 145, 99, 168, 99, 89, 29, 153, 236, 82, 99, 134, 114, 168, 19,
                 223, 69, 34, 47, 76, 76, 15, 97, 245, 184, 25, 103, 251, 82,
             ],
-        };
+        );
 
         let expected_vpk: [u8; 1184] = [
             127, 229, 162, 212, 104, 117, 4, 150, 192, 103, 122, 195, 14, 35, 12, 60, 52, 23, 220,
@@ -281,16 +283,16 @@ mod tests {
             219, 114, 113, 16, 42, 27, 220, 96, 151, 124, 8, 65,
         ]);
 
-        let expected_vsk: ViewingSecretKey = ViewingSecretKey {
-            d: [
+        let expected_vsk = ViewingSecretKey::new(
+            [
                 81, 154, 68, 152, 72, 163, 82, 17, 125, 156, 193, 135, 129, 93, 227, 55, 224, 104,
                 119, 232, 13, 101, 241, 20, 175, 72, 192, 186, 176, 246, 140, 211,
             ],
-            z: [
+            [
                 31, 40, 109, 41, 185, 61, 173, 79, 102, 171, 158, 245, 232, 71, 57, 157, 142, 117,
                 184, 235, 216, 71, 55, 44, 33, 156, 167, 133, 184, 92, 47, 174,
             ],
-        };
+        );
 
         let expected_vpk: [u8; 1184] = [
             67, 150, 145, 133, 41, 124, 194, 102, 104, 131, 195, 8, 168, 170, 200, 40, 210, 84, 85,

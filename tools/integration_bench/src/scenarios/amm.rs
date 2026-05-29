@@ -180,6 +180,7 @@ async fn timed_token_send(
                     to: Some(public_mention(to_id)),
                     to_npk: None,
                     to_vpk: None,
+                    to_keys: None,
                     to_identifier: Some(0),
                     amount,
                 }),

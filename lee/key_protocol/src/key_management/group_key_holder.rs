@@ -1,7 +1,7 @@
 use aes_gcm::{Aes256Gcm, KeyInit as _, aead::Aead as _};
 use lee_core::{
     SharedSecretKey,
-    encryption::{EphemeralPublicKey, ViewingPublicKey},
+    encryption::{EphemeralPublicKey, MlKem768EncapsulationKey},
     program::{PdaSeed, ProgramId},
 };
 use rand::{RngCore as _, rngs::OsRng};
@@ -156,8 +156,9 @@ impl GroupKeyHolder {
     /// different ciphertexts.
     #[must_use]
     pub fn seal_for(&self, recipient_key: &SealingPublicKey) -> Vec<u8> {
-        let vpk = ViewingPublicKey(recipient_key.0.clone());
-        let (shared, kem_ct) = SharedSecretKey::encapsulate(&vpk);
+        let sealing_key = MlKem768EncapsulationKey::from_bytes(recipient_key.0.clone())
+            .expect("key_protocol::group_key_holder::GroupKeyHolder::seal_for: SealingPublicKey must be a valid ML-KEM-768 encapsulation key");
+        let (shared, kem_ct) = SharedSecretKey::encapsulate(&sealing_key);
         let aes_key = Self::seal_kdf(&shared);
         let cipher = Aes256Gcm::new(&aes_key.into());
 
@@ -404,7 +405,9 @@ mod tests {
         let recipient_vpk = recipient_keys.generate_viewing_public_key();
         let recipient_vsk = recipient_keys.viewing_secret_key;
 
-        let sealed = holder.seal_for(&SealingPublicKey::from_bytes(recipient_vpk.0));
+        let sealed = holder.seal_for(&SealingPublicKey::from_bytes(
+            recipient_vpk.to_bytes().to_vec(),
+        ));
         let restored = GroupKeyHolder::unseal(&sealed, &recipient_vsk).expect("unseal");
 
         assert_eq!(restored.dangerous_raw_gms(), holder.dangerous_raw_gms());
@@ -434,7 +437,9 @@ mod tests {
             .produce_private_key_holder(None)
             .viewing_secret_key;
 
-        let sealed = holder.seal_for(&SealingPublicKey::from_bytes(recipient_vpk.0));
+        let sealed = holder.seal_for(&SealingPublicKey::from_bytes(
+            recipient_vpk.to_bytes().to_vec(),
+        ));
         let result = GroupKeyHolder::unseal(&sealed, &wrong_vsk);
         assert!(matches!(result, Err(super::SealError::DecryptionFailed)));
     }
@@ -449,7 +454,9 @@ mod tests {
         let recipient_vpk = recipient_keys.generate_viewing_public_key();
         let recipient_vsk = recipient_keys.viewing_secret_key;
 
-        let mut sealed = holder.seal_for(&SealingPublicKey::from_bytes(recipient_vpk.0));
+        let mut sealed = holder.seal_for(&SealingPublicKey::from_bytes(
+            recipient_vpk.to_bytes().to_vec(),
+        ));
         // Flip a byte in the AES-GCM ciphertext portion (after KEM ciphertext + nonce).
         let last = sealed.len() - 1;
         sealed[last] ^= 0xFF;
@@ -468,7 +475,7 @@ mod tests {
             .produce_private_key_holder(None)
             .generate_viewing_public_key();
 
-        let sealing_key = SealingPublicKey::from_bytes(recipient_vpk.0);
+        let sealing_key = SealingPublicKey::from_bytes(recipient_vpk.to_bytes().to_vec());
         let sealed_a = holder.seal_for(&sealing_key);
         let sealed_b = holder.seal_for(&sealing_key);
         assert_ne!(sealed_a, sealed_b);
@@ -531,7 +538,8 @@ mod tests {
         let bob_vpk = bob_keys.generate_viewing_public_key();
         let bob_vsk = bob_keys.viewing_secret_key;
 
-        let sealed = alice_holder.seal_for(&SealingPublicKey::from_bytes(bob_vpk.0));
+        let sealed =
+            alice_holder.seal_for(&SealingPublicKey::from_bytes(bob_vpk.to_bytes().to_vec()));
         let bob_holder =
             GroupKeyHolder::unseal(&sealed, &bob_vsk).expect("Bob should unseal the GMS");
 
