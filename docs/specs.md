@@ -1,6 +1,6 @@
-# LEZ v0.3 specifications
+# LEE v0.3 specifications
 
-## LEZ v0.3 basic types and constants
+## LEE v0.3 basic types and constants
 
 ```rust
 type AccountId = [u8; 32];
@@ -64,7 +64,7 @@ const MAX_NUMBER_CHAINED_CALLS: usize = 10;
 const DEFAULT_PROGRAM_ID: ProgramId = [0; 8];
 ```
 
-> **Byte order:** LEZ uses little-endian encoding throughout for integers, with the exception of the key protocol which follows BIP-32 (big-endian).
+> **Byte order:** LEE uses little-endian encoding throughout for integers, with the exception of the key protocol which follows BIP-32 (big-endian).
 
 ## Accounts
 
@@ -98,7 +98,7 @@ The identification number of the program that can operate on this account's data
 
 ### Balance field
 
-The number of native tokens held by the account. It's represented as a 128-bit number. That means, the total supply of the system should never exceed $2^{128} - 1$. As long as that is guaranteed, transfer operations on the balance will not overflow. This is because under normal transfer operations, no account can end up with a balance greater than the total supply of the system. NSSA prevents overflow exploits on the balance field by upcasting each term to u256 when computing the total balances before and after an execution.
+The number of native tokens held by the account. It's represented as a 128-bit number. That means, the total supply of the system should never exceed $2^{128} - 1$. As long as that is guaranteed, transfer operations on the balance will not overflow. This is because under normal transfer operations, no account can end up with a balance greater than the total supply of the system. LEE prevents overflow exploits on the balance field by upcasting each term to u256 when computing the total balances before and after an execution.
 
 ### Data field
 
@@ -213,8 +213,8 @@ $$\mathsf{AccountId} = \mathsf{SHA256}(\mathsf{PUBLIC\_PDA\_PREFIX} \;||\; \math
 The hash input is 96 bytes: 32-byte prefix + 32-byte `program_id` (as 8 LE u32 words) + 32-byte `seed`.
 
 ```rust
-/// ASCII "/NSSA/v0.2/AccountId/PDA/" zero-padded to 32 bytes
-PUBLIC_PDA_PREFIX: [u8; 32] = b"/NSSA/v0.2/AccountId/PDA/\x00\x00\x00\x00\x00\x00\x00"
+/// ASCII "/LEE/v0.3/AccountId/PDA/" zero-padded to 32 bytes
+PUBLIC_PDA_PREFIX: [u8; 32] = b"/LEE/v0.3/AccountId/PDA/\x00\x00\x00\x00\x00\x00\x00\x00"
 ```
 
 **Private program-derived account ID (private PDA):**
@@ -377,7 +377,7 @@ fn kdf(
     output_index: u32,                  // index of this output within the tx (LE)
 ) -> [u8; 32] {
     let mut bytes = Vec::new();
-    bytes.extend_from_slice(b"NSSA/v0.2/KDF-SHA256/");
+    bytes.extend_from_slice(b"LEE/v0.3/KDF-SHA256/");
     bytes.extend_from_slice(&shared_secret.0);
     bytes.extend_from_slice(&commitment.to_byte_array());
     bytes.extend_from_slice(&output_index.to_le_bytes());
@@ -650,10 +650,10 @@ pub type TimestampValidityWindow = ValidityWindow<Timestamp>;
 
 An output outside its window is rejected at the sequencer level before any state transition is applied.
 
-## NSSA v0.3 state
+## LEE v0.3 state
 
 ```rust
-struct NssaState {
+struct LeeState {
     public_state: Map<AccountId, Account>,
     private_state: (CommitmentSet, NullifierSet),
     programs: Map<ProgramId, Program>,
@@ -704,16 +704,6 @@ At genesis, the `CommitmentSet` is initialized by inserting `DUMMY_COMMITMENT` a
 
 See [docs/builtin_programs.md](builtin_programs.md). Additional user-defined programs may also be deployed via `ProgramDeploymentTransaction` (see "State transition from program deployment transactions").
 
-## Protected system accounts
-
-Certain accounts are reserved and cannot be modified by user-submitted transactions. The sequencer enforces this to every user transaction before any state mutation. Only sequencer-originated transactions bypass this check.
-
-The three clock accounts and the system faucet account are protected by a post-execution diff check. After a transaction's state diff is produced for all transaction types (public, privacy-preserving, or program deployment). The sequencer inspects whether any of the protected accounts appear with a changed value. If so, the transaction is rejected:
-
-This check fires after execution, so it catches indirect modifications (e.g. a program that receives a clock account as a pre-state and attempts to alter it).
-The only transactions that may update the protected accounts are:
-- the sequencer's own clock invocations, which are inserted at the end of the block after user transactions.
-- The genesis execution of the faucet program used for initial supply distribution.
 
 ## Structure of a public transaction
 
@@ -751,7 +741,7 @@ The message hash is `SHA256(PREFIX || borsh_serialize(message))`.
 
 ### Witness set
 
-A list of `(signature, public_key)` pairs. Each pair must produce a valid BIP-340 Schnorr signature over the message hash. The accounts derived from each `public_key` (via `AccountId::from(&public_key)`) form the *authorized signer set*. The program receives `is_authorized = true` for any pre-state account in this set (programs use the flag to decide whether to permit user-driven actions like transfers). Programs may also gain authorization for additional accounts via the PDA mechanism in chained calls. Authorization propagates down the call chain monotonically: the authorized set passed to each child call is the union of the parent's own authorized set and the parent's verified authorized pre-states, so an account authorized at any hop remains authorized for all subsequent calls even if an intermediate hop does not include it in its pre-states. Upon acceptance, each signing account's nonce is incremented by 1.
+A list of `(signature, public_key)` pairs. Each pair must produce a valid BIP-340 Schnorr signature over the message hash. The accounts derived from each `public_key` (via `AccountId::from(&public_key)`) form the *authorized signer set*. The program receives `is_authorized = true` for any pre-state account in this set (programs use the flag to decide whether to permit user-driven actions like transfers). Programs may also gain authorization for additional accounts via the PDA mechanism in chained calls. Authorization propagates down the call chain monotonically: the authorized set passed to each child call is the union of the parent's own authorized set and the parent's verified authorized pre-states, so an account authorized at any hop remains authorized for all subsequent calls even if an intermediate hop does not include it in its pre-states. This monotonicity applies equally to PDA-authorized accounts. Upon acceptance, each signing account's nonce is incremented by 1.
 
 ## Structure of a privacy-preserving transaction
 
@@ -804,7 +794,7 @@ The hash is `SHA256(PREFIX || borsh_serialize(message))`.
 
 ## The privacy-preserving execution circuit
 
-The circuit is a RISC-V program proven with the risc0 zkVM. It is executed entirely off-chain by the transaction sender; the sequencer only verifies the proof. It is not a built-in program in the NSSA sense — it wraps the execution of built-in programs inside a ZK proof.
+The circuit is a RISC-V program proven with the risc0 zkVM. It is executed entirely off-chain by the transaction sender; the sequencer only verifies the proof. It is not a built-in program in the LEE sense. It wraps the execution of built-in programs inside a ZK proof.
 
 **Workflow:**
 The circuit takes as private inputs a `PrivacyPreservingCircuitInput`: the sequence of `ProgramOutput`s for each call in the execution chain, one `InputAccountIdentity` per pre-state (carrying nullifier secret keys, shared secret keys, membership proofs, and identifiers as required by each account variant), and the top-level program ID.
@@ -1021,10 +1011,10 @@ fn private_account_discovery(
 | Nullifier — update | `b"/LEE/v0.3/Nullifier/Update/\x00\x00\x00\x00\x00"` |
 | Account ID — public | `b"/LEE/v0.3/AccountId/Public/\x00\x00\x00\x00\x00"` |
 | Account ID — private | `b"/LEE/v0.3/AccountId/Private/\x00\x00\x00\x00"` |
-| Account ID — public PDA | `b"/NSSA/v0.2/AccountId/PDA/\x00\x00\x00\x00\x00\x00\x00"` |
+| Account ID — public PDA | `b"/LEE/v0.3/AccountId/PDA/\x00\x00\x00\x00\x00\x00\x00\x00"` |
 | Account ID — private PDA | `b"/LEE/v0.3/AccountId/PrivatePDA/\x00"` |
 | Nullifier public key (from NSK) | `b"LEE/keys"` + nsk + `[7]` + `[0; 23]` |
-| KDF | `b"NSSA/v0.2/KDF-SHA256/"` |
+| KDF | `b"LEE/v0.3/KDF-SHA256/"` |
 | View tag | `b"/LEE/v0.3/ViewTag/"` |
 | Public transaction message hash | `b"/LEE/v0.3/Message/Public/\x00\x00\x00\x00\x00\x00\x00"` |
 | Privacy transaction message hash | `b"/LEE/v0.3/Message/Privacy/\x00\x00\x00\x00\x00\x00"` |
@@ -1051,7 +1041,7 @@ In pseudocode:
 ```rust
 fn validate_and_produce_public_state_diff(
     tx: PublicTransaction,
-    nssa_state: NssaState,
+    lee_state: LeeState,
     block_id: BlockId,
     timestamp: Timestamp,
 ) -> Map<AccountId, Account> {
@@ -1069,12 +1059,12 @@ fn validate_and_produce_public_state_diff(
     for ((signature, public_key), nonce) in witness_set.signatures_and_public_keys.zip(message.nonces) {
         assert!(signature.is_valid_for(message.hash(), public_key));
         let account_id = AccountId::from(public_key);
-        assert_eq!(nssa_state.public_state.get(account_id).nonce, nonce);
+        assert_eq!(lee_state.public_state.get(account_id).nonce, nonce);
         signer_account_ids.push(account_id);
     }
 
     let input_pre_states = message.account_ids.map(|id| AccountWithMetadata {
-        account: nssa_state.public_state.get(id),
+        account: lee_state.public_state.get(id),
         is_authorized: signer_account_ids.contains(id),
         account_id: id,
     });
@@ -1109,7 +1099,7 @@ fn validate_and_produce_public_state_diff(
     while let Some((call, caller_data)) = queue.pop_front() {
         assert!(counter <= MAX_NUMBER_CHAINED_CALLS);
 
-        let program = nssa_state.programs.get(call.program_id);
+        let program = lee_state.programs.get(call.program_id);
         let program_output = program.execute(
             call.program_id,
             caller_data.program_id,
@@ -1131,7 +1121,7 @@ fn validate_and_produce_public_state_diff(
         // Verify pre-state and authorization consistency: programs cannot fabricate inputs.
         for pre in program_output.pre_states {
             let expected_pre = state_diff.get(pre.account_id)
-                .unwrap_or(nssa_state.public_state.get(pre.account_id));
+                .unwrap_or(lee_state.public_state.get(pre.account_id));
             assert_eq!(pre.account, expected_pre);
             // The is_authorized flag must exactly match the actual authorization status:
             // programs cannot forge it (flag true on an unauthorized account) nor
@@ -1197,7 +1187,7 @@ fn validate_and_produce_public_state_diff(
 
     // Default-owner accounts that were modified must have been claimed.
     for (account_id, post) in state_diff {
-        let pre = nssa_state.public_state.get(account_id);
+        let pre = lee_state.public_state.get(account_id);
         if pre.program_owner == DEFAULT_PROGRAM_ID && pre != post {
             assert_ne!(post.program_owner, DEFAULT_PROGRAM_ID);
         }
@@ -1231,7 +1221,7 @@ In pseudocode:
 ```rust
 fn verify_privacy_preserving_transaction(
     tx: PrivacyPreservingTransaction,
-    nssa_state: NssaState,
+    lee_state: LeeState,
     block_id: BlockId,
     timestamp: Timestamp,
 ) {
@@ -1256,7 +1246,7 @@ fn verify_privacy_preserving_transaction(
     for ((sig, pk), nonce) in witness_set.signatures_and_public_keys.zip(message.nonces) {
         assert!(sig.is_valid_for(message.hash(), pk));
         let account_id = AccountId::from(pk);
-        assert_eq!(nssa_state.public_state.get(account_id).nonce, nonce);
+        assert_eq!(lee_state.public_state.get(account_id).nonce, nonce);
         authorized_ids.push(account_id);
     }
 
@@ -1266,7 +1256,7 @@ fn verify_privacy_preserving_transaction(
 
     // 7. Build public pre-states for proof verification
     let public_pre_states = message.public_account_ids.map(|id| AccountWithMetadata {
-        account: nssa_state.public_state.get(id),
+        account: lee_state.public_state.get(id),
         is_authorized: authorized_ids.contains(id),
         account_id: id,
     });
@@ -1286,11 +1276,11 @@ fn verify_privacy_preserving_transaction(
     // 9. Commitment freshness and valid digests are checked against the current CommitmentSet
     //    and NullifierSet.
     for commitment in message.new_commitments {
-        assert!(!nssa_state.private_state.0.contains(commitment));
+        assert!(!lee_state.private_state.0.contains(commitment));
     }
     for (nullifier, digest) in message.new_nullifiers {
-        assert!(!nssa_state.private_state.1.contains(nullifier));
-        assert!(nssa_state.private_state.0.is_current_or_previous_digest(digest));
+        assert!(!lee_state.private_state.1.contains(nullifier));
+        assert!(lee_state.private_state.0.is_current_or_previous_digest(digest));
     }
 }
 ```
@@ -1310,18 +1300,18 @@ Replay attacks are not possible for privacy transactions. Any accepted transacti
 ```rust
 fn transition_from_public_transaction(
     tx: PublicTransaction,
-    nssa_state: NssaState,
+    lee_state: LeeState,
     block_id: BlockId,
     timestamp: Timestamp,
 ) {
-    let state_diff = validate_and_produce_public_state_diff(tx, nssa_state, block_id, timestamp);
+    let state_diff = validate_and_produce_public_state_diff(tx, lee_state, block_id, timestamp);
 
     for (account_id, post) in state_diff {
-        nssa_state.public_state[account_id] = post;
+        lee_state.public_state[account_id] = post;
     }
 
     for account_id in tx.signer_account_ids() {
-        nssa_state.public_state[account_id].nonce += 1;
+        lee_state.public_state[account_id].nonce += 1;
     }
 }
 ```
@@ -1337,26 +1327,26 @@ fn transition_from_public_transaction(
 ```rust
 fn transition_from_privacy_preserving_transaction(
     tx: PrivacyPreservingTransaction,
-    nssa_state: NssaState,
+    lee_state: LeeState,
     block_id: BlockId,
     timestamp: Timestamp,
 ) {
-    verify_privacy_preserving_transaction(tx, nssa_state, block_id, timestamp);
+    verify_privacy_preserving_transaction(tx, lee_state, block_id, timestamp);
 
     for commitment in tx.message.new_commitments {
-        nssa_state.private_state.0.insert(commitment);
+        lee_state.private_state.0.insert(commitment);
     }
 
     for (nullifier, _) in tx.message.new_nullifiers {
-        nssa_state.private_state.1.insert(nullifier);
+        lee_state.private_state.1.insert(nullifier);
     }
 
     for (account_id, post) in tx.message.public_account_ids.zip(tx.message.public_post_states) {
-        nssa_state.public_state[account_id] = post;
+        lee_state.public_state[account_id] = post;
     }
 
     for account_id in tx.signer_account_ids() {
-        nssa_state.public_state[account_id].nonce += 1;
+        lee_state.public_state[account_id].nonce += 1;
     }
 }
 ```
@@ -1383,10 +1373,10 @@ struct ProgramDeploymentTransaction {
 ```rust
 fn transition_from_program_deployment_transaction(
     tx: &ProgramDeploymentTransaction,
-    nssa_state: &mut NssaState,
+    lee_state: &mut LeeState,
 ) {
     let program = Program::new(tx.message.bytecode.clone()).expect("Valid program bytecode");
-    assert!(!nssa_state.programs.contains_key(&program.id()), "Program already deployed");
-    nssa_state.programs.insert(program.id(), program);
+    assert!(!lee_state.programs.contains_key(&program.id()), "Program already deployed");
+    lee_state.programs.insert(program.id(), program);
 }
 ```
