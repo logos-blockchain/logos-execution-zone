@@ -1,0 +1,38 @@
+#![expect(
+    clippy::multiple_inherent_impl,
+    reason = "We prefer to group methods by functionality rather than by type for encoding"
+)]
+
+pub use lee_core::{
+    GENESIS_BLOCK_ID, SharedSecretKey,
+    account::{Account, AccountId, Data},
+    encryption::EphemeralPublicKey,
+    program::ProgramId,
+};
+pub use privacy_preserving_transaction::{
+    PrivacyPreservingTransaction, circuit::execute_and_prove,
+};
+pub use program_deployment_transaction::ProgramDeploymentTransaction;
+pub use program_methods::PRIVACY_PRESERVING_CIRCUIT_ID;
+pub use public_transaction::PublicTransaction;
+pub use signature::{PrivateKey, PublicKey, Signature};
+pub use state::{
+    CLOCK_01_PROGRAM_ACCOUNT_ID, CLOCK_10_PROGRAM_ACCOUNT_ID, CLOCK_50_PROGRAM_ACCOUNT_ID,
+    CLOCK_PROGRAM_ACCOUNT_IDS, V03State, system_bridge_account_id, system_faucet_account_id,
+};
+pub use validated_state_diff::ValidatedStateDiff;
+
+pub mod encoding;
+pub mod error;
+mod merkle_tree;
+pub mod privacy_preserving_transaction;
+pub mod program;
+pub mod program_deployment_transaction;
+pub mod public_transaction;
+mod signature;
+mod state;
+mod validated_state_diff;
+
+pub mod program_methods {
+    include!(concat!(env!("OUT_DIR"), "/program_methods/mod.rs"));
+}

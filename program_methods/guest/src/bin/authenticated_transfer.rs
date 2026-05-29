@@ -1,8 +1,8 @@
 use authenticated_transfer_core::Instruction;
-use nssa_core::{
+use lee_core::{
     account::{Account, AccountWithMetadata},
     program::{
-        AccountPostState, Claim, DEFAULT_PROGRAM_ID, ProgramInput, ProgramOutput, read_nssa_inputs,
+        AccountPostState, Claim, DEFAULT_PROGRAM_ID, ProgramInput, ProgramOutput, read_lee_inputs,
     },
 };
 
@@ -70,7 +70,7 @@ fn main() {
             instruction,
         },
         instruction_words,
-    ) = read_nssa_inputs::<Instruction>();
+    ) = read_lee_inputs::<Instruction>();
 
     let post_states = match instruction {
         Instruction::Initialize => {

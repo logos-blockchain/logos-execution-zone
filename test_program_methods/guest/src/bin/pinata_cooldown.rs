@@ -13,7 +13,7 @@
 //!   [prize: u64 LE | `cooldown_ms`: u64 LE | `last_claim_timestamp`: u64 LE].
 
 use clock_core::{CLOCK_01_PROGRAM_ACCOUNT_ID, ClockAccountData};
-use nssa_core::program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_nssa_inputs};
+use lee_core::program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_lee_inputs};
 
 type Instruction = ();
 
@@ -54,7 +54,7 @@ fn main() {
             instruction: (),
         },
         instruction_words,
-    ) = read_nssa_inputs::<Instruction>();
+    ) = read_lee_inputs::<Instruction>();
 
     let Ok([pinata, winner, clock_pre]) = <[_; 3]>::try_from(pre_states) else {
         panic!("Expected exactly 3 input accounts: pinata, winner, clock");

@@ -10,12 +10,12 @@ workspace = true
 
 [features]
 default = []
-prove = ["nssa/prove", "risc0-zkvm/prove"]
+prove = ["lee/prove", "risc0-zkvm/prove"]
 ppe = ["prove"]
 
 [dependencies]
-nssa = { workspace = true }
-nssa_core = { workspace = true, features = ["host"] }
+lee = { workspace = true }
+lee_core = { workspace = true, features = ["host"] }
 authenticated_transfer_core.workspace = true
 clock_core.workspace = true
 token_core.workspace = true

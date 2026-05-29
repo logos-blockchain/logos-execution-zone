@@ -4,10 +4,10 @@ use amm_core::{
     PoolDefinition, compute_liquidity_token_pda, compute_liquidity_token_pda_seed,
     compute_pool_pda, compute_vault_pda, compute_vault_pda_seed,
 };
-use nssa::{
+use lee::{
     PrivateKey, PublicKey, PublicTransaction, V03State, program::Program, public_transaction,
 };
-use nssa_core::{
+use lee_core::{
     account::{Account, AccountId, AccountWithMetadata, Data},
     program::{ChainedCall, ProgramId},
 };

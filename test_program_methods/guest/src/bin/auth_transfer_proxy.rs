@@ -1,6 +1,5 @@
-use nssa_core::program::{
-    AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput,
-    read_nssa_inputs,
+use lee_core::program::{
+    AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
 };
 
 /// PDA authorization program that delegates balance operations to `authenticated_transfer`.
@@ -39,7 +38,7 @@ fn main() {
             instruction: (pda_seed, auth_transfer_id, amount, is_withdraw),
         },
         instruction_words,
-    ) = read_nssa_inputs::<Instruction>();
+    ) = read_lee_inputs::<Instruction>();
 
     if is_withdraw {
         let Ok([pda_pre, recipient_pre]) = <[_; 2]>::try_from(pre_states.clone()) else {

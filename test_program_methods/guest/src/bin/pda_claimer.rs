@@ -1,5 +1,5 @@
-use nssa_core::program::{
-    AccountPostState, Claim, PdaSeed, ProgramInput, ProgramOutput, read_nssa_inputs,
+use lee_core::program::{
+    AccountPostState, Claim, PdaSeed, ProgramInput, ProgramOutput, read_lee_inputs,
 };
 
 type Instruction = PdaSeed;
@@ -13,7 +13,7 @@ fn main() {
             instruction: seed,
         },
         instruction_words,
-    ) = read_nssa_inputs::<Instruction>();
+    ) = read_lee_inputs::<Instruction>();
 
     let Ok([pre]) = <[_; 1]>::try_from(pre_states) else {
         return;

@@ -1,4 +1,4 @@
-use nssa_core::program::{AccountPostState, ProgramInput, ProgramOutput, read_nssa_inputs};
+use lee_core::program::{AccountPostState, ProgramInput, ProgramOutput, read_lee_inputs};
 
 /// A variant of `noop` that asserts every `pre_state.is_authorized == true` before echoing
 /// the `post_states`. Any unauthorized `pre_state` panics the guest, failing the whole
@@ -15,7 +15,7 @@ fn main() {
             ..
         },
         instruction_words,
-    ) = read_nssa_inputs::<Instruction>();
+    ) = read_lee_inputs::<Instruction>();
 
     for pre in &pre_states {
         assert!(

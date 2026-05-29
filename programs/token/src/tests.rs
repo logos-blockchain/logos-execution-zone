@@ -5,7 +5,7 @@
     reason = "We don't care about it in tests"
 )]
 
-use nssa_core::{
+use lee_core::{
     account::{Account, AccountId, AccountWithMetadata, Data},
     program::Claim,
 };

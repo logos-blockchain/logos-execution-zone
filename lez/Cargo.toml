@@ -1,0 +1,12 @@
+[package]
+name = "lez"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+sequencer_core.workspace = true
+indexer_core.workspace = true

@@ -1,7 +1,7 @@
-use nssa_core::{
+use lee_core::{
     Timestamp,
     program::{
-        AccountPostState, ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_nssa_inputs,
+        AccountPostState, ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
     },
 };
 use risc0_zkvm::serde::to_vec;
@@ -20,7 +20,7 @@ fn main() {
             instruction: (clock_program_id, timestamp),
         },
         instruction_words,
-    ) = read_nssa_inputs::<Instruction>();
+    ) = read_lee_inputs::<Instruction>();
 
     let post_states: Vec<_> = pre_states
         .iter()

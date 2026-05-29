@@ -1,6 +1,6 @@
-use nssa_core::{
+use lee_core::{
     account::Account,
-    program::{AccountPostState, ProgramInput, ProgramOutput, read_nssa_inputs},
+    program::{AccountPostState, ProgramInput, ProgramOutput, read_lee_inputs},
 };
 
 type Instruction = ();
@@ -14,7 +14,7 @@ fn main() {
             ..
         },
         instruction_words,
-    ) = read_nssa_inputs::<Instruction>();
+    ) = read_lee_inputs::<Instruction>();
 
     let Ok([pre]) = <[_; 1]>::try_from(pre_states) else {
         return;

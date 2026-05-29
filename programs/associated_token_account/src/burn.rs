@@ -1,4 +1,4 @@
-use nssa_core::{
+use lee_core::{
     account::AccountWithMetadata,
     program::{AccountPostState, ChainedCall, ProgramId},
 };

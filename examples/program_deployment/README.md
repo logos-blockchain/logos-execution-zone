@@ -13,7 +13,7 @@ cargo install --path wallet --force
 ```
 
 # 1. Run the sequencer
-From the project’s root directory, start the sequencer by following [these instructions](https://github.com/logos-blockchain/lssa#run-the-sequencer-and-node).
+From the project’s root directory, start the sequencer by following [these instructions](https://github.com/logos-blockchain/logos-execution-zone#run-the-sequencer-and-node).
 
 ## Checking and setting up the wallet
 For sanity let's check that the wallet can connect to it.
@@ -28,7 +28,7 @@ For this tutorial, use: `program-tutorial`
 You should see `✅All looks good!` if everything went well.
 
 # 2. Compile the example programs
-In a second terminal, from the `lssa` root directory, compile the example Risc0 programs:
+In a second terminal, from the `logos-execution-zone` root directory, compile the example Risc0 programs:
 ```bash
 cargo risczero build --manifest-path examples/program_deployment/methods/guest/Cargo.toml
 ```
@@ -134,7 +134,7 @@ echo -n SG9sYSBtdW5kbyE= | base64 -d
 You should see `Hola mundo!`.
 
 # 5. Understanding the code in `hello_world.rs`.
-The Hello world example demonstrates the minimal structure of an NSSA program.
+The Hello world example demonstrates the minimal structure of a LEE program.
 Its purpose is very simple: append the instruction bytes to the data field of a single account.
 
 ### What this program does in a nutshell
@@ -145,7 +145,7 @@ Its purpose is very simple: append the instruction bytes to the data field of a 
 2. Checks that there is exactly one input account: this example operates on a single account, so it expects `pre_states` to contain exactly one entry.
 3. Builds the post-state: It clones the input account and appends the instruction bytes to its data field.
 4. Handles account claiming logic: If the account is uninitialized (i.e. not yet claimed by any program), its program_owner will equal `DEFAULT_PROGRAM_ID`. In that case, the program issues a claim request, meaning: "This program now owns this account."
-5. Outputs the proposed state transition: `write_nssa_outputs` emits:
+5. Outputs the proposed state transition: `write_lee_outputs` emits:
   - The original instruction data
   - The original pre-states
   - The new post-states
@@ -154,7 +154,7 @@ Its purpose is very simple: append the instruction bytes to the data field of a 
 1. Reading inputs:
 ```rust
 let (ProgramInput { pre_states, instruction: greeting }, instruction_data)
-    = read_nssa_inputs::<Instruction>();
+    = read_lee_inputs::<Instruction>();
 ```
 2. Extracting the single account:
 ```rust
@@ -179,7 +179,7 @@ let post_state = if post_account.program_owner == DEFAULT_PROGRAM_ID {
 ```
 5. Emmiting the output
 ```rust
-write_nssa_outputs(instruction_data, vec![pre_state], vec![post_state]);
+write_lee_outputs(instruction_data, vec![pre_state], vec![post_state]);
 ```
 
 # 6. Understanding the runner script `run_hello_world.rs`
@@ -348,7 +348,7 @@ Check the `run_hello_world_private.rs` file to see how it is used.
 
 # 8. Account authorization mechanism
 The Hello world example does not enforce any authorization on the input account. This means any user can execute it on any account, regardless of ownership.
-NSSA provides a mechanism for programs to enforce proper authorization before an execution can succeed. The meaning of authorization differs between public and private accounts:
+LEE provides a mechanism for programs to enforce proper authorization before an execution can succeed. The meaning of authorization differs between public and private accounts:
 - Public accounts: authorization requires that the transaction is signed with the account’s signing key.
 - Private accounts: authorization requires that the circuit verifies knowledge of the account’s nullifier secret key.
 
@@ -594,7 +594,7 @@ wallet account get --account-id Private/8vzkK7vsdrS2gdPhLk72La8X4FJkgJ5kJLUBRbEV
 
 ## Digression: account authority vs account program ownership
 
-In NSSA there are two distinct concepts that control who can modify an account:
+In LEE there are two distinct concepts that control who can modify an account:
 **Program Ownership:** Each account has a field: `program_owner: ProgramId`.
 This indicates which program is allowed to update the account’s state during execution.
 - If a program is the program_owner of an account, it can freely mutate its fields.

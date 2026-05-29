@@ -12,8 +12,8 @@ use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, private_mention, public_mention,
     verify_commitment_is_in_state,
 };
+use lee::program::Program;
 use log::info;
-use nssa::program::Program;
 use sequencer_service_rpc::RpcClient as _;
 use token_core::{TokenDefinition, TokenHolding};
 use tokio::test;
@@ -24,7 +24,7 @@ use wallet::cli::{
 };
 
 /// Create a public account and return its ID.
-async fn new_public_account(ctx: &mut TestContext) -> Result<nssa::AccountId> {
+async fn new_public_account(ctx: &mut TestContext) -> Result<lee::AccountId> {
     let result = wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
         Command::Account(AccountSubcommand::New(NewSubcommand::Public {
@@ -40,7 +40,7 @@ async fn new_public_account(ctx: &mut TestContext) -> Result<nssa::AccountId> {
 }
 
 /// Create a private account and return its ID.
-async fn new_private_account(ctx: &mut TestContext) -> Result<nssa::AccountId> {
+async fn new_private_account(ctx: &mut TestContext) -> Result<lee::AccountId> {
     let result = wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
         Command::Account(AccountSubcommand::New(NewSubcommand::Private {
@@ -260,6 +260,7 @@ async fn transfer_and_burn_via_ata() -> Result<()> {
             to: Some(public_mention(sender_ata_id)),
             to_npk: None,
             to_vpk: None,
+            to_keys: None,
             to_identifier: Some(0),
             amount: fund_amount,
         }),
@@ -487,6 +488,7 @@ async fn transfer_via_ata_private_owner() -> Result<()> {
             to: Some(public_mention(sender_ata_id)),
             to_npk: None,
             to_vpk: None,
+            to_keys: None,
             to_identifier: Some(0),
             amount: fund_amount,
         }),
@@ -598,6 +600,7 @@ async fn burn_via_ata_private_owner() -> Result<()> {
             to: Some(public_mention(holder_ata_id)),
             to_npk: None,
             to_vpk: None,
+            to_keys: None,
             to_identifier: Some(0),
             amount: fund_amount,
         }),

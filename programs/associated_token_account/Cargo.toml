@@ -5,6 +5,6 @@ edition = "2024"
 license = { workspace = true }
 
 [dependencies]
-nssa_core.workspace = true
+lee_core.workspace = true
 token_core.workspace = true
 ata_core.workspace = true

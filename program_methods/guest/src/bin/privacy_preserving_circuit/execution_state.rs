@@ -3,7 +3,7 @@ use std::{
     convert::Infallible,
 };
 
-use nssa_core::{
+use lee_core::{
     Identifier, InputAccountIdentity, NullifierPublicKey,
     account::{Account, AccountId, AccountWithMetadata},
     program::{

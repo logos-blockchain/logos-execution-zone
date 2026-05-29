@@ -31,15 +31,14 @@
 //!
 //! # Tests
 //!
-//! See `nssa/src/state.rs` for integration tests:
+//! See `lee/src/state.rs` for integration tests:
 //! - `flash_swap_successful`: full round-trip, funds returned, state unchanged
 //! - `flash_swap_callback_keeps_funds_rollback`: callback keeps funds, full rollback
 //! - `flash_swap_self_call_targets_correct_program`: zero-amount self-call isolation test
 //! - `flash_swap_standalone_invariant_check_rejected`: `caller_program_id` access control
 
-use nssa_core::program::{
-    AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput,
-    read_nssa_inputs,
+use lee_core::program::{
+    AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
 };
 use serde::{Deserialize, Serialize};
 
@@ -78,7 +77,7 @@ fn main() {
             instruction,
         },
         instruction_words,
-    ) = read_nssa_inputs::<FlashSwapInstruction>();
+    ) = read_lee_inputs::<FlashSwapInstruction>();
 
     match instruction {
         FlashSwapInstruction::Initiate {

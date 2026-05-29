@@ -1,0 +1,603 @@
+use aes_gcm::{Aes256Gcm, KeyInit as _, aead::Aead as _};
+use lee_core::{
+    SharedSecretKey,
+    encryption::{EphemeralPublicKey, ViewingPublicKey},
+    program::{PdaSeed, ProgramId},
+};
+use rand::{RngCore as _, rngs::OsRng};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest as _, digest::FixedOutput as _};
+
+use super::secret_holders::{PrivateKeyHolder, SecretSpendingKey, ViewingSecretKey};
+
+/// Public key used to seal a `GroupKeyHolder` for distribution to a recipient.
+///
+/// Wraps the ML-KEM-768 encapsulation key bytes (1184 bytes). Distinct from
+/// `ViewingPublicKey` to enforce key separation: viewing keys encrypt account state,
+/// sealing keys encrypt the GMS for off-chain distribution.
+pub struct SealingPublicKey(Vec<u8>);
+
+impl SealingPublicKey {
+    /// Construct from raw serialized encapsulation-key bytes (e.g. received from another wallet).
+    #[must_use]
+    pub const fn from_bytes(bytes: Vec<u8>) -> Self {
+        Self(bytes)
+    }
+
+    /// Returns the raw bytes for display or transmission.
+    #[must_use]
+    pub fn to_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+/// Secret key used to unseal a `GroupKeyHolder` received from another member.
+/// Holds the two 32-byte FIPS 203 seed halves `d` and `z`.
+pub type SealingSecretKey = ViewingSecretKey;
+
+/// Manages shared viewing keys for a group of controllers owning private PDAs.
+///
+/// The Group Master Secret (GMS) is a 32-byte random value shared among controllers.
+/// Each private PDA owned by the group gets a unique [`SecretSpendingKey`] derived from
+/// the GMS by mixing the PDA seed into the SHA-256 input (see `secret_spending_key_for_pda`).
+///
+/// # Distribution
+///
+/// The GMS is a long-term secret and must never cross a trust boundary in raw form.
+/// Controllers share it off-chain by sealing it under each recipient's [`SealingPublicKey`]
+/// (see `seal_for` / `unseal`). Wallets persisting a `GroupKeyHolder` must encrypt it at
+/// rest; the raw bytes are exposed only via [`GroupKeyHolder::dangerous_raw_gms`], which
+/// is intended for the sealing path exclusively.
+///
+/// # Logging safety
+///
+/// `Debug` is implemented manually to redact the GMS; formatting this value with `{:?}`
+/// will not leak the secret. Code that formats through `{:#?}` on containing types is
+/// safe for the same reason.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GroupKeyHolder {
+    gms: [u8; 32],
+}
+
+impl std::fmt::Debug for GroupKeyHolder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GroupKeyHolder")
+            .field("gms", &"<redacted>")
+            .finish()
+    }
+}
+
+impl Default for GroupKeyHolder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl GroupKeyHolder {
+    /// Create a new group with a fresh random GMS.
+    #[must_use]
+    pub fn new() -> Self {
+        let mut gms = [0_u8; 32];
+        OsRng.fill_bytes(&mut gms);
+        Self { gms }
+    }
+
+    /// Restore from an existing GMS (received via `unseal`).
+    #[must_use]
+    pub const fn from_gms(gms: [u8; 32]) -> Self {
+        Self { gms }
+    }
+
+    /// Returns the raw 32-byte GMS. The name reflects intent: only the sealed-distribution
+    /// path (`seal_for`) and sealed-at-rest persistence should ever need the raw bytes. Do
+    /// not log the result, do not pass it across an untrusted channel.
+    #[must_use]
+    pub const fn dangerous_raw_gms(&self) -> &[u8; 32] {
+        &self.gms
+    }
+
+    /// Derive a per-PDA [`SecretSpendingKey`] by mixing the seed into the SHA-256 input.
+    ///
+    /// Each distinct `(program_id, pda_seed)` pair produces a distinct SSK in the full 256-bit
+    /// space, so adversarial seed-grinding cannot collide two PDAs' derived keys under the same
+    /// group. Uses the codebase's 32-byte protocol-versioned domain-separation convention.
+    fn secret_spending_key_for_pda(
+        &self,
+        program_id: &ProgramId,
+        pda_seed: &PdaSeed,
+    ) -> SecretSpendingKey {
+        const PREFIX: &[u8; 32] = b"/LEE/v0.3/GroupKeyDerivation/SSK";
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(PREFIX);
+        hasher.update(self.gms);
+        for word in program_id {
+            hasher.update(word.to_le_bytes());
+        }
+        hasher.update(pda_seed.as_ref());
+        SecretSpendingKey(hasher.finalize_fixed().into())
+    }
+
+    /// Derive keys for a specific PDA under a given program.
+    ///
+    /// All controllers holding the same GMS independently derive the same keys for the
+    /// same `(program_id, seed)` because the derivation is deterministic.
+    #[must_use]
+    pub fn derive_keys_for_pda(
+        &self,
+        program_id: &ProgramId,
+        pda_seed: &PdaSeed,
+    ) -> PrivateKeyHolder {
+        self.secret_spending_key_for_pda(program_id, pda_seed)
+            .produce_private_key_holder(None)
+    }
+
+    /// Derive keys for a shared regular (non-PDA) private account.
+    ///
+    /// Uses a distinct domain separator from `derive_keys_for_pda` to prevent cross-domain
+    /// key collisions. The `derivation_seed` should be a stable, unique 32-byte value
+    /// (e.g. derived deterministically from the account's identifier).
+    #[must_use]
+    pub fn derive_keys_for_shared_account(&self, derivation_seed: &[u8; 32]) -> PrivateKeyHolder {
+        const PREFIX: &[u8; 32] = b"/LEE/v0.3/GroupKeyDerivation/SHA";
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(PREFIX);
+        hasher.update(self.gms);
+        hasher.update(derivation_seed);
+        SecretSpendingKey(hasher.finalize_fixed().into()).produce_private_key_holder(None)
+    }
+
+    /// Encrypts this holder's GMS under the recipient's [`SealingPublicKey`].
+    ///
+    /// Uses ML-KEM-768 encapsulation to derive a shared secret, then AES-256-GCM to encrypt
+    /// the payload. The returned bytes are
+    /// `kem_ciphertext (1088) || nonce (12) || ciphertext+tag (48)` = 1148 bytes.
+    ///
+    /// Each call generates a fresh KEM encapsulation, so two seals of the same holder produce
+    /// different ciphertexts.
+    #[must_use]
+    pub fn seal_for(&self, recipient_key: &SealingPublicKey) -> Vec<u8> {
+        let sealing_key = ViewingPublicKey::from_bytes(recipient_key.0.clone())
+            .expect("key_protocol::group_key_holder::GroupKeyHolder::seal_for: SealingPublicKey must be a valid ML-KEM-768 encapsulation key");
+        let (shared, kem_ct) = SharedSecretKey::encapsulate(&sealing_key);
+        let aes_key = Self::seal_kdf(&shared);
+        let cipher = Aes256Gcm::new(&aes_key.into());
+
+        let mut nonce_bytes = [0_u8; 12];
+        OsRng.fill_bytes(&mut nonce_bytes);
+        let nonce = aes_gcm::Nonce::from(nonce_bytes);
+
+        let ciphertext = cipher
+            .encrypt(&nonce, self.gms.as_ref())
+            .expect("AES-GCM encryption should not fail with valid key/nonce");
+
+        let capacity = 1088_usize
+            .checked_add(12)
+            .and_then(|n| n.checked_add(ciphertext.len()))
+            .expect("seal capacity overflow");
+        let mut out = Vec::with_capacity(capacity);
+        out.extend_from_slice(&kem_ct.0);
+        out.extend_from_slice(&nonce_bytes);
+        out.extend_from_slice(&ciphertext);
+        out
+    }
+
+    /// Decrypts a sealed `GroupKeyHolder` using the recipient's [`SealingSecretKey`].
+    ///
+    /// Returns `Err` if the ciphertext is too short or the AES-GCM authentication tag
+    /// doesn't verify (wrong key or tampered data).
+    pub fn unseal(sealed: &[u8], own_key: &SealingSecretKey) -> Result<Self, SealError> {
+        // kem_ciphertext (1088) + nonce (12) = header, then AES-GCM tag (16) minimum.
+        const KEM_CT_LEN: usize = 1088;
+        const HEADER_LEN: usize = KEM_CT_LEN + 12;
+        const MIN_LEN: usize = HEADER_LEN + 16;
+
+        if sealed.len() < MIN_LEN {
+            return Err(SealError::TooShort);
+        }
+
+        let kem_ct = EphemeralPublicKey(sealed[..KEM_CT_LEN].to_vec());
+        let nonce = aes_gcm::Nonce::from_slice(&sealed[KEM_CT_LEN..HEADER_LEN]);
+        let ciphertext = &sealed[HEADER_LEN..];
+
+        let shared = SharedSecretKey::decapsulate(&kem_ct, &own_key.d, &own_key.z)
+            .expect("key_protocol::group_key_holder::GroupKeyHolder::unseal: KEM_CT_LEN guarantees exactly 1088 bytes");
+        let aes_key = Self::seal_kdf(&shared);
+        let cipher = Aes256Gcm::new(&aes_key.into());
+
+        let plaintext = cipher
+            .decrypt(nonce, ciphertext)
+            .map_err(|_err| SealError::DecryptionFailed)?;
+
+        if plaintext.len() != 32 {
+            return Err(SealError::DecryptionFailed);
+        }
+
+        let mut gms = [0_u8; 32];
+        gms.copy_from_slice(&plaintext);
+        Ok(Self::from_gms(gms))
+    }
+
+    /// Derives an AES-256 key from the ML-KEM shared secret via SHA-256 with a domain prefix.
+    fn seal_kdf(shared: &SharedSecretKey) -> [u8; 32] {
+        const PREFIX: &[u8; 32] = b"/LEE/v0.3/GroupKeySeal/AES\x00\x00\x00\x00\x00\x00";
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(PREFIX);
+        hasher.update(shared.0);
+        hasher.finalize_fixed().into()
+    }
+}
+
+#[derive(Debug)]
+pub enum SealError {
+    TooShort,
+    DecryptionFailed,
+}
+
+#[cfg(test)]
+mod tests {
+    use lee_core::NullifierPublicKey;
+
+    use super::*;
+
+    const TEST_PROGRAM_ID: ProgramId = [9; 8];
+
+    /// Two holders from the same GMS derive identical keys for the same PDA seed.
+    #[test]
+    fn same_gms_same_seed_produces_same_keys() {
+        let gms = [42_u8; 32];
+        let holder_a = GroupKeyHolder::from_gms(gms);
+        let holder_b = GroupKeyHolder::from_gms(gms);
+        let seed = PdaSeed::new([1; 32]);
+
+        let keys_a = holder_a.derive_keys_for_pda(&TEST_PROGRAM_ID, &seed);
+        let keys_b = holder_b.derive_keys_for_pda(&TEST_PROGRAM_ID, &seed);
+
+        assert_eq!(
+            keys_a.generate_nullifier_public_key().to_byte_array(),
+            keys_b.generate_nullifier_public_key().to_byte_array(),
+        );
+    }
+
+    /// Different PDA seeds produce different keys from the same GMS.
+    #[test]
+    fn same_gms_different_seed_produces_different_keys() {
+        let holder = GroupKeyHolder::from_gms([42_u8; 32]);
+        let seed_a = PdaSeed::new([1; 32]);
+        let seed_b = PdaSeed::new([2; 32]);
+
+        let npk_a = holder
+            .derive_keys_for_pda(&TEST_PROGRAM_ID, &seed_a)
+            .generate_nullifier_public_key();
+        let npk_b = holder
+            .derive_keys_for_pda(&TEST_PROGRAM_ID, &seed_b)
+            .generate_nullifier_public_key();
+
+        assert_ne!(npk_a.to_byte_array(), npk_b.to_byte_array());
+    }
+
+    /// Different GMS produce different keys for the same PDA seed.
+    #[test]
+    fn different_gms_same_seed_produces_different_keys() {
+        let holder_a = GroupKeyHolder::from_gms([42_u8; 32]);
+        let holder_b = GroupKeyHolder::from_gms([99_u8; 32]);
+        let seed = PdaSeed::new([1; 32]);
+
+        let npk_a = holder_a
+            .derive_keys_for_pda(&TEST_PROGRAM_ID, &seed)
+            .generate_nullifier_public_key();
+        let npk_b = holder_b
+            .derive_keys_for_pda(&TEST_PROGRAM_ID, &seed)
+            .generate_nullifier_public_key();
+
+        assert_ne!(npk_a.to_byte_array(), npk_b.to_byte_array());
+    }
+
+    /// GMS round-trip: export and restore produces the same keys.
+    #[test]
+    fn gms_round_trip() {
+        let original = GroupKeyHolder::from_gms([7_u8; 32]);
+        let restored = GroupKeyHolder::from_gms(*original.dangerous_raw_gms());
+        let seed = PdaSeed::new([1; 32]);
+
+        let npk_original = original
+            .derive_keys_for_pda(&TEST_PROGRAM_ID, &seed)
+            .generate_nullifier_public_key();
+        let npk_restored = restored
+            .derive_keys_for_pda(&TEST_PROGRAM_ID, &seed)
+            .generate_nullifier_public_key();
+
+        assert_eq!(npk_original.to_byte_array(), npk_restored.to_byte_array());
+    }
+
+    /// The derived `NullifierPublicKey` is non-zero (sanity check).
+    #[test]
+    fn derived_npk_is_non_zero() {
+        let holder = GroupKeyHolder::from_gms([42_u8; 32]);
+        let seed = PdaSeed::new([1; 32]);
+        let npk = holder
+            .derive_keys_for_pda(&TEST_PROGRAM_ID, &seed)
+            .generate_nullifier_public_key();
+
+        assert_ne!(npk, NullifierPublicKey([0; 32]));
+    }
+
+    /// Pins the end-to-end derivation for a fixed (GMS, `ProgramId`, `PdaSeed`). Any change
+    /// to `secret_spending_key_for_pda`, the `PrivateKeyHolder` nsk/npk chain, or the
+    /// `AccountId::for_private_pda` formula breaks this test. Mirrors the pinned-value
+    /// pattern from `for_private_pda_matches_pinned_value` in `lee_core`.
+    #[test]
+    fn pinned_end_to_end_derivation_for_private_pda() {
+        use lee_core::{account::AccountId, program::ProgramId};
+
+        let gms = [42_u8; 32];
+        let seed = PdaSeed::new([1; 32]);
+        let program_id: ProgramId = [9; 8];
+
+        let holder = GroupKeyHolder::from_gms(gms);
+        let npk = holder
+            .derive_keys_for_pda(&TEST_PROGRAM_ID, &seed)
+            .generate_nullifier_public_key();
+        let account_id = AccountId::for_private_pda(&program_id, &seed, &npk, u128::MAX);
+
+        let expected_npk = NullifierPublicKey([
+            136, 176, 234, 71, 208, 8, 143, 142, 126, 155, 132, 18, 71, 27, 88, 56, 100, 90, 79,
+            215, 76, 92, 60, 166, 104, 35, 51, 91, 16, 114, 188, 112,
+        ]);
+        // AccountId is derived from (program_id, seed, npk), so it changes when npk changes.
+        // We verify npk is pinned, and AccountId is deterministically derived from it.
+        let expected_account_id =
+            AccountId::for_private_pda(&program_id, &seed, &expected_npk, u128::MAX);
+
+        assert_eq!(npk, expected_npk);
+        assert_eq!(account_id, expected_account_id);
+    }
+
+    /// Wallets persist `GroupKeyHolder` to disk and reload it on startup. This test pins
+    /// the serde round-trip: serialize, deserialize, and assert the derived keys for a
+    /// sample seed match on both sides. A silent encoding drift would corrupt every
+    /// group-owned account.
+    #[test]
+    fn gms_serde_round_trip_preserves_derivation() {
+        let original = GroupKeyHolder::from_gms([7_u8; 32]);
+        let encoded = bincode::serialize(&original).expect("serialize");
+        let restored: GroupKeyHolder = bincode::deserialize(&encoded).expect("deserialize");
+
+        let seed = PdaSeed::new([1; 32]);
+        let npk_original = original
+            .derive_keys_for_pda(&TEST_PROGRAM_ID, &seed)
+            .generate_nullifier_public_key();
+        let npk_restored = restored
+            .derive_keys_for_pda(&TEST_PROGRAM_ID, &seed)
+            .generate_nullifier_public_key();
+
+        assert_eq!(npk_original, npk_restored);
+        assert_eq!(original.dangerous_raw_gms(), restored.dangerous_raw_gms());
+    }
+
+    /// A `GroupKeyHolder` constructed from the same 32 bytes as a personal
+    /// `SecretSpendingKey` must not derive the same `NullifierPublicKey` as the personal
+    /// path, so a private PDA cannot be spent by a personal nullifier even under
+    /// adversarial key-material reuse. The safety rests on the group path's distinct
+    /// domain-separation prefix plus the seed mix-in (see `secret_spending_key_for_pda`).
+    #[test]
+    fn group_derivation_does_not_collide_with_personal_path_at_shared_bytes() {
+        let shared_bytes = [13_u8; 32];
+        let seed = PdaSeed::new([5; 32]);
+
+        let group_npk = GroupKeyHolder::from_gms(shared_bytes)
+            .derive_keys_for_pda(&TEST_PROGRAM_ID, &seed)
+            .generate_nullifier_public_key();
+
+        let personal_npk = SecretSpendingKey(shared_bytes)
+            .produce_private_key_holder(None)
+            .generate_nullifier_public_key();
+
+        assert_ne!(group_npk, personal_npk);
+    }
+
+    /// Seal then unseal recovers the same GMS and derived keys.
+    #[test]
+    fn seal_unseal_round_trip() {
+        let holder = GroupKeyHolder::from_gms([42_u8; 32]);
+
+        let recipient_ssk = SecretSpendingKey([7_u8; 32]);
+        let recipient_keys = recipient_ssk.produce_private_key_holder(None);
+        let recipient_vpk = recipient_keys.generate_viewing_public_key();
+        let recipient_vsk = recipient_keys.viewing_secret_key;
+
+        let sealed = holder.seal_for(&SealingPublicKey::from_bytes(
+            recipient_vpk.to_bytes().to_vec(),
+        ));
+        let restored = GroupKeyHolder::unseal(&sealed, &recipient_vsk).expect("unseal");
+
+        assert_eq!(restored.dangerous_raw_gms(), holder.dangerous_raw_gms());
+
+        let seed = PdaSeed::new([1; 32]);
+        assert_eq!(
+            holder
+                .derive_keys_for_pda(&TEST_PROGRAM_ID, &seed)
+                .generate_nullifier_public_key(),
+            restored
+                .derive_keys_for_pda(&TEST_PROGRAM_ID, &seed)
+                .generate_nullifier_public_key(),
+        );
+    }
+
+    /// Unsealing with a different VSK fails with `DecryptionFailed`.
+    #[test]
+    fn unseal_wrong_vsk_fails() {
+        let holder = GroupKeyHolder::from_gms([42_u8; 32]);
+
+        let recipient_ssk = SecretSpendingKey([7_u8; 32]);
+        let recipient_vpk = recipient_ssk
+            .produce_private_key_holder(None)
+            .generate_viewing_public_key();
+
+        let wrong_vsk = SecretSpendingKey([99_u8; 32])
+            .produce_private_key_holder(None)
+            .viewing_secret_key;
+
+        let sealed = holder.seal_for(&SealingPublicKey::from_bytes(
+            recipient_vpk.to_bytes().to_vec(),
+        ));
+        let result = GroupKeyHolder::unseal(&sealed, &wrong_vsk);
+        assert!(matches!(result, Err(super::SealError::DecryptionFailed)));
+    }
+
+    /// Tampered ciphertext fails authentication.
+    #[test]
+    fn unseal_tampered_ciphertext_fails() {
+        let holder = GroupKeyHolder::from_gms([42_u8; 32]);
+
+        let recipient_ssk = SecretSpendingKey([7_u8; 32]);
+        let recipient_keys = recipient_ssk.produce_private_key_holder(None);
+        let recipient_vpk = recipient_keys.generate_viewing_public_key();
+        let recipient_vsk = recipient_keys.viewing_secret_key;
+
+        let mut sealed = holder.seal_for(&SealingPublicKey::from_bytes(
+            recipient_vpk.to_bytes().to_vec(),
+        ));
+        // Flip a byte in the AES-GCM ciphertext portion (after KEM ciphertext + nonce).
+        let last = sealed.len() - 1;
+        sealed[last] ^= 0xFF;
+
+        let result = GroupKeyHolder::unseal(&sealed, &recipient_vsk);
+        assert!(matches!(result, Err(super::SealError::DecryptionFailed)));
+    }
+
+    /// Two seals of the same holder produce different ciphertexts (KEM randomness).
+    #[test]
+    fn two_seals_produce_different_ciphertexts() {
+        let holder = GroupKeyHolder::from_gms([42_u8; 32]);
+
+        let recipient_ssk = SecretSpendingKey([7_u8; 32]);
+        let recipient_vpk = recipient_ssk
+            .produce_private_key_holder(None)
+            .generate_viewing_public_key();
+
+        let sealing_key = SealingPublicKey::from_bytes(recipient_vpk.to_bytes().to_vec());
+        let sealed_a = holder.seal_for(&sealing_key);
+        let sealed_b = holder.seal_for(&sealing_key);
+        assert_ne!(sealed_a, sealed_b);
+    }
+
+    /// Sealed payload is too short.
+    #[test]
+    fn unseal_too_short_fails() {
+        let vsk = SealingSecretKey {
+            d: [7_u8; 32],
+            z: [0_u8; 32],
+        };
+        let result = GroupKeyHolder::unseal(&[0_u8; 10], &vsk);
+        assert!(matches!(result, Err(super::SealError::TooShort)));
+    }
+
+    /// Degenerate GMS values must still produce valid, non-zero, pairwise-distinct npks.
+    #[test]
+    fn degenerate_gms_produces_distinct_non_zero_keys() {
+        let seed = PdaSeed::new([1; 32]);
+        let degenerate = [[0_u8; 32], [0xFF_u8; 32], {
+            let mut v = [0_u8; 32];
+            v[0] = 1;
+            v
+        }];
+
+        let npks: Vec<NullifierPublicKey> = degenerate
+            .iter()
+            .map(|gms| {
+                GroupKeyHolder::from_gms(*gms)
+                    .derive_keys_for_pda(&TEST_PROGRAM_ID, &seed)
+                    .generate_nullifier_public_key()
+            })
+            .collect();
+
+        for npk in &npks {
+            assert_ne!(*npk, NullifierPublicKey([0; 32]));
+        }
+        for (i, a) in npks.iter().enumerate() {
+            for b in &npks[i + 1..] {
+                assert_ne!(a, b);
+            }
+        }
+    }
+
+    /// Full lifecycle: create group, distribute GMS via seal/unseal, verify key agreement.
+    #[test]
+    fn group_pda_lifecycle() {
+        use lee_core::account::AccountId;
+
+        let alice_holder = GroupKeyHolder::new();
+        let pda_seed = PdaSeed::new([42_u8; 32]);
+        let program_id: lee_core::program::ProgramId = [1; 8];
+
+        let alice_keys = alice_holder.derive_keys_for_pda(&TEST_PROGRAM_ID, &pda_seed);
+        let alice_npk = alice_keys.generate_nullifier_public_key();
+
+        let bob_ssk = SecretSpendingKey([77_u8; 32]);
+        let bob_keys = bob_ssk.produce_private_key_holder(None);
+        let bob_vpk = bob_keys.generate_viewing_public_key();
+        let bob_vsk = bob_keys.viewing_secret_key;
+
+        let sealed =
+            alice_holder.seal_for(&SealingPublicKey::from_bytes(bob_vpk.to_bytes().to_vec()));
+        let bob_holder =
+            GroupKeyHolder::unseal(&sealed, &bob_vsk).expect("Bob should unseal the GMS");
+
+        let bob_npk = bob_holder
+            .derive_keys_for_pda(&TEST_PROGRAM_ID, &pda_seed)
+            .generate_nullifier_public_key();
+        assert_eq!(alice_npk, bob_npk);
+
+        let alice_account_id = AccountId::for_private_pda(&program_id, &pda_seed, &alice_npk, 0);
+        let bob_account_id = AccountId::for_private_pda(&program_id, &pda_seed, &bob_npk, 0);
+        assert_eq!(alice_account_id, bob_account_id);
+    }
+
+    /// Same GMS + same derivation seed produces same keys for shared accounts.
+    #[test]
+    fn shared_account_same_gms_same_seed_produces_same_keys() {
+        let gms = [42_u8; 32];
+        let derivation_seed = [1_u8; 32];
+        let holder_a = GroupKeyHolder::from_gms(gms);
+        let holder_b = GroupKeyHolder::from_gms(gms);
+
+        let npk_a = holder_a
+            .derive_keys_for_shared_account(&derivation_seed)
+            .generate_nullifier_public_key();
+        let npk_b = holder_b
+            .derive_keys_for_shared_account(&derivation_seed)
+            .generate_nullifier_public_key();
+
+        assert_eq!(npk_a, npk_b);
+    }
+
+    /// Different derivation seeds produce different keys for shared accounts.
+    #[test]
+    fn shared_account_different_seeds_produce_different_keys() {
+        let holder = GroupKeyHolder::from_gms([42_u8; 32]);
+        let npk_a = holder
+            .derive_keys_for_shared_account(&[1_u8; 32])
+            .generate_nullifier_public_key();
+        let npk_b = holder
+            .derive_keys_for_shared_account(&[2_u8; 32])
+            .generate_nullifier_public_key();
+
+        assert_ne!(npk_a, npk_b);
+    }
+
+    /// PDA and shared account derivations from the same GMS + same bytes never collide.
+    #[test]
+    fn pda_and_shared_derivations_do_not_collide() {
+        let holder = GroupKeyHolder::from_gms([42_u8; 32]);
+        let bytes = [1_u8; 32];
+
+        let pda_npk = holder
+            .derive_keys_for_pda(&TEST_PROGRAM_ID, &PdaSeed::new(bytes))
+            .generate_nullifier_public_key();
+        let shared_npk = holder
+            .derive_keys_for_shared_account(&bytes)
+            .generate_nullifier_public_key();
+
+        assert_ne!(pda_npk, shared_npk);
+    }
+}

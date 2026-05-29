@@ -1,5 +1,5 @@
-pub use nssa_core::program::PdaSeed;
-use nssa_core::{
+pub use lee_core::program::PdaSeed;
+use lee_core::{
     account::{AccountId, AccountWithMetadata},
     program::ProgramId,
 };

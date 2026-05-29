@@ -1,6 +1,6 @@
 # Wallet CLI Completion
 
-Completion scripts for the LSSA `wallet` command.
+Completion scripts for the LEZ `wallet` command.
 
 ## ZSH
 

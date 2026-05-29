@@ -1,4 +1,4 @@
-use nssa_core::program::{ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_nssa_inputs};
+use lee_core::program::{ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs};
 
 /// Instruction: (`auth_transfer_id`, `amount`) — both primitive, safe for `risc0_zkvm::serde`.
 type Instruction = (ProgramId, u128);
@@ -12,7 +12,7 @@ fn main() {
             instruction: (auth_transfer_id, amount),
         },
         instruction_words,
-    ) = read_nssa_inputs::<Instruction>();
+    ) = read_lee_inputs::<Instruction>();
 
     // Output empty pre/post states. P2 processes no accounts itself, so the
     // authorization check at validated_state_diff.rs:158-182 runs over nothing.

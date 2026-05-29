@@ -1,0 +1,40 @@
+language = "C"
+header = """
+/**
+ * LEE Wallet FFI Bindings
+ *
+ * Thread Safety: All functions are thread-safe. The wallet handle can be
+ * shared across threads, but operations are serialized internally.
+ *
+ * Memory Management:
+ * - Functions returning pointers allocate memory that must be freed
+ * - Use the corresponding wallet_ffi_free_* function to free memory
+ * - Never free memory returned by FFI using standard C free()
+ *
+ * Error Handling:
+ * - Functions return WalletFfiError codes
+ * - On error, call wallet_ffi_get_last_error() for detailed message
+ * - The error string must be freed with wallet_ffi_free_error_string()
+ *
+ * Initialization:
+ * 1. Call wallet_ffi_init_runtime() before any other function
+ * 2. Create wallet with wallet_ffi_create_new() or wallet_ffi_open()
+ * 3. Destroy wallet with wallet_ffi_destroy() when done
+ */
+"""
+
+include_guard = "WALLET_FFI_H"
+include_version = true
+no_includes = false
+
+[export]
+include = ["Ffi.*", "WalletFfiError", "WalletHandle"]
+
+[enum]
+rename_variants = "ScreamingSnakeCase"
+
+[fn]
+rename_args = "None"
+
+[struct]
+rename_fields = "None"

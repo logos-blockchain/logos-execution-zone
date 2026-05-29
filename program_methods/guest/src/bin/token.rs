@@ -6,7 +6,7 @@
 //! Token program accepts [`Instruction`] as input, refer to the corresponding documentation
 //! for more details.
 
-use nssa_core::program::{ProgramInput, ProgramOutput, read_nssa_inputs};
+use lee_core::program::{ProgramInput, ProgramOutput, read_lee_inputs};
 use token_program::core::Instruction;
 
 fn main() {
@@ -18,7 +18,7 @@ fn main() {
             instruction,
         },
         instruction_words,
-    ) = read_nssa_inputs::<Instruction>();
+    ) = read_lee_inputs::<Instruction>();
 
     let pre_states_clone = pre_states.clone();
 

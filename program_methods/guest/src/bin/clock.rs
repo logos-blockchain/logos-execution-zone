@@ -12,9 +12,9 @@ use clock_core::{
     CLOCK_01_PROGRAM_ACCOUNT_ID, CLOCK_10_PROGRAM_ACCOUNT_ID, CLOCK_50_PROGRAM_ACCOUNT_ID,
     ClockAccountData, Instruction,
 };
-use nssa_core::{
+use lee_core::{
     account::AccountWithMetadata,
-    program::{AccountPostState, ProgramInput, ProgramOutput, read_nssa_inputs},
+    program::{AccountPostState, ProgramInput, ProgramOutput, read_lee_inputs},
 };
 
 fn update_if_multiple(
@@ -45,7 +45,7 @@ fn main() {
             instruction: timestamp,
         },
         instruction_words,
-    ) = read_nssa_inputs::<Instruction>();
+    ) = read_lee_inputs::<Instruction>();
 
     let Ok([pre_01, pre_10, pre_50]) = <[_; 3]>::try_from(pre_states) else {
         panic!("Invalid number of input accounts");

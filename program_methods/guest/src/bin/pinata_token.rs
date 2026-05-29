@@ -1,7 +1,7 @@
-use nssa_core::{
+use lee_core::{
     account::Data,
     program::{
-        AccountPostState, ChainedCall, PdaSeed, ProgramInput, ProgramOutput, read_nssa_inputs,
+        AccountPostState, ChainedCall, PdaSeed, ProgramInput, ProgramOutput, read_lee_inputs,
     },
 };
 use risc0_zkvm::sha::{Impl, Sha256 as _};
@@ -58,7 +58,7 @@ fn main() {
             instruction: solution,
         },
         instruction_words,
-    ) = read_nssa_inputs::<Instruction>();
+    ) = read_lee_inputs::<Instruction>();
 
     let Ok(
         [

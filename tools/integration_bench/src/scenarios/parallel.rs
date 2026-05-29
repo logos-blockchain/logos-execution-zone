@@ -6,7 +6,7 @@
 use std::time::Instant;
 
 use anyhow::{Result, bail};
-use common::transaction::NSSATransaction;
+use common::transaction::LeeTransaction;
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::{TestContext, public_mention};
 use wallet::cli::{
@@ -69,6 +69,7 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
                         to: Some(public_mention(sender_id)),
                         to_npk: None,
                         to_vpk: None,
+                        to_keys: None,
                         to_identifier: Some(0),
                         amount: AMOUNT_PER_TRANSFER * 5,
                     }),
@@ -97,6 +98,7 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
                 to: Some(public_mention(*recipient_id)),
                 to_npk: None,
                 to_vpk: None,
+                to_keys: None,
                 to_identifier: Some(0),
                 amount: AMOUNT_PER_TRANSFER,
             }),
@@ -139,9 +141,9 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
             for tx in &block.body.transactions {
                 let n = borsh::to_vec(tx).map_or(0, |v| v.len());
                 match tx {
-                    NSSATransaction::Public(_) => sz.public_tx_bytes.push(n),
-                    NSSATransaction::PrivacyPreserving(_) => sz.ppe_tx_bytes.push(n),
-                    NSSATransaction::ProgramDeployment(_) => sz.deploy_tx_bytes.push(n),
+                    LeeTransaction::Public(_) => sz.public_tx_bytes.push(n),
+                    LeeTransaction::PrivacyPreserving(_) => sz.ppe_tx_bytes.push(n),
+                    LeeTransaction::ProgramDeployment(_) => sz.deploy_tx_bytes.push(n),
                 }
             }
             blocks.push(sz);
@@ -168,7 +170,7 @@ async fn new_public_account(
     ctx: &mut TestContext,
     output: &mut ScenarioOutput,
     label: &str,
-) -> Result<nssa::AccountId> {
+) -> Result<lee::AccountId> {
     let ret = output
         .step(ctx, label, async |ctx| {
             wallet::cli::execute_subcommand(

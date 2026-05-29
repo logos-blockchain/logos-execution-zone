@@ -10,7 +10,7 @@ workspace = true
 
 [dev-dependencies]
 key_protocol.workspace = true
-nssa_core = { workspace = true, features = ["host"] }
+lee_core = { workspace = true, features = ["host"] }
 rand = { workspace = true }
 criterion.workspace = true
 

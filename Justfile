@@ -36,13 +36,13 @@ run-bedrock:
     docker compose up
 
 # Run Sequencer
-[working-directory: 'sequencer/service']
+[working-directory: 'lez/sequencer/service']
 run-sequencer:
     @echo "🧠 Running sequencer"
     RUST_LOG=info RISC0_DEV_MODE=1 cargo run --release -p sequencer_service configs/debug/sequencer_config.json
 
 # Run Indexer
-[working-directory: 'indexer/service']
+[working-directory: 'lez/indexer/service']
 run-indexer mock="":
     @echo "🔍 Running indexer"
     @if [ "{{mock}}" = "mock" ]; then \
@@ -54,23 +54,23 @@ run-indexer mock="":
     fi
 
 # Run Explorer
-[working-directory: 'explorer_service']
+[working-directory: 'lez/explorer_service']
 run-explorer:
     @echo "🌐 Running explorer"
     RUST_LOG=info cargo leptos serve
 
 # Run Wallet
-[working-directory: 'wallet']
+[working-directory: 'lez/wallet']
 run-wallet +args:
     @echo "🔑 Running wallet"
-    NSSA_WALLET_HOME_DIR=$(pwd)/configs/debug cargo run --release -p wallet -- {{args}}
+    LEE_WALLET_HOME_DIR=$(pwd)/configs/debug cargo run --release -p wallet -- {{args}}
 
 # Clean runtime data
 clean:
     @echo "🧹 Cleaning run artifacts"
-    rm -rf sequencer/service/bedrock_signing_key
-    rm -rf sequencer/service/rocksdb
-    rm -rf indexer/service/rocksdb
-    rm -rf wallet/configs/debug/storage.json
+    rm -rf lez/sequencer/service/bedrock_signing_key
+    rm -rf lez/sequencer/service/rocksdb
+    rm -rf lez/indexer/service/rocksdb
+    rm -rf lez/wallet/configs/debug/storage.json
     rm -rf rocksdb
     cd bedrock && docker compose down -v

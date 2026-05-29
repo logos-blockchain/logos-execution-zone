@@ -1,4 +1,4 @@
-use nssa_core::program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_nssa_inputs};
+use lee_core::program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_lee_inputs};
 
 // Hello-world example program.
 //
@@ -25,7 +25,7 @@ fn main() {
             instruction: greeting,
         },
         instruction_data,
-    ) = read_nssa_inputs::<Instruction>();
+    ) = read_lee_inputs::<Instruction>();
 
     // Unpack the input account pre state
     let [pre_state] = pre_states
@@ -49,7 +49,7 @@ fn main() {
 
     // The output is a proposed state difference. It will only succeed if the pre states coincide
     // with the previous values of the accounts, and the transition to the post states conforms
-    // with the NSSA program rules.
+    // with the LEE program rules.
     // WARNING: constructing a `ProgramOutput` has no effect on its own. `.write()` must be
     // called to commit the output.
     ProgramOutput::new(

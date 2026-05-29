@@ -1,5 +1,5 @@
-use common::transaction::NSSATransaction;
-use nssa::{
+use common::transaction::LeeTransaction;
+use lee::{
     AccountId, PublicTransaction,
     program::Program,
     public_transaction::{Message, WitnessSet},
@@ -11,7 +11,7 @@ use wallet::WalletCore;
 //
 //   cargo risczero build --manifest-path examples/program_deployment/methods/guest/Cargo.toml
 //
-// Note: you must run the above command from the root of the `lssa` repository.
+// Note: you must run the above command from the root of the `logos-execution-zone` repository.
 // Note: The compiled binary file is stored in
 // methods/guest/target/riscv32im-risc0-zkvm-elf/docker/hello_world_with_authorization.bin
 //
@@ -73,7 +73,7 @@ async fn main() {
     // Submit the transaction
     let _response = wallet_core
         .sequencer_client
-        .send_transaction(NSSATransaction::Public(tx))
+        .send_transaction(LeeTransaction::Public(tx))
         .await
         .unwrap();
 }

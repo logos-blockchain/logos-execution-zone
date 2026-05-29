@@ -1,7 +1,7 @@
-use nssa_core::{
+use lee_core::{
     account::AccountWithMetadata,
     program::{
-        AccountPostState, ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_nssa_inputs,
+        AccountPostState, ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
     },
 };
 use risc0_zkvm::serde::to_vec;
@@ -20,7 +20,7 @@ fn main() {
             instruction: (balance, transfer_program_id),
         },
         instruction_words,
-    ) = read_nssa_inputs::<Instruction>();
+    ) = read_lee_inputs::<Instruction>();
 
     let Ok([sender, receiver]) = <[_; 2]>::try_from(pre_states) else {
         return;

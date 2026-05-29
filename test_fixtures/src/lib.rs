@@ -4,12 +4,12 @@
 use std::{net::SocketAddr, path::Path, sync::LazyLock};
 
 use anyhow::{Context as _, Result};
-use common::{HashType, transaction::NSSATransaction};
+use common::{HashType, transaction::LeeTransaction};
 use futures::FutureExt as _;
 use indexer_service::IndexerHandle;
+use lee::{AccountId, PrivacyPreservingTransaction};
+use lee_core::Commitment;
 use log::{debug, error};
-use nssa::{AccountId, PrivacyPreservingTransaction};
-use nssa_core::Commitment;
 use sequencer_core::config::GenesisAction;
 use sequencer_service::SequencerHandle;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
@@ -32,9 +32,9 @@ pub mod setup;
 
 // TODO: Remove this and control time from tests
 pub const TIME_TO_WAIT_FOR_BLOCK_SECONDS: u64 = 12;
-pub const NSSA_PROGRAM_FOR_TEST_DATA_CHANGER: &str = "data_changer.bin";
-pub const NSSA_PROGRAM_FOR_TEST_NOOP: &str = "noop.bin";
-pub const NSSA_PROGRAM_FOR_TEST_PDA_SPEND_PROXY: &str = "pda_spend_proxy.bin";
+pub const LEE_PROGRAM_FOR_TEST_DATA_CHANGER: &str = "data_changer.bin";
+pub const LEE_PROGRAM_FOR_TEST_NOOP: &str = "noop.bin";
+pub const LEE_PROGRAM_FOR_TEST_PDA_SPEND_PROXY: &str = "pda_spend_proxy.bin";
 
 pub(crate) const BEDROCK_SERVICE_WITH_OPEN_PORT: &str = "logos-blockchain-node-0";
 pub(crate) const BEDROCK_SERVICE_PORT: u16 = 18080;
@@ -465,7 +465,7 @@ pub async fn fetch_privacy_preserving_tx(
     let tx = seq_client.get_transaction(tx_hash).await.unwrap().unwrap();
 
     match tx {
-        NSSATransaction::PrivacyPreserving(privacy_preserving_transaction) => {
+        LeeTransaction::PrivacyPreserving(privacy_preserving_transaction) => {
             privacy_preserving_transaction
         }
         _ => panic!("Invalid tx type"),

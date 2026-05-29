@@ -5,13 +5,13 @@
 //! performs the actual transfer of funds from the vault accounts.
 
 use authenticated_transfer_core::Instruction as AuthTransferInstruction;
-use nssa_core::program::{
-    AccountPostState, ChainedCall, ProgramInput, ProgramOutput, read_nssa_inputs,
+use lee_core::program::{
+    AccountPostState, ChainedCall, ProgramInput, ProgramOutput, read_lee_inputs,
 };
 use vault_core::Instruction;
 
 fn unchanged_post_states(
-    pre_states: &[nssa_core::account::AccountWithMetadata],
+    pre_states: &[lee_core::account::AccountWithMetadata],
 ) -> Vec<AccountPostState> {
     pre_states
         .iter()
@@ -28,7 +28,7 @@ fn main() {
             instruction,
         },
         instruction_words,
-    ) = read_nssa_inputs::<Instruction>();
+    ) = read_lee_inputs::<Instruction>();
 
     let pre_states_clone = pre_states.clone();
     let post_states = unchanged_post_states(&pre_states_clone);

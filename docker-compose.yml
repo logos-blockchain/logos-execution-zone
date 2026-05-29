@@ -6,8 +6,8 @@ include:
   - path:
       bedrock/docker-compose.yml
   - path:
-      sequencer/service/docker-compose.yml
+      lez/sequencer/service/docker-compose.yml
   - path:
-      indexer/service/docker-compose.yml
+      lez/indexer/service/docker-compose.yml
   - path:
-      explorer_service/docker-compose.yml
+      lez/explorer_service/docker-compose.yml

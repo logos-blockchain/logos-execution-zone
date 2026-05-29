@@ -8,11 +8,11 @@ use std::time::Duration;
 
 use anyhow::Result;
 use bytesize::ByteSize;
-use common::transaction::NSSATransaction;
+use common::transaction::LeeTransaction;
 use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, config::SequencerPartialConfig,
 };
-use nssa::program::Program;
+use lee::program::Program;
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 
@@ -33,13 +33,13 @@ async fn reject_oversized_transaction() -> Result<()> {
     // Create a 1.1 MiB binary to ensure it exceeds the limit
     let oversized_binary = vec![0_u8; 1100 * 1024]; // 1.1 MiB binary
 
-    let message = nssa::program_deployment_transaction::Message::new(oversized_binary);
-    let tx = nssa::ProgramDeploymentTransaction::new(message);
+    let message = lee::program_deployment_transaction::Message::new(oversized_binary);
+    let tx = lee::ProgramDeploymentTransaction::new(message);
 
     // Try to submit the transaction and expect an error
     let result = ctx
         .sequencer_client()
-        .send_transaction(NSSATransaction::ProgramDeployment(tx))
+        .send_transaction(LeeTransaction::ProgramDeployment(tx))
         .await;
 
     assert!(
@@ -74,13 +74,13 @@ async fn accept_transaction_within_limit() -> Result<()> {
     // Create a small program deployment that should fit
     let small_binary = vec![0_u8; 1024]; // 1 KiB binary
 
-    let message = nssa::program_deployment_transaction::Message::new(small_binary);
-    let tx = nssa::ProgramDeploymentTransaction::new(message);
+    let message = lee::program_deployment_transaction::Message::new(small_binary);
+    let tx = lee::ProgramDeploymentTransaction::new(message);
 
     // This should succeed
     let result = ctx
         .sequencer_client()
-        .send_transaction(NSSATransaction::ProgramDeployment(tx))
+        .send_transaction(LeeTransaction::ProgramDeployment(tx))
         .await;
 
     assert!(
@@ -123,17 +123,17 @@ async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
 
     // Submit both program deployments
     ctx.sequencer_client()
-        .send_transaction(NSSATransaction::ProgramDeployment(
-            nssa::ProgramDeploymentTransaction::new(
-                nssa::program_deployment_transaction::Message::new(burner_bytecode),
+        .send_transaction(LeeTransaction::ProgramDeployment(
+            lee::ProgramDeploymentTransaction::new(
+                lee::program_deployment_transaction::Message::new(burner_bytecode),
             ),
         ))
         .await?;
 
     ctx.sequencer_client()
-        .send_transaction(NSSATransaction::ProgramDeployment(
-            nssa::ProgramDeploymentTransaction::new(
-                nssa::program_deployment_transaction::Message::new(chain_caller_bytecode),
+        .send_transaction(LeeTransaction::ProgramDeployment(
+            lee::ProgramDeploymentTransaction::new(
+                lee::program_deployment_transaction::Message::new(chain_caller_bytecode),
             ),
         ))
         .await?;
@@ -148,13 +148,13 @@ async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
         .unwrap();
 
     // Check which program is in block 1
-    let get_program_ids = |block: &common::block::Block| -> Vec<nssa::ProgramId> {
+    let get_program_ids = |block: &common::block::Block| -> Vec<lee::ProgramId> {
         block
             .body
             .transactions
             .iter()
             .filter_map(|tx| {
-                if let NSSATransaction::ProgramDeployment(deployment) = tx {
+                if let LeeTransaction::ProgramDeployment(deployment) = tx {
                     let bytecode = deployment.message.clone().into_bytecode();
                     Program::new(bytecode).ok().map(|p| p.id())
                 } else {

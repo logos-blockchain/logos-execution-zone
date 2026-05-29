@@ -7,14 +7,13 @@ use std::{path::PathBuf, time::Duration};
 
 use anyhow::{Context as _, Result};
 use authenticated_transfer_core::Instruction as AuthTransferInstruction;
-use common::transaction::NSSATransaction;
+use common::transaction::LeeTransaction;
 use integration_tests::{
-    NSSA_PROGRAM_FOR_TEST_PDA_SPEND_PROXY, TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext,
+    LEE_PROGRAM_FOR_TEST_PDA_SPEND_PROXY, TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext,
     verify_commitment_is_in_state,
 };
 use key_protocol::key_management::ephemeral_key_holder::EphemeralKeyHolder;
-use log::info;
-use nssa::{
+use lee::{
     AccountId, PrivacyPreservingTransaction, ProgramId,
     privacy_preserving_transaction::{
         circuit::{ProgramWithDependencies, execute_and_prove},
@@ -23,12 +22,13 @@ use nssa::{
     },
     program::Program,
 };
-use nssa_core::{
+use lee_core::{
     InputAccountIdentity, NullifierPublicKey,
     account::{Account, AccountWithMetadata},
     encryption::ViewingPublicKey,
     program::PdaSeed,
 };
+use log::info;
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 use wallet::{
@@ -64,9 +64,9 @@ async fn fund_private_pda(
     let sender_pre = AccountWithMetadata::new(sender_account.clone(), true, sender);
     let pda_pre = AccountWithMetadata::new(Account::default(), false, pda_account_id);
 
-    let eph_holder = EphemeralKeyHolder::new(&npk);
-    let ssk = eph_holder.calculate_shared_secret_sender(&vpk);
-    let epk = eph_holder.generate_ephemeral_public_key();
+    let eph_holder = EphemeralKeyHolder::new(&vpk);
+    let ssk = eph_holder.calculate_shared_secret_sender();
+    let epk = eph_holder.ephemeral_public_key().clone();
 
     let instruction = Program::serialize_instruction(AuthTransferInstruction::Transfer { amount })
         .context("failed to serialize auth_transfer instruction")?;
@@ -102,7 +102,7 @@ async fn fund_private_pda(
 
     wallet
         .sequencer_client
-        .send_transaction(NSSATransaction::PrivacyPreserving(tx))
+        .send_transaction(LeeTransaction::PrivacyPreserving(tx))
         .await
         .map_err(|e| anyhow::anyhow!("send transaction failed: {e}"))?;
 
@@ -170,7 +170,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
     let proxy = {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../artifacts/test_program_methods")
-            .join(NSSA_PROGRAM_FOR_TEST_PDA_SPEND_PROXY);
+            .join(LEE_PROGRAM_FOR_TEST_PDA_SPEND_PROXY);
         Program::new(std::fs::read(&path).with_context(|| format!("reading {path:?}"))?)
             .context("invalid pda_spend_proxy binary")?
     };
@@ -272,10 +272,10 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
 
     // Fresh recipients — hardcoded npks not in any wallet.
     let recipient_npk_0 = NullifierPublicKey([0xAA; 32]);
-    let recipient_vpk_0 = ViewingPublicKey::from_scalar(recipient_npk_0.0);
+    let recipient_vpk_0 = ViewingPublicKey::from_seed(&[0_u8; 32], &[1_u8; 32]);
 
     let recipient_npk_1 = NullifierPublicKey([0xBB; 32]);
-    let recipient_vpk_1 = ViewingPublicKey::from_scalar(recipient_npk_1.0);
+    let recipient_vpk_1 = ViewingPublicKey::from_seed(&[2_u8; 32], &[3_u8; 32]);
 
     let amount_spend_0: u128 = 13;
     let amount_spend_1: u128 = 37;

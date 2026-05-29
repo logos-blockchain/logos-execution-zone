@@ -1,14 +1,21 @@
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
-use common::transaction::NSSATransaction;
+use common::transaction::LeeTransaction;
 use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, fetch_privacy_preserving_tx, private_mention,
     public_mention, verify_commitment_is_in_state,
 };
+use lee::{
+    AccountId, SharedSecretKey, execute_and_prove,
+    privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
+};
+use lee_core::{
+    InputAccountIdentity, NullifierPublicKey,
+    account::AccountWithMetadata,
+    encryption::{EphemeralPublicKey, ViewingPublicKey},
+};
 use log::info;
-use nssa::{AccountId, program::Program};
-use nssa_core::{NullifierPublicKey, encryption::shared_key_derivation::Secp256k1Point};
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 use wallet::{
@@ -32,6 +39,7 @@ async fn private_transfer_to_owned_account() -> Result<()> {
         to: Some(private_mention(to)),
         to_npk: None,
         to_vpk: None,
+        to_keys: None,
         to_identifier: Some(0),
         amount: 100,
     });
@@ -65,13 +73,14 @@ async fn private_transfer_to_foreign_account() -> Result<()> {
     let from: AccountId = ctx.existing_private_accounts()[0];
     let to_npk = NullifierPublicKey([42; 32]);
     let to_npk_string = hex::encode(to_npk.0);
-    let to_vpk = Secp256k1Point::from_scalar(to_npk.0);
+    let to_vpk = ViewingPublicKey::from_seed(&[0_u8; 32], &[1_u8; 32]);
 
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
         from: private_mention(from),
         to: None,
         to_npk: Some(to_npk_string),
-        to_vpk: Some(hex::encode(to_vpk.0)),
+        to_vpk: Some(hex::encode(to_vpk.to_bytes())),
+        to_keys: None,
         to_identifier: Some(0),
         amount: 100,
     });
@@ -121,6 +130,7 @@ async fn deshielded_transfer_to_public_account() -> Result<()> {
         to: Some(public_mention(to)),
         to_npk: None,
         to_vpk: None,
+        to_keys: None,
         to_identifier: Some(0),
         amount: 100,
     });
@@ -183,7 +193,8 @@ async fn private_transfer_to_owned_account_using_claiming_path() -> Result<()> {
         from: private_mention(from),
         to: None,
         to_npk: Some(hex::encode(to.key_chain.nullifier_public_key.0)),
-        to_vpk: Some(hex::encode(&to.key_chain.viewing_public_key.0)),
+        to_vpk: Some(hex::encode(to.key_chain.viewing_public_key.to_bytes())),
+        to_keys: None,
         to_identifier: Some(to.kind.identifier()),
         amount: 100,
     });
@@ -233,6 +244,7 @@ async fn shielded_transfer_to_owned_private_account() -> Result<()> {
         to: Some(private_mention(to)),
         to_npk: None,
         to_vpk: None,
+        to_keys: None,
         to_identifier: Some(0),
         amount: 100,
     });
@@ -268,14 +280,15 @@ async fn shielded_transfer_to_foreign_account() -> Result<()> {
 
     let to_npk = NullifierPublicKey([42; 32]);
     let to_npk_string = hex::encode(to_npk.0);
-    let to_vpk = Secp256k1Point::from_scalar(to_npk.0);
+    let to_vpk = ViewingPublicKey::from_seed(&[0_u8; 32], &[1_u8; 32]);
     let from: AccountId = ctx.existing_public_accounts()[0];
 
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
         from: public_mention(from),
         to: None,
         to_npk: Some(to_npk_string),
-        to_vpk: Some(hex::encode(to_vpk.0)),
+        to_vpk: Some(hex::encode(to_vpk.to_bytes())),
+        to_keys: None,
         to_identifier: Some(0),
         amount: 100,
     });
@@ -345,7 +358,8 @@ async fn private_transfer_to_owned_account_continuous_run_path() -> Result<()> {
         from: private_mention(from),
         to: None,
         to_npk: Some(hex::encode(to.key_chain.nullifier_public_key.0)),
-        to_vpk: Some(hex::encode(&to.key_chain.viewing_public_key.0)),
+        to_vpk: Some(hex::encode(to.key_chain.viewing_public_key.to_bytes())),
+        to_keys: None,
         to_identifier: Some(to.kind.identifier()),
         amount: 100,
     });
@@ -446,6 +460,7 @@ async fn private_transfer_using_from_label() -> Result<()> {
         to: Some(private_mention(to)),
         to_npk: None,
         to_vpk: None,
+        to_keys: None,
         to_identifier: Some(0),
         amount: 100,
     });
@@ -539,7 +554,7 @@ async fn shielded_transfers_to_two_identifiers_same_npk() -> Result<()> {
     };
 
     let npk_hex = hex::encode(npk.0);
-    let vpk_hex = hex::encode(vpk.0);
+    let vpk_hex = hex::encode(vpk.to_bytes());
 
     let identifier_1 = 1_u128;
     let identifier_2 = 2_u128;
@@ -554,6 +569,7 @@ async fn shielded_transfers_to_two_identifiers_same_npk() -> Result<()> {
             to: None,
             to_npk: Some(npk_hex.clone()),
             to_vpk: Some(vpk_hex.clone()),
+            to_keys: None,
             to_identifier: Some(identifier_1),
             amount: 100,
         }),
@@ -567,6 +583,7 @@ async fn shielded_transfers_to_two_identifiers_same_npk() -> Result<()> {
             to: None,
             to_npk: Some(npk_hex),
             to_vpk: Some(vpk_hex),
+            to_keys: None,
             to_identifier: Some(identifier_2),
             amount: 200,
         }),
@@ -626,37 +643,31 @@ async fn shielded_transfers_to_two_identifiers_same_npk() -> Result<()> {
 }
 
 #[test]
-async fn ppt_that_chain_calls_faucet_is_dropped() -> Result<()> {
-    use nssa::{
-        EphemeralPublicKey, SharedSecretKey, execute_and_prove,
-        privacy_preserving_transaction::{self, circuit::ProgramWithDependencies},
-    };
-    use nssa_core::{InputAccountIdentity, account::AccountWithMetadata};
-
+async fn ppt_cant_chain_call_faucet() -> Result<()> {
     let ctx = TestContext::new().await?;
 
     let binary = std::fs::read(
         std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../artifacts/test_program_methods/faucet_chain_caller.bin"),
     )?;
-    let deploy_tx = NSSATransaction::ProgramDeployment(nssa::ProgramDeploymentTransaction::new(
-        nssa::program_deployment_transaction::Message::new(binary.clone()),
+    let deploy_tx = LeeTransaction::ProgramDeployment(lee::ProgramDeploymentTransaction::new(
+        lee::program_deployment_transaction::Message::new(binary.clone()),
     ));
     ctx.sequencer_client().send_transaction(deploy_tx).await?;
 
     info!("Waiting for deploy block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
-    let faucet_account_id = nssa::system_faucet_account_id();
+    let faucet_account_id = lee::system_faucet_account_id();
     let attacker_id = ctx.existing_public_accounts()[0];
     let faucet_program_id = Program::faucet().id();
     let vault_program_id = Program::vault().id();
     let auth_transfer_program_id = Program::authenticated_transfer_program().id();
-    let nsk: nssa_core::NullifierSecretKey = [3; 32];
+    let nsk: lee_core::NullifierSecretKey = [3; 32];
     let npk = NullifierPublicKey::from(&nsk);
-    let vpk = Secp256k1Point::from_scalar([4; 32]);
-    let ssk = SharedSecretKey::new([55; 32], &vpk);
-    let epk = EphemeralPublicKey::from_scalar([55; 32]);
+    let _vpk = ViewingPublicKey::from_bytes(vec![4_u8; 1184]).unwrap();
+    let ssk = SharedSecretKey([55_u8; 32]);
+    let _epk = EphemeralPublicKey(vec![55_u8; 1088]);
     let attacker_vault_id = {
         let seed = vault_core::compute_vault_seed(attacker_id);
         AccountId::for_private_pda(&vault_program_id, &seed, &npk, 1337)
@@ -695,7 +706,7 @@ async fn ppt_that_chain_calls_faucet_is_dropped() -> Result<()> {
     let instruction =
         Program::serialize_instruction((faucet_program_id, vault_program_id, attacker_id, amount))?;
 
-    let (output, proof) = execute_and_prove(
+    let res = execute_and_prove(
         vec![faucet_pre, vault_pda_pre],
         instruction,
         vec![
@@ -708,47 +719,9 @@ async fn ppt_that_chain_calls_faucet_is_dropped() -> Result<()> {
             },
         ],
         &program_with_deps,
-    )?;
+    );
 
-    let message = privacy_preserving_transaction::Message::try_from_circuit_output(
-        vec![faucet_account_id],
-        vec![],
-        vec![(npk, vpk, epk)],
-        output,
-    )?;
-    let witness_set = privacy_preserving_transaction::WitnessSet::for_message(&message, proof, &[]);
-    let attack_ppt = NSSATransaction::PrivacyPreserving(nssa::PrivacyPreservingTransaction::new(
-        message,
-        witness_set,
-    ));
-
-    let faucet_balance_before = ctx
-        .sequencer_client()
-        .get_account_balance(faucet_account_id)
-        .await?;
-    let vault_balance_before = ctx
-        .sequencer_client()
-        .get_account_balance(attacker_vault_id)
-        .await?;
-
-    let tx_hash = ctx.sequencer_client().send_transaction(attack_ppt).await?;
-
-    info!("Waiting for next block creation");
-    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
-
-    let faucet_balance_after = ctx
-        .sequencer_client()
-        .get_account_balance(faucet_account_id)
-        .await?;
-    let vault_balance_after = ctx
-        .sequencer_client()
-        .get_account_balance(attacker_vault_id)
-        .await?;
-    let tx_on_chain = ctx.sequencer_client().get_transaction(tx_hash).await?;
-
-    assert_eq!(faucet_balance_after, faucet_balance_before);
-    assert_eq!(vault_balance_after, vault_balance_before);
-    assert!(tx_on_chain.is_none());
+    assert!(res.is_err());
 
     Ok(())
 }

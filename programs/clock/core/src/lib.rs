@@ -1,7 +1,7 @@
 //! Core data structures and constants for the Clock Program.
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use nssa_core::{Timestamp, account::AccountId};
+use lee_core::{Timestamp, account::AccountId};
 
 pub const CLOCK_01_PROGRAM_ACCOUNT_ID: AccountId =
     AccountId::new(*b"/LEZ/ClockProgramAccount/0000001");

@@ -1,6 +1,6 @@
-use nssa_core::program::{
+use lee_core::program::{
     AccountPostState, BlockValidityWindow, ProgramInput, ProgramOutput, TimestampValidityWindow,
-    read_nssa_inputs,
+    read_lee_inputs,
 };
 
 type Instruction = (BlockValidityWindow, TimestampValidityWindow);
@@ -14,7 +14,7 @@ fn main() {
             instruction: (block_validity_window, timestamp_validity_window),
         },
         instruction_words,
-    ) = read_nssa_inputs::<Instruction>();
+    ) = read_lee_inputs::<Instruction>();
 
     let Ok([pre]) = <[_; 1]>::try_from(pre_states) else {
         return;

@@ -10,8 +10,8 @@ workspace = true
 [dependencies]
 test_fixtures.workspace = true
 
-nssa_core = { workspace = true, features = ["host"] }
-nssa.workspace = true
+lee_core = { workspace = true, features = ["host"] }
+lee.workspace = true
 authenticated_transfer_core.workspace = true
 sequencer_core = { workspace = true, features = ["default", "testnet"] }
 wallet.workspace = true
@@ -22,6 +22,7 @@ token_core.workspace = true
 ata_core.workspace = true
 vault_core.workspace = true
 faucet_core.workspace = true
+bridge_core.workspace = true
 indexer_service_rpc = { workspace = true, features = ["client"] }
 sequencer_service_rpc = { workspace = true, features = ["client"] }
 wallet-ffi.workspace = true
@@ -34,3 +35,7 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 hex.workspace = true
 tempfile.workspace = true
 bytesize.workspace = true
+reqwest.workspace = true
+borsh.workspace = true
+logos-blockchain-http-api-common.workspace = true
+logos-blockchain-core.workspace = true

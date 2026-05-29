@@ -5,14 +5,14 @@ license = "MIT or Apache-2.0"
 resolver = "3"
 members = [
   "integration_tests",
-  "storage",
-  "key_protocol",
-  "mempool",
-  "wallet",
-  "wallet-ffi",
-  "common",
-  "nssa",
-  "nssa/core",
+  "lez/storage",
+  "lee/key_protocol",
+  "lee/state_machine",
+  "lee/state_machine/core",
+  "lez/mempool",
+  "lez/wallet",
+  "lez/wallet-ffi",
+  "lez/common",
   "programs/amm/core",
   "programs/amm",
   "programs/clock/core",
@@ -22,16 +22,17 @@ members = [
   "programs/associated_token_account",
   "programs/authenticated_transfer/core",
   "programs/faucet/core",
+  "programs/bridge/core",
   "programs/vault/core",
-  "sequencer/core",
-  "sequencer/service",
-  "sequencer/service/protocol",
-  "sequencer/service/rpc",
-  "indexer/core",
-  "indexer/service",
-  "indexer/service/protocol",
-  "indexer/service/rpc",
-  "explorer_service",
+  "lez/sequencer/core",
+  "lez/sequencer/service",
+  "lez/sequencer/service/protocol",
+  "lez/sequencer/service/rpc",
+  "lez/indexer/core",
+  "lez/indexer/service",
+  "lez/indexer/service/protocol",
+  "lez/indexer/service/rpc",
+  "lez/explorer_service",
   "program_methods",
   "program_methods/guest",
   "test_program_methods",
@@ -39,9 +40,10 @@ members = [
   "examples/program_deployment",
   "examples/program_deployment/methods",
   "examples/program_deployment/methods/guest",
-  "testnet_initial_state",
-  "indexer/ffi",
-  "keycard_wallet",
+  "lez/testnet_initial_state",
+  "lez/indexer/ffi",
+  "lez",
+  "lez/keycard_wallet",
   "test_fixtures",
   "tools/cycle_bench",
   "tools/crypto_primitives_bench",
@@ -49,23 +51,24 @@ members = [
 ]
 
 [workspace.dependencies]
-nssa = { path = "nssa" }
-nssa_core = { path = "nssa/core" }
-common = { path = "common" }
-mempool = { path = "mempool" }
-storage = { path = "storage" }
-key_protocol = { path = "key_protocol" }
-sequencer_core = { path = "sequencer/core" }
-sequencer_service_protocol = { path = "sequencer/service/protocol" }
-sequencer_service_rpc = { path = "sequencer/service/rpc" }
-sequencer_service = { path = "sequencer/service" }
-indexer_core = { path = "indexer/core" }
-indexer_service = { path = "indexer/service" }
-indexer_service_protocol = { path = "indexer/service/protocol" }
-indexer_service_rpc = { path = "indexer/service/rpc" }
-wallet = { path = "wallet" }
-wallet-ffi = { path = "wallet-ffi", default-features = false }
-indexer_ffi = { path = "indexer/ffi" }
+lee = { path = "lee/state_machine" }
+lee_core = { path = "lee/state_machine/core" }
+common = { path = "lez/common" }
+mempool = { path = "lez/mempool" }
+storage = { path = "lez/storage" }
+key_protocol = { path = "lee/key_protocol" }
+sequencer_core = { path = "lez/sequencer/core" }
+sequencer_service_protocol = { path = "lez/sequencer/service/protocol" }
+sequencer_service_rpc = { path = "lez/sequencer/service/rpc" }
+sequencer_service = { path = "lez/sequencer/service" }
+indexer_core = { path = "lez/indexer/core" }
+indexer_service = { path = "lez/indexer/service" }
+indexer_service_protocol = { path = "lez/indexer/service/protocol" }
+indexer_service_rpc = { path = "lez/indexer/service/rpc" }
+wallet = { path = "lez/wallet" }
+wallet-ffi = { path = "lez/wallet-ffi", default-features = false }
+indexer_ffi = { path = "lez/indexer/ffi" }
+lez = { path = "lez" }
 clock_core = { path = "programs/clock/core" }
 token_core = { path = "programs/token/core" }
 token_program = { path = "programs/token" }
@@ -75,10 +78,11 @@ ata_core = { path = "programs/associated_token_account/core" }
 ata_program = { path = "programs/associated_token_account" }
 authenticated_transfer_core = { path = "programs/authenticated_transfer/core" }
 faucet_core = { path = "programs/faucet/core" }
+bridge_core = { path = "programs/bridge/core" }
 vault_core = { path = "programs/vault/core" }
 test_program_methods = { path = "test_program_methods" }
-testnet_initial_state = { path = "testnet_initial_state" }
-keycard_wallet = { path = "keycard_wallet" }
+testnet_initial_state = { path = "lez/testnet_initial_state" }
+keycard_wallet = { path = "lez/keycard_wallet" }
 test_fixtures = { path = "test_fixtures" }
 
 tokio = { version = "1.50", features = [
@@ -134,12 +138,13 @@ tokio-retry = "0.3.0"
 schemars = "1.2"
 async-stream = "0.3.6"
 
-logos-blockchain-common-http-client = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "ee281a447d95a951752461ee0a6e88eb4a0f17cf" }
-logos-blockchain-key-management-system-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "ee281a447d95a951752461ee0a6e88eb4a0f17cf" }
-logos-blockchain-core = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "ee281a447d95a951752461ee0a6e88eb4a0f17cf" }
-logos-blockchain-chain-broadcast-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "ee281a447d95a951752461ee0a6e88eb4a0f17cf" }
-logos-blockchain-chain-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "ee281a447d95a951752461ee0a6e88eb4a0f17cf" }
-logos-blockchain-zone-sdk = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "ee281a447d95a951752461ee0a6e88eb4a0f17cf" }
+logos-blockchain-common-http-client = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "db9a8d821c1b20f29b03d02072817150cf969b8e" }
+logos-blockchain-key-management-system-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "db9a8d821c1b20f29b03d02072817150cf969b8e" }
+logos-blockchain-core = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "db9a8d821c1b20f29b03d02072817150cf969b8e" }
+logos-blockchain-chain-broadcast-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "db9a8d821c1b20f29b03d02072817150cf969b8e" }
+logos-blockchain-chain-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "db9a8d821c1b20f29b03d02072817150cf969b8e" }
+logos-blockchain-zone-sdk = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "db9a8d821c1b20f29b03d02072817150cf969b8e" }
+logos-blockchain-http-api-common = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "db9a8d821c1b20f29b03d02072817150cf969b8e" }
 
 rocksdb = { version = "0.24.0", default-features = false, features = [
   "snappy",
@@ -153,6 +158,7 @@ k256 = { version = "0.13.3", features = [
   "serde",
   "pem",
 ] }
+ml-kem = { version = "0.3", features = ["hazmat"] }
 elliptic-curve = { version = "0.13.8", features = ["arithmetic"] }
 actix-web = { version = "4.13.0", default-features = false, features = [
   "macros",

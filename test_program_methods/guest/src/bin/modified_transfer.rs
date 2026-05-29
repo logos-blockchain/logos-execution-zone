@@ -3,9 +3,9 @@
     reason = "This program is intentionally malicious and is expected to have side effects."
 )]
 
-use nssa_core::{
+use lee_core::{
     account::{Account, AccountWithMetadata},
-    program::{AccountPostState, ProgramInput, ProgramOutput, read_nssa_inputs},
+    program::{AccountPostState, ProgramInput, ProgramOutput, read_lee_inputs},
 };
 
 /// Initializes a default account under the ownership of this program.
@@ -70,7 +70,7 @@ fn main() {
             instruction: balance_to_move,
         },
         instruction_data,
-    ) = read_nssa_inputs();
+    ) = read_lee_inputs();
 
     let post_states = match (pre_states.as_slice(), balance_to_move) {
         ([account_to_claim], 0) => {

@@ -1,6 +1,5 @@
-use nssa_core::program::{
-    AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput,
-    read_nssa_inputs,
+use lee_core::program::{
+    AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
 };
 use risc0_zkvm::serde::to_vec;
 
@@ -19,7 +18,7 @@ fn main() {
             instruction: (seed, amount, auth_transfer_id),
         },
         instruction_words,
-    ) = read_nssa_inputs::<Instruction>();
+    ) = read_lee_inputs::<Instruction>();
 
     let Ok([first, second]) = <[_; 2]>::try_from(pre_states) else {
         return;

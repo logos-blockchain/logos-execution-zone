@@ -1,0 +1,25 @@
+[package]
+name = "indexer_service_protocol"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+lee_core = { workspace = true, optional = true, features = ["host"] }
+lee = { workspace = true, optional = true }
+common = { workspace = true, optional = true }
+
+serde = { workspace = true, features = ["derive"] }
+serde_with.workspace = true
+schemars.workspace = true
+base64.workspace = true
+base58.workspace = true
+hex.workspace = true
+anyhow.workspace = true
+
+[features]
+# Enable conversion to/from LEE core types
+convert = ["dep:lee_core", "dep:lee", "dep:common"]

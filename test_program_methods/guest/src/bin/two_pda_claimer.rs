@@ -1,5 +1,5 @@
-use nssa_core::program::{
-    AccountPostState, Claim, PdaSeed, ProgramInput, ProgramOutput, read_nssa_inputs,
+use lee_core::program::{
+    AccountPostState, Claim, PdaSeed, ProgramInput, ProgramOutput, read_lee_inputs,
 };
 
 /// Claims two `pre_states` under the same `seed`. Used to exercise the tx-wide
@@ -17,7 +17,7 @@ fn main() {
             instruction: seed,
         },
         instruction_words,
-    ) = read_nssa_inputs::<Instruction>();
+    ) = read_lee_inputs::<Instruction>();
 
     let Ok([pre_a, pre_b]) = <[_; 2]>::try_from(pre_states) else {
         return;

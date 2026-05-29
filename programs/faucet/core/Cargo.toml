@@ -8,5 +8,5 @@ license = { workspace = true }
 workspace = true
 
 [dependencies]
-nssa_core.workspace = true
+lee_core.workspace = true
 serde = { workspace = true, default-features = false }

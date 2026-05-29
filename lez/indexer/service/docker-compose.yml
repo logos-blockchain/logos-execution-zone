@@ -1,0 +1,17 @@
+services:
+  indexer_service:
+    image: lez/indexer_service
+    build:
+      context: ../..
+      dockerfile: lez/indexer/service/Dockerfile
+    container_name: indexer_service
+    ports:
+      - "8779:8779"
+    volumes:
+      # Mount configuration
+      - ./configs/indexer_config.json:/etc/indexer_service/indexer_config.json
+      # Mount data volume
+      - indexer_data:/var/lib/indexer_service
+
+volumes:
+  indexer_data:

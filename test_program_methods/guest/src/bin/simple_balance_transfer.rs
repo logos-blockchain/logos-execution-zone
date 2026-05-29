@@ -1,4 +1,4 @@
-use nssa_core::program::{AccountPostState, ProgramInput, ProgramOutput, read_nssa_inputs};
+use lee_core::program::{AccountPostState, ProgramInput, ProgramOutput, read_lee_inputs};
 
 type Instruction = u128;
 
@@ -11,7 +11,7 @@ fn main() {
             instruction: balance,
         },
         instruction_words,
-    ) = read_nssa_inputs::<Instruction>();
+    ) = read_lee_inputs::<Instruction>();
 
     let Ok([sender_pre, receiver_pre]) = <[_; 2]>::try_from(pre_states) else {
         return;

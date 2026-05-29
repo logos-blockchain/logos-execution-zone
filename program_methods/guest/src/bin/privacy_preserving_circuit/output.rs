@@ -1,4 +1,4 @@
-use nssa_core::{
+use lee_core::{
     Commitment, CommitmentSetDigest, DUMMY_COMMITMENT_HASH, EncryptionScheme, InputAccountIdentity,
     MembershipProof, Nullifier, NullifierPublicKey, NullifierSecretKey,
     PrivacyPreservingCircuitOutput, PrivateAccountKind, SharedSecretKey,
@@ -62,7 +62,7 @@ pub fn compute_circuit_output(
                     Nullifier::for_account_initialization(&account_id),
                     DUMMY_COMMITMENT_HASH,
                 );
-                let new_nonce = pre_state.account.nonce.private_account_nonce_increment(nsk);
+                let new_nonce = Nonce::private_account_nonce_init(&account_id);
 
                 emit_private_output(
                     &mut output,

@@ -27,9 +27,9 @@ Allowed `type` values:
 - `revert`
 
 Examples:
-- `feat(nssa): add private PDA support`
+- `feat(lee): add private PDA support`
 - `fix(wallet): correct fee calculation`
-- `feat(nssa)!: rename AccountId::from((prog, seed)) to AccountId::for_public_pda`
+- `feat(lee)!: rename AccountId::from((prog, seed)) to AccountId::for_public_pda`
 
 Breaking changes:
 - Mark with `!` in the title.

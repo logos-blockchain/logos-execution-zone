@@ -28,12 +28,12 @@ use clock_core::{
     ClockAccountData,
 };
 use cycle_bench::{ppe, stats::Stats};
-use nssa::program_methods::{
+use lee::program_methods::{
     AMM_ELF, AMM_ID, ASSOCIATED_TOKEN_ACCOUNT_ELF, ASSOCIATED_TOKEN_ACCOUNT_ID,
     AUTHENTICATED_TRANSFER_ELF, AUTHENTICATED_TRANSFER_ID, CLOCK_ELF, CLOCK_ID, TOKEN_ELF,
     TOKEN_ID,
 };
-use nssa_core::{
+use lee_core::{
     Timestamp,
     account::{Account, AccountId, AccountWithMetadata, Data},
     program::{InstructionData, ProgramId},

@@ -16,28 +16,28 @@ Installation:
 1. Install math applet on your keycard; this process only needs to be done once. In the root of repo:
     ```
     sudo apt-get install -y default-jdk
-    wget https://github.com/martinpaljak/GlobalPlatformPro/releases/download/v25.10.20/gp.jar -P keycard_wallet/keycard_applets
-    cd keycard_wallet/keycard_applets
+    wget https://github.com/martinpaljak/GlobalPlatformPro/releases/download/v25.10.20/gp.jar -P lez/keycard_wallet/keycard_applets
+    cd lez/keycard_wallet/keycard_applets
     java -jar gp.jar --key c212e073ff8b4bbfaff4de8ab655221f --load math.cap
     ```
 2. Install `keycard-desktop` from [github](https://github.com/choppu/keycard-desktop)
     - Keycard Desktop is used to install the LEE key protocol to a blank keycard.
-    - Select (Re)Install Applet and upload the key binary (`keycard_wallet/keycard_applets/LEE_keycard.cap`).
+    - Select (Re)Install Applet and upload the key binary (`lez/keycard_wallet/keycard_applets/LEE_keycard.cap`).
     ![keycard-desktop.png](keycard-desktop.png)
     - **Important:** keycard can only connect with one application at a time; if Keycard-Desktop is using keycard then Wallet CLI cannot access the same keycard, and vice-versa.
 
 ## Wallet with Keycard
-Keycard functionality is available to Wallet CLI by setting up the following Python virtual environment. The steps below can also be run via `keycard_wallet/wallet_with_keycard.sh`.
+Keycard functionality is available to Wallet CLI by setting up the following Python virtual environment. The steps below can also be run via `lez/keycard_wallet/wallet_with_keycard.sh`.
 
 ```bash
 # Install appropriate version of `keycard-py`.
-git clone --branch lee-schnorr --single-branch https://github.com/bitgamma/keycard-py.git keycard_wallet/python/keycard-py
+git clone --branch lee-schnorr --single-branch https://github.com/bitgamma/keycard-py.git lez/keycard_wallet/python/keycard-py
 
 # Set up virtual environment.
 python3 -m venv venv
 source venv/bin/activate
 pip install pyscard mnemonic ecdsa pyaes
-pip install -e keycard_wallet/python/keycard-py
+pip install -e lez/keycard_wallet/python/keycard-py
 ```
 
 **Important**: Keycard wallet commands only work within the virtual environment.

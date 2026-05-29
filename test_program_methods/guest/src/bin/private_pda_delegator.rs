@@ -1,6 +1,6 @@
-use nssa_core::program::{
+use lee_core::program::{
     AccountPostState, ChainedCall, Claim, PdaSeed, ProgramId, ProgramInput, ProgramOutput,
-    read_nssa_inputs,
+    read_lee_inputs,
 };
 use risc0_zkvm::serde::to_vec;
 
@@ -20,7 +20,7 @@ fn main() {
             instruction: (claim_seed, delegated_seed, callee_program_id),
         },
         instruction_words,
-    ) = read_nssa_inputs::<Instruction>();
+    ) = read_lee_inputs::<Instruction>();
 
     let Ok([pre]) = <[_; 1]>::try_from(pre_states) else {
         return;

@@ -46,6 +46,7 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
                     to: Some(private_mention(private_a)),
                     to_npk: None,
                     to_vpk: None,
+                    to_keys: None,
                     to_identifier: Some(0),
                     amount: 1_000,
                 }),
@@ -64,6 +65,7 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
                     to: Some(public_mention(public_recipient_id)),
                     to_npk: None,
                     to_vpk: None,
+                    to_keys: None,
                     to_identifier: Some(0),
                     amount: 100,
                 }),
@@ -82,6 +84,7 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
                     to: Some(private_mention(private_b)),
                     to_npk: None,
                     to_vpk: None,
+                    to_keys: None,
                     to_identifier: Some(0),
                     amount: 200,
                 }),
@@ -97,7 +100,7 @@ async fn new_public_account(
     ctx: &mut TestContext,
     output: &mut ScenarioOutput,
     label: &str,
-) -> Result<nssa::AccountId> {
+) -> Result<lee::AccountId> {
     let ret = output
         .step(ctx, label, async |ctx| {
             wallet::cli::execute_subcommand(
@@ -120,7 +123,7 @@ async fn new_private_account(
     ctx: &mut TestContext,
     output: &mut ScenarioOutput,
     label: &str,
-) -> Result<nssa::AccountId> {
+) -> Result<lee::AccountId> {
     let ret = output
         .step(ctx, label, async |ctx| {
             wallet::cli::execute_subcommand(

@@ -1,5 +1,5 @@
-use nssa_core::program::{
-    AccountPostState, DEFAULT_PROGRAM_ID, ProgramInput, ProgramOutput, read_nssa_inputs,
+use lee_core::program::{
+    AccountPostState, DEFAULT_PROGRAM_ID, ProgramInput, ProgramOutput, read_lee_inputs,
 };
 
 type Instruction = ();
@@ -13,7 +13,7 @@ fn main() {
             instruction: (),
         },
         instruction_words,
-    ) = read_nssa_inputs::<Instruction>();
+    ) = read_lee_inputs::<Instruction>();
 
     let post_states = pre_states
         .iter()

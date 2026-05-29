@@ -1,0 +1,32 @@
+[package]
+name = "indexer_core"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+common.workspace = true
+logos-blockchain-zone-sdk.workspace = true
+lee.workspace = true
+lee_core.workspace = true
+storage.workspace = true
+testnet_initial_state.workspace = true
+
+anyhow.workspace = true
+log.workspace = true
+serde.workspace = true
+humantime-serde.workspace = true
+borsh.workspace = true
+futures.workspace = true
+url.workspace = true
+logos-blockchain-core.workspace = true
+serde_json.workspace = true
+async-stream.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+authenticated_transfer_core.workspace = true

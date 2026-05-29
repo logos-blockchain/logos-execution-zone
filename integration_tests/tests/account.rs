@@ -6,9 +6,9 @@
 use anyhow::{Context as _, Result};
 use integration_tests::{TestContext, private_mention};
 use key_protocol::key_management::KeyChain;
+use lee::{Data, program::Program};
+use lee_core::account::Nonce;
 use log::info;
-use nssa::{Data, program::Program};
-use nssa_core::account::Nonce;
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 use wallet::{
@@ -127,8 +127,8 @@ async fn new_public_account_without_label() -> Result<()> {
 async fn import_public_account() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
-    let private_key = nssa::PrivateKey::new_os_random();
-    let account_id = nssa::AccountId::from(&nssa::PublicKey::new_from_private_key(&private_key));
+    let private_key = lee::PrivateKey::new_os_random();
+    let account_id = lee::AccountId::from(&lee::PublicKey::new_from_private_key(&private_key));
 
     let command = Command::Account(AccountSubcommand::Import(ImportSubcommand::Public {
         private_key,
@@ -156,8 +156,8 @@ async fn import_private_account() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
     let key_chain = KeyChain::new_os_random();
-    let account_id = nssa::AccountId::from((&key_chain.nullifier_public_key, 0));
-    let account = nssa::Account {
+    let account_id = lee::AccountId::from((&key_chain.nullifier_public_key, 0));
+    let account = lee::Account {
         program_owner: Program::authenticated_transfer_program().id(),
         balance: 777,
         data: Data::default(),
@@ -213,11 +213,11 @@ async fn import_private_account_second_time_overrides_account_data() -> Result<(
     let mut ctx = TestContext::new().await?;
 
     let key_chain = KeyChain::new_os_random();
-    let account_id = nssa::AccountId::from((&key_chain.nullifier_public_key, 0));
+    let account_id = lee::AccountId::from((&key_chain.nullifier_public_key, 0));
     let key_chain_json =
         serde_json::to_string(&key_chain).context("Failed to serialize key chain")?;
 
-    let initial_account = nssa::Account {
+    let initial_account = lee::Account {
         program_owner: Program::authenticated_transfer_program().id(),
         balance: 100,
         data: Data::default(),
@@ -236,7 +236,7 @@ async fn import_private_account_second_time_overrides_account_data() -> Result<(
     )
     .await?;
 
-    let updated_account = nssa::Account {
+    let updated_account = lee::Account {
         program_owner: Program::authenticated_transfer_program().id(),
         balance: 999,
         data: Data::default(),

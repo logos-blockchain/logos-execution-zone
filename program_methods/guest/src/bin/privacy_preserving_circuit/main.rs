@@ -1,4 +1,4 @@
-use nssa_core::PrivacyPreservingCircuitInput;
+use lee_core::PrivacyPreservingCircuitInput;
 use risc0_zkvm::guest::env;
 
 mod execution_state;

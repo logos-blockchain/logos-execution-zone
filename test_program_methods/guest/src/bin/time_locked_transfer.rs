@@ -10,7 +10,7 @@
 //!   2 - clock account (read-only, e.g. `CLOCK_01`).
 
 use clock_core::{CLOCK_01_PROGRAM_ACCOUNT_ID, ClockAccountData};
-use nssa_core::program::{AccountPostState, ProgramInput, ProgramOutput, read_nssa_inputs};
+use lee_core::program::{AccountPostState, ProgramInput, ProgramOutput, read_lee_inputs};
 
 /// (`amount`, `deadline_timestamp`).
 type Instruction = (u128, u64);
@@ -24,7 +24,7 @@ fn main() {
             instruction: (amount, deadline),
         },
         instruction_words,
-    ) = read_nssa_inputs::<Instruction>();
+    ) = read_lee_inputs::<Instruction>();
 
     let Ok([sender_pre, receiver_pre, clock_pre]) = <[_; 3]>::try_from(pre_states) else {
         panic!("Expected exactly 3 input accounts: sender, receiver, clock");

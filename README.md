@@ -80,7 +80,7 @@ For each tag we publish docker images of our services.
 If you depend on this project you can pin your rust dependency to a git tag like this:
 
 ```toml
-nssa_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.1.0" }
+lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git", tag = "v0.1.0" }
 ```
 
 # Install dependencies
@@ -134,7 +134,7 @@ RISC0_DEV_MODE=1 cargo test --release
 ### Integration tests
 
 ```bash
-export NSSA_WALLET_HOME_DIR=$(pwd)/integration_tests/configs/debug/wallet/
+export LEE_WALLET_HOME_DIR=$(pwd)/integration_tests/configs/debug/wallet/
 cd integration_tests
 # RISC0_DEV_MODE=1 skips proof generation; RUST_LOG=info enables runtime logs
 RUST_LOG=info RISC0_DEV_MODE=1 cargo run $(pwd)/configs/debug all
@@ -152,17 +152,17 @@ The sequencer and logos blockchain node can be run locally:
     - `cargo build --all-features`
     - `./target/debug/logos-blockchain-node --deployment nodes/node/standalone-deployment-config.yaml nodes/node/standalone-node-config.yaml`
 
- - Alternatively (WARNING: This node is outdated) go to `logos-blockchain/lssa/` repo and run the node from docker:
+ - Alternatively (WARNING: This node is outdated) go to `logos-blockchain/logos-execution-zone/` repo and run the node from docker:
     - `cd bedrock`
     - Change line 14 of `docker-compose.yml` from `"0:18080/tcp"` into `"8080:18080/tcp"`
     - `docker compose up`
 
- 2. On another terminal go to the `logos-blockchain/lssa` repo and run indexer service:
-      - `RUST_LOG=info cargo run -p indexer_service indexer/service/configs/indexer_config.json`
+ 2. On another terminal go to the `logos-blockchain/logos-execution-zone` repo and run indexer service:
+      - `RUST_LOG=info cargo run -p indexer_service lez/indexer/service/configs/indexer_config.json`
 
- 3. On another terminal go to the `logos-blockchain/lssa` repo and run the sequencer:
-      - `RUST_LOG=info cargo run -p sequencer_service sequencer/service/configs/debug/sequencer_config.json`
- 4. (To run the explorer): on another terminal go to `logos-blockchain/lssa/explorer_service` and run the following:
+ 3. On another terminal go to the `logos-blockchain/logos-execution-zone` repo and run the sequencer:
+      - `RUST_LOG=info cargo run -p sequencer_service lez/sequencer/service/configs/debug/sequencer_config.json`
+ 4. (To run the explorer): on another terminal go to `logos-blockchain/logos-execution-zone/lez/explorer_service` and run the following:
       - `cargo install cargo-leptos`
       - `cargo leptos build --release`
       - `cargo leptos serve --release`
@@ -171,9 +171,9 @@ The sequencer and logos blockchain node can be run locally:
 
 After stopping services above you need to remove 3 folders to start cleanly:
  1. In the `logos-blockchain/logos-blockchain` folder `state` (not needed in case of docker setup)
- 2. In the `lssa` folder `sequencer/service/rocksdb`
- 3. In the `lssa` file `sequencer/service/bedrock_signing_key`
- 4. In the `lssa` folder `indexer/service/rocksdb`
+ 2. In the `logos-execution-zone` folder `lez/sequencer/service/rocksdb`
+ 3. In the `logos-execution-zone` file `lez/sequencer/service/bedrock_signing_key`
+ 4. In the `logos-execution-zone` folder `lez/indexer/service/rocksdb`
 
 ### Normal mode (`just` commands)
 We provide a `Justfile` for developer and user needs, you can run the whole setup with it. The only difference will be that logos-blockchain (bedrock) will be started from docker.
@@ -220,7 +220,7 @@ This will use a wallet binary built from this repo and not the one installed in 
 ### Standalone mode
 The sequencer can be run in standalone mode with:
 ```bash
-RUST_LOG=info cargo run --features standalone -p sequencer_service sequencer/service/configs/debug
+RUST_LOG=info cargo run --features standalone -p sequencer_service lez/sequencer/service/configs/debug
 ```
 
 ## Running with Docker
@@ -231,7 +231,7 @@ You can run the whole setup with Docker:
 docker compose up
 ```
 
-With that you can send transactions from local wallet to the Sequencer running inside Docker using `wallet/configs/debug` as well as exploring blocks by opening `http://localhost:8080`.
+With that you can send transactions from local wallet to the Sequencer running inside Docker using `lez/wallet/configs/debug` as well as exploring blocks by opening `http://localhost:8080`.
 
 ## Caution for local image builds
 

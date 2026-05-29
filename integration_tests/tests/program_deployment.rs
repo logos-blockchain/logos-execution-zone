@@ -6,12 +6,12 @@
 use std::{path::PathBuf, time::Duration};
 
 use anyhow::Result;
-use common::transaction::NSSATransaction;
+use common::transaction::LeeTransaction;
 use integration_tests::{
-    NSSA_PROGRAM_FOR_TEST_DATA_CHANGER, TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext,
+    LEE_PROGRAM_FOR_TEST_DATA_CHANGER, TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext,
 };
+use lee::program::Program;
 use log::info;
-use nssa::program::Program;
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 use wallet::cli::{
@@ -26,7 +26,7 @@ async fn deploy_and_execute_program() -> Result<()> {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let binary_filepath: PathBuf = PathBuf::from(manifest_dir)
         .join("../artifacts/test_program_methods")
-        .join(NSSA_PROGRAM_FOR_TEST_DATA_CHANGER);
+        .join(LEE_PROGRAM_FOR_TEST_DATA_CHANGER);
 
     let command = Command::DeployProgram {
         binary_filepath: binary_filepath.clone(),
@@ -39,7 +39,7 @@ async fn deploy_and_execute_program() -> Result<()> {
 
     // The program is the data changer and takes one account as input.
     // We pass an uninitialized account and we expect after execution to be owned by the data
-    // changer program (NSSA account claiming mechanism) with data equal to [0] (due to program
+    // changer program (LEE account claiming mechanism) with data equal to [0] (due to program
     // logic)
     let bytecode = std::fs::read(binary_filepath)?;
     let data_changer = Program::new(bytecode)?;
@@ -61,17 +61,17 @@ async fn deploy_and_execute_program() -> Result<()> {
         .wallet()
         .get_account_public_signing_key(account_id)
         .unwrap();
-    let message = nssa::public_transaction::Message::try_new(
+    let message = lee::public_transaction::Message::try_new(
         data_changer.id(),
         vec![account_id],
         nonces,
         vec![0],
     )?;
-    let witness_set = nssa::public_transaction::WitnessSet::for_message(&message, &[private_key]);
-    let transaction = nssa::PublicTransaction::new(message, witness_set);
+    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[private_key]);
+    let transaction = lee::PublicTransaction::new(message, witness_set);
     let _response = ctx
         .sequencer_client()
-        .send_transaction(NSSATransaction::Public(transaction))
+        .send_transaction(LeeTransaction::Public(transaction))
         .await?;
 
     info!("Waiting for next block creation");

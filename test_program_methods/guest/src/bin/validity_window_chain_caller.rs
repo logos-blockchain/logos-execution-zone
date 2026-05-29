@@ -1,6 +1,6 @@
-use nssa_core::program::{
+use lee_core::program::{
     AccountPostState, BlockValidityWindow, ChainedCall, ProgramId, ProgramInput, ProgramOutput,
-    TimestampValidityWindow, read_nssa_inputs,
+    TimestampValidityWindow, read_lee_inputs,
 };
 use risc0_zkvm::serde::to_vec;
 
@@ -22,7 +22,7 @@ fn main() {
             instruction: (block_validity_window, chained_program_id, chained_block_validity_window),
         },
         instruction_words,
-    ) = read_nssa_inputs::<Instruction>();
+    ) = read_lee_inputs::<Instruction>();
 
     let [pre] = <[_; 1]>::try_from(pre_states.clone()).expect("Expected exactly one pre state");
     let post = pre.account.clone();

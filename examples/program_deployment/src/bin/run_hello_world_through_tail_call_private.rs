@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use nssa::{
+use lee::{
     AccountId, ProgramId, privacy_preserving_transaction::circuit::ProgramWithDependencies,
     program::Program,
 };
@@ -10,7 +10,7 @@ use wallet::{AccountIdentity, WalletCore};
 //
 //   cargo risczero build --manifest-path examples/program_deployment/methods/guest/Cargo.toml
 //
-// Note: you must run the above command from the root of the `lssa` repository.
+// Note: you must run the above command from the root of the `logos-execution-zone` repository.
 // Note: The compiled binary file is stored in
 // methods/guest/target/riscv32im-risc0-zkvm-elf/docker/simple_tail_call.bin
 //

@@ -11,7 +11,7 @@ workspace = true
 [dependencies]
 common.workspace = true
 indexer_service_rpc = { workspace = true, features = ["client"] }
-nssa.workspace = true
+lee.workspace = true
 sequencer_service_rpc = { workspace = true, features = ["client"] }
 test_fixtures.workspace = true
 wallet.workspace = true

@@ -2,8 +2,8 @@ on:
   pull_request:
     paths:
       - "tools/crypto_primitives_bench/**"
-      - "key_protocol/**"
-      - "nssa/core/**"
+      - "lez/key_protocol/**"
+      - "lee/core/**"
       - ".github/workflows/bench-regression.yml"
 
 permissions:

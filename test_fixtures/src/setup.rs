@@ -1,10 +1,10 @@
 use std::{collections::HashMap, net::SocketAddr, path::PathBuf};
 
 use anyhow::{Context as _, Result, bail};
-use common::transaction::NSSATransaction;
+use common::transaction::LeeTransaction;
 use indexer_service::IndexerHandle;
+use lee::{AccountId, PrivateKey, PublicKey, PublicTransaction, program::Program};
 use log::{debug, warn};
-use nssa::{AccountId, PrivateKey, PublicKey, PublicTransaction, program::Program};
 use sequencer_service::{GenesisAction, SequencerHandle};
 use sequencer_service_rpc::RpcClient as _;
 use tempfile::TempDir;
@@ -173,7 +173,7 @@ pub fn setup_wallet(
                 private_account.key_chain.clone(),
                 None,
                 private_account.identifier,
-                nssa::Account::default(),
+                lee::Account::default(),
             );
     }
 
@@ -237,7 +237,7 @@ async fn claim_funds_from_vault(
         .pub_account_signing_key(owner_id)
         .with_context(|| format!("Missing signing key for public account {owner_id}"))?;
 
-    let message = nssa::public_transaction::Message::try_new(
+    let message = lee::public_transaction::Message::try_new(
         vault_program_id,
         vec![owner_id, owner_vault_id],
         nonces,
@@ -245,12 +245,12 @@ async fn claim_funds_from_vault(
     )
     .context("Failed to build vault claim message")?;
 
-    let witness_set = nssa::public_transaction::WitnessSet::for_message(&message, &[signing_key]);
+    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[signing_key]);
     let tx = PublicTransaction::new(message, witness_set);
 
     let tx_hash = wallet
         .sequencer_client
-        .send_transaction(NSSATransaction::Public(tx))
+        .send_transaction(LeeTransaction::Public(tx))
         .await
         .context("Failed to submit vault claim transaction")?;
 
@@ -280,7 +280,7 @@ async fn claim_funds_from_vault_to_private(
             .context("Failed to serialize vault private claim instruction")?;
 
     let program_with_dependencies =
-        nssa::privacy_preserving_transaction::circuit::ProgramWithDependencies::new(
+        lee::privacy_preserving_transaction::circuit::ProgramWithDependencies::new(
             vault_program,
             HashMap::from([(
                 Program::authenticated_transfer_program().id(),
@@ -309,7 +309,7 @@ async fn claim_funds_from_vault_to_private(
         .await
         .context("Failed to confirm private vault claim transaction")?;
 
-    let NSSATransaction::PrivacyPreserving(tx) = transfer_tx else {
+    let LeeTransaction::PrivacyPreserving(tx) = transfer_tx else {
         bail!("Expected privacy preserving transaction result for private vault claim");
     };
 

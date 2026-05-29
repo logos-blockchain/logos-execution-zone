@@ -118,7 +118,7 @@ async fn new_public_account(
     ctx: &mut TestContext,
     output: &mut ScenarioOutput,
     label: &str,
-) -> Result<nssa::AccountId> {
+) -> Result<lee::AccountId> {
     let ret = output
         .step(ctx, label, async |ctx| {
             wallet::cli::execute_subcommand(
@@ -141,8 +141,8 @@ async fn timed_token_new(
     ctx: &mut TestContext,
     output: &mut ScenarioOutput,
     label: &str,
-    def_id: nssa::AccountId,
-    supply_id: nssa::AccountId,
+    def_id: lee::AccountId,
+    supply_id: lee::AccountId,
     name: &str,
 ) -> Result<()> {
     let name = name.to_owned();
@@ -167,8 +167,8 @@ async fn timed_token_send(
     ctx: &mut TestContext,
     output: &mut ScenarioOutput,
     label: &str,
-    from_id: nssa::AccountId,
-    to_id: nssa::AccountId,
+    from_id: lee::AccountId,
+    to_id: lee::AccountId,
     amount: u128,
 ) -> Result<()> {
     output
@@ -180,6 +180,7 @@ async fn timed_token_send(
                     to: Some(public_mention(to_id)),
                     to_npk: None,
                     to_vpk: None,
+                    to_keys: None,
                     to_identifier: Some(0),
                     amount,
                 }),

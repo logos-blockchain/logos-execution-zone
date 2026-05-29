@@ -132,6 +132,7 @@ async fn amm_public() -> Result<()> {
         to: Some(public_mention(recipient_account_id_1)),
         to_npk: None,
         to_vpk: None,
+        to_keys: None,
         to_identifier: Some(0),
         amount: 7,
     };
@@ -158,6 +159,7 @@ async fn amm_public() -> Result<()> {
         to: Some(public_mention(recipient_account_id_2)),
         to_npk: None,
         to_vpk: None,
+        to_keys: None,
         to_identifier: Some(0),
         amount: 7,
     };
@@ -530,6 +532,7 @@ async fn amm_new_pool_using_labels() -> Result<()> {
         to: Some(public_mention(holding_a_id)),
         to_npk: None,
         to_vpk: None,
+        to_keys: None,
         to_identifier: Some(0),
         amount: 5,
     };
@@ -551,6 +554,7 @@ async fn amm_new_pool_using_labels() -> Result<()> {
         to: Some(public_mention(holding_b_id)),
         to_npk: None,
         to_vpk: None,
+        to_keys: None,
         to_identifier: Some(0),
         amount: 5,
     };

@@ -13,21 +13,21 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result};
 use bytesize::ByteSize;
-use common::transaction::NSSATransaction;
+use common::transaction::LeeTransaction;
 use integration_tests::{TestContext, config::SequencerPartialConfig};
 use key_protocol::key_management::ephemeral_key_holder::EphemeralKeyHolder;
-use log::info;
-use nssa::{
+use lee::{
     Account, AccountId, PrivacyPreservingTransaction, PrivateKey, PublicKey, PublicTransaction,
     privacy_preserving_transaction::{self as pptx, circuit},
     program::Program,
     public_transaction as putx,
 };
-use nssa_core::{
+use lee_core::{
     InputAccountIdentity, MembershipProof, NullifierPublicKey,
     account::{AccountWithMetadata, Nonce, data::Data},
     encryption::ViewingPublicKey,
 };
+use log::info;
 use sequencer_core::config::GenesisAction;
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
@@ -90,16 +90,16 @@ impl TpsTestManager {
             )
             .context("Failed to build vault claim message")?;
             let witness_set =
-                nssa::public_transaction::WitnessSet::for_message(&message, &[private_key]);
+                lee::public_transaction::WitnessSet::for_message(&message, &[private_key]);
             let tx = PublicTransaction::new(message, witness_set);
             let hash = sequencer_client
-                .send_transaction(NSSATransaction::Public(tx))
+                .send_transaction(LeeTransaction::Public(tx))
                 .await
                 .context("Failed to submit vault claim")?;
             tx_hashes.push(hash);
         }
 
-        let deadline = Instant::now() + Duration::from_secs(300);
+        let deadline = Instant::now() + Duration::from_mins(5);
         for (i, tx_hash) in tx_hashes.iter().enumerate() {
             loop {
                 anyhow::ensure!(
@@ -140,7 +140,7 @@ impl TpsTestManager {
                 )
                 .unwrap();
                 let witness_set =
-                    nssa::public_transaction::WitnessSet::for_message(&message, &[&pair[0].0]);
+                    lee::public_transaction::WitnessSet::for_message(&message, &[&pair[0].0]);
                 PublicTransaction::new(message, witness_set)
             })
             .collect();
@@ -202,7 +202,7 @@ pub async fn tps_test() -> Result<()> {
     for (i, tx) in txs.into_iter().enumerate() {
         let tx_hash = ctx
             .sequencer_client()
-            .send_transaction(NSSATransaction::Public(tx))
+            .send_transaction(LeeTransaction::Public(tx))
             .await
             .unwrap();
         info!("Sent tx {i}");
@@ -256,8 +256,7 @@ pub async fn tps_test() -> Result<()> {
 fn build_privacy_transaction() -> PrivacyPreservingTransaction {
     let program = Program::authenticated_transfer_program();
     let sender_nsk = [1; 32];
-    let sender_vsk = [99; 32];
-    let sender_vpk = ViewingPublicKey::from_scalar(sender_vsk);
+    let sender_vpk = ViewingPublicKey::from_seed(&[99_u8; 32], &[100_u8; 32]);
     let sender_npk = NullifierPublicKey::from(&sender_nsk);
     let sender_pre = AccountWithMetadata::new(
         Account {
@@ -270,8 +269,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
         AccountId::for_regular_private_account(&sender_npk, 0),
     );
     let recipient_nsk = [2; 32];
-    let recipient_vsk = [99; 32];
-    let recipient_vpk = ViewingPublicKey::from_scalar(recipient_vsk);
+    let recipient_vpk = ViewingPublicKey::from_seed(&[101_u8; 32], &[102_u8; 32]);
     let recipient_npk = NullifierPublicKey::from(&recipient_nsk);
     let recipient_pre = AccountWithMetadata::new(
         Account::default(),
@@ -279,13 +277,13 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
         AccountId::for_regular_private_account(&recipient_npk, 0),
     );
 
-    let eph_holder_from = EphemeralKeyHolder::new(&sender_npk);
-    let sender_ss = eph_holder_from.calculate_shared_secret_sender(&sender_vpk);
-    let sender_epk = eph_holder_from.generate_ephemeral_public_key();
+    let eph_holder_from = EphemeralKeyHolder::new(&sender_vpk);
+    let sender_ss = eph_holder_from.calculate_shared_secret_sender();
+    let sender_epk = eph_holder_from.ephemeral_public_key().clone();
 
-    let eph_holder_to = EphemeralKeyHolder::new(&recipient_npk);
-    let recipient_ss = eph_holder_to.calculate_shared_secret_sender(&recipient_vpk);
-    let recipient_epk = eph_holder_from.generate_ephemeral_public_key();
+    let eph_holder_to = EphemeralKeyHolder::new(&recipient_vpk);
+    let recipient_ss = eph_holder_to.calculate_shared_secret_sender();
+    let recipient_epk = eph_holder_to.ephemeral_public_key().clone();
 
     let balance_to_move: u128 = 1;
     let proof: MembershipProof = (

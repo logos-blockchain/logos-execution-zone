@@ -1,6 +1,6 @@
-use nssa_core::{
+use lee_core::{
     account::{AccountWithMetadata, Data},
-    program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_nssa_inputs},
+    program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_lee_inputs},
 };
 
 // Hello-world with write + move_data example program.
@@ -72,7 +72,7 @@ fn main() {
             instruction: (function_id, data),
         },
         instruction_words,
-    ) = read_nssa_inputs::<Instruction>();
+    ) = read_lee_inputs::<Instruction>();
 
     let post_states = match (pre_states.as_slice(), function_id, data.len()) {
         ([account_pre], WRITE_FUNCTION_ID, _) => {

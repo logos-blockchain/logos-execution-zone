@@ -8,7 +8,7 @@
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, bail};
-use common::transaction::NSSATransaction;
+use common::transaction::LeeTransaction;
 use sequencer_service_rpc::RpcClient as _;
 use serde::{Serialize, Serializer};
 use test_fixtures::{DiskSizes, TestContext};
@@ -161,9 +161,9 @@ async fn finalize_step(
                 for tx in &block.body.transactions {
                     let n = borsh::to_vec(tx).map_or(0, |v| v.len());
                     match tx {
-                        NSSATransaction::Public(_) => sz.public_tx_bytes.push(n),
-                        NSSATransaction::PrivacyPreserving(_) => sz.ppe_tx_bytes.push(n),
-                        NSSATransaction::ProgramDeployment(_) => sz.deploy_tx_bytes.push(n),
+                        LeeTransaction::Public(_) => sz.public_tx_bytes.push(n),
+                        LeeTransaction::PrivacyPreserving(_) => sz.ppe_tx_bytes.push(n),
+                        LeeTransaction::ProgramDeployment(_) => sz.deploy_tx_bytes.push(n),
                     }
                 }
                 blocks.push(sz);

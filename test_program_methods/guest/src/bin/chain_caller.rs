@@ -1,7 +1,6 @@
 use authenticated_transfer_core::Instruction as AuthTransferInstruction;
-use nssa_core::program::{
-    AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput,
-    read_nssa_inputs,
+use lee_core::program::{
+    AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
 };
 use risc0_zkvm::serde::to_vec;
 
@@ -20,7 +19,7 @@ fn main() {
             instruction: (balance, auth_transfer_id, num_chain_calls, pda_seed),
         },
         instruction_words,
-    ) = read_nssa_inputs::<Instruction>();
+    ) = read_lee_inputs::<Instruction>();
 
     let Ok([recipient_pre, sender_pre]) = <[_; 2]>::try_from(pre_states) else {
         return;

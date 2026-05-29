@@ -9,7 +9,7 @@
 use std::num::NonZero;
 
 use amm_core::Instruction;
-use nssa_core::program::{ProgramInput, ProgramOutput, read_nssa_inputs};
+use lee_core::program::{ProgramInput, ProgramOutput, read_lee_inputs};
 
 fn main() {
     let (
@@ -20,7 +20,7 @@ fn main() {
             instruction,
         },
         instruction_words,
-    ) = read_nssa_inputs::<Instruction>();
+    ) = read_lee_inputs::<Instruction>();
 
     let pre_states_clone = pre_states.clone();
 

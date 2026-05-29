@@ -1,5 +1,5 @@
-use nssa_core::program::{
-    AccountPostState, ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_nssa_inputs,
+use lee_core::program::{
+    AccountPostState, ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
 };
 
 // Tail Call example program.
@@ -33,7 +33,7 @@ fn main() {
             instruction: (),
         },
         instruction_data,
-    ) = read_nssa_inputs::<()>();
+    ) = read_lee_inputs::<()>();
 
     // Unpack the input account pre state
     let [pre_state] = pre_states

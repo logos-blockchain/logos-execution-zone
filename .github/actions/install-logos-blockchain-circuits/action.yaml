@@ -16,4 +16,4 @@ runs:
       env:
         GITHUB_TOKEN: ${{ inputs.github-token }}
       run: |
-        curl -sSL https://raw.githubusercontent.com/logos-blockchain/logos-blockchain/main/scripts/setup-logos-blockchain-circuits.sh | bash
+        curl -sSL https://raw.githubusercontent.com/logos-blockchain/logos-blockchain/6ac348bea4160ca708b70a86b3964e9f1ce82fff/scripts/setup-logos-blockchain-circuits.sh | bash

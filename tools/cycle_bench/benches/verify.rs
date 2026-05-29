@@ -11,7 +11,7 @@ use std::{hint::black_box, time::Duration};
 use anyhow::Context as _;
 use criterion::{Criterion, criterion_group, criterion_main};
 use cycle_bench::ppe::prove_auth_transfer_in_ppe;
-use nssa::program_methods::PRIVACY_PRESERVING_CIRCUIT_ID;
+use lee::program_methods::PRIVACY_PRESERVING_CIRCUIT_ID;
 use risc0_zkvm::{InnerReceipt, Receipt};
 
 fn bench_verify(c: &mut Criterion) {

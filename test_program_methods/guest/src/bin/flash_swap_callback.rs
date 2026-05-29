@@ -24,9 +24,8 @@
 //! called by any program. In production, a callback would typically verify the caller
 //! if it needs to trust the context it is called from.
 
-use nssa_core::program::{
-    AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput,
-    read_nssa_inputs,
+use lee_core::program::{
+    AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
 };
 use serde::{Deserialize, Serialize};
 
@@ -48,7 +47,7 @@ fn main() {
             instruction,
         },
         instruction_words,
-    ) = read_nssa_inputs::<CallbackInstruction>();
+    ) = read_lee_inputs::<CallbackInstruction>();
 
     // pre_states[0] = vault (after transfer out), pre_states[1] = receiver (after transfer out)
     let Ok([vault_pre, receiver_pre]) = <[_; 2]>::try_from(pre_states) else {

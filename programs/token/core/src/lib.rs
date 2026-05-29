@@ -1,7 +1,7 @@
 //! This crate contains core data structures and utilities for the Token Program.
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use nssa_core::account::{AccountId, Data};
+use lee_core::account::{AccountId, Data};
 use serde::{Deserialize, Serialize};
 
 /// Token Program Instruction.

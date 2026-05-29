@@ -5,12 +5,12 @@
 
 use std::{collections::HashMap, time::Instant};
 
-use nssa::{
+use lee::{
     execute_and_prove,
     privacy_preserving_transaction::circuit::{ProgramWithDependencies, Proof},
     program::Program,
 };
-use nssa_core::{
+use lee_core::{
     InputAccountIdentity, PrivacyPreservingCircuitOutput,
     account::{Account, AccountId, AccountWithMetadata},
     program::ProgramId,
@@ -19,8 +19,8 @@ use risc0_zkvm::serde::to_vec;
 
 use super::PpeBenchResult;
 
-const AUTH_TRANSFER_ID: ProgramId = nssa::program_methods::AUTHENTICATED_TRANSFER_ID;
-const AUTH_TRANSFER_ELF: &[u8] = nssa::program_methods::AUTHENTICATED_TRANSFER_ELF;
+const AUTH_TRANSFER_ID: ProgramId = lee::program_methods::AUTHENTICATED_TRANSFER_ID;
+const AUTH_TRANSFER_ELF: &[u8] = lee::program_methods::AUTHENTICATED_TRANSFER_ELF;
 
 /// `chain_caller` bytecode shipped at `artifacts/test_program_methods/chain_caller.bin`.
 /// Loaded at compile time so we don't need a dev-dependency on `test_program_methods`.
@@ -144,7 +144,7 @@ fn prove_chain_caller(
     let pre_states = vec![recipient_pre, sender_pre];
 
     let balance: u128 = 1;
-    let pda_seed: Option<nssa_core::program::PdaSeed> = None;
+    let pda_seed: Option<lee_core::program::PdaSeed> = None;
     let instruction = (balance, AUTH_TRANSFER_ID, num_chain_calls, pda_seed);
     let instruction_data = to_vec(&instruction)?;
 

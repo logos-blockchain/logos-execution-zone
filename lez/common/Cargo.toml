@@ -1,0 +1,25 @@
+[package]
+name = "common"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+lee.workspace = true
+lee_core.workspace = true
+authenticated_transfer_core.workspace = true
+clock_core.workspace = true
+
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_with.workspace = true
+base64.workspace = true
+sha2.workspace = true
+log.workspace = true
+hex.workspace = true
+borsh.workspace = true
+logos-blockchain-common-http-client.workspace = true
