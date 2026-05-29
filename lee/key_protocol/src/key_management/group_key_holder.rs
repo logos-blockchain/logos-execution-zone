@@ -32,7 +32,7 @@ impl SealingPublicKey {
 }
 
 /// Secret key used to unseal a `GroupKeyHolder` received from another member.
-/// Holds the two 32-byte FIPS 203 seed halves `d` and `r`.
+/// Holds the two 32-byte FIPS 203 seed halves `d` and `z`.
 pub type SealingSecretKey = ViewingSecretKey;
 
 /// Manages shared viewing keys for a group of controllers owning private PDAs.
@@ -198,7 +198,8 @@ impl GroupKeyHolder {
         let nonce = aes_gcm::Nonce::from_slice(&sealed[KEM_CT_LEN..HEADER_LEN]);
         let ciphertext = &sealed[HEADER_LEN..];
 
-        let shared = SharedSecretKey::decapsulate(&kem_ct, &own_key.d, &own_key.r);
+        let shared = SharedSecretKey::decapsulate(&kem_ct, &own_key.d, &own_key.z)
+            .expect("key_protocol::group_key_holder::GroupKeyHolder::unseal: KEM_CT_LEN guarantees exactly 1088 bytes");
         let aes_key = Self::seal_kdf(&shared);
         let cipher = Aes256Gcm::new(&aes_key.into());
 
@@ -478,7 +479,7 @@ mod tests {
     fn unseal_too_short_fails() {
         let vsk = SealingSecretKey {
             d: [7_u8; 32],
-            r: [0_u8; 32],
+            z: [0_u8; 32],
         };
         let result = GroupKeyHolder::unseal(&[0_u8; 10], &vsk);
         assert!(matches!(result, Err(super::SealError::TooShort)));

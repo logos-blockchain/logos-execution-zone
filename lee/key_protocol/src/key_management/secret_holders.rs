@@ -20,12 +20,12 @@ pub struct SeedHolder {
 /// Secret spending key object. Can produce `PrivateKeyHolder` objects.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct SecretSpendingKey(pub [u8; 32]);
-/// Viewing secret key: the KEM seed split into its two 32-byte halves `d` and `r` (= z in
-/// FIPS 203), from which the ML-KEM 768 decapsulation key is derived deterministically.
+/// Viewing secret key: the FIPS 203 KEM seed split into its two 32-byte halves `d` and `z`,
+/// from which the ML-KEM-768 decapsulation key is derived deterministically.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ViewingSecretKey {
     pub d: [u8; 32],
-    pub r: [u8; 32],
+    pub z: [u8; 32],
 }
 
 /// Private key holder. Produces public keys. Can produce `account_id`. Can produce shared secret
@@ -146,7 +146,7 @@ impl SecretSpendingKey {
             d: *full_seed
                 .first_chunk::<32>()
                 .expect("hash_value is 64 bytes, must be safe to get first 32"),
-            r: *full_seed
+            z: *full_seed
                 .last_chunk::<32>()
                 .expect("hash_value is 64 bytes, must be safe to get last 32"),
         }
@@ -156,7 +156,7 @@ impl SecretSpendingKey {
     pub const fn generate_viewing_secret_key(seed: [u8; 64]) -> ViewingSecretKey {
         ViewingSecretKey {
             d: *seed.first_chunk::<32>().expect("seed is 64 bytes"),
-            r: *seed.last_chunk::<32>().expect("seed is 64 bytes"),
+            z: *seed.last_chunk::<32>().expect("seed is 64 bytes"),
         }
     }
 
@@ -174,7 +174,7 @@ impl From<&ViewingSecretKey> for ViewingPublicKey {
         use ml_kem::{Kem, KeyExport as _, MlKem768, Seed};
         let mut seed_bytes = [0_u8; 64];
         seed_bytes[..32].copy_from_slice(&sk.d);
-        seed_bytes[32..].copy_from_slice(&sk.r);
+        seed_bytes[32..].copy_from_slice(&sk.z);
         let dk = <MlKem768 as Kem>::DecapsulationKey::from_seed(Seed::from(seed_bytes));
         Self(dk.encapsulation_key().to_bytes().to_vec())
     }

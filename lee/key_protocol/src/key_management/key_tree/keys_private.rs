@@ -66,7 +66,7 @@ impl ChildKeysPrivate {
         parent_hash.update([9_u8]);
         parent_hash.update(self.value.0.private_key_holder.nullifier_secret_key);
         parent_hash.update(self.value.0.private_key_holder.viewing_secret_key.d);
-        parent_hash.update(self.value.0.private_key_holder.viewing_secret_key.r);
+        parent_hash.update(self.value.0.private_key_holder.viewing_secret_key.z);
         let parent_pt = parent_hash.finalize();
 
         let mut input = vec![];
@@ -172,7 +172,7 @@ mod tests {
                 187, 143, 146, 12, 68, 148, 25, 203, 21, 92, 131, 2, 221, 81, 117, 62, 98, 194,
                 159, 177, 102, 254, 236, 182, 76, 242, 116, 219, 17, 166, 99, 36,
             ],
-            r: [
+            z: [
                 80, 97, 83, 209, 145, 99, 168, 99, 89, 29, 153, 236, 82, 99, 134, 114, 168, 19,
                 223, 69, 34, 47, 76, 76, 15, 97, 245, 184, 25, 103, 251, 82,
             ],
@@ -286,7 +286,7 @@ mod tests {
                 81, 154, 68, 152, 72, 163, 82, 17, 125, 156, 193, 135, 129, 93, 227, 55, 224, 104,
                 119, 232, 13, 101, 241, 20, 175, 72, 192, 186, 176, 246, 140, 211,
             ],
-            r: [
+            z: [
                 31, 40, 109, 41, 185, 61, 173, 79, 102, 171, 158, 245, 232, 71, 57, 157, 142, 117,
                 184, 235, 216, 71, 55, 44, 33, 156, 167, 133, 184, 92, 47, 174,
             ],

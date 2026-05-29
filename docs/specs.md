@@ -1,6 +1,6 @@
-# LEZ v0.3 specifications for Key Agreement
+# LEE v0.3 specifications for Key Agreement
 
-## LEZ v0.3 basic types and constants
+## LEE v0.3 basic types and constants
 
 ```rust
 /// The ML-KEM-768 KEM ciphertext produced during encapsulation (1088 bytes) of a message.
@@ -24,9 +24,9 @@ struct EncryptedAccountData {
 When creating a private account output, the sender uses the recipient's viewing public key to encapsulate a random message that is used to establish a shared secret between the sender and recipient:
 
 - Sender: $(\mathsf{ss},\, \mathsf{epk}) = \mathsf{encapsulate}(\mathsf{vpk\_recipient})$. The 1088-byte ciphertext `epk` is included in the transaction as the `EphemeralPublicKey` field.
-- Receiver: $\mathsf{ss} = \mathsf{decapsulate}(\mathsf{epk},\, vsk.d,\, vks.r)$
+- Receiver: $\mathsf{ss} = \mathsf{decapsulate}(\mathsf{epk},\, vsk.d,\, vsk.z)$
 
-where `vpk` is the receiver's `ViewingPublicKey` and `(vsk.d, vsk.r)` are the two 32-byte halves of the receiver's `ViewingSecretKey`.
+where `vpk` is the receiver's `ViewingPublicKey` and `(vsk.d, vsk.z)` are the two 32-byte halves of the receiver's `ViewingSecretKey`.
 
 #### KDF
 
@@ -86,6 +86,11 @@ pub enum InputAccountIdentity {
         npk: NullifierPublicKey,
         ssk: SharedSecretKey,
         identifier: Identifier,
+        /// When `Some((seed, authority_program_id))`, the circuit binds this position via
+        /// `AccountId::for_private_pda(authority_program_id, seed, npk, identifier) == pre_state.account_id`
+        /// rather than requiring a `Claim::Pda` or caller `pda_seeds`. The `pre_state` must
+        /// have `is_authorized == false`.
+        seed: Option<(PdaSeed, ProgramId)>,
     },
 
     /// Update of an existing private PDA. npk is derived from nsk.
@@ -95,6 +100,11 @@ pub enum InputAccountIdentity {
         nsk: NullifierSecretKey,
         membership_proof: MembershipProof,
         identifier: Identifier,
+        /// When `Some((seed, authority_program_id))`, the circuit binds this position via
+        /// `AccountId::for_private_pda(authority_program_id, seed, npk, identifier) == pre_state.account_id`
+        /// rather than requiring a caller `pda_seeds`. The `pre_state` must have
+        /// `is_authorized == false`.
+        seed: Option<(PdaSeed, ProgramId)>,
     },
 }
 ```
@@ -102,9 +112,9 @@ pub enum InputAccountIdentity {
 The `ssk` field carries the **shared secret key** — the 32-byte shared secret used to encrypt the post-state. Note that the key protocol uses `ssk` for "spending secret key" (the master key that derives `nsk` and `vsk`); here `ssk` means the per-output KEM shared secret. It is established via ML-KEM-768:
 
 - Sender: `(ssk, epk) = encapsulate(vpk)`
-- Receiver: `ssk = decapsulate(epk, vsk.d, vsk.r)`
+- Receiver: `ssk = decapsulate(epk, vsk.d, vsk.z)`
 
-where `epk` is the ML-KEM-768 ciphertext (1088 bytes) stored as the `EphemeralPublicKey`, `vpk` is the recipient's `ViewingPublicKey` (1184 bytes), and `(vsk.d, vsk.r)` are the 32-byte seed halves of the recipient's `ViewingSecretKey`.
+where `epk` is the ML-KEM-768 ciphertext (1088 bytes) stored as the `EphemeralPublicKey`, `vpk` is the recipient's `ViewingPublicKey` (1184 bytes), and `(vsk.d, vsk.z)` are the 32-byte seed halves of the recipient's `ViewingSecretKey`.
 
 ## Encrypted private account discovery and tagging
 
@@ -114,12 +124,12 @@ Each private account output includes a 1-byte view tag to allow wallets to quick
 
 $$\mathsf{ViewTag} = \mathsf{SHA256}(\text{"/LEE/v0.3/ViewTag/"} \;||\; \mathsf{Npk} \;||\; \mathsf{Vpk})[0]$$
 
-where `Npk` is the 32-byte nullifier public key and `Vpk` is the 1184 byte `ViewingPublicKey` of the recipient. On average only 1 in 256 outputs will pass this filter for a given account, avoiding expensive ECDH on irrelevant outputs.
+where `Npk` is the 32-byte nullifier public key and `Vpk` is the 1184 byte `ViewingPublicKey` of the recipient. On average only 1 in 256 outputs will pass this filter for a given account, avoiding expensive ML-KEM decapsulation on irrelevant outputs.
 
 ### Private account discovery with viewing keys
 
 1. For each encrypted output, compute the expected view tag from `(Npk, Vpk)`. Skip if it does not match.
-2. Decapsulate using ML-KEM-768: `ss = decapsulate(epk, vsk.d, vsk.r)`.
+2. Decapsulate using ML-KEM-768: `ss = decapsulate(epk, vsk.d, vsk.z)`.
 3. Run `kdf(ss, commitment, output_index)` to derive the symmetric key.
 4. Decrypt the ciphertext with ChaCha20.
 5. Parse the 81-byte header to recover `PrivateAccountKind`.
@@ -144,7 +154,7 @@ fn private_account_discovery(
         if encrypted_account.view_tag != expected_tag {
             continue;
         }
-        let ss = SharedSecretKey::decapsulate(&encrypted_account.epk, &vsk.d, &vsk.r);
+        let ss = SharedSecretKey::decapsulate(&encrypted_account.epk, &vsk.d, &vsk.z);
         if let Some((kind, account)) = EncryptionScheme::decrypt(
             &encrypted_account.ciphertext, &ss, commitment, output_index as u32
         ) {

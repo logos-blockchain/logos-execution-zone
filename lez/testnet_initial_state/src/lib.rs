@@ -43,7 +43,7 @@ const VSK_D_PRIV_ACC_A: [u8; 32] = [
     187, 41, 163, 19, 231, 232, 122, 225, 55, 134, 184,
 ];
 
-const VSK_R_PRIV_ACC_A: [u8; 32] = [
+const VSK_Z_PRIV_ACC_A: [u8; 32] = [
     225, 24, 98, 78, 31, 203, 175, 248, 213, 17, 133, 207, 10, 135, 132, 151, 59, 184, 5, 81, 28,
     238, 137, 62, 233, 227, 99, 17, 236, 159, 244, 63,
 ];
@@ -53,7 +53,7 @@ const VSK_D_PRIV_ACC_B: [u8; 32] = [
     12, 178, 229, 236, 255, 120, 146, 211, 169, 117, 153, 180,
 ];
 
-const VSK_R_PRIV_ACC_B: [u8; 32] = [
+const VSK_Z_PRIV_ACC_B: [u8; 32] = [
     165, 80, 169, 87, 248, 88, 167, 154, 27, 67, 131, 122, 50, 130, 111, 40, 164, 180, 204, 75,
     188, 140, 110, 132, 113, 133, 222, 8, 49, 123, 187, 18,
 ];
@@ -138,11 +138,11 @@ pub fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialD
             nullifier_secret_key: NSK_PRIV_ACC_A,
             viewing_secret_key: ViewingSecretKey {
                 d: VSK_D_PRIV_ACC_A,
-                r: VSK_R_PRIV_ACC_A,
+                z: VSK_Z_PRIV_ACC_A,
             },
         },
         nullifier_public_key: NullifierPublicKey(NPK_PRIV_ACC_A),
-        viewing_public_key: ViewingPublicKey::from_seed(&VSK_D_PRIV_ACC_A, &VSK_R_PRIV_ACC_A),
+        viewing_public_key: ViewingPublicKey::from_seed(&VSK_D_PRIV_ACC_A, &VSK_Z_PRIV_ACC_A),
     };
 
     let key_chain_2 = KeyChain {
@@ -151,11 +151,11 @@ pub fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialD
             nullifier_secret_key: NSK_PRIV_ACC_B,
             viewing_secret_key: ViewingSecretKey {
                 d: VSK_D_PRIV_ACC_B,
-                r: VSK_R_PRIV_ACC_B,
+                z: VSK_Z_PRIV_ACC_B,
             },
         },
         nullifier_public_key: NullifierPublicKey(NPK_PRIV_ACC_B),
-        viewing_public_key: ViewingPublicKey::from_seed(&VSK_D_PRIV_ACC_B, &VSK_R_PRIV_ACC_B),
+        viewing_public_key: ViewingPublicKey::from_seed(&VSK_D_PRIV_ACC_B, &VSK_Z_PRIV_ACC_B),
     };
 
     vec![

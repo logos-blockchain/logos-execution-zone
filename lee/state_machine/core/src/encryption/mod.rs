@@ -161,11 +161,11 @@ mod tests {
     #[test]
     fn kem_to_chacha20_round_trip() {
         let d = [1_u8; 32];
-        let r = [2_u8; 32];
-        let vpk = shared_key_derivation::ViewingPublicKey::from_seed(&d, &r);
+        let z = [2_u8; 32];
+        let vpk = shared_key_derivation::ViewingPublicKey::from_seed(&d, &z);
 
         let (sender_ss, epk) = SharedSecretKey::encapsulate(&vpk);
-        let receiver_ss = SharedSecretKey::decapsulate(&epk, &d, &r);
+        let receiver_ss = SharedSecretKey::decapsulate(&epk, &d, &z).unwrap();
 
         let account = Account {
             program_owner: [12_u32; 8],

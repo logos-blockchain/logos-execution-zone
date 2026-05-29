@@ -537,7 +537,7 @@ pub mod tests {
     pub struct TestPrivateKeys {
         pub nsk: NullifierSecretKey,
         pub d: [u8; 32],
-        pub r: [u8; 32],
+        pub z: [u8; 32],
     }
 
     impl TestPrivateKeys {
@@ -546,7 +546,7 @@ pub mod tests {
         }
 
         pub fn vpk(&self) -> ViewingPublicKey {
-            ViewingPublicKey::from_seed(&self.d, &self.r)
+            ViewingPublicKey::from_seed(&self.d, &self.z)
         }
     }
 
@@ -1335,7 +1335,7 @@ pub mod tests {
         TestPrivateKeys {
             nsk: [13; 32],
             d: [31; 32],
-            r: [32; 32],
+            z: [32; 32],
         }
     }
 
@@ -1343,7 +1343,7 @@ pub mod tests {
         TestPrivateKeys {
             nsk: [38; 32],
             d: [83; 32],
-            r: [84; 32],
+            z: [84; 32],
         }
     }
 

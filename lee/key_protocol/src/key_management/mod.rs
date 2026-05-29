@@ -69,10 +69,9 @@ impl KeyChain {
     pub fn calculate_shared_secret_receiver(
         &self,
         ephemeral_public_key_sender: &EphemeralPublicKey,
-        _index: Option<u32>,
-    ) -> SharedSecretKey {
+    ) -> Option<SharedSecretKey> {
         let vsk = &self.private_key_holder.viewing_secret_key;
-        SharedSecretKey::decapsulate(ephemeral_public_key_sender, &vsk.d, &vsk.r)
+        SharedSecretKey::decapsulate(ephemeral_public_key_sender, &vsk.d, &vsk.z)
     }
 }
 
@@ -104,7 +103,7 @@ mod tests {
         // Create a proper KEM ciphertext by encapsulating toward this key chain's VPK.
         let (_, epk) = SharedSecretKey::encapsulate(&account_id_key_holder.viewing_public_key);
 
-        let _shared_secret = account_id_key_holder.calculate_shared_secret_receiver(&epk, None);
+        let _shared_secret = account_id_key_holder.calculate_shared_secret_receiver(&epk);
     }
 
     #[test]
@@ -177,8 +176,8 @@ mod tests {
 
         let key_sender = eph_key_holder.calculate_shared_secret_sender();
         let key_receiver =
-            keys.calculate_shared_secret_receiver(eph_key_holder.ephemeral_public_key(), Some(2));
+            keys.calculate_shared_secret_receiver(eph_key_holder.ephemeral_public_key());
 
-        assert_eq!(key_sender.0, key_receiver.0);
+        assert_eq!(key_sender.0, key_receiver.unwrap().0);
     }
 }

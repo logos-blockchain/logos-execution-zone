@@ -30,14 +30,14 @@ impl ViewingPublicKey {
         &self.0
     }
 
-    /// Derive the ML-KEM-768 encapsulation key from the FIPS 203 seed halves `d` and `r`.
+    /// Derive the ML-KEM-768 encapsulation key from the FIPS 203 seed halves `d` and `z`.
     /// Allows any crate to construct a VPK from raw seed bytes without importing
     /// `key_protocol::ViewingSecretKey`.
     #[must_use]
-    pub fn from_seed(d: &[u8; 32], r: &[u8; 32]) -> Self {
+    pub fn from_seed(d: &[u8; 32], z: &[u8; 32]) -> Self {
         let mut seed = Seed::default();
         seed[..32].copy_from_slice(d);
-        seed[32..].copy_from_slice(r);
+        seed[32..].copy_from_slice(z);
         let dk = ml_kem::DecapsulationKey768::from_seed(seed);
         Self(dk.encapsulation_key().to_bytes().to_vec())
     }
@@ -104,21 +104,22 @@ impl SharedSecretKey {
 
     /// Receiver: decapsulate the shared secret from a KEM ciphertext.
     ///
-    /// `d` and `r` are the two 32-byte halves of the FIPS 203 `ViewingSecretKey` seed.
+    /// Returns `None` if the `EphemeralPublicKey` is not exactly 1088 bytes — callers on
+    /// the wallet scan path should skip the output rather than panic on malformed chain data.
+    ///
+    /// `d` and `z` are the two 32-byte halves of the FIPS 203 `ViewingSecretKey` seed.
     #[must_use]
-    pub fn decapsulate(ciphertext: &EphemeralPublicKey, d: &[u8; 32], r: &[u8; 32]) -> Self {
+    pub fn decapsulate(ciphertext: &EphemeralPublicKey, d: &[u8; 32], z: &[u8; 32]) -> Option<Self> {
         let mut seed = Seed::default();
         seed[..32].copy_from_slice(d);
-        seed[32..].copy_from_slice(r);
+        seed[32..].copy_from_slice(z);
         let dk = ml_kem::DecapsulationKey768::from_seed(seed);
-        let ss = dk
-            .decapsulate_slice(&ciphertext.0)
-            .expect("EphemeralPublicKey must be 1088 bytes (ML-KEM-768 ciphertext)");
+        let ss = dk.decapsulate_slice(&ciphertext.0).ok()?;
         let ss_bytes: [u8; 32] = ss
             .as_slice()
             .try_into()
             .expect("ML-KEM shared key is 32 bytes");
-        Self(ss_bytes)
+        Some(Self(ss_bytes))
     }
 }
 
@@ -131,18 +132,18 @@ mod tests {
     #[test]
     fn encapsulate_decapsulate_round_trip() {
         let d = [1_u8; 32];
-        let r = [2_u8; 32];
+        let z = [2_u8; 32];
 
         let mut seed = Seed::default();
         seed[..32].copy_from_slice(&d);
-        seed[32..].copy_from_slice(&r);
+        seed[32..].copy_from_slice(&z);
 
         let dk = ml_kem::DecapsulationKey768::from_seed(seed);
         let ek_bytes = dk.encapsulation_key().to_bytes();
         let vpk = ViewingPublicKey(ek_bytes.to_vec());
 
         let (sender_ss, epk) = SharedSecretKey::encapsulate(&vpk);
-        let receiver_ss = SharedSecretKey::decapsulate(&epk, &d, &r);
+        let receiver_ss = SharedSecretKey::decapsulate(&epk, &d, &z).unwrap();
 
         assert_eq!(sender_ss.0, receiver_ss.0, "shared secrets must match");
         assert_eq!(epk.0.len(), 1088, "ML-KEM-768 ciphertext is 1088 bytes");
@@ -154,21 +155,48 @@ mod tests {
     }
 
     #[test]
+    fn decapsulate_returns_none_for_malformed_epk() {
+        let d = [1_u8; 32];
+        let z = [2_u8; 32];
+
+        // Too short — 100 bytes instead of 1088.
+        let short_epk = EphemeralPublicKey(vec![42_u8; 100]);
+        assert!(
+            SharedSecretKey::decapsulate(&short_epk, &d, &z).is_none(),
+            "short EphemeralPublicKey must return None"
+        );
+
+        // Too long — 1089 bytes instead of 1088.
+        let long_epk = EphemeralPublicKey(vec![42_u8; 1089]);
+        assert!(
+            SharedSecretKey::decapsulate(&long_epk, &d, &z).is_none(),
+            "long EphemeralPublicKey must return None"
+        );
+
+        // Empty.
+        let empty_epk = EphemeralPublicKey(vec![]);
+        assert!(
+            SharedSecretKey::decapsulate(&empty_epk, &d, &z).is_none(),
+            "empty EphemeralPublicKey must return None"
+        );
+    }
+
+    #[test]
     fn different_vpks_produce_different_shared_secrets() {
-        let (d1, r1) = ([1_u8; 32], [2_u8; 32]);
-        let (d2, r2) = ([3_u8; 32], [4_u8; 32]);
+        let (d1, z1) = ([1_u8; 32], [2_u8; 32]);
+        let (d2, z2) = ([3_u8; 32], [4_u8; 32]);
 
         let vpk1 = {
             let mut seed = Seed::default();
             seed[..32].copy_from_slice(&d1);
-            seed[32..].copy_from_slice(&r1);
+            seed[32..].copy_from_slice(&z1);
             let dk = ml_kem::DecapsulationKey768::from_seed(seed);
             ViewingPublicKey(dk.encapsulation_key().to_bytes().to_vec())
         };
         let vpk2 = {
             let mut seed = Seed::default();
             seed[..32].copy_from_slice(&d2);
-            seed[32..].copy_from_slice(&r2);
+            seed[32..].copy_from_slice(&z2);
             let dk = ml_kem::DecapsulationKey768::from_seed(seed);
             ViewingPublicKey(dk.encapsulation_key().to_bytes().to_vec())
         };

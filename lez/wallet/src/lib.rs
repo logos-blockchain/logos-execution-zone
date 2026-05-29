@@ -726,7 +726,7 @@ impl WalletCore {
             .storage
             .key_chain()
             .private_account_key_chains()
-            .flat_map(|(_account_id, key_chain, index)| {
+            .flat_map(|(_account_id, key_chain, _index)| {
                 let view_tag = EncryptedAccountData::compute_view_tag(
                     &key_chain.nullifier_public_key,
                     &key_chain.viewing_public_key,
@@ -741,10 +741,8 @@ impl WalletCore {
                     .filter_map(move |(ciph_id, encrypted_data)| {
                         let ciphertext = &encrypted_data.ciphertext;
                         let commitment = &new_commitments[ciph_id];
-                        let shared_secret = key_chain.calculate_shared_secret_receiver(
-                            &encrypted_data.epk,
-                            index.and_then(ChainIndex::index),
-                        );
+                        let shared_secret = key_chain
+                            .calculate_shared_secret_receiver(&encrypted_data.epk)?;
 
                         lee_core::EncryptionScheme::decrypt(
                             ciphertext,
@@ -826,8 +824,11 @@ impl WalletCore {
                     continue;
                 }
 
-                let shared_secret =
-                    SharedSecretKey::decapsulate(&encrypted_data.epk, &vsk.d, &vsk.r);
+                let Some(shared_secret) =
+                    SharedSecretKey::decapsulate(&encrypted_data.epk, &vsk.d, &vsk.z)
+                else {
+                    continue;
+                };
                 let commitment = &tx.message.new_commitments[ciph_id];
 
                 if let Some((_kind, new_acc)) = lee_core::EncryptionScheme::decrypt(
