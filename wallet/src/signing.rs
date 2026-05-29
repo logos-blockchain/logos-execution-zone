@@ -27,7 +27,7 @@ impl KeycardSessionContext {
 
     pub fn close(self, py: Python<'_>) {
         if let Some(w) = self.wallet {
-            drop(w.close_session(py));
+            let _res = w.close_session(py);
         }
     }
 }

@@ -417,7 +417,7 @@ impl AccountManager {
                 for path in keycard_paths {
                     sigs.push(wallet.sign_message_for_path(py, path, &message_hash)?);
                 }
-                drop(wallet.close_session(py));
+                let _res = wallet.close_session(py);
                 Ok(())
             })
             .map_err(anyhow::Error::from)?;
