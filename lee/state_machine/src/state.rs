@@ -421,7 +421,7 @@ pub mod tests {
         BlockId, Commitment, InputAccountIdentity, Nullifier, NullifierPublicKey,
         NullifierSecretKey, SharedSecretKey, Timestamp,
         account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
-        encryption::ViewingPublicKey,
+        encryption::{EphemeralPublicKey, ViewingPublicKey},
         program::{
             BlockValidityWindow, ExecutionValidationError, PdaSeed, ProgramId,
             TimestampValidityWindow, WrappedBalanceSum,
@@ -4672,7 +4672,7 @@ pub mod tests {
         };
         let commitment_pda_1_after_spend =
             Commitment::new(&alice_pda_1_id, &alice_pda_1_account_after_spend);
-        let alice_shared_1_refund = SharedSecretKey::new([12; 32], &alice_keys.vpk());
+        let alice_shared_1_refund = SharedSecretKey([12; 32]);
         {
             let recipient_account = state.get_account_by_id(recipient_id);
             let recipient_nonce = recipient_account.nonce;
@@ -4708,7 +4708,7 @@ pub mod tests {
                 vec![(
                     alice_npk,
                     alice_keys.vpk(),
-                    EphemeralPublicKey::from_scalar([12; 32]),
+                    EphemeralPublicKey(vec![12_u8; 1088]),
                 )],
                 output,
             )

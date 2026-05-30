@@ -15,14 +15,6 @@ use lee_core::{
     encryption::{EphemeralPublicKey, ViewingPublicKey},
 };
 use log::info;
-<<<<<<< HEAD
-=======
-use nssa::{AccountId, program::Program};
-use nssa_core::{
-    NullifierPublicKey,
-    encryption::{MlKem768EncapsulationKey, ViewingPublicKey},
-};
->>>>>>> f4315d18 (addressed comments)
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 use wallet::{
@@ -672,9 +664,9 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
     let auth_transfer_program_id = Program::authenticated_transfer_program().id();
     let nsk: lee_core::NullifierSecretKey = [3; 32];
     let npk = NullifierPublicKey::from(&nsk);
-    let vpk = MlKem768EncapsulationKey::from_bytes(vec![4_u8; 1184]).unwrap();
+    let _vpk = MlKem768EncapsulationKey::from_bytes(vec![4_u8; 1184]).unwrap();
     let ssk = SharedSecretKey([55_u8; 32]);
-    let epk = EphemeralPublicKey(vec![55_u8; 1088]);
+    let _epk = EphemeralPublicKey(vec![55_u8; 1088]);
     let attacker_vault_id = {
         let seed = vault_core::compute_vault_seed(attacker_id);
         AccountId::for_private_pda(&vault_program_id, &seed, &npk, 1337)
