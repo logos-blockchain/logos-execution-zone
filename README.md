@@ -135,9 +135,8 @@ RISC0_DEV_MODE=1 cargo test --release
 
 ```bash
 export NSSA_WALLET_HOME_DIR=$(pwd)/integration_tests/configs/debug/wallet/
-cd integration_tests
 # RISC0_DEV_MODE=1 skips proof generation; RUST_LOG=info enables runtime logs
-RUST_LOG=info RISC0_DEV_MODE=1 cargo run $(pwd)/configs/debug all
+RUST_LOG=info RISC0_DEV_MODE=1 cargo test -p integration_tests --release -- --nocapture
 ```
 
 # Run the sequencer and node
