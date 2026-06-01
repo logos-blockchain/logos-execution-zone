@@ -303,16 +303,37 @@ pub struct Nullifier(
 );
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub struct ValidityWindow(pub (Option<BlockId>, Option<BlockId>));
+#[serde(transparent)]
+pub struct ValidityWindow<T = BlockId>(pub (Option<T>, Option<T>));
 
-impl Display for ValidityWindow {
+impl<T: Display> Display for ValidityWindow<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.0 {
+        match &self.0 {
             (Some(start), Some(end)) => write!(f, "[{start}, {end})"),
             (Some(start), None) => write!(f, "[{start}, \u{221e})"),
             (None, Some(end)) => write!(f, "(-\u{221e}, {end})"),
             (None, None) => write!(f, "(-\u{221e}, \u{221e})"),
         }
+    }
+}
+
+impl ValidityWindow<BlockId> {
+    /// Convert to a UTC datetime window given a block-to-timestamp mapping.
+    pub fn to_datetime_window<F>(
+        &self,
+        block_to_timestamp_ms: F,
+    ) -> ValidityWindow<chrono::DateTime<chrono::Utc>>
+    where
+        F: Fn(BlockId) -> Option<u64>,
+    {
+        let convert = |id: &BlockId| {
+            block_to_timestamp_ms(*id)
+                .and_then(|ms| chrono::DateTime::from_timestamp_millis(ms as i64))
+        };
+        ValidityWindow((
+            self.0.0.as_ref().and_then(&convert),
+            self.0.1.as_ref().and_then(&convert),
+        ))
     }
 }
 

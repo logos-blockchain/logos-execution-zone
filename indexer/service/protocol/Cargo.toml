@@ -8,6 +8,7 @@ license = { workspace = true }
 workspace = true
 
 [dependencies]
+chrono = { workspace = true }
 nssa_core = { workspace = true, optional = true, features = ["host"] }
 nssa = { workspace = true, optional = true }
 common = { workspace = true, optional = true }
