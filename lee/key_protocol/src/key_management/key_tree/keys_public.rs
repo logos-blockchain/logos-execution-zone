@@ -14,7 +14,7 @@ pub struct ChildKeysPublic {
     pub pk: lee::PublicKey,
     pub cc: [u8; 32],
     /// Can be [`None`] if root.
-    pub ci: Option<u32>,
+    pub cci: Option<u32>,
 }
 
 impl ChildKeysPublic {
@@ -40,13 +40,13 @@ impl ChildKeysPublic {
             ssk,
             pk,
             cc,
-            ci: None,
+            cci: None,
         }
     }
 
     #[must_use]
-    pub fn nth_child(&self, ci: u32) -> Self {
-        let hash_value = self.compute_hash_value(ci);
+    pub fn nth_child(&self, cci: u32) -> Self {
+        let hash_value = self.compute_hash_value(cci);
 
         let lhs = k256::Scalar::from_repr(
             (*hash_value
@@ -55,8 +55,8 @@ impl ChildKeysPublic {
             .into(),
         )
         .expect("Expect a valid k256 scalar");
-        let rhs = k256::Scalar::from_repr((*self.sk.value()).into())
-            .expect("Expect a valid k256 scalar");
+        let rhs =
+            k256::Scalar::from_repr((*self.sk.value()).into()).expect("Expect a valid k256 scalar");
 
         let sk = lee::PrivateKey::try_new(lhs.add(&rhs).to_bytes().into())
             .expect("Expect a valid private key");
@@ -74,7 +74,7 @@ impl ChildKeysPublic {
             ssk,
             pk,
             cc,
-            ci: Some(ci),
+            cci: Some(cci),
         }
     }
 
@@ -83,7 +83,7 @@ impl ChildKeysPublic {
         lee::AccountId::from(&self.pk)
     }
 
-    fn compute_hash_value(&self, ci: u32) -> [u8; 64] {
+    fn compute_hash_value(&self, cci: u32) -> [u8; 64] {
         let mut hash_input = vec![];
         // Simplified key logic by only supporting harden keys.
         // Non-harden keys would require access to untweaked public keys associated to `sk`s.
@@ -92,7 +92,7 @@ impl ChildKeysPublic {
         hash_input.extend_from_slice(self.sk.value());
 
         #[expect(clippy::big_endian_bytes, reason = "BIP-032 uses big endian")]
-        hash_input.extend_from_slice(&ci.to_be_bytes());
+        hash_input.extend_from_slice(&cci.to_be_bytes());
 
         hmac_sha512::HMAC::mac(hash_input, self.cc)
     }
@@ -113,8 +113,8 @@ impl KeyTreeNode for ChildKeysPublic {
         Self::root(seed)
     }
 
-    fn derive_child(&self, ci: u32) -> Self {
-        self.nth_child(ci)
+    fn derive_child(&self, cci: u32) -> Self {
+        self.nth_child(cci)
     }
 
     fn account_ids(&self) -> impl Iterator<Item = lee::AccountId> {
@@ -176,8 +176,8 @@ mod tests {
             187, 148, 92, 44, 253, 210, 37,
         ];
         let root_keys = ChildKeysPublic::root(seed);
-        let ci = (2_u32).pow(31) + 13;
-        let child_keys = ChildKeysPublic::nth_child(&root_keys, ci);
+        let cci = (2_u32).pow(31) + 13;
+        let child_keys = ChildKeysPublic::nth_child(&root_keys, cci);
 
         let expected_cc = [
             149, 226, 13, 4, 194, 12, 69, 29, 9, 234, 209, 119, 98, 4, 128, 91, 37, 103, 192, 31,
