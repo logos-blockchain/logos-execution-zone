@@ -11,8 +11,8 @@ struct PublicKey([u8; 32]);
 struct SecretSpendingKey([u8; 32]);
 type NullifierSecretKey = [u8; 32];
 struct NullifierPublicKey([u8; 32]);
-struct ViewingSecretKey { d: [u8; 32], r: [u8; 32] }
-struct ViewingPublicKey(Vec<u8>); // 1184 bytes — ML-KEM 768 encapsulation key
+struct ViewingSecretKey { d: [u8; 32], z: [u8; 32] }
+type ViewingPublicKey = MlKem768EncapsulationKey; // 1184 bytes — ML-KEM 768 encapsulation key
 
 /// Signing related keys
 /// Do we need to define AccountId generation or is that handled in Sergio's?
@@ -20,42 +20,11 @@ struct ViewingPublicKey(Vec<u8>); // 1184 bytes — ML-KEM 768 encapsulation key
 
 ## HD wallet
 
-LEE’s HD wallet provides a streamlined mechanism for a user to generate the necessary keys. Each account requires a unique set of keys. Prior to the creation of a new account, the new set of keys can be generated based on a previously used set *owned* by the user.
+LEE’s HD wallet derives all account keys from a single mnemonic phrase ([BIP-039](https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki)). The mnemonic generates a `seed` that roots two independent key subtrees: one for public state accounts (based on [BIP-032](https://github.com/bitcoin/bips/blob/master/bip-0032.mediawiki)) and one for private state accounts (based on [ZIP-032](https://zips.z.cash/zip-0032)).
 
-The user initializes their wallet with a random mnemonic phrase ([BIP-039](https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki)). This phrase then generates *master public state keys* and *master private state keys*. Master keys are the only keys computed directly from the seed. All subsequent keys are, implicitly, computed using these master keys and some sequence of indices.
+Each parent-to-child edge is parametrized by an index. A key is uniquely addressed by its path from the root. E.g. `m_pub/0/4/12` is the 12th child of the 4th child of the 0th child of the public master key; `m_priv/0/4/12` is the analogous path for private accounts.
 
-The user’s mnemonic phrase generates the wallet’s `seed`. At a high level, the seed generates a tree of keys. Specifically, the seed is used to generates two subtrees; one for public state account keys and the other for private state account keys.
-
-```mermaid
-graph TD
-	A[seed] --> B0[public
-	 master keys]
-	B0 --> D0[pub_key0]
-	B0 --> D1[pub_key1]
-	A --> C1[private
-	 master keys]
-	D0 --> E0[pub_key00]
-	D0 --> E1[pub_key01]
-	C1 --> D2[priv_key0]
-	C1 --> D3[priv_key1]
-	D3 --> E2[priv_key10]
-	D3 --> E3[priv_key11]
-	D3 --> E4[priv_key12]
-```
-
-The path from parent node to a child node is parametrized by an index. Each child key is computed using the parent’s *chain code* and an index. 
-
-Each set of keys can be uniquely identified by LEE wallet with a sequence of indices from the master keys. E.g., `m_pub/0/4/12` denotes the key path:
-
-- 0th child of public master keys
-- 4th child of (0th child of public master keys)
-- 12th child of [4th child of (0th child of master public keys)]
-
-Similarly, `m_priv/0/4/12` denotes a path from the master private keys.
-
-The index parameter is used to systematically compute and recover account keys. E.g., if no accounts can be located on-chain (public retrieval, or transactions decrypted with the corresponding `vsk` for private accounts) using for a child key of a specific index then it is reasonable to expect that subsequential indices were not used. For efficiency, Bitcoin terminates the search for a node’s children after 20 unused keys.
-
-LEE adapts [BIP-032](https://github.com/bitcoin/bips/blob/master/bip-0032.mediawiki) for the public state keys and [ZIP-032](https://zips.z.cash/zip-0032) for the private state keys.
+During key discovery, LEE stops searching a node’s children after 20 consecutive unused indices (following Bitcoin’s gap-limit convention).
 
 ## Seed
 
@@ -79,11 +48,11 @@ let hash_value = hmac_sha512::HMAC::mac(seed, b"LEE_master_priv");
 
 In both cases the 64-byte HMAC output is split the same way: the first 32 bytes become the subtree's root secret key and the last 32 bytes become its root chain code.
 
-The seed itself is never stored on-chain and should be treated with the same sensitivity as the mnemonic phrase it was derived from.
+The seed is never stored on-chain.
 
 ## Public account keys
 
-Public accounts consist of three keys (secret key `sk`, Schnorr secret key `ssk` and public key `pk`). Additionally, auxillary values chain index `ci` and `chain code`
+Public accounts consist of three keys (secret key `sk`, Schnorr secret key `ssk` and public key `pk`). Additionally, auxillary values chain index `ci` and chain code `cc`. A public account keys are generated using its chain index and its parent's chain code.
 
 ```rust
 pub struct ChildKeysPublic {
@@ -92,16 +61,17 @@ pub struct ChildKeysPublic {
     pub pk: PublicKey,
     pub cc: [u8; 32],
     /// Can be [`None`] if root.
-    pub ci: Option<u32>
+    pub cci: Option<u32>
 }
 ```
-TODO: `cc` likely should be `u32` rather than `u8`.
-
 
 ### Secret key
 
-The secret key (`sk`) is used for managing public account ownership and authorization. Authorization for spending funds and, in some cases, modifying account data is handled by signing the transaction with the account's secret key.
+The secret key (`sk`) is used for generating the Schnorr secret key. Currently, the secret key is not directly used in LEE. Rather, the Schnorr secret key (`ssk`) is used for managing the public account. At some point in the future, Schnorr signatures (and `ssk`) will be phased out. At that point, `sk` will be used for authorization in a PQ signature scheme.
 
+The secret key `sk` is computed in one using one of two different methods. The method used depeneds on whether the account keys is the root key or a child key.
+
+#### Secret key for root public account
 ```rust
 let sk = nssa::PrivateKey::try_new(
     *hash_value
@@ -110,8 +80,9 @@ let sk = nssa::PrivateKey::try_new(
     )
 ```
 
+#### Secret key for child public account
 ```rust
-let hash_value = self.compute_hash_value(ci);
+let hash_value = self.compute_hash_value(cci);
 
 let lhs = k256::Scalar::from_repr(
     (*hash_value
@@ -128,10 +99,17 @@ let sk = nssa::PrivateKey::try_new(lhs.add(&rhs).to_bytes().into())
     .expect("Expect a valid private key");
 ```
 
-### Schnorr secret key
-A public account's Schnorr secret key (`ssk`) is used to sign transaction messages. The Schnorr secret key is computed from the account's secret key. The Schnorr secret key serves as protective layer between the account's secret key and quantum attackers.
+In both cases, the chain code `cc` is the last 32 bytes of `hash_value`.
 
-TODO: steamline these
+### Schnorr secret key
+
+The Schnorr secret key (`ssk`) is used for managing public ownership and authorization Authorization for spending funds and, in some cases, modifying account data is handled by signing the transaction with the account’s Schnorr secret key. The Schnorr secret key serves as protective layer between the account's secret key and quantum attackers.
+
+The Schnorr secret key (`ssk`) is computed from the secret key (`sk`) as follows:
+1. `private_key` is the scalar associated in the basefield for `secp256k1` generated from `sk`.
+2. `public_key` is the corresponding (compressed) public key in `secp256k1`.
+3. `ssk = private_key + Sha256(public_key)` where the hash of `public_key` is parsed as a scalar.
+
 ```rust
     pub fn tweak(value: &[u8; 32]) -> Result<Self, NssaError> {
         if !Self::is_valid_key(*value) {
@@ -156,23 +134,18 @@ TODO: steamline these
 ```
 
 ```rust
-let ssk = nssa::PrivateKey::tweak(ssk.value()).expect("Invalid private key produced from `tweak`");
+let ssk = nssa::PrivateKey::tweak(sk.value()).expect("Invalid private key produced from `tweak`");
 ```
 
 ### Public key
 
-A public account's public key (`pk`) is used to verify account ownership. Specifically, the public key is used to validate (Schnorr) signatures purporting to authorizing an account’s usage.
-
-
-TODO: expand on
-
-```rust
-let pk = nssa::PublicKey::new_from_private_key(&sk);
-```
-
+A public account’s public key (`pk`) is used to verify account ownership. Specifically, the public key is used to validate (Schnorr) signatures purporting to authorizing an account’s usage. The public key is the compressed Schnorr public key (32-bytes).
 
 ## Private account keys
 
+Private accounts consist of three types of keys: secret spending key `ssk`, nullifier keys (`nsk`, `npk`), and viewing keys (`vsk`, `vpk`). Additionally, auxiliary values chain index `ci` and chain code `cc`. Private account keys are generated using their chain index and their parent's chain code.
+
+Each private account's key data are stored in `ChildKeysPrivate`.
 ```rust
 pub struct ChildKeysPrivate {
     pub value: (KeyChain, BTreeMap<PrivateAccountKind, nssa::Account>),
@@ -182,7 +155,7 @@ pub struct ChildKeysPrivate {
 }
 ```
 
-`KeyChain` is defined in `key_management/mod.rs`. It is the private account keychain that bundles all keys for a single private account:
+Unlike public account keys, private account keys can be used for multiple accounts. A list (`BTreeMap`) is used to store all private accounts that use the same set of private account keys. `KeyChain` bundle all of the secret keys.
 
 ```rust
 pub struct KeyChain {
@@ -198,9 +171,15 @@ pub struct PrivateKeyHolder {
 }
 ```
 
-### Root key generation
+### Secret key
 
-Master private keys are derived from the BIP-039 seed via HMAC-SHA512 keyed with `"LEE_master_priv"`. The 64-byte output is split: the first 32 bytes become the `SecretSpendingKey` (`ssk`) and the last 32 bytes become the child chain code (`ccc`).
+The `SecretSpendingKey` (`ssk`) is the root secret for a private account node. It is never transmitted or stored on-chain; all other keys are derived from it.
+
+For both the root and each child, the `ssk` is a 32-byte value taken from the first half of an HMAC-SHA512 output.
+
+#### Secret key generation for root
+
+Root private keys are derived from the BIP-039 seed via HMAC-SHA512 keyed with `"LEE_master_priv"`. The 64-byte output is split: the first 32 bytes become the `SecretSpendingKey` (`ssk`) and the last 32 bytes become the child chain code (`ccc`).
 
 ```rust
 let hash_value = hmac_sha512::HMAC::mac(seed, b"LEE_master_priv");
@@ -211,7 +190,7 @@ let ssk = SecretSpendingKey(
 let ccc = *hash_value.last_chunk::<32>().expect("64-byte output");
 ```
 
-### Child key generation
+#### Secret key generation for child keys
 
 Child keys are derived from the parent's `PrivateKeyHolder` (via a SHA-256 "parent point" commitment) and the parent's `ccc`, mixed with the child index `cci`. The scheme follows ZIP-032 in spirit.
 
@@ -219,11 +198,9 @@ Child keys are derived from the parent's `PrivateKeyHolder` (via a SHA-256 "pare
 // 1. Commit to the parent's secret material
 let mut parent_hash = sha2::Sha256::new();
 parent_hash.update(b"LEE/keys");
-parent_hash.update([0_u8; 16]);
-parent_hash.update([9_u8]);
 parent_hash.update(parent.private_key_holder.nullifier_secret_key);
 parent_hash.update(parent.private_key_holder.viewing_secret_key.d);
-parent_hash.update(parent.private_key_holder.viewing_secret_key.r);
+parent_hash.update(parent.private_key_holder.viewing_secret_key.z);
 let parent_pt = parent_hash.finalize(); // 32 bytes
 
 // 2. Derive child ssk and ccc
@@ -237,12 +214,6 @@ let hash_value = hmac_sha512::HMAC::mac(input, parent.ccc);
 let ssk = SecretSpendingKey(*hash_value.first_chunk::<32>().expect("64-byte output"));
 let ccc = *hash_value.last_chunk::<32>().expect("64-byte output");
 ```
-
-### Secret key
-
-The `SecretSpendingKey` (`ssk`) is the root secret for a private account node. It is never transmitted or stored on-chain; all other keys are derived from it.
-
-For both the root and each child, the `ssk` is a 32-byte value taken from the first half of an HMAC-SHA512 output (see root and child generation above).
 
 ### Nullifier keys
 
@@ -261,6 +232,8 @@ hasher.update([0_u8; 19]);   // 19 bytes padding
 
 let nsk: NullifierSecretKey = hasher.finalize_fixed().into();
 ```
+The `root` private account does not have an `index` (`None`). The `index` is treated as `0_u32` in this case.
+
 
 **`npk` derivation** — SHA-256 (risc0 implementation) of domain-prefixed `nsk`:
 
@@ -275,33 +248,11 @@ bytes.extend_from_slice(&[0_u8; 23]);  // 23 bytes padding
 let npk = NullifierPublicKey(risc0_sha256(&bytes));
 ```
 
-**`AccountId` for a private account** — SHA-256 over a 80-byte preimage:
-
-```rust
-// AccountId::for_regular_private_account
-const PRIVATE_ACCOUNT_ID_PREFIX: &[u8; 32] = b"/LEE/v0.3/AccountId/Private/\x00\x00\x00\x00";
-
-let mut bytes = [0; 80];
-bytes[0..32].copy_from_slice(PRIVATE_ACCOUNT_ID_PREFIX);
-bytes[32..64].copy_from_slice(&npk.0);
-bytes[64..80].copy_from_slice(&identifier.to_le_bytes()); // u128, little-endian
-
-let account_id = SHA-256(bytes);
-```
-
-**Nullifier computation:**
-
-```rust
-// For account update
-let nullifier = SHA-256(b"/LEE/v0.3/Nullifier/Update/\x00\x00\x00\x00\x00" || commitment || nsk);
-
-// For account initialization
-let nullifier = SHA-256(b"/LEE/v0.3/Nullifier/Initialize/\x00" || account_id);
-```
+The nullifier secret key and nullifier public key include constants (`1_u8` and `7_u8`). These constants are used to avoid collision of inputs between nullifier secret keys and nullifier public keys.
 
 ### Viewing keys
 
-The viewing secret key (`vsk`) is a 64-byte ML-KEM 768 seed split into two 32-byte halves `d` and `r`. The viewing public key (`vpk`) is the corresponding ML-KEM 768 encapsulation key (1184 bytes). The `vsk` allows the holder to decrypt ciphertexts sent to the account; the `vpk` is the address component senders use to encrypt.
+The viewing secret key (`vsk`) is a 64-byte ML-KEM 768 seed split into two 32-byte halves `d` and `z`. The viewing public key (`vpk`) is the corresponding ML-KEM 768 encapsulation key (1184 bytes). The `vsk` allows the holder to decrypt ciphertexts sent to the account; the `vpk` is the address component senders use to encrypt.
 
 **`vsk` derivation** — HMAC-SHA512 over a 64-byte domain-tagged input:
 
@@ -319,7 +270,7 @@ let full_seed = hmac_sha512::HMAC::mac(bytes, b"LEE_viewing_seed");
 
 let vsk = ViewingSecretKey {
     d: *full_seed.first_chunk::<32>().expect("64-byte output"),
-    r: *full_seed.last_chunk::<32>().expect("64-byte output"),
+    z: *full_seed.last_chunk::<32>().expect("64-byte output"),
 };
 ```
 
@@ -327,17 +278,12 @@ let vsk = ViewingSecretKey {
 
 ```rust
 // ViewingPublicKey::from(&vsk)
-let mut seed_bytes = [0_u8; 64];
-seed_bytes[..32].copy_from_slice(&vsk.d);
-seed_bytes[32..].copy_from_slice(&vsk.r);
-
-let dk = MlKem768::DecapsulationKey::from_seed(seed_bytes);
-let vpk = ViewingPublicKey(dk.encapsulation_key().to_bytes().to_vec()); // 1184 bytes
+let vpk = MlKem768EncapsulationKey::from_seed(&vsk.d, &vsk.z); // 1184 bytes
 ```
 
-**Shared secret (receiver side)** — ML-KEM 768 decapsulation using `vsk.d` and `vsk.r`:
+**Shared secret (receiver side)** — ML-KEM 768 decapsulation using `vsk.d` and `vsk.z`:
 
 ```rust
 // KeyChain::calculate_shared_secret_receiver
-let shared_secret = SharedSecretKey::decapsulate(&ephemeral_public_key, &vsk.d, &vsk.r);
+let shared_secret = SharedSecretKey::decapsulate(&ephemeral_public_key, &vsk.d, &vsk.z);
 ```
