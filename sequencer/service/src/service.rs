@@ -14,6 +14,7 @@ use sequencer_core::{
 use sequencer_service_protocol::{
     Account, AccountId, Block, BlockId, Commitment, HashType, MembershipProof, Nonce, ProgramId,
 };
+use sequencer_service_rpc::HealthStatus;
 use tokio::sync::Mutex;
 
 const NOT_FOUND_ERROR_CODE: i32 = -31999;
@@ -81,8 +82,18 @@ impl<BC: BlockPublisherTrait + Send + 'static> sequencer_service_rpc::RpcServer
         Ok(tx_hash)
     }
 
-    async fn check_health(&self) -> Result<(), ErrorObjectOwned> {
-        Ok(())
+    async fn check_health(&self) -> Result<HealthStatus, ErrorObjectOwned> {
+        let sequencer = self.sequencer.lock().await;
+        let chain_height = sequencer.chain_height();
+
+        // Sequencer is considered healthy if it has produced at least the genesis block.
+        // Clients should poll this endpoint twice with a delay to verify chain_height increases.
+        let is_healthy = sequencer.block_store().latest_block_meta().is_ok();
+
+        Ok(HealthStatus {
+            chain_height,
+            is_healthy,
+        })
     }
 
     async fn get_block(&self, block_id: BlockId) -> Result<Option<Block>, ErrorObjectOwned> {

@@ -8,6 +8,7 @@ license = { workspace = true }
 workspace = true
 
 [dependencies]
+serde = { version = "1", features = ["derive"] }
 sequencer_service_protocol.workspace = true
 
 jsonrpsee = { workspace = true, features = ["macros"] }

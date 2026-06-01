@@ -5,10 +5,21 @@ use jsonrpsee::proc_macros::rpc;
 use jsonrpsee::types::ErrorObjectOwned;
 #[cfg(feature = "client")]
 pub use jsonrpsee::{core::ClientError, http_client::HttpClientBuilder as SequencerClientBuilder};
+use serde::{Deserialize, Serialize};
 use sequencer_service_protocol::{
     Account, AccountId, Block, BlockId, Commitment, HashType, MembershipProof, NSSATransaction,
     Nonce, ProgramId,
 };
+
+/// Health status returned by the sequencer healthcheck endpoint.
+/// The chain_height field can be polled twice to verify the sequencer is progressing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HealthStatus {
+    /// Current chain height (block count). Should increase over time if sequencer is healthy.
+    pub chain_height: BlockId,
+    /// Whether the sequencer considers itself healthy.
+    pub is_healthy: bool,
+}
 
 #[cfg(all(not(feature = "server"), not(feature = "client")))]
 compile_error!("At least one of `server` or `client` features must be enabled.");
@@ -39,9 +50,10 @@ pub trait Rpc {
     #[method(name = "sendTransaction")]
     async fn send_transaction(&self, tx: NSSATransaction) -> Result<HashType, ErrorObjectOwned>;
 
-    // TODO: expand healthcheck response into some kind of report
+    /// Returns the current chain height (block count).
+    /// A sequencer is healthy if this value increases over time.
     #[method(name = "checkHealth")]
-    async fn check_health(&self) -> Result<(), ErrorObjectOwned>;
+    async fn check_health(&self) -> Result<HealthStatus, ErrorObjectOwned>;
 
     // TODO: These functions should be removed after wallet starts using indexer
     // for this type of queries.
