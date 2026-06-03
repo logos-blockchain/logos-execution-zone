@@ -507,6 +507,72 @@ enum WalletFfiError wallet_ffi_get_private_account_keys(struct WalletHandle *han
                                                         struct FfiPrivateAccountKeys *out_keys);
 
 /**
+ * Return the keys of the first private accounts key chain in the wallet.
+ *
+ * The first chain is determined by BTreeMap ordering over chain indices,
+ * which is deterministic — calling this function on a wallet persisted to
+ * disk and reopened later returns the same NPK as long as no preceding
+ * chain index was inserted in between.
+ *
+ * Intended for clients (e.g. agent runtimes) that need a stable
+ * cryptographic identity derived from the wallet seed without rotating
+ * it at every call to `wallet_ffi_create_private_accounts_key`.
+ *
+ * # Parameters
+ * - `handle`: Valid wallet handle
+ * - `out_keys`: Output pointer for the key material
+ *
+ * # Returns
+ * - `Success` on success
+ * - `AccountNotFound` if the wallet has no private accounts key yet
+ * - Error code on other failures
+ *
+ * # Memory
+ * The keys must be freed with `wallet_ffi_free_private_account_keys()`.
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+ * - `out_keys` must be a valid pointer to a `FfiPrivateAccountKeys` struct
+ */
+enum WalletFfiError wallet_ffi_get_first_private_accounts_key(struct WalletHandle *handle,
+                                                              struct FfiPrivateAccountKeys *out_keys);
+
+/**
+ * Return the keys of the private accounts key node at a specific chain
+ * index. The chain index is given as the wallet-CLI string format,
+ * e.g. "/" for the root node, "/0" for the first child, "/0/1" for a
+ * nested node, etc.
+ *
+ * Intended for clients that need a stable cryptographic identity
+ * anchored on a known position in the key tree. Combined with the root
+ * node "/" seeded automatically by `WalletCore::new_init_storage`, this
+ * gives a deterministic agent identity that survives wallet reopen
+ * without any side-car cache.
+ *
+ * # Parameters
+ * - `handle`: Valid wallet handle
+ * - `chain_index_str`: Null-terminated UTF-8 chain index path
+ * - `out_keys`: Output pointer for the key material
+ *
+ * # Returns
+ * - `Success` on success
+ * - `InvalidUtf8` if `chain_index_str` is malformed
+ * - `AccountNotFound` if no node exists at the given chain index
+ * - Error code on other failures
+ *
+ * # Memory
+ * The keys must be freed with `wallet_ffi_free_private_account_keys()`.
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+ * - `chain_index_str` must be a valid null-terminated UTF-8 string
+ * - `out_keys` must be a valid pointer to a `FfiPrivateAccountKeys` struct
+ */
+enum WalletFfiError wallet_ffi_get_private_accounts_key_by_chain_index(struct WalletHandle *handle,
+                                                                       const char *chain_index_str,
+                                                                       struct FfiPrivateAccountKeys *out_keys);
+
+/**
  * Free private account keys returned by `wallet_ffi_get_private_account_keys`.
  *
  * # Safety

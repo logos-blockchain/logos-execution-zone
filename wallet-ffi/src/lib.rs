@@ -94,7 +94,7 @@ pub(crate) fn map_execution_error(e: ExecutionFailureKind) -> FfiError {
 }
 
 /// Helper to convert a C string to a Rust String.
-fn c_str_to_string(ptr: *const c_char, name: &str) -> Result<String, WalletFfiError> {
+pub(crate) fn c_str_to_string(ptr: *const c_char, name: &str) -> Result<String, WalletFfiError> {
     if ptr.is_null() {
         print_error(format!("Null pointer for {name}"));
         return Err(WalletFfiError::NullPointer);

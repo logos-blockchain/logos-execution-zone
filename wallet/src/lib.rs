@@ -13,7 +13,7 @@ use anyhow::{Context as _, Result};
 use bip39::Mnemonic;
 use common::{HashType, transaction::NSSATransaction};
 use config::WalletConfig;
-use key_protocol::key_management::key_tree::chain_index::ChainIndex;
+use key_protocol::key_management::{KeyChain, key_tree::chain_index::ChainIndex};
 use log::info;
 use nssa::{
     Account, AccountId, PrivacyPreservingTransaction,
@@ -246,6 +246,34 @@ impl WalletCore {
         self.storage
             .key_chain_mut()
             .create_private_accounts_key(chain_index)
+    }
+
+    /// Return the KeyChain of the first private accounts key in the wallet.
+    /// BTreeMap iteration over chain indices is deterministic, so this is
+    /// stable across wallet reopens for the same persisted storage. Used by
+    /// clients (e.g. agent runtimes) that need a stable cryptographic
+    /// identity tied to the wallet seed without rotating it at every
+    /// create_private_accounts_key call.
+    #[must_use]
+    pub fn first_private_accounts_key_chain(&self) -> Option<&KeyChain> {
+        self.storage
+            .key_chain()
+            .private_account_key_chains()
+            .next()
+            .map(|(_account_id, key_chain, _chain_index)| key_chain)
+    }
+
+    /// Return the KeyChain of the private accounts key at the given chain
+    /// index. Lets clients persist a pointer (chain_index, not crypto) and
+    /// look the same key back up across restarts deterministically.
+    #[must_use]
+    pub fn private_accounts_key_chain_by_index(
+        &self,
+        chain_index: &ChainIndex,
+    ) -> Option<&KeyChain> {
+        self.storage
+            .key_chain()
+            .private_account_key_chain_by_index(chain_index)
     }
 
     pub fn create_new_account_private(

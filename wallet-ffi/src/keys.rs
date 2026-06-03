@@ -145,6 +145,172 @@ pub unsafe extern "C" fn wallet_ffi_get_private_account_keys(
     WalletFfiError::Success
 }
 
+/// Return the keys of the first private accounts key chain in the wallet.
+///
+/// The first chain is determined by BTreeMap ordering over chain indices,
+/// which is deterministic — calling this function on a wallet persisted to
+/// disk and reopened later returns the same NPK as long as no preceding
+/// chain index was inserted in between.
+///
+/// Intended for clients (e.g. agent runtimes) that need a stable
+/// cryptographic identity derived from the wallet seed without rotating
+/// it at every call to `wallet_ffi_create_private_accounts_key`.
+///
+/// # Parameters
+/// - `handle`: Valid wallet handle
+/// - `out_keys`: Output pointer for the key material
+///
+/// # Returns
+/// - `Success` on success
+/// - `AccountNotFound` if the wallet has no private accounts key yet
+/// - Error code on other failures
+///
+/// # Memory
+/// The keys must be freed with `wallet_ffi_free_private_account_keys()`.
+///
+/// # Safety
+/// - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+/// - `out_keys` must be a valid pointer to a `FfiPrivateAccountKeys` struct
+#[no_mangle]
+pub unsafe extern "C" fn wallet_ffi_get_first_private_accounts_key(
+    handle: *mut WalletHandle,
+    out_keys: *mut FfiPrivateAccountKeys,
+) -> WalletFfiError {
+    let wrapper = match get_wallet(handle) {
+        Ok(w) => w,
+        Err(e) => return e,
+    };
+
+    if out_keys.is_null() {
+        print_error("Null pointer argument");
+        return WalletFfiError::NullPointer;
+    }
+
+    let wallet = match wrapper.core.lock() {
+        Ok(w) => w,
+        Err(e) => {
+            print_error(format!("Failed to lock wallet: {e}"));
+            return WalletFfiError::InternalError;
+        }
+    };
+
+    let Some(key_chain) = wallet.first_private_accounts_key_chain() else {
+        print_error("Wallet has no private accounts key");
+        return WalletFfiError::AccountNotFound;
+    };
+
+    let npk_bytes = key_chain.nullifier_public_key.0;
+
+    let vpk_bytes = key_chain.viewing_public_key.to_bytes();
+    let vpk_len = vpk_bytes.len();
+    let vpk_vec = vpk_bytes.to_vec();
+    let vpk_boxed = vpk_vec.into_boxed_slice();
+    #[expect(
+        clippy::as_conversions,
+        reason = "We need to convert the boxed slice into a raw pointer for FFI"
+    )]
+    let vpk_ptr = Box::into_raw(vpk_boxed) as *const u8;
+
+    unsafe {
+        (*out_keys).nullifier_public_key.data = npk_bytes;
+        (*out_keys).viewing_public_key = vpk_ptr;
+        (*out_keys).viewing_public_key_len = vpk_len;
+    }
+
+    WalletFfiError::Success
+}
+
+/// Return the keys of the private accounts key node at a specific chain
+/// index. The chain index is given as the wallet-CLI string format,
+/// e.g. "/" for the root node, "/0" for the first child, "/0/1" for a
+/// nested node, etc.
+///
+/// Intended for clients that need a stable cryptographic identity
+/// anchored on a known position in the key tree. Combined with the root
+/// node "/" seeded automatically by `WalletCore::new_init_storage`, this
+/// gives a deterministic agent identity that survives wallet reopen
+/// without any side-car cache.
+///
+/// # Parameters
+/// - `handle`: Valid wallet handle
+/// - `chain_index_str`: Null-terminated UTF-8 chain index path
+/// - `out_keys`: Output pointer for the key material
+///
+/// # Returns
+/// - `Success` on success
+/// - `InvalidUtf8` if `chain_index_str` is malformed
+/// - `AccountNotFound` if no node exists at the given chain index
+/// - Error code on other failures
+///
+/// # Memory
+/// The keys must be freed with `wallet_ffi_free_private_account_keys()`.
+///
+/// # Safety
+/// - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+/// - `chain_index_str` must be a valid null-terminated UTF-8 string
+/// - `out_keys` must be a valid pointer to a `FfiPrivateAccountKeys` struct
+#[no_mangle]
+pub unsafe extern "C" fn wallet_ffi_get_private_accounts_key_by_chain_index(
+    handle: *mut WalletHandle,
+    chain_index_str: *const std::ffi::c_char,
+    out_keys: *mut FfiPrivateAccountKeys,
+) -> WalletFfiError {
+    use key_protocol::key_management::key_tree::chain_index::ChainIndex;
+    use std::str::FromStr;
+
+    let wrapper = match get_wallet(handle) {
+        Ok(w) => w,
+        Err(e) => return e,
+    };
+
+    if chain_index_str.is_null() || out_keys.is_null() {
+        print_error("Null pointer argument");
+        return WalletFfiError::NullPointer;
+    }
+
+    let Ok(chain_index_str) = crate::c_str_to_string(chain_index_str, "chain_index_str") else {
+        return WalletFfiError::InvalidUtf8;
+    };
+
+    let Ok(chain_index) = ChainIndex::from_str(&chain_index_str) else {
+        print_error(format!("Failed to parse chain index: {chain_index_str}"));
+        return WalletFfiError::InvalidKeyValue;
+    };
+
+    let wallet = match wrapper.core.lock() {
+        Ok(w) => w,
+        Err(e) => {
+            print_error(format!("Failed to lock wallet: {e}"));
+            return WalletFfiError::InternalError;
+        }
+    };
+
+    let Some(key_chain) = wallet.private_accounts_key_chain_by_index(&chain_index) else {
+        print_error(format!("No private accounts key at chain index {chain_index_str}"));
+        return WalletFfiError::AccountNotFound;
+    };
+
+    let npk_bytes = key_chain.nullifier_public_key.0;
+
+    let vpk_bytes = key_chain.viewing_public_key.to_bytes();
+    let vpk_len = vpk_bytes.len();
+    let vpk_vec = vpk_bytes.to_vec();
+    let vpk_boxed = vpk_vec.into_boxed_slice();
+    #[expect(
+        clippy::as_conversions,
+        reason = "We need to convert the boxed slice into a raw pointer for FFI"
+    )]
+    let vpk_ptr = Box::into_raw(vpk_boxed) as *const u8;
+
+    unsafe {
+        (*out_keys).nullifier_public_key.data = npk_bytes;
+        (*out_keys).viewing_public_key = vpk_ptr;
+        (*out_keys).viewing_public_key_len = vpk_len;
+    }
+
+    WalletFfiError::Success
+}
+
 /// Free private account keys returned by `wallet_ffi_get_private_account_keys`.
 ///
 /// # Safety
