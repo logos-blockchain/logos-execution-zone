@@ -87,10 +87,16 @@ wallet account get --account-id "Public/7wHg9sbJwc6h3NP1S9bekfAzB8CHifEcxKswCKUt
 echo ""
 echo "=== Test: Shielded auth-transfer to owned private account ==="
 
+SHIELDED_RECV=$(wallet account new private | grep -o 'Private/[^[:space:]]*' | head -1)
+echo "Private recipient: $SHIELDED_RECV"
+SHIELDED_KEYS=$(wallet account show-keys --account-id "$SHIELDED_RECV")
+SHIELDED_NPK=$(echo "$SHIELDED_KEYS" | head -1)
+SHIELDED_VPK=$(echo "$SHIELDED_KEYS" | tail -1)
+
 wallet auth-transfer send --amount 2 \
   --from "m/44'/60'/0'/0/0" \
-  --to-npk "55204e2934045b044f06d8222b454d46b54788f33c7dec4f6733d441703bb0e6" \
-  --to-vpk "02a8626b0c0ad9383c5678dad48c3969b4174fb377cdb03a6259648032c774cec8"
+  --to-npk "$SHIELDED_NPK" \
+  --to-vpk "$SHIELDED_VPK"
 echo "Shielded auth-transfer sent"
 
 sleep 15

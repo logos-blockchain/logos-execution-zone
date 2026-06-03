@@ -69,7 +69,10 @@ The default password (`KeycardDefaultPairing`) is [recommended](https://docs.key
 To use a custom pairing password, set it before `init`:
 
 ```bash
-export KEYCARD_PAIRING_PASSWORD=my-custom-password
+# Note: Keep the leading space before this command.
+# Leading space prevents this command from being stored in shell history
+# (when HISTCONTROL=ignorespace is enabled).
+ export KEYCARD_PAIRING_PASSWORD=my-custom-password
 wallet keycard init
 ```
 
@@ -152,7 +155,7 @@ Keycard PIN:
 
 First install the wallet with the `keycard-debug` feature:
 ```bash
-cargo install --path wallet --force --features keycard-debug
+cargo install --path lez/wallet --force --features keycard-debug
 ```
 
 Then run the command:
@@ -168,7 +171,7 @@ VSK: 30f798893977a7b7263d1f77abf58e11e014428c92030d6a02fe363cceb41ffa
 
 To restore the standard build without `keycard-debug` afterwards:
 ```bash
-cargo install --path wallet --force
+cargo install --path lez/wallet --force
 ```
 
 ### Pinata (testnet)
@@ -496,7 +499,7 @@ Transaction data is ...
 
 ## Testing
 
-Tests for Keycard commands are in `keycard_wallet/tests/`.
+Tests for Keycard commands are in `lez/keycard_wallet/tests/`.
 
 | Test file | Description |
 |---|---|
@@ -508,15 +511,15 @@ Tests for Keycard commands are in `keycard_wallet/tests/`.
 Run from the repo root with a Keycard connected:
 
 ```bash
-bash keycard_wallet/tests/keycard_tests.sh
-bash keycard_wallet/tests/keycard_tests_2.sh
-bash keycard_wallet/tests/keycard_test_3.sh
-bash keycard_wallet/tests/keycard_power_recovery_tests.sh
+bash lez/keycard_wallet/tests/keycard_tests.sh
+bash lez/keycard_wallet/tests/keycard_tests_2.sh
+bash lez/keycard_wallet/tests/keycard_test_3.sh
+bash lez/keycard_wallet/tests/keycard_power_recovery_tests.sh
 ```
 
 ## SigningGroup
 
-`SigningGroup` (`wallet/src/signing.rs`) partitions a transaction's signers into two buckets — local accounts and Keycard accounts. This ensures that Python GIL is only used at most once per transaction, regardless of how many Keycard accounts are involved.
+`SigningGroup` (`lez/wallet/src/signing.rs`) partitions a transaction's signers into two buckets — local accounts and Keycard accounts. This ensures that Python GIL is only used at most once per transaction, regardless of how many Keycard accounts are involved.
 
 Local signers are resolved and signed in pure Rust. Keycard signers store only their BIP32 key path; all of them are signed inside a single Python session (`connect` / `close_session`) when `sign_all` is called. The command calls `needs_pin` to decide whether to prompt for a PIN before signing.
 

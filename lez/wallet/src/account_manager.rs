@@ -72,7 +72,7 @@ impl AccountIdentity {
     /// Returns the `AccountId` for public variants. Used by facades that need the raw ID
     /// for derived-address computation alongside the identity.
     #[must_use]
-    pub const fn public_account_id(&self) -> Option<nssa::AccountId> {
+    pub const fn public_account_id(&self) -> Option<lee::AccountId> {
         match self {
             Self::Public(id) | Self::PublicNoSign(id) => Some(*id),
             Self::PublicKeycard { account_id, .. } => Some(*account_id),

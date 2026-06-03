@@ -258,7 +258,7 @@ sleep 15
 
 echo "Keycard path 2 (LEZ definition) state (total supply should have increased):"
 wallet account get --account-id "m/44'/60'/0'/0/2"
-echo "Keycard path 6 (LEZ holding) state (balance should be 20500):"
+echo "Keycard path 6 (LEZ holding) state (balance should be 20800):"
 wallet account get --account-id "m/44'/60'/0'/0/6"
 
 # =============================================================================
@@ -276,7 +276,7 @@ sleep 15
 
 echo "Keycard path 2 (LEZ definition) state (total supply should reflect burn):"
 wallet account get --account-id "m/44'/60'/0'/0/2"
-echo "Keycard path 6 (LEZ holding) state (balance should be 20000):"
+echo "Keycard path 6 (LEZ holding) state (balance should be 20300):"
 wallet account get --account-id "m/44'/60'/0'/0/6"
 
 # =============================================================================

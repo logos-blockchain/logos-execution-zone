@@ -1,5 +1,4 @@
 use keycard_wallet::{KeycardWallet, python_path};
-use lee::{AccountId, PrivateKey, PublicKey, Signature};
 use pyo3::Python;
 
 /// Lazily opens and reuses a single Keycard session for all keycard signers in one transaction.

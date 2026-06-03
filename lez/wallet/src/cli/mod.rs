@@ -157,7 +157,7 @@ impl CliAccountMention {
     }
 
     #[must_use]
-    pub fn into_public_identity(self, account_id: nssa::AccountId) -> crate::AccountIdentity {
+    pub fn into_public_identity(self, account_id: lee::AccountId) -> crate::AccountIdentity {
         match self {
             Self::KeyPath(key_path) => crate::AccountIdentity::PublicKeycard {
                 account_id,

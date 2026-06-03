@@ -7,7 +7,7 @@
 
 source venv/bin/activate
 
-cargo install --path wallet --force --features keycard-debug
+cargo install --path lez/wallet --force --features keycard-debug
 
 export KEYCARD_PIN=111111
 
