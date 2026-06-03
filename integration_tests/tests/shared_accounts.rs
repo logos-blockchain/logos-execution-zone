@@ -108,7 +108,7 @@ async fn group_invite_join_key_agreement() -> Result<()> {
         .sealing_secret_key()
         .context("Sealing key not found")?;
     let sealing_pk = key_protocol::key_management::group_key_holder::SealingPublicKey::from_bytes(
-        nssa_core::encryption::ViewingPublicKey::from_seed(&sealing_sk.d, &sealing_sk.z)
+        lee_core::encryption::ViewingPublicKey::from_seed(&sealing_sk.d, &sealing_sk.z)
             .to_bytes()
             .to_vec(),
     );

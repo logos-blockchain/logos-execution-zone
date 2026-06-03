@@ -1,7 +1,7 @@
 use aes_gcm::{Aes256Gcm, KeyInit as _, aead::Aead as _};
 use lee_core::{
     SharedSecretKey,
-    encryption::{EphemeralPublicKey, MlKem768EncapsulationKey},
+    encryption::{EphemeralPublicKey, ViewingPublicKey},
     program::{PdaSeed, ProgramId},
 };
 use rand::{RngCore as _, rngs::OsRng};
@@ -156,7 +156,7 @@ impl GroupKeyHolder {
     /// different ciphertexts.
     #[must_use]
     pub fn seal_for(&self, recipient_key: &SealingPublicKey) -> Vec<u8> {
-        let sealing_key = MlKem768EncapsulationKey::from_bytes(recipient_key.0.clone())
+        let sealing_key = ViewingPublicKey::from_bytes(recipient_key.0.clone())
             .expect("key_protocol::group_key_holder::GroupKeyHolder::seal_for: SealingPublicKey must be a valid ML-KEM-768 encapsulation key");
         let (shared, kem_ct) = SharedSecretKey::encapsulate(&sealing_key);
         let aes_key = Self::seal_kdf(&shared);
@@ -324,7 +324,7 @@ mod tests {
     /// Pins the end-to-end derivation for a fixed (GMS, `ProgramId`, `PdaSeed`). Any change
     /// to `secret_spending_key_for_pda`, the `PrivateKeyHolder` nsk/npk chain, or the
     /// `AccountId::for_private_pda` formula breaks this test. Mirrors the pinned-value
-    /// pattern from `for_private_pda_matches_pinned_value` in `nssa_core`.
+    /// pattern from `for_private_pda_matches_pinned_value` in `lee_core`.
     #[test]
     fn pinned_end_to_end_derivation_for_private_pda() {
         use lee_core::{account::AccountId, program::ProgramId};

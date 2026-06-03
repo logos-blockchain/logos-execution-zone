@@ -167,7 +167,7 @@ impl EphemeralPublicKey {
 
     /// Deserializes an ML-KEM-768 ciphertext from a cursor.
     /// Reads exactly 1088 bytes — the fixed ciphertext size for ML-KEM-768.
-    pub fn from_cursor(cursor: &mut Cursor<&[u8]>) -> Result<Self, NssaCoreError> {
+    pub fn from_cursor(cursor: &mut Cursor<&[u8]>) -> Result<Self, LeeCoreError> {
         let mut value = vec![0_u8; 1088];
         cursor.read_exact(&mut value)?;
         Ok(Self(value))

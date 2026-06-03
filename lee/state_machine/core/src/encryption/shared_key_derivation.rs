@@ -31,9 +31,9 @@ impl MlKem768EncapsulationKey {
     pub const LEN: usize = 1184;
 
     /// Construct from raw bytes, returning an error if the length is not [`Self::LEN`].
-    pub fn from_bytes(bytes: Vec<u8>) -> Result<Self, crate::error::NssaCoreError> {
+    pub fn from_bytes(bytes: Vec<u8>) -> Result<Self, crate::error::LeeCoreError> {
         if bytes.len() != Self::LEN {
-            return Err(crate::error::NssaCoreError::DeserializationError(format!(
+            return Err(crate::error::LeeCoreError::DeserializationError(format!(
                 "MlKem768EncapsulationKey must be {} bytes, got {}",
                 Self::LEN,
                 bytes.len()

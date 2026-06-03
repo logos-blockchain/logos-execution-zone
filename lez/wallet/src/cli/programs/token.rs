@@ -791,7 +791,9 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                 let recipient_vpk_res = hex::decode(&recipient_vpk).context(
                     "wallet::cli::programs::token: recipient_vpk must be a valid hex string",
                 )?;
-                let recipient_vpk = lee_core::encryption::ViewingPublicKey(recipient_vpk_res);
+                let recipient_vpk =
+                    lee_core::encryption::ViewingPublicKey::from_bytes(recipient_vpk_res)
+                        .map_err(|e| anyhow::anyhow!("{e}"))?;
 
                 let (tx_hash, [secret_sender, _]) = Token(wallet_core)
                     .send_transfer_transaction_private_foreign_account(
@@ -901,7 +903,8 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                 let holder_vpk_res = hex::decode(&holder_vpk).context(
                     "wallet::cli::programs::token: holder_vpk must be a valid hex string",
                 )?;
-                let holder_vpk = lee_core::encryption::ViewingPublicKey(holder_vpk_res);
+                let holder_vpk = lee_core::encryption::ViewingPublicKey::from_bytes(holder_vpk_res)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
 
                 let (tx_hash, [secret_definition, _]) = Token(wallet_core)
                     .send_mint_transaction_private_foreign_account(
@@ -1055,7 +1058,9 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                 let recipient_vpk_res = hex::decode(&recipient_vpk).context(
                     "wallet::cli::programs::token: recipient_vpk must be a valid hex string",
                 )?;
-                let recipient_vpk = lee_core::encryption::ViewingPublicKey(recipient_vpk_res);
+                let recipient_vpk =
+                    lee_core::encryption::ViewingPublicKey::from_bytes(recipient_vpk_res)
+                        .map_err(|e| anyhow::anyhow!("{e}"))?;
 
                 let (tx_hash, _) = Token(wallet_core)
                     .send_transfer_transaction_shielded_foreign_account(
@@ -1184,7 +1189,8 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                 let holder_vpk_res = hex::decode(&holder_vpk).context(
                     "wallet::cli::programs::token: holder_vpk must be a valid hex string",
                 )?;
-                let holder_vpk = lee_core::encryption::ViewingPublicKey(holder_vpk_res);
+                let holder_vpk = lee_core::encryption::ViewingPublicKey::from_bytes(holder_vpk_res)
+                    .map_err(|e| anyhow::anyhow!("{e}"))?;
 
                 let (tx_hash, _) = Token(wallet_core)
                     .send_mint_transaction_shielded_foreign_account(

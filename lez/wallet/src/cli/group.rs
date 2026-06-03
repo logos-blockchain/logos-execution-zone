@@ -156,8 +156,10 @@ impl WalletSubcommand for GroupSubcommand {
                 let mut r = [0_u8; 32];
                 rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut d);
                 rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut r);
-                let secret = ViewingSecretKey { d, r };
-                let ek_bytes = lee_core::encryption::ViewingPublicKey::from_seed(&d, &r).0;
+                let secret = ViewingSecretKey::new(d, r);
+                let ek_bytes = lee_core::encryption::ViewingPublicKey::from_seed(&d, &r)
+                    .to_bytes()
+                    .to_vec();
                 let public_key = SealingPublicKey::from_bytes(ek_bytes);
 
                 wallet_core.set_sealing_secret_key(secret);

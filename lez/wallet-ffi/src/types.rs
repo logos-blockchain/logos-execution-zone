@@ -164,7 +164,10 @@ impl FfiPrivateAccountKeys {
             let slice = unsafe {
                 slice::from_raw_parts(self.viewing_public_key, self.viewing_public_key_len)
             };
-            Ok(lee_core::encryption::ViewingPublicKey(slice.to_vec()))
+            Ok(
+                lee_core::encryption::ViewingPublicKey::from_bytes(slice.to_vec())
+                    .expect("wallet_ffi: length already validated to 1184 bytes"),
+            )
         } else {
             Err(WalletFfiError::InvalidKeyValue)
         }

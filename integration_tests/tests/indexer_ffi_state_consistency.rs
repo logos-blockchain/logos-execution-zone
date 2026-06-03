@@ -30,6 +30,7 @@ fn indexer_ffi_state_consistency() -> Result<()> {
         to: Some(public_mention(ctx.ctx().existing_public_accounts()[1])),
         to_npk: None,
         to_vpk: None,
+        to_keys: None,
         amount: 100,
         to_identifier: Some(0),
     });
@@ -67,6 +68,7 @@ fn indexer_ffi_state_consistency() -> Result<()> {
         to: Some(private_mention(to)),
         to_npk: None,
         to_vpk: None,
+        to_keys: None,
         amount: 100,
         to_identifier: Some(0),
     });

@@ -25,6 +25,7 @@ async fn indexer_state_consistency() -> Result<()> {
         to: Some(public_mention(ctx.existing_public_accounts()[1])),
         to_npk: None,
         to_vpk: None,
+        to_keys: None,
         to_identifier: Some(0),
         amount: 100,
     });
@@ -60,6 +61,7 @@ async fn indexer_state_consistency() -> Result<()> {
         to: Some(private_mention(to)),
         to_npk: None,
         to_vpk: None,
+        to_keys: None,
         to_identifier: Some(0),
         amount: 100,
     });

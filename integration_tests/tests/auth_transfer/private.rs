@@ -11,7 +11,8 @@ use lee::{
     privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
 };
 use lee_core::{
-    InputAccountIdentity, NullifierPublicKey, account::AccountWithMetadata,
+    InputAccountIdentity, NullifierPublicKey,
+    account::AccountWithMetadata,
     encryption::{EphemeralPublicKey, ViewingPublicKey},
 };
 use log::info;
@@ -664,7 +665,7 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
     let auth_transfer_program_id = Program::authenticated_transfer_program().id();
     let nsk: lee_core::NullifierSecretKey = [3; 32];
     let npk = NullifierPublicKey::from(&nsk);
-    let _vpk = MlKem768EncapsulationKey::from_bytes(vec![4_u8; 1184]).unwrap();
+    let _vpk = ViewingPublicKey::from_bytes(vec![4_u8; 1184]).unwrap();
     let ssk = SharedSecretKey([55_u8; 32]);
     let _epk = EphemeralPublicKey(vec![55_u8; 1088]);
     let attacker_vault_id = {

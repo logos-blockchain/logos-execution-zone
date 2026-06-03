@@ -1,10 +1,7 @@
 use bip39::Mnemonic;
 use common::HashType;
+use lee_core::{NullifierPublicKey, NullifierSecretKey, encryption::ViewingPublicKey};
 use ml_kem;
-use lee_core::{
-    NullifierPublicKey, NullifierSecretKey,
-    encryption::ViewingPublicKey,
-};
 use rand::{RngCore as _, rngs::OsRng};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, digest::FixedOutput as _};
@@ -176,7 +173,7 @@ impl SecretSpendingKey {
     }
 }
 
-impl From<&ViewingSecretKey> for MlKem768EncapsulationKey {
+impl From<&ViewingSecretKey> for ViewingPublicKey {
     fn from(sk: &ViewingSecretKey) -> Self {
         use ml_kem::{Kem, KeyExport as _, MlKem768, Seed};
         let mut seed_bytes = [0_u8; 64];
@@ -195,8 +192,8 @@ impl PrivateKeyHolder {
     }
 
     #[must_use]
-    pub fn generate_viewing_public_key(&self) -> MlKem768EncapsulationKey {
-        MlKem768EncapsulationKey::from(&self.viewing_secret_key)
+    pub fn generate_viewing_public_key(&self) -> ViewingPublicKey {
+        ViewingPublicKey::from(&self.viewing_secret_key)
     }
 }
 

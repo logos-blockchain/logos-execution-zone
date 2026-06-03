@@ -31,7 +31,7 @@ risc0-build = "3.0.3"
 risc0-binfmt = "3.0.2"
 
 [dev-dependencies]
-nssa_core = { workspace = true, features = ["test_utils"] }
+lee_core = { workspace = true, features = ["test_utils"] }
 token_core.workspace = true
 authenticated_transfer_core.workspace = true
 test_program_methods.workspace = true

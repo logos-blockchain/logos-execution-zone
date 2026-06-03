@@ -43,6 +43,7 @@ async fn indexer_state_consistency_with_labels() -> Result<()> {
         to: Some(CliAccountMention::Label(to_label)),
         to_npk: None,
         to_vpk: None,
+        to_keys: None,
         to_identifier: Some(0),
         amount: 100,
     });
