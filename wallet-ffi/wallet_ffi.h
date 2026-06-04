@@ -208,6 +208,19 @@ typedef struct FfiPublicAccountKey {
 } FfiPublicAccountKey;
 
 /**
+ * FFI signature shape produced by `wallet_ffi_sign_message_at_chain_index`.
+ *
+ * `signature` is a 64-byte BIP-340 Schnorr-over-secp256k1 signature.
+ * `verifying_public_key` is the 32-byte x-only public key matching the
+ * signing key derived at the specified chain index. Both arrays are
+ * inlined by value — no allocation, no free function needed.
+ */
+typedef struct FfiCardSignature {
+  uint8_t signature[64];
+  uint8_t verifying_public_key[32];
+} FfiCardSignature;
+
+/**
  * Result of a transfer operation.
  */
 typedef struct FfiTransferResult {
@@ -571,6 +584,42 @@ enum WalletFfiError wallet_ffi_get_first_private_accounts_key(struct WalletHandl
 enum WalletFfiError wallet_ffi_get_private_accounts_key_by_chain_index(struct WalletHandle *handle,
                                                                        const char *chain_index_str,
                                                                        struct FfiPrivateAccountKeys *out_keys);
+
+/**
+ * Sign an arbitrary message with the private accounts key at the
+ * specified chain index. Uses BIP-340 Schnorr over secp256k1 with the
+ * secret_spending_key as the signing scalar. The message is SHA-256
+ * prehashed (matching the existing nssa::Signature::new convention).
+ *
+ * Designed for clients that need to sign application-level material
+ * (e.g. an A2A AgentCard or a JWS) with the same key tree the wallet
+ * uses, without surfacing the private scalar to the host.
+ *
+ * # Parameters
+ * - `handle`: Valid wallet handle
+ * - `chain_index_str`: Null-terminated UTF-8 chain index path (e.g. "/" for the root)
+ * - `message`: Pointer to the message bytes to sign
+ * - `message_len`: Length of the message in bytes
+ * - `out_sig`: Output pointer for the {signature, verifying public key} pair
+ *
+ * # Returns
+ * - `Success` on success
+ * - `InvalidUtf8` if `chain_index_str` is malformed
+ * - `AccountNotFound` if no node exists at the given chain index
+ * - `InternalError` if the signing scalar is not a valid k256 secret key
+ * - Error code on other failures
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle
+ * - `chain_index_str` must be a valid null-terminated UTF-8 string
+ * - `message` must be a valid pointer to at least `message_len` bytes
+ * - `out_sig` must be a valid pointer to an `FfiCardSignature` struct
+ */
+enum WalletFfiError wallet_ffi_sign_message_at_chain_index(struct WalletHandle *handle,
+                                                           const char *chain_index_str,
+                                                           const uint8_t *message,
+                                                           uintptr_t message_len,
+                                                           struct FfiCardSignature *out_sig);
 
 /**
  * Free private account keys returned by `wallet_ffi_get_private_account_keys`.

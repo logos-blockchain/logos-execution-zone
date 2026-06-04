@@ -10477,11 +10477,13 @@ name = "wallet-ffi"
 version = "0.1.0"
 dependencies = [
  "cbindgen",
+ "k256",
  "key_protocol",
  "nssa",
  "nssa_core",
  "sequencer_service_rpc",
  "serde_json",
+ "sha2",
  "tempfile",
  "tokio",
  "wallet",

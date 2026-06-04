@@ -311,6 +311,124 @@ pub unsafe extern "C" fn wallet_ffi_get_private_accounts_key_by_chain_index(
     WalletFfiError::Success
 }
 
+/// FFI signature shape produced by `wallet_ffi_sign_message_at_chain_index`.
+///
+/// `signature` is a 64-byte BIP-340 Schnorr-over-secp256k1 signature.
+/// `verifying_public_key` is the 32-byte x-only public key matching the
+/// signing key derived at the specified chain index. Both arrays are
+/// inlined by value — no allocation, no free function needed.
+#[repr(C)]
+pub struct FfiCardSignature {
+    pub signature: [u8; 64],
+    pub verifying_public_key: [u8; 32],
+}
+
+/// Sign an arbitrary message with the private accounts key at the
+/// specified chain index. Uses BIP-340 Schnorr over secp256k1 with the
+/// secret_spending_key as the signing scalar. The message is SHA-256
+/// prehashed (matching the existing nssa::Signature::new convention).
+///
+/// Designed for clients that need to sign application-level material
+/// (e.g. an A2A AgentCard or a JWS) with the same key tree the wallet
+/// uses, without surfacing the private scalar to the host.
+///
+/// # Parameters
+/// - `handle`: Valid wallet handle
+/// - `chain_index_str`: Null-terminated UTF-8 chain index path (e.g. "/" for the root)
+/// - `message`: Pointer to the message bytes to sign
+/// - `message_len`: Length of the message in bytes
+/// - `out_sig`: Output pointer for the {signature, verifying public key} pair
+///
+/// # Returns
+/// - `Success` on success
+/// - `InvalidUtf8` if `chain_index_str` is malformed
+/// - `AccountNotFound` if no node exists at the given chain index
+/// - `InternalError` if the signing scalar is not a valid k256 secret key
+/// - Error code on other failures
+///
+/// # Safety
+/// - `handle` must be a valid wallet handle
+/// - `chain_index_str` must be a valid null-terminated UTF-8 string
+/// - `message` must be a valid pointer to at least `message_len` bytes
+/// - `out_sig` must be a valid pointer to an `FfiCardSignature` struct
+#[no_mangle]
+pub unsafe extern "C" fn wallet_ffi_sign_message_at_chain_index(
+    handle: *mut WalletHandle,
+    chain_index_str: *const std::ffi::c_char,
+    message: *const u8,
+    message_len: usize,
+    out_sig: *mut FfiCardSignature,
+) -> WalletFfiError {
+    use key_protocol::key_management::key_tree::chain_index::ChainIndex;
+    use sha2::{Digest as _, Sha256};
+    use std::str::FromStr as _;
+
+    let wrapper = match get_wallet(handle) {
+        Ok(w) => w,
+        Err(e) => return e,
+    };
+
+    if chain_index_str.is_null() || message.is_null() || out_sig.is_null() {
+        print_error("Null pointer argument");
+        return WalletFfiError::NullPointer;
+    }
+
+    let Ok(chain_index_str) = crate::c_str_to_string(chain_index_str, "chain_index_str") else {
+        return WalletFfiError::InvalidUtf8;
+    };
+    let Ok(chain_index) = ChainIndex::from_str(&chain_index_str) else {
+        print_error(format!("Failed to parse chain index: {chain_index_str}"));
+        return WalletFfiError::InvalidKeyValue;
+    };
+
+    let wallet = match wrapper.core.lock() {
+        Ok(w) => w,
+        Err(e) => {
+            print_error(format!("Failed to lock wallet: {e}"));
+            return WalletFfiError::InternalError;
+        }
+    };
+
+    let Some(key_chain) = wallet.private_accounts_key_chain_by_index(&chain_index) else {
+        print_error(format!("No private accounts key at chain index {chain_index_str}"));
+        return WalletFfiError::AccountNotFound;
+    };
+
+    let secret_scalar = key_chain.secret_spending_key.0;
+    let Ok(signing_key) = k256::schnorr::SigningKey::from_bytes(&secret_scalar) else {
+        print_error("secret_spending_key is not a valid Schnorr signing scalar");
+        return WalletFfiError::InternalError;
+    };
+
+    // Prehash with SHA-256 to fit the 32-byte BIP-340 message input.
+    let msg_slice = unsafe { std::slice::from_raw_parts(message, message_len) };
+    let mut hasher = Sha256::new();
+    hasher.update(msg_slice);
+    let prehash: [u8; 32] = hasher.finalize().into();
+
+    let mut aux_random = [0_u8; 32];
+    use k256::elliptic_curve::rand_core::{OsRng, RngCore as _};
+    OsRng.fill_bytes(&mut aux_random);
+
+    let signature = match signing_key.sign_prehash_with_aux_rand(&prehash, &aux_random) {
+        Ok(s) => s,
+        Err(e) => {
+            print_error(format!("Schnorr signing failed: {e}"));
+            return WalletFfiError::InternalError;
+        }
+    };
+
+    let verifying_key = signing_key.verifying_key();
+    let verifying_bytes = verifying_key.to_bytes();
+
+    unsafe {
+        (*out_sig).signature = signature.to_bytes();
+        (*out_sig).verifying_public_key = verifying_bytes.into();
+    }
+
+    WalletFfiError::Success
+}
+
 /// Free private account keys returned by `wallet_ffi_get_private_account_keys`.
 ///
 /// # Safety
