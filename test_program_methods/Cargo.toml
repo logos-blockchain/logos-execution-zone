@@ -7,6 +7,9 @@ license = { workspace = true }
 [lints]
 workspace = true
 
+[dependencies]
+borsh.workspace = true
+
 [build-dependencies]
 risc0-build.workspace = true
 

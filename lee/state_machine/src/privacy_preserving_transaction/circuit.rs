@@ -838,6 +838,234 @@ mod tests {
         assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
     }
 
+    /// Prove N PPE transactions and aggregate all their proofs into one succinct receipt.
+    ///
+    /// Uses the `ppe_aggregation` guest (in `test_program_methods`). The host
+    /// loads each PPE receipt as an assumption and passes the journals to the
+    /// guest, which calls `env::verify` for each. The resulting receipt proves
+    /// "all N PPE executions were valid" in one succinct proof.
+    ///
+    /// This test uses N=3 to demonstrate the generalised aggregation.
+    #[test]
+    fn aggregate_n_ppe_proofs() {
+        use lee_core::account::Nonce;
+        use risc0_zkvm::{ExecutorEnv, InnerReceipt, ProverOpts, Receipt, default_prover};
+        use test_program_methods::{PPE_AGGREGATION_ELF, PPE_AGGREGATION_ID};
+
+        let program = Program::authenticated_transfer_program();
+
+        // ── Proof 0: public sender → private recipient ────────────────────────────
+        let keys_0 = test_private_account_keys_1();
+        let ssk_0 = SharedSecretKey::encapsulate_deterministic(&keys_0.vpk(), &[0_u8; 32], 0).0;
+        let (output_0, proof_0) = execute_and_prove(
+            vec![
+                AccountWithMetadata::new(
+                    Account { program_owner: program.id(), balance: 100, ..Account::default() },
+                    true,
+                    AccountId::new([0x01; 32]),
+                ),
+                AccountWithMetadata::new(
+                    Account::default(),
+                    false,
+                    AccountId::for_regular_private_account(&keys_0.npk(), 0),
+                ),
+            ],
+            Program::serialize_instruction(
+                authenticated_transfer_core::Instruction::Transfer { amount: 10 },
+            ).unwrap(),
+            vec![
+                InputAccountIdentity::Public,
+                InputAccountIdentity::PrivateUnauthorized {
+                    npk: keys_0.npk(),
+                    ssk: ssk_0,
+                    identifier: 0,
+                },
+            ],
+            &program.clone().into(),
+        ).expect("proof 0 should succeed");
+
+        // ── Proof 1: public sender → private recipient ────────────────────────────
+        let keys_1 = test_private_account_keys_2();
+        let ssk_1 = SharedSecretKey::encapsulate_deterministic(&keys_1.vpk(), &[0_u8; 32], 0).0;
+        let (output_1, proof_1) = execute_and_prove(
+            vec![
+                AccountWithMetadata::new(
+                    Account { program_owner: program.id(), balance: 200, ..Account::default() },
+                    true,
+                    AccountId::new([0x02; 32]),
+                ),
+                AccountWithMetadata::new(
+                    Account::default(),
+                    false,
+                    AccountId::for_regular_private_account(&keys_1.npk(), 0),
+                ),
+            ],
+            Program::serialize_instruction(
+                authenticated_transfer_core::Instruction::Transfer { amount: 20 },
+            ).unwrap(),
+            vec![
+                InputAccountIdentity::Public,
+                InputAccountIdentity::PrivateUnauthorized {
+                    npk: keys_1.npk(),
+                    ssk: ssk_1,
+                    identifier: 0,
+                },
+            ],
+            &program.clone().into(),
+        ).expect("proof 1 should succeed");
+
+        // ── Proof 2: fully private transfer ──────────────────────────────────────
+        let sender_keys_2 = test_private_account_keys_1();
+        let recipient_keys_2 = test_private_account_keys_2();
+        let sender_2_id = AccountId::for_regular_private_account(&sender_keys_2.npk(), 0);
+        let sender_2_account =
+            Account { program_owner: program.id(), balance: 50, nonce: Nonce(1), ..Account::default() };
+        let sender_2_commitment = Commitment::new(&sender_2_id, &sender_2_account);
+        let mut cs = CommitmentSet::with_capacity(1);
+        cs.extend(std::slice::from_ref(&sender_2_commitment));
+        // sender is output index 0, recipient is output index 1
+        let ssk_2_sender =
+            SharedSecretKey::encapsulate_deterministic(&sender_keys_2.vpk(), &[0_u8; 32], 0).0;
+        let ssk_2_recipient =
+            SharedSecretKey::encapsulate_deterministic(&recipient_keys_2.vpk(), &[0_u8; 32], 1).0;
+        let (output_2, proof_2) = execute_and_prove(
+            vec![
+                AccountWithMetadata::new(sender_2_account, true, sender_2_id),
+                AccountWithMetadata::new(
+                    Account::default(),
+                    false,
+                    AccountId::for_regular_private_account(&recipient_keys_2.npk(), 1),
+                ),
+            ],
+            Program::serialize_instruction(
+                authenticated_transfer_core::Instruction::Transfer { amount: 30 },
+            ).unwrap(),
+            vec![
+                InputAccountIdentity::PrivateAuthorizedUpdate {
+                    ssk: ssk_2_sender,
+                    nsk: sender_keys_2.nsk,
+                    membership_proof: cs.get_proof_for(&sender_2_commitment).unwrap(),
+                    identifier: 0,
+                },
+                InputAccountIdentity::PrivateUnauthorized {
+                    npk: recipient_keys_2.npk(),
+                    ssk: ssk_2_recipient,
+                    identifier: 1,
+                },
+            ],
+            &program.into(),
+        ).expect("proof 2 should succeed");
+
+        // ── Aggregate all three ───────────────────────────────────────────────────
+        let proofs: Vec<(PrivacyPreservingCircuitOutput, Proof)> =
+            vec![(output_0, proof_0), (output_1, proof_1), (output_2, proof_2)];
+
+        let mut env_builder = ExecutorEnv::builder();
+        env_builder.write(&PRIVACY_PRESERVING_CIRCUIT_ID).unwrap();
+        env_builder.write(&(proofs.len() as u32)).unwrap();
+
+        // Write journals first, then add assumptions — ordering matters for the guest.
+        let journals: Vec<Vec<u8>> = proofs.iter().map(|(o, _)| o.to_bytes()).collect();
+        for journal in &journals {
+            env_builder.write(journal).unwrap();
+        }
+        for ((_, proof), journal) in proofs.iter().zip(&journals) {
+            let inner: InnerReceipt = borsh::from_slice(&proof.0).unwrap();
+            env_builder.add_assumption(Receipt::new(inner, journal.clone()));
+        }
+
+        let env = env_builder.build().unwrap();
+        let prove_info = default_prover()
+            .prove_with_opts(env, PPE_AGGREGATION_ELF, &ProverOpts::succinct())
+            .expect("aggregation proving should succeed");
+
+        prove_info
+            .receipt
+            .verify(PPE_AGGREGATION_ID)
+            .expect("aggregated proof must verify");
+
+        let recovered: Vec<PrivacyPreservingCircuitOutput> =
+            prove_info.receipt.journal.decode().unwrap();
+        assert_eq!(recovered.len(), proofs.len());
+        for (i, (expected_output, _)) in proofs.iter().enumerate() {
+            assert_eq!(&recovered[i], expected_output, "output {i} mismatch");
+        }
+    }
+
+    /// Aggregate pre-generated PPE proofs loaded from disk.
+    ///
+    /// This test isolates the aggregation circuit from individual transaction proving:
+    /// it loads fixtures produced by `ppe_test_data_gen`, reconstructs each receipt,
+    /// and runs only the `PPE_AGGREGATION_ELF` circuit — no `execute_and_prove` call.
+    ///
+    /// Skips gracefully when the fixture file is absent so CI is not broken.
+    /// To run: generate fixtures first, then point the test at them:
+    ///
+    /// ```sh
+    /// RISC0_DEV_MODE=1 cargo run --release -p ppe_test_data_gen -- --output ppe_fixtures.bin
+    /// RISC0_DEV_MODE=1 cargo test -p lee aggregate_ppe_proofs_from_fixtures
+    /// ```
+    ///
+    /// Override the path via the `PPE_FIXTURES` env var (default: `ppe_fixtures.bin`).
+    #[test]
+    fn aggregate_ppe_proofs_from_fixtures() {
+        use risc0_zkvm::{ExecutorEnv, InnerReceipt, ProverOpts, Receipt, default_prover};
+        use test_program_methods::{PPE_AGGREGATION_ELF, PPE_AGGREGATION_ID, PpeFixture};
+
+        let path =
+            std::env::var("PPE_FIXTURES").unwrap_or_else(|_| "ppe_fixtures.bin".to_owned());
+        let mut fixtures = PpeFixture::load_bundle(&path);
+
+        if fixtures.is_empty() {
+            return; // file absent — load_bundle already printed a skip notice
+        }
+
+        if let Ok(count_str) = std::env::var("PPE_FIXTURES_COUNT") {
+            let count: usize = count_str.parse().expect("PPE_FIXTURES_COUNT must be a number");
+            fixtures.truncate(count);
+        }
+
+        let mut env_builder = ExecutorEnv::builder();
+        env_builder.write(&PRIVACY_PRESERVING_CIRCUIT_ID).unwrap();
+        env_builder
+            .write(&u32::try_from(fixtures.len()).expect("fixture count fits in u32"))
+            .unwrap();
+
+        // Journals must be written before assumptions (guest reads them in order).
+        for f in &fixtures {
+            env_builder.write(&f.output_bytes).unwrap();
+        }
+        for f in &fixtures {
+            let inner: InnerReceipt = borsh::from_slice(&f.proof_bytes)
+                .expect("fixture proof_bytes is not a valid InnerReceipt");
+            env_builder.add_assumption(Receipt::new(inner, f.output_bytes.clone()));
+        }
+
+        let env = env_builder.build().unwrap();
+        let t0 = std::time::Instant::now();
+        let prove_info = default_prover()
+            .prove_with_opts(env, PPE_AGGREGATION_ELF, &ProverOpts::succinct())
+            .expect("aggregation proving should succeed");
+        let proving_ms = t0.elapsed().as_millis();
+
+        let proof_size = borsh::to_vec(&prove_info.receipt.inner).unwrap().len();
+        eprintln!(
+            "[lee::analytics] ppe_aggregation n={} proving_ms={} proof_size_bytes={}",
+            fixtures.len(),
+            proving_ms,
+            proof_size,
+        );
+
+        prove_info
+            .receipt
+            .verify(PPE_AGGREGATION_ID)
+            .expect("aggregated proof must verify");
+
+        let recovered: Vec<PrivacyPreservingCircuitOutput> =
+            prove_info.receipt.journal.decode().unwrap();
+        assert_eq!(recovered.len(), fixtures.len(), "recovered output count mismatch");
+    }
+
     #[test]
     fn private_pda_update_identifier_mismatch_fails() {
         let program = Program::pda_spend_proxy();

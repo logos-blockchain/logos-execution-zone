@@ -7455,6 +7455,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "439ee305def115ba05938db6eb1644ff94165c5ab5e9420d1c1bcedbba909391"
 
 [[package]]
+name = "ppe_test_data_gen"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "authenticated_transfer_core",
+ "borsh",
+ "clap",
+ "lee",
+ "lee_core",
+ "risc0-zkvm",
+]
+
+[[package]]
 name = "ppv-lite86"
 version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9851,6 +9864,7 @@ dependencies = [
 name = "test_program_methods"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "risc0-build",
 ]
 
@@ -9859,6 +9873,7 @@ name = "test_programs"
 version = "0.1.0"
 dependencies = [
  "authenticated_transfer_core",
+ "bytemuck",
  "clock_core",
  "faucet_core",
  "lee_core",

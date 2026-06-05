@@ -48,6 +48,7 @@ members = [
   "tools/cycle_bench",
   "tools/crypto_primitives_bench",
   "tools/integration_bench",
+  "tools/ppe_test_data_gen",
 ]
 
 [workspace.dependencies]

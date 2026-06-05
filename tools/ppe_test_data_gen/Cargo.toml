@@ -1,0 +1,25 @@
+[package]
+name = "ppe_test_data_gen"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+publish = false
+
+[lints]
+workspace = true
+
+# Enabling `prove` links in the RISC0 prover backend. Without it the binary
+# compiles but `execute_and_prove` will panic at runtime.
+# Set RISC0_DEV_MODE=1 for fast mock proofs during development.
+[features]
+default = ["prove"]
+prove = ["lee/prove", "risc0-zkvm/prove"]
+
+[dependencies]
+lee = { workspace = true }
+lee_core = { workspace = true, features = ["test_utils"] }
+authenticated_transfer_core.workspace = true
+risc0-zkvm.workspace = true
+borsh.workspace = true
+anyhow.workspace = true
+clap = { workspace = true }
