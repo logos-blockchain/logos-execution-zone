@@ -16,10 +16,7 @@ ignore = [
   { id = "RUSTSEC-2026-0118", reason = "`hickory-proto` v0.25.0-alpha.5 is present transitively from logos crates, modification may break integration" },
   { id = "RUSTSEC-2026-0119", reason = "`hickory-proto` v0.25.0-alpha.5 is present transitively from logos crates, modification may break integration" },
 
-  { id = "RUSTSEC-2025-0137", reason = "newest `rint` depends on rustc v1.90.0 and we build artifacts with v1.88.8" },
-
   { id = "RUSTSEC-2024-0370", reason = "transitive dependency of `logos-blockchain-http-api-common`, can't do anything than wait for upstream fix" },
->>>>>>> refs/rewritten/onto
 ]
 yanked = "deny"
 unused-ignored-advisory = "deny"

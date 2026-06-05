@@ -192,7 +192,6 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                     (to_npk, to_vpk)
                 };
 
-
                 let from = from.resolve(wallet_core.storage())?;
                 let to = to
                     .map(|account_mention| account_mention.resolve(wallet_core.storage()))
@@ -341,7 +340,6 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                 } else {
                     (holder_npk, holder_vpk)
                 };
-
 
                 let definition = definition.resolve(wallet_core.storage())?;
                 let holder = holder
