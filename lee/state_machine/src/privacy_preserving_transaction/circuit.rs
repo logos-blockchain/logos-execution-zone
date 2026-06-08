@@ -1026,6 +1026,14 @@ mod tests {
         }
 
         let mut env_builder = ExecutorEnv::builder();
+
+        // Smaller segments lower peak prover memory (handy on memory-constrained
+        // GPUs) at the cost of more segments and overall proving time.
+        if let Ok(po2_str) = std::env::var("PPE_SEGMENT_LIMIT_PO2") {
+            let po2: u32 = po2_str.parse().expect("PPE_SEGMENT_LIMIT_PO2 must be a number");
+            env_builder.segment_limit_po2(po2);
+        }
+
         env_builder.write(&PRIVACY_PRESERVING_CIRCUIT_ID).unwrap();
         env_builder
             .write(&u32::try_from(fixtures.len()).expect("fixture count fits in u32"))

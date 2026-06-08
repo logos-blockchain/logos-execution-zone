@@ -43,4 +43,5 @@ test-case = "3.3.1"
 [features]
 default = []
 prove = ["risc0-zkvm/prove"]
+cuda = ["risc0-zkvm/cuda"]
 test-utils = []
