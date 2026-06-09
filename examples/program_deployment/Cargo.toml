@@ -13,6 +13,11 @@ lee.workspace = true
 lee_core.workspace = true
 sequencer_service_rpc = { workspace = true, features = ["client"] }
 wallet.workspace = true
+pool_stub_core.workspace = true
+authenticated_transfer_core.workspace = true
+twap_core.workspace = true
+clock_core.workspace = true
+serde.workspace = true
 
 tokio = { workspace = true, features = ["macros"] }
 clap.workspace = true

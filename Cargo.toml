@@ -18,6 +18,10 @@ members = [
   "programs/clock/core",
   "programs/token/core",
   "programs/token",
+  "programs/pool_stub/core",
+  "programs/pool_stub",
+  "programs/twap/core",
+  "programs/twap",
   "programs/associated_token_account/core",
   "programs/associated_token_account",
   "programs/authenticated_transfer/core",
@@ -72,6 +76,10 @@ lez = { path = "lez" }
 clock_core = { path = "programs/clock/core" }
 token_core = { path = "programs/token/core" }
 token_program = { path = "programs/token" }
+pool_stub_core = { path = "programs/pool_stub/core" }
+pool_stub_program = { path = "programs/pool_stub" }
+twap_core = { path = "programs/twap/core" }
+twap_program = { path = "programs/twap" }
 amm_core = { path = "programs/amm/core" }
 amm_program = { path = "programs/amm" }
 ata_core = { path = "programs/associated_token_account/core" }
