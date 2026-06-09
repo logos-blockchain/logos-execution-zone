@@ -1,5 +1,5 @@
 [package]
-name = "twap_core"
+name = "oracle_price"
 version = "0.1.0"
 edition = "2024"
 license = { workspace = true }
@@ -8,5 +8,5 @@ license = { workspace = true }
 workspace = true
 
 [dependencies]
-oracle_price.workspace = true
-serde.workspace = true
+lee_core.workspace = true
+borsh.workspace = true

@@ -22,6 +22,7 @@ members = [
   "programs/pool_stub",
   "programs/twap/core",
   "programs/twap",
+  "programs/oracle_price",
   "programs/associated_token_account/core",
   "programs/associated_token_account",
   "programs/authenticated_transfer/core",
@@ -80,6 +81,7 @@ pool_stub_core = { path = "programs/pool_stub/core" }
 pool_stub_program = { path = "programs/pool_stub" }
 twap_core = { path = "programs/twap/core" }
 twap_program = { path = "programs/twap" }
+oracle_price = { path = "programs/oracle_price" }
 amm_core = { path = "programs/amm/core" }
 amm_program = { path = "programs/amm" }
 ata_core = { path = "programs/associated_token_account/core" }
