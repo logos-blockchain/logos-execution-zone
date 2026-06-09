@@ -1,6 +1,5 @@
 use std::time::Duration;
 
-use authenticated_transfer_core::Instruction as AuthIx;
 use clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID;
 use common::HashType;
 use common::transaction::LeeTransaction;
@@ -56,18 +55,6 @@ async fn main() {
     let (pool, _) = wallet.create_new_account_public(None);
     let (price, _) = wallet.create_new_account_public(None);
     let clock = CLOCK_01_PROGRAM_ACCOUNT_ID;
-
-    let auth_program = Program::authenticated_transfer_program();
-    hashes.push((
-        "reg_pool",
-        call(&wallet, &auth_program, vec![AccountIdentity::Public(pool)], AuthIx::Initialize).await,
-    ));
-    tokio::time::sleep(Duration::from_millis(1500)).await;
-    hashes.push((
-        "reg_price",
-        call(&wallet, &auth_program, vec![AccountIdentity::Public(price)], AuthIx::Initialize).await,
-    ));
-    tokio::time::sleep(Duration::from_millis(1500)).await;
 
     hashes.push((
         "init_pool",
