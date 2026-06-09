@@ -42,7 +42,11 @@ pub fn read_twap(
     let mut post = price_acc.account;
     post.data = Data::from(&out);
 
-    vec![AccountPostState::new_claimed_if_default(post, Claim::Authorized)]
+    vec![
+        AccountPostState::new(pool.account),
+        AccountPostState::new(clock.account),
+        AccountPostState::new_claimed_if_default(post, Claim::Authorized),
+    ]
 }
 
 fn oldest_at_or_before(p: &PoolAccount, target_block: u64) -> Observation {

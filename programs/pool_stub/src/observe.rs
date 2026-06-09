@@ -15,7 +15,10 @@ pub fn observe(
     let now = ClockAccountData::from_bytes(clock.account.data.as_ref());
 
     if now.block_id <= p.last_block {
-        return vec![];
+        return vec![
+            AccountPostState::new(pool.account),
+            AccountPostState::new(clock.account),
+        ];
     }
 
     let delta = (tick - p.last_tick).clamp(-MAX_TICK_DELTA, MAX_TICK_DELTA);
@@ -36,5 +39,8 @@ pub fn observe(
     let mut post = pool.account;
     post.data = Data::from(&p);
 
-    vec![AccountPostState::new_claimed_if_default(post, Claim::Authorized)]
+    vec![
+        AccountPostState::new_claimed_if_default(post, Claim::Authorized),
+        AccountPostState::new(clock.account),
+    ]
 }

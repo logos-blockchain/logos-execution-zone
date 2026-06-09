@@ -10,6 +10,21 @@ use serde::Serialize;
 use twap_core::{Instruction as TwapIx, PriceAccount};
 use wallet::{AccountIdentity, WalletCore};
 
+async fn await_included(wallet: &WalletCore, hash: HashType) {
+    for _ in 0..60 {
+        if wallet
+            .sequencer_client
+            .get_transaction(hash)
+            .await
+            .unwrap()
+            .is_some()
+        {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(1000)).await;
+    }
+}
+
 async fn deploy(wallet: &WalletCore, path: &str) -> (Program, HashType) {
     let bytecode = std::fs::read(path).unwrap();
     let program = Program::new(bytecode.clone()).unwrap();
@@ -21,6 +36,7 @@ async fn deploy(wallet: &WalletCore, path: &str) -> (Program, HashType) {
         .send_transaction(LeeTransaction::ProgramDeployment(tx))
         .await
         .unwrap();
+    await_included(wallet, hash).await;
 
     (program, hash)
 }
@@ -33,10 +49,13 @@ async fn call(
 ) -> HashType {
     let instruction_data = Program::serialize_instruction(ix).unwrap();
 
-    wallet
+    let hash = wallet
         .send_pub_tx(accounts, instruction_data, &program.clone().into())
         .await
-        .unwrap()
+        .unwrap();
+    await_included(wallet, hash).await;
+
+    hash
 }
 
 #[tokio::main]
