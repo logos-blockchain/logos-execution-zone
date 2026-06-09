@@ -217,8 +217,7 @@ mod tests {
 
     async fn make_service() -> SequencerService<MockBlockPublisher> {
         let config = test_config();
-        let (core, mempool_handle) =
-            SequencerCoreWithMockClients::start_from_config(config).await;
+        let (core, mempool_handle) = SequencerCoreWithMockClients::start_from_config(config).await;
         let arc_core = Arc::new(Mutex::new(core));
         SequencerService::new(arc_core, mempool_handle, 512)
     }
@@ -231,8 +230,7 @@ mod tests {
                 max_block_size: bytesize::ByteSize::b(1),
                 ..test_config()
             };
-            let (core2, mh2) =
-                SequencerCoreWithMockClients::start_from_config(config2).await;
+            let (core2, mh2) = SequencerCoreWithMockClients::start_from_config(config2).await;
             SequencerService::new(Arc::new(Mutex::new(core2)), mh2, 1)
         };
         let tx = common::test_utils::produce_dummy_empty_transaction();
