@@ -1,6 +1,6 @@
 use lee_core::{
     account::{AccountWithMetadata, Data},
-    program::AccountPostState,
+    program::{AccountPostState, Claim},
 };
 use pool_stub_core::{CARDINALITY, Observation, PoolAccount};
 
@@ -17,5 +17,5 @@ pub fn init(pool: AccountWithMetadata, tick: i32) -> Vec<AccountPostState> {
     let mut post = pool.account;
     post.data = Data::from(&pool_account);
 
-    vec![AccountPostState::new(post)]
+    vec![AccountPostState::new_claimed_if_default(post, Claim::Authorized)]
 }
