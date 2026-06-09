@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, sync::Arc};
 
-use common::transaction::LeeTransaction;
+use common::transaction::{LeeTransaction, TransactionMalformationError};
 use jsonrpsee::{
     core::async_trait,
     types::{ErrorCode, ErrorObjectOwned},
@@ -65,13 +65,7 @@ impl<BC: BlockPublisherTrait + Send + 'static> sequencer_service_rpc::RpcServer
         let authenticated_tx = tx
             .transaction_stateless_check()
             .inspect_err(|err| warn!("Error at pre_check {err:#?}"))
-            .map_err(|err| {
-                ErrorObjectOwned::owned(
-                    ErrorCode::InvalidParams.code(),
-                    format!("{err:?}"),
-                    None::<()>,
-                )
-            })?;
+            .map_err(malformation_to_rpc)?;
 
         self.mempool_handle
             .push((TransactionOrigin::User, authenticated_tx))
@@ -179,4 +173,84 @@ impl<BC: BlockPublisherTrait + Send + 'static> sequencer_service_rpc::RpcServer
 
 fn internal_error(err: &DbError) -> ErrorObjectOwned {
     ErrorObjectOwned::owned(ErrorCode::InternalError.code(), err.to_string(), None::<()>)
+}
+
+fn malformation_to_rpc(err: TransactionMalformationError) -> ErrorObjectOwned {
+    ErrorObjectOwned::owned(ErrorCode::InvalidParams.code(), err.to_string(), None::<()>)
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::shadow_unrelated, reason = "We don't care about it in tests")]
+
+    use std::{sync::Arc, time::Duration};
+
+    use common::test_utils::sequencer_sign_key_for_testing;
+    use jsonrpsee::types::ErrorCode;
+    use logos_blockchain_core::mantle::ops::channel::ChannelId;
+    use sequencer_core::{
+        config::{BedrockConfig, SequencerConfig},
+        mock::{MockBlockPublisher, SequencerCoreWithMockClients},
+    };
+    use tokio::sync::Mutex;
+
+    use super::*;
+
+    fn test_config() -> SequencerConfig {
+        let tempdir = tempfile::tempdir().unwrap();
+        SequencerConfig {
+            home: tempdir.into_path(),
+            max_num_tx_in_block: 10,
+            max_block_size: bytesize::ByteSize::b(512),
+            mempool_max_size: 10000,
+            block_create_timeout: Duration::from_secs(1),
+            signing_key: *sequencer_sign_key_for_testing().value(),
+            bedrock_config: BedrockConfig {
+                channel_id: ChannelId::from([0; 32]),
+                node_url: "http://not-used-in-tests".parse().unwrap(),
+                auth: None,
+            },
+            retry_pending_blocks_timeout: Duration::from_secs(4 * 60),
+            genesis: vec![],
+        }
+    }
+
+    async fn make_service() -> SequencerService<MockBlockPublisher> {
+        let config = test_config();
+        let (core, mempool_handle) =
+            SequencerCoreWithMockClients::start_from_config(config).await;
+        let arc_core = Arc::new(Mutex::new(core));
+        SequencerService::new(arc_core, mempool_handle, 512)
+    }
+
+    #[tokio::test]
+    async fn send_transaction_too_large_returns_invalid_params() {
+        use sequencer_service_rpc::RpcServer as _;
+        let tiny_service = {
+            let config2 = SequencerConfig {
+                max_block_size: bytesize::ByteSize::b(1),
+                ..test_config()
+            };
+            let (core2, mh2) =
+                SequencerCoreWithMockClients::start_from_config(config2).await;
+            SequencerService::new(Arc::new(Mutex::new(core2)), mh2, 1)
+        };
+        let tx = common::test_utils::produce_dummy_empty_transaction();
+        let result = tiny_service.send_transaction(tx).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.code(), ErrorCode::InvalidParams.code());
+        assert!(err.message().contains("too large") || err.message().contains("exceeds maximum"));
+    }
+
+    #[tokio::test]
+    async fn send_valid_transaction_returns_hash() {
+        use sequencer_service_rpc::RpcServer as _;
+        let service = make_service().await;
+        let tx = common::test_utils::produce_dummy_empty_transaction();
+        let expected_hash = tx.hash();
+        let result = service.send_transaction(tx).await;
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), expected_hash);
+    }
 }
