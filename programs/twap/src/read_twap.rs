@@ -2,14 +2,14 @@ use lee_core::{
     account::{AccountWithMetadata, Data},
     program::{AccountPostState, Claim},
 };
-use pool_stub_core::{ClockExt, Observation, PoolAccount};
+use pool_stub_core::{ClockExt, Observation, PoolAccount, WithClock};
 use twap_core::{PriceAccount, TWAP_SOURCE_ID};
 
 #[must_use]
 pub fn read_twap(
     pool: AccountWithMetadata,
-    clock: AccountWithMetadata,
     price_acc: AccountWithMetadata,
+    clock: AccountWithMetadata,
     window_blocks: u64,
     max_age_blocks: u64,
 ) -> Vec<AccountPostState> {
@@ -43,9 +43,9 @@ pub fn read_twap(
 
     vec![
         AccountPostState::new(pool.account),
-        AccountPostState::new(clock.account),
         AccountPostState::new_claimed_if_default(post, Claim::Authorized),
     ]
+    .with_clock(clock)
 }
 
 fn oldest_at_or_before(p: &PoolAccount, target_block: u64) -> Observation {

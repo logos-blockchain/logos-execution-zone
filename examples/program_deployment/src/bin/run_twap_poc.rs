@@ -106,8 +106,8 @@ async fn main() {
             &twap_program,
             vec![
                 AccountIdentity::PublicNoSign(pool),
-                AccountIdentity::PublicNoSign(clock),
                 AccountIdentity::Public(price),
+                AccountIdentity::PublicNoSign(clock),
             ],
             TwapIx::ReadTwap {
                 window_blocks: 3,

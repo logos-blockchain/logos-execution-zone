@@ -1,6 +1,9 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use clock_core::{CLOCK_01_PROGRAM_ACCOUNT_ID, ClockAccountData};
-use lee_core::account::{AccountWithMetadata, Data};
+use lee_core::{
+    account::{AccountWithMetadata, Data},
+    program::AccountPostState,
+};
 use serde::{Deserialize, Serialize};
 
 pub const CARDINALITY: usize = 16;
@@ -57,5 +60,21 @@ impl ClockExt for AccountWithMetadata {
         );
 
         ClockAccountData::from_bytes(self.account.data.as_ref())
+    }
+}
+
+pub trait WithClock {
+    fn with_clock(self, clock: AccountWithMetadata) -> Self;
+}
+
+impl WithClock for Vec<AccountPostState> {
+    fn with_clock(mut self, clock: AccountWithMetadata) -> Self {
+        assert_eq!(
+            clock.account_id, CLOCK_01_PROGRAM_ACCOUNT_ID,
+            "Not the system clock account"
+        );
+        self.push(AccountPostState::new(clock.account));
+
+        self
     }
 }

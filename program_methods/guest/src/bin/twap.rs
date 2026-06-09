@@ -19,10 +19,10 @@ fn main() {
             window_blocks,
             max_age_blocks,
         } => {
-            let [pool, clock, price] = pre_states
+            let [pool, price, clock] = pre_states
                 .try_into()
                 .expect("ReadTwap instruction requires exactly three accounts");
-            twap_program::read_twap::read_twap(pool, clock, price, window_blocks, max_age_blocks)
+            twap_program::read_twap::read_twap(pool, price, clock, window_blocks, max_age_blocks)
         }
     };
 

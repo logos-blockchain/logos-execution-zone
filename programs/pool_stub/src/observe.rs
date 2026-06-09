@@ -2,7 +2,7 @@ use lee_core::{
     account::{AccountWithMetadata, Data},
     program::{AccountPostState, Claim},
 };
-use pool_stub_core::{ClockExt, MAX_TICK_DELTA, Observation, PoolAccount};
+use pool_stub_core::{ClockExt, MAX_TICK_DELTA, Observation, PoolAccount, WithClock};
 
 #[must_use]
 pub fn observe(
@@ -14,10 +14,7 @@ pub fn observe(
     let now = clock.read_clock();
 
     if now.block_id <= p.last_block {
-        return vec![
-            AccountPostState::new(pool.account),
-            AccountPostState::new(clock.account),
-        ];
+        return vec![AccountPostState::new(pool.account)].with_clock(clock);
     }
 
     let delta = (tick - p.last_tick).clamp(-MAX_TICK_DELTA, MAX_TICK_DELTA);
@@ -38,8 +35,5 @@ pub fn observe(
     let mut post = pool.account;
     post.data = Data::from(&p);
 
-    vec![
-        AccountPostState::new_claimed_if_default(post, Claim::Authorized),
-        AccountPostState::new(clock.account),
-    ]
+    vec![AccountPostState::new_claimed_if_default(post, Claim::Authorized)].with_clock(clock)
 }
