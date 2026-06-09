@@ -1,9 +1,8 @@
-use clock_core::ClockAccountData;
 use lee_core::{
     account::{AccountWithMetadata, Data},
     program::{AccountPostState, Claim},
 };
-use pool_stub_core::{Observation, PoolAccount};
+use pool_stub_core::{ClockExt, Observation, PoolAccount};
 use twap_core::{PriceAccount, TWAP_SOURCE_ID};
 
 #[must_use]
@@ -15,7 +14,7 @@ pub fn read_twap(
     max_age_blocks: u64,
 ) -> Vec<AccountPostState> {
     let p = PoolAccount::try_from(&pool.account.data).expect("Invalid pool data");
-    let now = ClockAccountData::from_bytes(clock.account.data.as_ref());
+    let now = clock.read_clock();
 
     assert!(
         now.block_id.saturating_sub(p.last_block) <= max_age_blocks,

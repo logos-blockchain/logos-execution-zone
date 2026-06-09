@@ -1,9 +1,8 @@
-use clock_core::ClockAccountData;
 use lee_core::{
     account::{AccountWithMetadata, Data},
     program::{AccountPostState, Claim},
 };
-use pool_stub_core::{MAX_TICK_DELTA, Observation, PoolAccount};
+use pool_stub_core::{ClockExt, MAX_TICK_DELTA, Observation, PoolAccount};
 
 #[must_use]
 pub fn observe(
@@ -12,7 +11,7 @@ pub fn observe(
     tick: i32,
 ) -> Vec<AccountPostState> {
     let mut p = PoolAccount::try_from(&pool.account.data).expect("Invalid pool data");
-    let now = ClockAccountData::from_bytes(clock.account.data.as_ref());
+    let now = clock.read_clock();
 
     if now.block_id <= p.last_block {
         return vec![

@@ -1,5 +1,6 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee_core::account::Data;
+use clock_core::{CLOCK_01_PROGRAM_ACCOUNT_ID, ClockAccountData};
+use lee_core::account::{AccountWithMetadata, Data};
 use serde::{Deserialize, Serialize};
 
 pub const CARDINALITY: usize = 16;
@@ -41,5 +42,20 @@ impl From<&PoolAccount> for Data {
         BorshSerialize::serialize(pool, &mut data).expect("Serialization to Vec should not fail");
 
         Self::try_from(data).expect("Pool account encoded data should fit into Data")
+    }
+}
+
+pub trait ClockExt {
+    fn read_clock(&self) -> ClockAccountData;
+}
+
+impl ClockExt for AccountWithMetadata {
+    fn read_clock(&self) -> ClockAccountData {
+        assert_eq!(
+            self.account_id, CLOCK_01_PROGRAM_ACCOUNT_ID,
+            "Not the system clock account"
+        );
+
+        ClockAccountData::from_bytes(self.account.data.as_ref())
     }
 }
