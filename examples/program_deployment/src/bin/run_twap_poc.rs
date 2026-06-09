@@ -4,17 +4,12 @@ use authenticated_transfer_core::Instruction as AuthIx;
 use clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID;
 use common::HashType;
 use common::transaction::LeeTransaction;
-use lee::{
-    AccountId, PrivateKey, ProgramDeploymentTransaction, PublicTransaction,
-    program::Program,
-    program_deployment_transaction,
-    public_transaction::{Message, WitnessSet},
-};
+use lee::{ProgramDeploymentTransaction, program::Program, program_deployment_transaction};
 use pool_stub_core::Instruction as PoolIx;
 use sequencer_service_rpc::RpcClient as _;
 use serde::Serialize;
 use twap_core::{Instruction as TwapIx, PriceAccount};
-use wallet::WalletCore;
+use wallet::{AccountIdentity, WalletCore};
 
 async fn deploy(wallet: &WalletCore, path: &str) -> (Program, HashType) {
     let bytecode = std::fs::read(path).unwrap();
@@ -34,19 +29,13 @@ async fn deploy(wallet: &WalletCore, path: &str) -> (Program, HashType) {
 async fn call(
     wallet: &WalletCore,
     program: &Program,
-    accounts: Vec<AccountId>,
+    accounts: Vec<AccountIdentity>,
     ix: impl Serialize,
-    signing_keys: &[&PrivateKey],
 ) -> HashType {
     let instruction_data = Program::serialize_instruction(ix).unwrap();
-    let nonces = wallet.get_accounts_nonces(accounts.clone()).await.unwrap();
-    let message = Message::new_preserialized(program.id(), accounts, nonces, instruction_data);
-    let witness_set = WitnessSet::for_message(&message, signing_keys);
-    let tx = PublicTransaction::new(message, witness_set);
 
     wallet
-        .sequencer_client
-        .send_transaction(LeeTransaction::Public(tx))
+        .send_pub_tx(accounts, instruction_data, &program.clone().into())
         .await
         .unwrap()
 }
@@ -68,32 +57,38 @@ async fn main() {
     let (price, _) = wallet.create_new_account_public(None);
     let clock = CLOCK_01_PROGRAM_ACCOUNT_ID;
 
-    let pool_key = wallet.get_account_public_signing_key(pool).unwrap().clone();
-    let price_key = wallet.get_account_public_signing_key(price).unwrap().clone();
-
     let auth_program = Program::authenticated_transfer_program();
     hashes.push((
         "reg_pool",
-        call(&wallet, &auth_program, vec![pool], AuthIx::Initialize, &[&pool_key]).await,
+        call(&wallet, &auth_program, vec![AccountIdentity::Public(pool)], AuthIx::Initialize).await,
     ));
     tokio::time::sleep(Duration::from_millis(1500)).await;
     hashes.push((
         "reg_price",
-        call(&wallet, &auth_program, vec![price], AuthIx::Initialize, &[&price_key]).await,
+        call(&wallet, &auth_program, vec![AccountIdentity::Public(price)], AuthIx::Initialize).await,
     ));
     tokio::time::sleep(Duration::from_millis(1500)).await;
 
     hashes.push((
         "init_pool",
-        call(&wallet, &pool_program, vec![pool], PoolIx::InitPool { tick: 0 }, &[&pool_key]).await,
+        call(&wallet, &pool_program, vec![AccountIdentity::Public(pool)], PoolIx::InitPool { tick: 0 })
+            .await,
     ));
     tokio::time::sleep(Duration::from_millis(1500)).await;
 
     for tick in [100_i32, 250, 400, 9_000_000, 600] {
         hashes.push((
             "observe",
-            call(&wallet, &pool_program, vec![pool, clock], PoolIx::Observe { tick }, &[&pool_key])
-                .await,
+            call(
+                &wallet,
+                &pool_program,
+                vec![
+                    AccountIdentity::Public(pool),
+                    AccountIdentity::PublicNoSign(clock),
+                ],
+                PoolIx::Observe { tick },
+            )
+            .await,
         ));
         tokio::time::sleep(Duration::from_millis(1500)).await;
     }
@@ -103,12 +98,15 @@ async fn main() {
         call(
             &wallet,
             &twap_program,
-            vec![pool, clock, price],
+            vec![
+                AccountIdentity::PublicNoSign(pool),
+                AccountIdentity::PublicNoSign(clock),
+                AccountIdentity::Public(price),
+            ],
             TwapIx::ReadTwap {
                 window_blocks: 3,
                 max_age_blocks: 100,
             },
-            &[&price_key],
         )
         .await,
     ));
