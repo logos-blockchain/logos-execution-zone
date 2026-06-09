@@ -29,10 +29,9 @@ pub const DUMMY_COMMITMENT_HASH: [u8; 32] = [
     129, 241, 118, 39, 41, 253, 141, 171, 184, 71, 8, 41,
 ];
 
-#[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
-#[cfg_attr(
-    any(feature = "host", test),
-    derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)
+#[derive(
+    Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, BorshSerialize,
+    BorshDeserialize,
 )]
 pub struct Commitment(pub(super) [u8; 32]);
 

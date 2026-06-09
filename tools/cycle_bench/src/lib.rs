@@ -14,10 +14,17 @@
     feature = "ppe",
     expect(
         clippy::arbitrary_source_item_ordering,
+        reason = "PPE module: re-export ordering trips strict lints"
+    )
+)]
+#![cfg_attr(
+    any(feature = "ppe", feature = "aggregator"),
+    expect(
         clippy::print_stderr,
-        reason = "PPE module: re-export ordering and eprintln progress trip strict lints"
+        reason = "PPE/aggregator bench: eprintln progress messages"
     )
 )]
 
+pub mod aggregator;
 pub mod ppe;
 pub mod stats;

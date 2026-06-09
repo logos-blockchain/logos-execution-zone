@@ -27,7 +27,7 @@ use clock_core::{
     CLOCK_01_PROGRAM_ACCOUNT_ID, CLOCK_10_PROGRAM_ACCOUNT_ID, CLOCK_50_PROGRAM_ACCOUNT_ID,
     ClockAccountData,
 };
-use cycle_bench::{ppe, stats::Stats};
+use cycle_bench::{aggregator, ppe, stats::Stats};
 use lee::program_methods::{
     AMM_ELF, AMM_ID, ASSOCIATED_TOKEN_ACCOUNT_ELF, ASSOCIATED_TOKEN_ACCOUNT_ID,
     AUTHENTICATED_TRANSFER_ELF, AUTHENTICATED_TRANSFER_ID, CLOCK_ELF, CLOCK_ID, TOKEN_ELF,
@@ -54,6 +54,12 @@ struct Cli {
     /// with depth N=1,3,5,9. Requires --features ppe at build time. Very slow.
     #[arg(long)]
     ppe: bool,
+
+    /// Also run aggregator circuit benches: batch N=1,3,5 pp-proofs through both the
+    /// core and strict aggregator circuits. Reports pp-prove time, agg-prove time, and
+    /// proof sizes. Requires --features aggregator at build time and a full RISC0 build.
+    #[arg(long)]
+    aggregator: bool,
 
     /// Iterations for executor wall-time sampling per case. First iter is
     /// discarded as warmup, remaining N feed the stats.
@@ -515,6 +521,25 @@ fn main() -> Result<()> {
         ppe::print_table(&ppe_results);
     }
 
+    #[cfg(feature = "aggregator")]
+    let agg_results = if cli.aggregator {
+        aggregator::run_all()
+    } else {
+        Vec::new()
+    };
+    #[cfg(not(feature = "aggregator"))]
+    let agg_results: Vec<aggregator::AggregatorBenchResult> = {
+        if cli.aggregator {
+            eprintln!(
+                "cycle_bench: --aggregator requires --features aggregator at build time. Ignoring."
+            );
+        }
+        Vec::new()
+    };
+    if !agg_results.is_empty() {
+        aggregator::print_table(&agg_results);
+    }
+
     let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("..")
@@ -526,6 +551,7 @@ fn main() -> Result<()> {
     let combined = serde_json::json!({
         "standalone": results,
         "ppe": ppe_results,
+        "aggregator": agg_results,
     });
     std::fs::write(&out_path, serde_json::to_string_pretty(&combined)?)?;
     println!("\nJSON written to {}", out_path.display());

@@ -65,10 +65,9 @@ impl From<&NullifierSecretKey> for NullifierPublicKey {
 
 pub type NullifierSecretKey = [u8; 32];
 
-#[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
-#[cfg_attr(
-    any(feature = "host", test),
-    derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)
+#[derive(
+    Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, BorshSerialize,
+    BorshDeserialize,
 )]
 pub struct Nullifier(pub(super) [u8; 32]);
 

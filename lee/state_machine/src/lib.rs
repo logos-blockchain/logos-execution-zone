@@ -22,6 +22,7 @@ pub use state::{
 };
 pub use validated_state_diff::ValidatedStateDiff;
 
+pub mod aggregator_circuit;
 pub mod encoding;
 pub mod error;
 mod merkle_tree;
