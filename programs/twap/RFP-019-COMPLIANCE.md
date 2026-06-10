@@ -1,7 +1,7 @@
 # RFP-019 — requirement traceability
 
-Status of each RFP-019 requirement against this PoC.
-Legend: ✅ done in PoC · 🟡 partial · ❌ not done / out of PoC scope.
+Status of each RFP-019 requirement against this implementation.
+Legend: ✅ implemented · 🟡 partial · ❌ not yet implemented.
 
 Code lives in: `oracle_price` (standard), `pool_stub` (DEX stand-in for RFP-004),
 `twap`/`twap_core` (oracle), `examples/program_deployment/src/bin/run_twap_poc.rs`
@@ -15,7 +15,7 @@ Code lives in: `oracle_price` (standard), `pool_stub` (DEX stand-in for RFP-004)
    Source is `pool_stub` (stands in for the RFP-004 DEX, which isn't available).
 2. 🟡 **Tick accumulator + configurable cardinality (default 1, up to 65,535)** —
    `pool_stub_core::PoolAccount.obs` sized at `InitPool { cardinality: u16 }`
-   (clamped ≥1). Configurable up to 65,535. Gaps: PoC driver uses 16, not the
+   (clamped ≥1). Configurable up to 65,535. Gaps: the driver uses 16, not the
    RFP default 1; **cardinality *expansion* of an existing pool is not implemented**
    (only set at init).
 3. 🟡 **Query returns TWAP price + observation timestamps used** — price is
@@ -48,7 +48,7 @@ Code lives in: `oracle_price` (standard), `pool_stub` (DEX stand-in for RFP-004)
 1. ❌ SDK doc packet (+ Recommended Consumer Pattern).
 2. ❌ CLI doc packet.
 3. ❌ Figma designs for the mini-app.
-4. 🟡 README — `rfp-019-twap-poc` README + `MATH_REFERENCES.md` exist; no full
+4. 🟡 README — repo README + `MATH_REFERENCES.md` exist; no full
    deployment/addresses/CLI/mini-app walkthrough.
 
 ## Testing & Reliability
@@ -60,8 +60,8 @@ Code lives in: `oracle_price` (standard), `pool_stub` (DEX stand-in for RFP-004)
 3. ❌ **Per-pool failure isolation** — single pool only.
 4. ✅ **Deployed + tested on devnet/testnet** — verified live on a local LEZ
    sequencer (deploy → init → observe ×N → read → price).
-5. 🟡 **E2E tests in CI, green** — e2e exercised manually via the driver; unit
-   tests pass; **no CI wired**.
+5. 🟡 **E2E tests in CI, green** — e2e exercised via the driver; unit tests pass;
+   **no CI wired**.
 6. 🟡 **Test suite** — unit tests for TWAP correctness (`tick_to_price`,
    `average_tick`) and **tick-delta truncation** (`clamp_tick_delta`) in
    `twap_core`/`pool_stub_core`. Gaps: staleness-rejection, `(base,quote)`
@@ -92,12 +92,12 @@ Code lives in: `oracle_price` (standard), `pool_stub` (DEX stand-in for RFP-004)
 
 ## Summary
 
-The PoC proves the **on-chain core**: read accumulator → geometric-mean TWAP
-(integer fixed-point) → per-block truncation → maxAge gating → write the
-canonical, standalone price-account standard, verified end-to-end on live LEZ.
+The **on-chain core** is implemented and verified end-to-end on live LEZ: read
+accumulator → geometric-mean TWAP (integer fixed-point) → per-block truncation
+→ maxAge gating → write the canonical, standalone price-account standard.
 
-Main gaps to a full RFP-019 delivery: SPEL IDL for the standard; owner-gated
-feed registration + cardinality expansion; SDK / CLI / mini-app / reference
-consumer (incl. multi-source); CI + the remaining tests; CU-cost and
+Remaining work for the full RFP-019 deliverable: SPEL IDL for the standard;
+owner-gated feed registration + cardinality expansion; SDK / CLI / mini-app /
+reference consumer (incl. multi-source); CI + the remaining tests; CU-cost and
 manipulation-cost analyses; per-pool governable `MAX_TICK_DELTA`; and swapping
 `pool_stub` for the real RFP-004 DEX.

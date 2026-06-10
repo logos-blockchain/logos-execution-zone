@@ -12,9 +12,9 @@ constants, Q64.96, tick range ±887272):
 - v4: <https://github.com/Uniswap/v4-core/blob/main/src/libraries/TickMath.sol>
 - docs: <https://docs.uniswap.org/contracts/v3/reference/core/libraries/TickMath>
 
-Our `twap_core::tick_to_price` is a simplified integer `pow` (exponentiation by
-squaring in 1e18 fixed-point) that is correct for the PoC tick range. Production
-should port the audited constants above for the full range and overflow safety.
+Our `twap_core::tick_to_price` is an integer `pow` (exponentiation by squaring
+in 1e18 fixed-point), correct for the currently supported tick range. The full
+±887272 range with overflow safety needs the audited constants above ported.
 
 ## 2. Accumulator + `average_tick` — geometric-mean TWAP (Uniswap Oracle)
 
