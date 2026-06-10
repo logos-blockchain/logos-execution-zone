@@ -77,8 +77,16 @@ async fn main() {
 
     hashes.push((
         "init_pool",
-        call(&wallet, &pool_program, vec![AccountIdentity::Public(pool)], PoolIx::InitPool { tick: 0 })
-            .await,
+        call(
+            &wallet,
+            &pool_program,
+            vec![AccountIdentity::Public(pool)],
+            PoolIx::InitPool {
+                tick: 0,
+                cardinality: 16,
+            },
+        )
+        .await,
     ));
     tokio::time::sleep(Duration::from_millis(1500)).await;
 

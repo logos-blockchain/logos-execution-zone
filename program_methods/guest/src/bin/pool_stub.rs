@@ -15,11 +15,11 @@ fn main() {
     let pre_states_clone = pre_states.clone();
 
     let post_states = match instruction {
-        Instruction::InitPool { tick } => {
+        Instruction::InitPool { tick, cardinality } => {
             let [pool] = pre_states
                 .try_into()
                 .expect("InitPool instruction requires exactly one account");
-            pool_stub_program::init::init(pool, tick)
+            pool_stub_program::init::init(pool, tick, cardinality)
         }
         Instruction::Observe { tick } => {
             let [pool, clock] = pre_states

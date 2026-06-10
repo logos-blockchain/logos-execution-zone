@@ -6,12 +6,11 @@ use lee_core::{
 };
 use serde::{Deserialize, Serialize};
 
-pub const CARDINALITY: usize = 16;
 pub const MAX_TICK_DELTA: i32 = 9_116;
 
 #[derive(Serialize, Deserialize)]
 pub enum Instruction {
-    InitPool { tick: i32 },
+    InitPool { tick: i32, cardinality: u16 },
     Observe { tick: i32 },
 }
 
