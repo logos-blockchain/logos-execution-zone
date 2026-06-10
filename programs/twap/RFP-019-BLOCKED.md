@@ -52,8 +52,6 @@ from the DEX*, so without the DEX there is nothing real to read. We substitute
 
 These need no missing piece; only more work:
 
-- Full-range integer TickMath (port the audited Uniswap constants for the
-  ±887272 tick range and overflow safety).
 - A pure read-only consult path (current `read_twap` writes the price account).
 - Cardinality *expansion* of an existing pool (currently only set at init).
 - Pool registration/deregistration **state-transition tests** (the mechanism
