@@ -3,7 +3,7 @@
 //! Extends the core aggregator circuit with one additional check proven inside RISC0:
 //! - Each transaction's validity window contains the provided `block_id` and `timestamp`.
 
-use std::{collections::HashSet, convert::Infallible};
+use std::convert::Infallible;
 
 use lee_core::{
     AggregatorCircuitInput, AggregatorCircuitOutput, Commitment, Nullifier, account::AccountId,
@@ -25,23 +25,27 @@ fn main() {
             .unwrap_or_else(|_: Infallible| unreachable!("Infallible error is never constructed"));
     }
 
-    let mut seen_nullifiers: HashSet<Nullifier> = HashSet::new();
+    // Linear-scan dedup: batches are small (n is bounded), so a `Vec` + `contains` check
+    // avoids the per-element hashing cost of `HashSet` in the zkVM.
+    let mut seen_nullifiers: Vec<Nullifier> = Vec::new();
     for output in &circuit_outputs {
         for (nullifier, _) in &output.new_nullifiers {
             assert!(
-                seen_nullifiers.insert(*nullifier),
+                !seen_nullifiers.contains(nullifier),
                 "Duplicate nullifier across transactions in batch"
             );
+            seen_nullifiers.push(*nullifier);
         }
     }
 
-    let mut seen_commitments: HashSet<Commitment> = HashSet::new();
+    let mut seen_commitments: Vec<Commitment> = Vec::new();
     for output in &circuit_outputs {
         for commitment in &output.new_commitments {
             assert!(
-                seen_commitments.insert(commitment.clone()),
+                !seen_commitments.contains(commitment),
                 "Duplicate commitment across transactions in batch"
             );
+            seen_commitments.push(commitment.clone());
         }
     }
 
@@ -56,16 +60,17 @@ fn main() {
         );
     }
 
-    let mut seen_updated_account_ids: HashSet<AccountId> = HashSet::new();
+    let mut seen_updated_account_ids: Vec<AccountId> = Vec::new();
     for output in &circuit_outputs {
         for (pre_state, post_state) in
             output.public_pre_states.iter().zip(output.public_post_states.iter())
         {
             if pre_state.account != *post_state {
                 assert!(
-                    seen_updated_account_ids.insert(pre_state.account_id),
+                    !seen_updated_account_ids.contains(&pre_state.account_id),
                     "Public account updated by multiple transactions in batch"
                 );
+                seen_updated_account_ids.push(pre_state.account_id);
             }
         }
     }

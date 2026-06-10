@@ -962,13 +962,15 @@ mod tests {
 
         let mut env_builder = ExecutorEnv::builder();
         env_builder.write(&PRIVACY_PRESERVING_CIRCUIT_ID).unwrap();
-        env_builder.write(&(proofs.len() as u32)).unwrap();
 
-        // Write journals first, then add assumptions — ordering matters for the guest.
+        // Outputs are written once as a word-native `Vec<&PrivacyPreservingCircuitOutput>`
+        // (matching `aggregator_circuit`'s `AggregatorCircuitInput`) instead of N raw
+        // `Vec<u8>` journal buffers — see the ppe_aggregation guest for why.
+        let outputs: Vec<&PrivacyPreservingCircuitOutput> =
+            proofs.iter().map(|(o, _)| o).collect();
+        env_builder.write(&outputs).unwrap();
+
         let journals: Vec<Vec<u8>> = proofs.iter().map(|(o, _)| o.to_bytes()).collect();
-        for journal in &journals {
-            env_builder.write(journal).unwrap();
-        }
         for ((_, proof), journal) in proofs.iter().zip(&journals) {
             let inner: InnerReceipt = borsh::from_slice(&proof.0).unwrap();
             env_builder.add_assumption(Receipt::new(inner, journal.clone()));
@@ -1035,14 +1037,19 @@ mod tests {
         }
 
         env_builder.write(&PRIVACY_PRESERVING_CIRCUIT_ID).unwrap();
-        env_builder
-            .write(&u32::try_from(fixtures.len()).expect("fixture count fits in u32"))
-            .unwrap();
 
-        // Journals must be written before assumptions (guest reads them in order).
-        for f in &fixtures {
-            env_builder.write(&f.output_bytes).unwrap();
-        }
+        // Outputs are written once as a word-native `Vec<PrivacyPreservingCircuitOutput>`
+        // (matching `aggregator_circuit`'s `AggregatorCircuitInput`) instead of N raw
+        // `Vec<u8>` journal buffers — see the ppe_aggregation guest for why.
+        let outputs: Vec<PrivacyPreservingCircuitOutput> = fixtures
+            .iter()
+            .map(|f| {
+                let words: &[u32] = bytemuck::cast_slice(&f.output_bytes);
+                risc0_zkvm::serde::from_slice(words).expect("fixture output_bytes invalid")
+            })
+            .collect();
+        env_builder.write(&outputs).unwrap();
+
         for f in &fixtures {
             let inner: InnerReceipt = borsh::from_slice(&f.proof_bytes)
                 .expect("fixture proof_bytes is not a valid InnerReceipt");
@@ -1058,10 +1065,14 @@ mod tests {
 
         let proof_size = borsh::to_vec(&prove_info.receipt.inner).unwrap().len();
         eprintln!(
-            "[lee::analytics] ppe_aggregation n={} proving_ms={} proof_size_bytes={}",
+            "[lee::analytics] ppe_aggregation n={} proving_ms={} proof_size_bytes={} \
+             segments={} total_cycles={} user_cycles={}",
             fixtures.len(),
             proving_ms,
             proof_size,
+            prove_info.stats.segments,
+            prove_info.stats.total_cycles,
+            prove_info.stats.user_cycles,
         );
 
         prove_info
