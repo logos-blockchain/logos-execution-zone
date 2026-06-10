@@ -10,3 +10,4 @@ workspace = true
 [dependencies]
 oracle_price.workspace = true
 serde.workspace = true
+ruint = { version = "1.17", default-features = false }
