@@ -78,3 +78,24 @@ impl WithClock for Vec<AccountPostState> {
         self
     }
 }
+
+#[must_use]
+pub fn clamp_tick_delta(last_tick: i32, new_tick: i32) -> i32 {
+    (new_tick - last_tick).clamp(-MAX_TICK_DELTA, MAX_TICK_DELTA)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn delta_is_clamped_to_max() {
+        assert_eq!(clamp_tick_delta(0, 9_000_000), MAX_TICK_DELTA);
+        assert_eq!(clamp_tick_delta(0, -9_000_000), -MAX_TICK_DELTA);
+    }
+
+    #[test]
+    fn small_delta_passes_through() {
+        assert_eq!(clamp_tick_delta(100, 250), 150);
+    }
+}

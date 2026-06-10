@@ -3,7 +3,7 @@ use lee_core::{
     program::{AccountPostState, Claim},
 };
 use pool_stub_core::{ClockExt, Observation, PoolAccount, WithClock};
-use twap_core::{PriceAccount, TWAP_SOURCE_ID};
+use twap_core::{PriceAccount, TWAP_SOURCE_ID, average_tick, tick_to_price};
 
 #[must_use]
 pub fn read_twap(
@@ -25,11 +25,10 @@ pub fn read_twap(
     let target = newest.block.saturating_sub(window_blocks);
     let older = oldest_at_or_before(&p, target);
 
-    let span = i128::from(newest.block.saturating_sub(older.block));
+    let span = newest.block.saturating_sub(older.block);
     assert!(span > 0, "Insufficient observations for window");
 
-    let avg_tick = i32::try_from((newest.tick_cumulative - older.tick_cumulative) / span)
-        .expect("Tick out of range");
+    let avg_tick = average_tick(newest.tick_cumulative, older.tick_cumulative, span);
     let price = tick_to_price(avg_tick);
     assert!(price > 0, "Invalid price");
 
@@ -56,10 +55,4 @@ fn oldest_at_or_before(p: &PoolAccount, target_block: u64) -> Observation {
         .or_else(|| p.obs.iter().filter(|o| o.block > 0).min_by_key(|o| o.block))
         .cloned()
         .unwrap_or_default()
-}
-
-fn tick_to_price(tick: i32) -> u128 {
-    let ratio = 1.0001_f64.powi(tick);
-
-    (ratio * 1e8) as u128
 }

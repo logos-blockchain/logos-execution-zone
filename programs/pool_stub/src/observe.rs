@@ -2,7 +2,7 @@ use lee_core::{
     account::{AccountWithMetadata, Data},
     program::{AccountPostState, Claim},
 };
-use pool_stub_core::{ClockExt, MAX_TICK_DELTA, Observation, PoolAccount, WithClock};
+use pool_stub_core::{ClockExt, Observation, PoolAccount, WithClock, clamp_tick_delta};
 
 #[must_use]
 pub fn observe(
@@ -17,8 +17,7 @@ pub fn observe(
         return vec![AccountPostState::new(pool.account)].with_clock(clock);
     }
 
-    let delta = (tick - p.last_tick).clamp(-MAX_TICK_DELTA, MAX_TICK_DELTA);
-    let eff_tick = p.last_tick + delta;
+    let eff_tick = p.last_tick + clamp_tick_delta(p.last_tick, tick);
     let blocks = i128::from(now.block_id - p.last_block);
     let prev = p.obs[p.index as usize].tick_cumulative;
 
