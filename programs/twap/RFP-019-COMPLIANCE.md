@@ -36,12 +36,16 @@ Code lives in: `oracle_price` (standard), `pool_stub` (DEX stand-in for RFP-004)
 2. ❌ **Mini-app GUI dashboard** (live TWAP, side-by-side vs another source, history).
 3. ❌ **CLI** (query / expand cardinality / register / deregister).
 4. 🟡 **Standalone IDL** — standalone crate done (`oracle_price`); **SPEL IDL not done**.
-5. 🟡 **Clear error messages** — `"Stale price"`, `"Insufficient observations for
-   window"`, `"Invalid price"`, `"Not the system clock account"`. Gaps: no
-   `(base_asset, quote_asset)` mismatch message, no explicit "cardinality too low".
-6. ❌ **Reference consumer + multi-source pattern** — driver reads the price at the
-   end but is not a reference consumer; no `(base,quote)` check, no multi-source
-   primary/fallback/divergence helper.
+5. 🟡 **Clear error messages** — producer side: `"Stale price"`, `"Insufficient
+   observations for window"`, `"Invalid price"`, `"Not the system clock account"`;
+   consumer side: `ConsumeError::{PairMismatch, Stale, Unavailable}`. Gap: no
+   explicit "cardinality too low for the requested window" message.
+6. ✅ **Reference consumer + multi-source pattern** — `oracle_price::consume`
+   verifies `(base_asset, quote_asset)`, enforces `maxAge`, and refuses on an
+   unavailable (zero) price; `oracle_price::consume_multi` does primary + fallback
+   on staleness with a divergence cross-check that flags but does not gate. Unit
+   tested. Form: documented helper + tests (the RFP-permitted equivalent of a
+   consumer program).
 
 ## Documentation
 
@@ -63,9 +67,10 @@ Code lives in: `oracle_price` (standard), `pool_stub` (DEX stand-in for RFP-004)
 5. 🟡 **E2E tests in CI, green** — e2e exercised via the driver; unit tests pass;
    **no CI wired**.
 6. 🟡 **Test suite** — unit tests for TWAP correctness (`tick_to_price`,
-   `average_tick`) and **tick-delta truncation** (`clamp_tick_delta`) in
-   `twap_core`/`pool_stub_core`. Gaps: staleness-rejection, `(base,quote)`
-   mismatch, and registration tests not written.
+   `average_tick`), **tick-delta truncation** (`clamp_tick_delta`), and
+   consumer-side **staleness rejection** + **`(base,quote)` mismatch**
+   (`oracle_price` tests). Gap: pool registration/deregistration state-transition
+   tests not written.
 
 ## Performance
 
@@ -86,7 +91,10 @@ Code lives in: `oracle_price` (standard), `pool_stub` (DEX stand-in for RFP-004)
 
 ## Soft requirements
 
-1. ❌ **Multi-source consumer helper SDK** (primary + fallback + divergence flags).
+1. ✅ **Multi-source consumer helper** — `oracle_price::consume_multi` returns a
+   single result plus `Diagnostics { fallback_used, divergence_detected }`;
+   primary feed with fallback on staleness, divergence cross-check logs but does
+   not gate. Unit tested.
 
 ---
 
