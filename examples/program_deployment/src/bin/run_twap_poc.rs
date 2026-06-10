@@ -110,8 +110,8 @@ async fn main() {
                 AccountIdentity::PublicNoSign(clock),
             ],
             TwapIx::ReadTwap {
-                window_blocks: 3,
-                max_age_blocks: 100,
+                window_ms: 6_000,
+                max_age_ms: 600_000,
             },
         )
         .await,

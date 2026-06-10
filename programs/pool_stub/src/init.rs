@@ -8,7 +8,6 @@ use pool_stub_core::{CARDINALITY, Observation, PoolAccount};
 pub fn init(pool: AccountWithMetadata, tick: i32) -> Vec<AccountPostState> {
     let pool_account = PoolAccount {
         last_tick: tick,
-        last_block: 0,
         last_ts_ms: 0,
         index: 0,
         obs: vec![Observation::default(); CARDINALITY],

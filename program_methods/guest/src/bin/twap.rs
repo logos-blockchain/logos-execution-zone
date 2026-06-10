@@ -16,13 +16,13 @@ fn main() {
 
     let post_states = match instruction {
         Instruction::ReadTwap {
-            window_blocks,
-            max_age_blocks,
+            window_ms,
+            max_age_ms,
         } => {
             let [pool, price, clock] = pre_states
                 .try_into()
                 .expect("ReadTwap instruction requires exactly three accounts");
-            twap_program::read_twap::read_twap(pool, price, clock, window_blocks, max_age_blocks)
+            twap_program::read_twap::read_twap(pool, price, clock, window_ms, max_age_ms)
         }
     };
 

@@ -17,14 +17,13 @@ pub enum Instruction {
 
 #[derive(Clone, Default, BorshSerialize, BorshDeserialize)]
 pub struct Observation {
-    pub block: u64,
+    pub timestamp: u64,
     pub tick_cumulative: i128,
 }
 
 #[derive(Default, BorshSerialize, BorshDeserialize)]
 pub struct PoolAccount {
     pub last_tick: i32,
-    pub last_block: u64,
     pub last_ts_ms: u64,
     pub index: u16,
     pub obs: Vec<Observation>,

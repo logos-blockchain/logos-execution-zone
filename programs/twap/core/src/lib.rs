@@ -9,7 +9,7 @@ const TICK_BASE_FP: u128 = 1_000_100_000_000_000_000;
 
 #[derive(Serialize, Deserialize)]
 pub enum Instruction {
-    ReadTwap { window_blocks: u64, max_age_blocks: u64 },
+    ReadTwap { window_ms: u64, max_age_ms: u64 },
 }
 
 #[must_use]
