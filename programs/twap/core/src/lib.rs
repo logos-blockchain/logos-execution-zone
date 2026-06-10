@@ -4,6 +4,9 @@ pub use oracle_price::{PriceAccount, SOURCE_TWAP as TWAP_SOURCE_ID};
 
 pub const PRICE_SCALE: u128 = 100_000_000;
 
+const FP: u128 = 1_000_000_000_000_000_000;
+const TICK_BASE_FP: u128 = 1_000_100_000_000_000_000;
+
 #[derive(Serialize, Deserialize)]
 pub enum Instruction {
     ReadTwap { window_blocks: u64, max_age_blocks: u64 },
@@ -16,11 +19,25 @@ pub fn average_tick(newer_cumulative: i128, older_cumulative: i128, span: u64) -
     i32::try_from((newer_cumulative - older_cumulative) / span).expect("Tick out of range")
 }
 
+fn pow_fp(mut base: u128, mut exp: u32) -> u128 {
+    let mut result = FP;
+    while exp > 0 {
+        if exp & 1 == 1 {
+            result = result * base / FP;
+        }
+        base = base * base / FP;
+        exp >>= 1;
+    }
+
+    result
+}
+
 #[must_use]
 pub fn tick_to_price(tick: i32) -> u128 {
-    let ratio = 1.0001_f64.powi(tick);
+    let ratio = pow_fp(TICK_BASE_FP, tick.unsigned_abs());
+    let scaled = if tick >= 0 { ratio } else { FP * FP / ratio };
 
-    (ratio * PRICE_SCALE as f64) as u128
+    scaled * PRICE_SCALE / FP
 }
 
 #[cfg(test)]
@@ -45,6 +62,16 @@ mod tests {
         assert!(
             (106_000_000..107_000_000).contains(&price),
             "1.0001^600 should be ~1.0618, got {price}"
+        );
+    }
+
+    #[test]
+    fn negative_tick_is_below_unit() {
+        let price = tick_to_price(-600);
+
+        assert!(
+            (94_000_000..95_000_000).contains(&price),
+            "1.0001^-600 should be ~0.9418, got {price}"
         );
     }
 }
