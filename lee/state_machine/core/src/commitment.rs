@@ -30,7 +30,15 @@ pub const DUMMY_COMMITMENT_HASH: [u8; 32] = [
 ];
 
 #[derive(
-    Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, BorshSerialize,
+    Clone,
+    PartialEq,
+    Eq,
+    Hash,
+    PartialOrd,
+    Ord,
+    Serialize,
+    Deserialize,
+    BorshSerialize,
     BorshDeserialize,
 )]
 pub struct Commitment(pub(super) [u8; 32]);

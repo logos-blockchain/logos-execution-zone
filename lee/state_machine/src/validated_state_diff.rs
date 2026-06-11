@@ -404,25 +404,10 @@ impl ValidatedStateDiff {
             LeeError::OutOfValidityWindow
         );
 
-        // Build pre_states for proof verification
-        let public_pre_states: Vec<_> = message
-            .public_account_ids
-            .iter()
-            .map(|account_id| {
-                AccountWithMetadata::new(
-                    state.get_account_by_id(*account_id),
-                    signer_account_ids.contains(account_id),
-                    *account_id,
-                )
-            })
-            .collect();
+        let circuit_output = circuit_output_for_message(state, message, &signer_account_ids);
 
         // 4. Proof verification
-        check_privacy_preserving_circuit_proof_is_valid(
-            &witness_set.proof,
-            &public_pre_states,
-            message,
-        )?;
+        check_privacy_preserving_circuit_proof_is_valid(&witness_set.proof, &circuit_output)?;
 
         // 5. Commitment freshness
         state.check_commitments_are_new(&message.new_commitments)?;
@@ -484,13 +469,27 @@ impl ValidatedStateDiff {
     }
 }
 
-fn check_privacy_preserving_circuit_proof_is_valid(
-    proof: &Proof,
-    public_pre_states: &[AccountWithMetadata],
+/// Reconstructs the `PrivacyPreservingCircuitOutput` a `Message` corresponds to, using `state`
+/// to fill in `public_pre_states`. Used to verify the transaction's proof here, and reused by
+/// the aggregator circuit to rebuild the journal each proof verifies against.
+pub fn circuit_output_for_message(
+    state: &V03State,
     message: &Message,
-) -> Result<(), LeeError> {
-    let output = PrivacyPreservingCircuitOutput {
-        public_pre_states: public_pre_states.to_vec(),
+    signer_account_ids: &[AccountId],
+) -> PrivacyPreservingCircuitOutput {
+    let public_pre_states = message
+        .public_account_ids
+        .iter()
+        .map(|account_id| {
+            AccountWithMetadata::new(
+                state.get_account_by_id(*account_id),
+                signer_account_ids.contains(account_id),
+                *account_id,
+            )
+        })
+        .collect();
+    PrivacyPreservingCircuitOutput {
+        public_pre_states,
         public_post_states: message.public_post_states.clone(),
         ciphertexts: message
             .encrypted_private_post_states
@@ -502,9 +501,15 @@ fn check_privacy_preserving_circuit_proof_is_valid(
         new_nullifiers: message.new_nullifiers.clone(),
         block_validity_window: message.block_validity_window,
         timestamp_validity_window: message.timestamp_validity_window,
-    };
+    }
+}
+
+fn check_privacy_preserving_circuit_proof_is_valid(
+    proof: &Proof,
+    output: &PrivacyPreservingCircuitOutput,
+) -> Result<(), LeeError> {
     proof
-        .is_valid_for(&output)
+        .is_valid_for(output)
         .then_some(())
         .ok_or(LeeError::InvalidPrivacyPreservingProof)
 }

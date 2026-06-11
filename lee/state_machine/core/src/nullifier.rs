@@ -66,7 +66,16 @@ impl From<&NullifierSecretKey> for NullifierPublicKey {
 pub type NullifierSecretKey = [u8; 32];
 
 #[derive(
-    Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, BorshSerialize,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    BorshSerialize,
     BorshDeserialize,
 )]
 pub struct Nullifier(pub(super) [u8; 32]);

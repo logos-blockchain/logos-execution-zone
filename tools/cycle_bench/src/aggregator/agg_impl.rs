@@ -8,15 +8,18 @@ use std::{path::PathBuf, time::Instant};
 
 use authenticated_transfer_core::Instruction;
 use lee::{
+    PrivacyPreservingTransaction, PrivateKey, PublicKey, V03State,
     aggregator_circuit::aggregate,
     execute_and_prove,
-    privacy_preserving_transaction::circuit::{Proof, ProgramWithDependencies},
+    privacy_preserving_transaction::{
+        circuit::ProgramWithDependencies, message::Message, witness_set::WitnessSet,
+    },
     program::Program,
     program_methods::{AUTHENTICATED_TRANSFER_ELF, AUTHENTICATED_TRANSFER_ID},
 };
 use lee_core::{
     BlockId, InputAccountIdentity, NullifierPublicKey, SharedSecretKey, Timestamp,
-    account::{Account, AccountId, AccountWithMetadata},
+    account::{Account, AccountId, AccountWithMetadata, Nonce},
     encryption::ViewingPublicKey,
 };
 use risc0_zkvm::serde::to_vec;
@@ -38,23 +41,37 @@ fn load_aggregator_elf(name: &str) -> anyhow::Result<Vec<u8>> {
     })
 }
 
-/// Generates a public-to-private (shielded) auth-transfer pp-proof.
+/// Derives a deterministic, valid `PrivateKey` for sender `tag`.
 ///
-/// The sender is a public account; the recipient is a fresh private account derived
-/// from `tag`. Distinct tags yield distinct `npk` values → distinct commitments and
-/// nullifiers, so any number of these proofs can be safely aggregated in one batch.
-fn prove_shielded_transfer(
-    tag: u8,
-) -> anyhow::Result<(lee_core::PrivacyPreservingCircuitOutput, Proof)> {
+/// Only `seed[0]` varies; the remaining bytes are fixed at `50`, which keeps the
+/// resulting 256-bit big-endian value comfortably below the secp256k1 curve order for
+/// any `tag`, so the key is always valid.
+fn sender_signing_key(tag: u8) -> PrivateKey {
+    let mut seed = [50_u8; 32];
+    seed[0] = tag;
+    PrivateKey::try_new(seed).expect("deterministic seed should be a valid private key")
+}
+
+/// Generates a public-to-private (shielded) auth-transfer pp-transaction.
+///
+/// The sender is a public account whose id is derived from a real signing key, so the
+/// resulting transaction's signature matches its `message.public_account_ids`; the
+/// recipient is a fresh private account derived from `tag`. Distinct tags yield distinct
+/// `npk` values → distinct commitments and nullifiers, so any number of these
+/// transactions can be safely aggregated in one batch.
+fn prove_shielded_transfer(tag: u8) -> anyhow::Result<(AccountId, PrivacyPreservingTransaction)> {
     let nsk: [u8; 32] = [tag; 32];
     let d: [u8; 32] = [tag.wrapping_add(64); 32];
     let z: [u8; 32] = [tag.wrapping_add(128); 32];
 
     let npk = NullifierPublicKey::from(&nsk);
     let vpk = ViewingPublicKey::from_seed(&d, &z);
-    let (ssk, _epk) = SharedSecretKey::encapsulate(&vpk);
+    let (ssk, epk) = SharedSecretKey::encapsulate(&vpk);
 
     let recipient_account_id = AccountId::for_regular_private_account(&npk, 0);
+
+    let signing_key = sender_signing_key(tag);
+    let sender_account_id = AccountId::from(&PublicKey::new_from_private_key(&signing_key));
 
     let program = Program::new(AUTHENTICATED_TRANSFER_ELF.to_vec())?;
     let pwd = ProgramWithDependencies::from(program);
@@ -68,7 +85,7 @@ fn prove_shielded_transfer(
             ..Account::default()
         },
         is_authorized: true,
-        account_id: AccountId::new([tag; 32]),
+        account_id: sender_account_id,
     };
 
     // Fresh private recipient account (zero balance, not yet authorized).
@@ -81,15 +98,27 @@ fn prove_shielded_transfer(
     let instruction_data = to_vec(&Instruction::Transfer { amount: 1_000 })?;
     let identities = vec![
         InputAccountIdentity::Public,
-        InputAccountIdentity::PrivateUnauthorized { npk, ssk, identifier: 0 },
+        InputAccountIdentity::PrivateUnauthorized {
+            npk,
+            ssk,
+            identifier: 0,
+        },
     ];
 
-    Ok(execute_and_prove(
-        vec![sender, recipient],
-        instruction_data,
-        identities,
-        &pwd,
-    )?)
+    let (output, proof) = execute_and_prove(vec![sender, recipient], instruction_data, identities, &pwd)?;
+
+    let message = Message::try_from_circuit_output(
+        vec![sender_account_id],
+        vec![Nonce(0)],
+        vec![(npk, vpk, epk)],
+        output,
+    )?;
+    let witness_set = WitnessSet::for_message(&message, proof, &[&signing_key]);
+
+    Ok((
+        sender_account_id,
+        PrivacyPreservingTransaction::new(message, witness_set),
+    ))
 }
 
 pub fn run(n_txs: usize, strict: bool) -> AggregatorBenchResult {
@@ -115,19 +144,19 @@ pub fn run(n_txs: usize, strict: bool) -> AggregatorBenchResult {
                 agg_proof_bytes: None,
                 pp_proof_bytes_per_tx: None,
                 error: Some(e.to_string()),
-            }
+            };
         }
     };
 
-    // Generate N pp-proofs with distinct private recipients (tags 1..=N).
+    // Generate N pp-transactions with distinct private recipients (tags 1..=N).
     let pp_started = Instant::now();
-    let proofs: Result<Vec<_>, anyhow::Error> = (0..n_txs)
+    let txs: Result<Vec<_>, anyhow::Error> = (0..n_txs)
         .map(|i| prove_shielded_transfer(u8::try_from(i + 1).unwrap_or(u8::MAX)))
         .collect();
     let pp_prove_ms = pp_started.elapsed().as_secs_f64() * 1_000.0;
 
-    let proofs = match proofs {
-        Ok(p) => p,
+    let txs = match txs {
+        Ok(t) => t,
         Err(e) => {
             return AggregatorBenchResult {
                 label,
@@ -138,18 +167,30 @@ pub fn run(n_txs: usize, strict: bool) -> AggregatorBenchResult {
                 agg_proof_bytes: None,
                 pp_proof_bytes_per_tx: None,
                 error: Some(e.to_string()),
-            }
+            };
         }
     };
 
     // Capture per-tx proof size before the vec is consumed by aggregate().
-    let pp_proof_bytes_per_tx = proofs.first().map(|(_, p)| p.clone().into_inner().len());
+    let pp_proof_bytes_per_tx = txs
+        .first()
+        .map(|(_, tx)| tx.witness_set().proof().clone().into_inner().len());
 
     let block_id: BlockId = 1;
     let timestamp = Timestamp::from(1_700_000_000_u64);
 
+    // Genesis state containing each sender's public account, matching the balance used
+    // when proving its transaction.
+    let genesis_accounts: Vec<(AccountId, u128)> = txs
+        .iter()
+        .map(|(account_id, _)| (*account_id, 1_000_000))
+        .collect();
+    let state = V03State::new_with_genesis_accounts(&genesis_accounts, vec![], timestamp);
+    let transactions: Vec<PrivacyPreservingTransaction> =
+        txs.into_iter().map(|(_, tx)| tx).collect();
+
     let agg_started = Instant::now();
-    let result = aggregate(block_id, timestamp, proofs, &elf, None);
+    let result = aggregate(block_id, timestamp, transactions, &state, &elf, None);
     let agg_prove_ms = agg_started.elapsed().as_secs_f64() * 1_000.0;
 
     match result {

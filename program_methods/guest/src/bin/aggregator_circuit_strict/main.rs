@@ -62,8 +62,10 @@ fn main() {
 
     let mut seen_updated_account_ids: Vec<AccountId> = Vec::new();
     for output in &circuit_outputs {
-        for (pre_state, post_state) in
-            output.public_pre_states.iter().zip(output.public_post_states.iter())
+        for (pre_state, post_state) in output
+            .public_pre_states
+            .iter()
+            .zip(output.public_post_states.iter())
         {
             if pre_state.account != *post_state {
                 assert!(

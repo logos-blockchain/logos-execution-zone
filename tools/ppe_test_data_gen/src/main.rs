@@ -4,6 +4,10 @@
 //! `to_bytes()`) and the raw `InnerReceipt` bytes (Borsh-encoded, from `Proof::into_inner()`).
 //! The whole bundle is a Borsh-encoded `Vec<PpeFixture>`.
 //!
+//! Each proof is also wrapped into a `PrivacyPreservingTransaction` (signed by a real key)
+//! together with the genesis `V03State` its sender accounts were proven against, and written
+//! as a `PpeTxFixtureBundle` for the aggregator circuit's host-side pre-checks.
+//!
 //! Keys are derived deterministically from the proof index so the fixture file is
 //! reproducible.
 //! # Usage
@@ -49,14 +53,24 @@ use authenticated_transfer_core::Instruction;
 use borsh::{BorshDeserialize, BorshSerialize};
 use clap::Parser;
 use lee::{
-    execute_and_prove, privacy_preserving_transaction::circuit::ProgramWithDependencies,
+    PrivacyPreservingTransaction, PrivateKey, PublicKey, V03State, execute_and_prove,
+    privacy_preserving_transaction::{
+        circuit::ProgramWithDependencies,
+        message::Message,
+        witness_set::WitnessSet,
+    },
     program::Program,
 };
 use lee_core::{
     InputAccountIdentity, NullifierPublicKey, SharedSecretKey,
-    account::{Account, AccountId, AccountWithMetadata},
+    account::{Account, AccountId, AccountWithMetadata, Nonce},
     encryption::ViewingPublicKey,
 };
+
+/// Block id and timestamp the generated transactions' validity windows and nonces are
+/// proven/checked against, matching the values used by `bench_aggregator`.
+const BLOCK_ID: u64 = 1;
+const TIMESTAMP: u64 = 1_700_000_000;
 
 /// Mirror of `test_program_methods::PpeFixture`. Borsh field order must stay in sync.
 #[derive(BorshSerialize, BorshDeserialize)]
@@ -66,34 +80,58 @@ struct PpeFixture {
     proof_bytes: Vec<u8>,
 }
 
+/// Mirror of `test_program_methods::PpeTxFixtureBundle`. Borsh field order must stay in sync.
+#[derive(BorshSerialize, BorshDeserialize)]
+struct PpeTxFixtureBundle {
+    block_id: u64,
+    timestamp: u64,
+    labels: Vec<String>,
+    state_bytes: Vec<u8>,
+    tx_bytes: Vec<Vec<u8>>,
+}
+
 #[derive(Parser)]
 #[command(
     name = "ppe_test_data_gen",
     about = "Generate PPE proof fixtures for aggregation testing"
 )]
 struct Cli {
-    /// Output file path for the Borsh-serialised fixture bundle.
+    /// Output file path for the Borsh-serialised `Vec<PpeFixture>` bundle.
     #[arg(long, default_value = "ppe_fixtures.bin")]
     output: PathBuf,
+
+    /// Output file path for the Borsh-serialised `PpeTxFixtureBundle`.
+    #[arg(long, default_value = "ppe_tx_fixtures.bin")]
+    tx_output: PathBuf,
 
     /// Number of independent PPE proofs to generate.
     #[arg(long, default_value_t = 16)]
     count: usize,
 }
 
+/// Derives a deterministic, valid `PrivateKey` for proof index `i`.
+///
+/// Only `seed[0]` and `seed[1]` vary; the remaining bytes are fixed at `50`, which keeps
+/// the resulting 256-bit big-endian value comfortably below the secp256k1 curve order for
+/// any `seed[0]`/`seed[1]`, so the key is always valid.
+fn sender_signing_key(i: usize) -> PrivateKey {
+    let mut seed = [50_u8; 32];
+    seed[0] = (i & 0xFF) as u8;
+    seed[1] = ((i >> 8) & 0xFF) as u8;
+    PrivateKey::try_new(seed).expect("deterministic seed should be a valid private key")
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let program = Program::authenticated_transfer_program();
     let mut fixtures: Vec<PpeFixture> = Vec::with_capacity(cli.count);
+    let mut tx_labels: Vec<String> = Vec::with_capacity(cli.count);
+    let mut transactions: Vec<PrivacyPreservingTransaction> = Vec::with_capacity(cli.count);
+    let mut genesis_accounts: Vec<(AccountId, u128)> = Vec::with_capacity(cli.count);
 
     for i in 0..cli.count {
         let lo = (i & 0xFF) as u8;
         let hi = ((i >> 8) & 0xFF) as u8;
-
-        // Non-zero bases ensure no key is accidentally all-zero.
-        let mut nsk = [41_u8; 32];
-        nsk[0] = lo;
-        nsk[1] = hi;
 
         // ViewingPublicKey requires two independent 32-byte seed halves (d, z).
         let mut d = [42_u8; 32];
@@ -112,14 +150,20 @@ fn main() -> Result<()> {
         let label = format!("public_to_private_{i}");
 
         let vpk = ViewingPublicKey::from_seed(&d, &z);
+
+        // Recipient: fresh private account derived from this proof's index.
+        let mut nsk = [41_u8; 32];
+        nsk[0] = lo;
+        nsk[1] = hi;
         let npk = NullifierPublicKey::from(&nsk);
         // `encapsulate_deterministic` requires `lee_core` with `test_utils` feature.
         // The recipient output is at index 0 (the only private output in this scenario).
-        let (ssk, _epk) = SharedSecretKey::encapsulate_deterministic(&vpk, &msg, 0);
+        let (ssk, epk) = SharedSecretKey::encapsulate_deterministic(&vpk, &msg, 0);
 
-        let mut sender_seed = [45_u8; 32];
-        sender_seed[0] = lo;
-        sender_seed[1] = hi;
+        // Sender: public account whose id is derived from a real signing key, so the
+        // transaction's signature matches `message.public_account_ids`.
+        let signing_key = sender_signing_key(i);
+        let sender_account_id = AccountId::from(&PublicKey::new_from_private_key(&signing_key));
 
         let sender = AccountWithMetadata::new(
             Account {
@@ -128,7 +172,7 @@ fn main() -> Result<()> {
                 ..Account::default()
             },
             true,
-            AccountId::new(sender_seed),
+            sender_account_id,
         );
         let recipient = AccountWithMetadata::new(
             Account::default(),
@@ -136,9 +180,8 @@ fn main() -> Result<()> {
             AccountId::for_regular_private_account(&npk, 0),
         );
 
-        let instruction =
-            Program::serialize_instruction(Instruction::Transfer { amount })
-                .context("serialise instruction")?;
+        let instruction = Program::serialize_instruction(Instruction::Transfer { amount })
+            .context("serialise instruction")?;
 
         eprintln!(
             "[ppe_test_data_gen] ({}/{}) proving '{label}' ...",
@@ -161,7 +204,7 @@ fn main() -> Result<()> {
         )
         .with_context(|| format!("execute_and_prove for '{label}'"))?;
 
-        let proof_bytes = proof.into_inner();
+        let proof_bytes = proof.clone().into_inner();
         let output_bytes = output.to_bytes();
 
         eprintln!(
@@ -173,10 +216,23 @@ fn main() -> Result<()> {
         );
 
         fixtures.push(PpeFixture {
-            label,
+            label: label.clone(),
             output_bytes,
             proof_bytes,
         });
+
+        let message = Message::try_from_circuit_output(
+            vec![sender_account_id],
+            vec![Nonce(0)],
+            vec![(npk, vpk, epk)],
+            output,
+        )
+        .with_context(|| format!("build message for '{label}'"))?;
+        let witness_set = WitnessSet::for_message(&message, proof, &[&signing_key]);
+
+        transactions.push(PrivacyPreservingTransaction::new(message, witness_set));
+        genesis_accounts.push((sender_account_id, amount + 10));
+        tx_labels.push(label);
     }
 
     let bundle = borsh::to_vec(&fixtures).context("serialise fixture bundle")?;
@@ -187,6 +243,28 @@ fn main() -> Result<()> {
         fixtures.len(),
         bundle.len(),
         cli.output.display(),
+    );
+
+    let state = V03State::new_with_genesis_accounts(&genesis_accounts, vec![], TIMESTAMP);
+    let tx_bundle = PpeTxFixtureBundle {
+        block_id: BLOCK_ID,
+        timestamp: TIMESTAMP,
+        labels: tx_labels,
+        state_bytes: borsh::to_vec(&state).context("serialise genesis state")?,
+        tx_bytes: transactions
+            .iter()
+            .map(borsh::to_vec)
+            .collect::<Result<_, _>>()
+            .context("serialise transactions")?,
+    };
+    let tx_bundle_bytes = borsh::to_vec(&tx_bundle).context("serialise tx fixture bundle")?;
+    std::fs::write(&cli.tx_output, &tx_bundle_bytes).context("write tx output file")?;
+
+    eprintln!(
+        "[ppe_test_data_gen] wrote {} transactions ({} bytes total) -> {}",
+        tx_bundle.tx_bytes.len(),
+        tx_bundle_bytes.len(),
+        cli.tx_output.display(),
     );
 
     Ok(())

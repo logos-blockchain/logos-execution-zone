@@ -106,5 +106,8 @@ pub fn print_table(results: &[AggregatorBenchResult]) {
 }
 
 fn fmt_ms(ms: Option<f64>) -> String {
-    ms.map_or_else(|| "-".to_owned(), |v| format!("{v:.1} ({:.1}s)", v / 1_000.0))
+    ms.map_or_else(
+        || "-".to_owned(),
+        |v| format!("{v:.1} ({:.1}s)", v / 1_000.0),
+    )
 }

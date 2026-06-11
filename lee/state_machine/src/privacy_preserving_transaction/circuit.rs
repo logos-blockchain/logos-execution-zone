@@ -860,7 +860,11 @@ mod tests {
         let (output_0, proof_0) = execute_and_prove(
             vec![
                 AccountWithMetadata::new(
-                    Account { program_owner: program.id(), balance: 100, ..Account::default() },
+                    Account {
+                        program_owner: program.id(),
+                        balance: 100,
+                        ..Account::default()
+                    },
                     true,
                     AccountId::new([0x01; 32]),
                 ),
@@ -870,9 +874,10 @@ mod tests {
                     AccountId::for_regular_private_account(&keys_0.npk(), 0),
                 ),
             ],
-            Program::serialize_instruction(
-                authenticated_transfer_core::Instruction::Transfer { amount: 10 },
-            ).unwrap(),
+            Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
+                amount: 10,
+            })
+            .unwrap(),
             vec![
                 InputAccountIdentity::Public,
                 InputAccountIdentity::PrivateUnauthorized {
@@ -882,7 +887,8 @@ mod tests {
                 },
             ],
             &program.clone().into(),
-        ).expect("proof 0 should succeed");
+        )
+        .expect("proof 0 should succeed");
 
         // ── Proof 1: public sender → private recipient ────────────────────────────
         let keys_1 = test_private_account_keys_2();
@@ -890,7 +896,11 @@ mod tests {
         let (output_1, proof_1) = execute_and_prove(
             vec![
                 AccountWithMetadata::new(
-                    Account { program_owner: program.id(), balance: 200, ..Account::default() },
+                    Account {
+                        program_owner: program.id(),
+                        balance: 200,
+                        ..Account::default()
+                    },
                     true,
                     AccountId::new([0x02; 32]),
                 ),
@@ -900,9 +910,10 @@ mod tests {
                     AccountId::for_regular_private_account(&keys_1.npk(), 0),
                 ),
             ],
-            Program::serialize_instruction(
-                authenticated_transfer_core::Instruction::Transfer { amount: 20 },
-            ).unwrap(),
+            Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
+                amount: 20,
+            })
+            .unwrap(),
             vec![
                 InputAccountIdentity::Public,
                 InputAccountIdentity::PrivateUnauthorized {
@@ -912,14 +923,19 @@ mod tests {
                 },
             ],
             &program.clone().into(),
-        ).expect("proof 1 should succeed");
+        )
+        .expect("proof 1 should succeed");
 
         // ── Proof 2: fully private transfer ──────────────────────────────────────
         let sender_keys_2 = test_private_account_keys_1();
         let recipient_keys_2 = test_private_account_keys_2();
         let sender_2_id = AccountId::for_regular_private_account(&sender_keys_2.npk(), 0);
-        let sender_2_account =
-            Account { program_owner: program.id(), balance: 50, nonce: Nonce(1), ..Account::default() };
+        let sender_2_account = Account {
+            program_owner: program.id(),
+            balance: 50,
+            nonce: Nonce(1),
+            ..Account::default()
+        };
         let sender_2_commitment = Commitment::new(&sender_2_id, &sender_2_account);
         let mut cs = CommitmentSet::with_capacity(1);
         cs.extend(std::slice::from_ref(&sender_2_commitment));
@@ -937,9 +953,10 @@ mod tests {
                     AccountId::for_regular_private_account(&recipient_keys_2.npk(), 1),
                 ),
             ],
-            Program::serialize_instruction(
-                authenticated_transfer_core::Instruction::Transfer { amount: 30 },
-            ).unwrap(),
+            Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
+                amount: 30,
+            })
+            .unwrap(),
             vec![
                 InputAccountIdentity::PrivateAuthorizedUpdate {
                     ssk: ssk_2_sender,
@@ -954,11 +971,15 @@ mod tests {
                 },
             ],
             &program.into(),
-        ).expect("proof 2 should succeed");
+        )
+        .expect("proof 2 should succeed");
 
         // ── Aggregate all three ───────────────────────────────────────────────────
-        let proofs: Vec<(PrivacyPreservingCircuitOutput, Proof)> =
-            vec![(output_0, proof_0), (output_1, proof_1), (output_2, proof_2)];
+        let proofs: Vec<(PrivacyPreservingCircuitOutput, Proof)> = vec![
+            (output_0, proof_0),
+            (output_1, proof_1),
+            (output_2, proof_2),
+        ];
 
         let mut env_builder = ExecutorEnv::builder();
         env_builder.write(&PRIVACY_PRESERVING_CIRCUIT_ID).unwrap();
@@ -966,8 +987,7 @@ mod tests {
         // Outputs are written once as a word-native `Vec<&PrivacyPreservingCircuitOutput>`
         // (matching `aggregator_circuit`'s `AggregatorCircuitInput`) instead of N raw
         // `Vec<u8>` journal buffers — see the ppe_aggregation guest for why.
-        let outputs: Vec<&PrivacyPreservingCircuitOutput> =
-            proofs.iter().map(|(o, _)| o).collect();
+        let outputs: Vec<&PrivacyPreservingCircuitOutput> = proofs.iter().map(|(o, _)| o).collect();
         env_builder.write(&outputs).unwrap();
 
         let journals: Vec<Vec<u8>> = proofs.iter().map(|(o, _)| o.to_bytes()).collect();
@@ -1014,8 +1034,7 @@ mod tests {
         use risc0_zkvm::{ExecutorEnv, InnerReceipt, ProverOpts, Receipt, default_prover};
         use test_program_methods::{PPE_AGGREGATION_ELF, PPE_AGGREGATION_ID, PpeFixture};
 
-        let path =
-            std::env::var("PPE_FIXTURES").unwrap_or_else(|_| "ppe_fixtures.bin".to_owned());
+        let path = std::env::var("PPE_FIXTURES").unwrap_or_else(|_| "ppe_fixtures.bin".to_owned());
         let mut fixtures = PpeFixture::load_bundle(&path);
 
         if fixtures.is_empty() {
@@ -1023,7 +1042,9 @@ mod tests {
         }
 
         if let Ok(count_str) = std::env::var("PPE_FIXTURES_COUNT") {
-            let count: usize = count_str.parse().expect("PPE_FIXTURES_COUNT must be a number");
+            let count: usize = count_str
+                .parse()
+                .expect("PPE_FIXTURES_COUNT must be a number");
             fixtures.truncate(count);
         }
 
@@ -1032,7 +1053,9 @@ mod tests {
         // Smaller segments lower peak prover memory (handy on memory-constrained
         // GPUs) at the cost of more segments and overall proving time.
         if let Ok(po2_str) = std::env::var("PPE_SEGMENT_LIMIT_PO2") {
-            let po2: u32 = po2_str.parse().expect("PPE_SEGMENT_LIMIT_PO2 must be a number");
+            let po2: u32 = po2_str
+                .parse()
+                .expect("PPE_SEGMENT_LIMIT_PO2 must be a number");
             env_builder.segment_limit_po2(po2);
         }
 
@@ -1064,16 +1087,19 @@ mod tests {
         let proving_ms = t0.elapsed().as_millis();
 
         let proof_size = borsh::to_vec(&prove_info.receipt.inner).unwrap().len();
-        eprintln!(
-            "[lee::analytics] ppe_aggregation n={} proving_ms={} proof_size_bytes={} \
-             segments={} total_cycles={} user_cycles={}",
-            fixtures.len(),
-            proving_ms,
-            proof_size,
-            prove_info.stats.segments,
-            prove_info.stats.total_cycles,
-            prove_info.stats.user_cycles,
-        );
+        #[expect(clippy::print_stderr, reason = "benchmark result line consumed by tooling")]
+        {
+            eprintln!(
+                "[lee::analytics] ppe_aggregation n={} proving_ms={} proof_size_bytes={} \
+                 segments={} total_cycles={} user_cycles={}",
+                fixtures.len(),
+                proving_ms,
+                proof_size,
+                prove_info.stats.segments,
+                prove_info.stats.total_cycles,
+                prove_info.stats.user_cycles,
+            );
+        }
 
         prove_info
             .receipt
@@ -1082,7 +1108,11 @@ mod tests {
 
         let recovered: Vec<PrivacyPreservingCircuitOutput> =
             prove_info.receipt.journal.decode().unwrap();
-        assert_eq!(recovered.len(), fixtures.len(), "recovered output count mismatch");
+        assert_eq!(
+            recovered.len(),
+            fixtures.len(),
+            "recovered output count mismatch"
+        );
     }
 
     #[test]

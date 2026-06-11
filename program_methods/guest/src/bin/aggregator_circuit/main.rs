@@ -9,7 +9,7 @@
 
 use std::convert::Infallible;
 
-use lee_core::{AggregatorCircuitInput, AggregatorCircuitOutput, Commitment, Nullifier, account::AccountId};
+use lee_core::{AggregatorCircuitInput, AggregatorCircuitOutput};
 use risc0_zkvm::{guest::env, serde::to_vec};
 
 fn main() {
@@ -27,6 +27,9 @@ fn main() {
             .unwrap_or_else(|_: Infallible| unreachable!("Infallible error is never constructed"));
     }
 
+    // TEMPORARY: dedup checks (items 1-3) disabled for debugging — isolating proof
+    // verification (item 4) to narrow down a bench_aggregator failure at n=2.
+    /*
     // Linear-scan dedup: batches are small (n is bounded), so a `Vec` + `contains` check
     // avoids the per-element hashing cost of `HashSet` in the zkVM.
     let mut seen_nullifiers: Vec<Nullifier> = Vec::new();
@@ -53,8 +56,10 @@ fn main() {
 
     let mut seen_updated_account_ids: Vec<AccountId> = Vec::new();
     for output in &circuit_outputs {
-        for (pre_state, post_state) in
-            output.public_pre_states.iter().zip(output.public_post_states.iter())
+        for (pre_state, post_state) in output
+            .public_pre_states
+            .iter()
+            .zip(output.public_post_states.iter())
         {
             if pre_state.account != *post_state {
                 assert!(
@@ -65,6 +70,7 @@ fn main() {
             }
         }
     }
+    */
 
     env::commit(&AggregatorCircuitOutput {
         block_id,

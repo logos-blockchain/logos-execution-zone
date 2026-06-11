@@ -2,14 +2,14 @@
 # Benchmarks the aggregator circuit (core and strict variants) with CUDA acceleration.
 #
 # Fixtures must be generated first:
-#   cargo run --release -p ppe_test_data_gen -- --output ppe_fixtures.bin
+#   cargo run --release -p ppe_test_data_gen -- --tx-output ppe_tx_fixtures.bin
 #
 # Usage:
 #   ./bench_aggregator_cuda.sh
 #
 # Environment:
-#   PPE_FIXTURES  — path to fixture file (default: ppe_fixtures.bin)
-#   COUNTS        — space-separated list of transaction counts (default: "1 3 5")
+#   PPE_TX_FIXTURES — path to fixture file (default: ppe_tx_fixtures.bin)
+#   COUNTS          — space-separated list of transaction counts (default: "1 3 5")
 
 set -euo pipefail
 
@@ -18,14 +18,14 @@ export NVCC=/usr/local/cuda-13.0/bin/nvcc
 export CUDA_HOME=/usr/local/cuda-13.0
 export PATH="/usr/local/cuda-13.0/bin:$PATH"
 
-FIXTURES="$(realpath "${PPE_FIXTURES:-ppe_fixtures.bin}")"
+FIXTURES="$(realpath "${PPE_TX_FIXTURES:-ppe_tx_fixtures.bin}")"
 COUNTS="${COUNTS:-2 3 4 5 6 7 8 10 12 14 16}"
 SEGMENT_LIMIT_PO2="${PPE_SEGMENT_LIMIT_PO2-19}"
 
 if [ ! -f "$FIXTURES" ]; then
     echo "ERROR: fixture file '$FIXTURES' not found."
     echo "Generate it first:"
-    echo "  cargo run --release -p ppe_test_data_gen -- --output $FIXTURES"
+    echo "  cargo run --release -p ppe_test_data_gen -- --tx-output $FIXTURES"
     exit 1
 fi
 
@@ -46,7 +46,7 @@ run_bench() {
     local line
     line=$(
         env \
-        PPE_FIXTURES="$FIXTURES" \
+        PPE_TX_FIXTURES="$FIXTURES" \
         AGGREGATOR_COUNT="$count" \
         AGGREGATOR_STRICT="$strict" \
         "${segment_limit_env[@]}" \
