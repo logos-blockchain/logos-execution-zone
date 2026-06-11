@@ -74,7 +74,8 @@ impl PrivateKey {
 
         let sk = k256::SecretKey::from_slice(value).map_err(|_e| LeeError::InvalidPrivateKey)?;
 
-        let hashed: [u8; 32] = Sha256::digest(sk.public_key().to_encoded_point(true).as_bytes()).into();
+        let hashed: [u8; 32] =
+            Sha256::digest(sk.public_key().to_encoded_point(true).as_bytes()).into();
 
         let sk = sk.to_nonzero_scalar();
 

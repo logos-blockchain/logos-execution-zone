@@ -7,8 +7,9 @@ use zeroize::Zeroizing;
 
 pub mod python_path;
 
-/// NSK and VSK as fixed-length zeroizing byte arrays.
-type PrivateKeyPair = (Zeroizing<[u8; 32]>, Zeroizing<[u8; 32]>);
+/// NSK (32 bytes) and VSK (64 bytes, the ML-KEM-768 seed `d || z`) as fixed-length zeroizing byte
+/// arrays.
+type PrivateKeyPair = (Zeroizing<[u8; 32]>, Zeroizing<[u8; 64]>);
 
 // TODO: encrypt at rest alongside broader wallet storage encryption work.
 #[derive(Serialize, Deserialize)]
@@ -239,13 +240,13 @@ impl KeycardWallet {
         };
 
         let vsk = {
-            if raw_vsk.len() != 32 {
+            if raw_vsk.len() != 64 {
                 return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                    "expected 32-byte VSK from keycard, got {} bytes",
+                    "expected 64-byte VSK from keycard, got {} bytes",
                     raw_vsk.len()
                 )));
             }
-            let mut arr = Zeroizing::new([0_u8; 32]);
+            let mut arr = Zeroizing::new([0_u8; 64]);
             arr.copy_from_slice(&raw_vsk);
             arr
         };
