@@ -15,7 +15,7 @@ use risc0_zkvm::{guest::env, serde::to_vec};
 /// circuit outputs from the single aggregated proof.
 ///
 /// Outputs are read once as a word-native `Vec<...>` and re-serialized per-output via
-/// `to_vec()` for `env::verify`, mirroring `aggregator_circuit`. This replaced reading
+/// `to_vec()` for `env::verify`. This replaced reading
 /// each journal as a raw `env::read::<Vec<u8>>()`: risc0's default serde deserializes
 /// `Vec<u8>` one byte at a time (each unpacked from a word), which costs more guest
 /// cycles than the word-native path. `to_vec(output)` and `output.to_bytes()` produce

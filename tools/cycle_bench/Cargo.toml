@@ -13,7 +13,6 @@ default = []
 prove = ["lee/prove", "risc0-zkvm/prove"]
 cuda = ["lee/cuda", "risc0-zkvm/cuda"]
 ppe = ["prove"]
-aggregator = ["ppe"]
 
 [dependencies]
 lee = { workspace = true }

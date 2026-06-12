@@ -3,7 +3,6 @@
     reason = "We prefer to group methods by functionality rather than by type for encoding"
 )]
 
-pub use aggregator_circuit_io::{AggregatorCircuitInput, AggregatorCircuitOutput};
 pub use circuit_io::{
     InputAccountIdentity, PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput,
 };
@@ -14,15 +13,17 @@ pub use commitment::{
 pub use encryption::{EncryptionScheme, SharedSecretKey};
 pub use nullifier::{Identifier, Nullifier, NullifierPublicKey, NullifierSecretKey};
 pub use program::PrivateAccountKind;
+pub use sequencer_aggregator_io::SequencerAggregatorOutput;
 
 pub mod account;
-mod aggregator_circuit_io;
 mod circuit_io;
 mod commitment;
 mod encoding;
 pub mod encryption;
+pub mod message;
 mod nullifier;
 pub mod program;
+mod sequencer_aggregator_io;
 
 #[cfg(feature = "host")]
 pub mod error;

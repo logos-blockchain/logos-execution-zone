@@ -985,8 +985,7 @@ mod tests {
         env_builder.write(&PRIVACY_PRESERVING_CIRCUIT_ID).unwrap();
 
         // Outputs are written once as a word-native `Vec<&PrivacyPreservingCircuitOutput>`
-        // (matching `aggregator_circuit`'s `AggregatorCircuitInput`) instead of N raw
-        // `Vec<u8>` journal buffers — see the ppe_aggregation guest for why.
+        // instead of N raw `Vec<u8>` journal buffers — see the ppe_aggregation guest for why.
         let outputs: Vec<&PrivacyPreservingCircuitOutput> = proofs.iter().map(|(o, _)| o).collect();
         env_builder.write(&outputs).unwrap();
 
@@ -1062,8 +1061,7 @@ mod tests {
         env_builder.write(&PRIVACY_PRESERVING_CIRCUIT_ID).unwrap();
 
         // Outputs are written once as a word-native `Vec<PrivacyPreservingCircuitOutput>`
-        // (matching `aggregator_circuit`'s `AggregatorCircuitInput`) instead of N raw
-        // `Vec<u8>` journal buffers — see the ppe_aggregation guest for why.
+        // instead of N raw `Vec<u8>` journal buffers — see the ppe_aggregation guest for why.
         let outputs: Vec<PrivacyPreservingCircuitOutput> = fixtures
             .iter()
             .map(|f| {

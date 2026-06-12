@@ -22,7 +22,6 @@ pub use state::{
 };
 pub use validated_state_diff::ValidatedStateDiff;
 
-pub mod aggregator_circuit;
 pub mod encoding;
 pub mod error;
 mod merkle_tree;
@@ -30,6 +29,7 @@ pub mod privacy_preserving_transaction;
 pub mod program;
 pub mod program_deployment_transaction;
 pub mod public_transaction;
+pub mod sequencer_aggregator;
 mod signature;
 mod state;
 mod validated_state_diff;

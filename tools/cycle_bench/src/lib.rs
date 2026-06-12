@@ -18,13 +18,12 @@
     )
 )]
 #![cfg_attr(
-    any(feature = "ppe", feature = "aggregator"),
+    feature = "ppe",
     expect(
         clippy::print_stderr,
-        reason = "PPE/aggregator bench: eprintln progress messages"
+        reason = "PPE bench: eprintln progress messages"
     )
 )]
 
-pub mod aggregator;
 pub mod ppe;
 pub mod stats;
