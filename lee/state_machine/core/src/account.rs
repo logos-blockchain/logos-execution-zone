@@ -14,7 +14,7 @@ use crate::{NullifierSecretKey, program::ProgramId};
 
 pub mod data;
 
-#[derive(Copy, Debug, Default, Clone, Eq, PartialEq)]
+#[derive(Copy, Debug, Default, Clone, Eq, PartialEq, Hash)]
 pub struct Nonce(pub u128);
 
 impl Nonce {
@@ -23,16 +23,6 @@ impl Nonce {
             .0
             .checked_add(1)
             .expect("Overflow when incrementing nonce");
-    }
-
-    #[must_use]
-    pub fn private_account_nonce_init(account_id: &AccountId) -> Self {
-        let mut bytes: [u8; 64] = [0_u8; 64];
-        bytes[..32].copy_from_slice(account_id.value());
-        let result: [u8; 32] = Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap();
-        let result = result.first_chunk::<16>().unwrap();
-
-        Self(u128::from_le_bytes(*result))
     }
 
     #[must_use]
@@ -302,14 +292,6 @@ mod tests {
         let default_account_id = AccountId::default();
         let expected_account_id = AccountId::new([0; 32]);
         assert!(default_account_id == expected_account_id);
-    }
-
-    #[test]
-    fn initialize_private_nonce() {
-        let account_id = AccountId::new([42; 32]);
-        let nonce = Nonce::private_account_nonce_init(&account_id);
-        let expected_nonce = Nonce(37_937_661_125_547_691_021_612_781_941_709_513_486);
-        assert_eq!(nonce, expected_nonce);
     }
 
     #[test]

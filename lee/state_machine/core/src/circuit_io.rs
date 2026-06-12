@@ -1,9 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Commitment, CommitmentSetDigest, Identifier, MembershipProof, Nullifier, NullifierPublicKey,
+    Commitment, CommitmentSetDigest, MembershipProof, Nullifier, NullifierPublicKey,
     NullifierSecretKey, SharedSecretKey,
-    account::{Account, AccountWithMetadata},
+    account::{Account, AccountWithMetadata, Nonce},
     encryption::{EncryptedAccountData, EphemeralPublicKey, ViewTag},
     program::{BlockValidityWindow, PdaSeed, ProgramId, ProgramOutput, TimestampValidityWindow},
 };
@@ -29,48 +29,47 @@ pub enum InputAccountIdentity {
     /// commitment, ciphertext, or nullifier.
     Public,
     /// Init of an authorized standalone private account: no membership proof. The `pre_state`
-    /// must be `Account::default()`. The `account_id` is derived as
-    /// `AccountId::for_regular_private_account(&NullifierPublicKey::from(nsk), identifier)` and
-    /// matched against `pre_state.account_id`.
+    /// must be `Account::default()` except for `nonce`, which equals the sender-chosen `nonce`
+    /// here. The `account_id` is derived as
+    /// `AccountId::for_regular_private_account(&NullifierPublicKey::from(nsk))` and matched
+    /// against `pre_state.account_id`.
     PrivateAuthorizedInit {
         epk: EphemeralPublicKey,
         view_tag: ViewTag,
         ssk: SharedSecretKey,
         nsk: NullifierSecretKey,
-        identifier: Identifier,
+        nonce: Nonce,
     },
     /// Update of an authorized standalone private account: existing on-chain commitment, with
-    /// membership proof.
+    /// membership proof. The nonce is carried by `pre_state`.
     PrivateAuthorizedUpdate {
         epk: EphemeralPublicKey,
         view_tag: ViewTag,
         ssk: SharedSecretKey,
         nsk: NullifierSecretKey,
         membership_proof: MembershipProof,
-        identifier: Identifier,
     },
     /// Init of a standalone private account the caller does not own (e.g. a recipient who
-    /// doesn't yet exist on chain). No `nsk`, no membership proof.
+    /// doesn't yet exist on chain). No `nsk`, no membership proof; `nonce` is sender-chosen.
     PrivateUnauthorized {
         epk: EphemeralPublicKey,
         view_tag: ViewTag,
         npk: NullifierPublicKey,
         ssk: SharedSecretKey,
-        identifier: Identifier,
+        nonce: Nonce,
     },
     /// Init of a private PDA, unauthorized. The npk-to-account_id binding is proven upstream
-    /// via `Claim::Pda(seed)` or a caller's `pda_seeds` match. The identifier diversifies the
-    /// PDA within the `(program_id, seed, npk)` family: `AccountId::for_private_pda` uses it
-    /// as the 4th input.
+    /// via `Claim::Pda(seed)` or a caller's `pda_seeds` match. Multiple notes live under the PDA
+    /// address, diversified by the sender-chosen `nonce`.
     PrivatePdaInit {
         epk: EphemeralPublicKey,
         view_tag: ViewTag,
         npk: NullifierPublicKey,
         ssk: SharedSecretKey,
-        identifier: Identifier,
+        nonce: Nonce,
         /// When `Some((seed, authority_program_id))`, the circuit binds this position via the
         /// external derivation check
-        /// `AccountId::for_private_pda(authority_program_id, seed, npk, identifier) ==
+        /// `AccountId::for_private_pda(authority_program_id, seed, npk) ==
         /// pre_state.account_id` rather than requiring a `Claim::Pda` or caller
         /// `pda_seeds` to establish the binding. The `pre_state` must have `is_authorized
         /// == false`.
@@ -78,17 +77,16 @@ pub enum InputAccountIdentity {
     },
     /// Update of an existing private PDA, with membership proof. `npk` is derived
     /// from `nsk`. Authorization may be established upstream by a caller `pda_seeds` match or a
-    /// previously-seen authorization in a chained call.
+    /// previously-seen authorization in a chained call. The nonce is carried by `pre_state`.
     PrivatePdaUpdate {
         epk: EphemeralPublicKey,
         view_tag: ViewTag,
         ssk: SharedSecretKey,
         nsk: NullifierSecretKey,
         membership_proof: MembershipProof,
-        identifier: Identifier,
         /// When `Some((seed, authority_program_id))`, the circuit binds this position via the
         /// external derivation check
-        /// `AccountId::for_private_pda(authority_program_id, seed, npk, identifier) ==
+        /// `AccountId::for_private_pda(authority_program_id, seed, npk) ==
         /// pre_state.account_id` rather than requiring a caller `pda_seeds` to establish
         /// the binding. The `pre_state` must have `is_authorized == false`.
         seed: Option<(PdaSeed, ProgramId)>,
@@ -109,17 +107,13 @@ impl InputAccountIdentity {
         )
     }
 
-    /// For private PDA variants, return the `(npk, identifier)` pair. `Init` carries both
-    /// directly; `Update` derives `npk` from `nsk`. For non-PDA variants returns `None`.
+    /// For private PDA variants, return the `npk`. `Init` carries it directly; `Update` derives it
+    /// from `nsk`. For non-PDA variants returns `None`.
     #[must_use]
-    pub fn npk_if_private_pda(&self) -> Option<(NullifierPublicKey, Identifier)> {
+    pub fn npk_if_private_pda(&self) -> Option<NullifierPublicKey> {
         match self {
-            Self::PrivatePdaInit {
-                npk, identifier, ..
-            } => Some((*npk, *identifier)),
-            Self::PrivatePdaUpdate {
-                nsk, identifier, ..
-            } => Some((NullifierPublicKey::from(nsk), *identifier)),
+            Self::PrivatePdaInit { npk, .. } => Some(*npk),
+            Self::PrivatePdaUpdate { nsk, .. } => Some(NullifierPublicKey::from(nsk)),
             Self::Public
             | Self::PrivateAuthorizedInit { .. }
             | Self::PrivateAuthorizedUpdate { .. }

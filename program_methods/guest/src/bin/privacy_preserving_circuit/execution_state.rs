@@ -4,8 +4,8 @@ use std::{
 };
 
 use lee_core::{
-    Identifier, InputAccountIdentity, NullifierPublicKey,
-    account::{Account, AccountId, AccountWithMetadata},
+    InputAccountIdentity, NullifierPublicKey,
+    account::{Account, AccountId, AccountWithMetadata, Nonce},
     program::{
         AccountPostState, BlockValidityWindow, ChainedCall, Claim, DEFAULT_PROGRAM_ID,
         MAX_NUMBER_CHAINED_CALLS, PdaSeed, ProgramId, ProgramOutput, TimestampValidityWindow,
@@ -17,12 +17,15 @@ use risc0_zkvm::{guest::env, serde::to_vec};
 /// State of the involved accounts before and after program execution.
 pub struct ExecutionState {
     pre_states: Vec<AccountWithMetadata>,
-    post_states: HashMap<AccountId, Account>,
+    // Shielded re-key: keyed by `(account_id, nonce)` rather than `account_id`, so multiple notes
+    // under one address (e.g. `account_id = H(npk)`) coexist as distinct entries while a note
+    // threaded across chained calls keeps one key (its nonce is frozen during execution by rule 3).
+    // Public accounts are single-cell, so they remain one entry per `account_id` (fixed nonce).
+    post_states: HashMap<(AccountId, Nonce), Account>,
     block_validity_window: BlockValidityWindow,
     timestamp_validity_window: TimestampValidityWindow,
     /// Positions (in `pre_states`) of private-PDA accounts whose supplied npk has been bound to
-    /// their `AccountId` via a proven `AccountId::for_private_pda(program_id, seed, npk,
-    /// identifier)` check.
+    /// their `AccountId` via a proven `AccountId::for_private_pda(program_id, seed, npk)` check.
     /// Two proof paths populate this set: a `Claim::Pda(seed)` in a program's `post_state` on
     /// that `pre_state`, or a caller's `ChainedCall.pda_seeds` entry matching that `pre_state`
     /// under the private derivation. Binding is an idempotent property, not an event: the same
@@ -31,8 +34,7 @@ pub struct ExecutionState {
     /// not `assert!(insert)`. After the main loop, every private-PDA position must appear in this
     /// map; otherwise the npk is unbound and the circuit rejects.
     /// The stored `(ProgramId, PdaSeed)` is the owner program and seed, used in
-    /// `compute_circuit_output` to construct `PrivateAccountKind::Pda { program_id, seed,
-    /// identifier }`.
+    /// `compute_circuit_output` to construct `PrivateAccountKind::Pda { program_id, seed }`.
     private_pda_bound_positions: HashMap<usize, (ProgramId, PdaSeed)>,
     /// Across the whole transaction, each `(program_id, seed)` pair may resolve to at most one
     /// `AccountId`. A seed under a program can derive a family of accounts, one public PDA and
@@ -43,12 +45,11 @@ pub struct ExecutionState {
     /// `AccountId` entry or as an equality check against the existing one, making the rule: one
     /// `(program, seed)` → one account per tx.
     pda_family_binding: HashMap<(ProgramId, PdaSeed), AccountId>,
-    /// Map from a private-PDA `pre_state`'s position in `account_identities` to the (npk,
-    /// identifier) supplied for that position. Built once in `derive_from_outputs` by walking
-    /// `account_identities` and consulting `npk_if_private_pda`. Used later by the claim and
-    /// caller-seeds authorization paths to verify
-    /// `AccountId::for_private_pda(program_id, seed, npk, identifier) == pre_state.account_id`.
-    private_pda_npk_by_position: HashMap<usize, (NullifierPublicKey, Identifier)>,
+    /// Map from a private-PDA `pre_state`'s position in `account_identities` to the npk supplied
+    /// for that position. Built once in `derive_from_outputs` by walking `account_identities` and
+    /// consulting `npk_if_private_pda`. Used later by the claim and caller-seeds authorization
+    /// paths to verify `AccountId::for_private_pda(program_id, seed, npk) == pre_state.account_id`.
+    private_pda_npk_by_position: HashMap<usize, NullifierPublicKey>,
     authorized_accounts: HashSet<AccountId>,
 }
 
@@ -59,15 +60,14 @@ impl ExecutionState {
         program_id: ProgramId,
         program_outputs: Vec<ProgramOutput>,
     ) -> Self {
-        // Build position → (npk, identifier) map for private-PDA pre_states, indexed by position
-        // in `account_identities`. The vec is documented as 1:1 with the program's pre_state
+        // Build position → npk map for private-PDA pre_states, indexed by position in
+        // `account_identities`. The vec is documented as 1:1 with the program's pre_state
         // order, so position here matches `pre_state_position` used downstream in
         // `validate_and_sync_states`.
-        let mut private_pda_npk_by_position: HashMap<usize, (NullifierPublicKey, Identifier)> =
-            HashMap::new();
+        let mut private_pda_npk_by_position: HashMap<usize, NullifierPublicKey> = HashMap::new();
         for (pos, account_identity) in account_identities.iter().enumerate() {
-            if let Some((npk, identifier)) = account_identity.npk_if_private_pda() {
-                private_pda_npk_by_position.insert(pos, (npk, identifier));
+            if let Some(npk) = account_identity.npk_if_private_pda() {
+                private_pda_npk_by_position.insert(pos, npk);
             }
         }
 
@@ -225,7 +225,7 @@ impl ExecutionState {
             .map(|a| {
                 let post = execution_state
                     .post_states
-                    .get(&a.account_id)
+                    .get(&(a.account_id, a.account.nonce))
                     .expect("Post state must exist for pre state");
                 (a, post)
             })
@@ -253,8 +253,9 @@ impl ExecutionState {
     ) {
         for (pre, mut post) in output_pre_states.into_iter().zip(output_post_states) {
             let pre_account_id = pre.account_id;
+            let pre_nonce = pre.account.nonce;
             let pre_is_authorized = pre.is_authorized;
-            let post_states_entry = self.post_states.entry(pre.account_id);
+            let post_states_entry = self.post_states.entry((pre.account_id, pre_nonce));
             match &post_states_entry {
                 Entry::Occupied(occupied) => {
                     #[expect(
@@ -278,7 +279,10 @@ impl ExecutionState {
                         .pre_states
                         .iter()
                         .enumerate()
-                        .find(|(_, acc)| acc.account_id == pre_account_id)
+                        .find(|(_, acc)| {
+                            acc.account_id == pre_account_id
+                                && acc.account.nonce == pre_account.nonce
+                        })
                         .map_or_else(
                             || panic!(
                                 "Pre state must exist in execution state for account {pre_account_id}",
@@ -309,16 +313,11 @@ impl ExecutionState {
                     let external_seed = match account_identities.get(pre_state_position) {
                         Some(InputAccountIdentity::PrivatePdaInit {
                             npk,
-                            identifier,
                             seed: Some((seed, authority_program_id)),
                             ..
                         }) => {
-                            let expected = AccountId::for_private_pda(
-                                authority_program_id,
-                                seed,
-                                npk,
-                                *identifier,
-                            );
+                            let expected =
+                                AccountId::for_private_pda(authority_program_id, seed, npk);
                             assert_eq!(
                                 pre_account_id, expected,
                                 "External seed mismatch for PrivatePdaInit at position {pre_state_position}"
@@ -327,17 +326,12 @@ impl ExecutionState {
                         }
                         Some(InputAccountIdentity::PrivatePdaUpdate {
                             nsk,
-                            identifier,
                             seed: Some((seed, authority_program_id)),
                             ..
                         }) => {
                             let npk = NullifierPublicKey::from(nsk);
-                            let expected = AccountId::for_private_pda(
-                                authority_program_id,
-                                seed,
-                                &npk,
-                                *identifier,
-                            );
+                            let expected =
+                                AccountId::for_private_pda(authority_program_id, seed, &npk);
                             assert_eq!(
                                 pre_account_id, expected,
                                 "External seed mismatch for PrivatePdaUpdate at position {pre_state_position}"
@@ -382,7 +376,9 @@ impl ExecutionState {
                 let pre_state_position = self
                     .pre_states
                     .iter()
-                    .position(|acc| acc.account_id == pre_account_id)
+                    .position(|acc| {
+                        acc.account_id == pre_account_id && acc.account.nonce == pre_nonce
+                    })
                     .expect("Pre state must exist at this point");
 
                 let account_identity = &account_identities[pre_state_position];
@@ -416,14 +412,13 @@ impl ExecutionState {
                     match claim {
                         Claim::Authorized => {}
                         Claim::Pda(seed) => {
-                            let (npk, identifier) = self
+                            let npk = self
                                 .private_pda_npk_by_position
                                 .get(&pre_state_position)
                                 .expect(
                                     "private PDA pre_state must have an npk in the position map",
                                 );
-                            let pda =
-                                AccountId::for_private_pda(&program_id, &seed, npk, *identifier);
+                            let pda = AccountId::for_private_pda(&program_id, &seed, npk);
                             assert_eq!(
                                 pre_account_id, pda,
                                 "Invalid private PDA claim for account {pre_account_id}"
@@ -473,7 +468,7 @@ impl ExecutionState {
         let states_iter = self.pre_states.into_iter().map(move |pre| {
             let post = self
                 .post_states
-                .remove(&pre.account_id)
+                .remove(&(pre.account_id, pre.account.nonce))
                 .expect("Account from pre states should exist in state diff");
             (pre, post)
         });
@@ -548,7 +543,7 @@ fn bind_private_pda_position(
 fn resolve_authorization_and_record_bindings(
     pda_family_binding: &mut HashMap<(ProgramId, PdaSeed), AccountId>,
     private_pda_bound_positions: &mut HashMap<usize, (ProgramId, PdaSeed)>,
-    private_pda_npk_by_position: &HashMap<usize, (NullifierPublicKey, Identifier)>,
+    private_pda_npk_by_position: &HashMap<usize, NullifierPublicKey>,
     authorized_accounts: &mut HashSet<AccountId>,
     pre_account_id: AccountId,
     pre_state_position: usize,
@@ -562,9 +557,8 @@ fn resolve_authorization_and_record_bindings(
                 if AccountId::for_public_pda(&caller, seed) == pre_account_id {
                     return Some((*seed, false, caller));
                 }
-                if let Some((npk, identifier)) =
-                    private_pda_npk_by_position.get(&pre_state_position)
-                    && AccountId::for_private_pda(&caller, seed, npk, *identifier) == pre_account_id
+                if let Some(npk) = private_pda_npk_by_position.get(&pre_state_position)
+                    && AccountId::for_private_pda(&caller, seed, npk) == pre_account_id
                 {
                     return Some((*seed, true, caller));
                 }

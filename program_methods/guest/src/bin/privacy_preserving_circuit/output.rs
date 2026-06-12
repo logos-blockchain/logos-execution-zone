@@ -44,10 +44,10 @@ pub fn compute_circuit_output(
                 view_tag,
                 ssk,
                 nsk,
-                identifier,
+                nonce,
             } => {
                 let npk = NullifierPublicKey::from(nsk);
-                let account_id = AccountId::for_regular_private_account(&npk, *identifier);
+                let account_id = AccountId::for_regular_private_account(&npk);
 
                 assert_eq!(account_id, pre_state.account_id, "AccountId mismatch");
                 assert!(
@@ -56,27 +56,27 @@ pub fn compute_circuit_output(
                 );
                 assert_eq!(
                     pre_state.account,
-                    Account::default(),
-                    "Found new private account with non default values"
+                    Account { nonce: *nonce, ..Account::default() },
+                    "New private account must be default except for the sender-chosen nonce"
                 );
 
+                let pre_commitment = Commitment::new(&account_id, &pre_state.account);
                 let new_nullifier = (
-                    Nullifier::for_account_initialization(&account_id),
+                    Nullifier::for_account_initialization(&pre_commitment),
                     DUMMY_COMMITMENT_HASH,
                 );
-                let new_nonce = Nonce::private_account_nonce_init(&account_id);
 
                 emit_private_output(
                     &mut output,
                     &mut output_index,
                     post_state,
                     &account_id,
-                    &PrivateAccountKind::Regular(*identifier),
+                    &PrivateAccountKind::Regular,
                     ssk,
                     epk,
                     *view_tag,
                     new_nullifier,
-                    new_nonce,
+                    *nonce,
                 );
             }
             InputAccountIdentity::PrivateAuthorizedUpdate {
@@ -85,10 +85,9 @@ pub fn compute_circuit_output(
                 ssk,
                 nsk,
                 membership_proof,
-                identifier,
             } => {
                 let npk = NullifierPublicKey::from(nsk);
-                let account_id = AccountId::for_regular_private_account(&npk, *identifier);
+                let account_id = AccountId::for_regular_private_account(&npk);
 
                 assert_eq!(account_id, pre_state.account_id, "AccountId mismatch");
                 assert!(
@@ -109,7 +108,7 @@ pub fn compute_circuit_output(
                     &mut output_index,
                     post_state,
                     &account_id,
-                    &PrivateAccountKind::Regular(*identifier),
+                    &PrivateAccountKind::Regular,
                     ssk,
                     epk,
                     *view_tag,
@@ -122,38 +121,38 @@ pub fn compute_circuit_output(
                 view_tag,
                 npk,
                 ssk,
-                identifier,
+                nonce,
             } => {
-                let account_id = AccountId::for_regular_private_account(npk, *identifier);
+                let account_id = AccountId::for_regular_private_account(npk);
 
                 assert_eq!(account_id, pre_state.account_id, "AccountId mismatch");
                 assert_eq!(
                     pre_state.account,
-                    Account::default(),
-                    "Found new private account with non default values",
+                    Account { nonce: *nonce, ..Account::default() },
+                    "New private account must be default except for the sender-chosen nonce",
                 );
                 assert!(
                     !pre_state.is_authorized,
                     "Found new private account marked as authorized."
                 );
 
+                let pre_commitment = Commitment::new(&account_id, &pre_state.account);
                 let new_nullifier = (
-                    Nullifier::for_account_initialization(&account_id),
+                    Nullifier::for_account_initialization(&pre_commitment),
                     DUMMY_COMMITMENT_HASH,
                 );
-                let new_nonce = Nonce::private_account_nonce_init(&account_id);
 
                 emit_private_output(
                     &mut output,
                     &mut output_index,
                     post_state,
                     &account_id,
-                    &PrivateAccountKind::Regular(*identifier),
+                    &PrivateAccountKind::Regular,
                     ssk,
                     epk,
                     *view_tag,
                     new_nullifier,
-                    new_nonce,
+                    *nonce,
                 );
             }
             InputAccountIdentity::PrivatePdaInit {
@@ -161,7 +160,7 @@ pub fn compute_circuit_output(
                 view_tag,
                 npk: _,
                 ssk,
-                identifier,
+                nonce,
                 seed: _,
             } => {
                 // The npk-to-account_id binding is established upstream in
@@ -176,17 +175,17 @@ pub fn compute_circuit_output(
                 );
                 assert_eq!(
                     pre_state.account,
-                    Account::default(),
-                    "New private PDA must be default"
+                    Account { nonce: *nonce, ..Account::default() },
+                    "New private PDA must be default except for the sender-chosen nonce"
                 );
-
-                let new_nullifier = (
-                    Nullifier::for_account_initialization(&pre_state.account_id),
-                    DUMMY_COMMITMENT_HASH,
-                );
-                let new_nonce = Nonce::private_account_nonce_init(&pre_state.account_id);
 
                 let account_id = pre_state.account_id;
+                let pre_commitment = Commitment::new(&account_id, &pre_state.account);
+                let new_nullifier = (
+                    Nullifier::for_account_initialization(&pre_commitment),
+                    DUMMY_COMMITMENT_HASH,
+                );
+
                 let (authority_program_id, seed) = pda_seed_by_position
                     .get(&pos)
                     .expect("PrivatePdaInit position must be in pda_seed_by_position");
@@ -198,13 +197,12 @@ pub fn compute_circuit_output(
                     &PrivateAccountKind::Pda {
                         program_id: *authority_program_id,
                         seed: *seed,
-                        identifier: *identifier,
                     },
                     ssk,
                     epk,
                     *view_tag,
                     new_nullifier,
-                    new_nonce,
+                    *nonce,
                 );
             }
             InputAccountIdentity::PrivatePdaUpdate {
@@ -213,7 +211,6 @@ pub fn compute_circuit_output(
                 ssk,
                 nsk,
                 membership_proof,
-                identifier,
                 seed: external_seed,
             } => {
                 // With an external seed the binding comes from the circuit input and the
@@ -246,7 +243,6 @@ pub fn compute_circuit_output(
                     &PrivateAccountKind::Pda {
                         program_id: *authority_program_id,
                         seed: *seed,
-                        identifier: *identifier,
                     },
                     ssk,
                     epk,

@@ -179,7 +179,7 @@ mod tests {
 
         let account_ct = EncryptionScheme::encrypt(
             &account,
-            &PrivateAccountKind::Regular(42),
+            &PrivateAccountKind::Regular,
             &secret,
             &commitment,
             0,
@@ -189,7 +189,6 @@ mod tests {
             &PrivateAccountKind::Pda {
                 program_id: [1_u32; 8],
                 seed: PdaSeed::new([2_u8; 32]),
-                identifier: 42,
             },
             &secret,
             &commitment,
@@ -216,7 +215,7 @@ mod tests {
             balance: 999,
             ..Account::default()
         };
-        let kind = PrivateAccountKind::Regular(0);
+        let kind = PrivateAccountKind::Regular;
         let commitment = crate::Commitment::new(&AccountId::new([7_u8; 32]), &account);
 
         let ct = EncryptionScheme::encrypt(&account, &kind, &sender_ss, &commitment, 0);

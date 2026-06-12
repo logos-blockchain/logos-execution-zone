@@ -13,7 +13,7 @@ pub use commitment::{
 pub use encryption::{
     EncryptedAccountData, EncryptionScheme, EphemeralPublicKey, SharedSecretKey, ViewTag,
 };
-pub use nullifier::{Identifier, Nullifier, NullifierPublicKey, NullifierSecretKey};
+pub use nullifier::{Nullifier, NullifierPublicKey, NullifierSecretKey};
 pub use program::PrivateAccountKind;
 
 pub mod account;
