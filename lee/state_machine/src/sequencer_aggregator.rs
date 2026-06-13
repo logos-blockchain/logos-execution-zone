@@ -1,14 +1,6 @@
-//! TODO: redo-description (Marvin-pq)
-//! Clean-slate host/guest pair for the sequencer's transaction aggregator.
-//!
-//! The guest cannot depend on the `lee` crate, so the host converts each transaction's
-//! [`Message`] into its `lee_core`-resident mirror ([`lee_core::message::Message`]) and
-//! writes it to the guest alongside the `public_pre_states` resolved for its
-//! `public_account_ids`. The guest reconstructs the `PrivacyPreservingCircuitOutput` each
-//! message corresponds to (`Message::into_circuit_output`), verifies the transaction's PPE
-//! proof against it (as a recursive assumption added by the host), checks nullifier/
-//! commitment/account-update uniqueness and block/timestamp validity windows across the
-//! batch, and commits the verified messages alongside `block_id`/`timestamp` as its journal.
+//! Host program for the aggregation circuit. Multiple privacy
+//! preserving transaction proofs are compressed into a single
+//! zk-STARK.
 
 use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, SequencerAggregatorOutput,
@@ -22,8 +14,9 @@ use crate::{
     privacy_preserving_transaction::message::Message,
 };
 
-/// Converts `message` into its `lee_core`-resident mirror for the guest. `epk` is dropped
-/// (see [`lee_core::message`]'s module docs).
+/// Converts `message` into its `lee_core`-resident mirror for the guest circuit.
+/// `epk` is not necessary for guest program, and its inclusion increases the number of
+/// cycles by (approximately) a million.
 fn to_aggregator_message(message: &Message) -> lee_core::message::Message {
     lee_core::message::Message {
         public_account_ids: message.public_account_ids.clone(),
@@ -132,7 +125,7 @@ pub fn aggregate(
     public_pre_states: Vec<Vec<AccountWithMetadata>>,
     block_id: BlockId,
     timestamp: Timestamp,
-    segment_limit_po2: Option<u32>,
+    segment_limit_po2: Option<u32>, // Included due to hardware limitations.
     elf: &[u8],
 ) -> Result<(SequencerAggregatorOutput, Vec<u8>), LeeError> {
     crate::ensure!(
@@ -352,7 +345,7 @@ pub(crate) mod tests {
     /// `AGGREGATOR_COUNT` truncates down from this, so bumping it regenerates
     /// [`BENCH_TRANSACTIONS_CACHE_PATH`] (a one-time cost — see
     /// [`load_or_generate_test_transactions`]).
-    const BENCH_MAX_TRANSACTIONS: usize = 8;
+    const BENCH_MAX_TRANSACTIONS: usize = 16;
 
     /// Path to a Borsh-encoded cache of [`generate_test_transactions`]'s output, used by
     /// [`bench_sequencer_aggregator`].
