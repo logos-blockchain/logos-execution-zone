@@ -16,11 +16,80 @@ use lee::AccountId;
 use log::info;
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
-use wallet::cli::{
-    Command, SubcommandReturnValue,
-    account::{AccountSubcommand, NewSubcommand},
-    programs::native_token_transfer::AuthTransferSubcommand,
+use wallet::{
+    cli::{
+        CliAccountMention, Command, SubcommandReturnValue,
+        account::{AccountSubcommand, NewSubcommand},
+        programs::native_token_transfer::AuthTransferSubcommand,
+    },
+    storage::key_chain::FoundPrivateAccount,
 };
+
+/// Create a private or public account at the given chain index and return its ID.
+async fn new_account(ctx: &mut TestContext, private: bool, cci: ChainIndex) -> Result<AccountId> {
+    let subcommand = if private {
+        NewSubcommand::Private {
+            cci: Some(cci),
+            label: None,
+        }
+    } else {
+        NewSubcommand::Public {
+            cci: Some(cci),
+            label: None,
+        }
+    };
+    let result = wallet::cli::execute_subcommand(
+        ctx.wallet_mut(),
+        Command::Account(AccountSubcommand::New(subcommand)),
+    )
+    .await?;
+    let SubcommandReturnValue::RegisterAccount { account_id } = result else {
+        anyhow::bail!("Expected RegisterAccount return value");
+    };
+    Ok(account_id)
+}
+
+/// Send `amount` from `from` to `to` via an authenticated transfer (identifier 0).
+async fn send(
+    ctx: &mut TestContext,
+    from: CliAccountMention,
+    to: CliAccountMention,
+    amount: u128,
+) -> Result<()> {
+    let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
+        from,
+        to: Some(to),
+        to_npk: None,
+        to_vpk: None,
+        to_keys: None,
+        to_identifier: Some(0),
+        amount,
+    });
+    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
+    Ok(())
+}
+
+/// Look up the restored private account for `account_id`, asserting it exists.
+fn restored_private_account<'a>(
+    ctx: &'a TestContext,
+    account_id: AccountId,
+    label: &str,
+) -> FoundPrivateAccount<'a> {
+    ctx.wallet()
+        .storage()
+        .key_chain()
+        .private_account(account_id)
+        .unwrap_or_else(|| panic!("{label} should be restored"))
+}
+
+/// Assert that a restored public account's signing key exists.
+fn assert_public_account_restored(ctx: &TestContext, account_id: AccountId, label: &str) {
+    ctx.wallet()
+        .storage()
+        .key_chain()
+        .pub_account_signing_key(account_id)
+        .unwrap_or_else(|| panic!("{label} should be restored"));
+}
 
 #[test]
 async fn sync_private_account_with_non_zero_chain_index() -> Result<()> {
@@ -118,107 +187,47 @@ async fn restore_keys_from_seed() -> Result<()> {
 
     let from: AccountId = ctx.existing_private_accounts()[0];
 
-    // Create first private account at root
-    let command = Command::Account(AccountSubcommand::New(NewSubcommand::Private {
-        cci: Some(ChainIndex::root()),
-        label: None,
-    }));
-    let result = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
-    let SubcommandReturnValue::RegisterAccount {
-        account_id: to_account_id1,
-    } = result
-    else {
-        anyhow::bail!("Expected RegisterAccount return value");
-    };
+    // Create private accounts at root and /0
+    let to_account_id1 = new_account(&mut ctx, true, ChainIndex::root()).await?;
+    let to_account_id2 = new_account(&mut ctx, true, ChainIndex::from_str("/0")?).await?;
 
-    // Create second private account at /0
-    let command = Command::Account(AccountSubcommand::New(NewSubcommand::Private {
-        cci: Some(ChainIndex::from_str("/0")?),
-        label: None,
-    }));
-    let result = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
-    let SubcommandReturnValue::RegisterAccount {
-        account_id: to_account_id2,
-    } = result
-    else {
-        anyhow::bail!("Expected RegisterAccount return value");
-    };
-
-    // Send to first private account
-    let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: private_mention(from),
-        to: Some(private_mention(to_account_id1)),
-        to_npk: None,
-        to_vpk: None,
-        to_keys: None,
-        to_identifier: Some(0),
-        amount: 100,
-    });
-    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
-
-    // Send to second private account
-    let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: private_mention(from),
-        to: Some(private_mention(to_account_id2)),
-        to_npk: None,
-        to_vpk: None,
-        to_keys: None,
-        to_identifier: Some(0),
-        amount: 101,
-    });
-    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
+    // Send to both private accounts
+    send(
+        &mut ctx,
+        private_mention(from),
+        private_mention(to_account_id1),
+        100,
+    )
+    .await?;
+    send(
+        &mut ctx,
+        private_mention(from),
+        private_mention(to_account_id2),
+        101,
+    )
+    .await?;
 
     let from: AccountId = ctx.existing_public_accounts()[0];
 
-    // Create first public account at root
-    let command = Command::Account(AccountSubcommand::New(NewSubcommand::Public {
-        cci: Some(ChainIndex::root()),
-        label: None,
-    }));
-    let result = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
-    let SubcommandReturnValue::RegisterAccount {
-        account_id: to_account_id3,
-    } = result
-    else {
-        anyhow::bail!("Expected RegisterAccount return value");
-    };
+    // Create public accounts at root and /0
+    let to_account_id3 = new_account(&mut ctx, false, ChainIndex::root()).await?;
+    let to_account_id4 = new_account(&mut ctx, false, ChainIndex::from_str("/0")?).await?;
 
-    // Create second public account at /0
-    let command = Command::Account(AccountSubcommand::New(NewSubcommand::Public {
-        cci: Some(ChainIndex::from_str("/0")?),
-        label: None,
-    }));
-    let result = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
-    let SubcommandReturnValue::RegisterAccount {
-        account_id: to_account_id4,
-    } = result
-    else {
-        anyhow::bail!("Expected RegisterAccount return value");
-    };
-
-    // Send to first public account
-    let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: public_mention(from),
-        to: Some(public_mention(to_account_id3)),
-        to_npk: None,
-        to_vpk: None,
-        to_keys: None,
-        to_identifier: Some(0),
-        amount: 102,
-    });
-    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
-
-    // Send to second public account
-    let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: public_mention(from),
-        to: Some(public_mention(to_account_id4)),
-        to_npk: None,
-        to_vpk: None,
-        to_keys: None,
-        to_identifier: Some(0),
-        amount: 103,
-    });
-    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
+    // Send to both public accounts
+    send(
+        &mut ctx,
+        public_mention(from),
+        public_mention(to_account_id3),
+        102,
+    )
+    .await?;
+    send(
+        &mut ctx,
+        public_mention(from),
+        public_mention(to_account_id4),
+        103,
+    )
+    .await?;
 
     info!("Preparation complete, performing keys restoration");
 
@@ -226,34 +235,12 @@ async fn restore_keys_from_seed() -> Result<()> {
     wallet::cli::execute_keys_restoration(ctx.wallet_mut(), 10).await?;
 
     // Verify restored private accounts
-    let acc1 = ctx
-        .wallet()
-        .storage()
-        .key_chain()
-        .private_account(to_account_id1)
-        .expect("Acc 1 should be restored");
-
-    let acc2 = ctx
-        .wallet()
-        .storage()
-        .key_chain()
-        .private_account(to_account_id2)
-        .expect("Acc 2 should be restored");
+    let acc1 = restored_private_account(&ctx, to_account_id1, "Acc 1");
+    let acc2 = restored_private_account(&ctx, to_account_id2, "Acc 2");
 
     // Verify restored public accounts
-    let _acc3 = ctx
-        .wallet()
-        .storage()
-        .key_chain()
-        .pub_account_signing_key(to_account_id3)
-        .expect("Acc 3 should be restored");
-
-    let _acc4 = ctx
-        .wallet()
-        .storage()
-        .key_chain()
-        .pub_account_signing_key(to_account_id4)
-        .expect("Acc 4 should be restored");
+    assert_public_account_restored(&ctx, to_account_id3, "Acc 3");
+    assert_public_account_restored(&ctx, to_account_id4, "Acc 4");
 
     assert_eq!(
         acc1.account.program_owner,
@@ -270,27 +257,20 @@ async fn restore_keys_from_seed() -> Result<()> {
     info!("Tree checks passed, testing restored accounts can transact");
 
     // Test that restored accounts can send transactions
-    let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: private_mention(to_account_id1),
-        to: Some(private_mention(to_account_id2)),
-        to_npk: None,
-        to_vpk: None,
-        to_keys: None,
-        to_identifier: Some(0),
-        amount: 10,
-    });
-    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
-
-    let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: public_mention(to_account_id3),
-        to: Some(public_mention(to_account_id4)),
-        to_npk: None,
-        to_vpk: None,
-        to_keys: None,
-        to_identifier: Some(0),
-        amount: 11,
-    });
-    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
+    send(
+        &mut ctx,
+        private_mention(to_account_id1),
+        private_mention(to_account_id2),
+        10,
+    )
+    .await?;
+    send(
+        &mut ctx,
+        public_mention(to_account_id3),
+        public_mention(to_account_id4),
+        11,
+    )
+    .await?;
 
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
