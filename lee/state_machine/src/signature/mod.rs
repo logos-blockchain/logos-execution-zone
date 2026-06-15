@@ -1,7 +1,7 @@
 use std::str::FromStr;
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use k256::ecdsa::signature::hazmat::PrehashVerifier;
+use k256::ecdsa::signature::hazmat::PrehashVerifier as _;
 pub use private_key::PrivateKey;
 pub use public_key::PublicKey;
 use rand::{RngCore as _, rngs::OsRng};
