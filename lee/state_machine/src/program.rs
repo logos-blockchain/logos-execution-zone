@@ -117,6 +117,7 @@ impl Program {
             elf: AUTHENTICATED_TRANSFER_ELF.to_vec(),
         }
     }
+
     #[must_use]
     pub const fn authenticated_transfer_program_id() -> ProgramId {
         AUTHENTICATED_TRANSFER_ID
@@ -129,6 +130,7 @@ impl Program {
             elf: TOKEN_ELF.to_vec(),
         }
     }
+
     #[must_use]
     pub const fn token_id() -> ProgramId {
         TOKEN_ID
@@ -141,6 +143,7 @@ impl Program {
             elf: AMM_ELF.to_vec(),
         }
     }
+
     #[must_use]
     pub const fn amm_id() -> ProgramId {
         AMM_ID
@@ -153,6 +156,7 @@ impl Program {
             elf: CLOCK_ELF.to_vec(),
         }
     }
+
     #[must_use]
     pub const fn clock_id() -> ProgramId {
         CLOCK_ID
@@ -165,6 +169,7 @@ impl Program {
             elf: ASSOCIATED_TOKEN_ACCOUNT_ELF.to_vec(),
         }
     }
+
     #[must_use]
     pub const fn ata_id() -> ProgramId {
         ASSOCIATED_TOKEN_ACCOUNT_ID
@@ -177,6 +182,7 @@ impl Program {
             elf: VAULT_ELF.to_vec(),
         }
     }
+
     #[must_use]
     pub const fn vault_id() -> ProgramId {
         VAULT_ID
@@ -189,6 +195,7 @@ impl Program {
             elf: FAUCET_ELF.to_vec(),
         }
     }
+
     #[must_use]
     pub const fn faucet_id() -> ProgramId {
         FAUCET_ID
@@ -201,6 +208,7 @@ impl Program {
             elf: BRIDGE_ELF.to_vec(),
         }
     }
+
     #[must_use]
     pub const fn bridge_id() -> ProgramId {
         BRIDGE_ID
@@ -216,6 +224,7 @@ impl Program {
             elf: PINATA_ELF.to_vec(),
         }
     }
+
     #[must_use]
     pub const fn pinata_id() -> ProgramId {
         PINATA_ID
@@ -228,6 +237,7 @@ impl Program {
             elf: crate::program_methods::PINATA_TOKEN_ELF.to_vec(),
         }
     }
+
     #[must_use]
     pub const fn pinata_token_id() -> ProgramId {
         crate::program_methods::PINATA_TOKEN_ID
