@@ -51,7 +51,7 @@ The seed is never stored on-chain.
 
 ## Public account keys
 
-Public accounts consist of three keys (secret key `sk`, Schnorr secret key `ssk` and public key `pk`). Additionally, auxillary values chain index `ci` and chain code `cc`. A public account keys are generated using its chain index and its parent's chain code.
+Public accounts consist of three keys (secret key `sk`, Schnorr secret key `ssk` and public key `pk`). Additionally, auxiliary values chain index `ci` and chain code `cc`. Public account keys are generated using their chain index and their parent's chain code.
 
 ```rust
 pub struct ChildKeysPublic {
