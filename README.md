@@ -86,21 +86,25 @@ lee_core = { git = "https://github.com/logos-blockchain/logos-execution-zone.git
 # Install dependencies
 ### Install build dependencies
 
+The wallet links against the system Python (via `pyo3`, used for keycard
+support), so the Python development package is required in addition to the
+usual build tools.
+
 - On Linux
 Ubuntu / Debian
 ```sh
-apt install build-essential clang libclang-dev libssl-dev pkg-config
+apt install build-essential clang libclang-dev libssl-dev pkg-config python3-dev
 ```
 
 - On Fedora
 ```sh
-sudo dnf install clang clang-devel openssl-devel pkgconf
+sudo dnf install clang clang-devel openssl-devel pkgconf python3-devel
 ```
 
 - On Mac
 ```sh
 xcode-select --install
-brew install pkg-config openssl
+brew install pkg-config openssl python
 ```
 
 ### Install Rust
@@ -147,7 +151,7 @@ The sequencer and logos blockchain node can be run locally:
  1. On one terminal go to the `logos-blockchain/logos-blockchain` repo and run a local logos blockchain node:
     - `git checkout master; git pull`
     - `cargo clean`
-    - `rm -r ~/.logos-blockchain-circuits`
+    - `rm -rf ~/.logos-blockchain-circuits`
     - `./scripts/setup-logos-blockchain-circuits.sh`
     - `cargo build --all-features`
     - `./target/debug/logos-blockchain-node --deployment nodes/node/standalone-deployment-config.yaml nodes/node/standalone-node-config.yaml`
