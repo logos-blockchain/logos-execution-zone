@@ -68,7 +68,7 @@ pub struct ChildKeysPublic {
 
 The secret key (`sk`) is used for generating the Schnorr secret key. Currently, the secret key is not directly used in LEE. Rather, the Schnorr secret key (`ssk`) is used for managing the public account. At some point in the future, Schnorr signatures (and `ssk`) will be phased out. At that point, `sk` will be used for authorization in a PQ signature scheme.
 
-The secret key `sk` is computed in one using one of two different methods. The method used depeneds on whether the account keys is the root key or a child key.
+The secret key `sk` is computed using one of two different methods. The method used depends on whether the account key is the root key or a child key.
 
 #### Secret key for root public account
 ```rust
