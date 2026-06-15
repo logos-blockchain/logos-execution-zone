@@ -157,6 +157,7 @@ k256 = { version = "0.13.3", features = [
   "expose-field",
   "serde",
   "pem",
+  "schnorr",
 ] }
 ml-kem = { version = "0.3", features = ["hazmat"] }
 elliptic-curve = { version = "0.13.8", features = ["arithmetic"] }
