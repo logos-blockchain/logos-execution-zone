@@ -138,7 +138,7 @@ let ssk = nssa::PrivateKey::tweak(sk.value()).expect("Invalid private key produc
 
 ### Public key
 
-A public account’s public key (`pk`) is used to verify account ownership. Specifically, the public key is used to validate (Schnorr) signatures purporting to authorizing an account’s usage. The public key is the compressed Schnorr public key (32-bytes).
+A public account’s public key (`pk`) is used to verify account ownership. Specifically, the public key is used to validate (Schnorr) signatures purporting to authorizing an account’s usage. The public key is the x-only Schnorr public key (32 bytes, BIP-340).
 
 ## Private account keys
 
