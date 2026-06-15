@@ -43,16 +43,7 @@ pub struct PrivateKeyHolder {
 impl SeedHolder {
     #[must_use]
     pub fn new_os_random() -> Self {
-        let mut enthopy_bytes: [u8; 32] = [0; 32];
-        OsRng.fill_bytes(&mut enthopy_bytes);
-
-        let mnemonic = Mnemonic::from_entropy(&enthopy_bytes)
-            .expect("Enthropy must be a multiple of 32 bytes");
-        let seed_wide = mnemonic.to_seed("mnemonic");
-
-        Self {
-            seed: seed_wide.to_vec(),
-        }
+        Self::new_mnemonic("mnemonic").0
     }
 
     #[must_use]
@@ -62,14 +53,8 @@ impl SeedHolder {
 
         let mnemonic =
             Mnemonic::from_entropy(&entropy_bytes).expect("Entropy must be a multiple of 32 bytes");
-        let seed_wide = mnemonic.to_seed(passphrase);
 
-        (
-            Self {
-                seed: seed_wide.to_vec(),
-            },
-            mnemonic,
-        )
+        (Self::from_mnemonic(&mnemonic, passphrase), mnemonic)
     }
 
     #[must_use]
@@ -107,10 +92,7 @@ impl SecretSpendingKey {
         const SUFFIX_1: &[u8; 1] = &[1];
         const SUFFIX_2: &[u8; 19] = &[0; 19];
 
-        let index = match index {
-            None => 0_u32,
-            _ => index.expect("Expect a valid u32"),
-        };
+        let index = index.unwrap_or(0);
 
         let mut hasher = sha2::Sha256::new();
         hasher.update(PREFIX);
@@ -129,10 +111,7 @@ impl SecretSpendingKey {
         const SUFFIX_1: &[u8; 1] = &[2];
         const SUFFIX_2: &[u8; 19] = &[0; 19];
 
-        let index = match index {
-            None => 0_u32,
-            _ => index.expect("Expect a valid u32"),
-        };
+        let index = index.unwrap_or(0);
 
         let mut bytes: Vec<u8> = Vec::with_capacity(64);
         bytes.extend_from_slice(PREFIX);
@@ -146,14 +125,7 @@ impl SecretSpendingKey {
 
         let full_seed = hmac_sha512::HMAC::mac(bytes, b"LEE_viewing_seed");
 
-        ViewingSecretKey::new(
-            *full_seed
-                .first_chunk::<32>()
-                .expect("hash_value is 64 bytes, must be safe to get first 32"),
-            *full_seed
-                .last_chunk::<32>()
-                .expect("hash_value is 64 bytes, must be safe to get last 32"),
-        )
+        Self::generate_viewing_secret_key(full_seed)
     }
 
     #[must_use]
@@ -201,7 +173,6 @@ impl PrivateKeyHolder {
 mod tests {
     use super::*;
 
-    // TODO? are these necessary?
     #[test]
     fn seed_generation_test() {
         let seed_holder = SeedHolder::new_os_random();

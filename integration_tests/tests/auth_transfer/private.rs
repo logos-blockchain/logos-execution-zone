@@ -11,7 +11,7 @@ use lee::{
     privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
 };
 use lee_core::{
-    EncryptedAccountData, InputAccountIdentity, NullifierPublicKey,
+    EncryptedAccountData, InputAccountIdentity, ML_KEM_768_CIPHERTEXT_LEN, NullifierPublicKey,
     account::AccountWithMetadata,
     encryption::{EphemeralPublicKey, ViewingPublicKey},
 };
@@ -664,7 +664,7 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
     let npk = NullifierPublicKey::from(&nsk);
     let vpk = ViewingPublicKey::from_bytes(vec![4_u8; 1184]).unwrap();
     let ssk = SharedSecretKey([55_u8; 32]);
-    let epk = EphemeralPublicKey(vec![55_u8; 1088]);
+    let epk = EphemeralPublicKey(vec![55_u8; ML_KEM_768_CIPHERTEXT_LEN]);
     let attacker_vault_id = {
         let seed = vault_core::compute_vault_seed(attacker_id);
         AccountId::for_private_pda(&vault_program_id, &seed, &npk, 1337)

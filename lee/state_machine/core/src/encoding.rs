@@ -7,7 +7,7 @@ use std::io::Read as _;
 #[cfg(feature = "host")]
 use crate::Nullifier;
 #[cfg(feature = "host")]
-use crate::encryption::EphemeralPublicKey;
+use crate::encryption::{EphemeralPublicKey, ML_KEM_768_CIPHERTEXT_LEN};
 #[cfg(feature = "host")]
 use crate::error::LeeCoreError;
 use crate::{
@@ -168,7 +168,7 @@ impl EphemeralPublicKey {
     /// Deserializes an ML-KEM-768 ciphertext from a cursor.
     /// Reads exactly 1088 bytes — the fixed ciphertext size for ML-KEM-768.
     pub fn from_cursor(cursor: &mut Cursor<&[u8]>) -> Result<Self, LeeCoreError> {
-        let mut value = vec![0_u8; 1088];
+        let mut value = vec![0_u8; ML_KEM_768_CIPHERTEXT_LEN];
         cursor.read_exact(&mut value)?;
         Ok(Self(value))
     }

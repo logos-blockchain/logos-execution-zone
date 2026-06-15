@@ -1,7 +1,7 @@
 use aes_gcm::{Aes256Gcm, KeyInit as _, aead::Aead as _};
 use lee_core::{
     SharedSecretKey,
-    encryption::{EphemeralPublicKey, ViewingPublicKey},
+    encryption::{EphemeralPublicKey, ML_KEM_768_CIPHERTEXT_LEN, ViewingPublicKey},
     program::{PdaSeed, ProgramId},
 };
 use rand::{RngCore as _, rngs::OsRng};
@@ -170,7 +170,7 @@ impl GroupKeyHolder {
             .encrypt(&nonce, self.gms.as_ref())
             .expect("AES-GCM encryption should not fail with valid key/nonce");
 
-        let capacity = 1088_usize
+        let capacity = ML_KEM_768_CIPHERTEXT_LEN
             .checked_add(12)
             .and_then(|n| n.checked_add(ciphertext.len()))
             .expect("seal capacity overflow");
@@ -187,20 +187,19 @@ impl GroupKeyHolder {
     /// doesn't verify (wrong key or tampered data).
     pub fn unseal(sealed: &[u8], own_key: &SealingSecretKey) -> Result<Self, SealError> {
         // kem_ciphertext (1088) + nonce (12) = header, then AES-GCM tag (16) minimum.
-        const KEM_CT_LEN: usize = 1088;
-        const HEADER_LEN: usize = KEM_CT_LEN + 12;
+        const HEADER_LEN: usize = ML_KEM_768_CIPHERTEXT_LEN + 12;
         const MIN_LEN: usize = HEADER_LEN + 16;
 
         if sealed.len() < MIN_LEN {
             return Err(SealError::TooShort);
         }
 
-        let kem_ct = EphemeralPublicKey(sealed[..KEM_CT_LEN].to_vec());
-        let nonce = aes_gcm::Nonce::from_slice(&sealed[KEM_CT_LEN..HEADER_LEN]);
+        let kem_ct = EphemeralPublicKey(sealed[..ML_KEM_768_CIPHERTEXT_LEN].to_vec());
+        let nonce = aes_gcm::Nonce::from_slice(&sealed[ML_KEM_768_CIPHERTEXT_LEN..HEADER_LEN]);
         let ciphertext = &sealed[HEADER_LEN..];
 
         let shared = SharedSecretKey::decapsulate(&kem_ct, &own_key.d, &own_key.z)
-            .expect("key_protocol::group_key_holder::GroupKeyHolder::unseal: KEM_CT_LEN guarantees exactly 1088 bytes");
+            .expect("key_protocol::group_key_holder::GroupKeyHolder::unseal: ML_KEM_768_CIPHERTEXT_LEN guarantees exactly 1088 bytes");
         let aes_key = Self::seal_kdf(&shared);
         let cipher = Aes256Gcm::new(&aes_key.into());
 

@@ -330,7 +330,7 @@ pub mod tests {
         BlockId, Commitment, EncryptedAccountData, InputAccountIdentity, Nullifier,
         NullifierPublicKey, NullifierSecretKey, SharedSecretKey, Timestamp,
         account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
-        encryption::{EphemeralPublicKey, ViewingPublicKey},
+        encryption::{EphemeralPublicKey, ML_KEM_768_CIPHERTEXT_LEN, ViewingPublicKey},
         program::{
             BlockValidityWindow, ExecutionValidationError, MAX_NUMBER_CHAINED_CALLS, PdaSeed,
             ProgramId, TimestampValidityWindow, WrappedBalanceSum,
@@ -4379,7 +4379,7 @@ pub mod tests {
                 vec![
                     InputAccountIdentity::Public,
                     InputAccountIdentity::PrivatePdaUpdate {
-                        epk: EphemeralPublicKey(vec![12_u8; 1088]),
+                        epk: EphemeralPublicKey(vec![12_u8; ML_KEM_768_CIPHERTEXT_LEN]),
                         view_tag: EncryptedAccountData::compute_view_tag(
                             &alice_npk,
                             &alice_keys.vpk(),

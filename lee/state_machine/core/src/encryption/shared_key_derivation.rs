@@ -146,6 +146,7 @@ mod tests {
     use ml_kem::KeyExport as _;
 
     use super::*;
+    use crate::ML_KEM_768_CIPHERTEXT_LEN;
 
     #[test]
     fn encapsulate_decapsulate_round_trip() {
@@ -164,7 +165,11 @@ mod tests {
         let receiver_ss = SharedSecretKey::decapsulate(&epk, &d, &z).unwrap();
 
         assert_eq!(sender_ss.0, receiver_ss.0, "shared secrets must match");
-        assert_eq!(epk.0.len(), 1088, "ML-KEM-768 ciphertext is 1088 bytes");
+        assert_eq!(
+            epk.0.len(),
+            ML_KEM_768_CIPHERTEXT_LEN,
+            "ML-KEM-768 ciphertext is 1088 bytes"
+        );
         assert_eq!(
             ek.0.len(),
             1184,
@@ -185,7 +190,7 @@ mod tests {
         );
 
         // Too long — 1089 bytes instead of 1088.
-        let long_epk = EphemeralPublicKey(vec![42_u8; 1089]);
+        let long_epk = EphemeralPublicKey(vec![42_u8; ML_KEM_768_CIPHERTEXT_LEN + 1]);
         assert!(
             SharedSecretKey::decapsulate(&long_epk, &d, &z).is_none(),
             "long EphemeralPublicKey must return None"

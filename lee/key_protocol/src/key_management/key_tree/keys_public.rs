@@ -1,7 +1,7 @@
 use k256::elliptic_curve::PrimeField as _;
 use serde::{Deserialize, Serialize};
 
-use crate::key_management::key_tree::traits::KeyTreeNode;
+use crate::key_management::key_tree::{split_hash, traits::KeyTreeNode};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[cfg_attr(any(test, feature = "test_utils"), derive(PartialEq, Eq))]
@@ -21,52 +21,32 @@ impl ChildKeysPublic {
     #[must_use]
     pub fn root(seed: [u8; 64]) -> Self {
         let hash_value = hmac_sha512::HMAC::mac(seed, "LEE_master_pub");
+        let (first, cc) = split_hash(&hash_value);
 
-        let sk = lee::PrivateKey::try_new(
-            *hash_value
-                .first_chunk::<32>()
-                .expect("hash_value is 64 bytes, must be safe to get first 32"),
-        )
-        .expect("Expect a valid Private Key");
-        let ssk = lee::PrivateKey::tweak(sk.value()).expect("`key_protocol::key_management::keys_public::root()`: Invalid private key produced from `tweak`");
+        let sk = lee::PrivateKey::try_new(first).expect("Expect a valid Private Key");
 
-        let cc = *hash_value
-            .last_chunk::<32>()
-            .expect("hash_value is 64 bytes, must be safe to get last 32");
-        let pk = lee::PublicKey::new_from_private_key(&ssk);
-
-        Self {
-            sk,
-            ssk,
-            pk,
-            cc,
-            cci: None,
-        }
+        Self::from_sk_and_cc(sk, cc, None)
     }
 
     #[must_use]
     pub fn nth_child(&self, cci: u32) -> Self {
         let hash_value = self.compute_hash_value(cci);
+        let (first, cc) = split_hash(&hash_value);
 
-        let lhs = k256::Scalar::from_repr(
-            (*hash_value
-                .first_chunk::<32>()
-                .expect("hash_value is 64 bytes, must be safe to get first 32"))
-            .into(),
-        )
-        .expect("Expect a valid k256 scalar");
+        let lhs = k256::Scalar::from_repr(first.into()).expect("Expect a valid k256 scalar");
         let rhs =
             k256::Scalar::from_repr((*self.sk.value()).into()).expect("Expect a valid k256 scalar");
 
         let sk = lee::PrivateKey::try_new(lhs.add(&rhs).to_bytes().into())
             .expect("Expect a valid private key");
 
-        let ssk = lee::PrivateKey::tweak(sk.value()).expect("`key_protocol::key_management::keys_public::nth_child()`: Invalid private key produced from `tweak`");
+        Self::from_sk_and_cc(sk, cc, Some(cci))
+    }
 
-        let cc = *hash_value
-            .last_chunk::<32>()
-            .expect("hash_value is 64 bytes, must be safe to get last 32");
-
+    fn from_sk_and_cc(sk: lee::PrivateKey, cc: [u8; 32], cci: Option<u32>) -> Self {
+        let ssk = lee::PrivateKey::tweak(sk.value()).expect(
+            "`key_protocol::key_management::keys_public::ChildKeysPublic`: Invalid private key produced from `tweak`",
+        );
         let pk = lee::PublicKey::new_from_private_key(&ssk);
 
         Self {
@@ -74,7 +54,7 @@ impl ChildKeysPublic {
             ssk,
             pk,
             cc,
-            cci: Some(cci),
+            cci,
         }
     }
 
@@ -128,15 +108,16 @@ mod tests {
 
     use super::*;
 
+    const SEED: [u8; 64] = [
+        88, 189, 37, 237, 199, 125, 151, 226, 69, 153, 165, 113, 191, 69, 188, 221, 9, 34, 173,
+        134, 61, 109, 34, 103, 121, 39, 237, 14, 107, 194, 24, 194, 191, 14, 237, 185, 12, 87, 22,
+        227, 38, 71, 17, 144, 251, 118, 217, 115, 33, 222, 201, 61, 203, 246, 121, 214, 6, 187,
+        148, 92, 44, 253, 210, 37,
+    ];
+
     #[test]
     fn master_keys_generation() {
-        let seed = [
-            88, 189, 37, 237, 199, 125, 151, 226, 69, 153, 165, 113, 191, 69, 188, 221, 9, 34, 173,
-            134, 61, 109, 34, 103, 121, 39, 237, 14, 107, 194, 24, 194, 191, 14, 237, 185, 12, 87,
-            22, 227, 38, 71, 17, 144, 251, 118, 217, 115, 33, 222, 201, 61, 203, 246, 121, 214, 6,
-            187, 148, 92, 44, 253, 210, 37,
-        ];
-        let keys = ChildKeysPublic::root(seed);
+        let keys = ChildKeysPublic::root(SEED);
 
         let expected_cc = [
             238, 94, 84, 154, 56, 224, 80, 218, 133, 249, 179, 222, 9, 24, 17, 252, 120, 127, 222,
@@ -169,13 +150,7 @@ mod tests {
 
     #[test]
     fn child_keys_generation() {
-        let seed = [
-            88, 189, 37, 237, 199, 125, 151, 226, 69, 153, 165, 113, 191, 69, 188, 221, 9, 34, 173,
-            134, 61, 109, 34, 103, 121, 39, 237, 14, 107, 194, 24, 194, 191, 14, 237, 185, 12, 87,
-            22, 227, 38, 71, 17, 144, 251, 118, 217, 115, 33, 222, 201, 61, 203, 246, 121, 214, 6,
-            187, 148, 92, 44, 253, 210, 37,
-        ];
-        let root_keys = ChildKeysPublic::root(seed);
+        let root_keys = ChildKeysPublic::root(SEED);
         let cci = (2_u32).pow(31) + 13;
         let child_keys = ChildKeysPublic::nth_child(&root_keys, cci);
 
