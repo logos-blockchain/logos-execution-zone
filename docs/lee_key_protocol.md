@@ -15,7 +15,6 @@ struct ViewingSecretKey { d: [u8; 32], z: [u8; 32] }
 type ViewingPublicKey = MlKem768EncapsulationKey; // 1184 bytes — ML-KEM 768 encapsulation key
 
 /// Signing related keys
-/// Do we need to define AccountId generation or is that handled in Sergio's?
 ```
 
 ## HD wallet
