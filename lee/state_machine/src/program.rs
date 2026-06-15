@@ -113,65 +113,97 @@ impl Program {
     #[must_use]
     pub fn authenticated_transfer_program() -> Self {
         Self {
-            id: AUTHENTICATED_TRANSFER_ID,
+            id: Self::authenticated_transfer_program_id(),
             elf: AUTHENTICATED_TRANSFER_ELF.to_vec(),
         }
+    }
+    #[must_use]
+    pub const fn authenticated_transfer_program_id() -> ProgramId {
+        AUTHENTICATED_TRANSFER_ID
     }
 
     #[must_use]
     pub fn token() -> Self {
         Self {
-            id: TOKEN_ID,
+            id: Self::token_id(),
             elf: TOKEN_ELF.to_vec(),
         }
+    }
+    #[must_use]
+    pub const fn token_id() -> ProgramId {
+        TOKEN_ID
     }
 
     #[must_use]
     pub fn amm() -> Self {
         Self {
-            id: AMM_ID,
+            id: Self::amm_id(),
             elf: AMM_ELF.to_vec(),
         }
+    }
+    #[must_use]
+    pub const fn amm_id() -> ProgramId {
+        AMM_ID
     }
 
     #[must_use]
     pub fn clock() -> Self {
         Self {
-            id: CLOCK_ID,
+            id: Self::clock_id(),
             elf: CLOCK_ELF.to_vec(),
         }
+    }
+    #[must_use]
+    pub const fn clock_id() -> ProgramId {
+        CLOCK_ID
     }
 
     #[must_use]
     pub fn ata() -> Self {
         Self {
-            id: ASSOCIATED_TOKEN_ACCOUNT_ID,
+            id: Self::ata_id(),
             elf: ASSOCIATED_TOKEN_ACCOUNT_ELF.to_vec(),
         }
+    }
+    #[must_use]
+    pub const fn ata_id() -> ProgramId {
+        ASSOCIATED_TOKEN_ACCOUNT_ID
     }
 
     #[must_use]
     pub fn vault() -> Self {
         Self {
-            id: VAULT_ID,
+            id: Self::vault_id(),
             elf: VAULT_ELF.to_vec(),
         }
+    }
+    #[must_use]
+    pub const fn vault_id() -> ProgramId {
+        VAULT_ID
     }
 
     #[must_use]
     pub fn faucet() -> Self {
         Self {
-            id: FAUCET_ID,
+            id: Self::faucet_id(),
             elf: FAUCET_ELF.to_vec(),
         }
+    }
+    #[must_use]
+    pub const fn faucet_id() -> ProgramId {
+        FAUCET_ID
     }
 
     #[must_use]
     pub fn bridge() -> Self {
         Self {
-            id: BRIDGE_ID,
+            id: Self::bridge_id(),
             elf: BRIDGE_ELF.to_vec(),
         }
+    }
+    #[must_use]
+    pub const fn bridge_id() -> ProgramId {
+        BRIDGE_ID
     }
 }
 
@@ -180,18 +212,25 @@ impl Program {
     #[must_use]
     pub fn pinata() -> Self {
         Self {
-            id: PINATA_ID,
+            id: Self::pinata_id(),
             elf: PINATA_ELF.to_vec(),
         }
+    }
+    #[must_use]
+    pub const fn pinata_id() -> ProgramId {
+        PINATA_ID
     }
 
     #[must_use]
     pub fn pinata_token() -> Self {
-        use crate::program_methods::{PINATA_TOKEN_ELF, PINATA_TOKEN_ID};
         Self {
-            id: PINATA_TOKEN_ID,
-            elf: PINATA_TOKEN_ELF.to_vec(),
+            id: Self::pinata_token_id(),
+            elf: crate::program_methods::PINATA_TOKEN_ELF.to_vec(),
         }
+    }
+    #[must_use]
+    pub const fn pinata_token_id() -> ProgramId {
+        crate::program_methods::PINATA_TOKEN_ID
     }
 }
 

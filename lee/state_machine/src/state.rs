@@ -1,4 +1,7 @@
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::{
+    collections::{BTreeSet, HashMap, HashSet},
+    sync::LazyLock,
+};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use clock_core::ClockAccountData;
@@ -24,6 +27,12 @@ use crate::{
 };
 
 pub const MAX_NUMBER_CHAINED_CALLS: usize = 10;
+
+static SYSTEM_FAUCET_ACCOUNT_ID: LazyLock<AccountId> =
+    LazyLock::new(|| faucet_core::compute_faucet_account_id(Program::faucet_id()));
+
+static SYSTEM_BRIDGE_ACCOUNT_ID: LazyLock<AccountId> =
+    LazyLock::new(|| bridge_core::compute_bridge_account_id(Program::bridge_id()));
 
 #[derive(Clone, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(test, derive(Debug, PartialEq, Eq))]
@@ -154,14 +163,13 @@ impl V03State {
     ) -> Self {
         let faucet_account_id = system_faucet_account_id();
         let bridge_account_id = system_bridge_account_id();
-        let authenticated_transfer_program = Program::authenticated_transfer_program();
         let mut public_state: HashMap<_, _> = initial_data
             .iter()
             .copied()
             .map(|(account_id, balance)| {
                 let account = Account {
                     balance,
-                    program_owner: authenticated_transfer_program.id(),
+                    program_owner: Program::authenticated_transfer_program_id(),
                     ..Account::default()
                 };
                 (account_id, account)
@@ -207,7 +215,7 @@ impl V03State {
             timestamp: genesis_timestamp,
         }
         .to_bytes();
-        let clock_program_id = Program::clock().id();
+        let clock_program_id = Program::clock_id();
         for account_id in CLOCK_PROGRAM_ACCOUNT_IDS {
             self.public_state.insert(
                 account_id,
@@ -350,7 +358,7 @@ impl V03State {
         self.public_state.insert(
             account_id,
             Account {
-                program_owner: Program::pinata().id(),
+                program_owner: Program::pinata_id(),
                 balance: 1_500_000,
                 // Difficulty: 3
                 data: vec![3; 33].try_into().expect("should fit"),
@@ -365,7 +373,7 @@ impl V03State {
         self.public_state.insert(
             account_id,
             Account {
-                program_owner: Program::pinata_token().id(),
+                program_owner: Program::pinata_token_id(),
                 // Difficulty: 3
                 data: vec![3; 33].try_into().expect("should fit"),
                 ..Account::default()
@@ -383,7 +391,7 @@ impl V03State {
 
 fn system_faucet_account() -> Account {
     Account {
-        program_owner: Program::authenticated_transfer_program().id(),
+        program_owner: Program::authenticated_transfer_program_id(),
         balance: u128::MAX,
         ..Account::default()
     }
@@ -391,19 +399,19 @@ fn system_faucet_account() -> Account {
 
 fn system_bridge_account() -> Account {
     Account {
-        program_owner: Program::authenticated_transfer_program().id(),
+        program_owner: Program::authenticated_transfer_program_id(),
         ..Account::default()
     }
 }
 
 #[must_use]
 pub fn system_faucet_account_id() -> AccountId {
-    faucet_core::compute_faucet_account_id(Program::faucet().id())
+    *SYSTEM_FAUCET_ACCOUNT_ID
 }
 
 #[must_use]
 pub fn system_bridge_account_id() -> AccountId {
-    bridge_core::compute_bridge_account_id(Program::bridge().id())
+    *SYSTEM_BRIDGE_ACCOUNT_ID
 }
 
 #[cfg(test)]
