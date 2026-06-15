@@ -102,7 +102,7 @@ In both cases, the chain code `cc` is the last 32 bytes of `hash_value`.
 
 ### Schnorr secret key
 
-The Schnorr secret key (`ssk`) is used for managing public ownership and authorization Authorization for spending funds and, in some cases, modifying account data is handled by signing the transaction with the account’s Schnorr secret key. The Schnorr secret key serves as protective layer between the account's secret key and quantum attackers.
+The Schnorr secret key (`ssk`) is used for managing public ownership and authorization. Authorization for spending funds and, in some cases, modifying account data is handled by signing the transaction with the account’s Schnorr secret key. The Schnorr secret key serves as a protective layer between the account's secret key and quantum attackers.
 
 The Schnorr secret key (`ssk`) is computed from the secret key (`sk`) as follows:
 1. `private_key` is the scalar associated in the basefield for `secp256k1` generated from `sk`.
