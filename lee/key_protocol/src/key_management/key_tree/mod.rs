@@ -341,6 +341,18 @@ mod tests {
     }
 
     #[test]
+    fn split_hash_splits_into_first_and_last_32_bytes() {
+        let mut hash_value = [0_u8; 64];
+        hash_value[..32].fill(0xAA);
+        hash_value[32..].fill(0xBB);
+
+        let (first, last) = split_hash(&hash_value);
+
+        assert_eq!(first, [0xAA; 32]);
+        assert_eq!(last, [0xBB; 32]);
+    }
+
+    #[test]
     fn simple_key_tree() {
         let seed_holder = seed_holder_for_tests();
 
