@@ -83,31 +83,31 @@ pub fn print_table(results: &[PpeBenchResult]) {
     );
     println!("{}", "-".repeat(lw + 92));
     for r in results {
-        let p = r.prove_wall_ms.map_or_else(
+        let time = r.prove_wall_ms.map_or_else(
             || "-".to_owned(),
             |v| format!("{v:.1} ({:.1}s)", v / 1_000.0),
         );
-        let c = r
+        let user_cycles = r
             .user_cycles
             .map_or_else(|| "-".to_owned(), |n| n.to_string());
-        let tc = r
+        let total_cycles = r
             .total_cycles
             .map_or_else(|| "-".to_owned(), |n| n.to_string());
-        let s = r.segments.map_or_else(|| "-".to_owned(), |n| n.to_string());
-        let b = r
+        let segments = r.segments.map_or_else(|| "-".to_owned(), |n| n.to_string());
+        let byte_size = r
             .proof_bytes
             .map_or_else(|| "-".to_owned(), |n| n.to_string());
-        let e = r.error.as_deref().unwrap_or("");
+        let error = r.error.as_deref().unwrap_or("");
         println!(
             "{:<lw$}  {:>5}  {:>20}  {:>12}  {:>12}  {:>8}  {:>12}  {}",
             r.label,
             r.chain_depth,
-            p,
-            c,
-            tc,
-            s,
-            b,
-            e,
+            time,
+            user_cycles,
+            total_cycles,
+            segments,
+            byte_size,
+            error,
             lw = lw,
         );
     }
