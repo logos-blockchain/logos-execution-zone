@@ -6,7 +6,7 @@ use lee_core::{
     account::AccountWithMetadata,
     program::{ChainedCall, InstructionData, ProgramId, ProgramOutput},
 };
-use risc0_zkvm::{ExecutorEnv, InnerReceipt, ProverOpts, Receipt, default_prover};
+use risc0_zkvm::{ExecutorEnv, InnerReceipt, ProverOpts, Receipt, SessionStats, default_prover};
 
 use crate::{
     error::{InvalidProgramBehaviorError, LeeError},
@@ -70,7 +70,7 @@ pub fn execute_and_prove(
     account_identities: Vec<InputAccountIdentity>,
     program_with_dependencies: &ProgramWithDependencies,
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
-    let (output, proof, _cycles) = execute_and_prove_with_cycles(
+    let (output, proof, _stats) = execute_and_prove_with_stats(
         pre_states,
         instruction_data,
         account_identities,
@@ -79,14 +79,14 @@ pub fn execute_and_prove(
     Ok((output, proof))
 }
 
-/// Generates a proof and cycle count for the execution of a LEE program inside the privacy
+/// Generates a proof and stats for the execution of a LEE program inside the privacy
 /// preserving execution circuit.
-pub fn execute_and_prove_with_cycles(
+pub fn execute_and_prove_with_stats(
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: InstructionData,
     account_identities: Vec<InputAccountIdentity>,
     program_with_dependencies: &ProgramWithDependencies,
-) -> Result<(PrivacyPreservingCircuitOutput, Proof, u64), LeeError> {
+) -> Result<(PrivacyPreservingCircuitOutput, Proof, SessionStats), LeeError> {
     let ProgramWithDependencies {
         program: initial_program,
         dependencies,
@@ -162,7 +162,7 @@ pub fn execute_and_prove_with_cycles(
         .decode()
         .map_err(|e| LeeError::CircuitOutputDeserializationError(e.to_string()))?;
 
-    Ok((circuit_output, proof, prove_info.stats.user_cycles))
+    Ok((circuit_output, proof, prove_info.stats))
 }
 
 fn execute_and_prove_program(

@@ -7,7 +7,7 @@ use std::{collections::HashMap, time::Instant};
 
 use lee::{
     privacy_preserving_transaction::circuit::{
-        ProgramWithDependencies, Proof, execute_and_prove_with_cycles,
+        ProgramWithDependencies, Proof, execute_and_prove_with_stats,
     },
     program::Program,
 };
@@ -17,7 +17,7 @@ use lee_core::{
     account::{Account, AccountId, AccountWithMetadata},
     program::ProgramId,
 };
-use risc0_zkvm::serde::to_vec;
+use risc0_zkvm::{SessionStats, serde::to_vec};
 
 use super::PpeBenchResult;
 
@@ -37,14 +37,16 @@ pub fn run_auth_transfer_in_ppe(private: bool) -> PpeBenchResult {
     };
     let started = Instant::now();
     match prove_auth_transfer_in_ppe(private) {
-        Ok((_out, proof, user_cycles)) => {
+        Ok((_out, proof, stats)) => {
             let prove_ms = started.elapsed().as_secs_f64() * 1_000.0;
             PpeBenchResult {
                 label,
                 chain_depth: 0,
                 prove_wall_ms: Some(prove_ms),
                 proof_bytes: Some(proof.into_inner().len()),
-                user_cycles: Some(user_cycles),
+                user_cycles: Some(stats.user_cycles),
+                total_cycles: Some(stats.total_cycles),
+                segments: Some(stats.segments),
                 error: None,
             }
         }
@@ -54,6 +56,8 @@ pub fn run_auth_transfer_in_ppe(private: bool) -> PpeBenchResult {
             prove_wall_ms: None,
             proof_bytes: None,
             user_cycles: None,
+            total_cycles: None,
+            segments: None,
             error: Some(err.to_string()),
         },
     }
@@ -63,7 +67,7 @@ pub fn run_auth_transfer_in_ppe(private: bool) -> PpeBenchResult {
 /// `private` flag signals whether the receiver is a private account.
 pub fn prove_auth_transfer_in_ppe(
     private: bool,
-) -> anyhow::Result<(PrivacyPreservingCircuitOutput, Proof, u64)> {
+) -> anyhow::Result<(PrivacyPreservingCircuitOutput, Proof, SessionStats)> {
     let pwd = ProgramWithDependencies::from(Program::new(AUTH_TRANSFER_ELF.to_vec())?);
 
     // Sender must already be claimed by auth_transfer for its balance to be debited.
@@ -104,7 +108,7 @@ pub fn prove_auth_transfer_in_ppe(
         (recipient, InputAccountIdentity::Public)
     };
 
-    Ok(execute_and_prove_with_cycles(
+    Ok(execute_and_prove_with_stats(
         vec![sender, recipient],
         instruction_data,
         vec![InputAccountIdentity::Public, recipient_identity],
@@ -116,14 +120,16 @@ pub fn run_chain_caller(depth: u32) -> PpeBenchResult {
     let label = format!("chain_caller depth={depth}");
     let started = Instant::now();
     match prove_chain_caller(depth) {
-        Ok((_out, proof, user_cycles)) => {
+        Ok((_out, proof, stats)) => {
             let prove_ms = started.elapsed().as_secs_f64() * 1_000.0;
             PpeBenchResult {
                 label,
                 chain_depth: depth as usize,
                 prove_wall_ms: Some(prove_ms),
                 proof_bytes: Some(proof.into_inner().len()),
-                user_cycles: Some(user_cycles),
+                user_cycles: Some(stats.user_cycles),
+                total_cycles: Some(stats.total_cycles),
+                segments: Some(stats.segments),
                 error: None,
             }
         }
@@ -133,6 +139,8 @@ pub fn run_chain_caller(depth: u32) -> PpeBenchResult {
             prove_wall_ms: None,
             proof_bytes: None,
             user_cycles: None,
+            total_cycles: None,
+            segments: None,
             error: Some(err.to_string()),
         },
     }
@@ -140,7 +148,7 @@ pub fn run_chain_caller(depth: u32) -> PpeBenchResult {
 
 fn prove_chain_caller(
     num_chain_calls: u32,
-) -> anyhow::Result<(PrivacyPreservingCircuitOutput, Proof, u64)> {
+) -> anyhow::Result<(PrivacyPreservingCircuitOutput, Proof, SessionStats)> {
     let chain_caller = Program::new(CHAIN_CALLER_ELF.to_vec())?;
     let auth_transfer = Program::new(AUTH_TRANSFER_ELF.to_vec())?;
     let mut deps = HashMap::new();
@@ -177,7 +185,7 @@ fn prove_chain_caller(
 
     let account_identities = vec![InputAccountIdentity::Public; pre_states.len()];
 
-    Ok(execute_and_prove_with_cycles(
+    Ok(execute_and_prove_with_stats(
         pre_states,
         instruction_data,
         account_identities,

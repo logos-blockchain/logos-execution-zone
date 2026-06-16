@@ -29,6 +29,10 @@ pub struct PpeBenchResult {
     pub prove_wall_ms: Option<f64>,
     /// Executor `user_cycles` of the privacy circuit.
     pub user_cycles: Option<u64>,
+    /// `total_cycles` including padding.
+    pub total_cycles: Option<u64>,
+    /// Number of segments.
+    pub segments: Option<usize>,
     /// borsh-serialized `InnerReceipt` length (`S_agg` in the fee model).
     pub proof_bytes: Option<usize>,
     pub error: Option<String>,
@@ -66,16 +70,18 @@ pub fn print_table(results: &[PpeBenchResult]) {
         .max("label".len());
 
     println!(
-        "\n{:<lw$}  {:>5}  {:>20}  {:>12}  {:>12}  {}",
+        "\n{:<lw$}  {:>5}  {:>20}  {:>12}  {:>12}  {:>8}  {:>12}  {}",
         "label",
         "depth",
         "prove_ms (s)",
         "user_cycles",
+        "total_cycles",
+        "segments",
         "proof_bytes",
         "error",
         lw = lw,
     );
-    println!("{}", "-".repeat(lw + 72));
+    println!("{}", "-".repeat(lw + 92));
     for r in results {
         let p = r.prove_wall_ms.map_or_else(
             || "-".to_owned(),
@@ -84,16 +90,22 @@ pub fn print_table(results: &[PpeBenchResult]) {
         let c = r
             .user_cycles
             .map_or_else(|| "-".to_owned(), |n| n.to_string());
+        let tc = r
+            .total_cycles
+            .map_or_else(|| "-".to_owned(), |n| n.to_string());
+        let s = r.segments.map_or_else(|| "-".to_owned(), |n| n.to_string());
         let b = r
             .proof_bytes
             .map_or_else(|| "-".to_owned(), |n| n.to_string());
         let e = r.error.as_deref().unwrap_or("");
         println!(
-            "{:<lw$}  {:>5}  {:>20}  {:>12}  {:>12}  {}",
+            "{:<lw$}  {:>5}  {:>20}  {:>12}  {:>12}  {:>8}  {:>12}  {}",
             r.label,
             r.chain_depth,
             p,
             c,
+            tc,
+            s,
             b,
             e,
             lw = lw,
