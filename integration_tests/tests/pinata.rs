@@ -6,13 +6,13 @@
 
 use std::time::Duration;
 
-use anyhow::{Context as _, Result};
+use anyhow::Result;
+use common::PINATA_BASE58;
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, private_mention, public_mention,
-    verify_commitment_is_in_state,
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, account_balance,
+    assert_private_commitment_in_state, private_mention, public_mention, sync_private,
 };
 use log::info;
-use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 use wallet::cli::{
     Command, SubcommandReturnValue,
@@ -41,10 +41,7 @@ async fn claim_pinata_to_uninitialized_public_account_fails_fast() -> Result<()>
         anyhow::bail!("Expected RegisterAccount return value");
     };
 
-    let pinata_balance_pre = ctx
-        .sequencer_client()
-        .get_account_balance(system_accounts::pinata_account_id())
-        .await?;
+    let pinata_balance_pre = account_balance(&ctx, PINATA_BASE58.parse().unwrap()).await?;
 
     let claim_result = wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
@@ -64,10 +61,7 @@ async fn claim_pinata_to_uninitialized_public_account_fails_fast() -> Result<()>
         "Expected init guidance, got: {err}",
     );
 
-    let pinata_balance_post = ctx
-        .sequencer_client()
-        .get_account_balance(system_accounts::pinata_account_id())
-        .await?;
+    let pinata_balance_post = account_balance(&ctx, PINATA_BASE58.parse().unwrap()).await?;
 
     assert_eq!(pinata_balance_post, pinata_balance_pre);
 
@@ -93,10 +87,7 @@ async fn claim_pinata_to_uninitialized_private_account_fails_fast() -> Result<()
         anyhow::bail!("Expected RegisterAccount return value");
     };
 
-    let pinata_balance_pre = ctx
-        .sequencer_client()
-        .get_account_balance(system_accounts::pinata_account_id())
-        .await?;
+    let pinata_balance_pre = account_balance(&ctx, PINATA_BASE58.parse().unwrap()).await?;
 
     let claim_result = wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
@@ -116,10 +107,7 @@ async fn claim_pinata_to_uninitialized_private_account_fails_fast() -> Result<()
         "Expected init guidance, got: {err}",
     );
 
-    let pinata_balance_post = ctx
-        .sequencer_client()
-        .get_account_balance(system_accounts::pinata_account_id())
-        .await?;
+    let pinata_balance_post = account_balance(&ctx, PINATA_BASE58.parse().unwrap()).await?;
 
     assert_eq!(pinata_balance_post, pinata_balance_pre);
 
@@ -135,10 +123,7 @@ async fn claim_pinata_to_existing_public_account() -> Result<()> {
         to: public_mention(ctx.existing_public_accounts()[0]),
     });
 
-    let pinata_balance_pre = ctx
-        .sequencer_client()
-        .get_account_balance(system_accounts::pinata_account_id())
-        .await?;
+    let pinata_balance_pre = account_balance(&ctx, PINATA_BASE58.parse().unwrap()).await?;
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
@@ -146,15 +131,9 @@ async fn claim_pinata_to_existing_public_account() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     info!("Checking correct balance move");
-    let pinata_balance_post = ctx
-        .sequencer_client()
-        .get_account_balance(system_accounts::pinata_account_id())
-        .await?;
+    let pinata_balance_post = account_balance(&ctx, PINATA_BASE58.parse().unwrap()).await?;
 
-    let winner_balance_post = ctx
-        .sequencer_client()
-        .get_account_balance(ctx.existing_public_accounts()[0])
-        .await?;
+    let winner_balance_post = account_balance(&ctx, ctx.existing_public_accounts()[0]).await?;
 
     assert_eq!(pinata_balance_post, pinata_balance_pre - pinata_prize);
     assert_eq!(winner_balance_post, 10000 + pinata_prize);
@@ -173,10 +152,7 @@ async fn claim_pinata_to_existing_private_account() -> Result<()> {
         to: private_mention(ctx.existing_private_accounts()[0]),
     });
 
-    let pinata_balance_pre = ctx
-        .sequencer_client()
-        .get_account_balance(system_accounts::pinata_account_id())
-        .await?;
+    let pinata_balance_pre = account_balance(&ctx, PINATA_BASE58.parse().unwrap()).await?;
 
     let result = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
     let SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash: _ } = result else {
@@ -187,19 +163,11 @@ async fn claim_pinata_to_existing_private_account() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     info!("Syncing private accounts");
-    let command = Command::Account(AccountSubcommand::SyncPrivate {});
-    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
+    sync_private(&mut ctx).await?;
 
-    let new_commitment = ctx
-        .wallet()
-        .get_private_account_commitment(ctx.existing_private_accounts()[0])
-        .context("Failed to get private account commitment")?;
-    assert!(verify_commitment_is_in_state(new_commitment, ctx.sequencer_client()).await);
+    assert_private_commitment_in_state(&ctx, ctx.existing_private_accounts()[0], "account").await?;
 
-    let pinata_balance_post = ctx
-        .sequencer_client()
-        .get_account_balance(system_accounts::pinata_account_id())
-        .await?;
+    let pinata_balance_post = account_balance(&ctx, PINATA_BASE58.parse().unwrap()).await?;
 
     assert_eq!(pinata_balance_post, pinata_balance_pre - pinata_prize);
 
@@ -239,37 +207,23 @@ async fn claim_pinata_to_new_private_account() -> Result<()> {
     info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
-    let new_commitment = ctx
-        .wallet()
-        .get_private_account_commitment(winner_account_id)
-        .context("Failed to get private account commitment")?;
-    assert!(verify_commitment_is_in_state(new_commitment, ctx.sequencer_client()).await);
+    assert_private_commitment_in_state(&ctx, winner_account_id, "account").await?;
 
     // Claim pinata to the new private account
     let command = Command::Pinata(PinataProgramAgnosticSubcommand::Claim {
         to: private_mention(winner_account_id),
     });
 
-    let pinata_balance_pre = ctx
-        .sequencer_client()
-        .get_account_balance(system_accounts::pinata_account_id())
-        .await?;
+    let pinata_balance_pre = account_balance(&ctx, PINATA_BASE58.parse().unwrap()).await?;
 
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
     info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
-    let new_commitment = ctx
-        .wallet()
-        .get_private_account_commitment(winner_account_id)
-        .context("Failed to get private account commitment")?;
-    assert!(verify_commitment_is_in_state(new_commitment, ctx.sequencer_client()).await);
+    assert_private_commitment_in_state(&ctx, winner_account_id, "account").await?;
 
-    let pinata_balance_post = ctx
-        .sequencer_client()
-        .get_account_balance(system_accounts::pinata_account_id())
-        .await?;
+    let pinata_balance_post = account_balance(&ctx, PINATA_BASE58.parse().unwrap()).await?;
 
     assert_eq!(pinata_balance_post, pinata_balance_pre - pinata_prize);
 

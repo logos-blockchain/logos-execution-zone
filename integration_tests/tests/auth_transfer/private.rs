@@ -3,8 +3,9 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, fetch_privacy_preserving_tx, new_account,
-    private_mention, public_mention, send, verify_commitment_is_in_state,
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, account_balance,
+    assert_private_commitment_in_state, fetch_privacy_preserving_tx, get_account, new_account,
+    private_mention, public_mention, send, sync_private, verify_commitment_is_in_state,
 };
 use lee::{
     AccountId, SharedSecretKey, execute_and_prove,
@@ -41,17 +42,8 @@ async fn private_transfer_to_owned_account() -> Result<()> {
     info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
-    let new_commitment1 = ctx
-        .wallet()
-        .get_private_account_commitment(from)
-        .context("Failed to get private account commitment for sender")?;
-    assert!(verify_commitment_is_in_state(new_commitment1, ctx.sequencer_client()).await);
-
-    let new_commitment2 = ctx
-        .wallet()
-        .get_private_account_commitment(to)
-        .context("Failed to get private account commitment for receiver")?;
-    assert!(verify_commitment_is_in_state(new_commitment2, ctx.sequencer_client()).await);
+    assert_private_commitment_in_state(&ctx, from, "sender").await?;
+    assert_private_commitment_in_state(&ctx, to, "receiver").await?;
 
     info!("Successfully transferred privately to owned account");
 
@@ -126,13 +118,9 @@ async fn deshielded_transfer_to_public_account() -> Result<()> {
         .wallet()
         .get_account_private(from)
         .context("Failed to get sender's private account")?;
-    let new_commitment = ctx
-        .wallet()
-        .get_private_account_commitment(from)
-        .context("Failed to get private account commitment")?;
-    assert!(verify_commitment_is_in_state(new_commitment, ctx.sequencer_client()).await);
+    assert_private_commitment_in_state(&ctx, from, "sender").await?;
 
-    let acc_2_balance = ctx.sequencer_client().get_account_balance(to).await?;
+    let acc_2_balance = account_balance(&ctx, to).await?;
 
     assert_eq!(from_acc.balance, 9900);
     assert_eq!(acc_2_balance, 20100);
@@ -178,14 +166,13 @@ async fn private_transfer_to_owned_account_using_claiming_path() -> Result<()> {
     let tx = fetch_privacy_preserving_tx(ctx.sequencer_client(), tx_hash).await;
 
     // Sync the wallet to claim the new account
-    let command = Command::Account(AccountSubcommand::SyncPrivate {});
-    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
+    sync_private(&mut ctx).await?;
 
-    let new_commitment1 = ctx
+    let sender_commitment = ctx
         .wallet()
         .get_private_account_commitment(from)
         .context("Failed to get private account commitment for sender")?;
-    assert_eq!(tx.message.new_commitments[0], new_commitment1);
+    assert_eq!(tx.message.new_commitments[0], sender_commitment);
 
     assert_eq!(tx.message.new_commitments.len(), 2);
     for commitment in tx.message.new_commitments {
@@ -219,13 +206,9 @@ async fn shielded_transfer_to_owned_private_account() -> Result<()> {
         .wallet()
         .get_account_private(to)
         .context("Failed to get receiver's private account")?;
-    let new_commitment = ctx
-        .wallet()
-        .get_private_account_commitment(to)
-        .context("Failed to get receiver's commitment")?;
-    assert!(verify_commitment_is_in_state(new_commitment, ctx.sequencer_client()).await);
+    assert_private_commitment_in_state(&ctx, to, "receiver").await?;
 
-    let acc_from_balance = ctx.sequencer_client().get_account_balance(from).await?;
+    let acc_from_balance = account_balance(&ctx, from).await?;
 
     assert_eq!(acc_from_balance, 9900);
     assert_eq!(acc_to.balance, 20100);
@@ -264,7 +247,7 @@ async fn shielded_transfer_to_foreign_account() -> Result<()> {
 
     let tx = fetch_privacy_preserving_tx(ctx.sequencer_client(), tx_hash).await;
 
-    let acc_1_balance = ctx.sequencer_client().get_account_balance(from).await?;
+    let acc_1_balance = account_balance(&ctx, from).await?;
 
     assert!(
         verify_commitment_is_in_state(
@@ -356,14 +339,9 @@ async fn initialize_private_account() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     info!("Syncing private accounts");
-    let command = Command::Account(AccountSubcommand::SyncPrivate {});
-    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
+    sync_private(&mut ctx).await?;
 
-    let new_commitment = ctx
-        .wallet()
-        .get_private_account_commitment(account_id)
-        .context("Failed to get private account commitment")?;
-    assert!(verify_commitment_is_in_state(new_commitment, ctx.sequencer_client()).await);
+    assert_private_commitment_in_state(&ctx, account_id, "account").await?;
 
     let account = ctx
         .wallet()
@@ -409,17 +387,8 @@ async fn private_transfer_using_from_label() -> Result<()> {
     info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
-    let new_commitment1 = ctx
-        .wallet()
-        .get_private_account_commitment(from)
-        .context("Failed to get private account commitment for sender")?;
-    assert!(verify_commitment_is_in_state(new_commitment1, ctx.sequencer_client()).await);
-
-    let new_commitment2 = ctx
-        .wallet()
-        .get_private_account_commitment(to)
-        .context("Failed to get private account commitment for receiver")?;
-    assert!(verify_commitment_is_in_state(new_commitment2, ctx.sequencer_client()).await);
+    assert_private_commitment_in_state(&ctx, from, "sender").await?;
+    assert_private_commitment_in_state(&ctx, to, "receiver").await?;
 
     info!("Successfully transferred privately using from_label");
 
@@ -449,14 +418,9 @@ async fn initialize_private_account_using_label() -> Result<()> {
 
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
-    let command = Command::Account(AccountSubcommand::SyncPrivate {});
-    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
+    sync_private(&mut ctx).await?;
 
-    let new_commitment = ctx
-        .wallet()
-        .get_private_account_commitment(account_id)
-        .context("Failed to get private account commitment")?;
-    assert!(verify_commitment_is_in_state(new_commitment, ctx.sequencer_client()).await);
+    assert_private_commitment_in_state(&ctx, account_id, "account").await?;
 
     let account = ctx
         .wallet()
@@ -532,11 +496,7 @@ async fn shielded_transfers_to_two_identifiers_same_npk() -> Result<()> {
     info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
-    wallet::cli::execute_subcommand(
-        ctx.wallet_mut(),
-        Command::Account(AccountSubcommand::SyncPrivate {}),
-    )
-    .await?;
+    sync_private(&mut ctx).await?;
 
     // Both accounts must be discovered with the correct balances.
     let account_id_1 = AccountId::for_regular_private_account(&npk, identifier_1);
@@ -611,16 +571,12 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
     let amount: u128 = 1;
 
     let faucet_pre = AccountWithMetadata::new(
-        ctx.sequencer_client()
-            .get_account(faucet_account_id)
-            .await?,
+        get_account(&ctx, faucet_account_id).await?,
         false,
         faucet_account_id,
     );
     let vault_pda_pre = AccountWithMetadata::new(
-        ctx.sequencer_client()
-            .get_account(attacker_vault_id)
-            .await?,
+        get_account(&ctx, attacker_vault_id).await?,
         false,
         attacker_vault_id,
     );

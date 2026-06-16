@@ -7,7 +7,10 @@ use std::{io::Write as _, time::Duration};
 
 use anyhow::Result;
 use common::transaction::LeeTransaction;
-use integration_tests::{TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext};
+use integration_tests::{
+    LEE_PROGRAM_FOR_TEST_DATA_CHANGER, TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, get_account,
+};
+use lee::program::Program;
 use log::info;
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
@@ -66,7 +69,7 @@ async fn deploy_and_execute_program() -> Result<()> {
     // block
     tokio::time::sleep(Duration::from_secs(2 * TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
-    let post_state_account = ctx.sequencer_client().get_account(account_id).await?;
+    let post_state_account = get_account(&ctx, account_id).await?;
 
     let expected_data: &[u8] = &[];
     assert_eq!(post_state_account.program_owner, claimer.id());

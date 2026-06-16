@@ -3,7 +3,8 @@ use std::time::Duration;
 use anyhow::Result;
 use common::transaction::LeeTransaction;
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, new_account, public_mention, send,
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, account_balance, get_account, new_account,
+    public_mention, send,
 };
 use lee::{program::Program, public_transaction, system_faucet_account_id};
 use log::info;
@@ -31,14 +32,8 @@ async fn successful_transfer_to_existing_account() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     info!("Checking correct balance move");
-    let acc_1_balance = ctx
-        .sequencer_client()
-        .get_account_balance(ctx.existing_public_accounts()[0])
-        .await?;
-    let acc_2_balance = ctx
-        .sequencer_client()
-        .get_account_balance(ctx.existing_public_accounts()[1])
-        .await?;
+    let acc_1_balance = account_balance(&ctx, ctx.existing_public_accounts()[0]).await?;
+    let acc_2_balance = account_balance(&ctx, ctx.existing_public_accounts()[1]).await?;
 
     info!("Balance of sender: {acc_1_balance:#?}");
     info!("Balance of receiver: {acc_2_balance:#?}");
@@ -68,14 +63,8 @@ pub async fn successful_transfer_to_new_account() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     info!("Checking correct balance move");
-    let acc_1_balance = ctx
-        .sequencer_client()
-        .get_account_balance(ctx.existing_public_accounts()[0])
-        .await?;
-    let acc_2_balance = ctx
-        .sequencer_client()
-        .get_account_balance(new_persistent_account_id)
-        .await?;
+    let acc_1_balance = account_balance(&ctx, ctx.existing_public_accounts()[0]).await?;
+    let acc_2_balance = account_balance(&ctx, new_persistent_account_id).await?;
 
     info!("Balance of sender: {acc_1_balance:#?}");
     info!("Balance of receiver: {acc_2_balance:#?}");
@@ -107,14 +96,8 @@ async fn failed_transfer_with_insufficient_balance() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     info!("Checking balances unchanged");
-    let acc_1_balance = ctx
-        .sequencer_client()
-        .get_account_balance(ctx.existing_public_accounts()[0])
-        .await?;
-    let acc_2_balance = ctx
-        .sequencer_client()
-        .get_account_balance(ctx.existing_public_accounts()[1])
-        .await?;
+    let acc_1_balance = account_balance(&ctx, ctx.existing_public_accounts()[0]).await?;
+    let acc_2_balance = account_balance(&ctx, ctx.existing_public_accounts()[1]).await?;
 
     info!("Balance of sender: {acc_1_balance:#?}");
     info!("Balance of receiver: {acc_2_balance:#?}");
@@ -140,14 +123,8 @@ async fn two_consecutive_successful_transfers() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     info!("Checking correct balance move after first transfer");
-    let acc_1_balance = ctx
-        .sequencer_client()
-        .get_account_balance(ctx.existing_public_accounts()[0])
-        .await?;
-    let acc_2_balance = ctx
-        .sequencer_client()
-        .get_account_balance(ctx.existing_public_accounts()[1])
-        .await?;
+    let acc_1_balance = account_balance(&ctx, ctx.existing_public_accounts()[0]).await?;
+    let acc_2_balance = account_balance(&ctx, ctx.existing_public_accounts()[1]).await?;
 
     info!("Balance of sender: {acc_1_balance:#?}");
     info!("Balance of receiver: {acc_2_balance:#?}");
@@ -164,14 +141,8 @@ async fn two_consecutive_successful_transfers() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     info!("Checking correct balance move after second transfer");
-    let acc_1_balance = ctx
-        .sequencer_client()
-        .get_account_balance(ctx.existing_public_accounts()[0])
-        .await?;
-    let acc_2_balance = ctx
-        .sequencer_client()
-        .get_account_balance(ctx.existing_public_accounts()[1])
-        .await?;
+    let acc_1_balance = account_balance(&ctx, ctx.existing_public_accounts()[0]).await?;
+    let acc_2_balance = account_balance(&ctx, ctx.existing_public_accounts()[1]).await?;
 
     info!("Balance of sender: {acc_1_balance:#?}");
     info!("Balance of receiver: {acc_2_balance:#?}");
@@ -196,7 +167,7 @@ async fn initialize_public_account() -> Result<()> {
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
     info!("Checking correct execution");
-    let account = ctx.sequencer_client().get_account(account_id).await?;
+    let account = get_account(&ctx, account_id).await?;
 
     assert_eq!(
         account.program_owner,
@@ -237,14 +208,8 @@ async fn successful_transfer_using_from_label() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     info!("Checking correct balance move");
-    let acc_1_balance = ctx
-        .sequencer_client()
-        .get_account_balance(ctx.existing_public_accounts()[0])
-        .await?;
-    let acc_2_balance = ctx
-        .sequencer_client()
-        .get_account_balance(ctx.existing_public_accounts()[1])
-        .await?;
+    let acc_1_balance = account_balance(&ctx, ctx.existing_public_accounts()[0]).await?;
+    let acc_2_balance = account_balance(&ctx, ctx.existing_public_accounts()[1]).await?;
 
     assert_eq!(acc_1_balance, 9900);
     assert_eq!(acc_2_balance, 20100);
@@ -280,14 +245,8 @@ async fn successful_transfer_using_to_label() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     info!("Checking correct balance move");
-    let acc_1_balance = ctx
-        .sequencer_client()
-        .get_account_balance(ctx.existing_public_accounts()[0])
-        .await?;
-    let acc_2_balance = ctx
-        .sequencer_client()
-        .get_account_balance(ctx.existing_public_accounts()[1])
-        .await?;
+    let acc_1_balance = account_balance(&ctx, ctx.existing_public_accounts()[0]).await?;
+    let acc_2_balance = account_balance(&ctx, ctx.existing_public_accounts()[1]).await?;
 
     assert_eq!(acc_1_balance, 9900);
     assert_eq!(acc_2_balance, 20100);
@@ -303,14 +262,8 @@ async fn cannot_transfer_funds_from_system_faucet_account() -> Result<()> {
     let faucet_account_id = system_accounts::faucet_account_id();
 
     let recipient = ctx.existing_public_accounts()[0];
-    let recipient_balance_before = ctx
-        .sequencer_client()
-        .get_account_balance(recipient)
-        .await?;
-    let faucet_balance_before = ctx
-        .sequencer_client()
-        .get_account_balance(faucet_account_id)
-        .await?;
+    let recipient_balance_before = account_balance(&ctx, recipient).await?;
+    let faucet_balance_before = account_balance(&ctx, faucet_account_id).await?;
 
     let amount = 1_u128;
     let message = public_transaction::Message::try_new(
@@ -331,14 +284,8 @@ async fn cannot_transfer_funds_from_system_faucet_account() -> Result<()> {
     info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
-    let recipient_balance_after = ctx
-        .sequencer_client()
-        .get_account_balance(recipient)
-        .await?;
-    let faucet_balance_after = ctx
-        .sequencer_client()
-        .get_account_balance(faucet_account_id)
-        .await?;
+    let recipient_balance_after = account_balance(&ctx, recipient).await?;
+    let faucet_balance_after = account_balance(&ctx, faucet_account_id).await?;
     let tx_on_chain = ctx.sequencer_client().get_transaction(tx_hash).await?;
 
     assert_eq!(recipient_balance_after, recipient_balance_before);
@@ -357,14 +304,8 @@ async fn cannot_execute_faucet_program() -> Result<()> {
     let vault_program_id = programs::vault().id();
     let recipient_vault_id = vault_core::compute_vault_account_id(vault_program_id, recipient);
 
-    let recipient_balance_before = ctx
-        .sequencer_client()
-        .get_account_balance(recipient)
-        .await?;
-    let faucet_balance_before = ctx
-        .sequencer_client()
-        .get_account_balance(faucet_account_id)
-        .await?;
+    let recipient_balance_before = account_balance(&ctx, recipient).await?;
+    let faucet_balance_before = account_balance(&ctx, faucet_account_id).await?;
 
     let amount = 1_u128;
     let message = public_transaction::Message::try_new(
@@ -389,14 +330,8 @@ async fn cannot_execute_faucet_program() -> Result<()> {
     info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
-    let recipient_balance_after = ctx
-        .sequencer_client()
-        .get_account_balance(recipient)
-        .await?;
-    let faucet_balance_after = ctx
-        .sequencer_client()
-        .get_account_balance(faucet_account_id)
-        .await?;
+    let recipient_balance_after = account_balance(&ctx, recipient).await?;
+    let faucet_balance_after = account_balance(&ctx, faucet_account_id).await?;
     let tx_on_chain = ctx.sequencer_client().get_transaction(tx_hash).await?;
 
     assert_eq!(recipient_balance_after, recipient_balance_before);
@@ -437,28 +372,16 @@ async fn user_tx_that_chain_calls_faucet_is_dropped() -> Result<()> {
         lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
     ));
 
-    let faucet_balance_before = ctx
-        .sequencer_client()
-        .get_account_balance(faucet_account_id)
-        .await?;
-    let vault_balance_before = ctx
-        .sequencer_client()
-        .get_account_balance(attacker_vault_id)
-        .await?;
+    let faucet_balance_before = account_balance(&ctx, faucet_account_id).await?;
+    let vault_balance_before = account_balance(&ctx, attacker_vault_id).await?;
 
     let tx_hash = ctx.sequencer_client().send_transaction(attack_tx).await?;
 
     info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
-    let faucet_balance_after = ctx
-        .sequencer_client()
-        .get_account_balance(faucet_account_id)
-        .await?;
-    let vault_balance_after = ctx
-        .sequencer_client()
-        .get_account_balance(attacker_vault_id)
-        .await?;
+    let faucet_balance_after = account_balance(&ctx, faucet_account_id).await?;
+    let vault_balance_after = account_balance(&ctx, attacker_vault_id).await?;
     let tx_on_chain = ctx.sequencer_client().get_transaction(tx_hash).await?;
 
     assert_eq!(faucet_balance_after, faucet_balance_before);

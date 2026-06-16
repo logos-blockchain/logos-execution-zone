@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, private_mention, public_mention,
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, private_mention, public_mention, sync_private,
 };
 use log::info;
 use tokio::test;
@@ -197,8 +197,7 @@ async fn fund_shared_account_from_public() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Sync private accounts
-    let command = Command::Account(AccountSubcommand::SyncPrivate);
-    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
+    sync_private(&mut ctx).await?;
 
     // Fund from a public account
     let from_public = ctx.existing_public_accounts()[0];
@@ -216,8 +215,7 @@ async fn fund_shared_account_from_public() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Sync private accounts
-    let command = Command::Account(AccountSubcommand::SyncPrivate);
-    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
+    sync_private(&mut ctx).await?;
 
     // Verify the shared account was updated
     let entry = ctx

@@ -9,7 +9,8 @@ use anyhow::{Context as _, Result};
 use authenticated_transfer_core::Instruction as AuthTransferInstruction;
 use common::transaction::LeeTransaction;
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, verify_commitment_is_in_state,
+    LEE_PROGRAM_FOR_TEST_PDA_SPEND_PROXY, TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext,
+    assert_private_commitment_in_state, sync_private, verify_commitment_is_in_state,
 };
 use key_protocol::key_management::ephemeral_key_holder::EphemeralKeyHolder;
 use lee::{
@@ -30,10 +31,7 @@ use lee_core::{
 use log::info;
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
-use wallet::{
-    AccountIdentity, WalletCore,
-    cli::{Command, account::AccountSubcommand},
-};
+use wallet::{AccountIdentity, WalletCore};
 
 /// Funds a private PDA by calling `auth_transfer` directly.
 #[expect(
@@ -218,11 +216,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Sync so alice's wallet discovers and stores both PDAs.
-    wallet::cli::execute_subcommand(
-        ctx.wallet_mut(),
-        Command::Account(AccountSubcommand::SyncPrivate {}),
-    )
-    .await?;
+    sync_private(&mut ctx).await?;
 
     // Both PDAs must be discoverable and have the correct balance.
     let pda_0_account = ctx
@@ -301,11 +295,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
     info!("Waiting for block");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
-    wallet::cli::execute_subcommand(
-        ctx.wallet_mut(),
-        Command::Account(AccountSubcommand::SyncPrivate {}),
-    )
-    .await?;
+    sync_private(&mut ctx).await?;
 
     // After spending, PDAs should have the remaining balance.
     let pda_0_spent = ctx
@@ -321,23 +311,8 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
     assert_eq!(pda_1_spent.balance, amount - amount_spend_1);
 
     // Post-spend commitments must be in state.
-    let post_spend_commitment_0 = ctx
-        .wallet()
-        .get_private_account_commitment(alice_pda_0_id)
-        .context("post-spend commitment for alice_pda_0 missing")?;
-    assert!(
-        verify_commitment_is_in_state(post_spend_commitment_0, ctx.sequencer_client()).await,
-        "alice_pda_0 post-spend commitment not in state"
-    );
-
-    let post_spend_commitment_1 = ctx
-        .wallet()
-        .get_private_account_commitment(alice_pda_1_id)
-        .context("post-spend commitment for alice_pda_1 missing")?;
-    assert!(
-        verify_commitment_is_in_state(post_spend_commitment_1, ctx.sequencer_client()).await,
-        "alice_pda_1 post-spend commitment not in state"
-    );
+    assert_private_commitment_in_state(&ctx, alice_pda_0_id, "alice_pda_0").await?;
+    assert_private_commitment_in_state(&ctx, alice_pda_1_id, "alice_pda_1").await?;
 
     info!("Private PDA family member receive-and-spend test passed");
     Ok(())

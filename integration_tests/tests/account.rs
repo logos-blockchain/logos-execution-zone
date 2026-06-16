@@ -4,12 +4,11 @@
 )]
 
 use anyhow::{Context as _, Result};
-use integration_tests::{TestContext, private_mention};
+use integration_tests::{TestContext, get_account, new_account, private_mention};
 use key_protocol::key_management::KeyChain;
 use lee::Data;
 use lee_core::account::Nonce;
 use log::info;
-use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 use wallet::{
     account::{AccountIdWithPrivacy, HumanReadableAccount, Label},
@@ -24,10 +23,7 @@ use wallet::{
 async fn get_existing_account() -> Result<()> {
     let ctx = TestContext::new().await?;
 
-    let account = ctx
-        .sequencer_client()
-        .get_account(ctx.existing_public_accounts()[0])
-        .await?;
+    let account = get_account(&ctx, ctx.existing_public_accounts()[0]).await?;
 
     assert_eq!(
         account.program_owner,
@@ -95,18 +91,7 @@ async fn add_label_to_existing_account() -> Result<()> {
 async fn new_public_account_without_label() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
-    let command = Command::Account(AccountSubcommand::New(NewSubcommand::Public {
-        cci: None,
-        label: None,
-    }));
-
-    let result = execute_subcommand(ctx.wallet_mut(), command).await?;
-
-    // Extract the account_id from the result
-
-    let wallet::cli::SubcommandReturnValue::RegisterAccount { account_id } = result else {
-        panic!("Expected RegisterAccount return value")
-    };
+    let account_id = new_account(&mut ctx, false, None).await?;
 
     // Verify no label was stored for the account id
     assert!(
