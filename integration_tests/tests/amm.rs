@@ -7,7 +7,7 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use integration_tests::{TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, public_mention};
+use integration_tests::{TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, new_account, public_mention};
 use log::info;
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
@@ -25,94 +25,22 @@ async fn amm_public() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
     // Create new account for the token definition
-    let SubcommandReturnValue::RegisterAccount {
-        account_id: definition_account_id_1,
-    } = wallet::cli::execute_subcommand(
-        ctx.wallet_mut(),
-        Command::Account(AccountSubcommand::New(NewSubcommand::Public {
-            cci: None,
-            label: None,
-        })),
-    )
-    .await?
-    else {
-        anyhow::bail!("Expected RegisterAccount return value");
-    };
+    let definition_account_id_1 = new_account(&mut ctx, false, None).await?;
 
     // Create new account for the token supply holder
-    let SubcommandReturnValue::RegisterAccount {
-        account_id: supply_account_id_1,
-    } = wallet::cli::execute_subcommand(
-        ctx.wallet_mut(),
-        Command::Account(AccountSubcommand::New(NewSubcommand::Public {
-            cci: None,
-            label: None,
-        })),
-    )
-    .await?
-    else {
-        anyhow::bail!("Expected RegisterAccount return value");
-    };
+    let supply_account_id_1 = new_account(&mut ctx, false, None).await?;
 
     // Create new account for receiving a token transaction
-    let SubcommandReturnValue::RegisterAccount {
-        account_id: recipient_account_id_1,
-    } = wallet::cli::execute_subcommand(
-        ctx.wallet_mut(),
-        Command::Account(AccountSubcommand::New(NewSubcommand::Public {
-            cci: None,
-            label: None,
-        })),
-    )
-    .await?
-    else {
-        anyhow::bail!("Expected RegisterAccount return value");
-    };
+    let recipient_account_id_1 = new_account(&mut ctx, false, None).await?;
 
     // Create new account for the token definition
-    let SubcommandReturnValue::RegisterAccount {
-        account_id: definition_account_id_2,
-    } = wallet::cli::execute_subcommand(
-        ctx.wallet_mut(),
-        Command::Account(AccountSubcommand::New(NewSubcommand::Public {
-            cci: None,
-            label: None,
-        })),
-    )
-    .await?
-    else {
-        anyhow::bail!("Expected RegisterAccount return value");
-    };
+    let definition_account_id_2 = new_account(&mut ctx, false, None).await?;
 
     // Create new account for the token supply holder
-    let SubcommandReturnValue::RegisterAccount {
-        account_id: supply_account_id_2,
-    } = wallet::cli::execute_subcommand(
-        ctx.wallet_mut(),
-        Command::Account(AccountSubcommand::New(NewSubcommand::Public {
-            cci: None,
-            label: None,
-        })),
-    )
-    .await?
-    else {
-        anyhow::bail!("Expected RegisterAccount return value");
-    };
+    let supply_account_id_2 = new_account(&mut ctx, false, None).await?;
 
     // Create new account for receiving a token transaction
-    let SubcommandReturnValue::RegisterAccount {
-        account_id: recipient_account_id_2,
-    } = wallet::cli::execute_subcommand(
-        ctx.wallet_mut(),
-        Command::Account(AccountSubcommand::New(NewSubcommand::Public {
-            cci: None,
-            label: None,
-        })),
-    )
-    .await?
-    else {
-        anyhow::bail!("Expected RegisterAccount return value");
-    };
+    let recipient_account_id_2 = new_account(&mut ctx, false, None).await?;
 
     // Create new token
     let subcommand = TokenProgramAgnosticSubcommand::New {
@@ -174,19 +102,7 @@ async fn amm_public() -> Result<()> {
 
     // Setup accounts
     // Create new account for the user holding lp
-    let SubcommandReturnValue::RegisterAccount {
-        account_id: user_holding_lp,
-    } = wallet::cli::execute_subcommand(
-        ctx.wallet_mut(),
-        Command::Account(AccountSubcommand::New(NewSubcommand::Public {
-            cci: None,
-            label: None,
-        })),
-    )
-    .await?
-    else {
-        anyhow::bail!("Expected RegisterAccount return value");
-    };
+    let user_holding_lp = new_account(&mut ctx, false, None).await?;
 
     // Send creation tx
     let subcommand = AmmProgramAgnosticSubcommand::New {
@@ -412,33 +328,9 @@ async fn amm_new_pool_using_labels() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
     // Create token 1 accounts
-    let SubcommandReturnValue::RegisterAccount {
-        account_id: definition_account_id_1,
-    } = wallet::cli::execute_subcommand(
-        ctx.wallet_mut(),
-        Command::Account(AccountSubcommand::New(NewSubcommand::Public {
-            cci: None,
-            label: None,
-        })),
-    )
-    .await?
-    else {
-        anyhow::bail!("Expected RegisterAccount return value");
-    };
+    let definition_account_id_1 = new_account(&mut ctx, false, None).await?;
 
-    let SubcommandReturnValue::RegisterAccount {
-        account_id: supply_account_id_1,
-    } = wallet::cli::execute_subcommand(
-        ctx.wallet_mut(),
-        Command::Account(AccountSubcommand::New(NewSubcommand::Public {
-            cci: None,
-            label: None,
-        })),
-    )
-    .await?
-    else {
-        anyhow::bail!("Expected RegisterAccount return value");
-    };
+    let supply_account_id_1 = new_account(&mut ctx, false, None).await?;
 
     // Create holding_a with a label
     let holding_a_label = Label::new("amm-holding-a-label");
@@ -457,33 +349,9 @@ async fn amm_new_pool_using_labels() -> Result<()> {
     };
 
     // Create token 2 accounts
-    let SubcommandReturnValue::RegisterAccount {
-        account_id: definition_account_id_2,
-    } = wallet::cli::execute_subcommand(
-        ctx.wallet_mut(),
-        Command::Account(AccountSubcommand::New(NewSubcommand::Public {
-            cci: None,
-            label: None,
-        })),
-    )
-    .await?
-    else {
-        anyhow::bail!("Expected RegisterAccount return value");
-    };
+    let definition_account_id_2 = new_account(&mut ctx, false, None).await?;
 
-    let SubcommandReturnValue::RegisterAccount {
-        account_id: supply_account_id_2,
-    } = wallet::cli::execute_subcommand(
-        ctx.wallet_mut(),
-        Command::Account(AccountSubcommand::New(NewSubcommand::Public {
-            cci: None,
-            label: None,
-        })),
-    )
-    .await?
-    else {
-        anyhow::bail!("Expected RegisterAccount return value");
-    };
+    let supply_account_id_2 = new_account(&mut ctx, false, None).await?;
 
     // Create holding_b with a label
     let holding_b_label = Label::new("amm-holding-b-label");

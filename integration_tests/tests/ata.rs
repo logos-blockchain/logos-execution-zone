@@ -9,7 +9,7 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 use associated_token_account_core::{compute_ata_seed, get_associated_token_account_id};
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, private_mention, public_mention,
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, new_account, private_mention, public_mention,
     verify_commitment_is_in_state,
 };
 use log::info;
@@ -17,50 +17,17 @@ use sequencer_service_rpc::RpcClient as _;
 use token_core::{TokenDefinition, TokenHolding};
 use tokio::test;
 use wallet::cli::{
-    Command, SubcommandReturnValue,
-    account::{AccountSubcommand, NewSubcommand},
+    Command,
     programs::{ata::AtaSubcommand, token::TokenProgramAgnosticSubcommand},
 };
-
-/// Create a public account and return its ID.
-async fn new_public_account(ctx: &mut TestContext) -> Result<lee::AccountId> {
-    let result = wallet::cli::execute_subcommand(
-        ctx.wallet_mut(),
-        Command::Account(AccountSubcommand::New(NewSubcommand::Public {
-            cci: None,
-            label: None,
-        })),
-    )
-    .await?;
-    let SubcommandReturnValue::RegisterAccount { account_id } = result else {
-        anyhow::bail!("Expected RegisterAccount return value");
-    };
-    Ok(account_id)
-}
-
-/// Create a private account and return its ID.
-async fn new_private_account(ctx: &mut TestContext) -> Result<lee::AccountId> {
-    let result = wallet::cli::execute_subcommand(
-        ctx.wallet_mut(),
-        Command::Account(AccountSubcommand::New(NewSubcommand::Private {
-            cci: None,
-            label: None,
-        })),
-    )
-    .await?;
-    let SubcommandReturnValue::RegisterAccount { account_id } = result else {
-        anyhow::bail!("Expected RegisterAccount return value");
-    };
-    Ok(account_id)
-}
 
 #[test]
 async fn create_ata_initializes_holding_account() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
-    let definition_account_id = new_public_account(&mut ctx).await?;
-    let supply_account_id = new_public_account(&mut ctx).await?;
-    let owner_account_id = new_public_account(&mut ctx).await?;
+    let definition_account_id = new_account(&mut ctx, false, None).await?;
+    let supply_account_id = new_account(&mut ctx, false, None).await?;
+    let owner_account_id = new_account(&mut ctx, false, None).await?;
 
     // Create a fungible token
     let total_supply = 100_u128;
@@ -121,9 +88,9 @@ async fn create_ata_initializes_holding_account() -> Result<()> {
 async fn create_ata_is_idempotent() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
-    let definition_account_id = new_public_account(&mut ctx).await?;
-    let supply_account_id = new_public_account(&mut ctx).await?;
-    let owner_account_id = new_public_account(&mut ctx).await?;
+    let definition_account_id = new_account(&mut ctx, false, None).await?;
+    let supply_account_id = new_account(&mut ctx, false, None).await?;
+    let owner_account_id = new_account(&mut ctx, false, None).await?;
 
     // Create a fungible token
     wallet::cli::execute_subcommand(
@@ -196,10 +163,10 @@ async fn create_ata_is_idempotent() -> Result<()> {
 async fn transfer_and_burn_via_ata() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
-    let definition_account_id = new_public_account(&mut ctx).await?;
-    let supply_account_id = new_public_account(&mut ctx).await?;
-    let sender_account_id = new_public_account(&mut ctx).await?;
-    let recipient_account_id = new_public_account(&mut ctx).await?;
+    let definition_account_id = new_account(&mut ctx, false, None).await?;
+    let supply_account_id = new_account(&mut ctx, false, None).await?;
+    let sender_account_id = new_account(&mut ctx, false, None).await?;
+    let recipient_account_id = new_account(&mut ctx, false, None).await?;
 
     let total_supply = 1000_u128;
 
@@ -355,9 +322,9 @@ async fn transfer_and_burn_via_ata() -> Result<()> {
 async fn create_ata_with_private_owner() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
-    let definition_account_id = new_public_account(&mut ctx).await?;
-    let supply_account_id = new_public_account(&mut ctx).await?;
-    let owner_account_id = new_private_account(&mut ctx).await?;
+    let definition_account_id = new_account(&mut ctx, false, None).await?;
+    let supply_account_id = new_account(&mut ctx, false, None).await?;
+    let owner_account_id = new_account(&mut ctx, true, None).await?;
 
     // Create a fungible token
     wallet::cli::execute_subcommand(
@@ -424,10 +391,10 @@ async fn create_ata_with_private_owner() -> Result<()> {
 async fn transfer_via_ata_private_owner() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
-    let definition_account_id = new_public_account(&mut ctx).await?;
-    let supply_account_id = new_public_account(&mut ctx).await?;
-    let sender_account_id = new_private_account(&mut ctx).await?;
-    let recipient_account_id = new_public_account(&mut ctx).await?;
+    let definition_account_id = new_account(&mut ctx, false, None).await?;
+    let supply_account_id = new_account(&mut ctx, false, None).await?;
+    let sender_account_id = new_account(&mut ctx, true, None).await?;
+    let recipient_account_id = new_account(&mut ctx, false, None).await?;
 
     let total_supply = 1000_u128;
 
@@ -549,9 +516,9 @@ async fn transfer_via_ata_private_owner() -> Result<()> {
 async fn burn_via_ata_private_owner() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
-    let definition_account_id = new_public_account(&mut ctx).await?;
-    let supply_account_id = new_public_account(&mut ctx).await?;
-    let holder_account_id = new_private_account(&mut ctx).await?;
+    let definition_account_id = new_account(&mut ctx, false, None).await?;
+    let supply_account_id = new_account(&mut ctx, false, None).await?;
+    let holder_account_id = new_account(&mut ctx, true, None).await?;
 
     let total_supply = 500_u128;
 

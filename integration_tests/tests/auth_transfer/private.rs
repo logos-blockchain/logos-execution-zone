@@ -3,8 +3,8 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, fetch_privacy_preserving_tx, private_mention,
-    public_mention, verify_commitment_is_in_state,
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, fetch_privacy_preserving_tx, new_account,
+    private_mention, public_mention, send, verify_commitment_is_in_state,
 };
 use lee::{
     AccountId, SharedSecretKey, execute_and_prove,
@@ -36,17 +36,7 @@ async fn private_transfer_to_owned_account() -> Result<()> {
     let from: AccountId = ctx.existing_private_accounts()[0];
     let to: AccountId = ctx.existing_private_accounts()[1];
 
-    let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: private_mention(from),
-        to: Some(private_mention(to)),
-        to_npk: None,
-        to_vpk: None,
-        to_keys: None,
-        to_identifier: Some(0),
-        amount: 100,
-    });
-
-    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
+    send(&mut ctx, private_mention(from), private_mention(to), 100).await?;
 
     info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
@@ -127,17 +117,7 @@ async fn deshielded_transfer_to_public_account() -> Result<()> {
         .context("Failed to get sender's private account")?;
     assert_eq!(from_acc.balance, 10000);
 
-    let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: private_mention(from),
-        to: Some(public_mention(to)),
-        to_npk: None,
-        to_vpk: None,
-        to_keys: None,
-        to_identifier: Some(0),
-        amount: 100,
-    });
-
-    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
+    send(&mut ctx, private_mention(from), public_mention(to), 100).await?;
 
     info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
@@ -169,18 +149,7 @@ async fn private_transfer_to_owned_account_using_claiming_path() -> Result<()> {
     let from: AccountId = ctx.existing_private_accounts()[0];
 
     // Create a new private account
-    let command = Command::Account(AccountSubcommand::New(NewSubcommand::Private {
-        cci: None,
-        label: None,
-    }));
-
-    let sub_ret = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
-    let SubcommandReturnValue::RegisterAccount {
-        account_id: to_account_id,
-    } = sub_ret
-    else {
-        anyhow::bail!("Expected RegisterAccount return value");
-    };
+    let to_account_id = new_account(&mut ctx, true, None).await?;
 
     // Get the keys for the newly created account
     let to = ctx
@@ -241,17 +210,7 @@ async fn shielded_transfer_to_owned_private_account() -> Result<()> {
     let from: AccountId = ctx.existing_public_accounts()[0];
     let to: AccountId = ctx.existing_private_accounts()[1];
 
-    let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: public_mention(from),
-        to: Some(private_mention(to)),
-        to_npk: None,
-        to_vpk: None,
-        to_keys: None,
-        to_identifier: Some(0),
-        amount: 100,
-    });
-
-    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
+    send(&mut ctx, public_mention(from), private_mention(to), 100).await?;
 
     info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
@@ -334,18 +293,7 @@ async fn private_transfer_to_owned_account_continuous_run_path() -> Result<()> {
     let from: AccountId = ctx.existing_private_accounts()[0];
 
     // Create a new private account
-    let command = Command::Account(AccountSubcommand::New(NewSubcommand::Private {
-        cci: None,
-        label: None,
-    }));
-    let sub_ret = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
-
-    let SubcommandReturnValue::RegisterAccount {
-        account_id: to_account_id,
-    } = sub_ret
-    else {
-        anyhow::bail!("Failed to register account");
-    };
+    let to_account_id = new_account(&mut ctx, true, None).await?;
 
     // Get the newly created account's keys
     let to = ctx
@@ -398,14 +346,7 @@ async fn private_transfer_to_owned_account_continuous_run_path() -> Result<()> {
 async fn initialize_private_account() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
-    let command = Command::Account(AccountSubcommand::New(NewSubcommand::Private {
-        cci: None,
-        label: None,
-    }));
-    let result = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
-    let SubcommandReturnValue::RegisterAccount { account_id } = result else {
-        anyhow::bail!("Expected RegisterAccount return value");
-    };
+    let account_id = new_account(&mut ctx, true, None).await?;
 
     let command = Command::AuthTransfer(AuthTransferSubcommand::Init {
         account_id: private_mention(account_id),
@@ -457,17 +398,13 @@ async fn private_transfer_using_from_label() -> Result<()> {
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
     // Send using the label instead of account ID
-    let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: CliAccountMention::Label(label),
-        to: Some(private_mention(to)),
-        to_npk: None,
-        to_vpk: None,
-        to_keys: None,
-        to_identifier: Some(0),
-        amount: 100,
-    });
-
-    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
+    send(
+        &mut ctx,
+        CliAccountMention::Label(label),
+        private_mention(to),
+        100,
+    )
+    .await?;
 
     info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;

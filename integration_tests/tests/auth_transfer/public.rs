@@ -2,16 +2,17 @@ use std::time::Duration;
 
 use anyhow::Result;
 use common::transaction::LeeTransaction;
-use integration_tests::{TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, public_mention};
-use lee::public_transaction;
+use integration_tests::{
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, new_account, public_mention, send,
+};
+use lee::{program::Program, public_transaction, system_faucet_account_id};
 use log::info;
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 use wallet::{
     account::Label,
     cli::{
-        CliAccountMention, Command, SubcommandReturnValue,
-        account::{AccountSubcommand, NewSubcommand},
+        CliAccountMention, Command, account::AccountSubcommand,
         programs::native_token_transfer::AuthTransferSubcommand,
     },
 };
@@ -19,18 +20,12 @@ use wallet::{
 #[test]
 async fn successful_transfer_to_existing_account() -> Result<()> {
     let mut ctx = TestContext::new().await?;
+    let (acc0, acc1) = (
+        ctx.existing_public_accounts()[0],
+        ctx.existing_public_accounts()[1],
+    );
 
-    let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: public_mention(ctx.existing_public_accounts()[0]),
-        to: Some(public_mention(ctx.existing_public_accounts()[1])),
-        to_npk: None,
-        to_vpk: None,
-        to_keys: None,
-        to_identifier: Some(0),
-        amount: 100,
-    });
-
-    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
+    send(&mut ctx, public_mention(acc0), public_mention(acc1), 100).await?;
 
     info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
@@ -58,38 +53,16 @@ async fn successful_transfer_to_existing_account() -> Result<()> {
 pub async fn successful_transfer_to_new_account() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
-    let command = Command::Account(AccountSubcommand::New(NewSubcommand::Public {
-        cci: None,
-        label: None,
-    }));
+    let new_persistent_account_id = new_account(&mut ctx, false, None).await?;
+    let acc0 = ctx.existing_public_accounts()[0];
 
-    wallet::cli::execute_subcommand(ctx.wallet_mut(), command)
-        .await
-        .unwrap();
-
-    let new_persistent_account_id = ctx
-        .wallet()
-        .storage()
-        .key_chain()
-        .public_account_ids()
-        .map(|(account_id, _)| account_id)
-        .find(|acc_id| {
-            *acc_id != ctx.existing_public_accounts()[0]
-                && *acc_id != ctx.existing_public_accounts()[1]
-        })
-        .expect("Failed to find newly created account in the wallet storage");
-
-    let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: public_mention(ctx.existing_public_accounts()[0]),
-        to: Some(public_mention(new_persistent_account_id)),
-        to_npk: None,
-        to_vpk: None,
-        to_keys: None,
-        to_identifier: Some(0),
-        amount: 100,
-    });
-
-    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
+    send(
+        &mut ctx,
+        public_mention(acc0),
+        public_mention(new_persistent_account_id),
+        100,
+    )
+    .await?;
 
     info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
@@ -155,19 +128,13 @@ async fn failed_transfer_with_insufficient_balance() -> Result<()> {
 #[test]
 async fn two_consecutive_successful_transfers() -> Result<()> {
     let mut ctx = TestContext::new().await?;
+    let (acc0, acc1) = (
+        ctx.existing_public_accounts()[0],
+        ctx.existing_public_accounts()[1],
+    );
 
     // First transfer
-    let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: public_mention(ctx.existing_public_accounts()[0]),
-        to: Some(public_mention(ctx.existing_public_accounts()[1])),
-        to_npk: None,
-        to_vpk: None,
-        to_keys: None,
-        to_identifier: Some(0),
-        amount: 100,
-    });
-
-    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
+    send(&mut ctx, public_mention(acc0), public_mention(acc1), 100).await?;
 
     info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
@@ -191,17 +158,7 @@ async fn two_consecutive_successful_transfers() -> Result<()> {
     info!("First TX Success!");
 
     // Second transfer
-    let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: public_mention(ctx.existing_public_accounts()[0]),
-        to: Some(public_mention(ctx.existing_public_accounts()[1])),
-        to_npk: None,
-        to_vpk: None,
-        to_keys: None,
-        to_identifier: Some(0),
-        amount: 100,
-    });
-
-    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
+    send(&mut ctx, public_mention(acc0), public_mention(acc1), 100).await?;
 
     info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
@@ -231,14 +188,7 @@ async fn two_consecutive_successful_transfers() -> Result<()> {
 async fn initialize_public_account() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
-    let command = Command::Account(AccountSubcommand::New(NewSubcommand::Public {
-        cci: None,
-        label: None,
-    }));
-    let result = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
-    let SubcommandReturnValue::RegisterAccount { account_id } = result else {
-        anyhow::bail!("Expected RegisterAccount return value");
-    };
+    let account_id = new_account(&mut ctx, false, None).await?;
 
     let command = Command::AuthTransfer(AuthTransferSubcommand::Init {
         account_id: public_mention(account_id),
@@ -274,17 +224,14 @@ async fn successful_transfer_using_from_label() -> Result<()> {
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
     // Send using the label instead of account ID
-    let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: CliAccountMention::Label(label),
-        to: Some(public_mention(ctx.existing_public_accounts()[1])),
-        to_npk: None,
-        to_vpk: None,
-        to_keys: None,
-        to_identifier: Some(0),
-        amount: 100,
-    });
-
-    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
+    let acc1 = ctx.existing_public_accounts()[1];
+    send(
+        &mut ctx,
+        CliAccountMention::Label(label),
+        public_mention(acc1),
+        100,
+    )
+    .await?;
 
     info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
@@ -320,17 +267,14 @@ async fn successful_transfer_using_to_label() -> Result<()> {
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
     // Send using the label for the recipient
-    let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
-        from: public_mention(ctx.existing_public_accounts()[0]),
-        to: Some(CliAccountMention::Label(label)),
-        to_npk: None,
-        to_vpk: None,
-        to_keys: None,
-        to_identifier: Some(0),
-        amount: 100,
-    });
-
-    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
+    let acc0 = ctx.existing_public_accounts()[0];
+    send(
+        &mut ctx,
+        public_mention(acc0),
+        CliAccountMention::Label(label),
+        100,
+    )
+    .await?;
 
     info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
