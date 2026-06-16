@@ -70,6 +70,23 @@ pub fn execute_and_prove(
     account_identities: Vec<InputAccountIdentity>,
     program_with_dependencies: &ProgramWithDependencies,
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
+    let (output, proof, _cycles) = execute_and_prove_with_cycles(
+        pre_states,
+        instruction_data,
+        account_identities,
+        program_with_dependencies,
+    )?;
+    Ok((output, proof))
+}
+
+/// Generates a proof and cycle count for the execution of a LEE program inside the privacy
+/// preserving execution circuit.
+pub fn execute_and_prove_with_cycles(
+    pre_states: Vec<AccountWithMetadata>,
+    instruction_data: InstructionData,
+    account_identities: Vec<InputAccountIdentity>,
+    program_with_dependencies: &ProgramWithDependencies,
+) -> Result<(PrivacyPreservingCircuitOutput, Proof, u64), LeeError> {
     let ProgramWithDependencies {
         program: initial_program,
         dependencies,
@@ -145,7 +162,7 @@ pub fn execute_and_prove(
         .decode()
         .map_err(|e| LeeError::CircuitOutputDeserializationError(e.to_string()))?;
 
-    Ok((circuit_output, proof))
+    Ok((circuit_output, proof, prove_info.stats.user_cycles))
 }
 
 fn execute_and_prove_program(
