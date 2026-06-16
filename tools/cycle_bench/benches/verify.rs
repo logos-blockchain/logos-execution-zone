@@ -15,7 +15,7 @@ use lee::program_methods::PRIVACY_PRESERVING_CIRCUIT_ID;
 use risc0_zkvm::{InnerReceipt, Receipt};
 
 fn bench_verify(c: &mut Criterion) {
-    let (output, proof) = prove_auth_transfer_in_ppe().expect("prove auth_transfer in PPE");
+    let (output, proof, _) = prove_auth_transfer_in_ppe(false).expect("prove auth_transfer in PPE");
     let journal = output.to_bytes();
     let proof_bytes = proof.into_inner();
     let inner: InnerReceipt = borsh::from_slice(&proof_bytes)

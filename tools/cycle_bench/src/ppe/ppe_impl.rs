@@ -6,12 +6,14 @@
 use std::{collections::HashMap, time::Instant};
 
 use lee::{
-    execute_and_prove,
-    privacy_preserving_transaction::circuit::{ProgramWithDependencies, Proof},
+    privacy_preserving_transaction::circuit::{
+        ProgramWithDependencies, Proof, execute_and_prove_with_cycles,
+    },
     program::Program,
 };
 use lee_core::{
-    InputAccountIdentity, PrivacyPreservingCircuitOutput,
+    EphemeralPublicKey, InputAccountIdentity, NullifierPublicKey, PrivacyPreservingCircuitOutput,
+    SharedSecretKey,
     account::{Account, AccountId, AccountWithMetadata},
     program::ProgramId,
 };
@@ -27,17 +29,22 @@ const AUTH_TRANSFER_ELF: &[u8] = lee::program_methods::AUTHENTICATED_TRANSFER_EL
 const CHAIN_CALLER_ELF: &[u8] =
     include_bytes!("../../../../artifacts/test_program_methods/chain_caller.bin");
 
-pub fn run_auth_transfer_in_ppe() -> PpeBenchResult {
-    let label = "auth_transfer Transfer in PPE".to_owned();
+pub fn run_auth_transfer_in_ppe(private: bool) -> PpeBenchResult {
+    let label = if private {
+        "auth_transfer Transfer in PPE (private output)".to_owned()
+    } else {
+        "auth_transfer Transfer in PPE (all public)".to_owned()
+    };
     let started = Instant::now();
-    match prove_auth_transfer_in_ppe() {
-        Ok((_out, proof)) => {
+    match prove_auth_transfer_in_ppe(private) {
+        Ok((_out, proof, user_cycles)) => {
             let prove_ms = started.elapsed().as_secs_f64() * 1_000.0;
             PpeBenchResult {
                 label,
                 chain_depth: 0,
                 prove_wall_ms: Some(prove_ms),
                 proof_bytes: Some(proof.into_inner().len()),
+                user_cycles: Some(user_cycles),
                 error: None,
             }
         }
@@ -46,18 +53,20 @@ pub fn run_auth_transfer_in_ppe() -> PpeBenchResult {
             chain_depth: 0,
             prove_wall_ms: None,
             proof_bytes: None,
+            user_cycles: None,
             error: Some(err.to_string()),
         },
     }
 }
 
-pub fn prove_auth_transfer_in_ppe() -> anyhow::Result<(PrivacyPreservingCircuitOutput, Proof)> {
-    let program = Program::new(AUTH_TRANSFER_ELF.to_vec())?;
-    let pwd = ProgramWithDependencies::from(program);
+/// Proves an `auth_transfer` Transfer wrapped in the privacy circuit.
+/// `private` flag signals whether the receiver is a private account.
+pub fn prove_auth_transfer_in_ppe(
+    private: bool,
+) -> anyhow::Result<(PrivacyPreservingCircuitOutput, Proof, u64)> {
+    let pwd = ProgramWithDependencies::from(Program::new(AUTH_TRANSFER_ELF.to_vec())?);
 
-    // For PPE to allow the sender's balance to be decremented by this
-    // program, the sender must already be claimed by auth_transfer.
-    // Recipient stays default-owned so the first call can claim it.
+    // Sender must already be claimed by auth_transfer for its balance to be debited.
     let sender = AccountWithMetadata {
         account: Account {
             program_owner: AUTH_TRANSFER_ID,
@@ -67,22 +76,38 @@ pub fn prove_auth_transfer_in_ppe() -> anyhow::Result<(PrivacyPreservingCircuitO
         is_authorized: true,
         account_id: AccountId::new([1; 32]),
     };
-    let recipient = AccountWithMetadata {
-        account: Account::default(),
-        is_authorized: true,
-        account_id: AccountId::new([2; 32]),
+    let instruction_data =
+        to_vec(&authenticated_transfer_core::Instruction::Transfer { amount: 5_000 })?;
+
+    let (recipient, recipient_identity) = if private {
+        let npk = NullifierPublicKey::from(&[2; 32]);
+        let recipient = AccountWithMetadata {
+            account: Account::default(),
+            is_authorized: false,
+            account_id: AccountId::for_regular_private_account(&npk, 0),
+        };
+        let identity = InputAccountIdentity::PrivateUnauthorized {
+            epk: EphemeralPublicKey(Vec::new()),
+            view_tag: 0,
+            npk,
+            ssk: SharedSecretKey([3; 32]),
+            identifier: 0,
+        };
+        (recipient, identity)
+    } else {
+        // Recipient stays default-owned so the first call can claim it.
+        let recipient = AccountWithMetadata {
+            account: Account::default(),
+            is_authorized: true,
+            account_id: AccountId::new([4; 32]),
+        };
+        (recipient, InputAccountIdentity::Public)
     };
-    let pre_states = vec![sender, recipient];
 
-    let instruction = authenticated_transfer_core::Instruction::Transfer { amount: 5_000 };
-    let instruction_data = to_vec(&instruction)?;
-
-    let account_identities = vec![InputAccountIdentity::Public; pre_states.len()];
-
-    Ok(execute_and_prove(
-        pre_states,
+    Ok(execute_and_prove_with_cycles(
+        vec![sender, recipient],
         instruction_data,
-        account_identities,
+        vec![InputAccountIdentity::Public, recipient_identity],
         &pwd,
     )?)
 }
@@ -91,13 +116,14 @@ pub fn run_chain_caller(depth: u32) -> PpeBenchResult {
     let label = format!("chain_caller depth={depth}");
     let started = Instant::now();
     match prove_chain_caller(depth) {
-        Ok((_out, proof)) => {
+        Ok((_out, proof, user_cycles)) => {
             let prove_ms = started.elapsed().as_secs_f64() * 1_000.0;
             PpeBenchResult {
                 label,
                 chain_depth: depth as usize,
                 prove_wall_ms: Some(prove_ms),
                 proof_bytes: Some(proof.into_inner().len()),
+                user_cycles: Some(user_cycles),
                 error: None,
             }
         }
@@ -106,6 +132,7 @@ pub fn run_chain_caller(depth: u32) -> PpeBenchResult {
             chain_depth: depth as usize,
             prove_wall_ms: None,
             proof_bytes: None,
+            user_cycles: None,
             error: Some(err.to_string()),
         },
     }
@@ -113,7 +140,7 @@ pub fn run_chain_caller(depth: u32) -> PpeBenchResult {
 
 fn prove_chain_caller(
     num_chain_calls: u32,
-) -> anyhow::Result<(PrivacyPreservingCircuitOutput, Proof)> {
+) -> anyhow::Result<(PrivacyPreservingCircuitOutput, Proof, u64)> {
     let chain_caller = Program::new(CHAIN_CALLER_ELF.to_vec())?;
     let auth_transfer = Program::new(AUTH_TRANSFER_ELF.to_vec())?;
     let mut deps = HashMap::new();
@@ -150,7 +177,7 @@ fn prove_chain_caller(
 
     let account_identities = vec![InputAccountIdentity::Public; pre_states.len()];
 
-    Ok(execute_and_prove(
+    Ok(execute_and_prove_with_cycles(
         pre_states,
         instruction_data,
         account_identities,

@@ -27,6 +27,8 @@ pub struct PpeBenchResult {
     pub label: String,
     pub chain_depth: usize,
     pub prove_wall_ms: Option<f64>,
+    /// Executor `user_cycles` of the privacy circuit.
+    pub user_cycles: Option<u64>,
     /// borsh-serialized `InnerReceipt` length (`S_agg` in the fee model).
     pub proof_bytes: Option<usize>,
     pub error: Option<String>,
@@ -34,17 +36,18 @@ pub struct PpeBenchResult {
 
 #[cfg(not(feature = "ppe"))]
 #[must_use]
-pub const fn run_all() -> Vec<PpeBenchResult> {
+pub const fn run_all(_private: bool) -> Vec<PpeBenchResult> {
     Vec::new()
 }
 
+/// Runs the PPE cases.
 #[cfg(feature = "ppe")]
 #[must_use]
-pub fn run_all() -> Vec<PpeBenchResult> {
+pub fn run_all(private: bool) -> Vec<PpeBenchResult> {
     let mut results = Vec::new();
 
     eprintln!("PPE: running composition cost (auth_transfer Transfer in PPE)");
-    results.push(ppe_impl::run_auth_transfer_in_ppe());
+    results.push(ppe_impl::run_auth_transfer_in_ppe(private));
 
     for depth in [1_u32, 3, 5, 9] {
         eprintln!("PPE: running chain_caller depth={depth}");
@@ -63,29 +66,34 @@ pub fn print_table(results: &[PpeBenchResult]) {
         .max("label".len());
 
     println!(
-        "\n{:<lw$}  {:>5}  {:>20}  {:>12}  {}",
+        "\n{:<lw$}  {:>5}  {:>20}  {:>12}  {:>12}  {}",
         "label",
         "depth",
         "prove_ms (s)",
+        "user_cycles",
         "proof_bytes",
         "error",
         lw = lw,
     );
-    println!("{}", "-".repeat(lw + 60));
+    println!("{}", "-".repeat(lw + 72));
     for r in results {
         let p = r.prove_wall_ms.map_or_else(
             || "-".to_owned(),
             |v| format!("{v:.1} ({:.1}s)", v / 1_000.0),
         );
+        let c = r
+            .user_cycles
+            .map_or_else(|| "-".to_owned(), |n| n.to_string());
         let b = r
             .proof_bytes
             .map_or_else(|| "-".to_owned(), |n| n.to_string());
         let e = r.error.as_deref().unwrap_or("");
         println!(
-            "{:<lw$}  {:>5}  {:>20}  {:>12}  {}",
+            "{:<lw$}  {:>5}  {:>20}  {:>12}  {:>12}  {}",
             r.label,
             r.chain_depth,
             p,
+            c,
             b,
             e,
             lw = lw,

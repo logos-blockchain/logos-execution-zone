@@ -58,6 +58,11 @@ struct Cli {
     #[arg(long)]
     ppe: bool,
 
+    /// With --ppe, run the `auth_transfer` case with a private receiver. Requires
+    /// --features ppe at build time. Extremely slow.
+    #[arg(long)]
+    ppe_private: bool,
+
     /// Iterations for executor wall-time sampling per case. First iter is
     /// discarded as warmup, remaining N feed the stats.
     #[arg(long, default_value_t = 5)]
@@ -609,7 +614,11 @@ fn main() -> Result<()> {
     }
 
     #[cfg(feature = "ppe")]
-    let ppe_results = if cli.ppe { ppe::run_all() } else { Vec::new() };
+    let ppe_results = if cli.ppe {
+        ppe::run_all(cli.ppe_private)
+    } else {
+        Vec::new()
+    };
     #[cfg(not(feature = "ppe"))]
     let ppe_results: Vec<ppe::PpeBenchResult> = {
         if cli.ppe {
