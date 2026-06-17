@@ -91,6 +91,16 @@
             sha256 = recursionZkrHash;
           };
 
+          lbcTarball = pkgs.fetchurl {
+            url = "https://github.com/logos-blockchain/logos-blockchain-circuits/releases/download/v0.5.0/logos-blockchain-circuits-v0.5.0-linux-x86_64.tar.gz";
+            sha256 = "sha256-d7a0hbMKL/8fULNZfwQ+JtnVOUDq5amA2th5Re693dE=";
+          };
+
+          lbcLibs = pkgs.runCommand "lbc-libs-v0.5.0" { nativeBuildInputs = [ pkgs.gnutar ]; } ''
+            tar xf ${lbcTarball} -C "$TMPDIR"
+            cp -r "$TMPDIR/logos-blockchain-circuits-v0.5.0-linux-x86_64" $out
+          '';
+
           commonArgs = {
             inherit src;
             buildInputs = [ pkgs.openssl ];
@@ -99,6 +109,7 @@
               pkgs.clang
               pkgs.llvmPackages.libclang.lib
               pkgs.gnutar  # Required for crane's archive operations (macOS tar lacks --sort)
+              pkgs.python3  # Required by pyo3's build script (wallet -> keycard_wallet/pyo3)
             ];
             LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
             # Point the risc0-circuit-recursion build script to the pre-fetched zip
@@ -115,6 +126,11 @@
               export PATH="$PATH:/usr/bin"
             '';
             LOGOS_BLOCKCHAIN_CIRCUITS = logos-blockchain-circuits.packages.${system}.default;
+            LBC_POC_LIB_DIR       = "${lbcLibs}/poc";
+            LBC_SIGNATURE_LIB_DIR = "${lbcLibs}/signature";
+            LBC_POL_LIB_DIR       = "${lbcLibs}/pol";
+            LBC_POQ_LIB_DIR       = "${lbcLibs}/poq";
+            LBC_LIB_DIR           = "${lbcLibs}/lib";
           };
 
           walletFfiPackage = craneLib.buildPackage (
@@ -125,7 +141,7 @@
               cargoExtraArgs = "-p wallet-ffi";
               postInstall = ''
                 mkdir -p $out/include
-                cp wallet-ffi/wallet_ffi.h $out/include/
+                cp lez/wallet-ffi/wallet_ffi.h $out/include/
               ''
               + pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
                 install_name_tool -id @rpath/libwallet_ffi.dylib $out/lib/libwallet_ffi.dylib
@@ -141,7 +157,7 @@
               cargoExtraArgs = "-p indexer_ffi";
               postInstall = ''
                 mkdir -p $out/include
-                cp indexer/ffi/indexer_ffi.h $out/include/
+                cp lez/indexer/ffi/indexer_ffi.h $out/include/
               ''
               + pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
                 install_name_tool -id @rpath/libindexer_ffi.dylib $out/lib/libindexer_ffi.dylib
