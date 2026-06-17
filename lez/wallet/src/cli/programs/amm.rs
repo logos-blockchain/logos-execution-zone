@@ -118,6 +118,187 @@ pub enum AmmProgramAgnosticSubcommand {
     },
 }
 
+impl AmmProgramAgnosticSubcommand {
+    async fn handle_new(
+        user_holding_a: CliAccountMention,
+        user_holding_b: CliAccountMention,
+        user_holding_lp: CliAccountMention,
+        balance_a: u128,
+        balance_b: u128,
+        wallet_core: &mut WalletCore,
+    ) -> Result<SubcommandReturnValue> {
+        let a_id = user_holding_a.resolve(wallet_core.storage())?;
+        let b_id = user_holding_b.resolve(wallet_core.storage())?;
+        let lp_id = user_holding_lp.resolve(wallet_core.storage())?;
+        match (a_id, b_id, lp_id) {
+            (
+                AccountIdWithPrivacy::Public(a),
+                AccountIdWithPrivacy::Public(b),
+                AccountIdWithPrivacy::Public(lp),
+            ) => {
+                let tx_hash = Amm(wallet_core)
+                    .send_new_definition(
+                        user_holding_a.into_public_identity(a),
+                        user_holding_b.into_public_identity(b),
+                        user_holding_lp.into_public_identity(lp),
+                        balance_a,
+                        balance_b,
+                    )
+                    .await?;
+                wallet_core
+                    .poll_and_finalize_public_transaction(tx_hash)
+                    .await
+            }
+            _ => {
+                // ToDo: Implement after private multi-chain calls is available
+                anyhow::bail!("Only public execution allowed for Amm calls");
+            }
+        }
+    }
+
+    async fn handle_swap_exact_input(
+        user_holding_a: CliAccountMention,
+        user_holding_b: CliAccountMention,
+        amount_in: u128,
+        min_amount_out: u128,
+        token_definition: AccountId,
+        wallet_core: &mut WalletCore,
+    ) -> Result<SubcommandReturnValue> {
+        let a_id = user_holding_a.resolve(wallet_core.storage())?;
+        let b_id = user_holding_b.resolve(wallet_core.storage())?;
+        match (a_id, b_id) {
+            (AccountIdWithPrivacy::Public(a), AccountIdWithPrivacy::Public(b)) => {
+                let tx_hash = Amm(wallet_core)
+                    .send_swap_exact_input(
+                        user_holding_a.into_public_identity(a),
+                        user_holding_b.into_public_identity(b),
+                        amount_in,
+                        min_amount_out,
+                        token_definition,
+                    )
+                    .await?;
+                wallet_core
+                    .poll_and_finalize_public_transaction(tx_hash)
+                    .await
+            }
+            _ => {
+                // ToDo: Implement after private multi-chain calls is available
+                anyhow::bail!("Only public execution allowed for Amm calls");
+            }
+        }
+    }
+
+    async fn handle_swap_exact_output(
+        user_holding_a: CliAccountMention,
+        user_holding_b: CliAccountMention,
+        exact_amount_out: u128,
+        max_amount_in: u128,
+        token_definition: AccountId,
+        wallet_core: &mut WalletCore,
+    ) -> Result<SubcommandReturnValue> {
+        let a_id = user_holding_a.resolve(wallet_core.storage())?;
+        let b_id = user_holding_b.resolve(wallet_core.storage())?;
+        match (a_id, b_id) {
+            (AccountIdWithPrivacy::Public(a), AccountIdWithPrivacy::Public(b)) => {
+                let tx_hash = Amm(wallet_core)
+                    .send_swap_exact_output(
+                        user_holding_a.into_public_identity(a),
+                        user_holding_b.into_public_identity(b),
+                        exact_amount_out,
+                        max_amount_in,
+                        token_definition,
+                    )
+                    .await?;
+                wallet_core
+                    .poll_and_finalize_public_transaction(tx_hash)
+                    .await
+            }
+            _ => {
+                // ToDo: Implement after private multi-chain calls is available
+                anyhow::bail!("Only public execution allowed for Amm calls");
+            }
+        }
+    }
+
+    async fn handle_add_liquidity(
+        user_holding_a: CliAccountMention,
+        user_holding_b: CliAccountMention,
+        user_holding_lp: CliAccountMention,
+        min_amount_lp: u128,
+        max_amount_a: u128,
+        max_amount_b: u128,
+        wallet_core: &mut WalletCore,
+    ) -> Result<SubcommandReturnValue> {
+        let a_id = user_holding_a.resolve(wallet_core.storage())?;
+        let b_id = user_holding_b.resolve(wallet_core.storage())?;
+        let lp_id = user_holding_lp.resolve(wallet_core.storage())?;
+        match (a_id, b_id, lp_id) {
+            (
+                AccountIdWithPrivacy::Public(a),
+                AccountIdWithPrivacy::Public(b),
+                AccountIdWithPrivacy::Public(lp),
+            ) => {
+                let tx_hash = Amm(wallet_core)
+                    .send_add_liquidity(
+                        user_holding_a.into_public_identity(a),
+                        user_holding_b.into_public_identity(b),
+                        user_holding_lp.into_public_identity(lp),
+                        min_amount_lp,
+                        max_amount_a,
+                        max_amount_b,
+                    )
+                    .await?;
+                wallet_core
+                    .poll_and_finalize_public_transaction(tx_hash)
+                    .await
+            }
+            _ => {
+                // ToDo: Implement after private multi-chain calls is available
+                anyhow::bail!("Only public execution allowed for Amm calls");
+            }
+        }
+    }
+
+    async fn handle_remove_liquidity(
+        user_holding_a: CliAccountMention,
+        user_holding_b: CliAccountMention,
+        user_holding_lp: CliAccountMention,
+        balance_lp: u128,
+        min_amount_a: u128,
+        min_amount_b: u128,
+        wallet_core: &mut WalletCore,
+    ) -> Result<SubcommandReturnValue> {
+        let a_id = user_holding_a.resolve(wallet_core.storage())?;
+        let b_id = user_holding_b.resolve(wallet_core.storage())?;
+        let lp_id = user_holding_lp.resolve(wallet_core.storage())?;
+        match (a_id, b_id, lp_id) {
+            (
+                AccountIdWithPrivacy::Public(a),
+                AccountIdWithPrivacy::Public(b),
+                AccountIdWithPrivacy::Public(lp),
+            ) => {
+                let tx_hash = Amm(wallet_core)
+                    .send_remove_liquidity(
+                        a,
+                        b,
+                        user_holding_lp.into_public_identity(lp),
+                        balance_lp,
+                        min_amount_a,
+                        min_amount_b,
+                    )
+                    .await?;
+                wallet_core
+                    .poll_and_finalize_public_transaction(tx_hash)
+                    .await
+            }
+            _ => {
+                // ToDo: Implement after private multi-chain calls is available
+                anyhow::bail!("Only public execution allowed for Amm calls");
+            }
+        }
+    }
+}
+
 impl WalletSubcommand for AmmProgramAgnosticSubcommand {
     async fn handle_subcommand(
         self,
@@ -131,35 +312,15 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
                 balance_a,
                 balance_b,
             } => {
-                let a_id = user_holding_a.resolve(wallet_core.storage())?;
-                let b_id = user_holding_b.resolve(wallet_core.storage())?;
-                let lp_id = user_holding_lp.resolve(wallet_core.storage())?;
-                match (a_id, b_id, lp_id) {
-                    (
-                        AccountIdWithPrivacy::Public(a),
-                        AccountIdWithPrivacy::Public(b),
-                        AccountIdWithPrivacy::Public(lp),
-                    ) => {
-                        let tx_hash = Amm(wallet_core)
-                            .send_new_definition(
-                                user_holding_a.into_public_identity(a),
-                                user_holding_b.into_public_identity(b),
-                                user_holding_lp.into_public_identity(lp),
-                                balance_a,
-                                balance_b,
-                            )
-                            .await?;
-                        println!("Transaction hash is {tx_hash}");
-                        let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
-                        println!("Transaction data is {transfer_tx:?}");
-                        wallet_core.store_persistent_data()?;
-                        Ok(SubcommandReturnValue::Empty)
-                    }
-                    _ => {
-                        // ToDo: Implement after private multi-chain calls is available
-                        anyhow::bail!("Only public execution allowed for Amm calls");
-                    }
-                }
+                Self::handle_new(
+                    user_holding_a,
+                    user_holding_b,
+                    user_holding_lp,
+                    balance_a,
+                    balance_b,
+                    wallet_core,
+                )
+                .await
             }
             Self::SwapExactInput {
                 user_holding_a,
@@ -168,30 +329,15 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
                 min_amount_out,
                 token_definition,
             } => {
-                let a_id = user_holding_a.resolve(wallet_core.storage())?;
-                let b_id = user_holding_b.resolve(wallet_core.storage())?;
-                match (a_id, b_id) {
-                    (AccountIdWithPrivacy::Public(a), AccountIdWithPrivacy::Public(b)) => {
-                        let tx_hash = Amm(wallet_core)
-                            .send_swap_exact_input(
-                                user_holding_a.into_public_identity(a),
-                                user_holding_b.into_public_identity(b),
-                                amount_in,
-                                min_amount_out,
-                                token_definition,
-                            )
-                            .await?;
-                        println!("Transaction hash is {tx_hash}");
-                        let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
-                        println!("Transaction data is {transfer_tx:?}");
-                        wallet_core.store_persistent_data()?;
-                        Ok(SubcommandReturnValue::Empty)
-                    }
-                    _ => {
-                        // ToDo: Implement after private multi-chain calls is available
-                        anyhow::bail!("Only public execution allowed for Amm calls");
-                    }
-                }
+                Self::handle_swap_exact_input(
+                    user_holding_a,
+                    user_holding_b,
+                    amount_in,
+                    min_amount_out,
+                    token_definition,
+                    wallet_core,
+                )
+                .await
             }
             Self::SwapExactOutput {
                 user_holding_a,
@@ -200,30 +346,15 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
                 max_amount_in,
                 token_definition,
             } => {
-                let a_id = user_holding_a.resolve(wallet_core.storage())?;
-                let b_id = user_holding_b.resolve(wallet_core.storage())?;
-                match (a_id, b_id) {
-                    (AccountIdWithPrivacy::Public(a), AccountIdWithPrivacy::Public(b)) => {
-                        let tx_hash = Amm(wallet_core)
-                            .send_swap_exact_output(
-                                user_holding_a.into_public_identity(a),
-                                user_holding_b.into_public_identity(b),
-                                exact_amount_out,
-                                max_amount_in,
-                                token_definition,
-                            )
-                            .await?;
-                        println!("Transaction hash is {tx_hash}");
-                        let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
-                        println!("Transaction data is {transfer_tx:?}");
-                        wallet_core.store_persistent_data()?;
-                        Ok(SubcommandReturnValue::Empty)
-                    }
-                    _ => {
-                        // ToDo: Implement after private multi-chain calls is available
-                        anyhow::bail!("Only public execution allowed for Amm calls");
-                    }
-                }
+                Self::handle_swap_exact_output(
+                    user_holding_a,
+                    user_holding_b,
+                    exact_amount_out,
+                    max_amount_in,
+                    token_definition,
+                    wallet_core,
+                )
+                .await
             }
             Self::AddLiquidity {
                 user_holding_a,
@@ -233,36 +364,16 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
                 max_amount_a,
                 max_amount_b,
             } => {
-                let a_id = user_holding_a.resolve(wallet_core.storage())?;
-                let b_id = user_holding_b.resolve(wallet_core.storage())?;
-                let lp_id = user_holding_lp.resolve(wallet_core.storage())?;
-                match (a_id, b_id, lp_id) {
-                    (
-                        AccountIdWithPrivacy::Public(a),
-                        AccountIdWithPrivacy::Public(b),
-                        AccountIdWithPrivacy::Public(lp),
-                    ) => {
-                        let tx_hash = Amm(wallet_core)
-                            .send_add_liquidity(
-                                user_holding_a.into_public_identity(a),
-                                user_holding_b.into_public_identity(b),
-                                user_holding_lp.into_public_identity(lp),
-                                min_amount_lp,
-                                max_amount_a,
-                                max_amount_b,
-                            )
-                            .await?;
-                        println!("Transaction hash is {tx_hash}");
-                        let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
-                        println!("Transaction data is {transfer_tx:?}");
-                        wallet_core.store_persistent_data()?;
-                        Ok(SubcommandReturnValue::Empty)
-                    }
-                    _ => {
-                        // ToDo: Implement after private multi-chain calls is available
-                        anyhow::bail!("Only public execution allowed for Amm calls");
-                    }
-                }
+                Self::handle_add_liquidity(
+                    user_holding_a,
+                    user_holding_b,
+                    user_holding_lp,
+                    min_amount_lp,
+                    max_amount_a,
+                    max_amount_b,
+                    wallet_core,
+                )
+                .await
             }
             Self::RemoveLiquidity {
                 user_holding_a,
@@ -272,36 +383,16 @@ impl WalletSubcommand for AmmProgramAgnosticSubcommand {
                 min_amount_a,
                 min_amount_b,
             } => {
-                let a_id = user_holding_a.resolve(wallet_core.storage())?;
-                let b_id = user_holding_b.resolve(wallet_core.storage())?;
-                let lp_id = user_holding_lp.resolve(wallet_core.storage())?;
-                match (a_id, b_id, lp_id) {
-                    (
-                        AccountIdWithPrivacy::Public(a),
-                        AccountIdWithPrivacy::Public(b),
-                        AccountIdWithPrivacy::Public(lp),
-                    ) => {
-                        let tx_hash = Amm(wallet_core)
-                            .send_remove_liquidity(
-                                a,
-                                b,
-                                user_holding_lp.into_public_identity(lp),
-                                balance_lp,
-                                min_amount_a,
-                                min_amount_b,
-                            )
-                            .await?;
-                        println!("Transaction hash is {tx_hash}");
-                        let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
-                        println!("Transaction data is {transfer_tx:?}");
-                        wallet_core.store_persistent_data()?;
-                        Ok(SubcommandReturnValue::Empty)
-                    }
-                    _ => {
-                        // ToDo: Implement after private multi-chain calls is available
-                        anyhow::bail!("Only public execution allowed for Amm calls");
-                    }
-                }
+                Self::handle_remove_liquidity(
+                    user_holding_a,
+                    user_holding_b,
+                    user_holding_lp,
+                    balance_lp,
+                    min_amount_a,
+                    min_amount_b,
+                    wallet_core,
+                )
+                .await
             }
         }
     }

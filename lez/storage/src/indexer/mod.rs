@@ -153,103 +153,105 @@ impl RocksDBIO {
         }
 
         let br_id = closest_breakpoint_id(block_id);
-        let mut breakpoint = self.get_breakpoint(br_id)?;
+        let mut state = self.get_breakpoint(br_id)?;
 
         let start = u64::from(BREAKPOINT_INTERVAL)
             .checked_mul(br_id)
             .expect("Reached maximum breakpoint id");
 
-        for mut block in self.get_block_batch_seq(
+        for block in self.get_block_batch_seq(
             start.checked_add(1).expect("Will be lesser that u64::MAX")..=block_id,
         )? {
-            let expected_clock = LeeTransaction::Public(clock_invocation(block.header.timestamp));
-
-            let clock_tx = block.body.transactions.pop().ok_or_else(|| {
-                DbError::db_interaction_error(
-                    "Block must contain clock transaction at the end".to_owned(),
-                )
-            })?;
-            let user_txs = block.body.transactions;
-
-            if clock_tx != expected_clock {
-                return Err(DbError::db_interaction_error(
-                        "Last transaction in block must be the clock invocation for the block timestamp"
-                            .to_owned(),
-                    ));
-            }
-            for transaction in user_txs {
-                let is_genesis = block.header.block_id == GENESIS_BLOCK_ID;
-                if is_genesis {
-                    let genesis_tx = match transaction {
-                        LeeTransaction::Public(public_tx) => public_tx,
-                        LeeTransaction::PrivacyPreserving(_)
-                        | LeeTransaction::ProgramDeployment(_) => {
-                            return Err(DbError::db_interaction_error(
-                                "Genesis block should contain only public transactions".to_owned(),
-                            ));
-                        }
-                    };
-                    breakpoint
-                        .transition_from_public_transaction(
-                            &genesis_tx,
-                            block.header.block_id,
-                            block.header.timestamp,
-                        )
-                        .map_err(|err| {
-                            DbError::db_interaction_error(format!(
-                                "genesis transaction execution failed with err {err:?}"
-                            ))
-                        })?;
-                } else {
-                    transaction
-                        .transaction_stateless_check()
-                        .map_err(|err| {
-                            DbError::db_interaction_error(format!(
-                                "transaction pre check failed with err {err:?}"
-                            ))
-                        })?
-                        // FIXME: HOT FIX (testnet v0.2): does not check for system account updates due to
-                        // sequencer-generated deposit tx'es;
-                        // CHANGE ME back to `execute_check_on_state` when the indexer can authenticate deposit transactions
-                        .execute_without_system_accounts_check_on_state(
-                            &mut breakpoint,
-                            block.header.block_id,
-                            block.header.timestamp,
-                        )
-                        .map_err(|err| {
-                            DbError::db_interaction_error(format!(
-                                "transaction execution failed with err {err:?}"
-                            ))
-                        })?;
-                }
-            }
-
-            let LeeTransaction::Public(clock_public_tx) = clock_tx else {
-                return Err(DbError::db_interaction_error(
-                    "Clock invocation must be a public transaction".to_owned(),
-                ));
-            };
-
-            breakpoint
-                .transition_from_public_transaction(
-                    &clock_public_tx,
-                    block.header.block_id,
-                    block.header.timestamp,
-                )
-                .map_err(|err| {
-                    DbError::db_interaction_error(format!(
-                        "clock transaction execution failed with err {err:?}"
-                    ))
-                })?;
+            apply_block_transactions(block, &mut state)?;
         }
 
-        Ok(breakpoint)
+        Ok(state)
     }
 
     pub fn final_state(&self) -> DbResult<V03State> {
         let last_block_id = self.get_meta_last_block_id_in_db()?.unwrap_or(0);
         self.calculate_state_for_id(last_block_id)
     }
+}
+
+fn apply_block_transactions(mut block: Block, state: &mut V03State) -> DbResult<()> {
+    let expected_clock = LeeTransaction::Public(clock_invocation(block.header.timestamp));
+
+    let clock_tx = block.body.transactions.pop().ok_or_else(|| {
+        DbError::db_interaction_error("Block must contain clock transaction at the end".to_owned())
+    })?;
+
+    if clock_tx != expected_clock {
+        return Err(DbError::db_interaction_error(
+            "Last transaction in block must be the clock invocation for the block timestamp"
+                .to_owned(),
+        ));
+    }
+
+    for transaction in block.body.transactions {
+        if block.header.block_id == GENESIS_BLOCK_ID {
+            let genesis_tx = match transaction {
+                LeeTransaction::Public(public_tx) => public_tx,
+                LeeTransaction::PrivacyPreserving(_) | LeeTransaction::ProgramDeployment(_) => {
+                    return Err(DbError::db_interaction_error(
+                        "Genesis block should contain only public transactions".to_owned(),
+                    ));
+                }
+            };
+            state
+                .transition_from_public_transaction(
+                    &genesis_tx,
+                    block.header.block_id,
+                    block.header.timestamp,
+                )
+                .map_err(|err| {
+                    DbError::db_interaction_error(format!(
+                        "genesis transaction execution failed with err {err:?}"
+                    ))
+                })?;
+        } else {
+            transaction
+                .transaction_stateless_check()
+                .map_err(|err| {
+                    DbError::db_interaction_error(format!(
+                        "transaction pre check failed with err {err:?}"
+                    ))
+                })?
+                // FIXME: HOT FIX (testnet v0.2): does not check for system account updates due to
+                // sequencer-generated deposit tx'es;
+                // CHANGE ME back to `execute_check_on_state` when the indexer can authenticate deposit transactions
+                .execute_without_system_accounts_check_on_state(
+                    state,
+                    block.header.block_id,
+                    block.header.timestamp,
+                )
+                .map_err(|err| {
+                    DbError::db_interaction_error(format!(
+                        "transaction execution failed with err {err:?}"
+                    ))
+                })?;
+        }
+    }
+
+    let LeeTransaction::Public(clock_public_tx) = clock_tx else {
+        return Err(DbError::db_interaction_error(
+            "Clock invocation must be a public transaction".to_owned(),
+        ));
+    };
+
+    state
+        .transition_from_public_transaction(
+            &clock_public_tx,
+            block.header.block_id,
+            block.header.timestamp,
+        )
+        .map_err(|err| {
+            DbError::db_interaction_error(format!(
+                "clock transaction execution failed with err {err:?}"
+            ))
+        })?;
+
+    Ok(())
 }
 
 fn closest_breakpoint_id(block_id: u64) -> u64 {

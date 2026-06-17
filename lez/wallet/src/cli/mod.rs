@@ -341,6 +341,26 @@ pub fn read_keys_file(path: &str) -> Result<(Vec<u8>, Vec<u8>)> {
     Ok((npk, vpk))
 }
 
+pub(crate) fn decode_npk_vpk(
+    npk_hex: &str,
+    vpk_hex: &str,
+) -> Result<(
+    lee_core::NullifierPublicKey,
+    lee_core::encryption::ViewingPublicKey,
+)> {
+    let npk_bytes: [u8; 32] = hex::decode(npk_hex)
+        .context("npk must be valid hex")?
+        .try_into()
+        .map_err(|v: Vec<u8>| anyhow::anyhow!("npk must be exactly 32 bytes, got {}", v.len()))?;
+
+    let vpk = lee_core::encryption::ViewingPublicKey::from_bytes(
+        hex::decode(vpk_hex).context("vpk must be valid hex")?,
+    )
+    .map_err(|e| anyhow::anyhow!("{e}"))?;
+
+    Ok((lee_core::NullifierPublicKey(npk_bytes), vpk))
+}
+
 pub fn read_mnemonic_from_stdin() -> Result<Mnemonic> {
     let mut phrase = String::new();
 

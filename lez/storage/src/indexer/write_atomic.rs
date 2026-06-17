@@ -52,44 +52,8 @@ impl RocksDBIO {
         acc_id: [u8; 32],
         tx_hashes: &[[u8; 32]],
     ) -> DbResult<()> {
-        let acc_num_tx = self.get_acc_meta_num_tx(acc_id)?.unwrap_or(0);
-        let cf_att = self.account_id_to_tx_hash_column();
         let mut write_batch = WriteBatch::new();
-
-        for (tx_id, tx_hash) in tx_hashes.iter().enumerate() {
-            let put_id = acc_num_tx
-                .checked_add(tx_id.try_into().expect("Must fit into u64"))
-                .expect("Tx count should be lesser that u64::MAX");
-
-            let mut prefix = borsh::to_vec(&acc_id).map_err(|berr| {
-                DbError::borsh_cast_message(berr, Some("Failed to serialize account id".to_owned()))
-            })?;
-            let suffix = borsh::to_vec(&put_id).map_err(|berr| {
-                DbError::borsh_cast_message(berr, Some("Failed to serialize tx id".to_owned()))
-            })?;
-
-            prefix.extend_from_slice(&suffix);
-
-            write_batch.put_cf(
-                &cf_att,
-                prefix,
-                borsh::to_vec(tx_hash).map_err(|berr| {
-                    DbError::borsh_cast_message(
-                        berr,
-                        Some("Failed to serialize tx hash".to_owned()),
-                    )
-                })?,
-            );
-        }
-
-        self.update_acc_meta_batch(
-            acc_id,
-            acc_num_tx
-                .checked_add(tx_hashes.len().try_into().expect("Must fit into u64"))
-                .expect("Tx count should be lesser that u64::MAX"),
-            &mut write_batch,
-        )?;
-
+        self.put_account_transactions_dependant(acc_id, tx_hashes, &mut write_batch)?;
         self.db.write(write_batch).map_err(|rerr| {
             DbError::rocksdb_cast_message(rerr, Some("Failed to write batch".to_owned()))
         })

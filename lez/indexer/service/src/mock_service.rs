@@ -330,6 +330,76 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
     }
 }
 
+fn mock_public_tx(
+    tx_hash: HashType,
+    block_id: BlockId,
+    tx_idx: u64,
+    account_ids: &[AccountId],
+) -> Transaction {
+    Transaction::Public(PublicTransaction {
+        hash: tx_hash,
+        message: PublicMessage {
+            program_id: ProgramId([1_u32; 8]),
+            account_ids: vec![
+                account_ids[tx_idx as usize % account_ids.len()],
+                account_ids[(tx_idx as usize + 1) % account_ids.len()],
+            ],
+            nonces: vec![block_id as u128, (block_id + 1) as u128],
+            instruction_data: vec![1, 2, 3, 4],
+        },
+        witness_set: WitnessSet {
+            signatures_and_public_keys: vec![],
+            proof: None,
+        },
+    })
+}
+
+fn mock_privacy_preserving_tx(
+    tx_hash: HashType,
+    block_id: BlockId,
+    tx_idx: u64,
+    account_ids: &[AccountId],
+) -> Transaction {
+    Transaction::PrivacyPreserving(PrivacyPreservingTransaction {
+        hash: tx_hash,
+        message: PrivacyPreservingMessage {
+            public_account_ids: vec![account_ids[tx_idx as usize % account_ids.len()]],
+            nonces: vec![block_id as u128],
+            public_post_states: vec![Account {
+                program_owner: ProgramId([1_u32; 8]),
+                balance: 500,
+                data: Data(vec![0xdd, 0xee]),
+                nonce: block_id as u128,
+            }],
+            encrypted_private_post_states: vec![EncryptedAccountData {
+                ciphertext: indexer_service_protocol::Ciphertext(vec![0x01, 0x02, 0x03, 0x04]),
+                epk: indexer_service_protocol::EphemeralPublicKey(vec![0xaa; 32]),
+                view_tag: 42,
+            }],
+            new_commitments: vec![Commitment([block_id as u8; 32])],
+            new_nullifiers: vec![(
+                indexer_service_protocol::Nullifier([tx_idx as u8; 32]),
+                CommitmentSetDigest([0xff; 32]),
+            )],
+            block_validity_window: ValidityWindow((None, None)),
+            timestamp_validity_window: ValidityWindow((None, None)),
+        },
+        witness_set: WitnessSet {
+            signatures_and_public_keys: vec![],
+            proof: Some(indexer_service_protocol::Proof(vec![0; 32])),
+        },
+    })
+}
+
+fn mock_program_deployment_tx(tx_hash: HashType) -> Transaction {
+    Transaction::ProgramDeployment(ProgramDeploymentTransaction {
+        hash: tx_hash,
+        message: ProgramDeploymentMessage {
+            bytecode: vec![0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00],
+        },
+    })
+}
+
 fn build_mock_block(
     block_id: BlockId,
     prev_hash: HashType,
@@ -344,7 +414,6 @@ fn build_mock_block(
         HashType(hash)
     };
 
-    // Create 2-4 transactions per block (mix of Public, PrivacyPreserving, and ProgramDeployment)
     let num_txs = 2 + (block_id % 3);
     let mut block_transactions = Vec::new();
 
@@ -356,65 +425,10 @@ fn build_mock_block(
             HashType(hash)
         };
 
-        // Vary transaction types: Public, PrivacyPreserving, or ProgramDeployment
         let tx = match (block_id + tx_idx) % 5 {
-            // Public transactions (most common)
-            0 | 1 => Transaction::Public(PublicTransaction {
-                hash: tx_hash,
-                message: PublicMessage {
-                    program_id: ProgramId([1_u32; 8]),
-                    account_ids: vec![
-                        account_ids[tx_idx as usize % account_ids.len()],
-                        account_ids[(tx_idx as usize + 1) % account_ids.len()],
-                    ],
-                    nonces: vec![block_id as u128, (block_id + 1) as u128],
-                    instruction_data: vec![1, 2, 3, 4],
-                },
-                witness_set: WitnessSet {
-                    signatures_and_public_keys: vec![],
-                    proof: None,
-                },
-            }),
-            // PrivacyPreserving transactions
-            2 | 3 => Transaction::PrivacyPreserving(PrivacyPreservingTransaction {
-                hash: tx_hash,
-                message: PrivacyPreservingMessage {
-                    public_account_ids: vec![account_ids[tx_idx as usize % account_ids.len()]],
-                    nonces: vec![block_id as u128],
-                    public_post_states: vec![Account {
-                        program_owner: ProgramId([1_u32; 8]),
-                        balance: 500,
-                        data: Data(vec![0xdd, 0xee]),
-                        nonce: block_id as u128,
-                    }],
-                    encrypted_private_post_states: vec![EncryptedAccountData {
-                        ciphertext: indexer_service_protocol::Ciphertext(vec![
-                            0x01, 0x02, 0x03, 0x04,
-                        ]),
-                        epk: indexer_service_protocol::EphemeralPublicKey(vec![0xaa; 32]),
-                        view_tag: 42,
-                    }],
-                    new_commitments: vec![Commitment([block_id as u8; 32])],
-                    new_nullifiers: vec![(
-                        indexer_service_protocol::Nullifier([tx_idx as u8; 32]),
-                        CommitmentSetDigest([0xff; 32]),
-                    )],
-                    block_validity_window: ValidityWindow((None, None)),
-                    timestamp_validity_window: ValidityWindow((None, None)),
-                },
-                witness_set: WitnessSet {
-                    signatures_and_public_keys: vec![],
-                    proof: Some(indexer_service_protocol::Proof(vec![0; 32])),
-                },
-            }),
-            // ProgramDeployment transactions (rare)
-            _ => Transaction::ProgramDeployment(ProgramDeploymentTransaction {
-                hash: tx_hash,
-                message: ProgramDeploymentMessage {
-                    bytecode: vec![0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00], /* WASM magic
-                                                                                     * number */
-                },
-            }),
+            0 | 1 => mock_public_tx(tx_hash, block_id, tx_idx, account_ids),
+            2 | 3 => mock_privacy_preserving_tx(tx_hash, block_id, tx_idx, account_ids),
+            _ => mock_program_deployment_tx(tx_hash),
         };
 
         block_transactions.push(tx);

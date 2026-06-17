@@ -222,10 +222,50 @@ mod tests {
         assert_eq!(final_id, None);
     }
 
+    struct TestFixture {
+        storage: IndexerStore,
+        from: AccountId,
+        to: AccountId,
+        _home: tempfile::TempDir,
+    }
+
+    async fn store_with_transfer_blocks(
+        block_count: u64,
+        prev_hash: Option<common::HashType>,
+    ) -> TestFixture {
+        let home = tempdir().unwrap();
+        let storage = IndexerStore::open_db(home.path()).unwrap();
+
+        let initial_accounts = initial_pub_accounts_private_keys();
+        let from = initial_accounts[0].account_id;
+        let to = initial_accounts[1].account_id;
+        let sign_key = initial_accounts[0].pub_sign_key.clone();
+
+        let mut prev_hash = prev_hash;
+        for i in 0..block_count {
+            let tx = common::test_utils::create_transaction_native_token_transfer(
+                from, u128::from(i), to, 10, &sign_key,
+            );
+            let block_id = i + 1;
+
+            let next_block = common::test_utils::produce_dummy_block(block_id, prev_hash, vec![tx]);
+            prev_hash = Some(next_block.header.hash);
+
+            storage
+                .put_block(
+                    next_block,
+                    HeaderId::from([u8::try_from(i + 1).unwrap(); 32]),
+                )
+                .await
+                .unwrap();
+        }
+
+        TestFixture { storage, from, to, _home: home }
+    }
+
     #[tokio::test]
     async fn state_transition() {
         let home = tempdir().unwrap();
-
         let storage = IndexerStore::open_db(home.as_ref()).unwrap();
 
         let initial_accounts = initial_pub_accounts_private_keys();
@@ -233,7 +273,6 @@ mod tests {
         let to = initial_accounts[1].account_id;
         let sign_key = initial_accounts[0].pub_sign_key.clone();
 
-        // Submit genesis block
         let clock_tx = LeeTransaction::Public(clock_invocation(0));
         let genesis_block_data = HashableBlockData {
             block_id: 1,
@@ -249,15 +288,13 @@ mod tests {
             .await
             .unwrap();
 
-        for i in 0..10 {
+        for i in 0..10_u128 {
             let tx = common::test_utils::create_transaction_native_token_transfer(
                 from, i, to, 10, &sign_key,
             );
             let block_id = u64::try_from(i + 1).unwrap();
-
             let next_block = common::test_utils::produce_dummy_block(block_id, prev_hash, vec![tx]);
             prev_hash = Some(next_block.header.hash);
-
             storage
                 .put_block(
                     next_block,
@@ -276,48 +313,18 @@ mod tests {
 
     #[tokio::test]
     async fn account_state_at_block() {
-        let home = tempdir().unwrap();
+        let TestFixture { storage, from, to, _home } = store_with_transfer_blocks(10, None).await;
 
-        let storage = IndexerStore::open_db(home.as_ref()).unwrap();
-
-        let mut prev_hash = None;
-
-        let initial_accounts = initial_pub_accounts_private_keys();
-        let from = initial_accounts[0].account_id;
-        let to = initial_accounts[1].account_id;
-        let sign_key = initial_accounts[0].pub_sign_key.clone();
-
-        for i in 0..10 {
-            let tx = common::test_utils::create_transaction_native_token_transfer(
-                from, i, to, 10, &sign_key,
-            );
-            let block_id = u64::try_from(i + 1).unwrap();
-
-            let next_block = common::test_utils::produce_dummy_block(block_id, prev_hash, vec![tx]);
-            prev_hash = Some(next_block.header.hash);
-
-            storage
-                .put_block(
-                    next_block,
-                    HeaderId::from([u8::try_from(i + 1).unwrap(); 32]),
-                )
-                .await
-                .unwrap();
-        }
-
-        // Genesis block: no transfers applied yet.
         let acc1_at_1 = storage.account_state_at_block(&from, 1).unwrap();
         let acc2_at_1 = storage.account_state_at_block(&to, 1).unwrap();
         assert_eq!(acc1_at_1.balance, 9990);
         assert_eq!(acc2_at_1.balance, 20010);
 
-        // After block 5: 4 transfers of 10 applied (one each in blocks 2..=5).
         let acc1_at_5 = storage.account_state_at_block(&from, 5).unwrap();
         let acc2_at_5 = storage.account_state_at_block(&to, 5).unwrap();
         assert_eq!(acc1_at_5.balance, 9950);
         assert_eq!(acc2_at_5.balance, 20050);
 
-        // After final block 9: 8 transfers applied; should match current state.
         let acc1_at_9 = storage.account_state_at_block(&from, 9).unwrap();
         let acc2_at_9 = storage.account_state_at_block(&to, 9).unwrap();
         assert_eq!(acc1_at_9.balance, 9910);

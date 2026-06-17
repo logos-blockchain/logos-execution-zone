@@ -69,17 +69,13 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     /// assumed to represent the correct latest state consistent with Bedrock-finalized data.
     /// If no database is found, the sequencer performs a fresh start from genesis,
     /// initializing its state with the accounts defined in the configuration file.
-    pub async fn start_from_config(
-        config: SequencerConfig,
-    ) -> (Self, MemPoolHandle<(TransactionOrigin, LeeTransaction)>) {
+    fn open_or_create_store(
+        config: &SequencerConfig,
+    ) -> (SequencerStore, lee::V03State, Block) {
         let signing_key = lee::PrivateKey::try_new(config.signing_key).unwrap();
-
-        let bedrock_signing_key =
-            load_or_create_signing_key(&config.home.join("bedrock_signing_key"))
-                .expect("Failed to load or create bedrock signing key");
-
         let db_path = config.home.join("rocksdb");
-        let (store, state, genesis_block) = if db_path.exists() {
+
+        if db_path.exists() {
             let store =
                 SequencerStore::open_db(&db_path, signing_key.clone()).unwrap_or_else(|err| {
                     panic!(
@@ -101,7 +97,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                 db_path.display()
             );
 
-            let (genesis_state, genesis_txs) = build_genesis_state(&config);
+            let (genesis_state, genesis_txs) = build_genesis_state(config);
 
             let hashable_data = HashableBlockData {
                 block_id: GENESIS_BLOCK_ID,
@@ -120,7 +116,17 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             .expect("Failed to create database with genesis block");
 
             (store, genesis_state, genesis_block)
-        };
+        }
+    }
+
+    pub async fn start_from_config(
+        config: SequencerConfig,
+    ) -> (Self, MemPoolHandle<(TransactionOrigin, LeeTransaction)>) {
+        let bedrock_signing_key =
+            load_or_create_signing_key(&config.home.join("bedrock_signing_key"))
+                .expect("Failed to load or create bedrock signing key");
+
+        let (store, state, genesis_block) = Self::open_or_create_store(&config);
 
         let latest_block_meta = store
             .latest_block_meta()
@@ -333,6 +339,61 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
 
     /// Builds a new block from transactions in the mempool.
     /// Does NOT publish or store the block — the caller is responsible for that.
+    fn apply_mempool_transaction(
+        &mut self,
+        origin: TransactionOrigin,
+        tx: &LeeTransaction,
+        block_height: u64,
+        timestamp: u64,
+        deposit_event_ids: &mut Vec<HashType>,
+        withdrawals: &mut Vec<WithdrawArg>,
+    ) -> Result<bool> {
+        let tx_hash = tx.hash();
+        match origin {
+            TransactionOrigin::User => {
+                let validated_diff = match tx.validate_on_state(
+                    &self.state,
+                    block_height,
+                    timestamp,
+                ) {
+                    Ok(diff) => diff,
+                    Err(err) => {
+                        error!(
+                            "Transaction with hash {tx_hash} failed execution check with error: {err:#?}, skipping it",
+                        );
+                        return Ok(false);
+                    }
+                };
+
+                if let Some(withdraw_data) = extract_bridge_withdraw_data(tx) {
+                    withdrawals.push(withdraw_data);
+                }
+
+                self.state.apply_state_diff(validated_diff);
+            }
+            TransactionOrigin::Sequencer => {
+                let LeeTransaction::Public(public_tx) = tx else {
+                    panic!("Sequencer may only generate Public transactions, found {tx:#?}");
+                };
+
+                if let Some(deposit_op_id) = extract_bridge_deposit_id(tx) {
+                    deposit_event_ids.push(deposit_op_id);
+                }
+
+                self.state
+                    .transition_from_public_transaction(
+                        public_tx,
+                        block_height,
+                        timestamp,
+                    )
+                    .context("Failed to execute sequencer-generated transaction")?;
+            }
+        }
+
+        info!("Validated transaction with hash {tx_hash}, including it in block");
+        Ok(true)
+    }
+
     fn build_block_from_mempool(&mut self) -> Result<BlockWithMeta> {
         let now = Instant::now();
 
@@ -353,14 +414,12 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         let new_block_timestamp = u64::try_from(chrono::Utc::now().timestamp_millis())
             .expect("Timestamp must be positive");
 
-        // Pre-create the mandatory clock tx so its size is included in the block size check.
         let clock_tx = clock_invocation(new_block_timestamp);
         let clock_lee_tx = LeeTransaction::Public(clock_tx.clone());
 
         while let Some((origin, tx)) = self.mempool.pop() {
             let tx_hash = tx.hash();
 
-            // Check if block size exceeds limit (including the mandatory clock tx).
             let temp_valid_transactions = [
                 valid_transactions.as_slice(),
                 std::slice::from_ref(&tx),
@@ -379,66 +438,30 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                 .len();
 
             if block_size > max_block_size {
-                // Block would exceed size limit, remove last transaction and push back
                 warn!(
                     "Transaction with hash {tx_hash} deferred to next block: \
                      block size {block_size} bytes would exceed limit of {max_block_size} bytes",
                 );
-
                 self.mempool.push_front((origin, tx));
                 break;
             }
 
-            match origin {
-                TransactionOrigin::User => {
-                    let validated_diff = match tx.validate_on_state(
-                        &self.state,
-                        new_block_height,
-                        new_block_timestamp,
-                    ) {
-                        Ok(diff) => diff,
-                        Err(err) => {
-                            error!(
-                                "Transaction with hash {tx_hash} failed execution check with error: {err:#?}, skipping it",
-                            );
-                            continue;
-                        }
-                    };
-
-                    if let Some(withdraw_data) = extract_bridge_withdraw_data(&tx) {
-                        withdrawals.push(withdraw_data);
-                    }
-
-                    self.state.apply_state_diff(validated_diff);
-                }
-                TransactionOrigin::Sequencer => {
-                    let LeeTransaction::Public(public_tx) = &tx else {
-                        panic!("Sequencer may only generate Public transactions, found {tx:#?}");
-                    };
-
-                    if let Some(deposit_op_id) = extract_bridge_deposit_id(&tx) {
-                        deposit_event_ids.push(deposit_op_id);
-                    }
-
-                    self.state
-                        .transition_from_public_transaction(
-                            public_tx,
-                            new_block_height,
-                            new_block_timestamp,
-                        )
-                        .context("Failed to execute sequencer-generated transaction")?;
-                }
+            if self.apply_mempool_transaction(
+                origin,
+                &tx,
+                new_block_height,
+                new_block_timestamp,
+                &mut deposit_event_ids,
+                &mut withdrawals,
+            )? {
+                valid_transactions.push(tx);
             }
 
-            valid_transactions.push(tx);
-
-            info!("Validated transaction with hash {tx_hash}, including it in block");
             if valid_transactions.len() >= self.sequencer_config.max_num_tx_in_block {
                 break;
             }
         }
 
-        // Append the Clock Program invocation as the mandatory last transaction.
         self.state
             .transition_from_public_transaction(&clock_tx, new_block_height, new_block_timestamp)
             .context("Clock transaction failed. Aborting block production.")?;

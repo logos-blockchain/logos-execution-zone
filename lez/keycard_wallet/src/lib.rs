@@ -134,10 +134,6 @@ impl KeycardWallet {
         })
     }
 
-    #[expect(
-        clippy::arithmetic_side_effects,
-        reason = "64 - s_stripped.len() is safe: s_stripped.len() ≤ 31 because py_signature.len() is in [32, 63]"
-    )]
     pub fn sign_message_for_path(
         &self,
         py: Python,
@@ -150,33 +146,9 @@ impl KeycardWallet {
             .call_method1("sign_message_for_path", (message, path))?
             .extract()?;
 
-        // The keycard Python library strips leading zeros from S when S < 2^(8k) for some k.
-        // Left-pad S back to 32 bytes so the full signature is always 64 bytes (R || S).
-        let py_signature = if py_signature.len() < 64 {
-            if py_signature.len() < 32 {
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                    "signature from keycard too short: {} bytes",
-                    py_signature.len()
-                )));
-            }
-            let s_stripped = &py_signature[32..];
-            let mut padded = [0_u8; 64];
-            padded[..32].copy_from_slice(&py_signature[..32]);
-            padded[(64 - s_stripped.len())..].copy_from_slice(s_stripped);
-            padded.to_vec()
-        } else {
-            py_signature
+        let sig = Signature {
+            value: normalize_keycard_signature(py_signature)?,
         };
-
-        let signature: [u8; 64] = py_signature.try_into().map_err(|vec: Vec<u8>| {
-            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                "Invalid signature length: expected 64 bytes, got {} (bytes: {:02x?})",
-                vec.len(),
-                vec
-            ))
-        })?;
-
-        let sig = Signature { value: signature };
         let pub_key = self.get_public_key_for_path(py, path)?;
         if !sig.is_valid_for(message, &pub_key) {
             return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
@@ -224,32 +196,8 @@ impl KeycardWallet {
             .call_method1("get_private_keys_for_path", (path,))?
             .extract()?;
 
-        let raw_nsk = Zeroizing::new(raw_nsk);
-        let raw_vsk = Zeroizing::new(raw_vsk);
-
-        let nsk = {
-            if raw_nsk.len() != 32 {
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                    "expected 32-byte NSK from keycard, got {} bytes",
-                    raw_nsk.len()
-                )));
-            }
-            let mut arr = Zeroizing::new([0_u8; 32]);
-            arr.copy_from_slice(&raw_nsk);
-            arr
-        };
-
-        let vsk = {
-            if raw_vsk.len() != 64 {
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                    "expected 64-byte VSK from keycard, got {} bytes",
-                    raw_vsk.len()
-                )));
-            }
-            let mut arr = Zeroizing::new([0_u8; 64]);
-            arr.copy_from_slice(&raw_vsk);
-            arr
-        };
+        let nsk = zeroizing_fixed_bytes::<32>("nullifier secret key", Zeroizing::new(raw_nsk))?;
+        let vsk = zeroizing_fixed_bytes::<64>("view secret key", Zeroizing::new(raw_vsk))?;
 
         Ok((nsk, vsk))
     }
@@ -267,6 +215,51 @@ impl KeycardWallet {
             result
         })
     }
+}
+
+/// The keycard Python library strips leading zeros from S when S < 2^(8k) for some k.
+/// Left-pad S back to 32 bytes so the full signature is always 64 bytes (R || S).
+#[expect(
+    clippy::arithmetic_side_effects,
+    reason = "64 - s_stripped.len() is safe: s_stripped.len() ≤ 31 because py_signature.len() is in [32, 63]"
+)]
+fn normalize_keycard_signature(py_signature: Vec<u8>) -> PyResult<[u8; 64]> {
+    if py_signature.len() < 64 {
+        if py_signature.len() < 32 {
+            return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "signature from keycard too short: {} bytes",
+                py_signature.len()
+            )));
+        }
+        let s_stripped = &py_signature[32..];
+        let mut padded = [0_u8; 64];
+        padded[..32].copy_from_slice(&py_signature[..32]);
+        padded[(64 - s_stripped.len())..].copy_from_slice(s_stripped);
+        Ok(padded)
+    } else {
+        py_signature.try_into().map_err(|vec: Vec<u8>| {
+            PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+                "Invalid signature length: expected 64 bytes, got {} (bytes: {:02x?})",
+                vec.len(),
+                vec
+            ))
+        })
+    }
+}
+
+fn zeroizing_fixed_bytes<const N: usize>(
+    label: &str,
+    raw: Zeroizing<Vec<u8>>,
+) -> PyResult<Zeroizing<[u8; N]>> {
+    if raw.len() != N {
+        return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "expected {N}-byte {label} from keycard, got {} bytes",
+            raw.len()
+        )));
+    }
+    let mut arr = Zeroizing::new([0_u8; N]);
+    arr.copy_from_slice(&raw);
+    Ok(arr)
 }
 
 fn pairing_file_path() -> Option<PathBuf> {

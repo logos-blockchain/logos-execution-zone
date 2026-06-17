@@ -553,6 +553,32 @@ impl WalletCore {
         Ok(())
     }
 
+    pub(crate) async fn poll_and_finalize_public_transaction(
+        &mut self,
+        tx_hash: HashType,
+    ) -> Result<cli::SubcommandReturnValue> {
+        println!("Transaction hash is {tx_hash}");
+        let transfer_tx = self.poll_native_token_transfer(tx_hash).await?;
+        println!("Transaction data is {transfer_tx:?}");
+        self.store_persistent_data()?;
+        Ok(cli::SubcommandReturnValue::Empty)
+    }
+
+    /// Pass an empty slice when the recipient is foreign and no accounts need decoding.
+    pub(crate) async fn poll_and_finalize_pp_transaction(
+        &mut self,
+        tx_hash: HashType,
+        acc_decode_data: &[AccDecodeData],
+    ) -> Result<cli::SubcommandReturnValue> {
+        println!("Transaction hash is {tx_hash}");
+        let transfer_tx = self.poll_native_token_transfer(tx_hash).await?;
+        if let common::transaction::LeeTransaction::PrivacyPreserving(tx) = transfer_tx {
+            self.decode_insert_privacy_preserving_transaction_results(&tx, acc_decode_data)?;
+        }
+        self.store_persistent_data()?;
+        Ok(cli::SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
+    }
+
     pub async fn send_privacy_preserving_tx(
         &self,
         accounts: Vec<AccountIdentity>,

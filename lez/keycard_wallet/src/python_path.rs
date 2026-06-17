@@ -2,8 +2,7 @@ use std::{env, path::PathBuf};
 
 use pyo3::{prelude::*, types::PyList};
 
-/// Adds the project's `python/` directory and venv site-packages to Python's sys.path.
-pub fn add_python_path(py: Python<'_>) -> PyResult<()> {
+fn collect_python_paths() -> Vec<PathBuf> {
     let current_dir = env::current_dir().expect("Failed to get current working directory");
 
     let python_base = env::var("VIRTUAL_ENV")
@@ -11,7 +10,7 @@ pub fn add_python_path(py: Python<'_>) -> PyResult<()> {
         .and_then(|v| PathBuf::from(v).parent().map(PathBuf::from))
         .unwrap_or_else(|| current_dir.clone());
 
-    let mut paths_to_add: Vec<PathBuf> = vec![
+    let mut paths = vec![
         python_base
             .join("lez")
             .join("keycard_wallet")
@@ -23,24 +22,28 @@ pub fn add_python_path(py: Python<'_>) -> PyResult<()> {
             .join("keycard-py"),
     ];
 
-    // If a virtualenv is active, add its site-packages so that dependencies
-    // installed in the venv (e.g. smartcard, ecdsa) are importable by the
-    // pyo3 embedded interpreter, which does not inherit sys.path from the
-    // shell's `python3` executable.
+    // pyo3's embedded interpreter does not inherit sys.path from the shell,
+    // so venv site-packages must be added explicitly.
     if let Ok(venv) = env::var("VIRTUAL_ENV") {
         let lib = PathBuf::from(&venv).join("lib");
         if let Ok(entries) = std::fs::read_dir(&lib) {
             for entry in entries.flatten() {
                 let site_packages = entry.path().join("site-packages");
                 if site_packages.exists() {
-                    paths_to_add.push(site_packages);
+                    paths.push(site_packages);
                 }
             }
         }
     }
 
-    // Sanity check — warns early if a path doesn't exist
-    for path in &paths_to_add {
+    paths
+}
+
+/// Adds the project's `python/` directory and venv site-packages to Python's sys.path.
+pub fn add_python_path(py: Python<'_>) -> PyResult<()> {
+    let paths = collect_python_paths();
+
+    for path in &paths {
         if !path.exists() {
             log::info!("Warning: Python path does not exist: {}", path.display());
         }
@@ -50,10 +53,9 @@ pub fn add_python_path(py: Python<'_>) -> PyResult<()> {
     let binding = sys.getattr("path")?;
     let sys_path = binding.cast::<PyList>()?;
 
-    for path in &paths_to_add {
+    for path in &paths {
         let path_str = path.to_str().expect("Invalid path");
 
-        // Avoid duplicating the path
         let already_present = sys_path
             .iter()
             .any(|p| p.extract::<&str>().is_ok_and(|s| s == path_str));

@@ -1,6 +1,5 @@
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 use clap::Subcommand;
-use common::transaction::LeeTransaction;
 use lee::AccountId;
 
 use crate::{
@@ -110,6 +109,365 @@ pub enum TokenProgramAgnosticSubcommand {
     },
 }
 
+impl TokenProgramAgnosticSubcommand {
+    async fn handle_new(
+        definition_account_id: CliAccountMention,
+        supply_account_id: CliAccountMention,
+        name: String,
+        total_supply: u128,
+        wallet_core: &mut WalletCore,
+    ) -> Result<SubcommandReturnValue> {
+        let def_mention = definition_account_id.clone();
+        let sup_mention = supply_account_id.clone();
+        let definition_account_id = definition_account_id.resolve(wallet_core.storage())?;
+        let supply_account_id = supply_account_id.resolve(wallet_core.storage())?;
+        let underlying_subcommand = match (definition_account_id, supply_account_id) {
+            (AccountIdWithPrivacy::Public(_), AccountIdWithPrivacy::Public(_)) => {
+                TokenProgramSubcommand::Create(
+                    CreateNewTokenProgramSubcommand::NewPublicDefPublicSupp {
+                        definition_account_id: def_mention,
+                        supply_account_id: sup_mention,
+                        name,
+                        total_supply,
+                    },
+                )
+            }
+            (
+                AccountIdWithPrivacy::Public(definition_account_id),
+                AccountIdWithPrivacy::Private(supply_account_id),
+            ) => TokenProgramSubcommand::Create(
+                CreateNewTokenProgramSubcommand::NewPublicDefPrivateSupp {
+                    definition_account_id,
+                    supply_account_id,
+                    name,
+                    total_supply,
+                },
+            ),
+            (
+                AccountIdWithPrivacy::Private(definition_account_id),
+                AccountIdWithPrivacy::Private(supply_account_id),
+            ) => TokenProgramSubcommand::Create(
+                CreateNewTokenProgramSubcommand::NewPrivateDefPrivateSupp {
+                    definition_account_id,
+                    supply_account_id,
+                    name,
+                    total_supply,
+                },
+            ),
+            (
+                AccountIdWithPrivacy::Private(definition_account_id),
+                AccountIdWithPrivacy::Public(supply_account_id),
+            ) => TokenProgramSubcommand::Create(
+                CreateNewTokenProgramSubcommand::NewPrivateDefPublicSupp {
+                    definition_account_id,
+                    supply_account_id,
+                    name,
+                    total_supply,
+                },
+            ),
+        };
+
+        underlying_subcommand.handle_subcommand(wallet_core).await
+    }
+
+    fn route_send_owned(
+        from: AccountIdWithPrivacy,
+        to: AccountIdWithPrivacy,
+        from_mention: CliAccountMention,
+        to_mention: Option<CliAccountMention>,
+        amount: u128,
+    ) -> TokenProgramSubcommand {
+        match (from, to) {
+            (AccountIdWithPrivacy::Public(_), AccountIdWithPrivacy::Public(_)) => {
+                TokenProgramSubcommand::Public(TokenProgramSubcommandPublic::TransferToken {
+                    sender_account_id: from_mention,
+                    recipient_account_id: to_mention.expect("`wallet::cli::programs::token::Send`: Invalid to_mention account provided"),
+                    balance_to_move: amount,
+                })
+            }
+            (AccountIdWithPrivacy::Private(from), AccountIdWithPrivacy::Private(to)) => {
+                TokenProgramSubcommand::Private(
+                    TokenProgramSubcommandPrivate::TransferTokenPrivateOwned {
+                        sender_account_id: from,
+                        recipient_account_id: to,
+                        balance_to_move: amount,
+                    },
+                )
+            }
+            (AccountIdWithPrivacy::Private(from), AccountIdWithPrivacy::Public(to)) => {
+                TokenProgramSubcommand::Deshielded(
+                    TokenProgramSubcommandDeshielded::TransferTokenDeshielded {
+                        sender_account_id: from,
+                        recipient_account_id: to,
+                        balance_to_move: amount,
+                    },
+                )
+            }
+            (AccountIdWithPrivacy::Public(from), AccountIdWithPrivacy::Private(to)) => {
+                TokenProgramSubcommand::Shielded(
+                    TokenProgramSubcommandShielded::TransferTokenShieldedOwned {
+                        sender: Some(from_mention.into_public_identity(from)),
+                        recipient_account_id: to,
+                        balance_to_move: amount,
+                    },
+                )
+            }
+        }
+    }
+
+    fn route_send_foreign(
+        from: AccountIdWithPrivacy,
+        from_mention: CliAccountMention,
+        to_npk: String,
+        to_vpk: String,
+        to_identifier: Option<u128>,
+        amount: u128,
+    ) -> TokenProgramSubcommand {
+        match from {
+            AccountIdWithPrivacy::Private(from) => TokenProgramSubcommand::Private(
+                TokenProgramSubcommandPrivate::TransferTokenPrivateForeign {
+                    sender_account_id: from,
+                    recipient_npk: to_npk,
+                    recipient_vpk: to_vpk,
+                    recipient_identifier: to_identifier,
+                    balance_to_move: amount,
+                },
+            ),
+            AccountIdWithPrivacy::Public(from) => TokenProgramSubcommand::Shielded(
+                TokenProgramSubcommandShielded::TransferTokenShieldedForeign {
+                    sender: Some(from_mention.into_public_identity(from)),
+                    recipient_npk: to_npk,
+                    recipient_vpk: to_vpk,
+                    recipient_identifier: to_identifier,
+                    balance_to_move: amount,
+                },
+            ),
+        }
+    }
+
+    async fn handle_send(
+        from: CliAccountMention,
+        to: Option<CliAccountMention>,
+        to_npk: Option<String>,
+        to_vpk: Option<String>,
+        to_keys: Option<String>,
+        to_identifier: Option<u128>,
+        amount: u128,
+        wallet_core: &mut WalletCore,
+    ) -> Result<SubcommandReturnValue> {
+        let from_mention = from.clone();
+        let to_mention = to.clone();
+        let (to_npk, to_vpk) = if let Some(path) = to_keys {
+            let (npk_bytes, vpk_bytes) = crate::cli::read_keys_file(&path)?;
+            (Some(hex::encode(npk_bytes)), Some(hex::encode(vpk_bytes)))
+        } else {
+            (to_npk, to_vpk)
+        };
+
+        let from = from.resolve(wallet_core.storage())?;
+        let to = to
+            .map(|account_mention| account_mention.resolve(wallet_core.storage()))
+            .transpose()?;
+        let underlying_subcommand = match (to, to_npk, to_vpk) {
+            (None, None, None) => {
+                anyhow::bail!(
+                    "Provide either account account_id of receiver or their public keys"
+                );
+            }
+            (Some(_), Some(_), Some(_)) => {
+                anyhow::bail!(
+                    "Provide only one variant: either account account_id of receiver or their public keys"
+                );
+            }
+            (_, Some(_), None) | (_, None, Some(_)) => {
+                anyhow::bail!("List of public keys is uncomplete");
+            }
+            (Some(to), None, None) => {
+                Self::route_send_owned(from, to, from_mention, to_mention, amount)
+            }
+            (None, Some(to_npk), Some(to_vpk)) => {
+                Self::route_send_foreign(from, from_mention, to_npk, to_vpk, to_identifier, amount)
+            }
+        };
+
+        underlying_subcommand.handle_subcommand(wallet_core).await
+    }
+
+    async fn handle_burn(
+        definition: CliAccountMention,
+        holder: CliAccountMention,
+        amount: u128,
+        wallet_core: &mut WalletCore,
+    ) -> Result<SubcommandReturnValue> {
+        let holder_mention = holder.clone();
+        let definition = definition.resolve(wallet_core.storage())?;
+        let holder = holder.resolve(wallet_core.storage())?;
+        let underlying_subcommand = match (definition, holder) {
+            (AccountIdWithPrivacy::Public(definition), AccountIdWithPrivacy::Public(_)) => {
+                TokenProgramSubcommand::Public(TokenProgramSubcommandPublic::BurnToken {
+                    definition_account_id: definition,
+                    holder_account_id: holder_mention,
+                    amount,
+                })
+            }
+            (
+                AccountIdWithPrivacy::Private(definition),
+                AccountIdWithPrivacy::Private(holder),
+            ) => TokenProgramSubcommand::Private(
+                TokenProgramSubcommandPrivate::BurnTokenPrivateOwned {
+                    definition_account_id: definition,
+                    holder_account_id: holder,
+                    amount,
+                },
+            ),
+            (
+                AccountIdWithPrivacy::Private(definition),
+                AccountIdWithPrivacy::Public(holder),
+            ) => TokenProgramSubcommand::Deshielded(
+                TokenProgramSubcommandDeshielded::BurnTokenDeshieldedOwned {
+                    definition_account_id: definition,
+                    holder_account_id: holder,
+                    amount,
+                },
+            ),
+            (
+                AccountIdWithPrivacy::Public(definition),
+                AccountIdWithPrivacy::Private(holder),
+            ) => TokenProgramSubcommand::Shielded(
+                TokenProgramSubcommandShielded::BurnTokenShielded {
+                    definition_account_id: definition,
+                    holder_account_id: holder,
+                    amount,
+                },
+            ),
+        };
+
+        underlying_subcommand.handle_subcommand(wallet_core).await
+    }
+
+    fn route_mint_owned(
+        definition: AccountIdWithPrivacy,
+        holder: AccountIdWithPrivacy,
+        def_mention: CliAccountMention,
+        holder_mention: Option<CliAccountMention>,
+        amount: u128,
+    ) -> TokenProgramSubcommand {
+        match (definition, holder) {
+            (AccountIdWithPrivacy::Public(_), AccountIdWithPrivacy::Public(_)) => {
+                TokenProgramSubcommand::Public(TokenProgramSubcommandPublic::MintToken {
+                    definition_account_id: def_mention,
+                    holder_account_id: holder_mention.expect("`wallet::cli::programs::token::Mint`: Invalid holder_mention account provided"),
+                    amount,
+                })
+            }
+            (AccountIdWithPrivacy::Private(definition), AccountIdWithPrivacy::Private(holder)) => {
+                TokenProgramSubcommand::Private(
+                    TokenProgramSubcommandPrivate::MintTokenPrivateOwned {
+                        definition_account_id: definition,
+                        holder_account_id: holder,
+                        amount,
+                    },
+                )
+            }
+            (AccountIdWithPrivacy::Private(definition), AccountIdWithPrivacy::Public(holder)) => {
+                TokenProgramSubcommand::Deshielded(
+                    TokenProgramSubcommandDeshielded::MintTokenDeshielded {
+                        definition_account_id: definition,
+                        holder_account_id: holder,
+                        amount,
+                    },
+                )
+            }
+            (AccountIdWithPrivacy::Public(definition), AccountIdWithPrivacy::Private(holder)) => {
+                TokenProgramSubcommand::Shielded(
+                    TokenProgramSubcommandShielded::MintTokenShieldedOwned {
+                        definition_account_id: definition,
+                        holder_account_id: holder,
+                        amount,
+                    },
+                )
+            }
+        }
+    }
+
+    fn route_mint_foreign(
+        definition: AccountIdWithPrivacy,
+        holder_npk: String,
+        holder_vpk: String,
+        holder_identifier: Option<u128>,
+        amount: u128,
+    ) -> TokenProgramSubcommand {
+        match definition {
+            AccountIdWithPrivacy::Private(definition) => TokenProgramSubcommand::Private(
+                TokenProgramSubcommandPrivate::MintTokenPrivateForeign {
+                    definition_account_id: definition,
+                    holder_npk,
+                    holder_vpk,
+                    holder_identifier,
+                    amount,
+                },
+            ),
+            AccountIdWithPrivacy::Public(definition) => TokenProgramSubcommand::Shielded(
+                TokenProgramSubcommandShielded::MintTokenShieldedForeign {
+                    definition_account_id: definition,
+                    holder_npk,
+                    holder_vpk,
+                    holder_identifier,
+                    amount,
+                },
+            ),
+        }
+    }
+
+    async fn handle_mint(
+        definition: CliAccountMention,
+        holder: Option<CliAccountMention>,
+        holder_npk: Option<String>,
+        holder_vpk: Option<String>,
+        holder_keys: Option<String>,
+        holder_identifier: Option<u128>,
+        amount: u128,
+        wallet_core: &mut WalletCore,
+    ) -> Result<SubcommandReturnValue> {
+        let def_mention = definition.clone();
+        let holder_mention = holder.clone();
+        let (holder_npk, holder_vpk) = if let Some(path) = holder_keys {
+            let (npk_bytes, vpk_bytes) = crate::cli::read_keys_file(&path)?;
+            (Some(hex::encode(npk_bytes)), Some(hex::encode(vpk_bytes)))
+        } else {
+            (holder_npk, holder_vpk)
+        };
+
+        let definition = definition.resolve(wallet_core.storage())?;
+        let holder = holder
+            .map(|account_mention| account_mention.resolve(wallet_core.storage()))
+            .transpose()?;
+        let underlying_subcommand = match (holder, holder_npk, holder_vpk) {
+            (None, None, None) => {
+                anyhow::bail!(
+                    "Provide either account account_id of holder or their public keys"
+                );
+            }
+            (Some(_), Some(_), Some(_)) => {
+                anyhow::bail!(
+                    "Provide only one variant: either account_id of holder or their public keys"
+                );
+            }
+            (_, Some(_), None) | (_, None, Some(_)) => {
+                anyhow::bail!("List of public keys is uncomplete");
+            }
+            (Some(holder), None, None) => {
+                Self::route_mint_owned(definition, holder, def_mention, holder_mention, amount)
+            }
+            (None, Some(holder_npk), Some(holder_vpk)) => {
+                Self::route_mint_foreign(definition, holder_npk, holder_vpk, holder_identifier, amount)
+            }
+        };
+
+        underlying_subcommand.handle_subcommand(wallet_core).await
+    }
+}
+
 impl WalletSubcommand for TokenProgramAgnosticSubcommand {
     async fn handle_subcommand(
         self,
@@ -122,57 +480,14 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                 name,
                 total_supply,
             } => {
-                let def_mention = definition_account_id.clone();
-                let sup_mention = supply_account_id.clone();
-                let definition_account_id = definition_account_id.resolve(wallet_core.storage())?;
-                let supply_account_id = supply_account_id.resolve(wallet_core.storage())?;
-                let underlying_subcommand = match (definition_account_id, supply_account_id) {
-                    (AccountIdWithPrivacy::Public(_), AccountIdWithPrivacy::Public(_)) => {
-                        TokenProgramSubcommand::Create(
-                            CreateNewTokenProgramSubcommand::NewPublicDefPublicSupp {
-                                definition_account_id: def_mention,
-                                supply_account_id: sup_mention,
-                                name,
-                                total_supply,
-                            },
-                        )
-                    }
-                    (
-                        AccountIdWithPrivacy::Public(definition_account_id),
-                        AccountIdWithPrivacy::Private(supply_account_id),
-                    ) => TokenProgramSubcommand::Create(
-                        CreateNewTokenProgramSubcommand::NewPublicDefPrivateSupp {
-                            definition_account_id,
-                            supply_account_id,
-                            name,
-                            total_supply,
-                        },
-                    ),
-                    (
-                        AccountIdWithPrivacy::Private(definition_account_id),
-                        AccountIdWithPrivacy::Private(supply_account_id),
-                    ) => TokenProgramSubcommand::Create(
-                        CreateNewTokenProgramSubcommand::NewPrivateDefPrivateSupp {
-                            definition_account_id,
-                            supply_account_id,
-                            name,
-                            total_supply,
-                        },
-                    ),
-                    (
-                        AccountIdWithPrivacy::Private(definition_account_id),
-                        AccountIdWithPrivacy::Public(supply_account_id),
-                    ) => TokenProgramSubcommand::Create(
-                        CreateNewTokenProgramSubcommand::NewPrivateDefPublicSupp {
-                            definition_account_id,
-                            supply_account_id,
-                            name,
-                            total_supply,
-                        },
-                    ),
-                };
-
-                underlying_subcommand.handle_subcommand(wallet_core).await
+                Self::handle_new(
+                    definition_account_id,
+                    supply_account_id,
+                    name,
+                    total_supply,
+                    wallet_core,
+                )
+                .await
             }
             Self::Send {
                 from,
@@ -183,146 +498,16 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                 to_identifier,
                 amount,
             } => {
-                let from_mention = from.clone();
-                let to_mention = to.clone();
-                let (to_npk, to_vpk) = if let Some(path) = to_keys {
-                    let (npk_bytes, vpk_bytes) = crate::cli::read_keys_file(&path)?;
-                    (Some(hex::encode(npk_bytes)), Some(hex::encode(vpk_bytes)))
-                } else {
-                    (to_npk, to_vpk)
-                };
-
-                let from = from.resolve(wallet_core.storage())?;
-                let to = to
-                    .map(|account_mention| account_mention.resolve(wallet_core.storage()))
-                    .transpose()?;
-                let underlying_subcommand = match (to, to_npk, to_vpk) {
-                    (None, None, None) => {
-                        anyhow::bail!(
-                            "Provide either account account_id of receiver or their public keys"
-                        );
-                    }
-                    (Some(_), Some(_), Some(_)) => {
-                        anyhow::bail!(
-                            "Provide only one variant: either account account_id of receiver or their public keys"
-                        );
-                    }
-                    (_, Some(_), None) | (_, None, Some(_)) => {
-                        anyhow::bail!("List of public keys is uncomplete");
-                    }
-                    (Some(to), None, None) => match (from, to) {
-                        (AccountIdWithPrivacy::Public(_), AccountIdWithPrivacy::Public(_)) => {
-                            TokenProgramSubcommand::Public(
-                                TokenProgramSubcommandPublic::TransferToken {
-                                    sender_account_id: from_mention,
-                                    recipient_account_id: to_mention.expect("`wallet::cli::programs::token::Send`: Invalid to_mention account provided"),
-                                    balance_to_move: amount,
-                                },
-                            )
-                        }
-                        (
-                            AccountIdWithPrivacy::Private(from),
-                            AccountIdWithPrivacy::Private(to),
-                        ) => TokenProgramSubcommand::Private(
-                            TokenProgramSubcommandPrivate::TransferTokenPrivateOwned {
-                                sender_account_id: from,
-                                recipient_account_id: to,
-                                balance_to_move: amount,
-                            },
-                        ),
-                        (AccountIdWithPrivacy::Private(from), AccountIdWithPrivacy::Public(to)) => {
-                            TokenProgramSubcommand::Deshielded(
-                                TokenProgramSubcommandDeshielded::TransferTokenDeshielded {
-                                    sender_account_id: from,
-                                    recipient_account_id: to,
-                                    balance_to_move: amount,
-                                },
-                            )
-                        }
-                        (AccountIdWithPrivacy::Public(from), AccountIdWithPrivacy::Private(to)) => {
-                            TokenProgramSubcommand::Shielded(
-                                TokenProgramSubcommandShielded::TransferTokenShieldedOwned {
-                                    sender: Some(from_mention.into_public_identity(from)),
-                                    recipient_account_id: to,
-                                    balance_to_move: amount,
-                                },
-                            )
-                        }
-                    },
-                    (None, Some(to_npk), Some(to_vpk)) => match from {
-                        AccountIdWithPrivacy::Private(from) => TokenProgramSubcommand::Private(
-                            TokenProgramSubcommandPrivate::TransferTokenPrivateForeign {
-                                sender_account_id: from,
-                                recipient_npk: to_npk,
-                                recipient_vpk: to_vpk,
-                                recipient_identifier: to_identifier,
-                                balance_to_move: amount,
-                            },
-                        ),
-                        AccountIdWithPrivacy::Public(from) => TokenProgramSubcommand::Shielded(
-                            TokenProgramSubcommandShielded::TransferTokenShieldedForeign {
-                                sender: Some(from_mention.into_public_identity(from)),
-                                recipient_npk: to_npk,
-                                recipient_vpk: to_vpk,
-                                recipient_identifier: to_identifier,
-                                balance_to_move: amount,
-                            },
-                        ),
-                    },
-                };
-
-                underlying_subcommand.handle_subcommand(wallet_core).await
+                Self::handle_send(
+                    from, to, to_npk, to_vpk, to_keys, to_identifier, amount, wallet_core,
+                )
+                .await
             }
             Self::Burn {
                 definition,
                 holder,
                 amount,
-            } => {
-                let holder_mention = holder.clone();
-                let definition = definition.resolve(wallet_core.storage())?;
-                let holder = holder.resolve(wallet_core.storage())?;
-                let underlying_subcommand = match (definition, holder) {
-                    (AccountIdWithPrivacy::Public(definition), AccountIdWithPrivacy::Public(_)) => {
-                        TokenProgramSubcommand::Public(TokenProgramSubcommandPublic::BurnToken {
-                            definition_account_id: definition,
-                            holder_account_id: holder_mention,
-                            amount,
-                        })
-                    }
-                    (
-                        AccountIdWithPrivacy::Private(definition),
-                        AccountIdWithPrivacy::Private(holder),
-                    ) => TokenProgramSubcommand::Private(
-                        TokenProgramSubcommandPrivate::BurnTokenPrivateOwned {
-                            definition_account_id: definition,
-                            holder_account_id: holder,
-                            amount,
-                        },
-                    ),
-                    (
-                        AccountIdWithPrivacy::Private(definition),
-                        AccountIdWithPrivacy::Public(holder),
-                    ) => TokenProgramSubcommand::Deshielded(
-                        TokenProgramSubcommandDeshielded::BurnTokenDeshieldedOwned {
-                            definition_account_id: definition,
-                            holder_account_id: holder,
-                            amount,
-                        },
-                    ),
-                    (
-                        AccountIdWithPrivacy::Public(definition),
-                        AccountIdWithPrivacy::Private(holder),
-                    ) => TokenProgramSubcommand::Shielded(
-                        TokenProgramSubcommandShielded::BurnTokenShielded {
-                            definition_account_id: definition,
-                            holder_account_id: holder,
-                            amount,
-                        },
-                    ),
-                };
-
-                underlying_subcommand.handle_subcommand(wallet_core).await
-            }
+            } => Self::handle_burn(definition, holder, amount, wallet_core).await,
             Self::Mint {
                 definition,
                 holder,
@@ -332,101 +517,17 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                 holder_identifier,
                 amount,
             } => {
-                let def_mention = definition.clone();
-                let holder_mention = holder.clone();
-                let (holder_npk, holder_vpk) = if let Some(path) = holder_keys {
-                    let (npk_bytes, vpk_bytes) = crate::cli::read_keys_file(&path)?;
-                    (Some(hex::encode(npk_bytes)), Some(hex::encode(vpk_bytes)))
-                } else {
-                    (holder_npk, holder_vpk)
-                };
-
-                let definition = definition.resolve(wallet_core.storage())?;
-                let holder = holder
-                    .map(|account_mention| account_mention.resolve(wallet_core.storage()))
-                    .transpose()?;
-                let underlying_subcommand = match (holder, holder_npk, holder_vpk) {
-                    (None, None, None) => {
-                        anyhow::bail!(
-                            "Provide either account account_id of holder or their public keys"
-                        );
-                    }
-                    (Some(_), Some(_), Some(_)) => {
-                        anyhow::bail!(
-                            "Provide only one variant: either account_id of holder or their public keys"
-                        );
-                    }
-                    (_, Some(_), None) | (_, None, Some(_)) => {
-                        anyhow::bail!("List of public keys is uncomplete");
-                    }
-                    (Some(holder), None, None) => match (definition, holder) {
-                        (AccountIdWithPrivacy::Public(_), AccountIdWithPrivacy::Public(_)) => {
-                            TokenProgramSubcommand::Public(
-                                TokenProgramSubcommandPublic::MintToken {
-                                    definition_account_id: def_mention,
-                                    holder_account_id: holder_mention.expect("`wallet::cli::programs::token::Mint`: Invalid holder_mention account provided"),
-                                    amount,
-                                },
-                            )
-                        }
-                        (
-                            AccountIdWithPrivacy::Private(definition),
-                            AccountIdWithPrivacy::Private(holder),
-                        ) => TokenProgramSubcommand::Private(
-                            TokenProgramSubcommandPrivate::MintTokenPrivateOwned {
-                                definition_account_id: definition,
-                                holder_account_id: holder,
-                                amount,
-                            },
-                        ),
-                        (
-                            AccountIdWithPrivacy::Private(definition),
-                            AccountIdWithPrivacy::Public(holder),
-                        ) => TokenProgramSubcommand::Deshielded(
-                            TokenProgramSubcommandDeshielded::MintTokenDeshielded {
-                                definition_account_id: definition,
-                                holder_account_id: holder,
-                                amount,
-                            },
-                        ),
-                        (
-                            AccountIdWithPrivacy::Public(definition),
-                            AccountIdWithPrivacy::Private(holder),
-                        ) => TokenProgramSubcommand::Shielded(
-                            TokenProgramSubcommandShielded::MintTokenShieldedOwned {
-                                definition_account_id: definition,
-                                holder_account_id: holder,
-                                amount,
-                            },
-                        ),
-                    },
-                    (None, Some(holder_npk), Some(holder_vpk)) => match definition {
-                        AccountIdWithPrivacy::Private(definition) => {
-                            TokenProgramSubcommand::Private(
-                                TokenProgramSubcommandPrivate::MintTokenPrivateForeign {
-                                    definition_account_id: definition,
-                                    holder_npk,
-                                    holder_vpk,
-                                    holder_identifier,
-                                    amount,
-                                },
-                            )
-                        }
-                        AccountIdWithPrivacy::Public(definition) => {
-                            TokenProgramSubcommand::Shielded(
-                                TokenProgramSubcommandShielded::MintTokenShieldedForeign {
-                                    definition_account_id: definition,
-                                    holder_npk,
-                                    holder_vpk,
-                                    holder_identifier,
-                                    amount,
-                                },
-                            )
-                        }
-                    },
-                };
-
-                underlying_subcommand.handle_subcommand(wallet_core).await
+                Self::handle_mint(
+                    definition,
+                    holder,
+                    holder_npk,
+                    holder_vpk,
+                    holder_keys,
+                    holder_identifier,
+                    amount,
+                    wallet_core,
+                )
+                .await
             }
         }
     }
@@ -697,6 +798,88 @@ pub enum CreateNewTokenProgramSubcommand {
     },
 }
 
+impl TokenProgramSubcommandPublic {
+    async fn handle_transfer_token(
+        sender_account_id: CliAccountMention,
+        recipient_account_id: CliAccountMention,
+        balance_to_move: u128,
+        wallet_core: &mut WalletCore,
+    ) -> Result<SubcommandReturnValue> {
+        let sender = sender_account_id.resolve(wallet_core.storage())?;
+        let recipient = recipient_account_id.resolve(wallet_core.storage())?;
+        let (
+            AccountIdWithPrivacy::Public(sender_id),
+            AccountIdWithPrivacy::Public(recipient_id),
+        ) = (sender, recipient)
+        else {
+            anyhow::bail!(
+                "`TokenProgramSubcommandPublic::TransferToken`: Unexpected private account received."
+            );
+        };
+        let tx_hash = Token(wallet_core)
+            .send_transfer_transaction(
+                sender_account_id.into_public_identity(sender_id),
+                recipient_account_id.into_public_identity(recipient_id),
+                balance_to_move,
+            )
+            .await?;
+        wallet_core
+            .poll_and_finalize_public_transaction(tx_hash)
+            .await
+    }
+
+    async fn handle_burn_token(
+        definition_account_id: AccountId,
+        holder_account_id: CliAccountMention,
+        amount: u128,
+        wallet_core: &mut WalletCore,
+    ) -> Result<SubcommandReturnValue> {
+        let holder = holder_account_id.resolve(wallet_core.storage())?;
+        let AccountIdWithPrivacy::Public(holder_id) = holder else {
+            anyhow::bail!(
+                "`TokenProgramSubcommandPublic::BurnToken`: holder account must be public."
+            );
+        };
+        let tx_hash = Token(wallet_core)
+            .send_burn_transaction(
+                definition_account_id,
+                holder_account_id.into_public_identity(holder_id),
+                amount,
+            )
+            .await?;
+        wallet_core
+            .poll_and_finalize_public_transaction(tx_hash)
+            .await
+    }
+
+    async fn handle_mint_token(
+        definition_account_id: CliAccountMention,
+        holder_account_id: CliAccountMention,
+        amount: u128,
+        wallet_core: &mut WalletCore,
+    ) -> Result<SubcommandReturnValue> {
+        let definition = definition_account_id.resolve(wallet_core.storage())?;
+        let holder = holder_account_id.resolve(wallet_core.storage())?;
+        let (AccountIdWithPrivacy::Public(def_id), AccountIdWithPrivacy::Public(holder_id)) =
+            (definition, holder)
+        else {
+            anyhow::bail!(
+                "`TokenProgramSubcommandPublic::MintToken`: holder account must be public."
+            );
+        };
+        let tx_hash = Token(wallet_core)
+            .send_mint_transaction(
+                definition_account_id.into_public_identity(def_id),
+                holder_account_id.into_public_identity(holder_id),
+                amount,
+            )
+            .await?;
+        wallet_core
+            .poll_and_finalize_public_transaction(tx_hash)
+            .await
+    }
+}
+
 impl WalletSubcommand for TokenProgramSubcommandPublic {
     async fn handle_subcommand(
         self,
@@ -708,82 +891,155 @@ impl WalletSubcommand for TokenProgramSubcommandPublic {
                 recipient_account_id,
                 balance_to_move,
             } => {
-                let sender = sender_account_id.resolve(wallet_core.storage())?;
-                let recipient = recipient_account_id.resolve(wallet_core.storage())?;
-                let (
-                    AccountIdWithPrivacy::Public(sender_id),
-                    AccountIdWithPrivacy::Public(recipient_id),
-                ) = (sender, recipient)
-                else {
-                    anyhow::bail!(
-                        "`TokenProgramSubcommandPublic::TransferToken`: Unexpected private account received."
-                    );
-                };
-                let tx_hash = Token(wallet_core)
-                    .send_transfer_transaction(
-                        sender_account_id.into_public_identity(sender_id),
-                        recipient_account_id.into_public_identity(recipient_id),
-                        balance_to_move,
-                    )
-                    .await?;
-                println!("Transaction hash is {tx_hash}");
-                let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
-                println!("Transaction data is {transfer_tx:?}");
-                wallet_core.store_persistent_data()?;
-                Ok(SubcommandReturnValue::Empty)
+                Self::handle_transfer_token(
+                    sender_account_id,
+                    recipient_account_id,
+                    balance_to_move,
+                    wallet_core,
+                )
+                .await
             }
             Self::BurnToken {
                 definition_account_id,
                 holder_account_id,
                 amount,
             } => {
-                let holder = holder_account_id.resolve(wallet_core.storage())?;
-                let AccountIdWithPrivacy::Public(holder_id) = holder else {
-                    anyhow::bail!(
-                        "`TokenProgramSubcommandPublic::BurnToken`: holder account must be public."
-                    );
-                };
-                let tx_hash = Token(wallet_core)
-                    .send_burn_transaction(
-                        definition_account_id,
-                        holder_account_id.into_public_identity(holder_id),
-                        amount,
-                    )
-                    .await?;
-                println!("Transaction hash is {tx_hash}");
-                let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
-                println!("Transaction data is {transfer_tx:?}");
-                wallet_core.store_persistent_data()?;
-                Ok(SubcommandReturnValue::Empty)
+                Self::handle_burn_token(definition_account_id, holder_account_id, amount, wallet_core)
+                    .await
             }
             Self::MintToken {
                 definition_account_id,
                 holder_account_id,
                 amount,
             } => {
-                let definition = definition_account_id.resolve(wallet_core.storage())?;
-                let holder = holder_account_id.resolve(wallet_core.storage())?;
-                let (AccountIdWithPrivacy::Public(def_id), AccountIdWithPrivacy::Public(holder_id)) =
-                    (definition, holder)
-                else {
-                    anyhow::bail!(
-                        "`TokenProgramSubcommandPublic::MintToken`: holder account must be public."
-                    );
-                };
-                let tx_hash = Token(wallet_core)
-                    .send_mint_transaction(
-                        definition_account_id.into_public_identity(def_id),
-                        holder_account_id.into_public_identity(holder_id),
-                        amount,
-                    )
-                    .await?;
-                println!("Transaction hash is {tx_hash}");
-                let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
-                println!("Transaction data is {transfer_tx:?}");
-                wallet_core.store_persistent_data()?;
-                Ok(SubcommandReturnValue::Empty)
+                Self::handle_mint_token(definition_account_id, holder_account_id, amount, wallet_core)
+                    .await
             }
         }
+    }
+}
+
+impl TokenProgramSubcommandPrivate {
+    async fn handle_transfer_token_private_owned(
+        sender_account_id: AccountId,
+        recipient_account_id: AccountId,
+        balance_to_move: u128,
+        wallet_core: &mut WalletCore,
+    ) -> Result<SubcommandReturnValue> {
+        let (tx_hash, [secret_sender, secret_recipient]) = Token(wallet_core)
+            .send_transfer_transaction_private_owned_account(
+                sender_account_id,
+                recipient_account_id,
+                balance_to_move,
+            )
+            .await?;
+
+        wallet_core
+            .poll_and_finalize_pp_transaction(tx_hash, &[
+                Decode(secret_sender, sender_account_id),
+                Decode(secret_recipient, recipient_account_id),
+            ])
+            .await
+    }
+
+    async fn handle_transfer_token_private_foreign(
+        sender_account_id: AccountId,
+        recipient_npk: String,
+        recipient_vpk: String,
+        recipient_identifier: Option<u128>,
+        balance_to_move: u128,
+        wallet_core: &mut WalletCore,
+    ) -> Result<SubcommandReturnValue> {
+        let (recipient_npk, recipient_vpk) =
+            crate::cli::decode_npk_vpk(&recipient_npk, &recipient_vpk)?;
+
+        let (tx_hash, [secret_sender, _]) = Token(wallet_core)
+            .send_transfer_transaction_private_foreign_account(
+                sender_account_id,
+                recipient_npk,
+                recipient_vpk,
+                recipient_identifier.unwrap_or_else(rand::random),
+                balance_to_move,
+            )
+            .await?;
+
+        wallet_core
+            .poll_and_finalize_pp_transaction(tx_hash, &[
+                Decode(secret_sender, sender_account_id),
+            ])
+            .await
+    }
+
+    async fn handle_burn_token_private_owned(
+        definition_account_id: AccountId,
+        holder_account_id: AccountId,
+        amount: u128,
+        wallet_core: &mut WalletCore,
+    ) -> Result<SubcommandReturnValue> {
+        let (tx_hash, [secret_definition, secret_holder]) = Token(wallet_core)
+            .send_burn_transaction_private_owned_account(
+                definition_account_id,
+                holder_account_id,
+                amount,
+            )
+            .await?;
+
+        wallet_core
+            .poll_and_finalize_pp_transaction(tx_hash, &[
+                Decode(secret_definition, definition_account_id),
+                Decode(secret_holder, holder_account_id),
+            ])
+            .await
+    }
+
+    async fn handle_mint_token_private_owned(
+        definition_account_id: AccountId,
+        holder_account_id: AccountId,
+        amount: u128,
+        wallet_core: &mut WalletCore,
+    ) -> Result<SubcommandReturnValue> {
+        let (tx_hash, [secret_definition, secret_holder]) = Token(wallet_core)
+            .send_mint_transaction_private_owned_account(
+                definition_account_id,
+                holder_account_id,
+                amount,
+            )
+            .await?;
+
+        wallet_core
+            .poll_and_finalize_pp_transaction(tx_hash, &[
+                Decode(secret_definition, definition_account_id),
+                Decode(secret_holder, holder_account_id),
+            ])
+            .await
+    }
+
+    async fn handle_mint_token_private_foreign(
+        definition_account_id: AccountId,
+        holder_npk: String,
+        holder_vpk: String,
+        holder_identifier: Option<u128>,
+        amount: u128,
+        wallet_core: &mut WalletCore,
+    ) -> Result<SubcommandReturnValue> {
+        let (holder_npk, holder_vpk) =
+            crate::cli::decode_npk_vpk(&holder_npk, &holder_vpk)?;
+
+        let (tx_hash, [secret_definition, _]) = Token(wallet_core)
+            .send_mint_transaction_private_foreign_account(
+                definition_account_id,
+                holder_npk,
+                holder_vpk,
+                holder_identifier.unwrap_or_else(rand::random),
+                amount,
+            )
+            .await?;
+
+        wallet_core
+            .poll_and_finalize_pp_transaction(tx_hash, &[
+                Decode(secret_definition, definition_account_id),
+            ])
+            .await
     }
 }
 
@@ -798,33 +1054,13 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                 recipient_account_id,
                 balance_to_move,
             } => {
-                let (tx_hash, [secret_sender, secret_recipient]) = Token(wallet_core)
-                    .send_transfer_transaction_private_owned_account(
-                        sender_account_id,
-                        recipient_account_id,
-                        balance_to_move,
-                    )
-                    .await?;
-
-                println!("Transaction hash is {tx_hash}");
-
-                let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
-
-                if let LeeTransaction::PrivacyPreserving(tx) = transfer_tx {
-                    let acc_decode_data = vec![
-                        Decode(secret_sender, sender_account_id),
-                        Decode(secret_recipient, recipient_account_id),
-                    ];
-
-                    wallet_core.decode_insert_privacy_preserving_transaction_results(
-                        &tx,
-                        &acc_decode_data,
-                    )?;
-                }
-
-                wallet_core.store_persistent_data()?;
-
-                Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
+                Self::handle_transfer_token_private_owned(
+                    sender_account_id,
+                    recipient_account_id,
+                    balance_to_move,
+                    wallet_core,
+                )
+                .await
             }
             Self::TransferTokenPrivateForeign {
                 sender_account_id,
@@ -833,110 +1069,41 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                 recipient_identifier,
                 balance_to_move,
             } => {
-                let recipient_npk_res = hex::decode(recipient_npk)?;
-                let mut recipient_npk = [0; 32];
-                recipient_npk.copy_from_slice(&recipient_npk_res);
-                let recipient_npk = lee_core::NullifierPublicKey(recipient_npk);
-
-                let recipient_vpk_res = hex::decode(&recipient_vpk).context(
-                    "wallet::cli::programs::token: recipient_vpk must be a valid hex string",
-                )?;
-                let recipient_vpk =
-                    lee_core::encryption::ViewingPublicKey::from_bytes(recipient_vpk_res)
-                        .map_err(|e| anyhow::anyhow!("{e}"))?;
-
-                let (tx_hash, [secret_sender, _]) = Token(wallet_core)
-                    .send_transfer_transaction_private_foreign_account(
-                        sender_account_id,
-                        recipient_npk,
-                        recipient_vpk,
-                        recipient_identifier.unwrap_or_else(rand::random),
-                        balance_to_move,
-                    )
-                    .await?;
-
-                println!("Transaction hash is {tx_hash}");
-
-                let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
-
-                if let LeeTransaction::PrivacyPreserving(tx) = transfer_tx {
-                    let acc_decode_data = vec![Decode(secret_sender, sender_account_id)];
-
-                    wallet_core.decode_insert_privacy_preserving_transaction_results(
-                        &tx,
-                        &acc_decode_data,
-                    )?;
-                }
-
-                wallet_core.store_persistent_data()?;
-
-                Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
+                Self::handle_transfer_token_private_foreign(
+                    sender_account_id,
+                    recipient_npk,
+                    recipient_vpk,
+                    recipient_identifier,
+                    balance_to_move,
+                    wallet_core,
+                )
+                .await
             }
             Self::BurnTokenPrivateOwned {
                 definition_account_id,
                 holder_account_id,
                 amount,
             } => {
-                let (tx_hash, [secret_definition, secret_holder]) = Token(wallet_core)
-                    .send_burn_transaction_private_owned_account(
-                        definition_account_id,
-                        holder_account_id,
-                        amount,
-                    )
-                    .await?;
-
-                println!("Transaction hash is {tx_hash}");
-
-                let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
-
-                if let LeeTransaction::PrivacyPreserving(tx) = transfer_tx {
-                    let acc_decode_data = vec![
-                        Decode(secret_definition, definition_account_id),
-                        Decode(secret_holder, holder_account_id),
-                    ];
-
-                    wallet_core.decode_insert_privacy_preserving_transaction_results(
-                        &tx,
-                        &acc_decode_data,
-                    )?;
-                }
-
-                wallet_core.store_persistent_data()?;
-
-                Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
+                Self::handle_burn_token_private_owned(
+                    definition_account_id,
+                    holder_account_id,
+                    amount,
+                    wallet_core,
+                )
+                .await
             }
             Self::MintTokenPrivateOwned {
                 definition_account_id,
                 holder_account_id,
                 amount,
             } => {
-                let (tx_hash, [secret_definition, secret_holder]) = Token(wallet_core)
-                    .send_mint_transaction_private_owned_account(
-                        definition_account_id,
-                        holder_account_id,
-                        amount,
-                    )
-                    .await?;
-
-                println!("Transaction hash is {tx_hash}");
-
-                let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
-
-                if let LeeTransaction::PrivacyPreserving(tx) = transfer_tx {
-                    let acc_decode_data = vec![
-                        Decode(secret_definition, definition_account_id),
-                        Decode(secret_holder, holder_account_id),
-                    ];
-
-                    wallet_core.decode_insert_privacy_preserving_transaction_results(
-                        &tx,
-                        &acc_decode_data,
-                    )?;
-                }
-
-                wallet_core.store_persistent_data()?;
-
-                Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
+                Self::handle_mint_token_private_owned(
+                    definition_account_id,
+                    holder_account_id,
+                    amount,
+                    wallet_core,
+                )
+                .await
             }
             Self::MintTokenPrivateForeign {
                 definition_account_id,
@@ -945,45 +1112,82 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                 holder_identifier,
                 amount,
             } => {
-                let holder_npk_res = hex::decode(holder_npk)?;
-                let mut holder_npk = [0; 32];
-                holder_npk.copy_from_slice(&holder_npk_res);
-                let holder_npk = lee_core::NullifierPublicKey(holder_npk);
-
-                let holder_vpk_res = hex::decode(&holder_vpk).context(
-                    "wallet::cli::programs::token: holder_vpk must be a valid hex string",
-                )?;
-                let holder_vpk = lee_core::encryption::ViewingPublicKey::from_bytes(holder_vpk_res)
-                    .map_err(|e| anyhow::anyhow!("{e}"))?;
-
-                let (tx_hash, [secret_definition, _]) = Token(wallet_core)
-                    .send_mint_transaction_private_foreign_account(
-                        definition_account_id,
-                        holder_npk,
-                        holder_vpk,
-                        holder_identifier.unwrap_or_else(rand::random),
-                        amount,
-                    )
-                    .await?;
-
-                println!("Transaction hash is {tx_hash}");
-
-                let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
-
-                if let LeeTransaction::PrivacyPreserving(tx) = transfer_tx {
-                    let acc_decode_data = vec![Decode(secret_definition, definition_account_id)];
-
-                    wallet_core.decode_insert_privacy_preserving_transaction_results(
-                        &tx,
-                        &acc_decode_data,
-                    )?;
-                }
-
-                wallet_core.store_persistent_data()?;
-
-                Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
+                Self::handle_mint_token_private_foreign(
+                    definition_account_id,
+                    holder_npk,
+                    holder_vpk,
+                    holder_identifier,
+                    amount,
+                    wallet_core,
+                )
+                .await
             }
         }
+    }
+}
+
+impl TokenProgramSubcommandDeshielded {
+    async fn handle_transfer_token_deshielded(
+        sender_account_id: AccountId,
+        recipient_account_id: AccountId,
+        balance_to_move: u128,
+        wallet_core: &mut WalletCore,
+    ) -> Result<SubcommandReturnValue> {
+        let (tx_hash, secret_sender) = Token(wallet_core)
+            .send_transfer_transaction_deshielded(
+                sender_account_id,
+                recipient_account_id,
+                balance_to_move,
+            )
+            .await?;
+
+        wallet_core
+            .poll_and_finalize_pp_transaction(tx_hash, &[
+                Decode(secret_sender, sender_account_id),
+            ])
+            .await
+    }
+
+    async fn handle_burn_token_deshielded_owned(
+        definition_account_id: AccountId,
+        holder_account_id: AccountId,
+        amount: u128,
+        wallet_core: &mut WalletCore,
+    ) -> Result<SubcommandReturnValue> {
+        let (tx_hash, secret_definition) = Token(wallet_core)
+            .send_burn_transaction_deshielded_owned_account(
+                definition_account_id,
+                holder_account_id,
+                amount,
+            )
+            .await?;
+
+        wallet_core
+            .poll_and_finalize_pp_transaction(tx_hash, &[
+                Decode(secret_definition, definition_account_id),
+            ])
+            .await
+    }
+
+    async fn handle_mint_token_deshielded(
+        definition_account_id: AccountId,
+        holder_account_id: AccountId,
+        amount: u128,
+        wallet_core: &mut WalletCore,
+    ) -> Result<SubcommandReturnValue> {
+        let (tx_hash, secret_definition) = Token(wallet_core)
+            .send_mint_transaction_deshielded(
+                definition_account_id,
+                holder_account_id,
+                amount,
+            )
+            .await?;
+
+        wallet_core
+            .poll_and_finalize_pp_transaction(tx_hash, &[
+                Decode(secret_definition, definition_account_id),
+            ])
+            .await
     }
 }
 
@@ -998,92 +1202,158 @@ impl WalletSubcommand for TokenProgramSubcommandDeshielded {
                 recipient_account_id,
                 balance_to_move,
             } => {
-                let (tx_hash, secret_sender) = Token(wallet_core)
-                    .send_transfer_transaction_deshielded(
-                        sender_account_id,
-                        recipient_account_id,
-                        balance_to_move,
-                    )
-                    .await?;
-
-                println!("Transaction hash is {tx_hash}");
-
-                let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
-
-                if let LeeTransaction::PrivacyPreserving(tx) = transfer_tx {
-                    let acc_decode_data = vec![Decode(secret_sender, sender_account_id)];
-
-                    wallet_core.decode_insert_privacy_preserving_transaction_results(
-                        &tx,
-                        &acc_decode_data,
-                    )?;
-                }
-
-                wallet_core.store_persistent_data()?;
-
-                Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
+                Self::handle_transfer_token_deshielded(
+                    sender_account_id,
+                    recipient_account_id,
+                    balance_to_move,
+                    wallet_core,
+                )
+                .await
             }
             Self::BurnTokenDeshieldedOwned {
                 definition_account_id,
                 holder_account_id,
                 amount,
             } => {
-                let (tx_hash, secret_definition) = Token(wallet_core)
-                    .send_burn_transaction_deshielded_owned_account(
-                        definition_account_id,
-                        holder_account_id,
-                        amount,
-                    )
-                    .await?;
-
-                println!("Transaction hash is {tx_hash}");
-
-                let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
-
-                if let LeeTransaction::PrivacyPreserving(tx) = transfer_tx {
-                    let acc_decode_data = vec![Decode(secret_definition, definition_account_id)];
-
-                    wallet_core.decode_insert_privacy_preserving_transaction_results(
-                        &tx,
-                        &acc_decode_data,
-                    )?;
-                }
-
-                wallet_core.store_persistent_data()?;
-
-                Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
+                Self::handle_burn_token_deshielded_owned(
+                    definition_account_id,
+                    holder_account_id,
+                    amount,
+                    wallet_core,
+                )
+                .await
             }
             Self::MintTokenDeshielded {
                 definition_account_id,
                 holder_account_id,
                 amount,
             } => {
-                let (tx_hash, secret_definition) = Token(wallet_core)
-                    .send_mint_transaction_deshielded(
-                        definition_account_id,
-                        holder_account_id,
-                        amount,
-                    )
-                    .await?;
-
-                println!("Transaction hash is {tx_hash}");
-
-                let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
-
-                if let LeeTransaction::PrivacyPreserving(tx) = transfer_tx {
-                    let acc_decode_data = vec![Decode(secret_definition, definition_account_id)];
-
-                    wallet_core.decode_insert_privacy_preserving_transaction_results(
-                        &tx,
-                        &acc_decode_data,
-                    )?;
-                }
-
-                wallet_core.store_persistent_data()?;
-
-                Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
+                Self::handle_mint_token_deshielded(
+                    definition_account_id,
+                    holder_account_id,
+                    amount,
+                    wallet_core,
+                )
+                .await
             }
         }
+    }
+}
+
+impl TokenProgramSubcommandShielded {
+    async fn handle_transfer_token_shielded_foreign(
+        sender: Option<AccountIdentity>,
+        recipient_npk: String,
+        recipient_vpk: String,
+        recipient_identifier: Option<u128>,
+        balance_to_move: u128,
+        wallet_core: &mut WalletCore,
+    ) -> Result<SubcommandReturnValue> {
+        let (recipient_npk, recipient_vpk) =
+            crate::cli::decode_npk_vpk(&recipient_npk, &recipient_vpk)?;
+
+        let (tx_hash, _) = Token(wallet_core)
+            .send_transfer_transaction_shielded_foreign_account(
+                sender.expect("sender set during Send dispatch"),
+                recipient_npk,
+                recipient_vpk,
+                recipient_identifier.unwrap_or_else(rand::random),
+                balance_to_move,
+            )
+            .await?;
+
+        wallet_core
+            .poll_and_finalize_pp_transaction(tx_hash, &[])
+            .await
+    }
+
+    async fn handle_transfer_token_shielded_owned(
+        sender: Option<AccountIdentity>,
+        recipient_account_id: AccountId,
+        balance_to_move: u128,
+        wallet_core: &mut WalletCore,
+    ) -> Result<SubcommandReturnValue> {
+        let (tx_hash, secret_recipient) = Token(wallet_core)
+            .send_transfer_transaction_shielded_owned_account(
+                sender.expect("sender set during Send dispatch"),
+                recipient_account_id,
+                balance_to_move,
+            )
+            .await?;
+
+        wallet_core
+            .poll_and_finalize_pp_transaction(tx_hash, &[
+                Decode(secret_recipient, recipient_account_id),
+            ])
+            .await
+    }
+
+    async fn handle_burn_token_shielded(
+        definition_account_id: AccountId,
+        holder_account_id: AccountId,
+        amount: u128,
+        wallet_core: &mut WalletCore,
+    ) -> Result<SubcommandReturnValue> {
+        let (tx_hash, secret_holder) = Token(wallet_core)
+            .send_burn_transaction_shielded(
+                definition_account_id,
+                holder_account_id,
+                amount,
+            )
+            .await?;
+
+        wallet_core
+            .poll_and_finalize_pp_transaction(tx_hash, &[
+                Decode(secret_holder, holder_account_id),
+            ])
+            .await
+    }
+
+    async fn handle_mint_token_shielded_owned(
+        definition_account_id: AccountId,
+        holder_account_id: AccountId,
+        amount: u128,
+        wallet_core: &mut WalletCore,
+    ) -> Result<SubcommandReturnValue> {
+        let (tx_hash, secret_holder) = Token(wallet_core)
+            .send_mint_transaction_shielded_owned_account(
+                definition_account_id,
+                holder_account_id,
+                amount,
+            )
+            .await?;
+
+        wallet_core
+            .poll_and_finalize_pp_transaction(tx_hash, &[
+                Decode(secret_holder, holder_account_id),
+            ])
+            .await
+    }
+
+    async fn handle_mint_token_shielded_foreign(
+        definition_account_id: AccountId,
+        holder_npk: String,
+        holder_vpk: String,
+        holder_identifier: Option<u128>,
+        amount: u128,
+        wallet_core: &mut WalletCore,
+    ) -> Result<SubcommandReturnValue> {
+        let (holder_npk, holder_vpk) =
+            crate::cli::decode_npk_vpk(&holder_npk, &holder_vpk)?;
+
+        let (tx_hash, _) = Token(wallet_core)
+            .send_mint_transaction_shielded_foreign_account(
+                definition_account_id,
+                holder_npk,
+                holder_vpk,
+                holder_identifier.unwrap_or_else(rand::random),
+                amount,
+            )
+            .await?;
+
+        wallet_core
+            .poll_and_finalize_pp_transaction(tx_hash, &[])
+            .await
     }
 }
 
@@ -1100,129 +1370,54 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                 recipient_identifier,
                 balance_to_move,
             } => {
-                let recipient_npk_res = hex::decode(recipient_npk)?;
-                let mut recipient_npk = [0; 32];
-                recipient_npk.copy_from_slice(&recipient_npk_res);
-                let recipient_npk = lee_core::NullifierPublicKey(recipient_npk);
-
-                let recipient_vpk_res = hex::decode(&recipient_vpk).context(
-                    "wallet::cli::programs::token: recipient_vpk must be a valid hex string",
-                )?;
-                let recipient_vpk =
-                    lee_core::encryption::ViewingPublicKey::from_bytes(recipient_vpk_res)
-                        .map_err(|e| anyhow::anyhow!("{e}"))?;
-
-                let (tx_hash, _) = Token(wallet_core)
-                    .send_transfer_transaction_shielded_foreign_account(
-                        sender.expect("sender set during Send dispatch"),
-                        recipient_npk,
-                        recipient_vpk,
-                        recipient_identifier.unwrap_or_else(rand::random),
-                        balance_to_move,
-                    )
-                    .await?;
-
-                println!("Transaction hash is {tx_hash}");
-
-                let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
-
-                if let LeeTransaction::PrivacyPreserving(tx) = transfer_tx {
-                    println!("Transaction data is {:?}", tx.message);
-                }
-
-                wallet_core.store_persistent_data()?;
-
-                Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
+                Self::handle_transfer_token_shielded_foreign(
+                    sender,
+                    recipient_npk,
+                    recipient_vpk,
+                    recipient_identifier,
+                    balance_to_move,
+                    wallet_core,
+                )
+                .await
             }
             Self::TransferTokenShieldedOwned {
                 sender,
                 recipient_account_id,
                 balance_to_move,
             } => {
-                let (tx_hash, secret_recipient) = Token(wallet_core)
-                    .send_transfer_transaction_shielded_owned_account(
-                        sender.expect("sender set during Send dispatch"),
-                        recipient_account_id,
-                        balance_to_move,
-                    )
-                    .await?;
-
-                println!("Transaction hash is {tx_hash}");
-
-                let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
-
-                if let LeeTransaction::PrivacyPreserving(tx) = transfer_tx {
-                    let acc_decode_data = vec![Decode(secret_recipient, recipient_account_id)];
-
-                    wallet_core.decode_insert_privacy_preserving_transaction_results(
-                        &tx,
-                        &acc_decode_data,
-                    )?;
-                }
-
-                wallet_core.store_persistent_data()?;
-
-                Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
+                Self::handle_transfer_token_shielded_owned(
+                    sender,
+                    recipient_account_id,
+                    balance_to_move,
+                    wallet_core,
+                )
+                .await
             }
             Self::BurnTokenShielded {
                 definition_account_id,
                 holder_account_id,
                 amount,
             } => {
-                let (tx_hash, secret_holder) = Token(wallet_core)
-                    .send_burn_transaction_shielded(
-                        definition_account_id,
-                        holder_account_id,
-                        amount,
-                    )
-                    .await?;
-
-                println!("Transaction hash is {tx_hash}");
-
-                let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
-
-                if let LeeTransaction::PrivacyPreserving(tx) = transfer_tx {
-                    let acc_decode_data = vec![Decode(secret_holder, holder_account_id)];
-
-                    wallet_core.decode_insert_privacy_preserving_transaction_results(
-                        &tx,
-                        &acc_decode_data,
-                    )?;
-                }
-
-                wallet_core.store_persistent_data()?;
-
-                Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
+                Self::handle_burn_token_shielded(
+                    definition_account_id,
+                    holder_account_id,
+                    amount,
+                    wallet_core,
+                )
+                .await
             }
             Self::MintTokenShieldedOwned {
                 definition_account_id,
                 holder_account_id,
                 amount,
             } => {
-                let (tx_hash, secret_holder) = Token(wallet_core)
-                    .send_mint_transaction_shielded_owned_account(
-                        definition_account_id,
-                        holder_account_id,
-                        amount,
-                    )
-                    .await?;
-
-                println!("Transaction hash is {tx_hash}");
-
-                let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
-
-                if let LeeTransaction::PrivacyPreserving(tx) = transfer_tx {
-                    let acc_decode_data = vec![Decode(secret_holder, holder_account_id)];
-
-                    wallet_core.decode_insert_privacy_preserving_transaction_results(
-                        &tx,
-                        &acc_decode_data,
-                    )?;
-                }
-
-                wallet_core.store_persistent_data()?;
-
-                Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
+                Self::handle_mint_token_shielded_owned(
+                    definition_account_id,
+                    holder_account_id,
+                    amount,
+                    wallet_core,
+                )
+                .await
             }
             Self::MintTokenShieldedForeign {
                 definition_account_id,
@@ -1231,40 +1426,116 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                 holder_identifier,
                 amount,
             } => {
-                let holder_npk_res = hex::decode(holder_npk)?;
-                let mut holder_npk = [0; 32];
-                holder_npk.copy_from_slice(&holder_npk_res);
-                let holder_npk = lee_core::NullifierPublicKey(holder_npk);
-
-                let holder_vpk_res = hex::decode(&holder_vpk).context(
-                    "wallet::cli::programs::token: holder_vpk must be a valid hex string",
-                )?;
-                let holder_vpk = lee_core::encryption::ViewingPublicKey::from_bytes(holder_vpk_res)
-                    .map_err(|e| anyhow::anyhow!("{e}"))?;
-
-                let (tx_hash, _) = Token(wallet_core)
-                    .send_mint_transaction_shielded_foreign_account(
-                        definition_account_id,
-                        holder_npk,
-                        holder_vpk,
-                        holder_identifier.unwrap_or_else(rand::random),
-                        amount,
-                    )
-                    .await?;
-
-                println!("Transaction hash is {tx_hash}");
-
-                let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
-
-                if let LeeTransaction::PrivacyPreserving(tx) = transfer_tx {
-                    println!("Transaction data is {:?}", tx.message);
-                }
-
-                wallet_core.store_persistent_data()?;
-
-                Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
+                Self::handle_mint_token_shielded_foreign(
+                    definition_account_id,
+                    holder_npk,
+                    holder_vpk,
+                    holder_identifier,
+                    amount,
+                    wallet_core,
+                )
+                .await
             }
         }
+    }
+}
+
+impl CreateNewTokenProgramSubcommand {
+    async fn handle_new_private_def_private_supp(
+        definition_account_id: AccountId,
+        supply_account_id: AccountId,
+        name: String,
+        total_supply: u128,
+        wallet_core: &mut WalletCore,
+    ) -> Result<SubcommandReturnValue> {
+        let (tx_hash, [secret_definition, secret_supply]) = Token(wallet_core)
+            .send_new_definition_private_owned_definiton_and_supply(
+                definition_account_id,
+                supply_account_id,
+                name,
+                total_supply,
+            )
+            .await?;
+
+        wallet_core
+            .poll_and_finalize_pp_transaction(tx_hash, &[
+                Decode(secret_definition, definition_account_id),
+                Decode(secret_supply, supply_account_id),
+            ])
+            .await
+    }
+
+    async fn handle_new_private_def_public_supp(
+        definition_account_id: AccountId,
+        supply_account_id: AccountId,
+        name: String,
+        total_supply: u128,
+        wallet_core: &mut WalletCore,
+    ) -> Result<SubcommandReturnValue> {
+        let (tx_hash, secret_definition) = Token(wallet_core)
+            .send_new_definition_private_owned_definiton(
+                definition_account_id,
+                supply_account_id,
+                name,
+                total_supply,
+            )
+            .await?;
+
+        wallet_core
+            .poll_and_finalize_pp_transaction(tx_hash, &[
+                Decode(secret_definition, definition_account_id),
+            ])
+            .await
+    }
+
+    async fn handle_new_public_def_private_supp(
+        definition_account_id: AccountId,
+        supply_account_id: AccountId,
+        name: String,
+        total_supply: u128,
+        wallet_core: &mut WalletCore,
+    ) -> Result<SubcommandReturnValue> {
+        let (tx_hash, secret_supply) = Token(wallet_core)
+            .send_new_definition_private_owned_supply(
+                definition_account_id,
+                supply_account_id,
+                name,
+                total_supply,
+            )
+            .await?;
+
+        wallet_core
+            .poll_and_finalize_pp_transaction(tx_hash, &[
+                Decode(secret_supply, supply_account_id),
+            ])
+            .await
+    }
+
+    async fn handle_new_public_def_public_supp(
+        definition_account_id: CliAccountMention,
+        supply_account_id: CliAccountMention,
+        name: String,
+        total_supply: u128,
+        wallet_core: &mut WalletCore,
+    ) -> Result<SubcommandReturnValue> {
+        let definition = definition_account_id.resolve(wallet_core.storage())?;
+        let supply = supply_account_id.resolve(wallet_core.storage())?;
+        let (AccountIdWithPrivacy::Public(def_id), AccountIdWithPrivacy::Public(sup_id)) =
+            (definition, supply)
+        else {
+            anyhow::bail!("`NewPublicDefPublicSupp`: unexpected private account received.");
+        };
+        let tx_hash = Token(wallet_core)
+            .send_new_definition(
+                definition_account_id.into_public_identity(def_id),
+                supply_account_id.into_public_identity(sup_id),
+                name,
+                total_supply,
+            )
+            .await?;
+        wallet_core
+            .poll_and_finalize_public_transaction(tx_hash)
+            .await
     }
 }
 
@@ -1280,34 +1551,14 @@ impl WalletSubcommand for CreateNewTokenProgramSubcommand {
                 name,
                 total_supply,
             } => {
-                let (tx_hash, [secret_definition, secret_supply]) = Token(wallet_core)
-                    .send_new_definition_private_owned_definiton_and_supply(
-                        definition_account_id,
-                        supply_account_id,
-                        name,
-                        total_supply,
-                    )
-                    .await?;
-
-                println!("Transaction hash is {tx_hash}");
-
-                let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
-
-                if let LeeTransaction::PrivacyPreserving(tx) = transfer_tx {
-                    let acc_decode_data = vec![
-                        Decode(secret_definition, definition_account_id),
-                        Decode(secret_supply, supply_account_id),
-                    ];
-
-                    wallet_core.decode_insert_privacy_preserving_transaction_results(
-                        &tx,
-                        &acc_decode_data,
-                    )?;
-                }
-
-                wallet_core.store_persistent_data()?;
-
-                Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
+                Self::handle_new_private_def_private_supp(
+                    definition_account_id,
+                    supply_account_id,
+                    name,
+                    total_supply,
+                    wallet_core,
+                )
+                .await
             }
             Self::NewPrivateDefPublicSupp {
                 definition_account_id,
@@ -1315,31 +1566,14 @@ impl WalletSubcommand for CreateNewTokenProgramSubcommand {
                 name,
                 total_supply,
             } => {
-                let (tx_hash, secret_definition) = Token(wallet_core)
-                    .send_new_definition_private_owned_definiton(
-                        definition_account_id,
-                        supply_account_id,
-                        name,
-                        total_supply,
-                    )
-                    .await?;
-
-                println!("Transaction hash is {tx_hash}");
-
-                let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
-
-                if let LeeTransaction::PrivacyPreserving(tx) = transfer_tx {
-                    let acc_decode_data = vec![Decode(secret_definition, definition_account_id)];
-
-                    wallet_core.decode_insert_privacy_preserving_transaction_results(
-                        &tx,
-                        &acc_decode_data,
-                    )?;
-                }
-
-                wallet_core.store_persistent_data()?;
-
-                Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
+                Self::handle_new_private_def_public_supp(
+                    definition_account_id,
+                    supply_account_id,
+                    name,
+                    total_supply,
+                    wallet_core,
+                )
+                .await
             }
             Self::NewPublicDefPrivateSupp {
                 definition_account_id,
@@ -1347,31 +1581,14 @@ impl WalletSubcommand for CreateNewTokenProgramSubcommand {
                 name,
                 total_supply,
             } => {
-                let (tx_hash, secret_supply) = Token(wallet_core)
-                    .send_new_definition_private_owned_supply(
-                        definition_account_id,
-                        supply_account_id,
-                        name,
-                        total_supply,
-                    )
-                    .await?;
-
-                println!("Transaction hash is {tx_hash}");
-
-                let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
-
-                if let LeeTransaction::PrivacyPreserving(tx) = transfer_tx {
-                    let acc_decode_data = vec![Decode(secret_supply, supply_account_id)];
-
-                    wallet_core.decode_insert_privacy_preserving_transaction_results(
-                        &tx,
-                        &acc_decode_data,
-                    )?;
-                }
-
-                wallet_core.store_persistent_data()?;
-
-                Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
+                Self::handle_new_public_def_private_supp(
+                    definition_account_id,
+                    supply_account_id,
+                    name,
+                    total_supply,
+                    wallet_core,
+                )
+                .await
             }
             Self::NewPublicDefPublicSupp {
                 definition_account_id,
@@ -1379,26 +1596,14 @@ impl WalletSubcommand for CreateNewTokenProgramSubcommand {
                 name,
                 total_supply,
             } => {
-                let definition = definition_account_id.resolve(wallet_core.storage())?;
-                let supply = supply_account_id.resolve(wallet_core.storage())?;
-                let (AccountIdWithPrivacy::Public(def_id), AccountIdWithPrivacy::Public(sup_id)) =
-                    (definition, supply)
-                else {
-                    anyhow::bail!("`NewPublicDefPublicSupp`: unexpected private account received.");
-                };
-                let tx_hash = Token(wallet_core)
-                    .send_new_definition(
-                        definition_account_id.into_public_identity(def_id),
-                        supply_account_id.into_public_identity(sup_id),
-                        name,
-                        total_supply,
-                    )
-                    .await?;
-                println!("Transaction hash is {tx_hash}");
-                let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
-                println!("Transaction data is {transfer_tx:?}");
-                wallet_core.store_persistent_data()?;
-                Ok(SubcommandReturnValue::Empty)
+                Self::handle_new_public_def_public_supp(
+                    definition_account_id,
+                    supply_account_id,
+                    name,
+                    total_supply,
+                    wallet_core,
+                )
+                .await
             }
         }
     }
