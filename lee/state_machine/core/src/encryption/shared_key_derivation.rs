@@ -64,7 +64,7 @@ impl SharedSecretKey {
         let ek_bytes: ml_kem::kem::Key<ml_kem::EncapsulationKey768> =
             ek.0.as_slice()
                 .try_into()
-                .expect("MlKem768EncapsulationKey must be 1184 bytes");
+                .expect("MlKem768EncapsulationKey must be MlKem768EncapsulationKey::LEN bytes");
         let ek_obj = ml_kem::EncapsulationKey768::new(&ek_bytes).expect(
             "MlKem768EncapsulationKey bytes must encode a valid ML-KEM-768 encapsulation key",
         );
@@ -104,7 +104,7 @@ impl SharedSecretKey {
         let ek_bytes: ml_kem::kem::Key<ml_kem::EncapsulationKey768> =
             ek.0.as_slice()
                 .try_into()
-                .expect("MlKem768EncapsulationKey must be 1184 bytes");
+                .expect("MlKem768EncapsulationKey must be MlKem768EncapsulationKey::LEN bytes");
         let ek_obj = ml_kem::EncapsulationKey768::new(&ek_bytes).expect(
             "MlKem768EncapsulationKey bytes must encode a valid ML-KEM-768 encapsulation key",
         );
@@ -118,7 +118,7 @@ impl SharedSecretKey {
 
     /// Receiver: decapsulate the shared secret from a KEM ciphertext.
     ///
-    /// Returns `None` if the `EphemeralPublicKey` is not exactly 1088 bytes — callers on
+    /// Returns `None` if the `EphemeralPublicKey` is not exactly [`ML_KEM_768_CIPHERTEXT_LEN`] bytes — callers on
     /// the wallet scan path should skip the output rather than panic on malformed chain data.
     ///
     /// `d` and `z` are the two 32-byte halves of the FIPS 203 `ViewingSecretKey` seed.
@@ -168,12 +168,12 @@ mod tests {
         assert_eq!(
             epk.0.len(),
             ML_KEM_768_CIPHERTEXT_LEN,
-            "ML-KEM-768 ciphertext is 1088 bytes"
+            "ML-KEM-768 ciphertext length"
         );
         assert_eq!(
             ek.0.len(),
-            1184,
-            "ML-KEM-768 encapsulation key is 1184 bytes"
+            MlKem768EncapsulationKey::LEN,
+            "ML-KEM-768 encapsulation key length"
         );
     }
 
@@ -182,14 +182,14 @@ mod tests {
         let d = [1_u8; 32];
         let z = [2_u8; 32];
 
-        // Too short — 100 bytes instead of 1088.
+        // Too short — 100 bytes instead of ML_KEM_768_CIPHERTEXT_LEN.
         let short_epk = EphemeralPublicKey(vec![42_u8; 100]);
         assert!(
             SharedSecretKey::decapsulate(&short_epk, &d, &z).is_none(),
             "short EphemeralPublicKey must return None"
         );
 
-        // Too long — 1089 bytes instead of 1088.
+        // Too long — ML_KEM_768_CIPHERTEXT_LEN + 1.
         let long_epk = EphemeralPublicKey(vec![42_u8; ML_KEM_768_CIPHERTEXT_LEN + 1]);
         assert!(
             SharedSecretKey::decapsulate(&long_epk, &d, &z).is_none(),

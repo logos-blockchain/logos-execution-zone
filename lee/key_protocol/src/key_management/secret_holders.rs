@@ -153,7 +153,7 @@ impl From<&ViewingSecretKey> for ViewingPublicKey {
         seed_bytes[32..].copy_from_slice(&sk.z);
         let dk = <MlKem768 as Kem>::DecapsulationKey::from_seed(Seed::from(seed_bytes));
         Self::from_bytes(dk.encapsulation_key().to_bytes().to_vec())
-            .expect("key_protocol::secret_holders::From<&ViewingSecretKey>: ML-KEM-768 encapsulation key is always 1184 bytes")
+            .expect("key_protocol::secret_holders::From<&ViewingSecretKey>: ML-KEM-768 encapsulation key is always ViewingPublicKey::LEN bytes")
     }
 }
 

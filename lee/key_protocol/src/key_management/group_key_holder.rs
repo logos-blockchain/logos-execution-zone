@@ -150,7 +150,7 @@ impl GroupKeyHolder {
     ///
     /// Uses ML-KEM-768 encapsulation to derive a shared secret, then AES-256-GCM to encrypt
     /// the payload. The returned bytes are
-    /// `kem_ciphertext (1088) || nonce (12) || ciphertext+tag (48)` = 1148 bytes.
+    /// `kem_ciphertext (ML_KEM_768_CIPHERTEXT_LEN) || nonce (12) || ciphertext+tag (48)`.
     ///
     /// Each call generates a fresh KEM encapsulation, so two seals of the same holder produce
     /// different ciphertexts.
@@ -186,7 +186,7 @@ impl GroupKeyHolder {
     /// Returns `Err` if the ciphertext is too short or the AES-GCM authentication tag
     /// doesn't verify (wrong key or tampered data).
     pub fn unseal(sealed: &[u8], own_key: &SealingSecretKey) -> Result<Self, SealError> {
-        // kem_ciphertext (1088) + nonce (12) = header, then AES-GCM tag (16) minimum.
+        // kem_ciphertext (ML_KEM_768_CIPHERTEXT_LEN) + nonce (12) = header, then AES-GCM tag (16) minimum.
         const HEADER_LEN: usize = ML_KEM_768_CIPHERTEXT_LEN + 12;
         const MIN_LEN: usize = HEADER_LEN + 16;
 
