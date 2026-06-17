@@ -227,23 +227,25 @@ impl AccountManager {
                     }
                     prepare_public_keycard_state(wallet, account_id, key_path).await?
                 }
-                AccountIdentity::PrivateOwned(account_id) => {
-                    State::Private(private_key_tree_acc_preparation(wallet, account_id, false).await?)
-                }
+                AccountIdentity::PrivateOwned(account_id) => State::Private(
+                    private_key_tree_acc_preparation(wallet, account_id, false).await?,
+                ),
                 AccountIdentity::PrivateForeign {
                     npk,
                     vpk,
                     identifier,
                 } => State::Private(private_foreign_acc_preparation(npk, vpk, identifier)),
-                AccountIdentity::PrivatePdaOwned(account_id) => {
-                    State::Private(private_key_tree_acc_preparation(wallet, account_id, true).await?)
-                }
+                AccountIdentity::PrivatePdaOwned(account_id) => State::Private(
+                    private_key_tree_acc_preparation(wallet, account_id, true).await?,
+                ),
                 AccountIdentity::PrivatePdaForeign {
                     account_id,
                     npk,
                     vpk,
                     identifier,
-                } => State::Private(private_pda_foreign_acc_preparation(account_id, npk, vpk, identifier)),
+                } => State::Private(private_pda_foreign_acc_preparation(
+                    account_id, npk, vpk, identifier,
+                )),
                 AccountIdentity::PrivateShared {
                     nsk,
                     npk,
@@ -252,7 +254,10 @@ impl AccountManager {
                 } => {
                     let account_id = lee::AccountId::from((&npk, identifier));
                     State::Private(
-                        private_shared_acc_preparation(wallet, account_id, nsk, npk, vpk, identifier, false).await?,
+                        private_shared_acc_preparation(
+                            wallet, account_id, nsk, npk, vpk, identifier, false,
+                        )
+                        .await?,
                     )
                 }
                 AccountIdentity::PrivatePdaShared {
@@ -262,7 +267,10 @@ impl AccountManager {
                     vpk,
                     identifier,
                 } => State::Private(
-                    private_shared_acc_preparation(wallet, account_id, nsk, npk, vpk, identifier, true).await?,
+                    private_shared_acc_preparation(
+                        wallet, account_id, nsk, npk, vpk, identifier, true,
+                    )
+                    .await?,
                 ),
             };
 
@@ -480,7 +488,7 @@ async fn prepare_public_state(
     } else {
         None
     };
-    let account = AccountWithMetadata::new(acc.clone(), sk.is_some(), account_id);
+    let account = AccountWithMetadata::new(acc, sk.is_some(), account_id);
     Ok(State::Public { account, sk })
 }
 
@@ -493,7 +501,7 @@ async fn prepare_public_keycard_state(
         .get_account_public(account_id)
         .await
         .map_err(ExecutionFailureKind::SequencerError)?;
-    let account = AccountWithMetadata::new(acc.clone(), true, account_id);
+    let account = AccountWithMetadata::new(acc, true, account_id);
     Ok(State::PublicKeycard { account, key_path })
 }
 

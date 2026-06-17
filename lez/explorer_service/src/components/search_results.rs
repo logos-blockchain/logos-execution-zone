@@ -5,10 +5,6 @@ use crate::api::SearchResults;
 
 /// Search results view component
 #[component]
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "Leptos component props are passed by value by framework convention"
-)]
 pub fn SearchResultsView(results: SearchResults) -> impl IntoView {
     let SearchResults {
         blocks,

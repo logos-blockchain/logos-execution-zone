@@ -4,8 +4,10 @@ use indexer_service_protocol::{HashType, Transaction};
 use leptos::prelude::*;
 use leptos_router::hooks::use_params_map;
 
-use crate::api;
-use crate::components::{PrivacyPreservingTxDetails, ProgramDeploymentTxDetails, PublicTxDetails};
+use crate::{
+    api,
+    components::{PrivacyPreservingTxDetails, ProgramDeploymentTxDetails, PublicTxDetails},
+};
 
 /// Transaction page component
 #[component]

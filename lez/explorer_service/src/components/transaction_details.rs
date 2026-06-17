@@ -8,10 +8,6 @@ use super::AccountNonceList;
 
 /// Public transaction details component
 #[component]
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "Leptos component props are passed by value by framework convention"
-)]
 pub fn PublicTxDetails(tx: PublicTransaction) -> impl IntoView {
     let PublicTransaction {
         hash: _,
@@ -65,10 +61,6 @@ pub fn PublicTxDetails(tx: PublicTransaction) -> impl IntoView {
 
 /// Privacy-preserving transaction details component
 #[component]
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "Leptos component props are passed by value by framework convention"
-)]
 pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl IntoView {
     let PrivacyPreservingTransaction {
         hash: _,
@@ -137,15 +129,8 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
 
 /// Program deployment transaction details component
 #[component]
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "Leptos component props are passed by value by framework convention"
-)]
 pub fn ProgramDeploymentTxDetails(tx: ProgramDeploymentTransaction) -> impl IntoView {
-    let ProgramDeploymentTransaction {
-        hash: _,
-        message,
-    } = tx;
+    let ProgramDeploymentTransaction { hash: _, message } = tx;
     let ProgramDeploymentMessage { bytecode } = message;
 
     let bytecode_len = bytecode.len();

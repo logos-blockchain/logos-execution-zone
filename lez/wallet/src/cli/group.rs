@@ -50,11 +50,11 @@ pub enum GroupSubcommand {
 }
 
 impl GroupSubcommand {
-    async fn handle_new(name: Label, wallet_core: &mut WalletCore) -> Result<SubcommandReturnValue> {
+    fn handle_new(name: &Label, wallet_core: &mut WalletCore) -> Result<SubcommandReturnValue> {
         if wallet_core
             .storage()
             .key_chain()
-            .group_key_holder(&name)
+            .group_key_holder(name)
             .is_some()
         {
             anyhow::bail!("Group '{name}' already exists");
@@ -68,7 +68,7 @@ impl GroupSubcommand {
         Ok(SubcommandReturnValue::Empty)
     }
 
-    async fn handle_list(wallet_core: &mut WalletCore) -> Result<SubcommandReturnValue> {
+    fn handle_list(wallet_core: &WalletCore) -> SubcommandReturnValue {
         let mut empty = true;
         let holders_iter = wallet_core.storage().key_chain().group_key_holders_iter();
         for (name, _) in holders_iter {
@@ -78,11 +78,11 @@ impl GroupSubcommand {
         if empty {
             println!("No groups found");
         }
-        Ok(SubcommandReturnValue::Empty)
+        SubcommandReturnValue::Empty
     }
 
-    async fn handle_remove(name: Label, wallet_core: &mut WalletCore) -> Result<SubcommandReturnValue> {
-        if wallet_core.remove_group_key_holder(&name).is_none() {
+    fn handle_remove(name: &Label, wallet_core: &mut WalletCore) -> Result<SubcommandReturnValue> {
+        if wallet_core.remove_group_key_holder(name).is_none() {
             anyhow::bail!("Group '{name}' not found");
         }
 
@@ -91,37 +91,35 @@ impl GroupSubcommand {
         Ok(SubcommandReturnValue::Empty)
     }
 
-    async fn handle_invite(
-        name: Label,
-        key: String,
-        wallet_core: &mut WalletCore,
+    fn handle_invite(
+        name: &Label,
+        key: &str,
+        wallet_core: &WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let holder = wallet_core
             .storage()
             .key_chain()
-            .group_key_holder(&name)
+            .group_key_holder(name)
             .context(format!("Group '{name}' not found"))?;
 
-        let key_bytes = hex::decode(&key).context("Invalid key hex")?;
+        let key_bytes = hex::decode(key).context("Invalid key hex")?;
         let recipient_key =
-            key_protocol::key_management::group_key_holder::SealingPublicKey::from_bytes(
-                key_bytes,
-            );
+            key_protocol::key_management::group_key_holder::SealingPublicKey::from_bytes(key_bytes);
 
         let sealed = holder.seal_for(&recipient_key);
         println!("{}", hex::encode(&sealed));
         Ok(SubcommandReturnValue::Empty)
     }
 
-    async fn handle_join(
-        name: Label,
-        sealed: String,
+    fn handle_join(
+        name: &Label,
+        sealed: &str,
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         if wallet_core
             .storage()
             .key_chain()
-            .group_key_holder(&name)
+            .group_key_holder(name)
             .is_some()
         {
             anyhow::bail!("Group '{name}' already exists");
@@ -133,7 +131,7 @@ impl GroupSubcommand {
             .sealing_secret_key()
             .context("No sealing key found. Run 'wallet group new-sealing-key' first.")?;
 
-        let sealed_bytes = hex::decode(&sealed).context("Invalid sealed hex")?;
+        let sealed_bytes = hex::decode(sealed).context("Invalid sealed hex")?;
 
         let holder = GroupKeyHolder::unseal(&sealed_bytes, sealing_key)
             .map_err(|e| anyhow::anyhow!("Failed to unseal: {e:?}"))?;
@@ -145,7 +143,7 @@ impl GroupSubcommand {
         Ok(SubcommandReturnValue::Empty)
     }
 
-    async fn handle_new_sealing_key(wallet_core: &mut WalletCore) -> Result<SubcommandReturnValue> {
+    fn handle_new_sealing_key(wallet_core: &mut WalletCore) -> Result<SubcommandReturnValue> {
         if wallet_core
             .storage()
             .key_chain()
@@ -181,12 +179,12 @@ impl WalletSubcommand for GroupSubcommand {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         match self {
-            Self::New { name } => Self::handle_new(name, wallet_core).await,
-            Self::List => Self::handle_list(wallet_core).await,
-            Self::Remove { name } => Self::handle_remove(name, wallet_core).await,
-            Self::Invite { name, key } => Self::handle_invite(name, key, wallet_core).await,
-            Self::Join { name, sealed } => Self::handle_join(name, sealed, wallet_core).await,
-            Self::NewSealingKey => Self::handle_new_sealing_key(wallet_core).await,
+            Self::New { name } => Self::handle_new(&name, wallet_core),
+            Self::List => Ok(Self::handle_list(wallet_core)),
+            Self::Remove { name } => Self::handle_remove(&name, wallet_core),
+            Self::Invite { name, key } => Self::handle_invite(&name, &key, wallet_core),
+            Self::Join { name, sealed } => Self::handle_join(&name, &sealed, wallet_core),
+            Self::NewSealingKey => Self::handle_new_sealing_key(wallet_core),
         }
     }
 }

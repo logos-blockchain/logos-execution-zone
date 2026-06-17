@@ -554,7 +554,7 @@ impl WalletCore {
     }
 
     pub(crate) async fn poll_and_finalize_public_transaction(
-        &mut self,
+        &self,
         tx_hash: HashType,
     ) -> Result<cli::SubcommandReturnValue> {
         println!("Transaction hash is {tx_hash}");

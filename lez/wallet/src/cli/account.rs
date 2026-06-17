@@ -126,7 +126,7 @@ pub enum NewSubcommand {
 }
 
 impl NewSubcommand {
-    async fn handle_public(
+    fn handle_public(
         cci: Option<ChainIndex>,
         label: Option<Label>,
         wallet_core: &mut WalletCore,
@@ -151,9 +151,7 @@ impl NewSubcommand {
                 .add_label(label, AccountIdWithPrivacy::Public(account_id))?;
         }
 
-        println!(
-            "Generated new account with account_id Public/{account_id} at path {chain_index}"
-        );
+        println!("Generated new account with account_id Public/{account_id} at path {chain_index}");
         println!("With pk {}", hex::encode(public_key.value()));
 
         wallet_core.store_persistent_data()?;
@@ -161,7 +159,7 @@ impl NewSubcommand {
         Ok(SubcommandReturnValue::RegisterAccount { account_id })
     }
 
-    async fn handle_private(
+    fn handle_private(
         cci: Option<ChainIndex>,
         label: Option<Label>,
         wallet_core: &mut WalletCore,
@@ -199,8 +197,8 @@ impl NewSubcommand {
         Ok(SubcommandReturnValue::RegisterAccount { account_id })
     }
 
-    async fn handle_private_gms(
-        group: Label,
+    fn handle_private_gms(
+        group: &Label,
         label: Option<Label>,
         pda: bool,
         seed: Option<String>,
@@ -214,8 +212,7 @@ impl NewSubcommand {
 
         let info = if pda {
             let seed_hex = seed.context("--seed is required for PDA accounts")?;
-            let pid_hex =
-                program_id.context("--program-id is required for PDA accounts")?;
+            let pid_hex = program_id.context("--program-id is required for PDA accounts")?;
 
             let seed_bytes: [u8; 32] = hex::decode(&seed_hex)
                 .context("Invalid seed hex")?
@@ -259,7 +256,7 @@ impl NewSubcommand {
         })
     }
 
-    async fn handle_private_accounts_key(
+    fn handle_private_accounts_key(
         cci: Option<ChainIndex>,
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
@@ -289,12 +286,8 @@ impl WalletSubcommand for NewSubcommand {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         match self {
-            Self::Public { cci, label } => {
-                Self::handle_public(cci, label, wallet_core).await
-            }
-            Self::Private { cci, label } => {
-                Self::handle_private(cci, label, wallet_core).await
-            }
+            Self::Public { cci, label } => Self::handle_public(cci, label, wallet_core),
+            Self::Private { cci, label } => Self::handle_private(cci, label, wallet_core),
             Self::PrivateGms {
                 group,
                 label,
@@ -302,12 +295,16 @@ impl WalletSubcommand for NewSubcommand {
                 seed,
                 program_id,
                 identifier,
-            } => {
-                Self::handle_private_gms(group, label, pda, seed, program_id, identifier, wallet_core).await
-            }
-            Self::PrivateAccountsKey { cci } => {
-                Self::handle_private_accounts_key(cci, wallet_core).await
-            }
+            } => Self::handle_private_gms(
+                &group,
+                label,
+                pda,
+                seed,
+                program_id,
+                identifier,
+                wallet_core,
+            ),
+            Self::PrivateAccountsKey { cci } => Self::handle_private_accounts_key(cci, wallet_core),
         }
     }
 }
@@ -317,7 +314,7 @@ impl AccountSubcommand {
         raw: bool,
         keys: bool,
         account_id: CliAccountMention,
-        wallet_core: &mut WalletCore,
+        wallet_core: &WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let resolved = account_id.resolve(wallet_core.storage())?;
         wallet_core
@@ -387,25 +384,20 @@ impl AccountSubcommand {
         Ok(SubcommandReturnValue::Empty)
     }
 
-    async fn handle_list(
-        long: bool,
-        wallet_core: &mut WalletCore,
-    ) -> Result<SubcommandReturnValue> {
+    async fn handle_list(long: bool, wallet_core: &WalletCore) -> Result<SubcommandReturnValue> {
         let key_chain = &wallet_core.storage.key_chain();
         let storage = wallet_core.storage();
 
-        let format_with_label =
-            |id: AccountIdWithPrivacy, chain_index: Option<&ChainIndex>| {
-                let id_str =
-                    chain_index.map_or_else(|| id.to_string(), |cci| format!("{cci} {id}"));
+        let format_with_label = |id: AccountIdWithPrivacy, chain_index: Option<&ChainIndex>| {
+            let id_str = chain_index.map_or_else(|| id.to_string(), |cci| format!("{cci} {id}"));
 
-                let labels = storage.labels_for_account(id).format(", ").to_string();
-                if labels.is_empty() {
-                    id_str
-                } else {
-                    format!("{id_str} [{labels}]")
-                }
-            };
+            let labels = storage.labels_for_account(id).format(", ").to_string();
+            if labels.is_empty() {
+                id_str
+            } else {
+                format!("{id_str} [{labels}]")
+            }
+        };
 
         if !long {
             let accounts = key_chain
@@ -456,9 +448,9 @@ impl AccountSubcommand {
         Ok(SubcommandReturnValue::Empty)
     }
 
-    async fn handle_label(
-        account_id: CliAccountMention,
-        label: Label,
+    fn handle_label(
+        account_id: &CliAccountMention,
+        label: &Label,
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let account_id = account_id.resolve(wallet_core.storage())?;
@@ -474,9 +466,9 @@ impl AccountSubcommand {
         Ok(SubcommandReturnValue::Empty)
     }
 
-    async fn handle_show_keys(
-        account_id: CliAccountMention,
-        wallet_core: &mut WalletCore,
+    fn handle_show_keys(
+        account_id: &CliAccountMention,
+        wallet_core: &WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let resolved = account_id.resolve(wallet_core.storage())?;
         let AccountIdWithPrivacy::Private(account_id) = resolved else {
@@ -524,14 +516,12 @@ impl WalletSubcommand for AccountSubcommand {
             }
             Self::List { long } => Self::handle_list(long, wallet_core).await,
             Self::Label { account_id, label } => {
-                Self::handle_label(account_id, label, wallet_core).await
+                Self::handle_label(&account_id, &label, wallet_core)
             }
             Self::Import(import_subcommand) => {
                 import_subcommand.handle_subcommand(wallet_core).await
             }
-            Self::ShowKeys { account_id } => {
-                Self::handle_show_keys(account_id, wallet_core).await
-            }
+            Self::ShowKeys { account_id } => Self::handle_show_keys(&account_id, wallet_core),
         }
     }
 }

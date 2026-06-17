@@ -74,14 +74,16 @@ impl AuthTransferSubcommand {
                     .await?;
 
                 wallet_core
-                    .poll_and_finalize_pp_transaction(tx_hash, &[
-                        Decode(secret, account_id),
-                    ])
+                    .poll_and_finalize_pp_transaction(tx_hash, &[Decode(secret, account_id)])
                     .await
             }
         }
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "extracted match arm with many destructured fields"
+    )]
     async fn handle_send(
         from_account: CliAccountMention,
         to_account: Option<CliAccountMention>,
@@ -107,9 +109,7 @@ impl AuthTransferSubcommand {
             .transpose()?;
         let underlying_subcommand = match (to, to_npk, to_vpk) {
             (None, None, None) => {
-                anyhow::bail!(
-                    "Provide either account account_id of receiver or their public keys"
-                );
+                anyhow::bail!("Provide either account account_id of receiver or their public keys");
             }
             (Some(_), Some(_), Some(_)) => {
                 anyhow::bail!(
@@ -128,16 +128,15 @@ impl AuthTransferSubcommand {
                         amount,
                     }
                 }
-                (
-                    AccountIdWithPrivacy::Private(from),
-                    AccountIdWithPrivacy::Private(to),
-                ) => NativeTokenTransferProgramSubcommand::Private(
-                    NativeTokenTransferProgramSubcommandPrivate::PrivateOwned {
-                        from,
-                        to,
-                        amount,
-                    },
-                ),
+                (AccountIdWithPrivacy::Private(from), AccountIdWithPrivacy::Private(to)) => {
+                    NativeTokenTransferProgramSubcommand::Private(
+                        NativeTokenTransferProgramSubcommandPrivate::PrivateOwned {
+                            from,
+                            to,
+                            amount,
+                        },
+                    )
+                }
                 (AccountIdWithPrivacy::Private(from), AccountIdWithPrivacy::Public(to)) => {
                     NativeTokenTransferProgramSubcommand::Deshielded { from, to, amount }
                 }
@@ -197,8 +196,17 @@ impl WalletSubcommand for AuthTransferSubcommand {
                 to_identifier,
                 amount,
             } => {
-                Self::handle_send(from, to, to_npk, to_vpk, to_keys, to_identifier, amount, wallet_core)
-                    .await
+                Self::handle_send(
+                    from,
+                    to,
+                    to_npk,
+                    to_vpk,
+                    to_keys,
+                    to_identifier,
+                    amount,
+                    wallet_core,
+                )
+                .await
             }
         }
     }
@@ -332,10 +340,10 @@ impl NativeTokenTransferProgramSubcommandPrivate {
             .await?;
 
         wallet_core
-            .poll_and_finalize_pp_transaction(tx_hash, &[
-                Decode(secret_from, from),
-                Decode(secret_to, to),
-            ])
+            .poll_and_finalize_pp_transaction(
+                tx_hash,
+                &[Decode(secret_from, from), Decode(secret_to, to)],
+            )
             .await
     }
 
@@ -360,9 +368,7 @@ impl NativeTokenTransferProgramSubcommandPrivate {
             .await?;
 
         wallet_core
-            .poll_and_finalize_pp_transaction(tx_hash, &[
-                Decode(secret_from, from),
-            ])
+            .poll_and_finalize_pp_transaction(tx_hash, &[Decode(secret_from, from)])
             .await
     }
 }
@@ -383,8 +389,15 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandPrivate {
                 to_identifier,
                 amount,
             } => {
-                Self::handle_private_foreign(from, to_npk, to_vpk, to_identifier, amount, wallet_core)
-                    .await
+                Self::handle_private_foreign(
+                    from,
+                    to_npk,
+                    to_vpk,
+                    to_identifier,
+                    amount,
+                    wallet_core,
+                )
+                .await
             }
         }
     }
@@ -398,17 +411,11 @@ impl NativeTokenTransferProgramSubcommandShielded {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let (tx_hash, secret) = NativeTokenTransfer(wallet_core)
-            .send_shielded_transfer(
-                from.expect("from set during Send dispatch"),
-                to,
-                amount,
-            )
+            .send_shielded_transfer(from.expect("from set during Send dispatch"), to, amount)
             .await?;
 
         wallet_core
-            .poll_and_finalize_pp_transaction(tx_hash, &[
-                Decode(secret, to),
-            ])
+            .poll_and_finalize_pp_transaction(tx_hash, &[Decode(secret, to)])
             .await
     }
 
@@ -418,7 +425,7 @@ impl NativeTokenTransferProgramSubcommandShielded {
         to_vpk: String,
         to_identifier: Option<u128>,
         amount: u128,
-        wallet_core: &mut WalletCore,
+        wallet_core: &WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let (to_npk, to_vpk) = crate::cli::decode_npk_vpk(&to_npk, &to_vpk)?;
 
@@ -456,8 +463,15 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandShielded {
                 to_identifier,
                 amount,
             } => {
-                Self::handle_shielded_foreign(from, to_npk, to_vpk, to_identifier, amount, wallet_core)
-                    .await
+                Self::handle_shielded_foreign(
+                    from,
+                    to_npk,
+                    to_vpk,
+                    to_identifier,
+                    amount,
+                    wallet_core,
+                )
+                .await
             }
         }
     }
@@ -475,9 +489,7 @@ impl NativeTokenTransferProgramSubcommand {
             .await?;
 
         wallet_core
-            .poll_and_finalize_pp_transaction(tx_hash, &[
-                Decode(secret, from),
-            ])
+            .poll_and_finalize_pp_transaction(tx_hash, &[Decode(secret, from)])
             .await
     }
 
@@ -485,7 +497,7 @@ impl NativeTokenTransferProgramSubcommand {
         from: Option<AccountIdentity>,
         to: Option<AccountIdentity>,
         amount: u128,
-        wallet_core: &mut WalletCore,
+        wallet_core: &WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let tx_hash = NativeTokenTransfer(wallet_core)
             .send_public_transfer(

@@ -38,16 +38,16 @@ pub enum KeycardSubcommand {
 }
 
 impl KeycardSubcommand {
-    async fn handle_available(_wallet_core: &mut WalletCore) -> Result<SubcommandReturnValue> {
+    fn handle_available(_wallet_core: &mut WalletCore) -> SubcommandReturnValue {
         Python::attach(|py| {
             python_path::add_python_path(py)
                 .expect("`wallet::keycard::available`: unable to setup python path");
 
             let wallet = KeycardWallet::new(py)
                 .expect("`wallet::keycard::available`: invalid data received for pin");
-            let available = wallet.is_unpaired_keycard_available(py).expect(
-                "`wallet::keycard::available`: received invalid data from Keycard wrapper",
-            );
+            let available = wallet
+                .is_unpaired_keycard_available(py)
+                .expect("`wallet::keycard::available`: received invalid data from Keycard wrapper");
 
             if available {
                 println!("\u{2705} Keycard is available.");
@@ -56,10 +56,10 @@ impl KeycardSubcommand {
             }
         });
 
-        Ok(SubcommandReturnValue::Empty)
+        SubcommandReturnValue::Empty
     }
 
-    async fn handle_connect(_wallet_core: &mut WalletCore) -> Result<SubcommandReturnValue> {
+    fn handle_connect(_wallet_core: &mut WalletCore) -> Result<SubcommandReturnValue> {
         let pin = read_pin()?;
 
         Python::attach(|py| {
@@ -80,7 +80,7 @@ impl KeycardSubcommand {
         Ok(SubcommandReturnValue::Empty)
     }
 
-    async fn handle_disconnect(_wallet_core: &mut WalletCore) -> Result<SubcommandReturnValue> {
+    fn handle_disconnect(_wallet_core: &mut WalletCore) -> Result<SubcommandReturnValue> {
         let pin = read_pin()?;
 
         Python::attach(|py| {
@@ -105,7 +105,7 @@ impl KeycardSubcommand {
         Ok(SubcommandReturnValue::Empty)
     }
 
-    async fn handle_init(_wallet_core: &mut WalletCore) -> Result<SubcommandReturnValue> {
+    fn handle_init(_wallet_core: &mut WalletCore) -> Result<SubcommandReturnValue> {
         let pin = read_pin()?;
 
         Python::attach(|py| {
@@ -128,7 +128,7 @@ impl KeycardSubcommand {
         Ok(SubcommandReturnValue::Empty)
     }
 
-    async fn handle_load(_wallet_core: &mut WalletCore) -> Result<SubcommandReturnValue> {
+    fn handle_load(_wallet_core: &mut WalletCore) -> Result<SubcommandReturnValue> {
         let pin = read_pin()?;
         let mnemonic = read_mnemonic()?;
 
@@ -156,8 +156,8 @@ impl KeycardSubcommand {
     }
 
     #[cfg(feature = "keycard-debug")]
-    async fn handle_get_private_keys(
-        key_path: String,
+    fn handle_get_private_keys(
+        key_path: &str,
         reveal: bool,
         _wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
@@ -173,9 +173,8 @@ impl KeycardSubcommand {
              Any terminal log, scrollback, or screen recording captures these keys."
         );
         let pin = read_pin()?;
-        let (nsk, vsk) =
-            KeycardWallet::get_private_keys_for_path_with_connect(&pin, &key_path)
-                .map_err(anyhow::Error::from)?;
+        let (nsk, vsk) = KeycardWallet::get_private_keys_for_path_with_connect(&pin, key_path)
+            .map_err(anyhow::Error::from)?;
         println!("NSK: {}", hex::encode(*nsk));
         println!("VSK: {}", hex::encode(*vsk));
         Ok(SubcommandReturnValue::Empty)
@@ -188,14 +187,14 @@ impl WalletSubcommand for KeycardSubcommand {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         match self {
-            Self::Available => Self::handle_available(wallet_core).await,
-            Self::Connect => Self::handle_connect(wallet_core).await,
-            Self::Disconnect => Self::handle_disconnect(wallet_core).await,
-            Self::Init => Self::handle_init(wallet_core).await,
-            Self::Load => Self::handle_load(wallet_core).await,
+            Self::Available => Ok(Self::handle_available(wallet_core)),
+            Self::Connect => Self::handle_connect(wallet_core),
+            Self::Disconnect => Self::handle_disconnect(wallet_core),
+            Self::Init => Self::handle_init(wallet_core),
+            Self::Load => Self::handle_load(wallet_core),
             #[cfg(feature = "keycard-debug")]
             Self::GetPrivateKeys { key_path, reveal } => {
-                Self::handle_get_private_keys(key_path, reveal, wallet_core).await
+                Self::handle_get_private_keys(&key_path, reveal, wallet_core)
             }
         }
     }

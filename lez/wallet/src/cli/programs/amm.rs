@@ -125,7 +125,7 @@ impl AmmProgramAgnosticSubcommand {
         user_holding_lp: CliAccountMention,
         balance_a: u128,
         balance_b: u128,
-        wallet_core: &mut WalletCore,
+        wallet_core: &WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let a_id = user_holding_a.resolve(wallet_core.storage())?;
         let b_id = user_holding_b.resolve(wallet_core.storage())?;
@@ -162,7 +162,7 @@ impl AmmProgramAgnosticSubcommand {
         amount_in: u128,
         min_amount_out: u128,
         token_definition: AccountId,
-        wallet_core: &mut WalletCore,
+        wallet_core: &WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let a_id = user_holding_a.resolve(wallet_core.storage())?;
         let b_id = user_holding_b.resolve(wallet_core.storage())?;
@@ -194,7 +194,7 @@ impl AmmProgramAgnosticSubcommand {
         exact_amount_out: u128,
         max_amount_in: u128,
         token_definition: AccountId,
-        wallet_core: &mut WalletCore,
+        wallet_core: &WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let a_id = user_holding_a.resolve(wallet_core.storage())?;
         let b_id = user_holding_b.resolve(wallet_core.storage())?;
@@ -227,7 +227,7 @@ impl AmmProgramAgnosticSubcommand {
         min_amount_lp: u128,
         max_amount_a: u128,
         max_amount_b: u128,
-        wallet_core: &mut WalletCore,
+        wallet_core: &WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let a_id = user_holding_a.resolve(wallet_core.storage())?;
         let b_id = user_holding_b.resolve(wallet_core.storage())?;
@@ -266,7 +266,7 @@ impl AmmProgramAgnosticSubcommand {
         balance_lp: u128,
         min_amount_a: u128,
         min_amount_b: u128,
-        wallet_core: &mut WalletCore,
+        wallet_core: &WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let a_id = user_holding_a.resolve(wallet_core.storage())?;
         let b_id = user_holding_b.resolve(wallet_core.storage())?;

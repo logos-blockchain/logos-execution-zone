@@ -247,6 +247,10 @@ fn normalize_keycard_signature(py_signature: Vec<u8>) -> PyResult<[u8; 64]> {
     }
 }
 
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Zeroizing<Vec<u8>> is consumed to ensure the source is zeroed on drop"
+)]
 fn zeroizing_fixed_bytes<const N: usize>(
     label: &str,
     raw: Zeroizing<Vec<u8>>,

@@ -36,6 +36,7 @@ pub mod config;
 pub mod mock;
 
 /// The origin of a transaction.
+#[derive(Clone, Copy)]
 pub enum TransactionOrigin {
     /// Basic transactions submitted by users via RPC.
     User,
@@ -69,20 +70,17 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     /// assumed to represent the correct latest state consistent with Bedrock-finalized data.
     /// If no database is found, the sequencer performs a fresh start from genesis,
     /// initializing its state with the accounts defined in the configuration file.
-    fn open_or_create_store(
-        config: &SequencerConfig,
-    ) -> (SequencerStore, lee::V03State, Block) {
+    fn open_or_create_store(config: &SequencerConfig) -> (SequencerStore, lee::V03State, Block) {
         let signing_key = lee::PrivateKey::try_new(config.signing_key).unwrap();
         let db_path = config.home.join("rocksdb");
 
         if db_path.exists() {
-            let store =
-                SequencerStore::open_db(&db_path, signing_key.clone()).unwrap_or_else(|err| {
-                    panic!(
-                        "Failed to open database at {} with error: {err}",
-                        db_path.display()
-                    )
-                });
+            let store = SequencerStore::open_db(&db_path, signing_key).unwrap_or_else(|err| {
+                panic!(
+                    "Failed to open database at {} with error: {err}",
+                    db_path.display()
+                )
+            });
             let state = store
                 .get_lee_state()
                 .expect("Failed to read state from store");
@@ -381,11 +379,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                 }
 
                 self.state
-                    .transition_from_public_transaction(
-                        public_tx,
-                        block_height,
-                        timestamp,
-                    )
+                    .transition_from_public_transaction(public_tx, block_height, timestamp)
                     .context("Failed to execute sequencer-generated transaction")?;
             }
         }

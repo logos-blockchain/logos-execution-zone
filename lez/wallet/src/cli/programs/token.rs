@@ -181,7 +181,9 @@ impl TokenProgramAgnosticSubcommand {
             (AccountIdWithPrivacy::Public(_), AccountIdWithPrivacy::Public(_)) => {
                 TokenProgramSubcommand::Public(TokenProgramSubcommandPublic::TransferToken {
                     sender_account_id: from_mention,
-                    recipient_account_id: to_mention.expect("`wallet::cli::programs::token::Send`: Invalid to_mention account provided"),
+                    recipient_account_id: to_mention.expect(
+                        "`wallet::cli::programs::token::Send`: Invalid to_mention account provided",
+                    ),
                     balance_to_move: amount,
                 })
             }
@@ -245,6 +247,10 @@ impl TokenProgramAgnosticSubcommand {
         }
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "extracted match arm with many destructured fields"
+    )]
     async fn handle_send(
         from: CliAccountMention,
         to: Option<CliAccountMention>,
@@ -270,9 +276,7 @@ impl TokenProgramAgnosticSubcommand {
             .transpose()?;
         let underlying_subcommand = match (to, to_npk, to_vpk) {
             (None, None, None) => {
-                anyhow::bail!(
-                    "Provide either account account_id of receiver or their public keys"
-                );
+                anyhow::bail!("Provide either account account_id of receiver or their public keys");
             }
             (Some(_), Some(_), Some(_)) => {
                 anyhow::bail!(
@@ -310,36 +314,33 @@ impl TokenProgramAgnosticSubcommand {
                     amount,
                 })
             }
-            (
-                AccountIdWithPrivacy::Private(definition),
-                AccountIdWithPrivacy::Private(holder),
-            ) => TokenProgramSubcommand::Private(
-                TokenProgramSubcommandPrivate::BurnTokenPrivateOwned {
-                    definition_account_id: definition,
-                    holder_account_id: holder,
-                    amount,
-                },
-            ),
-            (
-                AccountIdWithPrivacy::Private(definition),
-                AccountIdWithPrivacy::Public(holder),
-            ) => TokenProgramSubcommand::Deshielded(
-                TokenProgramSubcommandDeshielded::BurnTokenDeshieldedOwned {
-                    definition_account_id: definition,
-                    holder_account_id: holder,
-                    amount,
-                },
-            ),
-            (
-                AccountIdWithPrivacy::Public(definition),
-                AccountIdWithPrivacy::Private(holder),
-            ) => TokenProgramSubcommand::Shielded(
-                TokenProgramSubcommandShielded::BurnTokenShielded {
-                    definition_account_id: definition,
-                    holder_account_id: holder,
-                    amount,
-                },
-            ),
+            (AccountIdWithPrivacy::Private(definition), AccountIdWithPrivacy::Private(holder)) => {
+                TokenProgramSubcommand::Private(
+                    TokenProgramSubcommandPrivate::BurnTokenPrivateOwned {
+                        definition_account_id: definition,
+                        holder_account_id: holder,
+                        amount,
+                    },
+                )
+            }
+            (AccountIdWithPrivacy::Private(definition), AccountIdWithPrivacy::Public(holder)) => {
+                TokenProgramSubcommand::Deshielded(
+                    TokenProgramSubcommandDeshielded::BurnTokenDeshieldedOwned {
+                        definition_account_id: definition,
+                        holder_account_id: holder,
+                        amount,
+                    },
+                )
+            }
+            (AccountIdWithPrivacy::Public(definition), AccountIdWithPrivacy::Private(holder)) => {
+                TokenProgramSubcommand::Shielded(
+                    TokenProgramSubcommandShielded::BurnTokenShielded {
+                        definition_account_id: definition,
+                        holder_account_id: holder,
+                        amount,
+                    },
+                )
+            }
         };
 
         underlying_subcommand.handle_subcommand(wallet_core).await
@@ -390,7 +391,7 @@ impl TokenProgramAgnosticSubcommand {
         }
     }
 
-    fn route_mint_foreign(
+    const fn route_mint_foreign(
         definition: AccountIdWithPrivacy,
         holder_npk: String,
         holder_vpk: String,
@@ -419,6 +420,10 @@ impl TokenProgramAgnosticSubcommand {
         }
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "extracted match arm with many destructured fields"
+    )]
     async fn handle_mint(
         definition: CliAccountMention,
         holder: Option<CliAccountMention>,
@@ -444,9 +449,7 @@ impl TokenProgramAgnosticSubcommand {
             .transpose()?;
         let underlying_subcommand = match (holder, holder_npk, holder_vpk) {
             (None, None, None) => {
-                anyhow::bail!(
-                    "Provide either account account_id of holder or their public keys"
-                );
+                anyhow::bail!("Provide either account account_id of holder or their public keys");
             }
             (Some(_), Some(_), Some(_)) => {
                 anyhow::bail!(
@@ -459,9 +462,13 @@ impl TokenProgramAgnosticSubcommand {
             (Some(holder), None, None) => {
                 Self::route_mint_owned(definition, holder, def_mention, holder_mention, amount)
             }
-            (None, Some(holder_npk), Some(holder_vpk)) => {
-                Self::route_mint_foreign(definition, holder_npk, holder_vpk, holder_identifier, amount)
-            }
+            (None, Some(holder_npk), Some(holder_vpk)) => Self::route_mint_foreign(
+                definition,
+                holder_npk,
+                holder_vpk,
+                holder_identifier,
+                amount,
+            ),
         };
 
         underlying_subcommand.handle_subcommand(wallet_core).await
@@ -499,7 +506,14 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                 amount,
             } => {
                 Self::handle_send(
-                    from, to, to_npk, to_vpk, to_keys, to_identifier, amount, wallet_core,
+                    from,
+                    to,
+                    to_npk,
+                    to_vpk,
+                    to_keys,
+                    to_identifier,
+                    amount,
+                    wallet_core,
                 )
                 .await
             }
@@ -803,14 +817,12 @@ impl TokenProgramSubcommandPublic {
         sender_account_id: CliAccountMention,
         recipient_account_id: CliAccountMention,
         balance_to_move: u128,
-        wallet_core: &mut WalletCore,
+        wallet_core: &WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let sender = sender_account_id.resolve(wallet_core.storage())?;
         let recipient = recipient_account_id.resolve(wallet_core.storage())?;
-        let (
-            AccountIdWithPrivacy::Public(sender_id),
-            AccountIdWithPrivacy::Public(recipient_id),
-        ) = (sender, recipient)
+        let (AccountIdWithPrivacy::Public(sender_id), AccountIdWithPrivacy::Public(recipient_id)) =
+            (sender, recipient)
         else {
             anyhow::bail!(
                 "`TokenProgramSubcommandPublic::TransferToken`: Unexpected private account received."
@@ -832,7 +844,7 @@ impl TokenProgramSubcommandPublic {
         definition_account_id: AccountId,
         holder_account_id: CliAccountMention,
         amount: u128,
-        wallet_core: &mut WalletCore,
+        wallet_core: &WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let holder = holder_account_id.resolve(wallet_core.storage())?;
         let AccountIdWithPrivacy::Public(holder_id) = holder else {
@@ -856,7 +868,7 @@ impl TokenProgramSubcommandPublic {
         definition_account_id: CliAccountMention,
         holder_account_id: CliAccountMention,
         amount: u128,
-        wallet_core: &mut WalletCore,
+        wallet_core: &WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let definition = definition_account_id.resolve(wallet_core.storage())?;
         let holder = holder_account_id.resolve(wallet_core.storage())?;
@@ -904,16 +916,26 @@ impl WalletSubcommand for TokenProgramSubcommandPublic {
                 holder_account_id,
                 amount,
             } => {
-                Self::handle_burn_token(definition_account_id, holder_account_id, amount, wallet_core)
-                    .await
+                Self::handle_burn_token(
+                    definition_account_id,
+                    holder_account_id,
+                    amount,
+                    wallet_core,
+                )
+                .await
             }
             Self::MintToken {
                 definition_account_id,
                 holder_account_id,
                 amount,
             } => {
-                Self::handle_mint_token(definition_account_id, holder_account_id, amount, wallet_core)
-                    .await
+                Self::handle_mint_token(
+                    definition_account_id,
+                    holder_account_id,
+                    amount,
+                    wallet_core,
+                )
+                .await
             }
         }
     }
@@ -935,10 +957,13 @@ impl TokenProgramSubcommandPrivate {
             .await?;
 
         wallet_core
-            .poll_and_finalize_pp_transaction(tx_hash, &[
-                Decode(secret_sender, sender_account_id),
-                Decode(secret_recipient, recipient_account_id),
-            ])
+            .poll_and_finalize_pp_transaction(
+                tx_hash,
+                &[
+                    Decode(secret_sender, sender_account_id),
+                    Decode(secret_recipient, recipient_account_id),
+                ],
+            )
             .await
     }
 
@@ -964,9 +989,7 @@ impl TokenProgramSubcommandPrivate {
             .await?;
 
         wallet_core
-            .poll_and_finalize_pp_transaction(tx_hash, &[
-                Decode(secret_sender, sender_account_id),
-            ])
+            .poll_and_finalize_pp_transaction(tx_hash, &[Decode(secret_sender, sender_account_id)])
             .await
     }
 
@@ -985,10 +1008,13 @@ impl TokenProgramSubcommandPrivate {
             .await?;
 
         wallet_core
-            .poll_and_finalize_pp_transaction(tx_hash, &[
-                Decode(secret_definition, definition_account_id),
-                Decode(secret_holder, holder_account_id),
-            ])
+            .poll_and_finalize_pp_transaction(
+                tx_hash,
+                &[
+                    Decode(secret_definition, definition_account_id),
+                    Decode(secret_holder, holder_account_id),
+                ],
+            )
             .await
     }
 
@@ -1007,10 +1033,13 @@ impl TokenProgramSubcommandPrivate {
             .await?;
 
         wallet_core
-            .poll_and_finalize_pp_transaction(tx_hash, &[
-                Decode(secret_definition, definition_account_id),
-                Decode(secret_holder, holder_account_id),
-            ])
+            .poll_and_finalize_pp_transaction(
+                tx_hash,
+                &[
+                    Decode(secret_definition, definition_account_id),
+                    Decode(secret_holder, holder_account_id),
+                ],
+            )
             .await
     }
 
@@ -1022,8 +1051,7 @@ impl TokenProgramSubcommandPrivate {
         amount: u128,
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
-        let (holder_npk, holder_vpk) =
-            crate::cli::decode_npk_vpk(&holder_npk, &holder_vpk)?;
+        let (holder_npk, holder_vpk) = crate::cli::decode_npk_vpk(&holder_npk, &holder_vpk)?;
 
         let (tx_hash, [secret_definition, _]) = Token(wallet_core)
             .send_mint_transaction_private_foreign_account(
@@ -1036,9 +1064,10 @@ impl TokenProgramSubcommandPrivate {
             .await?;
 
         wallet_core
-            .poll_and_finalize_pp_transaction(tx_hash, &[
-                Decode(secret_definition, definition_account_id),
-            ])
+            .poll_and_finalize_pp_transaction(
+                tx_hash,
+                &[Decode(secret_definition, definition_account_id)],
+            )
             .await
     }
 }
@@ -1142,9 +1171,7 @@ impl TokenProgramSubcommandDeshielded {
             .await?;
 
         wallet_core
-            .poll_and_finalize_pp_transaction(tx_hash, &[
-                Decode(secret_sender, sender_account_id),
-            ])
+            .poll_and_finalize_pp_transaction(tx_hash, &[Decode(secret_sender, sender_account_id)])
             .await
     }
 
@@ -1163,9 +1190,10 @@ impl TokenProgramSubcommandDeshielded {
             .await?;
 
         wallet_core
-            .poll_and_finalize_pp_transaction(tx_hash, &[
-                Decode(secret_definition, definition_account_id),
-            ])
+            .poll_and_finalize_pp_transaction(
+                tx_hash,
+                &[Decode(secret_definition, definition_account_id)],
+            )
             .await
     }
 
@@ -1176,17 +1204,14 @@ impl TokenProgramSubcommandDeshielded {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let (tx_hash, secret_definition) = Token(wallet_core)
-            .send_mint_transaction_deshielded(
-                definition_account_id,
-                holder_account_id,
-                amount,
-            )
+            .send_mint_transaction_deshielded(definition_account_id, holder_account_id, amount)
             .await?;
 
         wallet_core
-            .poll_and_finalize_pp_transaction(tx_hash, &[
-                Decode(secret_definition, definition_account_id),
-            ])
+            .poll_and_finalize_pp_transaction(
+                tx_hash,
+                &[Decode(secret_definition, definition_account_id)],
+            )
             .await
     }
 }
@@ -1282,9 +1307,10 @@ impl TokenProgramSubcommandShielded {
             .await?;
 
         wallet_core
-            .poll_and_finalize_pp_transaction(tx_hash, &[
-                Decode(secret_recipient, recipient_account_id),
-            ])
+            .poll_and_finalize_pp_transaction(
+                tx_hash,
+                &[Decode(secret_recipient, recipient_account_id)],
+            )
             .await
     }
 
@@ -1295,17 +1321,11 @@ impl TokenProgramSubcommandShielded {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let (tx_hash, secret_holder) = Token(wallet_core)
-            .send_burn_transaction_shielded(
-                definition_account_id,
-                holder_account_id,
-                amount,
-            )
+            .send_burn_transaction_shielded(definition_account_id, holder_account_id, amount)
             .await?;
 
         wallet_core
-            .poll_and_finalize_pp_transaction(tx_hash, &[
-                Decode(secret_holder, holder_account_id),
-            ])
+            .poll_and_finalize_pp_transaction(tx_hash, &[Decode(secret_holder, holder_account_id)])
             .await
     }
 
@@ -1324,9 +1344,7 @@ impl TokenProgramSubcommandShielded {
             .await?;
 
         wallet_core
-            .poll_and_finalize_pp_transaction(tx_hash, &[
-                Decode(secret_holder, holder_account_id),
-            ])
+            .poll_and_finalize_pp_transaction(tx_hash, &[Decode(secret_holder, holder_account_id)])
             .await
     }
 
@@ -1338,8 +1356,7 @@ impl TokenProgramSubcommandShielded {
         amount: u128,
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
-        let (holder_npk, holder_vpk) =
-            crate::cli::decode_npk_vpk(&holder_npk, &holder_vpk)?;
+        let (holder_npk, holder_vpk) = crate::cli::decode_npk_vpk(&holder_npk, &holder_vpk)?;
 
         let (tx_hash, _) = Token(wallet_core)
             .send_mint_transaction_shielded_foreign_account(
@@ -1458,10 +1475,13 @@ impl CreateNewTokenProgramSubcommand {
             .await?;
 
         wallet_core
-            .poll_and_finalize_pp_transaction(tx_hash, &[
-                Decode(secret_definition, definition_account_id),
-                Decode(secret_supply, supply_account_id),
-            ])
+            .poll_and_finalize_pp_transaction(
+                tx_hash,
+                &[
+                    Decode(secret_definition, definition_account_id),
+                    Decode(secret_supply, supply_account_id),
+                ],
+            )
             .await
     }
 
@@ -1482,9 +1502,10 @@ impl CreateNewTokenProgramSubcommand {
             .await?;
 
         wallet_core
-            .poll_and_finalize_pp_transaction(tx_hash, &[
-                Decode(secret_definition, definition_account_id),
-            ])
+            .poll_and_finalize_pp_transaction(
+                tx_hash,
+                &[Decode(secret_definition, definition_account_id)],
+            )
             .await
     }
 
@@ -1505,9 +1526,7 @@ impl CreateNewTokenProgramSubcommand {
             .await?;
 
         wallet_core
-            .poll_and_finalize_pp_transaction(tx_hash, &[
-                Decode(secret_supply, supply_account_id),
-            ])
+            .poll_and_finalize_pp_transaction(tx_hash, &[Decode(secret_supply, supply_account_id)])
             .await
     }
 
@@ -1516,7 +1535,7 @@ impl CreateNewTokenProgramSubcommand {
         supply_account_id: CliAccountMention,
         name: String,
         total_supply: u128,
-        wallet_core: &mut WalletCore,
+        wallet_core: &WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let definition = definition_account_id.resolve(wallet_core.storage())?;
         let supply = supply_account_id.resolve(wallet_core.storage())?;

@@ -24,10 +24,10 @@ pub enum ConfigSubcommand {
 }
 
 impl ConfigSubcommand {
-    async fn handle_get(
+    fn handle_get(
         all: bool,
         key: Option<String>,
-        wallet_core: &mut WalletCore,
+        wallet_core: &WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let config = wallet_core.config();
         if all {
@@ -109,11 +109,8 @@ impl ConfigSubcommand {
         Ok(SubcommandReturnValue::Empty)
     }
 
-    async fn handle_description(
-        key: String,
-        _wallet_core: &mut WalletCore,
-    ) -> Result<SubcommandReturnValue> {
-        match key.as_str() {
+    fn handle_description(key: &str, _wallet_core: &WalletCore) -> SubcommandReturnValue {
+        match key {
             "override_rust_log" => {
                 println!("Value of variable RUST_LOG to override, affects logging");
             }
@@ -151,7 +148,7 @@ impl ConfigSubcommand {
             }
         }
 
-        Ok(SubcommandReturnValue::Empty)
+        SubcommandReturnValue::Empty
     }
 }
 
@@ -161,9 +158,9 @@ impl WalletSubcommand for ConfigSubcommand {
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
         match self {
-            Self::Get { all, key } => Self::handle_get(all, key, wallet_core).await,
+            Self::Get { all, key } => Self::handle_get(all, key, wallet_core),
             Self::Set { key, value } => Self::handle_set(key, value, wallet_core).await,
-            Self::Description { key } => Self::handle_description(key, wallet_core).await,
+            Self::Description { key } => Ok(Self::handle_description(&key, wallet_core)),
         }
     }
 }

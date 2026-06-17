@@ -211,17 +211,6 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn correct_startup() {
-        let home = tempdir().unwrap();
-
-        let storage = IndexerStore::open_db(home.as_ref()).unwrap();
-
-        let final_id = storage.get_last_block_id().unwrap();
-
-        assert_eq!(final_id, None);
-    }
-
     struct TestFixture {
         storage: IndexerStore,
         from: AccountId,
@@ -229,6 +218,10 @@ mod tests {
         _home: tempfile::TempDir,
     }
 
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "test helper with bounded inputs"
+    )]
     async fn store_with_transfer_blocks(
         block_count: u64,
         prev_hash: Option<common::HashType>,
@@ -244,7 +237,11 @@ mod tests {
         let mut prev_hash = prev_hash;
         for i in 0..block_count {
             let tx = common::test_utils::create_transaction_native_token_transfer(
-                from, u128::from(i), to, 10, &sign_key,
+                from,
+                u128::from(i),
+                to,
+                10,
+                &sign_key,
             );
             let block_id = i + 1;
 
@@ -260,7 +257,23 @@ mod tests {
                 .unwrap();
         }
 
-        TestFixture { storage, from, to, _home: home }
+        TestFixture {
+            storage,
+            from,
+            to,
+            _home: home,
+        }
+    }
+
+    #[test]
+    fn correct_startup() {
+        let home = tempdir().unwrap();
+
+        let storage = IndexerStore::open_db(home.as_ref()).unwrap();
+
+        let final_id = storage.get_last_block_id().unwrap();
+
+        assert_eq!(final_id, None);
     }
 
     #[tokio::test]
@@ -313,7 +326,12 @@ mod tests {
 
     #[tokio::test]
     async fn account_state_at_block() {
-        let TestFixture { storage, from, to, _home } = store_with_transfer_blocks(10, None).await;
+        let TestFixture {
+            storage,
+            from,
+            to,
+            _home,
+        } = store_with_transfer_blocks(10, None).await;
 
         let acc1_at_1 = storage.account_state_at_block(&from, 1).unwrap();
         let acc2_at_1 = storage.account_state_at_block(&to, 1).unwrap();

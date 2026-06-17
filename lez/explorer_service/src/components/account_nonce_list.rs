@@ -4,10 +4,6 @@ use leptos::prelude::*;
 use leptos_router::components::A;
 
 #[component]
-#[expect(
-    clippy::needless_pass_by_value,
-    reason = "Leptos component props are passed by value by framework convention"
-)]
 pub fn AccountNonceList(account_ids: Vec<AccountId>, nonces: Vec<u128>) -> impl IntoView {
     view! {
         <div class="accounts-list">

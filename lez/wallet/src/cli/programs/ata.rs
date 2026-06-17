@@ -69,18 +69,18 @@ pub enum AtaSubcommand {
 }
 
 impl AtaSubcommand {
-    async fn handle_address(
+    fn handle_address(
         owner: AccountId,
         token_definition: AccountId,
-        _wallet_core: &mut WalletCore,
-    ) -> Result<SubcommandReturnValue> {
+        _wallet_core: &WalletCore,
+    ) -> SubcommandReturnValue {
         let ata_program_id = programs::ata().id();
         let ata_id = associated_token_account_core::get_associated_token_account_id(
             &ata_program_id,
             &associated_token_account_core::compute_ata_seed(owner, token_definition),
         );
         println!("{ata_id}");
-        Ok(SubcommandReturnValue::Empty)
+        SubcommandReturnValue::Empty
     }
 
     async fn handle_create(
@@ -106,9 +106,7 @@ impl AtaSubcommand {
                     .await?;
 
                 wallet_core
-                    .poll_and_finalize_pp_transaction(tx_hash, &[
-                        Decode(secret, owner_id),
-                    ])
+                    .poll_and_finalize_pp_transaction(tx_hash, &[Decode(secret, owner_id)])
                     .await
             }
         }
@@ -145,9 +143,7 @@ impl AtaSubcommand {
                     .await?;
 
                 wallet_core
-                    .poll_and_finalize_pp_transaction(tx_hash, &[
-                        Decode(secret, from_id),
-                    ])
+                    .poll_and_finalize_pp_transaction(tx_hash, &[Decode(secret, from_id)])
                     .await
             }
         }
@@ -181,9 +177,7 @@ impl AtaSubcommand {
                     .await?;
 
                 wallet_core
-                    .poll_and_finalize_pp_transaction(tx_hash, &[
-                        Decode(secret, holder_id),
-                    ])
+                    .poll_and_finalize_pp_transaction(tx_hash, &[Decode(secret, holder_id)])
                     .await
             }
         }
@@ -192,7 +186,7 @@ impl AtaSubcommand {
     async fn handle_list(
         owner: AccountId,
         token_definition: Vec<AccountId>,
-        wallet_core: &mut WalletCore,
+        wallet_core: &WalletCore,
     ) -> Result<SubcommandReturnValue> {
         let ata_program_id = programs::ata().id();
 
@@ -211,8 +205,7 @@ impl AtaSubcommand {
                     TokenHolding::Fungible { balance, .. } => {
                         println!("ATA {ata_id} (definition {def}): balance {balance}");
                     }
-                    TokenHolding::NftMaster { .. }
-                    | TokenHolding::NftPrintedCopy { .. } => {
+                    TokenHolding::NftMaster { .. } | TokenHolding::NftPrintedCopy { .. } => {
                         println!("ATA {ata_id} (definition {def}): unsupported token type");
                     }
                 }
@@ -232,7 +225,7 @@ impl WalletSubcommand for AtaSubcommand {
             Self::Address {
                 owner,
                 token_definition,
-            } => Self::handle_address(owner, token_definition, wallet_core).await,
+            } => Ok(Self::handle_address(owner, token_definition, wallet_core)),
             Self::Create {
                 owner,
                 token_definition,
