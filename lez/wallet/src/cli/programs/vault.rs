@@ -1,6 +1,5 @@
 use anyhow::Result;
 use clap::Subcommand;
-use common::transaction::LeeTransaction;
 use lee::AccountId;
 
 use crate::{
@@ -55,36 +54,20 @@ impl WalletSubcommand for VaultSubcommand {
                         let tx_hash = Vault(wallet_core)
                             .send_transfer(sender_id, recipient_id, amount)
                             .await?;
-
-                        println!("Transaction hash is {tx_hash}");
-
-                        let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
-
-                        println!("Transaction data is {transfer_tx:?}");
-
-                        Ok(SubcommandReturnValue::Empty)
+                        wallet_core
+                            .poll_and_finalize_public_transaction(tx_hash)
+                            .await
                     }
                     AccountIdWithPrivacy::Private(sender_id) => {
                         let (tx_hash, secret_sender) = Vault(wallet_core)
                             .send_transfer_private_sender(sender_id, recipient_id, amount)
                             .await?;
-
-                        println!("Transaction hash is {tx_hash}");
-
-                        let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
-
-                        println!("Transaction data is {transfer_tx:?}");
-
-                        if let LeeTransaction::PrivacyPreserving(tx) = transfer_tx {
-                            wallet_core.decode_insert_privacy_preserving_transaction_results(
-                                &tx,
+                        wallet_core
+                            .poll_and_finalize_pp_transaction(
+                                tx_hash,
                                 &[Decode(secret_sender, sender_id)],
-                            )?;
-                        }
-
-                        wallet_core.store_persistent_data()?;
-
-                        Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
+                            )
+                            .await
                     }
                 }
             }
@@ -94,36 +77,20 @@ impl WalletSubcommand for VaultSubcommand {
                 match account_id {
                     AccountIdWithPrivacy::Public(owner_id) => {
                         let tx_hash = Vault(wallet_core).send_claim(owner_id, amount).await?;
-
-                        println!("Transaction hash is {tx_hash}");
-
-                        let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
-
-                        println!("Transaction data is {transfer_tx:?}");
-
-                        Ok(SubcommandReturnValue::Empty)
+                        wallet_core
+                            .poll_and_finalize_public_transaction(tx_hash)
+                            .await
                     }
                     AccountIdWithPrivacy::Private(owner_id) => {
                         let (tx_hash, secret_owner) = Vault(wallet_core)
                             .send_claim_private_owner(owner_id, amount)
                             .await?;
-
-                        println!("Transaction hash is {tx_hash}");
-
-                        let transfer_tx = wallet_core.poll_native_token_transfer(tx_hash).await?;
-
-                        println!("Transaction data is {transfer_tx:?}");
-
-                        if let LeeTransaction::PrivacyPreserving(tx) = transfer_tx {
-                            wallet_core.decode_insert_privacy_preserving_transaction_results(
-                                &tx,
+                        wallet_core
+                            .poll_and_finalize_pp_transaction(
+                                tx_hash,
                                 &[Decode(secret_owner, owner_id)],
-                            )?;
-                        }
-
-                        wallet_core.store_persistent_data()?;
-
-                        Ok(SubcommandReturnValue::PrivacyPreservingTransfer { tx_hash })
+                            )
+                            .await
                     }
                 }
             }
