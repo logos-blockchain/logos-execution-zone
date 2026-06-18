@@ -59,46 +59,9 @@ impl ExecutionState {
         program_id: ProgramId,
         program_outputs: Vec<ProgramOutput>,
     ) -> Self {
-        // Build position → (npk, identifier) map for private-PDA pre_states, indexed by position
-        // in `account_identities`. The vec is documented as 1:1 with the program's pre_state
-        // order, so position here matches `pre_state_position` used downstream in
-        // `validate_and_sync_states`.
-        let mut private_pda_npk_by_position: HashMap<usize, (NullifierPublicKey, Identifier)> =
-            HashMap::new();
-        for (pos, account_identity) in account_identities.iter().enumerate() {
-            if let Some((npk, identifier)) = account_identity.npk_if_private_pda() {
-                private_pda_npk_by_position.insert(pos, (npk, identifier));
-            }
-        }
-
-        let block_valid_from = program_outputs
-            .iter()
-            .filter_map(|output| output.block_validity_window.start())
-            .max();
-        let block_valid_until = program_outputs
-            .iter()
-            .filter_map(|output| output.block_validity_window.end())
-            .min();
-        let ts_valid_from = program_outputs
-            .iter()
-            .filter_map(|output| output.timestamp_validity_window.start())
-            .max();
-        let ts_valid_until = program_outputs
-            .iter()
-            .filter_map(|output| output.timestamp_validity_window.end())
-            .min();
-
-        let block_validity_window: BlockValidityWindow = (block_valid_from, block_valid_until)
-            .try_into()
-            .expect(
-                "There should be non empty intersection in the program output block validity windows",
-            );
-        let timestamp_validity_window: TimestampValidityWindow =
-            (ts_valid_from, ts_valid_until)
-                .try_into()
-                .expect(
-                    "There should be non empty intersection in the program output timestamp validity windows",
-                );
+        let private_pda_npk_by_position = build_private_pda_npk_map(account_identities);
+        let (block_validity_window, timestamp_validity_window) =
+            intersect_validity_windows(&program_outputs);
 
         let mut execution_state = Self {
             pre_states: Vec::new(),
@@ -136,49 +99,7 @@ impl ExecutionState {
                 panic!("Insufficient program outputs for chained calls");
             };
 
-            // Check that instruction data in chained call is the instruction data in program output
-            assert_eq!(
-                chained_call.instruction_data, program_output.instruction_data,
-                "Mismatched instruction data between chained call and program output"
-            );
-
-            // Check that `program_output` is consistent with the execution of the corresponding
-            // program.
-            let program_output_words =
-                &to_vec(&program_output).expect("program_output must be serializable");
-            env::verify(chained_call.program_id, program_output_words).unwrap_or_else(
-                |_: Infallible| unreachable!("Infallible error is never constructed"),
-            );
-
-            // Verify that the program output's self_program_id matches the expected program ID.
-            // This ensures the proof commits to which program produced the output.
-            assert_eq!(
-                program_output.self_program_id, chained_call.program_id,
-                "Program output self_program_id does not match chained call program_id"
-            );
-
-            // Verify that the program output's caller_program_id matches the actual caller.
-            // This prevents a malicious user from privately executing an internal function
-            // by spoofing caller_program_id (e.g. passing caller_program_id = self_program_id
-            // to bypass access control checks).
-            assert_eq!(
-                program_output.caller_program_id, caller_program_id,
-                "Program output caller_program_id does not match actual caller"
-            );
-
-            // Check that the program is well behaved.
-            // See the # Programs section for the definition of the `validate_execution` method.
-            let validated_execution = validate_execution(
-                &program_output.pre_states,
-                &program_output.post_states,
-                chained_call.program_id,
-            );
-            if let Err(err) = validated_execution {
-                panic!(
-                    "Invalid program behavior in program {:?}: {err}",
-                    chained_call.program_id
-                );
-            }
+            verify_program_output(&chained_call, caller_program_id, &program_output);
 
             for next_call in program_output.chained_calls.iter().rev() {
                 chained_calls.push_front((next_call.clone(), Some(chained_call.program_id)));
@@ -202,41 +123,8 @@ impl ExecutionState {
             "Inner call without a chained call found",
         );
 
-        // Every private-PDA pre_state must have had its npk bound to its account_id, either via
-        // a `Claim::Pda(seed)` in some program's post_state or via a caller's `pda_seeds`
-        // matching the private derivation. An unbound private-PDA pre_state has no
-        // cryptographic link between the supplied npk and the account_id, and must be rejected.
-        for (pos, account_identity) in account_identities.iter().enumerate() {
-            if account_identity.is_private_pda() {
-                assert!(
-                    execution_state
-                        .private_pda_bound_positions
-                        .contains_key(&pos),
-                    "private PDA pre_state at position {pos} has no proven (seed, npk) binding via Claim::Pda or caller pda_seeds"
-                );
-            }
-        }
-
-        // Check that all modified uninitialized accounts were claimed
-        for (account_id, post) in execution_state
-            .pre_states
-            .iter()
-            .filter(|a| a.account.program_owner == DEFAULT_PROGRAM_ID)
-            .map(|a| {
-                let post = execution_state
-                    .post_states
-                    .get(&a.account_id)
-                    .expect("Post state must exist for pre state");
-                (a, post)
-            })
-            .filter(|(pre_default, post)| pre_default.account != **post)
-            .map(|(pre, post)| (pre.account_id, post))
-        {
-            assert_ne!(
-                post.program_owner, DEFAULT_PROGRAM_ID,
-                "Account {account_id} was modified but not claimed"
-            );
-        }
+        execution_state.assert_all_pda_positions_bound(account_identities);
+        execution_state.assert_modified_accounts_claimed();
 
         execution_state
     }
@@ -254,200 +142,185 @@ impl ExecutionState {
         for (pre, mut post) in output_pre_states.into_iter().zip(output_post_states) {
             let pre_account_id = pre.account_id;
             let pre_is_authorized = pre.is_authorized;
-            let post_states_entry = self.post_states.entry(pre.account_id);
-            match &post_states_entry {
-                Entry::Occupied(occupied) => {
-                    #[expect(
-                        clippy::shadow_unrelated,
-                        reason = "Shadowing is intentional to use all fields"
-                    )]
-                    let AccountWithMetadata {
-                        account: pre_account,
-                        account_id: pre_account_id,
-                        is_authorized: pre_is_authorized,
-                    } = pre;
 
-                    // Ensure that new pre state is the same as known post state
-                    assert_eq!(
-                        occupied.get(),
-                        &pre_account,
-                        "Inconsistent pre state for account {pre_account_id}",
+            if let Some(existing) = self.post_states.get(&pre.account_id) {
+                #[expect(
+                    clippy::shadow_unrelated,
+                    reason = "Shadowing is intentional to use all fields"
+                )]
+                let AccountWithMetadata {
+                    account: pre_account,
+                    account_id: pre_account_id,
+                    is_authorized: pre_is_authorized,
+                } = pre;
+
+                assert_eq!(
+                    existing, &pre_account,
+                    "Inconsistent pre state for account {pre_account_id}",
+                );
+
+                let (previous_is_authorized, pre_state_position) = self
+                    .pre_states
+                    .iter()
+                    .enumerate()
+                    .find(|(_, acc)| acc.account_id == pre_account_id)
+                    .map_or_else(
+                        || panic!(
+                            "Pre state must exist in execution state for account {pre_account_id}",
+                        ),
+                        |(pos, acc)| (acc.is_authorized, pos),
                     );
 
-                    let (previous_is_authorized, pre_state_position) = self
-                        .pre_states
-                        .iter()
-                        .enumerate()
-                        .find(|(_, acc)| acc.account_id == pre_account_id)
-                        .map_or_else(
-                            || panic!(
-                                "Pre state must exist in execution state for account {pre_account_id}",
-                            ),
-                            |(pos, acc)| (acc.is_authorized, pos)
-                        );
+                let is_authorized = resolve_authorization_and_record_bindings(
+                    &mut self.pda_family_binding,
+                    &mut self.private_pda_bound_positions,
+                    &self.private_pda_npk_by_position,
+                    &mut self.authorized_accounts,
+                    pre_account_id,
+                    pre_state_position,
+                    caller_program_id,
+                    caller_pda_seeds,
+                    previous_is_authorized,
+                );
 
-                    let is_authorized = resolve_authorization_and_record_bindings(
-                        &mut self.pda_family_binding,
-                        &mut self.private_pda_bound_positions,
-                        &self.private_pda_npk_by_position,
-                        &mut self.authorized_accounts,
-                        pre_account_id,
-                        pre_state_position,
-                        caller_program_id,
-                        caller_pda_seeds,
-                        previous_is_authorized,
-                    );
-
-                    assert_eq!(
-                        pre_is_authorized, is_authorized,
-                        "Inconsistent authorization for account {pre_account_id}",
-                    );
-                }
-                Entry::Vacant(_) => {
-                    // Pre state for the initial call
-                    let pre_state_position = self.pre_states.len();
-                    let external_seed = match account_identities.get(pre_state_position) {
-                        Some(InputAccountIdentity::PrivatePdaInit {
-                            npk,
-                            identifier,
-                            seed: Some((seed, authority_program_id)),
-                            ..
-                        }) => {
-                            let expected = AccountId::for_private_pda(
-                                authority_program_id,
-                                seed,
-                                npk,
-                                *identifier,
-                            );
-                            assert_eq!(
-                                pre_account_id, expected,
-                                "External seed mismatch for PrivatePdaInit at position {pre_state_position}"
-                            );
-                            Some((*seed, *authority_program_id))
-                        }
-                        Some(InputAccountIdentity::PrivatePdaUpdate {
-                            nsk,
-                            identifier,
-                            seed: Some((seed, authority_program_id)),
-                            ..
-                        }) => {
-                            let npk = NullifierPublicKey::from(nsk);
-                            let expected = AccountId::for_private_pda(
-                                authority_program_id,
-                                seed,
-                                &npk,
-                                *identifier,
-                            );
-                            assert_eq!(
-                                pre_account_id, expected,
-                                "External seed mismatch for PrivatePdaUpdate at position {pre_state_position}"
-                            );
-                            Some((*seed, *authority_program_id))
-                        }
-                        _ => None,
-                    };
-                    // External seed is only consulted the first time the account is seen.
-                    // Subsequent calls need no re-check because the entry is already recorded on
-                    // private_pda_bound_positions.
-                    if let Some((seed, authority_program_id)) = external_seed {
-                        assert!(
-                            !pre.is_authorized,
-                            "Private PDA with externally-provided seed must not be authorized at position {pre_state_position}"
-                        );
-                        bind_private_pda_position(
-                            &mut self.private_pda_bound_positions,
-                            pre_state_position,
-                            authority_program_id,
-                            seed,
-                        );
-                        assert_family_binding(
-                            &mut self.pda_family_binding,
-                            authority_program_id,
-                            seed,
-                            pre_account_id,
-                        );
-                    }
-                    self.pre_states.push(pre);
-                }
+                assert_eq!(
+                    pre_is_authorized, is_authorized,
+                    "Inconsistent authorization for account {pre_account_id}",
+                );
+            } else {
+                let pre_state_position = self.pre_states.len();
+                resolve_external_seed(
+                    account_identities,
+                    pre_state_position,
+                    pre_account_id,
+                    pre.is_authorized,
+                    &mut self.private_pda_bound_positions,
+                    &mut self.pda_family_binding,
+                );
+                self.pre_states.push(pre);
             }
 
             if let Some(claim) = post.required_claim() {
-                // The invoked program can only claim accounts with default program id.
-                assert_eq!(
-                    post.account().program_owner,
-                    DEFAULT_PROGRAM_ID,
-                    "Cannot claim an initialized account {pre_account_id}"
+                self.process_claim(
+                    account_identities,
+                    &mut post,
+                    pre_account_id,
+                    pre_is_authorized,
+                    program_id,
+                    claim,
                 );
-
-                let pre_state_position = self
-                    .pre_states
-                    .iter()
-                    .position(|acc| acc.account_id == pre_account_id)
-                    .expect("Pre state must exist at this point");
-
-                let account_identity = &account_identities[pre_state_position];
-                if account_identity.is_public() {
-                    match claim {
-                        Claim::Authorized => {
-                            // Note: no need to check authorized pdas because we have already
-                            // checked consistency of authorization above.
-                            assert!(
-                                pre_is_authorized,
-                                "Cannot claim unauthorized account {pre_account_id}"
-                            );
-                        }
-                        Claim::Pda(seed) => {
-                            let pda = AccountId::for_public_pda(&program_id, &seed);
-                            assert_eq!(
-                                pre_account_id, pda,
-                                "Invalid PDA claim for account {pre_account_id} which does not match derived PDA {pda}"
-                            );
-                            assert_family_binding(
-                                &mut self.pda_family_binding,
-                                program_id,
-                                seed,
-                                pre_account_id,
-                            );
-                        }
-                    }
-                } else {
-                    // Private accounts: don't enforce the claim semantics. Unauthorized private
-                    // claiming is intentionally allowed
-                    match claim {
-                        Claim::Authorized => {}
-                        Claim::Pda(seed) => {
-                            let (npk, identifier) = self
-                                .private_pda_npk_by_position
-                                .get(&pre_state_position)
-                                .expect(
-                                    "private PDA pre_state must have an npk in the position map",
-                                );
-                            let pda =
-                                AccountId::for_private_pda(&program_id, &seed, npk, *identifier);
-                            assert_eq!(
-                                pre_account_id, pda,
-                                "Invalid private PDA claim for account {pre_account_id}"
-                            );
-                            bind_private_pda_position(
-                                &mut self.private_pda_bound_positions,
-                                pre_state_position,
-                                program_id,
-                                seed,
-                            );
-                            assert_family_binding(
-                                &mut self.pda_family_binding,
-                                program_id,
-                                seed,
-                                pre_account_id,
-                            );
-                        }
-                    }
-                }
-
-                post.account_mut().program_owner = program_id;
             }
 
-            post_states_entry.insert_entry(post.into_account());
+            self.post_states.insert(pre_account_id, post.into_account());
+        }
+    }
+
+    fn process_claim(
+        &mut self,
+        account_identities: &[InputAccountIdentity],
+        post: &mut AccountPostState,
+        pre_account_id: AccountId,
+        pre_is_authorized: bool,
+        program_id: ProgramId,
+        claim: Claim,
+    ) {
+        assert_eq!(
+            post.account().program_owner,
+            DEFAULT_PROGRAM_ID,
+            "Cannot claim an initialized account {pre_account_id}"
+        );
+
+        let pre_state_position = self
+            .pre_states
+            .iter()
+            .position(|acc| acc.account_id == pre_account_id)
+            .expect("Pre state must exist at this point");
+
+        let account_identity = &account_identities[pre_state_position];
+        if account_identity.is_public() {
+            match claim {
+                Claim::Authorized => {
+                    assert!(
+                        pre_is_authorized,
+                        "Cannot claim unauthorized account {pre_account_id}"
+                    );
+                }
+                Claim::Pda(seed) => {
+                    let pda = AccountId::for_public_pda(&program_id, &seed);
+                    assert_eq!(
+                        pre_account_id, pda,
+                        "Invalid PDA claim for account {pre_account_id} which does not match derived PDA {pda}"
+                    );
+                    assert_family_binding(
+                        &mut self.pda_family_binding,
+                        program_id,
+                        seed,
+                        pre_account_id,
+                    );
+                }
+            }
+        } else {
+            match claim {
+                Claim::Authorized => {}
+                Claim::Pda(seed) => {
+                    let (npk, identifier) = self
+                        .private_pda_npk_by_position
+                        .get(&pre_state_position)
+                        .expect("private PDA pre_state must have an npk in the position map");
+                    let pda = AccountId::for_private_pda(&program_id, &seed, npk, *identifier);
+                    assert_eq!(
+                        pre_account_id, pda,
+                        "Invalid private PDA claim for account {pre_account_id}"
+                    );
+                    bind_private_pda_position(
+                        &mut self.private_pda_bound_positions,
+                        pre_state_position,
+                        program_id,
+                        seed,
+                    );
+                    assert_family_binding(
+                        &mut self.pda_family_binding,
+                        program_id,
+                        seed,
+                        pre_account_id,
+                    );
+                }
+            }
+        }
+
+        post.account_mut().program_owner = program_id;
+    }
+
+    fn assert_all_pda_positions_bound(&self, account_identities: &[InputAccountIdentity]) {
+        for (pos, account_identity) in account_identities.iter().enumerate() {
+            if account_identity.is_private_pda() {
+                assert!(
+                    self.private_pda_bound_positions.contains_key(&pos),
+                    "private PDA pre_state at position {pos} has no proven (seed, npk) binding via Claim::Pda or caller pda_seeds"
+                );
+            }
+        }
+    }
+
+    fn assert_modified_accounts_claimed(&self) {
+        for (account_id, post) in self
+            .pre_states
+            .iter()
+            .filter(|a| a.account.program_owner == DEFAULT_PROGRAM_ID)
+            .map(|a| {
+                let post = self
+                    .post_states
+                    .get(&a.account_id)
+                    .expect("Post state must exist for pre state");
+                (a, post)
+            })
+            .filter(|(pre_default, post)| pre_default.account != **post)
+            .map(|(pre, post)| (pre.account_id, post))
+        {
+            assert_ne!(
+                post.program_owner, DEFAULT_PROGRAM_ID,
+                "Account {account_id} was modified but not claimed"
+            );
         }
     }
 
@@ -486,6 +359,90 @@ impl ExecutionState {
     }
 }
 
+fn verify_program_output(
+    chained_call: &ChainedCall,
+    caller_program_id: Option<ProgramId>,
+    program_output: &ProgramOutput,
+) {
+    assert_eq!(
+        chained_call.instruction_data, program_output.instruction_data,
+        "Mismatched instruction data between chained call and program output"
+    );
+
+    let program_output_words =
+        &to_vec(program_output).expect("program_output must be serializable");
+    env::verify(chained_call.program_id, program_output_words)
+        .unwrap_or_else(|_: Infallible| unreachable!("Infallible error is never constructed"));
+
+    assert_eq!(
+        program_output.self_program_id, chained_call.program_id,
+        "Program output self_program_id does not match chained call program_id"
+    );
+
+    assert_eq!(
+        program_output.caller_program_id, caller_program_id,
+        "Program output caller_program_id does not match actual caller"
+    );
+
+    if let Err(err) = validate_execution(
+        &program_output.pre_states,
+        &program_output.post_states,
+        chained_call.program_id,
+    ) {
+        panic!(
+            "Invalid program behavior in program {:?}: {err}",
+            chained_call.program_id
+        );
+    }
+}
+
+fn build_private_pda_npk_map(
+    account_identities: &[InputAccountIdentity],
+) -> HashMap<usize, (NullifierPublicKey, Identifier)> {
+    account_identities
+        .iter()
+        .enumerate()
+        .filter_map(|(pos, identity)| {
+            identity
+                .npk_if_private_pda()
+                .map(|(npk, identifier)| (pos, (npk, identifier)))
+        })
+        .collect()
+}
+
+fn intersect_validity_windows(
+    program_outputs: &[ProgramOutput],
+) -> (BlockValidityWindow, TimestampValidityWindow) {
+    let block_valid_from = program_outputs
+        .iter()
+        .filter_map(|output| output.block_validity_window.start())
+        .max();
+    let block_valid_until = program_outputs
+        .iter()
+        .filter_map(|output| output.block_validity_window.end())
+        .min();
+    let ts_valid_from = program_outputs
+        .iter()
+        .filter_map(|output| output.timestamp_validity_window.start())
+        .max();
+    let ts_valid_until = program_outputs
+        .iter()
+        .filter_map(|output| output.timestamp_validity_window.end())
+        .min();
+
+    let block_validity_window: BlockValidityWindow =
+        (block_valid_from, block_valid_until).try_into().expect(
+            "There should be non empty intersection in the program output block validity windows",
+        );
+    let timestamp_validity_window: TimestampValidityWindow = (ts_valid_from, ts_valid_until)
+        .try_into()
+        .expect(
+            "There should be non empty intersection in the program output timestamp validity windows",
+        );
+
+    (block_validity_window, timestamp_validity_window)
+}
+
 /// Record or re-verify the `(program_id, seed) → account_id` family binding for the
 /// transaction. Any claim or caller-seed authorization that resolves a `pre_state` under
 /// `(program_id, seed)` must agree with every prior resolution of the same pair; otherwise a
@@ -493,6 +450,66 @@ impl ExecutionState {
 /// once (different npks under the same seed) and let a callee mix balances across them. Free
 /// function so callers can pass `&mut self.pda_family_binding` without holding a borrow on
 /// the surrounding struct's other fields.
+fn resolve_external_seed(
+    account_identities: &[InputAccountIdentity],
+    pre_state_position: usize,
+    pre_account_id: AccountId,
+    is_authorized: bool,
+    private_pda_bound_positions: &mut HashMap<usize, (ProgramId, PdaSeed)>,
+    pda_family_binding: &mut HashMap<(ProgramId, PdaSeed), AccountId>,
+) {
+    let external_seed = match account_identities.get(pre_state_position) {
+        Some(InputAccountIdentity::PrivatePdaInit {
+            npk,
+            identifier,
+            seed: Some((seed, authority_program_id)),
+            ..
+        }) => {
+            let expected = AccountId::for_private_pda(authority_program_id, seed, npk, *identifier);
+            assert_eq!(
+                pre_account_id, expected,
+                "External seed mismatch for PrivatePdaInit at position {pre_state_position}"
+            );
+            Some((*seed, *authority_program_id))
+        }
+        Some(InputAccountIdentity::PrivatePdaUpdate {
+            nsk,
+            identifier,
+            seed: Some((seed, authority_program_id)),
+            ..
+        }) => {
+            let npk = NullifierPublicKey::from(nsk);
+            let expected =
+                AccountId::for_private_pda(authority_program_id, seed, &npk, *identifier);
+            assert_eq!(
+                pre_account_id, expected,
+                "External seed mismatch for PrivatePdaUpdate at position {pre_state_position}"
+            );
+            Some((*seed, *authority_program_id))
+        }
+        _ => None,
+    };
+
+    if let Some((seed, authority_program_id)) = external_seed {
+        assert!(
+            !is_authorized,
+            "Private PDA with externally-provided seed must not be authorized at position {pre_state_position}"
+        );
+        bind_private_pda_position(
+            private_pda_bound_positions,
+            pre_state_position,
+            authority_program_id,
+            seed,
+        );
+        assert_family_binding(
+            pda_family_binding,
+            authority_program_id,
+            seed,
+            pre_account_id,
+        );
+    }
+}
+
 fn assert_family_binding(
     bindings: &mut HashMap<(ProgramId, PdaSeed), AccountId>,
     program_id: ProgramId,
