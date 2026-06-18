@@ -510,6 +510,66 @@ fn resolve_external_seed(
 /// once (different npks under the same seed) and let a callee mix balances across them. Free
 /// function so callers can pass `&mut self.pda_family_binding` without holding a borrow on
 /// the surrounding struct's other fields.
+fn resolve_external_seed(
+    account_identities: &[InputAccountIdentity],
+    pre_state_position: usize,
+    pre_account_id: AccountId,
+    is_authorized: bool,
+    private_pda_bound_positions: &mut HashMap<usize, (ProgramId, PdaSeed)>,
+    pda_family_binding: &mut HashMap<(ProgramId, PdaSeed), AccountId>,
+) {
+    let external_seed = match account_identities.get(pre_state_position) {
+        Some(InputAccountIdentity::PrivatePdaInit {
+            npk,
+            identifier,
+            seed: Some((seed, authority_program_id)),
+            ..
+        }) => {
+            let expected = AccountId::for_private_pda(authority_program_id, seed, npk, *identifier);
+            assert_eq!(
+                pre_account_id, expected,
+                "External seed mismatch for PrivatePdaInit at position {pre_state_position}"
+            );
+            Some((*seed, *authority_program_id))
+        }
+        Some(InputAccountIdentity::PrivatePdaUpdate {
+            nsk,
+            identifier,
+            seed: Some((seed, authority_program_id)),
+            ..
+        }) => {
+            let npk = NullifierPublicKey::from(nsk);
+            let expected =
+                AccountId::for_private_pda(authority_program_id, seed, &npk, *identifier);
+            assert_eq!(
+                pre_account_id, expected,
+                "External seed mismatch for PrivatePdaUpdate at position {pre_state_position}"
+            );
+            Some((*seed, *authority_program_id))
+        }
+        _ => None,
+    };
+
+    if let Some((seed, authority_program_id)) = external_seed {
+        assert!(
+            !is_authorized,
+            "Private PDA with externally-provided seed must not be authorized at position {pre_state_position}"
+        );
+        bind_private_pda_position(
+            private_pda_bound_positions,
+            pre_state_position,
+            authority_program_id,
+            seed,
+        );
+        assert_family_binding(
+            pda_family_binding,
+            authority_program_id,
+            seed,
+            pre_account_id,
+        );
+    }
+}
+
 fn assert_family_binding(
     bindings: &mut HashMap<(ProgramId, PdaSeed), AccountId>,
     program_id: ProgramId,
