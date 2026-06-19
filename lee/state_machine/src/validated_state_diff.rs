@@ -49,6 +49,11 @@ impl ValidatedStateDiff {
         let message = tx.message();
         let witness_set = tx.witness_set();
 
+        ensure!(
+            !message.account_ids.is_empty(),
+            LeeError::InvalidInput("Public transaction must have at least one account".into())
+        );
+
         // All account_ids must be different
         ensure!(
             message.account_ids.iter().collect::<HashSet<_>>().len() == message.account_ids.len(),

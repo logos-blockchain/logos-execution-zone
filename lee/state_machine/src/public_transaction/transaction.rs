@@ -243,6 +243,21 @@ pub mod tests {
     }
 
     #[test]
+    fn empty_transaction_is_rejected() {
+        let state = state_for_tests();
+        let message = Message::new_preserialized(
+            Program::authenticated_transfer_program().id(),
+            vec![],
+            vec![],
+            vec![0; 4],
+        );
+        let witness_set = WitnessSet::from_raw_parts(vec![]);
+        let tx = PublicTransaction::new(message, witness_set);
+        let result = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0);
+        assert!(matches!(result, Err(LeeError::InvalidInput(_))));
+    }
+
+    #[test]
     fn program_id_must_belong_to_bulitin_program_ids() {
         let (key1, key2, addr1, addr2) = keys_for_tests();
         let state = state_for_tests();
