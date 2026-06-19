@@ -78,6 +78,7 @@ async fn fund_private_pda(
             npk,
             ssk,
             identifier,
+            membership_proof: None,
             seed: Some((seed, authority_program_id)),
         },
     ];

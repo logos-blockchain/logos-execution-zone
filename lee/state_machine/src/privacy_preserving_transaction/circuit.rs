@@ -273,6 +273,7 @@ mod tests {
                     npk: recipient_keys.npk(),
                     ssk: shared_secret,
                     identifier: 0,
+                membership_proof: None,
                 },
             ],
             &crate::test_methods::simple_balance_transfer().into(),
@@ -387,6 +388,7 @@ mod tests {
                     npk: recipient_keys.npk(),
                     ssk: shared_secret_2,
                     identifier: 0,
+                membership_proof: None,
                 },
             ],
             &program.into(),
@@ -460,6 +462,7 @@ mod tests {
                 npk: account_keys.npk(),
                 ssk: shared_secret,
                 identifier: 0,
+            membership_proof: None,
             }],
             &program_with_deps,
         );
@@ -491,6 +494,7 @@ mod tests {
                 npk,
                 ssk: shared_secret,
                 identifier,
+                membership_proof: None,
                 seed: None,
             }],
             &program.clone().into(),
@@ -540,6 +544,7 @@ mod tests {
                 npk,
                 ssk: shared_secret_pda,
                 identifier: 0,
+                membership_proof: None,
                 seed: None,
             }],
             &program_with_deps,
@@ -595,6 +600,7 @@ mod tests {
                     npk,
                     ssk: shared_secret_pda,
                     identifier: 0,
+                    membership_proof: None,
                     seed: None,
                 },
                 InputAccountIdentity::Public,
@@ -653,6 +659,7 @@ mod tests {
                     npk: shared_npk,
                     ssk: shared_secret,
                     identifier: shared_identifier,
+                membership_proof: None,
                 },
             ],
             &program.into(),
@@ -683,6 +690,7 @@ mod tests {
                 ssk,
                 nsk: keys.nsk,
                 identifier,
+                membership_proof: None,
             }],
             &program.into(),
         )
@@ -698,23 +706,40 @@ mod tests {
     /// to `PrivateAccountKind::Regular` carrying the correct identifier.
     #[test]
     fn private_unauthorized_init_encrypts_regular_kind_with_identifier() {
-        let program = crate::test_methods::claimer();
+        let program = Program::authenticated_transfer_program();
         let keys = test_private_account_keys_1();
         let identifier: u128 = 99;
         let ssk = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &[0_u8; 32], 0).0;
+
+        let sender = AccountWithMetadata::new(
+            Account {
+                program_owner: program.id(),
+                balance: 1,
+                ..Account::default()
+            },
+            true,
+            AccountId::new([0; 32]),
+        );
         let recipient_id = AccountId::for_regular_private_account(&keys.npk(), identifier);
         let recipient = AccountWithMetadata::new(Account::default(), false, recipient_id);
 
         let (output, _) = execute_and_prove(
-            vec![recipient],
-            Program::serialize_instruction(()).unwrap(),
-            vec![InputAccountIdentity::PrivateUnauthorized {
-                epk: EphemeralPublicKey(Vec::new()),
-                view_tag: EncryptedAccountData::compute_view_tag(&keys.npk(), &keys.vpk()),
-                npk: keys.npk(),
-                ssk,
-                identifier,
-            }],
+            vec![sender, recipient],
+            Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
+                amount: 1,
+            })
+            .unwrap(),
+            vec![
+                InputAccountIdentity::Public,
+                InputAccountIdentity::PrivateUnauthorized {
+                    epk: EphemeralPublicKey(Vec::new()),
+                    view_tag: EncryptedAccountData::compute_view_tag(&keys.npk(), &keys.vpk()),
+                    npk: keys.npk(),
+                    ssk,
+                    identifier,
+                    membership_proof: None,
+                },
+            ],
             &program.into(),
         )
         .unwrap();
@@ -848,6 +873,7 @@ mod tests {
                 npk,
                 ssk: shared_secret,
                 identifier: 99,
+                membership_proof: None,
                 seed: None,
             }],
             &program.into(),
@@ -903,4 +929,5 @@ mod tests {
 
         assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
     }
+
 }
