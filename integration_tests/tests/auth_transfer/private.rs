@@ -724,10 +724,10 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
     Ok(())
 }
 
-#[test]
-async fn init_with_dummy_commitment_membership_proof_produces_valid_root() -> Result<()> {
-    let ctx = TestContext::new().await?;
-
+async fn prove_init_with_membership_proof(
+    ctx: &TestContext,
+    membership_proof: Option<lee_core::MembershipProof>,
+) -> Result<lee_core::PrivacyPreservingCircuitOutput> {
     let program = Program::authenticated_transfer_program();
     let sender_id = ctx.existing_public_accounts()[0];
     let sender_pre = AccountWithMetadata::new(
@@ -743,15 +743,7 @@ async fn init_with_dummy_commitment_membership_proof_produces_valid_root() -> Re
     let recipient_account_id = AccountId::for_regular_private_account(&npk, 0);
     let recipient = AccountWithMetadata::new(Account::default(), false, recipient_account_id);
 
-    let dummy_proof = ctx
-        .sequencer_client()
-        .get_proof_for_commitment(DUMMY_COMMITMENT)
-        .await?
-        .expect("DUMMY_COMMITMENT must be in genesis commitment set");
-
-    let expected_digest = compute_digest_for_path(&DUMMY_COMMITMENT, &dummy_proof);
-
-    let (output, _proof) = execute_and_prove(
+    let (output, _) = execute_and_prove(
         vec![sender_pre, recipient],
         Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
             amount: 1,
@@ -764,11 +756,31 @@ async fn init_with_dummy_commitment_membership_proof_produces_valid_root() -> Re
                 npk,
                 ssk,
                 identifier: 0,
-                membership_proof: Some(dummy_proof),
+                membership_proof,
             },
         ],
         &program.into(),
     )?;
+
+    Ok(output)
+}
+
+#[test]
+async fn init_with_dummy_commitment_membership_proof_produces_valid_root() -> Result<()> {
+    let ctx = TestContext::new().await?;
+
+    let dummy_proof = ctx
+        .sequencer_client()
+        .get_proof_for_commitment(DUMMY_COMMITMENT)
+        .await?
+        .expect("DUMMY_COMMITMENT must be in genesis commitment set");
+    let expected_digest = compute_digest_for_path(&DUMMY_COMMITMENT, &dummy_proof);
+
+    let nsk: lee_core::NullifierSecretKey = [7; 32];
+    let npk = NullifierPublicKey::from(&nsk);
+    let recipient_account_id = AccountId::for_regular_private_account(&npk, 0);
+
+    let output = prove_init_with_membership_proof(&ctx, Some(dummy_proof)).await?;
 
     assert_eq!(output.new_nullifiers.len(), 1);
     let (nullifier, digest) = &output.new_nullifiers[0];
@@ -786,74 +798,15 @@ async fn init_with_dummy_commitment_membership_proof_produces_valid_root() -> Re
 async fn init_nullifier_digest_is_bound_to_membership_proof() -> Result<()> {
     let ctx = TestContext::new().await?;
 
-    let program = Program::authenticated_transfer_program();
-    let sender_id = ctx.existing_public_accounts()[0];
-
-    let nsk: lee_core::NullifierSecretKey = [7; 32];
-    let npk = NullifierPublicKey::from(&nsk);
-    let vpk = ViewingPublicKey::from_bytes(vec![4_u8; 1184]).unwrap();
-    let ssk = SharedSecretKey([55_u8; 32]);
-    let recipient_account_id = AccountId::for_regular_private_account(&npk, 0);
-
     let dummy_proof = ctx
         .sequencer_client()
         .get_proof_for_commitment(DUMMY_COMMITMENT)
         .await?
         .expect("DUMMY_COMMITMENT must be in genesis commitment set");
-
     let expected_digest = compute_digest_for_path(&DUMMY_COMMITMENT, &dummy_proof);
 
-    // Run with membership proof — digest should be the computed tree root.
-    let sender_pre = AccountWithMetadata::new(
-        ctx.sequencer_client().get_account(sender_id).await?,
-        true,
-        sender_id,
-    );
-    let recipient = AccountWithMetadata::new(Account::default(), false, recipient_account_id);
-    let (output_with_proof, _) = execute_and_prove(
-        vec![sender_pre, recipient],
-        Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
-            amount: 1,
-        })?,
-        vec![
-            InputAccountIdentity::Public,
-            InputAccountIdentity::PrivateUnauthorized {
-                epk: EphemeralPublicKey(Vec::new()),
-                view_tag: EncryptedAccountData::compute_view_tag(&npk, &vpk),
-                npk,
-                ssk,
-                identifier: 0,
-                membership_proof: Some(dummy_proof),
-            },
-        ],
-        &program.clone().into(),
-    )?;
-
-    // Run without membership proof — digest should be DUMMY_COMMITMENT_HASH.
-    let sender_pre = AccountWithMetadata::new(
-        ctx.sequencer_client().get_account(sender_id).await?,
-        true,
-        sender_id,
-    );
-    let recipient = AccountWithMetadata::new(Account::default(), false, recipient_account_id);
-    let (output_without_proof, _) = execute_and_prove(
-        vec![sender_pre, recipient],
-        Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
-            amount: 1,
-        })?,
-        vec![
-            InputAccountIdentity::Public,
-            InputAccountIdentity::PrivateUnauthorized {
-                epk: EphemeralPublicKey(Vec::new()),
-                view_tag: EncryptedAccountData::compute_view_tag(&npk, &vpk),
-                npk,
-                ssk,
-                identifier: 0,
-                membership_proof: None,
-            },
-        ],
-        &program.into(),
-    )?;
+    let output_with_proof = prove_init_with_membership_proof(&ctx, Some(dummy_proof)).await?;
+    let output_without_proof = prove_init_with_membership_proof(&ctx, None).await?;
 
     assert_eq!(output_with_proof.new_nullifiers[0].1, expected_digest);
     assert_eq!(
