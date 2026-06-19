@@ -341,7 +341,9 @@ impl AccountManager {
             states.push(state);
         }
 
-        let has_init_account = states.iter().any(|s| matches!(s, State::Private(pre) if pre.proof.is_none()));
+        let has_init_account = states
+            .iter()
+            .any(|s| matches!(s, State::Private(pre) if pre.proof.is_none()));
         let dummy_commitment_proof = if has_init_account {
             wallet
                 .get_dummy_commitment_proof()

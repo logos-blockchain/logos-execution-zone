@@ -12,8 +12,9 @@ use lee::{
 };
 use lee_core::{
     DUMMY_COMMITMENT, DUMMY_COMMITMENT_HASH, EncryptedAccountData, InputAccountIdentity, Nullifier,
-    NullifierPublicKey, compute_digest_for_path,
+    NullifierPublicKey,
     account::{Account, AccountWithMetadata},
+    compute_digest_for_path,
     encryption::{EphemeralPublicKey, ViewingPublicKey},
 };
 use log::info;
@@ -855,7 +856,10 @@ async fn init_nullifier_digest_is_bound_to_membership_proof() -> Result<()> {
     )?;
 
     assert_eq!(output_with_proof.new_nullifiers[0].1, expected_digest);
-    assert_eq!(output_without_proof.new_nullifiers[0].1, DUMMY_COMMITMENT_HASH);
+    assert_eq!(
+        output_without_proof.new_nullifiers[0].1,
+        DUMMY_COMMITMENT_HASH
+    );
     assert_ne!(
         output_with_proof.new_nullifiers[0].1,
         output_without_proof.new_nullifiers[0].1,

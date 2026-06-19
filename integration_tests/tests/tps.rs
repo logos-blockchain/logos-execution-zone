@@ -314,7 +314,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
                 npk: recipient_npk,
                 ssk: recipient_ss,
                 identifier: 0,
-            membership_proof: None,
+                membership_proof: None,
             },
         ],
         &program.into(),

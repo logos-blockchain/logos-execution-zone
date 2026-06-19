@@ -273,7 +273,7 @@ mod tests {
                     npk: recipient_keys.npk(),
                     ssk: shared_secret,
                     identifier: 0,
-                membership_proof: None,
+                    membership_proof: None,
                 },
             ],
             &crate::test_methods::simple_balance_transfer().into(),
@@ -388,7 +388,7 @@ mod tests {
                     npk: recipient_keys.npk(),
                     ssk: shared_secret_2,
                     identifier: 0,
-                membership_proof: None,
+                    membership_proof: None,
                 },
             ],
             &program.into(),
@@ -462,7 +462,7 @@ mod tests {
                 npk: account_keys.npk(),
                 ssk: shared_secret,
                 identifier: 0,
-            membership_proof: None,
+                membership_proof: None,
             }],
             &program_with_deps,
         );
@@ -659,7 +659,7 @@ mod tests {
                     npk: shared_npk,
                     ssk: shared_secret,
                     identifier: shared_identifier,
-                membership_proof: None,
+                    membership_proof: None,
                 },
             ],
             &program.into(),
@@ -929,5 +929,4 @@ mod tests {
 
         assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
     }
-
 }
