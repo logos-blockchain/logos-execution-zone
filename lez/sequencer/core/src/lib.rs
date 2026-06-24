@@ -335,8 +335,9 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         Ok(self.chain_height)
     }
 
-    /// Builds a new block from transactions in the mempool.
-    /// Does NOT publish or store the block — the caller is responsible for that.
+    /// Validates and applies a single mempool transaction to the current state.
+    /// Returns `Ok(true)` if the transaction was valid and applied, `Ok(false)` if
+    /// it was skipped due to validation failure.
     fn apply_mempool_transaction(
         &mut self,
         origin: TransactionOrigin,
