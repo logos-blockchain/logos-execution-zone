@@ -5,7 +5,8 @@ use key_protocol::key_management::ephemeral_key_holder::EphemeralKeyHolder;
 use keycard_wallet::{KeycardWallet, python_path};
 use lee::{AccountId, PrivateKey, PublicKey, Signature};
 use lee_core::{
-    Identifier, InputAccountIdentity, MembershipProof, NullifierPublicKey, NullifierSecretKey,
+    CommitmentSetDigest, Identifier, InputAccountIdentity, MembershipProof, NullifierPublicKey,
+    NullifierSecretKey,
     SharedSecretKey,
     account::{AccountWithMetadata, Nonce},
     encryption::{EncryptedAccountData, EphemeralPublicKey, ViewingPublicKey},
@@ -187,7 +188,7 @@ enum State {
 pub struct AccountManager {
     states: Vec<State>,
     pin: Option<String>,
-    dummy_commitment_proof: Option<MembershipProof>,
+    dummy_commitment_root: Option<CommitmentSetDigest>,
 }
 
 impl AccountManager {
@@ -344,9 +345,9 @@ impl AccountManager {
         let has_init_account = states
             .iter()
             .any(|s| matches!(s, State::Private(pre) if pre.proof.is_none()));
-        let dummy_commitment_proof = if has_init_account {
+        let dummy_commitment_root = if has_init_account {
             wallet
-                .get_dummy_commitment_proof()
+                .get_commitment_root()
                 .await
                 .map_err(ExecutionFailureKind::SequencerError)?
         } else {
@@ -356,7 +357,7 @@ impl AccountManager {
         Ok(Self {
             states,
             pin,
-            dummy_commitment_proof,
+            dummy_commitment_root,
         })
     }
 
@@ -421,7 +422,7 @@ impl AccountManager {
                         npk: pre.npk,
                         ssk: pre.ssk,
                         identifier: pre.identifier,
-                        membership_proof: self.dummy_commitment_proof.clone(),
+                        commitment_root: self.dummy_commitment_root,
                         seed: None,
                     },
                 },
@@ -442,7 +443,7 @@ impl AccountManager {
                         ssk: pre.ssk,
                         nsk,
                         identifier: pre.identifier,
-                        membership_proof: self.dummy_commitment_proof.clone(),
+                        commitment_root: self.dummy_commitment_root,
                     },
                     (None, _) => InputAccountIdentity::PrivateUnauthorized {
                         epk: pre.epk.clone(),
@@ -450,7 +451,7 @@ impl AccountManager {
                         npk: pre.npk,
                         ssk: pre.ssk,
                         identifier: pre.identifier,
-                        membership_proof: self.dummy_commitment_proof.clone(),
+                        commitment_root: self.dummy_commitment_root,
                     },
                 },
             })

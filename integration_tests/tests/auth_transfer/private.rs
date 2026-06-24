@@ -712,7 +712,7 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
                 npk,
                 ssk,
                 identifier: 1337,
-                membership_proof: None,
+                commitment_root: None,
                 seed: None,
             },
         ],
@@ -724,9 +724,9 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
     Ok(())
 }
 
-async fn prove_init_with_membership_proof(
+async fn prove_init_with_commitment_root(
     ctx: &TestContext,
-    membership_proof: Option<lee_core::MembershipProof>,
+    commitment_root: Option<lee_core::CommitmentSetDigest>,
 ) -> Result<lee_core::PrivacyPreservingCircuitOutput> {
     let program = Program::authenticated_transfer_program();
     let sender_id = ctx.existing_public_accounts()[0];
@@ -756,7 +756,7 @@ async fn prove_init_with_membership_proof(
                 npk,
                 ssk,
                 identifier: 0,
-                membership_proof,
+                commitment_root,
             },
         ],
         &program.into(),
@@ -766,7 +766,7 @@ async fn prove_init_with_membership_proof(
 }
 
 #[test]
-async fn init_with_dummy_commitment_membership_proof_produces_valid_root() -> Result<()> {
+async fn init_with_dummy_commitment_root_produces_valid_root() -> Result<()> {
     let ctx = TestContext::new().await?;
 
     let dummy_proof = ctx
@@ -780,7 +780,7 @@ async fn init_with_dummy_commitment_membership_proof_produces_valid_root() -> Re
     let npk = NullifierPublicKey::from(&nsk);
     let recipient_account_id = AccountId::for_regular_private_account(&npk, 0);
 
-    let output = prove_init_with_membership_proof(&ctx, Some(dummy_proof)).await?;
+    let output = prove_init_with_commitment_root(&ctx, Some(expected_digest)).await?;
 
     assert_eq!(output.new_nullifiers.len(), 1);
     let (nullifier, digest) = &output.new_nullifiers[0];
@@ -795,7 +795,7 @@ async fn init_with_dummy_commitment_membership_proof_produces_valid_root() -> Re
 }
 
 #[test]
-async fn init_nullifier_digest_is_bound_to_membership_proof() -> Result<()> {
+async fn init_nullifier_digest_is_bound_to_commitment_root() -> Result<()> {
     let ctx = TestContext::new().await?;
 
     let dummy_proof = ctx
@@ -805,17 +805,17 @@ async fn init_nullifier_digest_is_bound_to_membership_proof() -> Result<()> {
         .expect("DUMMY_COMMITMENT must be in genesis commitment set");
     let expected_digest = compute_digest_for_path(&DUMMY_COMMITMENT, &dummy_proof);
 
-    let output_with_proof = prove_init_with_membership_proof(&ctx, Some(dummy_proof)).await?;
-    let output_without_proof = prove_init_with_membership_proof(&ctx, None).await?;
+    let output_with_root = prove_init_with_commitment_root(&ctx, Some(expected_digest)).await?;
+    let output_without_root = prove_init_with_commitment_root(&ctx, None).await?;
 
-    assert_eq!(output_with_proof.new_nullifiers[0].1, expected_digest);
+    assert_eq!(output_with_root.new_nullifiers[0].1, expected_digest);
     assert_eq!(
-        output_without_proof.new_nullifiers[0].1,
+        output_without_root.new_nullifiers[0].1,
         DUMMY_COMMITMENT_HASH
     );
     assert_ne!(
-        output_with_proof.new_nullifiers[0].1,
-        output_without_proof.new_nullifiers[0].1,
+        output_with_root.new_nullifiers[0].1,
+        output_without_root.new_nullifiers[0].1,
     );
 
     Ok(())
