@@ -7,17 +7,11 @@ use std::{io::Write as _, time::Duration};
 
 use anyhow::Result;
 use common::transaction::LeeTransaction;
-use integration_tests::{
-    LEE_PROGRAM_FOR_TEST_DATA_CHANGER, TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, get_account,
-};
-use lee::program::Program;
+use integration_tests::{TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, get_account, new_account};
 use log::info;
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
-use wallet::cli::{
-    Command, SubcommandReturnValue,
-    account::{AccountSubcommand, NewSubcommand},
-};
+use wallet::cli::Command;
 
 #[test]
 async fn deploy_and_execute_program() -> Result<()> {
@@ -38,17 +32,7 @@ async fn deploy_and_execute_program() -> Result<()> {
     info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
-    let SubcommandReturnValue::RegisterAccount { account_id } = wallet::cli::execute_subcommand(
-        ctx.wallet_mut(),
-        Command::Account(AccountSubcommand::New(NewSubcommand::Public {
-            cci: None,
-            label: None,
-        })),
-    )
-    .await?
-    else {
-        panic!("Expected RegisterAccount return value");
-    };
+    let account_id = new_account(&mut ctx, false, None).await?;
 
     let nonces = ctx.wallet().get_accounts_nonces(vec![account_id]).await?;
     let private_key = ctx

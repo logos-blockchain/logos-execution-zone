@@ -6,7 +6,7 @@ use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, account_balance, get_account, new_account,
     public_mention, send,
 };
-use lee::{program::Program, public_transaction, system_faucet_account_id};
+use lee::public_transaction;
 use log::info;
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
@@ -21,19 +21,23 @@ use wallet::{
 #[test]
 async fn successful_transfer_to_existing_account() -> Result<()> {
     let mut ctx = TestContext::new().await?;
-    let (acc0, acc1) = (
-        ctx.existing_public_accounts()[0],
-        ctx.existing_public_accounts()[1],
-    );
 
-    send(&mut ctx, public_mention(acc0), public_mention(acc1), 100).await?;
+    let sender = ctx.existing_public_accounts()[0];
+    let receiver = ctx.existing_public_accounts()[1];
+    send(
+        &mut ctx,
+        public_mention(sender),
+        public_mention(receiver),
+        100,
+    )
+    .await?;
 
     info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     info!("Checking correct balance move");
-    let acc_1_balance = account_balance(&ctx, ctx.existing_public_accounts()[0]).await?;
-    let acc_2_balance = account_balance(&ctx, ctx.existing_public_accounts()[1]).await?;
+    let acc_1_balance = account_balance(&ctx, sender).await?;
+    let acc_2_balance = account_balance(&ctx, receiver).await?;
 
     info!("Balance of sender: {acc_1_balance:#?}");
     info!("Balance of receiver: {acc_2_balance:#?}");
@@ -49,11 +53,11 @@ pub async fn successful_transfer_to_new_account() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
     let new_persistent_account_id = new_account(&mut ctx, false, None).await?;
-    let acc0 = ctx.existing_public_accounts()[0];
 
+    let sender = ctx.existing_public_accounts()[0];
     send(
         &mut ctx,
-        public_mention(acc0),
+        public_mention(sender),
         public_mention(new_persistent_account_id),
         100,
     )
@@ -63,7 +67,7 @@ pub async fn successful_transfer_to_new_account() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     info!("Checking correct balance move");
-    let acc_1_balance = account_balance(&ctx, ctx.existing_public_accounts()[0]).await?;
+    let acc_1_balance = account_balance(&ctx, sender).await?;
     let acc_2_balance = account_balance(&ctx, new_persistent_account_id).await?;
 
     info!("Balance of sender: {acc_1_balance:#?}");
@@ -111,20 +115,25 @@ async fn failed_transfer_with_insufficient_balance() -> Result<()> {
 #[test]
 async fn two_consecutive_successful_transfers() -> Result<()> {
     let mut ctx = TestContext::new().await?;
-    let (acc0, acc1) = (
-        ctx.existing_public_accounts()[0],
-        ctx.existing_public_accounts()[1],
-    );
+
+    let sender = ctx.existing_public_accounts()[0];
+    let receiver = ctx.existing_public_accounts()[1];
 
     // First transfer
-    send(&mut ctx, public_mention(acc0), public_mention(acc1), 100).await?;
+    send(
+        &mut ctx,
+        public_mention(sender),
+        public_mention(receiver),
+        100,
+    )
+    .await?;
 
     info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     info!("Checking correct balance move after first transfer");
-    let acc_1_balance = account_balance(&ctx, ctx.existing_public_accounts()[0]).await?;
-    let acc_2_balance = account_balance(&ctx, ctx.existing_public_accounts()[1]).await?;
+    let acc_1_balance = account_balance(&ctx, sender).await?;
+    let acc_2_balance = account_balance(&ctx, receiver).await?;
 
     info!("Balance of sender: {acc_1_balance:#?}");
     info!("Balance of receiver: {acc_2_balance:#?}");
@@ -135,14 +144,20 @@ async fn two_consecutive_successful_transfers() -> Result<()> {
     info!("First TX Success!");
 
     // Second transfer
-    send(&mut ctx, public_mention(acc0), public_mention(acc1), 100).await?;
+    send(
+        &mut ctx,
+        public_mention(sender),
+        public_mention(receiver),
+        100,
+    )
+    .await?;
 
     info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     info!("Checking correct balance move after second transfer");
-    let acc_1_balance = account_balance(&ctx, ctx.existing_public_accounts()[0]).await?;
-    let acc_2_balance = account_balance(&ctx, ctx.existing_public_accounts()[1]).await?;
+    let acc_1_balance = account_balance(&ctx, sender).await?;
+    let acc_2_balance = account_balance(&ctx, receiver).await?;
 
     info!("Balance of sender: {acc_1_balance:#?}");
     info!("Balance of receiver: {acc_2_balance:#?}");
@@ -195,11 +210,12 @@ async fn successful_transfer_using_from_label() -> Result<()> {
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
     // Send using the label instead of account ID
-    let acc1 = ctx.existing_public_accounts()[1];
+    let sender = ctx.existing_public_accounts()[0];
+    let receiver = ctx.existing_public_accounts()[1];
     send(
         &mut ctx,
         CliAccountMention::Label(label),
-        public_mention(acc1),
+        public_mention(receiver),
         100,
     )
     .await?;
@@ -208,8 +224,8 @@ async fn successful_transfer_using_from_label() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     info!("Checking correct balance move");
-    let acc_1_balance = account_balance(&ctx, ctx.existing_public_accounts()[0]).await?;
-    let acc_2_balance = account_balance(&ctx, ctx.existing_public_accounts()[1]).await?;
+    let acc_1_balance = account_balance(&ctx, sender).await?;
+    let acc_2_balance = account_balance(&ctx, receiver).await?;
 
     assert_eq!(acc_1_balance, 9900);
     assert_eq!(acc_2_balance, 20100);
@@ -232,10 +248,11 @@ async fn successful_transfer_using_to_label() -> Result<()> {
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
     // Send using the label for the recipient
-    let acc0 = ctx.existing_public_accounts()[0];
+    let sender = ctx.existing_public_accounts()[0];
+    let receiver = ctx.existing_public_accounts()[1];
     send(
         &mut ctx,
-        public_mention(acc0),
+        public_mention(sender),
         CliAccountMention::Label(label),
         100,
     )
@@ -245,8 +262,8 @@ async fn successful_transfer_using_to_label() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     info!("Checking correct balance move");
-    let acc_1_balance = account_balance(&ctx, ctx.existing_public_accounts()[0]).await?;
-    let acc_2_balance = account_balance(&ctx, ctx.existing_public_accounts()[1]).await?;
+    let acc_1_balance = account_balance(&ctx, sender).await?;
+    let acc_2_balance = account_balance(&ctx, receiver).await?;
 
     assert_eq!(acc_1_balance, 9900);
     assert_eq!(acc_2_balance, 20100);

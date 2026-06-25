@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, create_token, get_account, new_account,
-    private_mention, public_mention, token_send, verify_commitment_is_in_state,
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, get_account, new_account, private_mention,
+    public_mention, sync_private, verify_commitment_is_in_state,
 };
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use log::info;
@@ -40,14 +40,16 @@ async fn create_and_transfer_public_token() -> Result<()> {
     // Create new token
     let name = "A NAME".to_owned();
     let total_supply = 37;
-    create_token(
-        &mut ctx,
-        public_mention(definition_account_id),
-        public_mention(supply_account_id),
-        name.clone(),
+    let subcommand = TokenProgramAgnosticSubcommand::New {
+        definition_account_id: public_mention(definition_account_id),
+        supply_account_id: public_mention(supply_account_id),
+        name: name.clone(),
         total_supply,
-    )
-    .await?;
+    };
+    wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
+
+    info!("Waiting for next block creation");
+    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Check the status of the token definition account
     let definition_acc = get_account(&ctx, definition_account_id).await?;
@@ -79,17 +81,24 @@ async fn create_and_transfer_public_token() -> Result<()> {
 
     // Transfer 7 tokens from supply_acc to recipient_account_id
     let transfer_amount = 7;
-    token_send(
-        &mut ctx,
-        public_mention(supply_account_id),
-        public_mention(recipient_account_id),
-        transfer_amount,
-    )
-    .await?;
+    let subcommand = TokenProgramAgnosticSubcommand::Send {
+        from: public_mention(supply_account_id),
+        to: Some(public_mention(recipient_account_id)),
+        to_npk: None,
+        to_vpk: None,
+        to_keys: None,
+        to_identifier: Some(0),
+        amount: transfer_amount,
+    };
+
+    wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
+
+    info!("Waiting for next block creation");
+    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Check the status of the supply account after transfer
     let supply_acc = get_account(&ctx, supply_account_id).await?;
-    assert_eq!(supply_acc.program_owner, Program::token().id());
+    assert_eq!(supply_acc.program_owner, programs::token().id());
     let token_holding = TokenHolding::try_from(&supply_acc.data)?;
     assert_eq!(
         token_holding,
@@ -101,7 +110,7 @@ async fn create_and_transfer_public_token() -> Result<()> {
 
     // Check the status of the recipient account after transfer
     let recipient_acc = get_account(&ctx, recipient_account_id).await?;
-    assert_eq!(recipient_acc.program_owner, Program::token().id());
+    assert_eq!(recipient_acc.program_owner, programs::token().id());
     let token_holding = TokenHolding::try_from(&recipient_acc.data)?;
     assert_eq!(
         token_holding,
@@ -212,14 +221,17 @@ async fn create_and_transfer_token_with_private_supply() -> Result<()> {
     // Create new token
     let name = "A NAME".to_owned();
     let total_supply = 37;
-    create_token(
-        &mut ctx,
-        public_mention(definition_account_id),
-        private_mention(supply_account_id),
-        name.clone(),
+    let subcommand = TokenProgramAgnosticSubcommand::New {
+        definition_account_id: public_mention(definition_account_id),
+        supply_account_id: private_mention(supply_account_id),
+        name: name.clone(),
         total_supply,
-    )
-    .await?;
+    };
+
+    wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
+
+    info!("Waiting for next block creation");
+    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Check the status of the token definition account
     let definition_acc = get_account(&ctx, definition_account_id).await?;
@@ -243,13 +255,20 @@ async fn create_and_transfer_token_with_private_supply() -> Result<()> {
 
     // Transfer 7 tokens from supply_acc to recipient_account_id
     let transfer_amount = 7;
-    token_send(
-        &mut ctx,
-        private_mention(supply_account_id),
-        private_mention(recipient_account_id),
-        transfer_amount,
-    )
-    .await?;
+    let subcommand = TokenProgramAgnosticSubcommand::Send {
+        from: private_mention(supply_account_id),
+        to: Some(private_mention(recipient_account_id)),
+        to_npk: None,
+        to_vpk: None,
+        to_keys: None,
+        to_identifier: Some(0),
+        amount: transfer_amount,
+    };
+
+    wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
+
+    info!("Waiting for next block creation");
+    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     let new_commitment1 = ctx
         .wallet()
@@ -328,14 +347,17 @@ async fn create_token_with_private_definition() -> Result<()> {
     // Create token with private definition
     let name = "A NAME".to_owned();
     let total_supply = 37;
-    create_token(
-        &mut ctx,
-        private_mention(definition_account_id),
-        public_mention(supply_account_id),
-        name.clone(),
+    let subcommand = TokenProgramAgnosticSubcommand::New {
+        definition_account_id: private_mention(definition_account_id),
+        supply_account_id: public_mention(supply_account_id),
+        name: name.clone(),
         total_supply,
-    )
-    .await?;
+    };
+
+    wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
+
+    info!("Waiting for next block creation");
+    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Verify private definition commitment
     let new_commitment = ctx
@@ -465,14 +487,17 @@ async fn create_token_with_private_definition_and_supply() -> Result<()> {
     // Create token with both private definition and supply
     let name = "A NAME".to_owned();
     let total_supply = 37;
-    create_token(
-        &mut ctx,
-        private_mention(definition_account_id),
-        private_mention(supply_account_id),
+    let subcommand = TokenProgramAgnosticSubcommand::New {
+        definition_account_id: private_mention(definition_account_id),
+        supply_account_id: private_mention(supply_account_id),
         name,
         total_supply,
-    )
-    .await?;
+    };
+
+    wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
+
+    info!("Waiting for next block creation");
+    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Verify definition commitment
     let definition_commitment = ctx
@@ -508,13 +533,20 @@ async fn create_token_with_private_definition_and_supply() -> Result<()> {
 
     // Transfer tokens
     let transfer_amount = 7;
-    token_send(
-        &mut ctx,
-        private_mention(supply_account_id),
-        private_mention(recipient_account_id),
-        transfer_amount,
-    )
-    .await?;
+    let subcommand = TokenProgramAgnosticSubcommand::Send {
+        from: private_mention(supply_account_id),
+        to: Some(private_mention(recipient_account_id)),
+        to_npk: None,
+        to_vpk: None,
+        to_keys: None,
+        to_identifier: Some(0),
+        amount: transfer_amount,
+    };
+
+    wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
+
+    info!("Waiting for next block creation");
+    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Verify both commitments updated
     let supply_commitment = ctx
@@ -577,24 +609,34 @@ async fn shielded_token_transfer() -> Result<()> {
     // Create token
     let name = "A NAME".to_owned();
     let total_supply = 37;
-    create_token(
-        &mut ctx,
-        public_mention(definition_account_id),
-        public_mention(supply_account_id),
+    let subcommand = TokenProgramAgnosticSubcommand::New {
+        definition_account_id: public_mention(definition_account_id),
+        supply_account_id: public_mention(supply_account_id),
         name,
         total_supply,
-    )
-    .await?;
+    };
+
+    wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
+
+    info!("Waiting for next block creation");
+    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Perform shielded transfer: public supply -> private recipient
     let transfer_amount = 7;
-    token_send(
-        &mut ctx,
-        public_mention(supply_account_id),
-        private_mention(recipient_account_id),
-        transfer_amount,
-    )
-    .await?;
+    let subcommand = TokenProgramAgnosticSubcommand::Send {
+        from: public_mention(supply_account_id),
+        to: Some(private_mention(recipient_account_id)),
+        to_npk: None,
+        to_vpk: None,
+        to_keys: None,
+        to_identifier: Some(0),
+        amount: transfer_amount,
+    };
+
+    wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
+
+    info!("Waiting for next block creation");
+    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Verify supply account balance
     let supply_acc = get_account(&ctx, supply_account_id).await?;
@@ -649,24 +691,34 @@ async fn deshielded_token_transfer() -> Result<()> {
     // Create token with private supply
     let name = "A NAME".to_owned();
     let total_supply = 37;
-    create_token(
-        &mut ctx,
-        public_mention(definition_account_id),
-        private_mention(supply_account_id),
+    let subcommand = TokenProgramAgnosticSubcommand::New {
+        definition_account_id: public_mention(definition_account_id),
+        supply_account_id: private_mention(supply_account_id),
         name,
         total_supply,
-    )
-    .await?;
+    };
+
+    wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
+
+    info!("Waiting for next block creation");
+    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Perform deshielded transfer: private supply -> public recipient
     let transfer_amount = 7;
-    token_send(
-        &mut ctx,
-        private_mention(supply_account_id),
-        public_mention(recipient_account_id),
-        transfer_amount,
-    )
-    .await?;
+    let subcommand = TokenProgramAgnosticSubcommand::Send {
+        from: private_mention(supply_account_id),
+        to: Some(public_mention(recipient_account_id)),
+        to_npk: None,
+        to_vpk: None,
+        to_keys: None,
+        to_identifier: Some(0),
+        amount: transfer_amount,
+    };
+
+    wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
+
+    info!("Waiting for next block creation");
+    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Verify supply account commitment exists
     let new_commitment = ctx
@@ -718,14 +770,17 @@ async fn token_claiming_path_with_private_accounts() -> Result<()> {
     // Create token
     let name = "A NAME".to_owned();
     let total_supply = 37;
-    create_token(
-        &mut ctx,
-        private_mention(definition_account_id),
-        private_mention(supply_account_id),
+    let subcommand = TokenProgramAgnosticSubcommand::New {
+        definition_account_id: private_mention(definition_account_id),
+        supply_account_id: private_mention(supply_account_id),
         name,
         total_supply,
-    )
-    .await?;
+    };
+
+    wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
+
+    info!("Waiting for next block creation");
+    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Create new private account for claiming path
     let recipient_account_id = new_account(&mut ctx, true, None).await?;
@@ -759,8 +814,7 @@ async fn token_claiming_path_with_private_accounts() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Sync to claim the account
-    let command = Command::Account(AccountSubcommand::SyncPrivate {});
-    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
+    sync_private(&mut ctx).await?;
 
     // Verify commitment exists
     let recipient_commitment = ctx
@@ -829,14 +883,16 @@ async fn create_token_using_labels() -> Result<()> {
     // Create token using account labels instead of IDs
     let name = "LABELED TOKEN".to_owned();
     let total_supply = 100;
-    create_token(
-        &mut ctx,
-        def_label.into(),
-        supply_label.into(),
-        name.clone(),
+    let subcommand = TokenProgramAgnosticSubcommand::New {
+        definition_account_id: def_label.into(),
+        supply_account_id: supply_label.into(),
+        name: name.clone(),
         total_supply,
-    )
-    .await?;
+    };
+    wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
+
+    info!("Waiting for next block creation");
+    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     let definition_acc = get_account(&ctx, definition_account_id).await?;
     let token_definition = TokenDefinition::try_from(&definition_acc.data)?;
@@ -895,24 +951,32 @@ async fn transfer_token_using_from_label() -> Result<()> {
 
     // Create token
     let total_supply = 50;
-    create_token(
-        &mut ctx,
-        public_mention(definition_account_id),
-        public_mention(supply_account_id),
-        "LABEL TEST TOKEN".to_owned(),
+    let subcommand = TokenProgramAgnosticSubcommand::New {
+        definition_account_id: public_mention(definition_account_id),
+        supply_account_id: public_mention(supply_account_id),
+        name: "LABEL TEST TOKEN".to_owned(),
         total_supply,
-    )
-    .await?;
+    };
+    wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
+
+    info!("Waiting for next block creation");
+    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Transfer token using from_label instead of from
     let transfer_amount = 20;
-    token_send(
-        &mut ctx,
-        supply_label.into(),
-        public_mention(recipient_account_id),
-        transfer_amount,
-    )
-    .await?;
+    let subcommand = TokenProgramAgnosticSubcommand::Send {
+        from: supply_label.into(),
+        to: Some(public_mention(recipient_account_id)),
+        to_npk: None,
+        to_vpk: None,
+        to_keys: None,
+        to_identifier: Some(0),
+        amount: transfer_amount,
+    };
+    wallet::cli::execute_subcommand(ctx.wallet_mut(), Command::Token(subcommand)).await?;
+
+    info!("Waiting for next block creation");
+    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     let recipient_acc = get_account(&ctx, recipient_account_id).await?;
     let token_holding = TokenHolding::try_from(&recipient_acc.data)?;

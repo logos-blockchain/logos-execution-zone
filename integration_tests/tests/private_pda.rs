@@ -9,8 +9,7 @@ use anyhow::{Context as _, Result};
 use authenticated_transfer_core::Instruction as AuthTransferInstruction;
 use common::transaction::LeeTransaction;
 use integration_tests::{
-    LEE_PROGRAM_FOR_TEST_PDA_SPEND_PROXY, TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext,
-    assert_private_commitment_in_state, sync_private, verify_commitment_is_in_state,
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, sync_private, verify_commitment_is_in_state,
 };
 use key_protocol::key_management::ephemeral_key_holder::EphemeralKeyHolder;
 use lee::{
@@ -311,8 +310,23 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
     assert_eq!(pda_1_spent.balance, amount - amount_spend_1);
 
     // Post-spend commitments must be in state.
-    assert_private_commitment_in_state(&ctx, alice_pda_0_id, "alice_pda_0").await?;
-    assert_private_commitment_in_state(&ctx, alice_pda_1_id, "alice_pda_1").await?;
+    let post_spend_commitment_0 = ctx
+        .wallet()
+        .get_private_account_commitment(alice_pda_0_id)
+        .context("post-spend commitment for alice_pda_0 missing")?;
+    assert!(
+        verify_commitment_is_in_state(post_spend_commitment_0, ctx.sequencer_client()).await,
+        "alice_pda_0 post-spend commitment not in state"
+    );
+
+    let post_spend_commitment_1 = ctx
+        .wallet()
+        .get_private_account_commitment(alice_pda_1_id)
+        .context("post-spend commitment for alice_pda_1 missing")?;
+    assert!(
+        verify_commitment_is_in_state(post_spend_commitment_1, ctx.sequencer_client()).await,
+        "alice_pda_1 post-spend commitment not in state"
+    );
 
     info!("Private PDA family member receive-and-spend test passed");
     Ok(())
