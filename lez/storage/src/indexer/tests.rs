@@ -327,8 +327,7 @@ fn block_batch() {
     let mut batch_res = dbio.get_block_batch(Some(5), 4).unwrap();
     batch_res.reverse(); // Reverse to match ascending order for comparison
 
-    let block_hashes_db: Vec<[u8; 32]> =
-        batch_res.into_iter().map(|bl| bl.header.hash.0).collect();
+    let block_hashes_db: Vec<[u8; 32]> = batch_res.into_iter().map(|bl| bl.header.hash.0).collect();
 
     assert_eq!(block_hashes_mem, block_hashes_db);
 

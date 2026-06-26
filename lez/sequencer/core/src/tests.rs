@@ -273,9 +273,8 @@ async fn transaction_pre_check_native_transfer_valid() {
 
     let sign_key1 = create_signing_key_for_account1();
 
-    let tx = common::test_utils::create_transaction_native_token_transfer(
-        acc1, 0, acc2, 10, &sign_key1,
-    );
+    let tx =
+        common::test_utils::create_transaction_native_token_transfer(acc1, 0, acc2, 10, &sign_key1);
     let result = tx.transaction_stateless_check();
 
     assert!(result.is_ok());
@@ -290,9 +289,8 @@ async fn transaction_pre_check_native_transfer_other_signature() {
 
     let sign_key2 = create_signing_key_for_account2();
 
-    let tx = common::test_utils::create_transaction_native_token_transfer(
-        acc1, 0, acc2, 10, &sign_key2,
-    );
+    let tx =
+        common::test_utils::create_transaction_native_token_transfer(acc1, 0, acc2, 10, &sign_key2);
 
     // Signature is valid, stateless check pass
     let tx = tx.transaction_stateless_check().unwrap();
@@ -866,10 +864,8 @@ fn private_bridge_withdraw_invocation_is_dropped() {
         .expect("Message construction should succeed");
     let witness_set =
         lee::privacy_preserving_transaction::WitnessSet::for_message(&message, proof, &[]);
-    let tx = LeeTransaction::PrivacyPreserving(PrivacyPreservingTransaction::new(
-        message,
-        witness_set,
-    ));
+    let tx =
+        LeeTransaction::PrivacyPreserving(PrivacyPreservingTransaction::new(message, witness_set));
     let res = tx.execute_check_on_state(&mut state, 1, 0);
 
     assert!(
@@ -887,11 +883,7 @@ fn state_with_clock_and_program(program: Program, clock_timestamp: u64) -> V03St
         state.force_insert_account(clock_id, system_accounts::clock_account());
     }
     state
-        .transition_from_public_transaction(
-            &clock_invocation(clock_timestamp),
-            1,
-            clock_timestamp,
-        )
+        .transition_from_public_transaction(&clock_invocation(clock_timestamp), 1, clock_timestamp)
         .expect("Clock invocation should advance the clock");
     state
 }
@@ -1057,8 +1049,7 @@ fn pinata_cooldown_claim_succeeds_after_cooldown() {
 
     // Advance the clock so the cooldown check reads an updated timestamp.
     let block_timestamp = genesis_timestamp + cooldown_ms;
-    let mut state =
-        state_with_clock_and_program(test_programs::pinata_cooldown(), block_timestamp);
+    let mut state = state_with_clock_and_program(test_programs::pinata_cooldown(), block_timestamp);
 
     // The winner must be a non-default account so the program may credit it without claiming.
     state.force_insert_account(
@@ -1106,8 +1097,7 @@ fn pinata_cooldown_claim_fails_during_cooldown() {
 
     // Timestamp is only 100ms after the last claim, well within the 500ms cooldown.
     let block_timestamp = genesis_timestamp + 100;
-    let mut state =
-        state_with_clock_and_program(test_programs::pinata_cooldown(), block_timestamp);
+    let mut state = state_with_clock_and_program(test_programs::pinata_cooldown(), block_timestamp);
 
     state.force_insert_account(
         winner_id,
