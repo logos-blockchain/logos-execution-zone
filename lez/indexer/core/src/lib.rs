@@ -104,10 +104,13 @@ impl IndexerCore {
     }
 
     /// Reads the channel's genesis (first `Block`) from the start of the channel.
-    /// Returns `None` if the channel has no block yet or L1 can't be reached within
-    /// the timeout — the check is best-effort and must never block or fail startup.
+    ///
+    /// Bedrock can be slow to serve the channel right after boot, so we allow a
+    /// generous timeout. Returns `None` if the channel has no block yet, the read
+    /// errors, or the timeout elapses — the check is best-effort and must never
+    /// fail startup; a genuine reset is still caught by the per-block park logic.
     async fn fetch_channel_genesis(&self) -> Result<Option<Block>> {
-        const GENESIS_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+        const GENESIS_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
         let fetch = async {
             let stream = self.zone_indexer.next_messages(None).await?;
             let mut stream = std::pin::pin!(stream);
@@ -121,7 +124,15 @@ impl IndexerCore {
             Ok(None)
         };
         match tokio::time::timeout(GENESIS_FETCH_TIMEOUT, fetch).await {
-            Ok(res) => res,
+            Ok(Ok(maybe_block)) => Ok(maybe_block),
+            // A read error (e.g. bedrock briefly unreachable at boot) must not refuse
+            // startup — skip the check and proceed, consistent with the ingest loop.
+            Ok(Err(err)) => {
+                warn!(
+                    "Failed to read channel genesis for the consistency check; proceeding: {err:#}"
+                );
+                Ok(None)
+            }
             Err(_elapsed) => {
                 warn!("Timed out reading channel genesis for the consistency check; proceeding");
                 Ok(None)
