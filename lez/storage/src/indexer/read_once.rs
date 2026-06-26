@@ -3,8 +3,9 @@ use crate::{
     DBIO as _,
     cells::shared_cells::{BlockCell, FirstBlockCell, FirstBlockSetCell, LastBlockCell},
     indexer::indexer_cells::{
-        AccNumTxCell, BlockHashToBlockIdMapCell, BreakpointCellOwned, LastBreakpointIdCell,
-        LastObservedL1LibHeaderCell, TxHashToBlockIdMapCell, ZoneSdkIndexerCursorCellOwned,
+        AccNumTxCell, BlockHashToBlockIdMapCell, BreakpointCellOwned, ChainBreakerCellOwned,
+        LastBreakpointIdCell, LastObservedL1LibHeaderCell, TxHashToBlockIdMapCell,
+        ZoneSdkIndexerCursorCellOwned,
     },
 };
 
@@ -71,6 +72,12 @@ impl RocksDBIO {
     pub fn get_zone_sdk_indexer_cursor_bytes(&self) -> DbResult<Option<Vec<u8>>> {
         Ok(self
             .get_opt::<ZoneSdkIndexerCursorCellOwned>(())?
+            .map(|cell| cell.0))
+    }
+
+    pub fn get_chain_breaker_bytes(&self) -> DbResult<Option<Vec<u8>>> {
+        Ok(self
+            .get_opt::<ChainBreakerCellOwned>(())?
             .map(|cell| cell.0))
     }
 }

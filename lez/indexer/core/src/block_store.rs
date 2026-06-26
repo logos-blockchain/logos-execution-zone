@@ -13,6 +13,8 @@ use logos_blockchain_zone_sdk::Slot;
 use storage::indexer::RocksDBIO;
 use tokio::sync::RwLock;
 
+use crate::chain_breaker::ChainBreaker;
+
 #[derive(Clone)]
 pub struct IndexerStore {
     dbio: Arc<RocksDBIO>,
@@ -118,6 +120,21 @@ impl IndexerStore {
         Ok(())
     }
 
+    pub fn get_chain_breaker(&self) -> Result<Option<ChainBreaker>> {
+        let Some(bytes) = self.dbio.get_chain_breaker_bytes()? else {
+            return Ok(None);
+        };
+        let breaker: Option<ChainBreaker> =
+            serde_json::from_slice(&bytes).context("Failed to deserialize stored chain breaker")?;
+        Ok(breaker)
+    }
+
+    pub fn set_chain_breaker(&self, breaker: &Option<ChainBreaker>) -> Result<()> {
+        let bytes = serde_json::to_vec(breaker).context("Failed to serialize chain breaker")?;
+        self.dbio.put_chain_breaker_bytes(&bytes)?;
+        Ok(())
+    }
+
     /// Recalculation of final state directly from DB.
     ///
     /// Used for indexer healthcheck.
@@ -199,6 +216,43 @@ impl IndexerStore {
 
         info!("Putting block {} into DB", block.header.block_id);
         Ok(self.dbio.put_block(&block, l1_header.into())?)
+    }
+}
+
+#[cfg(test)]
+mod chain_breaker_tests {
+    use common::HashType;
+
+    use super::*;
+    use crate::{chain_breaker::ChainBreaker, ingest_error::BlockIngestError};
+
+    #[tokio::test]
+    async fn chain_breaker_roundtrips_and_clears() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = IndexerStore::open_db(dir.path()).expect("open store");
+
+        assert!(store.get_chain_breaker().expect("get").is_none());
+
+        let breaker = ChainBreaker {
+            block_id: Some(7),
+            block_hash: Some(HashType([1_u8; 32])),
+            prev_block_hash: Some(HashType([2_u8; 32])),
+            l1_slot: serde_json::Value::Null,
+            error: BlockIngestError::StateTransition("boom".to_owned()),
+            first_seen: Some(99),
+            orphans_since: 3,
+        };
+        store
+            .set_chain_breaker(&Some(breaker))
+            .expect("set breaker");
+
+        let got = store.get_chain_breaker().expect("get").expect("present");
+        assert_eq!(got.block_id, Some(7));
+        assert_eq!(got.orphans_since, 3);
+        assert!(matches!(got.error, BlockIngestError::StateTransition(_)));
+
+        store.set_chain_breaker(&None).expect("clear");
+        assert!(store.get_chain_breaker().expect("get").is_none());
     }
 }
 

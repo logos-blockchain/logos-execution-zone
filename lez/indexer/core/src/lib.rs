@@ -2,6 +2,7 @@ use std::{path::Path, sync::Arc};
 
 use anyhow::Result;
 use arc_swap::ArcSwap;
+pub use chain_breaker::ChainBreaker;
 use common::block::Block;
 // ToDo: Remove after testnet
 use futures::StreamExt as _;
@@ -18,6 +19,7 @@ use crate::{
     status::{IndexerStatus, IndexerSyncStatus},
 };
 pub mod block_store;
+pub mod chain_breaker;
 pub mod config;
 pub mod ingest_error;
 pub mod status;
