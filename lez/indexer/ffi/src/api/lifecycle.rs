@@ -112,10 +112,17 @@ unsafe fn setup_indexer(
         unsafe { Runtime::from_borrowed(caller.as_ref()) }
     };
 
-    let core = IndexerCore::new(config, &storage_dir).map_err(|e| {
-        log::error!("Could not initialize indexer core: {e}");
-        OperationStatus::InitializationError
-    })?;
+    let allow_reset = config.allow_chain_reset;
+    let core = runtime
+        .block_on(IndexerCore::new_with_genesis_check(
+            config,
+            &storage_dir,
+            allow_reset,
+        ))
+        .map_err(|e| {
+            log::error!("Could not initialize indexer core: {e}");
+            OperationStatus::InitializationError
+        })?;
 
     // The block stream writes each parsed block into the store as a side effect
     // of being polled, so we spawn a task that simply drains it. There are no
