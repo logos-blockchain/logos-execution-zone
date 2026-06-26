@@ -7,14 +7,13 @@ use common::block::Block;
 use futures::StreamExt as _;
 pub use ingest_error::BlockIngestError;
 use log::{error, info, warn};
-use logos_blockchain_core::header::HeaderId;
 use logos_blockchain_zone_sdk::{
     CommonHttpClient, ZoneMessage, adapter::NodeHttpClient, indexer::ZoneIndexer,
 };
 pub use stall_reason::StallReason;
 
 use crate::{
-    block_store::IndexerStore,
+    block_store::{AcceptOutcome, IndexerStore},
     config::IndexerConfig,
     status::{IndexerStatus, IndexerSyncStatus},
 };
@@ -95,8 +94,6 @@ impl IndexerCore {
                 let stream = match self.zone_indexer.next_messages(cursor).await {
                     Ok(s) => s,
                     Err(err) => {
-                        // `next_messages` reads L1 consensus info internally, so
-                        // this also covers an unreachable/misconfigured L1 node.
                         error!("Failed to start zone-sdk next_messages stream: {err}");
                         self.set_status(IndexerSyncStatus::error(format!(
                             "cannot reach L1 / read channel: {err}"
@@ -107,11 +104,8 @@ impl IndexerCore {
                 };
                 let mut stream = std::pin::pin!(stream);
 
-                // Flip to Syncing on the first message of this cycle (not merely on
-                // a successful poll) so the steady-state CaughtUp status doesn't
-                // flicker. Until then the state stays Starting (cold-start scan of
-                // empty L1 history) or CaughtUp (idle).
                 let mut announced_syncing = false;
+                let mut had_cycle_error = false;
 
                 while let Some((msg, slot)) = stream.next().await {
                     if !announced_syncing {
@@ -121,17 +115,25 @@ impl IndexerCore {
 
                     let zone_block = match msg {
                         ZoneMessage::Block(b) => b,
-                        // Non-block messages don't carry a cursor position; the
-                        // next ZoneBlock advances past them implicitly.
                         ZoneMessage::Deposit(_) | ZoneMessage::Withdraw(_) => continue,
                     };
+
+                    let l1_slot = serde_json::to_value(&slot).unwrap_or(serde_json::Value::Null);
 
                     let block: Block = match borsh::from_slice(&zone_block.data) {
                         Ok(b) => b,
                         Err(e) => {
                             error!("Failed to deserialize L2 block from zone-sdk: {e}");
-                            // Advance past the broken inscription so we don't
-                            // re-process it on restart.
+                            if let Err(err) =
+                                self.store.record_deserialize_stall(l1_slot, e.to_string())
+                            {
+                                warn!("Failed to record stall reason: {err:#}");
+                            }
+                            self.set_status(IndexerSyncStatus::stalled(format!(
+                                "failed to deserialize L2 block: {e}"
+                            )));
+                            // Advance the L1 read cursor past the broken inscription;
+                            // the validated tip stays frozen.
                             cursor = Some(slot);
                             if let Err(err) = self.store.set_zone_cursor(&slot) {
                                 warn!("Failed to persist indexer cursor: {err:#}");
@@ -140,27 +142,53 @@ impl IndexerCore {
                         }
                     };
 
-                    info!("Indexed L2 block {}", block.header.block_id);
-
-                    // TODO: Remove l1_header placeholder once storage layer
-                    // no longer requires it. Zone-sdk handles L1 tracking internally.
-                    let placeholder_l1_header = HeaderId::from([0_u8; 32]);
-                    if let Err(err) = self.store.put_block(block.clone(), placeholder_l1_header).await {
-                        error!("Failed to store block {}: {err:#}", block.header.block_id);
+                    match self.store.accept_block(&block, l1_slot).await {
+                        Ok(AcceptOutcome::Applied) => {
+                            info!("Indexed L2 block {}", block.header.block_id);
+                            self.set_status(IndexerSyncStatus::syncing());
+                            cursor = Some(slot);
+                            if let Err(err) = self.store.set_zone_cursor(&slot) {
+                                warn!("Failed to persist indexer cursor: {err:#}");
+                            }
+                            yield Ok(block);
+                        }
+                        Ok(AcceptOutcome::Parked(ingest_err)) => {
+                            error!(
+                                "Parked at block {}: {ingest_err}",
+                                block.header.block_id
+                            );
+                            self.set_status(IndexerSyncStatus::stalled(ingest_err.to_string()));
+                            // Advance the L1 read cursor; tip stays frozen, no yield.
+                            cursor = Some(slot);
+                            if let Err(err) = self.store.set_zone_cursor(&slot) {
+                                warn!("Failed to persist indexer cursor: {err:#}");
+                            }
+                        }
+                        Err(err) => {
+                            // Infrastructure error (DB read/write), not a bad block.
+                            // Keep the cursor put; re-poll the same position next cycle.
+                            error!(
+                                "Store error applying block {}: {err:#}",
+                                block.header.block_id
+                            );
+                            self.set_status(IndexerSyncStatus::error(format!(
+                                "store error: {err:#}"
+                            )));
+                            had_cycle_error = true;
+                            break;
+                        }
                     }
-
-                    cursor = Some(slot);
-                    if let Err(err) = self.store.set_zone_cursor(&slot) {
-                        warn!("Failed to persist indexer cursor: {err:#}");
-                    }
-                    yield Ok(block);
                 }
 
-                // Stream drained: caught up to LIB as of this cycle. Clears any
-                // prior error (e.g. a transient L1 disconnect that left no
-                // backlog, so the `Syncing` branch above never ran). Sleep then
-                // poll again.
-                self.set_status(IndexerSyncStatus::caught_up());
+                if had_cycle_error {
+                    tokio::time::sleep(poll_interval).await;
+                    continue;
+                }
+
+                // Stream drained. Stay Stalled if parked; otherwise we are caught up.
+                if self.store.get_stall_reason().ok().flatten().is_none() {
+                    self.set_status(IndexerSyncStatus::caught_up());
+                }
                 tokio::time::sleep(poll_interval).await;
             }
         }

@@ -8,7 +8,6 @@ use common::{
 };
 use lee::{Account, AccountId, GENESIS_BLOCK_ID, V03State};
 use lee_core::BlockId;
-use log::info;
 use logos_blockchain_core::header::HeaderId;
 use logos_blockchain_zone_sdk::Slot;
 use storage::indexer::RocksDBIO;
@@ -292,68 +291,6 @@ impl IndexerStore {
         self.set_stall_reason(&None)?;
         Ok(AcceptOutcome::Applied)
     }
-
-    pub async fn put_block(&self, mut block: Block, l1_header: HeaderId) -> Result<()> {
-        info!("Applying block {}", block.header.block_id);
-        {
-            let mut state_guard = self.current_state.write().await;
-
-            let (clock_tx, user_txs) = block
-                .body
-                .transactions
-                .split_last()
-                .ok_or_else(|| anyhow::anyhow!("Block has no transactions"))?;
-
-            anyhow::ensure!(
-                *clock_tx == LeeTransaction::Public(clock_invocation(block.header.timestamp)),
-                "Last transaction in block must be the clock invocation for the block timestamp"
-            );
-
-            let is_genesis = block.header.block_id == 1;
-            for transaction in user_txs {
-                if is_genesis {
-                    let genesis_tx = match transaction {
-                        LeeTransaction::Public(public_tx) => public_tx,
-                        LeeTransaction::PrivacyPreserving(_)
-                        | LeeTransaction::ProgramDeployment(_) => {
-                            anyhow::bail!("Genesis block should contain only public transactions")
-                        }
-                    };
-                    state_guard
-                        .transition_from_public_transaction(
-                            genesis_tx,
-                            block.header.block_id,
-                            block.header.timestamp,
-                        )
-                        .context("Failed to execute genesis public transaction")?;
-                } else {
-                    transaction.clone().execute_on_state(
-                        &mut state_guard,
-                        block.header.block_id,
-                        block.header.timestamp,
-                    )?;
-                }
-            }
-
-            // Apply the clock invocation directly (it is expected to modify clock accounts).
-            let LeeTransaction::Public(clock_public_tx) = clock_tx else {
-                anyhow::bail!("Clock invocation must be a public transaction");
-            };
-            state_guard.transition_from_public_transaction(
-                clock_public_tx,
-                block.header.block_id,
-                block.header.timestamp,
-            )?;
-        }
-
-        // ToDo: Currently we are fetching only finalized blocks
-        // if it changes, the following lines need to be updated
-        // to represent correct block finality
-        block.bedrock_status = BedrockStatus::Finalized;
-
-        info!("Putting block {} into DB", block.header.block_id);
-        Ok(self.dbio.put_block(&block, l1_header.into())?)
-    }
 }
 
 /// Applies a block's transactions to `state`, mapping every failure to a
@@ -448,65 +385,11 @@ mod stall_reason_tests {
 
 #[cfg(test)]
 mod tests {
-    use common::{HashType, block::HashableBlockData};
+    use common::test_utils::{create_transaction_native_token_transfer, produce_dummy_block};
     use tempfile::tempdir;
     use testnet_initial_state::initial_pub_accounts_private_keys;
 
     use super::*;
-
-    struct TestFixture {
-        storage: IndexerStore,
-        from: AccountId,
-        to: AccountId,
-        _home: tempfile::TempDir,
-    }
-
-    #[expect(
-        clippy::arithmetic_side_effects,
-        reason = "test helper with bounded inputs"
-    )]
-    async fn store_with_transfer_blocks(
-        block_count: u64,
-        prev_hash: Option<common::HashType>,
-    ) -> TestFixture {
-        let home = tempdir().unwrap();
-        let storage = IndexerStore::open_db(home.path()).unwrap();
-
-        let initial_accounts = initial_pub_accounts_private_keys();
-        let from = initial_accounts[0].account_id;
-        let to = initial_accounts[1].account_id;
-        let sign_key = initial_accounts[0].pub_sign_key.clone();
-
-        let mut prev_hash = prev_hash;
-        for i in 0..block_count {
-            let tx = common::test_utils::create_transaction_native_token_transfer(
-                from,
-                u128::from(i),
-                to,
-                10,
-                &sign_key,
-            );
-            let block_id = i + 1;
-
-            let next_block = common::test_utils::produce_dummy_block(block_id, prev_hash, vec![tx]);
-            prev_hash = Some(next_block.header.hash);
-
-            storage
-                .put_block(
-                    next_block,
-                    HeaderId::from([u8::try_from(i + 1).unwrap(); 32]),
-                )
-                .await
-                .unwrap();
-        }
-
-        TestFixture {
-            storage,
-            from,
-            to,
-            _home: home,
-        }
-    }
 
     #[test]
     fn correct_startup() {
@@ -520,76 +403,99 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn state_transition() {
+    async fn accept_block_applies_transfers_and_advances_tip() {
         let home = tempdir().unwrap();
-        let storage = IndexerStore::open_db(home.as_ref()).unwrap();
+        let store = IndexerStore::open_db(home.as_ref()).unwrap();
 
         let initial_accounts = initial_pub_accounts_private_keys();
         let from = initial_accounts[0].account_id;
         let to = initial_accounts[1].account_id;
         let sign_key = initial_accounts[0].pub_sign_key.clone();
 
-        let clock_tx = LeeTransaction::Public(clock_invocation(0));
-        let genesis_block_data = HashableBlockData {
-            block_id: 1,
-            prev_block_hash: HashType::default(),
-            timestamp: 0,
-            transactions: vec![clock_tx],
-        };
-        let genesis_block = genesis_block_data
-            .into_pending_block(&common::test_utils::sequencer_sign_key_for_testing());
-        let mut prev_hash = Some(genesis_block.header.hash);
-        storage
-            .put_block(genesis_block, HeaderId::from([0_u8; 32]))
+        // Genesis (block 1): clock-only.
+        let genesis = produce_dummy_block(1, None, vec![]);
+        let mut prev_hash = genesis.header.hash;
+        assert!(matches!(
+            store
+                .accept_block(&genesis, serde_json::Value::Null)
+                .await
+                .unwrap(),
+            AcceptOutcome::Applied
+        ));
+
+        // Blocks 2..=11: one native transfer of 10 each (nonces 0..=9).
+        for i in 0..10_u64 {
+            let tx = create_transaction_native_token_transfer(from, i as u128, to, 10, &sign_key);
+            let block = produce_dummy_block(i + 2, Some(prev_hash), vec![tx]);
+            prev_hash = block.header.hash;
+            assert!(matches!(
+                store
+                    .accept_block(&block, serde_json::Value::Null)
+                    .await
+                    .unwrap(),
+                AcceptOutcome::Applied
+            ));
+        }
+
+        assert_eq!(
+            store.account_current_state(&from).await.unwrap().balance,
+            9900
+        );
+        assert_eq!(
+            store.account_current_state(&to).await.unwrap().balance,
+            20100
+        );
+        // Tip advanced to the last applied block; a clean run leaves no stall.
+        assert_eq!(store.get_last_block_id().unwrap(), Some(11));
+        assert!(store.get_stall_reason().unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn account_state_at_block_reflects_history() {
+        let home = tempdir().unwrap();
+        let store = IndexerStore::open_db(home.as_ref()).unwrap();
+
+        let initial_accounts = initial_pub_accounts_private_keys();
+        let from = initial_accounts[0].account_id;
+        let to = initial_accounts[1].account_id;
+        let sign_key = initial_accounts[0].pub_sign_key.clone();
+
+        let genesis = produce_dummy_block(1, None, vec![]);
+        let mut prev_hash = genesis.header.hash;
+        store
+            .accept_block(&genesis, serde_json::Value::Null)
             .await
             .unwrap();
 
-        for i in 0..10_u128 {
-            let tx = common::test_utils::create_transaction_native_token_transfer(
-                from, i, to, 10, &sign_key,
-            );
-            let block_id = u64::try_from(i + 1).unwrap();
-            let next_block = common::test_utils::produce_dummy_block(block_id, prev_hash, vec![tx]);
-            prev_hash = Some(next_block.header.hash);
-            storage
-                .put_block(
-                    next_block,
-                    HeaderId::from([u8::try_from(i + 1).unwrap(); 32]),
-                )
+        for i in 0..10_u64 {
+            let tx = create_transaction_native_token_transfer(from, i as u128, to, 10, &sign_key);
+            let block = produce_dummy_block(i + 2, Some(prev_hash), vec![tx]);
+            prev_hash = block.header.hash;
+            store
+                .accept_block(&block, serde_json::Value::Null)
                 .await
                 .unwrap();
         }
 
-        let acc1_val = storage.account_current_state(&from).await.unwrap();
-        let acc2_val = storage.account_current_state(&to).await.unwrap();
-
-        assert_eq!(acc1_val.balance, 9900);
-        assert_eq!(acc2_val.balance, 20100);
-    }
-
-    #[tokio::test]
-    async fn account_state_at_block() {
-        let TestFixture {
-            storage,
-            from,
-            to,
-            _home,
-        } = store_with_transfer_blocks(10, None).await;
-
-        let acc1_at_1 = storage.account_state_at_block(&from, 1).unwrap();
-        let acc2_at_1 = storage.account_state_at_block(&to, 1).unwrap();
-        assert_eq!(acc1_at_1.balance, 9990);
-        assert_eq!(acc2_at_1.balance, 20010);
-
-        let acc1_at_5 = storage.account_state_at_block(&from, 5).unwrap();
-        let acc2_at_5 = storage.account_state_at_block(&to, 5).unwrap();
-        assert_eq!(acc1_at_5.balance, 9950);
-        assert_eq!(acc2_at_5.balance, 20050);
-
-        let acc1_at_9 = storage.account_state_at_block(&from, 9).unwrap();
-        let acc2_at_9 = storage.account_state_at_block(&to, 9).unwrap();
-        assert_eq!(acc1_at_9.balance, 9910);
-        assert_eq!(acc2_at_9.balance, 20090);
+        // State at block N is inclusive of block N.
+        // Block 1 (genesis, clock-only): no transfers yet.
+        assert_eq!(
+            store.account_state_at_block(&from, 1).unwrap().balance,
+            10000
+        );
+        assert_eq!(store.account_state_at_block(&to, 1).unwrap().balance, 20000);
+        // Through block 5: 4 transfers applied (blocks 2..=5).
+        assert_eq!(
+            store.account_state_at_block(&from, 5).unwrap().balance,
+            9960
+        );
+        assert_eq!(store.account_state_at_block(&to, 5).unwrap().balance, 20040);
+        // Through block 9: 8 transfers applied (blocks 2..=9).
+        assert_eq!(
+            store.account_state_at_block(&from, 9).unwrap().balance,
+            9920
+        );
+        assert_eq!(store.account_state_at_block(&to, 9).unwrap().balance, 20080);
     }
 }
 
