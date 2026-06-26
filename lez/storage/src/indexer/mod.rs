@@ -211,20 +211,7 @@ fn apply_block_transactions(mut block: Block, state: &mut V03State) -> DbResult<
                 })?;
         } else {
             transaction
-                .transaction_stateless_check()
-                .map_err(|err| {
-                    DbError::db_interaction_error(format!(
-                        "transaction pre check failed with err {err:?}"
-                    ))
-                })?
-                // FIXME: HOT FIX (testnet v0.2): does not check for system account updates due to
-                // sequencer-generated deposit tx'es;
-                // CHANGE ME back to `execute_check_on_state` when the indexer can authenticate deposit transactions
-                .execute_without_system_accounts_check_on_state(
-                    state,
-                    block.header.block_id,
-                    block.header.timestamp,
-                )
+                .execute_on_state(state, block.header.block_id, block.header.timestamp)
                 .map_err(|err| {
                     DbError::db_interaction_error(format!(
                         "transaction execution failed with err {err:?}"

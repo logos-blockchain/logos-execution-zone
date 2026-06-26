@@ -92,9 +92,8 @@ impl LeeTransaction {
         Ok(diff)
     }
 
-    /// Computes the validated state diff without enforcing the system-account
-    /// restriction. Shared by [`Self::validate_on_state`] and
-    /// [`Self::execute_without_system_accounts_check_on_state`].
+    /// Computes the validated state diff. Shared by [`Self::validate_on_state`]
+    /// (which adds the system-account guards) and [`Self::execute_on_state`].
     fn compute_state_diff(
         &self,
         state: &V03State,
@@ -129,16 +128,12 @@ impl LeeTransaction {
         Ok(self)
     }
 
-    /// Similar to [`Self::execute_check_on_state`], but skips the system-account guard.
+    /// Executes the transaction against the current state and applies the resulting diff,
+    /// without the system-account guards enforced by [`Self::execute_check_on_state`].
     ///
-    /// FIXME: HOT FIX (testnet v0.2): the indexer replays blocks the sequencer already
-    /// accepted, including sequencer-generated deposit transactions that
-    /// legitimately modify the bridge account. The `TransactionOrigin::Sequencer`
-    /// tag that lets the sequencer bypass the guard is not carried in the block,
-    /// so the indexer cannot yet distinguish deposit txs from user txs.
-    ///
-    /// REMOVE ME when the indexer can authenticate deposit transactions.
-    pub fn execute_without_system_accounts_check_on_state(
+    /// The indexer replays blocks the sequencer already validated and inscribed on Bedrock,
+    /// so it trusts those inscriptions and re-derives state without re-validating them.
+    pub fn execute_on_state(
         self,
         state: &mut V03State,
         block_id: BlockId,
