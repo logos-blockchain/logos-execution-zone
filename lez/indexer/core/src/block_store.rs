@@ -377,6 +377,10 @@ mod stall_reason_tests {
         assert_eq!(got.block_id, Some(7));
         assert_eq!(got.orphans_since, 3);
         assert!(matches!(got.error, BlockIngestError::StateTransition(_)));
+        assert_eq!(got.block_hash, Some(HashType([1_u8; 32])));
+        assert_eq!(got.prev_block_hash, Some(HashType([2_u8; 32])));
+        assert_eq!(got.l1_slot, serde_json::Value::Null);
+        assert_eq!(got.first_seen, Some(99));
 
         store.set_stall_reason(&None).expect("clear");
         assert!(store.get_stall_reason().expect("get").is_none());
@@ -501,7 +505,7 @@ mod tests {
 
 #[cfg(test)]
 mod accept_tests {
-    use common::{HashType, block::HashableBlockData};
+    use common::{HashType, block::HashableBlockData, test_utils::produce_dummy_block};
 
     use super::*;
     use crate::ingest_error::BlockIngestError;
@@ -596,5 +600,62 @@ mod accept_tests {
         let stall = store.get_stall_reason().expect("get").expect("present");
         assert_eq!(stall.block_id, None);
         assert!(matches!(stall.error, BlockIngestError::Deserialize(_)));
+    }
+
+    #[tokio::test]
+    async fn parks_then_recovers_on_valid_continuation() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = IndexerStore::open_db(dir.path()).expect("open store");
+
+        // Genesis (block 1, clock-only) applies and advances the tip.
+        let genesis = produce_dummy_block(1, None, vec![]);
+        assert!(matches!(
+            store
+                .accept_block(&genesis, serde_json::Value::Null)
+                .await
+                .unwrap(),
+            AcceptOutcome::Applied
+        ));
+
+        // A block that skips ahead (id 3 while the tip is 1) parks the indexer.
+        let bad = produce_dummy_block(3, Some(genesis.header.hash), vec![]);
+        assert!(matches!(
+            store
+                .accept_block(&bad, serde_json::Value::Null)
+                .await
+                .unwrap(),
+            AcceptOutcome::Parked(BlockIngestError::UnexpectedBlockId {
+                expected: 2,
+                got: 3
+            })
+        ));
+        assert!(
+            store.get_stall_reason().unwrap().is_some(),
+            "indexer should be parked after the bad block"
+        );
+        assert_eq!(
+            store.get_last_block_id().unwrap(),
+            Some(1),
+            "validated tip must stay frozen at genesis while parked"
+        );
+
+        // The valid continuation (block 2 chaining on genesis) recovers the chain.
+        let next = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+        assert!(matches!(
+            store
+                .accept_block(&next, serde_json::Value::Null)
+                .await
+                .unwrap(),
+            AcceptOutcome::Applied
+        ));
+        assert!(
+            store.get_stall_reason().unwrap().is_none(),
+            "stall reason must clear on recovery"
+        );
+        assert_eq!(
+            store.get_last_block_id().unwrap(),
+            Some(2),
+            "tip must advance to the recovered block"
+        );
     }
 }
