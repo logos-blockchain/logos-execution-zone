@@ -1489,6 +1489,86 @@ struct FfiCreateWalletOutput wallet_ffi_create_new(const char *config_path,
 struct WalletHandle *wallet_ffi_open(const char *config_path, const char *storage_path);
 
 /**
+ * Create a new wallet at LEZ's canonical home, deriving the paths from the
+ * environment (`LEE_WALLET_HOME_DIR` or `~/.lee/wallet`) and creating the
+ * directory if needed.
+ *
+ * This is the path-free equivalent of [`wallet_ffi_create_new`]: callers that
+ * just want the default location don't have to reconstruct LEZ's path layout.
+ *
+ * # Parameters
+ * - `password`: Password for encrypting the wallet seed
+ *
+ * # Returns
+ * - Result, which contains opaque wallet handle and mnemonic words on success
+ * - Result with null pointers on error (call `wallet_ffi_get_last_error()` for details)
+ *
+ * # Safety
+ * `password` must be a valid null-terminated UTF-8 string.
+ */
+struct FfiCreateWalletOutput wallet_ffi_create_new_default(const char *password);
+
+/**
+ * Open the existing wallet at LEZ's canonical home, deriving the paths from the
+ * environment (`LEE_WALLET_HOME_DIR` or `~/.lee/wallet`).
+ *
+ * This is the path-free equivalent of [`wallet_ffi_open`].
+ *
+ * # Returns
+ * - Opaque wallet handle on success
+ * - Null pointer on error (call `wallet_ffi_get_last_error()` for details)
+ *
+ * # Safety
+ * This function takes no pointer arguments and is always safe to call.
+ */
+struct WalletHandle *wallet_ffi_open_default(void);
+
+/**
+ * Return LEZ's canonical wallet config path (`LEE_WALLET_HOME_DIR` or
+ * `~/.lee/wallet`, plus `wallet_config.json`).
+ *
+ * Lets callers display or inspect the default location without reconstructing
+ * LEZ's path layout themselves.
+ *
+ * # Returns
+ * - Pointer to null-terminated string on success (caller must free with
+ *   `wallet_ffi_free_string()`)
+ * - Null pointer on error
+ *
+ * # Safety
+ * This function takes no pointer arguments and is always safe to call.
+ */
+char *wallet_ffi_default_config_path(void);
+
+/**
+ * Return LEZ's canonical wallet storage path (`LEE_WALLET_HOME_DIR` or
+ * `~/.lee/wallet`, plus `storage.json`).
+ *
+ * # Returns
+ * - Pointer to null-terminated string on success (caller must free with
+ *   `wallet_ffi_free_string()`)
+ * - Null pointer on error
+ *
+ * # Safety
+ * This function takes no pointer arguments and is always safe to call.
+ */
+char *wallet_ffi_default_storage_path(void);
+
+/**
+ * Whether a wallet already exists at LEZ's canonical home (i.e. its
+ * `storage.json` is present). Lets callers decide between an open and a
+ * create flow without touching the filesystem or knowing the path.
+ *
+ * # Returns
+ * - `true` if the default storage file exists, `false` otherwise (including
+ *   when the path can't be resolved)
+ *
+ * # Safety
+ * This function takes no pointer arguments and is always safe to call.
+ */
+bool wallet_ffi_wallet_exists_default(void);
+
+/**
  * Destroy a wallet handle and free its resources.
  *
  * After calling this function, the handle is invalid and must not be used.
