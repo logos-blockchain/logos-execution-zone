@@ -62,9 +62,11 @@ impl IndexerCore {
     pub fn status(&self) -> IndexerStatus {
         let sync = IndexerSyncStatus::clone(&self.status.load());
         let indexed_block_id = self.store.get_last_block_id().ok().flatten();
+        let chain_breaker = self.store.get_chain_breaker().ok().flatten();
         IndexerStatus {
             sync,
             indexed_block_id,
+            chain_breaker,
         }
     }
 
