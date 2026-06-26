@@ -1,0 +1,333 @@
+use super::*;
+
+#[test]
+fn validity_window_unbounded_accepts_any_value() {
+    let w: ValidityWindow<u64> = ValidityWindow::new_unbounded();
+    assert!(w.is_valid_for(0));
+    assert!(w.is_valid_for(u64::MAX));
+}
+
+#[test]
+fn validity_window_bounded_range_includes_from_excludes_to() {
+    let w: ValidityWindow<u64> = (Some(5), Some(10)).try_into().unwrap();
+    assert!(!w.is_valid_for(4));
+    assert!(w.is_valid_for(5));
+    assert!(w.is_valid_for(9));
+    assert!(!w.is_valid_for(10));
+}
+
+#[test]
+fn validity_window_only_from_bound() {
+    let w: ValidityWindow<u64> = (Some(5), None).try_into().unwrap();
+    assert!(!w.is_valid_for(4));
+    assert!(w.is_valid_for(5));
+    assert!(w.is_valid_for(u64::MAX));
+}
+
+#[test]
+fn validity_window_only_to_bound() {
+    let w: ValidityWindow<u64> = (None, Some(5)).try_into().unwrap();
+    assert!(w.is_valid_for(0));
+    assert!(w.is_valid_for(4));
+    assert!(!w.is_valid_for(5));
+}
+
+#[test]
+fn validity_window_adjacent_bounds_are_invalid() {
+    // [5, 5) is an empty range — from == to
+    assert!(ValidityWindow::<u64>::try_from((Some(5), Some(5))).is_err());
+}
+
+#[test]
+fn validity_window_inverted_bounds_are_invalid() {
+    assert!(ValidityWindow::<u64>::try_from((Some(10), Some(5))).is_err());
+}
+
+#[test]
+fn validity_window_getters_match_construction() {
+    let w: ValidityWindow<u64> = (Some(3), Some(7)).try_into().unwrap();
+    assert_eq!(w.start(), Some(3));
+    assert_eq!(w.end(), Some(7));
+}
+
+#[test]
+fn validity_window_getters_for_unbounded() {
+    let w: ValidityWindow<u64> = ValidityWindow::new_unbounded();
+    assert_eq!(w.start(), None);
+    assert_eq!(w.end(), None);
+}
+
+#[test]
+fn validity_window_from_range() {
+    let w: ValidityWindow<u64> = ValidityWindow::try_from(5_u64..10).unwrap();
+    assert_eq!(w.start(), Some(5));
+    assert_eq!(w.end(), Some(10));
+}
+
+#[test]
+fn validity_window_from_range_empty_is_invalid() {
+    assert!(ValidityWindow::<u64>::try_from(5_u64..5).is_err());
+}
+
+#[test]
+fn validity_window_from_range_inverted_is_invalid() {
+    let from = 10_u64;
+    let to = 5_u64;
+    assert!(ValidityWindow::<u64>::try_from(from..to).is_err());
+}
+
+#[test]
+fn validity_window_from_range_from() {
+    let w: ValidityWindow<u64> = (5_u64..).into();
+    assert_eq!(w.start(), Some(5));
+    assert_eq!(w.end(), None);
+}
+
+#[test]
+fn validity_window_from_range_to() {
+    let w: ValidityWindow<u64> = (..10_u64).into();
+    assert_eq!(w.start(), None);
+    assert_eq!(w.end(), Some(10));
+}
+
+#[test]
+fn validity_window_from_range_full() {
+    let w: ValidityWindow<u64> = (..).into();
+    assert_eq!(w.start(), None);
+    assert_eq!(w.end(), None);
+}
+
+#[test]
+fn program_output_try_with_block_validity_window_range() {
+    let output = ProgramOutput::new(DEFAULT_PROGRAM_ID, None, vec![], vec![], vec![])
+        .try_with_block_validity_window(10_u64..100)
+        .unwrap();
+    assert_eq!(output.block_validity_window.start(), Some(10));
+    assert_eq!(output.block_validity_window.end(), Some(100));
+}
+
+#[test]
+fn program_output_with_block_validity_window_range_from() {
+    let output = ProgramOutput::new(DEFAULT_PROGRAM_ID, None, vec![], vec![], vec![])
+        .with_block_validity_window(10_u64..);
+    assert_eq!(output.block_validity_window.start(), Some(10));
+    assert_eq!(output.block_validity_window.end(), None);
+}
+
+#[test]
+fn program_output_with_block_validity_window_range_to() {
+    let output = ProgramOutput::new(DEFAULT_PROGRAM_ID, None, vec![], vec![], vec![])
+        .with_block_validity_window(..100_u64);
+    assert_eq!(output.block_validity_window.start(), None);
+    assert_eq!(output.block_validity_window.end(), Some(100));
+}
+
+#[test]
+fn program_output_try_with_block_validity_window_empty_range_fails() {
+    let result = ProgramOutput::new(DEFAULT_PROGRAM_ID, None, vec![], vec![], vec![])
+        .try_with_block_validity_window(5_u64..5);
+    assert!(result.is_err());
+}
+
+#[test]
+fn post_state_new_with_claim_constructor() {
+    let account = Account {
+        program_owner: [1, 2, 3, 4, 5, 6, 7, 8],
+        balance: 1337,
+        data: vec![0xde, 0xad, 0xbe, 0xef].try_into().unwrap(),
+        nonce: 10_u128.into(),
+    };
+
+    let account_post_state = AccountPostState::new_claimed(account.clone(), Claim::Authorized);
+
+    assert_eq!(account, account_post_state.account);
+    assert_eq!(account_post_state.required_claim(), Some(Claim::Authorized));
+}
+
+#[test]
+fn post_state_new_without_claim_constructor() {
+    let account = Account {
+        program_owner: [1, 2, 3, 4, 5, 6, 7, 8],
+        balance: 1337,
+        data: vec![0xde, 0xad, 0xbe, 0xef].try_into().unwrap(),
+        nonce: 10_u128.into(),
+    };
+
+    let account_post_state = AccountPostState::new(account.clone());
+
+    assert_eq!(account, account_post_state.account);
+    assert!(account_post_state.required_claim().is_none());
+}
+
+#[test]
+fn post_state_account_getter() {
+    let mut account = Account {
+        program_owner: [1, 2, 3, 4, 5, 6, 7, 8],
+        balance: 1337,
+        data: vec![0xde, 0xad, 0xbe, 0xef].try_into().unwrap(),
+        nonce: 10_u128.into(),
+    };
+
+    let mut account_post_state = AccountPostState::new(account.clone());
+
+    assert_eq!(account_post_state.account(), &account);
+    assert_eq!(account_post_state.account_mut(), &mut account);
+}
+
+// ---- AccountId::for_private_pda tests ----
+
+/// Pins `AccountId::for_private_pda` against a hardcoded expected output for a specific
+/// `(program_id, seed, npk, identifier)` tuple. Any change to `PRIVATE_PDA_PREFIX`, byte
+/// ordering, or the underlying hash breaks this test.
+#[test]
+fn for_private_pda_matches_pinned_value() {
+    let program_id: ProgramId = [1; 8];
+    let seed = PdaSeed::new([2; 32]);
+    let npk = NullifierPublicKey([3; 32]);
+    let identifier: Identifier = u128::MAX;
+    let expected = AccountId::new([
+        59, 239, 182, 97, 14, 220, 96, 115, 238, 133, 143, 33, 234, 82, 237, 255, 148, 110, 54,
+        124, 98, 159, 245, 101, 146, 182, 150, 54, 37, 62, 25, 17,
+    ]);
+    assert_eq!(
+        AccountId::for_private_pda(&program_id, &seed, &npk, identifier),
+        expected
+    );
+}
+
+/// Two groups with different viewing keys at the same (program, seed) get different addresses.
+#[test]
+fn for_private_pda_differs_for_different_npk() {
+    let program_id: ProgramId = [1; 8];
+    let seed = PdaSeed::new([2; 32]);
+    let npk_a = NullifierPublicKey([3; 32]);
+    let npk_b = NullifierPublicKey([4; 32]);
+    assert_ne!(
+        AccountId::for_private_pda(&program_id, &seed, &npk_a, u128::MAX),
+        AccountId::for_private_pda(&program_id, &seed, &npk_b, u128::MAX),
+    );
+}
+
+/// Different seeds produce different addresses, even with the same program and npk.
+#[test]
+fn for_private_pda_differs_for_different_seed() {
+    let program_id: ProgramId = [1; 8];
+    let seed_a = PdaSeed::new([2; 32]);
+    let seed_b = PdaSeed::new([5; 32]);
+    let npk = NullifierPublicKey([3; 32]);
+    assert_ne!(
+        AccountId::for_private_pda(&program_id, &seed_a, &npk, u128::MAX),
+        AccountId::for_private_pda(&program_id, &seed_b, &npk, u128::MAX),
+    );
+}
+
+/// Different programs produce different addresses, even with the same seed and npk.
+#[test]
+fn for_private_pda_differs_for_different_program_id() {
+    let program_id_a: ProgramId = [1; 8];
+    let program_id_b: ProgramId = [9; 8];
+    let seed = PdaSeed::new([2; 32]);
+    let npk = NullifierPublicKey([3; 32]);
+    assert_ne!(
+        AccountId::for_private_pda(&program_id_a, &seed, &npk, u128::MAX),
+        AccountId::for_private_pda(&program_id_b, &seed, &npk, u128::MAX),
+    );
+}
+
+/// Different identifiers produce different addresses for the same `(program_id, seed, npk)`,
+/// confirming that each `(program_id, seed, npk)` tuple controls a family of 2^128 addresses.
+#[test]
+fn for_private_pda_differs_for_different_identifier() {
+    let program_id: ProgramId = [1; 8];
+    let seed = PdaSeed::new([2; 32]);
+    let npk = NullifierPublicKey([3; 32]);
+    assert_ne!(
+        AccountId::for_private_pda(&program_id, &seed, &npk, 0),
+        AccountId::for_private_pda(&program_id, &seed, &npk, 1),
+    );
+    assert_ne!(
+        AccountId::for_private_pda(&program_id, &seed, &npk, 0),
+        AccountId::for_private_pda(&program_id, &seed, &npk, u128::MAX),
+    );
+}
+
+/// A private PDA at the same (program, seed) has a different address than a public PDA,
+/// because the private formula uses a different prefix and includes npk.
+#[test]
+fn for_private_pda_differs_from_public_pda() {
+    let program_id: ProgramId = [1; 8];
+    let seed = PdaSeed::new([2; 32]);
+    let npk = NullifierPublicKey([3; 32]);
+    let private_id = AccountId::for_private_pda(&program_id, &seed, &npk, u128::MAX);
+    let public_id = AccountId::for_public_pda(&program_id, &seed);
+    assert_ne!(private_id, public_id);
+}
+
+#[cfg(feature = "host")]
+#[test]
+fn private_account_kind_header_round_trips() {
+    let regular = PrivateAccountKind::Regular(42);
+    let pda = PrivateAccountKind::Pda {
+        program_id: [1_u32; 8],
+        seed: PdaSeed::new([2_u8; 32]),
+        identifier: u128::MAX,
+    };
+    assert_eq!(
+        PrivateAccountKind::from_header_bytes(&regular.to_header_bytes()),
+        Some(regular)
+    );
+    assert_eq!(
+        PrivateAccountKind::from_header_bytes(&pda.to_header_bytes()),
+        Some(pda)
+    );
+}
+
+#[cfg(feature = "host")]
+#[test]
+fn private_account_kind_unknown_discriminant_returns_none() {
+    let mut bytes = [0_u8; PrivateAccountKind::HEADER_LEN];
+    bytes[0] = 0xFF;
+    assert_eq!(PrivateAccountKind::from_header_bytes(&bytes), None);
+}
+
+#[test]
+fn for_private_account_dispatches_correctly() {
+    let program_id: ProgramId = [1; 8];
+    let seed = PdaSeed::new([2; 32]);
+    let npk = NullifierPublicKey([3; 32]);
+    let identifier: Identifier = 77;
+
+    assert_eq!(
+        AccountId::for_private_account(&npk, &PrivateAccountKind::Regular(identifier)),
+        AccountId::for_regular_private_account(&npk, identifier),
+    );
+    assert_eq!(
+        AccountId::for_private_account(
+            &npk,
+            &PrivateAccountKind::Pda {
+                program_id,
+                seed,
+                identifier
+            }
+        ),
+        AccountId::for_private_pda(&program_id, &seed, &npk, identifier),
+    );
+}
+
+#[test]
+fn compute_public_authorized_pdas_with_seeds() {
+    let caller: ProgramId = [1; 8];
+    let seed = PdaSeed::new([2; 32]);
+    let result = compute_public_authorized_pdas(Some(caller), &[seed]);
+    let expected = AccountId::for_public_pda(&caller, &seed);
+    assert!(result.contains(&expected));
+    assert_eq!(result.len(), 1);
+}
+
+/// With no caller (top-level call), the result is always empty.
+#[test]
+fn compute_public_authorized_pdas_no_caller_returns_empty() {
+    let seed = PdaSeed::new([2; 32]);
+    let result = compute_public_authorized_pdas(None, &[seed]);
+    assert!(result.is_empty());
+}
