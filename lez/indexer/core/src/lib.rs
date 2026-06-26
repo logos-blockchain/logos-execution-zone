@@ -5,6 +5,7 @@ use arc_swap::ArcSwap;
 use common::block::Block;
 // ToDo: Remove after testnet
 use futures::StreamExt as _;
+pub use ingest_error::BlockIngestError;
 use log::{error, info, warn};
 use logos_blockchain_core::header::HeaderId;
 use logos_blockchain_zone_sdk::{
@@ -16,9 +17,9 @@ use crate::{
     config::IndexerConfig,
     status::{IndexerStatus, IndexerSyncStatus},
 };
-
 pub mod block_store;
 pub mod config;
+pub mod ingest_error;
 pub mod status;
 
 #[derive(Clone)]

@@ -178,7 +178,7 @@ mod tests {
         }
         .into_pending_block(&key);
 
-        let mut tampered = block.clone();
+        let mut tampered = block;
         tampered.header.timestamp = 99; // header changed; stale hash no longer matches
         assert_ne!(tampered.recompute_hash(), tampered.header.hash);
     }

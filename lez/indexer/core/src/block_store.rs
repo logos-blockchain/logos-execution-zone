@@ -173,13 +173,11 @@ impl IndexerStore {
                         )
                         .context("Failed to execute genesis public transaction")?;
                 } else {
-                    transaction
-                        .clone()
-                        .execute_on_state(
-                            &mut state_guard,
-                            block.header.block_id,
-                            block.header.timestamp,
-                        )?;
+                    transaction.clone().execute_on_state(
+                        &mut state_guard,
+                        block.header.block_id,
+                        block.header.timestamp,
+                    )?;
                 }
             }
 
