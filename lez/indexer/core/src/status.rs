@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-use crate::chain_breaker::ChainBreaker;
+use crate::stall_reason::StallReason;
 
 /// Coarse lifecycle state of the indexer's ingestion loop, so a client can tell
 /// "still catching up" apart from "something went wrong".
@@ -15,8 +15,8 @@ pub enum IndexerSyncState {
     CaughtUp,
     /// The last cycle failed (e.g. the L1 node is unreachable). See `last_error`.
     Error,
-    /// Parked on a chain breaker: the validated tip is frozen awaiting a valid
-    /// continuation. See `last_error` and the snapshot's `chain_breaker`.
+    /// Parked on a stall reason: the validated tip is frozen awaiting a valid
+    /// continuation. See `last_error` and the snapshot's `stall_reason`.
     Stalled,
 }
 
@@ -62,8 +62,8 @@ impl IndexerSyncStatus {
         }
     }
 
-    /// Parked on a chain breaker; `reason` mirrors the breaker's error message.
-    /// The full breaker is attached to the [`IndexerStatus`] snapshot.
+    /// Parked on a stall reason; `reason` mirrors the stall's error message.
+    /// The full stall is attached to the [`IndexerStatus`] snapshot.
     pub(crate) const fn stalled(reason: String) -> Self {
         Self {
             state: IndexerSyncState::Stalled,
@@ -83,7 +83,7 @@ pub struct IndexerStatus {
     #[serde(flatten)]
     pub sync: IndexerSyncStatus,
     pub indexed_block_id: Option<u64>,
-    pub chain_breaker: Option<ChainBreaker>,
+    pub stall_reason: Option<StallReason>,
 }
 
 #[cfg(test)]
@@ -95,7 +95,7 @@ mod tests {
         let status = IndexerStatus {
             sync: IndexerSyncStatus::error("boom".to_owned()),
             indexed_block_id: Some(7),
-            chain_breaker: None,
+            stall_reason: None,
         };
         let value = serde_json::to_value(&status).expect("serialize");
         assert_eq!(
@@ -104,7 +104,7 @@ mod tests {
                 "state": "error",
                 "lastError": "boom",
                 "indexedBlockId": 7,
-                "chainBreaker": null,
+                "stallReason": null,
             })
         );
     }
@@ -119,13 +119,13 @@ mod tests {
     }
 
     #[test]
-    fn stalled_status_serializes_with_breaker() {
-        use crate::{chain_breaker::ChainBreaker, ingest_error::BlockIngestError};
+    fn stalled_status_serializes_with_stall_reason() {
+        use crate::{ingest_error::BlockIngestError, stall_reason::StallReason};
 
         let status = IndexerStatus {
             sync: IndexerSyncStatus::stalled("broken chain link".to_owned()),
             indexed_block_id: Some(41),
-            chain_breaker: Some(ChainBreaker {
+            stall_reason: Some(StallReason {
                 block_id: Some(42),
                 block_hash: None,
                 prev_block_hash: None,
@@ -139,6 +139,6 @@ mod tests {
         assert_eq!(value["state"], serde_json::json!("stalled"));
         assert_eq!(value["lastError"], serde_json::json!("broken chain link"));
         assert_eq!(value["indexedBlockId"], serde_json::json!(41));
-        assert_eq!(value["chainBreaker"]["orphansSince"], serde_json::json!(2));
+        assert_eq!(value["stallReason"]["orphansSince"], serde_json::json!(2));
     }
 }

@@ -2,7 +2,6 @@ use std::{path::Path, sync::Arc};
 
 use anyhow::Result;
 use arc_swap::ArcSwap;
-pub use chain_breaker::ChainBreaker;
 use common::block::Block;
 // ToDo: Remove after testnet
 use futures::StreamExt as _;
@@ -12,6 +11,7 @@ use logos_blockchain_core::header::HeaderId;
 use logos_blockchain_zone_sdk::{
     CommonHttpClient, ZoneMessage, adapter::NodeHttpClient, indexer::ZoneIndexer,
 };
+pub use stall_reason::StallReason;
 
 use crate::{
     block_store::IndexerStore,
@@ -19,9 +19,9 @@ use crate::{
     status::{IndexerStatus, IndexerSyncStatus},
 };
 pub mod block_store;
-pub mod chain_breaker;
 pub mod config;
 pub mod ingest_error;
+pub mod stall_reason;
 pub mod status;
 
 #[derive(Clone)]
@@ -62,11 +62,11 @@ impl IndexerCore {
     pub fn status(&self) -> IndexerStatus {
         let sync = IndexerSyncStatus::clone(&self.status.load());
         let indexed_block_id = self.store.get_last_block_id().ok().flatten();
-        let chain_breaker = self.store.get_chain_breaker().ok().flatten();
+        let stall_reason = self.store.get_stall_reason().ok().flatten();
         IndexerStatus {
             sync,
             indexed_block_id,
-            chain_breaker,
+            stall_reason,
         }
     }
 

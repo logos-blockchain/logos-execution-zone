@@ -2,7 +2,7 @@ use common::HashType;
 use serde::{Deserialize, Serialize};
 
 /// Why the indexer could not apply an L2 block from the channel. Stored inside a
-/// [`crate::chain_breaker::ChainBreaker`] and surfaced on the status snapshot.
+/// [`crate::stall_reason::StallReason`] and surfaced on the status snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize, thiserror::Error)]
 #[serde(rename_all = "camelCase")]
 pub enum BlockIngestError {

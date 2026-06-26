@@ -3,7 +3,7 @@ use crate::{
     DBIO as _,
     cells::shared_cells::{FirstBlockSetCell, LastBlockCell},
     indexer::indexer_cells::{
-        BreakpointCellRef, ChainBreakerCellRef, LastBreakpointIdCell, LastObservedL1LibHeaderCell,
+        BreakpointCellRef, LastBreakpointIdCell, LastObservedL1LibHeaderCell, StallReasonCellRef,
         ZoneSdkIndexerCursorCellRef,
     },
 };
@@ -35,8 +35,8 @@ impl RocksDBIO {
         self.put(&ZoneSdkIndexerCursorCellRef(bytes), ())
     }
 
-    pub fn put_chain_breaker_bytes(&self, bytes: &[u8]) -> DbResult<()> {
-        self.put(&ChainBreakerCellRef(bytes), ())
+    pub fn put_stall_reason_bytes(&self, bytes: &[u8]) -> DbResult<()> {
+        self.put(&StallReasonCellRef(bytes), ())
     }
 
     // State

@@ -7,8 +7,8 @@ use crate::{
     error::DbError,
     indexer::{
         ACC_NUM_CELL_NAME, BLOCK_HASH_CELL_NAME, BREAKPOINT_CELL_NAME, CF_ACC_META,
-        CF_BREAKPOINT_NAME, CF_HASH_TO_ID, CF_TX_TO_ID, DB_META_CHAIN_BREAKER_KEY,
-        DB_META_LAST_BREAKPOINT_ID, DB_META_LAST_OBSERVED_L1_LIB_HEADER_ID_IN_DB_KEY,
+        CF_BREAKPOINT_NAME, CF_HASH_TO_ID, CF_TX_TO_ID, DB_META_LAST_BREAKPOINT_ID,
+        DB_META_LAST_OBSERVED_L1_LIB_HEADER_ID_IN_DB_KEY, DB_META_STALL_REASON_KEY,
         DB_META_ZONE_SDK_INDEXER_CURSOR_KEY, TX_HASH_CELL_NAME,
     },
 };
@@ -247,36 +247,36 @@ impl SimpleWritableCell for ZoneSdkIndexerCursorCellRef<'_> {
     }
 }
 
-/// Opaque JSON bytes for the indexer's persisted `Option<ChainBreaker>`.
+/// Opaque JSON bytes for the indexer's persisted `Option<StallReason>`.
 /// Serialized via `serde_json` by the caller (mirrors the zone-sdk cursor cell).
 #[derive(BorshDeserialize)]
-pub struct ChainBreakerCellOwned(pub Vec<u8>);
+pub struct StallReasonCellOwned(pub Vec<u8>);
 
-impl SimpleStorableCell for ChainBreakerCellOwned {
+impl SimpleStorableCell for StallReasonCellOwned {
     type KeyParams = ();
 
-    const CELL_NAME: &'static str = DB_META_CHAIN_BREAKER_KEY;
+    const CELL_NAME: &'static str = DB_META_STALL_REASON_KEY;
     const CF_NAME: &'static str = CF_META_NAME;
 }
 
-impl SimpleReadableCell for ChainBreakerCellOwned {}
+impl SimpleReadableCell for StallReasonCellOwned {}
 
 #[derive(BorshSerialize)]
-pub struct ChainBreakerCellRef<'bytes>(pub &'bytes [u8]);
+pub struct StallReasonCellRef<'bytes>(pub &'bytes [u8]);
 
-impl SimpleStorableCell for ChainBreakerCellRef<'_> {
+impl SimpleStorableCell for StallReasonCellRef<'_> {
     type KeyParams = ();
 
-    const CELL_NAME: &'static str = DB_META_CHAIN_BREAKER_KEY;
+    const CELL_NAME: &'static str = DB_META_STALL_REASON_KEY;
     const CF_NAME: &'static str = CF_META_NAME;
 }
 
-impl SimpleWritableCell for ChainBreakerCellRef<'_> {
+impl SimpleWritableCell for StallReasonCellRef<'_> {
     fn value_constructor(&self) -> DbResult<Vec<u8>> {
         borsh::to_vec(&self).map_err(|err| {
             DbError::borsh_cast_message(
                 err,
-                Some("Failed to serialize chain breaker cell".to_owned()),
+                Some("Failed to serialize stall reason cell".to_owned()),
             )
         })
     }

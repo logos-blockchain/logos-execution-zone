@@ -24,8 +24,8 @@ pub const DB_META_LAST_OBSERVED_L1_LIB_HEADER_ID_IN_DB_KEY: &str =
 pub const DB_META_LAST_BREAKPOINT_ID: &str = "last_breakpoint_id";
 /// Key base for storing the zone-sdk indexer cursor (opaque bytes).
 pub const DB_META_ZONE_SDK_INDEXER_CURSOR_KEY: &str = "zone_sdk_indexer_cursor";
-/// Key base for storing the persisted `Option<ChainBreaker>` diagnostic record (opaque JSON bytes).
-pub const DB_META_CHAIN_BREAKER_KEY: &str = "chain_breaker";
+/// Key base for storing the persisted `Option<StallReason>` diagnostic record (opaque JSON bytes).
+pub const DB_META_STALL_REASON_KEY: &str = "stall_reason";
 
 /// Cell name for a breakpoint.
 pub const BREAKPOINT_CELL_NAME: &str = "breakpoint";

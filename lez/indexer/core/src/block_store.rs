@@ -14,7 +14,7 @@ use logos_blockchain_zone_sdk::Slot;
 use storage::indexer::RocksDBIO;
 use tokio::sync::RwLock;
 
-use crate::{chain_breaker::ChainBreaker, ingest_error::BlockIngestError};
+use crate::{ingest_error::BlockIngestError, stall_reason::StallReason};
 
 struct Tip {
     block_id: u64,
@@ -25,7 +25,7 @@ struct Tip {
 pub enum AcceptOutcome {
     /// Chained and applied; tip and L1 read cursor both advance.
     Applied,
-    /// Did not chain or failed to apply; tip stays frozen, breaker recorded.
+    /// Did not chain or failed to apply; tip stays frozen, stall recorded.
     Parked(BlockIngestError),
 }
 
@@ -134,18 +134,18 @@ impl IndexerStore {
         Ok(())
     }
 
-    pub fn get_chain_breaker(&self) -> Result<Option<ChainBreaker>> {
-        let Some(bytes) = self.dbio.get_chain_breaker_bytes()? else {
+    pub fn get_stall_reason(&self) -> Result<Option<StallReason>> {
+        let Some(bytes) = self.dbio.get_stall_reason_bytes()? else {
             return Ok(None);
         };
-        let breaker: Option<ChainBreaker> =
-            serde_json::from_slice(&bytes).context("Failed to deserialize stored chain breaker")?;
-        Ok(breaker)
+        let stall: Option<StallReason> =
+            serde_json::from_slice(&bytes).context("Failed to deserialize stored stall reason")?;
+        Ok(stall)
     }
 
-    pub fn set_chain_breaker(&self, breaker: &Option<ChainBreaker>) -> Result<()> {
-        let bytes = serde_json::to_vec(breaker).context("Failed to serialize chain breaker")?;
-        self.dbio.put_chain_breaker_bytes(&bytes)?;
+    pub fn set_stall_reason(&self, stall: &Option<StallReason>) -> Result<()> {
+        let bytes = serde_json::to_vec(stall).context("Failed to serialize stall reason")?;
+        self.dbio.put_stall_reason_bytes(&bytes)?;
         Ok(())
     }
 
@@ -224,20 +224,20 @@ impl IndexerStore {
         Ok(None)
     }
 
-    /// Records the chain breaker: the first break is stored verbatim; subsequent
+    /// Records the stall reason: the first break is stored verbatim; subsequent
     /// breaks only bump `orphans_since`, preserving the original cause.
-    fn record_break(
+    fn record_stall(
         &self,
         header: Option<&BlockHeader>,
         l1_slot: serde_json::Value,
         error: BlockIngestError,
     ) -> Result<()> {
-        let breaker = match self.get_chain_breaker()? {
+        let stall = match self.get_stall_reason()? {
             Some(mut existing) => {
                 existing.orphans_since = existing.orphans_since.saturating_add(1);
                 existing
             }
-            None => ChainBreaker {
+            None => StallReason {
                 block_id: header.map(|h| h.block_id),
                 block_hash: header.map(|h| h.hash),
                 prev_block_hash: header.map(|h| h.prev_block_hash),
@@ -247,35 +247,35 @@ impl IndexerStore {
                 orphans_since: 0,
             },
         };
-        self.set_chain_breaker(&Some(breaker))
+        self.set_stall_reason(&Some(stall))
     }
 
-    /// Records a breaker for an inscription that could not even be parsed.
-    pub fn record_deserialize_break(
+    /// Records a stall for an inscription that could not even be parsed.
+    pub fn record_deserialize_stall(
         &self,
         l1_slot: serde_json::Value,
         error: String,
     ) -> Result<()> {
-        self.record_break(None, l1_slot, BlockIngestError::Deserialize(error))
+        self.record_stall(None, l1_slot, BlockIngestError::Deserialize(error))
     }
 
     /// Validates `block` against the tip and, if it chains, applies it atomically
     /// (scratch clone, commit only on full success) and advances the tip. On any
-    /// failure records the breaker and returns `Parked` without touching state.
+    /// failure records the stall and returns `Parked` without touching state.
     pub async fn accept_block(
         &self,
         block: &Block,
         l1_slot: serde_json::Value,
     ) -> Result<AcceptOutcome> {
         if let Some(err) = self.acceptance_error(block)? {
-            self.record_break(Some(&block.header), l1_slot, err.clone())?;
+            self.record_stall(Some(&block.header), l1_slot, err.clone())?;
             return Ok(AcceptOutcome::Parked(err));
         }
 
         // TODO: we use scratch state to be atomic, but need to revisit how expensive a clone is
         let mut scratch = self.current_state.read().await.clone();
         if let Err(err) = apply_block_to_scratch(block, &mut scratch) {
-            self.record_break(Some(&block.header), l1_slot, err.clone())?;
+            self.record_stall(Some(&block.header), l1_slot, err.clone())?;
             return Ok(AcceptOutcome::Parked(err));
         }
 
@@ -283,13 +283,13 @@ impl IndexerStore {
         stored.bedrock_status = BedrockStatus::Finalized;
         if let Err(err) = self.dbio.put_block(&stored, [0_u8; 32]) {
             let ingest_err = BlockIngestError::Storage(err.to_string());
-            self.record_break(Some(&block.header), l1_slot, ingest_err.clone())?;
+            self.record_stall(Some(&block.header), l1_slot, ingest_err.clone())?;
             return Ok(AcceptOutcome::Parked(ingest_err));
         }
 
         // Commit in-memory state (infallible) only after the DB write succeeded.
         *self.current_state.write().await = scratch;
-        self.set_chain_breaker(&None)?;
+        self.set_stall_reason(&None)?;
         Ok(AcceptOutcome::Applied)
     }
 
@@ -412,20 +412,20 @@ fn apply_block_to_scratch(block: &Block, state: &mut V03State) -> Result<(), Blo
 }
 
 #[cfg(test)]
-mod chain_breaker_tests {
+mod stall_reason_tests {
     use common::HashType;
 
     use super::*;
-    use crate::{chain_breaker::ChainBreaker, ingest_error::BlockIngestError};
+    use crate::{ingest_error::BlockIngestError, stall_reason::StallReason};
 
     #[tokio::test]
-    async fn chain_breaker_roundtrips_and_clears() {
+    async fn stall_reason_roundtrips_and_clears() {
         let dir = tempfile::tempdir().expect("tempdir");
         let store = IndexerStore::open_db(dir.path()).expect("open store");
 
-        assert!(store.get_chain_breaker().expect("get").is_none());
+        assert!(store.get_stall_reason().expect("get").is_none());
 
-        let breaker = ChainBreaker {
+        let stall = StallReason {
             block_id: Some(7),
             block_hash: Some(HashType([1_u8; 32])),
             prev_block_hash: Some(HashType([2_u8; 32])),
@@ -434,17 +434,15 @@ mod chain_breaker_tests {
             first_seen: Some(99),
             orphans_since: 3,
         };
-        store
-            .set_chain_breaker(&Some(breaker))
-            .expect("set breaker");
+        store.set_stall_reason(&Some(stall)).expect("set stall");
 
-        let got = store.get_chain_breaker().expect("get").expect("present");
+        let got = store.get_stall_reason().expect("get").expect("present");
         assert_eq!(got.block_id, Some(7));
         assert_eq!(got.orphans_since, 3);
         assert!(matches!(got.error, BlockIngestError::StateTransition(_)));
 
-        store.set_chain_breaker(&None).expect("clear");
-        assert!(store.get_chain_breaker().expect("get").is_none());
+        store.set_stall_reason(&None).expect("clear");
+        assert!(store.get_stall_reason().expect("get").is_none());
     }
 }
 
@@ -636,9 +634,9 @@ mod accept_tests {
                 got: 2
             })
         ));
-        let breaker = store.get_chain_breaker().expect("get").expect("present");
-        assert_eq!(breaker.block_id, Some(2));
-        assert_eq!(breaker.orphans_since, 0);
+        let stall = store.get_stall_reason().expect("get").expect("present");
+        assert_eq!(stall.block_id, Some(2));
+        assert_eq!(stall.orphans_since, 0);
     }
 
     #[tokio::test]
@@ -675,22 +673,22 @@ mod accept_tests {
             .await
             .expect("accept");
 
-        let breaker = store.get_chain_breaker().expect("get").expect("present");
-        assert_eq!(breaker.block_id, Some(2), "first breaker preserved");
-        assert_eq!(breaker.orphans_since, 1, "second break counted as orphan");
+        let stall = store.get_stall_reason().expect("get").expect("present");
+        assert_eq!(stall.block_id, Some(2), "first stall preserved");
+        assert_eq!(stall.orphans_since, 1, "second break counted as orphan");
     }
 
     #[tokio::test]
-    async fn deserialize_break_records_breaker_without_header() {
+    async fn deserialize_break_records_stall_without_header() {
         let dir = tempfile::tempdir().expect("tempdir");
         let store = IndexerStore::open_db(dir.path()).expect("open store");
 
         store
-            .record_deserialize_break(serde_json::Value::Null, "bad bytes".to_owned())
+            .record_deserialize_stall(serde_json::Value::Null, "bad bytes".to_owned())
             .expect("record");
 
-        let breaker = store.get_chain_breaker().expect("get").expect("present");
-        assert_eq!(breaker.block_id, None);
-        assert!(matches!(breaker.error, BlockIngestError::Deserialize(_)));
+        let stall = store.get_stall_reason().expect("get").expect("present");
+        assert_eq!(stall.block_id, None);
+        assert!(matches!(stall.error, BlockIngestError::Deserialize(_)));
     }
 }

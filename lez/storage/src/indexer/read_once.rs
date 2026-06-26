@@ -3,8 +3,8 @@ use crate::{
     DBIO as _,
     cells::shared_cells::{BlockCell, FirstBlockCell, FirstBlockSetCell, LastBlockCell},
     indexer::indexer_cells::{
-        AccNumTxCell, BlockHashToBlockIdMapCell, BreakpointCellOwned, ChainBreakerCellOwned,
-        LastBreakpointIdCell, LastObservedL1LibHeaderCell, TxHashToBlockIdMapCell,
+        AccNumTxCell, BlockHashToBlockIdMapCell, BreakpointCellOwned, LastBreakpointIdCell,
+        LastObservedL1LibHeaderCell, StallReasonCellOwned, TxHashToBlockIdMapCell,
         ZoneSdkIndexerCursorCellOwned,
     },
 };
@@ -75,9 +75,7 @@ impl RocksDBIO {
             .map(|cell| cell.0))
     }
 
-    pub fn get_chain_breaker_bytes(&self) -> DbResult<Option<Vec<u8>>> {
-        Ok(self
-            .get_opt::<ChainBreakerCellOwned>(())?
-            .map(|cell| cell.0))
+    pub fn get_stall_reason_bytes(&self) -> DbResult<Option<Vec<u8>>> {
+        Ok(self.get_opt::<StallReasonCellOwned>(())?.map(|cell| cell.0))
     }
 }
