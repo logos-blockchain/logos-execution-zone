@@ -186,7 +186,8 @@ impl GroupKeyHolder {
     /// Returns `Err` if the ciphertext is too short or the AES-GCM authentication tag
     /// doesn't verify (wrong key or tampered data).
     pub fn unseal(sealed: &[u8], own_key: &SealingSecretKey) -> Result<Self, SealError> {
-        // kem_ciphertext (ML_KEM_768_CIPHERTEXT_LEN) + nonce (12) = header, then AES-GCM tag (16) minimum.
+        // kem_ciphertext (ML_KEM_768_CIPHERTEXT_LEN) + nonce (12) = header, then AES-GCM tag (16)
+        // minimum.
         const HEADER_LEN: usize = ML_KEM_768_CIPHERTEXT_LEN + 12;
         const MIN_LEN: usize = HEADER_LEN + 16;
 
