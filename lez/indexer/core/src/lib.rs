@@ -118,7 +118,7 @@ impl IndexerCore {
                         ZoneMessage::Deposit(_) | ZoneMessage::Withdraw(_) => continue,
                     };
 
-                    let l1_slot = serde_json::to_value(&slot).unwrap_or(serde_json::Value::Null);
+                    let l1_slot = serde_json::to_value(slot).unwrap_or(serde_json::Value::Null);
 
                     let block: Block = match borsh::from_slice(&zone_block.data) {
                         Ok(b) => b,

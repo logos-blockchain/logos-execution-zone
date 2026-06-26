@@ -19,6 +19,7 @@ pub struct StallReason {
     pub first_seen: Option<u64>,
     /// Number of later non-chaining blocks (orphans, since the tip is frozen).
     ///
-    /// TODO: We could store a different "branch" of blocks following this sta
+    /// TODO: We could store a different "branch" of blocks following this break, but for now we
+    /// just count them.
     pub orphans_since: u64,
 }

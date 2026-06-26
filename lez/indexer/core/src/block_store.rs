@@ -425,7 +425,7 @@ mod tests {
 
         // Blocks 2..=11: one native transfer of 10 each (nonces 0..=9).
         for i in 0..10_u64 {
-            let tx = create_transaction_native_token_transfer(from, i as u128, to, 10, &sign_key);
+            let tx = create_transaction_native_token_transfer(from, i.into(), to, 10, &sign_key);
             let block = produce_dummy_block(i + 2, Some(prev_hash), vec![tx]);
             prev_hash = block.header.hash;
             assert!(matches!(
@@ -468,7 +468,7 @@ mod tests {
             .unwrap();
 
         for i in 0..10_u64 {
-            let tx = create_transaction_native_token_transfer(from, i as u128, to, 10, &sign_key);
+            let tx = create_transaction_native_token_transfer(from, i.into(), to, 10, &sign_key);
             let block = produce_dummy_block(i + 2, Some(prev_hash), vec![tx]);
             prev_hash = block.header.hash;
             store
