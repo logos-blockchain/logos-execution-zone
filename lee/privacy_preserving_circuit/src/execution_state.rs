@@ -443,13 +443,6 @@ fn intersect_validity_windows(
     (block_validity_window, timestamp_validity_window)
 }
 
-/// Record or re-verify the `(program_id, seed) → account_id` family binding for the
-/// transaction. Any claim or caller-seed authorization that resolves a `pre_state` under
-/// `(program_id, seed)` must agree with every prior resolution of the same pair; otherwise a
-/// single `pda_seeds: [seed]` entry could authorize multiple private-PDA family members at
-/// once (different npks under the same seed) and let a callee mix balances across them. Free
-/// function so callers can pass `&mut self.pda_family_binding` without holding a borrow on
-/// the surrounding struct's other fields.
 fn resolve_external_seed(
     account_identities: &[InputAccountIdentity],
     pre_state_position: usize,
@@ -510,6 +503,13 @@ fn resolve_external_seed(
     }
 }
 
+/// Record or re-verify the `(program_id, seed) → account_id` family binding for the
+/// transaction. Any claim or caller-seed authorization that resolves a `pre_state` under
+/// `(program_id, seed)` must agree with every prior resolution of the same pair; otherwise a
+/// single `pda_seeds: [seed]` entry could authorize multiple private-PDA family members at
+/// once (different npks under the same seed) and let a callee mix balances across them. Free
+/// function so callers can pass `&mut self.pda_family_binding` without holding a borrow on
+/// the surrounding struct's other fields.
 fn assert_family_binding(
     bindings: &mut HashMap<(ProgramId, PdaSeed), AccountId>,
     program_id: ProgramId,
