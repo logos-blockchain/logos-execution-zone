@@ -23,7 +23,8 @@ use lee::{
     public_transaction as putx,
 };
 use lee_core::{
-    EncryptedAccountData, InputAccountIdentity, MembershipProof, NullifierPublicKey,
+    DUMMY_COMMITMENT_HASH, EncryptedAccountData, InputAccountIdentity, MembershipProof,
+    NullifierPublicKey,
     account::{AccountWithMetadata, Nonce, data::Data},
     encryption::ViewingPublicKey,
 };
@@ -314,7 +315,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
                 npk: recipient_npk,
                 ssk: recipient_ss,
                 identifier: 0,
-                commitment_root: None,
+                commitment_root: DUMMY_COMMITMENT_HASH,
             },
         ],
         &program.into(),

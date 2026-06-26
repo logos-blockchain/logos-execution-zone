@@ -5,9 +5,8 @@ use key_protocol::key_management::ephemeral_key_holder::EphemeralKeyHolder;
 use keycard_wallet::{KeycardWallet, python_path};
 use lee::{AccountId, PrivateKey, PublicKey, Signature};
 use lee_core::{
-    CommitmentSetDigest, Identifier, InputAccountIdentity, MembershipProof, NullifierPublicKey,
-    NullifierSecretKey,
-    SharedSecretKey,
+    CommitmentSetDigest, DUMMY_COMMITMENT_HASH, Identifier, InputAccountIdentity, MembershipProof,
+    NullifierPublicKey, NullifierSecretKey, SharedSecretKey,
     account::{AccountWithMetadata, Nonce},
     encryption::{EncryptedAccountData, EphemeralPublicKey, ViewingPublicKey},
 };
@@ -188,7 +187,7 @@ enum State {
 pub struct AccountManager {
     states: Vec<State>,
     pin: Option<String>,
-    dummy_commitment_root: Option<CommitmentSetDigest>,
+    dummy_commitment_root: CommitmentSetDigest,
 }
 
 impl AccountManager {
@@ -350,8 +349,9 @@ impl AccountManager {
                 .get_commitment_root()
                 .await
                 .map_err(ExecutionFailureKind::SequencerError)?
+                .unwrap_or(DUMMY_COMMITMENT_HASH)
         } else {
-            None
+            DUMMY_COMMITMENT_HASH
         };
 
         Ok(Self {

@@ -22,7 +22,7 @@ use lee::{
     program::Program,
 };
 use lee_core::{
-    EncryptedAccountData, InputAccountIdentity, NullifierPublicKey,
+    DUMMY_COMMITMENT_HASH, EncryptedAccountData, InputAccountIdentity, NullifierPublicKey,
     account::{Account, AccountWithMetadata},
     encryption::ViewingPublicKey,
     program::PdaSeed,
@@ -78,7 +78,7 @@ async fn fund_private_pda(
             npk,
             ssk,
             identifier,
-            commitment_root: None,
+            commitment_root: DUMMY_COMMITMENT_HASH,
             seed: Some((seed, authority_program_id)),
         },
     ];

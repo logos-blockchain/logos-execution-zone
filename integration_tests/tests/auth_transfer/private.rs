@@ -712,7 +712,7 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
                 npk,
                 ssk,
                 identifier: 1337,
-                commitment_root: None,
+                commitment_root: DUMMY_COMMITMENT_HASH,
                 seed: None,
             },
         ],
@@ -726,9 +726,9 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
 
 async fn prove_init_with_commitment_root(
     ctx: &TestContext,
-    commitment_root: Option<lee_core::CommitmentSetDigest>,
+    commitment_root: lee_core::CommitmentSetDigest,
 ) -> Result<lee_core::PrivacyPreservingCircuitOutput> {
-    let program = Program::authenticated_transfer_program();
+    let program = programs::authenticated_transfer();
     let sender_id = ctx.existing_public_accounts()[0];
     let sender_pre = AccountWithMetadata::new(
         ctx.sequencer_client().get_account(sender_id).await?,
@@ -780,7 +780,7 @@ async fn init_with_dummy_commitment_root_produces_valid_root() -> Result<()> {
     let npk = NullifierPublicKey::from(&nsk);
     let recipient_account_id = AccountId::for_regular_private_account(&npk, 0);
 
-    let output = prove_init_with_commitment_root(&ctx, Some(expected_digest)).await?;
+    let output = prove_init_with_commitment_root(&ctx, expected_digest).await?;
 
     assert_eq!(output.new_nullifiers.len(), 1);
     let (nullifier, digest) = &output.new_nullifiers[0];
@@ -805,8 +805,8 @@ async fn init_nullifier_digest_is_bound_to_commitment_root() -> Result<()> {
         .expect("DUMMY_COMMITMENT must be in genesis commitment set");
     let expected_digest = compute_digest_for_path(&DUMMY_COMMITMENT, &dummy_proof);
 
-    let output_with_root = prove_init_with_commitment_root(&ctx, Some(expected_digest)).await?;
-    let output_without_root = prove_init_with_commitment_root(&ctx, None).await?;
+    let output_with_root = prove_init_with_commitment_root(&ctx, expected_digest).await?;
+    let output_without_root = prove_init_with_commitment_root(&ctx, DUMMY_COMMITMENT_HASH).await?;
 
     assert_eq!(output_with_root.new_nullifiers[0].1, expected_digest);
     assert_eq!(
