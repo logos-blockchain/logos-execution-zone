@@ -149,6 +149,11 @@ impl indexer_service_rpc::RpcServer for IndexerService {
         Ok(tx_res)
     }
 
+    async fn get_status(&self) -> Result<serde_json::Value, ErrorObjectOwned> {
+        Ok(serde_json::to_value(self.indexer.status())
+            .expect("IndexerStatus serialization should not fail"))
+    }
+
     async fn healthcheck(&self) -> Result<(), ErrorObjectOwned> {
         // Checking, that indexer can calculate last state
         let _ = self

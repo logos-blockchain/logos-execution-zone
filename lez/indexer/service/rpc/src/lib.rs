@@ -69,6 +69,9 @@ pub trait Rpc {
         limit: u64,
     ) -> Result<Vec<Transaction>, ErrorObjectOwned>;
 
+    #[method(name = "getStatus")]
+    async fn get_status(&self) -> Result<serde_json::Value, ErrorObjectOwned>;
+
     // ToDo: expand healthcheck response into some kind of report
     #[method(name = "checkHealth")]
     async fn healthcheck(&self) -> Result<(), ErrorObjectOwned>;

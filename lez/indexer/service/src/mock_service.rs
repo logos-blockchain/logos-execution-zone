@@ -325,6 +325,24 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
             .collect())
     }
 
+    async fn get_status(&self) -> Result<serde_json::Value, ErrorObjectOwned> {
+        let indexed_block_id = self
+            .state
+            .read()
+            .await
+            .blocks
+            .iter()
+            .rev()
+            .find(|block| block.bedrock_status == BedrockStatus::Finalized)
+            .map(|block| block.header.block_id);
+        Ok(serde_json::json!({
+            "state": "caught_up",
+            "lastError": null,
+            "indexedBlockId": indexed_block_id,
+            "stallReason": null,
+        }))
+    }
+
     async fn healthcheck(&self) -> Result<(), ErrorObjectOwned> {
         Ok(())
     }
