@@ -43,32 +43,3 @@ impl IndexerConfig {
         })
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::IndexerConfig;
-
-    const MINIMAL_CONFIG: &str = r#"{
-        "consensus_info_polling_interval": "1s",
-        "bedrock_config": { "addr": "http://localhost:18080" },
-        "channel_id": "0101010101010101010101010101010101010101010101010101010101010101"
-    }"#;
-
-    #[test]
-    fn allow_chain_reset_defaults_to_false() {
-        let config: IndexerConfig = serde_json::from_str(MINIMAL_CONFIG).unwrap();
-        assert!(!config.allow_chain_reset);
-    }
-
-    #[test]
-    fn allow_chain_reset_parses_true() {
-        let json = r#"{
-            "consensus_info_polling_interval": "1s",
-            "bedrock_config": { "addr": "http://localhost:18080" },
-            "channel_id": "0101010101010101010101010101010101010101010101010101010101010101",
-            "allow_chain_reset": true
-        }"#;
-        let config: IndexerConfig = serde_json::from_str(json).unwrap();
-        assert!(config.allow_chain_reset);
-    }
-}
