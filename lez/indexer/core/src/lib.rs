@@ -25,12 +25,10 @@ pub mod status;
 
 /// Result of comparing the indexer's stored tip against the channel.
 enum ChainIdentityOutcome {
-    /// Proceed from the persisted cursor. Either the channel still serves our tip
-    /// (same chain), there is nothing to compare (empty store / parked / no cursor),
-    /// or the check was inconclusive (L1 unreadable, or bedrock's LIB still behind
-    /// our tip slot) — none of which prove a reset.
+    /// Proceed from the cursor: channel still serves our chain, nothing to compare,
+    /// or the check was inconclusive — none of which prove a reset.
     Consistent,
-    /// The channel serves a *different* block at the tip's id — a chain reset.
+    /// The channel serves a different block at one of our ids — a chain reset.
     Mismatch { detail: String },
 }
 
@@ -95,39 +93,28 @@ impl IndexerCore {
         }
     }
 
-    /// Verifies the channel still serves our chain at the tip's L1 slot (the persisted
-    /// cursor), by comparing the first block it serves there against our stored block
-    /// of the *same id*.
+    /// Detects when the local store belongs to a different chain than the connected L1
+    /// (e.g. a wiped/restarted bedrock) so startup can reset instead of silently
+    /// diverging. Mostly a dev convenience; won't trigger during normal live indexing.
     ///
-    /// This is mostly a development convenience: it lets the indexer notice that its
-    /// local state belongs to a different chain than the one it is now connected to
-    /// (e.g. a wiped/restarted bedrock) and reset instead of silently diverging. It
-    /// will not trigger during normal live indexing. Reading at the cursor — which is
-    /// recent — keeps this to ~one batch rather than a scan from genesis (L1 slots
-    /// are wall-clock-derived, so genesis is millions of empty slots away).
+    /// Compares the first block the channel serves at/after the cursor (the tip's
+    /// recent L1 slot, so ~one batch — not a from-genesis scan) against our stored
+    /// block of the *same id*. Comparing by the channel's id, not our tip id, is what
+    /// catches a *shorter* reset chain: it has no block at our tip id, but its low-id
+    /// block here differs from ours.
     async fn chain_identity_outcome(&self) -> Result<ChainIdentityOutcome> {
-        // We deliberately do NOT skip parked stores: a parked store must still be able
-        // to detect a reset, or it stays parked across reboots forever (its persisted
-        // stall would short-circuit the check every boot). A same-chain park is still
-        // safe — the parked block sits at an id we never applied, so the lookup below
-        // misses and we stay Consistent.
+        // Don't skip parked stores: the stall is persisted and only clears on a
+        // successful apply, so skipping would re-park forever and never catch a reset.
+        // Safe anyway — a same-chain park sits at an id we never applied, so the lookup
+        // below misses → Consistent.
         let Some(cursor) = self.store.get_zone_cursor()? else {
-            return Ok(ChainIdentityOutcome::Consistent); // empty / cold store: nothing to verify
+            return Ok(ChainIdentityOutcome::Consistent); // empty / cold store
         };
 
-        // Compare the first block the channel serves at/after the cursor against our
-        // stored block of the same id. On the same chain that is our tip and matches;
-        // a reset serves a different block here — crucially including a freshly
-        // restarted, *shorter* chain whose low-id block at this slot differs from ours
-        // (the old "look for our tip id" approach missed this: a short chain has no
-        // block at our tip id).
-        //
-        // Anything inconclusive stays Consistent (proceed, let ingest park if truly
-        // divergent) rather than wiping a valid store: an empty/unreadable read (most
-        // importantly bedrock's LIB still behind our tip slot), or a channel block at
-        // an id we don't hold. Blind spot: a store holding only genesis can't be
-        // distinguished (genesis is deterministic across chains), but that window is
-        // transient.
+        // Inconclusive cases stay Consistent (ingest parks if truly divergent) rather
+        // than wipe a valid store: empty/unreadable read (notably bedrock's LIB behind
+        // our tip), or an id we don't hold. Blind spot: a genesis-only store can't be
+        // told apart (genesis is deterministic), but that window is transient.
         let Some(channel_block) = self.fetch_channel_block_from(cursor).await? else {
             return Ok(ChainIdentityOutcome::Consistent);
         };
@@ -137,17 +124,13 @@ impl IndexerCore {
         Ok(compare_block(&ours, &channel_block))
     }
 
-    /// Reads the channel starting at the tip's L1 slot (the `cursor`) and returns the
-    /// first block it serves there. `next_messages` is exclusive of its argument, so
-    /// `cursor - 1` is passed to include the tip's own slot.
-    ///
-    /// Cheap: the cursor is recent, so this reads roughly one batch. `None` covers the
-    /// inconclusive cases — a slow/unreachable L1 (timeout/error) or bedrock's LIB
-    /// still behind our tip slot (empty stream) — neither of which proves a reset.
+    /// Reads the first block the channel serves at/after the tip's slot. `next_messages`
+    /// is exclusive, so `cursor - 1` includes the tip's own slot. `None` = inconclusive
+    /// (timeout/error, or bedrock's LIB behind our tip → empty stream).
     async fn fetch_channel_block_from(&self, cursor: Slot) -> Result<Option<Block>> {
         const TIP_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
-        // A slot-0 cursor is degenerate (real inscriptions live at wall-clock slots);
-        // bail rather than let `next_messages(None)` fall back to a from-genesis scan.
+        // Slot-0 cursor is degenerate (inscriptions live at wall-clock slots); bail
+        // rather than let `next_messages(None)` do a from-genesis scan.
         let Some(from_slot) = cursor.into_inner().checked_sub(1) else {
             return Ok(None);
         };
