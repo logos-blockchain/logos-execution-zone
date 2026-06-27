@@ -114,7 +114,7 @@ unsafe fn setup_indexer(
 
     let allow_reset = config.allow_chain_reset;
     let core = runtime
-        .block_on(IndexerCore::new_with_genesis_check(
+        .block_on(IndexerCore::new_with_chain_check(
             config,
             &storage_dir,
             allow_reset,

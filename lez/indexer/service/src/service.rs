@@ -21,7 +21,7 @@ pub struct IndexerService {
 impl IndexerService {
     pub async fn new(config: IndexerConfig, storage_dir: &Path) -> Result<Self> {
         let allow_reset = config.allow_chain_reset;
-        let indexer = IndexerCore::new_with_genesis_check(config, storage_dir, allow_reset).await?;
+        let indexer = IndexerCore::new_with_chain_check(config, storage_dir, allow_reset).await?;
         let subscription_service = SubscriptionService::spawn_new(indexer.clone());
 
         Ok(Self {
