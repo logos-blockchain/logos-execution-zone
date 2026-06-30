@@ -511,7 +511,7 @@ fn n_unique<T: Eq + Hash>(data: &[T]) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use lee_core::account::{AccountId, Nonce};
+    use lee_core::account::{AccountId, Nonce, PrivateAddressPlaintext};
 
     use crate::{
         PrivateKey, PublicKey, V03State,
@@ -603,7 +603,7 @@ mod tests {
         // Attacker controls a private account.
         let attacker_keys = test_private_account_keys_1();
         let attacker_id =
-            AccountId::for_regular_private_account(&attacker_keys.npk(), &attacker_keys.vpk(), 0);
+            PrivateAddressPlaintext::new(attacker_keys.npk(), attacker_keys.vpk(), 0).account_id();
 
         let victim_id = AccountId::new([20_u8; 32]);
         let recipient_id = AccountId::new([42_u8; 32]);
@@ -709,9 +709,10 @@ mod tests {
     /// There are two routes, both closed:
     ///
     /// - **mask=1 (`PrivateAuthorizedUpdate`)**: the circuit derives `account_id =
-    ///   AccountId::for_regular_private_account(&npk_from(nsk), identifier)` and asserts it matches
-    ///   `pre_state.account_id`. Passing this check requires the victim's `nsk`, which the attacker
-    ///   does not have. `execute_and_prove` panics inside the ZKVM and no proof is produced.
+    ///   PrivateAddressPlaintext::new(npk_from(nsk), vpk, identifier).account_id()` and asserts it
+    ///   matches `pre_state.account_id`. Passing this check requires the victim's `nsk`, which the
+    ///   attacker does not have. `execute_and_prove` panics inside the ZKVM and no proof is
+    ///   produced.
     ///
     /// - **mask=0 (`Public`)**: the circuit places the account in `public_pre_states` and
     ///   `execute_and_prove` succeeds. The host-side validator then reconstructs
@@ -754,12 +755,12 @@ mod tests {
         // Attacker controls a private account.
         let attacker_keys = test_private_account_keys_1();
         let attacker_id =
-            AccountId::for_regular_private_account(&attacker_keys.npk(), &attacker_keys.vpk(), 0);
+            PrivateAddressPlaintext::new(attacker_keys.npk(), attacker_keys.vpk(), 0).account_id();
 
         // Victim is a private account — not registered in public chain state.
         let victim_keys = test_private_account_keys_2();
         let victim_id =
-            AccountId::for_regular_private_account(&victim_keys.npk(), &victim_keys.vpk(), 0);
+            PrivateAddressPlaintext::new(victim_keys.npk(), victim_keys.vpk(), 0).account_id();
         let victim_balance = 5_000_u128;
 
         let recipient_id = AccountId::new([42_u8; 32]);

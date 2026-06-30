@@ -420,7 +420,9 @@ pub mod tests {
     use lee_core::{
         BlockId, Commitment, InputAccountIdentity, Nullifier, NullifierPublicKey,
         NullifierSecretKey, Timestamp,
-        account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
+        account::{
+            Account, AccountId, AccountWithMetadata, Nonce, PrivateAddressPlaintext, data::Data,
+        },
         encryption::ViewingPublicKey,
         program::{
             BlockValidityWindow, ExecutionValidationError, PdaSeed, ProgramId,
@@ -517,7 +519,7 @@ pub mod tests {
 
         #[must_use]
         pub fn with_private_account(mut self, keys: &TestPrivateKeys, account: &Account) -> Self {
-            let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), 0);
+            let account_id = PrivateAddressPlaintext::new(keys.npk(), keys.vpk(), 0).account_id();
             let commitment = Commitment::new(&account_id, account);
             self.private_state.0.extend(&[commitment]);
             self
@@ -729,8 +731,8 @@ pub mod tests {
             ..Account::default()
         };
 
-        let account_id1 = AccountId::for_regular_private_account(&keys1.npk(), &keys1.vpk(), 0);
-        let account_id2 = AccountId::for_regular_private_account(&keys2.npk(), &keys2.vpk(), 0);
+        let account_id1 = PrivateAddressPlaintext::new(keys1.npk(), keys1.vpk(), 0).account_id();
+        let account_id2 = PrivateAddressPlaintext::new(keys2.npk(), keys2.vpk(), 0).account_id();
 
         let init_commitment1 = Commitment::new(&account_id1, &account);
         let init_commitment2 = Commitment::new(&account_id2, &account);
@@ -1406,7 +1408,8 @@ pub mod tests {
         let recipient = AccountWithMetadata::new(
             Account::default(),
             false,
-            (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
+            PrivateAddressPlaintext::new(recipient_keys.npk(), recipient_keys.vpk(), 0)
+                .account_id(),
         );
 
         let (output, proof) = circuit::execute_and_prove(
@@ -1448,17 +1451,18 @@ pub mod tests {
     ) -> PrivacyPreservingTransaction {
         let program = Program::authenticated_transfer_program();
         let sender_account_id =
-            AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
+            PrivateAddressPlaintext::new(sender_keys.npk(), sender_keys.vpk(), 0).account_id();
         let sender_commitment = Commitment::new(&sender_account_id, sender_private_account);
         let sender_pre = AccountWithMetadata::new(
             sender_private_account.clone(),
             true,
-            (&sender_keys.npk(), &sender_keys.vpk(), 0),
+            PrivateAddressPlaintext::new(sender_keys.npk(), sender_keys.vpk(), 0).account_id(),
         );
         let recipient_pre = AccountWithMetadata::new(
             Account::default(),
             false,
-            (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
+            PrivateAddressPlaintext::new(recipient_keys.npk(), recipient_keys.vpk(), 0)
+                .account_id(),
         );
 
         let (output, proof) = circuit::execute_and_prove(
@@ -1504,12 +1508,12 @@ pub mod tests {
     ) -> PrivacyPreservingTransaction {
         let program = Program::authenticated_transfer_program();
         let sender_account_id =
-            AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
+            PrivateAddressPlaintext::new(sender_keys.npk(), sender_keys.vpk(), 0).account_id();
         let sender_commitment = Commitment::new(&sender_account_id, sender_private_account);
         let sender_pre = AccountWithMetadata::new(
             sender_private_account.clone(),
             true,
-            (&sender_keys.npk(), &sender_keys.vpk(), 0),
+            PrivateAddressPlaintext::new(sender_keys.npk(), sender_keys.vpk(), 0).account_id(),
         );
         let recipient_pre = AccountWithMetadata::new(
             state.get_account_by_id(*recipient_account_id),
@@ -1615,9 +1619,10 @@ pub mod tests {
         );
 
         let sender_account_id =
-            AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
+            PrivateAddressPlaintext::new(sender_keys.npk(), sender_keys.vpk(), 0).account_id();
         let recipient_account_id =
-            AccountId::for_regular_private_account(&recipient_keys.npk(), &recipient_keys.vpk(), 0);
+            PrivateAddressPlaintext::new(recipient_keys.npk(), recipient_keys.vpk(), 0)
+                .account_id();
         let expected_new_commitment_1 = Commitment::new(
             &sender_account_id,
             &Account {
@@ -1769,7 +1774,7 @@ pub mod tests {
         );
 
         let sender_account_id =
-            AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
+            PrivateAddressPlaintext::new(sender_keys.npk(), sender_keys.vpk(), 0).account_id();
         let expected_new_commitment = Commitment::new(
             &sender_account_id,
             &Account {
@@ -2081,12 +2086,13 @@ pub mod tests {
                 ..Account::default()
             },
             true,
-            (&sender_keys.npk(), &sender_keys.vpk(), 0),
+            PrivateAddressPlaintext::new(sender_keys.npk(), sender_keys.vpk(), 0).account_id(),
         );
         let private_account_2 = AccountWithMetadata::new(
             Account::default(),
             false,
-            (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
+            PrivateAddressPlaintext::new(recipient_keys.npk(), recipient_keys.vpk(), 0)
+                .account_id(),
         );
 
         // Setting the recipient nsk to authorize the sender.
@@ -2129,7 +2135,7 @@ pub mod tests {
                 ..Account::default()
             },
             true,
-            (&sender_keys.npk(), &sender_keys.vpk(), 0),
+            PrivateAddressPlaintext::new(sender_keys.npk(), sender_keys.vpk(), 0).account_id(),
         );
         let private_account_2 = AccountWithMetadata::new(
             Account {
@@ -2138,7 +2144,8 @@ pub mod tests {
                 ..Account::default()
             },
             false,
-            (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
+            PrivateAddressPlaintext::new(recipient_keys.npk(), recipient_keys.vpk(), 0)
+                .account_id(),
         );
 
         let result = execute_and_prove(
@@ -2177,7 +2184,7 @@ pub mod tests {
                 ..Account::default()
             },
             true,
-            (&sender_keys.npk(), &sender_keys.vpk(), 0),
+            PrivateAddressPlaintext::new(sender_keys.npk(), sender_keys.vpk(), 0).account_id(),
         );
         let private_account_2 = AccountWithMetadata::new(
             Account {
@@ -2186,7 +2193,8 @@ pub mod tests {
                 ..Account::default()
             },
             false,
-            (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
+            PrivateAddressPlaintext::new(recipient_keys.npk(), recipient_keys.vpk(), 0)
+                .account_id(),
         );
 
         let result = execute_and_prove(
@@ -2225,7 +2233,7 @@ pub mod tests {
                 ..Account::default()
             },
             true,
-            (&sender_keys.npk(), &sender_keys.vpk(), 0),
+            PrivateAddressPlaintext::new(sender_keys.npk(), sender_keys.vpk(), 0).account_id(),
         );
         let private_account_2 = AccountWithMetadata::new(
             Account {
@@ -2234,7 +2242,8 @@ pub mod tests {
                 ..Account::default()
             },
             false,
-            (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
+            PrivateAddressPlaintext::new(recipient_keys.npk(), recipient_keys.vpk(), 0)
+                .account_id(),
         );
 
         let result = execute_and_prove(
@@ -2273,7 +2282,7 @@ pub mod tests {
                 ..Account::default()
             },
             true,
-            (&sender_keys.npk(), &sender_keys.vpk(), 0),
+            PrivateAddressPlaintext::new(sender_keys.npk(), sender_keys.vpk(), 0).account_id(),
         );
         let private_account_2 = AccountWithMetadata::new(
             Account {
@@ -2282,7 +2291,8 @@ pub mod tests {
                 ..Account::default()
             },
             false,
-            (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
+            PrivateAddressPlaintext::new(recipient_keys.npk(), recipient_keys.vpk(), 0)
+                .account_id(),
         );
 
         let result = execute_and_prove(
@@ -2322,13 +2332,14 @@ pub mod tests {
                 ..Account::default()
             },
             true,
-            (&sender_keys.npk(), &sender_keys.vpk(), 0),
+            PrivateAddressPlaintext::new(sender_keys.npk(), sender_keys.vpk(), 0).account_id(),
         );
         let private_account_2 = AccountWithMetadata::new(
             Account::default(),
             // This should be set to false in normal circumstances
             true,
-            (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
+            PrivateAddressPlaintext::new(recipient_keys.npk(), recipient_keys.vpk(), 0)
+                .account_id(),
         );
 
         let result = execute_and_prove(
@@ -2397,9 +2408,10 @@ pub mod tests {
 
     /// Happy path: a program claims a new private PDA via `Claim::Pda(seed)`. The circuit
     /// reads the npk for that `pre_state` from `private_account_keys` at the `pre_state`'s
-    /// position, derives `AccountId` via `AccountId::for_private_pda(program_id, seed, npk)`, and
-    /// asserts it equals the `pre_state`'s `account_id`. The equality both validates the claim
-    /// and binds the supplied npk to the `account_id`.
+    /// position, derives `AccountId` via `PrivateAddressPlaintext::new(npk,
+    /// ..).pda_account_id(program_id, seed)`, and asserts it equals the `pre_state`'s
+    /// `account_id`. The equality both validates the claim and binds the supplied npk to the
+    /// `account_id`.
     #[test]
     fn private_pda_claim_succeeds() {
         let program = Program::pda_claimer();
@@ -2407,8 +2419,8 @@ pub mod tests {
         let npk = keys.npk();
         let seed = PdaSeed::new([42; 32]);
 
-        let account_id =
-            AccountId::for_private_pda(&program.id(), &seed, &npk, &keys.vpk(), u128::MAX);
+        let account_id = PrivateAddressPlaintext::new(npk, keys.vpk(), u128::MAX)
+            .pda_account_id(&program.id(), &seed);
         let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
         let result = execute_and_prove(
@@ -2433,7 +2445,8 @@ pub mod tests {
     }
 
     /// An npk is supplied that does not match the `pre_state`'s `account_id` under
-    /// `AccountId::for_private_pda(program, claim_seed, npk)`. The claim equality check rejects.
+    /// `PrivateAddressPlaintext::new(npk, ..).pda_account_id(program, claim_seed)`. The claim
+    /// equality check rejects.
     #[test]
     fn private_pda_npk_mismatch_fails() {
         // `keys_a` produces the `pre_state`'s `account_id` (the registered pair), `keys_b` is
@@ -2446,10 +2459,10 @@ pub mod tests {
         let seed = PdaSeed::new([42; 32]);
 
         // `account_id` is derived from `npk_a`, but `npk_b` is supplied for this pre_state.
-        // `AccountId::for_private_pda(program, seed, npk_b) != account_id`, so the claim check in
-        // the circuit must reject.
-        let account_id =
-            AccountId::for_private_pda(&program.id(), &seed, &npk_a, &keys_a.vpk(), u128::MAX);
+        // `PrivateAddressPlaintext::new(npk_b, ..).pda_account_id(program, seed) != account_id`, so
+        // the claim check in the circuit must reject.
+        let account_id = PrivateAddressPlaintext::new(npk_a, keys_a.vpk(), u128::MAX)
+            .pda_account_id(&program.id(), &seed);
         let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
         let result = execute_and_prove(
@@ -2472,7 +2485,7 @@ pub mod tests {
     /// private PDA via `Claim::Pda(seed)`, then chains to a callee (`noop`) delegating the same
     /// seed via `ChainedCall.pda_seeds`. In the callee's step, the `pre_state`'s authorization
     /// is established via the private derivation
-    /// `AccountId::for_private_pda(delegator, seed, npk) == pre.account_id`.
+    /// `PrivateAddressPlaintext::new(npk, ..).pda_account_id(delegator, seed) == pre.account_id`.
     #[test]
     fn caller_pda_seeds_authorize_private_pda_for_callee() {
         let delegator = Program::private_pda_delegator();
@@ -2481,8 +2494,8 @@ pub mod tests {
         let npk = keys.npk();
         let seed = PdaSeed::new([77; 32]);
 
-        let account_id =
-            AccountId::for_private_pda(&delegator.id(), &seed, &npk, &keys.vpk(), u128::MAX);
+        let account_id = PrivateAddressPlaintext::new(npk, keys.vpk(), u128::MAX)
+            .pda_account_id(&delegator.id(), &seed);
         let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
         let callee_id = callee.id();
@@ -2521,8 +2534,8 @@ pub mod tests {
         let claim_seed = PdaSeed::new([77; 32]);
         let wrong_delegated_seed = PdaSeed::new([88; 32]);
 
-        let account_id =
-            AccountId::for_private_pda(&delegator.id(), &claim_seed, &npk, &keys.vpk(), u128::MAX);
+        let account_id = PrivateAddressPlaintext::new(npk, keys.vpk(), u128::MAX)
+            .pda_account_id(&delegator.id(), &claim_seed);
         let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
         let callee_id = callee.id();
@@ -2560,20 +2573,10 @@ pub mod tests {
         let keys_b = test_private_account_keys_2();
         let seed = PdaSeed::new([55; 32]);
 
-        let account_a = AccountId::for_private_pda(
-            &program.id(),
-            &seed,
-            &keys_a.npk(),
-            &keys_a.vpk(),
-            u128::MAX,
-        );
-        let account_b = AccountId::for_private_pda(
-            &program.id(),
-            &seed,
-            &keys_b.npk(),
-            &keys_b.vpk(),
-            u128::MAX,
-        );
+        let account_a = PrivateAddressPlaintext::new(keys_a.npk(), keys_a.vpk(), u128::MAX)
+            .pda_account_id(&program.id(), &seed);
+        let account_b = PrivateAddressPlaintext::new(keys_b.npk(), keys_b.vpk(), u128::MAX)
+            .pda_account_id(&program.id(), &seed);
 
         let pre_a = AccountWithMetadata::new(Account::default(), false, account_a);
         let pre_b = AccountWithMetadata::new(Account::default(), false, account_b);
@@ -2617,8 +2620,8 @@ pub mod tests {
 
         // Simulate a previously-claimed private PDA: program_owner != DEFAULT, is_authorized =
         // true, account_id derived via the private formula.
-        let account_id =
-            AccountId::for_private_pda(&program.id(), &seed, &npk, &keys.vpk(), u128::MAX);
+        let account_id = PrivateAddressPlaintext::new(npk, keys.vpk(), u128::MAX)
+            .pda_account_id(&program.id(), &seed);
         let owned_pre_state = AccountWithMetadata::new(
             Account {
                 program_owner: program.id(),
@@ -2711,7 +2714,7 @@ pub mod tests {
                 ..Account::default()
             },
             true,
-            (&sender_keys.npk(), &sender_keys.vpk(), 0),
+            PrivateAddressPlaintext::new(sender_keys.npk(), sender_keys.vpk(), 0).account_id(),
         );
 
         let result = execute_and_prove(
@@ -3045,7 +3048,7 @@ pub mod tests {
             ..Account::default()
         };
         let sender_account_id =
-            AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
+            PrivateAddressPlaintext::new(sender_keys.npk(), sender_keys.vpk(), 0).account_id();
         let sender_commitment = Commitment::new(&sender_account_id, &sender_private_account);
         let sender_init_nullifier = Nullifier::for_account_initialization(&sender_account_id);
         let mut state = V03State::new_with_genesis_accounts(
@@ -3056,7 +3059,7 @@ pub mod tests {
         let sender_pre = AccountWithMetadata::new(
             sender_private_account,
             true,
-            (&sender_keys.npk(), &sender_keys.vpk(), 0),
+            PrivateAddressPlaintext::new(sender_keys.npk(), sender_keys.vpk(), 0).account_id(),
         );
         let recipient_private_key = PrivateKey::try_new([2; 32]).unwrap();
         let recipient_account_id =
@@ -3129,7 +3132,7 @@ pub mod tests {
                 ..Account::default()
             },
             true,
-            (&from_keys.npk(), &from_keys.vpk(), 0),
+            PrivateAddressPlaintext::new(from_keys.npk(), from_keys.vpk(), 0).account_id(),
         );
         let to_account = AccountWithMetadata::new(
             Account {
@@ -3137,13 +3140,13 @@ pub mod tests {
                 ..Account::default()
             },
             true,
-            (&to_keys.npk(), &to_keys.vpk(), 0),
+            PrivateAddressPlaintext::new(to_keys.npk(), to_keys.vpk(), 0).account_id(),
         );
 
         let from_account_id =
-            AccountId::for_regular_private_account(&from_keys.npk(), &from_keys.vpk(), 0);
+            PrivateAddressPlaintext::new(from_keys.npk(), from_keys.vpk(), 0).account_id();
         let to_account_id =
-            AccountId::for_regular_private_account(&to_keys.npk(), &to_keys.vpk(), 0);
+            PrivateAddressPlaintext::new(to_keys.npk(), to_keys.vpk(), 0).account_id();
         let from_commitment = Commitment::new(&from_account_id, &from_account.account);
         let to_commitment = Commitment::new(&to_account_id, &to_account.account);
         let from_init_nullifier = Nullifier::for_account_initialization(&from_account_id);
@@ -3450,7 +3453,7 @@ pub mod tests {
         let authorized_account = AccountWithMetadata::new(
             Account::default(),
             true,
-            (&private_keys.npk(), &private_keys.vpk(), 0),
+            PrivateAddressPlaintext::new(private_keys.npk(), private_keys.vpk(), 0).account_id(),
         );
 
         let program = Program::authenticated_transfer_program();
@@ -3483,7 +3486,7 @@ pub mod tests {
         assert!(result.is_ok());
 
         let account_id =
-            AccountId::for_regular_private_account(&private_keys.npk(), &private_keys.vpk(), 0);
+            PrivateAddressPlaintext::new(private_keys.npk(), private_keys.vpk(), 0).account_id();
         let nullifier = Nullifier::for_account_initialization(&account_id);
         assert!(state.private_state.1.contains(&nullifier));
     }
@@ -3500,7 +3503,7 @@ pub mod tests {
         let unauthorized_account = AccountWithMetadata::new(
             Account::default(),
             false,
-            (&private_keys.npk(), &private_keys.vpk(), 0),
+            PrivateAddressPlaintext::new(private_keys.npk(), private_keys.vpk(), 0).account_id(),
         );
 
         let program = Program::claimer();
@@ -3528,7 +3531,7 @@ pub mod tests {
             .unwrap();
 
         let account_id =
-            AccountId::for_regular_private_account(&private_keys.npk(), &private_keys.vpk(), 0);
+            PrivateAddressPlaintext::new(private_keys.npk(), private_keys.vpk(), 0).account_id();
         let nullifier = Nullifier::for_account_initialization(&account_id);
         assert!(state.private_state.1.contains(&nullifier));
     }
@@ -3544,7 +3547,7 @@ pub mod tests {
         let authorized_account = AccountWithMetadata::new(
             Account::default(),
             true,
-            (&private_keys.npk(), &private_keys.vpk(), 0),
+            PrivateAddressPlaintext::new(private_keys.npk(), private_keys.vpk(), 0).account_id(),
         );
 
         let claimer_program = Program::claimer();
@@ -3581,7 +3584,7 @@ pub mod tests {
 
         // Verify the account is now initialized (nullifier exists)
         let account_id =
-            AccountId::for_regular_private_account(&private_keys.npk(), &private_keys.vpk(), 0);
+            PrivateAddressPlaintext::new(private_keys.npk(), private_keys.vpk(), 0).account_id();
         let nullifier = Nullifier::for_account_initialization(&account_id);
         assert!(state.private_state.1.contains(&nullifier));
 
@@ -3671,7 +3674,7 @@ pub mod tests {
         let private_account = AccountWithMetadata::new(
             Account::default(),
             true,
-            (&sender_keys.npk(), &sender_keys.vpk(), 0),
+            PrivateAddressPlaintext::new(sender_keys.npk(), sender_keys.vpk(), 0).account_id(),
         );
         // Don't change data (None) and don't claim (false)
         let instruction: (Option<Vec<u8>>, bool) = (None, false);
@@ -3700,7 +3703,7 @@ pub mod tests {
         let private_account = AccountWithMetadata::new(
             Account::default(),
             true,
-            (&sender_keys.npk(), &sender_keys.vpk(), 0),
+            PrivateAddressPlaintext::new(sender_keys.npk(), sender_keys.vpk(), 0).account_id(),
         );
         // Change data but don't claim (false) - should fail
         let new_data = vec![1, 2, 3, 4, 5];
@@ -3743,11 +3746,13 @@ pub mod tests {
         let recipient_account = AccountWithMetadata::new(
             Account::default(),
             true,
-            (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
+            PrivateAddressPlaintext::new(recipient_keys.npk(), recipient_keys.vpk(), 0)
+                .account_id(),
         );
 
         let recipient_account_id =
-            AccountId::for_regular_private_account(&recipient_keys.npk(), &recipient_keys.vpk(), 0);
+            PrivateAddressPlaintext::new(recipient_keys.npk(), recipient_keys.vpk(), 0)
+                .account_id();
         let recipient_commitment =
             Commitment::new(&recipient_account_id, &recipient_account.account);
         let recipient_init_nullifier = Nullifier::for_account_initialization(&recipient_account_id);
@@ -3916,7 +3921,7 @@ pub mod tests {
         let pre = AccountWithMetadata::new(
             Account::default(),
             false,
-            (&account_keys.npk(), &account_keys.vpk(), 0),
+            PrivateAddressPlaintext::new(account_keys.npk(), account_keys.vpk(), 0).account_id(),
         );
         let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0).with_test_programs();
         let tx = {
@@ -3981,7 +3986,7 @@ pub mod tests {
         let pre = AccountWithMetadata::new(
             Account::default(),
             false,
-            (&account_keys.npk(), &account_keys.vpk(), 0),
+            PrivateAddressPlaintext::new(account_keys.npk(), account_keys.vpk(), 0).account_id(),
         );
         let mut state = V03State::new_with_genesis_accounts(&[], vec![], 0).with_test_programs();
         let tx = {
@@ -4512,10 +4517,10 @@ pub mod tests {
             ProgramWithDependencies::new(proxy, [(auth_transfer_id, auth_transfer.clone())].into());
 
         let funder_id = funder_keys.account_id();
-        let alice_pda_0_id =
-            AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, &alice_keys.vpk(), 0);
-        let alice_pda_1_id =
-            AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, &alice_keys.vpk(), 1);
+        let alice_pda_0_id = PrivateAddressPlaintext::new(alice_npk, alice_keys.vpk(), 0)
+            .pda_account_id(&proxy_id, &seed);
+        let alice_pda_1_id = PrivateAddressPlaintext::new(alice_npk, alice_keys.vpk(), 1)
+            .pda_account_id(&proxy_id, &seed);
         let recipient_id = test_public_account_keys_2().account_id();
         let recipient_signing_key = test_public_account_keys_2().signing_key;
 

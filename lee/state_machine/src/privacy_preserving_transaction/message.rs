@@ -119,10 +119,12 @@ pub mod tests {
 
         let encrypted_private_post_states = Vec::new();
 
-        let account_id2 = lee_core::account::AccountId::for_regular_private_account(&npk2, &vpk, 0);
+        let account_id2 =
+            lee_core::account::PrivateAddressPlaintext::new(npk2, vpk.clone(), 0).account_id();
         let new_commitments = vec![Commitment::new(&account_id2, &account2)];
 
-        let account_id1 = lee_core::account::AccountId::for_regular_private_account(&npk1, &vpk, 0);
+        let account_id1 =
+            lee_core::account::PrivateAddressPlaintext::new(npk1, vpk, 0).account_id();
         let old_commitment = Commitment::new(&account_id1, &account1);
         let new_nullifiers = vec![(
             Nullifier::for_account_update(&old_commitment, &nsk1),
@@ -198,7 +200,8 @@ pub mod tests {
         let npk = NullifierPublicKey::from(&[1; 32]);
         let vpk = ViewingPublicKey::from_seed(&[2_u8; 32], &[3_u8; 32]);
         let account = Account::default();
-        let account_id = lee_core::account::AccountId::for_regular_private_account(&npk, &vpk, 0);
+        let account_id =
+            lee_core::account::PrivateAddressPlaintext::new(npk, vpk.clone(), 0).account_id();
         let commitment = Commitment::new(&account_id, &account);
         let (shared_secret, epk) =
             SharedSecretKey::encapsulate_deterministic(&vpk, &EphemeralSecretKey([0_u8; 32]));

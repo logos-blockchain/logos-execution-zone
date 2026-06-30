@@ -180,7 +180,9 @@ mod tests {
     use lee_core::{
         Commitment, DUMMY_COMMITMENT_HASH, EncryptionScheme, EphemeralSecretKey, Nullifier,
         PrivacyPreservingCircuitOutput, SharedSecretKey,
-        account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
+        account::{
+            Account, AccountId, AccountWithMetadata, Nonce, PrivateAddressPlaintext, data::Data,
+        },
         program::{PdaSeed, PrivateAccountKind},
     };
 
@@ -236,7 +238,8 @@ mod tests {
         );
 
         let recipient_account_id =
-            AccountId::for_regular_private_account(&recipient_keys.npk(), &recipient_keys.vpk(), 0);
+            PrivateAddressPlaintext::new(recipient_keys.npk(), recipient_keys.vpk(), 0)
+                .account_id();
         let recipient = AccountWithMetadata::new(Account::default(), false, recipient_account_id);
 
         let balance_to_move: u128 = 37;
@@ -316,14 +319,15 @@ mod tests {
                 data: Data::default(),
             },
             true,
-            AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0),
+            PrivateAddressPlaintext::new(sender_keys.npk(), sender_keys.vpk(), 0).account_id(),
         );
         let sender_account_id =
-            AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
+            PrivateAddressPlaintext::new(sender_keys.npk(), sender_keys.vpk(), 0).account_id();
         let commitment_sender = Commitment::new(&sender_account_id, &sender_pre.account);
 
         let recipient_account_id =
-            AccountId::for_regular_private_account(&recipient_keys.npk(), &recipient_keys.vpk(), 0);
+            PrivateAddressPlaintext::new(recipient_keys.npk(), recipient_keys.vpk(), 0)
+                .account_id();
         let recipient = AccountWithMetadata::new(Account::default(), false, recipient_account_id);
         let balance_to_move: u128 = 37;
 
@@ -429,7 +433,7 @@ mod tests {
         let pre = AccountWithMetadata::new(
             Account::default(),
             false,
-            AccountId::for_regular_private_account(&account_keys.npk(), &account_keys.vpk(), 0),
+            PrivateAddressPlaintext::new(account_keys.npk(), account_keys.vpk(), 0).account_id(),
         );
 
         let validity_window_chain_caller = Program::validity_window_chain_caller();
@@ -473,8 +477,8 @@ mod tests {
         let npk = keys.npk();
         let seed = PdaSeed::new([42; 32]);
         let identifier: u128 = 99;
-        let account_id =
-            AccountId::for_private_pda(&program.id(), &seed, &npk, &keys.vpk(), identifier);
+        let account_id = PrivateAddressPlaintext::new(npk, keys.vpk(), identifier)
+            .pda_account_id(&program.id(), &seed);
         let init_nonce = Nonce::private_account_nonce_init(&account_id);
         let esk = EphemeralSecretKey::new(&account_id, &[0; 32], &init_nonce);
         let shared_secret = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &esk).0;
@@ -517,7 +521,8 @@ mod tests {
         let seed = PdaSeed::new([42; 32]);
 
         // PDA (new, private PDA)
-        let pda_id = AccountId::for_private_pda(&program.id(), &seed, &npk, &keys.vpk(), 0);
+        let pda_id =
+            PrivateAddressPlaintext::new(npk, keys.vpk(), 0).pda_account_id(&program.id(), &seed);
         let pda_pre = AccountWithMetadata::new(Account::default(), false, pda_id);
 
         let auth_id = auth_transfer.id();
@@ -556,7 +561,8 @@ mod tests {
         let seed = PdaSeed::new([42; 32]);
 
         // PDA (new, private PDA)
-        let pda_id = AccountId::for_private_pda(&program.id(), &seed, &npk, &keys.vpk(), 0);
+        let pda_id =
+            PrivateAddressPlaintext::new(npk, keys.vpk(), 0).pda_account_id(&program.id(), &seed);
         let pda_pre = AccountWithMetadata::new(Account::default(), false, pda_id);
 
         // Recipient (public)
@@ -624,7 +630,8 @@ mod tests {
 
         // Recipient: shared private account (new, unauthorized)
         let shared_account_id =
-            AccountId::from((&shared_npk, &shared_keys.vpk(), shared_identifier));
+            PrivateAddressPlaintext::new(shared_npk, shared_keys.vpk(), shared_identifier)
+                .account_id();
         let recipient = AccountWithMetadata::new(Account::default(), false, shared_account_id);
 
         let balance_to_move: u128 = 100;
@@ -662,7 +669,7 @@ mod tests {
         let keys = test_private_account_keys_1();
         let identifier: u128 = 99;
         let account_id =
-            AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
+            PrivateAddressPlaintext::new(keys.npk(), keys.vpk(), identifier).account_id();
         let nonce = Nonce::private_account_nonce_init(&account_id);
         let esk = EphemeralSecretKey::new(&account_id, &[0; 32], &nonce);
         let ssk = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &esk).0;
@@ -696,7 +703,7 @@ mod tests {
         let keys = test_private_account_keys_1();
         let identifier: u128 = 99;
         let account_id =
-            AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
+            PrivateAddressPlaintext::new(keys.npk(), keys.vpk(), identifier).account_id();
         let pre = AccountWithMetadata::new(Account::default(), true, account_id);
 
         let (output, _) = execute_and_prove(
@@ -742,7 +749,7 @@ mod tests {
         let identifier: u128 = 99;
         // create an account id with one set of viewing keys
         let account_id =
-            AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
+            PrivateAddressPlaintext::new(keys.npk(), keys.vpk(), identifier).account_id();
         let pre = AccountWithMetadata::new(Account::default(), true, account_id);
 
         let result = execute_and_prove(
@@ -771,7 +778,7 @@ mod tests {
         let keys = test_private_account_keys_1();
         let identifier: u128 = 99;
         let recipient_id =
-            AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
+            PrivateAddressPlaintext::new(keys.npk(), keys.vpk(), identifier).account_id();
         let init_nonce = Nonce::private_account_nonce_init(&recipient_id);
         let esk = EphemeralSecretKey::new(&recipient_id, &[0; 32], &init_nonce);
         let ssk = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &esk).0;
@@ -820,7 +827,7 @@ mod tests {
         let keys = test_private_account_keys_1();
         let identifier: u128 = 99;
         let account_id =
-            AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
+            PrivateAddressPlaintext::new(keys.npk(), keys.vpk(), identifier).account_id();
         let update_nonce = Nonce::default().private_account_nonce_increment(&keys.nsk);
         let esk = EphemeralSecretKey::new(&account_id, &[0; 32], &update_nonce);
         let ssk = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &esk).0;
@@ -873,8 +880,8 @@ mod tests {
         let seed = PdaSeed::new([42; 32]);
         let identifier: u128 = 99;
         let auth_transfer_id = auth_transfer.id();
-        let pda_id =
-            AccountId::for_private_pda(&program.id(), &seed, &npk, &keys.vpk(), identifier);
+        let pda_id = PrivateAddressPlaintext::new(npk, keys.vpk(), identifier)
+            .pda_account_id(&program.id(), &seed);
         let update_nonce = Nonce::default().private_account_nonce_increment(&keys.nsk);
         let esk = EphemeralSecretKey::new(&pda_id, &[0; 32], &update_nonce);
         let ssk = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &esk).0;
@@ -930,7 +937,8 @@ mod tests {
         let keys = test_private_account_keys_1();
         let npk = keys.npk();
         let seed = PdaSeed::new([42; 32]);
-        let account_id = AccountId::for_private_pda(&program.id(), &seed, &npk, &keys.vpk(), 5);
+        let account_id =
+            PrivateAddressPlaintext::new(npk, keys.vpk(), 5).pda_account_id(&program.id(), &seed);
         let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
         let result = execute_and_prove(
@@ -957,7 +965,8 @@ mod tests {
         let npk = keys.npk();
         let seed = PdaSeed::new([42; 32]);
         let auth_transfer_id = auth_transfer.id();
-        let pda_id = AccountId::for_private_pda(&program.id(), &seed, &npk, &keys.vpk(), 5);
+        let pda_id =
+            PrivateAddressPlaintext::new(npk, keys.vpk(), 5).pda_account_id(&program.id(), &seed);
         let pda_account = Account {
             program_owner: auth_transfer_id,
             balance: 1,
