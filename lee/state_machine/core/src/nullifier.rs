@@ -36,23 +36,6 @@ impl PrivateAddressPlaintext {
     }
 }
 
-impl AccountId {
-    #[must_use]
-    pub fn for_regular_private_account(
-        npk: &NullifierPublicKey,
-        vpk: &ViewingPublicKey,
-        identifier: Identifier,
-    ) -> Self {
-        PrivateAddressPlaintext::new(*npk, vpk.clone(), identifier).account_id()
-    }
-}
-
-impl From<(&NullifierPublicKey, &ViewingPublicKey, Identifier)> for AccountId {
-    fn from((npk, vpk, identifier): (&NullifierPublicKey, &ViewingPublicKey, Identifier)) -> Self {
-        PrivateAddressPlaintext::new(*npk, vpk.clone(), identifier).account_id()
-    }
-}
-
 impl AsRef<[u8]> for NullifierPublicKey {
     fn as_ref(&self) -> &[u8] {
         self.0.as_slice()

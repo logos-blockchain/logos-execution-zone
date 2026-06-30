@@ -162,17 +162,6 @@ impl AccountId {
                 .pda_account_id(program_id, seed),
         }
     }
-
-    #[must_use]
-    pub fn for_private_pda(
-        program_id: &ProgramId,
-        seed: &PdaSeed,
-        npk: &NullifierPublicKey,
-        vpk: &ViewingPublicKey,
-        identifier: Identifier,
-    ) -> Self {
-        PrivateAddressPlaintext::new(*npk, vpk.clone(), identifier).pda_account_id(program_id, seed)
-    }
 }
 
 impl PrivateAddressPlaintext {
