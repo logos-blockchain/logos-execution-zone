@@ -295,9 +295,8 @@ impl ExecutionState {
                             seed: Some((seed, authority_program_id)),
                             ..
                         }) => {
-                            let expected =
-                                PrivateAddressPlaintext::new(*npk, vpk.clone(), *identifier)
-                                    .pda_account_id(authority_program_id, seed);
+                            let expected = PrivateAddressPlaintext::new(*npk, vpk, *identifier)
+                                .pda_account_id(authority_program_id, seed);
                             assert_eq!(
                                 pre_account_id, expected,
                                 "External seed mismatch for PrivatePdaInit at position {pre_state_position}"
@@ -312,9 +311,8 @@ impl ExecutionState {
                             ..
                         }) => {
                             let npk = NullifierPublicKey::from(nsk);
-                            let expected =
-                                PrivateAddressPlaintext::new(npk, vpk.clone(), *identifier)
-                                    .pda_account_id(authority_program_id, seed);
+                            let expected = PrivateAddressPlaintext::new(npk, vpk, *identifier)
+                                .pda_account_id(authority_program_id, seed);
                             assert_eq!(
                                 pre_account_id, expected,
                                 "External seed mismatch for PrivatePdaUpdate at position {pre_state_position}"

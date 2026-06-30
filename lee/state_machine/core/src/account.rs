@@ -183,17 +183,17 @@ impl AccountId {
 }
 
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
-pub struct PrivateAddressPlaintext {
+pub struct PrivateAddressPlaintext<'vpk> {
     pub npk: NullifierPublicKey,
-    pub vpk: ViewingPublicKey,
+    pub vpk: &'vpk ViewingPublicKey,
     pub identifier: Identifier,
 }
 
-impl PrivateAddressPlaintext {
+impl<'vpk> PrivateAddressPlaintext<'vpk> {
     #[must_use]
     pub const fn new(
         npk: NullifierPublicKey,
-        vpk: ViewingPublicKey,
+        vpk: &'vpk ViewingPublicKey,
         identifier: Identifier,
     ) -> Self {
         Self {

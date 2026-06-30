@@ -1606,7 +1606,7 @@ mod tests {
         let sender_keys = KeyChain::new_os_random();
         let sender_account_id = PrivateAddressPlaintext::new(
             sender_keys.nullifier_public_key,
-            sender_keys.viewing_public_key.clone(),
+            &sender_keys.viewing_public_key,
             0,
         )
         .account_id();
@@ -1634,7 +1634,7 @@ mod tests {
             true,
             PrivateAddressPlaintext::new(
                 sender_keys.nullifier_public_key,
-                sender_keys.viewing_public_key.clone(),
+                &sender_keys.viewing_public_key,
                 0,
             )
             .account_id(),

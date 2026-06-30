@@ -908,7 +908,7 @@ fn test_wallet_ffi_transfer_shielded() -> Result<()> {
         let mut out_keys = FfiPrivateAccountKeys::default();
         wallet_ffi_create_private_accounts_key(wallet_ffi_handle, &raw mut out_keys).unwrap();
         let account_id =
-            lee::PrivateAddressPlaintext::new(out_keys.npk(), out_keys.vpk().unwrap(), 0_u128)
+            lee::PrivateAddressPlaintext::new(out_keys.npk(), &out_keys.vpk().unwrap(), 0_u128)
                 .account_id();
         let to: FfiBytes32 = account_id.into();
         (to, out_keys)
@@ -1047,7 +1047,7 @@ fn test_wallet_ffi_transfer_private() -> Result<()> {
         let mut out_keys = FfiPrivateAccountKeys::default();
         wallet_ffi_create_private_accounts_key(wallet_ffi_handle, &raw mut out_keys).unwrap();
         let account_id =
-            lee::PrivateAddressPlaintext::new(out_keys.npk(), out_keys.vpk().unwrap(), 0_u128)
+            lee::PrivateAddressPlaintext::new(out_keys.npk(), &out_keys.vpk().unwrap(), 0_u128)
                 .account_id();
         let to: FfiBytes32 = account_id.into();
         (to, out_keys)

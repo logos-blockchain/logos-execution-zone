@@ -103,14 +103,14 @@ impl InputAccountIdentity {
     }
 
     #[must_use]
-    pub fn private_pda_address(&self) -> Option<PrivateAddressPlaintext> {
+    pub fn private_pda_address(&self) -> Option<PrivateAddressPlaintext<'_>> {
         match self {
             Self::PrivatePdaInit {
                 npk,
                 vpk,
                 identifier,
                 ..
-            } => Some(PrivateAddressPlaintext::new(*npk, vpk.clone(), *identifier)),
+            } => Some(PrivateAddressPlaintext::new(*npk, vpk, *identifier)),
             Self::PrivatePdaUpdate {
                 nsk,
                 vpk,
@@ -118,7 +118,7 @@ impl InputAccountIdentity {
                 ..
             } => Some(PrivateAddressPlaintext::new(
                 NullifierPublicKey::from(nsk),
-                vpk.clone(),
+                vpk,
                 *identifier,
             )),
             Self::Public

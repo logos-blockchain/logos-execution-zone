@@ -25,7 +25,7 @@ impl InitialPrivateAccountForWallet {
     pub fn account_id(&self) -> AccountId {
         PrivateAddressPlaintext::new(
             self.key_chain.nullifier_public_key,
-            self.key_chain.viewing_public_key.clone(),
+            &self.key_chain.viewing_public_key,
             self.identifier,
         )
         .account_id()

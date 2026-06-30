@@ -527,7 +527,7 @@ impl WalletSubcommand for ImportSubcommand {
                 let account = lee::Account::from(account_state);
                 let account_id = lee::PrivateAddressPlaintext::new(
                     key_chain.nullifier_public_key,
-                    key_chain.viewing_public_key.clone(),
+                    &key_chain.viewing_public_key,
                     identifier,
                 )
                 .account_id();

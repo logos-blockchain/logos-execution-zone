@@ -152,19 +152,19 @@ impl AccountId {
     ) -> Self {
         match kind {
             PrivateAccountKind::Regular(identifier) => {
-                PrivateAddressPlaintext::new(*npk, vpk.clone(), *identifier).account_id()
+                PrivateAddressPlaintext::new(*npk, vpk, *identifier).account_id()
             }
             PrivateAccountKind::Pda {
                 program_id,
                 seed,
                 identifier,
-            } => PrivateAddressPlaintext::new(*npk, vpk.clone(), *identifier)
+            } => PrivateAddressPlaintext::new(*npk, vpk, *identifier)
                 .pda_account_id(program_id, seed),
         }
     }
 }
 
-impl PrivateAddressPlaintext {
+impl PrivateAddressPlaintext<'_> {
     /// Derives an [`AccountId`] for a private PDA from the program ID, seed, nullifier public
     /// key, and identifier.
     ///
@@ -964,7 +964,7 @@ mod tests {
             156, 13, 55, 32, 139, 91, 222, 209, 83, 172, 148, 123, 179,
         ]);
         assert_eq!(
-            PrivateAddressPlaintext::new(npk, vpk, identifier).pda_account_id(&program_id, &seed),
+            PrivateAddressPlaintext::new(npk, &vpk, identifier).pda_account_id(&program_id, &seed),
             expected
         );
     }
@@ -978,9 +978,8 @@ mod tests {
         let npk_b = NullifierPublicKey([4; 32]);
         let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
         assert_ne!(
-            PrivateAddressPlaintext::new(npk_a, vpk.clone(), u128::MAX)
-                .pda_account_id(&program_id, &seed),
-            PrivateAddressPlaintext::new(npk_b, vpk, u128::MAX).pda_account_id(&program_id, &seed),
+            PrivateAddressPlaintext::new(npk_a, &vpk, u128::MAX).pda_account_id(&program_id, &seed),
+            PrivateAddressPlaintext::new(npk_b, &vpk, u128::MAX).pda_account_id(&program_id, &seed),
         );
     }
 
@@ -993,9 +992,8 @@ mod tests {
         let npk = NullifierPublicKey([3; 32]);
         let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
         assert_ne!(
-            PrivateAddressPlaintext::new(npk, vpk.clone(), u128::MAX)
-                .pda_account_id(&program_id, &seed_a),
-            PrivateAddressPlaintext::new(npk, vpk, u128::MAX).pda_account_id(&program_id, &seed_b),
+            PrivateAddressPlaintext::new(npk, &vpk, u128::MAX).pda_account_id(&program_id, &seed_a),
+            PrivateAddressPlaintext::new(npk, &vpk, u128::MAX).pda_account_id(&program_id, &seed_b),
         );
     }
 
@@ -1008,9 +1006,8 @@ mod tests {
         let npk = NullifierPublicKey([3; 32]);
         let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
         assert_ne!(
-            PrivateAddressPlaintext::new(npk, vpk.clone(), u128::MAX)
-                .pda_account_id(&program_id_a, &seed),
-            PrivateAddressPlaintext::new(npk, vpk, u128::MAX).pda_account_id(&program_id_b, &seed),
+            PrivateAddressPlaintext::new(npk, &vpk, u128::MAX).pda_account_id(&program_id_a, &seed),
+            PrivateAddressPlaintext::new(npk, &vpk, u128::MAX).pda_account_id(&program_id_b, &seed),
         );
     }
 
@@ -1023,12 +1020,12 @@ mod tests {
         let npk = NullifierPublicKey([3; 32]);
         let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
         assert_ne!(
-            PrivateAddressPlaintext::new(npk, vpk.clone(), 0).pda_account_id(&program_id, &seed),
-            PrivateAddressPlaintext::new(npk, vpk.clone(), 1).pda_account_id(&program_id, &seed),
+            PrivateAddressPlaintext::new(npk, &vpk, 0).pda_account_id(&program_id, &seed),
+            PrivateAddressPlaintext::new(npk, &vpk, 1).pda_account_id(&program_id, &seed),
         );
         assert_ne!(
-            PrivateAddressPlaintext::new(npk, vpk.clone(), 0).pda_account_id(&program_id, &seed),
-            PrivateAddressPlaintext::new(npk, vpk, u128::MAX).pda_account_id(&program_id, &seed),
+            PrivateAddressPlaintext::new(npk, &vpk, 0).pda_account_id(&program_id, &seed),
+            PrivateAddressPlaintext::new(npk, &vpk, u128::MAX).pda_account_id(&program_id, &seed),
         );
     }
 
@@ -1041,7 +1038,7 @@ mod tests {
         let npk = NullifierPublicKey([3; 32]);
         let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
         let private_id =
-            PrivateAddressPlaintext::new(npk, vpk, u128::MAX).pda_account_id(&program_id, &seed);
+            PrivateAddressPlaintext::new(npk, &vpk, u128::MAX).pda_account_id(&program_id, &seed);
         let public_id = AccountId::for_public_pda(&program_id, &seed);
         assert_ne!(private_id, public_id);
     }
@@ -1083,7 +1080,7 @@ mod tests {
 
         assert_eq!(
             AccountId::for_private_account(&npk, &vpk, &PrivateAccountKind::Regular(identifier)),
-            PrivateAddressPlaintext::new(npk, vpk.clone(), identifier).account_id(),
+            PrivateAddressPlaintext::new(npk, &vpk, identifier).account_id(),
         );
         assert_eq!(
             AccountId::for_private_account(
@@ -1095,8 +1092,7 @@ mod tests {
                     identifier
                 }
             ),
-            PrivateAddressPlaintext::new(npk, vpk.clone(), identifier)
-                .pda_account_id(&program_id, &seed),
+            PrivateAddressPlaintext::new(npk, &vpk, identifier).pda_account_id(&program_id, &seed),
         );
     }
 

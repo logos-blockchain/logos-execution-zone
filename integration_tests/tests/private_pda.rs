@@ -51,7 +51,7 @@ async fn fund_private_pda(
     amount: u128,
     auth_transfer: &ProgramWithDependencies,
 ) -> Result<()> {
-    let pda_account_id = PrivateAddressPlaintext::new(npk, vpk.clone(), identifier)
+    let pda_account_id = PrivateAddressPlaintext::new(npk, &vpk, identifier)
         .pda_account_id(&authority_program_id, &seed);
     let sender_account = wallet
         .get_account_public(sender)
@@ -177,10 +177,10 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
     let spend_program =
         ProgramWithDependencies::new(proxy, [(auth_transfer_id, auth_transfer)].into());
 
-    let alice_pda_0_id = PrivateAddressPlaintext::new(alice_npk, alice_vpk.clone(), 0)
-        .pda_account_id(&proxy_id, &seed);
-    let alice_pda_1_id = PrivateAddressPlaintext::new(alice_npk, alice_vpk.clone(), 1)
-        .pda_account_id(&proxy_id, &seed);
+    let alice_pda_0_id =
+        PrivateAddressPlaintext::new(alice_npk, &alice_vpk, 0).pda_account_id(&proxy_id, &seed);
+    let alice_pda_1_id =
+        PrivateAddressPlaintext::new(alice_npk, &alice_vpk, 1).pda_account_id(&proxy_id, &seed);
 
     // Use two different public senders to avoid nonce conflicts between the back-to-back txs.
     let senders = ctx.existing_public_accounts();

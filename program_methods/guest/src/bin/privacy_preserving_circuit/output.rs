@@ -47,7 +47,7 @@ pub fn compute_circuit_output(
                 identifier,
             } => {
                 let address =
-                    PrivateAddressPlaintext::new(NullifierPublicKey::from(&nsk), vpk, identifier);
+                    PrivateAddressPlaintext::new(NullifierPublicKey::from(&nsk), &vpk, identifier);
                 let account_id = address.account_id();
 
                 assert_eq!(account_id, pre_state.account_id, "AccountId mismatch");
@@ -74,7 +74,7 @@ pub fn compute_circuit_output(
                     &account_id,
                     &PrivateAccountKind::Regular(address.identifier),
                     &address.npk,
-                    &address.vpk,
+                    address.vpk,
                     &random_seed,
                     new_nullifier,
                     new_nonce,
@@ -88,7 +88,7 @@ pub fn compute_circuit_output(
                 identifier,
             } => {
                 let address =
-                    PrivateAddressPlaintext::new(NullifierPublicKey::from(&nsk), vpk, identifier);
+                    PrivateAddressPlaintext::new(NullifierPublicKey::from(&nsk), &vpk, identifier);
                 let account_id = address.account_id();
 
                 assert_eq!(account_id, pre_state.account_id, "AccountId mismatch");
@@ -115,7 +115,7 @@ pub fn compute_circuit_output(
                     &account_id,
                     &PrivateAccountKind::Regular(address.identifier),
                     &address.npk,
-                    &address.vpk,
+                    address.vpk,
                     &random_seed,
                     new_nullifier,
                     new_nonce,
@@ -127,7 +127,7 @@ pub fn compute_circuit_output(
                 npk,
                 identifier,
             } => {
-                let address = PrivateAddressPlaintext::new(npk, vpk, identifier);
+                let address = PrivateAddressPlaintext::new(npk, &vpk, identifier);
                 let account_id = address.account_id();
 
                 assert_eq!(account_id, pre_state.account_id, "AccountId mismatch");
@@ -154,7 +154,7 @@ pub fn compute_circuit_output(
                     &account_id,
                     &PrivateAccountKind::Regular(address.identifier),
                     &address.npk,
-                    &address.vpk,
+                    address.vpk,
                     &random_seed,
                     new_nullifier,
                     new_nonce,

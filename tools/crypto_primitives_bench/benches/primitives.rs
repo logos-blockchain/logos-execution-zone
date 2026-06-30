@@ -49,7 +49,7 @@ fn bench_encryption(c: &mut Criterion) {
     let npk = recipient_kc.nullifier_public_key;
     let account = Account::default();
     let account_id =
-        PrivateAddressPlaintext::new(npk, recipient_kc.viewing_public_key.clone(), 0).account_id();
+        PrivateAddressPlaintext::new(npk, &recipient_kc.viewing_public_key, 0).account_id();
     let commitment = Commitment::new(&account_id, &account);
     let (shared, _epk) = SharedSecretKey::encapsulate(&recipient_kc.viewing_public_key);
     let kind = PrivateAccountKind::Regular(0_u128);

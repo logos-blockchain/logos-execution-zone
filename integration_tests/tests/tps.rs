@@ -266,7 +266,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
             data: Data::default(),
         },
         true,
-        PrivateAddressPlaintext::new(sender_npk, sender_vpk.clone(), 0).account_id(),
+        PrivateAddressPlaintext::new(sender_npk, &sender_vpk, 0).account_id(),
     );
     let recipient_nsk = [2; 32];
     let recipient_vpk = ViewingPublicKey::from_seed(&[101_u8; 32], &[102_u8; 32]);
@@ -274,7 +274,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
     let recipient_pre = AccountWithMetadata::new(
         Account::default(),
         false,
-        PrivateAddressPlaintext::new(recipient_npk, recipient_vpk.clone(), 0).account_id(),
+        PrivateAddressPlaintext::new(recipient_npk, &recipient_vpk, 0).account_id(),
     );
 
     let balance_to_move: u128 = 1;

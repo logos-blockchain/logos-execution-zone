@@ -158,7 +158,7 @@ async fn import_private_account() -> Result<()> {
     let key_chain = KeyChain::new_os_random();
     let account_id = lee::PrivateAddressPlaintext::new(
         key_chain.nullifier_public_key,
-        key_chain.viewing_public_key.clone(),
+        &key_chain.viewing_public_key,
         0,
     )
     .account_id();
@@ -220,7 +220,7 @@ async fn import_private_account_second_time_overrides_account_data() -> Result<(
     let key_chain = KeyChain::new_os_random();
     let account_id = lee::PrivateAddressPlaintext::new(
         key_chain.nullifier_public_key,
-        key_chain.viewing_public_key.clone(),
+        &key_chain.viewing_public_key,
         0,
     )
     .account_id();

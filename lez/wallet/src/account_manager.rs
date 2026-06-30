@@ -264,7 +264,7 @@ impl AccountManager {
                     let auth_acc = AccountWithMetadata::new(
                         acc,
                         false,
-                        PrivateAddressPlaintext::new(npk, vpk.clone(), identifier).account_id(),
+                        PrivateAddressPlaintext::new(npk, &vpk, identifier).account_id(),
                     );
                     let mut random_seed: [u8; 32] = [0; 32];
                     OsRng.fill_bytes(&mut random_seed);
@@ -314,8 +314,7 @@ impl AccountManager {
                     identifier,
                 } => {
                     let account_id =
-                        lee::PrivateAddressPlaintext::new(npk, vpk.clone(), identifier)
-                            .account_id();
+                        lee::PrivateAddressPlaintext::new(npk, &vpk, identifier).account_id();
                     let pre = private_shared_acc_preparation(
                         wallet, account_id, nsk, npk, vpk, identifier, false,
                     )

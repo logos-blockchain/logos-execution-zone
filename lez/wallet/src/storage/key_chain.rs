@@ -738,7 +738,7 @@ mod tests {
         let key_chain = KeyChain::new_os_random();
         let account_id = PrivateAddressPlaintext::new(
             key_chain.nullifier_public_key,
-            key_chain.viewing_public_key.clone(),
+            &key_chain.viewing_public_key,
             0,
         )
         .account_id();
@@ -758,7 +758,7 @@ mod tests {
         let key_chain = KeyChain::new_os_random();
         let account_id = PrivateAddressPlaintext::new(
             key_chain.nullifier_public_key,
-            key_chain.viewing_public_key.clone(),
+            &key_chain.viewing_public_key,
             0,
         )
         .account_id();
@@ -808,7 +808,7 @@ mod tests {
         let key_chain = KeyChain::new_os_random();
         let account_id = PrivateAddressPlaintext::new(
             key_chain.nullifier_public_key,
-            key_chain.viewing_public_key,
+            &key_chain.viewing_public_key,
             0,
         )
         .account_id();
@@ -834,7 +834,7 @@ mod tests {
         let key_chain = KeyChain::new_os_random();
         let account_id1 = PrivateAddressPlaintext::new(
             key_chain.nullifier_public_key,
-            key_chain.viewing_public_key.clone(),
+            &key_chain.viewing_public_key,
             0,
         )
         .account_id();

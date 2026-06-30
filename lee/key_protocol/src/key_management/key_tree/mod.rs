@@ -277,7 +277,7 @@ impl KeyTree<ChildKeysPrivate> {
         let node = self.key_map.get(cci)?;
         let account_id = lee::PrivateAddressPlaintext::new(
             node.value.0.nullifier_public_key,
-            node.value.0.viewing_public_key.clone(),
+            &node.value.0.viewing_public_key,
             identifier,
         )
         .account_id();

@@ -603,7 +603,7 @@ mod tests {
         // Attacker controls a private account.
         let attacker_keys = test_private_account_keys_1();
         let attacker_id =
-            PrivateAddressPlaintext::new(attacker_keys.npk(), attacker_keys.vpk(), 0).account_id();
+            PrivateAddressPlaintext::new(attacker_keys.npk(), &attacker_keys.vpk(), 0).account_id();
 
         let victim_id = AccountId::new([20_u8; 32]);
         let recipient_id = AccountId::new([42_u8; 32]);
@@ -709,7 +709,7 @@ mod tests {
     /// There are two routes, both closed:
     ///
     /// - **mask=1 (`PrivateAuthorizedUpdate`)**: the circuit derives `account_id =
-    ///   PrivateAddressPlaintext::new(npk_from(nsk), vpk, identifier).account_id()` and asserts it
+    ///   PrivateAddressPlaintext::new(npk_from(nsk), &vpk, identifier).account_id()` and asserts it
     ///   matches `pre_state.account_id`. Passing this check requires the victim's `nsk`, which the
     ///   attacker does not have. `execute_and_prove` panics inside the ZKVM and no proof is
     ///   produced.
@@ -755,12 +755,12 @@ mod tests {
         // Attacker controls a private account.
         let attacker_keys = test_private_account_keys_1();
         let attacker_id =
-            PrivateAddressPlaintext::new(attacker_keys.npk(), attacker_keys.vpk(), 0).account_id();
+            PrivateAddressPlaintext::new(attacker_keys.npk(), &attacker_keys.vpk(), 0).account_id();
 
         // Victim is a private account — not registered in public chain state.
         let victim_keys = test_private_account_keys_2();
         let victim_id =
-            PrivateAddressPlaintext::new(victim_keys.npk(), victim_keys.vpk(), 0).account_id();
+            PrivateAddressPlaintext::new(victim_keys.npk(), &victim_keys.vpk(), 0).account_id();
         let victim_balance = 5_000_u128;
 
         let recipient_id = AccountId::new([42_u8; 32]);

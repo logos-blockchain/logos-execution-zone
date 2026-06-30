@@ -599,14 +599,14 @@ async fn shielded_transfers_to_two_identifiers_same_npk() -> Result<()> {
     .await?;
 
     // Both accounts must be discovered with the correct balances.
-    let account_id_1 = PrivateAddressPlaintext::new(npk, vpk.clone(), identifier_1).account_id();
+    let account_id_1 = PrivateAddressPlaintext::new(npk, &vpk, identifier_1).account_id();
     let acc_1 = ctx
         .wallet()
         .get_account_private(account_id_1)
         .context("account for identifier 1 not found after sync")?;
     assert_eq!(acc_1.balance, 100);
 
-    let account_id_2 = PrivateAddressPlaintext::new(npk, vpk.clone(), identifier_2).account_id();
+    let account_id_2 = PrivateAddressPlaintext::new(npk, &vpk, identifier_2).account_id();
     let acc_2 = ctx
         .wallet()
         .get_account_private(account_id_2)
@@ -667,8 +667,7 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
     let vpk = ViewingPublicKey::from_bytes(vec![4_u8; 1184]).unwrap();
     let attacker_vault_id = {
         let seed = vault_core::compute_vault_seed(attacker_id);
-        PrivateAddressPlaintext::new(npk, vpk.clone(), 1337)
-            .pda_account_id(&vault_program_id, &seed)
+        PrivateAddressPlaintext::new(npk, &vpk, 1337).pda_account_id(&vault_program_id, &seed)
     };
     let amount: u128 = 1;
 

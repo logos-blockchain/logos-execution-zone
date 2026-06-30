@@ -16,7 +16,7 @@ pub type Identifier = u128;
 #[cfg_attr(any(feature = "host", test), derive(Hash))]
 pub struct NullifierPublicKey(pub [u8; 32]);
 
-impl PrivateAddressPlaintext {
+impl PrivateAddressPlaintext<'_> {
     /// Derives an [`AccountId`] for a regular (non-PDA) private account from the nullifier public
     /// key and identifier.
     #[must_use]
@@ -162,7 +162,7 @@ mod tests {
             220, 68, 135, 10, 171, 182, 80, 54, 74, 228, 244, 236, 7,
         ]);
 
-        let account_id = PrivateAddressPlaintext::new(npk, vpk, 0).account_id();
+        let account_id = PrivateAddressPlaintext::new(npk, &vpk, 0).account_id();
 
         assert_eq!(account_id, expected_account_id);
     }
@@ -180,7 +180,7 @@ mod tests {
             189, 170, 32, 181, 255, 231, 19, 92, 235, 59, 153, 185, 172, 206,
         ]);
 
-        let account_id = PrivateAddressPlaintext::new(npk, vpk, 1).account_id();
+        let account_id = PrivateAddressPlaintext::new(npk, &vpk, 1).account_id();
 
         assert_eq!(account_id, expected_account_id);
     }
@@ -199,7 +199,7 @@ mod tests {
             159, 112, 84, 100, 133, 244, 16, 34, 221, 35, 128, 131, 98, 159,
         ]);
 
-        let account_id = PrivateAddressPlaintext::new(npk, vpk, identifier).account_id();
+        let account_id = PrivateAddressPlaintext::new(npk, &vpk, identifier).account_id();
 
         assert_eq!(account_id, expected_account_id);
     }

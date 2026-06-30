@@ -108,7 +108,7 @@ impl PrivateAccountPrivateInitialData {
     pub fn account_id(&self) -> lee::AccountId {
         lee::PrivateAddressPlaintext::new(
             self.key_chain.nullifier_public_key,
-            self.key_chain.viewing_public_key.clone(),
+            &self.key_chain.viewing_public_key,
             self.identifier,
         )
         .account_id()
@@ -220,8 +220,7 @@ pub fn initial_state() -> V03State {
             .map(|init_comm_data| {
                 let npk = &init_comm_data.npk;
                 let account_id =
-                    lee::PrivateAddressPlaintext::new(*npk, init_comm_data.vpk.clone(), 0)
-                        .account_id();
+                    lee::PrivateAddressPlaintext::new(*npk, &init_comm_data.vpk, 0).account_id();
 
                 let mut acc = init_comm_data.account.clone();
 

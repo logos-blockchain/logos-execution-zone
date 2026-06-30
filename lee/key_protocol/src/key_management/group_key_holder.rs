@@ -337,8 +337,8 @@ mod tests {
         let keys = holder.derive_keys_for_pda(&TEST_PROGRAM_ID, &seed);
         let npk = keys.generate_nullifier_public_key();
         let vpk = keys.generate_viewing_public_key();
-        let account_id = PrivateAddressPlaintext::new(npk, vpk.clone(), u128::MAX)
-            .pda_account_id(&program_id, &seed);
+        let account_id =
+            PrivateAddressPlaintext::new(npk, &vpk, u128::MAX).pda_account_id(&program_id, &seed);
 
         let expected_npk = NullifierPublicKey([
             136, 176, 234, 71, 208, 8, 143, 142, 126, 155, 132, 18, 71, 27, 88, 56, 100, 90, 79,
@@ -346,7 +346,7 @@ mod tests {
         ]);
         // AccountId is derived from (program_id, seed, npk), so it changes when npk changes.
         // We verify npk is pinned, and AccountId is deterministically derived from it.
-        let expected_account_id = PrivateAddressPlaintext::new(expected_npk, vpk, u128::MAX)
+        let expected_account_id = PrivateAddressPlaintext::new(expected_npk, &vpk, u128::MAX)
             .pda_account_id(&program_id, &seed);
 
         assert_eq!(npk, expected_npk);
@@ -550,9 +550,9 @@ mod tests {
 
         let alice_vpk = alice_keys.generate_viewing_public_key();
         let bob_group_vpk = bob_group_keys.generate_viewing_public_key();
-        let alice_account_id = PrivateAddressPlaintext::new(alice_npk, alice_vpk, 0)
+        let alice_account_id = PrivateAddressPlaintext::new(alice_npk, &alice_vpk, 0)
             .pda_account_id(&program_id, &pda_seed);
-        let bob_account_id = PrivateAddressPlaintext::new(bob_npk, bob_group_vpk, 0)
+        let bob_account_id = PrivateAddressPlaintext::new(bob_npk, &bob_group_vpk, 0)
             .pda_account_id(&program_id, &pda_seed);
         assert_eq!(alice_account_id, bob_account_id);
     }
