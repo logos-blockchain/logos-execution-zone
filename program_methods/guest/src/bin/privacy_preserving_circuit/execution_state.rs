@@ -527,11 +527,11 @@ fn resolve_authorization_and_record_bindings(
     caller_pda_seeds: &[PdaSeed],
     previous_is_authorized: bool,
 ) -> bool {
-    let pda_address = account_identities
-        .get(pre_state_position)
-        .and_then(InputAccountIdentity::private_pda_address);
     let matched_caller_seed: Option<(PdaSeed, bool, ProgramId)> =
         caller_program_id.and_then(|caller| {
+            let pda_address = account_identities
+                .get(pre_state_position)
+                .and_then(InputAccountIdentity::private_pda_address);
             caller_pda_seeds.iter().find_map(|seed| {
                 if AccountId::for_public_pda(&caller, seed) == pre_account_id {
                     return Some((*seed, false, caller));
