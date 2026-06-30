@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     Commitment, CommitmentSetDigest, Identifier, MembershipProof, Nullifier, NullifierPublicKey,
     NullifierSecretKey,
-    account::{Account, AccountWithMetadata},
+    account::{Account, AccountWithMetadata, PrivateAddressPlaintext},
     encryption::{EncryptedAccountData, ViewingPublicKey},
     program::{BlockValidityWindow, PdaSeed, ProgramId, ProgramOutput, TimestampValidityWindow},
 };
@@ -28,7 +28,7 @@ pub enum InputAccountIdentity {
     Public,
     /// Init of an authorized standalone private account: no membership proof. The `pre_state`
     /// must be `Account::default()`. The `account_id` is derived as
-    /// `AccountId::for_regular_private_account(&NullifierPublicKey::from(nsk), vpk, identifier)`
+    /// `PrivateAddressPlaintext::new(NullifierPublicKey::from(nsk), vpk, identifier).account_id()`
     /// and matched against `pre_state.account_id`.
     PrivateAuthorizedInit {
         vpk: ViewingPublicKey,
@@ -55,8 +55,7 @@ pub enum InputAccountIdentity {
     },
     /// Init of a private PDA, unauthorized. The npk-to-account_id binding is proven upstream
     /// via `Claim::Pda(seed)` or a caller's `pda_seeds` match. The identifier diversifies the
-    /// PDA within the `(program_id, seed, npk)` family: `AccountId::for_private_pda` uses it
-    /// as the 4th input.
+    /// PDA within the `(program_id, seed, npk)` family.
     PrivatePdaInit {
         vpk: ViewingPublicKey,
         random_seed: [u8; 32],
@@ -64,10 +63,10 @@ pub enum InputAccountIdentity {
         identifier: Identifier,
         /// When `Some((seed, authority_program_id))`, the circuit binds this position via the
         /// external derivation check
-        /// `AccountId::for_private_pda(authority_program_id, seed, npk, vpk, identifier) ==
-        /// pre_state.account_id` rather than requiring a `Claim::Pda` or caller
-        /// `pda_seeds` to establish the binding. The `pre_state` must have `is_authorized
-        /// == false`.
+        /// `PrivateAddressPlaintext::new(npk, vpk,
+        /// identifier).pda_account_id(authority_program_id, seed) == pre_state.account_id`
+        /// rather than requiring a `Claim::Pda` or caller `pda_seeds` to establish the
+        /// binding. The `pre_state` must have `is_authorized == false`.
         seed: Option<(PdaSeed, ProgramId)>,
     },
     /// Update of an existing private PDA, with membership proof. `npk` is derived
@@ -81,9 +80,10 @@ pub enum InputAccountIdentity {
         identifier: Identifier,
         /// When `Some((seed, authority_program_id))`, the circuit binds this position via the
         /// external derivation check
-        /// `AccountId::for_private_pda(authority_program_id, seed, npk, vpk, identifier) ==
-        /// pre_state.account_id` rather than requiring a caller `pda_seeds` to establish
-        /// the binding. The `pre_state` must have `is_authorized == false`.
+        /// `PrivateAddressPlaintext::new(npk, vpk,
+        /// identifier).pda_account_id(authority_program_id, seed) == pre_state.account_id`
+        /// rather than requiring a caller `pda_seeds` to establish the binding. The
+        /// `pre_state` must have `is_authorized == false`.
         seed: Option<(PdaSeed, ProgramId)>,
     },
 }
@@ -103,22 +103,24 @@ impl InputAccountIdentity {
     }
 
     #[must_use]
-    pub fn npk_vpk_if_private_pda(
-        &self,
-    ) -> Option<(NullifierPublicKey, ViewingPublicKey, Identifier)> {
+    pub fn private_pda_address(&self) -> Option<PrivateAddressPlaintext> {
         match self {
             Self::PrivatePdaInit {
                 npk,
                 vpk,
                 identifier,
                 ..
-            } => Some((*npk, vpk.clone(), *identifier)),
+            } => Some(PrivateAddressPlaintext::new(*npk, vpk.clone(), *identifier)),
             Self::PrivatePdaUpdate {
                 nsk,
                 vpk,
                 identifier,
                 ..
-            } => Some((NullifierPublicKey::from(nsk), vpk.clone(), *identifier)),
+            } => Some(PrivateAddressPlaintext::new(
+                NullifierPublicKey::from(nsk),
+                vpk.clone(),
+                *identifier,
+            )),
             Self::Public
             | Self::PrivateAuthorizedInit { .. }
             | Self::PrivateAuthorizedUpdate { .. }
