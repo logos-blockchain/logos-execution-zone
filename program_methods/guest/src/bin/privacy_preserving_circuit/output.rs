@@ -11,7 +11,7 @@ use crate::execution_state::ExecutionState;
 
 pub fn compute_circuit_output(
     execution_state: ExecutionState,
-    account_identities: Vec<InputAccountIdentity>,
+    account_identities: &[InputAccountIdentity],
 ) -> PrivacyPreservingCircuitOutput {
     let (block_validity_window, timestamp_validity_window, pda_seed_by_position, states_iter) =
         execution_state.into_parts();
@@ -33,7 +33,7 @@ pub fn compute_circuit_output(
 
     let mut output_index = 0;
     for (pos, (account_identity, (pre_state, post_state))) in
-        account_identities.into_iter().zip(states_iter).enumerate()
+        account_identities.iter().zip(states_iter).enumerate()
     {
         match account_identity {
             InputAccountIdentity::Public => {
@@ -47,7 +47,7 @@ pub fn compute_circuit_output(
                 identifier,
             } => {
                 let address =
-                    PrivateAddressPlaintext::new(NullifierPublicKey::from(&nsk), &vpk, identifier);
+                    PrivateAddressPlaintext::new(NullifierPublicKey::from(nsk), vpk, *identifier);
                 let account_id = address.account_id();
 
                 assert_eq!(account_id, pre_state.account_id, "AccountId mismatch");
@@ -75,7 +75,7 @@ pub fn compute_circuit_output(
                     &PrivateAccountKind::Regular(address.identifier),
                     &address.npk,
                     address.vpk,
-                    &random_seed,
+                    random_seed,
                     new_nullifier,
                     new_nonce,
                 );
@@ -88,7 +88,7 @@ pub fn compute_circuit_output(
                 identifier,
             } => {
                 let address =
-                    PrivateAddressPlaintext::new(NullifierPublicKey::from(&nsk), &vpk, identifier);
+                    PrivateAddressPlaintext::new(NullifierPublicKey::from(nsk), vpk, *identifier);
                 let account_id = address.account_id();
 
                 assert_eq!(account_id, pre_state.account_id, "AccountId mismatch");
@@ -98,15 +98,12 @@ pub fn compute_circuit_output(
                 );
 
                 let new_nullifier = compute_update_nullifier_and_set_digest(
-                    &membership_proof,
+                    membership_proof,
                     &pre_state.account,
                     &account_id,
-                    &nsk,
+                    nsk,
                 );
-                let new_nonce = pre_state
-                    .account
-                    .nonce
-                    .private_account_nonce_increment(&nsk);
+                let new_nonce = pre_state.account.nonce.private_account_nonce_increment(nsk);
 
                 emit_private_output(
                     &mut output,
@@ -116,7 +113,7 @@ pub fn compute_circuit_output(
                     &PrivateAccountKind::Regular(address.identifier),
                     &address.npk,
                     address.vpk,
-                    &random_seed,
+                    random_seed,
                     new_nullifier,
                     new_nonce,
                 );
@@ -127,7 +124,7 @@ pub fn compute_circuit_output(
                 npk,
                 identifier,
             } => {
-                let address = PrivateAddressPlaintext::new(npk, &vpk, identifier);
+                let address = PrivateAddressPlaintext::new(*npk, vpk, *identifier);
                 let account_id = address.account_id();
 
                 assert_eq!(account_id, pre_state.account_id, "AccountId mismatch");
@@ -155,7 +152,7 @@ pub fn compute_circuit_output(
                     &PrivateAccountKind::Regular(address.identifier),
                     &address.npk,
                     address.vpk,
-                    &random_seed,
+                    random_seed,
                     new_nullifier,
                     new_nonce,
                 );
@@ -200,11 +197,11 @@ pub fn compute_circuit_output(
                     &PrivateAccountKind::Pda {
                         program_id: *authority_program_id,
                         seed: *seed,
-                        identifier,
+                        identifier: *identifier,
                     },
-                    &npk,
-                    &vpk,
-                    &random_seed,
+                    npk,
+                    vpk,
+                    random_seed,
                     new_nullifier,
                     new_nonce,
                 );
@@ -228,18 +225,15 @@ pub fn compute_circuit_output(
                 );
 
                 let new_nullifier = compute_update_nullifier_and_set_digest(
-                    &membership_proof,
+                    membership_proof,
                     &pre_state.account,
                     &pre_state.account_id,
-                    &nsk,
+                    nsk,
                 );
-                let new_nonce = pre_state
-                    .account
-                    .nonce
-                    .private_account_nonce_increment(&nsk);
+                let new_nonce = pre_state.account.nonce.private_account_nonce_increment(nsk);
 
                 let account_id = pre_state.account_id;
-                let npk = NullifierPublicKey::from(&nsk);
+                let npk = NullifierPublicKey::from(nsk);
                 let (authority_program_id, seed) = pda_seed_by_position
                     .get(&pos)
                     .expect("PrivatePdaUpdate position must be in pda_seed_by_position");
@@ -251,11 +245,11 @@ pub fn compute_circuit_output(
                     &PrivateAccountKind::Pda {
                         program_id: *authority_program_id,
                         seed: *seed,
-                        identifier,
+                        identifier: *identifier,
                     },
                     &npk,
-                    &vpk,
-                    &random_seed,
+                    vpk,
+                    random_seed,
                     new_nullifier,
                     new_nonce,
                 );
