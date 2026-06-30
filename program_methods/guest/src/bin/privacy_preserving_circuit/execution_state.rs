@@ -4,7 +4,7 @@ use std::{
 };
 
 use lee_core::{
-    InputAccountIdentity,
+    InputAccountIdentity, NullifierPublicKey,
     account::{Account, AccountId, AccountWithMetadata, PrivateAddressPlaintext},
     program::{
         AccountPostState, BlockValidityWindow, ChainedCall, Claim, DEFAULT_PROGRAM_ID,
@@ -43,12 +43,6 @@ pub struct ExecutionState {
     /// `AccountId` entry or as an equality check against the existing one, making the rule: one
     /// `(program, seed)` → one account per tx.
     pda_family_binding: HashMap<(ProgramId, PdaSeed), AccountId>,
-    /// Map from a private-PDA `pre_state`'s position in `account_identities` to the
-    /// `PrivateAddressPlaintext` supplied for that position. Built once in `derive_from_outputs`
-    /// by walking `account_identities` and consulting `private_pda_address`. Used later by the
-    /// claim and caller-seeds authorization paths to verify
-    /// `address.pda_account_id(program_id, seed) == pre_state.account_id`.
-    private_pda_by_position: HashMap<usize, PrivateAddressPlaintext>,
     authorized_accounts: HashSet<AccountId>,
 }
 
@@ -59,17 +53,6 @@ impl ExecutionState {
         program_id: ProgramId,
         program_outputs: Vec<ProgramOutput>,
     ) -> Self {
-        // Build position → `PrivateAddressPlaintext` map for private-PDA pre_states, indexed by
-        // position in `account_identities`. The vec is documented as 1:1 with the program's
-        // pre_state order, so position here matches `pre_state_position` used downstream in
-        // `validate_and_sync_states`.
-        let mut private_pda_by_position: HashMap<usize, PrivateAddressPlaintext> = HashMap::new();
-        for (pos, account_identity) in account_identities.iter().enumerate() {
-            if let Some(address) = account_identity.private_pda_address() {
-                private_pda_by_position.insert(pos, address);
-            }
-        }
-
         let block_valid_from = program_outputs
             .iter()
             .filter_map(|output| output.block_validity_window.start())
@@ -106,7 +89,6 @@ impl ExecutionState {
             timestamp_validity_window,
             private_pda_bound_positions: HashMap::new(),
             pda_family_binding: HashMap::new(),
-            private_pda_by_position,
             authorized_accounts: HashSet::new(),
         };
 
@@ -288,7 +270,7 @@ impl ExecutionState {
                     let is_authorized = resolve_authorization_and_record_bindings(
                         &mut self.pda_family_binding,
                         &mut self.private_pda_bound_positions,
-                        &self.private_pda_by_position,
+                        account_identities,
                         &mut self.authorized_accounts,
                         pre_account_id,
                         pre_state_position,
@@ -307,16 +289,15 @@ impl ExecutionState {
                     let pre_state_position = self.pre_states.len();
                     let external_seed = match account_identities.get(pre_state_position) {
                         Some(InputAccountIdentity::PrivatePdaInit {
+                            npk,
+                            vpk,
+                            identifier,
                             seed: Some((seed, authority_program_id)),
                             ..
                         }) => {
-                            let expected = self
-                                .private_pda_by_position
-                                .get(&pre_state_position)
-                                .expect(
-                                    "private PDA pre_state must have an address in the position map",
-                                )
-                                .pda_account_id(authority_program_id, seed);
+                            let expected =
+                                PrivateAddressPlaintext::new(*npk, vpk.clone(), *identifier)
+                                    .pda_account_id(authority_program_id, seed);
                             assert_eq!(
                                 pre_account_id, expected,
                                 "External seed mismatch for PrivatePdaInit at position {pre_state_position}"
@@ -324,16 +305,16 @@ impl ExecutionState {
                             Some((*seed, *authority_program_id))
                         }
                         Some(InputAccountIdentity::PrivatePdaUpdate {
+                            nsk,
+                            vpk,
+                            identifier,
                             seed: Some((seed, authority_program_id)),
                             ..
                         }) => {
-                            let expected = self
-                                .private_pda_by_position
-                                .get(&pre_state_position)
-                                .expect(
-                                    "private PDA pre_state must have an address in the position map",
-                                )
-                                .pda_account_id(authority_program_id, seed);
+                            let npk = NullifierPublicKey::from(nsk);
+                            let expected =
+                                PrivateAddressPlaintext::new(npk, vpk.clone(), *identifier)
+                                    .pda_account_id(authority_program_id, seed);
                             assert_eq!(
                                 pre_account_id, expected,
                                 "External seed mismatch for PrivatePdaUpdate at position {pre_state_position}"
@@ -412,12 +393,9 @@ impl ExecutionState {
                     match claim {
                         Claim::Authorized => {}
                         Claim::Pda(seed) => {
-                            let pda = self
-                                .private_pda_by_position
-                                .get(&pre_state_position)
-                                .expect(
-                                    "private PDA pre_state must have an address in the position map",
-                                )
+                            let pda = account_identity
+                                .private_pda_address()
+                                .expect("private PDA claim requires a private PDA account identity")
                                 .pda_account_id(&program_id, &seed);
                             assert_eq!(
                                 pre_account_id, pda,
@@ -543,7 +521,7 @@ fn bind_private_pda_position(
 fn resolve_authorization_and_record_bindings(
     pda_family_binding: &mut HashMap<(ProgramId, PdaSeed), AccountId>,
     private_pda_bound_positions: &mut HashMap<usize, (ProgramId, PdaSeed)>,
-    private_pda_by_position: &HashMap<usize, PrivateAddressPlaintext>,
+    account_identities: &[InputAccountIdentity],
     authorized_accounts: &mut HashSet<AccountId>,
     pre_account_id: AccountId,
     pre_state_position: usize,
@@ -557,7 +535,9 @@ fn resolve_authorization_and_record_bindings(
                 if AccountId::for_public_pda(&caller, seed) == pre_account_id {
                     return Some((*seed, false, caller));
                 }
-                if let Some(address) = private_pda_by_position.get(&pre_state_position)
+                if let Some(address) = account_identities
+                    .get(pre_state_position)
+                    .and_then(InputAccountIdentity::private_pda_address)
                     && address.pda_account_id(&caller, seed) == pre_account_id
                 {
                     return Some((*seed, true, caller));
