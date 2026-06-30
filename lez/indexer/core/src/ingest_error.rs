@@ -22,8 +22,6 @@ pub enum BlockIngestError {
     },
     #[error("state transition failed: {0}")]
     StateTransition(String),
-    #[error("storage error: {0}")]
-    Storage(String),
 }
 
 #[cfg(test)]

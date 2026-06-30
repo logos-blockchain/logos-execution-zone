@@ -151,8 +151,13 @@ impl indexer_service_rpc::RpcServer for IndexerService {
     }
 
     async fn get_status(&self) -> Result<serde_json::Value, ErrorObjectOwned> {
-        Ok(serde_json::to_value(self.indexer.status())
-            .expect("IndexerStatus serialization should not fail"))
+        serde_json::to_value(self.indexer.status()).map_err(|err| {
+            ErrorObjectOwned::owned(
+                ErrorCode::InternalError.code(),
+                "failed to serialize indexer status".to_owned(),
+                Some(format!("{err:#}")),
+            )
+        })
     }
 
     async fn healthcheck(&self) -> Result<(), ErrorObjectOwned> {

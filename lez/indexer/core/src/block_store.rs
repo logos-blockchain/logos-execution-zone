@@ -280,11 +280,9 @@ impl IndexerStore {
 
         let mut stored = block.clone();
         stored.bedrock_status = BedrockStatus::Finalized;
-        if let Err(err) = self.dbio.put_block(&stored, [0_u8; 32]) {
-            let ingest_err = BlockIngestError::Storage(err.to_string());
-            self.record_stall(Some(&block.header), l1_slot, ingest_err.clone())?;
-            return Ok(AcceptOutcome::Parked(ingest_err));
-        }
+        self.dbio
+            .put_block(&stored, [0_u8; 32])
+            .context("Failed to persist accepted block")?;
 
         // Commit in-memory state (infallible) only after the DB write succeeded.
         *self.current_state.write().await = scratch;
