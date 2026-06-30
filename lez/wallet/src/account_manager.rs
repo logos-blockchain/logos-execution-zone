@@ -2,7 +2,7 @@ use core::fmt;
 
 use anyhow::Result;
 use keycard_wallet::{KeycardWallet, python_path};
-use lee::{AccountId, PrivateKey, PublicKey, Signature};
+use lee::{AccountId, PrivateAddressPlaintext, PrivateKey, PublicKey, Signature};
 use lee_core::{
     Identifier, InputAccountIdentity, MembershipProof, NullifierPublicKey, NullifierSecretKey,
     SharedSecretKey,
@@ -30,7 +30,7 @@ pub enum AccountIdentity {
         identifier: Identifier,
     },
     /// An owned private PDA: wallet holds the nsk/npk; `account_id` was derived via
-    /// [`AccountId::for_private_pda`].
+    /// [`PrivateAddressPlaintext::pda_account_id`].
     PrivatePdaOwned(AccountId),
     /// A foreign private PDA: wallet knows the recipient's npk/vpk but not their nsk.
     /// Uses a default (uninitialised) account.
@@ -50,7 +50,7 @@ pub enum AccountIdentity {
         identifier: Identifier,
     },
     /// A shared private PDA with externally-provided keys (e.g. from GMS).
-    /// `account_id` was derived via [`AccountId::for_private_pda`].
+    /// `account_id` was derived via [`PrivateAddressPlaintext::pda_account_id`].
     PrivatePdaShared {
         account_id: AccountId,
         nsk: NullifierSecretKey,
@@ -261,7 +261,11 @@ impl AccountManager {
                     identifier,
                 } => {
                     let acc = lee_core::account::Account::default();
-                    let auth_acc = AccountWithMetadata::new(acc, false, (&npk, &vpk, identifier));
+                    let auth_acc = AccountWithMetadata::new(
+                        acc,
+                        false,
+                        PrivateAddressPlaintext::new(npk, vpk.clone(), identifier).account_id(),
+                    );
                     let mut random_seed: [u8; 32] = [0; 32];
                     OsRng.fill_bytes(&mut random_seed);
                     let pre = AccountPreparedData {
@@ -309,7 +313,9 @@ impl AccountManager {
                     vpk,
                     identifier,
                 } => {
-                    let account_id = lee::AccountId::from((&npk, &vpk, identifier));
+                    let account_id =
+                        lee::PrivateAddressPlaintext::new(npk, vpk.clone(), identifier)
+                            .account_id();
                     let pre = private_shared_acc_preparation(
                         wallet, account_id, nsk, npk, vpk, identifier, false,
                     )

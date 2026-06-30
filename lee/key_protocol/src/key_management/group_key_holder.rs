@@ -323,11 +323,11 @@ mod tests {
 
     /// Pins the end-to-end derivation for a fixed (GMS, `ProgramId`, `PdaSeed`). Any change
     /// to `secret_spending_key_for_pda`, the `PrivateKeyHolder` nsk/npk chain, or the
-    /// `AccountId::for_private_pda` formula breaks this test. Mirrors the pinned-value
+    /// `PrivateAddressPlaintext::pda_account_id` formula breaks this test. Mirrors the pinned-value
     /// pattern from `for_private_pda_matches_pinned_value` in `lee_core`.
     #[test]
     fn pinned_end_to_end_derivation_for_private_pda() {
-        use lee_core::{account::AccountId, program::ProgramId};
+        use lee_core::{account::PrivateAddressPlaintext, program::ProgramId};
 
         let gms = [42_u8; 32];
         let seed = PdaSeed::new([1; 32]);
@@ -337,7 +337,8 @@ mod tests {
         let keys = holder.derive_keys_for_pda(&TEST_PROGRAM_ID, &seed);
         let npk = keys.generate_nullifier_public_key();
         let vpk = keys.generate_viewing_public_key();
-        let account_id = AccountId::for_private_pda(&program_id, &seed, &npk, &vpk, u128::MAX);
+        let account_id = PrivateAddressPlaintext::new(npk, vpk.clone(), u128::MAX)
+            .pda_account_id(&program_id, &seed);
 
         let expected_npk = NullifierPublicKey([
             136, 176, 234, 71, 208, 8, 143, 142, 126, 155, 132, 18, 71, 27, 88, 56, 100, 90, 79,
@@ -345,8 +346,8 @@ mod tests {
         ]);
         // AccountId is derived from (program_id, seed, npk), so it changes when npk changes.
         // We verify npk is pinned, and AccountId is deterministically derived from it.
-        let expected_account_id =
-            AccountId::for_private_pda(&program_id, &seed, &expected_npk, &vpk, u128::MAX);
+        let expected_account_id = PrivateAddressPlaintext::new(expected_npk, vpk, u128::MAX)
+            .pda_account_id(&program_id, &seed);
 
         assert_eq!(npk, expected_npk);
         assert_eq!(account_id, expected_account_id);
@@ -524,7 +525,7 @@ mod tests {
     /// Full lifecycle: create group, distribute GMS via seal/unseal, verify key agreement.
     #[test]
     fn group_pda_lifecycle() {
-        use lee_core::account::AccountId;
+        use lee_core::account::PrivateAddressPlaintext;
 
         let alice_holder = GroupKeyHolder::new();
         let pda_seed = PdaSeed::new([42_u8; 32]);
@@ -549,10 +550,10 @@ mod tests {
 
         let alice_vpk = alice_keys.generate_viewing_public_key();
         let bob_group_vpk = bob_group_keys.generate_viewing_public_key();
-        let alice_account_id =
-            AccountId::for_private_pda(&program_id, &pda_seed, &alice_npk, &alice_vpk, 0);
-        let bob_account_id =
-            AccountId::for_private_pda(&program_id, &pda_seed, &bob_npk, &bob_group_vpk, 0);
+        let alice_account_id = PrivateAddressPlaintext::new(alice_npk, alice_vpk, 0)
+            .pda_account_id(&program_id, &pda_seed);
+        let bob_account_id = PrivateAddressPlaintext::new(bob_npk, bob_group_vpk, 0)
+            .pda_account_id(&program_id, &pda_seed);
         assert_eq!(alice_account_id, bob_account_id);
     }
 

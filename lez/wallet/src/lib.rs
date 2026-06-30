@@ -17,7 +17,7 @@ use common::{HashType, transaction::LeeTransaction};
 use config::WalletConfig;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use lee::{
-    Account, AccountId, PrivacyPreservingTransaction,
+    Account, AccountId, PrivacyPreservingTransaction, PrivateAddressPlaintext,
     privacy_preserving_transaction::{
         circuit::ProgramWithDependencies, message::EncryptedAccountData,
     },
@@ -377,7 +377,8 @@ impl WalletCore {
         let keys = holder.derive_keys_for_pda(&program_id, &pda_seed);
         let npk = keys.generate_nullifier_public_key();
         let vpk = keys.generate_viewing_public_key();
-        let account_id = AccountId::for_private_pda(&program_id, &pda_seed, &npk, &vpk, identifier);
+        let account_id = PrivateAddressPlaintext::new(npk, vpk.clone(), identifier)
+            .pda_account_id(&program_id, &pda_seed);
 
         self.register_shared_account(
             account_id,
@@ -419,7 +420,7 @@ impl WalletCore {
         let keys = holder.derive_keys_for_shared_account(&derivation_seed);
         let npk = keys.generate_nullifier_public_key();
         let vpk = keys.generate_viewing_public_key();
-        let account_id = AccountId::from((&npk, &vpk, identifier));
+        let account_id = PrivateAddressPlaintext::new(npk, vpk.clone(), identifier).account_id();
 
         self.register_shared_account(account_id, group_name, identifier, None, None);
 

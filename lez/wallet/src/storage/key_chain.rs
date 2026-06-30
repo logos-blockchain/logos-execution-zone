@@ -696,6 +696,8 @@ impl Default for UserKeyChain {
 
 #[cfg(test)]
 mod tests {
+    use lee::PrivateAddressPlaintext;
+
     use super::*;
 
     #[test]
@@ -734,11 +736,12 @@ mod tests {
         let mut user_data = UserKeyChain::default();
 
         let key_chain = KeyChain::new_os_random();
-        let account_id = AccountId::from((
-            &key_chain.nullifier_public_key,
-            &key_chain.viewing_public_key,
+        let account_id = PrivateAddressPlaintext::new(
+            key_chain.nullifier_public_key,
+            key_chain.viewing_public_key.clone(),
             0,
-        ));
+        )
+        .account_id();
         let account = lee_core::account::Account::default();
 
         user_data.add_imported_private_account(key_chain, None, 0, account);
@@ -753,11 +756,12 @@ mod tests {
         let mut user_data = UserKeyChain::default();
 
         let key_chain = KeyChain::new_os_random();
-        let account_id = AccountId::from((
-            &key_chain.nullifier_public_key,
-            &key_chain.viewing_public_key,
+        let account_id = PrivateAddressPlaintext::new(
+            key_chain.nullifier_public_key,
+            key_chain.viewing_public_key.clone(),
             0,
-        ));
+        )
+        .account_id();
         let account = lee_core::account::Account::default();
 
         user_data.add_imported_private_account(key_chain, None, 0, account.clone());
@@ -802,11 +806,12 @@ mod tests {
         let mut user_data = UserKeyChain::default();
 
         let key_chain = KeyChain::new_os_random();
-        let account_id = AccountId::from((
-            &key_chain.nullifier_public_key,
-            &key_chain.viewing_public_key,
+        let account_id = PrivateAddressPlaintext::new(
+            key_chain.nullifier_public_key,
+            key_chain.viewing_public_key,
             0,
-        ));
+        )
+        .account_id();
 
         let new_account = lee_core::account::Account {
             balance: 100,
@@ -827,11 +832,12 @@ mod tests {
         let mut user_data = UserKeyChain::default();
 
         let key_chain = KeyChain::new_os_random();
-        let account_id1 = AccountId::from((
-            &key_chain.nullifier_public_key,
-            &key_chain.viewing_public_key,
+        let account_id1 = PrivateAddressPlaintext::new(
+            key_chain.nullifier_public_key,
+            key_chain.viewing_public_key.clone(),
             0,
-        ));
+        )
+        .account_id();
         let account = lee_core::account::Account::default();
         user_data.add_imported_private_account(key_chain, None, 0, account);
 
