@@ -169,10 +169,9 @@ pub fn compute_circuit_output(
             } => {
                 // The npk-to-account_id binding is established upstream in
                 // `validate_and_sync_states` via `Claim::Pda(seed)` or a caller `pda_seeds`
-                // match. Here we only enforce the init pre-conditions. The supplied npk on
-                // the variant has been recorded into `private_pda_by_position` and used
-                // for the binding check; we use `pre_state.account_id` directly for nullifier
-                // and commitment derivation.
+                // match. Here we only enforce the init pre-conditions. The supplied npk on the
+                // variant is bound by that check; we use `pre_state.account_id` directly for
+                // nullifier and commitment derivation.
                 assert!(
                     !pre_state.is_authorized,
                     "PrivatePdaInit requires unauthorized pre_state"

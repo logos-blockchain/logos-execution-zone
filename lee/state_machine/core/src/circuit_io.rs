@@ -14,7 +14,7 @@ pub struct PrivacyPreservingCircuitInput {
     pub program_outputs: Vec<ProgramOutput>,
     /// One entry per `pre_state`, in the same order as the program's `pre_states`.
     /// Length must equal the number of `pre_states` derived from `program_outputs`.
-    /// The guest's `private_pda_by_position` and `private_pda_bound_positions`
+    /// The guest's binding checks and `private_pda_bound_positions`
     /// rely on this position alignment.
     pub account_identities: Vec<InputAccountIdentity>,
     /// Program ID.
