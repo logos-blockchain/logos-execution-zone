@@ -4,7 +4,7 @@ use anyhow::{Context as _, Result};
 use bytesize::ByteSize;
 use indexer_service::{ChannelId, ClientConfig, IndexerConfig};
 use key_protocol::key_management::KeyChain;
-use lee::{AccountId, PrivateKey, PublicKey};
+use lee::{AccountId, PrivateAddressPlaintext, PrivateKey, PublicKey};
 use lee_core::Identifier;
 use sequencer_core::config::{BedrockConfig, GenesisAction, SequencerConfig};
 use url::Url;
@@ -23,11 +23,12 @@ pub struct InitialPrivateAccountForWallet {
 impl InitialPrivateAccountForWallet {
     #[must_use]
     pub fn account_id(&self) -> AccountId {
-        AccountId::from((
-            &self.key_chain.nullifier_public_key,
-            &self.key_chain.viewing_public_key,
+        PrivateAddressPlaintext::new(
+            self.key_chain.nullifier_public_key,
+            self.key_chain.viewing_public_key.clone(),
             self.identifier,
-        ))
+        )
+        .account_id()
     }
 }
 

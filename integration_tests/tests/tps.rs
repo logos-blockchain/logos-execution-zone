@@ -16,7 +16,8 @@ use bytesize::ByteSize;
 use common::transaction::LeeTransaction;
 use integration_tests::{TestContext, config::SequencerPartialConfig};
 use lee::{
-    Account, AccountId, PrivacyPreservingTransaction, PrivateKey, PublicKey, PublicTransaction,
+    Account, AccountId, PrivacyPreservingTransaction, PrivateAddressPlaintext, PrivateKey,
+    PublicKey, PublicTransaction,
     privacy_preserving_transaction::{self as pptx, circuit},
     program::Program,
     public_transaction as putx,
@@ -265,7 +266,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
             data: Data::default(),
         },
         true,
-        AccountId::for_regular_private_account(&sender_npk, &sender_vpk, 0),
+        PrivateAddressPlaintext::new(sender_npk, sender_vpk.clone(), 0).account_id(),
     );
     let recipient_nsk = [2; 32];
     let recipient_vpk = ViewingPublicKey::from_seed(&[101_u8; 32], &[102_u8; 32]);
@@ -273,7 +274,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
     let recipient_pre = AccountWithMetadata::new(
         Account::default(),
         false,
-        AccountId::for_regular_private_account(&recipient_npk, &recipient_vpk, 0),
+        PrivateAddressPlaintext::new(recipient_npk, recipient_vpk.clone(), 0).account_id(),
     );
 
     let balance_to_move: u128 = 1;

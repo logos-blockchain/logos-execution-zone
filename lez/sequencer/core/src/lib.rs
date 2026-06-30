@@ -819,7 +819,7 @@ mod tests {
     };
     use key_protocol::key_management::KeyChain;
     use lee::{
-        Account, AccountId, Data, PrivacyPreservingTransaction, V03State,
+        Account, Data, PrivacyPreservingTransaction, PrivateAddressPlaintext, V03State,
         error::LeeError,
         execute_and_prove,
         privacy_preserving_transaction::{Message, circuit::ProgramWithDependencies},
@@ -1604,11 +1604,12 @@ mod tests {
     #[test]
     fn private_bridge_withdraw_invocation_is_dropped() {
         let sender_keys = KeyChain::new_os_random();
-        let sender_account_id = AccountId::for_regular_private_account(
-            &sender_keys.nullifier_public_key,
-            &sender_keys.viewing_public_key,
+        let sender_account_id = PrivateAddressPlaintext::new(
+            sender_keys.nullifier_public_key,
+            sender_keys.viewing_public_key.clone(),
             0,
-        );
+        )
+        .account_id();
         let sender_private_account = Account {
             program_owner: Program::authenticated_transfer_program().id(),
             balance: 100,
@@ -1631,11 +1632,12 @@ mod tests {
         let sender_pre = AccountWithMetadata::new(
             sender_private_account,
             true,
-            (
-                &sender_keys.nullifier_public_key,
-                &sender_keys.viewing_public_key,
+            PrivateAddressPlaintext::new(
+                sender_keys.nullifier_public_key,
+                sender_keys.viewing_public_key.clone(),
                 0,
-            ),
+            )
+            .account_id(),
         );
         let bridge_pre = AccountWithMetadata::new(
             state.get_account_by_id(bridge_account_id),
