@@ -5,7 +5,7 @@
 
 pub use lee_core::{
     GENESIS_BLOCK_ID, SharedSecretKey,
-    account::{Account, AccountId, Data},
+    account::{Account, AccountId, Data, PrivateAddressPlaintext},
     encryption::EphemeralPublicKey,
     program::ProgramId,
 };

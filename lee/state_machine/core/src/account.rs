@@ -10,7 +10,10 @@ use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde::{Deserialize, Serialize};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
 
-use crate::{NullifierSecretKey, program::ProgramId};
+use crate::{
+    Identifier, NullifierPublicKey, NullifierSecretKey, encryption::ViewingPublicKey,
+    program::ProgramId,
+};
 
 pub mod data;
 
@@ -176,6 +179,28 @@ impl AccountId {
     #[must_use]
     pub const fn into_value(self) -> [u8; 32] {
         self.value
+    }
+}
+
+#[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
+pub struct PrivateAddressPlaintext {
+    pub npk: NullifierPublicKey,
+    pub vpk: ViewingPublicKey,
+    pub identifier: Identifier,
+}
+
+impl PrivateAddressPlaintext {
+    #[must_use]
+    pub const fn new(
+        npk: NullifierPublicKey,
+        vpk: ViewingPublicKey,
+        identifier: Identifier,
+    ) -> Self {
+        Self {
+            npk,
+            vpk,
+            identifier,
+        }
     }
 }
 

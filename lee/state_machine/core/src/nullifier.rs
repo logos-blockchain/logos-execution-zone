@@ -2,7 +2,11 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde::{Deserialize, Serialize};
 
-use crate::{Commitment, account::AccountId, encryption::ViewingPublicKey};
+use crate::{
+    Commitment,
+    account::{AccountId, PrivateAddressPlaintext},
+    encryption::ViewingPublicKey,
+};
 
 const PRIVATE_ACCOUNT_ID_PREFIX: &[u8; 32] = b"/LEE/v0.3/AccountId/Private/\x00\x00\x00\x00";
 
@@ -12,22 +16,18 @@ pub type Identifier = u128;
 #[cfg_attr(any(feature = "host", test), derive(Hash))]
 pub struct NullifierPublicKey(pub [u8; 32]);
 
-impl AccountId {
+impl PrivateAddressPlaintext {
     /// Derives an [`AccountId`] for a regular (non-PDA) private account from the nullifier public
     /// key and identifier.
     #[must_use]
-    pub fn for_regular_private_account(
-        npk: &NullifierPublicKey,
-        vpk: &ViewingPublicKey,
-        identifier: Identifier,
-    ) -> Self {
+    pub fn account_id(&self) -> AccountId {
         let mut bytes = [0_u8; 32 + 32 + ViewingPublicKey::LEN + 16];
         bytes[0..32].copy_from_slice(PRIVATE_ACCOUNT_ID_PREFIX);
-        bytes[32..64].copy_from_slice(&npk.0);
-        bytes[64..64 + ViewingPublicKey::LEN].copy_from_slice(vpk.to_bytes());
-        bytes[64 + ViewingPublicKey::LEN..].copy_from_slice(&identifier.to_le_bytes());
+        bytes[32..64].copy_from_slice(&self.npk.0);
+        bytes[64..64 + ViewingPublicKey::LEN].copy_from_slice(self.vpk.to_bytes());
+        bytes[64 + ViewingPublicKey::LEN..].copy_from_slice(&self.identifier.to_le_bytes());
 
-        Self::new(
+        AccountId::new(
             Impl::hash_bytes(&bytes)
                 .as_bytes()
                 .try_into()
@@ -36,9 +36,20 @@ impl AccountId {
     }
 }
 
+impl AccountId {
+    #[must_use]
+    pub fn for_regular_private_account(
+        npk: &NullifierPublicKey,
+        vpk: &ViewingPublicKey,
+        identifier: Identifier,
+    ) -> Self {
+        PrivateAddressPlaintext::new(*npk, vpk.clone(), identifier).account_id()
+    }
+}
+
 impl From<(&NullifierPublicKey, &ViewingPublicKey, Identifier)> for AccountId {
     fn from((npk, vpk, identifier): (&NullifierPublicKey, &ViewingPublicKey, Identifier)) -> Self {
-        Self::for_regular_private_account(npk, vpk, identifier)
+        PrivateAddressPlaintext::new(*npk, vpk.clone(), identifier).account_id()
     }
 }
 
@@ -168,7 +179,7 @@ mod tests {
             220, 68, 135, 10, 171, 182, 80, 54, 74, 228, 244, 236, 7,
         ]);
 
-        let account_id = AccountId::for_regular_private_account(&npk, &vpk, 0);
+        let account_id = PrivateAddressPlaintext::new(npk, vpk, 0).account_id();
 
         assert_eq!(account_id, expected_account_id);
     }
@@ -186,7 +197,7 @@ mod tests {
             189, 170, 32, 181, 255, 231, 19, 92, 235, 59, 153, 185, 172, 206,
         ]);
 
-        let account_id = AccountId::for_regular_private_account(&npk, &vpk, 1);
+        let account_id = PrivateAddressPlaintext::new(npk, vpk, 1).account_id();
 
         assert_eq!(account_id, expected_account_id);
     }
@@ -205,7 +216,7 @@ mod tests {
             159, 112, 84, 100, 133, 244, 16, 34, 221, 35, 128, 131, 98, 159,
         ]);
 
-        let account_id = AccountId::for_regular_private_account(&npk, &vpk, identifier);
+        let account_id = PrivateAddressPlaintext::new(npk, vpk, identifier).account_id();
 
         assert_eq!(account_id, expected_account_id);
     }
