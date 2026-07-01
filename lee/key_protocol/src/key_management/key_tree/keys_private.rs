@@ -6,7 +6,7 @@ use sha2::Digest as _;
 
 use crate::key_management::{
     KeyChain,
-    key_tree::traits::KeyTreeNode,
+    key_tree::{split_hash, traits::KeyTreeNode},
     secret_holders::{PrivateKeyHolder, SecretSpendingKey},
 };
 
@@ -23,38 +23,11 @@ impl ChildKeysPrivate {
     #[must_use]
     pub fn root(seed: [u8; 64]) -> Self {
         let hash_value = hmac_sha512::HMAC::mac(seed, b"LEE_master_priv");
+        let (first, ccc) = split_hash(&hash_value);
 
-        let ssk = SecretSpendingKey(
-            *hash_value
-                .first_chunk::<32>()
-                .expect("hash_value is 64 bytes, must be safe to get first 32"),
-        );
-        let ccc = *hash_value
-            .last_chunk::<32>()
-            .expect("hash_value is 64 bytes, must be safe to get last 32");
+        let ssk = SecretSpendingKey(first);
 
-        let nsk = ssk.generate_nullifier_secret_key(None);
-        let vsk = ssk.generate_viewing_secret_seed_key(None);
-
-        let npk = NullifierPublicKey::from(&nsk);
-        let vpk = ViewingPublicKey::from(&vsk);
-
-        Self {
-            value: (
-                KeyChain {
-                    secret_spending_key: ssk,
-                    nullifier_public_key: npk,
-                    viewing_public_key: vpk,
-                    private_key_holder: PrivateKeyHolder {
-                        nullifier_secret_key: nsk,
-                        viewing_secret_key: vsk,
-                    },
-                },
-                BTreeMap::from_iter([(PrivateAccountKind::Regular(0), lee::Account::default())]),
-            ),
-            ccc,
-            cci: None,
-        }
+        Self::from_ssk_and_ccc(ssk, ccc, None)
     }
 
     #[must_use]
@@ -77,18 +50,16 @@ impl ChildKeysPrivate {
         input.extend_from_slice(&cci.to_be_bytes());
 
         let hash_value = hmac_sha512::HMAC::mac(input, self.ccc);
+        let (first, ccc) = split_hash(&hash_value);
 
-        let ssk = SecretSpendingKey(
-            *hash_value
-                .first_chunk::<32>()
-                .expect("hash_value is 64 bytes, must be safe to get first 32"),
-        );
-        let ccc = *hash_value
-            .last_chunk::<32>()
-            .expect("hash_value is 64 bytes, must be safe to get last 32");
+        let ssk = SecretSpendingKey(first);
 
-        let nsk = ssk.generate_nullifier_secret_key(Some(cci));
-        let vsk = ssk.generate_viewing_secret_seed_key(Some(cci));
+        Self::from_ssk_and_ccc(ssk, ccc, Some(cci))
+    }
+
+    fn from_ssk_and_ccc(ssk: SecretSpendingKey, ccc: [u8; 32], cci: Option<u32>) -> Self {
+        let nsk = ssk.generate_nullifier_secret_key(cci);
+        let vsk = ssk.generate_viewing_secret_seed_key(cci);
 
         let npk = NullifierPublicKey::from(&nsk);
         let vpk = ViewingPublicKey::from(&vsk);
@@ -107,7 +78,7 @@ impl ChildKeysPrivate {
                 BTreeMap::from_iter([(PrivateAccountKind::Regular(0), lee::Account::default())]),
             ),
             ccc,
-            cci: Some(cci),
+            cci,
         }
     }
 }
@@ -137,16 +108,16 @@ mod tests {
     use super::*;
     use crate::key_management::{self, secret_holders::ViewingSecretKey};
 
+    const SEED: [u8; 64] = [
+        252, 56, 204, 83, 232, 123, 209, 188, 187, 167, 39, 213, 71, 39, 58, 65, 125, 134, 255, 49,
+        43, 108, 92, 53, 173, 164, 94, 142, 150, 74, 21, 163, 43, 144, 226, 87, 199, 18, 129, 223,
+        176, 198, 5, 150, 157, 70, 210, 254, 14, 105, 89, 191, 246, 27, 52, 170, 56, 114, 39, 38,
+        118, 197, 205, 225,
+    ];
+
     #[test]
     fn master_key_generation() {
-        let seed: [u8; 64] = [
-            252, 56, 204, 83, 232, 123, 209, 188, 187, 167, 39, 213, 71, 39, 58, 65, 125, 134, 255,
-            49, 43, 108, 92, 53, 173, 164, 94, 142, 150, 74, 21, 163, 43, 144, 226, 87, 199, 18,
-            129, 223, 176, 198, 5, 150, 157, 70, 210, 254, 14, 105, 89, 191, 246, 27, 52, 170, 56,
-            114, 39, 38, 118, 197, 205, 225,
-        ];
-
-        let keys = ChildKeysPrivate::root(seed);
+        let keys = ChildKeysPrivate::root(SEED);
 
         let expected_ssk = key_management::secret_holders::SecretSpendingKey([
             246, 79, 26, 124, 135, 95, 52, 51, 201, 27, 48, 194, 2, 144, 51, 219, 245, 128, 139,
@@ -179,6 +150,7 @@ mod tests {
             ],
         );
 
+        // Length matches MlKem768EncapsulationKey::LEN.
         let expected_vpk: [u8; 1184] = [
             127, 229, 162, 212, 104, 117, 4, 150, 192, 103, 122, 195, 14, 35, 12, 60, 52, 23, 220,
             150, 100, 203, 34, 34, 127, 232, 156, 43, 218, 109, 6, 160, 67, 35, 210, 194, 25, 181,
@@ -253,14 +225,7 @@ mod tests {
 
     #[test]
     fn child_keys_generation() {
-        let seed: [u8; 64] = [
-            252, 56, 204, 83, 232, 123, 209, 188, 187, 167, 39, 213, 71, 39, 58, 65, 125, 134, 255,
-            49, 43, 108, 92, 53, 173, 164, 94, 142, 150, 74, 21, 163, 43, 144, 226, 87, 199, 18,
-            129, 223, 176, 198, 5, 150, 157, 70, 210, 254, 14, 105, 89, 191, 246, 27, 52, 170, 56,
-            114, 39, 38, 118, 197, 205, 225,
-        ];
-
-        let root_node = ChildKeysPrivate::root(seed);
+        let root_node = ChildKeysPrivate::root(SEED);
         let child_node = ChildKeysPrivate::nth_child(&root_node, 42_u32);
 
         let expected_ssk = key_management::secret_holders::SecretSpendingKey([
@@ -293,6 +258,7 @@ mod tests {
             ],
         );
 
+        // Length matches MlKem768EncapsulationKey::LEN.
         let expected_vpk: [u8; 1184] = [
             215, 229, 207, 120, 148, 177, 148, 197, 72, 222, 134, 3, 231, 146, 123, 226, 36, 84,
             232, 179, 205, 16, 241, 142, 9, 81, 58, 54, 12, 115, 148, 182, 19, 245, 22, 203, 57,

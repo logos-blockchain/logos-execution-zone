@@ -139,7 +139,7 @@ impl ChainIndex {
             .map(|item| Self(item.into_iter().copied().collect()))
     }
 
-    pub fn chain_ids_at_depth(depth: usize) -> impl Iterator<Item = Self> {
+    fn collect_chain_ids_at_depth(depth: usize) -> Vec<Self> {
         let mut stack = vec![Self(vec![0; depth])];
         let mut cumulative_stack = vec![Self(vec![0; depth])];
 
@@ -152,23 +152,18 @@ impl ChainIndex {
             }
         }
 
-        cumulative_stack.into_iter().unique()
+        cumulative_stack
+    }
+
+    pub fn chain_ids_at_depth(depth: usize) -> impl Iterator<Item = Self> {
+        Self::collect_chain_ids_at_depth(depth).into_iter().unique()
     }
 
     pub fn chain_ids_at_depth_rev(depth: usize) -> impl Iterator<Item = Self> {
-        let mut stack = vec![Self(vec![0; depth])];
-        let mut cumulative_stack = vec![Self(vec![0; depth])];
-
-        while let Some(top_id) = stack.pop() {
-            if let Some(collapsed_id) = top_id.collapse_back() {
-                for id in collapsed_id.shuffle_iter() {
-                    stack.push(id.clone());
-                    cumulative_stack.push(id);
-                }
-            }
-        }
-
-        cumulative_stack.into_iter().rev().unique()
+        Self::collect_chain_ids_at_depth(depth)
+            .into_iter()
+            .rev()
+            .unique()
     }
 }
 

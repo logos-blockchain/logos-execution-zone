@@ -12,13 +12,16 @@ use crate::{Commitment, account::Account, program::PrivateAccountKind};
 #[cfg(feature = "host")]
 pub mod shared_key_derivation;
 
+/// Length in bytes of an ML-KEM-768 ciphertext (the `EphemeralPublicKey` payload).
+pub const ML_KEM_768_CIPHERTEXT_LEN: usize = 1088;
+
 pub type Scalar = [u8; 32];
 
 #[derive(Serialize, Deserialize, Clone, Copy)]
 pub struct SharedSecretKey(pub [u8; 32]);
 
 /// The ML-KEM-768 ciphertext produced during encapsulation; transmitted on-wire in place of the
-/// former ECDH ephemeral public key. Always 1088 bytes for ML-KEM-768.
+/// former ECDH ephemeral public key. Always `ML_KEM_768_CIPHERTEXT_LEN` (1088) bytes.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct EphemeralPublicKey(pub Vec<u8>);
 

@@ -11,7 +11,8 @@ pub use commitment::{
     compute_digest_for_path,
 };
 pub use encryption::{
-    EncryptedAccountData, EncryptionScheme, EphemeralPublicKey, SharedSecretKey, ViewTag,
+    EncryptedAccountData, EncryptionScheme, EphemeralPublicKey, ML_KEM_768_CIPHERTEXT_LEN,
+    SharedSecretKey, ViewTag,
 };
 pub use nullifier::{Identifier, Nullifier, NullifierPublicKey, NullifierSecretKey};
 pub use program::PrivateAccountKind;

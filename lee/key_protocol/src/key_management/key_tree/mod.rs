@@ -39,16 +39,7 @@ impl<N: KeyTreeNode> KeyTree<N> {
             .try_into()
             .expect("SeedHolder seed is 64 bytes long");
 
-        let root_keys = N::from_seed(seed_fit);
-        let account_id_map = root_keys
-            .account_ids()
-            .map(|id| (id, ChainIndex::root()))
-            .collect();
-
-        Self {
-            key_map: BTreeMap::from_iter([(ChainIndex::root(), root_keys)]),
-            account_id_map,
-        }
+        Self::new_from_root(N::from_seed(seed_fit))
     }
 
     pub fn new_from_root(root: N) -> Self {
@@ -63,6 +54,15 @@ impl<N: KeyTreeNode> KeyTree<N> {
         }
     }
 
+    fn insert_child(&mut self, child_keys: N, chain_index: ChainIndex) -> ChainIndex {
+        for account_id in child_keys.account_ids() {
+            self.account_id_map.insert(account_id, chain_index.clone());
+        }
+        self.key_map.insert(chain_index.clone(), child_keys);
+
+        chain_index
+    }
+
     pub fn generate_new_node(&mut self, parent_cci: &ChainIndex) -> Option<ChainIndex> {
         let parent_keys = self.key_map.get(parent_cci)?;
         let next_child_id = self
@@ -71,14 +71,8 @@ impl<N: KeyTreeNode> KeyTree<N> {
         let next_cci = parent_cci.nth_child(next_child_id);
 
         let child_keys = parent_keys.derive_child(next_child_id);
-        let account_ids = child_keys.account_ids();
 
-        for account_id in account_ids {
-            self.account_id_map.insert(account_id, next_cci.clone());
-        }
-        self.key_map.insert(next_cci.clone(), child_keys);
-
-        Some(next_cci)
+        Some(self.insert_child(child_keys, next_cci))
     }
 
     pub fn fill_node(&mut self, chain_index: &ChainIndex) -> Option<ChainIndex> {
@@ -86,14 +80,8 @@ impl<N: KeyTreeNode> KeyTree<N> {
         let child_id = *chain_index.chain().last()?;
 
         let child_keys = parent_keys.derive_child(child_id);
-        let account_ids = child_keys.account_ids();
 
-        for account_id in account_ids {
-            self.account_id_map.insert(account_id, chain_index.clone());
-        }
-        self.key_map.insert(chain_index.clone(), child_keys);
-
-        Some(chain_index.clone())
+        Some(self.insert_child(child_keys, chain_index.clone()))
     }
 
     #[must_use]
@@ -200,24 +188,27 @@ impl<N: KeyTreeNode> KeyTree<N> {
 }
 
 impl KeyTree<ChildKeysPublic> {
+    /// Pairs `cci` with the account ID of the node stored at it.
+    fn account_id_for_cci(&self, cci: ChainIndex) -> Option<(lee::AccountId, ChainIndex)> {
+        let node = self.key_map.get(&cci)?;
+        let account_id = node.account_ids().next()?;
+        Some((account_id, cci))
+    }
+
     /// Generate a new public key node, returning the account ID and chain index.
     pub fn generate_new_public_node(
         &mut self,
         parent_cci: &ChainIndex,
     ) -> Option<(lee::AccountId, ChainIndex)> {
         let cci = self.generate_new_node(parent_cci)?;
-        let node = self.key_map.get(&cci)?;
-        let account_id = node.account_ids().next()?;
-        Some((account_id, cci))
+        self.account_id_for_cci(cci)
     }
 
     /// Generate a new public key node using layered placement, returning the account ID and chain
     /// index.
     pub fn generate_new_public_node_layered(&mut self) -> Option<(lee::AccountId, ChainIndex)> {
         let cci = self.generate_new_node_layered()?;
-        let node = self.key_map.get(&cci)?;
-        let account_id = node.account_ids().next()?;
-        Some((account_id, cci))
+        self.account_id_for_cci(cci)
     }
 
     /// Cleanup of non-initialized accounts in a public tree.
@@ -322,6 +313,16 @@ impl KeyTree<ChildKeysPrivate> {
     }
 }
 
+const fn split_hash(hash_value: &[u8; 64]) -> ([u8; 32], [u8; 32]) {
+    let first = *hash_value
+        .first_chunk::<32>()
+        .expect("hash_value is 64 bytes, must be safe to get first 32");
+    let last = *hash_value
+        .last_chunk::<32>()
+        .expect("hash_value is 64 bytes, must be safe to get last 32");
+    (first, last)
+}
+
 #[cfg(test)]
 mod tests {
     #![expect(clippy::shadow_unrelated, reason = "We don't care about this in tests")]
@@ -337,6 +338,18 @@ mod tests {
         SeedHolder {
             seed: [42; 64].to_vec(),
         }
+    }
+
+    #[test]
+    fn split_hash_splits_into_first_and_last_32_bytes() {
+        let mut hash_value = [0_u8; 64];
+        hash_value[..32].fill(0xAA);
+        hash_value[32..].fill(0xBB);
+
+        let (first, last) = split_hash(&hash_value);
+
+        assert_eq!(first, [0xAA; 32]);
+        assert_eq!(last, [0xBB; 32]);
     }
 
     #[test]
