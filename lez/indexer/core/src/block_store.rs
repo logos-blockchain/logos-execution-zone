@@ -24,6 +24,8 @@ struct Tip {
 pub enum AcceptOutcome {
     /// Chained and applied; tip and L1 read cursor both advance.
     Applied,
+    /// A duplicate re-delivery of the current tip. Just L2 advances.
+    AlreadyApplied,
     /// Did not chain or failed to apply; tip stays frozen, stall recorded.
     Parked(BlockIngestError),
 }
@@ -266,6 +268,15 @@ impl IndexerStore {
         block: &Block,
         l1_slot: serde_json::Value,
     ) -> Result<AcceptOutcome> {
+        // idempotent edge case: re-delivery of the current tip
+        // (e.g. after a crash that left the L1 cursor behind the applied tip)
+        if let Some(tip) = self.validated_tip()?
+            && block.header.block_id == tip.block_id
+            && block.header.hash == tip.hash
+        {
+            return Ok(AcceptOutcome::AlreadyApplied);
+        }
+
         if let Some(err) = self.acceptance_error(block)? {
             self.record_stall(Some(&block.header), l1_slot, err.clone())?;
             return Ok(AcceptOutcome::Parked(err));
@@ -286,7 +297,12 @@ impl IndexerStore {
 
         // Commit in-memory state (infallible) only after the DB write succeeded.
         *self.current_state.write().await = scratch;
-        self.set_stall_reason(&None)?;
+        // Clear a recorded stall now that a block has chained and applied. Only write
+        // when one is actually present, so the steady state does no extra per-block
+        // write (and can't turn a transient clear-write error into a spurious park).
+        if self.get_stall_reason()?.is_some() {
+            self.set_stall_reason(&None)?;
+        }
         Ok(AcceptOutcome::Applied)
     }
 }
@@ -654,6 +670,62 @@ mod accept_tests {
             store.get_last_block_id().unwrap(),
             Some(2),
             "tip must advance to the recovered block"
+        );
+    }
+
+    #[tokio::test]
+    async fn redelivered_tip_block_is_idempotent_not_parked() {
+        use testnet_initial_state::initial_pub_accounts_private_keys;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = IndexerStore::open_db(dir.path()).expect("open store");
+
+        let accounts = initial_pub_accounts_private_keys();
+        let from = accounts[0].account_id;
+        let to = accounts[1].account_id;
+        let sign_key = accounts[0].pub_sign_key.clone();
+
+        let genesis = produce_dummy_block(1, None, vec![]);
+        store
+            .accept_block(&genesis, serde_json::Value::Null)
+            .await
+            .expect("accept genesis");
+
+        // Block 2: a single transfer of 10.
+        let tx = common::test_utils::create_transaction_native_token_transfer(
+            from, 0, to, 10, &sign_key,
+        );
+        let block = produce_dummy_block(2, Some(genesis.header.hash), vec![tx]);
+        assert!(matches!(
+            store
+                .accept_block(&block, serde_json::Value::Null)
+                .await
+                .unwrap(),
+            AcceptOutcome::Applied
+        ));
+        let balance_after = store.account_current_state(&from).await.unwrap().balance;
+
+        // Re-deliver the exact same block: idempotent skip, no state change, no park.
+        assert!(matches!(
+            store
+                .accept_block(&block, serde_json::Value::Null)
+                .await
+                .unwrap(),
+            AcceptOutcome::AlreadyApplied
+        ));
+        assert_eq!(
+            store.account_current_state(&from).await.unwrap().balance,
+            balance_after,
+            "re-delivered block must not be applied twice"
+        );
+        assert_eq!(
+            store.get_last_block_id().unwrap(),
+            Some(2),
+            "tip must stay at the already-applied block"
+        );
+        assert!(
+            store.get_stall_reason().unwrap().is_none(),
+            "a benign duplicate must not park the indexer"
         );
     }
 }

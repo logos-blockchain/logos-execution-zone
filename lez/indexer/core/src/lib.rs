@@ -261,6 +261,16 @@ impl IndexerCore {
                             }
                             yield Ok(block);
                         }
+                        Ok(AcceptOutcome::AlreadyApplied) => {
+                            info!(
+                                "Skipping already-applied block {}",
+                                block.header.block_id
+                            );
+                            cursor = Some(slot);
+                            if let Err(err) = self.store.set_zone_cursor(&slot) {
+                                warn!("Failed to persist indexer cursor: {err:#}");
+                            }
+                        }
                         Ok(AcceptOutcome::Parked(ingest_err)) => {
                             error!(
                                 "Parked at block {}: {ingest_err}",
