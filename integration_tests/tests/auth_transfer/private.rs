@@ -11,8 +11,8 @@ use lee::{
     privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
 };
 use lee_core::{
-    DUMMY_COMMITMENT, DUMMY_COMMITMENT_HASH, EncryptedAccountData, InputAccountIdentity, Nullifier,
-    NullifierPublicKey,
+    DUMMY_COMMITMENT, DUMMY_COMMITMENT_HASH, EncryptedAccountData, InputAccountIdentity,
+    ML_KEM_768_CIPHERTEXT_LEN, Nullifier, NullifierPublicKey,
     account::{Account, AccountWithMetadata},
     compute_digest_for_path,
     encryption::{EphemeralPublicKey, ViewingPublicKey},
