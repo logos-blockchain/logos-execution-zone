@@ -11,8 +11,10 @@ use lee::{
     privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
 };
 use lee_core::{
-    EncryptedAccountData, InputAccountIdentity, NullifierPublicKey,
-    account::AccountWithMetadata,
+    DUMMY_COMMITMENT, DUMMY_COMMITMENT_HASH, EncryptedAccountData, InputAccountIdentity, Nullifier,
+    NullifierPublicKey,
+    account::{Account, AccountWithMetadata},
+    compute_digest_for_path,
     encryption::{EphemeralPublicKey, ViewingPublicKey},
 };
 use log::info;
@@ -710,6 +712,7 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
                 npk,
                 ssk,
                 identifier: 1337,
+                commitment_root: DUMMY_COMMITMENT_HASH,
                 seed: None,
             },
         ],
@@ -717,6 +720,103 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
     );
 
     assert!(res.is_err());
+
+    Ok(())
+}
+
+async fn prove_init_with_commitment_root(
+    ctx: &TestContext,
+    commitment_root: lee_core::CommitmentSetDigest,
+) -> Result<lee_core::PrivacyPreservingCircuitOutput> {
+    let program = programs::authenticated_transfer();
+    let sender_id = ctx.existing_public_accounts()[0];
+    let sender_pre = AccountWithMetadata::new(
+        ctx.sequencer_client().get_account(sender_id).await?,
+        true,
+        sender_id,
+    );
+
+    let nsk: lee_core::NullifierSecretKey = [7; 32];
+    let npk = NullifierPublicKey::from(&nsk);
+    let vpk = ViewingPublicKey::from_bytes(vec![4_u8; 1184]).unwrap();
+    let ssk = SharedSecretKey([55_u8; 32]);
+    let recipient_account_id = AccountId::for_regular_private_account(&npk, 0);
+    let recipient = AccountWithMetadata::new(Account::default(), false, recipient_account_id);
+
+    let (output, _) = execute_and_prove(
+        vec![sender_pre, recipient],
+        Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
+            amount: 1,
+        })?,
+        vec![
+            InputAccountIdentity::Public,
+            InputAccountIdentity::PrivateUnauthorized {
+                epk: EphemeralPublicKey(Vec::new()),
+                view_tag: EncryptedAccountData::compute_view_tag(&npk, &vpk),
+                npk,
+                ssk,
+                identifier: 0,
+                commitment_root,
+            },
+        ],
+        &program.into(),
+    )?;
+
+    Ok(output)
+}
+
+#[test]
+async fn init_with_dummy_commitment_root_produces_valid_root() -> Result<()> {
+    let ctx = TestContext::new().await?;
+
+    let dummy_proof = ctx
+        .sequencer_client()
+        .get_proof_for_commitment(DUMMY_COMMITMENT)
+        .await?
+        .expect("DUMMY_COMMITMENT must be in genesis commitment set");
+    let expected_digest = compute_digest_for_path(&DUMMY_COMMITMENT, &dummy_proof);
+
+    let nsk: lee_core::NullifierSecretKey = [7; 32];
+    let npk = NullifierPublicKey::from(&nsk);
+    let recipient_account_id = AccountId::for_regular_private_account(&npk, 0);
+
+    let output = prove_init_with_commitment_root(&ctx, expected_digest).await?;
+
+    assert_eq!(output.new_nullifiers.len(), 1);
+    let (nullifier, digest) = &output.new_nullifiers[0];
+    assert_eq!(
+        *nullifier,
+        Nullifier::for_account_initialization(&recipient_account_id)
+    );
+    assert_eq!(*digest, expected_digest);
+    assert_ne!(*digest, DUMMY_COMMITMENT_HASH);
+
+    Ok(())
+}
+
+#[test]
+async fn init_nullifier_digest_is_bound_to_commitment_root() -> Result<()> {
+    let ctx = TestContext::new().await?;
+
+    let dummy_proof = ctx
+        .sequencer_client()
+        .get_proof_for_commitment(DUMMY_COMMITMENT)
+        .await?
+        .expect("DUMMY_COMMITMENT must be in genesis commitment set");
+    let expected_digest = compute_digest_for_path(&DUMMY_COMMITMENT, &dummy_proof);
+
+    let output_with_root = prove_init_with_commitment_root(&ctx, expected_digest).await?;
+    let output_without_root = prove_init_with_commitment_root(&ctx, DUMMY_COMMITMENT_HASH).await?;
+
+    assert_eq!(output_with_root.new_nullifiers[0].1, expected_digest);
+    assert_eq!(
+        output_without_root.new_nullifiers[0].1,
+        DUMMY_COMMITMENT_HASH
+    );
+    assert_ne!(
+        output_with_root.new_nullifiers[0].1,
+        output_without_root.new_nullifiers[0].1,
+    );
 
     Ok(())
 }

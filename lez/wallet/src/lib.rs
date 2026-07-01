@@ -22,7 +22,8 @@ use lee::{
     },
 };
 use lee_core::{
-    Commitment, MembershipProof, SharedSecretKey, account::Nonce, program::InstructionData,
+    Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, MembershipProof, SharedSecretKey,
+    account::Nonce, compute_digest_for_path, program::InstructionData,
 };
 use log::info;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
@@ -506,6 +507,14 @@ impl WalletCore {
         } else {
             Ok(None)
         }
+    }
+
+    pub async fn get_commitment_root(&self) -> Result<Option<CommitmentSetDigest>> {
+        let proof = self
+            .sequencer_client
+            .get_proof_for_commitment(DUMMY_COMMITMENT)
+            .await?;
+        Ok(proof.map(|p| compute_digest_for_path(&DUMMY_COMMITMENT, &p)))
     }
 
     pub fn decode_insert_privacy_preserving_transaction_results(

@@ -2,8 +2,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    BlockId, Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, MembershipProof, Nullifier,
-    Timestamp,
+    BlockId, Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, MembershipProof, Nullifier, Timestamp,
     account::{Account, AccountId},
     program::ProgramId,
 };
@@ -327,8 +326,8 @@ pub mod tests {
     use std::collections::HashMap;
 
     use lee_core::{
-        BlockId, Commitment, EncryptedAccountData, InputAccountIdentity, Nullifier,
-        NullifierPublicKey, NullifierSecretKey, SharedSecretKey, Timestamp,
+        BlockId, Commitment, DUMMY_COMMITMENT_HASH, EncryptedAccountData, InputAccountIdentity,
+        Nullifier, NullifierPublicKey, NullifierSecretKey, SharedSecretKey, Timestamp,
         account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
         encryption::{EphemeralPublicKey, ViewingPublicKey},
         program::{
@@ -1192,6 +1191,7 @@ pub mod tests {
                     npk: recipient_keys.npk(),
                     ssk: shared_secret,
                     identifier: 0,
+                    commitment_root: DUMMY_COMMITMENT_HASH,
                 },
             ],
             &crate::test_methods::simple_balance_transfer().into(),
@@ -1259,6 +1259,7 @@ pub mod tests {
                     npk: recipient_keys.npk(),
                     ssk: shared_secret_2,
                     identifier: 0,
+                    commitment_root: DUMMY_COMMITMENT_HASH,
                 },
             ],
             &program.into(),
@@ -1908,6 +1909,7 @@ pub mod tests {
                         0,
                     )
                     .0,
+                    commitment_root: DUMMY_COMMITMENT_HASH,
                     identifier: 0,
                 },
             ],
@@ -1974,6 +1976,7 @@ pub mod tests {
                         0,
                     )
                     .0,
+                    commitment_root: DUMMY_COMMITMENT_HASH,
                     identifier: 0,
                 },
             ],
@@ -2040,6 +2043,7 @@ pub mod tests {
                         0,
                     )
                     .0,
+                    commitment_root: DUMMY_COMMITMENT_HASH,
                     identifier: 0,
                 },
             ],
@@ -2106,6 +2110,7 @@ pub mod tests {
                         0,
                     )
                     .0,
+                    commitment_root: DUMMY_COMMITMENT_HASH,
                     identifier: 0,
                 },
             ],
@@ -2172,6 +2177,7 @@ pub mod tests {
                         0,
                     )
                     .0,
+                    commitment_root: DUMMY_COMMITMENT_HASH,
                     identifier: 0,
                 },
             ],
@@ -2236,6 +2242,7 @@ pub mod tests {
                         0,
                     )
                     .0,
+                    commitment_root: DUMMY_COMMITMENT_HASH,
                     identifier: 0,
                 },
             ],
@@ -2279,6 +2286,7 @@ pub mod tests {
                     npk,
                     ssk: shared_secret,
                     identifier: u128::MAX,
+                    commitment_root: DUMMY_COMMITMENT_HASH,
                     seed: None,
                 },
             ],
@@ -2314,6 +2322,7 @@ pub mod tests {
                 npk,
                 ssk: shared_secret,
                 identifier: u128::MAX,
+                commitment_root: DUMMY_COMMITMENT_HASH,
                 seed: None,
             }],
             &program.into(),
@@ -2357,6 +2366,7 @@ pub mod tests {
                 npk: npk_b,
                 ssk: shared_secret,
                 identifier: u128::MAX,
+                commitment_root: DUMMY_COMMITMENT_HASH,
                 seed: None,
             }],
             &program.into(),
@@ -2396,6 +2406,7 @@ pub mod tests {
                 npk,
                 ssk: shared_secret,
                 identifier: u128::MAX,
+                commitment_root: DUMMY_COMMITMENT_HASH,
                 seed: None,
             }],
             &program_with_deps,
@@ -2438,6 +2449,7 @@ pub mod tests {
                 npk,
                 ssk: shared_secret,
                 identifier: u128::MAX,
+                commitment_root: DUMMY_COMMITMENT_HASH,
                 seed: None,
             }],
             &program_with_deps,
@@ -2479,6 +2491,7 @@ pub mod tests {
                     npk: keys_a.npk(),
                     ssk: shared_a,
                     identifier: u128::MAX,
+                    commitment_root: DUMMY_COMMITMENT_HASH,
                     seed: None,
                 },
                 InputAccountIdentity::PrivatePdaInit {
@@ -2487,6 +2500,7 @@ pub mod tests {
                     npk: keys_b.npk(),
                     ssk: shared_b,
                     identifier: u128::MAX,
+                    commitment_root: DUMMY_COMMITMENT_HASH,
                     seed: None,
                 },
             ],
@@ -2531,6 +2545,7 @@ pub mod tests {
                 npk,
                 ssk: shared_secret,
                 identifier: u128::MAX,
+                commitment_root: DUMMY_COMMITMENT_HASH,
                 seed: None,
             }],
             &program.into(),
@@ -3302,6 +3317,7 @@ pub mod tests {
                 ssk: shared_secret,
                 nsk: private_keys.nsk,
                 identifier: 0,
+                commitment_root: DUMMY_COMMITMENT_HASH,
             }],
             &program.into(),
         )
@@ -3349,6 +3365,7 @@ pub mod tests {
                 npk: private_keys.npk(),
                 ssk: shared_secret,
                 identifier: 0,
+                commitment_root: DUMMY_COMMITMENT_HASH,
             }],
             &program.into(),
         )
@@ -3400,6 +3417,7 @@ pub mod tests {
                 ssk: shared_secret,
                 nsk: private_keys.nsk,
                 identifier: 0,
+                commitment_root: DUMMY_COMMITMENT_HASH,
             }],
             &claimer_program.into(),
         )
@@ -3446,6 +3464,7 @@ pub mod tests {
                 ssk: shared_secret2,
                 nsk: private_keys.nsk,
                 identifier: 0,
+                commitment_root: DUMMY_COMMITMENT_HASH,
             }],
             &noop_program.into(),
         );
@@ -3788,6 +3807,7 @@ pub mod tests {
                     npk: account_keys.npk(),
                     ssk: shared_secret,
                     identifier: 0,
+                    commitment_root: DUMMY_COMMITMENT_HASH,
                 }],
                 &validity_window_program.into(),
             )
@@ -3856,6 +3876,7 @@ pub mod tests {
                     npk: account_keys.npk(),
                     ssk: shared_secret,
                     identifier: 0,
+                    commitment_root: DUMMY_COMMITMENT_HASH,
                 }],
                 &validity_window_program.into(),
             )
@@ -4200,6 +4221,7 @@ pub mod tests {
                         npk: alice_npk,
                         ssk: alice_shared_0,
                         identifier: 0,
+                        commitment_root: DUMMY_COMMITMENT_HASH,
                         seed: Some((seed, proxy_id)),
                     },
                 ],
@@ -4240,6 +4262,7 @@ pub mod tests {
                         npk: alice_npk,
                         ssk: alice_shared_1,
                         identifier: 1,
+                        commitment_root: DUMMY_COMMITMENT_HASH,
                         seed: Some((seed, proxy_id)),
                     },
                 ],

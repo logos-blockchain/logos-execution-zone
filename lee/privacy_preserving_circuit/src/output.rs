@@ -1,7 +1,7 @@
 use lee_core::{
-    Commitment, CommitmentSetDigest, DUMMY_COMMITMENT_HASH, EncryptedAccountData, EncryptionScheme,
-    EphemeralPublicKey, InputAccountIdentity, MembershipProof, Nullifier, NullifierPublicKey,
-    NullifierSecretKey, PrivacyPreservingCircuitOutput, PrivateAccountKind, SharedSecretKey,
+    Commitment, CommitmentSetDigest, EncryptedAccountData, EncryptionScheme, EphemeralPublicKey,
+    InputAccountIdentity, MembershipProof, Nullifier, NullifierPublicKey, NullifierSecretKey,
+    PrivacyPreservingCircuitOutput, PrivateAccountKind, SharedSecretKey,
     account::{Account, AccountId, Nonce},
     compute_digest_for_path,
 };
@@ -20,7 +20,7 @@ struct PrivateOutputHandler<'ctx> {
 }
 
 impl PrivateOutputHandler<'_> {
-    fn authorized_init(self, nsk: &NullifierSecretKey) {
+    fn authorized_init(self, nsk: &NullifierSecretKey, commitment_root: &CommitmentSetDigest) {
         let npk = NullifierPublicKey::from(nsk);
         let account_id =
             derive_and_verify_account_id(&npk, self.identifier, self.pre_state.account_id);
@@ -35,7 +35,7 @@ impl PrivateOutputHandler<'_> {
             "Found new private account with non default values"
         );
 
-        let (new_nullifier, new_nonce) = init_nullifier_and_nonce(&account_id);
+        let (new_nullifier, new_nonce) = init_nullifier_and_nonce(&account_id, commitment_root);
         let kind = PrivateAccountKind::Regular(self.identifier);
 
         self.emit_private_output(&account_id, &kind, new_nullifier, new_nonce);
@@ -67,7 +67,7 @@ impl PrivateOutputHandler<'_> {
         self.emit_private_output(&account_id, &kind, new_nullifier, new_nonce);
     }
 
-    fn unauthorized(self, npk: &NullifierPublicKey) {
+    fn unauthorized(self, npk: &NullifierPublicKey, commitment_root: &CommitmentSetDigest) {
         let account_id =
             derive_and_verify_account_id(npk, self.identifier, self.pre_state.account_id);
 
@@ -81,7 +81,7 @@ impl PrivateOutputHandler<'_> {
             "Found new private account marked as authorized."
         );
 
-        let (new_nullifier, new_nonce) = init_nullifier_and_nonce(&account_id);
+        let (new_nullifier, new_nonce) = init_nullifier_and_nonce(&account_id, commitment_root);
         let kind = PrivateAccountKind::Regular(self.identifier);
 
         self.emit_private_output(&account_id, &kind, new_nullifier, new_nonce);
@@ -89,6 +89,7 @@ impl PrivateOutputHandler<'_> {
 
     fn pda_init(
         self,
+        commitment_root: &CommitmentSetDigest,
         pos: usize,
         pda_seed_by_position: &std::collections::HashMap<
             usize,
@@ -108,7 +109,8 @@ impl PrivateOutputHandler<'_> {
             "New private PDA must be default"
         );
 
-        let (new_nullifier, new_nonce) = init_nullifier_and_nonce(&self.pre_state.account_id);
+        let (new_nullifier, new_nonce) =
+            init_nullifier_and_nonce(&self.pre_state.account_id, commitment_root);
 
         let account_id = self.pre_state.account_id;
         let (authority_program_id, seed) = pda_seed_by_position
@@ -203,10 +205,13 @@ impl PrivateOutputHandler<'_> {
     }
 }
 
-fn init_nullifier_and_nonce(account_id: &AccountId) -> ((Nullifier, CommitmentSetDigest), Nonce) {
+fn init_nullifier_and_nonce(
+    account_id: &AccountId,
+    commitment_root: &CommitmentSetDigest,
+) -> ((Nullifier, CommitmentSetDigest), Nonce) {
     let nullifier = (
         Nullifier::for_account_initialization(account_id),
-        DUMMY_COMMITMENT_HASH,
+        *commitment_root,
     );
     let nonce = Nonce::private_account_nonce_init(account_id);
     (nullifier, nonce)
@@ -271,6 +276,7 @@ pub fn compute_circuit_output(
                 ssk,
                 nsk,
                 identifier,
+                commitment_root,
             } => PrivateOutputHandler {
                 output: &mut output,
                 output_index: &mut output_index,
@@ -281,7 +287,7 @@ pub fn compute_circuit_output(
                 ssk,
                 identifier: *identifier,
             }
-            .authorized_init(nsk),
+            .authorized_init(nsk, commitment_root),
             InputAccountIdentity::PrivateAuthorizedUpdate {
                 epk,
                 view_tag,
@@ -306,6 +312,7 @@ pub fn compute_circuit_output(
                 npk,
                 ssk,
                 identifier,
+                commitment_root,
             } => PrivateOutputHandler {
                 output: &mut output,
                 output_index: &mut output_index,
@@ -316,13 +323,14 @@ pub fn compute_circuit_output(
                 ssk,
                 identifier: *identifier,
             }
-            .unauthorized(npk),
+            .unauthorized(npk, commitment_root),
             InputAccountIdentity::PrivatePdaInit {
                 epk,
                 view_tag,
                 npk: _,
                 ssk,
                 identifier,
+                commitment_root,
                 seed: _,
             } => PrivateOutputHandler {
                 output: &mut output,
@@ -334,7 +342,7 @@ pub fn compute_circuit_output(
                 ssk,
                 identifier: *identifier,
             }
-            .pda_init(pos, &pda_seed_by_position),
+            .pda_init(commitment_root, pos, &pda_seed_by_position),
             InputAccountIdentity::PrivatePdaUpdate {
                 epk,
                 view_tag,
