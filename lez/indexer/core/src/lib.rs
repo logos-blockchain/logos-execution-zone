@@ -224,6 +224,7 @@ impl IndexerCore {
 
                     let zone_block = match msg {
                         ZoneMessage::Block(b) => b,
+                        // FIXME: will be handled in prep of decentralized sequencers
                         ZoneMessage::Deposit(_) | ZoneMessage::Withdraw(_) => continue,
                     };
 
