@@ -112,13 +112,8 @@ unsafe fn setup_indexer(
         unsafe { Runtime::from_borrowed(caller.as_ref()) }
     };
 
-    let allow_reset = config.allow_chain_reset;
     let core = runtime
-        .block_on(IndexerCore::new_with_chain_check(
-            config,
-            &storage_dir,
-            allow_reset,
-        ))
+        .block_on(IndexerCore::new(config, &storage_dir))
         .map_err(|e| {
             log::error!("Could not initialize indexer core: {e}");
             OperationStatus::InitializationError

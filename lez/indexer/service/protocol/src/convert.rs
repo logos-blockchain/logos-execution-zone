@@ -3,11 +3,12 @@
 use lee_core::account::Nonce;
 
 use crate::{
-    Account, AccountId, BedrockStatus, Block, BlockBody, BlockHeader, Ciphertext, Commitment,
-    CommitmentSetDigest, Data, EncryptedAccountData, EphemeralPublicKey, HashType, Nullifier,
-    PrivacyPreservingMessage, PrivacyPreservingTransaction, ProgramDeploymentMessage,
-    ProgramDeploymentTransaction, ProgramId, Proof, PublicKey, PublicMessage, PublicTransaction,
-    Signature, Transaction, ValidityWindow, WitnessSet,
+    Account, AccountId, BedrockStatus, Block, BlockBody, BlockHeader, BlockIngestError, Ciphertext,
+    Commitment, CommitmentSetDigest, Data, EncryptedAccountData, EphemeralPublicKey, HashType,
+    IndexerStatus, IndexerSyncState, Nullifier, PrivacyPreservingMessage,
+    PrivacyPreservingTransaction, ProgramDeploymentMessage, ProgramDeploymentTransaction,
+    ProgramId, Proof, PublicKey, PublicMessage, PublicTransaction, Signature, StallReason,
+    Transaction, ValidityWindow, WitnessSet,
 };
 
 // ============================================================================
@@ -705,5 +706,87 @@ impl TryFrom<ValidityWindow> for lee_core::program::ValidityWindow<u64> {
 
     fn try_from(value: ValidityWindow) -> Result<Self, Self::Error> {
         value.0.try_into()
+    }
+}
+
+// ============================================================================
+// Indexer status conversions
+// ============================================================================
+
+impl From<indexer_core::status::IndexerSyncState> for IndexerSyncState {
+    fn from(value: indexer_core::status::IndexerSyncState) -> Self {
+        match value {
+            indexer_core::status::IndexerSyncState::Starting => Self::Starting,
+            indexer_core::status::IndexerSyncState::Syncing => Self::Syncing,
+            indexer_core::status::IndexerSyncState::CaughtUp => Self::CaughtUp,
+            indexer_core::status::IndexerSyncState::Error => Self::Error,
+            indexer_core::status::IndexerSyncState::Stalled => Self::Stalled,
+        }
+    }
+}
+
+impl From<indexer_core::BlockIngestError> for BlockIngestError {
+    fn from(value: indexer_core::BlockIngestError) -> Self {
+        match value {
+            indexer_core::BlockIngestError::Deserialize(msg) => Self::Deserialize(msg),
+            indexer_core::BlockIngestError::UnexpectedBlockId { expected, got } => {
+                Self::UnexpectedBlockId { expected, got }
+            }
+            indexer_core::BlockIngestError::BrokenChainLink {
+                expected_prev,
+                got_prev,
+            } => Self::BrokenChainLink {
+                expected_prev: expected_prev.into(),
+                got_prev: got_prev.into(),
+            },
+            indexer_core::BlockIngestError::HashMismatch { computed, header } => {
+                Self::HashMismatch {
+                    computed: computed.into(),
+                    header: header.into(),
+                }
+            }
+            indexer_core::BlockIngestError::StateTransition(msg) => Self::StateTransition(msg),
+        }
+    }
+}
+
+impl From<indexer_core::StallReason> for StallReason {
+    fn from(value: indexer_core::StallReason) -> Self {
+        let indexer_core::StallReason {
+            block_id,
+            block_hash,
+            prev_block_hash,
+            l1_slot,
+            error,
+            first_seen,
+            orphans_since,
+        } = value;
+
+        Self {
+            block_id,
+            block_hash: block_hash.map(Into::into),
+            prev_block_hash: prev_block_hash.map(Into::into),
+            l1_slot: l1_slot.into_inner(),
+            error: error.into(),
+            first_seen,
+            orphans_since,
+        }
+    }
+}
+
+impl From<indexer_core::status::IndexerStatus> for IndexerStatus {
+    fn from(value: indexer_core::status::IndexerStatus) -> Self {
+        let indexer_core::status::IndexerStatus {
+            sync,
+            indexed_block_id,
+            stall_reason,
+        } = value;
+
+        Self {
+            state: sync.state.into(),
+            last_error: sync.last_error,
+            indexed_block_id,
+            stall_reason: stall_reason.map(Into::into),
+        }
     }
 }

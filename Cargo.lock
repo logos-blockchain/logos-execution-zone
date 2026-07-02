@@ -3913,6 +3913,7 @@ dependencies = [
  "base64",
  "common",
  "hex",
+ "indexer_core",
  "lee",
  "lee_core",
  "schemars 1.2.1",

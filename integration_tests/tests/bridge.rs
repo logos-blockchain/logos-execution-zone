@@ -572,18 +572,18 @@ async fn indexer_status_rpc_reports_caught_up_with_no_stall() -> anyhow::Result<
 
     let status = ctx.indexer_client().get_status().await?;
     assert_eq!(
-        status["state"],
-        serde_json::json!("caught_up"),
-        "indexer should be caught up, got {status}"
+        status.state,
+        indexer_service_protocol::IndexerSyncState::CaughtUp,
+        "indexer should be caught up, got {status:?}"
     );
     assert!(
-        status["stallReason"].is_null(),
-        "indexer should have no stall reason after a clean run, got {status}"
+        status.stall_reason.is_none(),
+        "indexer should have no stall reason after a clean run, got {status:?}"
     );
     assert_eq!(
-        status["indexedBlockId"],
-        serde_json::json!(indexer_tip),
-        "status indexedBlockId should equal the caught-up tip"
+        status.indexed_block_id,
+        Some(indexer_tip),
+        "status indexed_block_id should equal the caught-up tip"
     );
 
     Ok(())

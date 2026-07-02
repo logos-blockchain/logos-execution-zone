@@ -4,7 +4,9 @@ use anyhow::{Context as _, Result, bail};
 use arc_swap::ArcSwap;
 use futures::{StreamExt as _, never::Never};
 use indexer_core::{IndexerCore, config::IndexerConfig};
-use indexer_service_protocol::{Account, AccountId, Block, BlockId, HashType, Transaction};
+use indexer_service_protocol::{
+    Account, AccountId, Block, BlockId, HashType, IndexerStatus, Transaction,
+};
 use jsonrpsee::{
     SubscriptionSink,
     core::{Serialize, SubscriptionResult, async_trait},
@@ -20,8 +22,7 @@ pub struct IndexerService {
 
 impl IndexerService {
     pub async fn new(config: IndexerConfig, storage_dir: &Path) -> Result<Self> {
-        let allow_reset = config.allow_chain_reset;
-        let indexer = IndexerCore::new_with_chain_check(config, storage_dir, allow_reset).await?;
+        let indexer = IndexerCore::new(config, storage_dir).await?;
         let subscription_service = SubscriptionService::spawn_new(indexer.clone());
 
         Ok(Self {
@@ -150,14 +151,8 @@ impl indexer_service_rpc::RpcServer for IndexerService {
         Ok(tx_res)
     }
 
-    async fn get_status(&self) -> Result<serde_json::Value, ErrorObjectOwned> {
-        serde_json::to_value(self.indexer.status()).map_err(|err| {
-            ErrorObjectOwned::owned(
-                ErrorCode::InternalError.code(),
-                "failed to serialize indexer status".to_owned(),
-                Some(format!("{err:#}")),
-            )
-        })
+    async fn get_status(&self) -> Result<IndexerStatus, ErrorObjectOwned> {
+        Ok(self.indexer.status().into())
     }
 
     async fn healthcheck(&self) -> Result<(), ErrorObjectOwned> {

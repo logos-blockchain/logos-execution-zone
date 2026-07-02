@@ -42,7 +42,35 @@ pub struct IndexerCore {
 }
 
 impl IndexerCore {
-    pub fn new(config: IndexerConfig, storage_dir: &Path) -> Result<Self> {
+    /// Builds the core, then verifies the stored chain matches the channel's by
+    /// re-reading the channel at the stored tip's position. On mismatch: refuse
+    /// (error) unless `config.allow_chain_reset` is set, in which case wipe the
+    /// store and re-index from scratch.
+    pub async fn new(config: IndexerConfig, storage_dir: &Path) -> Result<Self> {
+        let home = storage_dir.join(format!("rocksdb-{}", config.channel_id));
+        let core = Self::open(config.clone(), storage_dir)?;
+        match core.chain_identity_outcome().await? {
+            ChainIdentityOutcome::Consistent => Ok(core),
+            ChainIdentityOutcome::Mismatch { detail } if config.allow_chain_reset => {
+                warn!(
+                    "Chain reset detected ({detail}). Wiping indexer store at {} and re-indexing.",
+                    home.display()
+                );
+                drop(core); // sole owner before the ingest task is spawned → closes the DB
+                storage::indexer::RocksDBIO::destroy(&home)?;
+                Self::open(config, storage_dir)
+            }
+            ChainIdentityOutcome::Mismatch { detail } => Err(anyhow::anyhow!(
+                "Indexer store at {} holds a different chain than the channel now serves \
+                 ({detail}). Delete the indexer storage directory, point at a fresh one, or \
+                 set `allow_chain_reset` in the indexer config.",
+                home.display()
+            )),
+        }
+    }
+
+    /// Opens the store and builds the core without the chain-identity check.
+    fn open(config: IndexerConfig, storage_dir: &Path) -> Result<Self> {
         // Namespace the DB by channel so indexers on different channels can
         // share a storage dir without their RocksDB state colliding.
         let home = storage_dir.join(format!("rocksdb-{}", config.channel_id));
@@ -60,37 +88,6 @@ impl IndexerCore {
             store: IndexerStore::open_db(&home)?,
             status: Arc::new(ArcSwap::from_pointee(IndexerSyncStatus::starting())),
         })
-    }
-
-    /// Builds the core, then verifies the stored chain matches the channel's by
-    /// re-reading the channel at the stored tip's position. On mismatch: refuse
-    /// (error) unless `allow_reset`, in which case wipe the store and re-index from
-    /// scratch. Used at service/FFI startup in place of `new`.
-    pub async fn new_with_chain_check(
-        config: IndexerConfig,
-        storage_dir: &Path,
-        allow_reset: bool,
-    ) -> Result<Self> {
-        let home = storage_dir.join(format!("rocksdb-{}", config.channel_id));
-        let core = Self::new(config.clone(), storage_dir)?;
-        match core.chain_identity_outcome().await? {
-            ChainIdentityOutcome::Consistent => Ok(core),
-            ChainIdentityOutcome::Mismatch { detail } if allow_reset => {
-                warn!(
-                    "Chain reset detected ({detail}). Wiping indexer store at {} and re-indexing.",
-                    home.display()
-                );
-                drop(core); // sole owner before the ingest task is spawned → closes the DB
-                storage::indexer::RocksDBIO::destroy(&home)?;
-                Self::new(config, storage_dir)
-            }
-            ChainIdentityOutcome::Mismatch { detail } => Err(anyhow::anyhow!(
-                "Indexer store at {} holds a different chain than the channel now serves \
-                 ({detail}). Run `just clean`, point at a fresh storage dir, or set \
-                 `allow_chain_reset` in the indexer config.",
-                home.display()
-            )),
-        }
     }
 
     /// Detects when the local store belongs to a different chain than the connected L1
@@ -183,6 +180,28 @@ impl IndexerCore {
         self.status.store(Arc::new(status));
     }
 
+    /// Advances the in-memory L1 read cursor past `slot` and persists it.
+    /// A persist failure is only logged: the worst case is re-reading a batch
+    /// after a restart, which ingestion handles idempotently.
+    fn advance_cursor(&self, cursor: &mut Option<Slot>, slot: Slot) {
+        *cursor = Some(slot);
+        if let Err(err) = self.store.set_zone_cursor(&slot) {
+            warn!("Failed to persist indexer cursor: {err:#}");
+        }
+    }
+
+    /// Parks on an inscription that could not be parsed as an L2 block:
+    /// records the stall and flips the status. The validated tip stays frozen.
+    fn park_undeserializable(&self, slot: Slot, error: &impl std::fmt::Display) {
+        error!("Failed to deserialize L2 block from zone-sdk: {error}");
+        if let Err(err) = self.store.record_deserialize_stall(slot, error.to_string()) {
+            warn!("Failed to record stall reason: {err:#}");
+        }
+        self.set_status(IndexerSyncStatus::stalled(format!(
+            "failed to deserialize L2 block: {error}"
+        )));
+    }
+
     pub fn subscribe_parse_block_stream(&self) -> impl futures::Stream<Item = Result<Block>> + '_ {
         let poll_interval = self.config.consensus_info_polling_interval;
         let initial_cursor = self
@@ -228,38 +247,29 @@ impl IndexerCore {
                         ZoneMessage::Deposit(_) | ZoneMessage::Withdraw(_) => continue,
                     };
 
-                    let l1_slot = serde_json::to_value(slot).unwrap_or(serde_json::Value::Null);
-
                     let block: Block = match borsh::from_slice(&zone_block.data) {
                         Ok(b) => b,
-                        Err(e) => {
-                            error!("Failed to deserialize L2 block from zone-sdk: {e}");
-                            if let Err(err) =
-                                self.store.record_deserialize_stall(l1_slot, e.to_string())
-                            {
+                        Err(error) => {
+                            error!("Failed to deserialize L2 block from zone-sdk: {error}");
+                            if let Err(err) = self.store.record_deserialize_stall(slot, error.to_string()) {
                                 warn!("Failed to record stall reason: {err:#}");
                             }
                             self.set_status(IndexerSyncStatus::stalled(format!(
-                                "failed to deserialize L2 block: {e}"
+                                "failed to deserialize L2 block: {error}"
                             )));
-                            // Advance the L1 read cursor past the broken inscription;
-                            // the validated tip stays frozen.
-                            cursor = Some(slot);
-                            if let Err(err) = self.store.set_zone_cursor(&slot) {
-                                warn!("Failed to persist indexer cursor: {err:#}");
-                            }
+
+
+                            // L1 proceeds regardless
+                            self.advance_cursor(&mut cursor, slot);
                             continue;
                         }
                     };
 
-                    match self.store.accept_block(&block, l1_slot).await {
+                    match self.store.accept_block(&block, slot).await {
                         Ok(AcceptOutcome::Applied) => {
                             info!("Indexed L2 block {}", block.header.block_id);
                             self.set_status(IndexerSyncStatus::syncing());
-                            cursor = Some(slot);
-                            if let Err(err) = self.store.set_zone_cursor(&slot) {
-                                warn!("Failed to persist indexer cursor: {err:#}");
-                            }
+                            self.advance_cursor(&mut cursor, slot);
                             yield Ok(block);
                         }
                         Ok(AcceptOutcome::AlreadyApplied) => {
@@ -267,10 +277,7 @@ impl IndexerCore {
                                 "Skipping already-applied block {}",
                                 block.header.block_id
                             );
-                            cursor = Some(slot);
-                            if let Err(err) = self.store.set_zone_cursor(&slot) {
-                                warn!("Failed to persist indexer cursor: {err:#}");
-                            }
+                            self.advance_cursor(&mut cursor, slot);
                         }
                         Ok(AcceptOutcome::Parked(ingest_err)) => {
                             error!(
@@ -278,15 +285,12 @@ impl IndexerCore {
                                 block.header.block_id
                             );
                             self.set_status(IndexerSyncStatus::stalled(ingest_err.to_string()));
-                            // Advance the L1 read cursor; tip stays frozen, no yield.
-                            cursor = Some(slot);
-                            if let Err(err) = self.store.set_zone_cursor(&slot) {
-                                warn!("Failed to persist indexer cursor: {err:#}");
-                            }
+                            // L1 proceeds regardless
+                            self.advance_cursor(&mut cursor, slot);
                         }
                         Err(err) => {
                             // Infrastructure error (DB read/write), not a bad block.
-                            // Keep the cursor put; re-poll the same position next cycle.
+                            // will re-poll from the same cursor next cycle.
                             error!(
                                 "Store error applying block {}: {err:#}",
                                 block.header.block_id

@@ -363,3 +363,66 @@ pub enum BedrockStatus {
     Safe,
     Finalized,
 }
+
+/// Coarse lifecycle state of the indexer's ingestion loop, so a client can tell
+/// "still catching up" apart from "something went wrong".
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub enum IndexerSyncState {
+    /// Booted; no ingestion cycle has run yet.
+    Starting,
+    /// Streaming finalized messages toward the L1 frontier.
+    Syncing,
+    /// Drained the stream up to the last finalized block; idle until new blocks finalize.
+    CaughtUp,
+    /// The last cycle failed (e.g. the L1 node is unreachable). See `last_error`.
+    Error,
+    /// Parked on a stall reason: the validated tip is frozen awaiting a valid
+    /// continuation. See `last_error` and `stall_reason`.
+    Stalled,
+}
+
+/// Why the indexer could not apply an L2 block from the channel.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub enum BlockIngestError {
+    Deserialize(String),
+    UnexpectedBlockId {
+        expected: u64,
+        got: u64,
+    },
+    BrokenChainLink {
+        expected_prev: HashType,
+        got_prev: HashType,
+    },
+    HashMismatch {
+        computed: HashType,
+        header: HashType,
+    },
+    StateTransition(String),
+}
+
+/// Diagnostic record of the first block that broke the L2 chain.
+///
+/// The block-derived fields are `None` for a deserialize break (no header was
+/// ever parsed). `l1_slot` is the L1 slot the breaking inscription was read at.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct StallReason {
+    pub block_id: Option<u64>,
+    pub block_hash: Option<HashType>,
+    pub prev_block_hash: Option<HashType>,
+    pub l1_slot: u64,
+    pub error: BlockIngestError,
+    /// The breaking block's L2 timestamp (`None` for a deserialize break).
+    pub first_seen: Option<Timestamp>,
+    /// Number of later non-chaining blocks seen while the tip is frozen.
+    pub orphans_since: u64,
+}
+
+/// Status snapshot returned by `getStatus`: the ingestion state plus the
+/// indexed L2 tip and, when stalled, the stall diagnostics.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct IndexerStatus {
+    pub state: IndexerSyncState,
+    pub last_error: Option<String>,
+    pub indexed_block_id: Option<BlockId>,
+    pub stall_reason: Option<StallReason>,
+}

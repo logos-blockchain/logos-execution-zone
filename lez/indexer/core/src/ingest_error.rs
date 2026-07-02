@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 /// Why the indexer could not apply an L2 block from the channel. Stored inside a
 /// [`crate::stall_reason::StallReason`] and surfaced on the status snapshot.
 #[derive(Debug, Clone, Serialize, Deserialize, thiserror::Error)]
-#[serde(rename_all = "camelCase")]
 pub enum BlockIngestError {
     #[error("failed to deserialize L2 block: {0}")]
     Deserialize(String),
@@ -37,7 +36,7 @@ mod tests {
         let value = serde_json::to_value(&err).expect("serialize");
         assert_eq!(
             value,
-            serde_json::json!({ "unexpectedBlockId": { "expected": 5, "got": 7 } })
+            serde_json::json!({ "UnexpectedBlockId": { "expected": 5, "got": 7 } })
         );
         let back: BlockIngestError = serde_json::from_value(value).expect("deserialize");
         assert!(matches!(

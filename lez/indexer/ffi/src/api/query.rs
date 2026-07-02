@@ -91,9 +91,9 @@ pub unsafe extern "C" fn query_last_block(indexer: *const IndexerServiceFFI) -> 
 /// Query the indexer's current sync status as a JSON C-string.
 ///
 /// The JSON schema is owned by `indexer_core` (`IndexerStatus`): an object with
-/// `state` (`starting`/`syncing`/`caught_up`/`error`), `indexedBlockId`, and
-/// `lastError`. Lets a client distinguish "still catching up" from "something
-/// went wrong".
+/// `state` (`Starting`/`Syncing`/`CaughtUp`/`Error`/`Stalled`),
+/// `indexed_block_id`, `last_error`, and `stall_reason`. Lets a client
+/// distinguish "still catching up" from "something went wrong".
 ///
 /// # Arguments
 ///

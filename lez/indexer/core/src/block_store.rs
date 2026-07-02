@@ -171,8 +171,8 @@ impl IndexerStore {
             .get_account_by_id(*account_id))
     }
 
-    /// The last successfully applied block as `{block_id, hash}`, or `None` before
-    /// any block is stored (cold start). Read fresh from the store each call.
+    /// The last successfully applied block, or `None` on a cold store.
+    /// Read fresh from the store each call.
     fn validated_tip(&self) -> Result<Option<Tip>> {
         let Some(block_id) = self.dbio.get_meta_last_block_id_in_db()? else {
             return Ok(None);
@@ -186,51 +186,12 @@ impl IndexerStore {
         }))
     }
 
-    /// Returns `Some(err)` if `block` is not the valid continuation of the tip:
-    /// hash integrity, then block-id continuity, then `prev_block_hash` linkage.
-    fn acceptance_error(&self, block: &Block) -> Result<Option<BlockIngestError>> {
-        let computed = block.recompute_hash();
-        if computed != block.header.hash {
-            return Ok(Some(BlockIngestError::HashMismatch {
-                computed,
-                header: block.header.hash,
-            }));
-        }
-
-        match self.validated_tip()? {
-            None => {
-                if block.header.block_id != GENESIS_BLOCK_ID {
-                    return Ok(Some(BlockIngestError::UnexpectedBlockId {
-                        expected: GENESIS_BLOCK_ID,
-                        got: block.header.block_id,
-                    }));
-                }
-            }
-            Some(tip) => {
-                let expected = tip.block_id.checked_add(1).expect("block id overflow");
-                if block.header.block_id != expected {
-                    return Ok(Some(BlockIngestError::UnexpectedBlockId {
-                        expected,
-                        got: block.header.block_id,
-                    }));
-                }
-                if block.header.prev_block_hash != tip.hash {
-                    return Ok(Some(BlockIngestError::BrokenChainLink {
-                        expected_prev: tip.hash,
-                        got_prev: block.header.prev_block_hash,
-                    }));
-                }
-            }
-        }
-        Ok(None)
-    }
-
     /// Records the stall reason: the first break is stored verbatim; subsequent
     /// breaks only bump `orphans_since`, preserving the original cause.
     fn record_stall(
         &self,
         header: Option<&BlockHeader>,
-        l1_slot: serde_json::Value,
+        l1_slot: Slot,
         error: BlockIngestError,
     ) -> Result<()> {
         let stall = match self.get_stall_reason()? {
@@ -252,32 +213,26 @@ impl IndexerStore {
     }
 
     /// Records a stall for an inscription that could not even be parsed.
-    pub fn record_deserialize_stall(
-        &self,
-        l1_slot: serde_json::Value,
-        error: String,
-    ) -> Result<()> {
+    pub fn record_deserialize_stall(&self, l1_slot: Slot, error: String) -> Result<()> {
         self.record_stall(None, l1_slot, BlockIngestError::Deserialize(error))
     }
 
     /// Validates `block` against the tip and, if it chains, applies it atomically
     /// (scratch clone, commit only on full success) and advances the tip. On any
     /// failure records the stall and returns `Parked` without touching state.
-    pub async fn accept_block(
-        &self,
-        block: &Block,
-        l1_slot: serde_json::Value,
-    ) -> Result<AcceptOutcome> {
+    pub async fn accept_block(&self, block: &Block, l1_slot: Slot) -> Result<AcceptOutcome> {
+        let tip = self.validated_tip()?;
+
         // idempotent edge case: re-delivery of the current tip
         // (e.g. after a crash that left the L1 cursor behind the applied tip)
-        if let Some(tip) = self.validated_tip()?
+        if let Some(tip) = &tip
             && block.header.block_id == tip.block_id
             && block.header.hash == tip.hash
         {
             return Ok(AcceptOutcome::AlreadyApplied);
         }
 
-        if let Some(err) = self.acceptance_error(block)? {
+        if let Err(err) = validate_against_tip(tip.as_ref(), block) {
             self.record_stall(Some(&block.header), l1_slot, err.clone())?;
             return Ok(AcceptOutcome::Parked(err));
         }
@@ -305,6 +260,46 @@ impl IndexerStore {
         }
         Ok(AcceptOutcome::Applied)
     }
+}
+
+/// Checks that `block` is the valid continuation of `tip`: hash integrity,
+/// then block-id continuity, then `prev_block_hash` linkage. A `None` tip
+/// (cold store) expects the genesis block.
+fn validate_against_tip(tip: Option<&Tip>, block: &Block) -> Result<(), BlockIngestError> {
+    let computed = block.recompute_hash();
+    if computed != block.header.hash {
+        return Err(BlockIngestError::HashMismatch {
+            computed,
+            header: block.header.hash,
+        });
+    }
+
+    match tip {
+        None => {
+            if block.header.block_id != GENESIS_BLOCK_ID {
+                return Err(BlockIngestError::UnexpectedBlockId {
+                    expected: GENESIS_BLOCK_ID,
+                    got: block.header.block_id,
+                });
+            }
+        }
+        Some(tip) => {
+            let expected = tip.block_id.checked_add(1).expect("block id overflow");
+            if block.header.block_id != expected {
+                return Err(BlockIngestError::UnexpectedBlockId {
+                    expected,
+                    got: block.header.block_id,
+                });
+            }
+            if block.header.prev_block_hash != tip.hash {
+                return Err(BlockIngestError::BrokenChainLink {
+                    expected_prev: tip.hash,
+                    got_prev: block.header.prev_block_hash,
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Applies a block's transactions to `state`, mapping every failure to a
@@ -380,7 +375,7 @@ mod stall_reason_tests {
             block_id: Some(7),
             block_hash: Some(HashType([1_u8; 32])),
             prev_block_hash: Some(HashType([2_u8; 32])),
-            l1_slot: serde_json::Value::Null,
+            l1_slot: Slot::from(42),
             error: BlockIngestError::StateTransition("boom".to_owned()),
             first_seen: Some(99),
             orphans_since: 3,
@@ -393,7 +388,7 @@ mod stall_reason_tests {
         assert!(matches!(got.error, BlockIngestError::StateTransition(_)));
         assert_eq!(got.block_hash, Some(HashType([1_u8; 32])));
         assert_eq!(got.prev_block_hash, Some(HashType([2_u8; 32])));
-        assert_eq!(got.l1_slot, serde_json::Value::Null);
+        assert_eq!(got.l1_slot, Slot::from(42));
         assert_eq!(got.first_seen, Some(99));
 
         store.set_stall_reason(&None).expect("clear");
@@ -434,10 +429,7 @@ mod tests {
         let genesis = produce_dummy_block(1, None, vec![]);
         let mut prev_hash = genesis.header.hash;
         assert!(matches!(
-            store
-                .accept_block(&genesis, serde_json::Value::Null)
-                .await
-                .unwrap(),
+            store.accept_block(&genesis, Slot::from(0)).await.unwrap(),
             AcceptOutcome::Applied
         ));
 
@@ -447,10 +439,7 @@ mod tests {
             let block = produce_dummy_block(i + 2, Some(prev_hash), vec![tx]);
             prev_hash = block.header.hash;
             assert!(matches!(
-                store
-                    .accept_block(&block, serde_json::Value::Null)
-                    .await
-                    .unwrap(),
+                store.accept_block(&block, Slot::from(0)).await.unwrap(),
                 AcceptOutcome::Applied
             ));
         }
@@ -480,19 +469,13 @@ mod tests {
 
         let genesis = produce_dummy_block(1, None, vec![]);
         let mut prev_hash = genesis.header.hash;
-        store
-            .accept_block(&genesis, serde_json::Value::Null)
-            .await
-            .unwrap();
+        store.accept_block(&genesis, Slot::from(0)).await.unwrap();
 
         for i in 0..10_u64 {
             let tx = create_transaction_native_token_transfer(from, i.into(), to, 10, &sign_key);
             let block = produce_dummy_block(i + 2, Some(prev_hash), vec![tx]);
             prev_hash = block.header.hash;
-            store
-                .accept_block(&block, serde_json::Value::Null)
-                .await
-                .unwrap();
+            store.accept_block(&block, Slot::from(0)).await.unwrap();
         }
 
         // State at block N is inclusive of block N.
@@ -547,7 +530,7 @@ mod accept_tests {
 
         let block = valid_hash_block(2, HashType([0_u8; 32]));
         let outcome = store
-            .accept_block(&block, serde_json::Value::Null)
+            .accept_block(&block, Slot::from(0))
             .await
             .expect("accept");
 
@@ -572,7 +555,7 @@ mod accept_tests {
         block.header.timestamp = 999; // invalidates the stored hash
 
         let outcome = store
-            .accept_block(&block, serde_json::Value::Null)
+            .accept_block(&block, Slot::from(0))
             .await
             .expect("accept");
         assert!(matches!(
@@ -588,12 +571,12 @@ mod accept_tests {
 
         let first = valid_hash_block(2, HashType([0_u8; 32]));
         store
-            .accept_block(&first, serde_json::Value::Null)
+            .accept_block(&first, Slot::from(0))
             .await
             .expect("accept");
         let second = valid_hash_block(3, HashType([0_u8; 32]));
         store
-            .accept_block(&second, serde_json::Value::Null)
+            .accept_block(&second, Slot::from(0))
             .await
             .expect("accept");
 
@@ -608,7 +591,7 @@ mod accept_tests {
         let store = IndexerStore::open_db(dir.path()).expect("open store");
 
         store
-            .record_deserialize_stall(serde_json::Value::Null, "bad bytes".to_owned())
+            .record_deserialize_stall(Slot::from(0), "bad bytes".to_owned())
             .expect("record");
 
         let stall = store.get_stall_reason().expect("get").expect("present");
@@ -624,20 +607,14 @@ mod accept_tests {
         // Genesis (block 1, clock-only) applies and advances the tip.
         let genesis = produce_dummy_block(1, None, vec![]);
         assert!(matches!(
-            store
-                .accept_block(&genesis, serde_json::Value::Null)
-                .await
-                .unwrap(),
+            store.accept_block(&genesis, Slot::from(0)).await.unwrap(),
             AcceptOutcome::Applied
         ));
 
         // A block that skips ahead (id 3 while the tip is 1) parks the indexer.
         let bad = produce_dummy_block(3, Some(genesis.header.hash), vec![]);
         assert!(matches!(
-            store
-                .accept_block(&bad, serde_json::Value::Null)
-                .await
-                .unwrap(),
+            store.accept_block(&bad, Slot::from(0)).await.unwrap(),
             AcceptOutcome::Parked(BlockIngestError::UnexpectedBlockId {
                 expected: 2,
                 got: 3
@@ -656,10 +633,7 @@ mod accept_tests {
         // The valid continuation (block 2 chaining on genesis) recovers the chain.
         let next = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
         assert!(matches!(
-            store
-                .accept_block(&next, serde_json::Value::Null)
-                .await
-                .unwrap(),
+            store.accept_block(&next, Slot::from(0)).await.unwrap(),
             AcceptOutcome::Applied
         ));
         assert!(
@@ -687,7 +661,7 @@ mod accept_tests {
 
         let genesis = produce_dummy_block(1, None, vec![]);
         store
-            .accept_block(&genesis, serde_json::Value::Null)
+            .accept_block(&genesis, Slot::from(0))
             .await
             .expect("accept genesis");
 
@@ -697,20 +671,14 @@ mod accept_tests {
         );
         let block = produce_dummy_block(2, Some(genesis.header.hash), vec![tx]);
         assert!(matches!(
-            store
-                .accept_block(&block, serde_json::Value::Null)
-                .await
-                .unwrap(),
+            store.accept_block(&block, Slot::from(0)).await.unwrap(),
             AcceptOutcome::Applied
         ));
         let balance_after = store.account_current_state(&from).await.unwrap().balance;
 
         // Re-deliver the exact same block: idempotent skip, no state change, no park.
         assert!(matches!(
-            store
-                .accept_block(&block, serde_json::Value::Null)
-                .await
-                .unwrap(),
+            store.accept_block(&block, Slot::from(0)).await.unwrap(),
             AcceptOutcome::AlreadyApplied
         ));
         assert_eq!(
