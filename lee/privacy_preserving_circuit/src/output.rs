@@ -1,7 +1,7 @@
 use lee_core::{
-    Commitment, CommitmentSetDigest, DummyInput, EncryptedAccountData, EncryptionScheme, EphemeralSecretKey,
-    InputAccountIdentity, MembershipProof, Nullifier, NullifierPublicKey, NullifierSecretKey,
-    PrivacyPreservingCircuitOutput, PrivateAccountKind, SharedSecretKey,
+    Commitment, CommitmentSetDigest, DummyInput, EncryptedAccountData, EncryptionScheme,
+    EphemeralSecretKey, InputAccountIdentity, MembershipProof, Nullifier, NullifierPublicKey,
+    NullifierSecretKey, PrivacyPreservingCircuitOutput, PrivateAccountKind, SharedSecretKey,
     account::{Account, AccountId, Nonce},
     compute_digest_for_path,
     encryption::{ViewTag, ViewingPublicKey},
@@ -273,7 +273,9 @@ pub fn compute_circuit_output(
 fn emit_dummy_output(output: &mut PrivacyPreservingCircuitOutput, dummy: DummyInput) {
     let nullifier = Nullifier::for_dummy(&dummy.nullifier_seed);
     let commitment = Commitment::for_dummy(&nullifier, &dummy.commitment_seed);
-    output.new_nullifiers.push((nullifier, dummy.commitment_root));
+    output
+        .new_nullifiers
+        .push((nullifier, dummy.commitment_root));
     output.new_commitments.push(commitment);
     output.encrypted_private_post_states.push(dummy.note);
 }

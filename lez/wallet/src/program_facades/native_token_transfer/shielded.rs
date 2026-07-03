@@ -24,6 +24,7 @@ impl NativeTokenTransfer<'_> {
                 instruction_data,
                 &program.into(),
                 tx_pre_check,
+                0,
             )
             .await
             .map(|(resp, secrets)| {
@@ -57,6 +58,7 @@ impl NativeTokenTransfer<'_> {
                 instruction_data,
                 &program.into(),
                 tx_pre_check,
+                0,
             )
             .await
             .map(|(resp, secrets)| {

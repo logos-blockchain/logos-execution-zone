@@ -18,8 +18,7 @@ fn main() {
         program_outputs,
     );
 
-    let output =
-        output::compute_circuit_output(execution_state, &account_identities, dummy_inputs);
+    let output = output::compute_circuit_output(execution_state, &account_identities, dummy_inputs);
 
     env::commit(&output);
 }

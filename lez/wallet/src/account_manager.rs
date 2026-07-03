@@ -4,11 +4,14 @@ use anyhow::Result;
 use keycard_wallet::{KeycardWallet, python_path};
 use lee::{AccountId, PrivateKey, PublicKey, Signature};
 use lee_core::{
-    Commitment, CommitmentSetDigest, Identifier, InputAccountIdentity, MembershipProof,
-    NullifierPublicKey, NullifierSecretKey, SharedSecretKey,
-    account::{AccountWithMetadata, Nonce},
+    Commitment, CommitmentSetDigest, DummyInput, EncryptionScheme, Identifier, InputAccountIdentity,
+    MembershipProof, NullifierPublicKey, NullifierSecretKey, PrivateAccountKind, SharedSecretKey,
+    account::{Account, AccountWithMetadata, Nonce},
     compute_digest_for_path,
-    encryption::{ViewTag, ViewingPublicKey},
+    encryption::{
+        EncryptedAccountData, EphemeralPublicKey, ML_KEM_768_CIPHERTEXT_LEN, ViewTag,
+        ViewingPublicKey,
+    },
 };
 use rand::{RngCore as _, rngs::OsRng};
 
@@ -398,6 +401,19 @@ impl AccountManager {
             .collect()
     }
 
+    /// Given a count, generate that many dummy inputs with randomized seeds and notes.
+    /// Uses the given commitment root from the account.
+    pub fn dummy_inputs(&self, count: usize) -> Vec<DummyInput> {
+        std::iter::repeat_with(|| DummyInput {
+            nullifier_seed: random_bytes(),
+            commitment_seed: random_bytes(),
+            note: random_dummy_note(),
+            commitment_root: self.dummy_commitment_root,
+        })
+        .take(count)
+        .collect()
+    }
+
     /// Build the per-account input vec for the privacy-preserving circuit. Each variant carries
     /// exactly the fields the circuit's code path for that account needs, with the ephemeral
     /// keys (`ssk`) drawn from the cached values that `private_account_keys` and the message
@@ -657,6 +673,36 @@ fn random_view_tag() -> ViewTag {
     let mut byte: [u8; 1] = [0; 1];
     OsRng.fill_bytes(&mut byte);
     byte[0]
+}
+
+fn random_bytes() -> [u8; 32] {
+    let mut bytes = [0; 32];
+    OsRng.fill_bytes(&mut bytes);
+    bytes
+}
+
+/// Generates a random note by encoding a default account with random secret key,
+/// then generating a random epk value (not connected to the original key) as well
+/// as a random tag.
+fn random_dummy_note() -> EncryptedAccountData {
+    let mut secret = [0; 32];
+    OsRng.fill_bytes(&mut secret);
+    // The cipher is currently assumed to have default data. The data padding
+    // leak is a separate issue.
+    let ciphertext = EncryptionScheme::encrypt(
+        &Account::default(),
+        &PrivateAccountKind::Regular(0),
+        &SharedSecretKey(secret),
+        &Commitment::new(&AccountId::new([0; 32]), &Account::default()),
+        0,
+    );
+    let mut epk = vec![0; ML_KEM_768_CIPHERTEXT_LEN];
+    OsRng.fill_bytes(&mut epk);
+    EncryptedAccountData {
+        ciphertext,
+        epk: EphemeralPublicKey(epk),
+        view_tag: random_view_tag(),
+    }
 }
 
 #[cfg(test)]
