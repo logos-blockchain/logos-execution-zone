@@ -2,7 +2,10 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde::{Deserialize, Serialize};
 
-use crate::account::{Account, AccountId};
+use crate::{
+    Nullifier,
+    account::{Account, AccountId},
+};
 
 /// A commitment to all zero data.
 /// ```python
@@ -76,6 +79,15 @@ impl Commitment {
             this
         };
         bytes.extend_from_slice(&account_bytes_with_hashed_data);
+        Self(Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap())
+    }
+
+    #[must_use]
+    pub fn for_dummy(nullifier: &Nullifier, commitment_seed: &[u8; 32]) -> Self {
+        const DUMMY_PREFIX: &[u8; 32] = b"/LEE/v0.3/Commitment/Dummy/\x00\x00\x00\x00\x00";
+        let mut bytes = DUMMY_PREFIX.to_vec();
+        bytes.extend_from_slice(&nullifier.0);
+        bytes.extend_from_slice(commitment_seed);
         Self(Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap())
     }
 }

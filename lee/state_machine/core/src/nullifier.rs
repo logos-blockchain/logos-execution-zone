@@ -109,6 +109,14 @@ impl Nullifier {
         bytes.extend_from_slice(account_id.value());
         Self(Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap())
     }
+
+    #[must_use]
+    pub fn for_dummy(nullifier_seed: &[u8; 32]) -> Self {
+        const DUMMY_PREFIX: &[u8; 32] = b"/LEE/v0.3/Nullifier/Dummy/\x00\x00\x00\x00\x00\x00";
+        let mut bytes = DUMMY_PREFIX.to_vec();
+        bytes.extend_from_slice(nullifier_seed);
+        Self(Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap())
+    }
 }
 
 #[cfg(test)]
