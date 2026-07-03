@@ -9,6 +9,7 @@ fn main() {
         program_outputs,
         account_identities,
         program_id,
+        dummy_inputs,
     } = env::read();
 
     let execution_state = execution_state::ExecutionState::derive_from_outputs(
@@ -17,7 +18,8 @@ fn main() {
         program_outputs,
     );
 
-    let output = output::compute_circuit_output(execution_state, &account_identities);
+    let output =
+        output::compute_circuit_output(execution_state, &account_identities, dummy_inputs);
 
     env::commit(&output);
 }

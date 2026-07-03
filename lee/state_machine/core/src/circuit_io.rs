@@ -19,6 +19,7 @@ pub struct PrivacyPreservingCircuitInput {
     pub account_identities: Vec<InputAccountIdentity>,
     /// Program ID.
     pub program_id: ProgramId,
+    pub dummy_inputs: Vec<DummyInput>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
