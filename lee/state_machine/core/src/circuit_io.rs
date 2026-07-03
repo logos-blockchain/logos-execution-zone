@@ -93,6 +93,20 @@ pub enum InputAccountIdentity {
     },
 }
 
+/// A struct containing necessary data for dummy nullifier and
+/// commitment generation.
+#[derive(Serialize, Deserialize)]
+pub struct DummyInput {
+    /// The seed used for generating the dummy nullifier.
+    pub nullifier_seed: [u8; 32],
+    /// The seed used for generating the dummy commitment.
+    pub commitment_seed: [u8; 32],
+    /// The dummy ciphertext, epk, and view tag.
+    pub note: EncryptedAccountData,
+    /// The dummy root.
+    pub commitment_root: CommitmentSetDigest,
+}
+
 impl InputAccountIdentity {
     #[must_use]
     pub const fn is_public(&self) -> bool {
