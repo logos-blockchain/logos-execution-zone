@@ -129,7 +129,10 @@ mod tests {
                 block_hash: None,
                 prev_block_hash: None,
                 l1_slot: Slot::from(0),
-                error: BlockIngestError::StateTransition("boom".to_owned()),
+                error: BlockIngestError::StateTransition {
+                    tx_index: 0,
+                    reason: Default::default(),
+                },
                 first_seen: None,
                 orphans_since: 2,
             }),

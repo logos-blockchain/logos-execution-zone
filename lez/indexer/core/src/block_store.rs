@@ -186,9 +186,11 @@ impl IndexerStore {
         }))
     }
 
-    /// Records the stall reason: the first break is stored verbatim; subsequent
-    /// breaks only bump `orphans_since`, preserving the original cause.
-    fn record_stall(
+    /// Record the stall reason.
+    ///
+    /// - First stall is stored verbatim
+    /// - Subsequent stalls only bump `orphans_since`, preserving the original cause.
+    pub fn record_stall(
         &self,
         header: Option<&BlockHeader>,
         l1_slot: Slot,
@@ -200,6 +202,7 @@ impl IndexerStore {
                 existing
             }
             None => StallReason {
+                // need to map out of `header` because they are not ser/de
                 block_id: header.map(|h| h.block_id),
                 block_hash: header.map(|h| h.hash),
                 prev_block_hash: header.map(|h| h.prev_block_hash),
@@ -210,11 +213,6 @@ impl IndexerStore {
             },
         };
         self.set_stall_reason(&Some(stall))
-    }
-
-    /// Records a stall for an inscription that could not even be parsed.
-    pub fn record_deserialize_stall(&self, l1_slot: Slot, error: String) -> Result<()> {
-        self.record_stall(None, l1_slot, BlockIngestError::Deserialize(error))
     }
 
     /// Validates `block` against the tip and, if it chains, applies it atomically
@@ -306,25 +304,26 @@ fn validate_against_tip(tip: Option<&Tip>, block: &Block) -> Result<(), BlockIng
 /// [`BlockIngestError`] so the caller can park rather than crash. Operates on a
 /// scratch state; the caller commits only on `Ok`.
 fn apply_block_to_scratch(block: &Block, state: &mut V03State) -> Result<(), BlockIngestError> {
-    let (clock_tx, user_txs) =
-        block.body.transactions.split_last().ok_or_else(|| {
-            BlockIngestError::StateTransition("block has no transactions".to_owned())
-        })?;
+    let (clock_tx, user_txs) = block
+        .body
+        .transactions
+        .split_last()
+        .ok_or(BlockIngestError::EmptyBlock)?;
 
     let expected_clock = LeeTransaction::Public(clock_invocation(block.header.timestamp));
     if *clock_tx != expected_clock {
-        return Err(BlockIngestError::StateTransition(
-            "last transaction must be the clock invocation for the block timestamp".to_owned(),
-        ));
+        return Err(BlockIngestError::InvalidClockTransaction);
     }
 
     let is_genesis = block.header.block_id == GENESIS_BLOCK_ID;
-    for transaction in user_txs {
+    for (tx_index, transaction) in user_txs.iter().enumerate() {
+        let state_transition = |err: anyhow::Error| BlockIngestError::StateTransition {
+            tx_index: tx_index.try_into().expect("tx index fits in u64"),
+            reason: format!("{err:#}"),
+        };
         if is_genesis {
             let LeeTransaction::Public(public_tx) = transaction else {
-                return Err(BlockIngestError::StateTransition(
-                    "genesis block should contain only public transactions".to_owned(),
-                ));
+                return Err(BlockIngestError::NonPublicGenesisTransaction);
             };
             state
                 .transition_from_public_transaction(
@@ -332,19 +331,17 @@ fn apply_block_to_scratch(block: &Block, state: &mut V03State) -> Result<(), Blo
                     block.header.block_id,
                     block.header.timestamp,
                 )
-                .map_err(|err| BlockIngestError::StateTransition(format!("{err:?}")))?;
+                .map_err(|err| state_transition(err.into()))?;
         } else {
             transaction
                 .clone()
                 .execute_on_state(state, block.header.block_id, block.header.timestamp)
-                .map_err(|err| BlockIngestError::StateTransition(format!("{err:?}")))?;
+                .map_err(|err| state_transition(err.into()))?;
         }
     }
 
     let LeeTransaction::Public(clock_public_tx) = clock_tx else {
-        return Err(BlockIngestError::StateTransition(
-            "clock invocation must be a public transaction".to_owned(),
-        ));
+        return Err(BlockIngestError::InvalidClockTransaction);
     };
     state
         .transition_from_public_transaction(
@@ -352,7 +349,10 @@ fn apply_block_to_scratch(block: &Block, state: &mut V03State) -> Result<(), Blo
             block.header.block_id,
             block.header.timestamp,
         )
-        .map_err(|err| BlockIngestError::StateTransition(format!("{err:?}")))?;
+        .map_err(|err| BlockIngestError::StateTransition {
+            tx_index: user_txs.len().try_into().expect("tx index fits in u64"),
+            reason: format!("{:#}", anyhow::Error::from(err)),
+        })?;
 
     Ok(())
 }
@@ -376,7 +376,10 @@ mod stall_reason_tests {
             block_hash: Some(HashType([1_u8; 32])),
             prev_block_hash: Some(HashType([2_u8; 32])),
             l1_slot: Slot::from(42),
-            error: BlockIngestError::StateTransition("boom".to_owned()),
+            error: BlockIngestError::StateTransition {
+                tx_index: 0,
+                reason: "boom".to_owned(),
+            },
             first_seen: Some(99),
             orphans_since: 3,
         };
@@ -385,7 +388,10 @@ mod stall_reason_tests {
         let got = store.get_stall_reason().expect("get").expect("present");
         assert_eq!(got.block_id, Some(7));
         assert_eq!(got.orphans_since, 3);
-        assert!(matches!(got.error, BlockIngestError::StateTransition(_)));
+        assert!(matches!(
+            got.error,
+            BlockIngestError::StateTransition { .. }
+        ));
         assert_eq!(got.block_hash, Some(HashType([1_u8; 32])));
         assert_eq!(got.prev_block_hash, Some(HashType([2_u8; 32])));
         assert_eq!(got.l1_slot, Slot::from(42));
@@ -591,7 +597,11 @@ mod accept_tests {
         let store = IndexerStore::open_db(dir.path()).expect("open store");
 
         store
-            .record_deserialize_stall(Slot::from(0), "bad bytes".to_owned())
+            .record_stall(
+                None,
+                Slot::from(0),
+                BlockIngestError::Deserialize("bad bytes".to_owned()),
+            )
             .expect("record");
 
         let stall = store.get_stall_reason().expect("get").expect("present");

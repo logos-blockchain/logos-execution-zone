@@ -2,7 +2,7 @@ use std::{path::Path, sync::Arc};
 
 use anyhow::{Context as _, Result};
 use arc_swap::ArcSwap;
-use common::block::Block;
+use common::{HashType, block::Block};
 // TODO: Remove after testnet
 use futures::StreamExt as _;
 pub use ingest_error::BlockIngestError;
@@ -29,7 +29,25 @@ enum ChainIdentityOutcome {
     /// or the check was inconclusive — none of which prove a reset.
     Consistent,
     /// The channel serves a different block at one of our ids — a chain reset.
-    Mismatch { detail: String },
+    Mismatch(ChainMismatch),
+}
+
+/// The differing pair behind a [`ChainIdentityOutcome::Mismatch`]: our stored
+/// block vs. the block the channel serves at the same id, as `(block_id, hash)`.
+struct ChainMismatch {
+    ours: (u64, HashType),
+    channel: (u64, HashType),
+}
+
+impl std::fmt::Display for ChainMismatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self { ours, channel } = self;
+        write!(
+            f,
+            "stored block {} {} != channel block {} {}",
+            ours.0, ours.1, channel.0, channel.1
+        )
+    }
 }
 
 #[derive(Clone)]
@@ -51,18 +69,19 @@ impl IndexerCore {
         let core = Self::open(config.clone(), storage_dir)?;
         match core.chain_identity_outcome().await? {
             ChainIdentityOutcome::Consistent => Ok(core),
-            ChainIdentityOutcome::Mismatch { detail } if config.allow_chain_reset => {
+            ChainIdentityOutcome::Mismatch(mismatch) if config.allow_chain_reset => {
                 warn!(
-                    "Chain reset detected ({detail}). Wiping indexer store at {} and re-indexing.",
+                    "Chain reset detected ({mismatch}). Wiping indexer store at {} and \
+                     re-indexing.",
                     home.display()
                 );
                 drop(core); // sole owner before the ingest task is spawned → closes the DB
                 storage::indexer::RocksDBIO::destroy(&home)?;
                 Self::open(config, storage_dir)
             }
-            ChainIdentityOutcome::Mismatch { detail } => Err(anyhow::anyhow!(
+            ChainIdentityOutcome::Mismatch(mismatch) => Err(anyhow::anyhow!(
                 "Indexer store at {} holds a different chain than the channel now serves \
-                 ({detail}). Delete the indexer storage directory, point at a fresh one, or \
+                 ({mismatch}). Delete the indexer storage directory, point at a fresh one, or \
                  set `allow_chain_reset` in the indexer config.",
                 home.display()
             )),
@@ -121,14 +140,16 @@ impl IndexerCore {
         Ok(compare_block(&ours, &channel_block))
     }
 
-    /// Reads the first block the channel serves at/after the tip's slot. `next_messages`
-    /// is exclusive, so `cursor - 1` includes the tip's own slot. `None` = inconclusive
-    /// (timeout/error, or bedrock's LIB behind our tip → empty stream).
+    /// Reads the first block the channel serves at/after the tip's slot.
+    ///
+    /// `None` = inconclusive (timeout/error, or bedrock's LIB behind our tip → empty stream).
     async fn fetch_channel_block_from(&self, cursor: Slot) -> Result<Option<Block>> {
         const TIP_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
-        // Slot-0 cursor is degenerate (inscriptions live at wall-clock slots); bail
-        // rather than let `next_messages(None)` do a from-genesis scan.
+
+        // `next_messages` is exclusive, so `cursor - 1` includes the tip's own slot.
         let Some(from_slot) = cursor.into_inner().checked_sub(1) else {
+            // Slot-0 cursor is degenerate (inscriptions live at wall-clock slots);
+            // so we bail rather than let `next_messages(None)` do a from-genesis scan.
             return Ok(None);
         };
         let fetch = async {
@@ -192,13 +213,20 @@ impl IndexerCore {
 
     /// Parks on an inscription that could not be parsed as an L2 block:
     /// records the stall and flips the status. The validated tip stays frozen.
-    fn park_undeserializable(&self, slot: Slot, error: &impl std::fmt::Display) {
-        error!("Failed to deserialize L2 block from zone-sdk: {error}");
-        if let Err(err) = self.store.record_deserialize_stall(slot, error.to_string()) {
+    fn park_undeserializable(&self, slot: Slot, error: std::io::Error) {
+        let error = anyhow::Error::new(error);
+
+        // use `:#` to get the entire error chain
+        let reason = format!("{error:#}");
+        error!("Failed to deserialize L2 block from zone-sdk: {reason}");
+        if let Err(err) =
+            self.store
+                .record_stall(None, slot, BlockIngestError::Deserialize(reason.clone()))
+        {
             warn!("Failed to record stall reason: {err:#}");
         }
         self.set_status(IndexerSyncStatus::stalled(format!(
-            "failed to deserialize L2 block: {error}"
+            "failed to deserialize L2 block: {reason}"
         )));
     }
 
@@ -250,15 +278,7 @@ impl IndexerCore {
                     let block: Block = match borsh::from_slice(&zone_block.data) {
                         Ok(b) => b,
                         Err(error) => {
-                            error!("Failed to deserialize L2 block from zone-sdk: {error}");
-                            if let Err(err) = self.store.record_deserialize_stall(slot, error.to_string()) {
-                                warn!("Failed to record stall reason: {err:#}");
-                            }
-                            self.set_status(IndexerSyncStatus::stalled(format!(
-                                "failed to deserialize L2 block: {error}"
-                            )));
-
-
+                            self.park_undeserializable(slot, error);
                             // L1 proceeds regardless
                             self.advance_cursor(&mut cursor, slot);
                             continue;
@@ -325,15 +345,10 @@ fn compare_block(ours: &Block, channel: &Block) -> ChainIdentityOutcome {
     if ours.header.hash == channel.header.hash {
         ChainIdentityOutcome::Consistent
     } else {
-        ChainIdentityOutcome::Mismatch {
-            detail: format!(
-                "stored block {} {} != channel block {} {}",
-                ours.header.block_id,
-                ours.header.hash,
-                channel.header.block_id,
-                channel.header.hash
-            ),
-        }
+        ChainIdentityOutcome::Mismatch(ChainMismatch {
+            ours: (ours.header.block_id, ours.header.hash),
+            channel: (channel.header.block_id, channel.header.hash),
+        })
     }
 }
 
@@ -362,7 +377,7 @@ mod chain_identity_tests {
         let current = block_with_prev(2);
         assert!(matches!(
             compare_block(&stored, &current),
-            ChainIdentityOutcome::Mismatch { .. }
+            ChainIdentityOutcome::Mismatch(_)
         ));
     }
 }

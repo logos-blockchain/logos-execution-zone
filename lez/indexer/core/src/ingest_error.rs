@@ -1,26 +1,43 @@
 use common::HashType;
 use serde::{Deserialize, Serialize};
 
-/// Why the indexer could not apply an L2 block from the channel. Stored inside a
-/// [`crate::stall_reason::StallReason`] and surfaced on the status snapshot.
+/// Why the indexer could not apply an L2 block from the channel.
+///
+/// Persisted in `RocksDB`, so every variant must have the following
+/// traits: `Clone + Serialize + Deserialize`.
 #[derive(Debug, Clone, Serialize, Deserialize, thiserror::Error)]
 pub enum BlockIngestError {
-    #[error("failed to deserialize L2 block: {0}")]
+    #[error("Failed to deserialize L2 block: {0}")]
+    /// Here we store the error string that is derived from [`borsh::from_slice`]'s [`Err`].
     Deserialize(String),
-    #[error("unexpected block id: expected {expected}, got {got}")]
+    #[error("Unexpected block id: expected {expected}, got {got}")]
     UnexpectedBlockId { expected: u64, got: u64 },
-    #[error("broken chain link: expected prev {expected_prev}, got {got_prev}")]
+    #[error("Broken chain link: expected prev {expected_prev}, got {got_prev}")]
     BrokenChainLink {
         expected_prev: HashType,
         got_prev: HashType,
     },
-    #[error("block hash mismatch: computed {computed}, header {header}")]
+    #[error("Block hash mismatch: computed {computed}, header {header}")]
     HashMismatch {
         computed: HashType,
         header: HashType,
     },
-    #[error("state transition failed: {0}")]
-    StateTransition(String),
+    #[error("Block has no transactions")]
+    EmptyBlock,
+    #[error("Last transaction must be the public clock invocation for the block timestamp")]
+    InvalidClockTransaction,
+    #[error("Genesis block must contain only public transactions")]
+    NonPublicGenesisTransaction,
+    #[error("State transition failed at transaction {tx_index}: {reason}")]
+    StateTransition {
+        /// Index of the failing transaction within the block body.
+        tx_index: u64,
+        /// Reason string from `lee::Error` to `anyhow::Error` to `{:#}`.
+        ///
+        /// This is required because `lee::Error` is not `Clone + Serialize + Deserialize`, so we
+        /// cannot store it directly.
+        reason: String,
+    },
 }
 
 #[cfg(test)]
@@ -46,11 +63,5 @@ mod tests {
                 got: 7
             }
         ));
-    }
-
-    #[test]
-    fn display_is_human_readable() {
-        let err = BlockIngestError::StateTransition("nonce too low".to_owned());
-        assert_eq!(err.to_string(), "state transition failed: nonce too low");
     }
 }

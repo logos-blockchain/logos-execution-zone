@@ -397,7 +397,14 @@ pub enum BlockIngestError {
         computed: HashType,
         header: HashType,
     },
-    StateTransition(String),
+    EmptyBlock,
+    InvalidClockTransaction,
+    NonPublicGenesisTransaction,
+    StateTransition {
+        /// Index of the failing transaction within the block body.
+        tx_index: u64,
+        reason: String,
+    },
 }
 
 /// Diagnostic record of the first block that broke the L2 chain.

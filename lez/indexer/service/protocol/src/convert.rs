@@ -745,7 +745,16 @@ impl From<indexer_core::BlockIngestError> for BlockIngestError {
                     header: header.into(),
                 }
             }
-            indexer_core::BlockIngestError::StateTransition(msg) => Self::StateTransition(msg),
+            indexer_core::BlockIngestError::EmptyBlock => Self::EmptyBlock,
+            indexer_core::BlockIngestError::InvalidClockTransaction => {
+                Self::InvalidClockTransaction
+            }
+            indexer_core::BlockIngestError::NonPublicGenesisTransaction => {
+                Self::NonPublicGenesisTransaction
+            }
+            indexer_core::BlockIngestError::StateTransition { tx_index, reason } => {
+                Self::StateTransition { tx_index, reason }
+            }
         }
     }
 }
