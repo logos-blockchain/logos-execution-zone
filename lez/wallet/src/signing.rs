@@ -1,5 +1,4 @@
-use keycard_wallet::{KeycardWallet, python_path};
-use pyo3::Python;
+use keycard_wallet::{KeycardWallet, KeycardWalletError};
 
 /// Lazily opens and reuses a single Keycard session for all keycard signers in one transaction.
 pub struct KeycardSessionContext {
@@ -15,19 +14,18 @@ impl KeycardSessionContext {
         }
     }
 
-    pub fn get_or_connect(&mut self, py: Python<'_>) -> pyo3::PyResult<&KeycardWallet> {
+    pub fn get_or_connect(&mut self) -> Result<&mut KeycardWallet, KeycardWalletError> {
         if self.wallet.is_none() {
-            python_path::add_python_path(py)?;
-            let wallet = KeycardWallet::new(py)?;
-            wallet.connect(py, &self.pin)?;
+            let mut wallet = KeycardWallet::new()?;
+            wallet.connect(&self.pin)?;
             self.wallet = Some(wallet);
         }
-        Ok(self.wallet.as_ref().expect("wallet was just inserted"))
+        Ok(self.wallet.as_mut().expect("wallet was just inserted"))
     }
 
-    pub fn close(self, py: Python<'_>) {
-        if let Some(w) = self.wallet {
-            let _res = w.close_session(py);
+    pub fn close(mut self) {
+        if let Some(wallet) = self.wallet.as_mut() {
+            drop(wallet.disconnect());
         }
     }
 }

@@ -5,8 +5,6 @@
 #   1. Run wallet_with_keycard.sh once to install dependencies.
 #   2. Keycard reader inserted with card loaded (wallet keycard load has been run).
 
-source venv/bin/activate
-
 cargo install --path lez/wallet --force --features keycard-debug
 
 export KEYCARD_PIN=111111

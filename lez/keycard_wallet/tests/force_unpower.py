@@ -7,8 +7,9 @@ the power-loss condition reported on some USB reader/driver combinations.
 Either:
 - pcscd re-powers the card on the next SCardConnect, so wallet
 commands will succeed without triggering the retry path.
-- the card stays unpowered, triggering TransportError
-and exercising the retry wrapper in pair() / setup_communication_with_pairing().
+- the card stays unpowered, triggering a PC/SC transport error
+(keycard_rs::Error::Io) and exercising the reconnect-and-retry wrapper in
+KeycardWallet::pair() / KeycardWallet::setup_communication_with_pairing().
 """
 import sys
 from smartcard.scard import (

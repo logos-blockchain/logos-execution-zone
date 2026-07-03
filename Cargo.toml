@@ -180,6 +180,8 @@ logos-blockchain-chain-service = { git = "https://github.com/logos-blockchain/lo
 logos-blockchain-zone-sdk = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d8711bbc3d43d3ef9755ef9b73af32fd0f703160" }
 logos-blockchain-http-api-common = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d8711bbc3d43d3ef9755ef9b73af32fd0f703160" }
 
+keycard-rs = { git = "https://github.com/keycard-tech/keycard-rs", rev = "98abc3ff1b26785a5631634d5bf24da54da541bf" }
+
 rocksdb = { version = "0.24.0", default-features = false, features = [
   "snappy",
   "bindgen-runtime",
@@ -201,7 +203,6 @@ actix-web = { version = "4.13.0", default-features = false, features = [
 axum = "0.8.4"
 clap = { version = "4.5.42", features = ["derive", "env"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"] }
-pyo3 = { version = "0.29", features = ["auto-initialize"] }
 zeroize = "1"
 criterion = { version = "0.8", features = ["html_reports"] }
 

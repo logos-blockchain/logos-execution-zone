@@ -23,7 +23,6 @@
 #   amm-lee-fund   → public LEE holding used to seed the AMM pool
 #   (LP holding for amm new is created fresh each run — no persistent label)
 
-source venv/bin/activate
 export KEYCARD_PIN=111111
 
 # =============================================================================

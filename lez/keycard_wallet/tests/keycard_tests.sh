@@ -1,8 +1,6 @@
 #!/bin/bash
 # Run wallet_with_keycard.sh first
 
-source venv/bin/activate # Load the appropriate virtual environment
-
 export KEYCARD_PIN=111111
 
 # Tests wallet keycard available

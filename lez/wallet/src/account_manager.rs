@@ -1,7 +1,7 @@
 use core::fmt;
 
 use anyhow::Result;
-use keycard_wallet::{KeycardWallet, python_path};
+use keycard_wallet::KeycardWallet;
 use lee::{AccountId, PrivateKey, PublicKey, Signature};
 use lee_core::{
     Commitment, CommitmentSetDigest, Identifier, InputAccountIdentity, MembershipProof,
@@ -237,14 +237,7 @@ impl AccountManager {
                     if pin.is_none() {
                         pin = Some(
                             crate::helperfunctions::read_pin()
-                                .map_err(|e| {
-                                    ExecutionFailureKind::KeycardError(pyo3::PyErr::new::<
-                                        pyo3::exceptions::PyRuntimeError,
-                                        _,
-                                    >(
-                                        e.to_string()
-                                    ))
-                                })?
+                                .map_err(ExecutionFailureKind::SignError)?
                                 .as_str()
                                 .to_owned(),
                         );
@@ -500,17 +493,11 @@ impl AccountManager {
             .collect();
 
         if let Some(pin) = self.pin.clone() {
-            pyo3::Python::attach(|py| -> pyo3::PyResult<()> {
-                python_path::add_python_path(py)?;
-                let wallet = KeycardWallet::new(py)?;
-                wallet.connect(py, &pin)?;
-                for path in keycard_paths {
-                    sigs.push(wallet.sign_message_for_path(py, path, &message_hash)?);
-                }
-                let _res = wallet.close_session(py);
-                Ok(())
-            })
-            .map_err(anyhow::Error::from)?;
+            let mut wallet = KeycardWallet::new()?;
+            wallet.connect(&pin)?;
+            for path in keycard_paths {
+                sigs.push(wallet.sign_message_for_path(path, &message_hash)?);
+            }
         }
 
         Ok(sigs)

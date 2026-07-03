@@ -86,8 +86,6 @@ pub enum ExecutionFailureKind {
     TransactionBuildError(#[from] lee::error::LeeError),
     #[error("Failed to sign transaction: {0}")]
     SignError(anyhow::Error),
-    #[error(transparent)]
-    KeycardError(#[from] pyo3::PyErr),
 }
 
 pub struct WalletCore {

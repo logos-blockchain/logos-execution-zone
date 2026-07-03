@@ -25,7 +25,6 @@ system_accounts.workspace = true
 associated_token_account_core.workspace = true
 
 bip39.workspace = true
-pyo3.workspace = true
 rpassword = "7"
 zeroize.workspace = true
 
