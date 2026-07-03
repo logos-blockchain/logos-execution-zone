@@ -4,12 +4,12 @@ use anyhow::Result;
 use keycard_wallet::{KeycardWallet, python_path};
 use lee::{AccountId, PrivateKey, PublicKey, Signature};
 use lee_core::{
-    Commitment, CommitmentSetDigest, DummyInput, EncryptionScheme, Identifier, InputAccountIdentity,
-    MembershipProof, NullifierPublicKey, NullifierSecretKey, PrivateAccountKind, SharedSecretKey,
+    Commitment, CommitmentSetDigest, DummyInput, Identifier, InputAccountIdentity, MembershipProof,
+    NullifierPublicKey, NullifierSecretKey, PrivateAccountKind, SharedSecretKey,
     account::{Account, AccountWithMetadata, Nonce},
     compute_digest_for_path,
     encryption::{
-        EncryptedAccountData, EphemeralPublicKey, ML_KEM_768_CIPHERTEXT_LEN, ViewTag,
+        Ciphertext, EncryptedAccountData, EphemeralPublicKey, ML_KEM_768_CIPHERTEXT_LEN, ViewTag,
         ViewingPublicKey,
     },
 };
@@ -267,8 +267,7 @@ impl AccountManager {
                 } => {
                     let acc = lee_core::account::Account::default();
                     let auth_acc = AccountWithMetadata::new(acc, false, (&npk, &vpk, identifier));
-                    let mut random_seed: [u8; 32] = [0; 32];
-                    OsRng.fill_bytes(&mut random_seed);
+                    let random_seed = random_bytes();
                     let pre = AccountPreparedData {
                         nsk: None,
                         npk,
@@ -294,8 +293,7 @@ impl AccountManager {
                 } => {
                     let acc = lee_core::account::Account::default();
                     let auth_acc = AccountWithMetadata::new(acc, false, account_id);
-                    let mut random_seed: [u8; 32] = [0; 32];
-                    OsRng.fill_bytes(&mut random_seed);
+                    let random_seed = random_bytes();
                     let pre = AccountPreparedData {
                         nsk: None,
                         npk,
@@ -565,8 +563,7 @@ fn private_key_tree_acc_preparation(
     // support from that in the wallet.
     let sender_pre = AccountWithMetadata::new(from_acc.account.clone(), true, account_id);
 
-    let mut random_seed: [u8; 32] = [0; 32];
-    OsRng.fill_bytes(&mut random_seed);
+    let random_seed = random_bytes();
 
     Ok(AccountPreparedData {
         nsk: Some(nsk),
@@ -598,8 +595,7 @@ fn private_shared_acc_preparation(
 
     let pre_state = AccountWithMetadata::new(acc, true, account_id);
 
-    let mut random_seed: [u8; 32] = [0; 32];
-    OsRng.fill_bytes(&mut random_seed);
+    let random_seed = random_bytes();
 
     AccountPreparedData {
         nsk: Some(nsk),
@@ -681,26 +677,22 @@ fn random_bytes() -> [u8; 32] {
     bytes
 }
 
-/// Generates a random note by encoding a default account with random secret key,
-/// then generating a random epk value (not connected to the original key) as well
-/// as a random tag.
+fn random_vec(len: usize) -> Vec<u8> {
+    let mut bytes = vec![0; len];
+    OsRng.fill_bytes(&mut bytes);
+    bytes
+}
+
+/// Generates a dummy note: random bytes sized to a default-account ciphertext, a
+/// random epk, and a random view tag. Not decryptable — it only pads the journal.
 fn random_dummy_note() -> EncryptedAccountData {
-    let mut secret = [0; 32];
-    OsRng.fill_bytes(&mut secret);
-    // The cipher is currently assumed to have default data. The data padding
-    // leak is a separate issue.
-    let ciphertext = EncryptionScheme::encrypt(
-        &Account::default(),
-        &PrivateAccountKind::Regular(0),
-        &SharedSecretKey(secret),
-        &Commitment::new(&AccountId::new([0; 32]), &Account::default()),
-        0,
-    );
-    let mut epk = vec![0; ML_KEM_768_CIPHERTEXT_LEN];
-    OsRng.fill_bytes(&mut epk);
+    // Sized to a default-account ciphertext; matching real data sizes is a separate issue.
+    let ciphertext_len = PrivateAccountKind::HEADER_LEN
+        .checked_add(Account::default().to_bytes().len())
+        .expect("dummy ciphertext length fits in usize");
     EncryptedAccountData {
-        ciphertext,
-        epk: EphemeralPublicKey(epk),
+        ciphertext: Ciphertext::from_inner(random_vec(ciphertext_len)),
+        epk: EphemeralPublicKey(random_vec(ML_KEM_768_CIPHERTEXT_LEN)),
         view_tag: random_view_tag(),
     }
 }
