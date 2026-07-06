@@ -180,13 +180,14 @@ logos-blockchain-chain-service = { git = "https://github.com/logos-blockchain/lo
 logos-blockchain-zone-sdk = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d8711bbc3d43d3ef9755ef9b73af32fd0f703160" }
 logos-blockchain-http-api-common = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d8711bbc3d43d3ef9755ef9b73af32fd0f703160" }
 
-keycard-rs = { git = "https://github.com/keycard-tech/keycard-rs", rev = "98abc3ff1b26785a5631634d5bf24da54da541bf" }
+keycard-rs = { git = "https://github.com/keycard-tech/keycard-rs", rev = "52cb832a6334ab84ea0a0e1f42aeabcf8a3b4337" } # includes the handshake signature-normalization fix (marvin/normalize-signature, merged)
 
 rocksdb = { version = "0.24.0", default-features = false, features = [
   "snappy",
   "bindgen-runtime",
 ] }
 rand = { version = "0.8.5", features = ["std", "std_rng", "getrandom"] }
+pcsc = "2"
 k256 = { version = "0.13.3", features = [
   "ecdsa-core",
   "arithmetic",

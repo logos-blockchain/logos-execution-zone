@@ -1,28 +1,28 @@
-use std::{path::PathBuf, str::FromStr as _};
+use std::str::FromStr as _;
 
 use keycard_rs::{
     KeycardCommandSet, PcscChannel,
     constants::sign_p2,
     parsing::Bip32KeyPair,
-    secure_channel::Pairing,
+    secure_channel::SecureChannelVersion,
     tlv::{BerTlvReader, TLV_KEY_TEMPLATE, TLV_PUB_KEY, TLV_SIGNATURE_TEMPLATE},
 };
 use lee::{AccountId, PublicKey, Signature};
 use rand::Rng as _;
-use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
-const DEFAULT_PAIRING_PASSWORD: &str = "KeycardDefaultPairing";
-
-/// LEE-applet extension tags. These aren't part of upstream `keycard-rs`'s `tlv` module (which
-/// only knows the standard Status Keycard tags) since they're specific to the LEE-flavored
-/// applet (`LEE_keycard.cap`).
+/// LEE-applet extension tags. `keycard-rs` implements *sending* the LEE commands
+/// (`load_lee_key`, `export_lee_key`) but never added parsing for their LEE-specific responses,
+/// so these tag values — owned by the applet, not either client library — have to be hardcoded
+/// here. Matches `KeycardApplet.TLV_LEE_NSK`/`TLV_LEE_VSK` in `status-keycard`
+/// (`KeycardApplet.java:97-98`), the applet `LEE_keycard.cap` was almost certainly built from.
 const TLV_LEE_NSK: u8 = 0x83;
 const TLV_LEE_VSK: u8 = 0x84;
 /// Raw Schnorr signature (64 bytes: `r || s`, no ASN.1/DER wrapping) nested inside the standard
 /// `TLV_SIGNATURE_TEMPLATE` alongside the usual `TLV_PUB_KEY`. Confirmed against real hardware —
 /// the LEE applet's `SIGN` response for `sign_p2::BIP340_SCHNORR` is
-/// `0xA0 { 0x80 <65-byte pubkey>, 0x88 <64-byte r||s> }`.
+/// `0xA0 { 0x80 <65-byte pubkey>, 0x88 <64-byte r||s> }` — and matches
+/// `SECP256k1.TLV_RAW_SIGNATURE` in `status-keycard` (`SECP256k1.java:64`).
 const TLV_LEE_RAW_SIGNATURE: u8 = 0x88;
 
 /// NSK (32 bytes) and VSK (64 bytes, the ML-KEM-768 seed `d || z`) as fixed-length zeroizing byte
@@ -35,51 +35,60 @@ pub enum KeycardWalletError {
     Keycard(#[from] keycard_rs::Error),
     #[error("keycard is already initialized")]
     AlreadyInitialized,
+    #[error(
+        "this wallet only supports Secure Channel V2 keycards (applet version >= 4.0); detected {0:?}"
+    )]
+    UnsupportedSecureChannel(Option<SecureChannelVersion>),
     #[error("invalid mnemonic phrase: {0}")]
     InvalidMnemonic(String),
     #[error("invalid key material from keycard: {0}")]
     InvalidKeyMaterial(String),
     #[error("keycard returned a signature that does not verify against its own public key")]
     SignatureVerificationFailed,
-}
-
-// TODO: encrypt at rest alongside broader wallet storage encryption work.
-#[derive(Serialize, Deserialize)]
-pub struct KeycardPairingData {
-    pub index: u8,
-    pub key: Vec<u8>,
-}
-
-impl KeycardPairingData {
-    const fn is_valid(&self) -> bool {
-        self.key.len() == 32 && self.index <= 4
-    }
+    #[error("invalid KEYCARD_CA_PUBLIC_KEY: {0}")]
+    InvalidCaPublicKey(String),
 }
 
 /// Rust wrapper around `keycard-rs`, talking to the LEE-flavored Keycard applet over PC/SC.
+/// Only Secure Channel V2 cards are supported — see `require_secure_channel_v2`.
 pub struct KeycardWallet {
     command_set: KeycardCommandSet,
 }
 
 impl KeycardWallet {
     /// Connects to the first available PC/SC reader. Does not select the applet yet — callers
-    /// that need application info (`initialize`, `pair`, `connect`, ...) do that themselves.
+    /// that need application info (`initialize`, `connect`, ...) do that themselves.
+    ///
+    /// Verifies the card's identity certificate against `keycard-rs`'s default production CA,
+    /// unless overridden via `KEYCARD_CA_PUBLIC_KEY` — see `ca_public_key_override`.
     pub fn new() -> Result<Self, KeycardWalletError> {
         let channel = PcscChannel::connect()?;
         Ok(Self {
-            command_set: KeycardCommandSet::new(channel),
+            command_set: Self::build_command_set(channel)?,
         })
     }
 
-    /// Returns whether a smart card reader and a selectable Keycard are both present.
+    fn build_command_set(channel: PcscChannel) -> Result<KeycardCommandSet, KeycardWalletError> {
+        Ok(match ca_public_key_override()? {
+            Some(ca) => KeycardCommandSet::new_with_ca(channel, ca),
+            None => KeycardCommandSet::new(channel),
+        })
+    }
+
+    /// Returns whether a smart card reader and a selectable, Secure-Channel-V2 Keycard are both
+    /// present.
     #[must_use]
-    pub fn is_unpaired_keycard_available() -> bool {
+    pub fn is_keycard_available() -> bool {
         let Ok(channel) = PcscChannel::connect() else {
             return false;
         };
-        KeycardCommandSet::new(channel)
-            .select()
-            .is_ok_and(|resp| resp.is_ok())
+        let Ok(mut command_set) = Self::build_command_set(channel) else {
+            return false;
+        };
+        if !command_set.select().is_ok_and(|resp| resp.is_ok()) {
+            return false;
+        }
+        command_set.secure_channel_version() == Some(SecureChannelVersion::V2)
     }
 
     fn select(&mut self) -> Result<(), KeycardWalletError> {
@@ -87,15 +96,17 @@ impl KeycardWallet {
         Ok(())
     }
 
-    fn open_and_verify(&mut self, pin: &str) -> Result<(), KeycardWalletError> {
-        self.command_set.auto_open_secure_channel()?;
-        self.command_set.verify_pin(pin)?.check_auth_ok()?;
-        Ok(())
+    /// Rejects any card that isn't running Secure Channel V2 (older applets, or a card that
+    /// hasn't advertised a secure channel at all). Call right after `select()`.
+    fn require_secure_channel_v2(&self) -> Result<(), KeycardWalletError> {
+        match self.command_set.secure_channel_version() {
+            Some(SecureChannelVersion::V2) => Ok(()),
+            other => Err(KeycardWalletError::UnsupportedSecureChannel(other)),
+        }
     }
 
     /// Rebuilds the PC/SC channel and command set, then retries `op` once, if `op` failed with a
-    /// transport-level error (e.g. the card lost power mid-session). Mirrors the reconnect-once
-    /// behavior the previous `keycard-py`-based wallet had for `TransportError`.
+    /// transport-level error (e.g. the card lost power mid-session).
     fn with_reconnect_on_transport_error<T>(
         &mut self,
         op: impl Fn(&mut Self) -> Result<T, KeycardWalletError>,
@@ -116,6 +127,7 @@ impl KeycardWallet {
     /// for surfacing the PUK to the operator — it cannot be recovered afterward.
     pub fn initialize(&mut self, pin: &str) -> Result<String, KeycardWalletError> {
         self.select()?;
+        self.require_secure_channel_v2()?;
         let already_initialized = self
             .command_set
             .app_info()
@@ -125,73 +137,37 @@ impl KeycardWallet {
             return Err(KeycardWalletError::AlreadyInitialized);
         }
 
+        // V2's INIT has no shared-secret field (confirmed against real hardware and the
+        // applet's own reference command set: a payload containing one is rejected outright) —
+        // pass an empty secret and let the card default the PIN/PUK retry counts.
         let puk = generate_puk();
         self.command_set
-            .init(pin, &puk, &pairing_password())?
+            .init_with_secret(pin, None, &puk, &[], 0, 0)?
             .check_ok()?;
         Ok(puk)
     }
 
-    pub fn pair(&mut self, pin: &str) -> Result<(u8, [u8; 32]), KeycardWalletError> {
+    /// Wipes the card's PIN, PUK, and loaded keys, returning it to an uninitialized state —
+    /// the counterpart to `initialize()`. Does **not** remove the identity certificate
+    /// provisioned via `IdentApplet`, so the card can be re-`initialize()`d afterward without
+    /// re-personalizing it. Irreversibly destroys any keys currently loaded on the card.
+    pub fn factory_reset(&mut self) -> Result<(), KeycardWalletError> {
         self.select()?;
-        self.command_set.auto_pair(&pairing_password())?;
-        let pairing = self
-            .command_set
-            .pairing()
-            .expect("auto_pair sets pairing data on success")
-            .clone();
-
-        if let Err(err) = self.open_and_verify(pin) {
-            drop(self.command_set.auto_unpair());
-            return Err(err);
-        }
-
-        Ok((pairing.pairing_index(), *pairing.pairing_key()))
-    }
-
-    pub fn setup_communication_with_pairing(
-        &mut self,
-        pin: &str,
-        index: u8,
-        key: &[u8; 32],
-    ) -> Result<(), KeycardWalletError> {
-        self.select()?;
-        self.command_set.set_pairing(Pairing::new(*key, index));
-        self.open_and_verify(pin)
-    }
-
-    /// Connect using a stored pairing if available, falling back to a fresh pair.
-    /// Saves any newly established pairing to disk.
-    pub fn connect(&mut self, pin: &str) -> Result<(), KeycardWalletError> {
-        if let Some(pairing) = load_pairing().filter(KeycardPairingData::is_valid) {
-            let key: [u8; 32] = pairing
-                .key
-                .clone()
-                .try_into()
-                .expect("KeycardPairingData::is_valid checked the key is 32 bytes");
-            let reconnected = self.with_reconnect_on_transport_error(|wallet| {
-                wallet.setup_communication_with_pairing(pin, pairing.index, &key)
-            });
-            if reconnected.is_ok() {
-                return Ok(());
-            }
-        }
-
-        let (index, key) = self.with_reconnect_on_transport_error(|wallet| wallet.pair(pin))?;
-        save_pairing(&KeycardPairingData {
-            index,
-            key: key.to_vec(),
-        });
+        self.require_secure_channel_v2()?;
+        self.command_set.factory_reset()?.check_ok()?;
         Ok(())
     }
 
-    /// Unpairs the current session. Returns `false` if there was nothing to unpair.
-    pub fn disconnect(&mut self) -> Result<bool, KeycardWalletError> {
-        if self.command_set.pairing().is_none() {
-            return Ok(false);
-        }
-        self.command_set.auto_unpair()?;
-        Ok(true)
+    /// Opens the secure channel and verifies the PIN. Secure Channel V2 re-authenticates from
+    /// the card's certificate every session — there's no pairing step and nothing to persist.
+    pub fn connect(&mut self, pin: &str) -> Result<(), KeycardWalletError> {
+        self.with_reconnect_on_transport_error(|wallet| {
+            wallet.select()?;
+            wallet.require_secure_channel_v2()?;
+            wallet.command_set.auto_open_secure_channel()?;
+            wallet.command_set.verify_pin(pin)?.check_auth_ok()?;
+            Ok(())
+        })
     }
 
     pub fn get_public_key_for_path(&mut self, path: &str) -> Result<PublicKey, KeycardWalletError> {
@@ -217,7 +193,8 @@ impl KeycardWallet {
             }
         };
 
-        PublicKey::try_new(x_only).map_err(|e| KeycardWalletError::InvalidKeyMaterial(e.to_string()))
+        PublicKey::try_new(x_only)
+            .map_err(|e| KeycardWalletError::InvalidKeyMaterial(e.to_string()))
     }
 
     pub fn get_public_key_for_path_with_connect(
@@ -234,9 +211,12 @@ impl KeycardWallet {
         path: &str,
         message: &[u8; 32],
     ) -> Result<(Signature, PublicKey), KeycardWalletError> {
-        let resp =
-            self.command_set
-                .sign_with_path_and_algo(message, path, sign_p2::BIP340_SCHNORR, false)?;
+        let resp = self.command_set.sign_with_path_and_algo(
+            message,
+            path,
+            sign_p2::BIP340_SCHNORR,
+            false,
+        )?;
         resp.check_ok()?;
 
         let sig = Signature {
@@ -276,7 +256,10 @@ impl KeycardWallet {
         Ok(format!("Public/{}", AccountId::from(&public_key)))
     }
 
-    pub fn get_private_keys_for_path(&mut self, path: &str) -> Result<PrivateKeyPair, KeycardWalletError> {
+    pub fn get_private_keys_for_path(
+        &mut self,
+        path: &str,
+    ) -> Result<PrivateKeyPair, KeycardWalletError> {
         let resp = self.command_set.export_lee_key(path)?;
         resp.check_ok()?;
 
@@ -297,9 +280,7 @@ impl KeycardWallet {
     ) -> Result<PrivateKeyPair, KeycardWalletError> {
         let mut wallet = Self::new()?;
         wallet.connect(pin)?;
-        let result = wallet.get_private_keys_for_path(path);
-        drop(wallet.disconnect());
-        result
+        wallet.get_private_keys_for_path(path)
     }
 }
 
@@ -310,8 +291,22 @@ fn generate_puk() -> String {
         .collect()
 }
 
-fn pairing_password() -> String {
-    std::env::var("KEYCARD_PAIRING_PASSWORD").unwrap_or_else(|_| DEFAULT_PAIRING_PASSWORD.to_owned())
+/// Optional override for the CA public key used to verify a card's identity certificate, read
+/// from `KEYCARD_CA_PUBLIC_KEY` as 66 hex characters (a 33-byte compressed secp256k1 key).
+/// Falls back to `keycard-rs`'s production default when unset.
+///
+/// This exists purely for testing against cards that weren't personalized through the real
+/// production process — e.g. `status-keycard`'s own `JUnit` suite signs test cards with a fixed,
+/// throwaway CA that will never match the production default. Real users' cards should need no
+/// override at all.
+fn ca_public_key_override() -> Result<Option<[u8; 33]>, KeycardWalletError> {
+    let Ok(hex_str) = std::env::var("KEYCARD_CA_PUBLIC_KEY") else {
+        return Ok(None);
+    };
+    let mut bytes = [0_u8; 33];
+    hex::decode_to_slice(hex_str.trim(), &mut bytes)
+        .map_err(|e| KeycardWalletError::InvalidCaPublicKey(e.to_string()))?;
+    Ok(Some(bytes))
 }
 
 /// Parses a BIP340 Schnorr signature from a LEE `SIGN` response.
@@ -361,36 +356,4 @@ fn zeroizing_fixed_bytes<const N: usize>(
     let mut arr = Zeroizing::new([0_u8; N]);
     arr.copy_from_slice(&raw);
     Ok(arr)
-}
-
-fn pairing_file_path() -> Option<PathBuf> {
-    let home = std::env::var("LEE_WALLET_HOME_DIR")
-        .map(PathBuf::from)
-        .or_else(|_| {
-            std::env::home_dir()
-                .map(|h| h.join(".lee").join("wallet"))
-                .ok_or(())
-        })
-        .ok()?;
-    Some(home.join("keycard_pairing.json"))
-}
-
-fn load_pairing() -> Option<KeycardPairingData> {
-    let path = pairing_file_path()?;
-    let file = std::fs::File::open(path).ok()?;
-    serde_json::from_reader(file).ok()
-}
-
-fn save_pairing(data: &KeycardPairingData) {
-    if let Some(path) = pairing_file_path()
-        && let Ok(json) = serde_json::to_vec_pretty(data)
-    {
-        drop(std::fs::write(path, json));
-    }
-}
-
-pub fn clear_pairing() {
-    if let Some(path) = pairing_file_path() {
-        drop(std::fs::remove_file(path));
-    }
 }

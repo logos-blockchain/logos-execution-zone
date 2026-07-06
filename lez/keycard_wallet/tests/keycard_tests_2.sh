@@ -2,7 +2,7 @@
 # keycard_tests_2.sh — comprehensive token + AMM keycard integration tests.
 #
 # Prerequisites:
-#   1. Run wallet_with_keycard.sh once to install dependencies.
+#   1. Run `cargo install --path lez/wallet --force` once to install the wallet CLI.
 #   2. Reset the local chain so all accounts are uninitialized.
 #   3. Keycard reader inserted with card loaded.
 #

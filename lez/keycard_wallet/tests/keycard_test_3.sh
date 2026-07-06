@@ -2,8 +2,7 @@
 # keycard_test_3.sh — tests for `wallet keycard get-private-keys`.
 #
 # Prerequisites:
-#   1. Run wallet_with_keycard.sh once to install dependencies.
-#   2. Keycard reader inserted with card loaded (wallet keycard load has been run).
+#   1. Keycard reader inserted with card loaded (wallet keycard load has been run).
 
 cargo install --path lez/wallet --force --features keycard-debug
 

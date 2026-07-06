@@ -1,5 +1,5 @@
 #!/bin/bash
-# Run wallet_with_keycard.sh first
+# Run `cargo install --path lez/wallet --force` first
 
 export KEYCARD_PIN=111111
 

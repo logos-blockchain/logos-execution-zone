@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 use clap::Subcommand;
-use keycard_wallet::{KeycardWallet, clear_pairing};
+use keycard_wallet::KeycardWallet;
 
 use crate::{
     WalletCore,
@@ -17,9 +17,16 @@ use crate::{
 pub enum KeycardSubcommand {
     Available,
     Connect,
-    Disconnect,
     Init,
     Load,
+    /// Wipes the card's PIN, PUK, and loaded keys back to an uninitialized state, so it can be
+    /// re-initialized with `wallet keycard init`. Irreversibly destroys any keys currently on
+    /// the card. Requires --confirm.
+    FactoryReset {
+        /// Confirm that the card's current keys should be irreversibly destroyed.
+        #[arg(long)]
+        confirm: bool,
+    },
     /// Retrieve the private keys (NSK, VSK) for a given BIP-32 key path.
     ///
     /// Prints raw key material to stdout — intended for debugging only.
@@ -38,7 +45,7 @@ pub enum KeycardSubcommand {
 
 impl KeycardSubcommand {
     fn handle_available(_wallet_core: &mut WalletCore) -> SubcommandReturnValue {
-        if KeycardWallet::is_unpaired_keycard_available() {
+        if KeycardWallet::is_keycard_available() {
             println!("\u{2705} Keycard is available.");
         } else {
             println!("\u{274c} Keycard is not available.");
@@ -52,20 +59,7 @@ impl KeycardSubcommand {
 
         let mut wallet = KeycardWallet::new()?;
         wallet.connect(&pin)?;
-        println!("\u{2705} Keycard paired and ready.");
-
-        Ok(SubcommandReturnValue::Empty)
-    }
-
-    fn handle_disconnect(_wallet_core: &mut WalletCore) -> Result<SubcommandReturnValue> {
-        let pin = read_pin()?;
-
-        let mut wallet = KeycardWallet::new()?;
-        wallet.connect(&pin)?;
-        wallet.disconnect()?;
-
-        clear_pairing();
-        println!("\u{2705} Keycard unpaired and pairing cleared.");
+        println!("\u{2705} Keycard connected and PIN verified.");
 
         Ok(SubcommandReturnValue::Empty)
     }
@@ -76,7 +70,6 @@ impl KeycardSubcommand {
         let mut wallet = KeycardWallet::new()?;
         let puk = wallet.initialize(&pin)?;
 
-        clear_pairing();
         println!("Keycard PUK: {puk}");
         println!("Record this PUK and store it somewhere safe. It cannot be recovered.");
         println!("\u{2705} Keycard initialized successfully.");
@@ -97,6 +90,25 @@ impl KeycardSubcommand {
         } else {
             println!("\u{274c} Failed to load mnemonic phrase.");
         }
+
+        Ok(SubcommandReturnValue::Empty)
+    }
+
+    fn handle_factory_reset(
+        confirm: bool,
+        _wallet_core: &mut WalletCore,
+    ) -> Result<SubcommandReturnValue> {
+        if !confirm {
+            eprintln!(
+                "WARNING: pass --confirm to factory-reset the keycard. \
+                 This irreversibly destroys any keys currently loaded on it."
+            );
+            return Ok(SubcommandReturnValue::Empty);
+        }
+
+        let mut wallet = KeycardWallet::new()?;
+        wallet.factory_reset()?;
+        println!("\u{2705} Keycard factory-reset. Run `wallet keycard init` to reinitialize it.");
 
         Ok(SubcommandReturnValue::Empty)
     }
@@ -135,9 +147,9 @@ impl WalletSubcommand for KeycardSubcommand {
         match self {
             Self::Available => Ok(Self::handle_available(wallet_core)),
             Self::Connect => Self::handle_connect(wallet_core),
-            Self::Disconnect => Self::handle_disconnect(wallet_core),
             Self::Init => Self::handle_init(wallet_core),
             Self::Load => Self::handle_load(wallet_core),
+            Self::FactoryReset { confirm } => Self::handle_factory_reset(confirm, wallet_core),
             #[cfg(feature = "keycard-debug")]
             Self::GetPrivateKeys { key_path, reveal } => {
                 Self::handle_get_private_keys(&key_path, reveal, wallet_core)

@@ -4796,7 +4796,7 @@ dependencies = [
 [[package]]
 name = "keycard-rs"
 version = "0.1.0"
-source = "git+https://github.com/keycard-tech/keycard-rs?rev=98abc3ff1b26785a5631634d5bf24da54da541bf#98abc3ff1b26785a5631634d5bf24da54da541bf"
+source = "git+https://github.com/keycard-tech/keycard-rs?rev=52cb832a6334ab84ea0a0e1f42aeabcf8a3b4337#52cb832a6334ab84ea0a0e1f42aeabcf8a3b4337"
 dependencies = [
  "aes 0.9.1",
  "base64 0.21.7",
@@ -4823,12 +4823,12 @@ name = "keycard_wallet"
 version = "0.1.0"
 dependencies = [
  "bip39",
+ "hex",
  "keycard-rs",
  "lee",
  "log",
+ "pcsc",
  "rand 0.8.6",
- "serde",
- "serde_json",
  "thiserror 2.0.18",
  "zeroize",
 ]

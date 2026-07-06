@@ -51,7 +51,6 @@ pub mod helperfunctions;
 pub mod multi_client;
 pub mod poller;
 pub mod program_facades;
-pub mod signing;
 pub mod storage;
 
 pub const HOME_DIR_ENV_VAR: &str = "LEE_WALLET_HOME_DIR";
