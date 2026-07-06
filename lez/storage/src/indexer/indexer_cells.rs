@@ -248,7 +248,6 @@ impl SimpleWritableCell for ZoneSdkIndexerCursorCellRef<'_> {
 }
 
 /// Opaque JSON bytes for the indexer's persisted `Option<StallReason>`.
-/// Serialized via `serde_json` by the caller (mirrors the zone-sdk cursor cell).
 #[derive(BorshDeserialize)]
 pub struct StallReasonCellOwned(pub Vec<u8>);
 

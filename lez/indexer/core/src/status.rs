@@ -131,7 +131,7 @@ mod tests {
                 l1_slot: Slot::from(0),
                 error: BlockIngestError::StateTransition {
                     tx_index: 0,
-                    reason: Default::default(),
+                    reason: String::default(),
                 },
                 first_seen: None,
                 orphans_since: 2,

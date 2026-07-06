@@ -24,22 +24,32 @@ pub mod stall_reason;
 pub mod status;
 
 /// Result of comparing the indexer's stored tip against the channel.
-enum ChainIdentityOutcome {
-    /// Proceed from the cursor: channel still serves our chain, nothing to compare,
-    /// or the check was inconclusive — none of which prove a reset.
+enum ChainConsistenty {
+    /// Channel serves the same block at our tip's id.
     Consistent,
-    /// The channel serves a different block at one of our ids — a chain reset.
-    Mismatch(ChainMismatch),
+    /// We could not determine the outcome due to one of:
+    ///
+    /// - cold store
+    /// - the channel served no comparable block, we hold no block at that id
+    /// - or the channel read was inconclusive (timeout / error / empty stream)
+    ///
+    /// NOTE: None of these prove a reset, so the caller proceeds.
+    /// A genuine divergence is still caught later when the ingest loop tries to apply and parks.
+    Inconclusive,
+    /// The channel serves a different block at one of our ids.
+    ///
+    /// Details in [`BlockMismatch`], and impl's Display trait.
+    Inconsistent(BlockMismatch),
 }
 
-/// The differing pair behind a [`ChainIdentityOutcome::Mismatch`]: our stored
+/// The differing pair behind a [`ChainConsistenty::Inconsistent`]: our stored
 /// block vs. the block the channel serves at the same id, as `(block_id, hash)`.
-struct ChainMismatch {
+struct BlockMismatch {
     ours: (u64, HashType),
     channel: (u64, HashType),
 }
 
-impl std::fmt::Display for ChainMismatch {
+impl std::fmt::Display for BlockMismatch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let Self { ours, channel } = self;
         write!(
@@ -61,15 +71,21 @@ pub struct IndexerCore {
 
 impl IndexerCore {
     /// Builds the core, then verifies the stored chain matches the channel's by
-    /// re-reading the channel at the stored tip's position. On mismatch: refuse
-    /// (error) unless `config.allow_chain_reset` is set, in which case wipe the
+    /// re-reading the channel at the stored tip's position.
+    ///
+    /// On mismatch: refuse (error) unless `config.allow_chain_reset` is set, in which case wipe the
     /// store and re-index from scratch.
     pub async fn new(config: IndexerConfig, storage_dir: &Path) -> Result<Self> {
         let home = storage_dir.join(format!("rocksdb-{}", config.channel_id));
         let core = Self::open(config.clone(), storage_dir)?;
-        match core.chain_identity_outcome().await? {
-            ChainIdentityOutcome::Consistent => Ok(core),
-            ChainIdentityOutcome::Mismatch(mismatch) if config.allow_chain_reset => {
+        match core.verify_chain_consistency().await? {
+            // `Inconclusive` is deliberately treated the same as `Consistent`.
+            //
+            // We could not prove a reset, so proceed from the cursor without wiping
+            // a possibly-valid store. A genuinely divergent chain is still caught
+            // later when the ingest loop tries to apply and parks.
+            ChainConsistenty::Consistent | ChainConsistenty::Inconclusive => Ok(core),
+            ChainConsistenty::Inconsistent(mismatch) if config.allow_chain_reset => {
                 warn!(
                     "Chain reset detected ({mismatch}). Wiping indexer store at {} and \
                      re-indexing.",
@@ -79,7 +95,7 @@ impl IndexerCore {
                 storage::indexer::RocksDBIO::destroy(&home)?;
                 Self::open(config, storage_dir)
             }
-            ChainIdentityOutcome::Mismatch(mismatch) => Err(anyhow::anyhow!(
+            ChainConsistenty::Inconsistent(mismatch) => Err(anyhow::anyhow!(
                 "Indexer store at {} holds a different chain than the channel now serves \
                  ({mismatch}). Delete the indexer storage directory, point at a fresh one, or \
                  set `allow_chain_reset` in the indexer config.",
@@ -113,38 +129,45 @@ impl IndexerCore {
     /// (e.g. a wiped/restarted bedrock) so startup can reset instead of silently
     /// diverging. Mostly a dev convenience; won't trigger during normal live indexing.
     ///
-    /// Compares the first block the channel serves at/after the cursor (the tip's
-    /// recent L1 slot, so ~one batch — not a from-genesis scan) against our stored
-    /// block of the *same id*. Comparing by the channel's id, not our tip id, is what
-    /// catches a *shorter* reset chain: it has no block at our tip id, but its low-id
-    /// block here differs from ours.
-    async fn chain_identity_outcome(&self) -> Result<ChainIdentityOutcome> {
-        // Don't skip parked stores: the stall is persisted and only clears on a
-        // successful apply, so skipping would re-park forever and never catch a reset.
-        // Safe anyway — a same-chain park sits at an id we never applied, so the lookup
-        // below misses → Consistent.
+    /// Compares the **first** block the channel serves at/after the cursor (the tip's
+    /// recent L1 slot) against our stored block of the *same id*.
+    /// Note that we have to respect the channel's tip slot, because if our tip
+    /// is ahead of the channel even in the same chain, it may looks like we are
+    /// ahead of the channel, but we are actually on a different chain.
+    async fn verify_chain_consistency(&self) -> Result<ChainConsistenty> {
         let Some(cursor) = self.store.get_zone_cursor()? else {
-            return Ok(ChainIdentityOutcome::Consistent); // empty / cold store
+            // if we have no cursor, the store is empty or cold: nothing to compare
+            return Ok(ChainConsistenty::Inconclusive);
         };
 
-        // Inconclusive cases stay Consistent (ingest parks if truly divergent) rather
-        // than wipe a valid store: empty/unreadable read (notably bedrock's LIB behind
-        // our tip), or an id we don't hold. Blind spot: a genesis-only store can't be
-        // told apart (genesis is deterministic), but that window is transient.
-        let Some(channel_block) = self.fetch_channel_block_from(cursor).await? else {
-            return Ok(ChainIdentityOutcome::Consistent);
+        let Some(channel) = self.fetch_channel_block_from(cursor).await? else {
+            // if the channel is empty, we have nothing to compare
+            return Ok(ChainConsistenty::Inconclusive);
         };
-        let Some(ours) = self.store.get_block_at_id(channel_block.header.block_id)? else {
-            return Ok(ChainIdentityOutcome::Consistent);
+
+        let Some(ours) = self.store.get_block_at_id(channel.header.block_id)? else {
+            // if we do not have the block the channel serves at that id, we cannot compare
+            return Ok(ChainConsistenty::Inconclusive);
         };
-        Ok(compare_block(&ours, &channel_block))
+
+        // copare the block w.r.t hashes
+        let comparison_result = if ours.header.hash == channel.header.hash {
+            ChainConsistenty::Consistent
+        } else {
+            ChainConsistenty::Inconsistent(BlockMismatch {
+                ours: (ours.header.block_id, ours.header.hash),
+                channel: (channel.header.block_id, channel.header.hash),
+            })
+        };
+
+        Ok(comparison_result)
     }
 
     /// Reads the first block the channel serves at/after the tip's slot.
     ///
-    /// `None` = inconclusive (timeout/error, or bedrock's LIB behind our tip → empty stream).
+    /// `None` means we could not read a comparable block.
     async fn fetch_channel_block_from(&self, cursor: Slot) -> Result<Option<Block>> {
-        const TIP_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+        const TIP_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
         // `next_messages` is exclusive, so `cursor - 1` includes the tip's own slot.
         let Some(from_slot) = cursor.into_inner().checked_sub(1) else {
@@ -167,6 +190,7 @@ impl IndexerCore {
             }
             Ok(None)
         };
+
         match tokio::time::timeout(TIP_FETCH_TIMEOUT, fetch).await {
             Ok(Ok(found)) => Ok(found),
             Ok(Err(err)) => {
@@ -187,8 +211,23 @@ impl IndexerCore {
     #[must_use]
     pub fn status(&self) -> IndexerStatus {
         let sync = IndexerSyncStatus::clone(&self.status.load());
-        let indexed_block_id = self.store.get_last_block_id().ok().flatten();
-        let stall_reason = self.store.get_stall_reason().ok().flatten();
+        // Log-and-fall-back rather than collapsing a store error into the same
+        // `None` as "legitimately absent": a DB read failure must not silently
+        // masquerade as "no tip yet" / "no stall recorded" in the snapshot.
+        let indexed_block_id = match self.store.get_last_block_id() {
+            Ok(id) => id,
+            Err(err) => {
+                warn!("Failed to read last indexed block id for status: {err:#}");
+                None
+            }
+        };
+        let stall_reason = match self.store.get_stall_reason() {
+            Ok(reason) => reason,
+            Err(err) => {
+                warn!("Failed to read stall reason for status: {err:#}");
+                None
+            }
+        };
         IndexerStatus {
             sync,
             indexed_block_id,
@@ -330,8 +369,14 @@ impl IndexerCore {
                 }
 
                 // Stream drained. Stay Stalled if parked; otherwise we are caught up.
-                if self.store.get_stall_reason().ok().flatten().is_none() {
-                    self.set_status(IndexerSyncStatus::caught_up());
+                // A store error here must not be collapsed to "no stall recorded":
+                // that would wrongly flip us to caught-up, so we log and hold state.
+                match self.store.get_stall_reason() {
+                    Ok(None) => self.set_status(IndexerSyncStatus::caught_up()),
+                    Ok(Some(_)) => {}
+                    Err(err) => {
+                        warn!("Failed to read stall reason after draining stream; not marking caught up: {err:#}");
+                    }
                 }
                 tokio::time::sleep(poll_interval).await;
             }
@@ -339,45 +384,31 @@ impl IndexerCore {
     }
 }
 
-/// Pure comparison of our stored block against the channel's block at the same id:
-/// a mismatch is differing hashes. Missing/unreadable cases are handled upstream.
-fn compare_block(ours: &Block, channel: &Block) -> ChainIdentityOutcome {
-    if ours.header.hash == channel.header.hash {
-        ChainIdentityOutcome::Consistent
-    } else {
-        ChainIdentityOutcome::Mismatch(ChainMismatch {
-            ours: (ours.header.block_id, ours.header.hash),
-            channel: (channel.header.block_id, channel.header.hash),
-        })
-    }
-}
-
 #[cfg(test)]
 mod chain_identity_tests {
-    use common::{HashType, block::Block, test_utils::produce_dummy_block};
+    use std::time::Duration;
 
-    use super::{ChainIdentityOutcome, compare_block};
+    use super::{ChainConsistenty, IndexerCore};
+    use crate::config::{ChannelId, ClientConfig, IndexerConfig};
 
-    fn block_with_prev(prev_seed: u8) -> Block {
-        produce_dummy_block(5, Some(HashType([prev_seed; 32])), vec![])
-    }
-
-    #[test]
-    fn matching_block_is_consistent() {
-        let b = block_with_prev(1);
+    #[tokio::test]
+    async fn cold_store_is_inconclusive() {
+        // An empty store has no cursor, so there is nothing to compare: the check
+        // must be Inconclusive (not Consistent), and it returns before any L1 read.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = IndexerConfig {
+            consensus_info_polling_interval: Duration::from_secs(1),
+            bedrock_config: ClientConfig {
+                addr: "http://localhost:1".parse().expect("url"),
+                auth: None,
+            },
+            channel_id: ChannelId::from([1; 32]),
+            allow_chain_reset: false,
+        };
+        let core = IndexerCore::open(config, dir.path()).expect("open core");
         assert!(matches!(
-            compare_block(&b, &b),
-            ChainIdentityOutcome::Consistent
-        ));
-    }
-
-    #[test]
-    fn differing_block_is_mismatch() {
-        let stored = block_with_prev(1);
-        let current = block_with_prev(2);
-        assert!(matches!(
-            compare_block(&stored, &current),
-            ChainIdentityOutcome::Mismatch(_)
+            core.verify_chain_consistency().await.expect("verify"),
+            ChainConsistenty::Inconclusive
         ));
     }
 }
