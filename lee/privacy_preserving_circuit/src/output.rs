@@ -271,12 +271,20 @@ pub fn compute_circuit_output(
 }
 
 fn emit_dummy_output(output: &mut PrivacyPreservingCircuitOutput, dummy: DummyInput) {
+    // Note: the nullifiers and commitments are generated from seeds.
+    // The prover is responsible for their randomness.
     let nullifier = Nullifier::for_dummy(&dummy.nullifier_seed);
     let commitment = Commitment::for_dummy(&nullifier, &dummy.commitment_seed);
     output
         .new_nullifiers
         .push((nullifier, dummy.commitment_root));
     output.new_commitments.push(commitment);
+    // Note: the encrypted post states are pushed as fed into the circuit.
+    // That means that the prover is responsible for managing the randomness
+    // so as to not reveal the padding.
+    //
+    // In particular, it is recommended to generate the ML KEM ciphertext
+    // explicitly as these are not uniformly random.
     output.encrypted_private_post_states.push(dummy.note);
 }
 

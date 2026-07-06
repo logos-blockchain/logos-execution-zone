@@ -9,8 +9,7 @@ use lee_core::{
     account::{Account, AccountWithMetadata, Nonce},
     compute_digest_for_path,
     encryption::{
-        Ciphertext, EncryptedAccountData, EphemeralPublicKey, ML_KEM_768_CIPHERTEXT_LEN, ViewTag,
-        ViewingPublicKey,
+        Ciphertext, EncryptedAccountData, MlKem768EncapsulationKey, ViewTag, ViewingPublicKey,
     },
 };
 use rand::{RngCore as _, rngs::OsRng};
@@ -683,16 +682,18 @@ fn random_vec(len: usize) -> Vec<u8> {
     bytes
 }
 
-/// Generates a dummy note: random bytes sized to a default-account ciphertext, a
-/// random epk, and a random view tag. Not decryptable — it only pads the journal.
+/// Generates a dummy note: random bytes sized to a default-account ciphertext, a real
+/// ML-KEM ciphertext epk toward a throwaway key, and a random view tag.
 fn random_dummy_note() -> EncryptedAccountData {
     // Sized to a default-account ciphertext; matching real data sizes is a separate issue.
     let ciphertext_len = PrivateAccountKind::HEADER_LEN
         .checked_add(Account::default().to_bytes().len())
         .expect("dummy ciphertext length fits in usize");
+    let throwaway_ek = MlKem768EncapsulationKey::from_seed(&random_bytes(), &random_bytes());
+    let (_, epk) = SharedSecretKey::encapsulate(&throwaway_ek);
     EncryptedAccountData {
         ciphertext: Ciphertext::from_inner(random_vec(ciphertext_len)),
-        epk: EphemeralPublicKey(random_vec(ML_KEM_768_CIPHERTEXT_LEN)),
+        epk,
         view_tag: random_view_tag(),
     }
 }
