@@ -8,6 +8,7 @@ use common::{
 };
 use lee::{Account, AccountId, GENESIS_BLOCK_ID, V03State};
 use lee_core::BlockId;
+use log::warn;
 use logos_blockchain_core::header::HeaderId;
 use logos_blockchain_zone_sdk::Slot;
 use storage::indexer::RocksDBIO;
@@ -150,6 +151,14 @@ impl IndexerStore {
         Ok(())
     }
 
+    /// Clears a recorded stall marker if one is present, skipping the write otherwise.
+    fn clear_stall_if_present(&self) -> Result<()> {
+        if self.get_stall_reason()?.is_some() {
+            self.set_stall_reason(&None)?;
+        }
+        Ok(())
+    }
+
     /// Recalculation of final state directly from DB.
     ///
     /// Used for indexer healthcheck.
@@ -221,11 +230,11 @@ impl IndexerStore {
     pub async fn accept_block(&self, block: &Block, l1_slot: Slot) -> Result<AcceptOutcome> {
         let tip = self.validated_tip()?;
 
-        // idempotent edge case: re-delivery of the current tip
-        // (e.g. after a crash that left the L1 cursor behind the applied tip)
+        // Re-delivery of an already-applied block is idempotent, not a divergence
         if let Some(tip) = &tip
-            && block.header.block_id == tip.block_id
-            && block.header.hash == tip.hash
+            && block.header.block_id <= tip.block_id
+            && let Some(stored) = self.get_block_at_id(block.header.block_id)?
+            && stored.header.hash == block.header.hash
         {
             return Ok(AcceptOutcome::AlreadyApplied);
         }
@@ -250,11 +259,10 @@ impl IndexerStore {
 
         // Commit in-memory state (infallible) only after the DB write succeeded.
         *self.current_state.write().await = scratch;
-        // Clear a recorded stall now that a block has chained and applied. Only write
-        // when one is actually present, so the steady state does no extra per-block
-        // write (and can't turn a transient clear-write error into a spurious park).
-        if self.get_stall_reason()?.is_some() {
-            self.set_stall_reason(&None)?;
+        // Best-effort: the block is durably applied, so a failed stall clear must not
+        // fail the apply. It self-heals on the next clear.
+        if let Err(err) = self.clear_stall_if_present() {
+            warn!("Failed to clear stall marker after applying block: {err:#}");
         }
         Ok(AcceptOutcome::Applied)
     }
@@ -282,7 +290,10 @@ fn validate_against_tip(tip: Option<&Tip>, block: &Block) -> Result<(), BlockIng
             }
         }
         Some(tip) => {
-            let expected = tip.block_id.checked_add(1).expect("block id overflow");
+            let expected = tip
+                .block_id
+                .checked_add(1)
+                .expect("block id should not overflow");
             if block.header.block_id != expected {
                 return Err(BlockIngestError::UnexpectedBlockId {
                     expected,
@@ -704,6 +715,66 @@ mod accept_tests {
         assert!(
             store.get_stall_reason().unwrap().is_none(),
             "a benign duplicate must not park the indexer"
+        );
+    }
+
+    #[tokio::test]
+    async fn redelivered_block_below_tip_is_idempotent_not_parked() {
+        use testnet_initial_state::initial_pub_accounts_private_keys;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = IndexerStore::open_db(dir.path()).expect("open store");
+
+        let accounts = initial_pub_accounts_private_keys();
+        let from = accounts[0].account_id;
+        let to = accounts[1].account_id;
+        let sign_key = accounts[0].pub_sign_key.clone();
+
+        // Build a short chain: genesis (1) -> block 2 -> block 3, so the tip is 3.
+        let genesis = produce_dummy_block(1, None, vec![]);
+        store
+            .accept_block(&genesis, Slot::from(0))
+            .await
+            .expect("accept genesis");
+
+        let tx2 = common::test_utils::create_transaction_native_token_transfer(
+            from, 0, to, 10, &sign_key,
+        );
+        let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![tx2]);
+        assert!(matches!(
+            store.accept_block(&block2, Slot::from(0)).await.unwrap(),
+            AcceptOutcome::Applied
+        ));
+
+        let tx3 = common::test_utils::create_transaction_native_token_transfer(
+            from, 1, to, 10, &sign_key,
+        );
+        let block3 = produce_dummy_block(3, Some(block2.header.hash), vec![tx3]);
+        assert!(matches!(
+            store.accept_block(&block3, Slot::from(0)).await.unwrap(),
+            AcceptOutcome::Applied
+        ));
+
+        let balance_after = store.account_current_state(&from).await.unwrap().balance;
+
+        // Re-deliver block 2 (id below the tip): a re-delivery, not a divergence.
+        assert!(matches!(
+            store.accept_block(&block2, Slot::from(0)).await.unwrap(),
+            AcceptOutcome::AlreadyApplied
+        ));
+        assert_eq!(
+            store.account_current_state(&from).await.unwrap().balance,
+            balance_after,
+            "re-delivered block below the tip must not be applied again"
+        );
+        assert_eq!(
+            store.get_last_block_id().unwrap(),
+            Some(3),
+            "tip must stay at the current head"
+        );
+        assert!(
+            store.get_stall_reason().unwrap().is_none(),
+            "a benign re-delivery must not park the indexer"
         );
     }
 }
