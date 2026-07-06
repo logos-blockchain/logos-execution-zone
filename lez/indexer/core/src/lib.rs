@@ -24,7 +24,7 @@ pub mod stall_reason;
 pub mod status;
 
 /// Result of comparing the indexer's stored tip against the channel.
-enum ChainConsistenty {
+enum ChainConsistency {
     /// Channel serves the same block at our tip's id.
     Consistent,
     /// We could not determine the outcome due to one of:
@@ -84,8 +84,8 @@ impl IndexerCore {
             // We could not prove a reset, so proceed from the cursor without wiping
             // a possibly-valid store. A genuinely divergent chain is still caught
             // later when the ingest loop tries to apply and parks.
-            ChainConsistenty::Consistent | ChainConsistenty::Inconclusive => Ok(core),
-            ChainConsistenty::Inconsistent(mismatch) if config.allow_chain_reset => {
+            ChainConsistency::Consistent | ChainConsistency::Inconclusive => Ok(core),
+            ChainConsistency::Inconsistent(mismatch) if config.allow_chain_reset => {
                 warn!(
                     "Chain reset detected ({mismatch}). Wiping indexer store at {} and \
                      re-indexing.",
@@ -95,7 +95,7 @@ impl IndexerCore {
                 storage::indexer::RocksDBIO::destroy(&home)?;
                 Self::open(config, storage_dir)
             }
-            ChainConsistenty::Inconsistent(mismatch) => Err(anyhow::anyhow!(
+            ChainConsistency::Inconsistent(mismatch) => Err(anyhow::anyhow!(
                 "Indexer store at {} holds a different chain than the channel now serves \
                  ({mismatch}). Delete the indexer storage directory, point at a fresh one, or \
                  set `allow_chain_reset` in the indexer config.",
@@ -134,27 +134,27 @@ impl IndexerCore {
     /// Note that we have to respect the channel's tip slot, because if our tip
     /// is ahead of the channel even in the same chain, it may looks like we are
     /// ahead of the channel, but we are actually on a different chain.
-    async fn verify_chain_consistency(&self) -> Result<ChainConsistenty> {
+    async fn verify_chain_consistency(&self) -> Result<ChainConsistency> {
         let Some(cursor) = self.store.get_zone_cursor()? else {
             // if we have no cursor, the store is empty or cold: nothing to compare
-            return Ok(ChainConsistenty::Inconclusive);
+            return Ok(ChainConsistency::Inconclusive);
         };
 
         let Some(channel) = self.fetch_channel_block_from(cursor).await? else {
             // if the channel is empty, we have nothing to compare
-            return Ok(ChainConsistenty::Inconclusive);
+            return Ok(ChainConsistency::Inconclusive);
         };
 
         let Some(ours) = self.store.get_block_at_id(channel.header.block_id)? else {
             // if we do not have the block the channel serves at that id, we cannot compare
-            return Ok(ChainConsistenty::Inconclusive);
+            return Ok(ChainConsistency::Inconclusive);
         };
 
         // copare the block w.r.t hashes
         let comparison_result = if ours.header.hash == channel.header.hash {
-            ChainConsistenty::Consistent
+            ChainConsistency::Consistent
         } else {
-            ChainConsistenty::Inconsistent(BlockMismatch {
+            ChainConsistency::Inconsistent(BlockMismatch {
                 ours: (ours.header.block_id, ours.header.hash),
                 channel: (channel.header.block_id, channel.header.hash),
             })
@@ -388,7 +388,7 @@ impl IndexerCore {
 mod chain_identity_tests {
     use std::time::Duration;
 
-    use super::{ChainConsistenty, IndexerCore};
+    use super::{ChainConsistency, IndexerCore};
     use crate::config::{ChannelId, ClientConfig, IndexerConfig};
 
     #[tokio::test]
@@ -408,7 +408,7 @@ mod chain_identity_tests {
         let core = IndexerCore::open(config, dir.path()).expect("open core");
         assert!(matches!(
             core.verify_chain_consistency().await.expect("verify"),
-            ChainConsistenty::Inconclusive
+            ChainConsistency::Inconclusive
         ));
     }
 }
