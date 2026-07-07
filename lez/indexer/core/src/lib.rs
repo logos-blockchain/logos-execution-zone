@@ -125,15 +125,14 @@ impl IndexerCore {
         })
     }
 
-    /// Detects when the local store belongs to a different chain than the connected L1
-    /// (e.g. a wiped/restarted bedrock) so startup can reset instead of silently
-    /// diverging. Mostly a dev convenience; won't trigger during normal live indexing.
+    /// Detects when the local store belongs to a different chain than the connected
+    /// L1 (e.g. a wiped/restarted bedrock) so startup can reset instead of silently
+    /// diverging. Best-effort dev convenience; won't trigger during normal live indexing.
     ///
-    /// Compares the **first** block the channel serves at/after the cursor (the tip's
-    /// recent L1 slot) against our stored block of the *same id*.
-    /// Note that we have to respect the channel's tip slot, because if our tip
-    /// is ahead of the channel even in the same chain, it may looks like we are
-    /// ahead of the channel, but we are actually on a different chain.
+    /// Compares the first block the channel serves at/after the read cursor against our
+    /// stored block of the same id. Conclusive only while caught up (cursor at the tip);
+    /// once parked the cursor runs ahead, so the compared id is one we never stored and
+    /// the result is `Inconclusive` — a genuine reset is then caught by the ingest loop.
     async fn verify_chain_consistency(&self) -> Result<ChainConsistency> {
         let Some(cursor) = self.store.get_zone_cursor()? else {
             // if we have no cursor, the store is empty or cold: nothing to compare
