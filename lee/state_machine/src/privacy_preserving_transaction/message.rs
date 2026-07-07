@@ -227,15 +227,14 @@ pub mod tests {
         let vpk = ViewingPublicKey::from_seed(&[2_u8; 32], &[3_u8; 32]);
         let account = Account::default();
         let account_id = lee_core::account::AccountId::for_regular_private_account(&npk, &vpk, 0);
-        let commitment = Commitment::new(&account_id, &account);
+        let nullifier = Nullifier::for_account_initialization(&account_id);
         let (shared_secret, epk) =
             SharedSecretKey::encapsulate_deterministic(&vpk, &EphemeralSecretKey([0_u8; 32]));
         let ciphertext = EncryptionScheme::encrypt(
             &account,
             &PrivateAccountKind::Regular(0),
             &shared_secret,
-            &commitment,
-            2,
+            &nullifier,
         );
         let encrypted_account_data =
             EncryptedAccountData::new(ciphertext.clone(), &npk, &vpk, epk.clone());

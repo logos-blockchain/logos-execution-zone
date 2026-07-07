@@ -418,8 +418,6 @@ impl UserKeyChain {
         i: usize,
     ) -> Option<Nullifier> {
         let encrypted = &message.encrypted_private_post_states[i];
-        let commitment = &message.new_commitments[i];
-        let ciph_id = u32::try_from(i).ok()?;
 
         let (nsk, secret, is_shared) = if let Some(entry) = self.shared_private_account(account_id)
         {
@@ -443,7 +441,7 @@ impl UserKeyChain {
         };
 
         let (kind, new_account) =
-            EncryptionScheme::decrypt(&encrypted.ciphertext, &secret, commitment, ciph_id)?;
+            EncryptionScheme::decrypt(&encrypted.ciphertext, &secret, &message.new_nullifiers[i].0)?;
         let new_nullifier = NullifierIndex::next_update_nullifier(account_id, &new_account, &nsk);
 
         if is_shared {
@@ -900,8 +898,7 @@ mod tests {
             &new_account,
             &PrivateAccountKind::Regular(identifier),
             &sender_ss,
-            &new_commitment,
-            0,
+            &old_nullifier,
         );
         let note = EncryptedAccountData::new(
             ciphertext,
@@ -971,8 +968,7 @@ mod tests {
             &new_account,
             &PrivateAccountKind::Regular(identifier),
             &sender_ss,
-            &new_commitment,
-            0,
+            &old_nullifier,
         );
         let note = EncryptedAccountData::new(ciphertext, &npk, &vpk, epk);
         let message = Message {
@@ -1034,8 +1030,7 @@ mod tests {
                 next,
                 &PrivateAccountKind::Regular(identifier),
                 &sender_ss,
-                &commitment,
-                0,
+                &spent,
             );
             let note = EncryptedAccountData::new(ciphertext, &npk, &vpk, epk);
             Message {

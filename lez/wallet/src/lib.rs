@@ -560,15 +560,11 @@ impl WalletCore {
             match acc_decode_data {
                 AccDecodeData::Decode(secret, acc_account_id) => {
                     let acc_ead = tx.message.encrypted_private_post_states[output_index].clone();
-                    let acc_comm = tx.message.new_commitments[output_index].clone();
 
                     let (kind, res_acc) = lee_core::EncryptionScheme::decrypt(
                         &acc_ead.ciphertext,
                         secret,
-                        &acc_comm,
-                        output_index
-                            .try_into()
-                            .expect("Output index is expected to fit in u32"),
+                        &tx.message.new_nullifiers[output_index].0,
                     )
                     .unwrap();
 
@@ -826,7 +822,7 @@ impl WalletCore {
                     &key_chain.nullifier_public_key,
                     &key_chain.viewing_public_key,
                 );
-                let new_commitments = &message.new_commitments;
+                let new_nullifiers = &message.new_nullifiers;
 
                 message
                     .encrypted_private_post_states
@@ -840,18 +836,11 @@ impl WalletCore {
                     })
                     .filter_map(move |(ciph_id, encrypted_data)| {
                         let ciphertext = &encrypted_data.ciphertext;
-                        let commitment = &new_commitments[ciph_id];
+                        let nullifier = &new_nullifiers[ciph_id].0;
                         let shared_secret =
                             key_chain.calculate_shared_secret_receiver(&encrypted_data.epk)?;
 
-                        lee_core::EncryptionScheme::decrypt(
-                            ciphertext,
-                            &shared_secret,
-                            commitment,
-                            ciph_id
-                                .try_into()
-                                .expect("Ciphertext ID is expected to fit in u32"),
-                        )
+                        lee_core::EncryptionScheme::decrypt(ciphertext, &shared_secret, nullifier)
                         .map(|(kind, res_acc)| {
                             let npk = &key_chain.nullifier_public_key;
                             let account_id = lee::AccountId::for_private_account(
@@ -920,15 +909,10 @@ impl WalletCore {
                 else {
                     continue;
                 };
-                let commitment = &message.new_commitments[ciph_id];
-
                 if let Some((_kind, new_acc)) = lee_core::EncryptionScheme::decrypt(
                     &encrypted_data.ciphertext,
                     &shared_secret,
-                    commitment,
-                    ciph_id
-                        .try_into()
-                        .expect("Ciphertext ID is expected to fit in u32"),
+                    &message.new_nullifiers[ciph_id].0,
                 ) {
                     info!("Synced shared account {account_id:#?} with new state {new_acc:#?}");
                     index.track(account_id, &new_acc, &nsk);

@@ -7,7 +7,7 @@ use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde::{Deserialize, Serialize};
 pub use shared_key_derivation::{MlKem768EncapsulationKey, ViewingPublicKey};
 
-use crate::{Commitment, account::Account, program::PrivateAccountKind};
+use crate::{Nullifier, account::Account, program::PrivateAccountKind};
 pub mod shared_key_derivation;
 
 /// Length in bytes of an ML-KEM-768 ciphertext (the `EphemeralPublicKey` payload).
@@ -114,39 +114,32 @@ impl EncryptionScheme {
         account: &Account,
         kind: &PrivateAccountKind,
         shared_secret: &SharedSecretKey,
-        commitment: &Commitment,
-        output_index: u32,
+        nullifier: &Nullifier,
     ) -> Ciphertext {
         // Plaintext: PrivateAccountKind::HEADER_LEN bytes header || account bytes.
         // Both variants produce the same header length — see PrivateAccountKind::to_header_bytes.
         let mut buffer = kind.to_header_bytes().to_vec();
         buffer.extend_from_slice(&account.to_bytes());
-        Self::symmetric_transform(&mut buffer, shared_secret, commitment, output_index);
+        Self::symmetric_transform(&mut buffer, shared_secret, nullifier);
         Ciphertext(buffer)
     }
 
     fn symmetric_transform(
         buffer: &mut [u8],
         shared_secret: &SharedSecretKey,
-        commitment: &Commitment,
-        output_index: u32,
+        nullifier: &Nullifier,
     ) {
-        let key = Self::kdf(shared_secret, commitment, output_index);
+        let key = Self::kdf(shared_secret, nullifier);
         let mut cipher = ChaCha20::new(&key.into(), &[0; 12].into());
         cipher.apply_keystream(buffer);
     }
 
-    fn kdf(
-        shared_secret: &SharedSecretKey,
-        commitment: &Commitment,
-        output_index: u32,
-    ) -> [u8; 32] {
+    fn kdf(shared_secret: &SharedSecretKey, nullifier: &Nullifier) -> [u8; 32] {
         const PREFIX: &[u8; 20] = b"LEE/v0.2/KDF-SHA256/";
-        let mut bytes = [0_u8; 20 + 32 + 32 + 4];
+        let mut bytes = [0_u8; 20 + 32 + 32];
         bytes[0..20].copy_from_slice(PREFIX);
         bytes[20..52].copy_from_slice(&shared_secret.0);
-        bytes[52..84].copy_from_slice(&commitment.to_byte_array());
-        bytes[84..88].copy_from_slice(&output_index.to_le_bytes());
+        bytes[52..84].copy_from_slice(&nullifier.to_byte_array());
 
         Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap()
     }
@@ -160,12 +153,11 @@ impl EncryptionScheme {
     pub fn decrypt(
         ciphertext: &Ciphertext,
         shared_secret: &SharedSecretKey,
-        commitment: &Commitment,
-        output_index: u32,
+        nullifier: &Nullifier,
     ) -> Option<(PrivateAccountKind, Account)> {
         use std::io::Cursor;
         let mut buffer = ciphertext.0.clone();
-        Self::symmetric_transform(&mut buffer, shared_secret, commitment, output_index);
+        Self::symmetric_transform(&mut buffer, shared_secret, nullifier);
 
         if buffer.len() < PrivateAccountKind::HEADER_LEN {
             return None;
@@ -180,8 +172,7 @@ impl EncryptionScheme {
                 println!(
                     "Failed to decode {ciphertext:?} \n
                       with secret {:?} ,\n
-                      commitment {commitment:?} ,\n
-                      and output_index {output_index} ,\n
+                      nullifier {nullifier:?} ,\n
                       with error {err:?}",
                     shared_secret.0
                 );
@@ -203,14 +194,13 @@ mod tests {
     fn encrypt_same_length_for_account_and_pda() {
         let account = Account::default();
         let secret = SharedSecretKey([0_u8; 32]);
-        let commitment = crate::Commitment::new(&AccountId::new([0_u8; 32]), &Account::default());
+        let nullifier = Nullifier::for_account_initialization(&AccountId::new([0_u8; 32]));
 
         let account_ct = EncryptionScheme::encrypt(
             &account,
             &PrivateAccountKind::Regular(42),
             &secret,
-            &commitment,
-            0,
+            &nullifier,
         );
         let pda_ct = EncryptionScheme::encrypt(
             &account,
@@ -220,8 +210,7 @@ mod tests {
                 identifier: 42,
             },
             &secret,
-            &commitment,
-            0,
+            &nullifier,
         );
 
         assert_eq!(account_ct.0.len(), pda_ct.0.len());
@@ -245,11 +234,11 @@ mod tests {
             ..Account::default()
         };
         let kind = PrivateAccountKind::Regular(0);
-        let commitment = crate::Commitment::new(&AccountId::new([7_u8; 32]), &account);
+        let nullifier = Nullifier::for_account_initialization(&AccountId::new([7_u8; 32]));
 
-        let ct = EncryptionScheme::encrypt(&account, &kind, &sender_ss, &commitment, 0);
+        let ct = EncryptionScheme::encrypt(&account, &kind, &sender_ss, &nullifier);
         let (decoded_kind, decoded_account) =
-            EncryptionScheme::decrypt(&ct, &receiver_ss, &commitment, 0)
+            EncryptionScheme::decrypt(&ct, &receiver_ss, &nullifier)
                 .expect("decryption must succeed with correct shared secret");
 
         assert_eq!(decoded_account, account);
@@ -257,7 +246,7 @@ mod tests {
 
         // Wrong shared secret must not decrypt correctly.
         let wrong_ss = SharedSecretKey([0_u8; 32]);
-        let bad = EncryptionScheme::decrypt(&ct, &wrong_ss, &commitment, 0);
+        let bad = EncryptionScheme::decrypt(&ct, &wrong_ss, &nullifier);
         assert!(
             bad.is_none() || bad.is_some_and(|(_, a)| a.balance != 999),
             "wrong shared secret must not produce the correct plaintext"

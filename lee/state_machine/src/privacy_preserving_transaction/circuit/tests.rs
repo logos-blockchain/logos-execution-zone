@@ -26,8 +26,7 @@ fn decrypt_kind(
     let (kind, _) = EncryptionScheme::decrypt(
         &output.encrypted_private_post_states[idx].ciphertext,
         ssk,
-        &output.new_commitments[idx],
-        u32::try_from(idx).expect("idx fits in u32"),
+        &output.new_nullifiers[idx].0,
     )
     .unwrap();
     kind
@@ -114,8 +113,7 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_pre_accounts() 
     let (_identifier, recipient_post) = EncryptionScheme::decrypt(
         &output.encrypted_private_post_states[0].ciphertext,
         &shared_secret,
-        &output.new_commitments[0],
-        0,
+        &output.new_nullifiers[0].0,
     )
     .unwrap();
     assert_eq!(recipient_post, expected_recipient_post);
@@ -227,8 +225,7 @@ fn prove_privacy_preserving_execution_circuit_fully_private() {
     let (_identifier, sender_post) = EncryptionScheme::decrypt(
         &output.encrypted_private_post_states[0].ciphertext,
         &shared_secret_1,
-        &expected_new_commitments[0],
-        0,
+        &output.new_nullifiers[0].0,
     )
     .unwrap();
     assert_eq!(sender_post, expected_private_account_1);
@@ -236,8 +233,7 @@ fn prove_privacy_preserving_execution_circuit_fully_private() {
     let (_identifier, recipient_post) = EncryptionScheme::decrypt(
         &output.encrypted_private_post_states[1].ciphertext,
         &shared_secret_2,
-        &expected_new_commitments[1],
-        1,
+        &output.new_nullifiers[1].0,
     )
     .unwrap();
     assert_eq!(recipient_post, expected_private_account_2);

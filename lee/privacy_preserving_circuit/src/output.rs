@@ -32,7 +32,6 @@ pub fn compute_circuit_output(
         "Invalid account_identities length"
     );
 
-    let mut output_index = 0;
     for (pos, (account_identity, (pre_state, post_state))) in
         account_identities.iter().zip(states_iter).enumerate()
     {
@@ -71,7 +70,6 @@ pub fn compute_circuit_output(
 
                 emit_private_output(
                     &mut output,
-                    &mut output_index,
                     post_state,
                     &account_id,
                     &PrivateAccountKind::Regular(*identifier),
@@ -109,7 +107,6 @@ pub fn compute_circuit_output(
 
                 emit_private_output(
                     &mut output,
-                    &mut output_index,
                     post_state,
                     &account_id,
                     &PrivateAccountKind::Regular(*identifier),
@@ -149,7 +146,6 @@ pub fn compute_circuit_output(
 
                 emit_private_output(
                     &mut output,
-                    &mut output_index,
                     post_state,
                     &account_id,
                     &PrivateAccountKind::Regular(*identifier),
@@ -197,7 +193,6 @@ pub fn compute_circuit_output(
                 let view_tag = EncryptedAccountData::compute_view_tag(npk, vpk);
                 emit_private_output(
                     &mut output,
-                    &mut output_index,
                     post_state,
                     &account_id,
                     &PrivateAccountKind::Pda {
@@ -245,7 +240,6 @@ pub fn compute_circuit_output(
                     .expect("PrivatePdaUpdate position must be in pda_seed_by_position");
                 emit_private_output(
                     &mut output,
-                    &mut output_index,
                     post_state,
                     &account_id,
                     &PrivateAccountKind::Pda {
@@ -294,7 +288,6 @@ fn emit_dummy_output(output: &mut PrivacyPreservingCircuitOutput, dummy: DummyIn
 )]
 fn emit_private_output(
     output: &mut PrivacyPreservingCircuitOutput,
-    output_index: &mut u32,
     post_state: Account,
     account_id: &AccountId,
     kind: &PrivateAccountKind,
@@ -304,8 +297,6 @@ fn emit_private_output(
     new_nullifier: (Nullifier, CommitmentSetDigest),
     new_nonce: Nonce,
 ) {
-    output.new_nullifiers.push(new_nullifier);
-
     let mut post_with_updated_nonce = post_state;
     post_with_updated_nonce.nonce = new_nonce;
 
@@ -318,10 +309,10 @@ fn emit_private_output(
         &post_with_updated_nonce,
         kind,
         &shared_secret,
-        &commitment_post,
-        *output_index,
+        &new_nullifier.0,
     );
 
+    output.new_nullifiers.push(new_nullifier);
     output.new_commitments.push(commitment_post);
     output
         .encrypted_private_post_states
@@ -330,9 +321,6 @@ fn emit_private_output(
             epk,
             view_tag,
         });
-    *output_index = output_index
-        .checked_add(1)
-        .unwrap_or_else(|| panic!("Too many private accounts, output index overflow"));
 }
 
 fn compute_update_nullifier_and_set_digest(
