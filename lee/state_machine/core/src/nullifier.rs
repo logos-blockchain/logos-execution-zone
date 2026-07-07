@@ -117,6 +117,11 @@ impl Nullifier {
         bytes.extend_from_slice(nullifier_seed);
         Self(Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap())
     }
+
+    #[must_use]
+    pub const fn to_byte_array(&self) -> [u8; 32] {
+        self.0
+    }
 }
 
 #[cfg(test)]

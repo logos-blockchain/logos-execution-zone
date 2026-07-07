@@ -97,11 +97,6 @@ impl NullifierPublicKey {
 
 #[cfg(feature = "host")]
 impl Nullifier {
-    #[must_use]
-    pub const fn to_byte_array(&self) -> [u8; 32] {
-        self.0
-    }
-
     #[cfg(feature = "host")]
     #[must_use]
     pub const fn from_byte_array(bytes: [u8; 32]) -> Self {
