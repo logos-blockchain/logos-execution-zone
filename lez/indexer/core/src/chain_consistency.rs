@@ -99,7 +99,7 @@ impl std::fmt::Display for ChainMismatch {
 /// parked block while stalled.
 struct Anchor {
     slot: Slot,
-    /// The anchor block's `(id, hash)`
+    /// The anchor block's `(id, hash)`.
     ///
     /// `None` when parked on an undeserializable inscription (no header was recorded).
     block: Option<(u64, HashType)>,
