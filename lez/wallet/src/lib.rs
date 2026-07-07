@@ -556,9 +556,16 @@ impl WalletCore {
             "Decode mask has {} entries but the transaction has {note_count} notes",
             acc_decode_mask.len(),
         );
-        for (output_index, acc_decode_data) in acc_decode_mask.iter().enumerate() {
+        for acc_decode_data in acc_decode_mask {
             match acc_decode_data {
                 AccDecodeData::Decode(secret, acc_account_id) => {
+                    let Some(output_index) = self
+                        .storage
+                        .key_chain()
+                        .locate_spend(*acc_account_id, &tx.message)
+                    else {
+                        continue;
+                    };
                     let acc_ead = tx.message.encrypted_private_post_states[output_index].clone();
 
                     let (kind, res_acc) = lee_core::EncryptionScheme::decrypt(

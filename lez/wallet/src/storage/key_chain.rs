@@ -453,6 +453,21 @@ impl UserKeyChain {
         Some(new_nullifier)
     }
 
+    #[must_use]
+    pub fn locate_spend(&self, account_id: AccountId, message: &Message) -> Option<usize> {
+        let init = Nullifier::for_account_initialization(&account_id);
+        let update = self.private_account(account_id).map(|acc| {
+            Nullifier::for_account_update(
+                &Commitment::new(&account_id, acc.account),
+                &acc.key_chain.private_key_holder.nullifier_secret_key,
+            )
+        });
+        message
+            .new_nullifiers
+            .iter()
+            .position(|(nullifier, _)| *nullifier == init || Some(nullifier) == update.as_ref())
+    }
+
     pub fn add_imported_public_account(&mut self, private_key: lee::PrivateKey) {
         let account_id = AccountId::from(&lee::PublicKey::new_from_private_key(&private_key));
 
