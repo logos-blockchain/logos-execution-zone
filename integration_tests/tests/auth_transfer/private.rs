@@ -83,7 +83,6 @@ async fn private_transfer_to_foreign_account() -> Result<()> {
     let tx = fetch_privacy_preserving_tx(ctx.sequencer_client(), tx_hash).await;
     assert_eq!(tx.message.new_commitments[0], new_commitment1);
 
-    assert_eq!(tx.message.new_commitments.len(), 2);
     for commitment in tx.message.new_commitments {
         assert!(verify_commitment_is_in_state(commitment, ctx.sequencer_client()).await);
     }
@@ -172,7 +171,6 @@ async fn private_transfer_to_owned_account_using_claiming_path() -> Result<()> {
         .context("Failed to get private account commitment for sender")?;
     assert_eq!(tx.message.new_commitments[0], sender_commitment);
 
-    assert_eq!(tx.message.new_commitments.len(), 2);
     for commitment in tx.message.new_commitments {
         assert!(verify_commitment_is_in_state(commitment, ctx.sequencer_client()).await);
     }
@@ -307,7 +305,6 @@ async fn private_transfer_to_owned_account_continuous_run_path() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Verify commitments are in state
-    assert_eq!(tx.message.new_commitments.len(), 2);
     for commitment in tx.message.new_commitments {
         assert!(verify_commitment_is_in_state(commitment, ctx.sequencer_client()).await);
     }

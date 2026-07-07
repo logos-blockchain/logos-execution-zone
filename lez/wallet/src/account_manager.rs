@@ -194,6 +194,14 @@ pub struct AccountManager {
 }
 
 impl AccountManager {
+    /// The private-account count that every privacy-preserving transaction is padded up to with
+    /// dummy inputs via the default interface.
+    ///
+    /// The value is selected based on the largest account number per-tx currently supported
+    /// (it is 7 for AMM). It is recommended to reassess this value per new actively supported
+    /// application and that all users share the value for a larger anonymity set.
+    const MAX_PRIVATE_ACCOUNTS: usize = 7;
+
     pub async fn new(
         wallet: &WalletCore,
         accounts: Vec<AccountIdentity>,
@@ -409,6 +417,17 @@ impl AccountManager {
         })
         .take(count)
         .collect()
+    }
+
+    /// Generate the dummy inputs that pad this transaction's private-account count up to
+    /// `MAX_PRIVATE_ACCOUNTS`.
+    pub fn dummy_inputs_default(&self) -> Vec<DummyInput> {
+        let private_count = self
+            .states
+            .iter()
+            .filter(|state| matches!(state, State::Private(_)))
+            .count();
+        self.dummy_inputs(Self::MAX_PRIVATE_ACCOUNTS.saturating_sub(private_count))
     }
 
     /// Build the per-account input vec for the privacy-preserving circuit. Each variant carries
@@ -712,5 +731,67 @@ mod tests {
         };
         assert!(acc.is_private());
         assert!(!acc.is_public());
+    }
+
+    fn private_state() -> State {
+        let npk = NullifierPublicKey([0; 32]);
+        let vpk = ViewingPublicKey::from_seed(&[0; 32], &[0; 32]);
+        let pre_state = AccountWithMetadata::new(Account::default(), false, (&npk, &vpk, 0));
+        State::Private(AccountPreparedData {
+            nsk: None,
+            npk,
+            identifier: 0,
+            vpk,
+            pre_state,
+            proof: None,
+            random_seed: [0; 32],
+            is_pda: false,
+        })
+    }
+
+    fn public_state() -> State {
+        let npk = NullifierPublicKey([0; 32]);
+        let vpk = ViewingPublicKey::from_seed(&[0; 32], &[0; 32]);
+        let account = AccountWithMetadata::new(Account::default(), false, (&npk, &vpk, 0));
+        State::Public { account, sk: None }
+    }
+
+    fn manager(states: Vec<State>) -> AccountManager {
+        AccountManager {
+            states,
+            pin: None,
+            dummy_commitment_root: [0; 32],
+        }
+    }
+
+    #[test]
+    fn dummy_inputs_default_pads_private_count_to_max() {
+        let max = AccountManager::MAX_PRIVATE_ACCOUNTS;
+
+        // Empty txs get padded to the max.
+        assert_eq!(manager(vec![]).dummy_inputs_default().len(), max);
+        // In a padded transaction, the padding amount depends on
+        // the amount of private accounts used.
+        assert_eq!(
+            manager(vec![private_state(), private_state()])
+                .dummy_inputs_default()
+                .len(),
+            max - 2
+        );
+        assert_eq!(
+            manager(vec![private_state(), public_state(), private_state()])
+                .dummy_inputs_default()
+                .len(),
+            max - 2
+        );
+
+        // If the private accounts in the transaction exceed the max, no padding
+        // is done.
+        let full: Vec<State> = std::iter::repeat_with(private_state).take(max).collect();
+        assert_eq!(manager(full).dummy_inputs_default().len(), 0);
+        let over: Vec<State> = std::iter::repeat_with(private_state)
+            .take(max + 2)
+            .collect();
+        assert_eq!(manager(over).dummy_inputs_default().len(), 0);
     }
 }
