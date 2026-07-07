@@ -1,8 +1,8 @@
 use std::{path::Path, sync::Arc};
 
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 use arc_swap::ArcSwap;
-use common::{HashType, block::Block};
+use common::block::Block;
 // TODO: Remove after testnet
 use futures::StreamExt as _;
 pub use ingest_error::BlockIngestError;
@@ -14,55 +14,22 @@ pub use stall_reason::StallReason;
 
 use crate::{
     block_store::{AcceptOutcome, IndexerStore},
+    chain_consistency::ChainConsistency,
     config::IndexerConfig,
     status::{IndexerStatus, IndexerSyncStatus},
 };
 pub mod block_store;
+pub mod chain_consistency;
 pub mod config;
 pub mod ingest_error;
 pub mod stall_reason;
 pub mod status;
 
-/// Result of comparing the indexer's stored tip against the channel.
-enum ChainConsistency {
-    /// Channel serves the same block at our tip's id.
-    Consistent,
-    /// We could not determine the outcome due to one of:
-    ///
-    /// - cold store
-    /// - the channel served no comparable block, we hold no block at that id
-    /// - or the channel read was inconclusive (timeout / error / empty stream)
-    ///
-    /// NOTE: None of these prove a reset, so the caller proceeds.
-    /// A genuine divergence is still caught later when the ingest loop tries to apply and parks.
-    Inconclusive,
-    /// The channel serves a different block at one of our ids.
-    ///
-    /// Details in [`BlockMismatch`], and impl's Display trait.
-    Inconsistent(BlockMismatch),
-}
-
-/// The differing pair behind a [`ChainConsistency::Inconsistent`]: our stored
-/// block vs. the block the channel serves at the same id, as `(block_id, hash)`.
-struct BlockMismatch {
-    ours: (u64, HashType),
-    channel: (u64, HashType),
-}
-
-impl std::fmt::Display for BlockMismatch {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let Self { ours, channel } = self;
-        write!(
-            f,
-            "stored block {} {} != channel block {} {}",
-            ours.0, ours.1, channel.0, channel.1
-        )
-    }
-}
-
 #[derive(Clone)]
 pub struct IndexerCore {
     pub zone_indexer: Arc<ZoneIndexer<NodeHttpClient>>,
+    /// Direct node handle for queries outside `ZoneIndexer`'s streaming API.
+    pub node: NodeHttpClient,
     pub config: IndexerConfig,
     pub store: IndexerStore,
     /// Live ingestion status; updated by the ingest stream, read by `status`.
@@ -115,92 +82,15 @@ impl IndexerCore {
             CommonHttpClient::new(basic_auth),
             config.bedrock_config.addr.clone(),
         );
-        let zone_indexer = ZoneIndexer::new(config.channel_id, node);
+        let zone_indexer = ZoneIndexer::new(config.channel_id, node.clone());
 
         Ok(Self {
             zone_indexer: Arc::new(zone_indexer),
+            node,
             config,
             store: IndexerStore::open_db(&home)?,
             status: Arc::new(ArcSwap::from_pointee(IndexerSyncStatus::starting())),
         })
-    }
-
-    /// Detects when the local store belongs to a different chain than the connected
-    /// L1 (e.g. a wiped/restarted bedrock) so startup can reset instead of silently
-    /// diverging. Best-effort dev convenience; won't trigger during normal live indexing.
-    ///
-    /// Compares the first block the channel serves at/after the read cursor against our
-    /// stored block of the same id. Conclusive only while caught up (cursor at the tip);
-    /// once parked the cursor runs ahead, so the compared id is one we never stored and
-    /// the result is `Inconclusive` — a genuine reset is then caught by the ingest loop.
-    async fn verify_chain_consistency(&self) -> Result<ChainConsistency> {
-        let Some(cursor) = self.store.get_zone_cursor()? else {
-            // if we have no cursor, the store is empty or cold: nothing to compare
-            return Ok(ChainConsistency::Inconclusive);
-        };
-
-        let Some(channel) = self.fetch_channel_block_from(cursor).await? else {
-            // if the channel is empty, we have nothing to compare
-            return Ok(ChainConsistency::Inconclusive);
-        };
-
-        let Some(ours) = self.store.get_block_at_id(channel.header.block_id)? else {
-            // if we do not have the block the channel serves at that id, we cannot compare
-            return Ok(ChainConsistency::Inconclusive);
-        };
-
-        // compare the block w.r.t hashes
-        let comparison_result = if ours.header.hash == channel.header.hash {
-            ChainConsistency::Consistent
-        } else {
-            ChainConsistency::Inconsistent(BlockMismatch {
-                ours: (ours.header.block_id, ours.header.hash),
-                channel: (channel.header.block_id, channel.header.hash),
-            })
-        };
-
-        Ok(comparison_result)
-    }
-
-    /// Reads the first block the channel serves at/after the tip's slot.
-    ///
-    /// `None` means we could not read a comparable block.
-    async fn fetch_channel_block_from(&self, cursor: Slot) -> Result<Option<Block>> {
-        const TIP_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
-
-        // `next_messages` is exclusive, so `cursor - 1` includes the tip's own slot.
-        let Some(from_slot) = cursor.into_inner().checked_sub(1) else {
-            // Slot-0 cursor is degenerate (inscriptions live at wall-clock slots);
-            // so we bail rather than let `next_messages(None)` do a from-genesis scan.
-            return Ok(None);
-        };
-        let fetch = async {
-            let stream = self
-                .zone_indexer
-                .next_messages(Some(Slot::from(from_slot)))
-                .await?;
-            let mut stream = std::pin::pin!(stream);
-            while let Some((msg, _slot)) = stream.next().await {
-                if let ZoneMessage::Block(zone_block) = msg {
-                    let block: Block = borsh::from_slice(&zone_block.data)
-                        .context("Failed to deserialize channel block")?;
-                    return Ok::<Option<Block>, anyhow::Error>(Some(block));
-                }
-            }
-            Ok(None)
-        };
-
-        match tokio::time::timeout(TIP_FETCH_TIMEOUT, fetch).await {
-            Ok(Ok(found)) => Ok(found),
-            Ok(Err(err)) => {
-                warn!("Failed to read channel tip for the consistency check; proceeding: {err:#}");
-                Ok(None)
-            }
-            Err(_elapsed) => {
-                warn!("Timed out reading channel tip for the consistency check; proceeding");
-                Ok(None)
-            }
-        }
     }
 
     /// Snapshot of the current ingestion status (sync state + indexed tip).
@@ -380,34 +270,5 @@ impl IndexerCore {
                 tokio::time::sleep(poll_interval).await;
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod chain_identity_tests {
-    use std::time::Duration;
-
-    use super::{ChainConsistency, IndexerCore};
-    use crate::config::{ChannelId, ClientConfig, IndexerConfig};
-
-    #[tokio::test]
-    async fn cold_store_is_inconclusive() {
-        // An empty store has no cursor, so there is nothing to compare: the check
-        // must be Inconclusive (not Consistent), and it returns before any L1 read.
-        let dir = tempfile::tempdir().expect("tempdir");
-        let config = IndexerConfig {
-            consensus_info_polling_interval: Duration::from_secs(1),
-            bedrock_config: ClientConfig {
-                addr: "http://localhost:1".parse().expect("url"),
-                auth: None,
-            },
-            channel_id: ChannelId::from([1; 32]),
-            allow_chain_reset: false,
-        };
-        let core = IndexerCore::open(config, dir.path()).expect("open core");
-        assert!(matches!(
-            core.verify_chain_consistency().await.expect("verify"),
-            ChainConsistency::Inconclusive
-        ));
     }
 }
