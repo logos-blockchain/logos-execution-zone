@@ -5,6 +5,7 @@
 # commands survive mid-session power loss.
 
 export KEYCARD_PIN=111111
+export KEYCARD_CA_PUBLIC_KEY=025877220aaae6e54a6f974602d5995c0fe24a3ea7ddabd8644bec795b9da00743
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 

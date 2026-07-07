@@ -2,6 +2,7 @@
 # Run `cargo install --path lez/wallet --force` first
 
 export KEYCARD_PIN=111111
+export KEYCARD_CA_PUBLIC_KEY=025877220aaae6e54a6f974602d5995c0fe24a3ea7ddabd8644bec795b9da00743
 
 # Tests wallet keycard available
 #   - Checks whether smart reader and keycard are both available.

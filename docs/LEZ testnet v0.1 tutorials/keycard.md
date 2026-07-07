@@ -9,16 +9,12 @@ This tutorial walks you through using Keycard with Wallet CLI. Keycard is option
 
 ### Firmware installation
 
-The applet (LEE key protocol support, on top of standard Status Keycard commands) is no longer vendored in this repo as a pre-built `.cap` — build it directly from source.
-
-**Currently this means building from a fork with a pending fix**, not upstream directly. We found and fixed a bug where the card signed LEE Schnorr signatures over the wrong message entirely (see [PR](https://github.com/jonesmarvin8/status-keycard/pull/new/marvin/fix-schnorr-hash-aliasing), not yet merged into [`keycard-tech/status-keycard`](https://github.com/keycard-tech/status-keycard)):
+LEE key protocol support (on top of standard Status Keycard commands) is built from source, from [`keycard-tech/status-keycard`](https://github.com/keycard-tech/status-keycard)'s default branch:
 
 ```bash
-git clone --recurse-submodules --branch marvin/fix-schnorr-hash-aliasing https://github.com/jonesmarvin8/status-keycard.git
+git clone --recurse-submodules https://github.com/keycard-tech/status-keycard.git
 cd status-keycard
 ```
-
-**Once that PR is merged, switch back to cloning `keycard-tech/status-keycard`'s default branch directly** — this fork/branch pointer is temporary.
 
 The build requires **OpenJDK 11 specifically** (newer JDKs aren't compatible with its Gradle/plugin versions):
 
@@ -39,21 +35,13 @@ Build and install onto a connected, blank card (disconnect all other card reader
 ./gradlew install
 ```
 
-This uses the GlobalPlatform default keys (`404142434445464748494a4b4c4d4e4f`) or the Keycard development-card key (`c212e073ff8b4bbfaff4de8ab655221f`) to load the applet.
+This uses the GlobalPlatform default keys (`404142434445464748494a4b4c4d4e4f`) or the Keycard development-card key (`c212e073ff8b4bbfaff4de8ab655221f`) to load it onto the card.
 
-### Personalizing the card
+**Warning: `./gradlew install` uninstalls and reinstalls the applet, which erases any existing personalization.** If you run this against a card that's already personalized (identity certificate, PIN, PUK, and any loaded keys), all of that is wiped, regardless of whether the firmware source changed at all — reinstalling the exact same build twice has the same effect.
 
-**Installing the applet alone isn't enough to use the card.** A freshly installed applet has no identity certificate, and refuses every command (including `SELECT`) until one is provisioned via `IdentApplet`. There isn't yet a documented, supported personalization path for production cards — this is a known gap, not something to work around ad hoc.
+### Personalizing your card
 
-For development/testing, the project's own JUnit test suite provisions the card against a fixed test CA as a side effect of running any test — run the narrowest one:
-
-```bash
-./gradlew test --tests "im.status.keycard.KeycardTest.selectTest"
-```
-
-If the card isn't initialized yet, this also initializes it with fixed test values (not secrets): PIN `000000`, alt-PIN `024680`, PUK `012345678901`. To re-personalize a card that's already initialized with different values, wipe it first with `wallet keycard factory-reset --confirm` (see the Commands table below), then re-run the test above, then `wallet keycard init` with whatever PIN you want.
-
-Because this personalizes against a throwaway test CA rather than a real production CA, the wallet needs to be told to trust it explicitly — see "CA public key override" below. Real, production-personalized cards need no such override.
+**Personalization is mandatory, not optional — every card requires it before any command will work, immediately after installing the firmware.** A freshly installed (or freshly reinstalled) card has no identity certificate, and refuses every command.
 
 **Important:** keycard can only connect with one application at a time; if another tool is using the keycard then Wallet CLI cannot access the same keycard, and vice-versa.
 
@@ -71,23 +59,22 @@ Unset it when done:
 unset KEYCARD_PIN
 ```
 
-## CA public key override
+## Default CA public key
 
-Secure Channel V2 verifies the card's identity certificate against a trusted CA public key. `keycard-rs` ships with the production default baked in, so real, production-personalized cards need no configuration at all.
+`keycard-rs` verifies every card's identity certificate against a trusted CA public key before anything else happens — no match, no commands, regardless of whether the firmware or PIN is correct. The baked-in default is:
 
-Cards personalized for development/testing (see "Personalizing the card" above) are signed by a different, throwaway CA, so the wallet needs to be told to trust it explicitly:
+```
+029ab99ee1e7a71bdf45b3f9c58c99866ff1294d2c1e304e228a86e10c3343501c
+```
+
+Cards personalized for development/testing (see "Personalizing the card" above) are signed by a different, throwaway CA instead, so the wallet needs to be told to trust it explicitly:
 
 ```bash
 export KEYCARD_CA_PUBLIC_KEY=025877220aaae6e54a6f974602d5995c0fe24a3ea7ddabd8644bec795b9da00743
+# unset KEYCARD_CA_PUBLIC_KEY when done testing against a dev card
 ```
 
-If this is unset (or set, but doesn't match the card's actual certificate), every keycard command will report the card as unavailable — that's the default-CA check correctly rejecting a card it doesn't recognize, not a bug. If it's set to something that isn't 66 hex characters, commands fail immediately with `invalid KEYCARD_CA_PUBLIC_KEY: ...` instead of a confusing "unavailable".
-
-Unset it when you're done testing against a dev card:
-
-```bash
-unset KEYCARD_CA_PUBLIC_KEY
-```
+If the card's certificate doesn't match whichever CA is in effect, every command reports the card as simply "not available."
 
 ## Keycard Commands
 

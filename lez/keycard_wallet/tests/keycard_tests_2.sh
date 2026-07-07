@@ -24,6 +24,7 @@
 #   (LP holding for amm new is created fresh each run — no persistent label)
 
 export KEYCARD_PIN=111111
+export KEYCARD_CA_PUBLIC_KEY=025877220aaae6e54a6f974602d5995c0fe24a3ea7ddabd8644bec795b9da00743
 
 # =============================================================================
 # Keycard setup
