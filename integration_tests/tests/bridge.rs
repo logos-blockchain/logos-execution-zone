@@ -561,7 +561,6 @@ fn create_zone_indexer_observer(
 ///
 /// TODO: Integration-level park testing (publishing a bad block to force a stall) is a follow-up
 /// needing fault injection support in the test harness.
-#[ignore = "requires the full local stack (bedrock + sequencer + indexer)"]
 #[test]
 async fn indexer_status_rpc_reports_caught_up_with_no_stall() -> anyhow::Result<()> {
     use indexer_service_rpc::RpcClient as _;

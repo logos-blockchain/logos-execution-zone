@@ -42,7 +42,7 @@ enum ChainConsistency {
     Inconsistent(BlockMismatch),
 }
 
-/// The differing pair behind a [`ChainConsistenty::Inconsistent`]: our stored
+/// The differing pair behind a [`ChainConsistency::Inconsistent`]: our stored
 /// block vs. the block the channel serves at the same id, as `(block_id, hash)`.
 struct BlockMismatch {
     ours: (u64, HashType),
@@ -150,7 +150,7 @@ impl IndexerCore {
             return Ok(ChainConsistency::Inconclusive);
         };
 
-        // copare the block w.r.t hashes
+        // compare the block w.r.t hashes
         let comparison_result = if ours.header.hash == channel.header.hash {
             ChainConsistency::Consistent
         } else {
