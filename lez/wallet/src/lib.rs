@@ -848,16 +848,16 @@ impl WalletCore {
                             key_chain.calculate_shared_secret_receiver(&encrypted_data.epk)?;
 
                         lee_core::EncryptionScheme::decrypt(ciphertext, &shared_secret, nullifier)
-                        .map(|(kind, res_acc)| {
-                            let npk = &key_chain.nullifier_public_key;
-                            let account_id = lee::AccountId::for_private_account(
-                                npk,
-                                &key_chain.viewing_public_key,
-                                &kind,
-                            );
-                            let nsk = key_chain.private_key_holder.nullifier_secret_key;
-                            (account_id, kind, res_acc, nsk)
-                        })
+                            .map(|(kind, res_acc)| {
+                                let npk = &key_chain.nullifier_public_key;
+                                let account_id = lee::AccountId::for_private_account(
+                                    npk,
+                                    &key_chain.viewing_public_key,
+                                    &kind,
+                                );
+                                let nsk = key_chain.private_key_holder.nullifier_secret_key;
+                                (account_id, kind, res_acc, nsk)
+                            })
                     })
                     .collect::<Vec<_>>()
             })

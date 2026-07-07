@@ -440,8 +440,11 @@ impl UserKeyChain {
             )
         };
 
-        let (kind, new_account) =
-            EncryptionScheme::decrypt(&encrypted.ciphertext, &secret, &message.new_nullifiers[i].0)?;
+        let (kind, new_account) = EncryptionScheme::decrypt(
+            &encrypted.ciphertext,
+            &secret,
+            &message.new_nullifiers[i].0,
+        )?;
         let new_nullifier = NullifierIndex::next_update_nullifier(account_id, &new_account, &nsk);
 
         if is_shared {
