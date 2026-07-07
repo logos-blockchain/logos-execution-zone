@@ -262,6 +262,17 @@ pub fn compute_circuit_output(
     }
 
     output
+        .new_commitments
+        .sort_unstable_by_key(Commitment::to_byte_array);
+
+    let mut notes: Vec<_> = core::mem::take(&mut output.new_nullifiers)
+        .into_iter()
+        .zip(core::mem::take(&mut output.encrypted_private_post_states))
+        .collect();
+    notes.sort_unstable_by_key(|((nullifier, _), _)| nullifier.to_byte_array());
+    (output.new_nullifiers, output.encrypted_private_post_states) = notes.into_iter().unzip();
+
+    output
 }
 
 fn emit_dummy_output(output: &mut PrivacyPreservingCircuitOutput, dummy: DummyInput) {
