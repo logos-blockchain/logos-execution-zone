@@ -1350,6 +1350,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "chain_state"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "common",
+ "lee",
+ "logos-blockchain-zone-sdk",
+ "serde",
+ "serde_json",
+ "testnet_initial_state",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "chkstk_stub"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

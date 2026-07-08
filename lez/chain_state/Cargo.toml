@@ -1,0 +1,21 @@
+[package]
+name = "chain_state"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+common.workspace = true
+lee.workspace = true
+logos-blockchain-zone-sdk.workspace = true
+
+anyhow.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+testnet_initial_state.workspace = true
+serde_json.workspace = true

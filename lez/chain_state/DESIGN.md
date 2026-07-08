@@ -86,8 +86,7 @@ struct ChainState {
     final_tip:    Option<Tip>,
     head_state:   V03State,        // final_state + applied head blocks
     head_blocks:  Vec<HeadEntry>,  // ordered, above final_tip
-    final_stall:  Option<StallReason>,  // persisted to RocksDB — see §4a
-    head_stall:   Option<StallReason>,  // in-memory only — recomputed from the stream on restart
+    final_stall:  Option<StallReason>,  // the one stall — persisted to RocksDB. See §4a
 }
 
 struct HeadEntry { this_msg: MsgId, block: Block }
@@ -103,8 +102,8 @@ Operations:
 
 - `apply_adopted(inscription) -> AcceptOutcome` — dedup by `this_msg` against our
   outbox, else `apply_block` on the head tip; on success push `HeadEntry`. On
-  failure, set **`head_stall`** (in-memory `StallReason`) and freeze the head tip
-  at the last valid block — do **not** persist.
+  failure, **do nothing durable**: the head tip simply stays at the last valid
+  block. No stall is recorded (see §4a) — the head self-heals from the stream.
 - `apply_channel_update(orphaned, adopted)` — revert every `orphaned` by
   `this_msg`, re-derive `head_state` (clone `final_state`, replay survivors),
   then apply every `adopted` in order. Atomic per event.
@@ -113,52 +112,62 @@ Operations:
 - `apply_finalized(inscription)` — steady state: if present in head by
   `this_msg`, `finalize_up_to`; cold-start backfill (not in head):
   `apply_block` directly to `final_state`, mirror into head. If a finalized block
-  fails to apply, set **`final_stall`** and persist it — this is the **only**
-  `StallReason` written to disk (see §4a).
-- `rollback_orphan(this_msg)` — drop from that entry forward, re-derive head;
-  clears `head_stall` if the re-derived head is clean.
-- `status() -> { final_height, head_height, head_stall, final_stall }` — for RPC/UI.
+  fails to apply, set **`final_stall`** and persist it — this is the **only** stall
+  (see §4a).
+- `rollback_orphan(this_msg)` — drop from that entry forward, re-derive head.
+- `status() -> { final_height, head_height, final_stall }` — for RPC/UI. A derived
+  "head blocked" indicator can be computed on demand (see §4a) without persisting.
 
 For the **indexer** (finalized-only `next_messages` stream), `head_blocks` stays
 empty and `head == final`; it exercises only `apply_finalized`. The **sequencer**
 uses both tiers from day one.
 
-### 4a. Two stalls — persisted vs in-memory
+### 4a. One stall — `final_stall`, persisted
 
-Both tiers carry a `StallReason` (`final_stall`, `head_stall`); they are equally
-informative. The difference is **persistence**, which follows from durability. L1
-finality is about inscription **canonicality**, not LEZ-block **content**
-validity, so an authorized sequencer can get a content-invalid block finalized —
-which is why both tiers can meet an invalid block in the first place.
+There is a single stall, `final_stall`, on the final tier. The head tier does
+**not** carry its own stall, and this is deliberate.
 
-- **`head_stall` — in-memory only.** The head is reorg-able and re-derived from
-  every `channel_update`. An invalid adopted block is transient: it is either
-  orphaned (a competing valid block at the same height wins) or it finalizes. We
-  set `head_stall` for observability (RPC/UI can show "head blocked at `N`:
-  StateTransition at tx 3") and freeze the head tip at the last valid block, but
-  we do **not** write it to disk — on restart the head is rebuilt from the stream,
-  so a persisted head stall would be redundant and could go stale. Because the
-  next adopted block chains on the bad one, it fails validation too, so the head
-  stays frozen until a valid block (competing or post-reorg) is adopted.
-- **`final_stall` — persisted.** The final tier is irreversible. If an invalid
-  block *finalizes*, the node is durably stuck until a valid successor (built by
-  honest sequencers on the last valid parent) finalizes. This must survive
-  restart: the startup chain-consistency / anchor check reads it, it is what we
-  surface as `Stalled`, and it is the signal the committee acts on to evict a bad
-  sequencer.
+The head and the final tier never represent two independent problems: a block
+always reaches the head first (as `adopted`) and only later the final tier (as
+`finalized`), so a would-be "head stall" is just the earlier, provisional sighting
+of the exact block that `final_stall` records durably if it finalizes — the same
+event modeled twice.
 
-An invalid block **migrates the problem head→final** when it finalizes: `head_stall`
-is set at `N` first; once `N+1(bad)` finalizes, `apply_finalized` fails and records
-the persisted `final_stall`. Both tiers end up stuck at `N` consistently, and both
-recover when `N+1′` finalizes. The indexer (final tier only) never sets
-`head_stall`, so it behaves exactly as it does today.
+And the head does not need a recorded reason to freeze. **The tip-freeze is
+intrinsic**: not applying a bad block is what freezes the tip; no marker is
+required. The head's freeze is also **transient and self-healing** — the bad block
+is either orphaned (a competing valid block at the same height wins and applies on
+its own) or it finalizes. Subsequent adopted blocks that chain on the bad one fail
+validation by themselves, and the producer builds on the head tip regardless of
+any marker. So a persisted head stall would be redundant (re-derived from the
+stream on restart) and buys no behavior.
+
+`final_stall` is the stall that does real work:
+
+- The **indexer already requires it** and ships it today. The indexer has only a
+  final tier (finalized-only stream, no head); its startup chain-consistency /
+  anchor check reads the persisted stall to know where it is parked. The shared
+  `final_stall` serves that unchanged.
+- It **survives restart** and is what we surface as `Stalled`.
+- "A bad block **finalized**" is the only irreversible, actionable condition — the
+  signal the committee acts on to evict a bad sequencer. A provisional head block
+  that may vanish on the next reorg is not something to evict over.
+
+The one thing we forgo is an *early warning* that a sequencer is posting garbage
+before it finalizes. That condition frequently self-heals via reorg, so alarming on
+it is mostly noise; if wanted, it is a **derived, non-persisted** indicator (e.g.
+"k adopted inscriptions above the head tip remain unapplied"), computed on demand —
+not a second `StallReason` in the struct.
+
+So the sequencer and the indexer share exactly one stall concept, keeping the two
+consumers uniform.
 
 ### 4b. Producer contract — write on turn, build on last valid
 
 The sequencer publishes **only on its own turn** (the SDK queues out-of-turn
 publishes). When it is our turn we build the next block on the **current head
 tip**, which is by construction the last validly-applied block. So if the head is
-frozen (`head_stall` set) on a peer's bad block, we build on that frozen valid
+frozen on a peer's bad block, we build on that frozen valid
 tip — the same parent every honest sequencer chooses — and thereby skip the bad
 block rather than extend it. A parked node keeps following peers' valid blocks as
 they arrive; the moment it also gets a turn, it produces the next valid block on
@@ -203,7 +212,7 @@ flowchart TD
     VAL --> OUT{"AcceptOutcome"}
     OUT -->|Applied| APP["append this_msg+block to head,<br/>advance head tip, clear stall"]
     OUT -->|AlreadyApplied| SKIP
-    OUT -->|"Parked(err)"| PARK["set head_stall (in-memory),<br/>freeze head tip — do NOT apply.<br/>Not persisted"]
+    OUT -->|"Parked(err)"| PARK["freeze head tip — do NOT apply.<br/>No stall recorded (self-heals<br/>via reorg/finalization)"]
     SKIP --> FIN
     APP --> FIN
     PARK --> FIN
@@ -231,11 +240,11 @@ stateDiagram-v2
     Parked --> Parked: further non-chaining finalized blocks (orphans_since++)
     Parked --> Syncing: valid successor finalizes on frozen final tip → stall cleared
     note right of Parked
-        final_stall — persisted, survives restart.
+        final_stall — the one stall. Persisted, survives restart.
         Head-tier bad blocks do NOT enter this state:
-        they set head_stall (in-memory) and self-heal
-        via reorg/finalization. Producer (on our turn)
-        builds on the last valid tip either way.
+        the head tip freezes intrinsically (no stall) and
+        self-heals via reorg/finalization. Producer (on our
+        turn) builds on the last valid tip either way.
     end note
 ```
 
@@ -258,13 +267,13 @@ stateDiagram-v2
 | 6   | Batch reorg: some `orphaned` + some `adopted` in one event | revert all orphaned, re-derive head, then apply all adopted in order                         | deterministic convergence                       |
 | 7   | Orphan chain (parent transitively off canonical)           | SDK surfaces all affected as `orphaned`; revert each, replay survivors                       | head_state matches new canonical branch         |
 
-**Invalid / bad block** — "stall" below means the **persisted `final_stall`**
-(§4a). A bad block seen only in `adopted` sets the in-memory `head_stall` (not
-persisted); it becomes a persisted `final_stall` only if it finalizes.
+**Invalid / bad block** — "stall" below means the one **persisted `final_stall`**
+(§4a). A bad block seen only in `adopted` records **no** stall — the head tip just
+freezes and self-heals; it becomes a `final_stall` only if it finalizes.
 
 | #   | Scenario                                                            | Handling                                                                                 | Expected                                        |
 | --- | ------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | ----------------------------------------------- |
-| 8   | Authorized sequencer posts a block with an invalid state transition | head: `apply_block` → `Parked`, set `head_stall` (in-memory), no persist. If it finalizes: persisted `final_stall` | park-and-skip; no apply, no halt                |
+| 8   | Authorized sequencer posts a block with an invalid state transition | head: `apply_block` → `Parked`, freeze head tip, no stall recorded. If it finalizes: persisted `final_stall` | park-and-skip; no apply, no halt                |
 | 9   | Broken chain link / hash mismatch / unexpected id in adopted        | `Parked(BrokenChainLink / HashMismatch / UnexpectedBlockId)`; same park                  | frozen tip; peers park identically              |
 | 10  | Undeserializable inscription payload                                | park with `Deserialize` (no header); processing advances                                 | recover when a valid block chains on frozen tip |
 | 11  | Valid successor after a park (recovery)                             | block chaining on frozen tip → `Applied` → clear stall                                   | head resumes automatically; no divergence       |

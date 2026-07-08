@@ -16,6 +16,7 @@ members = [
 
   "lez",
   "lez/system_accounts",
+  "lez/chain_state",
   "lez/sequencer/core",
   "lez/sequencer/service",
   "lez/sequencer/service/protocol",
@@ -64,6 +65,7 @@ members = [
 lee = { path = "lee/state_machine" }
 lee_core = { path = "lee/state_machine/core" }
 common = { path = "lez/common" }
+chain_state = { path = "lez/chain_state" }
 mempool = { path = "lez/mempool" }
 storage = { path = "lez/storage" }
 key_protocol = { path = "lee/key_protocol" }
