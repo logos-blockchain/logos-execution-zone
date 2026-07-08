@@ -85,11 +85,8 @@ impl KeycardSubcommand {
         wallet.connect(&pin)?;
         println!("\u{2705} Keycard is now connected to wallet.");
 
-        if wallet.load_mnemonic(&mnemonic).is_ok() {
-            println!("\u{2705} Mnemonic phrase loaded successfully.");
-        } else {
-            println!("\u{274c} Failed to load mnemonic phrase.");
-        }
+        wallet.load_mnemonic(&mnemonic)?;
+        println!("\u{2705} Mnemonic phrase loaded successfully.");
 
         Ok(SubcommandReturnValue::Empty)
     }

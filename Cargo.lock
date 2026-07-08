@@ -4796,7 +4796,7 @@ dependencies = [
 [[package]]
 name = "keycard-rs"
 version = "0.1.0"
-source = "git+https://github.com/keycard-tech/keycard-rs?rev=52cb832a6334ab84ea0a0e1f42aeabcf8a3b4337#52cb832a6334ab84ea0a0e1f42aeabcf8a3b4337"
+source = "git+https://github.com/keycard-tech/keycard-rs#9535a657ba04b1e6916de51777e22b4837c1a84d"
 dependencies = [
  "aes 0.9.1",
  "base64 0.21.7",
@@ -10135,7 +10135,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.2",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
