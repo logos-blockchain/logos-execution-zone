@@ -3864,6 +3864,7 @@ dependencies = [
  "arc-swap",
  "async-stream",
  "borsh",
+ "chain_state",
  "common",
  "futures",
  "humantime-serde",
@@ -3877,7 +3878,6 @@ dependencies = [
  "storage",
  "tempfile",
  "testnet_initial_state",
- "thiserror 2.0.18",
  "tokio",
  "url",
 ]

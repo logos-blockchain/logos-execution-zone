@@ -27,6 +27,10 @@ pub enum AcceptOutcome {
     AlreadyApplied,
     /// Did not chain or failed to apply; the tip stays frozen.
     Parked(BlockIngestError),
+    /// Chained but failed to apply, possibly transiently
+    /// ([`BlockIngestError::is_retryable`]); nothing recorded, tip and state
+    /// untouched. The caller retries and parks once it gives up.
+    RetryableFailure(BlockIngestError),
 }
 
 /// Validates `block` against `tip`, then applies it to `state`.

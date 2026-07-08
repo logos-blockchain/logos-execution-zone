@@ -2,19 +2,18 @@ use std::{path::Path, sync::Arc};
 
 use anyhow::Result;
 use arc_swap::ArcSwap;
+pub use chain_state::{AcceptOutcome, BlockIngestError, StallReason};
 use common::block::Block;
 // TODO: Remove after testnet
 use futures::StreamExt as _;
-pub use ingest_error::BlockIngestError;
 use log::{error, info, warn};
 use logos_blockchain_zone_sdk::{
     CommonHttpClient, Slot, ZoneMessage, adapter::NodeHttpClient, indexer::ZoneIndexer,
 };
 use retry::ApplyRetryGate;
-pub use stall_reason::StallReason;
 
 use crate::{
-    block_store::{AcceptOutcome, IndexerStore},
+    block_store::IndexerStore,
     chain_consistency::ChainConsistency,
     config::IndexerConfig,
     status::{IndexerStatus, IndexerSyncStatus},
@@ -22,9 +21,7 @@ use crate::{
 pub mod block_store;
 pub mod chain_consistency;
 pub mod config;
-pub mod ingest_error;
 mod retry;
-pub mod stall_reason;
 pub mod status;
 
 /// Consecutive failed apply attempts of the same block before parking.

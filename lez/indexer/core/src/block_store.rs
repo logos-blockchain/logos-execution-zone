@@ -1,40 +1,18 @@
 use std::{path::Path, sync::Arc};
 
 use anyhow::{Context as _, Result};
+use chain_state::{AcceptOutcome, BlockIngestError, StallReason, Tip, apply_block};
 use common::{
-    HashType,
     block::{BedrockStatus, Block, BlockHeader},
-    transaction::{LeeTransaction, clock_invocation},
+    transaction::LeeTransaction,
 };
-use lee::{Account, AccountId, GENESIS_BLOCK_ID, V03State};
+use lee::{Account, AccountId, V03State};
 use lee_core::BlockId;
 use log::warn;
 use logos_blockchain_core::header::HeaderId;
 use logos_blockchain_zone_sdk::Slot;
 use storage::indexer::RocksDBIO;
 use tokio::sync::RwLock;
-
-use crate::{ingest_error::BlockIngestError, stall_reason::StallReason};
-
-struct Tip {
-    block_id: u64,
-    hash: HashType,
-}
-
-/// Outcome of feeding a parsed L2 block to the validated tip.
-pub enum AcceptOutcome {
-    /// Chained and applied; tip and L1 read cursor both advance.
-    Applied,
-    /// A duplicate re-delivery of the current tip. Just L2 advances.
-    AlreadyApplied,
-    /// Did not chain or failed to apply; tip stays frozen, stall recorded.
-    Parked(BlockIngestError),
-    /// Chained but failed to apply, possibly transiently
-    /// ([`BlockIngestError::is_retryable`]); nothing recorded, tip and state
-    /// untouched. The caller retries and parks via
-    /// [`IndexerStore::record_stall`] once it gives up.
-    RetryableFailure(BlockIngestError),
-}
 
 #[derive(Clone)]
 pub struct IndexerStore {
@@ -252,14 +230,9 @@ impl IndexerStore {
             return Ok(AcceptOutcome::AlreadyApplied);
         }
 
-        if let Err(err) = validate_against_tip(tip.as_ref(), block) {
-            self.record_stall(Some(&block.header), l1_slot, err.clone())?;
-            return Ok(AcceptOutcome::Parked(err));
-        }
-
         // TODO: we use scratch state to be atomic, but need to revisit how expensive a clone is
         let mut scratch = self.current_state.read().await.clone();
-        if let Err(err) = apply_block_to_scratch(block, &mut scratch) {
+        if let Err(err) = apply_block(tip.as_ref(), block, &mut scratch) {
             if err.is_retryable() {
                 return Ok(AcceptOutcome::RetryableFailure(err));
             }
@@ -284,112 +257,11 @@ impl IndexerStore {
     }
 }
 
-/// Checks that `block` is the valid continuation of `tip`: hash integrity,
-/// then block-id continuity, then `prev_block_hash` linkage. A `None` tip
-/// (cold store) expects the genesis block.
-fn validate_against_tip(tip: Option<&Tip>, block: &Block) -> Result<(), BlockIngestError> {
-    let computed = block.recompute_hash();
-    if computed != block.header.hash {
-        return Err(BlockIngestError::HashMismatch {
-            computed,
-            header: block.header.hash,
-        });
-    }
-
-    match tip {
-        None => {
-            if block.header.block_id != GENESIS_BLOCK_ID {
-                return Err(BlockIngestError::UnexpectedBlockId {
-                    expected: GENESIS_BLOCK_ID,
-                    got: block.header.block_id,
-                });
-            }
-        }
-        Some(tip) => {
-            let expected = tip
-                .block_id
-                .checked_add(1)
-                .expect("block id should not overflow");
-            if block.header.block_id != expected {
-                return Err(BlockIngestError::UnexpectedBlockId {
-                    expected,
-                    got: block.header.block_id,
-                });
-            }
-            if block.header.prev_block_hash != tip.hash {
-                return Err(BlockIngestError::BrokenChainLink {
-                    expected_prev: tip.hash,
-                    got_prev: block.header.prev_block_hash,
-                });
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Applies a block's transactions to `state`, mapping every failure to a
-/// [`BlockIngestError`] so the caller can park rather than crash. Operates on a
-/// scratch state; the caller commits only on `Ok`.
-fn apply_block_to_scratch(block: &Block, state: &mut V03State) -> Result<(), BlockIngestError> {
-    let (clock_tx, user_txs) = block
-        .body
-        .transactions
-        .split_last()
-        .ok_or(BlockIngestError::EmptyBlock)?;
-
-    let expected_clock = LeeTransaction::Public(clock_invocation(block.header.timestamp));
-    if *clock_tx != expected_clock {
-        return Err(BlockIngestError::InvalidClockTransaction);
-    }
-
-    let is_genesis = block.header.block_id == GENESIS_BLOCK_ID;
-    for (tx_index, transaction) in user_txs.iter().enumerate() {
-        let state_transition = |err: anyhow::Error| BlockIngestError::StateTransition {
-            tx_index: tx_index.try_into().expect("tx index fits in u64"),
-            reason: format!("{err:#}"),
-        };
-        if is_genesis {
-            let LeeTransaction::Public(public_tx) = transaction else {
-                return Err(BlockIngestError::NonPublicGenesisTransaction);
-            };
-            state
-                .transition_from_public_transaction(
-                    public_tx,
-                    block.header.block_id,
-                    block.header.timestamp,
-                )
-                .map_err(|err| state_transition(err.into()))?;
-        } else {
-            transaction
-                .clone()
-                .execute_on_state(state, block.header.block_id, block.header.timestamp)
-                .map_err(|err| state_transition(err.into()))?;
-        }
-    }
-
-    let LeeTransaction::Public(clock_public_tx) = clock_tx else {
-        return Err(BlockIngestError::InvalidClockTransaction);
-    };
-    state
-        .transition_from_public_transaction(
-            clock_public_tx,
-            block.header.block_id,
-            block.header.timestamp,
-        )
-        .map_err(|err| BlockIngestError::StateTransition {
-            tx_index: user_txs.len().try_into().expect("tx index fits in u64"),
-            reason: format!("{:#}", anyhow::Error::from(err)),
-        })?;
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod stall_reason_tests {
     use common::HashType;
 
     use super::*;
-    use crate::{ingest_error::BlockIngestError, stall_reason::StallReason};
 
     #[tokio::test]
     async fn stall_reason_roundtrips_and_clears() {
@@ -538,7 +410,6 @@ mod accept_tests {
     use common::{HashType, block::HashableBlockData, test_utils::produce_dummy_block};
 
     use super::*;
-    use crate::ingest_error::BlockIngestError;
 
     fn signing_key() -> lee::PrivateKey {
         lee::PrivateKey::try_new([7_u8; 32]).expect("valid key")

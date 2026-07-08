@@ -1,6 +1,5 @@
+use chain_state::StallReason;
 use serde::Serialize;
-
-use crate::stall_reason::StallReason;
 
 /// Coarse lifecycle state of the indexer's ingestion loop, so a client can tell
 /// "still catching up" apart from "something went wrong".
@@ -117,9 +116,8 @@ mod tests {
 
     #[test]
     fn stalled_status_serializes_with_stall_reason() {
+        use chain_state::{BlockIngestError, StallReason};
         use logos_blockchain_zone_sdk::Slot;
-
-        use crate::{ingest_error::BlockIngestError, stall_reason::StallReason};
 
         let status = IndexerStatus {
             sync: IndexerSyncStatus::stalled("broken chain link".to_owned()),

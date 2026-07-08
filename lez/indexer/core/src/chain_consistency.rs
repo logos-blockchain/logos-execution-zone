@@ -305,8 +305,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        BlockIngestError,
-        block_store::AcceptOutcome,
+        AcceptOutcome, BlockIngestError,
         config::{ChannelId, ClientConfig, IndexerConfig},
     };
 
