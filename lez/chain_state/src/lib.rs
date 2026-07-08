@@ -1,12 +1,6 @@
-//! Shared, storage-free chain-state core for the LEZ sequencer and indexer.
-//!
-//! Hosts the single validate-then-apply entry point ([`apply_block`]) plus the
-//! shared types ([`BlockIngestError`], [`StallReason`], [`Tip`],
-//! [`AcceptOutcome`]) that both the sequencer and the indexer build on. The
-//! crate performs no I/O: callers own their storage and drive the
-//! `scratch → persist → commit` ordering around these primitives.
-//!
-//! See `DESIGN.md` in this crate for the two-tier chain-state model this backs.
+//! Storage-free chain-state core shared by the LEZ sequencer and indexer:
+//! the [`apply_block`] entry point plus [`BlockIngestError`], [`StallReason`],
+//! [`Tip`], and [`AcceptOutcome`]. See `DESIGN.md` for the two-tier model.
 
 pub mod apply;
 pub mod ingest_error;

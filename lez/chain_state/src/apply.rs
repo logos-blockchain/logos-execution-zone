@@ -11,11 +11,8 @@ use lee::{GENESIS_BLOCK_ID, V03State};
 
 use crate::ingest_error::BlockIngestError;
 
-/// The last successfully applied block: the parent the next block must chain on.
-///
-/// Only what validation needs today (`block_id` + `hash`). The two-tier
-/// `ChainState`'s `final_tip` will extend this with the inscription `l1_slot`
-/// when the anchor layer lands; the slot is currently tracked separately.
+/// The parent the next block must chain on.
+// `l1_slot` will be added here when the `ChainState` anchor layer lands.
 #[derive(Debug, Clone)]
 pub struct Tip {
     pub block_id: u64,
@@ -34,9 +31,7 @@ pub enum AcceptOutcome {
 
 /// Validates `block` against `tip`, then applies it to `state`.
 ///
-/// Validation runs first and touches nothing. Application then mutates `state`
-/// in place and can fail partway, so callers pass a scratch clone and commit it
-/// only when this returns `Ok`.
+/// Mutates `state` in place, so callers pass a scratch clone and commit on `Ok`.
 pub fn apply_block(
     tip: Option<&Tip>,
     block: &Block,
@@ -181,7 +176,10 @@ mod tests {
         let err = apply_block(None, &block, &mut state).expect_err("should reject");
         assert!(matches!(
             err,
-            BlockIngestError::UnexpectedBlockId { expected: 1, got: 2 }
+            BlockIngestError::UnexpectedBlockId {
+                expected: 1,
+                got: 2
+            }
         ));
     }
 
@@ -193,10 +191,14 @@ mod tests {
 
         // Tip is at 1; a block with id 3 skips ahead.
         let bad = produce_dummy_block(3, Some(genesis.header.hash), vec![]);
-        let err = apply_block(Some(&tip_of(&genesis)), &bad, &mut state).expect_err("should reject");
+        let err =
+            apply_block(Some(&tip_of(&genesis)), &bad, &mut state).expect_err("should reject");
         assert!(matches!(
             err,
-            BlockIngestError::UnexpectedBlockId { expected: 2, got: 3 }
+            BlockIngestError::UnexpectedBlockId {
+                expected: 2,
+                got: 3
+            }
         ));
     }
 
