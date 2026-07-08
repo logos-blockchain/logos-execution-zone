@@ -26,6 +26,8 @@ pub const DB_META_LAST_BREAKPOINT_ID: &str = "last_breakpoint_id";
 pub const DB_META_ZONE_SDK_INDEXER_CURSOR_KEY: &str = "zone_sdk_indexer_cursor";
 /// Key base for storing the persisted `Option<StallReason>` diagnostic record (opaque JSON bytes).
 pub const DB_META_STALL_REASON_KEY: &str = "stall_reason";
+/// Key base for storing the L1 inscription slot of the tip block.
+pub const DB_META_TIP_SLOT_KEY: &str = "tip_slot";
 
 /// Cell name for a breakpoint.
 pub const BREAKPOINT_CELL_NAME: &str = "breakpoint";

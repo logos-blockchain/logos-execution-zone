@@ -173,46 +173,59 @@ enum AnchorProbe {
     reason = "split for clarity & isolation of relevant code"
 )]
 impl IndexerCore {
-    /// Detects when the local store belongs to a different chain than the connected
-    /// L1 (e.g. a wiped/restarted bedrock) so startup can reset instead of silently
-    /// diverging. Best-effort dev convenience; won't trigger during normal live indexing.
+    /// Verifies whether the channel still serves the same chain the store was built from.
+    /// This may change frequently during development where we reset the chain from time to
+    /// time in devnet/testnet, but we do not expect [`ChainConsistency::Inconsistent`] in
+    /// production.
     ///
-    /// Anchors on a block the same chain must still serve at a known slot: the
-    /// recorded parked block while stalled, otherwise the tip at the read
-    /// cursor (only blocks advance the cursor, so when not parked it is the
-    /// tip's inscription slot). See [`Self::verify_chain_at_anchor`].
+    /// To compare the chains, we use an [`Anchor`] block that is either the parked L2 block
+    /// while stalled, or the tip L2 block at its own inscription L1 slot.
     pub(crate) async fn verify_chain_consistency(&self) -> Result<ChainConsistency> {
-        let anchor = if let Some(stall) = self.store.get_stall_reason()? {
-            Anchor {
-                slot: stall.l1_slot,
-                block: stall.block_id.zip(stall.block_hash),
-            }
-        } else {
-            let Some(cursor) = self.store.get_zone_cursor()? else {
-                // if we have no cursor, the store is empty or cold: nothing to compare
-                return Ok(ChainConsistency::Inconclusive);
-            };
-            let Some(tip_id) = self.store.get_last_block_id()? else {
-                return Ok(ChainConsistency::Inconclusive);
-            };
-            let Some(tip) = self.store.get_block_at_id(tip_id)? else {
-                return Ok(ChainConsistency::Inconclusive);
-            };
-            Anchor {
-                slot: cursor,
-                block: Some((tip_id, tip.header.hash)),
-            }
+        let Some(anchor) = self.get_startup_anchor()? else {
+            // empty or cold store: nothing to compare
+            return Ok(ChainConsistency::Inconclusive);
         };
 
         self.verify_chain_at_anchor(&anchor).await
+    }
+
+    /// Builds the anchor for the startup check.
+    ///
+    /// - If stalled, returns the recorded _parked_ block
+    /// - If not stalled, returns the validated tip at its _own_ inscription slot.
+    /// - If the store is empty, returns `None`.
+    fn get_startup_anchor(&self) -> Result<Option<Anchor>> {
+        if let Some(stall) = self.store.get_stall_reason()? {
+            return Ok(Some(Anchor {
+                slot: stall.l1_slot,
+                block: stall.block_id.zip(stall.block_hash),
+            }));
+        }
+
+        // not stalled, so anchor on the tip at its own inscription slot
+        let Some(slot) = self.store.get_tip_slot()?.or(self.store.get_zone_cursor()?) else {
+            return Ok(None);
+        };
+        let Some(tip_id) = self.store.get_last_block_id()? else {
+            return Ok(None);
+        };
+        let Some(tip) = self.store.get_block_at_id(tip_id)? else {
+            return Ok(None);
+        };
+        Ok(Some(Anchor {
+            slot,
+            block: Some((tip_id, tip.header.hash)),
+        }))
     }
 
     /// Verifies the channel still carries the anchor block at its slot.
     ///
     /// The anchor was finalized at `anchor.slot`, so the same chain must still
     /// serve it there, while a reset chain re-inscribes its content only at
-    /// later wall-clock slots. Only positive evidence of a different chain
-    /// yields `Inconsistent`; absence of data stays `Inconclusive`.
+    /// later wall-clock slots.
+    ///
+    /// Only positive evidence of a different chain yields `Inconsistent`.
+    /// Absence of data stays `Inconclusive`.
     async fn verify_chain_at_anchor(&self, anchor: &Anchor) -> Result<ChainConsistency> {
         match self.node.channel_state(self.config.channel_id).await {
             Ok(state) => {
@@ -386,6 +399,41 @@ mod tests {
             core.verify_chain_consistency().await.expect("verify"),
             ChainConsistency::Inconclusive
         ));
+    }
+
+    #[tokio::test]
+    async fn startup_anchor_prefers_tip_slot_over_lagging_cursor() {
+        // Cursor persist failures are warn-only, so the read cursor can lag the
+        // tip by several blocks. The anchor must pair the tip with its own
+        // inscription slot; pairing it with the stale cursor would make the scan
+        // misread the chain's intermediate blocks as re-inscriptions.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let core = unreachable_core(dir.path());
+
+        let genesis = common::test_utils::produce_dummy_block(1, None, vec![]);
+        core.store
+            .accept_block(&genesis, Slot::from(1_000))
+            .await
+            .expect("accept");
+        let block2 = common::test_utils::produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+        core.store
+            .accept_block(&block2, Slot::from(1_005))
+            .await
+            .expect("accept");
+        let block3 = common::test_utils::produce_dummy_block(3, Some(block2.header.hash), vec![]);
+        core.store
+            .accept_block(&block3, Slot::from(1_010))
+            .await
+            .expect("accept");
+
+        // Cursor last persisted at the genesis slot: two blocks behind the tip.
+        core.store
+            .set_zone_cursor(&Slot::from(1_000))
+            .expect("set cursor");
+
+        let anchor = core.get_startup_anchor().expect("anchor").expect("present");
+        assert_eq!(anchor.slot, Slot::from(1_010));
+        assert_eq!(anchor.block, Some((3, block3.header.hash)));
     }
 
     #[test]

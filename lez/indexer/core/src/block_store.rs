@@ -136,6 +136,13 @@ impl IndexerStore {
         Ok(())
     }
 
+    /// The L1 inscription slot of the validated tip, written atomically with it
+    /// by [`Self::accept_block`]. `None` on a cold store or one written before
+    /// the slot was recorded.
+    pub fn get_tip_slot(&self) -> Result<Option<Slot>> {
+        Ok(self.dbio.get_meta_tip_slot_in_db()?.map(Slot::from))
+    }
+
     pub fn get_stall_reason(&self) -> Result<Option<StallReason>> {
         let Some(bytes) = self.dbio.get_stall_reason_bytes()? else {
             return Ok(None);
@@ -254,7 +261,7 @@ impl IndexerStore {
         let mut stored = block.clone();
         stored.bedrock_status = BedrockStatus::Finalized;
         self.dbio
-            .put_block(&stored, [0_u8; 32])
+            .put_block(&stored, [0_u8; 32], l1_slot.into_inner())
             .context("Failed to persist accepted block")?;
 
         // Commit in-memory state (infallible) only after the DB write succeeded.
@@ -666,6 +673,46 @@ mod accept_tests {
             Some(2),
             "tip must advance to the recovered block"
         );
+    }
+
+    #[tokio::test]
+    async fn accept_block_records_tip_inscription_slot() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = IndexerStore::open_db(dir.path()).expect("open store");
+
+        assert_eq!(store.get_tip_slot().expect("get"), None);
+
+        let genesis = produce_dummy_block(1, None, vec![]);
+        store
+            .accept_block(&genesis, Slot::from(1_000))
+            .await
+            .expect("accept");
+        assert_eq!(store.get_tip_slot().expect("get"), Some(Slot::from(1_000)));
+
+        let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+        store
+            .accept_block(&block2, Slot::from(1_005))
+            .await
+            .expect("accept");
+        assert_eq!(store.get_tip_slot().expect("get"), Some(Slot::from(1_005)));
+
+        // A parked block freezes the tip, so its slot must not advance either.
+        let bad = produce_dummy_block(4, Some(block2.header.hash), vec![]);
+        assert!(matches!(
+            store.accept_block(&bad, Slot::from(1_010)).await.unwrap(),
+            AcceptOutcome::Parked(_)
+        ));
+        assert_eq!(store.get_tip_slot().expect("get"), Some(Slot::from(1_005)));
+
+        // Neither must a re-delivered old block move it.
+        assert!(matches!(
+            store
+                .accept_block(&genesis, Slot::from(1_015))
+                .await
+                .unwrap(),
+            AcceptOutcome::AlreadyApplied
+        ));
+        assert_eq!(store.get_tip_slot().expect("get"), Some(Slot::from(1_005)));
     }
 
     #[tokio::test]

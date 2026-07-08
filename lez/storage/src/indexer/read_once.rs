@@ -4,7 +4,7 @@ use crate::{
     cells::shared_cells::{BlockCell, FirstBlockCell, FirstBlockSetCell, LastBlockCell},
     indexer::indexer_cells::{
         AccNumTxCell, BlockHashToBlockIdMapCell, BreakpointCellOwned, LastBreakpointIdCell,
-        LastObservedL1LibHeaderCell, StallReasonCellOwned, TxHashToBlockIdMapCell,
+        LastObservedL1LibHeaderCell, StallReasonCellOwned, TipSlotCell, TxHashToBlockIdMapCell,
         ZoneSdkIndexerCursorCellOwned,
     },
 };
@@ -34,6 +34,11 @@ impl RocksDBIO {
 
     pub fn get_meta_last_breakpoint_id(&self) -> DbResult<Option<u64>> {
         self.get_opt::<LastBreakpointIdCell>(())
+            .map(|opt| opt.map(|cell| cell.0))
+    }
+
+    pub fn get_meta_tip_slot_in_db(&self) -> DbResult<Option<u64>> {
+        self.get_opt::<TipSlotCell>(())
             .map(|opt| opt.map(|cell| cell.0))
     }
 

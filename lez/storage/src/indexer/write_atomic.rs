@@ -8,7 +8,7 @@ use crate::{
     cells::shared_cells::{FirstBlockCell, FirstBlockSetCell, LastBlockCell},
     indexer::indexer_cells::{
         AccNumTxCell, BlockHashToBlockIdMapCell, LastBreakpointIdCell, LastObservedL1LibHeaderCell,
-        TxHashToBlockIdMapCell,
+        TipSlotCell, TxHashToBlockIdMapCell,
     },
 };
 
@@ -139,13 +139,20 @@ impl RocksDBIO {
         self.put_batch(&LastBreakpointIdCell(br_id), (), write_batch)
     }
 
+    pub fn put_meta_tip_slot_in_db_batch(
+        &self,
+        l1_slot: u64,
+        write_batch: &mut WriteBatch,
+    ) -> DbResult<()> {
+        self.put_batch(&TipSlotCell(l1_slot), (), write_batch)
+    }
+
     pub fn put_meta_is_first_block_set_batch(&self, write_batch: &mut WriteBatch) -> DbResult<()> {
         self.put_batch(&FirstBlockSetCell(true), (), write_batch)
     }
 
-    // Block
-
-    pub fn put_block(&self, block: &Block, l1_lib_header: [u8; 32]) -> DbResult<()> {
+    /// Put a block atomically (via [`WriteBatch`]) along with its L1 header and `Slot`.
+    pub fn put_block(&self, block: &Block, l1_lib_header: [u8; 32], l1_slot: u64) -> DbResult<()> {
         let cf_block = self.block_column();
         let last_curr_block = self.get_meta_last_block_id_in_db()?.unwrap_or(0);
         let mut write_batch = WriteBatch::default();
@@ -163,6 +170,7 @@ impl RocksDBIO {
         if block.header.block_id > last_curr_block {
             self.put_meta_last_block_in_db_batch(block.header.block_id, &mut write_batch)?;
             self.put_meta_last_observed_l1_lib_header_in_db_batch(l1_lib_header, &mut write_batch)?;
+            self.put_meta_tip_slot_in_db_batch(l1_slot, &mut write_batch)?;
         }
         if last_curr_block == 0 {
             self.put_meta_first_block_in_db_batch(block, &mut write_batch)?;
