@@ -81,9 +81,9 @@ async fn private_transfer_to_foreign_account() -> Result<()> {
         .context("Failed to get private account commitment for sender")?;
 
     let tx = fetch_privacy_preserving_tx(ctx.sequencer_client(), tx_hash).await;
-    assert!(tx.message.new_commitments.contains(&new_commitment1));
+    assert!(tx.message.commitments().contains(&new_commitment1));
 
-    for commitment in tx.message.new_commitments {
+    for commitment in tx.message.commitments() {
         assert!(verify_commitment_is_in_state(commitment, ctx.sequencer_client()).await);
     }
 
@@ -169,9 +169,9 @@ async fn private_transfer_to_owned_account_using_claiming_path() -> Result<()> {
         .wallet()
         .get_private_account_commitment(from)
         .context("Failed to get private account commitment for sender")?;
-    assert!(tx.message.new_commitments.contains(&sender_commitment));
+    assert!(tx.message.commitments().contains(&sender_commitment));
 
-    for commitment in tx.message.new_commitments {
+    for commitment in tx.message.commitments() {
         assert!(verify_commitment_is_in_state(commitment, ctx.sequencer_client()).await);
     }
 
@@ -245,7 +245,7 @@ async fn shielded_transfer_to_foreign_account() -> Result<()> {
 
     let acc_1_balance = account_balance(&ctx, from).await?;
 
-    for commitment in tx.message.new_commitments {
+    for commitment in tx.message.commitments() {
         assert!(verify_commitment_is_in_state(commitment, ctx.sequencer_client()).await);
     }
 
@@ -301,7 +301,7 @@ async fn private_transfer_to_owned_account_continuous_run_path() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     // Verify commitments are in state
-    for commitment in tx.message.new_commitments {
+    for commitment in tx.message.commitments() {
         assert!(verify_commitment_is_in_state(commitment, ctx.sequencer_client()).await);
     }
 
@@ -657,8 +657,9 @@ async fn init_with_dummy_commitment_root_produces_valid_root() -> Result<()> {
 
     let output = prove_init_with_commitment_root(&ctx, expected_digest).await?;
 
-    assert_eq!(output.new_nullifiers.len(), 1);
-    let (nullifier, digest) = &output.new_nullifiers[0];
+    assert_eq!(output.private_actions.len(), 1);
+    let action = &output.private_actions[0];
+    let (nullifier, digest) = (&action.nullifier, &action.root);
     assert_eq!(
         *nullifier,
         Nullifier::for_account_initialization(&recipient_account_id)
@@ -678,14 +679,14 @@ async fn init_nullifier_digest_is_bound_to_commitment_root() -> Result<()> {
     let output_with_root = prove_init_with_commitment_root(&ctx, expected_digest).await?;
     let output_without_root = prove_init_with_commitment_root(&ctx, DUMMY_COMMITMENT_HASH).await?;
 
-    assert_eq!(output_with_root.new_nullifiers[0].1, expected_digest);
+    assert_eq!(output_with_root.private_actions[0].root, expected_digest);
     assert_eq!(
-        output_without_root.new_nullifiers[0].1,
+        output_without_root.private_actions[0].root,
         DUMMY_COMMITMENT_HASH
     );
     assert_ne!(
-        output_with_root.new_nullifiers[0].1,
-        output_without_root.new_nullifiers[0].1,
+        output_with_root.private_actions[0].root,
+        output_without_root.private_actions[0].root,
     );
 
     Ok(())

@@ -402,11 +402,8 @@ fn private_pda_claim_succeeds() {
     );
 
     let (output, _proof) = result.expect("private PDA claim should succeed");
-    assert_eq!(output.new_nullifiers.len(), 1);
-    assert_eq!(output.new_commitments.len(), 1);
-    assert_eq!(output.encrypted_private_post_states.len(), 1);
-    assert!(output.public_pre_states.is_empty());
-    assert!(output.public_post_states.is_empty());
+    assert_eq!(output.private_actions.len(), 1);
+    assert!(output.public_actions.is_empty());
 }
 
 /// An npk is supplied that does not match the `pre_state`'s `account_id` under
@@ -482,8 +479,7 @@ fn caller_pda_seeds_authorize_private_pda_for_callee() {
 
     let (output, _proof) =
         result.expect("caller-seeds authorization of private PDA should succeed");
-    assert_eq!(output.new_commitments.len(), 1);
-    assert_eq!(output.new_nullifiers.len(), 1);
+    assert_eq!(output.private_actions.len(), 1);
 }
 
 /// The delegator chains with a different seed than the one it claimed with. In the callee
@@ -756,7 +752,7 @@ fn private_authorized_uninitialized_account() {
     .unwrap();
 
     // Create message from circuit output
-    let message = Message::try_from_circuit_output(vec![], vec![], output).unwrap();
+    let message = Message::from_circuit_output(vec![], output);
 
     let witness_set = WitnessSet::for_message(&message, proof, &[]);
 
@@ -801,7 +797,7 @@ fn private_unauthorized_uninitialized_account_can_still_be_claimed() {
     )
     .unwrap();
 
-    let message = Message::try_from_circuit_output(vec![], vec![], output).unwrap();
+    let message = Message::from_circuit_output(vec![], output);
 
     let witness_set = WitnessSet::for_message(&message, proof, &[]);
     let tx = PrivacyPreservingTransaction::new(message, witness_set);
@@ -851,7 +847,7 @@ fn private_account_claimed_then_used_without_init_flag_should_fail() {
     )
     .unwrap();
 
-    let message = Message::try_from_circuit_output(vec![], vec![], output).unwrap();
+    let message = Message::from_circuit_output(vec![], output);
 
     let witness_set = WitnessSet::for_message(&message, proof, &[]);
     let tx = PrivacyPreservingTransaction::new(message, witness_set);
@@ -961,8 +957,7 @@ fn two_private_pda_family_members_receive_and_spend() {
             &simple_transfer.clone().into(),
         )
         .unwrap();
-        let message =
-            Message::try_from_circuit_output(vec![funder_id], vec![funder_nonce], output).unwrap();
+        let message = Message::from_circuit_output(vec![funder_nonce], output);
         let witness_set = WitnessSet::for_message(&message, proof, &[&funder_keys.signing_key]);
         state
             .transition_from_privacy_preserving_transaction(
@@ -997,8 +992,7 @@ fn two_private_pda_family_members_receive_and_spend() {
             &simple_transfer.into(),
         )
         .unwrap();
-        let message =
-            Message::try_from_circuit_output(vec![funder_id], vec![funder_nonce], output).unwrap();
+        let message = Message::from_circuit_output(vec![funder_nonce], output);
         let witness_set = WitnessSet::for_message(&message, proof, &[&funder_keys.signing_key]);
         state
             .transition_from_privacy_preserving_transaction(
@@ -1041,8 +1035,7 @@ fn two_private_pda_family_members_receive_and_spend() {
             &spend_with_deps,
         )
         .unwrap();
-        let message =
-            Message::try_from_circuit_output(vec![recipient_id], vec![Nonce(0)], output).unwrap();
+        let message = Message::from_circuit_output(vec![Nonce(0)], output);
         let witness_set = WitnessSet::for_message(&message, proof, &[&recipient_signing_key]);
         state
             .transition_from_privacy_preserving_transaction(
@@ -1079,7 +1072,7 @@ fn two_private_pda_family_members_receive_and_spend() {
             &spend_with_deps,
         )
         .unwrap();
-        let message = Message::try_from_circuit_output(vec![recipient_id], vec![], output).unwrap();
+        let message = Message::from_circuit_output(vec![], output);
         let witness_set = WitnessSet::for_message(&message, proof, &[]);
         state
             .transition_from_privacy_preserving_transaction(
@@ -1130,9 +1123,7 @@ fn two_private_pda_family_members_receive_and_spend() {
             &crate::test_methods::simple_balance_transfer().into(),
         )
         .unwrap();
-        let message =
-            Message::try_from_circuit_output(vec![recipient_id], vec![recipient_nonce], output)
-                .unwrap();
+        let message = Message::from_circuit_output(vec![recipient_nonce], output);
         let witness_set = WitnessSet::for_message(&message, proof, &[&recipient_signing_key]);
         state
             .transition_from_privacy_preserving_transaction(

@@ -290,12 +290,7 @@ fn shielded_balance_transfer_for_tests(
     )
     .unwrap();
 
-    let message = Message::try_from_circuit_output(
-        vec![sender_keys.account_id()],
-        vec![sender_nonce],
-        output,
-    )
-    .unwrap();
+    let message = Message::from_circuit_output(vec![sender_nonce], output);
 
     let witness_set = WitnessSet::for_message(&message, proof, &[&sender_keys.signing_key]);
     PrivacyPreservingTransaction::new(message, witness_set)
@@ -349,7 +344,7 @@ fn private_balance_transfer_for_tests(
     )
     .unwrap();
 
-    let message = Message::try_from_circuit_output(vec![], vec![], output).unwrap();
+    let message = Message::from_circuit_output(vec![], output);
 
     let witness_set = WitnessSet::for_message(&message, proof, &[]);
 
@@ -398,8 +393,7 @@ fn deshielded_balance_transfer_for_tests(
     )
     .unwrap();
 
-    let message =
-        Message::try_from_circuit_output(vec![*recipient_account_id], vec![], output).unwrap();
+    let message = Message::from_circuit_output(vec![], output);
 
     let witness_set = WitnessSet::for_message(&message, proof, &[]);
 

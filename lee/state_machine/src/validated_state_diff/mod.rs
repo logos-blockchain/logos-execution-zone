@@ -4,7 +4,7 @@ use std::{
 };
 
 use lee_core::{
-    BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, Timestamp,
+    BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, PublicAction, Timestamp,
     account::{Account, AccountId, AccountWithMetadata},
     program::{
         ChainedCall, Claim, DEFAULT_PROGRAM_ID, ProgramId, compute_public_authorized_pdas,
@@ -310,10 +310,13 @@ impl ValidatedStateDiff {
     ) -> Result<Self, LeeError> {
         let message = &tx.message;
         let witness_set = &tx.witness_set;
+        let commitments = message.commitments();
+        let nullifiers = message.nullifiers();
+        let public_account_ids = message.public_account_ids();
 
         // 1. Commitments or nullifiers are non empty
         ensure!(
-            !message.new_commitments.is_empty() || !message.new_nullifiers.is_empty(),
+            !message.private_actions.is_empty(),
             LeeError::InvalidInput(
                 "Empty commitments and empty nullifiers found in message".into(),
             )
@@ -321,25 +324,19 @@ impl ValidatedStateDiff {
 
         // 2. Check there are no duplicate account_ids in the public_account_ids list.
         ensure!(
-            n_unique(&message.public_account_ids) == message.public_account_ids.len(),
+            n_unique(&public_account_ids) == public_account_ids.len(),
             LeeError::InvalidInput("Duplicate account_ids found in message".into())
         );
 
         // Check there are no duplicate nullifiers in the new_nullifiers list
         ensure!(
-            n_unique(
-                &message
-                    .new_nullifiers
-                    .iter()
-                    .map(|(n, _)| n)
-                    .collect::<Vec<_>>()
-            ) == message.new_nullifiers.len(),
+            n_unique(&nullifiers.iter().map(|(n, _)| n).collect::<Vec<_>>()) == nullifiers.len(),
             LeeError::InvalidInput("Duplicate nullifiers found in message".into())
         );
 
         // Check there are no duplicate commitments in the new_commitments list
         ensure!(
-            n_unique(&message.new_commitments) == message.new_commitments.len(),
+            n_unique(&commitments) == commitments.len(),
             LeeError::InvalidInput("Duplicate commitments found in message".into())
         );
 
@@ -376,8 +373,7 @@ impl ValidatedStateDiff {
         );
 
         // Build pre_states for proof verification
-        let public_pre_states: Vec<_> = message
-            .public_account_ids
+        let public_pre_states: Vec<_> = public_account_ids
             .iter()
             .map(|account_id| {
                 AccountWithMetadata::new(
@@ -396,28 +392,22 @@ impl ValidatedStateDiff {
         )?;
 
         // 5. Commitment freshness
-        state.check_commitments_are_new(&message.new_commitments)?;
+        state.check_commitments_are_new(&commitments)?;
 
         // 6. Nullifier uniqueness
-        state.check_nullifiers_are_valid(&message.new_nullifiers)?;
+        state.check_nullifiers_are_valid(&nullifiers)?;
 
-        let public_diff = message
-            .public_account_ids
+        let public_diff = public_account_ids
             .iter()
             .copied()
-            .zip(message.public_post_states.clone())
+            .zip(message.public_post_states())
             .collect();
-        let new_nullifiers = message
-            .new_nullifiers
-            .iter()
-            .copied()
-            .map(|(nullifier, _)| nullifier)
-            .collect();
+        let new_nullifiers = nullifiers.iter().map(|(nullifier, _)| *nullifier).collect();
 
         Ok(Self(StateDiff {
             signer_account_ids,
             public_diff,
-            new_commitments: message.new_commitments.clone(),
+            new_commitments: commitments,
             new_nullifiers,
             program: None,
         }))
@@ -498,11 +488,13 @@ fn check_privacy_preserving_circuit_proof_is_valid(
     message: &Message,
 ) -> Result<(), LeeError> {
     let output = PrivacyPreservingCircuitOutput {
-        public_pre_states: public_pre_states.to_vec(),
-        public_post_states: message.public_post_states.clone(),
-        encrypted_private_post_states: message.encrypted_private_post_states.clone(),
-        new_commitments: message.new_commitments.clone(),
-        new_nullifiers: message.new_nullifiers.clone(),
+        public_actions: public_pre_states
+            .iter()
+            .cloned()
+            .zip(message.public_post_states())
+            .map(|(pre, post)| PublicAction { pre, post })
+            .collect(),
+        private_actions: message.private_actions.clone(),
         block_validity_window: message.block_validity_window,
         timestamp_validity_window: message.timestamp_validity_window,
     };

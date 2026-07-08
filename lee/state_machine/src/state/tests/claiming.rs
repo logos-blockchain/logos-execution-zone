@@ -341,9 +341,7 @@ fn authorized_public_account_claiming_succeeds_when_executed_privately() {
     )
     .unwrap();
 
-    let message =
-        Message::try_from_circuit_output(vec![recipient_account_id], vec![Nonce(0)], output)
-            .unwrap();
+    let message = Message::from_circuit_output(vec![Nonce(0)], output);
 
     let witness_set = WitnessSet::for_message(&message, proof, &[&recipient_private_key]);
     let tx = PrivacyPreservingTransaction::new(message, witness_set);
@@ -466,7 +464,7 @@ fn private_chained_call(number_of_calls: u32) {
     )
     .unwrap();
 
-    let message = Message::try_from_circuit_output(vec![], vec![], output).unwrap();
+    let message = Message::from_circuit_output(vec![], output);
     let witness_set = WitnessSet::for_message(&message, proof, &[]);
     let transaction = PrivacyPreservingTransaction::new(message, witness_set);
 

@@ -875,8 +875,7 @@ fn private_bridge_withdraw_invocation_is_dropped() {
     )
     .expect("Execution should succeed");
 
-    let message = Message::try_from_circuit_output(vec![bridge_account_id], vec![], output)
-        .expect("Message construction should succeed");
+    let message = Message::from_circuit_output(vec![], output);
     let witness_set =
         lee::privacy_preserving_transaction::WitnessSet::for_message(&message, proof, &[]);
     let tx =

@@ -24,9 +24,9 @@ fn decrypt_kind(
     idx: usize,
 ) -> PrivateAccountKind {
     let (kind, _) = EncryptionScheme::decrypt(
-        &output.encrypted_private_post_states[idx].ciphertext,
+        &output.private_actions[idx].encrypted_post_state.ciphertext,
         ssk,
-        &output.new_nullifiers[idx].0,
+        &output.private_actions[idx].nullifier,
     )
     .unwrap();
     kind
@@ -102,18 +102,16 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_pre_accounts() 
 
     assert!(proof.is_valid_for(&output));
 
-    let [sender_pre] = output.public_pre_states.try_into().unwrap();
-    let [sender_post] = output.public_post_states.try_into().unwrap();
+    let [action] = output.public_actions.try_into().unwrap();
+    let (sender_pre, sender_post) = (action.pre, action.post);
     assert_eq!(sender_pre, expected_sender_pre);
     assert_eq!(sender_post, expected_sender_post);
-    assert_eq!(output.new_commitments.len(), 1);
-    assert_eq!(output.new_nullifiers.len(), 1);
-    assert_eq!(output.encrypted_private_post_states.len(), 1);
+    assert_eq!(output.private_actions.len(), 1);
 
     let (_identifier, recipient_post) = EncryptionScheme::decrypt(
-        &output.encrypted_private_post_states[0].ciphertext,
+        &output.private_actions[0].encrypted_post_state.ciphertext,
         &shared_secret,
-        &output.new_nullifiers[0].0,
+        &output.private_actions[0].nullifier,
     )
     .unwrap();
     assert_eq!(recipient_post, expected_recipient_post);
@@ -216,43 +214,46 @@ fn prove_privacy_preserving_execution_circuit_fully_private() {
     .unwrap();
 
     assert!(proof.is_valid_for(&output));
-    assert!(output.public_pre_states.is_empty());
-    assert!(output.public_post_states.is_empty());
+    assert!(output.public_actions.is_empty());
     let sender_nullifier = expected_new_nullifiers[0].0;
     let recipient_nullifier = expected_new_nullifiers[1].0;
 
-    let mut expected_new_commitments = expected_new_commitments;
-    expected_new_commitments.sort_unstable_by_key(Commitment::to_byte_array);
-    assert_eq!(output.new_commitments, expected_new_commitments);
+    let mut sorted_commitments = expected_new_commitments;
+    sorted_commitments.sort_unstable_by_key(Commitment::to_byte_array);
+    assert_eq!(output.commitments(), sorted_commitments);
 
-    let mut expected_new_nullifiers = expected_new_nullifiers;
-    expected_new_nullifiers.sort_unstable_by_key(|(nullifier, _)| nullifier.to_byte_array());
-    assert_eq!(output.new_nullifiers, expected_new_nullifiers);
+    let mut sorted_nullifiers = expected_new_nullifiers;
+    sorted_nullifiers.sort_unstable_by_key(|(nullifier, _)| nullifier.to_byte_array());
+    assert_eq!(output.nullifiers(), sorted_nullifiers);
 
-    assert_eq!(output.encrypted_private_post_states.len(), 2);
+    assert_eq!(output.private_actions.len(), 2);
 
     let sender_slot = output
-        .new_nullifiers
+        .private_actions
         .iter()
-        .position(|(nullifier, _)| *nullifier == sender_nullifier)
+        .position(|action| action.nullifier == sender_nullifier)
         .unwrap();
     let (_identifier, sender_post) = EncryptionScheme::decrypt(
-        &output.encrypted_private_post_states[sender_slot].ciphertext,
+        &output.private_actions[sender_slot]
+            .encrypted_post_state
+            .ciphertext,
         &shared_secret_1,
-        &output.new_nullifiers[sender_slot].0,
+        &output.private_actions[sender_slot].nullifier,
     )
     .unwrap();
     assert_eq!(sender_post, expected_private_account_1);
 
     let recipient_slot = output
-        .new_nullifiers
+        .private_actions
         .iter()
-        .position(|(nullifier, _)| *nullifier == recipient_nullifier)
+        .position(|action| action.nullifier == recipient_nullifier)
         .unwrap();
     let (_identifier, recipient_post) = EncryptionScheme::decrypt(
-        &output.encrypted_private_post_states[recipient_slot].ciphertext,
+        &output.private_actions[recipient_slot]
+            .encrypted_post_state
+            .ciphertext,
         &shared_secret_2,
-        &output.new_nullifiers[recipient_slot].0,
+        &output.private_actions[recipient_slot].nullifier,
     )
     .unwrap();
     assert_eq!(recipient_post, expected_private_account_2);
@@ -281,9 +282,9 @@ fn init_note_view_tag_is_derived_from_account_keys() {
     .unwrap();
 
     assert!(proof.is_valid_for(&output));
-    assert_eq!(output.encrypted_private_post_states.len(), 1);
+    assert_eq!(output.private_actions.len(), 1);
     assert_eq!(
-        output.encrypted_private_post_states[0].view_tag,
+        output.private_actions[0].encrypted_post_state.view_tag,
         EncryptedAccountData::compute_view_tag(&keys.npk(), &keys.vpk()),
     );
 }
@@ -324,8 +325,11 @@ fn update_note_view_tag_is_the_supplied_value() {
     .unwrap();
 
     assert!(proof.is_valid_for(&output));
-    assert_eq!(output.encrypted_private_post_states.len(), 1);
-    assert_eq!(output.encrypted_private_post_states[0].view_tag, fed_tag);
+    assert_eq!(output.private_actions.len(), 1);
+    assert_eq!(
+        output.private_actions[0].encrypted_post_state.view_tag,
+        fed_tag
+    );
 }
 
 #[test]
@@ -448,7 +452,7 @@ fn private_pda_init() {
     );
 
     let (output, _proof) = result.expect("PDA init should succeed");
-    assert_eq!(output.new_commitments.len(), 1);
+    assert_eq!(output.private_actions.len(), 1);
 }
 
 /// PDA withdraw: chains to `simple_balance_transfer` to move balance from PDA to recipient.
@@ -502,7 +506,7 @@ fn private_pda_withdraw() {
     );
 
     let (output, _proof) = result.expect("PDA withdraw should succeed");
-    assert_eq!(output.new_commitments.len(), 1);
+    assert_eq!(output.private_actions.len(), 1);
 }
 
 /// Shared regular private account: receives funds via `authenticated_transfer` directly,
@@ -554,7 +558,7 @@ fn shared_account_receives_via_simple_transfer() {
 
     let (output, _proof) = result.expect("shared account receive should succeed");
     // Sender is public (no commitment), recipient is private (1 commitment)
-    assert_eq!(output.new_commitments.len(), 1);
+    assert_eq!(output.private_actions.len(), 1);
 }
 
 /// `PrivateAuthorizedInit` with a non-default identifier produces a ciphertext that decrypts

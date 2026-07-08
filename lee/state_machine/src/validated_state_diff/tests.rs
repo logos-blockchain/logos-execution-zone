@@ -188,12 +188,10 @@ fn privacy_malicious_programs_cannot_drain_public_victim() {
 
     // public_account_ids lists the Public entries from account_identities, in order.
     // The single ciphertext belongs to attacker's private account update.
-    let message = Message::try_from_circuit_output(
-        vec![victim_id, recipient_id],
+    let message = Message::from_circuit_output(
         vec![], // no public signers, no nonces
         circuit_output,
-    )
-    .unwrap();
+    );
 
     let witness_set = WitnessSet::for_message(&message, proof, &[]); // no signatures
     let tx = PrivacyPreservingTransaction::new(message, witness_set);
@@ -350,12 +348,10 @@ fn privacy_malicious_programs_cannot_drain_private_victim() {
 
     // public_account_ids lists the Public entries from account_identities, in order.
     // The single ciphertext belongs to attacker's private account update.
-    let message = Message::try_from_circuit_output(
-        vec![victim_id, recipient_id],
+    let message = Message::from_circuit_output(
         vec![], // no public signers, no nonces
         circuit_output,
-    )
-    .unwrap();
+    );
 
     let witness_set = WitnessSet::for_message(&message, proof, &[]); // no signatures
     let tx = PrivacyPreservingTransaction::new(message, witness_set);
@@ -480,8 +476,9 @@ fn malicious_programs_cannot_drain_victim_without_signature() {
 #[test]
 fn privacy_garbage_proof_is_rejected() {
     use lee_core::{
-        Commitment,
+        Commitment, EncryptedAccountData, Nullifier, PrivateAction,
         account::Account,
+        encryption::{Ciphertext, EphemeralPublicKey},
         program::{BlockValidityWindow, TimestampValidityWindow},
     };
 
@@ -503,12 +500,18 @@ fn privacy_garbage_proof_is_rejected() {
     ));
     let commitment = Commitment::new(&account_id, &Account::default());
     let message = Message {
-        public_account_ids: vec![],
+        public_actions: vec![],
         nonces: vec![],
-        public_post_states: vec![],
-        encrypted_private_post_states: vec![],
-        new_commitments: vec![commitment],
-        new_nullifiers: vec![],
+        private_actions: vec![PrivateAction {
+            nullifier: Nullifier::for_account_initialization(&account_id),
+            root: [0; 32],
+            commitment,
+            encrypted_post_state: EncryptedAccountData {
+                ciphertext: Ciphertext::from_inner(vec![]),
+                epk: EphemeralPublicKey(vec![]),
+                view_tag: 0,
+            },
+        }],
         block_validity_window: BlockValidityWindow::new_unbounded(),
         timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
     };

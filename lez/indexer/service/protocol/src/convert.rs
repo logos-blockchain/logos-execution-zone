@@ -282,27 +282,30 @@ impl From<PublicMessage> for lee::public_transaction::Message {
 impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPreservingMessage {
     fn from(value: lee::privacy_preserving_transaction::message::Message) -> Self {
         let lee::privacy_preserving_transaction::message::Message {
-            public_account_ids,
+            public_actions,
             nonces,
-            public_post_states,
-            encrypted_private_post_states,
-            new_commitments,
-            new_nullifiers,
+            private_actions,
             block_validity_window,
             timestamp_validity_window,
         } = value;
         Self {
-            public_account_ids: public_account_ids.into_iter().map(Into::into).collect(),
+            public_account_ids: public_actions.iter().map(|a| a.account_id.into()).collect(),
             nonces: nonces.iter().map(|x| x.0).collect(),
-            public_post_states: public_post_states.into_iter().map(Into::into).collect(),
-            encrypted_private_post_states: encrypted_private_post_states
+            public_post_states: public_actions
                 .into_iter()
-                .map(Into::into)
+                .map(|a| a.post_state.into())
                 .collect(),
-            new_commitments: new_commitments.into_iter().map(Into::into).collect(),
-            new_nullifiers: new_nullifiers
+            encrypted_private_post_states: private_actions
+                .iter()
+                .map(|a| a.encrypted_post_state.clone().into())
+                .collect(),
+            new_commitments: private_actions
+                .iter()
+                .map(|a| a.commitment.clone().into())
+                .collect(),
+            new_nullifiers: private_actions
                 .into_iter()
-                .map(|(n, d)| (n.into(), d.into()))
+                .map(|a| (a.nullifier.into(), a.root.into()))
                 .collect(),
             block_validity_window: block_validity_window.into(),
             timestamp_validity_window: timestamp_validity_window.into(),
@@ -324,26 +327,50 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
             block_validity_window,
             timestamp_validity_window,
         } = value;
+
+        let public_post_states = public_post_states
+            .into_iter()
+            .map(TryInto::try_into)
+            .collect::<Result<Vec<lee_core::account::Account>, _>>()
+            .map_err(|e| lee::error::LeeError::InvalidInput(format!("{e}")))?;
+        let public_actions = public_account_ids
+            .into_iter()
+            .map(Into::into)
+            .zip(public_post_states)
+            .map(|(account_id, post_state)| {
+                lee::privacy_preserving_transaction::message::PublicActionWithID {
+                    account_id,
+                    post_state,
+                }
+            })
+            .collect();
+
+        let private_actions = new_commitments
+            .into_iter()
+            .map(Into::into)
+            .zip(
+                new_nullifiers
+                    .into_iter()
+                    .map(|(n, d)| (n.into(), d.into())),
+            )
+            .zip(encrypted_private_post_states.into_iter().map(Into::into))
+            .map(|((commitment, (nullifier, root)), encrypted_post_state)| {
+                lee_core::PrivateAction {
+                    nullifier,
+                    root,
+                    commitment,
+                    encrypted_post_state,
+                }
+            })
+            .collect();
+
         Ok(Self {
-            public_account_ids: public_account_ids.into_iter().map(Into::into).collect(),
+            public_actions,
             nonces: nonces
                 .iter()
                 .map(|x| lee_core::account::Nonce(*x))
                 .collect(),
-            public_post_states: public_post_states
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|e| lee::error::LeeError::InvalidInput(format!("{e}")))?,
-            encrypted_private_post_states: encrypted_private_post_states
-                .into_iter()
-                .map(Into::into)
-                .collect(),
-            new_commitments: new_commitments.into_iter().map(Into::into).collect(),
-            new_nullifiers: new_nullifiers
-                .into_iter()
-                .map(|(n, d)| (n.into(), d.into()))
-                .collect(),
+            private_actions,
             block_validity_window: block_validity_window
                 .try_into()
                 .map_err(|e| lee::error::LeeError::InvalidInput(format!("{e}")))?,
