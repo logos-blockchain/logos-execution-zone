@@ -160,6 +160,10 @@ impl RocksDBIO {
         }
 
         // walk down to the nearest snapshot that exists
+        //
+        // NOTE: we do not use `get_meta_last_breakpoint_id` here because
+        // it may be stale if the last breakpoint was deleted, and simply
+        // computing it from `block_id` is enough
         let target = closest_breakpoint_id(block_id);
         let mut br_id = target;
         let mut state = loop {
