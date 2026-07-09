@@ -11,7 +11,7 @@ use lee_core::BlockId;
 use log::warn;
 use logos_blockchain_core::header::HeaderId;
 use logos_blockchain_zone_sdk::Slot;
-use storage::indexer::RocksDBIO;
+use storage::{BREAKPOINT_INTERVAL, indexer::RocksDBIO};
 use tokio::sync::RwLock;
 
 use crate::{ingest_error::BlockIngestError, stall_reason::StallReason};
@@ -260,8 +260,13 @@ impl IndexerStore {
 
         let mut stored = block.clone();
         stored.bedrock_status = BedrockStatus::Finalized;
+        let breakpoint = block
+            .header
+            .block_id
+            .is_multiple_of(BREAKPOINT_INTERVAL.into())
+            .then_some(&scratch);
         self.dbio
-            .put_block(&stored, [0_u8; 32], l1_slot.into_inner(), None)
+            .put_block(&stored, [0_u8; 32], l1_slot.into_inner(), breakpoint)
             .context("Failed to persist accepted block")?;
 
         // Commit in-memory state (infallible) only after the DB write succeeded.
@@ -823,5 +828,52 @@ mod accept_tests {
             store.get_stall_reason().unwrap().is_none(),
             "a benign re-delivery must not park the indexer"
         );
+    }
+
+    #[tokio::test]
+    async fn accept_block_snapshots_state_at_breakpoint_interval() {
+        use testnet_initial_state::initial_pub_accounts_private_keys;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = IndexerStore::open_db(dir.path()).expect("open store");
+
+        let accounts = initial_pub_accounts_private_keys();
+        let from = accounts[0].account_id;
+        let to = accounts[1].account_id;
+        let sign_key = accounts[0].pub_sign_key.clone();
+
+        let genesis = produce_dummy_block(1, None, vec![]);
+        assert!(matches!(
+            store.accept_block(&genesis, Slot::from(0)).await.unwrap(),
+            AcceptOutcome::Applied
+        ));
+        let mut prev_hash = genesis.header.hash;
+
+        // Blocks 2..=101: one transfer of 1 each; block 100 crosses the interval.
+        for i in 0..100_u64 {
+            let tx = common::test_utils::create_transaction_native_token_transfer(
+                from,
+                i.into(),
+                to,
+                1,
+                &sign_key,
+            );
+            let block = produce_dummy_block(i + 2, Some(prev_hash), vec![tx]);
+            prev_hash = block.header.hash;
+            assert!(matches!(
+                store.accept_block(&block, Slot::from(0)).await.unwrap(),
+                AcceptOutcome::Applied
+            ));
+        }
+
+        // Snapshot at block 100 = genesis + 99 transfers, written with the block.
+        let bp1 = store.dbio.get_breakpoint(1).expect("breakpoint 1 present");
+        assert_eq!(bp1.get_account_by_id(from).balance, 10000 - 99);
+        assert_eq!(store.dbio.get_meta_last_breakpoint_id().unwrap(), Some(1));
+
+        // The #605 restart: reopening past the boundary must work.
+        drop(store);
+        let reopened = IndexerStore::open_db(dir.path()).expect("reopen");
+        assert_eq!(reopened.last_block().unwrap(), Some(101));
     }
 }
