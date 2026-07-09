@@ -88,9 +88,11 @@ impl RocksDBIO {
 
         let dbio = Self { db };
 
-        // First breakpoint setup
-        dbio.put_breakpoint(0, initial_state)?;
-        dbio.put_meta_last_breakpoint_id(0)?;
+        // Seed the genesis snapshot once; reopening must not clobber breakpoint meta.
+        if dbio.get_meta_last_breakpoint_id()?.is_none() {
+            dbio.put_breakpoint(0, initial_state)?;
+            dbio.put_meta_last_breakpoint_id(0)?;
+        }
 
         Ok(dbio)
     }

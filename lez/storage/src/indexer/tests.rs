@@ -471,3 +471,14 @@ fn account_map() {
 
     assert_eq!(acc1_tx_limited_hashes.as_slice(), &tx_hash_res[1..5]);
 }
+
+#[test]
+fn reopen_preserves_breakpoint_meta() {
+    let temp_dir = tempdir().unwrap();
+    {
+        let dbio = RocksDBIO::open_or_create(temp_dir.path(), &initial_state()).unwrap();
+        dbio.put_meta_last_breakpoint_id(5).unwrap();
+    } // drop releases the RocksDB lock
+    let dbio = RocksDBIO::open_or_create(temp_dir.path(), &initial_state()).unwrap();
+    assert_eq!(dbio.get_meta_last_breakpoint_id().unwrap(), Some(5));
+}
