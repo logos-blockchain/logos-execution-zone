@@ -29,6 +29,11 @@ pub enum AcceptOutcome {
     AlreadyApplied,
     /// Did not chain or failed to apply; tip stays frozen, stall recorded.
     Parked(BlockIngestError),
+    /// Chained but failed to apply, possibly transiently
+    /// ([`BlockIngestError::is_retryable`]); nothing recorded, tip and state
+    /// untouched. The caller retries and parks via
+    /// [`IndexerStore::record_stall`] once it gives up.
+    ApplyFailed(BlockIngestError),
 }
 
 #[derive(Clone)]
@@ -254,6 +259,9 @@ impl IndexerStore {
         // TODO: we use scratch state to be atomic, but need to revisit how expensive a clone is
         let mut scratch = self.current_state.read().await.clone();
         if let Err(err) = apply_block_to_scratch(block, &mut scratch) {
+            if err.is_retryable() {
+                return Ok(AcceptOutcome::ApplyFailed(err));
+            }
             self.record_stall(Some(&block.header), l1_slot, err.clone())?;
             return Ok(AcceptOutcome::Parked(err));
         }
@@ -875,5 +883,45 @@ mod accept_tests {
         drop(store);
         let reopened = IndexerStore::open_db(dir.path()).expect("reopen");
         assert_eq!(reopened.last_block().unwrap(), Some(101));
+    }
+
+    #[tokio::test]
+    async fn transient_apply_failure_returns_apply_failed_without_stall() {
+        use testnet_initial_state::initial_pub_accounts_private_keys;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = IndexerStore::open_db(dir.path()).expect("open store");
+
+        let accounts = initial_pub_accounts_private_keys();
+        let from = accounts[0].account_id;
+        let to = accounts[1].account_id;
+        let sign_key = accounts[0].pub_sign_key.clone();
+
+        let genesis = produce_dummy_block(1, None, vec![]);
+        store
+            .accept_block(&genesis, Slot::from(0))
+            .await
+            .expect("accept genesis");
+
+        // Overdraft: rejected during execution → StateTransition → retryable.
+        let tx = common::test_utils::create_transaction_native_token_transfer(
+            from,
+            0,
+            to,
+            1_000_000_000,
+            &sign_key,
+        );
+        let block = produce_dummy_block(2, Some(genesis.header.hash), vec![tx]);
+        let outcome = store.accept_block(&block, Slot::from(0)).await.unwrap();
+
+        assert!(matches!(
+            outcome,
+            AcceptOutcome::ApplyFailed(BlockIngestError::StateTransition { .. })
+        ));
+        assert!(
+            store.get_stall_reason().unwrap().is_none(),
+            "retryable failure must not persist a stall"
+        );
+        assert_eq!(store.get_last_block_id().unwrap(), Some(1), "tip frozen");
     }
 }

@@ -236,6 +236,15 @@ impl IndexerCore {
                             // L1 proceeds regardless
                             self.advance_cursor(&mut cursor, slot);
                         }
+                        Ok(AcceptOutcome::ApplyFailed(ingest_err)) => {
+                            error!(
+                                "Apply failed at block {}: {ingest_err}",
+                                block.header.block_id
+                            );
+                            self.set_status(IndexerSyncStatus::error(ingest_err.to_string()));
+                            had_cycle_error = true;
+                            break;
+                        }
                         Err(err) => {
                             // Infrastructure error (DB read/write), not a bad block.
                             // will re-poll from the same cursor next cycle.
