@@ -198,6 +198,43 @@ fn put_block_stores_breakpoint_in_same_batch() {
 }
 
 #[test]
+fn state_replay_falls_back_over_missing_breakpoints() {
+    let temp_dir = tempdir().unwrap();
+    let dbio = RocksDBIO::open_or_create(temp_dir.path(), &initial_state()).unwrap();
+
+    let from = acc1();
+    let to = acc2();
+    let sign_key = acc1_sign_key();
+
+    for i in 1..=u64::from(BREAKPOINT_INTERVAL) + 1 {
+        let prev_hash = dbio.get_meta_last_block_id_in_db().unwrap().map(|last_id| {
+            let last_block = dbio.get_block(last_id).unwrap().unwrap();
+            last_block.header.hash
+        });
+        let transfer_tx = common::test_utils::create_transaction_native_token_transfer(
+            from,
+            (i - 1).into(),
+            to,
+            1,
+            &sign_key,
+        );
+        let block = produce_dummy_block(i, prev_hash, vec![transfer_tx]);
+        dbio.put_block(&block, [0; 32], 0, None).unwrap();
+    }
+
+    assert!(dbio.get_breakpoint_opt(1).unwrap().is_none());
+    let final_state = dbio.final_state().unwrap();
+    assert_eq!(
+        10000 - final_state.get_account_by_id(acc1()).balance,
+        u128::from(BREAKPOINT_INTERVAL) + 1
+    );
+    assert_eq!(
+        final_state.get_account_by_id(acc2()).balance - 20000,
+        u128::from(BREAKPOINT_INTERVAL) + 1
+    );
+}
+
+#[test]
 fn simple_maps() {
     let temp_dir = tempdir().unwrap();
     let temdir_path = temp_dir.path();

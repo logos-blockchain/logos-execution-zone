@@ -55,6 +55,11 @@ impl RocksDBIO {
         self.get::<BreakpointCellOwned>(br_id).map(|cell| cell.0)
     }
 
+    pub fn get_breakpoint_opt(&self, br_id: u64) -> DbResult<Option<V03State>> {
+        self.get_opt::<BreakpointCellOwned>(br_id)
+            .map(|opt| opt.map(|cell| cell.0))
+    }
+
     // Mappings
 
     pub fn get_block_id_by_hash(&self, hash: [u8; 32]) -> DbResult<Option<u64>> {

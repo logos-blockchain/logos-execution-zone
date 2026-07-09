@@ -156,11 +156,26 @@ impl RocksDBIO {
             ));
         }
 
-        let br_id = closest_breakpoint_id(block_id);
-        let mut state = self.get_breakpoint(br_id)?;
+        // walk down to the nearest snapshot that exists
+        let mut breakpoint_id = closest_breakpoint_id(block_id);
+        let mut state = loop {
+            match self.get_breakpoint_opt(breakpoint_id)? {
+                Some(state) => break state,
+                None if breakpoint_id == 0 => {
+                    return Err(DbError::db_interaction_error(
+                        "Breakpoint 0 is missing".to_owned(),
+                    ));
+                }
+                None => {
+                    breakpoint_id = breakpoint_id
+                        .checked_sub(1)
+                        .expect("breakpoint_id > 0 checked above");
+                }
+            }
+        };
 
         let start = u64::from(BREAKPOINT_INTERVAL)
-            .checked_mul(br_id)
+            .checked_mul(breakpoint_id)
             .expect("Reached maximum breakpoint id");
 
         for block in self.get_block_batch_seq(
