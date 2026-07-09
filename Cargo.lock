@@ -1356,6 +1356,7 @@ dependencies = [
  "anyhow",
  "common",
  "lee",
+ "logos-blockchain-core",
  "logos-blockchain-zone-sdk",
  "serde",
  "serde_json",
