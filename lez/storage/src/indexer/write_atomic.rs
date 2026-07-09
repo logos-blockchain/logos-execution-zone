@@ -144,13 +144,14 @@ impl RocksDBIO {
     }
 
     /// Put a block atomically (via [`WriteBatch`]) along with its L1 header, `Slot`,
-    /// and — for interval-boundary blocks — its post-state snapshot.
+    /// and (at interval-boundary blocks) a snapshot of `post_state`, the block's
+    /// post-application state.
     pub fn put_block(
         &self,
         block: &Block,
         l1_lib_header: [u8; 32],
         l1_slot: u64,
-        breakpoint: Option<&V03State>,
+        post_state: &V03State,
     ) -> DbResult<()> {
         let cf_block = self.block_column();
         let last_curr_block = self.get_meta_last_block_id_in_db()?.unwrap_or(0);
@@ -215,22 +216,17 @@ impl RocksDBIO {
             self.put_account_transactions_dependant(acc_id, &tx_hashes, &mut write_batch)?;
         }
 
-        if let Some(state) = breakpoint {
-            if !block
-                .header
-                .block_id
-                .is_multiple_of(BREAKPOINT_INTERVAL.into())
-            {
-                return Err(DbError::db_interaction_error(
-                    "Breakpoint snapshot must accompany an interval-boundary block".to_owned(),
-                ));
-            }
+        if block
+            .header
+            .block_id
+            .is_multiple_of(BREAKPOINT_INTERVAL.into())
+        {
             let br_id = block
                 .header
                 .block_id
                 .checked_div(BREAKPOINT_INTERVAL.into())
                 .expect("Breakpoint interval is not zero");
-            self.put_batch(&BreakpointCellRef(state), br_id, &mut write_batch)?;
+            self.put_batch(&BreakpointCellRef(post_state), br_id, &mut write_batch)?;
         }
 
         self.db.write(write_batch).map_err(|rerr| {

@@ -1,4 +1,6 @@
 use super::{DbResult, RocksDBIO, V03State};
+#[cfg(test)]
+use crate::error::DbError;
 use crate::{
     DBIO as _,
     cells::shared_cells::{FirstBlockSetCell, LastBlockCell},
@@ -39,5 +41,17 @@ impl RocksDBIO {
 
     pub fn put_breakpoint(&self, br_id: u64, breakpoint: &V03State) -> DbResult<()> {
         self.put(&BreakpointCellRef(breakpoint), br_id)
+    }
+
+    /// Deletes a breakpoint snapshot. Test-only fault injection for simulating
+    /// stores whose boundary snapshot was lost.
+    #[cfg(test)]
+    pub(crate) fn delete_breakpoint(&self, br_id: u64) -> DbResult<()> {
+        let key = borsh::to_vec(&br_id).map_err(|err| {
+            DbError::borsh_cast_message(err, Some("Failed to serialize breakpoint id".to_owned()))
+        })?;
+        self.db
+            .delete_cf(&self.breakpoint_column(), key)
+            .map_err(|rerr| DbError::rocksdb_cast_message(rerr, None))
     }
 }
