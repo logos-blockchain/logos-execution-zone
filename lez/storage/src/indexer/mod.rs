@@ -5,6 +5,7 @@ use common::{
     transaction::{LeeTransaction, clock_invocation},
 };
 use lee::{GENESIS_BLOCK_ID, V03State};
+use log::warn;
 use rocksdb::{
     BoundColumnFamily, ColumnFamilyDescriptor, DBWithThreadMode, MultiThreaded, Options,
 };
@@ -159,25 +160,31 @@ impl RocksDBIO {
         }
 
         // walk down to the nearest snapshot that exists
-        let mut breakpoint_id = closest_breakpoint_id(block_id);
+        let target = closest_breakpoint_id(block_id);
+        let mut br_id = target;
         let mut state = loop {
-            match self.get_breakpoint_opt(breakpoint_id)? {
+            match self.get_breakpoint_opt(br_id)? {
                 Some(state) => break state,
-                None if breakpoint_id == 0 => {
+                None if br_id == 0 => {
                     return Err(DbError::db_interaction_error(
                         "Breakpoint 0 is missing".to_owned(),
                     ));
                 }
                 None => {
-                    breakpoint_id = breakpoint_id
+                    br_id = br_id
                         .checked_sub(1)
                         .expect("breakpoint_id > 0 checked above");
                 }
             }
         };
+        if br_id < target {
+            warn!(
+                "Breakpoint {target} missing; replaying from breakpoint {br_id} for block {block_id}"
+            );
+        }
 
         let start = u64::from(BREAKPOINT_INTERVAL)
-            .checked_mul(breakpoint_id)
+            .checked_mul(br_id)
             .expect("Reached maximum breakpoint id");
 
         for block in self.get_block_batch_seq(

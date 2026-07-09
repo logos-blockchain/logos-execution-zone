@@ -250,12 +250,21 @@ impl IndexerCore {
                                     "Parked at block {} after {attempts} failed apply attempts: {ingest_err}",
                                     block.header.block_id
                                 );
+                                // The stall must be durable before the cursor moves.
                                 if let Err(err) = self.store.record_stall(
                                     Some(&block.header),
                                     slot,
                                     ingest_err.clone(),
                                 ) {
-                                    warn!("Failed to record stall reason: {err:#}");
+                                    error!(
+                                        "Failed to record stall reason for block {}: {err:#}",
+                                        block.header.block_id
+                                    );
+                                    self.set_status(IndexerSyncStatus::error(format!(
+                                        "store error: {err:#}"
+                                    )));
+                                    had_cycle_error = true;
+                                    break;
                                 }
                                 self.set_status(IndexerSyncStatus::stalled(ingest_err.to_string()));
                                 self.advance_cursor(&mut cursor, slot);

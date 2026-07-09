@@ -13,6 +13,7 @@ lee.workspace = true
 
 thiserror.workspace = true
 borsh.workspace = true
+log.workspace = true
 rocksdb.workspace = true
 tempfile.workspace = true
 

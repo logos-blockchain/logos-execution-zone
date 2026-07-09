@@ -131,6 +131,21 @@ fn one_block_insertion() {
 }
 
 #[test]
+fn put_block_rejects_breakpoint_on_non_boundary_block() {
+    let temp_dir = tempdir().unwrap();
+    let temdir_path = temp_dir.path();
+
+    let dbio = RocksDBIO::open_or_create(temdir_path, &initial_state()).unwrap();
+
+    let block = produce_dummy_block(1, None, vec![]);
+
+    assert!(
+        dbio.put_block(&block, [0; 32], 0, Some(&initial_state()))
+            .is_err()
+    );
+}
+
+#[test]
 fn put_block_records_tip_inscription_slot() {
     let temp_dir = tempdir().unwrap();
     let dbio = RocksDBIO::open_or_create(temp_dir.path(), &initial_state()).unwrap();

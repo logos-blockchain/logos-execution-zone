@@ -224,13 +224,15 @@ impl RocksDBIO {
         }
 
         if let Some(state) = breakpoint {
-            debug_assert!(
-                block
-                    .header
-                    .block_id
-                    .is_multiple_of(BREAKPOINT_INTERVAL.into()),
-                "breakpoint snapshot must accompany an interval-boundary block"
-            );
+            if !block
+                .header
+                .block_id
+                .is_multiple_of(BREAKPOINT_INTERVAL.into())
+            {
+                return Err(DbError::db_interaction_error(
+                    "Breakpoint snapshot must accompany an interval-boundary block".to_owned(),
+                ));
+            }
             let br_id = block
                 .header
                 .block_id

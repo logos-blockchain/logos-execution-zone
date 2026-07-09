@@ -197,7 +197,7 @@ impl SubscriptionService {
             );
 
             // Respawn the subscription service loop if it has finished (either with error or panic)
-            if guard.handle.is_finished() {
+            if guard.handle.is_finished() && !self.shutdown.is_cancelled() {
                 drop(guard);
                 let new_parts = Self::spawn_respond_subscribers_loop(
                     self.indexer.clone(),
