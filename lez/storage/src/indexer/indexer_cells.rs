@@ -7,7 +7,7 @@ use crate::{
     error::DbError,
     indexer::{
         ACC_NUM_CELL_NAME, BLOCK_HASH_CELL_NAME, BREAKPOINT_CELL_NAME, CF_ACC_META,
-        CF_BREAKPOINT_NAME, CF_HASH_TO_ID, CF_TX_TO_ID, DB_META_LAST_BREAKPOINT_ID,
+        CF_BREAKPOINT_NAME, CF_HASH_TO_ID, CF_TX_TO_ID,
         DB_META_LAST_OBSERVED_L1_LIB_HEADER_ID_IN_DB_KEY, DB_META_STALL_REASON_KEY,
         DB_META_TIP_SLOT_KEY, DB_META_ZONE_SDK_INDEXER_CURSOR_KEY, TX_HASH_CELL_NAME,
     },
@@ -31,29 +31,6 @@ impl SimpleWritableCell for LastObservedL1LibHeaderCell {
             DbError::borsh_cast_message(
                 err,
                 Some("Failed to serialize last observed l1 header".to_owned()),
-            )
-        })
-    }
-}
-
-#[derive(Debug, BorshSerialize, BorshDeserialize)]
-pub struct LastBreakpointIdCell(pub u64);
-
-impl SimpleStorableCell for LastBreakpointIdCell {
-    type KeyParams = ();
-
-    const CELL_NAME: &'static str = DB_META_LAST_BREAKPOINT_ID;
-    const CF_NAME: &'static str = CF_META_NAME;
-}
-
-impl SimpleReadableCell for LastBreakpointIdCell {}
-
-impl SimpleWritableCell for LastBreakpointIdCell {
-    fn value_constructor(&self) -> DbResult<Vec<u8>> {
-        borsh::to_vec(&self).map_err(|err| {
-            DbError::borsh_cast_message(
-                err,
-                Some("Failed to serialize last breakpoint id".to_owned()),
             )
         })
     }

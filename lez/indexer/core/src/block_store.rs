@@ -878,7 +878,6 @@ mod accept_tests {
         // Snapshot at block 100 = genesis + 99 transfers, written with the block.
         let bp1 = store.dbio.get_breakpoint(1).expect("breakpoint 1 present");
         assert_eq!(bp1.get_account_by_id(from).balance, 10000 - 99);
-        assert_eq!(store.dbio.get_meta_last_breakpoint_id().unwrap(), Some(1));
 
         // The #605 restart: reopening past the boundary must work.
         drop(store);

@@ -3,7 +3,7 @@ use crate::{
     DBIO as _,
     cells::shared_cells::{FirstBlockSetCell, LastBlockCell},
     indexer::indexer_cells::{
-        BreakpointCellRef, LastBreakpointIdCell, LastObservedL1LibHeaderCell, StallReasonCellRef,
+        BreakpointCellRef, LastObservedL1LibHeaderCell, StallReasonCellRef,
         ZoneSdkIndexerCursorCellRef,
     },
 };
@@ -21,10 +21,6 @@ impl RocksDBIO {
         l1_lib_header: [u8; 32],
     ) -> DbResult<()> {
         self.put(&LastObservedL1LibHeaderCell(l1_lib_header), ())
-    }
-
-    pub fn put_meta_last_breakpoint_id(&self, br_id: u64) -> DbResult<()> {
-        self.put(&LastBreakpointIdCell(br_id), ())
     }
 
     pub fn put_meta_is_first_block_set(&self) -> DbResult<()> {

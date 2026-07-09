@@ -7,8 +7,8 @@ use crate::{
     DBIO as _,
     cells::shared_cells::{FirstBlockCell, FirstBlockSetCell, LastBlockCell},
     indexer::indexer_cells::{
-        AccNumTxCell, BlockHashToBlockIdMapCell, BreakpointCellRef, LastBreakpointIdCell,
-        LastObservedL1LibHeaderCell, TipSlotCell, TxHashToBlockIdMapCell,
+        AccNumTxCell, BlockHashToBlockIdMapCell, BreakpointCellRef, LastObservedL1LibHeaderCell,
+        TipSlotCell, TxHashToBlockIdMapCell,
     },
 };
 
@@ -131,14 +131,6 @@ impl RocksDBIO {
         self.put_batch(&LastObservedL1LibHeaderCell(l1_lib_header), (), write_batch)
     }
 
-    pub fn put_meta_last_breakpoint_id_batch(
-        &self,
-        br_id: u64,
-        write_batch: &mut WriteBatch,
-    ) -> DbResult<()> {
-        self.put_batch(&LastBreakpointIdCell(br_id), (), write_batch)
-    }
-
     pub fn put_meta_tip_slot_in_db_batch(
         &self,
         l1_slot: u64,
@@ -239,7 +231,6 @@ impl RocksDBIO {
                 .checked_div(BREAKPOINT_INTERVAL.into())
                 .expect("Breakpoint interval is not zero");
             self.put_batch(&BreakpointCellRef(state), br_id, &mut write_batch)?;
-            self.put_meta_last_breakpoint_id_batch(br_id, &mut write_batch)?;
         }
 
         self.db.write(write_batch).map_err(|rerr| {

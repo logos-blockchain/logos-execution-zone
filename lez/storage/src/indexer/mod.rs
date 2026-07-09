@@ -21,8 +21,6 @@ pub mod write_non_atomic;
 /// Key base for storing metainformation about id of last observed L1 lib header in db.
 pub const DB_META_LAST_OBSERVED_L1_LIB_HEADER_ID_IN_DB_KEY: &str =
     "last_observed_l1_lib_header_in_db";
-/// Key base for storing metainformation about the last breakpoint.
-pub const DB_META_LAST_BREAKPOINT_ID: &str = "last_breakpoint_id";
 /// Key base for storing the zone-sdk indexer cursor (opaque bytes).
 pub const DB_META_ZONE_SDK_INDEXER_CURSOR_KEY: &str = "zone_sdk_indexer_cursor";
 /// Key base for storing the persisted `Option<StallReason>` diagnostic record (opaque JSON bytes).
@@ -89,10 +87,9 @@ impl RocksDBIO {
 
         let dbio = Self { db };
 
-        // Seed the genesis snapshot once; reopening must not clobber breakpoint meta.
-        if dbio.get_meta_last_breakpoint_id()?.is_none() {
+        // Seed the genesis snapshot once; reopening must not clobber it.
+        if dbio.get_breakpoint_opt(0)?.is_none() {
             dbio.put_breakpoint(0, initial_state)?;
-            dbio.put_meta_last_breakpoint_id(0)?;
         }
 
         Ok(dbio)
@@ -160,10 +157,6 @@ impl RocksDBIO {
         }
 
         // walk down to the nearest snapshot that exists
-        //
-        // NOTE: we do not use `get_meta_last_breakpoint_id` here because
-        // it may be stale if the last breakpoint was deleted, and simply
-        // computing it from `block_id` is enough
         let target = closest_breakpoint_id(block_id);
         let mut br_id = target;
         let mut state = loop {

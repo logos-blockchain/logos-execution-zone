@@ -58,7 +58,6 @@ fn start_db() {
     let first_id = dbio.get_meta_first_block_id_in_db().unwrap();
     let is_first_set = dbio.get_meta_is_first_block_set().unwrap();
     let last_observed_l1_header = dbio.get_meta_last_observed_l1_lib_header_in_db().unwrap();
-    let last_br_id = dbio.get_meta_last_breakpoint_id().unwrap();
     let last_block = dbio.get_block(1).unwrap();
     let breakpoint = dbio.get_breakpoint(0).unwrap();
     let final_state = dbio.final_state().unwrap();
@@ -67,7 +66,6 @@ fn start_db() {
     assert_eq!(first_id, None);
     assert_eq!(last_observed_l1_header, None);
     assert!(!is_first_set);
-    assert_eq!(last_br_id, Some(0)); // TODO: Will be None after we remove hardcoded testnet state
     assert!(last_block.is_none());
     assert_eq!(
         breakpoint.get_account_by_id(acc1()),
@@ -107,7 +105,6 @@ fn one_block_insertion() {
         .unwrap()
         .unwrap();
     let is_first_set = dbio.get_meta_is_first_block_set().unwrap();
-    let last_br_id = dbio.get_meta_last_breakpoint_id().unwrap();
     let last_block = dbio.get_block(last_id).unwrap().unwrap();
     let breakpoint = dbio.get_breakpoint(0).unwrap();
     let final_state = dbio.final_state().unwrap();
@@ -116,7 +113,6 @@ fn one_block_insertion() {
     assert_eq!(first_id, Some(1));
     assert_eq!(last_observed_l1_header, [1; 32]);
     assert!(is_first_set);
-    assert_eq!(last_br_id, Some(0));
     assert_eq!(last_block.header.hash, block.header.hash);
     assert_eq!(
         breakpoint.get_account_by_id(acc1()).balance
@@ -198,7 +194,6 @@ fn put_block_stores_breakpoint_in_same_batch() {
         dbio.put_block(&block, [i; 32], 0, marker.as_ref()).unwrap();
     }
 
-    assert_eq!(dbio.get_meta_last_breakpoint_id().unwrap(), Some(1));
     let bp1 = dbio.get_breakpoint(1).unwrap();
     assert_eq!(bp1.get_account_by_id(acc1()).balance, 10000);
     assert_eq!(bp1.get_account_by_id(acc2()).balance, 20000);
@@ -488,12 +483,12 @@ fn account_map() {
 }
 
 #[test]
-fn reopen_preserves_breakpoint_meta() {
+fn reopen_preserves_seeded_breakpoint() {
     let temp_dir = tempdir().unwrap();
     {
         let dbio = RocksDBIO::open_or_create(temp_dir.path(), &initial_state()).unwrap();
-        dbio.put_meta_last_breakpoint_id(5).unwrap();
+        assert!(dbio.get_breakpoint_opt(0).unwrap().is_some());
     } // drop releases the RocksDB lock
     let dbio = RocksDBIO::open_or_create(temp_dir.path(), &initial_state()).unwrap();
-    assert_eq!(dbio.get_meta_last_breakpoint_id().unwrap(), Some(5));
+    assert!(dbio.get_breakpoint_opt(0).unwrap().is_some());
 }
