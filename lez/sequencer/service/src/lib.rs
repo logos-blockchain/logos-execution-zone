@@ -172,16 +172,15 @@ async fn main_loop(seq_core: Arc<Mutex<SequencerCore>>, block_timeout: Duration)
     loop {
         tokio::time::sleep(block_timeout).await;
 
-        info!("Collecting transactions from mempool, block creation");
+        let mut state = seq_core.lock().await;
 
-        let id = {
-            let mut state = seq_core.lock().await;
+        // Only produce on our turn.
+        if !state.is_our_turn() {
+            continue;
+        }
 
-            state.produce_new_block().await?
-        };
-
+        info!("Our turn: collecting transactions from mempool, creating block");
+        let id = state.produce_new_block().await?;
         info!("Block with id {id} created");
-
-        info!("Waiting for new transactions");
     }
 }

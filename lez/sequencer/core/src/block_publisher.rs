@@ -12,10 +12,14 @@ use logos_blockchain_zone_sdk::{
     adapter::NodeHttpClient,
     sequencer::{
         DepositInfo, Event, FinalizedOp, InscriptionInfo,
-        SequencerConfig as ZoneSdkSequencerConfig, WithdrawArg, WithdrawInfo, ZoneSequencer,
+        SequencerConfig as ZoneSdkSequencerConfig, TurnNotification, WithdrawArg, WithdrawInfo,
+        ZoneSequencer,
     },
 };
-use tokio::{sync::mpsc, task::JoinHandle};
+use tokio::{
+    sync::{mpsc, watch},
+    task::JoinHandle,
+};
 
 use crate::config::BedrockConfig;
 
@@ -63,6 +67,9 @@ pub trait BlockPublisherTrait: Clone {
     async fn publish_block(&self, block: &Block, withdrawals: Vec<WithdrawArg>) -> Result<()>;
 
     fn channel_id(&self) -> ChannelId;
+
+    /// Whether this sequencer is currently authorized to write to the channel.
+    fn is_our_turn(&self) -> bool;
 }
 
 /// Real block publisher backed by zone-sdk's `ZoneSequencer`.
@@ -70,6 +77,7 @@ pub trait BlockPublisherTrait: Clone {
 pub struct ZoneSdkPublisher {
     channel_id: ChannelId,
     publish_tx: mpsc::Sender<(Inscription, Vec<WithdrawArg>)>,
+    turn_rx: watch::Receiver<TurnNotification>,
     // Aborts the drive task when the last clone is dropped.
     _drive_task: Arc<DriveTaskGuard>,
 }
@@ -112,6 +120,8 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         // Grab readiness receiver before moving the sequencer into the drive
         // task so we can await cold-start completion below.
         let mut ready_rx = sequencer.subscribe_ready();
+        // Grab the turn watch before the move; the sdk actor keeps it current.
+        let turn_rx = sequencer.subscribe_turn_to_write();
 
         let (publish_tx, mut publish_rx) =
             mpsc::channel::<(Inscription, Vec<WithdrawArg>)>(PUBLISH_INBOX_CAPACITY);
@@ -197,6 +207,7 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         Ok(Self {
             channel_id: config.channel_id,
             publish_tx,
+            turn_rx,
             _drive_task: Arc::new(DriveTaskGuard(drive_task)),
         })
     }
@@ -217,6 +228,10 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
 
     fn channel_id(&self) -> ChannelId {
         self.channel_id
+    }
+
+    fn is_our_turn(&self) -> bool {
+        self.turn_rx.borrow().our_turn_to_write
     }
 }
 

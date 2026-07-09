@@ -553,6 +553,12 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         self.block_publisher.clone()
     }
 
+    /// Whether this sequencer is currently authorized to write to the channel.
+    #[must_use]
+    pub fn is_our_turn(&self) -> bool {
+        self.block_publisher.is_our_turn()
+    }
+
     fn next_block_id(&self) -> u64 {
         self.chain_height
             .checked_add(1)

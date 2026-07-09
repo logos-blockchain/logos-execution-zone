@@ -48,4 +48,8 @@ impl BlockPublisherTrait for MockBlockPublisher {
     fn channel_id(&self) -> ChannelId {
         self.channel_id
     }
+
+    fn is_our_turn(&self) -> bool {
+        true
+    }
 }
