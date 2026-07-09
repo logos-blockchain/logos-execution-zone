@@ -25,3 +25,6 @@ log.workspace = true
 hex.workspace = true
 borsh.workspace = true
 logos-blockchain-common-http-client.workspace = true
+
+[dev-dependencies]
+lee = { workspace = true, features = ["test-utils"] }

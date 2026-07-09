@@ -30,6 +30,8 @@ pub mod program_deployment_transaction;
 pub mod public_transaction;
 mod signature;
 mod state;
+#[cfg(feature = "test-utils")]
+pub mod test_utils;
 mod validated_state_diff;
 
 mod privacy_preserving_circuit {

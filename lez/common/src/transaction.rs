@@ -260,9 +260,112 @@ fn validate_doesnt_modify_account(
 
 #[cfg(test)]
 mod tests {
-    use lee::{AccountId, PrivateKey, PublicKey, V03State};
+    use lee::{Account, AccountId, PrivateKey, PublicKey, V03State};
+    use lee_core::account::Nonce;
 
-    use crate::test_utils::create_transaction_native_token_transfer;
+    use super::validate_doesnt_modify_account;
+    use crate::test_utils::{
+        any_public_transaction, create_transaction_native_token_transfer, state_and_diff,
+    };
+
+    #[test]
+    fn bridge_guard_allows_balance_only_increase() {
+        // A diff that *only* increases the bridge balance (the legitimate deposit shape)
+        // must be accepted.
+        let bridge_id = system_accounts::bridge_account_id();
+        let pre = Account {
+            balance: 500,
+            nonce: Nonce(7),
+            ..Account::default()
+        };
+        let post = Account {
+            balance: 600,
+            ..pre.clone()
+        };
+        let (state, diff) = state_and_diff(bridge_id, pre, post);
+
+        let tx = any_public_transaction();
+        assert!(
+            tx.validate_bridge_account_modification(&state, &diff)
+                .is_ok(),
+            "a balance-only increase of the bridge account must be allowed",
+        );
+    }
+
+    #[test]
+    fn bridge_guard_rejects_data_modification_even_when_balance_increases() {
+        // A diff that changes the bridge account's data (here: the nonce) while *also*
+        // increasing its balance must be rejected.
+        let bridge_id = system_accounts::bridge_account_id();
+        let pre = Account {
+            balance: 500,
+            nonce: Nonce(7),
+            ..Account::default()
+        };
+        let post = Account {
+            balance: 600,
+            nonce: Nonce(8),
+            ..pre.clone()
+        };
+        let (state, diff) = state_and_diff(bridge_id, pre, post);
+
+        let tx = any_public_transaction();
+        assert!(
+            tx.validate_bridge_account_modification(&state, &diff)
+                .is_err(),
+            "modifying bridge account data must be rejected even if the balance increases",
+        );
+    }
+
+    #[test]
+    fn bridge_guard_rejects_zero_value_deposit() {
+        // A diff that touches the bridge account without *strictly* increasing its balance
+        // must be rejected — a zero-value deposit is not a real credit.
+        let bridge_id = system_accounts::bridge_account_id();
+        let pre = Account {
+            balance: 500,
+            nonce: Nonce(7),
+            ..Account::default()
+        };
+        let post = pre.clone();
+        let (state, diff) = state_and_diff(bridge_id, pre, post);
+
+        let tx = any_public_transaction();
+        assert!(
+            tx.validate_bridge_account_modification(&state, &diff)
+                .is_err(),
+            "a bridge diff that does not strictly increase the balance must be rejected",
+        );
+    }
+
+    #[test]
+    fn validate_doesnt_modify_account_flags_a_changed_account() {
+        // Directly exercise the system-account guard with a diff that genuinely changes a
+        // clock account, then with one that leaves it untouched. The inverted comparison would
+        // treat a changed account as unchanged and wave it through (and would flag an *unchanged*
+        // account instead).
+        let clock_id = system_accounts::clock_account_ids()[0];
+        let pre = Account {
+            balance: 1_000,
+            ..Account::default()
+        };
+
+        let changed = Account {
+            balance: 2_000,
+            ..Account::default()
+        };
+        let (state, diff) = state_and_diff(clock_id, pre.clone(), changed);
+        assert!(
+            validate_doesnt_modify_account(&state, &diff, clock_id).is_err(),
+            "a diff that changes a system account must be rejected",
+        );
+
+        let (unchanged_state, unchanged_diff) = state_and_diff(clock_id, pre.clone(), pre);
+        assert!(
+            validate_doesnt_modify_account(&unchanged_state, &unchanged_diff, clock_id).is_ok(),
+            "a diff that leaves a system account unchanged must be accepted",
+        );
+    }
 
     #[test]
     fn system_account_ids_are_distinct_and_non_default() {

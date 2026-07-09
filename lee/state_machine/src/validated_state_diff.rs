@@ -35,9 +35,23 @@ pub struct StateDiff {
 
 /// The validated output of executing or verifying a transaction, ready to be applied to the state.
 ///
-/// Can only be constructed by the transaction validation functions inside this crate, ensuring the
-/// diff has been checked before any state mutation occurs.
+/// It can only be constructed by the transaction validation functions inside this crate, ensuring
+/// the diff has been checked before any state mutation occurs. Under the `test-utils` feature the
+/// [`crate::test_utils`] module additionally exposes a hand-rolled constructor for unit-testing
+/// downstream validation logic; that feature must never be enabled in a production build.
 pub struct ValidatedStateDiff(StateDiff);
+
+#[cfg(feature = "test-utils")]
+impl ValidatedStateDiff {
+    /// Test-only constructor that wraps an already-built [`StateDiff`] **without validating it**.
+    ///
+    /// Kept in this module so the wrapped field can stay private: in a normal build (feature off)
+    /// the only ways to obtain a `ValidatedStateDiff` remain the `from_*_transaction` validators.
+    #[must_use]
+    pub const fn new_unchecked(state_diff: StateDiff) -> Self {
+        Self(state_diff)
+    }
+}
 
 impl ValidatedStateDiff {
     pub fn from_public_transaction(

@@ -1,4 +1,12 @@
+// Backs the hand-built state/diff helpers below, which are compiled only for `common`'s own
+// unit tests. They rely on `lee::test_utils`, gated behind `lee`'s `test-utils` feature and
+// enabled here via dev-dependencies, so it never reaches a production build.
+#[cfg(test)]
+use std::collections::HashMap;
+
 use lee::AccountId;
+#[cfg(test)]
+use lee::{Account, PrivateKey, PublicKey, V03State, ValidatedStateDiff};
 
 use crate::{
     HashType,
@@ -11,6 +19,33 @@ use crate::{
 #[must_use]
 pub fn sequencer_sign_key_for_testing() -> lee::PrivateKey {
     lee::PrivateKey::try_new([37; 32]).unwrap()
+}
+
+/// A syntactically valid `Public` transaction. Its contents are irrelevant to the
+/// bridge guard, which only branches on the transaction *variant* and the diff.
+#[cfg(test)]
+#[must_use]
+pub fn any_public_transaction() -> LeeTransaction {
+    let sender_key = PrivateKey::try_new([9_u8; 32]).expect("valid key");
+    let sender_id = AccountId::from(&PublicKey::new_from_private_key(&sender_key));
+    let recipient_key = PrivateKey::try_new([8_u8; 32]).expect("valid key");
+    let recipient_id = AccountId::from(&PublicKey::new_from_private_key(&recipient_key));
+    create_transaction_native_token_transfer(sender_id, 0, recipient_id, 1, &sender_key)
+}
+
+/// Builds a state whose only entry is `account_id` (set to `pre`) and a single-entry diff
+/// that maps `account_id` to `post`, so the validation guards can be exercised in isolation.
+#[cfg(test)]
+#[must_use]
+pub fn state_and_diff(
+    account_id: AccountId,
+    pre: Account,
+    post: Account,
+) -> (V03State, ValidatedStateDiff) {
+    let state = V03State::new().with_public_accounts([(account_id, pre)]);
+    let diff =
+        lee::test_utils::validated_state_diff_from_public_diff(HashMap::from([(account_id, post)]));
+    (state, diff)
 }
 
 // Dummy producers
