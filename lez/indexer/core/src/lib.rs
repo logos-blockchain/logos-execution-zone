@@ -10,6 +10,7 @@ use log::{error, info, warn};
 use logos_blockchain_zone_sdk::{
     CommonHttpClient, Slot, ZoneMessage, adapter::NodeHttpClient, indexer::ZoneIndexer,
 };
+use retry::ApplyRetryGate;
 pub use stall_reason::StallReason;
 
 use crate::{
@@ -22,8 +23,12 @@ pub mod block_store;
 pub mod chain_consistency;
 pub mod config;
 pub mod ingest_error;
+mod retry;
 pub mod stall_reason;
 pub mod status;
+
+/// Consecutive failed apply attempts of the same block before parking.
+const APPLY_RETRY_LIMIT: u32 = 3;
 
 #[derive(Clone)]
 pub struct IndexerCore {
@@ -167,6 +172,7 @@ impl IndexerCore {
 
         async_stream::stream! {
             let mut cursor = initial_cursor;
+            let mut retry_gate = ApplyRetryGate::new();
 
             if cursor.is_some() {
                 info!("Resuming indexer from cursor {cursor:?}");
@@ -215,6 +221,7 @@ impl IndexerCore {
 
                     match self.store.accept_block(&block, slot).await {
                         Ok(AcceptOutcome::Applied) => {
+                            retry_gate.reset();
                             info!("Indexed L2 block {}", block.header.block_id);
                             self.set_status(IndexerSyncStatus::syncing());
                             self.advance_cursor(&mut cursor, slot);
@@ -237,13 +244,33 @@ impl IndexerCore {
                             self.advance_cursor(&mut cursor, slot);
                         }
                         Ok(AcceptOutcome::ApplyFailed(ingest_err)) => {
-                            error!(
-                                "Apply failed at block {}: {ingest_err}",
-                                block.header.block_id
-                            );
-                            self.set_status(IndexerSyncStatus::error(ingest_err.to_string()));
-                            had_cycle_error = true;
-                            break;
+                            let attempts = retry_gate.register_failure(block.header.block_id);
+                            if attempts >= APPLY_RETRY_LIMIT {
+                                error!(
+                                    "Parked at block {} after {attempts} failed apply attempts: {ingest_err}",
+                                    block.header.block_id
+                                );
+                                if let Err(err) = self.store.record_stall(
+                                    Some(&block.header),
+                                    slot,
+                                    ingest_err.clone(),
+                                ) {
+                                    warn!("Failed to record stall reason: {err:#}");
+                                }
+                                self.set_status(IndexerSyncStatus::stalled(ingest_err.to_string()));
+                                self.advance_cursor(&mut cursor, slot);
+                                retry_gate.reset();
+                            } else {
+                                error!(
+                                    "Failed to apply block {} (attempt {attempts}/{APPLY_RETRY_LIMIT}), will retry: {ingest_err}",
+                                    block.header.block_id
+                                );
+                                self.set_status(IndexerSyncStatus::error(format!(
+                                    "apply failed, retrying: {ingest_err}"
+                                )));
+                                had_cycle_error = true;
+                                break;
+                            }
                         }
                         Err(err) => {
                             // Infrastructure error (DB read/write), not a bad block.

@@ -237,8 +237,9 @@ impl IndexerStore {
     }
 
     /// Validates `block` against the tip and, if it chains, applies it atomically
-    /// (scratch clone, commit only on full success) and advances the tip. On any
-    /// failure records the stall and returns `Parked` without touching state.
+    /// (scratch clone, commit only on full success) and advances the tip.
+    /// Retryable apply failures return `ApplyFailed` without recording a stall
+    /// or touching state; other failures record the stall and return `Parked`.
     pub async fn accept_block(&self, block: &Block, l1_slot: Slot) -> Result<AcceptOutcome> {
         let tip = self.validated_tip()?;
 
