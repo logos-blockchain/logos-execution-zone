@@ -243,7 +243,7 @@ impl IndexerCore {
                             // L1 proceeds regardless
                             self.advance_cursor(&mut cursor, slot);
                         }
-                        Ok(AcceptOutcome::ApplyFailed(ingest_err)) => {
+                        Ok(AcceptOutcome::RetryableFailure(ingest_err)) => {
                             let attempts = retry_gate.register_failure(block.header.block_id);
                             if attempts >= APPLY_RETRY_LIMIT {
                                 error!(

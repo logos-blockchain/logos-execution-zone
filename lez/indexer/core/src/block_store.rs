@@ -33,7 +33,7 @@ pub enum AcceptOutcome {
     /// ([`BlockIngestError::is_retryable`]); nothing recorded, tip and state
     /// untouched. The caller retries and parks via
     /// [`IndexerStore::record_stall`] once it gives up.
-    ApplyFailed(BlockIngestError),
+    RetryableFailure(BlockIngestError),
 }
 
 #[derive(Clone)]
@@ -238,7 +238,7 @@ impl IndexerStore {
 
     /// Validates `block` against the tip and, if it chains, applies it atomically
     /// (scratch clone, commit only on full success) and advances the tip.
-    /// Retryable apply failures return `ApplyFailed` without recording a stall
+    /// Retryable apply failures return `RetryableFailure` without recording a stall
     /// or touching state; other failures record the stall and return `Parked`.
     pub async fn accept_block(&self, block: &Block, l1_slot: Slot) -> Result<AcceptOutcome> {
         let tip = self.validated_tip()?;
@@ -261,7 +261,7 @@ impl IndexerStore {
         let mut scratch = self.current_state.read().await.clone();
         if let Err(err) = apply_block_to_scratch(block, &mut scratch) {
             if err.is_retryable() {
-                return Ok(AcceptOutcome::ApplyFailed(err));
+                return Ok(AcceptOutcome::RetryableFailure(err));
             }
             self.record_stall(Some(&block.header), l1_slot, err.clone())?;
             return Ok(AcceptOutcome::Parked(err));
@@ -886,7 +886,7 @@ mod accept_tests {
     }
 
     #[tokio::test]
-    async fn transient_apply_failure_returns_apply_failed_without_stall() {
+    async fn transient_apply_failure_returns_retryable_failure_without_stall() {
         use testnet_initial_state::initial_pub_accounts_private_keys;
 
         let dir = tempfile::tempdir().expect("tempdir");
@@ -916,7 +916,7 @@ mod accept_tests {
 
         assert!(matches!(
             outcome,
-            AcceptOutcome::ApplyFailed(BlockIngestError::StateTransition { .. })
+            AcceptOutcome::RetryableFailure(BlockIngestError::StateTransition { .. })
         ));
         assert!(
             store.get_stall_reason().unwrap().is_none(),
