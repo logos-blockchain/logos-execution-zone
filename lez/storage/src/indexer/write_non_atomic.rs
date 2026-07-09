@@ -1,4 +1,4 @@
-use super::{BREAKPOINT_INTERVAL, DbError, DbResult, RocksDBIO, V03State};
+use super::{DbResult, RocksDBIO, V03State};
 use crate::{
     DBIO as _,
     cells::shared_cells::{FirstBlockSetCell, LastBlockCell},
@@ -43,28 +43,5 @@ impl RocksDBIO {
 
     pub fn put_breakpoint(&self, br_id: u64, breakpoint: &V03State) -> DbResult<()> {
         self.put(&BreakpointCellRef(breakpoint), br_id)
-    }
-
-    pub fn put_next_breakpoint(&self) -> DbResult<()> {
-        let last_block = self.get_meta_last_block_id_in_db()?.unwrap_or(0);
-        let next_breakpoint_id = self
-            .get_meta_last_breakpoint_id()?
-            .unwrap_or(0)
-            .checked_add(1)
-            .expect("Breakpoint Id will be lesser than u64::MAX");
-        let block_to_break_id = next_breakpoint_id
-            .checked_mul(u64::from(BREAKPOINT_INTERVAL))
-            .expect("Reached maximum breakpoint id");
-
-        if block_to_break_id <= last_block {
-            let next_breakpoint = self.calculate_state_for_id(block_to_break_id)?;
-
-            self.put_breakpoint(next_breakpoint_id, &next_breakpoint)?;
-            self.put_meta_last_breakpoint_id(next_breakpoint_id)
-        } else {
-            Err(DbError::db_interaction_error(
-                "Breakpoint not yet achieved".to_owned(),
-            ))
-        }
     }
 }

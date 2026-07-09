@@ -2,13 +2,13 @@ use std::collections::HashMap;
 
 use rocksdb::WriteBatch;
 
-use super::{BREAKPOINT_INTERVAL, Block, DbError, DbResult, RocksDBIO};
+use super::{BREAKPOINT_INTERVAL, Block, DbError, DbResult, RocksDBIO, V03State};
 use crate::{
     DBIO as _,
     cells::shared_cells::{FirstBlockCell, FirstBlockSetCell, LastBlockCell},
     indexer::indexer_cells::{
-        AccNumTxCell, BlockHashToBlockIdMapCell, LastBreakpointIdCell, LastObservedL1LibHeaderCell,
-        TipSlotCell, TxHashToBlockIdMapCell,
+        AccNumTxCell, BlockHashToBlockIdMapCell, BreakpointCellRef, LastBreakpointIdCell,
+        LastObservedL1LibHeaderCell, TipSlotCell, TxHashToBlockIdMapCell,
     },
 };
 
@@ -151,8 +151,15 @@ impl RocksDBIO {
         self.put_batch(&FirstBlockSetCell(true), (), write_batch)
     }
 
-    /// Put a block atomically (via [`WriteBatch`]) along with its L1 header and `Slot`.
-    pub fn put_block(&self, block: &Block, l1_lib_header: [u8; 32], l1_slot: u64) -> DbResult<()> {
+    /// Put a block atomically (via [`WriteBatch`]) along with its L1 header, `Slot`,
+    /// and — for interval-boundary blocks — its post-state snapshot.
+    pub fn put_block(
+        &self,
+        block: &Block,
+        l1_lib_header: [u8; 32],
+        l1_slot: u64,
+        breakpoint: Option<&V03State>,
+    ) -> DbResult<()> {
         let cf_block = self.block_column();
         let last_curr_block = self.get_meta_last_block_id_in_db()?.unwrap_or(0);
         let mut write_batch = WriteBatch::default();
@@ -216,17 +223,26 @@ impl RocksDBIO {
             self.put_account_transactions_dependant(acc_id, &tx_hashes, &mut write_batch)?;
         }
 
+        if let Some(state) = breakpoint {
+            debug_assert!(
+                block
+                    .header
+                    .block_id
+                    .is_multiple_of(BREAKPOINT_INTERVAL.into()),
+                "breakpoint snapshot must accompany an interval-boundary block"
+            );
+            let br_id = block
+                .header
+                .block_id
+                .checked_div(BREAKPOINT_INTERVAL.into())
+                .expect("Breakpoint interval is not zero");
+            self.put_batch(&BreakpointCellRef(state), br_id, &mut write_batch)?;
+            self.put_meta_last_breakpoint_id_batch(br_id, &mut write_batch)?;
+        }
+
         self.db.write(write_batch).map_err(|rerr| {
             DbError::rocksdb_cast_message(rerr, Some("Failed to write batch".to_owned()))
         })?;
-
-        if block
-            .header
-            .block_id
-            .is_multiple_of(BREAKPOINT_INTERVAL.into())
-        {
-            self.put_next_breakpoint()?;
-        }
 
         Ok(())
     }

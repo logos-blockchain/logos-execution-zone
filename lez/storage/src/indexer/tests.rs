@@ -87,7 +87,7 @@ fn one_block_insertion() {
     let dbio = RocksDBIO::open_or_create(temdir_path, &initial_state()).unwrap();
 
     let genesis_block = genesis_block();
-    dbio.put_block(&genesis_block, [0; 32], 0).unwrap();
+    dbio.put_block(&genesis_block, [0; 32], 0, None).unwrap();
 
     let prev_hash = genesis_block.header.hash;
     let from = acc1();
@@ -98,7 +98,7 @@ fn one_block_insertion() {
         common::test_utils::create_transaction_native_token_transfer(from, 0, to, 1, &sign_key);
     let block = produce_dummy_block(2, Some(prev_hash), vec![transfer_tx]);
 
-    dbio.put_block(&block, [1; 32], 0).unwrap();
+    dbio.put_block(&block, [1; 32], 0, None).unwrap();
 
     let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
     let first_id = dbio.get_meta_first_block_id_in_db().unwrap();
@@ -138,30 +138,33 @@ fn put_block_records_tip_inscription_slot() {
     assert_eq!(dbio.get_meta_tip_slot_in_db().unwrap(), None);
 
     let genesis_block = genesis_block();
-    dbio.put_block(&genesis_block, [0; 32], 1_000).unwrap();
+    dbio.put_block(&genesis_block, [0; 32], 1_000, None)
+        .unwrap();
     assert_eq!(dbio.get_meta_tip_slot_in_db().unwrap(), Some(1_000));
 
     let block = produce_dummy_block(2, Some(genesis_block.header.hash), vec![]);
-    dbio.put_block(&block, [1; 32], 1_005).unwrap();
+    dbio.put_block(&block, [1; 32], 1_005, None).unwrap();
     assert_eq!(dbio.get_meta_tip_slot_in_db().unwrap(), Some(1_005));
 
     // Re-inserting a block at/below the tip must not move the tip slot.
-    dbio.put_block(&genesis_block, [0; 32], 1_010).unwrap();
+    dbio.put_block(&genesis_block, [0; 32], 1_010, None)
+        .unwrap();
     assert_eq!(dbio.get_meta_tip_slot_in_db().unwrap(), Some(1_005));
 }
 
 #[test]
-fn new_breakpoint() {
+fn put_block_stores_breakpoint_in_same_batch() {
     let temp_dir = tempdir().unwrap();
-    let temdir_path = temp_dir.path();
-
-    let dbio = RocksDBIO::open_or_create(temdir_path, &initial_state()).unwrap();
+    let dbio = RocksDBIO::open_or_create(temp_dir.path(), &initial_state()).unwrap();
 
     let from = acc1();
     let to = acc2();
     let sign_key = acc1_sign_key();
 
-    for i in 1..=BREAKPOINT_INTERVAL + 1 {
+    // Chain blocks 1..=BREAKPOINT_INTERVAL; only the boundary block carries a
+    // snapshot. A recognizable marker state (the initial one) proves put_block
+    // stores the caller's snapshot verbatim rather than recomputing it.
+    for i in 1..=BREAKPOINT_INTERVAL {
         let prev_hash = dbio.get_meta_last_block_id_in_db().unwrap().map(|last_id| {
             let last_block = dbio.get_block(last_id).unwrap().unwrap();
             last_block.header.hash
@@ -175,42 +178,22 @@ fn new_breakpoint() {
             &sign_key,
         );
         let block = produce_dummy_block(i.into(), prev_hash, vec![transfer_tx]);
-        dbio.put_block(&block, [i; 32], 0).unwrap();
+
+        let marker = (i == BREAKPOINT_INTERVAL).then(initial_state);
+        dbio.put_block(&block, [i; 32], 0, marker.as_ref()).unwrap();
     }
 
-    let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
-    let first_id = dbio.get_meta_first_block_id_in_db().unwrap();
-    let is_first_set = dbio.get_meta_is_first_block_set().unwrap();
-    let last_br_id = dbio.get_meta_last_breakpoint_id().unwrap();
-    let last_block = dbio.get_block(last_id).unwrap().unwrap();
-    let prev_breakpoint = dbio.get_breakpoint(0).unwrap();
-    let breakpoint = dbio.get_breakpoint(1).unwrap();
-    let final_state = dbio.final_state().unwrap();
-
-    assert_eq!(last_id, 101);
-    assert_eq!(first_id, Some(1));
-    assert!(is_first_set);
-    assert_eq!(last_br_id, Some(1));
-    assert_ne!(last_block.header.hash, genesis_block().header.hash);
+    assert_eq!(dbio.get_meta_last_breakpoint_id().unwrap(), Some(1));
+    let bp1 = dbio.get_breakpoint(1).unwrap();
+    assert_eq!(bp1.get_account_by_id(acc1()).balance, 10000);
+    assert_eq!(bp1.get_account_by_id(acc2()).balance, 20000);
+    // Non-boundary blocks passed None: breakpoint 0 must be the only other one.
     assert_eq!(
-        prev_breakpoint.get_account_by_id(acc1()).balance
-            - final_state.get_account_by_id(acc1()).balance,
-        101
-    );
-    assert_eq!(
-        final_state.get_account_by_id(acc2()).balance
-            - prev_breakpoint.get_account_by_id(acc2()).balance,
-        101
-    );
-    assert_eq!(
-        breakpoint.get_account_by_id(acc1()).balance
-            - final_state.get_account_by_id(acc1()).balance,
-        1
-    );
-    assert_eq!(
-        final_state.get_account_by_id(acc2()).balance
-            - breakpoint.get_account_by_id(acc2()).balance,
-        1
+        dbio.get_breakpoint(0)
+            .unwrap()
+            .get_account_by_id(acc1())
+            .balance,
+        10000
     );
 }
 
@@ -231,7 +214,7 @@ fn simple_maps() {
 
     let control_hash1 = block.header.hash;
 
-    dbio.put_block(&block, [1; 32], 0).unwrap();
+    dbio.put_block(&block, [1; 32], 0, None).unwrap();
 
     let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
     let last_block = dbio.get_block(last_id).unwrap().unwrap();
@@ -243,7 +226,7 @@ fn simple_maps() {
 
     let control_hash2 = block.header.hash;
 
-    dbio.put_block(&block, [2; 32], 0).unwrap();
+    dbio.put_block(&block, [2; 32], 0, None).unwrap();
 
     let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
     let last_block = dbio.get_block(last_id).unwrap().unwrap();
@@ -255,7 +238,7 @@ fn simple_maps() {
     let control_tx_hash1 = transfer_tx.hash();
 
     let block = produce_dummy_block(3, Some(prev_hash), vec![transfer_tx]);
-    dbio.put_block(&block, [3; 32], 0).unwrap();
+    dbio.put_block(&block, [3; 32], 0, None).unwrap();
 
     let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
     let last_block = dbio.get_block(last_id).unwrap().unwrap();
@@ -267,7 +250,7 @@ fn simple_maps() {
     let control_tx_hash2 = transfer_tx.hash();
 
     let block = produce_dummy_block(4, Some(prev_hash), vec![transfer_tx]);
-    dbio.put_block(&block, [4; 32], 0).unwrap();
+    dbio.put_block(&block, [4; 32], 0, None).unwrap();
 
     let control_block_id1 = dbio.get_block_id_by_hash(control_hash1.0).unwrap().unwrap();
     let control_block_id2 = dbio.get_block_id_by_hash(control_hash2.0).unwrap().unwrap();
@@ -304,7 +287,7 @@ fn block_batch() {
     let block = produce_dummy_block(1, None, vec![transfer_tx]);
 
     block_res.push(block.clone());
-    dbio.put_block(&block, [1; 32], 0).unwrap();
+    dbio.put_block(&block, [1; 32], 0, None).unwrap();
 
     let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
     let last_block = dbio.get_block(last_id).unwrap().unwrap();
@@ -315,7 +298,7 @@ fn block_batch() {
     let block = produce_dummy_block(2, Some(prev_hash), vec![transfer_tx]);
 
     block_res.push(block.clone());
-    dbio.put_block(&block, [2; 32], 0).unwrap();
+    dbio.put_block(&block, [2; 32], 0, None).unwrap();
 
     let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
     let last_block = dbio.get_block(last_id).unwrap().unwrap();
@@ -326,7 +309,7 @@ fn block_batch() {
 
     let block = produce_dummy_block(3, Some(prev_hash), vec![transfer_tx]);
     block_res.push(block.clone());
-    dbio.put_block(&block, [3; 32], 0).unwrap();
+    dbio.put_block(&block, [3; 32], 0, None).unwrap();
 
     let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
     let last_block = dbio.get_block(last_id).unwrap().unwrap();
@@ -337,7 +320,7 @@ fn block_batch() {
 
     let block = produce_dummy_block(4, Some(prev_hash), vec![transfer_tx]);
     block_res.push(block.clone());
-    dbio.put_block(&block, [4; 32], 0).unwrap();
+    dbio.put_block(&block, [4; 32], 0, None).unwrap();
 
     let block_hashes_mem: Vec<[u8; 32]> =
         block_res.into_iter().map(|bl| bl.header.hash.0).collect();
@@ -396,7 +379,7 @@ fn account_map() {
 
     let block = produce_dummy_block(1, None, vec![transfer_tx1, transfer_tx2]);
 
-    dbio.put_block(&block, [1; 32], 0).unwrap();
+    dbio.put_block(&block, [1; 32], 0, None).unwrap();
 
     let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
     let last_block = dbio.get_block(last_id).unwrap().unwrap();
@@ -411,7 +394,7 @@ fn account_map() {
 
     let block = produce_dummy_block(2, Some(prev_hash), vec![transfer_tx1, transfer_tx2]);
 
-    dbio.put_block(&block, [2; 32], 0).unwrap();
+    dbio.put_block(&block, [2; 32], 0, None).unwrap();
 
     let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
     let last_block = dbio.get_block(last_id).unwrap().unwrap();
@@ -426,7 +409,7 @@ fn account_map() {
 
     let block = produce_dummy_block(3, Some(prev_hash), vec![transfer_tx1, transfer_tx2]);
 
-    dbio.put_block(&block, [3; 32], 0).unwrap();
+    dbio.put_block(&block, [3; 32], 0, None).unwrap();
 
     let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
     let last_block = dbio.get_block(last_id).unwrap().unwrap();
@@ -438,7 +421,7 @@ fn account_map() {
 
     let block = produce_dummy_block(4, Some(prev_hash), vec![transfer_tx]);
 
-    dbio.put_block(&block, [4; 32], 0).unwrap();
+    dbio.put_block(&block, [4; 32], 0, None).unwrap();
 
     let acc1_tx = dbio.get_acc_transactions(*acc1().value(), 0, 7).unwrap();
     let acc1_tx_hashes: Vec<[u8; 32]> = acc1_tx.into_iter().map(|tx| tx.hash().0).collect();
