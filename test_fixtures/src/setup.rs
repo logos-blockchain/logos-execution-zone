@@ -101,10 +101,15 @@ pub async fn setup_indexer(bedrock_addr: SocketAddr) -> Result<(IndexerHandle, T
     let indexer_config =
         config::indexer_config(bedrock_addr).context("Failed to create Indexer config")?;
 
-    indexer_service::run_server(indexer_config, temp_indexer_dir.path(), 0)
-        .await
-        .context("Failed to run Indexer Service")
-        .map(|handle| (handle, temp_indexer_dir))
+    indexer_service::run_server(
+        indexer_config,
+        temp_indexer_dir.path(),
+        0,
+        tokio_util::sync::CancellationToken::new(),
+    )
+    .await
+    .context("Failed to run Indexer Service")
+    .map(|handle| (handle, temp_indexer_dir))
 }
 
 pub async fn setup_sequencer(

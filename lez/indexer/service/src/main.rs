@@ -34,7 +34,9 @@ async fn main() -> Result<()> {
     let cancellation_token = listen_for_shutdown_signal();
 
     let config = indexer_service::IndexerConfig::from_path(&config_path)?;
-    let indexer_handle = indexer_service::run_server(config, data_dir.as_path(), port).await?;
+    let indexer_handle =
+        indexer_service::run_server(config, data_dir.as_path(), port, cancellation_token.clone())
+            .await?;
 
     tokio::select! {
         () = cancellation_token.cancelled() => {

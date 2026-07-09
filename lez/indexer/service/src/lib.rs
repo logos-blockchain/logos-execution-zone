@@ -5,6 +5,7 @@ pub use indexer_core::config::*;
 use indexer_service_rpc::RpcServer as _;
 use jsonrpsee::server::{Server, ServerHandle};
 use log::{error, info};
+use tokio_util::sync::CancellationToken;
 
 pub mod service;
 
@@ -69,9 +70,10 @@ pub async fn run_server(
     config: IndexerConfig,
     storage_dir: &Path,
     port: u16,
+    shutdown: CancellationToken,
 ) -> Result<IndexerHandle> {
     #[cfg(feature = "mock-responses")]
-    let _ = (config, storage_dir);
+    let _ = (config, storage_dir, shutdown);
 
     let server = Server::builder()
         .build(SocketAddr::from(([0, 0, 0, 0], port)))
@@ -86,7 +88,7 @@ pub async fn run_server(
 
     #[cfg(not(feature = "mock-responses"))]
     let handle = {
-        let service = service::IndexerService::new(config, storage_dir)
+        let service = service::IndexerService::new(config, storage_dir, shutdown)
             .await
             .context("Failed to initialize indexer service")?;
         server.start(service.into_rpc())

@@ -2,7 +2,7 @@ use std::{path::Path, pin::pin, sync::Arc};
 
 use anyhow::{Context as _, Result, bail};
 use arc_swap::ArcSwap;
-use futures::{StreamExt as _, never::Never};
+use futures::StreamExt as _;
 use indexer_core::{IndexerCore, config::IndexerConfig};
 use indexer_service_protocol::{
     Account, AccountId, Block, BlockId, HashType, IndexerStatus, Transaction,
@@ -14,6 +14,7 @@ use jsonrpsee::{
 };
 use log::{debug, error, info, warn};
 use tokio::sync::mpsc::UnboundedSender;
+use tokio_util::sync::CancellationToken;
 
 pub struct IndexerService {
     subscription_service: SubscriptionService,
@@ -21,9 +22,13 @@ pub struct IndexerService {
 }
 
 impl IndexerService {
-    pub async fn new(config: IndexerConfig, storage_dir: &Path) -> Result<Self> {
+    pub async fn new(
+        config: IndexerConfig,
+        storage_dir: &Path,
+        shutdown: CancellationToken,
+    ) -> Result<Self> {
         let indexer = IndexerCore::new(config, storage_dir).await?;
-        let subscription_service = SubscriptionService::spawn_new(indexer.clone());
+        let subscription_service = SubscriptionService::spawn_new(indexer.clone(), shutdown);
 
         Ok(Self {
             subscription_service,
@@ -170,15 +175,17 @@ impl indexer_service_rpc::RpcServer for IndexerService {
 struct SubscriptionService {
     parts: ArcSwap<SubscriptionLoopParts>,
     indexer: IndexerCore,
+    shutdown: CancellationToken,
 }
 
 impl SubscriptionService {
-    pub fn spawn_new(indexer: IndexerCore) -> Self {
-        let parts = Self::spawn_respond_subscribers_loop(indexer.clone());
+    pub fn spawn_new(indexer: IndexerCore, shutdown: CancellationToken) -> Self {
+        let parts = Self::spawn_respond_subscribers_loop(indexer.clone(), shutdown.clone());
 
         Self {
             parts: ArcSwap::new(Arc::new(parts)),
             indexer,
+            shutdown,
         }
     }
 
@@ -192,12 +199,16 @@ impl SubscriptionService {
             // Respawn the subscription service loop if it has finished (either with error or panic)
             if guard.handle.is_finished() {
                 drop(guard);
-                let new_parts = Self::spawn_respond_subscribers_loop(self.indexer.clone());
+                let new_parts = Self::spawn_respond_subscribers_loop(
+                    self.indexer.clone(),
+                    self.shutdown.clone(),
+                );
                 let old_handle_and_sender = self.parts.swap(Arc::new(new_parts));
                 let old_parts = Arc::into_inner(old_handle_and_sender)
                     .expect("There should be no other references to the old handle and sender");
 
                 match old_parts.handle.await {
+                    Ok(Ok(())) => {}
                     Ok(Err(err)) => {
                         error!(
                             "Subscription service loop has unexpectedly finished with error: {err:#}"
@@ -215,7 +226,10 @@ impl SubscriptionService {
         Ok(())
     }
 
-    fn spawn_respond_subscribers_loop(indexer: IndexerCore) -> SubscriptionLoopParts {
+    fn spawn_respond_subscribers_loop(
+        indexer: IndexerCore,
+        shutdown: CancellationToken,
+    ) -> SubscriptionLoopParts {
         let (new_subscription_sender, mut sub_receiver) =
             tokio::sync::mpsc::unbounded_channel::<Subscription<BlockId>>();
 
@@ -231,6 +245,10 @@ impl SubscriptionService {
                 )]
                 loop {
                     tokio::select! {
+                        () = shutdown.cancelled() => {
+                            info!("Shutdown requested; stopping block ingestion");
+                            return Ok(());
+                        }
                         sub = sub_receiver.recv() => {
                             let Some(subscription) = sub else {
                                 bail!("Subscription receiver closed unexpectedly");
@@ -259,10 +277,11 @@ impl SubscriptionService {
                     }
                 }
             };
-            let res: anyhow::Result<futures::never::Never> = run_loop.await;
-            let Err(err) = res;
-            error!("Subscription service loop has unexpectedly finished with error: {err:#?}");
-            Err(err)
+            let res: anyhow::Result<()> = run_loop.await;
+            if let Err(err) = &res {
+                error!("Subscription service loop has unexpectedly finished with error: {err:#?}");
+            }
+            res
         });
         SubscriptionLoopParts {
             handle,
@@ -278,7 +297,7 @@ impl Drop for SubscriptionService {
 }
 
 struct SubscriptionLoopParts {
-    handle: tokio::task::JoinHandle<Result<Never>>,
+    handle: tokio::task::JoinHandle<Result<()>>,
     new_subscription_sender: UnboundedSender<Subscription<BlockId>>,
 }
 
