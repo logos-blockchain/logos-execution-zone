@@ -198,6 +198,7 @@ fn prove_privacy_preserving_execution_circuit_fully_private() {
             InputAccountIdentity::PrivateAuthorizedUpdate {
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
+                view_tag: 0,
                 nsk: sender_keys.nsk,
                 membership_proof: commitment_set
                     .get_proof_for(&commitment_sender)
@@ -574,6 +575,7 @@ fn private_authorized_update_encrypts_regular_kind_with_identifier() {
         vec![InputAccountIdentity::PrivateAuthorizedUpdate {
             vpk: keys.vpk(),
             random_seed: [0; 32],
+            view_tag: 0,
             nsk: keys.nsk,
             membership_proof: commitment_set.get_proof_for(&commitment).unwrap(),
             identifier,
@@ -630,6 +632,7 @@ fn private_pda_update_encrypts_pda_kind_with_identifier() {
             InputAccountIdentity::PrivatePdaUpdate {
                 vpk: keys.vpk(),
                 random_seed: [0; 32],
+                view_tag: 0,
                 nsk: keys.nsk,
                 membership_proof: commitment_set.get_proof_for(&pda_commitment).unwrap(),
                 identifier,
@@ -708,6 +711,7 @@ fn private_pda_update_identifier_mismatch_fails() {
             InputAccountIdentity::PrivatePdaUpdate {
                 vpk: keys.vpk(),
                 random_seed: [0; 32],
+                view_tag: 0,
                 nsk: keys.nsk,
                 membership_proof: commitment_set.get_proof_for(&pda_commitment).unwrap(),
                 identifier: 99,

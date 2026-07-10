@@ -167,6 +167,7 @@ fn privacy_malicious_programs_cannot_drain_public_victim() {
         InputAccountIdentity::PrivateAuthorizedUpdate {
             vpk: attacker_keys.vpk(),
             random_seed: [0; 32],
+            view_tag: 0,
             nsk: attacker_keys.nsk,
             membership_proof,
             identifier: 0,
@@ -327,6 +328,7 @@ fn privacy_malicious_programs_cannot_drain_private_victim() {
         InputAccountIdentity::PrivateAuthorizedUpdate {
             vpk: attacker_keys.vpk(),
             random_seed: [0; 32],
+            view_tag: 0,
             nsk: attacker_keys.nsk,
             membership_proof,
             identifier: 0,

@@ -4,7 +4,7 @@ use lee_core::{
     PrivacyPreservingCircuitOutput, PrivateAccountKind, SharedSecretKey,
     account::{Account, AccountId, Nonce},
     compute_digest_for_path,
-    encryption::ViewingPublicKey,
+    encryption::{ViewTag, ViewingPublicKey},
 };
 
 use crate::execution_state::ExecutionState;
@@ -66,6 +66,7 @@ pub fn compute_circuit_output(
                     *commitment_root,
                 );
                 let new_nonce = Nonce::private_account_nonce_init(&account_id);
+                let view_tag = EncryptedAccountData::compute_view_tag(&npk, vpk);
 
                 emit_private_output(
                     &mut output,
@@ -73,7 +74,7 @@ pub fn compute_circuit_output(
                     post_state,
                     &account_id,
                     &PrivateAccountKind::Regular(*identifier),
-                    &npk,
+                    view_tag,
                     vpk,
                     random_seed,
                     new_nullifier,
@@ -83,6 +84,7 @@ pub fn compute_circuit_output(
             InputAccountIdentity::PrivateAuthorizedUpdate {
                 vpk,
                 random_seed,
+                view_tag,
                 nsk,
                 membership_proof,
                 identifier,
@@ -110,7 +112,7 @@ pub fn compute_circuit_output(
                     post_state,
                     &account_id,
                     &PrivateAccountKind::Regular(*identifier),
-                    &npk,
+                    *view_tag,
                     vpk,
                     random_seed,
                     new_nullifier,
@@ -142,6 +144,7 @@ pub fn compute_circuit_output(
                     *commitment_root,
                 );
                 let new_nonce = Nonce::private_account_nonce_init(&account_id);
+                let view_tag = EncryptedAccountData::compute_view_tag(npk, vpk);
 
                 emit_private_output(
                     &mut output,
@@ -149,7 +152,7 @@ pub fn compute_circuit_output(
                     post_state,
                     &account_id,
                     &PrivateAccountKind::Regular(*identifier),
-                    npk,
+                    view_tag,
                     vpk,
                     random_seed,
                     new_nullifier,
@@ -190,6 +193,7 @@ pub fn compute_circuit_output(
                 let (authority_program_id, seed) = pda_seed_by_position
                     .get(&pos)
                     .expect("PrivatePdaInit position must be in pda_seed_by_position");
+                let view_tag = EncryptedAccountData::compute_view_tag(npk, vpk);
                 emit_private_output(
                     &mut output,
                     &mut output_index,
@@ -200,7 +204,7 @@ pub fn compute_circuit_output(
                         seed: *seed,
                         identifier: *identifier,
                     },
-                    npk,
+                    view_tag,
                     vpk,
                     random_seed,
                     new_nullifier,
@@ -210,6 +214,7 @@ pub fn compute_circuit_output(
             InputAccountIdentity::PrivatePdaUpdate {
                 vpk,
                 random_seed,
+                view_tag,
                 nsk,
                 membership_proof,
                 identifier,
@@ -234,7 +239,6 @@ pub fn compute_circuit_output(
                 let new_nonce = pre_state.account.nonce.private_account_nonce_increment(nsk);
 
                 let account_id = pre_state.account_id;
-                let npk = NullifierPublicKey::from(nsk);
                 let (authority_program_id, seed) = pda_seed_by_position
                     .get(&pos)
                     .expect("PrivatePdaUpdate position must be in pda_seed_by_position");
@@ -248,7 +252,7 @@ pub fn compute_circuit_output(
                         seed: *seed,
                         identifier: *identifier,
                     },
-                    &npk,
+                    *view_tag,
                     vpk,
                     random_seed,
                     new_nullifier,
@@ -271,7 +275,7 @@ fn emit_private_output(
     post_state: Account,
     account_id: &AccountId,
     kind: &PrivateAccountKind,
-    npk: &NullifierPublicKey,
+    view_tag: ViewTag,
     vpk: &ViewingPublicKey,
     random_seed: &[u8; 32],
     new_nullifier: (Nullifier, CommitmentSetDigest),
@@ -286,15 +290,6 @@ fn emit_private_output(
 
     let esk = EphemeralSecretKey::new(account_id, random_seed, &new_nonce);
     let (shared_secret, epk) = SharedSecretKey::encapsulate_deterministic(vpk, &esk);
-
-    // Currently the view tag is properlty generated for all accounts.
-    // To increase privacy, this will be changed in the later version
-    // to only be generated explicitly for initialized accounts and
-    // fed by the prover directly for updated accounts.
-    //
-    // See issue 573:
-    // https://github.com/logos-blockchain/logos-execution-zone/issues/573
-    let view_tag = EncryptedAccountData::compute_view_tag(npk, vpk);
 
     let encrypted_account = EncryptionScheme::encrypt(
         &post_with_updated_nonce,

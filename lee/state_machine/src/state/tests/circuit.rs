@@ -64,6 +64,7 @@ fn circuit_fails_if_invalid_auth_keys_are_provided() {
             InputAccountIdentity::PrivateAuthorizedUpdate {
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
+                view_tag: 0,
                 nsk: recipient_keys.nsk,
                 membership_proof: (0, vec![]),
                 identifier: 0,
@@ -113,6 +114,7 @@ fn circuit_should_fail_if_new_private_account_with_non_default_balance_is_provid
             InputAccountIdentity::PrivateAuthorizedUpdate {
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
+                view_tag: 0,
                 nsk: sender_keys.nsk,
                 membership_proof: (0, vec![]),
                 identifier: 0,
@@ -162,6 +164,7 @@ fn circuit_should_fail_if_new_private_account_with_non_default_program_owner_is_
             InputAccountIdentity::PrivateAuthorizedUpdate {
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
+                view_tag: 0,
                 nsk: sender_keys.nsk,
                 membership_proof: (0, vec![]),
                 identifier: 0,
@@ -211,6 +214,7 @@ fn circuit_should_fail_if_new_private_account_with_non_default_data_is_provided(
             InputAccountIdentity::PrivateAuthorizedUpdate {
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
+                view_tag: 0,
                 nsk: sender_keys.nsk,
                 membership_proof: (0, vec![]),
                 identifier: 0,
@@ -260,6 +264,7 @@ fn circuit_should_fail_if_new_private_account_with_non_default_nonce_is_provided
             InputAccountIdentity::PrivateAuthorizedUpdate {
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
+                view_tag: 0,
                 nsk: sender_keys.nsk,
                 membership_proof: (0, vec![]),
                 identifier: 0,
@@ -307,6 +312,7 @@ fn circuit_should_fail_if_new_private_account_is_provided_with_default_values_bu
             InputAccountIdentity::PrivateAuthorizedUpdate {
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
+                view_tag: 0,
                 nsk: sender_keys.nsk,
                 membership_proof: (0, vec![]),
                 identifier: 0,
@@ -694,6 +700,7 @@ fn circuit_should_fail_if_there_are_repeated_ids() {
             InputAccountIdentity::PrivateAuthorizedUpdate {
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
+                view_tag: 0,
                 nsk: sender_keys.nsk,
                 membership_proof: (1, vec![]),
                 identifier: 0,
@@ -701,6 +708,7 @@ fn circuit_should_fail_if_there_are_repeated_ids() {
             InputAccountIdentity::PrivateAuthorizedUpdate {
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
+                view_tag: 0,
                 nsk: sender_keys.nsk,
                 membership_proof: (1, vec![]),
                 identifier: 0,
@@ -1020,6 +1028,7 @@ fn two_private_pda_family_members_receive_and_spend() {
                 InputAccountIdentity::PrivatePdaUpdate {
                     vpk: alice_keys.vpk(),
                     random_seed: [0; 32],
+                    view_tag: 0,
                     nsk: alice_keys.nsk,
                     membership_proof: state
                         .get_proof_for_commitment(&commitment_pda_0)
@@ -1057,6 +1066,7 @@ fn two_private_pda_family_members_receive_and_spend() {
                 InputAccountIdentity::PrivatePdaUpdate {
                     vpk: alice_keys.vpk(),
                     random_seed: [0; 32],
+                    view_tag: 0,
                     nsk: alice_keys.nsk,
                     membership_proof: state
                         .get_proof_for_commitment(&commitment_pda_1)
@@ -1108,6 +1118,7 @@ fn two_private_pda_family_members_receive_and_spend() {
                 InputAccountIdentity::PrivatePdaUpdate {
                     vpk: alice_keys.vpk(),
                     random_seed: [0; 32],
+                    view_tag: 0,
                     nsk: alice_keys.nsk,
                     membership_proof: state
                         .get_proof_for_commitment(&commitment_pda_1_after_spend)

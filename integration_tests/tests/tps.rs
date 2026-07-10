@@ -294,6 +294,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
             InputAccountIdentity::PrivateAuthorizedUpdate {
                 vpk: sender_vpk,
                 random_seed: [0; 32],
+                view_tag: 0,
                 nsk: sender_nsk,
                 membership_proof: proof,
                 identifier: 0,

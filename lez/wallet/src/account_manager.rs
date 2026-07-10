@@ -7,7 +7,7 @@ use lee_core::{
     CommitmentSetDigest, DUMMY_COMMITMENT_HASH, Identifier, InputAccountIdentity, MembershipProof,
     NullifierPublicKey, NullifierSecretKey, SharedSecretKey,
     account::{AccountWithMetadata, Nonce},
-    encryption::ViewingPublicKey,
+    encryption::{ViewTag, ViewingPublicKey},
 };
 use rand::{RngCore as _, rngs::OsRng};
 
@@ -423,6 +423,7 @@ impl AccountManager {
                     (Some(nsk), Some(membership_proof)) => InputAccountIdentity::PrivatePdaUpdate {
                         vpk: pre.vpk.clone(),
                         random_seed: pre.random_seed,
+                        view_tag: random_view_tag(),
                         nsk,
                         membership_proof,
                         identifier: pre.identifier,
@@ -442,6 +443,7 @@ impl AccountManager {
                         InputAccountIdentity::PrivateAuthorizedUpdate {
                             vpk: pre.vpk.clone(),
                             random_seed: pre.random_seed,
+                            view_tag: random_view_tag(),
                             nsk,
                             membership_proof,
                             identifier: pre.identifier,
@@ -616,6 +618,13 @@ async fn private_shared_acc_preparation(
         random_seed,
         is_pda,
     })
+}
+
+/// Generate random byte using OS randomness.
+fn random_view_tag() -> ViewTag {
+    let mut byte: [u8; 1] = [0; 1];
+    OsRng.fill_bytes(&mut byte);
+    byte[0]
 }
 
 #[cfg(test)]

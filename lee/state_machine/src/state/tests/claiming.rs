@@ -328,6 +328,7 @@ fn authorized_public_account_claiming_succeeds_when_executed_privately() {
             InputAccountIdentity::PrivateAuthorizedUpdate {
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
+                view_tag: 0,
                 nsk: sender_keys.nsk,
                 membership_proof: state
                     .get_proof_for_commitment(&sender_commitment)
@@ -443,6 +444,7 @@ fn private_chained_call(number_of_calls: u32) {
             InputAccountIdentity::PrivateAuthorizedUpdate {
                 vpk: from_keys.vpk(),
                 random_seed: [0; 32],
+                view_tag: 0,
                 nsk: from_keys.nsk,
                 membership_proof: state
                     .get_proof_for_commitment(&from_commitment)
@@ -452,6 +454,7 @@ fn private_chained_call(number_of_calls: u32) {
             InputAccountIdentity::PrivateAuthorizedUpdate {
                 vpk: to_keys.vpk(),
                 random_seed: [0; 32],
+                view_tag: 0,
                 nsk: to_keys.nsk,
                 membership_proof: state
                     .get_proof_for_commitment(&to_commitment)

@@ -330,6 +330,7 @@ fn private_balance_transfer_for_tests(
             InputAccountIdentity::PrivateAuthorizedUpdate {
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
+                view_tag: 0,
                 nsk: sender_keys.nsk,
                 membership_proof: state
                     .get_proof_for_commitment(&sender_commitment)
@@ -384,6 +385,7 @@ fn deshielded_balance_transfer_for_tests(
             InputAccountIdentity::PrivateAuthorizedUpdate {
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
+                view_tag: 0,
                 nsk: sender_keys.nsk,
                 membership_proof: state
                     .get_proof_for_commitment(&sender_commitment)

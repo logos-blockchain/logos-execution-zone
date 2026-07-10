@@ -524,6 +524,7 @@ fn malicious_authorization_changer_should_fail_in_privacy_preserving_circuit() {
             InputAccountIdentity::PrivateAuthorizedUpdate {
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
+                view_tag: 0,
                 nsk: recipient_keys.nsk,
                 membership_proof: state
                     .get_proof_for_commitment(&recipient_commitment)

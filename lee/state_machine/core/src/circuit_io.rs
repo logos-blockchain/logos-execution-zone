@@ -4,7 +4,7 @@ use crate::{
     Commitment, CommitmentSetDigest, Identifier, MembershipProof, Nullifier, NullifierPublicKey,
     NullifierSecretKey,
     account::{Account, AccountWithMetadata},
-    encryption::{EncryptedAccountData, ViewingPublicKey},
+    encryption::{EncryptedAccountData, ViewTag, ViewingPublicKey},
     program::{BlockValidityWindow, PdaSeed, ProgramId, ProgramOutput, TimestampValidityWindow},
 };
 
@@ -42,6 +42,7 @@ pub enum InputAccountIdentity {
     PrivateAuthorizedUpdate {
         vpk: ViewingPublicKey,
         random_seed: [u8; 32],
+        view_tag: ViewTag,
         nsk: NullifierSecretKey,
         membership_proof: MembershipProof,
         identifier: Identifier,
@@ -79,6 +80,7 @@ pub enum InputAccountIdentity {
     PrivatePdaUpdate {
         vpk: ViewingPublicKey,
         random_seed: [u8; 32],
+        view_tag: ViewTag,
         nsk: NullifierSecretKey,
         membership_proof: MembershipProof,
         identifier: Identifier,

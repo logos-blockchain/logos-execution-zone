@@ -74,6 +74,7 @@ fn private_changer_claimer_no_data_change_no_claim_succeeds() {
         vec![InputAccountIdentity::PrivateAuthorizedUpdate {
             vpk: sender_keys.vpk(),
             random_seed: [0; 32],
+            view_tag: 0,
             nsk: sender_keys.nsk,
             membership_proof: (0, vec![]),
             identifier: 0,
@@ -104,6 +105,7 @@ fn private_changer_claimer_data_change_no_claim_fails() {
         vec![InputAccountIdentity::PrivateAuthorizedUpdate {
             vpk: sender_keys.vpk(),
             random_seed: [0; 32],
+            view_tag: 0,
             nsk: sender_keys.nsk,
             membership_proof: (0, vec![]),
             identifier: 0,
