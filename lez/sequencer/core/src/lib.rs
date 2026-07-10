@@ -6,7 +6,7 @@ use std::{
 
 use anyhow::{Context as _, Result, anyhow};
 use borsh::BorshDeserialize;
-use chain_state::{ChainState, Tip};
+use chain_state::{AcceptOutcome, ChainState, Tip};
 use common::{
     HashType,
     block::{BedrockStatus, Block, HashableBlockData},
@@ -165,7 +165,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             Self::on_finalized_block(store.dbio()),
             Self::on_deposit_event(store.dbio(), mempool_handle.clone()),
             Self::on_withdraw_event(store.dbio()),
-            Self::on_follow(Arc::clone(&chain)),
+            Self::on_follow(store.dbio(), Arc::clone(&chain)),
         )
         .await
         .expect("Failed to initialize Block Publisher");
@@ -340,27 +340,63 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         })
     }
 
-    /// Feed one channel delta into the follow state: revert orphaned, apply
-    /// adopted, then finalize. Production builds on this same head.
-    ///
-    /// TODO: persist adopted/finalized peer blocks to the store here so restart and RPC see the
-    /// full canonical chain, not just our own blocks. Open question: will peers communicate in
-    /// another way?
-    fn on_follow(chain: Arc<Mutex<ChainState>>) -> block_publisher::OnFollowSink {
+    /// Feed one channel delta into the follow state and mirror it to the store:
+    /// revert orphaned, then apply and persist adopted and finalized blocks.
+    /// Production builds on this same head.
+    fn on_follow(
+        dbio: Arc<RocksDBIO>,
+        chain: Arc<Mutex<ChainState>>,
+    ) -> block_publisher::OnFollowSink {
         Box::new(move |update: block_publisher::FollowUpdate| {
             let chain = Arc::clone(&chain);
+            let dbio = Arc::clone(&dbio);
             Box::pin(async move {
-                let mut chain = chain.lock().expect("chain state mutex poisoned");
-                for (this_msg, _) in &update.orphaned {
-                    chain.revert_orphan(*this_msg);
+                // Apply under the lock and collect what to persist; take a single
+                // head snapshot. Release the lock before touching disk so the
+                // producer is never blocked on the follow path's I/O.
+                let (adopted, finalized, head_snapshot) = {
+                    let mut chain = chain.lock().expect("chain state mutex poisoned");
+                    for (this_msg, _) in &update.orphaned {
+                        chain.revert_orphan(*this_msg);
+                    }
+                    let mut adopted = Vec::new();
+                    for (this_msg, block) in &update.adopted {
+                        if matches!(
+                            chain.apply_adopted(*this_msg, block),
+                            AcceptOutcome::Applied
+                        ) {
+                            adopted.push(block);
+                        }
+                    }
+                    let mut finalized = Vec::new();
+                    for (this_msg, block) in &update.finalized {
+                        // TODO: thread the finalized inscription's L1 slot once the
+                        // sdk surfaces it; only used for the invalid-finalized stall.
+                        if matches!(
+                            chain.apply_finalized(*this_msg, block, Slot::from(0)),
+                            AcceptOutcome::Applied
+                        ) {
+                            finalized.push(block);
+                        }
+                    }
+                    (adopted, finalized, chain.head_state().clone())
+                };
+
+                for block in adopted {
+                    if let Err(err) = dbio.store_followed_block(block, &head_snapshot, false) {
+                        error!(
+                            "Failed to persist adopted block {}: {err:#}",
+                            block.header.block_id
+                        );
+                    }
                 }
-                for (this_msg, block) in &update.adopted {
-                    chain.apply_adopted(*this_msg, block);
-                }
-                for (this_msg, block) in &update.finalized {
-                    // TODO: thread the finalized inscription's L1 slot once the sdk
-                    // surfaces it; only used for the rare invalid-finalized stall.
-                    chain.apply_finalized(*this_msg, block, Slot::from(0));
+                for block in finalized {
+                    if let Err(err) = dbio.store_followed_block(block, &head_snapshot, true) {
+                        error!(
+                            "Failed to persist finalized block {}: {err:#}",
+                            block.header.block_id
+                        );
+                    }
                 }
             })
         })

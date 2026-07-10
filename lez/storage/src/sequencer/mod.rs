@@ -612,6 +612,34 @@ impl RocksDBIO {
         Ok(())
     }
 
+    /// Persists a followed (peer) block so the store mirrors the canonical chain.
+    ///
+    /// Skips the write when the store already holds this block (matched by id and
+    /// hash) — covering our own blocks and re-deliveries — but still marks it
+    /// finalized when `finalized` is set.
+    ///
+    /// When `finalized`, the block is marked so backfilled blocks (which arrive
+    /// without a prior pending write) are not left pending.
+    pub fn store_followed_block(
+        &self,
+        block: &Block,
+        state: &V03State,
+        finalized: bool,
+    ) -> DbResult<()> {
+        let block_id = block.header.block_id;
+        let already_stored = self
+            .get_block(block_id)?
+            .is_some_and(|stored| stored.header.hash == block.header.hash);
+
+        if !already_stored {
+            self.atomic_update(block, &[], vec![], state)?;
+        }
+        if finalized {
+            self.mark_block_as_finalized(block_id)?;
+        }
+        Ok(())
+    }
+
     pub fn get_all_blocks(&self) -> impl Iterator<Item = DbResult<Block>> {
         let cf_block = self.block_column();
         self.db
