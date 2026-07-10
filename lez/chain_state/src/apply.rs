@@ -30,6 +30,9 @@ pub enum AcceptOutcome {
     /// Chained but failed to apply, possibly transiently
     /// ([`BlockIngestError::is_retryable`]); nothing recorded, tip and state
     /// untouched. The caller retries and parks once it gives up.
+    ///
+    /// TODO: Only the indexer's `accept_block` emits this today; the sequencer's
+    /// `ChainState` parks on all failures without retrying (see `on_follow`).
     RetryableFailure(BlockIngestError),
 }
 

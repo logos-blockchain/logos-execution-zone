@@ -343,6 +343,12 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     /// Feed one channel delta into the follow state and mirror it to the store:
     /// revert orphaned, then apply and persist adopted and finalized blocks.
     /// Production builds on this same head.
+    ///
+    /// TODO: unlike the indexer's ingest loop, this path does not retry
+    /// `is_retryable` (transient) apply failures — a failed block just parks and
+    /// relies on a valid successor or a restart. `ChainState` never emits
+    /// `AcceptOutcome::RetryableFailure` yet; adding retry parity here is a
+    /// follow-up.
     fn on_follow(
         dbio: Arc<RocksDBIO>,
         chain: Arc<Mutex<ChainState>>,

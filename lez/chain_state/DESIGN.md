@@ -6,10 +6,6 @@ backs decentralized sequencing. Status: **interface freeze** — the
 contract the produce-on-turn and follow-blocks tracks build against. Changing
 them after the tracks split forces rework in both.
 
-Branch: `erhant/lez-two-tip-chain-state` (off `erhant/indexer-recoverable-invalid-blocks`).
-
----
-
 ## 1. Motivation
 
 Decentralized sequencing requires every honest node — sequencer or indexer — to
