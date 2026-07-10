@@ -343,8 +343,9 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     /// Feed one channel delta into the follow state: revert orphaned, apply
     /// adopted, then finalize. Production builds on this same head.
     ///
-    /// TODO: persist adopted/finalized peer blocks to the store here so restart and RPC see the full canonical chain, not just our own blocks.
-    /// Open question: will peers communicate in another way?
+    /// TODO: persist adopted/finalized peer blocks to the store here so restart and RPC see the
+    /// full canonical chain, not just our own blocks. Open question: will peers communicate in
+    /// another way?
     fn on_follow(chain: Arc<Mutex<ChainState>>) -> block_publisher::OnFollowSink {
         Box::new(move |update: block_publisher::FollowUpdate| {
             let chain = Arc::clone(&chain);
