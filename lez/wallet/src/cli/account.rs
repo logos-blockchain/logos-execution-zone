@@ -111,8 +111,9 @@ pub enum NewSubcommand {
         #[arg(long, requires = "pda")]
         /// Program ID as hex string.
         program_id: Option<String>,
-        #[arg(long, requires = "pda")]
-        /// Identifier that diversifies this PDA within the (`program_id`, seed, npk) family.
+        #[arg(long)]
+        /// Identifier selecting the shared account.
+        /// Co-owners must supply the same value to derive the same account.
         /// Defaults to a random value if not specified.
         identifier: Option<u128>,
     },
@@ -236,6 +237,10 @@ impl NewSubcommand {
                     pid,
                     identifier.unwrap_or_else(rand::random),
                 )
+                .await?
+        } else if let Some(id) = identifier {
+            wallet_core
+                .create_shared_regular_account_with_identifier(group.clone(), id)
                 .await?
         } else {
             wallet_core

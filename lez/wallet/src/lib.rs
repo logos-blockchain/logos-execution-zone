@@ -439,14 +439,21 @@ impl WalletCore {
         })
     }
 
-    /// Create a shared regular private account from a group's GMS. Returns the `AccountId` and
-    /// derived keys. The derivation seed is computed deterministically from a random identifier.
+    /// Create a shared regular private account from a group's GMS with a random identifier.
     pub async fn create_shared_regular_account(
         &mut self,
         group_name: Label,
     ) -> Result<SharedAccountInfo> {
-        let identifier: lee_core::Identifier = rand::random();
+        self.create_shared_regular_account_with_identifier(group_name, rand::random())
+            .await
+    }
 
+    /// Create a shared regular private account from a group's GMS under the given `identifier`.
+    pub async fn create_shared_regular_account_with_identifier(
+        &mut self,
+        group_name: Label,
+        identifier: lee_core::Identifier,
+    ) -> Result<SharedAccountInfo> {
         let holder = self
             .storage
             .key_chain()
