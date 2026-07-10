@@ -8907,6 +8907,7 @@ dependencies = [
  "borsh",
  "bridge_core",
  "bytesize",
+ "chain_state",
  "chrono",
  "common",
  "faucet_core",

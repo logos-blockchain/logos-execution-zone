@@ -11,7 +11,7 @@ use logos_blockchain_zone_sdk::{
     CommonHttpClient,
     adapter::NodeHttpClient,
     sequencer::{
-        DepositInfo, Event, FinalizedOp, InscriptionInfo,
+        DepositInfo, Event, FinalizedOp, InscriptionInfo, OrphanedTx,
         SequencerConfig as ZoneSdkSequencerConfig, TurnNotification, WithdrawArg, WithdrawInfo,
         ZoneSequencer,
     },
@@ -45,6 +45,19 @@ pub type OnDepositEventSink =
 pub type OnWithdrawEventSink =
     Box<dyn Fn(WithdrawInfo) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + 'static>;
 
+/// The channel delta the follow path consumes from one `Event::BlocksProcessed`,
+/// with inscription payloads decoded into `(MsgId, Block)` pairs.
+pub struct FollowUpdate {
+    pub adopted: Vec<(MsgId, Block)>,
+    pub orphaned: Vec<(MsgId, Block)>,
+    pub finalized: Vec<(MsgId, Block)>,
+}
+
+/// Sink for the follow path: apply adopted/finalized blocks to chain state and
+/// revert orphaned ones.
+pub type OnFollowSink =
+    Box<dyn Fn(FollowUpdate) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + 'static>;
+
 #[expect(async_fn_in_trait, reason = "We don't care about Send/Sync here")]
 pub trait BlockPublisherTrait: Clone {
     #[expect(
@@ -60,6 +73,7 @@ pub trait BlockPublisherTrait: Clone {
         on_finalized_block: FinalizedBlockSink,
         on_deposit_event: OnDepositEventSink,
         on_withdraw_event: OnWithdrawEventSink,
+        on_follow: OnFollowSink,
     ) -> Result<Self>;
 
     /// Fire-and-forget publish. Zone-sdk drives the actual submission and
@@ -100,6 +114,7 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         on_finalized_block: FinalizedBlockSink,
         on_deposit_event: OnDepositEventSink,
         on_withdraw_event: OnWithdrawEventSink,
+        on_follow: OnFollowSink,
     ) -> Result<Self> {
         let basic_auth = config.auth.clone().map(Into::into);
         let node = NodeHttpClient::new(CommonHttpClient::new(basic_auth), config.node_url.clone());
@@ -167,17 +182,32 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                             match event {
                                 Event::BlocksProcessed {
                                     checkpoint,
-                                    channel_update: _,
+                                    channel_update,
                                     finalized,
                                 } => {
                                     on_checkpoint(checkpoint);
+
+                                    let adopted = channel_update
+                                        .adopted
+                                        .iter()
+                                        .filter_map(block_from_inscription)
+                                        .collect();
+                                    let orphaned = channel_update
+                                        .orphaned
+                                        .iter()
+                                        .map(orphan_inscription)
+                                        .filter_map(block_from_inscription)
+                                        .collect();
+
+                                    let mut finalized_blocks = Vec::new();
                                     for op in finalized.into_iter().flat_map(|item| item.ops) {
                                         match op {
                                             FinalizedOp::Inscription(inscription) => {
-                                                if let Some(block_id) =
-                                                    block_id_from_inscription(&inscription)
+                                                if let Some((msg, block)) =
+                                                    block_from_inscription(&inscription)
                                                 {
-                                                    on_finalized_block(block_id);
+                                                    on_finalized_block(block.header.block_id);
+                                                    finalized_blocks.push((msg, block));
                                                 }
                                             }
                                             FinalizedOp::Deposit(deposit) => {
@@ -188,6 +218,13 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                                             }
                                         }
                                     }
+
+                                    on_follow(FollowUpdate {
+                                        adopted,
+                                        orphaned,
+                                        finalized: finalized_blocks,
+                                    })
+                                    .await;
                                 }
                                 Event::Ready | Event::TurnNotification { .. } => {}
                             }
@@ -235,13 +272,21 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
     }
 }
 
-/// Deserialize inscription payload as a `Block` and return it's`block_id`.
-/// Bad payloads are logged and skipped.
-fn block_id_from_inscription(inscription: &InscriptionInfo) -> Option<u64> {
+/// Deserialize an inscription payload into `(this_msg, Block)`. Bad payloads are
+/// logged and skipped.
+fn block_from_inscription(inscription: &InscriptionInfo) -> Option<(MsgId, Block)> {
     borsh::from_slice::<Block>(&inscription.payload)
         .inspect_err(|err| {
             warn!("Failed to deserialize block from inscription: {err:?}");
         })
         .ok()
-        .map(|block| block.header.block_id)
+        .map(|block| (inscription.this_msg, block))
+}
+
+/// The inscription carried by an orphaned tx (plain or atomic-withdraw bundle).
+const fn orphan_inscription(orphan: &OrphanedTx) -> &InscriptionInfo {
+    match orphan {
+        OrphanedTx::Inscription(info) => info,
+        OrphanedTx::AtomicWithdraw(bundle) => &bundle.inscription,
+    }
 }

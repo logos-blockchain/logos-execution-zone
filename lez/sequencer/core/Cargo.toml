@@ -10,6 +10,7 @@ workspace = true
 [dependencies]
 lee.workspace = true
 lee_core.workspace = true
+chain_state.workspace = true
 common.workspace = true
 storage.workspace = true
 mempool.workspace = true

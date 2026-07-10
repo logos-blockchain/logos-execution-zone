@@ -1,7 +1,12 @@
-use std::{path::Path, sync::Arc, time::Instant};
+use std::{
+    path::Path,
+    sync::{Arc, Mutex},
+    time::Instant,
+};
 
 use anyhow::{Context as _, Result, anyhow};
 use borsh::BorshDeserialize;
+use chain_state::{ChainState, Tip};
 use common::{
     HashType,
     block::{BedrockStatus, Block, HashableBlockData},
@@ -13,7 +18,10 @@ use lee::{AccountId, PublicTransaction, public_transaction::Message};
 use lee_core::GENESIS_BLOCK_ID;
 use log::{error, info, warn};
 use logos_blockchain_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
-use logos_blockchain_zone_sdk::sequencer::{DepositInfo, WithdrawArg};
+use logos_blockchain_zone_sdk::{
+    Slot,
+    sequencer::{DepositInfo, WithdrawArg},
+};
 use mempool::{MemPool, MemPoolHandle};
 #[cfg(feature = "mock")]
 pub use mock::SequencerCoreWithMockClients;
@@ -58,6 +66,9 @@ impl DepositMetadata {
 
 pub struct SequencerCore<BP: BlockPublisherTrait = ZoneSdkPublisher> {
     state: lee::V03State,
+    /// Two-tier follow state fed by the publisher's `on_follow` sink. Shared with
+    /// the drive task. Passive today; production moves onto its head next.
+    chain: Arc<Mutex<ChainState>>,
     store: SequencerStore,
     mempool: MemPool<(TransactionOrigin, LeeTransaction)>,
     sequencer_config: SequencerConfig,
@@ -131,6 +142,14 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             .latest_block_meta()
             .expect("Failed to read latest block meta from store");
 
+        let chain = Arc::new(Mutex::new(ChainState::from_final(
+            state.clone(),
+            Some(Tip {
+                block_id: latest_block_meta.id,
+                hash: latest_block_meta.hash,
+            }),
+        )));
+
         let initial_checkpoint = store
             .get_zone_checkpoint()
             .expect("Failed to load zone-sdk checkpoint");
@@ -148,6 +167,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             Self::on_finalized_block(store.dbio()),
             Self::on_deposit_event(store.dbio(), mempool_handle.clone()),
             Self::on_withdraw_event(store.dbio()),
+            Self::on_follow(Arc::clone(&chain)),
         )
         .await
         .expect("Failed to initialize Block Publisher");
@@ -183,6 +203,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
 
         let sequencer_core = Self {
             state,
+            chain,
             store,
             mempool,
             chain_height: latest_block_meta.id,
@@ -318,6 +339,28 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                     Err(err) => error!(
                         "Failed to reconcile Bedrock Withdraw event with tx_hash {hash_encoded}: {err:#}"
                     ),
+                }
+            })
+        })
+    }
+
+    /// Feed one channel delta into the follow state: revert orphaned, apply
+    /// adopted, then finalize. Passive today — production still uses `self.state`.
+    fn on_follow(chain: Arc<Mutex<ChainState>>) -> block_publisher::OnFollowSink {
+        Box::new(move |update: block_publisher::FollowUpdate| {
+            let chain = Arc::clone(&chain);
+            Box::pin(async move {
+                let mut chain = chain.lock().expect("chain state mutex poisoned");
+                for (this_msg, _) in &update.orphaned {
+                    chain.revert_orphan(*this_msg);
+                }
+                for (this_msg, block) in &update.adopted {
+                    chain.apply_adopted(*this_msg, block);
+                }
+                for (this_msg, block) in &update.finalized {
+                    // TODO: thread the finalized inscription's L1 slot once the sdk
+                    // surfaces it; only used for the rare invalid-finalized stall.
+                    chain.apply_finalized(*this_msg, block, Slot::from(0));
                 }
             })
         })
@@ -557,6 +600,12 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     #[must_use]
     pub fn is_our_turn(&self) -> bool {
         self.block_publisher.is_our_turn()
+    }
+
+    /// Shared handle to the two-tier follow state.
+    #[must_use]
+    pub fn chain(&self) -> Arc<Mutex<ChainState>> {
+        Arc::clone(&self.chain)
     }
 
     fn next_block_id(&self) -> u64 {

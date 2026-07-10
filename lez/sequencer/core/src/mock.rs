@@ -8,7 +8,7 @@ use logos_blockchain_zone_sdk::sequencer::WithdrawArg;
 
 use crate::{
     block_publisher::{
-        BlockPublisherTrait, CheckpointSink, FinalizedBlockSink, OnDepositEventSink,
+        BlockPublisherTrait, CheckpointSink, FinalizedBlockSink, OnDepositEventSink, OnFollowSink,
         OnWithdrawEventSink, SequencerCheckpoint,
     },
     config::BedrockConfig,
@@ -31,6 +31,7 @@ impl BlockPublisherTrait for MockBlockPublisher {
         _on_finalized_block: FinalizedBlockSink,
         _on_deposit_event: OnDepositEventSink,
         _on_withdraw_event: OnWithdrawEventSink,
+        _on_follow: OnFollowSink,
     ) -> Result<Self> {
         Ok(Self {
             channel_id: config.channel_id,
