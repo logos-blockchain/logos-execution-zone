@@ -65,14 +65,12 @@ impl DepositMetadata {
 }
 
 pub struct SequencerCore<BP: BlockPublisherTrait = ZoneSdkPublisher> {
-    state: lee::V03State,
-    /// Two-tier follow state fed by the publisher's `on_follow` sink. Shared with
-    /// the drive task. Passive today; production moves onto its head next.
+    /// Two-tier chain state: production builds on its head; the publisher's
+    /// `on_follow` sink feeds adopted/orphaned/finalized peer blocks into it.
     chain: Arc<Mutex<ChainState>>,
     store: SequencerStore,
     mempool: MemPool<(TransactionOrigin, LeeTransaction)>,
     sequencer_config: SequencerConfig,
-    chain_height: u64,
     block_publisher: BP,
 }
 
@@ -143,7 +141,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             .expect("Failed to read latest block meta from store");
 
         let chain = Arc::new(Mutex::new(ChainState::from_final(
-            state.clone(),
+            state,
             Some(Tip {
                 block_id: latest_block_meta.id,
                 hash: latest_block_meta.hash,
@@ -202,11 +200,9 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         }
 
         let sequencer_core = Self {
-            state,
             chain,
             store,
             mempool,
-            chain_height: latest_block_meta.id,
             sequencer_config: config,
             block_publisher,
         };
@@ -345,7 +341,10 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     }
 
     /// Feed one channel delta into the follow state: revert orphaned, apply
-    /// adopted, then finalize. Passive today — production still uses `self.state`.
+    /// adopted, then finalize. Production builds on this same head.
+    ///
+    /// TODO: persist adopted/finalized peer blocks to the store here so restart and RPC see the full canonical chain, not just our own blocks.
+    /// Open question: will peers communicate in another way?
     fn on_follow(chain: Arc<Mutex<ChainState>>) -> block_publisher::OnFollowSink {
         Box::new(move |update: block_publisher::FollowUpdate| {
             let chain = Arc::clone(&chain);
@@ -390,26 +389,27 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
 
         // Apply our own block to the head with the MsgId the publish assigned it,
         // so the head advances and the later adopted redelivery dedups.
-        self.chain
-            .lock()
-            .expect("chain state mutex poisoned")
-            .apply_adopted(this_msg, &block);
+        let head_state = {
+            let mut chain = self.chain.lock().expect("chain state mutex poisoned");
+            chain.apply_adopted(this_msg, &block);
+            chain.head_state().clone()
+        };
 
         self.store.update(
             &block,
             &deposit_event_ids,
             withdrawal_reconciliation_keys,
-            &self.state,
+            &head_state,
         )?;
 
-        Ok(self.chain_height)
+        Ok(block.header.block_id)
     }
 
     /// Validates and applies a single mempool transaction to the current state.
     /// Returns `Ok(true)` if the transaction was valid and applied, `Ok(false)` if
     /// it was skipped due to validation failure.
     fn apply_mempool_transaction(
-        &mut self,
+        state: &mut lee::V03State,
         origin: TransactionOrigin,
         tx: &LeeTransaction,
         block_height: u64,
@@ -420,11 +420,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         let tx_hash = tx.hash();
         match origin {
             TransactionOrigin::User => {
-                let validated_diff = match tx.validate_on_state(
-                    &self.state,
-                    block_height,
-                    timestamp,
-                ) {
+                let validated_diff = match tx.validate_on_state(state, block_height, timestamp) {
                     Ok(diff) => diff,
                     Err(err) => {
                         error!(
@@ -438,7 +434,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                     withdrawals.push(withdraw_data);
                 }
 
-                self.state.apply_state_diff(validated_diff);
+                state.apply_state_diff(validated_diff);
             }
             TransactionOrigin::Sequencer => {
                 let LeeTransaction::Public(public_tx) = tx else {
@@ -449,7 +445,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                     deposit_event_ids.push(deposit_op_id);
                 }
 
-                self.state
+                state
                     .transition_from_public_transaction(public_tx, block_height, timestamp)
                     .context("Failed to execute sequencer-generated transaction")?;
             }
@@ -462,7 +458,18 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     fn build_block_from_mempool(&mut self) -> Result<BlockWithMeta> {
         let now = Instant::now();
 
-        let new_block_height = self.next_block_id();
+        // Build on the head: its tip is the parent, its state the validation base.
+        let (prev_block_hash, new_block_height, mut working_state) = {
+            let chain = self.chain.lock().expect("chain state mutex poisoned");
+            let tip = chain.head_tip();
+            let height = tip.as_ref().map_or(GENESIS_BLOCK_ID, |head| {
+                head.block_id
+                    .checked_add(1)
+                    .expect("block id should not overflow")
+            });
+            let prev = tip.map_or(HashType([0; 32]), |head| head.hash);
+            (prev, height, chain.head_state().clone())
+        };
 
         let mut valid_transactions = Vec::new();
         let mut deposit_event_ids = Vec::new();
@@ -470,11 +477,6 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
 
         let max_block_size = usize::try_from(self.sequencer_config.max_block_size.as_u64())
             .expect("`max_block_size` should fit into usize");
-
-        let latest_block_meta = self
-            .store
-            .latest_block_meta()
-            .context("Failed to get latest block meta from store")?;
 
         let new_block_timestamp = u64::try_from(chrono::Utc::now().timestamp_millis())
             .expect("Timestamp must be positive");
@@ -494,7 +496,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             let temp_hashable_data = HashableBlockData {
                 block_id: new_block_height,
                 transactions: temp_valid_transactions,
-                prev_block_hash: latest_block_meta.hash,
+                prev_block_hash,
                 timestamp: new_block_timestamp,
             };
 
@@ -511,7 +513,8 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                 break;
             }
 
-            if self.apply_mempool_transaction(
+            if Self::apply_mempool_transaction(
+                &mut working_state,
                 origin,
                 &tx,
                 new_block_height,
@@ -527,7 +530,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             }
         }
 
-        self.state
+        working_state
             .transition_from_public_transaction(&clock_tx, new_block_height, new_block_timestamp)
             .context("Clock transaction failed. Aborting block production.")?;
         valid_transactions.push(clock_lee_tx);
@@ -535,15 +538,13 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         let hashable_data = HashableBlockData {
             block_id: new_block_height,
             transactions: valid_transactions,
-            prev_block_hash: latest_block_meta.hash,
+            prev_block_hash,
             timestamp: new_block_timestamp,
         };
 
         let block = hashable_data
             .clone()
             .into_pending_block(self.store.signing_key());
-
-        self.chain_height = new_block_height;
 
         log::info!(
             "Created block with {} transactions in {} seconds",
@@ -558,16 +559,30 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         })
     }
 
-    pub const fn state(&self) -> &lee::V03State {
-        &self.state
+    /// A clone of the current head state.
+    ///
+    /// TODO: cloning the whole state per call is wasteful; add targeted
+    /// account/nonce/proof accessors so RPC reads don't clone the whole state.
+    #[must_use]
+    pub fn state(&self) -> lee::V03State {
+        self.chain
+            .lock()
+            .expect("chain state mutex poisoned")
+            .head_state()
+            .clone()
     }
 
     pub const fn block_store(&self) -> &SequencerStore {
         &self.store
     }
 
-    pub const fn chain_height(&self) -> u64 {
-        self.chain_height
+    #[must_use]
+    pub fn chain_height(&self) -> u64 {
+        self.chain
+            .lock()
+            .expect("chain state mutex poisoned")
+            .head_tip()
+            .map_or(0, |tip| tip.block_id)
     }
 
     pub const fn sequencer_config(&self) -> &SequencerConfig {
@@ -614,12 +629,6 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     #[must_use]
     pub fn chain(&self) -> Arc<Mutex<ChainState>> {
         Arc::clone(&self.chain)
-    }
-
-    fn next_block_id(&self) -> u64 {
-        self.chain_height
-            .checked_add(1)
-            .unwrap_or_else(|| panic!("Max block height reached: {}", self.chain_height))
     }
 }
 

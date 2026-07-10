@@ -53,6 +53,13 @@ impl ChainState {
         &self.head_state
     }
 
+    /// Mutable access to the head state. Bypasses the `head_blocks` invariant, so
+    /// it is meant for tests and low-level callers.
+    #[must_use]
+    pub const fn head_state_mut(&mut self) -> &mut V03State {
+        &mut self.head_state
+    }
+
     #[must_use]
     pub const fn final_state(&self) -> &V03State {
         &self.final_state

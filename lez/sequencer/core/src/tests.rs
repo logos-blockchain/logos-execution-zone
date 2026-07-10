@@ -133,14 +133,14 @@ async fn start_from_config() {
     let (sequencer, _mempool_handle) =
         SequencerCoreWithMockClients::start_from_config(config.clone()).await;
 
-    assert_eq!(sequencer.chain_height, 1);
+    assert_eq!(sequencer.chain_height(), 1);
     assert_eq!(sequencer.sequencer_config.max_num_tx_in_block, 10);
 
     let acc1_account_id = initial_public_user_accounts()[0].account_id;
     let acc2_account_id = initial_public_user_accounts()[1].account_id;
 
-    let balance_acc_1 = sequencer.state.get_account_by_id(acc1_account_id).balance;
-    let balance_acc_2 = sequencer.state.get_account_by_id(acc2_account_id).balance;
+    let balance_acc_1 = sequencer.state().get_account_by_id(acc1_account_id).balance;
+    let balance_acc_2 = sequencer.state().get_account_by_id(acc2_account_id).balance;
 
     assert_eq!(10000, balance_acc_1);
     assert_eq!(20000, balance_acc_2);
@@ -173,7 +173,7 @@ async fn start_from_config_opens_existing_db_if_it_exists() {
 
     let (sequencer, _mempool_handle) =
         SequencerCoreWithMockClients::start_from_config(config).await;
-    assert_eq!(sequencer.chain_height, 1);
+    assert_eq!(sequencer.chain_height(), 1);
     assert!(sequencer.store.latest_block_meta().is_ok());
 }
 
@@ -282,7 +282,7 @@ async fn transaction_pre_check_native_transfer_valid() {
 
 #[tokio::test]
 async fn transaction_pre_check_native_transfer_other_signature() {
-    let (mut sequencer, _mempool_handle) = common_setup().await;
+    let (sequencer, _mempool_handle) = common_setup().await;
 
     let acc1 = initial_public_user_accounts()[0].account_id;
     let acc2 = initial_public_user_accounts()[1].account_id;
@@ -296,7 +296,15 @@ async fn transaction_pre_check_native_transfer_other_signature() {
     let tx = tx.transaction_stateless_check().unwrap();
 
     // Signature is not from sender. Execution fails
-    let result = tx.execute_check_on_state(&mut sequencer.state, 0, 0);
+    let result = tx.execute_check_on_state(
+        sequencer
+            .chain()
+            .lock()
+            .expect("chain mutex poisoned")
+            .head_state_mut(),
+        0,
+        0,
+    );
 
     assert!(matches!(
         result,
@@ -306,7 +314,7 @@ async fn transaction_pre_check_native_transfer_other_signature() {
 
 #[tokio::test]
 async fn transaction_pre_check_native_transfer_sent_too_much() {
-    let (mut sequencer, _mempool_handle) = common_setup().await;
+    let (sequencer, _mempool_handle) = common_setup().await;
 
     let acc1 = initial_public_user_accounts()[0].account_id;
     let acc2 = initial_public_user_accounts()[1].account_id;
@@ -322,9 +330,15 @@ async fn transaction_pre_check_native_transfer_sent_too_much() {
     // Passed pre-check
     assert!(result.is_ok());
 
-    let result = result
-        .unwrap()
-        .execute_check_on_state(&mut sequencer.state, 0, 0);
+    let result = result.unwrap().execute_check_on_state(
+        sequencer
+            .chain()
+            .lock()
+            .expect("chain mutex poisoned")
+            .head_state_mut(),
+        0,
+        0,
+    );
     let is_failed_at_balance_mismatch = matches!(
         result.err().unwrap(),
         lee::error::LeeError::ProgramExecutionFailed(_)
@@ -335,7 +349,7 @@ async fn transaction_pre_check_native_transfer_sent_too_much() {
 
 #[tokio::test]
 async fn transaction_execute_native_transfer() {
-    let (mut sequencer, _mempool_handle) = common_setup().await;
+    let (sequencer, _mempool_handle) = common_setup().await;
 
     let acc1 = initial_public_user_accounts()[0].account_id;
     let acc2 = initial_public_user_accounts()[1].account_id;
@@ -346,11 +360,19 @@ async fn transaction_execute_native_transfer() {
         acc1, 0, acc2, 100, &sign_key1,
     );
 
-    tx.execute_check_on_state(&mut sequencer.state, 0, 0)
-        .unwrap();
+    tx.execute_check_on_state(
+        sequencer
+            .chain()
+            .lock()
+            .expect("chain mutex poisoned")
+            .head_state_mut(),
+        0,
+        0,
+    )
+    .unwrap();
 
-    let bal_from = sequencer.state.get_account_by_id(acc1).balance;
-    let bal_to = sequencer.state.get_account_by_id(acc2).balance;
+    let bal_from = sequencer.state().get_account_by_id(acc1).balance;
+    let bal_to = sequencer.state().get_account_by_id(acc2).balance;
 
     assert_eq!(bal_from, 9900);
     assert_eq!(bal_to, 20100);
@@ -387,7 +409,7 @@ async fn push_tx_into_mempool_blocks_until_mempool_is_full() {
 #[tokio::test]
 async fn build_block_from_mempool() {
     let (mut sequencer, mempool_handle) = common_setup().await;
-    let genesis_height = sequencer.chain_height;
+    let genesis_height = sequencer.chain_height();
 
     let tx = common::test_utils::produce_dummy_empty_transaction();
     mempool_handle
@@ -397,7 +419,7 @@ async fn build_block_from_mempool() {
 
     let result = sequencer.build_block_from_mempool();
     assert!(result.is_ok());
-    assert_eq!(sequencer.chain_height, genesis_height + 1);
+    assert_eq!(sequencer.chain_height(), genesis_height + 1);
 }
 
 #[tokio::test]
@@ -429,7 +451,7 @@ async fn replay_transactions_are_rejected_in_the_same_block() {
     sequencer.produce_new_block().await.unwrap();
     let block = sequencer
         .store
-        .get_block_at_id(sequencer.chain_height)
+        .get_block_at_id(sequencer.chain_height())
         .unwrap()
         .unwrap();
 
@@ -464,7 +486,7 @@ async fn replay_transactions_are_rejected_in_different_blocks() {
     sequencer.produce_new_block().await.unwrap();
     let block = sequencer
         .store
-        .get_block_at_id(sequencer.chain_height)
+        .get_block_at_id(sequencer.chain_height())
         .unwrap()
         .unwrap();
     assert_eq!(
@@ -483,7 +505,7 @@ async fn replay_transactions_are_rejected_in_different_blocks() {
     sequencer.produce_new_block().await.unwrap();
     let block = sequencer
         .store
-        .get_block_at_id(sequencer.chain_height)
+        .get_block_at_id(sequencer.chain_height())
         .unwrap()
         .unwrap();
     // The replay is rejected, so only the clock tx is in the block.
@@ -525,7 +547,7 @@ async fn restart_from_storage() {
         sequencer.produce_new_block().await.unwrap();
         let block = sequencer
             .store
-            .get_block_at_id(sequencer.chain_height)
+            .get_block_at_id(sequencer.chain_height())
             .unwrap()
             .unwrap();
         assert_eq!(
@@ -541,8 +563,8 @@ async fn restart_from_storage() {
     // with the above transaction and update the state to reflect that.
     let (sequencer, _mempool_handle) =
         SequencerCoreWithMockClients::start_from_config(config.clone()).await;
-    let balance_acc_1 = sequencer.state.get_account_by_id(acc1_account_id).balance;
-    let balance_acc_2 = sequencer.state.get_account_by_id(acc2_account_id).balance;
+    let balance_acc_1 = sequencer.state().get_account_by_id(acc1_account_id).balance;
+    let balance_acc_2 = sequencer.state().get_account_by_id(acc2_account_id).balance;
 
     // Balances should be consistent with the stored block
     assert_eq!(
@@ -640,7 +662,7 @@ async fn produce_block_with_correct_prev_meta_after_restart() {
     // Step 5: Verify the new block has correct previous block metadata
     let new_block = sequencer
         .store
-        .get_block_at_id(sequencer.chain_height)
+        .get_block_at_id(sequencer.chain_height())
         .unwrap()
         .unwrap();
 
@@ -692,7 +714,7 @@ async fn transactions_touching_clock_account_are_dropped_from_block() {
 
     let block = sequencer
         .store
-        .get_block_at_id(sequencer.chain_height)
+        .get_block_at_id(sequencer.chain_height())
         .unwrap()
         .unwrap();
 
@@ -747,7 +769,7 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
 
     let block = sequencer
         .store
-        .get_block_at_id(sequencer.chain_height)
+        .get_block_at_id(sequencer.chain_height())
         .unwrap()
         .unwrap();
 
@@ -766,10 +788,13 @@ async fn block_production_aborts_when_clock_account_data_is_corrupted() {
 
     // Corrupt the clock 01 account data so the clock program panics on deserialization.
     let clock_account_id = system_accounts::clock_account_ids()[0];
-    let mut corrupted = sequencer.state.get_account_by_id(clock_account_id);
+    let mut corrupted = sequencer.state().get_account_by_id(clock_account_id);
     corrupted.data = vec![0xff; 3].try_into().unwrap();
     sequencer
-        .state
+        .chain()
+        .lock()
+        .expect("chain mutex poisoned")
+        .head_state_mut()
         .force_insert_account(clock_account_id, corrupted);
 
     // Push a dummy transaction so the mempool is non-empty.
