@@ -90,6 +90,14 @@ impl NullifierIndex {
         );
     }
 
+    /// Indexes `account_id` by the nullifier its initialization publishes.
+    pub fn track_initialization(&mut self, account_id: AccountId) {
+        self.0.insert(
+            Nullifier::for_account_initialization(&account_id),
+            account_id,
+        );
+    }
+
     /// Replaces a spent nullifier with the account's `next` one.
     pub fn update(&mut self, spent: &Nullifier, next: Nullifier, account_id: AccountId) {
         self.0.remove(spent);
@@ -985,6 +993,93 @@ mod tests {
             Nullifier::for_account_update(&Commitment::new(&account_id, &new_account), &nsk);
         assert_eq!(index.account_for(&new_nullifier), Some(account_id));
         assert!(index.account_for(&old_nullifier).is_none());
+    }
+
+    // The genesis catch-up seeds only the init nullifier and lets the nullifier pass decode the
+    // init note and every subsequent (randomly-tagged) update. Verify a shared account rolls from
+    // default through its init to a later update purely by nullifier — the path the catch-up runs.
+    #[test]
+    fn nullifier_sync_catches_up_shared_account_from_init() {
+        let mut kc = UserKeyChain::default();
+
+        let label = Label::new("group");
+        let holder = GroupKeyHolder::new();
+        let identifier = 0;
+        let keys = holder.derive_regular_shared_account_keys_from_identifier(identifier);
+        let npk = keys.generate_nullifier_public_key();
+        let vpk = keys.generate_viewing_public_key();
+        let nsk = keys.nullifier_secret_key;
+        let account_id = AccountId::from((&npk, &vpk, identifier));
+
+        kc.insert_group_key_holder(label.clone(), holder);
+        kc.insert_shared_private_account(
+            account_id,
+            SharedAccountEntry {
+                group_label: label,
+                identifier,
+                pda_seed: None,
+                authority_program_id: None,
+                account: Account::default(),
+            },
+        );
+
+        let mut index = NullifierIndex::default();
+        index.track_initialization(account_id);
+
+        // A note publishing `spent` and carrying the state `next`.
+        let make_message = |spent: Nullifier, next: &Account| {
+            let commitment = Commitment::new(&account_id, next);
+            let (sender_ss, epk) = SharedSecretKey::encapsulate(&vpk);
+            let ciphertext = EncryptionScheme::encrypt(
+                next,
+                &PrivateAccountKind::Regular(identifier),
+                &sender_ss,
+                &commitment,
+                0,
+            );
+            let note = EncryptedAccountData::new(ciphertext, &npk, &vpk, epk);
+            Message {
+                encrypted_private_post_states: vec![note],
+                new_commitments: vec![commitment],
+                new_nullifiers: vec![(spent, [0; 32])],
+                ..Default::default()
+            }
+        };
+
+        // Init: default -> initialized, discovered via the seeded init nullifier.
+        let initialized = Account {
+            balance: 250,
+            ..Account::default()
+        };
+        let init_msg = make_message(
+            Nullifier::for_account_initialization(&account_id),
+            &initialized,
+        );
+        assert_eq!(
+            kc.sync_updates_via_nullifiers(&init_msg, &mut index),
+            HashSet::from([0])
+        );
+        assert_eq!(
+            kc.shared_private_account(account_id).unwrap().account,
+            initialized
+        );
+
+        // Update: initialized -> updated, discovered via the now-tracked update nullifier.
+        let updated = Account {
+            balance: 500,
+            ..Account::default()
+        };
+        let update_spent =
+            Nullifier::for_account_update(&Commitment::new(&account_id, &initialized), &nsk);
+        let update_msg = make_message(update_spent, &updated);
+        assert_eq!(
+            kc.sync_updates_via_nullifiers(&update_msg, &mut index),
+            HashSet::from([0])
+        );
+        assert_eq!(
+            kc.shared_private_account(account_id).unwrap().account,
+            updated
+        );
     }
 
     #[test]

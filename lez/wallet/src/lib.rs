@@ -352,8 +352,60 @@ impl WalletCore {
         );
     }
 
+    /// Re-derive a shared account's state by scanning its keypair from genesis to the current
+    /// synced block. The init note's nullifier is deterministic on ID, so we await it and let
+    /// the nullifier pass decode the init and every subsequent update.
+    ///
+    /// If no initialization is found, will return `Ok` and default to usual hot-sync.
+    async fn catch_up_shared_account(&mut self, account_id: AccountId) -> Result<()> {
+        use futures::TryStreamExt as _;
+
+        let cursor = self.storage.last_synced_block();
+        if cursor == 0
+            || self
+                .storage
+                .key_chain()
+                .shared_private_account(account_id)
+                .is_none()
+        {
+            return Ok(());
+        }
+
+        info!("Scanning shared account {account_id:#?} from genesis to block {cursor}");
+
+        let mut index = NullifierIndex::default();
+        index.track_initialization(account_id);
+
+        let poller = self.poller.clone();
+        let mut blocks = std::pin::pin!(poller.poll_block_range(1..=cursor));
+        while let Some(block) = blocks.try_next().await? {
+            for tx in block.body.transactions {
+                let LeeTransaction::PrivacyPreserving(pp_tx) = &tx else {
+                    continue;
+                };
+                pp_tx.message.validate_note_lengths()?;
+                // Sync updates while watching only the init nullifier.
+                self.storage
+                    .key_chain_mut()
+                    .sync_updates_via_nullifiers(&pp_tx.message, &mut index);
+            }
+        }
+
+        let now = self.storage.last_synced_block();
+        // This is a defence-in-depth. Currently during the async update the cursor
+        // cannot advance. However, de-sync can be possible later. This hard error
+        // will signal this.
+        if now != cursor {
+            return Err(anyhow::anyhow!(
+                "Shared-account catched-up to {cursor} with a cursor de-sync advancing to {now}"
+            ));
+        }
+
+        Ok(())
+    }
+
     /// Create a shared PDA account from a group's GMS. Returns the `AccountId` and derived keys.
-    pub fn create_shared_pda_account(
+    pub async fn create_shared_pda_account(
         &mut self,
         group_name: Label,
         pda_seed: lee_core::program::PdaSeed,
@@ -378,6 +430,7 @@ impl WalletCore {
             Some(pda_seed),
             Some(program_id),
         );
+        self.catch_up_shared_account(account_id).await?;
 
         Ok(SharedAccountInfo {
             account_id,
@@ -388,7 +441,7 @@ impl WalletCore {
 
     /// Create a shared regular private account from a group's GMS. Returns the `AccountId` and
     /// derived keys. The derivation seed is computed deterministically from a random identifier.
-    pub fn create_shared_regular_account(
+    pub async fn create_shared_regular_account(
         &mut self,
         group_name: Label,
     ) -> Result<SharedAccountInfo> {
@@ -406,6 +459,7 @@ impl WalletCore {
         let account_id = AccountId::from((&npk, &vpk, identifier));
 
         self.register_shared_account(account_id, group_name, identifier, None, None);
+        self.catch_up_shared_account(account_id).await?;
 
         Ok(SharedAccountInfo {
             account_id,

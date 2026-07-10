@@ -197,7 +197,7 @@ impl NewSubcommand {
         Ok(SubcommandReturnValue::RegisterAccount { account_id })
     }
 
-    fn handle_private_gms(
+    async fn handle_private_gms(
         group: &Label,
         label: Option<Label>,
         pda: bool,
@@ -229,14 +229,18 @@ impl NewSubcommand {
                 pid[i] = u32::from_le_bytes(chunk.try_into().unwrap());
             }
 
-            wallet_core.create_shared_pda_account(
-                group.clone(),
-                pda_seed,
-                pid,
-                identifier.unwrap_or_else(rand::random),
-            )?
+            wallet_core
+                .create_shared_pda_account(
+                    group.clone(),
+                    pda_seed,
+                    pid,
+                    identifier.unwrap_or_else(rand::random),
+                )
+                .await?
         } else {
-            wallet_core.create_shared_regular_account(group.clone())?
+            wallet_core
+                .create_shared_regular_account(group.clone())
+                .await?
         };
 
         if let Some(label) = label {
@@ -295,15 +299,18 @@ impl WalletSubcommand for NewSubcommand {
                 seed,
                 program_id,
                 identifier,
-            } => Self::handle_private_gms(
-                &group,
-                label,
-                pda,
-                seed,
-                program_id,
-                identifier,
-                wallet_core,
-            ),
+            } => {
+                Self::handle_private_gms(
+                    &group,
+                    label,
+                    pda,
+                    seed,
+                    program_id,
+                    identifier,
+                    wallet_core,
+                )
+                .await
+            }
             Self::PrivateAccountsKey { cci } => Self::handle_private_accounts_key(cci, wallet_core),
         }
     }
