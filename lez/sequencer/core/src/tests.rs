@@ -139,8 +139,8 @@ async fn start_from_config() {
     let acc1_account_id = initial_public_user_accounts()[0].account_id;
     let acc2_account_id = initial_public_user_accounts()[1].account_id;
 
-    let balance_acc_1 = sequencer.state().get_account_by_id(acc1_account_id).balance;
-    let balance_acc_2 = sequencer.state().get_account_by_id(acc2_account_id).balance;
+    let balance_acc_1 = sequencer.with_state(|s| s.get_account_by_id(acc1_account_id).balance);
+    let balance_acc_2 = sequencer.with_state(|s| s.get_account_by_id(acc2_account_id).balance);
 
     assert_eq!(10000, balance_acc_1);
     assert_eq!(20000, balance_acc_2);
@@ -371,8 +371,8 @@ async fn transaction_execute_native_transfer() {
     )
     .unwrap();
 
-    let bal_from = sequencer.state().get_account_by_id(acc1).balance;
-    let bal_to = sequencer.state().get_account_by_id(acc2).balance;
+    let bal_from = sequencer.with_state(|s| s.get_account_by_id(acc1).balance);
+    let bal_to = sequencer.with_state(|s| s.get_account_by_id(acc2).balance);
 
     assert_eq!(bal_from, 9900);
     assert_eq!(bal_to, 20100);
@@ -563,8 +563,8 @@ async fn restart_from_storage() {
     // with the above transaction and update the state to reflect that.
     let (sequencer, _mempool_handle) =
         SequencerCoreWithMockClients::start_from_config(config.clone()).await;
-    let balance_acc_1 = sequencer.state().get_account_by_id(acc1_account_id).balance;
-    let balance_acc_2 = sequencer.state().get_account_by_id(acc2_account_id).balance;
+    let balance_acc_1 = sequencer.with_state(|s| s.get_account_by_id(acc1_account_id).balance);
+    let balance_acc_2 = sequencer.with_state(|s| s.get_account_by_id(acc2_account_id).balance);
 
     // Balances should be consistent with the stored block
     assert_eq!(
@@ -788,7 +788,7 @@ async fn block_production_aborts_when_clock_account_data_is_corrupted() {
 
     // Corrupt the clock 01 account data so the clock program panics on deserialization.
     let clock_account_id = system_accounts::clock_account_ids()[0];
-    let mut corrupted = sequencer.state().get_account_by_id(clock_account_id);
+    let mut corrupted = sequencer.with_state(|s| s.get_account_by_id(clock_account_id));
     corrupted.data = vec![0xff; 3].try_into().unwrap();
     sequencer
         .chain()

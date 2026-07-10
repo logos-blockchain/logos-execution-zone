@@ -165,7 +165,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             Self::on_finalized_block(store.dbio()),
             Self::on_deposit_event(store.dbio(), mempool_handle.clone()),
             Self::on_withdraw_event(store.dbio()),
-            Self::on_follow(store.dbio(), Arc::clone(&chain)),
+            Self::on_follow(store.dbio(), Arc::clone(&chain), mempool_handle.clone()),
         )
         .await
         .expect("Failed to initialize Block Publisher");
@@ -346,18 +346,22 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     fn on_follow(
         dbio: Arc<RocksDBIO>,
         chain: Arc<Mutex<ChainState>>,
+        mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
     ) -> block_publisher::OnFollowSink {
         Box::new(move |update: block_publisher::FollowUpdate| {
             let chain = Arc::clone(&chain);
             let dbio = Arc::clone(&dbio);
+            let mempool_handle = mempool_handle.clone();
             Box::pin(async move {
                 // Apply under the lock and collect what to persist; take a single
                 // head snapshot. Release the lock before touching disk so the
                 // producer is never blocked on the follow path's I/O.
-                let (adopted, finalized, head_snapshot) = {
+                let (adopted, finalized, resubmit_txs, head_snapshot) = {
                     let mut chain = chain.lock().expect("chain state mutex poisoned");
-                    for (this_msg, _) in &update.orphaned {
+                    let mut resubmit_txs = Vec::new();
+                    for (this_msg, block) in &update.orphaned {
                         chain.revert_orphan(*this_msg);
+                        resubmit_txs.extend(resubmittable_txs(block));
                     }
                     let mut adopted = Vec::new();
                     for (this_msg, block) in &update.adopted {
@@ -379,7 +383,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                             finalized.push(block);
                         }
                     }
-                    (adopted, finalized, chain.head_state().clone())
+                    (adopted, finalized, resubmit_txs, chain.head_state().clone())
                 };
 
                 for block in adopted {
@@ -396,6 +400,14 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                             "Failed to persist finalized block {}: {err:#}",
                             block.header.block_id
                         );
+                    }
+                }
+
+                // Rebuild orphaned work: return its user txs to the mempool so the
+                // next on-turn production re-includes them on the new head.
+                for tx in resubmit_txs {
+                    if let Err(err) = mempool_handle.push((TransactionOrigin::User, tx)).await {
+                        error!("Failed to resubmit orphaned transaction: {err:#}");
                     }
                 }
             })
@@ -596,17 +608,14 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         })
     }
 
-    /// A clone of the current head state.
-    ///
-    /// TODO: cloning the whole state per call is wasteful; add targeted
-    /// account/nonce/proof accessors so RPC reads don't clone the whole state.
-    #[must_use]
-    pub fn state(&self) -> lee::V03State {
-        self.chain
+    /// Reads the current head state under the lock without cloning it, so callers
+    /// reuse `V03State`'s own API (accounts, nonces, proofs) with no whole-state copy.
+    pub fn with_state<R>(&self, f: impl FnOnce(&lee::V03State) -> R) -> R {
+        f(self
+            .chain
             .lock()
             .expect("chain state mutex poisoned")
-            .head_state()
-            .clone()
+            .head_state())
     }
 
     pub const fn block_store(&self) -> &SequencerStore {
@@ -835,6 +844,19 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
         message,
         witness_set,
     )))
+}
+
+/// User transactions of an orphaned block to return to the mempool: everything
+/// except the trailing clock tx and sequencer-generated bridge deposits (those are
+/// replayed from their own bedrock events, not the mempool).
+fn resubmittable_txs(block: &Block) -> Vec<LeeTransaction> {
+    let Some((_clock, rest)) = block.body.transactions.split_last() else {
+        return Vec::new();
+    };
+    rest.iter()
+        .filter(|tx| extract_bridge_deposit_id(tx).is_none())
+        .cloned()
+        .collect()
 }
 
 #[must_use]

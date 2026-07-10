@@ -124,8 +124,8 @@ impl<BC: BlockPublisherTrait + Send + 'static> sequencer_service_rpc::RpcServer
 
     async fn get_account_balance(&self, account_id: AccountId) -> Result<u128, ErrorObjectOwned> {
         let sequencer = self.sequencer.lock().await;
-        let account = sequencer.state().get_account_by_id(account_id);
-        Ok(account.balance)
+        let balance = sequencer.with_state(|state| state.get_account_by_id(account_id).balance);
+        Ok(balance)
     }
 
     async fn get_transaction(
@@ -141,10 +141,12 @@ impl<BC: BlockPublisherTrait + Send + 'static> sequencer_service_rpc::RpcServer
         account_ids: Vec<AccountId>,
     ) -> Result<Vec<Nonce>, ErrorObjectOwned> {
         let sequencer = self.sequencer.lock().await;
-        let nonces = account_ids
-            .into_iter()
-            .map(|account_id| sequencer.state().get_account_by_id(account_id).nonce)
-            .collect();
+        let nonces = sequencer.with_state(|state| {
+            account_ids
+                .into_iter()
+                .map(|account_id| state.get_account_by_id(account_id).nonce)
+                .collect()
+        });
         Ok(nonces)
     }
 
@@ -153,12 +155,12 @@ impl<BC: BlockPublisherTrait + Send + 'static> sequencer_service_rpc::RpcServer
         commitment: Commitment,
     ) -> Result<Option<MembershipProof>, ErrorObjectOwned> {
         let sequencer = self.sequencer.lock().await;
-        Ok(sequencer.state().get_proof_for_commitment(&commitment))
+        Ok(sequencer.with_state(|state| state.get_proof_for_commitment(&commitment)))
     }
 
     async fn get_account(&self, account_id: AccountId) -> Result<Account, ErrorObjectOwned> {
         let sequencer = self.sequencer.lock().await;
-        Ok(sequencer.state().get_account_by_id(account_id))
+        Ok(sequencer.with_state(|state| state.get_account_by_id(account_id)))
     }
 
     async fn get_program_ids(&self) -> Result<BTreeMap<String, ProgramId>, ErrorObjectOwned> {
