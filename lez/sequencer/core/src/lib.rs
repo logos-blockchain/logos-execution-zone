@@ -382,10 +382,18 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             .collect::<Result<_>>()
             .context("Failed to build reconciliation keys for block withdrawals")?;
 
-        self.block_publisher
+        let this_msg = self
+            .block_publisher
             .publish_block(&block, withdrawals)
             .await
             .context("Failed to publish block to Bedrock")?;
+
+        // Apply our own block to the head with the MsgId the publish assigned it,
+        // so the head advances and the later adopted redelivery dedups.
+        self.chain
+            .lock()
+            .expect("chain state mutex poisoned")
+            .apply_adopted(this_msg, &block);
 
         self.store.update(
             &block,

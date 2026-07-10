@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use common::block::Block;
-use logos_blockchain_core::mantle::ops::channel::ChannelId;
+use logos_blockchain_core::mantle::ops::channel::{ChannelId, MsgId};
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 use logos_blockchain_zone_sdk::sequencer::WithdrawArg;
 
@@ -40,10 +40,13 @@ impl BlockPublisherTrait for MockBlockPublisher {
 
     async fn publish_block(
         &self,
-        _block: &Block,
+        block: &Block,
         _bridge_withdrawals: Vec<WithdrawArg>,
-    ) -> Result<()> {
-        Ok(())
+    ) -> Result<MsgId> {
+        // Deterministic per-block id so head dedup behaves in tests.
+        //
+        // TODO: should we allow more "mockability" here?
+        Ok(MsgId::from(block.header.hash.0))
     }
 
     fn channel_id(&self) -> ChannelId {

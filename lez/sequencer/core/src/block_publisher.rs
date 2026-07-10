@@ -17,7 +17,7 @@ use logos_blockchain_zone_sdk::{
     },
 };
 use tokio::{
-    sync::{mpsc, watch},
+    sync::{mpsc, oneshot, watch},
     task::JoinHandle,
 };
 
@@ -58,6 +58,14 @@ pub struct FollowUpdate {
 pub type OnFollowSink =
     Box<dyn Fn(FollowUpdate) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + 'static>;
 
+/// Publish request channel: the inscription, its bridge withdrawals, and a
+/// oneshot for the `MsgId` zone-sdk assigns.
+type PublishSender = mpsc::Sender<(
+    Inscription,
+    Vec<WithdrawArg>,
+    oneshot::Sender<Result<MsgId>>,
+)>;
+
 #[expect(async_fn_in_trait, reason = "We don't care about Send/Sync here")]
 pub trait BlockPublisherTrait: Clone {
     #[expect(
@@ -76,9 +84,9 @@ pub trait BlockPublisherTrait: Clone {
         on_follow: OnFollowSink,
     ) -> Result<Self>;
 
-    /// Fire-and-forget publish. Zone-sdk drives the actual submission and
-    /// retries internally; this just hands the payload off.
-    async fn publish_block(&self, block: &Block, withdrawals: Vec<WithdrawArg>) -> Result<()>;
+    /// Publish a block and return the `MsgId` zone-sdk assigned its inscription.
+    /// Zone-sdk drives the actual submission and retries internally.
+    async fn publish_block(&self, block: &Block, withdrawals: Vec<WithdrawArg>) -> Result<MsgId>;
 
     fn channel_id(&self) -> ChannelId;
 
@@ -90,7 +98,7 @@ pub trait BlockPublisherTrait: Clone {
 #[derive(Clone)]
 pub struct ZoneSdkPublisher {
     channel_id: ChannelId,
-    publish_tx: mpsc::Sender<(Inscription, Vec<WithdrawArg>)>,
+    publish_tx: PublishSender,
     turn_rx: watch::Receiver<TurnNotification>,
     // Aborts the drive task when the last clone is dropped.
     _drive_task: Arc<DriveTaskGuard>,
@@ -138,8 +146,8 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         // Grab the turn watch before the move; the sdk actor keeps it current.
         let turn_rx = sequencer.subscribe_turn_to_write();
 
-        let (publish_tx, mut publish_rx) =
-            mpsc::channel::<(Inscription, Vec<WithdrawArg>)>(PUBLISH_INBOX_CAPACITY);
+        let (publish_tx, mut publish_rx): (PublishSender, _) =
+            mpsc::channel(PUBLISH_INBOX_CAPACITY);
 
         let drive_task = tokio::spawn(async move {
             loop {
@@ -152,28 +160,33 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                         // Drain external publish requests by calling the
                         // borrowing handle — `&mut sequencer` is only
                         // available here.
-                        Some((data_bounded, withdrawals)) = publish_rx.recv() => {
+                        Some((data_bounded, withdrawals, resp_tx)) = publish_rx.recv() => {
                             let data_byte_size = data_bounded.len();
-                            if withdrawals.is_empty() {
-                                if let Err(e) = sequencer.handle()
-                                                .publish(data_bounded)
-                                                .context("Failed to publish block") {
-                                                    warn!("zone-sdk publish failed: {e:?}");
-                                                }
-
-                                info!("Published block with the size of {data_byte_size} bytes");
+                            let withdraw_count = withdrawals.len();
+                            let published = if withdrawals.is_empty() {
+                                sequencer.handle()
+                                    .publish(data_bounded)
+                                    .context("Failed to publish block")
                             } else {
-                                let withdraw_count = withdrawals.len();
-                                if let Err(e) = sequencer.handle()
-                                                .publish_atomic_withdraw(data_bounded, withdrawals)
-                                                .context("Failed to publish block with withdrawals") {
-                                                    warn!("zone-sdk publish failed: {e:?}");
-                                                }
+                                sequencer.handle()
+                                    .publish_atomic_withdraw(data_bounded, withdrawals)
+                                    .context("Failed to publish block with withdrawals")
+                            };
 
-                                info!(
-                                    "Published block with the size of {data_byte_size} bytes and {withdraw_count} bridge withdrawals",
-                                );
+                            let msg_result = published
+                                .map(|(result, _checkpoint)| result.tx.inscription().this_msg);
+                            match &msg_result {
+                                Ok(_) if withdraw_count == 0 => {
+                                    info!("Published block with the size of {data_byte_size} bytes");
+                                }
+                                Ok(_) => {
+                                    info!(
+                                        "Published block with the size of {data_byte_size} bytes and {withdraw_count} bridge withdrawals",
+                                    );
+                                }
+                                Err(e) => warn!("zone-sdk publish failed: {e:?}"),
                             }
+                            let _dontcare = resp_tx.send(msg_result);
                         }
                         event = sequencer.next_event() => {
                             let Some(event) = event else {
@@ -249,18 +262,21 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         })
     }
 
-    async fn publish_block(&self, block: &Block, withdrawals: Vec<WithdrawArg>) -> Result<()> {
+    async fn publish_block(&self, block: &Block, withdrawals: Vec<WithdrawArg>) -> Result<MsgId> {
         let data = borsh::to_vec(block).context("Failed to serialize block")?;
         let data_bounded: Inscription = data
             .try_into()
             .context("Block data exceeds maximum allowed size")?;
 
+        let (resp_tx, resp_rx) = oneshot::channel();
         self.publish_tx
-            .send((data_bounded, withdrawals))
+            .send((data_bounded, withdrawals, resp_tx))
             .await
             .map_err(|_closed| anyhow!("Drive task is no longer running"))?;
 
-        Ok(())
+        resp_rx
+            .await
+            .map_err(|_closed| anyhow!("Drive task dropped the publish response"))?
     }
 
     fn channel_id(&self) -> ChannelId {
