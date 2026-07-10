@@ -24,6 +24,8 @@ async fn main() -> Result<()> {
 
     let Args { config_path, port } = Args::parse();
 
+    // TODO: handle this cancellation token more gracefully within Sequencer service
+    // similar to how we do in Indexer
     let cancellation_token = listen_for_shutdown_signal();
 
     let config = sequencer_service::SequencerConfig::from_path(&config_path)?;

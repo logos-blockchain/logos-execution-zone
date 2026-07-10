@@ -88,7 +88,7 @@ pub async fn run_server(
 
     #[cfg(not(feature = "mock-responses"))]
     let handle = {
-        let service = service::IndexerService::new(config, storage_dir, shutdown)
+        let service = service::IndexerService::new(config, storage_dir, shutdown.child_token())
             .await
             .context("Failed to initialize indexer service")?;
         server.start(service.into_rpc())

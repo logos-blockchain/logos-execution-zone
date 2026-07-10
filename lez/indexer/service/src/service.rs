@@ -175,6 +175,10 @@ impl indexer_service_rpc::RpcServer for IndexerService {
 struct SubscriptionService {
     parts: ArcSwap<SubscriptionLoopParts>,
     indexer: IndexerCore,
+    /// Cancellation token that is used to signal the subscription service to shut down.
+    ///
+    /// NOTE: This will auto-cancel on `Drop`, so if your token is shared with other parts
+    /// use [`CancellationToken::child_token()`] instead.
     shutdown: CancellationToken,
 }
 
@@ -292,6 +296,7 @@ impl SubscriptionService {
 
 impl Drop for SubscriptionService {
     fn drop(&mut self) {
+        self.shutdown.cancel();
         self.parts.load().handle.abort();
     }
 }
