@@ -1,8 +1,8 @@
 #![expect(clippy::shadow_unrelated, reason = "We don't care about it in tests")]
 
 use lee_core::{
-    Commitment, DUMMY_COMMITMENT_HASH, EncryptionScheme, EphemeralSecretKey, Nullifier,
-    PrivacyPreservingCircuitOutput, SharedSecretKey,
+    Commitment, DUMMY_COMMITMENT_HASH, EncryptedAccountData, EncryptionScheme, EphemeralSecretKey,
+    Nullifier, PrivacyPreservingCircuitOutput, SharedSecretKey,
     account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
     program::{PdaSeed, PrivateAccountKind},
 };
@@ -241,6 +241,76 @@ fn prove_privacy_preserving_execution_circuit_fully_private() {
     )
     .unwrap();
     assert_eq!(recipient_post, expected_private_account_2);
+}
+
+#[test]
+fn init_note_view_tag_is_derived_from_account_keys() {
+    let program = crate::test_methods::noop();
+    let keys = test_private_account_keys_1();
+    let identifier: u128 = 0;
+    let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
+    let account = AccountWithMetadata::new(Account::default(), false, account_id);
+
+    let (output, proof) = execute_and_prove(
+        vec![account],
+        Program::serialize_instruction(()).unwrap(),
+        vec![InputAccountIdentity::PrivateUnauthorized {
+            vpk: keys.vpk(),
+            random_seed: [0; 32],
+            npk: keys.npk(),
+            identifier,
+            commitment_root: DUMMY_COMMITMENT_HASH,
+        }],
+        &program.into(),
+    )
+    .unwrap();
+
+    assert!(proof.is_valid_for(&output));
+    assert_eq!(output.encrypted_private_post_states.len(), 1);
+    assert_eq!(
+        output.encrypted_private_post_states[0].view_tag,
+        EncryptedAccountData::compute_view_tag(&keys.npk(), &keys.vpk()),
+    );
+}
+
+#[test]
+fn update_note_view_tag_is_the_supplied_value() {
+    let program = crate::test_methods::noop();
+    let keys = test_private_account_keys_1();
+    let identifier: u128 = 99;
+    let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
+    let account = Account {
+        program_owner: program.id(),
+        balance: 1,
+        ..Account::default()
+    };
+    let commitment = Commitment::new(&account_id, &account);
+    let mut commitment_set = CommitmentSet::with_capacity(1);
+    commitment_set.extend(std::slice::from_ref(&commitment));
+    let sender = AccountWithMetadata::new(account, true, account_id);
+
+    // A tag deliberately different from the address-derived one, so a passthrough is
+    // distinguishable from re-derivation.
+    let fed_tag = EncryptedAccountData::compute_view_tag(&keys.npk(), &keys.vpk()).wrapping_add(1);
+
+    let (output, proof) = execute_and_prove(
+        vec![sender],
+        Program::serialize_instruction(()).unwrap(),
+        vec![InputAccountIdentity::PrivateAuthorizedUpdate {
+            vpk: keys.vpk(),
+            random_seed: [0; 32],
+            view_tag: fed_tag,
+            nsk: keys.nsk,
+            membership_proof: commitment_set.get_proof_for(&commitment).unwrap(),
+            identifier,
+        }],
+        &program.into(),
+    )
+    .unwrap();
+
+    assert!(proof.is_valid_for(&output));
+    assert_eq!(output.encrypted_private_post_states.len(), 1);
+    assert_eq!(output.encrypted_private_post_states[0].view_tag, fed_tag);
 }
 
 #[test]
