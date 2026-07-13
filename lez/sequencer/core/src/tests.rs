@@ -23,6 +23,7 @@ use lee_core::{
     program::PdaSeed,
 };
 use logos_blockchain_core::mantle::ops::channel::{ChannelId, MsgId};
+use logos_blockchain_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
 use mempool::MemPoolHandle;
 use storage::sequencer::sequencer_cells::PendingDepositEventRecord;
 use tempfile::tempdir;
@@ -1542,4 +1543,24 @@ async fn follow_finalized_backfill_block_is_applied_and_marked_finalized() {
         .expect("backfilled block should be persisted");
     assert_eq!(stored.header.hash, peer_block.header.hash);
     assert!(matches!(stored.bedrock_status, BedrockStatus::Finalized));
+}
+
+#[tokio::test]
+async fn configure_channel_delegates_to_publisher() {
+    let config = setup_sequencer_config();
+    let (sequencer, _mempool_handle) =
+        SequencerCoreWithMockClients::start_from_config(config).await;
+
+    let admin = Ed25519Key::from_bytes(&[0xA1; ED25519_SECRET_KEY_SIZE]).public_key();
+    let peer = Ed25519Key::from_bytes(&[0xB2; ED25519_SECRET_KEY_SIZE]).public_key();
+    sequencer
+        .configure_channel(vec![admin, peer], 20, 30, 1, 1)
+        .await
+        .unwrap();
+
+    let calls = sequencer.block_publisher().configure_channel_calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].keys.len(), 2);
+    assert_eq!(calls[0].posting_timeframe, 20);
+    assert_eq!(calls[0].posting_timeout, 30);
 }

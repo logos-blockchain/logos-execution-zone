@@ -3,8 +3,11 @@ use std::{pin::Pin, sync::Arc, time::Duration};
 use anyhow::{Context as _, Result, anyhow};
 use common::block::Block;
 use log::{info, warn};
-pub use logos_blockchain_core::mantle::ops::channel::MsgId;
-use logos_blockchain_core::mantle::ops::channel::{ChannelId, inscribe::Inscription};
+pub use logos_blockchain_core::mantle::ops::channel::{Ed25519PublicKey, MsgId};
+use logos_blockchain_core::mantle::{
+    channel::{SlotTimeframe, SlotTimeout},
+    ops::channel::{ChannelId, config::Keys, inscribe::Inscription},
+};
 pub use logos_blockchain_key_management_system_service::keys::{Ed25519Key, ZkKey};
 pub use logos_blockchain_zone_sdk::sequencer::SequencerCheckpoint;
 use logos_blockchain_zone_sdk::{
@@ -58,13 +61,26 @@ pub struct FollowUpdate {
 pub type OnFollowSink =
     Box<dyn Fn(FollowUpdate) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + 'static>;
 
-/// Publish request channel: the inscription, its bridge withdrawals, and a
-/// oneshot for the `MsgId` zone-sdk assigns.
-type PublishSender = mpsc::Sender<(
-    Inscription,
-    Vec<WithdrawArg>,
-    oneshot::Sender<Result<MsgId>>,
-)>;
+/// Commands the drive task executes with `&mut sequencer`.
+enum Command {
+    /// Publish an inscription (+ atomic withdrawals); responds with the assigned `MsgId`.
+    Publish {
+        inscription: Inscription,
+        withdrawals: Vec<WithdrawArg>,
+        resp: oneshot::Sender<Result<MsgId>>,
+    },
+    /// Post a `ChannelConfig` op replacing the accredited keys / rotation params.
+    ConfigureChannel {
+        keys: Keys,
+        posting_timeframe: SlotTimeframe,
+        posting_timeout: SlotTimeout,
+        configuration_threshold: u16,
+        withdraw_threshold: u16,
+        resp: oneshot::Sender<Result<()>>,
+    },
+}
+
+type CommandSender = mpsc::Sender<Command>;
 
 #[expect(async_fn_in_trait, reason = "We don't care about Send/Sync here")]
 pub trait BlockPublisherTrait: Clone {
@@ -88,6 +104,19 @@ pub trait BlockPublisherTrait: Clone {
     /// Zone-sdk drives the actual submission and retries internally.
     async fn publish_block(&self, block: &Block, withdrawals: Vec<WithdrawArg>) -> Result<MsgId>;
 
+    /// Update the channel's accredited key set and rotation parameters via a
+    /// `ChannelConfig` op. The sequencer's bedrock key must be the channel
+    /// admin (`keys[0]`); the L1 rejects non-admin signers, so this is not
+    /// re-validated here.
+    async fn configure_channel(
+        &self,
+        keys: Vec<Ed25519PublicKey>,
+        posting_timeframe: u32,
+        posting_timeout: u32,
+        configuration_threshold: u16,
+        withdraw_threshold: u16,
+    ) -> Result<()>;
+
     fn channel_id(&self) -> ChannelId;
 
     /// Whether this sequencer is currently authorized to write to the channel.
@@ -98,7 +127,7 @@ pub trait BlockPublisherTrait: Clone {
 #[derive(Clone)]
 pub struct ZoneSdkPublisher {
     channel_id: ChannelId,
-    publish_tx: PublishSender,
+    command_tx: CommandSender,
     turn_rx: watch::Receiver<TurnNotification>,
     // Aborts the drive task when the last clone is dropped.
     _drive_task: Arc<DriveTaskGuard>,
@@ -146,7 +175,7 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         // Grab the turn watch before the move; the sdk actor keeps it current.
         let turn_rx = sequencer.subscribe_turn_to_write();
 
-        let (publish_tx, mut publish_rx): (PublishSender, _) =
+        let (command_tx, mut command_rx): (CommandSender, _) =
             mpsc::channel(PUBLISH_INBOX_CAPACITY);
 
         let drive_task = tokio::spawn(async move {
@@ -157,37 +186,62 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                 )]
                 {
                     tokio::select! {
-                        // Drain external publish requests by calling the
-                        // borrowing handle — `&mut sequencer` is only
-                        // available here.
-                        Some((data_bounded, withdrawals, resp_tx)) = publish_rx.recv() => {
-                            let data_byte_size = data_bounded.len();
-                            let withdraw_count = withdrawals.len();
-                            let published = if withdrawals.is_empty() {
-                                sequencer.handle()
-                                    .publish(data_bounded)
-                                    .context("Failed to publish block")
-                            } else {
-                                sequencer.handle()
-                                    .publish_atomic_withdraw(data_bounded, withdrawals)
-                                    .context("Failed to publish block with withdrawals")
-                            };
+                        // Drain external commands by calling the borrowing
+                        // handle — `&mut sequencer` is only available here.
+                        Some(command) = command_rx.recv() => match command {
+                            Command::Publish { inscription: data_bounded, withdrawals, resp: resp_tx } => {
+                                let data_byte_size = data_bounded.len();
+                                let withdraw_count = withdrawals.len();
+                                let published = if withdrawals.is_empty() {
+                                    sequencer.handle()
+                                        .publish(data_bounded)
+                                        .context("Failed to publish block")
+                                } else {
+                                    sequencer.handle()
+                                        .publish_atomic_withdraw(data_bounded, withdrawals)
+                                        .context("Failed to publish block with withdrawals")
+                                };
 
-                            let msg_result = published
-                                .map(|(result, _checkpoint)| result.tx.inscription().this_msg);
-                            match &msg_result {
-                                Ok(_) if withdraw_count == 0 => {
-                                    info!("Published block with the size of {data_byte_size} bytes");
+                                let msg_result = published
+                                    .map(|(result, _checkpoint)| result.tx.inscription().this_msg);
+                                match &msg_result {
+                                    Ok(_) if withdraw_count == 0 => {
+                                        info!("Published block with the size of {data_byte_size} bytes");
+                                    }
+                                    Ok(_) => {
+                                        info!(
+                                            "Published block with the size of {data_byte_size} bytes and {withdraw_count} bridge withdrawals",
+                                        );
+                                    }
+                                    Err(e) => warn!("zone-sdk publish failed: {e:?}"),
                                 }
-                                Ok(_) => {
-                                    info!(
-                                        "Published block with the size of {data_byte_size} bytes and {withdraw_count} bridge withdrawals",
-                                    );
-                                }
-                                Err(e) => warn!("zone-sdk publish failed: {e:?}"),
+                                let _dontcare = resp_tx.send(msg_result);
                             }
-                            let _dontcare = resp_tx.send(msg_result);
-                        }
+                            Command::ConfigureChannel {
+                                keys,
+                                posting_timeframe,
+                                posting_timeout,
+                                configuration_threshold,
+                                withdraw_threshold,
+                                resp,
+                            } => {
+                                let result = sequencer
+                                    .handle()
+                                    .channel_config(
+                                        keys,
+                                        posting_timeframe,
+                                        posting_timeout,
+                                        configuration_threshold,
+                                        withdraw_threshold,
+                                    )
+                                    .map(|_queued| ())
+                                    .context("Failed to post channel config");
+                                if let Err(err) = &result {
+                                    warn!("zone-sdk channel config failed: {err:?}");
+                                }
+                                let _dontcare = resp.send(result);
+                            }
+                        },
                         event = sequencer.next_event() => {
                             let Some(event) = event else {
                                 continue;
@@ -256,7 +310,7 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
 
         Ok(Self {
             channel_id: config.channel_id,
-            publish_tx,
+            command_tx,
             turn_rx,
             _drive_task: Arc::new(DriveTaskGuard(drive_task)),
         })
@@ -269,14 +323,45 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
             .context("Block data exceeds maximum allowed size")?;
 
         let (resp_tx, resp_rx) = oneshot::channel();
-        self.publish_tx
-            .send((data_bounded, withdrawals, resp_tx))
+        self.command_tx
+            .send(Command::Publish {
+                inscription: data_bounded,
+                withdrawals,
+                resp: resp_tx,
+            })
             .await
             .map_err(|_closed| anyhow!("Drive task is no longer running"))?;
 
         resp_rx
             .await
             .map_err(|_closed| anyhow!("Drive task dropped the publish response"))?
+    }
+
+    async fn configure_channel(
+        &self,
+        keys: Vec<Ed25519PublicKey>,
+        posting_timeframe: u32,
+        posting_timeout: u32,
+        configuration_threshold: u16,
+        withdraw_threshold: u16,
+    ) -> Result<()> {
+        let keys = Keys::try_from(keys)
+            .map_err(|_err| anyhow!("Channel key list must be non-empty and within bounds"))?;
+        let (resp_tx, resp_rx) = oneshot::channel();
+        self.command_tx
+            .send(Command::ConfigureChannel {
+                keys,
+                posting_timeframe: posting_timeframe.into(),
+                posting_timeout: posting_timeout.into(),
+                configuration_threshold,
+                withdraw_threshold,
+                resp: resp_tx,
+            })
+            .await
+            .map_err(|_closed| anyhow!("Drive task is no longer running"))?;
+        resp_rx
+            .await
+            .map_err(|_closed| anyhow!("Drive task dropped the config response"))?
     }
 
     fn channel_id(&self) -> ChannelId {

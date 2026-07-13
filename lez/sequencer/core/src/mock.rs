@@ -1,4 +1,7 @@
-use std::time::Duration;
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use anyhow::Result;
 use common::block::Block;
@@ -8,17 +11,38 @@ use logos_blockchain_zone_sdk::sequencer::WithdrawArg;
 
 use crate::{
     block_publisher::{
-        BlockPublisherTrait, CheckpointSink, FinalizedBlockSink, OnDepositEventSink, OnFollowSink,
-        OnWithdrawEventSink, SequencerCheckpoint,
+        BlockPublisherTrait, CheckpointSink, Ed25519PublicKey, FinalizedBlockSink,
+        OnDepositEventSink, OnFollowSink, OnWithdrawEventSink, SequencerCheckpoint,
     },
     config::BedrockConfig,
 };
 
 pub type SequencerCoreWithMockClients = crate::SequencerCore<MockBlockPublisher>;
 
+/// One recorded `configure_channel` invocation.
+#[derive(Clone)]
+pub struct ConfigureChannelCall {
+    pub keys: Vec<Ed25519PublicKey>,
+    pub posting_timeframe: u32,
+    pub posting_timeout: u32,
+    pub configuration_threshold: u16,
+    pub withdraw_threshold: u16,
+}
+
 #[derive(Clone)]
 pub struct MockBlockPublisher {
     channel_id: ChannelId,
+    configure_channel_calls: Arc<Mutex<Vec<ConfigureChannelCall>>>,
+}
+
+impl MockBlockPublisher {
+    #[must_use]
+    pub fn configure_channel_calls(&self) -> Vec<ConfigureChannelCall> {
+        self.configure_channel_calls
+            .lock()
+            .expect("mock mutex poisoned")
+            .clone()
+    }
 }
 
 impl BlockPublisherTrait for MockBlockPublisher {
@@ -35,6 +59,7 @@ impl BlockPublisherTrait for MockBlockPublisher {
     ) -> Result<Self> {
         Ok(Self {
             channel_id: config.channel_id,
+            configure_channel_calls: Arc::default(),
         })
     }
 
@@ -47,6 +72,27 @@ impl BlockPublisherTrait for MockBlockPublisher {
         //
         // TODO: should we allow more "mockability" here?
         Ok(MsgId::from(block.header.hash.0))
+    }
+
+    async fn configure_channel(
+        &self,
+        keys: Vec<Ed25519PublicKey>,
+        posting_timeframe: u32,
+        posting_timeout: u32,
+        configuration_threshold: u16,
+        withdraw_threshold: u16,
+    ) -> Result<()> {
+        self.configure_channel_calls
+            .lock()
+            .expect("mock mutex poisoned")
+            .push(ConfigureChannelCall {
+                keys,
+                posting_timeframe,
+                posting_timeout,
+                configuration_threshold,
+                withdraw_threshold,
+            });
+        Ok(())
     }
 
     fn channel_id(&self) -> ChannelId {

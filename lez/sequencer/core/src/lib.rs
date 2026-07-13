@@ -33,7 +33,7 @@ use storage::sequencer::{
 };
 
 use crate::{
-    block_publisher::{BlockPublisherTrait, ZoneSdkPublisher},
+    block_publisher::{BlockPublisherTrait, Ed25519PublicKey, ZoneSdkPublisher},
     block_store::SequencerStore,
 };
 
@@ -623,6 +623,27 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     #[must_use]
     pub fn is_our_turn(&self) -> bool {
         self.block_publisher.is_our_turn()
+    }
+
+    /// Update the channel's accredited key set and rotation parameters.
+    /// This sequencer's bedrock key must be the channel admin (`keys[0]`).
+    pub async fn configure_channel(
+        &self,
+        keys: Vec<Ed25519PublicKey>,
+        posting_timeframe: u32,
+        posting_timeout: u32,
+        configuration_threshold: u16,
+        withdraw_threshold: u16,
+    ) -> Result<()> {
+        self.block_publisher
+            .configure_channel(
+                keys,
+                posting_timeframe,
+                posting_timeout,
+                configuration_threshold,
+                withdraw_threshold,
+            )
+            .await
     }
 
     /// Shared handle to the two-tier follow state.
