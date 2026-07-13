@@ -217,10 +217,6 @@ pub enum TxKind {
 pub enum TransactionMalformationError {
     #[error("Invalid signature(-s)")]
     InvalidSignature,
-    #[error("Failed to decode transaction with hash: {tx:?}")]
-    FailedToDecode { tx: HashType },
-    #[error("Transaction size {size} exceeds maximum allowed size of {max} bytes")]
-    TransactionTooLarge { size: usize, max: usize },
 }
 
 /// Returns the canonical Clock Program invocation transaction for the given block timestamp.
