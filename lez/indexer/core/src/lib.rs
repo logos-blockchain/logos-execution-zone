@@ -23,7 +23,6 @@ pub mod block_store;
 pub mod chain_consistency;
 pub mod config;
 pub mod cross_zone_verifier;
-pub mod ingest_error;
 mod retry;
 pub mod status;
 
