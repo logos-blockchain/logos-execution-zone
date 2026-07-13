@@ -16,11 +16,14 @@ use crate::{
     block_store::IndexerStore,
     chain_consistency::ChainConsistency,
     config::IndexerConfig,
+    cross_zone_verifier::CrossZoneVerifier,
     status::{IndexerStatus, IndexerSyncStatus},
 };
 pub mod block_store;
 pub mod chain_consistency;
 pub mod config;
+pub mod cross_zone_verifier;
+pub mod ingest_error;
 mod retry;
 pub mod status;
 
@@ -36,6 +39,8 @@ pub struct IndexerCore {
     pub store: IndexerStore,
     /// Live ingestion status; updated by the ingest stream, read by `status`.
     pub status: Arc<ArcSwap<IndexerSyncStatus>>,
+    /// Option B cross-zone verifier; `None` when cross-zone messaging is disabled.
+    pub verifier: Option<CrossZoneVerifier>,
 }
 
 impl IndexerCore {
@@ -86,12 +91,35 @@ impl IndexerCore {
         );
         let zone_indexer = ZoneIndexer::new(config.channel_id, node.clone());
 
+        // Genesis accounts the indexer must seed to match the sequencer's state,
+        // since none are produced by a transaction: the cross-zone inbox config
+        // and any bridge-lock holdings. Both go through the same builders the
+        // sequencer uses, so the states are byte-identical.
+        let mut genesis_seed = Vec::new();
+        if let Some(cross_zone) = config.cross_zone.as_ref() {
+            let self_zone: [u8; 32] = *config.channel_id.as_ref();
+            genesis_seed.push(cross_zone::build_inbox_config_account(
+                self_zone, cross_zone,
+            ));
+        }
+        for holding in &config.bridge_lock_holdings {
+            genesis_seed.push(cross_zone::build_holding_account(
+                holding.holder,
+                holding.amount,
+            ));
+        }
+
+        // Option B verifier: re-derives each cross-zone dispatch from the peer's
+        // finalized blocks. `None` when cross-zone messaging is disabled.
+        let verifier = CrossZoneVerifier::start(&config);
+
         Ok(Self {
             zone_indexer: Arc::new(zone_indexer),
+            store: IndexerStore::open_db(&home, genesis_seed)?,
             node,
             config,
-            store: IndexerStore::open_db(&home)?,
             status: Arc::new(ArcSwap::from_pointee(IndexerSyncStatus::starting())),
+            verifier,
         })
     }
 
@@ -225,6 +253,22 @@ impl IndexerCore {
                             continue;
                         }
                     };
+
+                    // Option B: re-derive and verify every cross-zone dispatch
+                    // before applying the block. A forged or replayed dispatch
+                    // halts ingestion rather than persisting an invalid state.
+                    if let Some(verifier) = &self.verifier
+                        && let Err(err) = verifier.verify_block(&block).await
+                    {
+                        error!(
+                            "Cross-zone verification failed for block {}: {err:#}. Halting indexer ingestion.",
+                            block.header.block_id
+                        );
+                        self.set_status(IndexerSyncStatus::error(format!(
+                            "cross-zone verification failed: {err:#}"
+                        )));
+                        return;
+                    }
 
                     match self.store.accept_block(&block, slot).await {
                         Ok(AcceptOutcome::Applied) => {

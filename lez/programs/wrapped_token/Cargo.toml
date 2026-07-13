@@ -1,0 +1,12 @@
+[package]
+name = "wrapped_token_program"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+lee_core.workspace = true
+wrapped_token_core.workspace = true

@@ -336,9 +336,10 @@ impl TestContextBuilder {
             .context("Failed to setup Bedrock node")?;
 
         let indexer_components = if enable_indexer {
-            let (indexer_handle, temp_indexer_dir) = setup_indexer(bedrock_addr)
-                .await
-                .context("Failed to setup Indexer")?;
+            let (indexer_handle, temp_indexer_dir) =
+                setup_indexer(bedrock_addr, config::bedrock_channel_id(), None)
+                    .await
+                    .context("Failed to setup Indexer")?;
             let indexer_url = config::addr_to_url(config::UrlProtocol::Ws, indexer_handle.addr())
                 .context("Failed to convert indexer addr to URL")?;
             let indexer_client = IndexerClient::new(&indexer_url)
@@ -375,9 +376,15 @@ impl TestContextBuilder {
                 }
                 None => wallet_genesis,
             };
-            setup_sequencer(partial_config, bedrock_addr, genesis)
-                .await
-                .context("Failed to setup Sequencer")?
+            setup_sequencer(
+                partial_config,
+                bedrock_addr,
+                genesis,
+                config::bedrock_channel_id(),
+                None,
+            )
+            .await
+            .context("Failed to setup Sequencer")?
         };
 
         let (mut wallet, temp_wallet_dir, wallet_password) = setup_wallet(

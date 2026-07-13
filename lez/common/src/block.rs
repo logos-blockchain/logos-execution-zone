@@ -68,6 +68,16 @@ impl Block {
         }
         .compute_hash()
     }
+
+    /// Recomputes the signed hash from the block contents and checks the header
+    /// signature against `expected_pubkey`. Used to pin a peer zone's
+    /// block-signing key, so a block inscribed by anyone other than that zone's
+    /// sequencer is rejected even if it reached the channel.
+    #[must_use]
+    pub fn is_signed_by(&self, expected_pubkey: &lee::PublicKey) -> bool {
+        let hash = HashableBlockData::from(self.clone()).compute_hash();
+        self.header.signature.is_valid_for(&hash.0, expected_pubkey)
+    }
 }
 
 impl Serialize for Block {

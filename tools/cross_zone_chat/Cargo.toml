@@ -1,0 +1,25 @@
+[package]
+name = "cross_zone_chat"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+test_fixtures.workspace = true
+sequencer_service_rpc = { workspace = true, features = ["client"] }
+programs.workspace = true
+ping_core.workspace = true
+cross_zone_outbox_core.workspace = true
+cross_zone_inbox_core.workspace = true
+lee.workspace = true
+common.workspace = true
+risc0-zkvm.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+anyhow.workspace = true
+serde = { workspace = true, features = ["derive"] }
+axum.workspace = true
+log.workspace = true
+env_logger.workspace = true

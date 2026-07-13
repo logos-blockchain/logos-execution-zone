@@ -6,7 +6,7 @@ use indexer_service::{ChannelId, ClientConfig, IndexerConfig};
 use key_protocol::key_management::{KeyChain, secret_holders::SeedHolder};
 use lee::{AccountId, PrivateKey, PublicKey};
 use lee_core::Identifier;
-use sequencer_core::config::{BedrockConfig, GenesisAction, SequencerConfig};
+use sequencer_core::config::{BedrockConfig, CrossZoneConfig, GenesisAction, SequencerConfig};
 use url::Url;
 use wallet::config::WalletConfig;
 
@@ -80,6 +80,8 @@ pub fn sequencer_config(
     home: PathBuf,
     bedrock_addr: SocketAddr,
     genesis_transactions: Vec<GenesisAction>,
+    channel_id: ChannelId,
+    cross_zone: Option<CrossZoneConfig>,
 ) -> Result<SequencerConfig> {
     let SequencerPartialConfig {
         max_num_tx_in_block,
@@ -98,11 +100,12 @@ pub fn sequencer_config(
         genesis: genesis_transactions,
         signing_key: SEQUENCER_SIGNING_KEY,
         bedrock_config: BedrockConfig {
-            channel_id: bedrock_channel_id(),
+            channel_id,
             node_url: addr_to_url(UrlProtocol::Http, bedrock_addr)
                 .context("Failed to convert bedrock addr to URL")?,
             auth: None,
         },
+        cross_zone,
     })
 }
 
@@ -201,7 +204,11 @@ pub fn wallet_config(sequencer_addr: SocketAddr) -> Result<WalletConfig> {
     })
 }
 
-pub fn indexer_config(bedrock_addr: SocketAddr) -> Result<IndexerConfig> {
+pub fn indexer_config(
+    bedrock_addr: SocketAddr,
+    channel_id: ChannelId,
+    cross_zone: Option<CrossZoneConfig>,
+) -> Result<IndexerConfig> {
     Ok(IndexerConfig {
         consensus_info_polling_interval: Duration::from_secs(1),
         bedrock_config: ClientConfig {
@@ -209,7 +216,9 @@ pub fn indexer_config(bedrock_addr: SocketAddr) -> Result<IndexerConfig> {
                 .context("Failed to convert bedrock addr to URL")?,
             auth: None,
         },
-        channel_id: bedrock_channel_id(),
+        channel_id,
+        cross_zone,
+        bridge_lock_holdings: Vec::new(),
         allow_chain_reset: false,
     })
 }
@@ -230,6 +239,17 @@ pub fn addr_to_url(protocol: UrlProtocol, addr: SocketAddr) -> Result<Url> {
 #[must_use]
 pub fn bedrock_channel_id() -> ChannelId {
     let channel_id: [u8; 32] = [0_u8, 1]
+        .repeat(16)
+        .try_into()
+        .unwrap_or_else(|_| unreachable!());
+    ChannelId::from(channel_id)
+}
+
+/// A second zone's channel id, distinct from [`bedrock_channel_id`] so two zones
+/// settle independently on one shared Bedrock node in the cross-zone tests.
+#[must_use]
+pub fn bedrock_channel_id_b() -> ChannelId {
+    let channel_id: [u8; 32] = [0_u8, 2]
         .repeat(16)
         .try_into()
         .unwrap_or_else(|_| unreachable!());

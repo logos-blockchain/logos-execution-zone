@@ -8,6 +8,7 @@ use std::{
 use anyhow::Result;
 use bytesize::ByteSize;
 use common::config::BasicAuth;
+pub use cross_zone_inbox_core::{CrossZoneConfig, CrossZonePeer};
 use humantime_serde;
 use lee::AccountId;
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
@@ -24,6 +25,11 @@ pub enum GenesisAction {
     },
     SupplyBridgeAccount {
         balance: u128,
+    },
+    /// Seeds a bridge-lock holder's initial bridgeable balance into genesis state.
+    SupplyBridgeLockHolding {
+        holder: AccountId,
+        amount: u128,
     },
 }
 
@@ -53,6 +59,9 @@ pub struct SequencerConfig {
     /// Genesis configuration.
     #[serde(default)]
     pub genesis: Vec<GenesisAction>,
+    /// Cross-zone messaging configuration. `None` disables the watcher.
+    #[serde(default)]
+    pub cross_zone: Option<CrossZoneConfig>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]

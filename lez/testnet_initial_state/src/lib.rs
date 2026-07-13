@@ -258,7 +258,28 @@ fn initial_public_accounts() -> HashMap<AccountId, Account> {
                 .into_iter()
                 .map(|clock_id| (clock_id, system_accounts::clock_account())),
         )
+        .chain(std::iter::once(wrapped_token_config_account()))
         .collect()
+}
+
+/// The wrapped-token config account.
+///
+/// Seeded so the `wrapped_token` guest can pin its authorized minter (the
+/// cross-zone inbox) without importing the inbox id. Fixed for every zone, so it
+/// lives in the shared initial state.
+fn wrapped_token_config_account() -> (AccountId, Account) {
+    let wrapped_token_id = programs::wrapped_token().id();
+    (
+        wrapped_token_core::config_account_id(wrapped_token_id),
+        Account {
+            program_owner: wrapped_token_id,
+            data: wrapped_token_core::minter_bytes(programs::cross_zone_inbox().id())
+                .to_vec()
+                .try_into()
+                .expect("minter id fits in account data"),
+            ..Default::default()
+        },
+    )
 }
 
 fn initial_programs() -> Vec<Program> {
@@ -271,6 +292,12 @@ fn initial_programs() -> Vec<Program> {
         programs::vault(),
         programs::faucet(),
         programs::bridge(),
+        programs::cross_zone_outbox(),
+        programs::cross_zone_inbox(),
+        programs::ping_sender(),
+        programs::ping_receiver(),
+        programs::bridge_lock(),
+        programs::wrapped_token(),
     ]
 }
 

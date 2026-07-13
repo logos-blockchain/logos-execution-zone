@@ -1,0 +1,14 @@
+[package]
+name = "cross_zone_outbox_core"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+lee_core.workspace = true
+serde = { workspace = true, features = ["alloc"] }
+risc0-zkvm.workspace = true
+borsh.workspace = true

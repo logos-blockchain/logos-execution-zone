@@ -194,6 +194,14 @@ impl V03State {
         self.programs.insert(program.id(), program);
     }
 
+    /// Seeds a single genesis account that is not produced by any transaction
+    /// (e.g. the cross-zone inbox config or a bridge-lock holding). Lets the
+    /// sequencer and indexer seed identical zone-specific state after building
+    /// the shared initial state.
+    pub fn insert_genesis_account(&mut self, account_id: AccountId, account: Account) {
+        self.public_state.insert(account_id, account);
+    }
+
     pub fn apply_state_diff(&mut self, diff: ValidatedStateDiff) {
         let StateDiff {
             signer_account_ids,

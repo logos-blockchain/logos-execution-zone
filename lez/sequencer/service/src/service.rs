@@ -74,6 +74,20 @@ impl<BC: BlockPublisherTrait + Send + 'static> sequencer_service_rpc::RpcServer
                 )
             })?;
 
+        // Sequencer-only programs (the cross-zone inbox) are injected by the
+        // watcher; a user must not invoke them top-level, or anyone could forge
+        // an inbound cross-zone delivery. Chained user calls are already rejected
+        // by the inbox guest's caller-is-none assertion.
+        if let LeeTransaction::Public(public_tx) = &authenticated_tx
+            && sequencer_core::is_sequencer_only_program(public_tx.message().program_id)
+        {
+            return Err(ErrorObjectOwned::owned(
+                ErrorCode::InvalidParams.code(),
+                "Program is sequencer-only and cannot be invoked by a user transaction".to_owned(),
+                None::<()>,
+            ));
+        }
+
         self.mempool_handle
             .push((TransactionOrigin::User, authenticated_tx))
             .await

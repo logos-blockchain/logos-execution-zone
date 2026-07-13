@@ -44,6 +44,13 @@ members = [
   "lez/programs/pinata_token",
   "lez/programs/token",
   "lez/programs/vault",
+  "lez/programs/cross_zone_inbox",
+  "lez/programs/cross_zone_outbox",
+  "lez/programs/bridge_lock",
+  "lez/programs/wrapped_token",
+  "lez/programs/ping_sender",
+  "lez/programs/ping_receiver",
+  "lez/cross_zone",
 
   "test_programs",
   "test_programs/guest",
@@ -59,6 +66,7 @@ members = [
   "tools/cycle_bench",
   "tools/crypto_primitives_bench",
   "tools/integration_bench",
+  "tools/cross_zone_chat",
 ]
 
 [workspace.dependencies]
@@ -96,6 +104,12 @@ authenticated_transfer_core = { path = "lez/programs/authenticated_transfer/core
 faucet_core = { path = "lez/programs/faucet/core" }
 bridge_core = { path = "lez/programs/bridge/core" }
 vault_core = { path = "lez/programs/vault/core" }
+cross_zone_inbox_core = { path = "lez/programs/cross_zone_inbox/core" }
+cross_zone_outbox_core = { path = "lez/programs/cross_zone_outbox/core" }
+bridge_lock_core = { path = "lez/programs/bridge_lock/core" }
+wrapped_token_core = { path = "lez/programs/wrapped_token/core" }
+ping_core = { path = "lez/programs/ping_core" }
+cross_zone = { path = "lez/cross_zone" }
 build_utils = { path = "build_utils" }
 test_programs = { path = "test_programs" }
 testnet_initial_state = { path = "lez/testnet_initial_state" }
@@ -184,6 +198,7 @@ elliptic-curve = { version = "0.13.8", features = ["arithmetic"] }
 actix-web = { version = "4.13.0", default-features = false, features = [
   "macros",
 ] }
+axum = "0.8.4"
 clap = { version = "4.5.42", features = ["derive", "env"] }
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"] }
 pyo3 = { version = "0.29", features = ["auto-initialize"] }

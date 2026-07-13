@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Cross-zone chat</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    background: #0e1116;
+    color: #e6edf3;
+  }
+  header {
+    padding: 14px 20px;
+    border-bottom: 1px solid #232a33;
+    font-size: 15px;
+    color: #9aa7b4;
+  }
+  header b { color: #e6edf3; }
+  .columns { display: flex; height: calc(100vh - 51px); }
+  .zone {
+    flex: 1 1 0;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+  .zone + .zone { border-left: 1px solid #232a33; }
+  .zone h2 {
+    margin: 0;
+    padding: 12px 18px;
+    font-size: 14px;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: #9aa7b4;
+    border-bottom: 1px solid #232a33;
+  }
+  .zone.a h2 { color: #6cb6ff; }
+  .zone.b h2 { color: #6bd968; }
+  .log {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    padding: 14px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .msg {
+    background: #161b22;
+    border: 1px solid #232a33;
+    border-radius: 10px;
+    padding: 8px 12px;
+    max-width: 90%;
+    word-wrap: break-word;
+    white-space: pre-wrap;
+  }
+  .msg.inflight { border-color: #3a3320; }
+  .msg .text { margin-bottom: 6px; }
+  .stages {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    font-size: 11px;
+    line-height: 1.4;
+    color: #9aa7b4;
+  }
+  .stage {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 1px 7px;
+    border-radius: 999px;
+    border: 1px solid #2d3640;
+    background: #0e1116;
+    white-space: nowrap;
+  }
+  .stage.todo { opacity: .4; }
+  .stage.wait { border-color: #6b5a1f; color: #e3b341; }
+  .stage.done { border-color: #2c5d33; color: #6bd968; }
+  .stage .blk { color: #6cb6ff; font-variant-numeric: tabular-nums; }
+  .elapsed { color: #7d8893; font-variant-numeric: tabular-nums; }
+  .composer {
+    display: flex;
+    gap: 8px;
+    padding: 12px 16px;
+    border-top: 1px solid #232a33;
+  }
+  .composer input {
+    flex: 1 1 auto;
+    padding: 9px 12px;
+    border-radius: 8px;
+    border: 1px solid #2d3640;
+    background: #0e1116;
+    color: #e6edf3;
+    font-size: 14px;
+  }
+  .composer button {
+    padding: 9px 16px;
+    border-radius: 8px;
+    border: 0;
+    background: #2563eb;
+    color: #fff;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  .composer button:disabled { opacity: .5; cursor: default; }
+</style>
+</head>
+<body>
+<header>
+  <b>Cross-zone chat</b> — type in a column; each message shows its journey: sent into a source block, that block reaching <span style="color:#e3b341">Bedrock finality</span>, then <span style="color:#6bd968">delivery</span> into the other zone. The finality wait is the bulk of the latency.
+</header>
+<div class="columns">
+  <section class="zone a" data-zone="A">
+    <h2>Zone A</h2>
+    <div class="log" id="log-A"></div>
+    <form class="composer" data-zone="A">
+      <input type="text" placeholder="Message from Zone A → B" autocomplete="off" />
+      <button type="submit">Send</button>
+    </form>
+  </section>
+  <section class="zone b" data-zone="B">
+    <h2>Zone B</h2>
+    <div class="log" id="log-B"></div>
+    <form class="composer" data-zone="B">
+      <input type="text" placeholder="Message from Zone B → A" autocomplete="off" />
+      <button type="submit">Send</button>
+    </form>
+  </section>
+</div>
+<script>
+  // id -> { el, textEl, stagesEl } for in-place updates.
+  const bubbles = new Map();
+
+  function stage(cls, label, blockZone, block) {
+    const span = '<span class="stage ' + cls + '">' + label +
+      (block != null ? ' <span class="blk">' + blockZone + '#' + block + '</span>' : '') +
+      '</span>';
+    return span;
+  }
+
+  function renderStages(m) {
+    const parts = [];
+    // 1. submitted into a source block on the sender zone
+    if (m.source_block != null) {
+      parts.push(stage('done', 'sent', m.source_zone, m.source_block));
+    } else {
+      parts.push(stage('wait', 'sending…'));
+    }
+    // 2. Bedrock finality of that source block
+    if (m.finalized) {
+      parts.push(stage('done', 'Bedrock ✓ finalized'));
+    } else if (m.source_block != null) {
+      parts.push(stage('wait', 'Bedrock ⏳ pending'));
+    } else {
+      parts.push(stage('todo', 'Bedrock'));
+    }
+    // 3. delivery on the receiver zone
+    if (m.delivered_block != null) {
+      parts.push(stage('done', 'delivered', m.zone, m.delivered_block));
+    } else {
+      parts.push(stage(m.finalized ? 'wait' : 'todo', 'delivering…'));
+    }
+    // elapsed
+    const t = m.delivered_block != null ? (m.elapsed + 's ✓') : (m.elapsed + 's');
+    parts.push('<span class="elapsed">' + t + '</span>');
+    return parts.join('');
+  }
+
+  function upsert(m) {
+    let b = bubbles.get(m.id);
+    if (!b) {
+      const log = document.getElementById('log-' + m.zone);
+      const el = document.createElement('div');
+      el.className = 'msg inflight';
+      const textEl = document.createElement('div');
+      textEl.className = 'text';
+      textEl.textContent = m.text;
+      const stagesEl = document.createElement('div');
+      stagesEl.className = 'stages';
+      el.appendChild(textEl);
+      el.appendChild(stagesEl);
+      log.appendChild(el);
+      log.scrollTop = log.scrollHeight;
+      b = { el, stagesEl };
+      bubbles.set(m.id, b);
+    }
+    b.el.className = 'msg' + (m.delivered_block != null ? '' : ' inflight');
+    b.stagesEl.innerHTML = renderStages(m);
+  }
+
+  async function poll() {
+    try {
+      const res = await fetch('/timeline');
+      if (!res.ok) return;
+      const entries = await res.json();
+      for (const m of entries) upsert(m);
+    } catch (_) { /* transient; retry next tick */ }
+  }
+
+  for (const form of document.querySelectorAll('form.composer')) {
+    form.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      const zone = form.dataset.zone;
+      const input = form.querySelector('input');
+      const text = input.value.trim();
+      if (!text) return;
+      input.value = '';
+      try {
+        const res = await fetch('/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ zone, text }),
+        });
+        if (!res.ok) {
+          input.value = text;
+          input.placeholder = 'send failed: ' + (await res.text());
+        } else {
+          poll();
+        }
+      } catch (err) {
+        input.value = text;
+        input.placeholder = 'send error: ' + err;
+      }
+    });
+  }
+
+  setInterval(poll, 1000);
+  poll();
+</script>
+</body>
+</html>

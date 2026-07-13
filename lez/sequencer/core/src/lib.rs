@@ -40,6 +40,7 @@ use crate::{
 pub mod block_publisher;
 pub mod block_store;
 pub mod config;
+pub mod cross_zone_watcher;
 
 #[cfg(feature = "mock")]
 pub mod mock;
@@ -197,6 +198,17 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                         )
                     });
             }
+        }
+
+        // Cross-zone messaging: start a watcher per configured peer. The inbox
+        // config account is seeded into genesis state in `build_genesis_state`.
+        if let Some(cross_zone) = &config.cross_zone {
+            cross_zone_watcher::spawn_watchers(
+                &config.bedrock_config,
+                cross_zone,
+                config.block_create_timeout,
+                &mempool_handle,
+            );
         }
 
         let sequencer_core = Self {
@@ -752,14 +764,18 @@ fn build_genesis_state(config: &SequencerConfig) -> (lee::V03State, Vec<LeeTrans
     let genesis_txs = config
         .genesis
         .iter()
-        .map(|genesis_tx| match genesis_tx {
+        .filter_map(|genesis_tx| match genesis_tx {
             GenesisAction::SupplyAccount {
                 account_id,
                 balance,
-            } => build_supply_account_genesis_transaction(account_id, *balance),
+            } => Some(build_supply_account_genesis_transaction(
+                account_id, *balance,
+            )),
             GenesisAction::SupplyBridgeAccount { balance } => {
-                build_supply_bridge_account_genesis_transaction(*balance)
+                Some(build_supply_bridge_account_genesis_transaction(*balance))
             }
+            // Force-inserted below: bridge_lock has no mint transaction.
+            GenesisAction::SupplyBridgeLockHolding { .. } => None,
         })
         .chain(std::iter::once(clock_invocation(0)))
         .inspect(|tx| {
@@ -770,7 +786,34 @@ fn build_genesis_state(config: &SequencerConfig) -> (lee::V03State, Vec<LeeTrans
         .map(LeeTransaction::Public)
         .collect();
 
+    // Seed bridge-lock holder balances directly: they are not produced by any tx.
+    for action in &config.genesis {
+        if let GenesisAction::SupplyBridgeLockHolding { holder, amount } = action {
+            let (holder_id, account) = cross_zone::build_holding_account(*holder, *amount);
+            state.insert_genesis_account(holder_id, account);
+        }
+    }
+
+    // Seed this zone's cross-zone inbox config so the inbox guest can authorize
+    // inbound peer messages (zone-specific config, not produced by any tx).
+    if let Some(cross_zone) = &config.cross_zone {
+        let self_zone = *config.bedrock_config.channel_id.as_ref();
+        let (config_id, config_account) =
+            cross_zone::build_inbox_config_account(self_zone, cross_zone);
+        state.insert_genesis_account(config_id, config_account);
+    }
+
     (state, genesis_txs)
+}
+
+/// Whether a program may only be invoked by sequencer-origin transactions.
+///
+/// The cross-zone inbox is injected solely by the watcher; a user-submitted call
+/// must be rejected at ingress, since `TransactionOrigin` is not carried in the
+/// block.
+#[must_use]
+pub fn is_sequencer_only_program(program_id: lee::ProgramId) -> bool {
+    cross_zone::is_sequencer_only_program(program_id)
 }
 
 fn build_supply_account_genesis_transaction(

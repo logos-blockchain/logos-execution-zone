@@ -1,7 +1,7 @@
 use std::{net::SocketAddr, path::PathBuf};
 
 use anyhow::{Context as _, Result, bail};
-use indexer_service::IndexerHandle;
+use indexer_service::{ChannelId, IndexerHandle};
 use lee::{AccountId, PrivateKey, PublicKey};
 use log::{debug, warn};
 use sequencer_core::block_store::{DbDump, SequencerStore};
@@ -112,7 +112,11 @@ pub async fn setup_bedrock_node() -> Result<(DockerCompose, SocketAddr)> {
     Ok((compose, addr))
 }
 
-pub async fn setup_indexer(bedrock_addr: SocketAddr) -> Result<(IndexerHandle, TempDir)> {
+pub async fn setup_indexer(
+    bedrock_addr: SocketAddr,
+    channel_id: ChannelId,
+    cross_zone: Option<sequencer_core::config::CrossZoneConfig>,
+) -> Result<(IndexerHandle, TempDir)> {
     let temp_indexer_dir =
         tempfile::tempdir().context("Failed to create temp dir for indexer home")?;
 
@@ -121,8 +125,8 @@ pub async fn setup_indexer(bedrock_addr: SocketAddr) -> Result<(IndexerHandle, T
         temp_indexer_dir.path().display()
     );
 
-    let indexer_config =
-        config::indexer_config(bedrock_addr).context("Failed to create Indexer config")?;
+    let indexer_config = config::indexer_config(bedrock_addr, channel_id, cross_zone)
+        .context("Failed to create Indexer config")?;
 
     indexer_service::run_server(
         indexer_config,
@@ -139,11 +143,15 @@ pub async fn setup_sequencer(
     partial: config::SequencerPartialConfig,
     bedrock_addr: SocketAddr,
     genesis_transactions: Vec<GenesisAction>,
+    channel_id: ChannelId,
+    cross_zone: Option<sequencer_core::config::CrossZoneConfig>,
 ) -> Result<(SequencerHandle, TempDir)> {
     setup_sequencer_inner(
         partial,
         bedrock_addr,
         SequencerInit::Genesis(genesis_transactions),
+        channel_id,
+        cross_zone,
     )
     .await
 }
@@ -155,13 +163,22 @@ pub async fn setup_sequencer_from_prebuilt(
     bedrock_addr: SocketAddr,
 ) -> Result<(SequencerHandle, TempDir)> {
     let dump = load_prebuilt_dump()?;
-    setup_sequencer_inner(partial, bedrock_addr, SequencerInit::Prebuilt(&dump)).await
+    setup_sequencer_inner(
+        partial,
+        bedrock_addr,
+        SequencerInit::Prebuilt(&dump),
+        config::bedrock_channel_id(),
+        None,
+    )
+    .await
 }
 
 async fn setup_sequencer_inner(
     partial: config::SequencerPartialConfig,
     bedrock_addr: SocketAddr,
     init: SequencerInit<'_>,
+    channel_id: ChannelId,
+    cross_zone: Option<sequencer_core::config::CrossZoneConfig>,
 ) -> Result<(SequencerHandle, TempDir)> {
     let temp_sequencer_dir =
         tempfile::tempdir().context("Failed to create temp dir for sequencer home")?;
@@ -187,6 +204,8 @@ async fn setup_sequencer_inner(
         temp_sequencer_dir.path().to_owned(),
         bedrock_addr,
         genesis_transactions,
+        channel_id,
+        cross_zone,
     )
     .context("Failed to create Sequencer config")?;
 

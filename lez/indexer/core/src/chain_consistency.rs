@@ -318,6 +318,8 @@ mod tests {
             },
             channel_id: ChannelId::from([1; 32]),
             allow_chain_reset: false,
+            cross_zone: None,
+            bridge_lock_holdings: Vec::new(),
         };
         IndexerCore::open(config, dir).expect("open core")
     }

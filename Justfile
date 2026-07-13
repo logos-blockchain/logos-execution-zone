@@ -6,6 +6,11 @@ default:
 # ---- Configuration ----
 ARTIFACTS := "artifacts"
 
+# On macOS the integration-test binary links pyo3 against the CommandLineTools
+# Python framework with no embedded rpath, so it needs this to launch. Empty on
+# Linux/CI, which is unaffected.
+DEMO_ENV := if os() == "macos" { "DYLD_FALLBACK_FRAMEWORK_PATH=/Library/Developer/CommandLineTools/Library/Frameworks" } else { "" }
+
 # Build risc0 program artifacts.
 build-artifacts:
     @echo "🔨 Building artifacts"
@@ -98,6 +103,26 @@ wallet-import-test-accounts:
     just run-wallet vault claim --account-id Public/2RHZhw9h534Zr3eq2RGhQete2Hh667foECzXPmSkGni2 --amount 20000
 
     just run-wallet account list
+
+# Demo: cross-zone ping. Boots two zones on one Bedrock and sends a message from
+# zone A to zone B, where the indexer re-derives and verifies it (Option B)
+# before ping_receiver records it. Dev mode, no proving.
+demo-cross-zone-ping:
+    @echo "📡 Cross-zone ping demo (message A → B, indexer-verified)"
+    {{DEMO_ENV}} RISC0_DEV_MODE=1 cargo test -p integration_tests --release --test cross_zone_verified -- --nocapture
+
+# Demo: cross-zone wrapped-token bridge. Locks a balance on zone A and mints the
+# wrapped token to a recipient on zone B over the same verified spine.
+demo-cross-zone-bridge:
+    @echo "🌉 Cross-zone bridge demo (lock on A, mint on B)"
+    {{DEMO_ENV}} RISC0_DEV_MODE=1 cargo test -p integration_tests --release --test cross_zone_bridge -- --nocapture
+
+# Demo: interactive cross-zone chat. Boots two zones on one Bedrock and serves a
+# local two-column web UI; type in one zone and watch the message cross into the
+# other. Two people can chat across the zones. Dev mode, no proving.
+cross-zone-chat:
+    @echo "💬 Cross-zone chat demo — open the printed localhost URL"
+    {{DEMO_ENV}} RISC0_DEV_MODE=1 cargo run -p cross_zone_chat --release
 
 # Clean runtime data
 clean:

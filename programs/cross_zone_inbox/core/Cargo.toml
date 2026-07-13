@@ -1,0 +1,22 @@
+[package]
+name = "cross_zone_inbox_core"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+lee_core.workspace = true
+serde = { workspace = true, features = ["alloc"] }
+risc0-zkvm.workspace = true
+borsh.workspace = true
+lee = { workspace = true, optional = true }
+ping_core = { workspace = true, optional = true }
+bridge_lock_core = { workspace = true, optional = true }
+
+[features]
+# Host-only transaction builder and emission extractor; pull `lee` and the
+# emitter cores, so the risc0 guest builds without them.
+host = ["dep:lee", "dep:ping_core", "dep:bridge_lock_core"]

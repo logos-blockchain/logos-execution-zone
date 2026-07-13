@@ -33,6 +33,7 @@ use crate::{
     block_store::SequencerStore,
     build_genesis_state,
     config::{BedrockConfig, SequencerConfig},
+    is_sequencer_only_program,
     mock::SequencerCoreWithMockClients,
 };
 
@@ -59,7 +60,19 @@ fn setup_sequencer_config() -> SequencerConfig {
         },
         retry_pending_blocks_timeout: Duration::from_mins(4),
         genesis: vec![],
+        cross_zone: None,
     }
+}
+
+#[test]
+fn only_the_cross_zone_inbox_is_sequencer_only() {
+    assert!(is_sequencer_only_program(programs::cross_zone_inbox().id()));
+    assert!(!is_sequencer_only_program(
+        programs::cross_zone_outbox().id()
+    ));
+    assert!(!is_sequencer_only_program(programs::wrapped_token().id()));
+    assert!(!is_sequencer_only_program(programs::ping_sender().id()));
+    assert!(!is_sequencer_only_program(programs::clock().id()));
 }
 
 fn create_signing_key_for_account1() -> lee::PrivateKey {

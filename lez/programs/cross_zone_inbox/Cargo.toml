@@ -1,0 +1,12 @@
+[package]
+name = "cross_zone_inbox_program"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+lee_core.workspace = true
+cross_zone_inbox_core.workspace = true

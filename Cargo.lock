@@ -1155,6 +1155,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "bridge_lock_core"
+version = "0.1.0"
+dependencies = [
+ "lee_core",
+ "serde",
+]
+
+[[package]]
+name = "bridge_lock_program"
+version = "0.1.0"
+dependencies = [
+ "bridge_lock_core",
+ "cross_zone_outbox_core",
+ "lee_core",
+ "risc0-zkvm",
+ "wrapped_token_core",
+]
+
+[[package]]
 name = "bridge_program"
 version = "0.1.0"
 dependencies = [
@@ -1847,6 +1866,76 @@ name = "critical-section"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "790eea4361631c5e7d22598ecd5723ff611904e3344ce8720784c93e3d83d40b"
+
+[[package]]
+name = "cross_zone"
+version = "0.1.0"
+dependencies = [
+ "bridge_lock_core",
+ "cross_zone_inbox_core",
+ "lee",
+ "lee_core",
+ "ping_core",
+ "programs",
+ "risc0-zkvm",
+]
+
+[[package]]
+name = "cross_zone_chat"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum 0.8.9",
+ "common",
+ "cross_zone_inbox_core",
+ "cross_zone_outbox_core",
+ "env_logger",
+ "lee",
+ "log",
+ "ping_core",
+ "programs",
+ "risc0-zkvm",
+ "sequencer_service_rpc",
+ "serde",
+ "test_fixtures",
+ "tokio",
+]
+
+[[package]]
+name = "cross_zone_inbox_core"
+version = "0.1.0"
+dependencies = [
+ "borsh",
+ "lee_core",
+ "risc0-zkvm",
+ "serde",
+]
+
+[[package]]
+name = "cross_zone_inbox_program"
+version = "0.1.0"
+dependencies = [
+ "cross_zone_inbox_core",
+ "lee_core",
+]
+
+[[package]]
+name = "cross_zone_outbox_core"
+version = "0.1.0"
+dependencies = [
+ "borsh",
+ "lee_core",
+ "risc0-zkvm",
+ "serde",
+]
+
+[[package]]
+name = "cross_zone_outbox_program"
+version = "0.1.0"
+dependencies = [
+ "cross_zone_outbox_core",
+ "lee_core",
+]
 
 [[package]]
 name = "crossbeam-channel"
@@ -3867,13 +3956,19 @@ dependencies = [
  "borsh",
  "chain_state",
  "common",
+ "cross_zone",
+ "cross_zone_inbox_core",
  "futures",
+ "hex",
  "humantime-serde",
  "lee",
  "lee_core",
  "log",
  "logos-blockchain-core",
  "logos-blockchain-zone-sdk",
+ "ping_core",
+ "programs",
+ "risc0-zkvm",
  "serde",
  "serde_json",
  "storage",
@@ -4027,8 +4122,11 @@ dependencies = [
  "authenticated_transfer_core",
  "borsh",
  "bridge_core",
+ "bridge_lock_core",
  "bytesize",
  "common",
+ "cross_zone_inbox_core",
+ "cross_zone_outbox_core",
  "faucet_core",
  "futures",
  "hex",
@@ -4044,8 +4142,10 @@ dependencies = [
  "logos-blockchain-key-management-system-service",
  "logos-blockchain-zone-sdk",
  "num-bigint 0.4.6",
+ "ping_core",
  "programs",
  "reqwest",
+ "risc0-zkvm",
  "sequencer_core",
  "sequencer_service_rpc",
  "serde_json",
@@ -4058,6 +4158,7 @@ dependencies = [
  "vault_core",
  "wallet",
  "wallet-ffi",
+ "wrapped_token_core",
 ]
 
 [[package]]
@@ -7191,6 +7292,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "ping_core"
+version = "0.1.0"
+dependencies = [
+ "lee_core",
+ "serde",
+]
+
+[[package]]
+name = "ping_receiver_program"
+version = "0.1.0"
+dependencies = [
+ "lee_core",
+ "ping_core",
+]
+
+[[package]]
+name = "ping_sender_program"
+version = "0.1.0"
+dependencies = [
+ "cross_zone_outbox_core",
+ "lee_core",
+ "ping_core",
+]
+
+[[package]]
 name = "pkcs1"
 version = "0.7.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7462,15 +7588,20 @@ dependencies = [
  "associated_token_account_program",
  "authenticated_transfer_core",
  "bridge_core",
+ "bridge_lock_core",
  "build_utils",
  "clock_core",
+ "cross_zone_inbox_core",
+ "cross_zone_outbox_core",
  "faucet_core",
  "lee",
  "lee_core",
+ "ping_core",
  "risc0-zkvm",
  "token_core",
  "token_program",
  "vault_core",
+ "wrapped_token_core",
 ]
 
 [[package]]
@@ -8910,6 +9041,8 @@ dependencies = [
  "chain_state",
  "chrono",
  "common",
+ "cross_zone",
+ "cross_zone_inbox_core",
  "faucet_core",
  "futures",
  "hex",
@@ -9859,6 +9992,7 @@ dependencies = [
  "programs",
  "serde",
  "system_accounts",
+ "wrapped_token_core",
 ]
 
 [[package]]
@@ -11566,6 +11700,23 @@ dependencies = [
  "serde_json",
  "unicode-xid",
  "wasmparser",
+]
+
+[[package]]
+name = "wrapped_token_core"
+version = "0.1.0"
+dependencies = [
+ "lee_core",
+ "risc0-zkvm",
+ "serde",
+]
+
+[[package]]
+name = "wrapped_token_program"
+version = "0.1.0"
+dependencies = [
+ "lee_core",
+ "wrapped_token_core",
 ]
 
 [[package]]

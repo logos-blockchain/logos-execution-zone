@@ -1,0 +1,17 @@
+[package]
+name = "bridge_lock_core"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+lee_core.workspace = true
+serde = { workspace = true, features = ["alloc"] }
+lee = { workspace = true, optional = true }
+
+[features]
+# Host-only genesis helper; pulls `lee`, so the risc0 guest builds without it.
+host = ["dep:lee"]

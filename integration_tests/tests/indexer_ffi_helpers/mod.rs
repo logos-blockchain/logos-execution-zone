@@ -50,8 +50,12 @@ pub fn setup_indexer_ffi(bedrock_addr: SocketAddr) -> Result<(IndexerServiceFFI,
         temp_indexer_dir.path().display()
     );
 
-    let indexer_config = integration_tests::config::indexer_config(bedrock_addr)
-        .context("Failed to create Indexer config")?;
+    let indexer_config = integration_tests::config::indexer_config(
+        bedrock_addr,
+        integration_tests::config::bedrock_channel_id(),
+        None,
+    )
+    .context("Failed to create Indexer config")?;
 
     let config_json = serde_json::to_vec(&indexer_config)?;
     let config_path = temp_indexer_dir.path().join("indexer_config.json");

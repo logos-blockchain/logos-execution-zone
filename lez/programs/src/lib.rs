@@ -10,9 +10,12 @@ mod inner {
 
     use guests::{
         AMM_ELF, AMM_ID, ASSOCIATED_TOKEN_ACCOUNT_ELF, ASSOCIATED_TOKEN_ACCOUNT_ID,
-        AUTHENTICATED_TRANSFER_ELF, AUTHENTICATED_TRANSFER_ID, BRIDGE_ELF, BRIDGE_ID, CLOCK_ELF,
-        CLOCK_ID, FAUCET_ELF, FAUCET_ID, PINATA_ELF, PINATA_ID, PINATA_TOKEN_ELF, PINATA_TOKEN_ID,
-        TOKEN_ELF, TOKEN_ID, VAULT_ELF, VAULT_ID,
+        AUTHENTICATED_TRANSFER_ELF, AUTHENTICATED_TRANSFER_ID, BRIDGE_ELF, BRIDGE_ID,
+        BRIDGE_LOCK_ELF, BRIDGE_LOCK_ID, CLOCK_ELF, CLOCK_ID, CROSS_ZONE_INBOX_ELF,
+        CROSS_ZONE_INBOX_ID, CROSS_ZONE_OUTBOX_ELF, CROSS_ZONE_OUTBOX_ID, FAUCET_ELF, FAUCET_ID,
+        PINATA_ELF, PINATA_ID, PINATA_TOKEN_ELF, PINATA_TOKEN_ID, PING_RECEIVER_ELF,
+        PING_RECEIVER_ID, PING_SENDER_ELF, PING_SENDER_ID, TOKEN_ELF, TOKEN_ID, VAULT_ELF,
+        VAULT_ID, WRAPPED_TOKEN_ELF, WRAPPED_TOKEN_ID,
     };
     use lee::program::Program;
 
@@ -87,6 +90,42 @@ mod inner {
         Program::new_unchecked(BRIDGE_ID, Cow::Borrowed(BRIDGE_ELF))
     }
 
+    #[must_use]
+    #[inline]
+    pub const fn cross_zone_outbox() -> Program {
+        Program::new_unchecked(CROSS_ZONE_OUTBOX_ID, Cow::Borrowed(CROSS_ZONE_OUTBOX_ELF))
+    }
+
+    #[must_use]
+    #[inline]
+    pub const fn cross_zone_inbox() -> Program {
+        Program::new_unchecked(CROSS_ZONE_INBOX_ID, Cow::Borrowed(CROSS_ZONE_INBOX_ELF))
+    }
+
+    #[must_use]
+    #[inline]
+    pub const fn ping_sender() -> Program {
+        Program::new_unchecked(PING_SENDER_ID, Cow::Borrowed(PING_SENDER_ELF))
+    }
+
+    #[must_use]
+    #[inline]
+    pub const fn ping_receiver() -> Program {
+        Program::new_unchecked(PING_RECEIVER_ID, Cow::Borrowed(PING_RECEIVER_ELF))
+    }
+
+    #[must_use]
+    #[inline]
+    pub const fn bridge_lock() -> Program {
+        Program::new_unchecked(BRIDGE_LOCK_ID, Cow::Borrowed(BRIDGE_LOCK_ELF))
+    }
+
+    #[must_use]
+    #[inline]
+    pub const fn wrapped_token() -> Program {
+        Program::new_unchecked(WRAPPED_TOKEN_ID, Cow::Borrowed(WRAPPED_TOKEN_ELF))
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -127,6 +166,12 @@ mod inner {
                 (PINATA_TOKEN_ELF, PINATA_TOKEN_ID),
                 (TOKEN_ELF, TOKEN_ID),
                 (VAULT_ELF, VAULT_ID),
+                (CROSS_ZONE_OUTBOX_ELF, CROSS_ZONE_OUTBOX_ID),
+                (CROSS_ZONE_INBOX_ELF, CROSS_ZONE_INBOX_ID),
+                (PING_SENDER_ELF, PING_SENDER_ID),
+                (PING_RECEIVER_ELF, PING_RECEIVER_ID),
+                (BRIDGE_LOCK_ELF, BRIDGE_LOCK_ID),
+                (WRAPPED_TOKEN_ELF, WRAPPED_TOKEN_ID),
             ];
             for (elf, expected_id) in cases {
                 let program = Program::new((*elf).into()).unwrap();

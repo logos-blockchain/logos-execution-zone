@@ -22,6 +22,12 @@ associated_token_account_core.workspace = true
 vault_core.workspace = true
 faucet_core.workspace = true
 bridge_core.workspace = true
+ping_core.workspace = true
+cross_zone_outbox_core.workspace = true
+cross_zone_inbox_core.workspace = true
+bridge_lock_core.workspace = true
+wrapped_token_core.workspace = true
+risc0-zkvm.workspace = true
 indexer_service_rpc = { workspace = true, features = ["client"] }
 sequencer_service_rpc = { workspace = true, features = ["client"] }
 wallet-ffi.workspace = true

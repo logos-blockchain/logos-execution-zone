@@ -53,6 +53,8 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
         config::SequencerPartialConfig::default(),
         bedrock_addr,
         genesis,
+        config::bedrock_channel_id(),
+        None,
     )
     .await
     .context("Failed to setup Sequencer for fixture generation")?;

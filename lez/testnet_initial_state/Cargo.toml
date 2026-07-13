@@ -10,6 +10,7 @@ lee.workspace = true
 lee_core.workspace = true
 system_accounts.workspace = true
 programs.workspace = true
+wrapped_token_core.workspace = true
 
 serde.workspace = true
 

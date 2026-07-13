@@ -1,0 +1,15 @@
+[package]
+name = "bridge_lock_program"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+lee_core.workspace = true
+bridge_lock_core.workspace = true
+cross_zone_outbox_core.workspace = true
+wrapped_token_core.workspace = true
+risc0-zkvm.workspace = true
