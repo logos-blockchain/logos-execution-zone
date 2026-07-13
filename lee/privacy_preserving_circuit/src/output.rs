@@ -261,6 +261,12 @@ pub fn compute_circuit_output(
         emit_dummy_output(&mut output, dummy);
     }
 
+    obfuscate_output_ordering(&mut output);
+
+    output
+}
+
+fn obfuscate_output_ordering(output: &mut PrivacyPreservingCircuitOutput) {
     output
         .new_commitments
         .sort_unstable_by_key(Commitment::to_byte_array);
@@ -271,8 +277,6 @@ pub fn compute_circuit_output(
         .collect();
     notes.sort_unstable_by_key(|((nullifier, _), _)| nullifier.to_byte_array());
     (output.new_nullifiers, output.encrypted_private_post_states) = notes.into_iter().unzip();
-
-    output
 }
 
 fn emit_dummy_output(output: &mut PrivacyPreservingCircuitOutput, dummy: DummyInput) {
