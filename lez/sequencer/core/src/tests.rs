@@ -432,7 +432,8 @@ async fn build_block_from_mempool() {
 
     let result = sequencer.build_block_from_mempool();
     assert!(result.is_ok());
-    assert_eq!(sequencer.chain_height(), genesis_height + 1);
+    // Building itself does not advance the head; only apply-after-publish does.
+    assert_eq!(sequencer.chain_height(), genesis_height);
 }
 
 #[tokio::test]
