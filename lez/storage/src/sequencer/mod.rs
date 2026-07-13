@@ -689,3 +689,6 @@ impl RocksDBIO {
         })
     }
 }
+
+#[cfg(test)]
+mod tests;

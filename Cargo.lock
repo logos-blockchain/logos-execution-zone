@@ -1373,6 +1373,7 @@ name = "chain_state"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "borsh",
  "common",
  "lee",
  "logos-blockchain-core",

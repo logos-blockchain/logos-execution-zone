@@ -4,7 +4,7 @@ use std::{pin::pin, time::Duration};
 
 use common::{
     HashType,
-    block::HashableBlockData,
+    block::{BedrockStatus, HashableBlockData},
     test_utils::sequencer_sign_key_for_testing,
     transaction::{LeeTransaction, clock_invocation},
 };
@@ -22,19 +22,21 @@ use lee_core::{
     account::{AccountWithMetadata, Nonce},
     program::PdaSeed,
 };
-use logos_blockchain_core::mantle::ops::channel::ChannelId;
+use logos_blockchain_core::mantle::ops::channel::{ChannelId, MsgId};
 use mempool::MemPoolHandle;
 use storage::sequencer::sequencer_cells::PendingDepositEventRecord;
 use tempfile::tempdir;
 use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
 
 use crate::{
-    TransactionOrigin,
+    TransactionOrigin, apply_follow_update,
+    block_publisher::FollowUpdate,
     block_store::SequencerStore,
-    build_genesis_state,
+    build_bridge_deposit_tx_from_event, build_genesis_state,
     config::{BedrockConfig, SequencerConfig},
     is_sequencer_only_program,
     mock::SequencerCoreWithMockClients,
+    resubmittable_txs,
 };
 
 #[derive(borsh::BorshSerialize)]
@@ -1270,4 +1272,274 @@ fn pda_mechanism_with_pinata_token_program() {
         winner_token_holding_post,
         expected_winner_token_holding_post
     );
+}
+
+#[test]
+fn resubmittable_txs_drops_clock_and_bridge_deposits() {
+    let user_tx = common::test_utils::produce_dummy_empty_transaction();
+    let deposit_tx = build_bridge_deposit_tx_from_event(&PendingDepositEventRecord {
+        deposit_op_id: HashType([13; 32]),
+        source_tx_hash: HashType([7; 32]),
+        amount: 1,
+        metadata: borsh::to_vec(&DepositMetadataForEncoding {
+            recipient_id: initial_public_user_accounts()[0].account_id,
+        })
+        .unwrap(),
+        submitted_in_block_id: None,
+    })
+    .unwrap();
+    let withdraw_tx = {
+        let message = lee::public_transaction::Message::try_new(
+            programs::bridge().id(),
+            vec![system_accounts::bridge_account_id()],
+            vec![],
+            bridge_core::Instruction::Withdraw {
+                amount: 1,
+                bedrock_account_pk: [0; 32],
+            },
+        )
+        .unwrap();
+        LeeTransaction::Public(PublicTransaction::new(
+            message,
+            lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
+        ))
+    };
+
+    let block = common::test_utils::produce_dummy_block(
+        2,
+        Some(HashType([1; 32])),
+        vec![user_tx.clone(), deposit_tx, withdraw_tx.clone()],
+    );
+
+    // The trailing clock tx and the sequencer-generated deposit are dropped;
+    // user txs (withdrawals included) are returned.
+    assert_eq!(resubmittable_txs(&block), vec![user_tx, withdraw_tx]);
+}
+
+#[test]
+fn resubmittable_txs_of_blocks_without_user_txs_is_empty() {
+    // No transactions at all (not even the mandatory clock tx).
+    let empty = HashableBlockData {
+        block_id: 1,
+        prev_block_hash: HashType([0; 32]),
+        timestamp: 0,
+        transactions: vec![],
+    }
+    .into_pending_block(&sequencer_sign_key_for_testing());
+    assert!(resubmittable_txs(&empty).is_empty());
+
+    let clock_only = common::test_utils::produce_dummy_block(1, None, vec![]);
+    assert!(resubmittable_txs(&clock_only).is_empty());
+}
+
+#[tokio::test]
+async fn follow_adopted_peer_block_applies_and_persists() {
+    let config = setup_sequencer_config();
+    let (sequencer, mempool_handle) = SequencerCoreWithMockClients::start_from_config(config).await;
+    let genesis_meta = sequencer.store.latest_block_meta().unwrap();
+
+    let acc1 = initial_public_user_accounts()[0].account_id;
+    let acc2 = initial_public_user_accounts()[1].account_id;
+    let tx = common::test_utils::create_transaction_native_token_transfer(
+        acc1,
+        0,
+        acc2,
+        10,
+        &create_signing_key_for_account1(),
+    );
+    let peer_block = common::test_utils::produce_dummy_block(2, Some(genesis_meta.hash), vec![tx]);
+
+    apply_follow_update(
+        sequencer.store.dbio(),
+        sequencer.chain(),
+        mempool_handle.clone(),
+        FollowUpdate {
+            adopted: vec![(MsgId::from([1; 32]), peer_block.clone())],
+            orphaned: vec![],
+            finalized: vec![],
+        },
+    )
+    .await;
+
+    assert_eq!(sequencer.chain_height(), 2);
+    let stored = sequencer
+        .store
+        .get_block_at_id(2)
+        .unwrap()
+        .expect("adopted peer block should be persisted");
+    assert_eq!(stored.header.hash, peer_block.header.hash);
+    assert_eq!(
+        sequencer.with_state(|s| s.get_account_by_id(acc2).balance),
+        20010
+    );
+}
+
+#[tokio::test]
+async fn follow_redelivery_of_own_block_is_deduped() {
+    let config = setup_sequencer_config();
+    let (mut sequencer, mempool_handle) =
+        SequencerCoreWithMockClients::start_from_config(config).await;
+
+    let acc1 = initial_public_user_accounts()[0].account_id;
+    let acc2 = initial_public_user_accounts()[1].account_id;
+    let tx = common::test_utils::create_transaction_native_token_transfer(
+        acc1,
+        0,
+        acc2,
+        10,
+        &create_signing_key_for_account1(),
+    );
+    mempool_handle
+        .push((TransactionOrigin::User, tx))
+        .await
+        .unwrap();
+    sequencer.produce_new_block().await.unwrap();
+    let block2 = sequencer.store.get_block_at_id(2).unwrap().unwrap();
+
+    // The channel redelivers our own block under the MsgId the mock publisher
+    // assigned at publish time.
+    apply_follow_update(
+        sequencer.store.dbio(),
+        sequencer.chain(),
+        mempool_handle.clone(),
+        FollowUpdate {
+            adopted: vec![(MsgId::from(block2.header.hash.0), block2.clone())],
+            orphaned: vec![],
+            finalized: vec![],
+        },
+    )
+    .await;
+
+    assert_eq!(sequencer.chain_height(), 2);
+    assert_eq!(
+        sequencer.with_state(|s| s.get_account_by_id(acc2).balance),
+        20010,
+        "the transfer must not be double-applied"
+    );
+}
+
+#[tokio::test]
+async fn follow_orphan_reverts_head_and_requeues_user_txs() {
+    let config = setup_sequencer_config();
+    let (mut sequencer, mempool_handle) =
+        SequencerCoreWithMockClients::start_from_config(config).await;
+
+    let acc1 = initial_public_user_accounts()[0].account_id;
+    let acc2 = initial_public_user_accounts()[1].account_id;
+    let tx = common::test_utils::create_transaction_native_token_transfer(
+        acc1,
+        0,
+        acc2,
+        10,
+        &create_signing_key_for_account1(),
+    );
+    mempool_handle
+        .push((TransactionOrigin::User, tx.clone()))
+        .await
+        .unwrap();
+    sequencer.produce_new_block().await.unwrap();
+    let block2 = sequencer.store.get_block_at_id(2).unwrap().unwrap();
+
+    apply_follow_update(
+        sequencer.store.dbio(),
+        sequencer.chain(),
+        mempool_handle.clone(),
+        FollowUpdate {
+            adopted: vec![],
+            orphaned: vec![(MsgId::from(block2.header.hash.0), block2.clone())],
+            finalized: vec![],
+        },
+    )
+    .await;
+
+    assert_eq!(sequencer.chain_height(), 1);
+    assert_eq!(
+        sequencer.with_state(|s| s.get_account_by_id(acc1).balance),
+        10000,
+        "the orphaned transfer must be reverted from the head"
+    );
+    let (origin, requeued) = sequencer
+        .mempool
+        .pop()
+        .expect("orphaned user tx should be requeued");
+    assert!(matches!(origin, TransactionOrigin::User));
+    assert_eq!(requeued, tx);
+    assert!(
+        sequencer.mempool.pop().is_none(),
+        "the clock tx must not be requeued"
+    );
+}
+
+#[tokio::test]
+async fn follow_finalized_own_block_moves_final_tier_and_marks_store() {
+    let config = setup_sequencer_config();
+    let (mut sequencer, mempool_handle) =
+        SequencerCoreWithMockClients::start_from_config(config).await;
+
+    let tx = common::test_utils::produce_dummy_empty_transaction();
+    mempool_handle
+        .push((TransactionOrigin::User, tx))
+        .await
+        .unwrap();
+    sequencer.produce_new_block().await.unwrap();
+    let block2 = sequencer.store.get_block_at_id(2).unwrap().unwrap();
+
+    apply_follow_update(
+        sequencer.store.dbio(),
+        sequencer.chain(),
+        mempool_handle.clone(),
+        FollowUpdate {
+            adopted: vec![],
+            orphaned: vec![],
+            finalized: vec![(MsgId::from(block2.header.hash.0), block2.clone())],
+        },
+    )
+    .await;
+
+    let final_tip = sequencer
+        .chain()
+        .lock()
+        .expect("chain mutex poisoned")
+        .final_tip()
+        .expect("final tip set");
+    assert_eq!(final_tip.block_id, 2);
+    assert_eq!(sequencer.chain_height(), 2, "head is unchanged");
+    let stored = sequencer.store.get_block_at_id(2).unwrap().unwrap();
+    assert!(matches!(stored.bedrock_status, BedrockStatus::Finalized));
+}
+
+#[tokio::test]
+async fn follow_finalized_backfill_block_is_applied_and_marked_finalized() {
+    let config = setup_sequencer_config();
+    let (sequencer, mempool_handle) = SequencerCoreWithMockClients::start_from_config(config).await;
+    let genesis_meta = sequencer.store.latest_block_meta().unwrap();
+
+    // A peer block we never saw as adopted arrives straight from the
+    // finalized (backfill) stream.
+    let peer_block = common::test_utils::produce_dummy_block(2, Some(genesis_meta.hash), vec![]);
+
+    apply_follow_update(
+        sequencer.store.dbio(),
+        sequencer.chain(),
+        mempool_handle.clone(),
+        FollowUpdate {
+            adopted: vec![],
+            orphaned: vec![],
+            finalized: vec![(MsgId::from([2; 32]), peer_block.clone())],
+        },
+    )
+    .await;
+
+    assert_eq!(
+        sequencer.chain_height(),
+        2,
+        "head mirrors final on backfill"
+    );
+    let stored = sequencer
+        .store
+        .get_block_at_id(2)
+        .unwrap()
+        .expect("backfilled block should be persisted");
+    assert_eq!(stored.header.hash, peer_block.header.hash);
+    assert!(matches!(stored.bedrock_status, BedrockStatus::Finalized));
 }

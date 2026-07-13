@@ -19,4 +19,7 @@ thiserror.workspace = true
 
 [dev-dependencies]
 testnet_initial_state.workspace = true
+# we use borsh to compare byte-to-byte matching within tests
+# (it sorts hashmap's before serialization, so we can compare two states for equality)
+borsh.workspace = true
 serde_json.workspace = true

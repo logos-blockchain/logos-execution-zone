@@ -18,14 +18,16 @@ pub struct HeadEntry {
 }
 
 /// The head tier (reorg-able, from `adopted`/`orphaned`) over the final tier
-/// (irreversible, from `finalized`). `head_state == final_state` replayed
-/// through `head_blocks`.
+/// (irreversible, from `finalized`).
+///
+/// `head_state` is given by `final_state` replayed through `head_blocks`.
 pub struct ChainState {
     final_state: V03State,
     final_tip: Option<Tip>,
+    final_stall: Option<StallReason>,
+
     head_state: V03State,
     head_blocks: Vec<HeadEntry>,
-    final_stall: Option<StallReason>,
 }
 
 impl ChainState {
@@ -248,7 +250,10 @@ const fn stall_for(block: &Block, l1_slot: Slot, error: BlockIngestError) -> Sta
 
 #[cfg(test)]
 mod tests {
-    use common::test_utils::{create_transaction_native_token_transfer, produce_dummy_block};
+    use common::{
+        HashType,
+        test_utils::{create_transaction_native_token_transfer, produce_dummy_block},
+    };
     use testnet_initial_state::{initial_pub_accounts_private_keys, initial_state};
 
     use super::*;
@@ -259,6 +264,21 @@ mod tests {
 
     fn slot(n: u64) -> Slot {
         Slot::from(n)
+    }
+
+    /// `head_state` equals `final_state` replayed through `head_blocks`.
+    fn assert_head_matches_replay(chain: &ChainState) {
+        let mut state = chain.final_state.clone();
+        let mut tip = chain.final_tip.clone();
+        for entry in &chain.head_blocks {
+            apply_block(tip.as_ref(), &entry.block, &mut state).expect("head blocks must replay");
+            tip = Some(tip_of(&entry.block));
+        }
+        assert_eq!(
+            borsh::to_vec(&state).expect("state serializes"),
+            borsh::to_vec(chain.head_state()).expect("state serializes"),
+            "head_state must equal final_state replayed through head_blocks"
+        );
     }
 
     #[test]
@@ -401,6 +421,238 @@ mod tests {
         ));
         let stall = chain.final_stall().expect("final stall recorded");
         assert_eq!(stall.block_id, Some(3));
+    }
+
+    #[test]
+    fn orphaning_a_suffix_rederives_head_state() {
+        let accounts = initial_pub_accounts_private_keys();
+        let from = accounts[0].account_id;
+        let to = accounts[1].account_id;
+        let sign_key = accounts[0].pub_sign_key.clone();
+
+        let mut chain = ChainState::new(initial_state());
+        let genesis = produce_dummy_block(1, None, vec![]);
+        chain.apply_adopted(msg(1), &genesis);
+
+        let tx2 = create_transaction_native_token_transfer(from, 0, to, 10, &sign_key);
+        let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![tx2]);
+        chain.apply_adopted(msg(2), &block2);
+        let tx3 = create_transaction_native_token_transfer(from, 1, to, 10, &sign_key);
+        let block3 = produce_dummy_block(3, Some(block2.header.hash), vec![tx3]);
+        chain.apply_adopted(msg(3), &block3);
+        let tx4 = create_transaction_native_token_transfer(from, 2, to, 10, &sign_key);
+        let block4 = produce_dummy_block(4, Some(block3.header.hash), vec![tx4]);
+        chain.apply_adopted(msg(4), &block4);
+
+        // Orphaning block 3 drops the whole suffix (3 and 4).
+        chain.revert_orphan(msg(3));
+
+        assert_eq!(chain.head_tip().expect("head tip").block_id, 2);
+        assert_eq!(chain.head_state().get_account_by_id(from).balance, 9990);
+        assert_eq!(chain.head_state().get_account_by_id(to).balance, 20010);
+        assert_head_matches_replay(&chain);
+    }
+
+    #[test]
+    fn channel_update_replaces_multi_block_suffix() {
+        let accounts = initial_pub_accounts_private_keys();
+        let from = accounts[0].account_id;
+        let to = accounts[1].account_id;
+        let sign_key = accounts[0].pub_sign_key.clone();
+
+        let mut chain = ChainState::new(initial_state());
+        let genesis = produce_dummy_block(1, None, vec![]);
+        chain.apply_adopted(msg(1), &genesis);
+
+        let tx2 = create_transaction_native_token_transfer(from, 0, to, 10, &sign_key);
+        let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![tx2]);
+        chain.apply_adopted(msg(2), &block2);
+        let tx3 = create_transaction_native_token_transfer(from, 1, to, 10, &sign_key);
+        let block3 = produce_dummy_block(3, Some(block2.header.hash), vec![tx3]);
+        chain.apply_adopted(msg(3), &block3);
+        let tx4 = create_transaction_native_token_transfer(from, 2, to, 10, &sign_key);
+        let block4 = produce_dummy_block(4, Some(block3.header.hash), vec![tx4]);
+        chain.apply_adopted(msg(4), &block4);
+
+        // A competing branch replaces blocks 3 and 4; orphans arrive unordered.
+        let tx3_prime = create_transaction_native_token_transfer(from, 1, to, 20, &sign_key);
+        let block3_prime = produce_dummy_block(3, Some(block2.header.hash), vec![tx3_prime]);
+        let tx4_prime = create_transaction_native_token_transfer(from, 2, to, 30, &sign_key);
+        let block4_prime = produce_dummy_block(4, Some(block3_prime.header.hash), vec![tx4_prime]);
+
+        let outcomes = chain.apply_channel_update(
+            &[msg(4), msg(3)],
+            &[(msg(13), block3_prime), (msg(14), block4_prime)],
+        );
+
+        assert!(matches!(
+            outcomes.as_slice(),
+            [AcceptOutcome::Applied, AcceptOutcome::Applied]
+        ));
+        assert_eq!(chain.head_tip().expect("head tip").block_id, 4);
+        assert_eq!(chain.head_state().get_account_by_id(from).balance, 9940);
+        assert_eq!(chain.head_state().get_account_by_id(to).balance, 20060);
+        assert_head_matches_replay(&chain);
+    }
+
+    #[test]
+    fn channel_update_ignores_unknown_orphan() {
+        let mut chain = ChainState::new(initial_state());
+        let genesis = produce_dummy_block(1, None, vec![]);
+        let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+        chain.apply_adopted(msg(1), &genesis);
+        chain.apply_adopted(msg(2), &block2);
+
+        let block3 = produce_dummy_block(3, Some(block2.header.hash), vec![]);
+        let outcomes = chain.apply_channel_update(&[msg(99)], &[(msg(3), block3)]);
+
+        assert!(matches!(outcomes.as_slice(), [AcceptOutcome::Applied]));
+        assert_eq!(chain.head_tip().expect("head tip").block_id, 3);
+        assert_head_matches_replay(&chain);
+    }
+
+    #[test]
+    fn finalized_reinscription_matches_by_block_hash() {
+        let mut chain = ChainState::new(initial_state());
+        let genesis = produce_dummy_block(1, None, vec![]);
+        let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+        let block3 = produce_dummy_block(3, Some(block2.header.hash), vec![]);
+        chain.apply_adopted(msg(1), &genesis);
+        chain.apply_adopted(msg(2), &block2);
+        chain.apply_adopted(msg(3), &block3);
+
+        // Block 2 finalizes re-inscribed under a fresh MsgId: matched by hash,
+        // finalized through, and the head above it survives.
+        assert!(matches!(
+            chain.apply_finalized(msg(42), &block2, slot(5)),
+            AcceptOutcome::Applied
+        ));
+        assert_eq!(chain.final_tip().expect("final tip").block_id, 2);
+        assert_eq!(chain.head_tip().expect("head tip").block_id, 3);
+        assert!(chain.final_stall().is_none());
+        assert_head_matches_replay(&chain);
+    }
+
+    #[test]
+    fn finalize_through_preserves_head_state_and_advances_final_state() {
+        let accounts = initial_pub_accounts_private_keys();
+        let from = accounts[0].account_id;
+        let to = accounts[1].account_id;
+        let sign_key = accounts[0].pub_sign_key.clone();
+
+        let mut chain = ChainState::new(initial_state());
+        let genesis = produce_dummy_block(1, None, vec![]);
+        chain.apply_adopted(msg(1), &genesis);
+        let tx2 = create_transaction_native_token_transfer(from, 0, to, 10, &sign_key);
+        let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![tx2]);
+        chain.apply_adopted(msg(2), &block2);
+        let tx3 = create_transaction_native_token_transfer(from, 1, to, 10, &sign_key);
+        let block3 = produce_dummy_block(3, Some(block2.header.hash), vec![tx3]);
+        chain.apply_adopted(msg(3), &block3);
+
+        chain.apply_finalized(msg(2), &block2, slot(10));
+
+        // Head still reflects both transfers
+        assert_eq!(chain.head_state().get_account_by_id(to).balance, 20020);
+        // ...while final reflects only the finalized prefix.
+        assert_eq!(chain.final_state().get_account_by_id(to).balance, 20010);
+        assert_head_matches_replay(&chain);
+    }
+
+    #[test]
+    fn head_self_heals_with_valid_competitor_after_park() {
+        let mut chain = ChainState::new(initial_state());
+        let genesis = produce_dummy_block(1, None, vec![]);
+        chain.apply_adopted(msg(1), &genesis);
+
+        // Correct id, wrong parent: parked, head frozen at 1, no stall.
+        let bad = produce_dummy_block(2, Some(HashType([9; 32])), vec![]);
+        assert!(matches!(
+            chain.apply_adopted(msg(2), &bad),
+            AcceptOutcome::Parked(BlockIngestError::BrokenChainLink { .. })
+        ));
+        assert_eq!(chain.head_tip().expect("head tip").block_id, 1);
+        assert!(chain.final_stall().is_none());
+
+        // A valid competitor at the same height applies without any reorg event.
+        let good = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+        assert!(matches!(
+            chain.apply_adopted(msg(12), &good),
+            AcceptOutcome::Applied
+        ));
+        assert_eq!(chain.head_tip().expect("head tip").block_id, 2);
+        assert_head_matches_replay(&chain);
+    }
+
+    #[test]
+    fn repeated_invalid_finalized_bumps_orphans_since() {
+        let mut chain = ChainState::new(initial_state());
+        let genesis = produce_dummy_block(1, None, vec![]);
+        chain.apply_finalized(msg(1), &genesis, slot(10));
+
+        let bad3 = produce_dummy_block(3, Some(genesis.header.hash), vec![]);
+        chain.apply_finalized(msg(3), &bad3, slot(20));
+        let bad5 = produce_dummy_block(5, Some(bad3.header.hash), vec![]);
+        assert!(matches!(
+            chain.apply_finalized(msg(5), &bad5, slot(30)),
+            AcceptOutcome::Parked(_)
+        ));
+
+        let stall = chain.final_stall().expect("final stall recorded");
+        assert_eq!(stall.block_id, Some(3), "first stall reason is preserved");
+        assert_eq!(stall.orphans_since, 1);
+    }
+
+    #[test]
+    fn valid_finalized_successor_clears_final_stall() {
+        let mut chain = ChainState::new(initial_state());
+        let genesis = produce_dummy_block(1, None, vec![]);
+        chain.apply_finalized(msg(1), &genesis, slot(10));
+
+        let bad = produce_dummy_block(3, Some(genesis.header.hash), vec![]);
+        chain.apply_finalized(msg(3), &bad, slot(20));
+        assert!(chain.final_stall().is_some());
+
+        // The valid successor of the frozen final tip finalizes: stall clears.
+        let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+        assert!(matches!(
+            chain.apply_finalized(msg(2), &block2, slot(30)),
+            AcceptOutcome::Applied
+        ));
+        assert!(chain.final_stall().is_none());
+        assert_eq!(chain.final_tip().expect("final tip").block_id, 2);
+        assert_head_matches_replay(&chain);
+    }
+
+    #[test]
+    fn finalized_unknown_block_rebases_head() {
+        let accounts = initial_pub_accounts_private_keys();
+        let from = accounts[0].account_id;
+        let to = accounts[1].account_id;
+        let sign_key = accounts[0].pub_sign_key.clone();
+
+        let mut chain = ChainState::new(initial_state());
+        let genesis = produce_dummy_block(1, None, vec![]);
+        chain.apply_adopted(msg(1), &genesis);
+        chain.apply_finalized(msg(1), &genesis, slot(10));
+
+        // Head advances on a competing branch…
+        let block2a = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+        chain.apply_adopted(msg(2), &block2a);
+
+        // …but a different block 2 finalizes. The finalized chain is
+        // authoritative, so head rebases onto it.
+        let tx = create_transaction_native_token_transfer(from, 0, to, 10, &sign_key);
+        let block2b = produce_dummy_block(2, Some(genesis.header.hash), vec![tx]);
+        assert!(matches!(
+            chain.apply_finalized(msg(22), &block2b, slot(20)),
+            AcceptOutcome::Applied
+        ));
+
+        assert_eq!(chain.final_tip().expect("final tip").block_id, 2);
+        assert_eq!(chain.head_tip().expect("head tip").block_id, 2);
+        assert_eq!(chain.head_state().get_account_by_id(to).balance, 20010);
+        assert_head_matches_replay(&chain);
     }
 
     #[test]

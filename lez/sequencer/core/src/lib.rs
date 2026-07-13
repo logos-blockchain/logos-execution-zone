@@ -352,83 +352,19 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         })
     }
 
-    /// Feed one channel delta into the follow state and mirror it to the store:
-    /// revert orphaned, then apply and persist adopted and finalized blocks.
-    /// Production builds on this same head.
-    ///
-    /// TODO: unlike the indexer's ingest loop, this path does not retry
-    /// `is_retryable` (transient) apply failures — a failed block just parks and
-    /// relies on a valid successor or a restart. `ChainState` never emits
-    /// `AcceptOutcome::RetryableFailure` yet; adding retry parity here is a
-    /// follow-up.
+    /// Publisher sink adapter over [`apply_follow_update`].
     fn on_follow(
         dbio: Arc<RocksDBIO>,
         chain: Arc<Mutex<ChainState>>,
         mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
     ) -> block_publisher::OnFollowSink {
         Box::new(move |update: block_publisher::FollowUpdate| {
-            let chain = Arc::clone(&chain);
-            let dbio = Arc::clone(&dbio);
-            let mempool_handle = mempool_handle.clone();
-            Box::pin(async move {
-                // Apply under the lock and collect what to persist; take a single
-                // head snapshot. Release the lock before touching disk so the
-                // producer is never blocked on the follow path's I/O.
-                let (adopted, finalized, resubmit_txs, head_snapshot) = {
-                    let mut chain = chain.lock().expect("chain state mutex poisoned");
-                    let mut resubmit_txs = Vec::new();
-                    for (this_msg, block) in &update.orphaned {
-                        chain.revert_orphan(*this_msg);
-                        resubmit_txs.extend(resubmittable_txs(block));
-                    }
-                    let mut adopted = Vec::new();
-                    for (this_msg, block) in &update.adopted {
-                        if matches!(
-                            chain.apply_adopted(*this_msg, block),
-                            AcceptOutcome::Applied
-                        ) {
-                            adopted.push(block);
-                        }
-                    }
-                    let mut finalized = Vec::new();
-                    for (this_msg, block) in &update.finalized {
-                        // TODO: thread the finalized inscription's L1 slot once the
-                        // sdk surfaces it; only used for the invalid-finalized stall.
-                        if matches!(
-                            chain.apply_finalized(*this_msg, block, Slot::from(0)),
-                            AcceptOutcome::Applied
-                        ) {
-                            finalized.push(block);
-                        }
-                    }
-                    (adopted, finalized, resubmit_txs, chain.head_state().clone())
-                };
-
-                for block in adopted {
-                    if let Err(err) = dbio.store_followed_block(block, &head_snapshot, false) {
-                        error!(
-                            "Failed to persist adopted block {}: {err:#}",
-                            block.header.block_id
-                        );
-                    }
-                }
-                for block in finalized {
-                    if let Err(err) = dbio.store_followed_block(block, &head_snapshot, true) {
-                        error!(
-                            "Failed to persist finalized block {}: {err:#}",
-                            block.header.block_id
-                        );
-                    }
-                }
-
-                // Rebuild orphaned work: return its user txs to the mempool so the
-                // next on-turn production re-includes them on the new head.
-                for tx in resubmit_txs {
-                    if let Err(err) = mempool_handle.push((TransactionOrigin::User, tx)).await {
-                        error!("Failed to resubmit orphaned transaction: {err:#}");
-                    }
-                }
-            })
+            Box::pin(apply_follow_update(
+                Arc::clone(&dbio),
+                Arc::clone(&chain),
+                mempool_handle.clone(),
+                update,
+            ))
         })
     }
 
@@ -700,6 +636,81 @@ struct BlockWithMeta {
     block: Block,
     deposit_event_ids: Vec<HashType>,
     withdrawals: Vec<WithdrawArg>,
+}
+
+/// Feed one channel delta into the follow state and mirror it to the store:
+/// revert orphaned, then apply and persist adopted and finalized blocks.
+/// Production builds on this same head. Wired to the publisher via
+/// [`SequencerCore::on_follow`]; a free function so tests can drive it directly.
+///
+/// TODO: unlike the indexer's ingest loop, this path does not retry
+/// `is_retryable` (transient) apply failures — a failed block just parks and
+/// relies on a valid successor or a restart. `ChainState` never emits
+/// `AcceptOutcome::RetryableFailure` yet; adding retry parity here is a
+/// follow-up.
+async fn apply_follow_update(
+    dbio: Arc<RocksDBIO>,
+    chain: Arc<Mutex<ChainState>>,
+    mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
+    update: block_publisher::FollowUpdate,
+) {
+    // Apply under the lock and collect what to persist; take a single
+    // head snapshot. Release the lock before touching disk so the
+    // producer is never blocked on the follow path's I/O.
+    let (adopted, finalized, resubmit_txs, head_snapshot) = {
+        let mut chain = chain.lock().expect("chain state mutex poisoned");
+        let mut resubmit_txs = Vec::new();
+        for (this_msg, block) in &update.orphaned {
+            chain.revert_orphan(*this_msg);
+            resubmit_txs.extend(resubmittable_txs(block));
+        }
+        let mut adopted = Vec::new();
+        for (this_msg, block) in &update.adopted {
+            if matches!(
+                chain.apply_adopted(*this_msg, block),
+                AcceptOutcome::Applied
+            ) {
+                adopted.push(block);
+            }
+        }
+        let mut finalized = Vec::new();
+        for (this_msg, block) in &update.finalized {
+            // TODO: thread the finalized inscription's L1 slot once the
+            // sdk surfaces it; only used for the invalid-finalized stall.
+            if matches!(
+                chain.apply_finalized(*this_msg, block, Slot::from(0)),
+                AcceptOutcome::Applied
+            ) {
+                finalized.push(block);
+            }
+        }
+        (adopted, finalized, resubmit_txs, chain.head_state().clone())
+    };
+
+    for block in adopted {
+        if let Err(err) = dbio.store_followed_block(block, &head_snapshot, false) {
+            error!(
+                "Failed to persist adopted block {}: {err:#}",
+                block.header.block_id
+            );
+        }
+    }
+    for block in finalized {
+        if let Err(err) = dbio.store_followed_block(block, &head_snapshot, true) {
+            error!(
+                "Failed to persist finalized block {}: {err:#}",
+                block.header.block_id
+            );
+        }
+    }
+
+    // Rebuild orphaned work: return its user txs to the mempool so the
+    // next on-turn production re-includes them on the new head.
+    for tx in resubmit_txs {
+        if let Err(err) = mempool_handle.push((TransactionOrigin::User, tx)).await {
+            error!("Failed to resubmit orphaned transaction: {err:#}");
+        }
+    }
 }
 
 /// Checks the database for any pending deposit events that have not yet been marked as submitted in
