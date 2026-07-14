@@ -176,9 +176,10 @@ pub async fn setup_sequencer_from_prebuilt(
 }
 
 /// Like [`setup_sequencer`], but with a pre-generated bedrock (Ed25519, 32-byte
-/// seed) signing key written into the home so tests know the sequencer's
-/// public key before it boots — required to accredit a committee member that
-/// has not started yet.
+/// seed) signing key.
+///
+/// This allows the tests to know the sequencer's public key before it boots which
+/// is required to accredit a committee member that has not started yet.
 pub async fn setup_sequencer_with_bedrock_key(
     partial: config::SequencerPartialConfig,
     bedrock_addr: SocketAddr,
