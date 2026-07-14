@@ -8,7 +8,9 @@ use logos_blockchain_core::mantle::{
     channel::{SlotTimeframe, SlotTimeout},
     ops::channel::{ChannelId, config::Keys, inscribe::Inscription},
 };
-pub use logos_blockchain_key_management_system_service::keys::{Ed25519Key, ZkKey};
+pub use logos_blockchain_key_management_system_service::keys::{
+    ED25519_SECRET_KEY_SIZE, Ed25519Key, ZkKey,
+};
 pub use logos_blockchain_zone_sdk::sequencer::SequencerCheckpoint;
 use logos_blockchain_zone_sdk::{
     CommonHttpClient,
@@ -351,8 +353,8 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         configuration_threshold: u16,
         withdraw_threshold: u16,
     ) -> Result<()> {
-        let keys = Keys::try_from(keys)
-            .map_err(|_err| anyhow!("Channel key list must be non-empty and within bounds"))?;
+        let keys =
+            Keys::try_from(keys).map_err(|err| anyhow!("Invalid channel key list: {err}"))?;
         let (resp_tx, resp_rx) = oneshot::channel();
         self.command_tx
             .send(Command::ConfigureChannel {

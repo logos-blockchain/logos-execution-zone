@@ -4,7 +4,10 @@ use anyhow::{Context as _, Result, bail};
 use indexer_service::{ChannelId, IndexerHandle};
 use lee::{AccountId, PrivateKey, PublicKey};
 use log::{debug, warn};
-use sequencer_core::block_store::{DbDump, SequencerStore};
+use sequencer_core::{
+    block_publisher::ED25519_SECRET_KEY_SIZE,
+    block_store::{DbDump, SequencerStore},
+};
 use sequencer_service::{GenesisAction, SequencerHandle};
 use tempfile::TempDir;
 use testcontainers::compose::DockerCompose;
@@ -186,7 +189,7 @@ pub async fn setup_sequencer_with_bedrock_key(
     genesis_transactions: Vec<GenesisAction>,
     channel_id: ChannelId,
     cross_zone: Option<sequencer_core::config::CrossZoneConfig>,
-    bedrock_signing_key: [u8; 32],
+    bedrock_signing_key: [u8; ED25519_SECRET_KEY_SIZE],
 ) -> Result<(SequencerHandle, TempDir)> {
     setup_sequencer_inner(
         partial,
@@ -205,7 +208,7 @@ async fn setup_sequencer_inner(
     init: SequencerInit<'_>,
     channel_id: ChannelId,
     cross_zone: Option<sequencer_core::config::CrossZoneConfig>,
-    bedrock_signing_key: Option<[u8; 32]>,
+    bedrock_signing_key: Option<[u8; ED25519_SECRET_KEY_SIZE]>,
 ) -> Result<(SequencerHandle, TempDir)> {
     let temp_sequencer_dir =
         tempfile::tempdir().context("Failed to create temp dir for sequencer home")?;

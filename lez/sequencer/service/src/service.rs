@@ -248,13 +248,13 @@ fn parse_channel_key(hex_key: &str) -> Result<Ed25519PublicKey, ErrorObjectOwned
 
 #[cfg(test)]
 mod tests {
-    use sequencer_core::block_publisher::Ed25519Key;
+    use sequencer_core::block_publisher::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
 
     use super::*;
 
     #[test]
     fn parse_channel_key_roundtrips_and_rejects_garbage() {
-        let key = Ed25519Key::from_bytes(&[7; 32]).public_key();
+        let key = Ed25519Key::from_bytes(&[7; ED25519_SECRET_KEY_SIZE]).public_key();
         let parsed = parse_channel_key(&hex::encode(key.to_bytes())).unwrap();
         assert_eq!(parsed.to_bytes(), key.to_bytes());
 

@@ -16,7 +16,7 @@ use integration_tests::{
     indexer_client::IndexerClient,
     setup::{setup_bedrock_node, setup_indexer, setup_sequencer_with_bedrock_key},
 };
-use logos_blockchain_key_management_system_service::keys::Ed25519Key;
+use logos_blockchain_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
 use sequencer_service_protocol::ConfigureChannelRequest;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
 use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
@@ -39,8 +39,8 @@ async fn multi_sequencer_committee_converges() -> Result<()> {
         .context("Failed to set up Bedrock node")?;
 
     // Fixed seeds so A can accredit B's public key before B exists.
-    let key_a = [0xA1_u8; 32];
-    let key_b = [0xB2_u8; 32];
+    let key_a = [0xA1_u8; ED25519_SECRET_KEY_SIZE];
+    let key_b = [0xB2_u8; ED25519_SECRET_KEY_SIZE];
     let pub_a = Ed25519Key::from_bytes(&key_a).public_key();
     let pub_b = Ed25519Key::from_bytes(&key_b).public_key();
 
