@@ -204,6 +204,7 @@ impl<BC: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::Rpc
         &self,
         request: ConfigureChannelRequest,
     ) -> Result<(), ErrorObjectOwned> {
+        request.validate().map_err(invalid_params)?;
         let keys = request
             .keys
             .iter()
@@ -234,16 +235,17 @@ fn internal_error(err: &DbError) -> ErrorObjectOwned {
     ErrorObjectOwned::owned(ErrorCode::InternalError.code(), err.to_string(), None::<()>)
 }
 
+fn invalid_params(detail: String) -> ErrorObjectOwned {
+    ErrorObjectOwned::owned(ErrorCode::InvalidParams.code(), detail, None::<()>)
+}
+
 /// Parses one hex-encoded 32-byte Ed25519 public key from an RPC request.
 fn parse_channel_key(hex_key: &str) -> Result<Ed25519PublicKey, ErrorObjectOwned> {
-    let invalid = |detail: String| {
-        ErrorObjectOwned::owned(ErrorCode::InvalidParams.code(), detail, None::<()>)
-    };
     let mut bytes = [0_u8; 32];
     hex::decode_to_slice(hex_key, &mut bytes)
-        .map_err(|err| invalid(format!("Invalid hex-encoded key: {err}")))?;
+        .map_err(|err| invalid_params(format!("Invalid hex-encoded key: {err}")))?;
     Ed25519PublicKey::from_bytes(&bytes)
-        .map_err(|err| invalid(format!("Invalid Ed25519 public key: {err}")))
+        .map_err(|err| invalid_params(format!("Invalid Ed25519 public key: {err}")))
 }
 
 #[cfg(test)]
