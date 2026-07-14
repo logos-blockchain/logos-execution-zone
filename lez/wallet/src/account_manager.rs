@@ -129,6 +129,31 @@ impl fmt::Debug for AccountIdentity {
 }
 
 impl AccountIdentity {
+    /// Returns the account ID represented by this identity.
+    #[must_use]
+    pub fn account_id(&self) -> AccountId {
+        match self {
+            Self::Public(account_id)
+            | Self::PublicNoSign(account_id)
+            | Self::PrivateOwned(account_id)
+            | Self::PrivatePdaOwned(account_id)
+            | Self::PublicKeycard { account_id, .. }
+            | Self::PrivatePdaForeign { account_id, .. }
+            | Self::PrivatePdaShared { account_id, .. } => *account_id,
+            Self::PrivateForeign {
+                npk,
+                vpk,
+                identifier,
+            }
+            | Self::PrivateShared {
+                npk,
+                vpk,
+                identifier,
+                ..
+            } => AccountId::from((npk, vpk, *identifier)),
+        }
+    }
+
     #[must_use]
     /// Note: `PublicNoSign` still counts as public, the variant just suppresses the signing-key
     /// lookup.
@@ -664,5 +689,79 @@ mod tests {
         };
         assert!(acc.is_private());
         assert!(!acc.is_public());
+    }
+
+    #[test]
+    fn account_id_projects_every_identity_variant() {
+        let explicit_id = AccountId::new([7; 32]);
+        let npk = NullifierPublicKey([1; 32]);
+        let vpk = ViewingPublicKey::from_seed(&[2_u8; 32], &[3_u8; 32]);
+        let identifier = 42;
+        let derived_id = AccountId::from((&npk, &vpk, identifier));
+
+        assert_eq!(
+            AccountIdentity::Public(explicit_id).account_id(),
+            explicit_id
+        );
+        assert_eq!(
+            AccountIdentity::PublicNoSign(explicit_id).account_id(),
+            explicit_id
+        );
+        assert_eq!(
+            AccountIdentity::PublicKeycard {
+                account_id: explicit_id,
+                key_path: "m/0".to_owned(),
+            }
+            .account_id(),
+            explicit_id
+        );
+        assert_eq!(
+            AccountIdentity::PrivateOwned(explicit_id).account_id(),
+            explicit_id
+        );
+        assert_eq!(
+            AccountIdentity::PrivateForeign {
+                npk,
+                vpk: vpk.clone(),
+                identifier,
+            }
+            .account_id(),
+            derived_id
+        );
+        assert_eq!(
+            AccountIdentity::PrivatePdaOwned(explicit_id).account_id(),
+            explicit_id
+        );
+        assert_eq!(
+            AccountIdentity::PrivatePdaForeign {
+                account_id: explicit_id,
+                npk,
+                vpk: vpk.clone(),
+                identifier,
+            }
+            .account_id(),
+            explicit_id
+        );
+        assert_eq!(
+            AccountIdentity::PrivateShared {
+                nsk: [4; 32],
+                npk,
+                vpk: vpk.clone(),
+                identifier,
+            }
+            .account_id(),
+            derived_id
+        );
+        assert_eq!(
+            AccountIdentity::PrivatePdaShared {
+                account_id: explicit_id,
+                nsk: [4; 32],
+                npk,
+                vpk,
+                identifier,
+            }
+            .account_id(),
+            explicit_id
+        );
     }
 }

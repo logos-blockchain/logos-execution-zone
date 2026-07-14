@@ -4,5 +4,6 @@
     reason = "We don't care about these in tests"
 )]
 
+mod build;
 mod private;
 mod public;
