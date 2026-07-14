@@ -148,7 +148,7 @@ impl InputAccountIdentity {
 }
 
 #[derive(Serialize, Deserialize)]
-#[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
+#[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq, Default))]
 pub struct PrivacyPreservingCircuitOutput {
     pub public_pre_states: Vec<AccountWithMetadata>,
     pub public_post_states: Vec<Account>,

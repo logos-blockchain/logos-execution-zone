@@ -349,3 +349,79 @@ fn compute_update_nullifier_and_set_digest(
     let nullifier = Nullifier::for_account_update(&commitment_pre, nsk);
     (nullifier, set_digest)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use lee_core::{DUMMY_COMMITMENT_HASH, EphemeralPublicKey};
+
+    use super::*;
+
+    fn note(tag: u8) -> (Nullifier, Commitment, EncryptedAccountData) {
+        let nullifier = Nullifier::for_dummy(&[tag; 32]);
+        let commitment = Commitment::for_dummy(&nullifier, &[tag; 32]);
+        let ciphertext = EncryptionScheme::encrypt(
+            &Account::default(),
+            &PrivateAccountKind::Regular(0),
+            &SharedSecretKey([0; 32]),
+            &nullifier,
+        );
+        let encrypted = EncryptedAccountData {
+            ciphertext,
+            epk: EphemeralPublicKey(vec![tag]),
+            view_tag: 0,
+        };
+        (nullifier, commitment, encrypted)
+    }
+
+    #[test]
+    fn obfuscate_byte_sorts_commitments_and_nullifiers() {
+        let mut output = PrivacyPreservingCircuitOutput::default();
+        for tag in 0..3 {
+            let (nullifier, commitment, encrypted) = note(tag);
+            output.new_nullifiers.push((nullifier, DUMMY_COMMITMENT_HASH));
+            output.new_commitments.push(commitment);
+            output.encrypted_private_post_states.push(encrypted);
+        }
+
+        obfuscate_output_ordering(&mut output);
+
+        assert!(
+            output
+                .new_commitments
+                .is_sorted_by_key(Commitment::to_byte_array)
+        );
+        assert!(
+            output
+                .new_nullifiers
+                .is_sorted_by_key(|(nullifier, _)| nullifier.to_byte_array())
+        );
+    }
+
+    #[test]
+    fn obfuscate_keeps_each_nullifier_with_its_ciphertext() {
+        let mut output = PrivacyPreservingCircuitOutput::default();
+        for tag in 0..3 {
+            let (nullifier, _, encrypted) = note(tag);
+            output.new_nullifiers.push((nullifier, DUMMY_COMMITMENT_HASH));
+            output.encrypted_private_post_states.push(encrypted);
+        }
+        let paired: HashMap<[u8; 32], EphemeralPublicKey> = output
+            .new_nullifiers
+            .iter()
+            .zip(&output.encrypted_private_post_states)
+            .map(|((nullifier, _), note)| (nullifier.to_byte_array(), note.epk.clone()))
+            .collect();
+
+        obfuscate_output_ordering(&mut output);
+
+        for ((nullifier, _), note) in output
+            .new_nullifiers
+            .iter()
+            .zip(&output.encrypted_private_post_states)
+        {
+            assert_eq!(paired[&nullifier.to_byte_array()], note.epk);
+        }
+    }
+}
