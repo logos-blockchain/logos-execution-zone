@@ -108,14 +108,17 @@ pub trait BlockPublisherTrait: Clone {
     /// `ChannelConfig` op. The sequencer's bedrock key must be the channel
     /// admin (`keys[0]`); the L1 rejects non-admin signers, so this is not
     /// re-validated here.
-    async fn configure_channel(
+    ///
+    /// Desugared (not `async fn`) so the returned future is provably `Send` —
+    /// generic callers awaiting it inside jsonrpsee handlers require that.
+    fn configure_channel(
         &self,
         keys: Vec<Ed25519PublicKey>,
         posting_timeframe: u32,
         posting_timeout: u32,
         configuration_threshold: u16,
         withdraw_threshold: u16,
-    ) -> Result<()>;
+    ) -> impl Future<Output = Result<()>> + Send;
 
     fn channel_id(&self) -> ChannelId;
 

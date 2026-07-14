@@ -9,11 +9,12 @@ use lee;
 use log::warn;
 use mempool::MemPoolHandle;
 use sequencer_core::{
-    DbError, SequencerCore, TransactionOrigin, block_publisher::BlockPublisherTrait,
+    DbError, SequencerCore, TransactionOrigin,
+    block_publisher::{BlockPublisherTrait, Ed25519PublicKey},
 };
 use sequencer_service_protocol::{
-    Account, AccountId, Block, BlockId, ChannelId, Commitment, HashType, MembershipProof, Nonce,
-    ProgramId,
+    Account, AccountId, Block, BlockId, ChannelId, Commitment, ConfigureChannelRequest, HashType,
+    MembershipProof, Nonce, ProgramId,
 };
 use tokio::sync::Mutex;
 
@@ -40,7 +41,7 @@ impl<BC: BlockPublisherTrait> SequencerService<BC> {
 }
 
 #[async_trait]
-impl<BC: BlockPublisherTrait + Send + 'static> sequencer_service_rpc::RpcServer
+impl<BC: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::RpcServer
     for SequencerService<BC>
 {
     async fn send_transaction(&self, tx: LeeTransaction) -> Result<HashType, ErrorObjectOwned> {
@@ -198,8 +199,66 @@ impl<BC: BlockPublisherTrait + Send + 'static> sequencer_service_rpc::RpcServer
         let channel_id = self.sequencer.lock().await.block_publisher().channel_id();
         Ok(ChannelId(*channel_id.as_ref()))
     }
+
+    async fn admin_configure_channel(
+        &self,
+        request: ConfigureChannelRequest,
+    ) -> Result<(), ErrorObjectOwned> {
+        let keys = request
+            .keys
+            .iter()
+            .map(|hex_key| parse_channel_key(hex_key))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let sequencer = self.sequencer.lock().await;
+        sequencer
+            .configure_channel(
+                keys,
+                request.posting_timeframe,
+                request.posting_timeout,
+                request.configuration_threshold,
+                request.withdraw_threshold,
+            )
+            .await
+            .map_err(|err| {
+                ErrorObjectOwned::owned(
+                    ErrorCode::InternalError.code(),
+                    format!("{err:#}"),
+                    None::<()>,
+                )
+            })
+    }
 }
 
 fn internal_error(err: &DbError) -> ErrorObjectOwned {
     ErrorObjectOwned::owned(ErrorCode::InternalError.code(), err.to_string(), None::<()>)
+}
+
+/// Parses one hex-encoded 32-byte Ed25519 public key from an RPC request.
+fn parse_channel_key(hex_key: &str) -> Result<Ed25519PublicKey, ErrorObjectOwned> {
+    let invalid = |detail: String| {
+        ErrorObjectOwned::owned(ErrorCode::InvalidParams.code(), detail, None::<()>)
+    };
+    let mut bytes = [0_u8; 32];
+    hex::decode_to_slice(hex_key, &mut bytes)
+        .map_err(|err| invalid(format!("Invalid hex-encoded key: {err}")))?;
+    Ed25519PublicKey::from_bytes(&bytes)
+        .map_err(|err| invalid(format!("Invalid Ed25519 public key: {err}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use sequencer_core::block_publisher::Ed25519Key;
+
+    use super::*;
+
+    #[test]
+    fn parse_channel_key_roundtrips_and_rejects_garbage() {
+        let key = Ed25519Key::from_bytes(&[7; 32]).public_key();
+        let parsed = parse_channel_key(&hex::encode(key.to_bytes())).unwrap();
+        assert_eq!(parsed.to_bytes(), key.to_bytes());
+
+        assert!(parse_channel_key("not-hex").is_err());
+        assert!(parse_channel_key("abcd").is_err());
+    }
 }

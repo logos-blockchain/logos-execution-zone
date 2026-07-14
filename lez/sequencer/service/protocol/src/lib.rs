@@ -26,3 +26,17 @@ impl FromStr for ChannelId {
         Ok(Self(bytes))
     }
 }
+
+/// Request for `adminConfigureChannel`: replaces the channel's accredited key
+/// set and rotation parameters.
+///
+/// `keys` are hex-encoded 32-byte Ed25519 public keys; `keys[0]` must be this
+/// sequencer's (admin) key.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ConfigureChannelRequest {
+    pub keys: Vec<String>,
+    pub posting_timeframe: u32,
+    pub posting_timeout: u32,
+    pub configuration_threshold: u16,
+    pub withdraw_threshold: u16,
+}

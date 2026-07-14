@@ -9085,6 +9085,7 @@ dependencies = [
  "common",
  "env_logger",
  "futures",
+ "hex",
  "jsonrpsee",
  "lee",
  "log",
@@ -9105,6 +9106,7 @@ dependencies = [
  "hex",
  "lee",
  "lee_core",
+ "serde",
  "serde_with",
 ]
 

@@ -19,6 +19,7 @@ programs.workspace = true
 clap = { workspace = true, features = ["derive", "env"] }
 anyhow.workspace = true
 env_logger.workspace = true
+hex.workspace = true
 log.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true

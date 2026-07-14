@@ -6,8 +6,8 @@ use jsonrpsee::types::ErrorObjectOwned;
 #[cfg(feature = "client")]
 pub use jsonrpsee::{core::ClientError, http_client::HttpClientBuilder as SequencerClientBuilder};
 use sequencer_service_protocol::{
-    Account, AccountId, Block, BlockId, ChannelId, Commitment, HashType, LeeTransaction,
-    MembershipProof, Nonce, ProgramId,
+    Account, AccountId, Block, BlockId, ChannelId, Commitment, ConfigureChannelRequest, HashType,
+    LeeTransaction, MembershipProof, Nonce, ProgramId,
 };
 
 #[cfg(all(not(feature = "server"), not(feature = "client")))]
@@ -92,4 +92,12 @@ pub trait Rpc {
     async fn get_channel_id(&self) -> Result<ChannelId, ErrorObjectOwned>;
 
     // =============================================================================================
+
+    /// Admin-only in effect: the L1 rejects the config op unless this
+    /// sequencer's key is the channel admin (`keys[0]` of the current roster).
+    #[method(name = "adminConfigureChannel")]
+    async fn admin_configure_channel(
+        &self,
+        request: ConfigureChannelRequest,
+    ) -> Result<(), ErrorObjectOwned>;
 }
