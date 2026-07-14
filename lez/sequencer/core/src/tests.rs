@@ -1561,6 +1561,9 @@ async fn configure_channel_delegates_to_publisher() {
     let calls = sequencer.block_publisher().configure_channel_calls();
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].keys.len(), 2);
+    assert_eq!(calls[0].keys[0], admin);
     assert_eq!(calls[0].posting_timeframe, 20);
     assert_eq!(calls[0].posting_timeout, 30);
+    assert_eq!(calls[0].configuration_threshold, 1);
+    assert_eq!(calls[0].withdraw_threshold, 1);
 }

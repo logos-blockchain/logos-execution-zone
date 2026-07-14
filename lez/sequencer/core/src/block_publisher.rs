@@ -109,6 +109,9 @@ pub trait BlockPublisherTrait: Clone {
     /// admin (`keys[0]`); the L1 rejects non-admin signers, so this is not
     /// re-validated here.
     ///
+    /// `Ok(())` only means the signed op was queued locally, not that the
+    /// L1 accepted it — acceptance is asynchronous.
+    ///
     /// Desugared (not `async fn`) so the returned future is provably `Send` —
     /// generic callers awaiting it inside jsonrpsee handlers require that.
     fn configure_channel(

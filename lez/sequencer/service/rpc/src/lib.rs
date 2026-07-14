@@ -95,6 +95,11 @@ pub trait Rpc {
 
     /// Admin-only in effect: the L1 rejects the config op unless this
     /// sequencer's key is the channel admin (`keys[0]` of the current roster).
+    ///
+    /// `Ok(())` only means the signed config op was queued locally (like
+    /// block publishing), not that L1 accepted it: acceptance is asynchronous,
+    /// and a rejection (e.g. non-admin signer) is not reported here — it only
+    /// shows up in node logs and on-chain behavior.
     #[method(name = "adminConfigureChannel")]
     async fn admin_configure_channel(
         &self,
