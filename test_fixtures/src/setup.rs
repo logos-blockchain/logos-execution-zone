@@ -152,6 +152,7 @@ pub async fn setup_sequencer(
         SequencerInit::Genesis(genesis_transactions),
         channel_id,
         cross_zone,
+        None,
     )
     .await
 }
@@ -169,6 +170,30 @@ pub async fn setup_sequencer_from_prebuilt(
         SequencerInit::Prebuilt(&dump),
         config::bedrock_channel_id(),
         None,
+        None,
+    )
+    .await
+}
+
+/// Like [`setup_sequencer`], but with a pre-generated bedrock (Ed25519, 32-byte
+/// seed) signing key written into the home so tests know the sequencer's
+/// public key before it boots — required to accredit a committee member that
+/// has not started yet.
+pub async fn setup_sequencer_with_bedrock_key(
+    partial: config::SequencerPartialConfig,
+    bedrock_addr: SocketAddr,
+    genesis_transactions: Vec<GenesisAction>,
+    channel_id: ChannelId,
+    cross_zone: Option<sequencer_core::config::CrossZoneConfig>,
+    bedrock_signing_key: [u8; 32],
+) -> Result<(SequencerHandle, TempDir)> {
+    setup_sequencer_inner(
+        partial,
+        bedrock_addr,
+        SequencerInit::Genesis(genesis_transactions),
+        channel_id,
+        cross_zone,
+        Some(bedrock_signing_key),
     )
     .await
 }
@@ -179,6 +204,7 @@ async fn setup_sequencer_inner(
     init: SequencerInit<'_>,
     channel_id: ChannelId,
     cross_zone: Option<sequencer_core::config::CrossZoneConfig>,
+    bedrock_signing_key: Option<[u8; 32]>,
 ) -> Result<(SequencerHandle, TempDir)> {
     let temp_sequencer_dir =
         tempfile::tempdir().context("Failed to create temp dir for sequencer home")?;
@@ -187,6 +213,14 @@ async fn setup_sequencer_inner(
         "Using temp sequencer home at {}",
         temp_sequencer_dir.path().display()
     );
+
+    if let Some(key_bytes) = bedrock_signing_key {
+        std::fs::write(
+            temp_sequencer_dir.path().join("bedrock_signing_key"),
+            key_bytes,
+        )
+        .context("Failed to write pre-generated bedrock signing key")?;
+    }
 
     let genesis_transactions = match init {
         SequencerInit::Genesis(genesis) => genesis,
