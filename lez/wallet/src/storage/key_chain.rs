@@ -10,8 +10,7 @@ use key_protocol::key_management::{
 };
 use lee::{Account, AccountId, privacy_preserving_transaction::message::Message};
 use lee_core::{
-    Commitment, EncryptionScheme, Identifier, Nullifier, NullifierSecretKey, PrivateAccountKind,
-    SharedSecretKey,
+    Commitment, Identifier, Nullifier, NullifierSecretKey, PrivateAccountKind, SharedSecretKey,
 };
 use log::{debug, warn};
 use serde::{Deserialize, Serialize};
@@ -440,11 +439,7 @@ impl UserKeyChain {
             )
         };
 
-        let (kind, new_account) = EncryptionScheme::decrypt(
-            &encrypted.ciphertext,
-            &secret,
-            &message.new_nullifiers[i].0,
-        )?;
+        let (kind, new_account) = crate::decrypt_note_at(message, i, &secret)?;
         let new_nullifier = NullifierIndex::next_update_nullifier(account_id, &new_account, &nsk);
 
         if is_shared {
@@ -881,7 +876,7 @@ impl Default for UserKeyChain {
 
 #[cfg(test)]
 mod tests {
-    use lee_core::encryption::EncryptedAccountData;
+    use lee_core::{EncryptionScheme, encryption::EncryptedAccountData};
 
     use super::*;
 

@@ -566,14 +566,8 @@ impl WalletCore {
                     else {
                         continue;
                     };
-                    let acc_ead = tx.message.encrypted_private_post_states[output_index].clone();
-
-                    let (kind, res_acc) = lee_core::EncryptionScheme::decrypt(
-                        &acc_ead.ciphertext,
-                        secret,
-                        &tx.message.new_nullifiers[output_index].0,
-                    )
-                    .unwrap();
+                    let (kind, res_acc) =
+                        decrypt_note_at(&tx.message, output_index, secret).unwrap();
 
                     println!("Received new acc {res_acc:#?}");
 
@@ -829,8 +823,6 @@ impl WalletCore {
                     &key_chain.nullifier_public_key,
                     &key_chain.viewing_public_key,
                 );
-                let new_nullifiers = &message.new_nullifiers;
-
                 message
                     .encrypted_private_post_states
                     .iter()
@@ -842,22 +834,19 @@ impl WalletCore {
                         !handled.contains(ciph_id) && encrypted_data.view_tag == view_tag
                     })
                     .filter_map(move |(ciph_id, encrypted_data)| {
-                        let ciphertext = &encrypted_data.ciphertext;
-                        let nullifier = &new_nullifiers[ciph_id].0;
                         let shared_secret =
                             key_chain.calculate_shared_secret_receiver(&encrypted_data.epk)?;
 
-                        lee_core::EncryptionScheme::decrypt(ciphertext, &shared_secret, nullifier)
-                            .map(|(kind, res_acc)| {
-                                let npk = &key_chain.nullifier_public_key;
-                                let account_id = lee::AccountId::for_private_account(
-                                    npk,
-                                    &key_chain.viewing_public_key,
-                                    &kind,
-                                );
-                                let nsk = key_chain.private_key_holder.nullifier_secret_key;
-                                (account_id, kind, res_acc, nsk)
-                            })
+                        decrypt_note_at(message, ciph_id, &shared_secret).map(|(kind, res_acc)| {
+                            let npk = &key_chain.nullifier_public_key;
+                            let account_id = lee::AccountId::for_private_account(
+                                npk,
+                                &key_chain.viewing_public_key,
+                                &kind,
+                            );
+                            let nsk = key_chain.private_key_holder.nullifier_secret_key;
+                            (account_id, kind, res_acc, nsk)
+                        })
                     })
                     .collect::<Vec<_>>()
             })
@@ -916,11 +905,7 @@ impl WalletCore {
                 else {
                     continue;
                 };
-                if let Some((_kind, new_acc)) = lee_core::EncryptionScheme::decrypt(
-                    &encrypted_data.ciphertext,
-                    &shared_secret,
-                    &message.new_nullifiers[ciph_id].0,
-                ) {
+                if let Some((_kind, new_acc)) = decrypt_note_at(message, ciph_id, &shared_secret) {
                     info!("Synced shared account {account_id:#?} with new state {new_acc:#?}");
                     index.track(account_id, &new_acc, &nsk);
                     self.storage
@@ -945,6 +930,18 @@ impl WalletCore {
     pub const fn config_overrides(&self) -> &Option<WalletConfigOverrides> {
         &self.config_overrides
     }
+}
+
+fn decrypt_note_at(
+    message: &Message,
+    i: usize,
+    secret: &SharedSecretKey,
+) -> Option<(lee_core::PrivateAccountKind, Account)> {
+    lee_core::EncryptionScheme::decrypt(
+        &message.encrypted_private_post_states[i].ciphertext,
+        secret,
+        &message.new_nullifiers[i].0,
+    )
 }
 
 #[cfg(test)]
