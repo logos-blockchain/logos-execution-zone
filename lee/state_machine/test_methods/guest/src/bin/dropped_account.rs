@@ -5,12 +5,8 @@ type Instruction = ();
 /// Silently drops the second account entirely from its own output: given two `pre_states`, it
 /// returns only one `(pre, post)` pair, echoing the first account back unchanged.
 ///
-/// Unlike `missing_output` (whose own `pre_states.len() != post_states.len()`, tripping
-/// `validate_execution`'s internal length check directly), this program's own output is
-/// internally consistent — one `pre_state` and one matching `post_state` — it just reports fewer
-/// accounts than it was handed. This mirrors a well-behaved-looking dispatcher that filters an
-/// account out of both sides of its output together (e.g. a stale-signer-nonce workaround that's
-/// too broad), rather than an obviously malformed program.
+/// Differs from `missing_output` because the `pre_state` and `post_states` lengths match. We
+/// simply drop the account from both before returning them as part of the program's output.
 fn main() {
     let (
         ProgramInput {

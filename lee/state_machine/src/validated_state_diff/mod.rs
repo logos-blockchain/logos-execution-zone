@@ -294,11 +294,7 @@ impl ValidatedStateDiff {
         }
 
         // Every account the caller declared as part of the transaction must appear in the final
-        // diff. A well-behaved program's output always echoes back every account it was handed
-        // (unchanged if it only reads it) — this catches a program (or a macro-generated
-        // dispatcher wrapping one) that silently drops an account from its own output instead.
-        // Chained calls may still introduce accounts beyond this original list; this only checks
-        // the reverse direction.
+        // diff.
         for account_id in &message.account_ids {
             ensure!(
                 state_diff.contains_key(account_id),
