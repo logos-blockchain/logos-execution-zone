@@ -129,7 +129,7 @@ mod tests {
     use risc0_zkvm::sha::{Impl, Sha256 as _};
 
     use crate::{
-        Commitment, DUMMY_COMMITMENT, DUMMY_COMMITMENT_HASH,
+        Commitment, DUMMY_COMMITMENT, DUMMY_COMMITMENT_HASH, Nullifier,
         account::{Account, AccountId},
     };
 
@@ -149,5 +149,19 @@ mod tests {
                 .try_into()
                 .unwrap();
         assert_eq!(DUMMY_COMMITMENT_HASH, expected_dummy_commitment_hash);
+    }
+
+    #[test]
+    fn for_dummy_matches_pinned_value() {
+        let nullifier = Nullifier::for_dummy(&[0; 32]);
+        let commitment_seed = [1; 32];
+        let expected_commitment = Commitment([
+            106, 88, 233, 248, 28, 251, 254, 48, 62, 53, 61, 248, 25, 148, 223, 133, 108, 213, 184,
+            83, 73, 145, 122, 104, 89, 220, 111, 132, 40, 87, 12, 105,
+        ]);
+        assert_eq!(
+            Commitment::for_dummy(&nullifier, &commitment_seed),
+            expected_commitment
+        );
     }
 }

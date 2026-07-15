@@ -217,4 +217,14 @@ mod tests {
 
         assert_eq!(account_id, expected_account_id);
     }
+
+    #[test]
+    fn for_dummy_matches_pinned_value() {
+        let nullifier_seed = [0; 32];
+        let expected_nullifier = Nullifier([
+            244, 220, 48, 137, 204, 138, 180, 41, 108, 86, 40, 46, 187, 7, 232, 57, 57, 167, 143,
+            157, 125, 171, 137, 46, 64, 206, 191, 211, 231, 0, 11, 86,
+        ]);
+        assert_eq!(Nullifier::for_dummy(&nullifier_seed), expected_nullifier);
+    }
 }
