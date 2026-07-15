@@ -380,7 +380,9 @@ mod tests {
         let mut output = PrivacyPreservingCircuitOutput::default();
         for tag in 0..3 {
             let (nullifier, commitment, encrypted) = note(tag);
-            output.new_nullifiers.push((nullifier, DUMMY_COMMITMENT_HASH));
+            output
+                .new_nullifiers
+                .push((nullifier, DUMMY_COMMITMENT_HASH));
             output.new_commitments.push(commitment);
             output.encrypted_private_post_states.push(encrypted);
         }
@@ -404,7 +406,9 @@ mod tests {
         let mut output = PrivacyPreservingCircuitOutput::default();
         for tag in 0..3 {
             let (nullifier, _, encrypted) = note(tag);
-            output.new_nullifiers.push((nullifier, DUMMY_COMMITMENT_HASH));
+            output
+                .new_nullifiers
+                .push((nullifier, DUMMY_COMMITMENT_HASH));
             output.encrypted_private_post_states.push(encrypted);
         }
         let paired: HashMap<[u8; 32], EphemeralPublicKey> = output
