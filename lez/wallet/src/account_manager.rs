@@ -4,9 +4,10 @@ use anyhow::Result;
 use keycard_wallet::{KeycardWallet, python_path};
 use lee::{AccountId, PrivateKey, PublicKey, Signature};
 use lee_core::{
-    CommitmentSetDigest, DUMMY_COMMITMENT_HASH, Identifier, InputAccountIdentity, MembershipProof,
+    Commitment, CommitmentSetDigest, Identifier, InputAccountIdentity, MembershipProof,
     NullifierPublicKey, NullifierSecretKey, SharedSecretKey,
     account::{AccountWithMetadata, Nonce},
+    compute_digest_for_path,
     encryption::{ViewTag, ViewingPublicKey},
 };
 use rand::{RngCore as _, rngs::OsRng};
@@ -252,7 +253,7 @@ impl AccountManager {
                     State::PublicKeycard { account, key_path }
                 }
                 AccountIdentity::PrivateOwned(account_id) => {
-                    let pre = private_key_tree_acc_preparation(wallet, account_id, false).await?;
+                    let pre = private_key_tree_acc_preparation(wallet, account_id, false)?;
 
                     State::Private(pre)
                 }
@@ -279,7 +280,7 @@ impl AccountManager {
                     State::Private(pre)
                 }
                 AccountIdentity::PrivatePdaOwned(account_id) => {
-                    let pre = private_key_tree_acc_preparation(wallet, account_id, true).await?;
+                    let pre = private_key_tree_acc_preparation(wallet, account_id, true)?;
                     State::Private(pre)
                 }
                 AccountIdentity::PrivatePdaForeign {
@@ -313,8 +314,7 @@ impl AccountManager {
                     let account_id = lee::AccountId::from((&npk, &vpk, identifier));
                     let pre = private_shared_acc_preparation(
                         wallet, account_id, nsk, npk, vpk, identifier, false,
-                    )
-                    .await?;
+                    );
 
                     State::Private(pre)
                 }
@@ -327,8 +327,7 @@ impl AccountManager {
                 } => {
                     let pre = private_shared_acc_preparation(
                         wallet, account_id, nsk, npk, vpk, identifier, true,
-                    )
-                    .await?;
+                    );
 
                     State::Private(pre)
                 }
@@ -337,18 +336,7 @@ impl AccountManager {
             states.push(state);
         }
 
-        let has_init_account = states
-            .iter()
-            .any(|s| matches!(s, State::Private(pre) if pre.proof.is_none()));
-        let dummy_commitment_root = if has_init_account {
-            wallet
-                .get_commitment_root()
-                .await
-                .map_err(ExecutionFailureKind::SequencerError)?
-                .unwrap_or(DUMMY_COMMITMENT_HASH)
-        } else {
-            DUMMY_COMMITMENT_HASH
-        };
+        let dummy_commitment_root = fetch_private_proofs_and_root(wallet, &mut states).await?;
 
         Ok(Self {
             states,
@@ -542,7 +530,7 @@ struct AccountPreparedData {
     is_pda: bool,
 }
 
-async fn private_key_tree_acc_preparation(
+fn private_key_tree_acc_preparation(
     wallet: &WalletCore,
     account_id: AccountId,
     is_pda: bool,
@@ -557,12 +545,6 @@ async fn private_key_tree_acc_preparation(
     let from_npk = from_keys.nullifier_public_key;
     let from_vpk = from_keys.viewing_public_key.clone();
 
-    // TODO: Remove this unwrap, error types must be compatible
-    let proof = wallet
-        .check_private_account_initialized(account_id)
-        .await
-        .unwrap();
-
     // TODO: Technically we could allow unauthorized owned accounts, but currently we don't have
     // support from that in the wallet.
     let sender_pre = AccountWithMetadata::new(from_acc.account.clone(), true, account_id);
@@ -576,13 +558,13 @@ async fn private_key_tree_acc_preparation(
         identifier: from_identifier,
         vpk: from_vpk,
         pre_state: sender_pre,
-        proof,
+        proof: None,
         random_seed,
         is_pda,
     })
 }
 
-async fn private_shared_acc_preparation(
+fn private_shared_acc_preparation(
     wallet: &WalletCore,
     account_id: AccountId,
     nsk: NullifierSecretKey,
@@ -590,7 +572,7 @@ async fn private_shared_acc_preparation(
     vpk: ViewingPublicKey,
     identifier: Identifier,
     is_pda: bool,
-) -> Result<AccountPreparedData, ExecutionFailureKind> {
+) -> AccountPreparedData {
     let acc = wallet
         .storage()
         .key_chain()
@@ -600,24 +582,74 @@ async fn private_shared_acc_preparation(
 
     let pre_state = AccountWithMetadata::new(acc, true, account_id);
 
-    let proof = wallet
-        .check_private_account_initialized(account_id)
-        .await
-        .unwrap_or(None);
-
     let mut random_seed: [u8; 32] = [0; 32];
     OsRng.fill_bytes(&mut random_seed);
 
-    Ok(AccountPreparedData {
+    AccountPreparedData {
         nsk: Some(nsk),
         npk,
         identifier,
         vpk,
         pre_state,
-        proof,
+        proof: None,
         random_seed,
         is_pda,
-    })
+    }
+}
+
+async fn fetch_private_proofs_and_root(
+    wallet: &WalletCore,
+    states: &mut [State],
+) -> Result<CommitmentSetDigest, ExecutionFailureKind> {
+    let (mut private, commitments): (Vec<&mut AccountPreparedData>, Vec<Commitment>) = states
+        .iter_mut()
+        .filter_map(|state| match state {
+            State::Private(pre) => {
+                let commitment = wallet.get_private_account_commitment(pre.pre_state.account_id)?;
+                Some((pre, commitment))
+            }
+            State::Public { .. } | State::PublicKeycard { .. } => None,
+        })
+        .unzip();
+
+    let (proofs, root) = wallet
+        .get_proofs_and_root(commitments.clone())
+        .await
+        .map_err(ExecutionFailureKind::SequencerError)?;
+
+    validate_proofs_against_root(&commitments, &proofs, root)?;
+
+    for (pre, proof) in private.iter_mut().zip(proofs) {
+        pre.proof = proof;
+    }
+
+    Ok(root)
+}
+
+fn validate_proofs_against_root(
+    commitments: &[Commitment],
+    proofs: &[Option<MembershipProof>],
+    root: CommitmentSetDigest,
+) -> Result<(), ExecutionFailureKind> {
+    if proofs.len() != commitments.len() {
+        return Err(ExecutionFailureKind::SequencerError(anyhow::anyhow!(
+            "Sequencer returned {} proofs for {} commitments.",
+            proofs.len(),
+            commitments.len(),
+        )));
+    }
+
+    for (commitment, proof) in commitments.iter().zip(proofs) {
+        if let Some(proof) = proof
+            && compute_digest_for_path(commitment, proof) != root
+        {
+            return Err(ExecutionFailureKind::SequencerError(anyhow::anyhow!(
+                "Membership proof for {commitment:?} does not reproduce the appropriate root {root:?}.",
+            )));
+        }
+    }
+
+    Ok(())
 }
 
 /// Generate random byte using OS randomness.

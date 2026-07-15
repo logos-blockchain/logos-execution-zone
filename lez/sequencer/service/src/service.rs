@@ -12,8 +12,8 @@ use sequencer_core::{
     DbError, SequencerCore, TransactionOrigin, block_publisher::BlockPublisherTrait,
 };
 use sequencer_service_protocol::{
-    Account, AccountId, Block, BlockId, ChannelId, Commitment, HashType, MembershipProof, Nonce,
-    ProgramId,
+    Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest, HashType,
+    MembershipProof, Nonce, ProgramId,
 };
 use tokio::sync::Mutex;
 
@@ -162,12 +162,17 @@ impl<BC: BlockPublisherTrait + Send + 'static> sequencer_service_rpc::RpcServer
         Ok(nonces)
     }
 
-    async fn get_proof_for_commitment(
+    async fn get_proofs_and_root(
         &self,
-        commitment: Commitment,
-    ) -> Result<Option<MembershipProof>, ErrorObjectOwned> {
+        commitments: Vec<Commitment>,
+    ) -> Result<(Vec<Option<MembershipProof>>, CommitmentSetDigest), ErrorObjectOwned> {
         let sequencer = self.sequencer.lock().await;
-        Ok(sequencer.state().get_proof_for_commitment(&commitment))
+        let state = sequencer.state();
+        let proofs = commitments
+            .iter()
+            .map(|commitment| state.get_proof_for_commitment(commitment))
+            .collect();
+        Ok((proofs, state.commitment_root()))
     }
 
     async fn get_account(&self, account_id: AccountId) -> Result<Account, ErrorObjectOwned> {

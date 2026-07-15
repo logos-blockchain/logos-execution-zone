@@ -12,9 +12,8 @@ use lee::{
     program::Program,
 };
 use lee_core::{
-    DUMMY_COMMITMENT, DUMMY_COMMITMENT_HASH, InputAccountIdentity, Nullifier, NullifierPublicKey,
+    DUMMY_COMMITMENT_HASH, InputAccountIdentity, Nullifier, NullifierPublicKey,
     account::{Account, AccountWithMetadata},
-    compute_digest_for_path,
     encryption::ViewingPublicKey,
 };
 use log::info;
@@ -656,12 +655,7 @@ async fn prove_init_with_commitment_root(
 async fn init_with_dummy_commitment_root_produces_valid_root() -> Result<()> {
     let ctx = TestContext::new().await?;
 
-    let dummy_proof = ctx
-        .sequencer_client()
-        .get_proof_for_commitment(DUMMY_COMMITMENT)
-        .await?
-        .expect("DUMMY_COMMITMENT must be in genesis commitment set");
-    let expected_digest = compute_digest_for_path(&DUMMY_COMMITMENT, &dummy_proof);
+    let (_, expected_digest) = ctx.sequencer_client().get_proofs_and_root(vec![]).await?;
 
     let nsk: lee_core::NullifierSecretKey = [7; 32];
     let npk = NullifierPublicKey::from(&nsk);
@@ -686,12 +680,7 @@ async fn init_with_dummy_commitment_root_produces_valid_root() -> Result<()> {
 async fn init_nullifier_digest_is_bound_to_commitment_root() -> Result<()> {
     let ctx = TestContext::new().await?;
 
-    let dummy_proof = ctx
-        .sequencer_client()
-        .get_proof_for_commitment(DUMMY_COMMITMENT)
-        .await?
-        .expect("DUMMY_COMMITMENT must be in genesis commitment set");
-    let expected_digest = compute_digest_for_path(&DUMMY_COMMITMENT, &dummy_proof);
+    let (_, expected_digest) = ctx.sequencer_client().get_proofs_and_root(vec![]).await?;
 
     let output_with_root = prove_init_with_commitment_root(&ctx, expected_digest).await?;
     let output_without_root = prove_init_with_commitment_root(&ctx, DUMMY_COMMITMENT_HASH).await?;

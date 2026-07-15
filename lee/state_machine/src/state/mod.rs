@@ -138,6 +138,11 @@ impl V03State {
         Self::default()
     }
 
+    #[must_use]
+    pub fn commitment_root(&self) -> CommitmentSetDigest {
+        self.private_state.0.digest()
+    }
+
     /// Initializes state with given public account balances leaving other account fields at their
     /// default values.
     #[must_use]

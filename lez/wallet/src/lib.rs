@@ -23,8 +23,8 @@ use lee::{
     },
 };
 use lee_core::{
-    Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, MembershipProof, SharedSecretKey,
-    account::Nonce, compute_digest_for_path, program::InstructionData,
+    Commitment, CommitmentSetDigest, MembershipProof, SharedSecretKey, account::Nonce,
+    program::InstructionData,
 };
 use log::info;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
@@ -535,26 +535,14 @@ impl WalletCore {
         Some(Commitment::new(&account_id, account))
     }
 
-    pub async fn check_private_account_initialized(
+    pub async fn get_proofs_and_root(
         &self,
-        account_id: AccountId,
-    ) -> Result<Option<MembershipProof>> {
-        if let Some(acc_comm) = self.get_private_account_commitment(account_id) {
-            self.sequencer_client
-                .get_proof_for_commitment(acc_comm)
-                .await
-                .map_err(Into::into)
-        } else {
-            Ok(None)
-        }
-    }
-
-    pub async fn get_commitment_root(&self) -> Result<Option<CommitmentSetDigest>> {
-        let proof = self
-            .sequencer_client
-            .get_proof_for_commitment(DUMMY_COMMITMENT)
-            .await?;
-        Ok(proof.map(|p| compute_digest_for_path(&DUMMY_COMMITMENT, &p)))
+        commitments: Vec<Commitment>,
+    ) -> Result<(Vec<Option<MembershipProof>>, CommitmentSetDigest)> {
+        self.sequencer_client
+            .get_proofs_and_root(commitments)
+            .await
+            .map_err(Into::into)
     }
 
     pub fn decode_insert_privacy_preserving_transaction_results(

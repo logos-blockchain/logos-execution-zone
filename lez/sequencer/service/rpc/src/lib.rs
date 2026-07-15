@@ -6,8 +6,8 @@ use jsonrpsee::types::ErrorObjectOwned;
 #[cfg(feature = "client")]
 pub use jsonrpsee::{core::ClientError, http_client::HttpClientBuilder as SequencerClientBuilder};
 use sequencer_service_protocol::{
-    Account, AccountId, Block, BlockId, ChannelId, Commitment, HashType, LeeTransaction,
-    MembershipProof, Nonce, ProgramId,
+    Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest, HashType,
+    LeeTransaction, MembershipProof, Nonce, ProgramId,
 };
 
 #[cfg(all(not(feature = "server"), not(feature = "client")))]
@@ -76,11 +76,11 @@ pub trait Rpc {
         account_ids: Vec<AccountId>,
     ) -> Result<Vec<Nonce>, ErrorObjectOwned>;
 
-    #[method(name = "getProofForCommitment")]
-    async fn get_proof_for_commitment(
+    #[method(name = "getProofsAndRoot")]
+    async fn get_proofs_and_root(
         &self,
-        commitment: Commitment,
-    ) -> Result<Option<MembershipProof>, ErrorObjectOwned>;
+        commitments: Vec<Commitment>,
+    ) -> Result<(Vec<Option<MembershipProof>>, CommitmentSetDigest), ErrorObjectOwned>;
 
     #[method(name = "getAccount")]
     async fn get_account(&self, account_id: AccountId) -> Result<Account, ErrorObjectOwned>;
