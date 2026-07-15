@@ -284,65 +284,20 @@ jobs:
             --no-fund
 
       - name: Build and upload integration test targets
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
+          ARTIFACT_CLIENT_SCRIPT: ${{ github.workspace }}/.github/scripts/artifact-client/upload.mjs
           INTEGRATION_ARTIFACT_DIR: ${{ runner.temp }}/integration-test-targets
           INTEGRATION_ARTIFACT_MANIFEST: ${{ runner.temp }}/integration-test-targets/uploaded.jsonl
+          INTEGRATION_TARGETS_FILE: ${{ runner.temp }}/integration-test-targets/discovered.targets
           RISC0_DEV_MODE: "1"
-        run: |
-          target_dir="$RUNNER_TEMP/integration-test-targets"
-          : > "$INTEGRATION_ARTIFACT_MANIFEST"
-          archive=""
-          trap '[[ -z "$archive" ]] || rm -f "$archive"' EXIT
-
-          target_count=0
-          total_archive_bytes=0
-          while IFS= read -r target; do
-            if [[ ! "$target" =~ ^[a-z0-9_]+$ ]]; then
-              echo "Invalid integration test target: $target" >&2
-              exit 2
-            fi
-
-            archive="$target_dir/integration-test-$target.tar.zst"
-            cargo nextest archive \
-              -p integration_tests \
-              --test "$target" \
-              -E "binary(=$target)" \
-              --archive-file "$archive" \
-              --no-pager
-
-            archive_bytes="$(stat --format=%s "$archive")"
-            max_archive_bytes=$((128 * 1024 * 1024))
-            if (( archive_bytes > max_archive_bytes )); then
-              echo "Target $target archive is larger than the 128 MiB limit." >&2
-              exit 1
-            fi
-            total_archive_bytes=$((total_archive_bytes + archive_bytes))
-            max_total_archive_bytes=$((4 * 1024 * 1024 * 1024))
-            if (( total_archive_bytes > max_total_archive_bytes )); then
-              echo "Integration target archives exceed the 4 GiB total limit." >&2
-              exit 1
-            fi
-
-            archive_size="$(du -h "$archive" | cut -f1)"
-            echo "| \`$target\` | $archive_size |" >> "$GITHUB_STEP_SUMMARY"
-
-            node .github/scripts/artifact-client/upload.mjs "$archive"
-            rm -f "$archive"
-            archive=""
-            target_count=$((target_count + 1))
-
-            available_kib="$(df --output=avail -k "$RUNNER_TEMP" | tail -n 1 | tr -d ' ')"
-            minimum_free_kib=$((6 * 1024 * 1024))
-            if (( available_kib < minimum_free_kib )); then
-              echo "Less than 6 GiB remains while building integration archives." >&2
-              df -h "$RUNNER_TEMP" >&2
-              exit 1
-            fi
-          done < "$target_dir/discovered.targets"
-
-          echo >> "$GITHUB_STEP_SUMMARY"
-          echo "Built $target_count integration targets exactly once." \
-            >> "$GITHUB_STEP_SUMMARY"
+        with:
+          script: |
+            const { pathToFileURL } = await import("node:url")
+            const artifactClient = await import(
+              pathToFileURL(process.env.ARTIFACT_CLIENT_SCRIPT)
+            )
+            await artifactClient.buildAndUploadIntegrationTargets({ core, exec })
 
       - name: Publish integration test matrix
         id: publish-matrix
