@@ -246,10 +246,18 @@ mod tests {
 
         // Wrong shared secret must not decrypt correctly.
         let wrong_ss = SharedSecretKey([0_u8; 32]);
-        let bad = EncryptionScheme::decrypt(&ct, &wrong_ss, &nullifier);
+        let bad_via_ss = EncryptionScheme::decrypt(&ct, &wrong_ss, &nullifier);
         assert!(
-            bad.is_none() || bad.is_some_and(|(_, a)| a.balance != 999),
+            bad_via_ss.is_none() || bad_via_ss.is_some_and(|(_, a)| a.balance != 999),
             "wrong shared secret must not produce the correct plaintext"
+        );
+
+        // Wrong nullifier must not decrypt correctly.
+        let wrong_nullifier = Nullifier::for_account_initialization(&AccountId::new([9; 32]));
+        let bad_via_nlf = EncryptionScheme::decrypt(&ct, &receiver_ss, &wrong_nullifier);
+        assert!(
+            bad_via_nlf.is_none() || bad_via_nlf.is_some_and(|(_, a)| a.balance != 999),
+            "wrong nullifier must not produce the correct plaintext"
         );
     }
 

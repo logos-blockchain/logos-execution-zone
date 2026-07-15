@@ -81,7 +81,7 @@ async fn private_transfer_to_foreign_account() -> Result<()> {
         .context("Failed to get private account commitment for sender")?;
 
     let tx = fetch_privacy_preserving_tx(ctx.sequencer_client(), tx_hash).await;
-    assert_eq!(tx.message.new_commitments[0], new_commitment1);
+    assert!(tx.message.new_commitments.contains(&new_commitment1));
 
     for commitment in tx.message.new_commitments {
         assert!(verify_commitment_is_in_state(commitment, ctx.sequencer_client()).await);
@@ -169,7 +169,7 @@ async fn private_transfer_to_owned_account_using_claiming_path() -> Result<()> {
         .wallet()
         .get_private_account_commitment(from)
         .context("Failed to get private account commitment for sender")?;
-    assert_eq!(tx.message.new_commitments[0], sender_commitment);
+    assert!(tx.message.new_commitments.contains(&sender_commitment));
 
     for commitment in tx.message.new_commitments {
         assert!(verify_commitment_is_in_state(commitment, ctx.sequencer_client()).await);
@@ -245,13 +245,9 @@ async fn shielded_transfer_to_foreign_account() -> Result<()> {
 
     let acc_1_balance = account_balance(&ctx, from).await?;
 
-    assert!(
-        verify_commitment_is_in_state(
-            tx.message.new_commitments[0].clone(),
-            ctx.sequencer_client()
-        )
-        .await
-    );
+    for commitment in tx.message.new_commitments {
+        assert!(verify_commitment_is_in_state(commitment, ctx.sequencer_client()).await);
+    }
 
     assert_eq!(acc_1_balance, 9900);
 

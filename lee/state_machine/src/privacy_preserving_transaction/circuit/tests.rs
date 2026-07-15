@@ -218,22 +218,41 @@ fn prove_privacy_preserving_execution_circuit_fully_private() {
     assert!(proof.is_valid_for(&output));
     assert!(output.public_pre_states.is_empty());
     assert!(output.public_post_states.is_empty());
+    let sender_nullifier = expected_new_nullifiers[0].0;
+    let recipient_nullifier = expected_new_nullifiers[1].0;
+
+    let mut expected_new_commitments = expected_new_commitments;
+    expected_new_commitments.sort_unstable_by_key(Commitment::to_byte_array);
     assert_eq!(output.new_commitments, expected_new_commitments);
+
+    let mut expected_new_nullifiers = expected_new_nullifiers;
+    expected_new_nullifiers.sort_unstable_by_key(|(nullifier, _)| nullifier.to_byte_array());
     assert_eq!(output.new_nullifiers, expected_new_nullifiers);
+
     assert_eq!(output.encrypted_private_post_states.len(), 2);
 
+    let sender_slot = output
+        .new_nullifiers
+        .iter()
+        .position(|(nullifier, _)| *nullifier == sender_nullifier)
+        .unwrap();
     let (_identifier, sender_post) = EncryptionScheme::decrypt(
-        &output.encrypted_private_post_states[0].ciphertext,
+        &output.encrypted_private_post_states[sender_slot].ciphertext,
         &shared_secret_1,
-        &output.new_nullifiers[0].0,
+        &output.new_nullifiers[sender_slot].0,
     )
     .unwrap();
     assert_eq!(sender_post, expected_private_account_1);
 
+    let recipient_slot = output
+        .new_nullifiers
+        .iter()
+        .position(|(nullifier, _)| *nullifier == recipient_nullifier)
+        .unwrap();
     let (_identifier, recipient_post) = EncryptionScheme::decrypt(
-        &output.encrypted_private_post_states[1].ciphertext,
+        &output.encrypted_private_post_states[recipient_slot].ciphertext,
         &shared_secret_2,
-        &output.new_nullifiers[1].0,
+        &output.new_nullifiers[recipient_slot].0,
     )
     .unwrap();
     assert_eq!(recipient_post, expected_private_account_2);
