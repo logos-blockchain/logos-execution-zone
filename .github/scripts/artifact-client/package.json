@@ -1,0 +1,11 @@
+{
+  "name": "logos-execution-zone-ci-artifact-client",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "dependencies": {
+    "@actions/artifact": "6.2.1"
+  }
+}

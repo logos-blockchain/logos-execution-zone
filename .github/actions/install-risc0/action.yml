@@ -14,7 +14,7 @@ runs:
   steps:
     - name: Restore RISC Zero components
       id: restore-risc0
-      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/.risc0
         key: risc0-${{ runner.os }}-${{ runner.arch }}-${{ inputs.profile }}-rzup-0.5.0-r0vm-3.0.5-rust-1.94.1-cargo-risczero-3.0.5
@@ -24,6 +24,8 @@ runs:
         GITHUB_TOKEN: ${{ github.token }}
         RISC0_PROFILE: ${{ inputs.profile }}
       run: |
+        # Avoid mutable installer defaults: verify rzup itself, then select
+        # only the exact components required by this workflow profile.
         risc0_home="${RISC0_HOME:-$HOME/.risc0}"
         mkdir -p "$risc0_home/bin"
 
@@ -66,7 +68,7 @@ runs:
         inputs.save-cache == 'true' &&
         github.event_name == 'push' &&
         (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')
-      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ~/.risc0
         key: risc0-${{ runner.os }}-${{ runner.arch }}-${{ inputs.profile }}-rzup-0.5.0-r0vm-3.0.5-rust-1.94.1-cargo-risczero-3.0.5

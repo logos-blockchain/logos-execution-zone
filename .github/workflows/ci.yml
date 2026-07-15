@@ -116,6 +116,8 @@ jobs:
           RISC0_SKIP_BUILD: "1"
           RUSTDOCFLAGS: -D warnings
         run: |
+          # Guest packages generate colliding output names, so document them
+          # separately below with isolated target directories.
           cargo doc \
             --workspace \
             --all-features \
@@ -161,7 +163,7 @@ jobs:
         env:
           RISC0_DEV_MODE: "1"
           RUST_LOG: info
-        run: cargo nextest run --workspace --exclude integration_tests --exclude test_fixtures --all-features --no-fail-fast
+        run: cargo nextest run --workspace --exclude integration_tests --exclude test_fixtures --all-features
 
   test-fixtures-tests:
     runs-on: ubuntu-latest
@@ -196,11 +198,14 @@ jobs:
         env:
           RISC0_DEV_MODE: "1"
           RUST_LOG: info
-        run: cargo nextest run -p test_fixtures --no-fail-fast
+        run: cargo nextest run -p test_fixtures
 
   integration-tests-prepare:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    outputs:
+      integration-matrix: ${{ steps.publish-matrix.outputs.integration-matrix }}
+      auth-transfer-artifact-id: ${{ steps.publish-matrix.outputs.auth-transfer-artifact-id }}
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
@@ -226,14 +231,14 @@ jobs:
           tool: nextest@${{ env.NEXTEST_VERSION }}
           fallback: none
 
-      - name: Discover and validate integration test shards
+      - name: Discover integration test targets
         run: |
-          shard_dir="$RUNNER_TEMP/integration-test-shards"
-          mkdir -p "$shard_dir"
+          target_dir="$RUNNER_TEMP/integration-test-targets"
+          mkdir -p "$target_dir"
 
           cargo metadata \
             --no-deps \
-            --format-version 1 > "$shard_dir/metadata.json"
+            --format-version 1 > "$target_dir/metadata.json"
 
           jq -r '
             [.packages[]
@@ -244,53 +249,133 @@ jobs:
               | .name]
             | sort
             | unique[]
-          ' "$shard_dir/metadata.json" > "$shard_dir/discovered.targets"
+          ' "$target_dir/metadata.json" > "$target_dir/discovered.targets"
 
-          shard_targets=(
-            "indexer_ffi_state_consistency keys token indexer_block_batching indexer_test_run_ffi shared_accounts account"
-            "amm cross_zone_bridge pinata indexer_state_consistency_with_labels indexer_test_run vault program_deployment"
-            "indexer_ffi_state_consistency_with_labels ata auth_transfer indexer_stall indexer_ffi_block_batching private_pda block_size_limit cross_zone_state_machine"
-            "cross_zone_verified two_zone bridge indexer_state_consistency cross_zone_ping wallet_ffi config cross_zone_ingress_guard"
-          )
+          if [[ ! -s "$target_dir/discovered.targets" ]]; then
+            echo "No non-tps integration test targets were discovered." >&2
+            exit 1
+          fi
 
-          for shard in "${!shard_targets[@]}"; do
-            targets_file="$shard_dir/$shard.targets"
-            filter_file="$shard_dir/$shard.filter"
-            tr ' ' '\n' <<< "${shard_targets[$shard]}" > "$targets_file"
-            awk '
-              { printf "%s%s", separator, "binary(=" $0 ")"; separator = " | " }
-              END { print "" }
-            ' "$targets_file" > "$filter_file"
-          done
-
-          sort "$shard_dir"/[0-3].targets > "$shard_dir/assigned.targets"
-          if ! diff -u "$shard_dir/discovered.targets" "$shard_dir/assigned.targets"; then
-            echo "Every non-tps integration binary must belong to exactly one shard." >&2
+          target_count="$(wc -l < "$target_dir/discovered.targets")"
+          if (( target_count > 64 )); then
+            echo "More than 64 integration targets were discovered." >&2
             exit 1
           fi
 
           {
-            echo "### Integration archive shards"
+            echo "### Integration target archives"
             echo
-            echo "| Shard | Archive size | Binaries |"
-            echo "| ---: | ---: | ---: |"
+            echo "| Target | Archive size |"
+            echo "| --- | ---: |"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - uses: ./.github/actions/build-integration-shard
+      - name: Install Node.js for workflow artifact client
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          shard: "0"
+          node-version: 24
 
-      - uses: ./.github/actions/build-integration-shard
-        with:
-          shard: "1"
+      - name: Install workflow artifact client
+        run: |
+          npm ci \
+            --prefix .github/scripts/artifact-client \
+            --ignore-scripts \
+            --omit=dev \
+            --no-audit \
+            --no-fund
 
-      - uses: ./.github/actions/build-integration-shard
-        with:
-          shard: "2"
+      - name: Build and upload integration test targets
+        env:
+          INTEGRATION_ARTIFACT_DIR: ${{ runner.temp }}/integration-test-targets
+          INTEGRATION_ARTIFACT_MANIFEST: ${{ runner.temp }}/integration-test-targets/uploaded.jsonl
+          RISC0_DEV_MODE: "1"
+        run: |
+          target_dir="$RUNNER_TEMP/integration-test-targets"
+          : > "$INTEGRATION_ARTIFACT_MANIFEST"
+          archive=""
+          trap '[[ -z "$archive" ]] || rm -f "$archive"' EXIT
 
-      - uses: ./.github/actions/build-integration-shard
-        with:
-          shard: "3"
+          target_count=0
+          total_archive_bytes=0
+          while IFS= read -r target; do
+            if [[ ! "$target" =~ ^[a-z0-9_]+$ ]]; then
+              echo "Invalid integration test target: $target" >&2
+              exit 2
+            fi
+
+            archive="$target_dir/integration-test-$target.tar.zst"
+            cargo nextest archive \
+              -p integration_tests \
+              --test "$target" \
+              -E "binary(=$target)" \
+              --archive-file "$archive" \
+              --no-pager
+
+            archive_bytes="$(stat --format=%s "$archive")"
+            max_archive_bytes=$((128 * 1024 * 1024))
+            if (( archive_bytes > max_archive_bytes )); then
+              echo "Target $target archive is larger than the 128 MiB limit." >&2
+              exit 1
+            fi
+            total_archive_bytes=$((total_archive_bytes + archive_bytes))
+            max_total_archive_bytes=$((4 * 1024 * 1024 * 1024))
+            if (( total_archive_bytes > max_total_archive_bytes )); then
+              echo "Integration target archives exceed the 4 GiB total limit." >&2
+              exit 1
+            fi
+
+            archive_size="$(du -h "$archive" | cut -f1)"
+            echo "| \`$target\` | $archive_size |" >> "$GITHUB_STEP_SUMMARY"
+
+            node .github/scripts/artifact-client/upload.mjs "$archive"
+            rm -f "$archive"
+            archive=""
+            target_count=$((target_count + 1))
+
+            available_kib="$(df --output=avail -k "$RUNNER_TEMP" | tail -n 1 | tr -d ' ')"
+            minimum_free_kib=$((6 * 1024 * 1024))
+            if (( available_kib < minimum_free_kib )); then
+              echo "Less than 6 GiB remains while building integration archives." >&2
+              df -h "$RUNNER_TEMP" >&2
+              exit 1
+            fi
+          done < "$target_dir/discovered.targets"
+
+          echo >> "$GITHUB_STEP_SUMMARY"
+          echo "Built $target_count integration targets exactly once." \
+            >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish integration test matrix
+        id: publish-matrix
+        run: |
+          target_dir="$RUNNER_TEMP/integration-test-targets"
+          jq -r .target "$target_dir/uploaded.jsonl" \
+            | sort > "$target_dir/uploaded.targets"
+          if ! diff -u \
+            "$target_dir/discovered.targets" \
+            "$target_dir/uploaded.targets"; then
+            echo "Every discovered integration target must be uploaded exactly once." >&2
+            exit 1
+          fi
+
+          integration_matrix="$(jq -s -c '{include: .}' \
+            "$target_dir/uploaded.jsonl")"
+          auth_transfer_artifact_id="$(jq -r \
+            'select(.target == "auth_transfer") | .artifact_id' \
+            "$target_dir/uploaded.jsonl")"
+          if [[ ! "$auth_transfer_artifact_id" =~ ^[0-9]+$ ]]; then
+            echo "The auth_transfer artifact ID is missing or invalid." >&2
+            exit 1
+          fi
+
+          echo "integration-matrix=$integration_matrix" >> "$GITHUB_OUTPUT"
+          echo "auth-transfer-artifact-id=$auth_transfer_artifact_id" \
+            >> "$GITHUB_OUTPUT"
+
+      - name: Release artifact client and target metadata disk
+        if: always()
+        run: |
+          rm -rf .github/scripts/artifact-client/node_modules
+          rm -rf "$RUNNER_TEMP/integration-test-targets"
 
       - name: Stage RISC Zero runtime
         run: |
@@ -298,13 +383,18 @@ jobs:
           install -m 0755 "$(command -v r0vm)" "$RUNNER_TEMP/risc0-runtime/r0vm"
 
       - name: Upload RISC Zero runtime
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: risc0-runtime-3.0.5
           path: ${{ runner.temp }}/risc0-runtime/r0vm
           compression-level: 6
           retention-days: 1
           if-no-files-found: error
+          overwrite: true
+
+      - name: Release staged RISC Zero runtime disk
+        if: always()
+        run: rm -f "$RUNNER_TEMP/risc0-runtime/r0vm"
 
   integration-tests:
     needs:
@@ -314,10 +404,9 @@ jobs:
     timeout-minutes: 90
     strategy:
       fail-fast: false
-      max-parallel: 4
-      matrix:
-        shard: [0, 1, 2, 3]
-    name: integration-tests (shard ${{ matrix.shard }})
+      max-parallel: 30
+      matrix: ${{ fromJSON(needs.integration-tests-prepare.outputs.integration-matrix) }}
+    name: integration-tests (${{ matrix.target }})
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
@@ -329,20 +418,39 @@ jobs:
           tool: nextest@${{ env.NEXTEST_VERSION }}
           fallback: none
 
-      - name: Download integration test shard
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - name: Download integration test archive
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: integration-tests-${{ matrix.shard }}
-          path: ${{ runner.temp }}/integration-test-shard
+          artifact-ids: ${{ matrix.artifact_id }}
+          path: ${{ runner.temp }}/integration-test-target
+          skip-decompress: true
 
-      - name: Run integration test shard
+      - name: Run integration test target
         env:
+          ARCHIVE_NAME: ${{ matrix.archive }}
           RISC0_DEV_MODE: "1"
           RUST_LOG: info
+          TARGET: ${{ matrix.target }}
         run: |
-          archive="$RUNNER_TEMP/integration-test-shard/integration-tests-${{ matrix.shard }}.tar.zst"
-          targets="$RUNNER_TEMP/integration-test-shard/${{ matrix.shard }}.targets"
-          extract_dir="$RUNNER_TEMP/nextest-shard"
+          if [[ ! "$TARGET" =~ ^[a-z0-9_]+$ ]]; then
+            echo "Invalid integration test target: $TARGET" >&2
+            exit 2
+          fi
+
+          expected_archive="integration-test-$TARGET.tar.zst"
+          if [[ "$ARCHIVE_NAME" != "$expected_archive" ]]; then
+            echo "Archive $ARCHIVE_NAME does not match target $TARGET." >&2
+            exit 2
+          fi
+
+          archive="$RUNNER_TEMP/integration-test-target/$ARCHIVE_NAME"
+          extract_dir="$RUNNER_TEMP/nextest-target"
+
+          echo "::group::Archive and disk usage before extraction"
+          du -h "$archive"
+          df -h "$RUNNER_TEMP"
+          echo "::endgroup::"
+
           mkdir -p "$extract_dir"
           cargo-nextest nextest list \
             --archive-file "$archive" \
@@ -353,32 +461,30 @@ jobs:
             --no-pager > /dev/null
           rm -f "$archive"
 
+          echo "::group::Disk usage after extraction"
+          du -sh "$extract_dir"
+          df -h "$RUNNER_TEMP"
+          echo "::endgroup::"
+
           available_kib="$(df --output=avail -k "$RUNNER_TEMP" | tail -n 1 | tr -d ' ')"
           minimum_free_kib=$((6 * 1024 * 1024))
           if (( available_kib < minimum_free_kib )); then
-            echo "Less than 6 GiB remains after shard extraction." >&2
+            echo "Less than 6 GiB remains after target extraction." >&2
             df -h "$RUNNER_TEMP" >&2
             exit 1
           fi
 
-          common_args=(
-            --cargo-metadata "$extract_dir/target/nextest/cargo-metadata.json"
-            --binaries-metadata "$extract_dir/target/nextest/binaries-metadata.json"
-            --target-dir-remap "$extract_dir/target"
-            --workspace-remap "$GITHUB_WORKSPACE"
-            --no-fail-fast
-          )
-
-          failed=0
-          while IFS= read -r binary; do
-            echo "::group::integration binary: $binary"
-            if ! cargo-nextest nextest run "${common_args[@]}" -E "binary(=$binary)"; then
-              failed=1
-            fi
-            echo "::endgroup::"
-          done < "$targets"
-
-          exit "$failed"
+          cargo-nextest nextest run \
+            --cargo-metadata "$extract_dir/target/nextest/cargo-metadata.json" \
+            --binaries-metadata "$extract_dir/target/nextest/binaries-metadata.json" \
+            --target-dir-remap "$extract_dir/target" \
+            --workspace-remap "$GITHUB_WORKSPACE" \
+            --show-progress none \
+            --success-output immediate \
+            --status-level all \
+            --final-status-level all \
+            --no-output-indent \
+            -E "binary(=$TARGET)"
 
   valid-proof-test:
     needs: integration-tests-prepare
@@ -395,18 +501,20 @@ jobs:
           tool: nextest@${{ env.NEXTEST_VERSION }}
           fallback: none
 
-      - name: Download integration test shard
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - name: Download auth_transfer integration test archive
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: integration-tests-2
-          path: ${{ runner.temp }}/integration-test-shard
+          artifact-ids: ${{ needs.integration-tests-prepare.outputs.auth-transfer-artifact-id }}
+          path: ${{ runner.temp }}/integration-test-target
+          skip-decompress: true
 
       - name: Test valid proof
         env:
-          RUST_LOG: info
+          RISC0_INFO: "1"
+          RUST_LOG: info,risc0_zkvm::host::client::prove::external=debug,risc0_zkvm::host::server::prove=debug,risc0_zkvm::host::recursion::prove=debug
         run: |
-          archive="$RUNNER_TEMP/integration-test-shard/integration-tests-2.tar.zst"
-          extract_dir="$RUNNER_TEMP/nextest-shard"
+          archive="$RUNNER_TEMP/integration-test-target/integration-test-auth_transfer.tar.zst"
+          extract_dir="$RUNNER_TEMP/nextest-target"
           mkdir -p "$extract_dir"
           cargo-nextest nextest list \
             --archive-file "$archive" \
@@ -417,11 +525,14 @@ jobs:
             --no-pager > /dev/null
           rm -f "$archive"
 
+          echo "Starting non-development RISC Zero succinct proof."
           cargo-nextest nextest run \
             --cargo-metadata "$extract_dir/target/nextest/cargo-metadata.json" \
             --binaries-metadata "$extract_dir/target/nextest/binaries-metadata.json" \
             --target-dir-remap "$extract_dir/target" \
             --workspace-remap "$GITHUB_WORKSPACE" \
+            --no-capture \
+            --show-progress none \
             -E 'binary(=auth_transfer) & test(=private::private_transfer_to_owned_account)'
 
   artifacts:
