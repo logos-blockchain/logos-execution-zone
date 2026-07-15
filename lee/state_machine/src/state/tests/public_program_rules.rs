@@ -79,6 +79,58 @@ fn program_should_fail_with_missing_output_accounts() {
     ));
 }
 
+/// A program can drop an entire account from its own output — both its `pre_state` and
+/// `post_state` together, not just one side — while staying internally consistent
+/// (`pre_states.len() == post_states.len()` within its own report, so `validate_execution`'s
+/// length check alone can't catch it). This must still be rejected: every account the caller
+/// declared in the transaction must appear somewhere in the final diff.
+#[test]
+fn program_should_fail_if_it_drops_a_declared_account() {
+    // Both accounts need a non-default program_owner: an account left at DEFAULT_PROGRAM_ID with
+    // non-default data would itself violate the (separate, pre-existing) "claim before mutating a
+    // default-owned account" rule the moment it's echoed back — unrelated to what this test
+    // targets. `with_public_account_balances` leaves program_owner at DEFAULT_PROGRAM_ID, so use
+    // `with_public_accounts` to set it explicitly instead.
+    let mut state = V03State::new()
+        .with_public_accounts([
+            (
+                AccountId::new([1; 32]),
+                Account {
+                    program_owner: crate::test_methods::dropped_account().id(),
+                    balance: 100,
+                    ..Account::default()
+                },
+            ),
+            (
+                AccountId::new([2; 32]),
+                Account {
+                    program_owner: crate::test_methods::dropped_account().id(),
+                    balance: 0,
+                    ..Account::default()
+                },
+            ),
+        ])
+        .with_test_programs();
+    let account_ids = vec![AccountId::new([1; 32]), AccountId::new([2; 32])];
+    let program_id = crate::test_methods::dropped_account().id();
+    let message =
+        public_transaction::Message::try_new(program_id, account_ids, vec![], ()).unwrap();
+    let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+    let tx = PublicTransaction::new(message, witness_set);
+
+    let result = state.transition_from_public_transaction(&tx, 1, 0);
+
+    assert!(
+        matches!(
+            result,
+            Err(LeeError::InvalidProgramBehavior(
+                InvalidProgramBehaviorError::DeclaredAccountMissingFromOutput { account_id }
+            )) if account_id == AccountId::new([2; 32])
+        ),
+        "expected DeclaredAccountMissingFromOutput for the dropped account, got {result:?}"
+    );
+}
+
 #[test]
 fn program_should_fail_if_modifies_program_owner_with_only_non_default_program_owner() {
     let initial_data = [(

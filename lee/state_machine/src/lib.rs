@@ -78,6 +78,14 @@ mod test_methods {
     }
 
     #[must_use]
+    pub const fn dropped_account() -> Program {
+        Program::new_unchecked(
+            test_methods::DROPPED_ACCOUNT_ID,
+            Cow::Borrowed(test_methods::DROPPED_ACCOUNT_ELF),
+        )
+    }
+
+    #[must_use]
     pub const fn program_owner_changer() -> Program {
         Program::new_unchecked(
             test_methods::PROGRAM_OWNER_CHANGER_ID,

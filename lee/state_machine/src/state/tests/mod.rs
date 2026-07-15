@@ -48,6 +48,7 @@ impl V03State {
         self.insert_program(crate::test_methods::nonce_changer());
         self.insert_program(crate::test_methods::extra_output());
         self.insert_program(crate::test_methods::missing_output());
+        self.insert_program(crate::test_methods::dropped_account());
         self.insert_program(crate::test_methods::program_owner_changer());
         self.insert_program(crate::test_methods::data_changer());
         self.insert_program(crate::test_methods::minter());
