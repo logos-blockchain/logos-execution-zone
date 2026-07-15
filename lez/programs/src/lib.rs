@@ -1,4 +1,4 @@
-//! This crate provides [`Program`]s and associated utilities used by LEZ.
+//! This crate provides LEZ [`Program`](lee::program::Program) artifacts and related utilities.
 
 #[cfg(feature = "artifacts")]
 pub use inner::*;

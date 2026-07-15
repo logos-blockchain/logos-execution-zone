@@ -1,10 +1,72 @@
 name: Install risc0
-description: Installs risc0 in the environment
+description: Installs pinned RISC Zero components in the environment
+inputs:
+  profile:
+    description: Components to install (build or runtime)
+    required: false
+    default: build
+  save-cache:
+    description: Save a missing cache from a trusted branch
+    required: false
+    default: "false"
 runs:
   using: "composite"
   steps:
-    - name: Install risc0
+    - name: Restore RISC Zero components
+      id: restore-risc0
+      uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: ~/.risc0
+        key: risc0-${{ runner.os }}-${{ runner.arch }}-${{ inputs.profile }}-rzup-0.5.0-r0vm-3.0.5-rust-1.94.1-cargo-risczero-3.0.5
+
+    - name: Install pinned RISC Zero components
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        RISC0_PROFILE: ${{ inputs.profile }}
       run: |
-        curl -L https://risczero.com/install | bash
-        /home/runner/.risc0/bin/rzup install
+        risc0_home="${RISC0_HOME:-$HOME/.risc0}"
+        mkdir -p "$risc0_home/bin"
+
+        rzup="$risc0_home/bin/rzup"
+        rzup_sha256="7cdc1dd5d4b8ef38ea6170c45bd29ba65d389f0e96b365da61631d1fc5c6c1ca"
+        if ! echo "$rzup_sha256  $rzup" | sha256sum --check --status; then
+          rzup_download="$(mktemp)"
+          trap 'rm -f "$rzup_download"' EXIT
+          curl --proto '=https' --tlsv1.2 -fsSL \
+            https://risc0-artifacts.s3.us-west-2.amazonaws.com/rzup/prod/Linux-X64/rzup \
+            -o "$rzup_download"
+          echo "$rzup_sha256  $rzup_download" | sha256sum --check
+          install -m 0755 "$rzup_download" "$rzup"
+        fi
+
+        echo "$risc0_home/bin" >> "$GITHUB_PATH"
+        test "$("$rzup" --version)" = "rzup 0.5.0"
+
+        case "$RISC0_PROFILE" in
+          build)
+            "$rzup" install r0vm 3.0.5
+            "$rzup" install rust 1.94.1
+            "$rzup" install cargo-risczero 3.0.5
+            ;;
+          runtime)
+            "$rzup" install r0vm 3.0.5
+            ;;
+          *)
+            echo "Unsupported RISC Zero profile: $RISC0_PROFILE" >&2
+            exit 2
+            ;;
+        esac
+
+        "$rzup" show
       shell: bash
+
+    - name: Save RISC Zero components
+      if: >-
+        steps.restore-risc0.outputs.cache-hit != 'true' &&
+        inputs.save-cache == 'true' &&
+        github.event_name == 'push' &&
+        (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')
+      uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: ~/.risc0
+        key: risc0-${{ runner.os }}-${{ runner.arch }}-${{ inputs.profile }}-rzup-0.5.0-r0vm-3.0.5-rust-1.94.1-cargo-risczero-3.0.5

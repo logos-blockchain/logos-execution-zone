@@ -110,9 +110,9 @@ impl SharedSecretKey {
 
     /// Receiver: decapsulate the shared secret from a KEM ciphertext.
     ///
-    /// Returns `None` if the `EphemeralPublicKey` is not exactly [`ML_KEM_768_CIPHERTEXT_LEN`]
-    /// bytes — callers on the wallet scan path should skip the output rather than panic on
-    /// malformed chain data.
+    /// Returns `None` if the `EphemeralPublicKey` is not exactly
+    /// [`crate::ML_KEM_768_CIPHERTEXT_LEN`] bytes — callers on the wallet scan path should skip
+    /// the output rather than panic on malformed chain data.
     ///
     /// `d` and `z` are the two 32-byte halves of the FIPS 203 `ViewingSecretKey` seed.
     #[must_use]

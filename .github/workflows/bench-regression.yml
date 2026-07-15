@@ -2,8 +2,8 @@ on:
   pull_request:
     paths:
       - "tools/crypto_primitives_bench/**"
-      - "lez/key_protocol/**"
-      - "lee/core/**"
+      - "lee/key_protocol/**"
+      - "lee/state_machine/core/**"
       - ".github/workflows/bench-regression.yml"
 
 permissions:
@@ -12,27 +12,31 @@ permissions:
 
 name: bench-regression
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: "0"
+
 jobs:
   crypto-primitives:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.head_ref }}
           # criterion-compare-action checks out the base branch in a second
           # working tree, so we need the full history.
           fetch-depth: 0
 
       - uses: ./.github/actions/install-system-deps
 
-      - uses: ./.github/actions/install-risc0
-
       - name: Install active toolchain
-        run: rustup install
+        run: rustup install --profile minimal
 
       - name: Run criterion-compare against base branch
-        uses: boa-dev/criterion-compare-action@v3
+        uses: boa-dev/criterion-compare-action@adfd3a94634fe2041ce5613eb7df09d247555b87 # v3.2.4
         with:
           branchName: ${{ github.base_ref }}
           cwd: tools/crypto_primitives_bench
