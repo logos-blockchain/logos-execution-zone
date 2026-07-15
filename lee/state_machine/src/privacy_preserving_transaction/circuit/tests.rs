@@ -60,7 +60,7 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_pre_accounts() 
 
     let recipient_account_id =
         AccountId::for_regular_private_account(&recipient_keys.npk(), &recipient_keys.vpk(), 0);
-    let recipient = AccountWithMetadata::new(Account::default(), false, recipient_account_id);
+    let recipient = AccountWithMetadata::new(Account::default(), true, recipient_account_id);
 
     let balance_to_move: u128 = 37;
 
@@ -144,7 +144,7 @@ fn prove_privacy_preserving_execution_circuit_fully_private() {
 
     let recipient_account_id =
         AccountId::for_regular_private_account(&recipient_keys.npk(), &recipient_keys.vpk(), 0);
-    let recipient = AccountWithMetadata::new(Account::default(), false, recipient_account_id);
+    let recipient = AccountWithMetadata::new(Account::default(), true, recipient_account_id);
     let balance_to_move: u128 = 37;
 
     let mut commitment_set = CommitmentSet::with_capacity(2);
@@ -318,7 +318,7 @@ fn circuit_fails_when_chained_validity_windows_have_empty_intersection() {
     let account_keys = test_private_account_keys_1();
     let pre = AccountWithMetadata::new(
         Account::default(),
-        false,
+        true,
         AccountId::for_regular_private_account(&account_keys.npk(), &account_keys.vpk(), 0),
     );
 
@@ -493,7 +493,7 @@ fn private_pda_withdraw() {
 /// Shared regular private account: receives funds via `authenticated_transfer` directly,
 /// no custom program needed. This demonstrates the non-PDA shared account flow where
 /// keys are derived from GMS via `derive_keys_for_shared_account`. The shared account
-/// uses the standard unauthorized private account path and works with auth-transfer's
+/// uses the standard foreign private account path and works with auth-transfer's
 /// transfer path like any other private account.
 #[test]
 fn shared_account_receives_via_simple_transfer() {
@@ -514,9 +514,9 @@ fn shared_account_receives_via_simple_transfer() {
         sender_id,
     );
 
-    // Recipient: shared private account (new, unauthorized)
+    // Recipient: shared private account (new, foreign)
     let shared_account_id = AccountId::from((&shared_npk, &shared_keys.vpk(), shared_identifier));
-    let recipient = AccountWithMetadata::new(Account::default(), false, shared_account_id);
+    let recipient = AccountWithMetadata::new(Account::default(), true, shared_account_id);
 
     let balance_to_move: u128 = 100;
     let instruction = Program::serialize_instruction(balance_to_move).unwrap();
@@ -581,7 +581,7 @@ fn private_authorized_init_encrypts_regular_kind_with_identifier() {
 /// `PrivateForeignInit` with a non-default identifier produces a ciphertext that decrypts
 /// to `PrivateAccountKind::Regular` carrying the correct identifier.
 #[test]
-fn private_unauthorized_init_encrypts_regular_kind_with_identifier() {
+fn private_foreign_init_encrypts_regular_kind_with_identifier() {
     let program = crate::test_methods::claimer();
     let keys = test_private_account_keys_1();
     let identifier: u128 = 99;
@@ -592,7 +592,7 @@ fn private_unauthorized_init_encrypts_regular_kind_with_identifier() {
         &Nonce::private_account_nonce_init(&recipient_id),
     );
     let ssk = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &esk).0;
-    let recipient = AccountWithMetadata::new(Account::default(), false, recipient_id);
+    let recipient = AccountWithMetadata::new(Account::default(), true, recipient_id);
 
     let (output, _) = execute_and_prove(
         vec![recipient],

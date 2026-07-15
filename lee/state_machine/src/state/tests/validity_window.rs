@@ -126,7 +126,7 @@ fn validity_window_works_in_privacy_preserving_transactions(
     let account_keys = test_private_account_keys_1();
     let pre = AccountWithMetadata::new(
         Account::default(),
-        false,
+        true,
         (&account_keys.npk(), &account_keys.vpk(), 0),
     );
     let mut state = V03State::new().with_test_programs();
@@ -191,7 +191,7 @@ fn timestamp_validity_window_works_in_privacy_preserving_transactions(
     let account_keys = test_private_account_keys_1();
     let pre = AccountWithMetadata::new(
         Account::default(),
-        false,
+        true,
         (&account_keys.npk(), &account_keys.vpk(), 0),
     );
     let mut state = V03State::new().with_test_programs();

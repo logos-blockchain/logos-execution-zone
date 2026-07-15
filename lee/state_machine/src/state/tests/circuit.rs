@@ -49,7 +49,7 @@ fn circuit_fails_if_invalid_auth_keys_are_provided() {
     );
     let private_account_2 = AccountWithMetadata::new(
         Account::default(),
-        false,
+        true,
         (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
     );
 
@@ -103,7 +103,7 @@ fn circuit_should_fail_if_new_private_account_with_non_default_balance_is_provid
             balance: 1,
             ..Account::default()
         },
-        false,
+        true,
         (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
     );
 
@@ -153,7 +153,7 @@ fn circuit_should_fail_if_new_private_account_with_non_default_program_owner_is_
             program_owner: [0, 1, 2, 3, 4, 5, 6, 7],
             ..Account::default()
         },
-        false,
+        true,
         (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
     );
 
@@ -203,7 +203,7 @@ fn circuit_should_fail_if_new_private_account_with_non_default_data_is_provided(
             data: b"hola mundo".to_vec().try_into().unwrap(),
             ..Account::default()
         },
-        false,
+        true,
         (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
     );
 
@@ -253,7 +253,7 @@ fn circuit_should_fail_if_new_private_account_with_non_default_nonce_is_provided
             nonce: Nonce(0xdead_beef),
             ..Account::default()
         },
-        false,
+        true,
         (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
     );
 
@@ -284,7 +284,7 @@ fn circuit_should_fail_if_new_private_account_with_non_default_nonce_is_provided
 }
 
 #[test]
-fn circuit_should_fail_if_new_private_account_is_provided_with_default_values_but_marked_as_authorized()
+fn circuit_should_fail_if_new_private_account_is_provided_with_default_values_but_marked_as_unauthorized()
  {
     let program = crate::test_methods::simple_balance_transfer();
     let sender_keys = test_private_account_keys_1();
@@ -300,8 +300,8 @@ fn circuit_should_fail_if_new_private_account_is_provided_with_default_values_bu
     );
     let private_account_2 = AccountWithMetadata::new(
         Account::default(),
-        // This should be set to false in normal circumstances
-        true,
+        // This should be set to true in normal circumstances
+        false,
         (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
     );
 
@@ -781,7 +781,7 @@ fn private_unauthorized_uninitialized_account_can_still_be_claimed() {
     // remains allowed.
     let unauthorized_account = AccountWithMetadata::new(
         Account::default(),
-        false,
+        true,
         (&private_keys.npk(), &private_keys.vpk(), 0),
     );
 

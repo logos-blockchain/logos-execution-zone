@@ -270,7 +270,7 @@ fn shielded_balance_transfer_for_tests(
 
     let recipient = AccountWithMetadata::new(
         Account::default(),
-        false,
+        true,
         (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
     );
 
@@ -320,7 +320,7 @@ fn private_balance_transfer_for_tests(
     );
     let recipient_pre = AccountWithMetadata::new(
         Account::default(),
-        false,
+        true,
         (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
     );
 
