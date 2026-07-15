@@ -624,7 +624,7 @@ async fn prove_init_with_commitment_root(
     let npk = NullifierPublicKey::from(&nsk);
     let vpk = ViewingPublicKey::from_bytes(vec![4_u8; 1184]).unwrap();
     let recipient_account_id = AccountId::for_regular_private_account(&npk, &vpk, 0);
-    let recipient = AccountWithMetadata::new(Account::default(), false, recipient_account_id);
+    let recipient = AccountWithMetadata::new(Account::default(), true, recipient_account_id);
 
     let (output, _) = execute_and_prove(
         vec![sender_pre, recipient],

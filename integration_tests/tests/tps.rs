@@ -272,7 +272,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
     let recipient_npk = NullifierPublicKey::from(&recipient_nsk);
     let recipient_pre = AccountWithMetadata::new(
         Account::default(),
-        false,
+        true,
         AccountId::for_regular_private_account(&recipient_npk, &recipient_vpk, 0),
     );
 
