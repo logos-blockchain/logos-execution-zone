@@ -633,7 +633,7 @@ async fn prove_init_with_commitment_root(
         })?,
         vec![
             InputAccountIdentity::Public,
-            InputAccountIdentity::PrivateUnauthorized {
+            InputAccountIdentity::PrivateForeignInit {
                 vpk,
                 random_seed: [0; 32],
                 npk,

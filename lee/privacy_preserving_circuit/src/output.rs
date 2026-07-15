@@ -119,7 +119,7 @@ pub fn compute_circuit_output(
                     new_nonce,
                 );
             }
-            InputAccountIdentity::PrivateUnauthorized {
+            InputAccountIdentity::PrivateForeignInit {
                 vpk,
                 random_seed,
                 npk,
@@ -135,8 +135,8 @@ pub fn compute_circuit_output(
                     "Found new private account with non default values",
                 );
                 assert!(
-                    !pre_state.is_authorized,
-                    "Found new private account marked as authorized."
+                    pre_state.is_authorized,
+                    "Found new private account marked as unauthorized."
                 );
 
                 let new_nullifier = (

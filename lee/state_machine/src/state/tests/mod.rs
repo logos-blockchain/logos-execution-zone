@@ -279,7 +279,7 @@ fn shielded_balance_transfer_for_tests(
         Program::serialize_instruction(balance_to_move).unwrap(),
         vec![
             InputAccountIdentity::Public,
-            InputAccountIdentity::PrivateUnauthorized {
+            InputAccountIdentity::PrivateForeignInit {
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 npk: recipient_keys.npk(),
@@ -338,7 +338,7 @@ fn private_balance_transfer_for_tests(
                     .expect("sender's commitment must be in state"),
                 identifier: 0,
             },
-            InputAccountIdentity::PrivateUnauthorized {
+            InputAccountIdentity::PrivateForeignInit {
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 npk: recipient_keys.npk(),

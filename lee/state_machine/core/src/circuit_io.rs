@@ -49,7 +49,7 @@ pub enum InputAccountIdentity {
     },
     /// Init of a standalone private account the caller does not own (e.g. a recipient who
     /// doesn't yet exist on chain). No `nsk`, no membership proof.
-    PrivateUnauthorized {
+    PrivateForeignInit {
         vpk: ViewingPublicKey,
         random_seed: [u8; 32],
         npk: NullifierPublicKey,
@@ -127,7 +127,7 @@ impl InputAccountIdentity {
             Self::Public
             | Self::PrivateAuthorizedInit { .. }
             | Self::PrivateAuthorizedUpdate { .. }
-            | Self::PrivateUnauthorized { .. } => None,
+            | Self::PrivateForeignInit { .. } => None,
         }
     }
 }

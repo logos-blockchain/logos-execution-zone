@@ -138,7 +138,7 @@ fn validity_window_works_in_privacy_preserving_transactions(
         let (output, proof) = crate::privacy_preserving_transaction::circuit::execute_and_prove(
             vec![pre],
             Program::serialize_instruction(instruction).unwrap(),
-            vec![InputAccountIdentity::PrivateUnauthorized {
+            vec![InputAccountIdentity::PrivateForeignInit {
                 vpk: account_keys.vpk(),
                 random_seed: [0; 32],
                 npk: account_keys.npk(),
@@ -203,7 +203,7 @@ fn timestamp_validity_window_works_in_privacy_preserving_transactions(
         let (output, proof) = crate::privacy_preserving_transaction::circuit::execute_and_prove(
             vec![pre],
             Program::serialize_instruction(instruction).unwrap(),
-            vec![InputAccountIdentity::PrivateUnauthorized {
+            vec![InputAccountIdentity::PrivateForeignInit {
                 vpk: account_keys.vpk(),
                 random_seed: [0; 32],
                 npk: account_keys.npk(),

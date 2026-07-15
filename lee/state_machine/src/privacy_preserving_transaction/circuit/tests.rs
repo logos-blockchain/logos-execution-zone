@@ -89,7 +89,7 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_pre_accounts() 
         Program::serialize_instruction(balance_to_move).unwrap(),
         vec![
             InputAccountIdentity::Public,
-            InputAccountIdentity::PrivateUnauthorized {
+            InputAccountIdentity::PrivateForeignInit {
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 npk: recipient_keys.npk(),
@@ -205,7 +205,7 @@ fn prove_privacy_preserving_execution_circuit_fully_private() {
                     .expect("sender's commitment must be in the set"),
                 identifier: 0,
             },
-            InputAccountIdentity::PrivateUnauthorized {
+            InputAccountIdentity::PrivateForeignInit {
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 npk: recipient_keys.npk(),
@@ -342,7 +342,7 @@ fn circuit_fails_when_chained_validity_windows_have_empty_intersection() {
     let result = execute_and_prove(
         vec![pre],
         instruction,
-        vec![InputAccountIdentity::PrivateUnauthorized {
+        vec![InputAccountIdentity::PrivateForeignInit {
             vpk: account_keys.vpk(),
             random_seed: [0; 32],
             npk: account_keys.npk(),
@@ -526,7 +526,7 @@ fn shared_account_receives_via_simple_transfer() {
         instruction,
         vec![
             InputAccountIdentity::Public,
-            InputAccountIdentity::PrivateUnauthorized {
+            InputAccountIdentity::PrivateForeignInit {
                 vpk: shared_keys.vpk(),
                 random_seed: [0; 32],
                 npk: shared_npk,
@@ -578,7 +578,7 @@ fn private_authorized_init_encrypts_regular_kind_with_identifier() {
     );
 }
 
-/// `PrivateUnauthorized` with a non-default identifier produces a ciphertext that decrypts
+/// `PrivateForeignInit` with a non-default identifier produces a ciphertext that decrypts
 /// to `PrivateAccountKind::Regular` carrying the correct identifier.
 #[test]
 fn private_unauthorized_init_encrypts_regular_kind_with_identifier() {
@@ -597,7 +597,7 @@ fn private_unauthorized_init_encrypts_regular_kind_with_identifier() {
     let (output, _) = execute_and_prove(
         vec![recipient],
         Program::serialize_instruction(()).unwrap(),
-        vec![InputAccountIdentity::PrivateUnauthorized {
+        vec![InputAccountIdentity::PrivateForeignInit {
             vpk: keys.vpk(),
             random_seed: [0; 32],
             npk: keys.npk(),

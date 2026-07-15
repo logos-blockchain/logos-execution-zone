@@ -69,7 +69,7 @@ fn circuit_fails_if_invalid_auth_keys_are_provided() {
                 membership_proof: (0, vec![]),
                 identifier: 0,
             },
-            InputAccountIdentity::PrivateUnauthorized {
+            InputAccountIdentity::PrivateForeignInit {
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 npk: recipient_keys.npk(),
@@ -119,7 +119,7 @@ fn circuit_should_fail_if_new_private_account_with_non_default_balance_is_provid
                 membership_proof: (0, vec![]),
                 identifier: 0,
             },
-            InputAccountIdentity::PrivateUnauthorized {
+            InputAccountIdentity::PrivateForeignInit {
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 npk: recipient_keys.npk(),
@@ -169,7 +169,7 @@ fn circuit_should_fail_if_new_private_account_with_non_default_program_owner_is_
                 membership_proof: (0, vec![]),
                 identifier: 0,
             },
-            InputAccountIdentity::PrivateUnauthorized {
+            InputAccountIdentity::PrivateForeignInit {
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 npk: recipient_keys.npk(),
@@ -219,7 +219,7 @@ fn circuit_should_fail_if_new_private_account_with_non_default_data_is_provided(
                 membership_proof: (0, vec![]),
                 identifier: 0,
             },
-            InputAccountIdentity::PrivateUnauthorized {
+            InputAccountIdentity::PrivateForeignInit {
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 npk: recipient_keys.npk(),
@@ -269,7 +269,7 @@ fn circuit_should_fail_if_new_private_account_with_non_default_nonce_is_provided
                 membership_proof: (0, vec![]),
                 identifier: 0,
             },
-            InputAccountIdentity::PrivateUnauthorized {
+            InputAccountIdentity::PrivateForeignInit {
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 npk: recipient_keys.npk(),
@@ -317,7 +317,7 @@ fn circuit_should_fail_if_new_private_account_is_provided_with_default_values_bu
                 membership_proof: (0, vec![]),
                 identifier: 0,
             },
-            InputAccountIdentity::PrivateUnauthorized {
+            InputAccountIdentity::PrivateForeignInit {
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 npk: recipient_keys.npk(),
@@ -790,7 +790,7 @@ fn private_unauthorized_uninitialized_account_can_still_be_claimed() {
     let (output, proof) = execute_and_prove(
         vec![unauthorized_account],
         Program::serialize_instruction(()).unwrap(),
-        vec![InputAccountIdentity::PrivateUnauthorized {
+        vec![InputAccountIdentity::PrivateForeignInit {
             vpk: private_keys.vpk(),
             random_seed: [0; 32],
             npk: private_keys.npk(),

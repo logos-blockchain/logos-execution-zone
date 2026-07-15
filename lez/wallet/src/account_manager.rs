@@ -256,7 +256,7 @@ impl AccountManager {
                     identifier,
                 } => {
                     let acc = lee_core::account::Account::default();
-                    let auth_acc = AccountWithMetadata::new(acc, false, (&npk, &vpk, identifier));
+                    let auth_acc = AccountWithMetadata::new(acc, true, (&npk, &vpk, identifier));
                     let mut random_seed: [u8; 32] = [0; 32];
                     OsRng.fill_bytes(&mut random_seed);
                     let pre = AccountPreparedData {
@@ -437,7 +437,7 @@ impl AccountManager {
                         identifier: pre.identifier,
                         commitment_root: self.dummy_commitment_root,
                     },
-                    (None, _) => InputAccountIdentity::PrivateUnauthorized {
+                    (None, _) => InputAccountIdentity::PrivateForeignInit {
                         vpk: pre.vpk.clone(),
                         random_seed: pre.random_seed,
                         npk: pre.npk,

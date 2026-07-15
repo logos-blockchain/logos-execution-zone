@@ -299,7 +299,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
                 membership_proof: proof,
                 identifier: 0,
             },
-            InputAccountIdentity::PrivateUnauthorized {
+            InputAccountIdentity::PrivateForeignInit {
                 vpk: recipient_vpk,
                 random_seed: [0; 32],
                 npk: recipient_npk,
