@@ -16,7 +16,7 @@ use common::{HashType, transaction::LeeTransaction};
 use config::WalletConfig;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use lee::{
-    Account, AccountId, PrivacyPreservingTransaction, ProgramId,
+    Account, AccountId, PrivacyPreservingTransaction, ProgramId, PublicTransaction,
     privacy_preserving_transaction::{
         circuit::ProgramWithDependencies,
         message::{EncryptedAccountData, Message},
@@ -474,6 +474,19 @@ impl WalletCore {
         Some(Commitment::new(&account_id, account))
     }
 
+    /// Submit a fully built transaction without polling for its result.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExecutionFailureKind::SequencerClientError`] when the sequencer rejects the
+    /// submission or cannot be reached.
+    pub async fn submit_transaction(
+        &self,
+        transaction: LeeTransaction,
+    ) -> Result<HashType, ExecutionFailureKind> {
+        Ok(self.sequencer_client.send_transaction(transaction).await?)
+    }
+
     pub async fn get_proofs_and_root(
         &self,
         commitments: Vec<Commitment>,
@@ -563,7 +576,31 @@ impl WalletCore {
         instruction_data: InstructionData,
         program: &ProgramWithDependencies,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
-        self.send_privacy_preserving_tx_with_pre_check(accounts, instruction_data, program, |_| {
+        let (transaction, shared_secrets) = self
+            .build_privacy_preserving_tx(accounts, instruction_data, program)
+            .await?;
+        let hash = self
+            .submit_transaction(LeeTransaction::PrivacyPreserving(transaction))
+            .await?;
+
+        Ok((hash, shared_secrets))
+    }
+
+    /// Build a privacy-preserving transaction without submitting it.
+    ///
+    /// Wallet may read account state, prepare private inputs, prove, and sign while building. It
+    /// does not submit, poll, print, or persist Wallet state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ExecutionFailureKind`] when account preparation, proving, or signing fails.
+    pub async fn build_privacy_preserving_tx(
+        &self,
+        accounts: Vec<AccountIdentity>,
+        instruction_data: InstructionData,
+        program: &ProgramWithDependencies,
+    ) -> Result<(PrivacyPreservingTransaction, Vec<SharedSecretKey>), ExecutionFailureKind> {
+        self.build_privacy_preserving_tx_with_pre_check(accounts, instruction_data, program, |_| {
             Ok(())
         })
         .await
@@ -576,6 +613,28 @@ impl WalletCore {
         program: &ProgramWithDependencies,
         tx_pre_check: impl FnOnce(&[&Account]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
+        let (transaction, shared_secrets) = self
+            .build_privacy_preserving_tx_with_pre_check(
+                accounts,
+                instruction_data,
+                program,
+                tx_pre_check,
+            )
+            .await?;
+        let hash = self
+            .submit_transaction(LeeTransaction::PrivacyPreserving(transaction))
+            .await?;
+
+        Ok((hash, shared_secrets))
+    }
+
+    async fn build_privacy_preserving_tx_with_pre_check(
+        &self,
+        accounts: Vec<AccountIdentity>,
+        instruction_data: InstructionData,
+        program: &ProgramWithDependencies,
+        tx_pre_check: impl FnOnce(&[&Account]) -> Result<(), ExecutionFailureKind>,
+    ) -> Result<(PrivacyPreservingTransaction, Vec<SharedSecretKey>), ExecutionFailureKind> {
         let acc_manager = account_manager::AccountManager::new(self, accounts).await?;
 
         let pre_states = acc_manager.pre_states();
@@ -620,12 +679,7 @@ impl WalletCore {
             .map(|keys| keys.ssk)
             .collect();
 
-        Ok((
-            self.sequencer_client
-                .send_transaction(LeeTransaction::PrivacyPreserving(tx))
-                .await?,
-            shared_secrets,
-        ))
+        Ok((tx, shared_secrets))
     }
 
     pub async fn send_pub_tx(
@@ -634,7 +688,28 @@ impl WalletCore {
         instruction_data: InstructionData,
         program_id: ProgramId,
     ) -> Result<HashType, ExecutionFailureKind> {
-        self.send_pub_tx_with_pre_check(accounts, instruction_data, program_id, |_| Ok(()))
+        let transaction = self
+            .build_pub_tx(accounts, instruction_data, program_id)
+            .await?;
+        self.submit_transaction(LeeTransaction::Public(transaction))
+            .await
+    }
+
+    /// Build a public transaction without submitting it.
+    ///
+    /// Wallet may read account state and sign while building. It does not submit, poll, print,
+    /// or persist Wallet state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an [`ExecutionFailureKind`] when account preparation or signing fails.
+    pub async fn build_pub_tx(
+        &self,
+        accounts: Vec<AccountIdentity>,
+        instruction_data: InstructionData,
+        program_id: ProgramId,
+    ) -> Result<PublicTransaction, ExecutionFailureKind> {
+        self.build_pub_tx_with_pre_check(accounts, instruction_data, program_id, |_| Ok(()))
             .await
     }
 
@@ -645,6 +720,20 @@ impl WalletCore {
         program_id: ProgramId,
         tx_pre_check: impl FnOnce(&[&Account]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<HashType, ExecutionFailureKind> {
+        let transaction = self
+            .build_pub_tx_with_pre_check(accounts, instruction_data, program_id, tx_pre_check)
+            .await?;
+        self.submit_transaction(LeeTransaction::Public(transaction))
+            .await
+    }
+
+    async fn build_pub_tx_with_pre_check(
+        &self,
+        accounts: Vec<AccountIdentity>,
+        instruction_data: InstructionData,
+        program_id: ProgramId,
+        tx_pre_check: impl FnOnce(&[&Account]) -> Result<(), ExecutionFailureKind>,
+    ) -> Result<PublicTransaction, ExecutionFailureKind> {
         // Public transaction, all accounts must be public
         if accounts.iter().any(AccountIdentity::is_private) {
             return Err(ExecutionFailureKind::TransactionBuildError(
@@ -684,10 +773,7 @@ impl WalletCore {
 
         let tx = lee::public_transaction::PublicTransaction::new(message, witness_set);
 
-        Ok(self
-            .sequencer_client
-            .send_transaction(LeeTransaction::Public(tx))
-            .await?)
+        Ok(tx)
     }
 
     pub async fn sync_to_latest_block(&mut self) -> Result<u64> {
