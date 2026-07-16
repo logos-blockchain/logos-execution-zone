@@ -397,10 +397,10 @@ impl ValidatedStateDiff {
         // 6. Nullifier uniqueness
         state.check_nullifiers_are_valid(&nullifiers)?;
 
-        let public_diff = public_account_ids
+        let public_diff = message
+            .public_actions
             .iter()
-            .copied()
-            .zip(message.public_post_states())
+            .map(|action| (action.account_id, action.post_state.clone()))
             .collect();
         let new_nullifiers = nullifiers.iter().map(|(nullifier, _)| *nullifier).collect();
 
@@ -491,8 +491,11 @@ fn check_privacy_preserving_circuit_proof_is_valid(
         public_actions: public_pre_states
             .iter()
             .cloned()
-            .zip(message.public_post_states())
-            .map(|(pre, post)| PublicAction { pre, post })
+            .zip(&message.public_actions)
+            .map(|(pre, action)| PublicAction {
+                pre,
+                post: action.post_state.clone(),
+            })
             .collect(),
         private_actions: message.private_actions.clone(),
         block_validity_window: message.block_validity_window,

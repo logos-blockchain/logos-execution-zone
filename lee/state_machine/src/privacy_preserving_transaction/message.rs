@@ -101,14 +101,6 @@ impl Message {
     }
 
     #[must_use]
-    pub fn public_post_states(&self) -> Vec<Account> {
-        self.public_actions
-            .iter()
-            .map(|action| action.post_state.clone())
-            .collect()
-    }
-
-    #[must_use]
     pub fn hash(&self) -> [u8; 32] {
         let msg = self.to_bytes();
         let mut bytes = Vec::with_capacity(
