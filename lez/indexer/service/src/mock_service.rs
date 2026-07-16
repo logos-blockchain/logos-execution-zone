@@ -11,9 +11,9 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use indexer_service_protocol::{
     Account, AccountId, BedrockStatus, Block, BlockBody, BlockHeader, BlockId, Commitment,
     CommitmentSetDigest, Data, EncryptedAccountData, HashType, IndexerStatus, IndexerSyncState,
-    PrivacyPreservingMessage, PrivacyPreservingTransaction, ProgramDeploymentMessage,
-    ProgramDeploymentTransaction, ProgramId, PublicMessage, PublicTransaction, Signature,
-    Transaction, ValidityWindow, WitnessSet,
+    PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction,
+    ProgramDeploymentMessage, ProgramDeploymentTransaction, ProgramId, PublicActionWithID,
+    PublicMessage, PublicTransaction, Signature, Transaction, ValidityWindow, WitnessSet,
 };
 use jsonrpsee::{
     core::{SubscriptionResult, async_trait},
@@ -300,9 +300,11 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
                 .values()
                 .filter(|(tx, _)| match tx {
                     Transaction::Public(pub_tx) => pub_tx.message.account_ids.contains(&account_id),
-                    Transaction::PrivacyPreserving(priv_tx) => {
-                        priv_tx.message.public_account_ids.contains(&account_id)
-                    }
+                    Transaction::PrivacyPreserving(priv_tx) => priv_tx
+                        .message
+                        .public_actions
+                        .iter()
+                        .any(|action| action.account_id == account_id),
                     Transaction::ProgramDeployment(_) => false,
                 })
                 .cloned()
@@ -381,24 +383,26 @@ fn mock_privacy_preserving_tx(
     Transaction::PrivacyPreserving(PrivacyPreservingTransaction {
         hash: tx_hash,
         message: PrivacyPreservingMessage {
-            public_account_ids: vec![account_ids[tx_idx as usize % account_ids.len()]],
+            public_actions: vec![PublicActionWithID {
+                account_id: account_ids[tx_idx as usize % account_ids.len()],
+                post_state: Account {
+                    program_owner: ProgramId([1_u32; 8]),
+                    balance: 500,
+                    data: Data(vec![0xdd, 0xee]),
+                    nonce: block_id as u128,
+                },
+            }],
             nonces: vec![block_id as u128],
-            public_post_states: vec![Account {
-                program_owner: ProgramId([1_u32; 8]),
-                balance: 500,
-                data: Data(vec![0xdd, 0xee]),
-                nonce: block_id as u128,
+            private_actions: vec![PrivateAction {
+                nullifier: indexer_service_protocol::Nullifier([tx_idx as u8; 32]),
+                root: CommitmentSetDigest([0xff; 32]),
+                commitment: Commitment([block_id as u8; 32]),
+                encrypted_post_state: EncryptedAccountData {
+                    ciphertext: indexer_service_protocol::Ciphertext(vec![0x01, 0x02, 0x03, 0x04]),
+                    epk: indexer_service_protocol::EphemeralPublicKey(vec![0xaa; 32]),
+                    view_tag: 42,
+                },
             }],
-            encrypted_private_post_states: vec![EncryptedAccountData {
-                ciphertext: indexer_service_protocol::Ciphertext(vec![0x01, 0x02, 0x03, 0x04]),
-                epk: indexer_service_protocol::EphemeralPublicKey(vec![0xaa; 32]),
-                view_tag: 42,
-            }],
-            new_commitments: vec![Commitment([block_id as u8; 32])],
-            new_nullifiers: vec![(
-                indexer_service_protocol::Nullifier([tx_idx as u8; 32]),
-                CommitmentSetDigest([0xff; 32]),
-            )],
             block_validity_window: ValidityWindow((None, None)),
             timestamp_validity_window: ValidityWindow((None, None)),
         },

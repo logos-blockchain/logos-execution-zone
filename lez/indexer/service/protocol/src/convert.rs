@@ -6,9 +6,9 @@ use crate::{
     Account, AccountId, BedrockStatus, Block, BlockBody, BlockHeader, BlockIngestError, Ciphertext,
     Commitment, CommitmentSetDigest, Data, EncryptedAccountData, EphemeralPublicKey, HashType,
     IndexerStatus, IndexerSyncState, Nullifier, PrivacyPreservingMessage,
-    PrivacyPreservingTransaction, ProgramDeploymentMessage, ProgramDeploymentTransaction,
-    ProgramId, Proof, PublicKey, PublicMessage, PublicTransaction, Signature, StallReason,
-    Transaction, ValidityWindow, WitnessSet,
+    PrivacyPreservingTransaction, PrivateAction, ProgramDeploymentMessage,
+    ProgramDeploymentTransaction, ProgramId, Proof, PublicActionWithID, PublicKey, PublicMessage,
+    PublicTransaction, Signature, StallReason, Transaction, ValidityWindow, WitnessSet,
 };
 
 // ============================================================================
@@ -279,6 +279,26 @@ impl From<PublicMessage> for lee::public_transaction::Message {
     }
 }
 
+impl From<lee::privacy_preserving_transaction::message::PublicActionWithID> for PublicActionWithID {
+    fn from(value: lee::privacy_preserving_transaction::message::PublicActionWithID) -> Self {
+        Self {
+            account_id: value.account_id.into(),
+            post_state: value.post_state.into(),
+        }
+    }
+}
+
+impl From<lee_core::PrivateAction> for PrivateAction {
+    fn from(value: lee_core::PrivateAction) -> Self {
+        Self {
+            nullifier: value.nullifier.into(),
+            root: value.root.into(),
+            commitment: value.commitment.into(),
+            encrypted_post_state: value.encrypted_post_state.into(),
+        }
+    }
+}
+
 impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPreservingMessage {
     fn from(value: lee::privacy_preserving_transaction::message::Message) -> Self {
         let lee::privacy_preserving_transaction::message::Message {
@@ -289,26 +309,38 @@ impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPres
             timestamp_validity_window,
         } = value;
         Self {
-            public_account_ids: public_actions.iter().map(|a| a.account_id.into()).collect(),
+            public_actions: public_actions.into_iter().map(Into::into).collect(),
             nonces: nonces.iter().map(|x| x.0).collect(),
-            public_post_states: public_actions
-                .into_iter()
-                .map(|a| a.post_state.into())
-                .collect(),
-            encrypted_private_post_states: private_actions
-                .iter()
-                .map(|a| a.encrypted_post_state.clone().into())
-                .collect(),
-            new_commitments: private_actions
-                .iter()
-                .map(|a| a.commitment.clone().into())
-                .collect(),
-            new_nullifiers: private_actions
-                .into_iter()
-                .map(|a| (a.nullifier.into(), a.root.into()))
-                .collect(),
+            private_actions: private_actions.into_iter().map(Into::into).collect(),
             block_validity_window: block_validity_window.into(),
             timestamp_validity_window: timestamp_validity_window.into(),
+        }
+    }
+}
+
+impl TryFrom<PublicActionWithID>
+    for lee::privacy_preserving_transaction::message::PublicActionWithID
+{
+    type Error = lee::error::LeeError;
+
+    fn try_from(value: PublicActionWithID) -> Result<Self, Self::Error> {
+        Ok(Self {
+            account_id: value.account_id.into(),
+            post_state: value
+                .post_state
+                .try_into()
+                .map_err(|e| lee::error::LeeError::InvalidInput(format!("{e}")))?,
+        })
+    }
+}
+
+impl From<PrivateAction> for lee_core::PrivateAction {
+    fn from(value: PrivateAction) -> Self {
+        Self {
+            nullifier: value.nullifier.into(),
+            root: value.root.into(),
+            commitment: value.commitment.into(),
+            encrypted_post_state: value.encrypted_post_state.into(),
         }
     }
 }
@@ -318,51 +350,18 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
 
     fn try_from(value: PrivacyPreservingMessage) -> Result<Self, Self::Error> {
         let PrivacyPreservingMessage {
-            public_account_ids,
+            public_actions,
             nonces,
-            public_post_states,
-            encrypted_private_post_states,
-            new_commitments,
-            new_nullifiers,
+            private_actions,
             block_validity_window,
             timestamp_validity_window,
         } = value;
 
-        let public_post_states = public_post_states
+        let public_actions = public_actions
             .into_iter()
             .map(TryInto::try_into)
-            .collect::<Result<Vec<lee_core::account::Account>, _>>()
-            .map_err(|e| lee::error::LeeError::InvalidInput(format!("{e}")))?;
-        let public_actions = public_account_ids
-            .into_iter()
-            .map(Into::into)
-            .zip(public_post_states)
-            .map(|(account_id, post_state)| {
-                lee::privacy_preserving_transaction::message::PublicActionWithID {
-                    account_id,
-                    post_state,
-                }
-            })
-            .collect();
-
-        let private_actions = new_commitments
-            .into_iter()
-            .map(Into::into)
-            .zip(
-                new_nullifiers
-                    .into_iter()
-                    .map(|(n, d)| (n.into(), d.into())),
-            )
-            .zip(encrypted_private_post_states.into_iter().map(Into::into))
-            .map(|((commitment, (nullifier, root)), encrypted_post_state)| {
-                lee_core::PrivateAction {
-                    nullifier,
-                    root,
-                    commitment,
-                    encrypted_post_state,
-                }
-            })
-            .collect();
+            .collect::<Result<Vec<_>, _>>()?;
+        let private_actions = private_actions.into_iter().map(Into::into).collect();
 
         Ok(Self {
             public_actions,
