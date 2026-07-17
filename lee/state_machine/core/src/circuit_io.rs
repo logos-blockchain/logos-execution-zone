@@ -21,6 +21,7 @@ pub struct PrivacyPreservingCircuitInput {
     /// Program ID.
     pub program_id: ProgramId,
     pub dummy_inputs: Vec<DummyInput>,
+    pub ciphertext_padding: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]

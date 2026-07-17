@@ -230,6 +230,7 @@ pub mod tests {
             &PrivateAccountKind::Regular(0),
             &shared_secret,
             &nullifier,
+            None,
         );
         let encrypted_account_data =
             EncryptedAccountData::new(ciphertext.clone(), &npk, &vpk, epk.clone());

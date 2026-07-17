@@ -10,6 +10,7 @@ fn main() {
         account_identities,
         program_id,
         dummy_inputs,
+        ciphertext_padding,
     } = env::read();
 
     let execution_state = execution_state::ExecutionState::derive_from_outputs(
@@ -18,7 +19,12 @@ fn main() {
         program_outputs,
     );
 
-    let output = output::compute_circuit_output(execution_state, &account_identities, dummy_inputs);
+    let output = output::compute_circuit_output(
+        execution_state,
+        &account_identities,
+        dummy_inputs,
+        ciphertext_padding,
+    );
 
     env::commit(&output);
 }

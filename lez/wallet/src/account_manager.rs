@@ -5,8 +5,8 @@ use keycard_wallet::{KeycardWallet, python_path};
 use lee::{AccountId, PrivateKey, PublicKey, Signature};
 use lee_core::{
     Commitment, CommitmentSetDigest, DummyInput, Identifier, InputAccountIdentity, MembershipProof,
-    NullifierPublicKey, NullifierSecretKey, PrivateAccountKind, SharedSecretKey,
-    account::{Account, AccountWithMetadata, Nonce},
+    NullifierPublicKey, NullifierSecretKey, SharedSecretKey,
+    account::{AccountWithMetadata, Nonce},
     compute_digest_for_path,
     encryption::{
         Ciphertext, EncryptedAccountData, MlKem768EncapsulationKey, ViewTag, ViewingPublicKey,
@@ -15,6 +15,12 @@ use lee_core::{
 use rand::{RngCore as _, rngs::OsRng};
 
 use crate::{ExecutionFailureKind, WalletCore};
+
+/// A hardcoded pad size (in bytes) that the wallet automatically pads to.
+///
+/// The constant is supposed to be chosen based on the pragmatic considerations such as
+/// the largest possible size of actively-utilized transactions and gas costs.
+pub const CIPHERTEXT_PAD_SIZE: u32 = 512;
 
 #[derive(Clone, PartialEq, Eq)]
 pub enum AccountIdentity {
@@ -701,17 +707,15 @@ fn random_vec(len: usize) -> Vec<u8> {
     bytes
 }
 
-/// Generates a dummy note: random bytes sized to a default-account ciphertext, a real
+/// Generates a dummy note: random bytes sized to `CIPHERTEXT_PAD_SIZE`, a real
 /// ML-KEM ciphertext epk toward a throwaway key, and a random view tag.
 fn random_dummy_note() -> EncryptedAccountData {
-    // Sized to a default-account ciphertext; matching real data sizes is a separate issue.
-    let ciphertext_len = PrivateAccountKind::HEADER_LEN
-        .checked_add(Account::default().to_bytes().len())
-        .expect("dummy ciphertext length fits in usize");
     let throwaway_ek = MlKem768EncapsulationKey::from_seed(&random_bytes(), &random_bytes());
     let (_, epk) = SharedSecretKey::encapsulate(&throwaway_ek);
     EncryptedAccountData {
-        ciphertext: Ciphertext::from_inner(random_vec(ciphertext_len)),
+        ciphertext: Ciphertext::from_inner(random_vec(
+            usize::try_from(CIPHERTEXT_PAD_SIZE).expect("pad size fits in usize"),
+        )),
         epk,
         view_tag: random_view_tag(),
     }
@@ -719,6 +723,8 @@ fn random_dummy_note() -> EncryptedAccountData {
 
 #[cfg(test)]
 mod tests {
+    use lee_core::account::Account;
+
     use super::*;
 
     #[test]

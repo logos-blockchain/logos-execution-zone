@@ -120,11 +120,20 @@ impl EncryptionScheme {
         kind: &PrivateAccountKind,
         shared_secret: &SharedSecretKey,
         nullifier: &Nullifier,
+        pad_to_len: Option<u32>,
     ) -> Ciphertext {
         // Plaintext: PrivateAccountKind::HEADER_LEN bytes header || account bytes.
         // Both variants produce the same header length — see PrivateAccountKind::to_header_bytes.
         let mut buffer = kind.to_header_bytes().to_vec();
         buffer.extend_from_slice(&account.to_bytes());
+        if let Some(pad_to_len) = pad_to_len {
+            let pad_to_len = usize::try_from(pad_to_len).expect("pad length fits in usize");
+            assert!(
+                pad_to_len >= buffer.len(),
+                "ciphertext padding must be at least the plaintext length"
+            );
+            buffer.resize(pad_to_len, 0);
+        }
         Self::symmetric_transform(&mut buffer, shared_secret, nullifier);
         Ciphertext(buffer)
     }
@@ -206,6 +215,7 @@ mod tests {
             &PrivateAccountKind::Regular(42),
             &secret,
             &nullifier,
+            None,
         );
         let pda_ct = EncryptionScheme::encrypt(
             &account,
@@ -216,6 +226,7 @@ mod tests {
             },
             &secret,
             &nullifier,
+            None,
         );
 
         assert_eq!(account_ct.0.len(), pda_ct.0.len());
@@ -241,7 +252,7 @@ mod tests {
         let kind = PrivateAccountKind::Regular(0);
         let nullifier = Nullifier::for_account_initialization(&AccountId::new([7_u8; 32]));
 
-        let ct = EncryptionScheme::encrypt(&account, &kind, &sender_ss, &nullifier);
+        let ct = EncryptionScheme::encrypt(&account, &kind, &sender_ss, &nullifier, None);
         let (decoded_kind, decoded_account) =
             EncryptionScheme::decrypt(&ct, &receiver_ss, &nullifier)
                 .expect("decryption must succeed with correct shared secret");
