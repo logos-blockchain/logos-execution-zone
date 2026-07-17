@@ -6,8 +6,11 @@
 use anyhow::Result;
 use integration_tests::{TestContext, fetch_privacy_preserving_tx, new_account, private_mention};
 use tokio::test;
-use wallet::cli::{
-    Command, SubcommandReturnValue, programs::native_token_transfer::AuthTransferSubcommand,
+use wallet::{
+    CIPHERTEXT_PAD_SIZE,
+    cli::{
+        Command, SubcommandReturnValue, programs::native_token_transfer::AuthTransferSubcommand,
+    },
 };
 
 #[test]
@@ -27,6 +30,18 @@ async fn private_transaction_pads_notes_to_max() -> Result<()> {
     let tx = fetch_privacy_preserving_tx(ctx.sequencer_client(), tx_hash).await;
 
     assert_eq!(tx.message.private_actions.len(), 7);
+
+    let expected = usize::try_from(CIPHERTEXT_PAD_SIZE).expect("pad size fits in usize");
+    let lengths: Vec<usize> = tx
+        .message
+        .private_actions
+        .iter()
+        .map(|action| action.encrypted_post_state.ciphertext.as_bytes().len())
+        .collect();
+    assert!(
+        lengths.iter().all(|&len| len == expected),
+        "all note ciphertexts must be padded to {expected} bytes, got {lengths:?}"
+    );
 
     Ok(())
 }

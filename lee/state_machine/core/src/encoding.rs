@@ -124,6 +124,11 @@ impl Ciphertext {
         bytes
     }
 
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
     #[cfg(feature = "host")]
     #[must_use]
     pub fn into_inner(self) -> Vec<u8> {

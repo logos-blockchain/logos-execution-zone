@@ -290,6 +290,43 @@ fn init_note_view_tag_is_derived_from_account_keys() {
 }
 
 #[test]
+fn ciphertext_is_padded_to_requested_size() {
+    let program = crate::test_methods::noop();
+    let keys = test_private_account_keys_1();
+    let identifier: u128 = 0;
+    let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
+    let account = AccountWithMetadata::new(Account::default(), false, account_id);
+
+    let pad: u32 = 512;
+    let (output, proof) = execute_and_prove_with_dummy_inputs(
+        vec![account],
+        Program::serialize_instruction(()).unwrap(),
+        vec![InputAccountIdentity::PrivateUnauthorized {
+            vpk: keys.vpk(),
+            random_seed: [0; 32],
+            npk: keys.npk(),
+            identifier,
+            commitment_root: DUMMY_COMMITMENT_HASH,
+        }],
+        vec![],
+        Some(pad),
+        &program.into(),
+    )
+    .unwrap();
+
+    assert!(proof.is_valid_for(&output));
+    assert_eq!(output.private_actions.len(), 1);
+    assert_eq!(
+        output.private_actions[0]
+            .encrypted_post_state
+            .ciphertext
+            .as_bytes()
+            .len(),
+        usize::try_from(pad).expect("pad fits in usize"),
+    );
+}
+
+#[test]
 fn update_note_view_tag_is_the_supplied_value() {
     let program = crate::test_methods::noop();
     let keys = test_private_account_keys_1();
