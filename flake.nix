@@ -117,6 +117,7 @@
             done
             if [ -n "$tool" ]; then
               unset DEVELOPER_DIR SDKROOT
+              export xcrun_nocache=1
             fi
             exec /usr/bin/xcrun "$@"
           '';

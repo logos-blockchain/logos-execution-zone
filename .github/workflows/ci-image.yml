@@ -1,0 +1,75 @@
+name: CI image
+
+concurrency:
+  group: ci-image-${{ github.sha }}
+  cancel-in-progress: false
+
+# Resolves the CI image the calling workflow's jobs run in, building and pushing
+# it only when it isn't published yet.
+on:
+  workflow_call:
+    outputs:
+      image:
+        description: Image reference to pass to a job's `container:`.
+        value: ${{ jobs.ci-image.outputs.image }}
+
+jobs:
+  ci-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    outputs:
+      image: ${{ steps.image-ref.outputs.image }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.head_ref }}
+
+      # Tagging by content hash means a PR that touches the Dockerfile or the
+      # toolchain builds and tests against its own image, while every other PR
+      # reuses the one already in the registry.
+      - name: Compute image reference
+        id: image-ref
+        run: |
+          repo="$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')"
+          tag="$(cat .github/docker/ci.Dockerfile rust-toolchain.toml | sha256sum | cut -c1-16)"
+          echo "image=ghcr.io/${repo}/ci:${tag}" >> "$GITHUB_OUTPUT"
+          echo "CI image: ghcr.io/${repo}/ci:${tag}"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check whether the image is already published
+        id: probe
+        run: |
+          if docker manifest inspect "${{ steps.image-ref.outputs.image }}" > /dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Image already published, skipping build."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "Image not published yet, building it."
+          fi
+
+      - name: Set up Docker Buildx
+        if: steps.probe.outputs.exists == 'false'
+        uses: docker/setup-buildx-action@v3
+
+      # A pull_request from a fork gets a read-only GITHUB_TOKEN, so this step
+      # fails there. It only runs when the fork changed the image, which is the
+      # case that needs a maintainer's eyes anyway.
+      - name: Build and push CI image
+        if: steps.probe.outputs.exists == 'false'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./.github/docker/ci.Dockerfile
+          push: true
+          tags: ${{ steps.image-ref.outputs.image }}
+          # Links the package to the repo, so it shows up there and inherits its
+          # access rules.
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+          cache-from: type=gha,scope=ci-image
+          cache-to: type=gha,mode=max,scope=ci-image

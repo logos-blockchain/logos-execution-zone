@@ -1,0 +1,54 @@
+name: Run in CI image
+description: >
+  Runs a command inside the CI image on a plain runner, for jobs that need the
+  host's Docker daemon. `container:` cannot work for those: it puts the
+  workspace on a path the host daemon cannot resolve, and it forbids
+  `--network host`.
+
+inputs:
+  image:
+    description: CI image reference, from the ci-image workflow's output.
+    required: true
+  run:
+    description: Command to run inside the image.
+    required: true
+  env:
+    description: Newline-separated NAME=VALUE pairs to pass into the container.
+    required: false
+    default: ""
+
+runs:
+  using: "composite"
+  steps:
+    - name: Run in CI image
+      shell: bash
+      env:
+        INPUT_IMAGE: ${{ inputs.image }}
+        INPUT_RUN: ${{ inputs.run }}
+        INPUT_ENV: ${{ inputs.env }}
+      run: |
+        set -euo pipefail
+
+        env_args=()
+        while IFS= read -r pair; do
+          [[ -z "$pair" ]] && continue
+          env_args+=(--env "$pair")
+        done <<< "$INPUT_ENV"
+
+        # Cargo's registry is the only part of CARGO_HOME worth sharing with the
+        # host: mounting all of it would shadow the tools baked into the image.
+        mkdir -p "$HOME/.cargo/registry"
+
+        # Mounting the workspace on its own path is what makes this work. The
+        # daemon resolves compose bind mounts against the host, and the test
+        # binaries bake CARGO_MANIFEST_DIR in at compile time, so the path has
+        # to mean the same thing inside and outside the container.
+        docker run --rm \
+          --network host \
+          --volume /var/run/docker.sock:/var/run/docker.sock \
+          --volume "$PWD:$PWD" \
+          --volume "$HOME/.cargo/registry:/usr/local/cargo/registry" \
+          --workdir "$PWD" \
+          "${env_args[@]}" \
+          "$INPUT_IMAGE" \
+          bash -e -o pipefail -c "$INPUT_RUN"
