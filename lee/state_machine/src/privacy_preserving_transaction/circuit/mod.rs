@@ -76,6 +76,7 @@ pub fn execute_and_prove(
         instruction_data,
         account_identities,
         vec![],
+        None,
         program_with_dependencies,
     )
 }
@@ -85,6 +86,7 @@ pub fn execute_and_prove_with_dummy_inputs(
     instruction_data: InstructionData,
     account_identities: Vec<InputAccountIdentity>,
     dummy_inputs: Vec<DummyInput>,
+    ciphertext_padding: Option<u32>,
     program_with_dependencies: &ProgramWithDependencies,
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
     let ProgramWithDependencies {
@@ -145,6 +147,7 @@ pub fn execute_and_prove_with_dummy_inputs(
         account_identities,
         program_id: program_with_dependencies.program.id(),
         dummy_inputs,
+        ciphertext_padding,
     };
 
     env_builder.write(&circuit_input).unwrap();

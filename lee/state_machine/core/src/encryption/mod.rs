@@ -120,11 +120,20 @@ impl EncryptionScheme {
         kind: &PrivateAccountKind,
         shared_secret: &SharedSecretKey,
         nullifier: &Nullifier,
+        pad_to_len: Option<u32>,
     ) -> Ciphertext {
         // Plaintext: PrivateAccountKind::HEADER_LEN bytes header || account bytes.
         // Both variants produce the same header length — see PrivateAccountKind::to_header_bytes.
         let mut buffer = kind.to_header_bytes().to_vec();
         buffer.extend_from_slice(&account.to_bytes());
+        if let Some(pad_to_len) = pad_to_len {
+            let pad_to_len = usize::try_from(pad_to_len).expect("pad length fits in usize");
+            assert!(
+                pad_to_len >= buffer.len(),
+                "ciphertext padding must be at least the plaintext length"
+            );
+            buffer.resize(pad_to_len, 0);
+        }
         Self::symmetric_transform(&mut buffer, shared_secret, nullifier);
         Ciphertext(buffer)
     }
@@ -206,6 +215,7 @@ mod tests {
             &PrivateAccountKind::Regular(42),
             &secret,
             &nullifier,
+            None,
         );
         let pda_ct = EncryptionScheme::encrypt(
             &account,
@@ -216,9 +226,48 @@ mod tests {
             },
             &secret,
             &nullifier,
+            None,
         );
 
-        assert_eq!(account_ct.0.len(), pda_ct.0.len());
+        assert_eq!(account_ct.as_bytes().len(), pda_ct.as_bytes().len());
+    }
+
+    #[test]
+    fn encrypt_pads_ciphertext_to_exact_size() {
+        let secret = SharedSecretKey([0; 32]);
+        let nullifier = Nullifier::for_account_initialization(&AccountId::new([0; 32]));
+        let kind = PrivateAccountKind::Regular(0);
+        for data_len in [0, 10, 100, 300] {
+            let account = Account {
+                data: vec![7; data_len].try_into().unwrap(),
+                ..Account::default()
+            };
+            let plaintext_len = PrivateAccountKind::HEADER_LEN + account.to_bytes().len();
+            let base = u32::try_from(plaintext_len).expect("plaintext length fits in u32");
+            // exact (no-op), one byte over (tightest pad), and a loose pad
+            for pad in [base, base + 1, base + 1000] {
+                let ct = EncryptionScheme::encrypt(&account, &kind, &secret, &nullifier, Some(pad));
+                assert_eq!(
+                    ct.as_bytes().len(),
+                    usize::try_from(pad).expect("pad fits in usize")
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "ciphertext padding must be at least the plaintext length")]
+    fn encrypt_panics_when_padding_below_plaintext() {
+        let account = Account::default();
+        let secret = SharedSecretKey([0; 32]);
+        let nullifier = Nullifier::for_account_initialization(&AccountId::new([0; 32]));
+        let _ct = EncryptionScheme::encrypt(
+            &account,
+            &PrivateAccountKind::Regular(0),
+            &secret,
+            &nullifier,
+            Some(10),
+        );
     }
 
     /// Verifies the full account-note pipeline: ML-KEM-768 encapsulation/decapsulation
@@ -241,7 +290,7 @@ mod tests {
         let kind = PrivateAccountKind::Regular(0);
         let nullifier = Nullifier::for_account_initialization(&AccountId::new([7_u8; 32]));
 
-        let ct = EncryptionScheme::encrypt(&account, &kind, &sender_ss, &nullifier);
+        let ct = EncryptionScheme::encrypt(&account, &kind, &sender_ss, &nullifier, None);
         let (decoded_kind, decoded_account) =
             EncryptionScheme::decrypt(&ct, &receiver_ss, &nullifier)
                 .expect("decryption must succeed with correct shared secret");
