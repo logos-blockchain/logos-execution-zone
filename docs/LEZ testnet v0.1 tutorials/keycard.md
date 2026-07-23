@@ -132,14 +132,9 @@ Keycard PIN:
 ✅ Mnemonic phrase loaded successfully.
 ```
 
-5. `factory-reset` and `get-private-keys` (**debug builds only**)
+5. `factory-reset`
 
-Both require building the wallet with the `keycard-debug` feature:
-```bash
-cargo install --path lez/wallet --force --features keycard-debug
-```
-
-`factory-reset` wipes the card's PIN, PUK, and loaded keys back to an uninitialized state, so it can be re-`init`ialized — the counterpart to `init`. It does **not** remove the identity certificate, so the card doesn't need re-personalizing afterward. Irreversibly destroys any keys currently on the card, so it requires `--confirm`:
+Wipes the card's PIN, PUK, and loaded keys back to an uninitialized state, so it can be re-`init`ialized — the counterpart to `init`. It does **not** remove the identity certificate, so the card doesn't need re-personalizing afterward. Irreversibly destroys any keys currently on the card, so it requires `--confirm`:
 ```bash
 wallet keycard factory-reset --confirm
 
@@ -147,7 +142,14 @@ wallet keycard factory-reset --confirm
 ✅ Keycard factory-reset. Run `wallet keycard init` to reinitialize it.
 ```
 
-`get-private-keys` exports the raw NSK and VSK for a derivation path. NSK gates nullifier creation and VSK gates note decryption — either key is sufficient to fully compromise that account's privacy. Requires `--reveal` to confirm intent:
+6. `get-private-keys` (**debug builds only**)
+
+Requires building the wallet with the `keycard-debug` feature:
+```bash
+cargo install --path lez/wallet --force --features keycard-debug
+```
+
+Exports the raw NSK and VSK for a derivation path. NSK gates nullifier creation and VSK gates note decryption — either key is sufficient to fully compromise that account's privacy. Requires `--reveal` to confirm intent:
 ```bash
 wallet keycard get-private-keys --key-path "m/44'/60'/0'/0/0" --reveal
 

@@ -180,7 +180,7 @@ logos-blockchain-chain-service = { git = "https://github.com/logos-blockchain/lo
 logos-blockchain-zone-sdk = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d8711bbc3d43d3ef9755ef9b73af32fd0f703160" }
 logos-blockchain-http-api-common = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "d8711bbc3d43d3ef9755ef9b73af32fd0f703160" }
 
-keycard-rs = { git = "https://github.com/keycard-tech/keycard-rs" }
+keycard-rs = { git = "https://github.com/keycard-tech/keycard-rs", rev = "9535a657ba04b1e6916de51777e22b4837c1a84d" }
 
 rocksdb = { version = "0.24.0", default-features = false, features = [
   "snappy",
