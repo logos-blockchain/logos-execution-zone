@@ -254,7 +254,7 @@ fn init_note_view_tag_is_derived_from_account_keys() {
     let (output, proof) = execute_and_prove(
         vec![account],
         Program::serialize_instruction(()).unwrap(),
-        vec![InputAccountIdentity::PrivateUnauthorized {
+        vec![InputAccountIdentity::PrivateForeignInit {
             vpk: keys.vpk(),
             random_seed: [0; 32],
             npk: keys.npk(),
