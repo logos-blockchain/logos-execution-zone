@@ -249,7 +249,7 @@ fn init_note_view_tag_is_derived_from_account_keys() {
     let keys = test_private_account_keys_1();
     let identifier: u128 = 0;
     let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
-    let account = AccountWithMetadata::new(Account::default(), false, account_id);
+    let account = AccountWithMetadata::new(Account::default(), true, account_id);
 
     let (output, proof) = execute_and_prove(
         vec![account],
@@ -731,7 +731,7 @@ fn private_pda_init_identifier_mismatch_fails() {
     let npk = keys.npk();
     let seed = PdaSeed::new([42; 32]);
     let account_id = AccountId::for_private_pda(&program.id(), &seed, &npk, &keys.vpk(), 5);
-    let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
+    let pre_state = AccountWithMetadata::new(Account::default(), true, account_id);
 
     let result = execute_and_prove(
         vec![pre_state],
