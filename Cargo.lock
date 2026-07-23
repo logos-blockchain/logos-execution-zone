@@ -4796,7 +4796,7 @@ dependencies = [
 [[package]]
 name = "keycard-rs"
 version = "0.1.0"
-source = "git+https://github.com/keycard-tech/keycard-rs#9535a657ba04b1e6916de51777e22b4837c1a84d"
+source = "git+https://github.com/keycard-tech/keycard-rs?rev=9535a657ba04b1e6916de51777e22b4837c1a84d#9535a657ba04b1e6916de51777e22b4837c1a84d"
 dependencies = [
  "aes 0.9.1",
  "base64 0.21.7",
