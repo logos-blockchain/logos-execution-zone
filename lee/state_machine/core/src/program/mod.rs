@@ -164,22 +164,20 @@ impl AccountId {
         program_id: &ProgramId,
         seed: &PdaSeed,
         npk: &NullifierPublicKey,
-        apk: &AuthorizationPublicKey,
         vpk: &ViewingPublicKey,
         identifier: Identifier,
     ) -> Self {
         const PRIVATE_PDA_PREFIX: &[u8; 32] = b"/LEE/v0.3/AccountId/PrivatePDA/\x00";
 
-        let mut bytes = [0_u8; 32 + 32 + 32 + 32 + 32 + ViewingPublicKey::LEN + 16];
+        let mut bytes = [0_u8; 32 + 32 + 32 + 32 + ViewingPublicKey::LEN + 16];
         bytes[0..32].copy_from_slice(PRIVATE_PDA_PREFIX);
         let program_id_bytes: &[u8] =
             bytemuck::try_cast_slice(program_id).expect("ProgramId should be castable to &[u8]");
         bytes[32..64].copy_from_slice(program_id_bytes);
         bytes[64..96].copy_from_slice(&seed.0);
         bytes[96..128].copy_from_slice(&npk.to_byte_array());
-        bytes[128..160].copy_from_slice(&apk.0);
-        bytes[160..160 + ViewingPublicKey::LEN].copy_from_slice(vpk.to_bytes());
-        bytes[160 + ViewingPublicKey::LEN..].copy_from_slice(&identifier.to_le_bytes());
+        bytes[128..128 + ViewingPublicKey::LEN].copy_from_slice(vpk.to_bytes());
+        bytes[128 + ViewingPublicKey::LEN..].copy_from_slice(&identifier.to_le_bytes());
         Self::from_preimage(&bytes)
     }
 
@@ -199,7 +197,7 @@ impl AccountId {
                 program_id,
                 seed,
                 identifier,
-            } => Self::for_private_pda(program_id, seed, npk, apk, vpk, *identifier),
+            } => Self::for_private_pda(program_id, seed, npk, vpk, *identifier),
         }
     }
 

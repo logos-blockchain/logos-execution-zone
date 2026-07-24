@@ -299,8 +299,9 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
                 vpk: sender_vpk,
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: PrivateKind::Regular,
-                auth: AuthWitness::Held(sender_ask),
+                kind: PrivateKind::Regular {
+                    auth: AuthWitness::Held(sender_ask),
+                },
                 nullifier: NullifierWitness::Update {
                     nsk: sender_nsk,
                     membership_proof: proof,
@@ -310,8 +311,9 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
                 vpk: recipient_vpk,
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: PrivateKind::Regular,
-                auth: AuthWitness::Public(recipient_apk),
+                kind: PrivateKind::Regular {
+                    auth: AuthWitness::Public(recipient_apk),
+                },
                 nullifier: NullifierWitness::Init {
                     npk: recipient_npk,
                     commitment_root: DUMMY_COMMITMENT_HASH,

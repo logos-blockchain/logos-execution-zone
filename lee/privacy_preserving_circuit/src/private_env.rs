@@ -112,8 +112,10 @@ impl Backend for PrivateEnv<'_> {
             // feeds the cross-call scoping set.
             Some(InputAccountIdentity::Public) if pre.is_authorized => Authorization::Holder,
             Some(InputAccountIdentity::Private(PrivateWitness {
-                kind: PrivateKind::Regular,
-                auth: AuthWitness::Held(_),
+                kind:
+                    PrivateKind::Regular {
+                        auth: AuthWitness::Held(_),
+                    },
                 ..
             })) => Authorization::Holder,
             _ => Authorization::None,

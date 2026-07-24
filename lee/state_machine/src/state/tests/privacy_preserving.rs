@@ -521,8 +521,9 @@ fn malicious_authorization_changer_should_fail_in_privacy_preserving_circuit() {
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: PrivateKind::Regular,
-                auth: AuthWitness::Held(recipient_keys.ask),
+                kind: PrivateKind::Regular {
+                    auth: AuthWitness::Held(recipient_keys.ask),
+                },
                 nullifier: NullifierWitness::Update {
                     nsk: recipient_keys.nsk,
                     membership_proof: state

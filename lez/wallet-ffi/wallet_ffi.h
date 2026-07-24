@@ -963,7 +963,6 @@ struct FfiBytes32 wallet_ffi_account_id_for_public_pda(struct FfiProgramId progr
 enum WalletFfiError wallet_ffi_account_id_for_private_pda(struct FfiProgramId program_id,
                                                           FfiPdaSeed pda_seed,
                                                           FfiNullifierPublicKey npk,
-                                                          struct FfiBytes32 apk,
                                                           const uint8_t *viewing_public_key,
                                                           uintptr_t viewing_public_key_len,
                                                           struct FfiU128 identifier,

@@ -38,13 +38,12 @@ pub struct PrivateWitness {
     pub random_seed: [u8; 32],
     pub identifier: Identifier,
     pub kind: PrivateKind,
-    pub auth: AuthWitness,
     pub nullifier: NullifierWitness,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
 pub enum PrivateKind {
-    Regular,
+    Regular { auth: AuthWitness },
     Pda { seed: Option<(PdaSeed, ProgramId)> },
 }
 
@@ -86,10 +85,10 @@ impl AuthWitness {
 }
 
 impl PrivateWitness {
-    fn regular_id(&self) -> AccountId {
+    fn regular_id(&self, auth: &AuthWitness) -> AccountId {
         AccountId::for_regular_private_account(
             &self.nullifier.npk(),
-            &self.auth.apk(),
+            &auth.apk(),
             &self.vpk,
             self.identifier,
         )
@@ -100,7 +99,6 @@ impl PrivateWitness {
             program_id,
             seed,
             &self.nullifier.npk(),
-            &self.auth.apk(),
             &self.vpk,
             self.identifier,
         )
@@ -129,10 +127,10 @@ impl InputAccountIdentity {
         match self {
             Self::Private(
                 witness @ PrivateWitness {
-                    kind: PrivateKind::Regular,
+                    kind: PrivateKind::Regular { auth },
                     ..
                 },
-            ) => Some(witness.regular_id()),
+            ) => Some(witness.regular_id(auth)),
             Self::Public | Self::Private(_) => None,
         }
     }

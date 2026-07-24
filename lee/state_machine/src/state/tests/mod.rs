@@ -313,8 +313,9 @@ fn shielded_balance_transfer_for_tests(
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: PrivateKind::Regular,
-                auth: AuthWitness::Public(recipient_keys.apk()),
+                kind: PrivateKind::Regular {
+                    auth: AuthWitness::Public(recipient_keys.apk()),
+                },
                 nullifier: NullifierWitness::Init {
                     npk: recipient_keys.npk(),
                     commitment_root: DUMMY_COMMITMENT_HASH,
@@ -365,8 +366,9 @@ fn private_balance_transfer_for_tests(
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: PrivateKind::Regular,
-                auth: AuthWitness::Held(sender_keys.ask),
+                kind: PrivateKind::Regular {
+                    auth: AuthWitness::Held(sender_keys.ask),
+                },
                 nullifier: NullifierWitness::Update {
                     nsk: sender_keys.nsk,
                     membership_proof: state
@@ -378,8 +380,9 @@ fn private_balance_transfer_for_tests(
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: PrivateKind::Regular,
-                auth: AuthWitness::Public(recipient_keys.apk()),
+                kind: PrivateKind::Regular {
+                    auth: AuthWitness::Public(recipient_keys.apk()),
+                },
                 nullifier: NullifierWitness::Init {
                     npk: recipient_keys.npk(),
                     commitment_root: DUMMY_COMMITMENT_HASH,
@@ -426,8 +429,9 @@ fn deshielded_balance_transfer_for_tests(
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: PrivateKind::Regular,
-                auth: AuthWitness::Held(sender_keys.ask),
+                kind: PrivateKind::Regular {
+                    auth: AuthWitness::Held(sender_keys.ask),
+                },
                 nullifier: NullifierWitness::Update {
                     nsk: sender_keys.nsk,
                     membership_proof: state

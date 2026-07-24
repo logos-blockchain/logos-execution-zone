@@ -336,8 +336,9 @@ fn authorized_public_account_claiming_succeeds_when_executed_privately() {
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: PrivateKind::Regular,
-                auth: AuthWitness::Held(sender_keys.ask),
+                kind: PrivateKind::Regular {
+                    auth: AuthWitness::Held(sender_keys.ask),
+                },
                 nullifier: NullifierWitness::Update {
                     nsk: sender_keys.nsk,
                     membership_proof: state
@@ -454,8 +455,9 @@ fn private_chained_call(number_of_calls: u32) {
                 vpk: from_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: PrivateKind::Regular,
-                auth: AuthWitness::Held(from_keys.ask),
+                kind: PrivateKind::Regular {
+                    auth: AuthWitness::Held(from_keys.ask),
+                },
                 nullifier: NullifierWitness::Update {
                     nsk: from_keys.nsk,
                     membership_proof: state
@@ -467,8 +469,9 @@ fn private_chained_call(number_of_calls: u32) {
                 vpk: to_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: PrivateKind::Regular,
-                auth: AuthWitness::Held(to_keys.ask),
+                kind: PrivateKind::Regular {
+                    auth: AuthWitness::Held(to_keys.ask),
+                },
                 nullifier: NullifierWitness::Update {
                     nsk: to_keys.nsk,
                     membership_proof: state

@@ -40,7 +40,6 @@ pub enum AccountIdentity {
     PrivatePdaForeign {
         account_id: AccountId,
         npk: NullifierPublicKey,
-        apk: AuthorizationPublicKey,
         vpk: ViewingPublicKey,
         identifier: Identifier,
     },
@@ -59,7 +58,6 @@ pub enum AccountIdentity {
     PrivatePdaShared {
         account_id: AccountId,
         nsk: NullifierSecretKey,
-        ask: AuthorizationSecretKey,
         npk: NullifierPublicKey,
         vpk: ViewingPublicKey,
         identifier: Identifier,
@@ -96,14 +94,12 @@ impl fmt::Debug for AccountIdentity {
             Self::PrivatePdaForeign {
                 account_id,
                 npk,
-                apk,
                 vpk,
                 identifier,
             } => f
                 .debug_struct("PrivatePdaForeign")
                 .field("account_id", account_id)
                 .field("npk", npk)
-                .field("apk", apk)
                 .field("vpk", vpk)
                 .field("identifier", identifier)
                 .finish(),
@@ -182,10 +178,6 @@ pub struct PrivateAccountKeys {
     pub ssk: SharedSecretKey,
 }
 
-#[expect(
-    clippy::large_enum_variant,
-    reason = "Private carries a private-account prep with an inline ML-KEM viewing key; boxing every State for the size delta is not worth it"
-)]
 enum State {
     Public {
         account: AccountWithMetadata,
@@ -279,20 +271,21 @@ impl AccountManager {
                     let acc = lee_core::account::Account::default();
                     let account_id =
                         AccountId::for_regular_private_account(&npk, &apk, &vpk, identifier);
-                    let auth_acc = AccountWithMetadata::new(acc, false, account_id);
+                    let kind = PreparedKind::Regular {
+                        auth: AuthWitness::Public(apk),
+                    };
+                    let auth_acc = AccountWithMetadata::new(acc, kind.is_authorized(), account_id);
                     let mut random_seed: [u8; 32] = [0; 32];
                     OsRng.fill_bytes(&mut random_seed);
                     let pre = AccountPreparedData {
                         nsk: None,
                         npk,
-                        apk,
-                        ask: None,
+                        kind,
                         identifier,
                         vpk,
                         pre_state: auth_acc,
                         proof: None,
                         random_seed,
-                        is_pda: false,
                     };
 
                     State::Private(pre)
@@ -304,25 +297,23 @@ impl AccountManager {
                 AccountIdentity::PrivatePdaForeign {
                     account_id,
                     npk,
-                    apk,
                     vpk,
                     identifier,
                 } => {
                     let acc = lee_core::account::Account::default();
-                    let auth_acc = AccountWithMetadata::new(acc, false, account_id);
+                    let kind = PreparedKind::Pda;
+                    let auth_acc = AccountWithMetadata::new(acc, kind.is_authorized(), account_id);
                     let mut random_seed: [u8; 32] = [0; 32];
                     OsRng.fill_bytes(&mut random_seed);
                     let pre = AccountPreparedData {
                         nsk: None,
                         npk,
-                        apk,
-                        ask: None,
+                        kind,
                         identifier,
                         vpk,
                         pre_state: auth_acc,
                         proof: None,
                         random_seed,
-                        is_pda: true,
                     };
                     State::Private(pre)
                 }
@@ -337,7 +328,15 @@ impl AccountManager {
                     let account_id =
                         AccountId::for_regular_private_account(&npk, &apk, &vpk, identifier);
                     let pre = private_shared_acc_preparation(
-                        wallet, account_id, nsk, ask, npk, vpk, identifier, false,
+                        wallet,
+                        account_id,
+                        nsk,
+                        npk,
+                        vpk,
+                        identifier,
+                        PreparedKind::Regular {
+                            auth: AuthWitness::Held(ask),
+                        },
                     );
 
                     State::Private(pre)
@@ -345,13 +344,18 @@ impl AccountManager {
                 AccountIdentity::PrivatePdaShared {
                     account_id,
                     nsk,
-                    ask,
                     npk,
                     vpk,
                     identifier,
                 } => {
                     let pre = private_shared_acc_preparation(
-                        wallet, account_id, nsk, ask, npk, vpk, identifier, true,
+                        wallet,
+                        account_id,
+                        nsk,
+                        npk,
+                        vpk,
+                        identifier,
+                        PreparedKind::Pda,
                     );
 
                     State::Private(pre)
@@ -433,15 +437,11 @@ impl AccountManager {
             .map(|state| match state {
                 State::Public { .. } | State::PublicKeycard { .. } => InputAccountIdentity::Public,
                 State::Private(pre) => {
-                    let kind = if pre.is_pda {
-                        PrivateKind::Pda { seed: None }
-                    } else {
-                        PrivateKind::Regular
-                    };
-                    let auth = if holds_auth(pre.is_pda, pre.ask.is_some()) {
-                        AuthWitness::Held(pre.ask.expect("holds_auth implies ask is present"))
-                    } else {
-                        AuthWitness::Public(pre.apk)
+                    let kind = match &pre.kind {
+                        PreparedKind::Regular { auth } => {
+                            PrivateKind::Regular { auth: auth.clone() }
+                        }
+                        PreparedKind::Pda => PrivateKind::Pda { seed: None },
                     };
                     let nullifier = match (pre.nsk, pre.proof.clone()) {
                         (Some(nsk), Some(membership_proof)) => NullifierWitness::Update {
@@ -458,7 +458,6 @@ impl AccountManager {
                         random_seed: pre.random_seed,
                         identifier: pre.identifier,
                         kind,
-                        auth,
                         nullifier,
                     })
                 }
@@ -527,26 +526,31 @@ impl AccountManager {
     }
 }
 
+enum PreparedKind {
+    Regular { auth: AuthWitness },
+    Pda,
+}
+
+impl PreparedKind {
+    const fn is_authorized(&self) -> bool {
+        matches!(
+            self,
+            Self::Regular {
+                auth: AuthWitness::Held(_)
+            }
+        )
+    }
+}
+
 struct AccountPreparedData {
     nsk: Option<NullifierSecretKey>,
     npk: NullifierPublicKey,
-    apk: AuthorizationPublicKey,
-    ask: Option<AuthorizationSecretKey>,
+    kind: PreparedKind,
     identifier: Identifier,
     vpk: ViewingPublicKey,
     pre_state: AccountWithMetadata,
     proof: Option<MembershipProof>,
     random_seed: [u8; 32],
-    /// True when this account is a private PDA (owned or foreign). Used by `account_identities()`
-    /// to build a `PrivateKind::Pda` witness rather than a `Regular` one.
-    is_pda: bool,
-}
-
-// Whether the wallet holds this account's authorization key (a regular account with a known `ask`).
-// Single source for the pre-state `is_authorized` and the `AuthWitness::Held` choice, so they can't
-// drift: an unauthorized-owned regular (no `ask`) flips both together.
-const fn holds_auth(is_pda: bool, has_ask: bool) -> bool {
-    !is_pda && has_ask
 }
 
 fn private_key_tree_acc_preparation(
@@ -561,18 +565,21 @@ fn private_key_tree_acc_preparation(
     let from_identifier = from_acc.kind.identifier();
     let from_keys = &from_acc.key_chain;
     let nsk = from_keys.private_key_holder.nullifier_secret_key;
-    let ask = Some(from_keys.private_key_holder.authorization_secret_key);
     let from_npk = from_keys.nullifier_public_key;
-    let from_apk = from_keys.authorization_public_key;
     let from_vpk = from_keys.viewing_public_key.clone();
 
     // TODO: Technically we could allow unauthorized owned accounts, but currently we don't have
     // support from that in the wallet.
-    let sender_pre = AccountWithMetadata::new(
-        from_acc.account.clone(),
-        holds_auth(is_pda, ask.is_some()),
-        account_id,
-    );
+    let kind = if is_pda {
+        PreparedKind::Pda
+    } else {
+        PreparedKind::Regular {
+            auth: AuthWitness::Held(from_keys.private_key_holder.authorization_secret_key),
+        }
+    };
+
+    let sender_pre =
+        AccountWithMetadata::new(from_acc.account.clone(), kind.is_authorized(), account_id);
 
     let mut random_seed: [u8; 32] = [0; 32];
     OsRng.fill_bytes(&mut random_seed);
@@ -580,30 +587,23 @@ fn private_key_tree_acc_preparation(
     Ok(AccountPreparedData {
         nsk: Some(nsk),
         npk: from_npk,
-        apk: from_apk,
-        ask,
+        kind,
         identifier: from_identifier,
         vpk: from_vpk,
         pre_state: sender_pre,
         proof: None,
         random_seed,
-        is_pda,
     })
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "threads the shared account's keys individually; a context struct would only rename them"
-)]
 fn private_shared_acc_preparation(
     wallet: &WalletCore,
     account_id: AccountId,
     nsk: NullifierSecretKey,
-    ask: AuthorizationSecretKey,
     npk: NullifierPublicKey,
     vpk: ViewingPublicKey,
     identifier: Identifier,
-    is_pda: bool,
+    kind: PreparedKind,
 ) -> AccountPreparedData {
     let acc = wallet
         .storage()
@@ -612,9 +612,7 @@ fn private_shared_acc_preparation(
         .map(|e| e.account.clone())
         .unwrap_or_default();
 
-    let apk = AuthorizationPublicKey::from(&ask);
-    let ask = Some(ask);
-    let pre_state = AccountWithMetadata::new(acc, holds_auth(is_pda, ask.is_some()), account_id);
+    let pre_state = AccountWithMetadata::new(acc, kind.is_authorized(), account_id);
 
     let mut random_seed: [u8; 32] = [0; 32];
     OsRng.fill_bytes(&mut random_seed);
@@ -622,14 +620,12 @@ fn private_shared_acc_preparation(
     AccountPreparedData {
         nsk: Some(nsk),
         npk,
-        apk,
-        ask,
+        kind,
         identifier,
         vpk,
         pre_state,
         proof: None,
         random_seed,
-        is_pda,
     }
 }
 

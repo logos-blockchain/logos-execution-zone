@@ -185,14 +185,13 @@ fn for_private_pda_matches_pinned_value() {
     let seed = PdaSeed::new([2; 32]);
     let npk = NullifierPublicKey([3; 32]);
     let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
-    let apk = AuthorizationPublicKey::from(&[0_u8; 32]);
     let identifier: Identifier = u128::MAX;
     let expected = AccountId::new([
-        207, 161, 189, 178, 35, 142, 148, 199, 231, 214, 55, 131, 218, 152, 49, 15, 20, 47, 66, 49,
-        24, 68, 70, 238, 35, 43, 41, 165, 27, 221, 254, 216,
+        5, 87, 128, 244, 206, 244, 65, 130, 178, 88, 225, 183, 0, 159, 201, 201, 212, 206, 6, 156,
+        13, 55, 32, 139, 91, 222, 209, 83, 172, 148, 123, 179,
     ]);
     assert_eq!(
-        AccountId::for_private_pda(&program_id, &seed, &npk, &apk, &vpk, identifier),
+        AccountId::for_private_pda(&program_id, &seed, &npk, &vpk, identifier),
         expected
     );
 }
@@ -205,10 +204,9 @@ fn for_private_pda_differs_for_different_npk() {
     let npk_a = NullifierPublicKey([3; 32]);
     let npk_b = NullifierPublicKey([4; 32]);
     let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
-    let apk = AuthorizationPublicKey::from(&[0_u8; 32]);
     assert_ne!(
-        AccountId::for_private_pda(&program_id, &seed, &npk_a, &apk, &vpk, u128::MAX),
-        AccountId::for_private_pda(&program_id, &seed, &npk_b, &apk, &vpk, u128::MAX),
+        AccountId::for_private_pda(&program_id, &seed, &npk_a, &vpk, u128::MAX),
+        AccountId::for_private_pda(&program_id, &seed, &npk_b, &vpk, u128::MAX),
     );
 }
 
@@ -220,10 +218,9 @@ fn for_private_pda_differs_for_different_seed() {
     let seed_b = PdaSeed::new([5; 32]);
     let npk = NullifierPublicKey([3; 32]);
     let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
-    let apk = AuthorizationPublicKey::from(&[0_u8; 32]);
     assert_ne!(
-        AccountId::for_private_pda(&program_id, &seed_a, &npk, &apk, &vpk, u128::MAX),
-        AccountId::for_private_pda(&program_id, &seed_b, &npk, &apk, &vpk, u128::MAX),
+        AccountId::for_private_pda(&program_id, &seed_a, &npk, &vpk, u128::MAX),
+        AccountId::for_private_pda(&program_id, &seed_b, &npk, &vpk, u128::MAX),
     );
 }
 
@@ -235,10 +232,9 @@ fn for_private_pda_differs_for_different_program_id() {
     let seed = PdaSeed::new([2; 32]);
     let npk = NullifierPublicKey([3; 32]);
     let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
-    let apk = AuthorizationPublicKey::from(&[0_u8; 32]);
     assert_ne!(
-        AccountId::for_private_pda(&program_id_a, &seed, &npk, &apk, &vpk, u128::MAX),
-        AccountId::for_private_pda(&program_id_b, &seed, &npk, &apk, &vpk, u128::MAX),
+        AccountId::for_private_pda(&program_id_a, &seed, &npk, &vpk, u128::MAX),
+        AccountId::for_private_pda(&program_id_b, &seed, &npk, &vpk, u128::MAX),
     );
 }
 
@@ -250,14 +246,13 @@ fn for_private_pda_differs_for_different_identifier() {
     let seed = PdaSeed::new([2; 32]);
     let npk = NullifierPublicKey([3; 32]);
     let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
-    let apk = AuthorizationPublicKey::from(&[0_u8; 32]);
     assert_ne!(
-        AccountId::for_private_pda(&program_id, &seed, &npk, &apk, &vpk, 0),
-        AccountId::for_private_pda(&program_id, &seed, &npk, &apk, &vpk, 1),
+        AccountId::for_private_pda(&program_id, &seed, &npk, &vpk, 0),
+        AccountId::for_private_pda(&program_id, &seed, &npk, &vpk, 1),
     );
     assert_ne!(
-        AccountId::for_private_pda(&program_id, &seed, &npk, &apk, &vpk, 0),
-        AccountId::for_private_pda(&program_id, &seed, &npk, &apk, &vpk, u128::MAX),
+        AccountId::for_private_pda(&program_id, &seed, &npk, &vpk, 0),
+        AccountId::for_private_pda(&program_id, &seed, &npk, &vpk, u128::MAX),
     );
 }
 
@@ -269,8 +264,7 @@ fn for_private_pda_differs_from_public_pda() {
     let seed = PdaSeed::new([2; 32]);
     let npk = NullifierPublicKey([3; 32]);
     let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
-    let apk = AuthorizationPublicKey::from(&[0_u8; 32]);
-    let private_id = AccountId::for_private_pda(&program_id, &seed, &npk, &apk, &vpk, u128::MAX);
+    let private_id = AccountId::for_private_pda(&program_id, &seed, &npk, &vpk, u128::MAX);
     let public_id = AccountId::for_public_pda(&program_id, &seed);
     assert_ne!(private_id, public_id);
 }
@@ -326,6 +320,6 @@ fn for_private_account_dispatches_correctly() {
                 identifier
             }
         ),
-        AccountId::for_private_pda(&program_id, &seed, &npk, &apk, &vpk, identifier),
+        AccountId::for_private_pda(&program_id, &seed, &npk, &vpk, identifier),
     );
 }

@@ -310,7 +310,6 @@ impl WalletCore {
             Some(AccountIdentity::PrivatePdaShared {
                 account_id,
                 nsk,
-                ask,
                 npk,
                 vpk,
                 identifier,
@@ -371,10 +370,8 @@ impl WalletCore {
 
         let keys = holder.derive_keys_for_pda(&program_id, &pda_seed);
         let npk = keys.generate_nullifier_public_key();
-        let apk = keys.generate_authorization_public_key();
         let vpk = keys.generate_viewing_public_key();
-        let account_id =
-            AccountId::for_private_pda(&program_id, &pda_seed, &npk, &apk, &vpk, identifier);
+        let account_id = AccountId::for_private_pda(&program_id, &pda_seed, &npk, &vpk, identifier);
 
         self.register_shared_account(
             account_id,

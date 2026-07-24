@@ -65,8 +65,9 @@ fn circuit_fails_if_invalid_auth_keys_are_provided() {
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: PrivateKind::Regular,
-                auth: AuthWitness::Held(recipient_keys.ask),
+                kind: PrivateKind::Regular {
+                    auth: AuthWitness::Held(recipient_keys.ask),
+                },
                 nullifier: NullifierWitness::Update {
                     nsk: recipient_keys.nsk,
                     membership_proof: (0, vec![]),
@@ -76,8 +77,9 @@ fn circuit_fails_if_invalid_auth_keys_are_provided() {
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: PrivateKind::Regular,
-                auth: AuthWitness::Public(recipient_keys.apk()),
+                kind: PrivateKind::Regular {
+                    auth: AuthWitness::Public(recipient_keys.apk()),
+                },
                 nullifier: NullifierWitness::Init {
                     npk: recipient_keys.npk(),
                     commitment_root: DUMMY_COMMITMENT_HASH,
@@ -122,8 +124,9 @@ fn circuit_should_fail_if_new_private_account_with_non_default_balance_is_provid
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: PrivateKind::Regular,
-                auth: AuthWitness::Held(sender_keys.ask),
+                kind: PrivateKind::Regular {
+                    auth: AuthWitness::Held(sender_keys.ask),
+                },
                 nullifier: NullifierWitness::Update {
                     nsk: sender_keys.nsk,
                     membership_proof: (0, vec![]),
@@ -133,8 +136,9 @@ fn circuit_should_fail_if_new_private_account_with_non_default_balance_is_provid
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: PrivateKind::Regular,
-                auth: AuthWitness::Public(recipient_keys.apk()),
+                kind: PrivateKind::Regular {
+                    auth: AuthWitness::Public(recipient_keys.apk()),
+                },
                 nullifier: NullifierWitness::Init {
                     npk: recipient_keys.npk(),
                     commitment_root: DUMMY_COMMITMENT_HASH,
@@ -179,8 +183,9 @@ fn circuit_should_fail_if_new_private_account_with_non_default_program_owner_is_
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: PrivateKind::Regular,
-                auth: AuthWitness::Held(sender_keys.ask),
+                kind: PrivateKind::Regular {
+                    auth: AuthWitness::Held(sender_keys.ask),
+                },
                 nullifier: NullifierWitness::Update {
                     nsk: sender_keys.nsk,
                     membership_proof: (0, vec![]),
@@ -190,8 +195,9 @@ fn circuit_should_fail_if_new_private_account_with_non_default_program_owner_is_
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: PrivateKind::Regular,
-                auth: AuthWitness::Public(recipient_keys.apk()),
+                kind: PrivateKind::Regular {
+                    auth: AuthWitness::Public(recipient_keys.apk()),
+                },
                 nullifier: NullifierWitness::Init {
                     npk: recipient_keys.npk(),
                     commitment_root: DUMMY_COMMITMENT_HASH,
@@ -236,8 +242,9 @@ fn circuit_should_fail_if_new_private_account_with_non_default_data_is_provided(
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: PrivateKind::Regular,
-                auth: AuthWitness::Held(sender_keys.ask),
+                kind: PrivateKind::Regular {
+                    auth: AuthWitness::Held(sender_keys.ask),
+                },
                 nullifier: NullifierWitness::Update {
                     nsk: sender_keys.nsk,
                     membership_proof: (0, vec![]),
@@ -247,8 +254,9 @@ fn circuit_should_fail_if_new_private_account_with_non_default_data_is_provided(
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: PrivateKind::Regular,
-                auth: AuthWitness::Public(recipient_keys.apk()),
+                kind: PrivateKind::Regular {
+                    auth: AuthWitness::Public(recipient_keys.apk()),
+                },
                 nullifier: NullifierWitness::Init {
                     npk: recipient_keys.npk(),
                     commitment_root: DUMMY_COMMITMENT_HASH,
@@ -293,8 +301,9 @@ fn circuit_should_fail_if_new_private_account_with_non_default_nonce_is_provided
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: PrivateKind::Regular,
-                auth: AuthWitness::Held(sender_keys.ask),
+                kind: PrivateKind::Regular {
+                    auth: AuthWitness::Held(sender_keys.ask),
+                },
                 nullifier: NullifierWitness::Update {
                     nsk: sender_keys.nsk,
                     membership_proof: (0, vec![]),
@@ -304,8 +313,9 @@ fn circuit_should_fail_if_new_private_account_with_non_default_nonce_is_provided
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: PrivateKind::Regular,
-                auth: AuthWitness::Public(recipient_keys.apk()),
+                kind: PrivateKind::Regular {
+                    auth: AuthWitness::Public(recipient_keys.apk()),
+                },
                 nullifier: NullifierWitness::Init {
                     npk: recipient_keys.npk(),
                     commitment_root: DUMMY_COMMITMENT_HASH,
@@ -348,8 +358,9 @@ fn circuit_should_fail_if_new_private_account_is_provided_with_default_values_bu
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: PrivateKind::Regular,
-                auth: AuthWitness::Held(sender_keys.ask),
+                kind: PrivateKind::Regular {
+                    auth: AuthWitness::Held(sender_keys.ask),
+                },
                 nullifier: NullifierWitness::Update {
                     nsk: sender_keys.nsk,
                     membership_proof: (0, vec![]),
@@ -359,8 +370,9 @@ fn circuit_should_fail_if_new_private_account_is_provided_with_default_values_bu
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: PrivateKind::Regular,
-                auth: AuthWitness::Public(recipient_keys.apk()),
+                kind: PrivateKind::Regular {
+                    auth: AuthWitness::Public(recipient_keys.apk()),
+                },
                 nullifier: NullifierWitness::Init {
                     npk: recipient_keys.npk(),
                     commitment_root: DUMMY_COMMITMENT_HASH,
@@ -382,7 +394,6 @@ fn private_pda_without_binding_fails() {
     let program = crate::test_methods::simple_balance_transfer();
     let keys = test_private_account_keys_1();
     let npk = keys.npk();
-    let apk = keys.apk();
     let public_account_1 = AccountWithMetadata::new(
         Account {
             program_owner: program.id(),
@@ -405,7 +416,6 @@ fn private_pda_without_binding_fails() {
                 random_seed: [0; 32],
                 identifier: u128::MAX,
                 kind: PrivateKind::Pda { seed: None },
-                auth: AuthWitness::Public(apk),
                 nullifier: NullifierWitness::Init {
                     npk,
                     commitment_root: DUMMY_COMMITMENT_HASH,
@@ -428,7 +438,6 @@ fn private_pda_claim_succeeds() {
     let program = crate::test_methods::pda_claimer();
     let keys = test_private_account_keys_1();
     let npk = keys.npk();
-    let apk = keys.apk();
     let seed = PdaSeed::new([42; 32]);
 
     let account_id = keys.pda_account_id(&program.id(), &seed, u128::MAX);
@@ -442,7 +451,6 @@ fn private_pda_claim_succeeds() {
             random_seed: [0; 32],
             identifier: u128::MAX,
             kind: PrivateKind::Pda { seed: None },
-            auth: AuthWitness::Public(apk),
             nullifier: NullifierWitness::Init {
                 npk,
                 commitment_root: DUMMY_COMMITMENT_HASH,
@@ -485,7 +493,6 @@ fn private_pda_npk_mismatch_fails() {
             random_seed: [0; 32],
             identifier: u128::MAX,
             kind: PrivateKind::Pda { seed: None },
-            auth: AuthWitness::Public(keys_b.apk()),
             nullifier: NullifierWitness::Init {
                 npk: npk_b,
                 commitment_root: DUMMY_COMMITMENT_HASH,
@@ -508,7 +515,6 @@ fn caller_pda_seeds_authorize_private_pda_for_callee() {
     let callee = crate::test_methods::auth_asserting_noop();
     let keys = test_private_account_keys_1();
     let npk = keys.npk();
-    let apk = keys.apk();
     let seed = PdaSeed::new([77; 32]);
 
     let account_id = keys.pda_account_id(&delegator.id(), &seed, u128::MAX);
@@ -525,7 +531,6 @@ fn caller_pda_seeds_authorize_private_pda_for_callee() {
             random_seed: [0; 32],
             identifier: u128::MAX,
             kind: PrivateKind::Pda { seed: None },
-            auth: AuthWitness::Public(apk),
             nullifier: NullifierWitness::Init {
                 npk,
                 commitment_root: DUMMY_COMMITMENT_HASH,
@@ -550,7 +555,6 @@ fn caller_pda_seeds_with_wrong_seed_rejects_private_pda_for_callee() {
     let callee = crate::test_methods::auth_asserting_noop();
     let keys = test_private_account_keys_1();
     let npk = keys.npk();
-    let apk = keys.apk();
     let claim_seed = PdaSeed::new([77; 32]);
     let wrong_delegated_seed = PdaSeed::new([88; 32]);
 
@@ -568,7 +572,6 @@ fn caller_pda_seeds_with_wrong_seed_rejects_private_pda_for_callee() {
             random_seed: [0; 32],
             identifier: u128::MAX,
             kind: PrivateKind::Pda { seed: None },
-            auth: AuthWitness::Public(apk),
             nullifier: NullifierWitness::Init {
                 npk,
                 commitment_root: DUMMY_COMMITMENT_HASH,
@@ -610,7 +613,6 @@ fn two_private_pda_claims_under_same_seed_are_rejected() {
                 random_seed: [0; 32],
                 identifier: u128::MAX,
                 kind: PrivateKind::Pda { seed: None },
-                auth: AuthWitness::Public(keys_a.apk()),
                 nullifier: NullifierWitness::Init {
                     npk: keys_a.npk(),
                     commitment_root: DUMMY_COMMITMENT_HASH,
@@ -621,7 +623,6 @@ fn two_private_pda_claims_under_same_seed_are_rejected() {
                 random_seed: [0; 32],
                 identifier: u128::MAX,
                 kind: PrivateKind::Pda { seed: None },
-                auth: AuthWitness::Public(keys_b.apk()),
                 nullifier: NullifierWitness::Init {
                     npk: keys_b.npk(),
                     commitment_root: DUMMY_COMMITMENT_HASH,
@@ -644,7 +645,6 @@ fn private_pda_top_level_reuse_rejected_by_binding_check() {
     let program = crate::test_methods::noop();
     let keys = test_private_account_keys_1();
     let npk = keys.npk();
-    let apk = keys.apk();
     let seed = PdaSeed::new([99; 32]);
 
     // Simulate a previously-claimed private PDA: program_owner != DEFAULT, is_authorized =
@@ -667,7 +667,6 @@ fn private_pda_top_level_reuse_rejected_by_binding_check() {
             random_seed: [0; 32],
             identifier: u128::MAX,
             kind: PrivateKind::Pda { seed: None },
-            auth: AuthWitness::Public(apk),
             nullifier: NullifierWitness::Init {
                 npk,
                 commitment_root: DUMMY_COMMITMENT_HASH,
@@ -756,8 +755,9 @@ fn circuit_should_fail_if_there_are_repeated_ids() {
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: PrivateKind::Regular,
-                auth: AuthWitness::Held(sender_keys.ask),
+                kind: PrivateKind::Regular {
+                    auth: AuthWitness::Held(sender_keys.ask),
+                },
                 nullifier: NullifierWitness::Update {
                     nsk: sender_keys.nsk,
                     membership_proof: (1, vec![]),
@@ -767,8 +767,9 @@ fn circuit_should_fail_if_there_are_repeated_ids() {
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: PrivateKind::Regular,
-                auth: AuthWitness::Held(sender_keys.ask),
+                kind: PrivateKind::Regular {
+                    auth: AuthWitness::Held(sender_keys.ask),
+                },
                 nullifier: NullifierWitness::Update {
                     nsk: sender_keys.nsk,
                     membership_proof: (1, vec![]),
@@ -806,8 +807,9 @@ fn private_authorized_uninitialized_account() {
             vpk: private_keys.vpk(),
             random_seed: [0; 32],
             identifier: 0,
-            kind: PrivateKind::Regular,
-            auth: AuthWitness::Held(private_keys.ask),
+            kind: PrivateKind::Regular {
+                auth: AuthWitness::Held(private_keys.ask),
+            },
             nullifier: NullifierWitness::Init {
                 npk: NullifierPublicKey::from(&private_keys.nsk),
                 commitment_root: DUMMY_COMMITMENT_HASH,
@@ -855,8 +857,9 @@ fn private_unauthorized_uninitialized_account_can_still_be_claimed() {
             vpk: private_keys.vpk(),
             random_seed: [0; 32],
             identifier: 0,
-            kind: PrivateKind::Regular,
-            auth: AuthWitness::Public(private_keys.apk()),
+            kind: PrivateKind::Regular {
+                auth: AuthWitness::Public(private_keys.apk()),
+            },
             nullifier: NullifierWitness::Init {
                 npk: private_keys.npk(),
                 commitment_root: DUMMY_COMMITMENT_HASH,
@@ -905,8 +908,9 @@ fn private_account_claimed_then_used_without_init_flag_should_fail() {
             vpk: private_keys.vpk(),
             random_seed: [0; 32],
             identifier: 0,
-            kind: PrivateKind::Regular,
-            auth: AuthWitness::Held(private_keys.ask),
+            kind: PrivateKind::Regular {
+                auth: AuthWitness::Held(private_keys.ask),
+            },
             nullifier: NullifierWitness::Init {
                 npk: NullifierPublicKey::from(&private_keys.nsk),
                 commitment_root: DUMMY_COMMITMENT_HASH,
@@ -950,8 +954,9 @@ fn private_account_claimed_then_used_without_init_flag_should_fail() {
             vpk: private_keys.vpk(),
             random_seed: [0; 32],
             identifier: 0,
-            kind: PrivateKind::Regular,
-            auth: AuthWitness::Held(private_keys.ask),
+            kind: PrivateKind::Regular {
+                auth: AuthWitness::Held(private_keys.ask),
+            },
             nullifier: NullifierWitness::Init {
                 npk: NullifierPublicKey::from(&private_keys.nsk),
                 commitment_root: DUMMY_COMMITMENT_HASH,
@@ -1022,7 +1027,6 @@ fn two_private_pda_family_members_receive_and_spend() {
                     kind: PrivateKind::Pda {
                         seed: Some((seed, delegator_id)),
                     },
-                    auth: AuthWitness::Public(alice_keys.apk()),
                     nullifier: NullifierWitness::Init {
                         npk: alice_npk,
                         commitment_root: DUMMY_COMMITMENT_HASH,
@@ -1063,7 +1067,6 @@ fn two_private_pda_family_members_receive_and_spend() {
                     kind: PrivateKind::Pda {
                         seed: Some((seed, delegator_id)),
                     },
-                    auth: AuthWitness::Public(alice_keys.apk()),
                     nullifier: NullifierWitness::Init {
                         npk: alice_npk,
                         commitment_root: DUMMY_COMMITMENT_HASH,
@@ -1106,7 +1109,6 @@ fn two_private_pda_family_members_receive_and_spend() {
                     random_seed: [0; 32],
                     identifier: 0,
                     kind: PrivateKind::Pda { seed: None },
-                    auth: AuthWitness::Public(alice_keys.apk()),
                     nullifier: NullifierWitness::Update {
                         nsk: alice_keys.nsk,
                         membership_proof: state
@@ -1146,7 +1148,6 @@ fn two_private_pda_family_members_receive_and_spend() {
                     random_seed: [0; 32],
                     identifier: 1,
                     kind: PrivateKind::Pda { seed: None },
-                    auth: AuthWitness::Public(alice_keys.apk()),
                     nullifier: NullifierWitness::Update {
                         nsk: alice_keys.nsk,
                         membership_proof: state
@@ -1202,7 +1203,6 @@ fn two_private_pda_family_members_receive_and_spend() {
                     kind: PrivateKind::Pda {
                         seed: Some((seed, delegator_id)),
                     },
-                    auth: AuthWitness::Public(alice_keys.apk()),
                     nullifier: NullifierWitness::Update {
                         nsk: alice_keys.nsk,
                         membership_proof: state

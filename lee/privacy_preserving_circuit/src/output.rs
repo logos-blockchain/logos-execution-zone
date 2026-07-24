@@ -48,12 +48,11 @@ pub fn compute_circuit_output(
                     identifier,
                     kind,
                     nullifier,
-                    ..
                 } = witness;
                 let npk = nullifier.npk();
 
                 let (account_id, account_kind) = match kind {
-                    PrivateKind::Regular => {
+                    PrivateKind::Regular { .. } => {
                         let account_id = account_identity
                             .regular_account_id()
                             .expect("regular private account id");

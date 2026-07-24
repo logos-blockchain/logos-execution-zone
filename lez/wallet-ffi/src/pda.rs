@@ -47,7 +47,6 @@ pub unsafe extern "C" fn wallet_ffi_account_id_for_private_pda(
     program_id: FfiProgramId,
     pda_seed: FfiPdaSeed,
     npk: FfiNullifierPublicKey,
-    apk: FfiBytes32,
     viewing_public_key: *const u8,
     viewing_public_key_len: usize,
     identifier: FfiU128,
@@ -59,7 +58,7 @@ pub unsafe extern "C" fn wallet_ffi_account_id_for_private_pda(
 
     let ffi_private_keys = FfiPrivateAccountKeys {
         nullifier_public_key: npk,
-        authorization_public_key: apk,
+        authorization_public_key: FfiBytes32::default(),
         viewing_public_key,
         viewing_public_key_len,
     };
@@ -75,7 +74,6 @@ pub unsafe extern "C" fn wallet_ffi_account_id_for_private_pda(
             &program_id.data,
             &pda_seed.into(),
             &ffi_private_keys.npk(),
-            &lee_core::AuthorizationPublicKey(apk.data),
             &vpk.unwrap(),
             identifier.into(),
         )
@@ -88,7 +86,7 @@ pub unsafe extern "C" fn wallet_ffi_account_id_for_private_pda(
 #[cfg(test)]
 mod tests {
     use lee::AccountId;
-    use lee_core::{encryption::ViewingPublicKey, AuthorizationPublicKey, NullifierPublicKey};
+    use lee_core::{encryption::ViewingPublicKey, NullifierPublicKey};
     use vault_core::PdaSeed;
 
     use crate::{
@@ -114,11 +112,9 @@ mod tests {
         let pda_seed = PdaSeed::new([42; 32]);
         let vpk = ViewingPublicKey::from_bytes(vec![43; 1184]).unwrap();
         let npk = NullifierPublicKey([44; 32]);
-        let apk = AuthorizationPublicKey([45; 32]);
         let identifier = 100_000_u128;
 
-        let pda_id =
-            AccountId::for_private_pda(&program_id, &pda_seed, &npk, &apk, &vpk, identifier);
+        let pda_id = AccountId::for_private_pda(&program_id, &pda_seed, &npk, &vpk, identifier);
 
         let vpk_ptr = Box::into_raw(vpk.to_bytes().to_vec().into_boxed_slice()) as *const u8;
 
@@ -130,7 +126,6 @@ mod tests {
                 program_id.into(),
                 pda_seed.into(),
                 npk.into(),
-                apk.0.into(),
                 vpk_ptr,
                 1184,
                 identifier.into(),
