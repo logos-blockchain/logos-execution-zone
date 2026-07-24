@@ -43,6 +43,19 @@ pub const fn pda_spend_proxy() -> Program {
 
 #[must_use]
 #[inline]
+pub const fn pda_spend_delegator() -> Program {
+    use guests::{PDA_SPEND_DELEGATOR_ELF, PDA_SPEND_DELEGATOR_ID, PDA_SPEND_DELEGATOR_PATH};
+
+    let _unused = PDA_SPEND_DELEGATOR_PATH;
+
+    Program::new_unchecked(
+        PDA_SPEND_DELEGATOR_ID,
+        Cow::Borrowed(PDA_SPEND_DELEGATOR_ELF),
+    )
+}
+
+#[must_use]
+#[inline]
 pub const fn time_locked_transfer() -> Program {
     use guests::{TIME_LOCKED_TRANSFER_ELF, TIME_LOCKED_TRANSFER_ID, TIME_LOCKED_TRANSFER_PATH};
 

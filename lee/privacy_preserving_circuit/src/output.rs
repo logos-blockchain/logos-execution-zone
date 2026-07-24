@@ -1,8 +1,8 @@
 use lee_core::{
-    AuthWitness, Commitment, CommitmentSetDigest, EncryptedAccountData, EncryptionScheme,
-    EphemeralSecretKey, InputAccountIdentity, MembershipProof, Nullifier, NullifierPublicKey,
-    NullifierSecretKey, NullifierWitness, PrivacyPreservingCircuitOutput, PrivateAccountKind,
-    PrivateKind, PrivateWitness, SharedSecretKey, ThreadedDiff,
+    Commitment, CommitmentSetDigest, EncryptedAccountData, EncryptionScheme, EphemeralSecretKey,
+    InputAccountIdentity, MembershipProof, Nullifier, NullifierPublicKey, NullifierSecretKey,
+    NullifierWitness, PrivacyPreservingCircuitOutput, PrivateAccountKind, PrivateKind,
+    PrivateWitness, SharedSecretKey, ThreadedDiff,
     account::{Account, AccountId, Nonce},
     compute_digest_for_path,
     encryption::ViewingPublicKey,
@@ -47,8 +47,8 @@ pub fn compute_circuit_output(
                     random_seed,
                     identifier,
                     kind,
-                    auth,
                     nullifier,
+                    ..
                 } = witness;
                 let npk = nullifier.npk();
 
@@ -58,26 +58,9 @@ pub fn compute_circuit_output(
                             .regular_account_id()
                             .expect("regular private account id");
                         assert_eq!(account_id, pre_state.account_id, "AccountId mismatch");
-                        assert_eq!(
-                            pre_state.is_authorized,
-                            matches!(auth, AuthWitness::Held(_)),
-                            "Regular private account authorization must match its held auth key"
-                        );
                         (account_id, PrivateAccountKind::Regular(*identifier))
                     }
-                    PrivateKind::Pda {
-                        seed: external_seed,
-                    } => {
-                        match nullifier {
-                            NullifierWitness::Init { .. } => assert!(
-                                !pre_state.is_authorized,
-                                "Private PDA init requires an unauthorized pre-state"
-                            ),
-                            NullifierWitness::Update { .. } => assert!(
-                                pre_state.is_authorized ^ external_seed.is_some(),
-                                "Private PDA update requires an authorized pre-state or an external seed"
-                            ),
-                        }
+                    PrivateKind::Pda { .. } => {
                         let (authority_program_id, seed) = pda_seed_by_position
                             .get(&pos)
                             .expect("private PDA position must be in pda_seed_by_position");

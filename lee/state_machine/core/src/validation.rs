@@ -62,11 +62,6 @@ pub trait Backend {
     ) -> Result<bool, ValidationError>;
 
     fn finalize(&self) -> Result<(), ValidationError>;
-
-    // True if `is_authorized` is bound to each account's credential by a layer other than this
-    // validator — output.rs / verifier / finalize (private) — so the first-sight consistency check
-    // is skipped. False (public) means this validator's inline check is the only binding.
-    fn authorization_bound_elsewhere(&self) -> bool;
 }
 
 fn intersect_window<T: Copy + Ord>(
@@ -113,12 +108,9 @@ pub fn validate_state_diff<E: Backend>(
         for pre in &program_output.pre_states {
             let account_id = pre.account_id;
 
-            let is_first_sight;
             let expected = if let Some(post) = state_diff.get(&account_id) {
-                is_first_sight = false;
                 post.clone()
             } else {
-                is_first_sight = true;
                 pre_states.push(pre.clone());
                 let resolved = env.resolve_pre_state(pre)?;
                 if matches!(resolved.authorization, Authorization::Holder) {
@@ -149,24 +141,19 @@ pub fn validate_state_diff<E: Backend>(
             let is_indeed_authorized = seed_authorizes
                 || globally_authorized.contains(&account_id)
                 || caller_data.authorized_accounts.contains(&account_id);
-            // Re-seen accounts: cross-call (Q7) scoping. First-sight: bind `is_authorized` to the
-            // account's own credential — only where the backend has no other binding (public);
-            // private defers to output.rs / verifier / finalize, so it trusts first-sight.
-            if !is_first_sight || !env.authorization_bound_elsewhere() {
-                if pre.is_authorized && !is_indeed_authorized {
-                    return Err(ValidationError::ProgramBehavior(
-                        InvalidProgramBehaviorError::InvalidAccountAuthorization { account_id },
-                    )
-                    .into());
-                }
-                if !pre.is_authorized && is_indeed_authorized {
-                    return Err(ValidationError::ProgramBehavior(
-                        InvalidProgramBehaviorError::AuthorizedAccountMarkedAsNotAuthorized {
-                            account_id,
-                        },
-                    )
-                    .into());
-                }
+            if pre.is_authorized && !is_indeed_authorized {
+                return Err(ValidationError::ProgramBehavior(
+                    InvalidProgramBehaviorError::InvalidAccountAuthorization { account_id },
+                )
+                .into());
+            }
+            if !pre.is_authorized && is_indeed_authorized {
+                return Err(ValidationError::ProgramBehavior(
+                    InvalidProgramBehaviorError::AuthorizedAccountMarkedAsNotAuthorized {
+                        account_id,
+                    },
+                )
+                .into());
             }
         }
 

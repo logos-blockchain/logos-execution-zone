@@ -68,6 +68,7 @@ impl V03State {
         self.insert_program(crate::test_methods::malicious_self_program_id());
         self.insert_program(crate::test_methods::malicious_caller_program_id());
         self.insert_program(crate::test_methods::pda_spend_proxy());
+        self.insert_program(crate::test_methods::pda_spend_delegator());
         self.insert_program(crate::test_methods::claimer());
         self.insert_program(crate::test_methods::changer_claimer());
         self.insert_program(crate::test_methods::validity_window_chain_caller());

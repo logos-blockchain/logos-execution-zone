@@ -303,10 +303,6 @@ impl Backend for PublicEnv<'_> {
     fn finalize(&self) -> Result<(), ValidationError> {
         Ok(())
     }
-
-    fn authorization_bound_elsewhere(&self) -> bool {
-        false
-    }
 }
 
 impl From<ValidationError> for LeeError {

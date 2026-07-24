@@ -438,11 +438,10 @@ impl AccountManager {
                     } else {
                         PrivateKind::Regular
                     };
-                    let auth = if pre.is_pda {
-                        AuthWitness::Public(pre.apk)
+                    let auth = if holds_auth(pre.is_pda, pre.ask.is_some()) {
+                        AuthWitness::Held(pre.ask.expect("holds_auth implies ask is present"))
                     } else {
-                        pre.ask
-                            .map_or(AuthWitness::Public(pre.apk), AuthWitness::Held)
+                        AuthWitness::Public(pre.apk)
                     };
                     let nullifier = match (pre.nsk, pre.proof.clone()) {
                         (Some(nsk), Some(membership_proof)) => NullifierWitness::Update {
@@ -543,6 +542,13 @@ struct AccountPreparedData {
     is_pda: bool,
 }
 
+// Whether the wallet holds this account's authorization key (a regular account with a known `ask`).
+// Single source for the pre-state `is_authorized` and the `AuthWitness::Held` choice, so they can't
+// drift: an unauthorized-owned regular (no `ask`) flips both together.
+const fn holds_auth(is_pda: bool, has_ask: bool) -> bool {
+    !is_pda && has_ask
+}
+
 fn private_key_tree_acc_preparation(
     wallet: &WalletCore,
     account_id: AccountId,
@@ -555,14 +561,18 @@ fn private_key_tree_acc_preparation(
     let from_identifier = from_acc.kind.identifier();
     let from_keys = &from_acc.key_chain;
     let nsk = from_keys.private_key_holder.nullifier_secret_key;
-    let ask = from_keys.private_key_holder.authorization_secret_key;
+    let ask = Some(from_keys.private_key_holder.authorization_secret_key);
     let from_npk = from_keys.nullifier_public_key;
     let from_apk = from_keys.authorization_public_key;
     let from_vpk = from_keys.viewing_public_key.clone();
 
     // TODO: Technically we could allow unauthorized owned accounts, but currently we don't have
     // support from that in the wallet.
-    let sender_pre = AccountWithMetadata::new(from_acc.account.clone(), true, account_id);
+    let sender_pre = AccountWithMetadata::new(
+        from_acc.account.clone(),
+        holds_auth(is_pda, ask.is_some()),
+        account_id,
+    );
 
     let mut random_seed: [u8; 32] = [0; 32];
     OsRng.fill_bytes(&mut random_seed);
@@ -571,7 +581,7 @@ fn private_key_tree_acc_preparation(
         nsk: Some(nsk),
         npk: from_npk,
         apk: from_apk,
-        ask: Some(ask),
+        ask,
         identifier: from_identifier,
         vpk: from_vpk,
         pre_state: sender_pre,
@@ -602,7 +612,9 @@ fn private_shared_acc_preparation(
         .map(|e| e.account.clone())
         .unwrap_or_default();
 
-    let pre_state = AccountWithMetadata::new(acc, true, account_id);
+    let apk = AuthorizationPublicKey::from(&ask);
+    let ask = Some(ask);
+    let pre_state = AccountWithMetadata::new(acc, holds_auth(is_pda, ask.is_some()), account_id);
 
     let mut random_seed: [u8; 32] = [0; 32];
     OsRng.fill_bytes(&mut random_seed);
@@ -610,8 +622,8 @@ fn private_shared_acc_preparation(
     AccountPreparedData {
         nsk: Some(nsk),
         npk,
-        apk: AuthorizationPublicKey::from(&ask),
-        ask: Some(ask),
+        apk,
+        ask,
         identifier,
         vpk,
         pre_state,

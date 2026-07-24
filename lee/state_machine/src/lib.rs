@@ -219,6 +219,14 @@ mod test_methods {
     }
 
     #[must_use]
+    pub const fn pda_spend_delegator() -> Program {
+        Program::new_unchecked(
+            test_methods::PDA_SPEND_DELEGATOR_ID,
+            Cow::Borrowed(test_methods::PDA_SPEND_DELEGATOR_ELF),
+        )
+    }
+
+    #[must_use]
     pub const fn claimer() -> Program {
         Program::new_unchecked(
             test_methods::CLAIMER_ID,

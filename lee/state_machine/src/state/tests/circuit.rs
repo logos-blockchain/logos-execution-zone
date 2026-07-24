@@ -969,21 +969,21 @@ fn two_private_pda_family_members_receive_and_spend() {
     let alice_keys = test_private_account_keys_1();
     let alice_npk = alice_keys.npk();
 
-    let proxy = crate::test_methods::pda_spend_proxy();
+    let delegator = crate::test_methods::pda_spend_delegator();
     let simple_transfer = crate::test_methods::simple_balance_transfer();
-    let proxy_id = proxy.id();
+    let delegator_id = delegator.id();
     let simple_transfer_id = simple_transfer.id();
     let seed = PdaSeed::new([42; 32]);
     let amount: u128 = 100;
 
     let spend_with_deps = ProgramWithDependencies::new(
-        proxy,
+        delegator,
         [(simple_transfer_id, simple_transfer.clone())].into(),
     );
 
     let funder_id = funder_keys.account_id();
-    let alice_pda_0_id = alice_keys.pda_account_id(&proxy_id, &seed, 0);
-    let alice_pda_1_id = alice_keys.pda_account_id(&proxy_id, &seed, 1);
+    let alice_pda_0_id = alice_keys.pda_account_id(&delegator_id, &seed, 0);
+    let alice_pda_1_id = alice_keys.pda_account_id(&delegator_id, &seed, 1);
     let recipient_id = test_public_account_keys_2().account_id();
     let recipient_signing_key = test_public_account_keys_2().signing_key;
 
@@ -1020,7 +1020,7 @@ fn two_private_pda_family_members_receive_and_spend() {
                     random_seed: [0; 32],
                     identifier: 0,
                     kind: PrivateKind::Pda {
-                        seed: Some((seed, proxy_id)),
+                        seed: Some((seed, delegator_id)),
                     },
                     auth: AuthWitness::Public(alice_keys.apk()),
                     nullifier: NullifierWitness::Init {
@@ -1061,7 +1061,7 @@ fn two_private_pda_family_members_receive_and_spend() {
                     random_seed: [0; 32],
                     identifier: 1,
                     kind: PrivateKind::Pda {
-                        seed: Some((seed, proxy_id)),
+                        seed: Some((seed, delegator_id)),
                     },
                     auth: AuthWitness::Public(alice_keys.apk()),
                     nullifier: NullifierWitness::Init {
@@ -1096,7 +1096,7 @@ fn two_private_pda_family_members_receive_and_spend() {
         let recipient_account = state.get_account_by_id(recipient_id);
         let (output, proof) = execute_and_prove(
             vec![
-                AccountWithMetadata::new(alice_pda_0_account, true, alice_pda_0_id),
+                AccountWithMetadata::new(alice_pda_0_account, false, alice_pda_0_id),
                 AccountWithMetadata::new(recipient_account, true, recipient_id),
             ],
             Program::serialize_instruction((seed, amount, simple_transfer_id)).unwrap(),
@@ -1136,7 +1136,7 @@ fn two_private_pda_family_members_receive_and_spend() {
         let recipient_account = state.get_account_by_id(recipient_id);
         let (output, proof) = execute_and_prove(
             vec![
-                AccountWithMetadata::new(alice_pda_1_account.clone(), true, alice_pda_1_id),
+                AccountWithMetadata::new(alice_pda_1_account.clone(), false, alice_pda_1_id),
                 AccountWithMetadata::new(recipient_account, false, recipient_id),
             ],
             Program::serialize_instruction((seed, amount, simple_transfer_id)).unwrap(),
@@ -1200,7 +1200,7 @@ fn two_private_pda_family_members_receive_and_spend() {
                     random_seed: [0; 32],
                     identifier: 1,
                     kind: PrivateKind::Pda {
-                        seed: Some((seed, proxy_id)),
+                        seed: Some((seed, delegator_id)),
                     },
                     auth: AuthWitness::Public(alice_keys.apk()),
                     nullifier: NullifierWitness::Update {

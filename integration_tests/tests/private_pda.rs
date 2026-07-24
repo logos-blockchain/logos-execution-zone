@@ -136,7 +136,7 @@ async fn spend_private_pda(
                 },
             ],
             Program::serialize_instruction((seed, amount, auth_transfer_id))
-                .context("failed to serialize pda_spend_proxy instruction")?,
+                .context("failed to serialize pda_spend_delegator instruction")?,
             spend_program,
         )
         .await
@@ -170,21 +170,21 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         )
     };
 
-    let proxy = test_programs::pda_spend_proxy();
+    let delegator = test_programs::pda_spend_delegator();
     let auth_transfer = programs::authenticated_transfer();
-    let proxy_id = proxy.id();
+    let delegator_id = delegator.id();
     let auth_transfer_id = auth_transfer.id();
     let seed = PdaSeed::new([42; 32]);
     let amount: u128 = 100;
 
     let auth_transfer_program = ProgramWithDependencies::new(auth_transfer.clone(), [].into());
     let spend_program =
-        ProgramWithDependencies::new(proxy, [(auth_transfer_id, auth_transfer)].into());
+        ProgramWithDependencies::new(delegator, [(auth_transfer_id, auth_transfer)].into());
 
     let alice_pda_0_id =
-        AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, &alice_apk, &alice_vpk, 0);
+        AccountId::for_private_pda(&delegator_id, &seed, &alice_npk, &alice_apk, &alice_vpk, 0);
     let alice_pda_1_id =
-        AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, &alice_apk, &alice_vpk, 1);
+        AccountId::for_private_pda(&delegator_id, &seed, &alice_npk, &alice_apk, &alice_vpk, 1);
 
     // Use two different public senders to avoid nonce conflicts between the back-to-back txs.
     let senders = ctx.existing_public_accounts();
@@ -202,7 +202,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         alice_vpk.clone(),
         0,
         seed,
-        proxy_id,
+        delegator_id,
         amount,
         &auth_transfer_program,
     )
@@ -217,7 +217,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         alice_vpk.clone(),
         1,
         seed,
-        proxy_id,
+        delegator_id,
         amount,
         &auth_transfer_program,
     )

@@ -108,8 +108,8 @@ impl Backend for PrivateEnv<'_> {
         }
         let authorization = match ids.get(position) {
             // A public account is root-authorized iff it signed; the circuit's only signal is the
-            // verifier-bound `is_authorized`. Trusted here (first-sight check is skipped) and
-            // enforced by the verifier — this just feeds the cross-call scoping set.
+            // verifier-bound `is_authorized`. Trusted here and enforced by the verifier — this just
+            // feeds the cross-call scoping set.
             Some(InputAccountIdentity::Public) if pre.is_authorized => Authorization::Holder,
             Some(InputAccountIdentity::Private(PrivateWitness {
                 kind: PrivateKind::Regular,
@@ -161,10 +161,6 @@ impl Backend for PrivateEnv<'_> {
             }
         }
         Ok(())
-    }
-
-    fn authorization_bound_elsewhere(&self) -> bool {
-        true
     }
 }
 
