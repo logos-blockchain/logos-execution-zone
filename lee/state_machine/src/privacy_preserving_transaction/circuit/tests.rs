@@ -58,8 +58,7 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_pre_accounts() 
         AccountId::new([0; 32]),
     );
 
-    let recipient_account_id =
-        AccountId::for_regular_private_account(&recipient_keys.npk(), &recipient_keys.vpk(), 0);
+    let recipient_account_id = recipient_keys.regular_account_id(0);
     let recipient = AccountWithMetadata::new(Account::default(), false, recipient_account_id);
 
     let balance_to_move: u128 = 37;
@@ -136,14 +135,12 @@ fn prove_privacy_preserving_execution_circuit_fully_private() {
             data: Data::default(),
         },
         true,
-        AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0),
+        sender_keys.regular_account_id(0),
     );
-    let sender_account_id =
-        AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
+    let sender_account_id = sender_keys.regular_account_id(0);
     let commitment_sender = Commitment::new(&sender_account_id, &sender_pre.account);
 
-    let recipient_account_id =
-        AccountId::for_regular_private_account(&recipient_keys.npk(), &recipient_keys.vpk(), 0);
+    let recipient_account_id = recipient_keys.regular_account_id(0);
     let recipient = AccountWithMetadata::new(Account::default(), false, recipient_account_id);
     let balance_to_move: u128 = 37;
 
@@ -248,7 +245,7 @@ fn circuit_fails_when_chained_validity_windows_have_empty_intersection() {
     let pre = AccountWithMetadata::new(
         Account::default(),
         false,
-        AccountId::for_regular_private_account(&account_keys.npk(), &account_keys.vpk(), 0),
+        account_keys.regular_account_id(0),
     );
 
     let validity_window_chain_caller = crate::test_methods::validity_window_chain_caller();
@@ -293,8 +290,7 @@ fn private_pda_claim_with_custom_identifier_encrypts_correct_kind() {
     let npk = keys.npk();
     let seed = PdaSeed::new([42; 32]);
     let identifier: u128 = 99;
-    let account_id =
-        AccountId::for_private_pda(&program.id(), &seed, &npk, &keys.vpk(), identifier);
+    let account_id = keys.pda_account_id(&program.id(), &seed, identifier);
     let init_nonce = Nonce::private_account_nonce_init(&account_id);
     let esk = EphemeralSecretKey::new(&account_id, &[0; 32], &init_nonce);
     let shared_secret = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &esk).0;
@@ -337,7 +333,7 @@ fn private_pda_init() {
     let npk = keys.npk();
     let seed = PdaSeed::new([42; 32]);
     // PDA (new, private PDA)
-    let pda_id = AccountId::for_private_pda(&program.id(), &seed, &npk, &keys.vpk(), 0);
+    let pda_id = keys.pda_account_id(&program.id(), &seed, 0);
     let pda_pre = AccountWithMetadata::new(Account::default(), false, pda_id);
 
     let auth_id = simple_transfer.id();
@@ -376,7 +372,7 @@ fn private_pda_withdraw() {
     let npk = keys.npk();
     let seed = PdaSeed::new([42; 32]);
     // PDA (new, private PDA)
-    let pda_id = AccountId::for_private_pda(&program.id(), &seed, &npk, &keys.vpk(), 0);
+    let pda_id = keys.pda_account_id(&program.id(), &seed, 0);
     let pda_pre = AccountWithMetadata::new(Account::default(), false, pda_id);
 
     // Recipient (public)
@@ -444,7 +440,7 @@ fn shared_account_receives_via_simple_transfer() {
     );
 
     // Recipient: shared private account (new, unauthorized)
-    let shared_account_id = AccountId::from((&shared_npk, &shared_keys.vpk(), shared_identifier));
+    let shared_account_id = shared_keys.regular_account_id(shared_identifier);
     let recipient = AccountWithMetadata::new(Account::default(), false, shared_account_id);
 
     let balance_to_move: u128 = 100;
@@ -478,7 +474,7 @@ fn private_authorized_init_encrypts_regular_kind_with_identifier() {
     let program = crate::test_methods::claimer();
     let keys = test_private_account_keys_1();
     let identifier: u128 = 99;
-    let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
+    let account_id = keys.regular_account_id(identifier);
     let esk = EphemeralSecretKey::new(
         &account_id,
         &[0; 32],
@@ -514,7 +510,7 @@ fn private_unauthorized_init_encrypts_regular_kind_with_identifier() {
     let program = crate::test_methods::claimer();
     let keys = test_private_account_keys_1();
     let identifier: u128 = 99;
-    let recipient_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
+    let recipient_id = keys.regular_account_id(identifier);
     let esk = EphemeralSecretKey::new(
         &recipient_id,
         &[0; 32],
@@ -550,7 +546,7 @@ fn private_authorized_update_encrypts_regular_kind_with_identifier() {
     let program = crate::test_methods::noop();
     let keys = test_private_account_keys_1();
     let identifier: u128 = 99;
-    let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
+    let account_id = keys.regular_account_id(identifier);
     let esk = EphemeralSecretKey::new(
         &account_id,
         &[0; 32],
@@ -595,11 +591,10 @@ fn private_pda_update_encrypts_pda_kind_with_identifier() {
     let program = crate::test_methods::pda_spend_proxy();
     let simple_transfer = crate::test_methods::simple_balance_transfer();
     let keys = test_private_account_keys_1();
-    let npk = keys.npk();
     let seed = PdaSeed::new([42; 32]);
     let identifier: u128 = 99;
     let simple_transfer_id = simple_transfer.id();
-    let pda_id = AccountId::for_private_pda(&program.id(), &seed, &npk, &keys.vpk(), identifier);
+    let pda_id = keys.pda_account_id(&program.id(), &seed, identifier);
     let esk = EphemeralSecretKey::new(
         &pda_id,
         &[0; 32],
@@ -657,7 +652,7 @@ fn private_pda_init_identifier_mismatch_fails() {
     let keys = test_private_account_keys_1();
     let npk = keys.npk();
     let seed = PdaSeed::new([42; 32]);
-    let account_id = AccountId::for_private_pda(&program.id(), &seed, &npk, &keys.vpk(), 5);
+    let account_id = keys.pda_account_id(&program.id(), &seed, 5);
     let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
     let result = execute_and_prove(
@@ -682,10 +677,9 @@ fn private_pda_update_identifier_mismatch_fails() {
     let program = crate::test_methods::pda_spend_proxy();
     let simple_transfer = crate::test_methods::simple_balance_transfer();
     let keys = test_private_account_keys_1();
-    let npk = keys.npk();
     let seed = PdaSeed::new([42; 32]);
     let simple_transfer_id = simple_transfer.id();
-    let pda_id = AccountId::for_private_pda(&program.id(), &seed, &npk, &keys.vpk(), 5);
+    let pda_id = keys.pda_account_id(&program.id(), &seed, 5);
     let pda_account = Account {
         program_owner: simple_transfer_id,
         balance: 1,

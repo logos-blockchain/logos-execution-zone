@@ -7,8 +7,8 @@
 use std::collections::HashMap;
 
 use lee_core::{
-    BlockId, Commitment, DUMMY_COMMITMENT_HASH, InputAccountIdentity, Nullifier,
-    NullifierPublicKey, NullifierSecretKey, Timestamp,
+    BlockId, Commitment, DUMMY_COMMITMENT_HASH, Identifier, InputAccountIdentity, Nullifier,
+    NullifierPublicKey, NullifierSecretKey, PrivateAccountKind, Timestamp,
     account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
     encryption::ViewingPublicKey,
     program::{
@@ -118,7 +118,7 @@ impl V03State {
 
     #[must_use]
     pub fn with_private_account(mut self, keys: &TestPrivateKeys, account: &Account) -> Self {
-        let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), 0);
+        let account_id = keys.regular_account_id(0);
         let commitment = Commitment::new(&account_id, account);
         self.private_state.0.extend(&[commitment]);
         self
@@ -148,6 +148,27 @@ impl TestPrivateKeys {
 
     pub fn vpk(&self) -> ViewingPublicKey {
         ViewingPublicKey::from_seed(&self.d, &self.z)
+    }
+
+    pub fn account_id(&self, kind: &PrivateAccountKind) -> AccountId {
+        AccountId::for_private_account(&self.npk(), &self.vpk(), kind)
+    }
+
+    pub fn regular_account_id(&self, identifier: Identifier) -> AccountId {
+        self.account_id(&PrivateAccountKind::Regular(identifier))
+    }
+
+    pub fn pda_account_id(
+        &self,
+        program_id: &ProgramId,
+        seed: &PdaSeed,
+        identifier: Identifier,
+    ) -> AccountId {
+        self.account_id(&PrivateAccountKind::Pda {
+            program_id: *program_id,
+            seed: *seed,
+            identifier,
+        })
     }
 }
 
@@ -309,8 +330,7 @@ fn private_balance_transfer_for_tests(
     state: &V03State,
 ) -> PrivacyPreservingTransaction {
     let program = crate::test_methods::simple_balance_transfer();
-    let sender_account_id =
-        AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
+    let sender_account_id = sender_keys.regular_account_id(0);
     let sender_commitment = Commitment::new(&sender_account_id, sender_private_account);
     let sender_pre = AccountWithMetadata::new(
         sender_private_account.clone(),
@@ -363,8 +383,7 @@ fn deshielded_balance_transfer_for_tests(
     state: &V03State,
 ) -> PrivacyPreservingTransaction {
     let program = crate::test_methods::simple_balance_transfer();
-    let sender_account_id =
-        AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
+    let sender_account_id = sender_keys.regular_account_id(0);
     let sender_commitment = Commitment::new(&sender_account_id, sender_private_account);
     let sender_pre = AccountWithMetadata::new(
         sender_private_account.clone(),

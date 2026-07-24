@@ -378,7 +378,7 @@ fn private_pda_claim_succeeds() {
     let npk = keys.npk();
     let seed = PdaSeed::new([42; 32]);
 
-    let account_id = AccountId::for_private_pda(&program.id(), &seed, &npk, &keys.vpk(), u128::MAX);
+    let account_id = keys.pda_account_id(&program.id(), &seed, u128::MAX);
     let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
     let result = execute_and_prove(
@@ -412,15 +412,13 @@ fn private_pda_npk_mismatch_fails() {
     let program = crate::test_methods::pda_claimer();
     let keys_a = test_private_account_keys_1();
     let keys_b = test_private_account_keys_2();
-    let npk_a = keys_a.npk();
     let npk_b = keys_b.npk();
     let seed = PdaSeed::new([42; 32]);
 
     // `account_id` is derived from `npk_a`, but `npk_b` is supplied for this pre_state.
     // `AccountId::for_private_pda(program, seed, npk_b) != account_id`, so the claim check in
     // the circuit must reject.
-    let account_id =
-        AccountId::for_private_pda(&program.id(), &seed, &npk_a, &keys_a.vpk(), u128::MAX);
+    let account_id = keys_a.pda_account_id(&program.id(), &seed, u128::MAX);
     let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
     let result = execute_and_prove(
@@ -453,8 +451,7 @@ fn caller_pda_seeds_authorize_private_pda_for_callee() {
     let npk = keys.npk();
     let seed = PdaSeed::new([77; 32]);
 
-    let account_id =
-        AccountId::for_private_pda(&delegator.id(), &seed, &npk, &keys.vpk(), u128::MAX);
+    let account_id = keys.pda_account_id(&delegator.id(), &seed, u128::MAX);
     let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
     let callee_id = callee.id();
@@ -493,8 +490,7 @@ fn caller_pda_seeds_with_wrong_seed_rejects_private_pda_for_callee() {
     let claim_seed = PdaSeed::new([77; 32]);
     let wrong_delegated_seed = PdaSeed::new([88; 32]);
 
-    let account_id =
-        AccountId::for_private_pda(&delegator.id(), &claim_seed, &npk, &keys.vpk(), u128::MAX);
+    let account_id = keys.pda_account_id(&delegator.id(), &claim_seed, u128::MAX);
     let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
 
     let callee_id = callee.id();
@@ -532,20 +528,8 @@ fn two_private_pda_claims_under_same_seed_are_rejected() {
     let keys_b = test_private_account_keys_2();
     let seed = PdaSeed::new([55; 32]);
 
-    let account_a = AccountId::for_private_pda(
-        &program.id(),
-        &seed,
-        &keys_a.npk(),
-        &keys_a.vpk(),
-        u128::MAX,
-    );
-    let account_b = AccountId::for_private_pda(
-        &program.id(),
-        &seed,
-        &keys_b.npk(),
-        &keys_b.vpk(),
-        u128::MAX,
-    );
+    let account_a = keys_a.pda_account_id(&program.id(), &seed, u128::MAX);
+    let account_b = keys_b.pda_account_id(&program.id(), &seed, u128::MAX);
 
     let pre_a = AccountWithMetadata::new(Account::default(), false, account_a);
     let pre_b = AccountWithMetadata::new(Account::default(), false, account_b);
@@ -591,7 +575,7 @@ fn private_pda_top_level_reuse_rejected_by_binding_check() {
 
     // Simulate a previously-claimed private PDA: program_owner != DEFAULT, is_authorized =
     // true, account_id derived via the private formula.
-    let account_id = AccountId::for_private_pda(&program.id(), &seed, &npk, &keys.vpk(), u128::MAX);
+    let account_id = keys.pda_account_id(&program.id(), &seed, u128::MAX);
     let owned_pre_state = AccountWithMetadata::new(
         Account {
             program_owner: program.id(),
@@ -756,8 +740,7 @@ fn private_authorized_uninitialized_account() {
     let result = state.transition_from_privacy_preserving_transaction(&tx, 1, 0);
     assert!(result.is_ok());
 
-    let account_id =
-        AccountId::for_regular_private_account(&private_keys.npk(), &private_keys.vpk(), 0);
+    let account_id = private_keys.regular_account_id(0);
     let nullifier = Nullifier::for_account_initialization(&account_id);
     assert!(state.private_state.1.contains(&nullifier));
 }
@@ -802,8 +785,7 @@ fn private_unauthorized_uninitialized_account_can_still_be_claimed() {
         .transition_from_privacy_preserving_transaction(&tx, 1, 0)
         .unwrap();
 
-    let account_id =
-        AccountId::for_regular_private_account(&private_keys.npk(), &private_keys.vpk(), 0);
+    let account_id = private_keys.regular_account_id(0);
     let nullifier = Nullifier::for_account_initialization(&account_id);
     assert!(state.private_state.1.contains(&nullifier));
 }
@@ -856,8 +838,7 @@ fn private_account_claimed_then_used_without_init_flag_should_fail() {
     );
 
     // Verify the account is now initialized (nullifier exists)
-    let account_id =
-        AccountId::for_regular_private_account(&private_keys.npk(), &private_keys.vpk(), 0);
+    let account_id = private_keys.regular_account_id(0);
     let nullifier = Nullifier::for_account_initialization(&account_id);
     assert!(state.private_state.1.contains(&nullifier));
 
@@ -906,10 +887,8 @@ fn two_private_pda_family_members_receive_and_spend() {
     );
 
     let funder_id = funder_keys.account_id();
-    let alice_pda_0_id =
-        AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, &alice_keys.vpk(), 0);
-    let alice_pda_1_id =
-        AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, &alice_keys.vpk(), 1);
+    let alice_pda_0_id = alice_keys.pda_account_id(&proxy_id, &seed, 0);
+    let alice_pda_1_id = alice_keys.pda_account_id(&proxy_id, &seed, 1);
     let recipient_id = test_public_account_keys_2().account_id();
     let recipient_signing_key = test_public_account_keys_2().signing_key;
 

@@ -303,8 +303,7 @@ fn authorized_public_account_claiming_succeeds_when_executed_privately() {
         balance: 100,
         ..Account::default()
     };
-    let sender_account_id =
-        AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
+    let sender_account_id = sender_keys.regular_account_id(0);
     let sender_commitment = Commitment::new(&sender_account_id, &sender_private_account);
     let sender_init_nullifier = Nullifier::for_account_initialization(&sender_account_id);
     let mut state =
@@ -392,9 +391,8 @@ fn private_chained_call(number_of_calls: u32) {
         (&to_keys.npk(), &to_keys.vpk(), 0),
     );
 
-    let from_account_id =
-        AccountId::for_regular_private_account(&from_keys.npk(), &from_keys.vpk(), 0);
-    let to_account_id = AccountId::for_regular_private_account(&to_keys.npk(), &to_keys.vpk(), 0);
+    let from_account_id = from_keys.regular_account_id(0);
+    let to_account_id = to_keys.regular_account_id(0);
     let from_commitment = Commitment::new(&from_account_id, &from_account.account);
     let to_commitment = Commitment::new(&to_account_id, &to_account.account);
     let from_init_nullifier = Nullifier::for_account_initialization(&from_account_id);

@@ -1,6 +1,9 @@
 use bip39::Mnemonic;
 use common::HashType;
-use lee_core::{NullifierPublicKey, NullifierSecretKey, encryption::ViewingPublicKey};
+use lee_core::{
+    AuthorizationPublicKey, AuthorizationSecretKey, NullifierPublicKey, NullifierSecretKey,
+    encryption::ViewingPublicKey,
+};
 use ml_kem;
 use rand::{RngCore as _, rngs::OsRng};
 use serde::{Deserialize, Serialize};
@@ -37,6 +40,7 @@ impl ViewingSecretKey {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct PrivateKeyHolder {
     pub nullifier_secret_key: NullifierSecretKey,
+    pub authorization_secret_key: AuthorizationSecretKey,
     pub viewing_secret_key: ViewingSecretKey,
 }
 
@@ -106,6 +110,25 @@ impl SecretSpendingKey {
 
     #[must_use]
     #[expect(clippy::big_endian_bytes, reason = "BIP-032 uses big endian")]
+    pub fn generate_authorization_secret_key(&self, index: Option<u32>) -> AuthorizationSecretKey {
+        const PREFIX: &[u8; 8] = b"LEE/keys";
+        const SUFFIX_1: &[u8; 1] = &[3];
+        const SUFFIX_2: &[u8; 19] = &[0; 19];
+
+        let index = index.unwrap_or(0);
+
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(PREFIX);
+        hasher.update(self.0);
+        hasher.update(SUFFIX_1);
+        hasher.update(index.to_be_bytes());
+        hasher.update(SUFFIX_2);
+
+        <AuthorizationSecretKey>::from(hasher.finalize_fixed())
+    }
+
+    #[must_use]
+    #[expect(clippy::big_endian_bytes, reason = "BIP-032 uses big endian")]
     pub fn generate_viewing_secret_seed_key(&self, index: Option<u32>) -> ViewingSecretKey {
         const PREFIX: &[u8; 8] = b"LEE/keys";
         const SUFFIX_1: &[u8; 1] = &[2];
@@ -140,6 +163,7 @@ impl SecretSpendingKey {
     pub fn produce_private_key_holder(&self, index: Option<u32>) -> PrivateKeyHolder {
         PrivateKeyHolder {
             nullifier_secret_key: self.generate_nullifier_secret_key(index),
+            authorization_secret_key: self.generate_authorization_secret_key(index),
             viewing_secret_key: self.generate_viewing_secret_seed_key(index),
         }
     }
@@ -164,6 +188,11 @@ impl PrivateKeyHolder {
     }
 
     #[must_use]
+    pub fn generate_authorization_public_key(&self) -> AuthorizationPublicKey {
+        (&self.authorization_secret_key).into()
+    }
+
+    #[must_use]
     pub fn generate_viewing_public_key(&self) -> ViewingPublicKey {
         ViewingPublicKey::from(&self.viewing_secret_key)
     }
@@ -172,6 +201,29 @@ impl PrivateKeyHolder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ask_matches_pinned_vectors() {
+        // ask = SHA256("LEE/keys" ‖ SSK ‖ [3] ‖ index_be ‖ [0; 19]); pinned via Python SHA-256.
+        let ssk = SecretSpendingKey([0; 32]);
+        assert_eq!(
+            ssk.generate_authorization_secret_key(None),
+            [
+                0x27, 0x28, 0xee, 0xf0, 0xd0, 0xbf, 0xc2, 0x8c, 0xc5, 0x58, 0x8b, 0x69, 0x1d, 0x22,
+                0x06, 0x10, 0xb3, 0x19, 0x65, 0x11, 0xf4, 0x2c, 0x50, 0xb8, 0x35, 0xf7, 0x5e, 0x2a,
+                0x4d, 0x12, 0x18, 0x95,
+            ]
+        );
+    }
+
+    #[test]
+    fn ask_differs_for_different_index() {
+        let ssk = SecretSpendingKey([0; 32]);
+        assert_ne!(
+            ssk.generate_authorization_secret_key(Some(0)),
+            ssk.generate_authorization_secret_key(Some(1)),
+        );
+    }
 
     #[test]
     fn seed_generation_test() {

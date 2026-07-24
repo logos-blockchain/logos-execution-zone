@@ -138,6 +138,8 @@ fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialData>
         secret_spending_key: SecretSpendingKey(SSK_PRIV_ACC_A),
         private_key_holder: PrivateKeyHolder {
             nullifier_secret_key: NSK_PRIV_ACC_A,
+            authorization_secret_key: SecretSpendingKey(SSK_PRIV_ACC_A)
+                .generate_authorization_secret_key(None),
             viewing_secret_key: ViewingSecretKey::new(VSK_D_PRIV_ACC_A, VSK_Z_PRIV_ACC_A),
         },
         nullifier_public_key: NullifierPublicKey(NPK_PRIV_ACC_A),
@@ -148,6 +150,8 @@ fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialData>
         secret_spending_key: SecretSpendingKey(SSK_PRIV_ACC_B),
         private_key_holder: PrivateKeyHolder {
             nullifier_secret_key: NSK_PRIV_ACC_B,
+            authorization_secret_key: SecretSpendingKey(SSK_PRIV_ACC_B)
+                .generate_authorization_secret_key(None),
             viewing_secret_key: ViewingSecretKey::new(VSK_D_PRIV_ACC_B, VSK_Z_PRIV_ACC_B),
         },
         nullifier_public_key: NullifierPublicKey(NPK_PRIV_ACC_B),

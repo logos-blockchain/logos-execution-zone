@@ -60,6 +60,7 @@ impl ChildKeysPrivate {
     fn from_ssk_and_ccc(ssk: SecretSpendingKey, ccc: [u8; 32], cci: Option<u32>) -> Self {
         let nsk = ssk.generate_nullifier_secret_key(cci);
         let vsk = ssk.generate_viewing_secret_seed_key(cci);
+        let ask = ssk.generate_authorization_secret_key(cci);
 
         let npk = NullifierPublicKey::from(&nsk);
         let vpk = ViewingPublicKey::from(&vsk);
@@ -72,6 +73,7 @@ impl ChildKeysPrivate {
                     viewing_public_key: vpk,
                     private_key_holder: PrivateKeyHolder {
                         nullifier_secret_key: nsk,
+                        authorization_secret_key: ask,
                         viewing_secret_key: vsk,
                     },
                 },
