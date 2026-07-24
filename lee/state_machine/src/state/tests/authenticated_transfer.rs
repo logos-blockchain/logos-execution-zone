@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn transition_from_authenticated_transfer_program_invocation_default_account_destination() {
     let key = PrivateKey::try_new([1; 32]).unwrap();
-    let account_id = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let account_id = AccountId::for_public_key(PublicKey::new_from_private_key(&key).value());
     let initial_data = [(
         account_id,
         Account {
@@ -17,7 +17,7 @@ fn transition_from_authenticated_transfer_program_invocation_default_account_des
         .with_test_programs();
     let from = account_id;
     let to_key = PrivateKey::try_new([2; 32]).unwrap();
-    let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
+    let to = AccountId::for_public_key(PublicKey::new_from_private_key(&to_key).value());
     assert_eq!(state.get_account_by_id(to), Account::default());
     let balance_to_move = 5;
 
@@ -33,14 +33,14 @@ fn transition_from_authenticated_transfer_program_invocation_default_account_des
 #[test]
 fn transition_from_authenticated_transfer_program_invocation_insuficient_balance() {
     let key = PrivateKey::try_new([1; 32]).unwrap();
-    let account_id = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let account_id = AccountId::for_public_key(PublicKey::new_from_private_key(&key).value());
     let mut state = V03State::new()
         .with_public_account_balances([(account_id, 100)])
         .with_test_programs();
     let from = account_id;
     let from_key = key;
     let to_key = PrivateKey::try_new([2; 32]).unwrap();
-    let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
+    let to = AccountId::for_public_key(PublicKey::new_from_private_key(&to_key).value());
     let balance_to_move = 101;
     assert!(state.get_account_by_id(from).balance < balance_to_move);
 
@@ -58,8 +58,8 @@ fn transition_from_authenticated_transfer_program_invocation_insuficient_balance
 fn transition_from_authenticated_transfer_program_invocation_non_default_account_destination() {
     let key1 = PrivateKey::try_new([1; 32]).unwrap();
     let key2 = PrivateKey::try_new([2; 32]).unwrap();
-    let account_id1 = AccountId::from(&PublicKey::new_from_private_key(&key1));
-    let account_id2 = AccountId::from(&PublicKey::new_from_private_key(&key2));
+    let account_id1 = AccountId::for_public_key(PublicKey::new_from_private_key(&key1).value());
+    let account_id2 = AccountId::for_public_key(PublicKey::new_from_private_key(&key2).value());
     let initial_data = [
         (
             account_id1,
@@ -100,9 +100,9 @@ fn transition_from_authenticated_transfer_program_invocation_non_default_account
 #[test]
 fn transition_from_sequence_of_authenticated_transfer_program_invocations() {
     let key1 = PrivateKey::try_new([8; 32]).unwrap();
-    let account_id1 = AccountId::from(&PublicKey::new_from_private_key(&key1));
+    let account_id1 = AccountId::for_public_key(PublicKey::new_from_private_key(&key1).value());
     let key2 = PrivateKey::try_new([2; 32]).unwrap();
-    let account_id2 = AccountId::from(&PublicKey::new_from_private_key(&key2));
+    let account_id2 = AccountId::for_public_key(PublicKey::new_from_private_key(&key2).value());
     let initial_data = [(
         account_id1,
         Account {
@@ -115,7 +115,7 @@ fn transition_from_sequence_of_authenticated_transfer_program_invocations() {
         .with_public_accounts(initial_data)
         .with_test_programs();
     let key3 = PrivateKey::try_new([3; 32]).unwrap();
-    let account_id3 = AccountId::from(&PublicKey::new_from_private_key(&key3));
+    let account_id3 = AccountId::for_public_key(PublicKey::new_from_private_key(&key3).value());
     let balance_to_move = 5;
 
     let tx = transfer_transaction(

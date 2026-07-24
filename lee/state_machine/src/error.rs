@@ -1,9 +1,6 @@
 use std::io;
 
-use lee_core::{
-    account::{Account, AccountId},
-    program::ProgramId,
-};
+pub use lee_core::error::InvalidProgramBehaviorError;
 use thiserror::Error;
 
 #[macro_export]
@@ -79,58 +76,6 @@ pub enum LeeError {
 
     #[error("Execution outside of the validity window")]
     OutOfValidityWindow,
-}
-
-#[derive(Error, Debug)]
-pub enum InvalidProgramBehaviorError {
-    #[error(
-        "Inconsistent pre-state for account {account_id} : expected {expected:?}, actual {actual:?}"
-    )]
-    InconsistentAccountPreState {
-        account_id: AccountId,
-        // Boxed to reduce the size of the error type
-        expected: Box<Account>,
-        actual: Box<Account>,
-    },
-
-    #[error("Unauthorized account marked as authorized")]
-    InvalidAccountAuthorization { account_id: AccountId },
-
-    #[error("Authorized account marked as not authorized")]
-    AuthorizedAccountMarkedAsNotAuthorized { account_id: AccountId },
-
-    #[error("Program ID mismatch: expected {expected:?}, actual {actual:?}")]
-    MismatchedProgramId {
-        expected: ProgramId,
-        actual: ProgramId,
-    },
-
-    #[error("Caller program ID mismatch: expected {expected:?}, actual {actual:?}")]
-    MismatchedCallerProgramId {
-        expected: Option<ProgramId>,
-        actual: Option<ProgramId>,
-    },
-
-    #[error(transparent)]
-    ExecutionValidationFailed(#[from] lee_core::program::ExecutionValidationError),
-
-    #[error("Trying to claim account {account_id} which is not default")]
-    ClaimedNonDefaultAccount { account_id: AccountId },
-
-    #[error("Trying to claim account {account_id} which is not authorized")]
-    ClaimedUnauthorizedAccount { account_id: AccountId },
-
-    #[error("PDA claim mismatch: expected {expected:?}, actual {actual:?}")]
-    MismatchedPdaClaim {
-        expected: AccountId,
-        actual: AccountId,
-    },
-
-    #[error("Default account {account_id} was modified without being claimed")]
-    DefaultAccountModifiedWithoutClaim { account_id: AccountId },
-
-    #[error("Called program {program_id:?} which is not listed in dependencies")]
-    UndeclaredProgramDependency { program_id: ProgramId },
 }
 
 #[cfg(test)]

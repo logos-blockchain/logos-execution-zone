@@ -276,7 +276,8 @@ mod tests {
         // account would no longer be flagged) and `public_diff → HashMap::new()`
         // (an empty diff hides the modification).
         let sender_key = PrivateKey::try_new([5_u8; 32]).expect("valid key");
-        let sender_id = AccountId::from(&PublicKey::new_from_private_key(&sender_key));
+        let sender_id =
+            AccountId::for_public_key(PublicKey::new_from_private_key(&sender_key).value());
         let state = V03State::new().with_public_account_balances([(sender_id, 10_000)]);
 
         let tx = create_transaction_native_token_transfer(

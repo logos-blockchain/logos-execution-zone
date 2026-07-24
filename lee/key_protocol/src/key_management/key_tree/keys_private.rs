@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 
-use lee_core::{NullifierPublicKey, PrivateAccountKind, encryption::ViewingPublicKey};
+use lee_core::{
+    AuthorizationPublicKey, NullifierPublicKey, PrivateAccountKind, encryption::ViewingPublicKey,
+};
 use serde::{Deserialize, Serialize};
 use sha2::Digest as _;
 
@@ -63,6 +65,7 @@ impl ChildKeysPrivate {
         let ask = ssk.generate_authorization_secret_key(cci);
 
         let npk = NullifierPublicKey::from(&nsk);
+        let apk = AuthorizationPublicKey::from(&ask);
         let vpk = ViewingPublicKey::from(&vsk);
 
         Self {
@@ -70,6 +73,7 @@ impl ChildKeysPrivate {
                 KeyChain {
                     secret_spending_key: ssk,
                     nullifier_public_key: npk,
+                    authorization_public_key: apk,
                     viewing_public_key: vpk,
                     private_key_holder: PrivateKeyHolder {
                         nullifier_secret_key: nsk,
@@ -96,11 +100,12 @@ impl KeyTreeNode for ChildKeysPrivate {
 
     fn account_ids(&self) -> impl Iterator<Item = lee::AccountId> {
         let npk = self.value.0.nullifier_public_key;
+        let apk = self.value.0.authorization_public_key;
         let vpk = self.value.0.viewing_public_key.clone();
         self.value
             .1
             .keys()
-            .map(move |kind| lee::AccountId::for_private_account(&npk, &vpk, kind))
+            .map(move |kind| lee::AccountId::for_private_account(&npk, &apk, &vpk, kind))
     }
 }
 

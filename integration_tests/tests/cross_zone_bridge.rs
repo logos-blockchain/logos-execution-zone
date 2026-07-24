@@ -45,7 +45,7 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
     let zone_b: [u8; 32] = *channel_b.as_ref();
 
     let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
-    let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
+    let holder_id = AccountId::for_public_key(PublicKey::new_from_private_key(&holder_key).value());
 
     let wrapped_token_id = programs::wrapped_token().id();
     let cross_zone = CrossZoneConfig {

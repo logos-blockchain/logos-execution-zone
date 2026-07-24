@@ -205,6 +205,7 @@ async fn fund_shared_account_from_public() -> Result<()> {
         from: public_mention(from_public),
         to: Some(private_mention(shared_id)),
         to_npk: None,
+        to_apk: None,
         to_vpk: None,
         to_keys: None,
         to_identifier: None,

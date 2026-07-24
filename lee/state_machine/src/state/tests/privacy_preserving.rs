@@ -490,7 +490,7 @@ fn malicious_authorization_changer_should_fail_in_privacy_preserving_circuit() {
     let recipient_account = AccountWithMetadata::new(
         Account::default(),
         true,
-        (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
+        recipient_keys.regular_account_id(0),
     );
 
     let recipient_account_id = recipient_keys.regular_account_id(0);
@@ -517,15 +517,19 @@ fn malicious_authorization_changer_should_fail_in_privacy_preserving_circuit() {
         Program::serialize_instruction(instruction).unwrap(),
         vec![
             InputAccountIdentity::Public,
-            InputAccountIdentity::PrivateAuthorizedUpdate {
+            InputAccountIdentity::Private(PrivateWitness {
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
-                nsk: recipient_keys.nsk,
-                membership_proof: state
-                    .get_proof_for_commitment(&recipient_commitment)
-                    .expect("recipient's commitment must be in state"),
                 identifier: 0,
-            },
+                kind: PrivateKind::Regular,
+                auth: AuthWitness::Held(recipient_keys.ask),
+                nullifier: NullifierWitness::Update {
+                    nsk: recipient_keys.nsk,
+                    membership_proof: state
+                        .get_proof_for_commitment(&recipient_commitment)
+                        .expect("recipient's commitment must be in state"),
+                },
+            }),
         ],
         &program_with_deps,
     );

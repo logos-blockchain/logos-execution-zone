@@ -18,7 +18,8 @@ use lee::{
     program::Program,
 };
 use lee_core::{
-    Commitment, InputAccountIdentity, Nullifier,
+    AuthWitness, Commitment, InputAccountIdentity, Nullifier, NullifierWitness, PrivateKind,
+    PrivateWitness,
     account::{AccountWithMetadata, Nonce},
     program::PdaSeed,
 };
@@ -805,6 +806,7 @@ fn private_bridge_withdraw_invocation_is_dropped() {
     let sender_keys = KeyChain::new_os_random();
     let sender_account_id = AccountId::for_regular_private_account(
         &sender_keys.nullifier_public_key,
+        &sender_keys.authorization_public_key,
         &sender_keys.viewing_public_key,
         0,
     );
@@ -825,15 +827,7 @@ fn private_bridge_withdraw_invocation_is_dropped() {
 
     let sender_commitment = Commitment::new(&sender_account_id, &sender_private_account);
 
-    let sender_pre = AccountWithMetadata::new(
-        sender_private_account,
-        true,
-        (
-            &sender_keys.nullifier_public_key,
-            &sender_keys.viewing_public_key,
-            0,
-        ),
-    );
+    let sender_pre = AccountWithMetadata::new(sender_private_account, true, sender_account_id);
     let bridge_pre = AccountWithMetadata::new(
         state.get_account_by_id(bridge_account_id),
         false,
@@ -859,15 +853,19 @@ fn private_bridge_withdraw_invocation_is_dropped() {
         vec![sender_pre, bridge_pre],
         instruction,
         vec![
-            InputAccountIdentity::PrivateAuthorizedUpdate {
+            InputAccountIdentity::Private(PrivateWitness {
                 vpk: sender_keys.viewing_public_key.clone(),
                 random_seed: [0; 32],
-                nsk: sender_keys.private_key_holder.nullifier_secret_key,
-                membership_proof: state
-                    .get_proof_for_commitment(&sender_commitment)
-                    .expect("sender commitment must be in state"),
                 identifier: 0,
-            },
+                kind: PrivateKind::Regular,
+                auth: AuthWitness::Held(sender_keys.private_key_holder.authorization_secret_key),
+                nullifier: NullifierWitness::Update {
+                    nsk: sender_keys.private_key_holder.nullifier_secret_key,
+                    membership_proof: state
+                        .get_proof_for_commitment(&sender_commitment)
+                        .expect("sender commitment must be in state"),
+                },
+            }),
             InputAccountIdentity::Public,
         ],
         &program_with_deps,
@@ -941,7 +939,7 @@ fn time_locked_transfer_succeeds_when_deadline_has_passed() {
     );
 
     let key1 = PrivateKey::try_new([1; 32]).unwrap();
-    let sender_id = AccountId::from(&PublicKey::new_from_private_key(&key1));
+    let sender_id = AccountId::for_public_key(PublicKey::new_from_private_key(&key1).value());
     state.force_insert_account(
         sender_id,
         Account {
@@ -990,7 +988,7 @@ fn time_locked_transfer_fails_when_deadline_is_in_the_future() {
     );
 
     let key1 = PrivateKey::try_new([1; 32]).unwrap();
-    let sender_id = AccountId::from(&PublicKey::new_from_private_key(&key1));
+    let sender_id = AccountId::for_public_key(PublicKey::new_from_private_key(&key1).value());
     state.force_insert_account(
         sender_id,
         Account {

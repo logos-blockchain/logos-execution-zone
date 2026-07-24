@@ -6,7 +6,7 @@ use key_protocol::key_management::{
     secret_holders::{PrivateKeyHolder, SecretSpendingKey, ViewingSecretKey},
 };
 use lee::{Account, AccountId, Data, PrivateKey, PublicKey, V03State, program::Program};
-use lee_core::{NullifierPublicKey, encryption::ViewingPublicKey};
+use lee_core::{AuthorizationPublicKey, NullifierPublicKey, encryption::ViewingPublicKey};
 use serde::{Deserialize, Serialize};
 
 const PRIVATE_KEY_PUB_ACC_A: [u8; 32] = [
@@ -86,6 +86,7 @@ pub struct PublicAccountPublicInitialData {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PrivateAccountPublicInitialData {
     pub npk: lee_core::NullifierPublicKey,
+    pub apk: lee_core::AuthorizationPublicKey,
     pub vpk: lee_core::encryption::ViewingPublicKey,
     pub account: lee_core::account::Account,
 }
@@ -109,6 +110,7 @@ impl PrivateAccountPrivateInitialData {
     pub fn account_id(&self) -> lee::AccountId {
         lee::AccountId::for_regular_private_account(
             &self.key_chain.nullifier_public_key,
+            &self.key_chain.authorization_public_key,
             &self.key_chain.viewing_public_key,
             self.identifier,
         )
@@ -123,38 +125,44 @@ pub fn initial_pub_accounts_private_keys() -> Vec<PublicAccountPrivateInitialDat
 
     vec![
         PublicAccountPrivateInitialData {
-            account_id: AccountId::from(&PublicKey::new_from_private_key(&acc1_pub_sign_key)),
+            account_id: AccountId::for_public_key(
+                PublicKey::new_from_private_key(&acc1_pub_sign_key).value(),
+            ),
             pub_sign_key: acc1_pub_sign_key,
         },
         PublicAccountPrivateInitialData {
-            account_id: AccountId::from(&PublicKey::new_from_private_key(&acc2_pub_sign_key)),
+            account_id: AccountId::for_public_key(
+                PublicKey::new_from_private_key(&acc2_pub_sign_key).value(),
+            ),
             pub_sign_key: acc2_pub_sign_key,
         },
     ]
 }
 
 fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialData> {
+    let ask_a = SecretSpendingKey(SSK_PRIV_ACC_A).generate_authorization_secret_key(None);
     let key_chain_1 = KeyChain {
         secret_spending_key: SecretSpendingKey(SSK_PRIV_ACC_A),
         private_key_holder: PrivateKeyHolder {
             nullifier_secret_key: NSK_PRIV_ACC_A,
-            authorization_secret_key: SecretSpendingKey(SSK_PRIV_ACC_A)
-                .generate_authorization_secret_key(None),
+            authorization_secret_key: ask_a,
             viewing_secret_key: ViewingSecretKey::new(VSK_D_PRIV_ACC_A, VSK_Z_PRIV_ACC_A),
         },
         nullifier_public_key: NullifierPublicKey(NPK_PRIV_ACC_A),
+        authorization_public_key: AuthorizationPublicKey::from(&ask_a),
         viewing_public_key: ViewingPublicKey::from_seed(&VSK_D_PRIV_ACC_A, &VSK_Z_PRIV_ACC_A),
     };
 
+    let ask_b = SecretSpendingKey(SSK_PRIV_ACC_B).generate_authorization_secret_key(None);
     let key_chain_2 = KeyChain {
         secret_spending_key: SecretSpendingKey(SSK_PRIV_ACC_B),
         private_key_holder: PrivateKeyHolder {
             nullifier_secret_key: NSK_PRIV_ACC_B,
-            authorization_secret_key: SecretSpendingKey(SSK_PRIV_ACC_B)
-                .generate_authorization_secret_key(None),
+            authorization_secret_key: ask_b,
             viewing_secret_key: ViewingSecretKey::new(VSK_D_PRIV_ACC_B, VSK_Z_PRIV_ACC_B),
         },
         nullifier_public_key: NullifierPublicKey(NPK_PRIV_ACC_B),
+        authorization_public_key: AuthorizationPublicKey::from(&ask_b),
         viewing_public_key: ViewingPublicKey::from_seed(&VSK_D_PRIV_ACC_B, &VSK_Z_PRIV_ACC_B),
     };
 
@@ -189,6 +197,7 @@ fn initial_commitments() -> Vec<PrivateAccountPublicInitialData> {
         .into_iter()
         .map(|data| PrivateAccountPublicInitialData {
             npk: data.key_chain.nullifier_public_key,
+            apk: data.key_chain.authorization_public_key,
             vpk: data.key_chain.viewing_public_key.clone(),
             account: data.account,
         })
@@ -200,8 +209,12 @@ fn initial_private_accounts() -> Vec<(lee_core::Commitment, lee_core::Nullifier)
         .iter()
         .map(|init_comm_data| {
             let npk = &init_comm_data.npk;
-            let account_id =
-                lee::AccountId::for_regular_private_account(npk, &init_comm_data.vpk, 0);
+            let account_id = lee::AccountId::for_regular_private_account(
+                npk,
+                &init_comm_data.apk,
+                &init_comm_data.vpk,
+                0,
+            );
 
             let mut acc = init_comm_data.account.clone();
 
@@ -339,8 +352,8 @@ mod tests {
     const PUB_ACC_A_TEXT_ADDR: &str = "6iArKUXxhUJqS7kCaPNhwMWt3ro71PDyBj7jwAyE2VQV";
     const PUB_ACC_B_TEXT_ADDR: &str = "7wHg9sbJwc6h3NP1S9bekfAzB8CHifEcxKswCKUt3YQo";
 
-    const PRIV_ACC_A_TEXT_ADDR: &str = "EVesBKsYRVtkjnTcsbk8tWHkBn2xZmzAXzwgrP3ZaVoZ";
-    const PRIV_ACC_B_TEXT_ADDR: &str = "94MXhZnueurjX6v37CYDKVEKYBiyhYArvtEdceq2XDQP";
+    const PRIV_ACC_A_TEXT_ADDR: &str = "ED1ggYMyMCJ38Yyt2PmpPskHh8UqYKfGTJQLZszLoYwf";
+    const PRIV_ACC_B_TEXT_ADDR: &str = "8tnxhwEisCnUuvk3EpCYnM3o1GSDW164VeZVgsbh2kjc";
 
     #[test]
     fn pub_state_consistency() {
@@ -475,6 +488,7 @@ mod tests {
             init_comms[0],
             PrivateAccountPublicInitialData {
                 npk: NullifierPublicKey(NPK_PRIV_ACC_A),
+                apk: init_private_accs_keys[0].key_chain.authorization_public_key,
                 vpk: init_private_accs_keys[0]
                     .key_chain
                     .viewing_public_key
@@ -492,6 +506,7 @@ mod tests {
             init_comms[1],
             PrivateAccountPublicInitialData {
                 npk: NullifierPublicKey(NPK_PRIV_ACC_B),
+                apk: init_private_accs_keys[1].key_chain.authorization_public_key,
                 vpk: init_private_accs_keys[1]
                     .key_chain
                     .viewing_public_key

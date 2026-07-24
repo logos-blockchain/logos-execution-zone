@@ -186,7 +186,10 @@ impl KeycardWallet {
     ) -> PyResult<String> {
         let public_key = Self::get_public_key_for_path_with_connect(pin, key_path)?;
 
-        Ok(format!("Public/{}", AccountId::from(&public_key)))
+        Ok(format!(
+            "Public/{}",
+            AccountId::for_public_key(public_key.value())
+        ))
     }
 
     pub fn get_private_keys_for_path(&self, py: Python, path: &str) -> PyResult<PrivateKeyPair> {

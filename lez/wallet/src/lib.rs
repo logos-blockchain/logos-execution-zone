@@ -301,6 +301,7 @@ impl WalletCore {
             .shared_private_account(account_id)?;
         let keys = self.storage.key_chain().derive_shared_account_keys(entry)?;
         let nsk = keys.nullifier_secret_key;
+        let ask = keys.authorization_secret_key;
         let npk = keys.generate_nullifier_public_key();
         let vpk = keys.generate_viewing_public_key();
         let identifier = entry.identifier;
@@ -309,6 +310,7 @@ impl WalletCore {
             Some(AccountIdentity::PrivatePdaShared {
                 account_id,
                 nsk,
+                ask,
                 npk,
                 vpk,
                 identifier,
@@ -316,6 +318,7 @@ impl WalletCore {
         } else {
             Some(AccountIdentity::PrivateShared {
                 nsk,
+                ask,
                 npk,
                 vpk,
                 identifier,
@@ -368,8 +371,10 @@ impl WalletCore {
 
         let keys = holder.derive_keys_for_pda(&program_id, &pda_seed);
         let npk = keys.generate_nullifier_public_key();
+        let apk = keys.generate_authorization_public_key();
         let vpk = keys.generate_viewing_public_key();
-        let account_id = AccountId::for_private_pda(&program_id, &pda_seed, &npk, &vpk, identifier);
+        let account_id =
+            AccountId::for_private_pda(&program_id, &pda_seed, &npk, &apk, &vpk, identifier);
 
         self.register_shared_account(
             account_id,
@@ -402,8 +407,9 @@ impl WalletCore {
 
         let keys = holder.derive_regular_shared_account_keys_from_identifier(identifier);
         let npk = keys.generate_nullifier_public_key();
+        let apk = keys.generate_authorization_public_key();
         let vpk = keys.generate_viewing_public_key();
-        let account_id = AccountId::from((&npk, &vpk, identifier));
+        let account_id = AccountId::for_regular_private_account(&npk, &apk, &vpk, identifier);
 
         self.register_shared_account(account_id, group_name, identifier, None, None);
 
@@ -793,6 +799,7 @@ impl WalletCore {
                             let npk = &key_chain.nullifier_public_key;
                             let account_id = lee::AccountId::for_private_account(
                                 npk,
+                                &key_chain.authorization_public_key,
                                 &key_chain.viewing_public_key,
                                 &kind,
                             );

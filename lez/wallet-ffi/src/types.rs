@@ -8,7 +8,10 @@ use std::{
 };
 
 use lee::{Data, ProgramId, SharedSecretKey};
-use lee_core::{encryption::MlKem768EncapsulationKey, program::PdaSeed, NullifierPublicKey};
+use lee_core::{
+    encryption::MlKem768EncapsulationKey, program::PdaSeed, AuthorizationPublicKey,
+    NullifierPublicKey,
+};
 use wallet::{account::AccountIdWithPrivacy, AccountIdentity};
 
 use crate::error::WalletFfiError;
@@ -107,6 +110,8 @@ impl Default for FfiAccount {
 pub struct FfiPrivateAccountKeys {
     /// Nullifier public key (32 bytes).
     pub nullifier_public_key: FfiBytes32,
+    /// Authorization public key (32 bytes).
+    pub authorization_public_key: FfiBytes32,
     /// Viewing public key (ML-KEM-768 encapsulation key, 1184 bytes).
     pub viewing_public_key: *const u8,
     /// Length of viewing public key (always 1184 bytes for ML-KEM-768).
@@ -117,6 +122,7 @@ impl Default for FfiPrivateAccountKeys {
     fn default() -> Self {
         Self {
             nullifier_public_key: FfiBytes32::default(),
+            authorization_public_key: FfiBytes32::default(),
             viewing_public_key: std::ptr::null(),
             viewing_public_key_len: 0,
         }
@@ -201,6 +207,11 @@ impl FfiPrivateAccountKeys {
         lee_core::NullifierPublicKey(self.nullifier_public_key.data)
     }
 
+    #[must_use]
+    pub const fn apk(&self) -> lee_core::AuthorizationPublicKey {
+        lee_core::AuthorizationPublicKey(self.authorization_public_key.data)
+    }
+
     pub fn vpk(&self) -> Result<lee_core::encryption::ViewingPublicKey, WalletFfiError> {
         if self.viewing_public_key_len == 1184 {
             let slice = unsafe {
@@ -240,6 +251,8 @@ pub struct FfiAccountIdentity {
     pub key_path: *mut c_char,
     pub nullifier_secret_key: FfiBytes32,
     pub nullifier_public_key: FfiBytes32,
+    pub authorization_secret_key: FfiBytes32,
+    pub authorization_public_key: FfiBytes32,
     pub viewing_public_key: *const u8,
     pub viewing_public_key_len: usize,
     pub identifier: FfiU128,
@@ -253,6 +266,8 @@ impl Default for FfiAccountIdentity {
             key_path: std::ptr::null_mut(),
             nullifier_secret_key: FfiBytes32::default(),
             nullifier_public_key: FfiBytes32::default(),
+            authorization_secret_key: FfiBytes32::default(),
+            authorization_public_key: FfiBytes32::default(),
             viewing_public_key: std::ptr::null(),
             viewing_public_key_len: 0,
             identifier: FfiU128::default(),
@@ -392,6 +407,7 @@ impl From<AccountIdentity> for FfiAccountIdentity {
             },
             AccountIdentity::PrivateForeign {
                 npk,
+                apk,
                 vpk,
                 identifier,
             } => {
@@ -407,6 +423,7 @@ impl From<AccountIdentity> for FfiAccountIdentity {
                 Self {
                     kind: FfiAccountIdentityKind::PrivateForeign,
                     nullifier_public_key: npk.0.into(),
+                    authorization_public_key: apk.0.into(),
                     viewing_public_key: vpk_data,
                     viewing_public_key_len: vpk_len,
                     identifier: identifier.into(),
@@ -421,6 +438,7 @@ impl From<AccountIdentity> for FfiAccountIdentity {
             AccountIdentity::PrivatePdaForeign {
                 account_id,
                 npk,
+                apk,
                 vpk,
                 identifier,
             } => {
@@ -437,6 +455,7 @@ impl From<AccountIdentity> for FfiAccountIdentity {
                     kind: FfiAccountIdentityKind::PrivatePdaForeign,
                     account_id: account_id.into(),
                     nullifier_public_key: npk.0.into(),
+                    authorization_public_key: apk.0.into(),
                     viewing_public_key: vpk_data,
                     viewing_public_key_len: vpk_len,
                     identifier: identifier.into(),
@@ -445,6 +464,7 @@ impl From<AccountIdentity> for FfiAccountIdentity {
             }
             AccountIdentity::PrivateShared {
                 nsk,
+                ask,
                 npk,
                 vpk,
                 identifier,
@@ -461,6 +481,7 @@ impl From<AccountIdentity> for FfiAccountIdentity {
                 Self {
                     kind: FfiAccountIdentityKind::PrivateShared,
                     nullifier_secret_key: nsk.into(),
+                    authorization_secret_key: ask.into(),
                     nullifier_public_key: npk.0.into(),
                     viewing_public_key: vpk_data,
                     viewing_public_key_len: vpk_len,
@@ -471,6 +492,7 @@ impl From<AccountIdentity> for FfiAccountIdentity {
             AccountIdentity::PrivatePdaShared {
                 account_id,
                 nsk,
+                ask,
                 npk,
                 vpk,
                 identifier,
@@ -488,6 +510,7 @@ impl From<AccountIdentity> for FfiAccountIdentity {
                     kind: FfiAccountIdentityKind::PrivatePdaShared,
                     account_id: account_id.into(),
                     nullifier_secret_key: nsk.into(),
+                    authorization_secret_key: ask.into(),
                     nullifier_public_key: npk.0.into(),
                     viewing_public_key: vpk_data,
                     viewing_public_key_len: vpk_len,
@@ -536,6 +559,7 @@ impl TryFrom<&FfiAccountIdentity> for AccountIdentity {
 
                 Ok(Self::PrivateForeign {
                     npk: NullifierPublicKey(value.nullifier_public_key.data),
+                    apk: AuthorizationPublicKey(value.authorization_public_key.data),
                     vpk,
                     identifier: value.identifier.into(),
                 })
@@ -560,6 +584,7 @@ impl TryFrom<&FfiAccountIdentity> for AccountIdentity {
                 Ok(Self::PrivatePdaForeign {
                     account_id: value.account_id.into(),
                     npk: NullifierPublicKey(value.nullifier_public_key.data),
+                    apk: AuthorizationPublicKey(value.authorization_public_key.data),
                     vpk,
                     identifier: value.identifier.into(),
                 })
@@ -580,6 +605,7 @@ impl TryFrom<&FfiAccountIdentity> for AccountIdentity {
 
                 Ok(Self::PrivateShared {
                     nsk: value.nullifier_secret_key.data,
+                    ask: value.authorization_secret_key.data,
                     npk: NullifierPublicKey(value.nullifier_public_key.data),
                     vpk,
                     identifier: value.identifier.into(),
@@ -602,6 +628,7 @@ impl TryFrom<&FfiAccountIdentity> for AccountIdentity {
                 Ok(Self::PrivatePdaShared {
                     account_id: value.account_id.into(),
                     nsk: value.nullifier_secret_key.data,
+                    ask: value.authorization_secret_key.data,
                     npk: NullifierPublicKey(value.nullifier_public_key.data),
                     vpk,
                     identifier: value.identifier.into(),
@@ -667,17 +694,24 @@ mod tests {
     fn account_identity_roundtrip() {
         let private_key = PrivateKey::try_new([42; 32]).unwrap();
         let public_key = PublicKey::new_from_private_key(&private_key);
-        let pub_acc_id = (&public_key).into();
+        let pub_acc_id = lee::AccountId::for_public_key(public_key.value());
 
         let nsk = [43; 32];
+        let ask = [53; 32];
         let vpk = ViewingPublicKey::from_seed(&[44; 32], &[54; 32]);
         let npk = (&nsk).into();
+        let apk = (&ask).into();
         let identifier = u128::from_le_bytes([45; 16]);
 
-        let private_reg_acc_id =
-            AccountId::for_private_account(&npk, &vpk, &PrivateAccountKind::Regular(identifier));
+        let private_reg_acc_id = AccountId::for_private_account(
+            &npk,
+            &apk,
+            &vpk,
+            &PrivateAccountKind::Regular(identifier),
+        );
         let private_pda_acc_id = AccountId::for_private_account(
             &npk,
+            &apk,
             &vpk,
             &PrivateAccountKind::Pda {
                 program_id: [46; 8],
@@ -697,6 +731,7 @@ mod tests {
         let acc_identity_3 = AccountIdentity::PrivateOwned(private_reg_acc_id);
         let acc_identity_4 = AccountIdentity::PrivateForeign {
             npk,
+            apk,
             vpk: vpk.clone(),
             identifier,
         };
@@ -704,11 +739,13 @@ mod tests {
         let acc_identity_6 = AccountIdentity::PrivatePdaForeign {
             account_id: private_pda_acc_id,
             npk,
+            apk,
             vpk: vpk.clone(),
             identifier,
         };
         let acc_identity_7 = AccountIdentity::PrivateShared {
             nsk,
+            ask,
             npk,
             vpk: vpk.clone(),
             identifier,
@@ -716,6 +753,7 @@ mod tests {
         let acc_identity_8 = AccountIdentity::PrivatePdaShared {
             account_id: private_pda_acc_id,
             nsk,
+            ask,
             npk,
             vpk,
             identifier,

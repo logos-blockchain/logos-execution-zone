@@ -31,7 +31,8 @@ async fn prebuilt_context_follows_config() -> Result<()> {
 /// unfunded default root account, so we check the configured accounts specifically.)
 async fn assert_context_follows_config(ctx: &TestContext) -> Result<()> {
     for (private_key, expected_balance) in default_public_accounts_for_wallet() {
-        let account_id = AccountId::from(&PublicKey::new_from_private_key(&private_key));
+        let account_id =
+            AccountId::for_public_key(PublicKey::new_from_private_key(&private_key).value());
         let balance = ctx
             .sequencer_client()
             .get_account_balance(account_id)

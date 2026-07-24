@@ -484,6 +484,10 @@ impl AccountSubcommand {
         println!("{}", hex::encode(entry.key_chain.nullifier_public_key.0));
         println!(
             "{}",
+            hex::encode(entry.key_chain.authorization_public_key.0)
+        );
+        println!(
+            "{}",
             hex::encode(entry.key_chain.viewing_public_key.to_bytes())
         );
         Ok(SubcommandReturnValue::Empty)
@@ -558,8 +562,9 @@ impl WalletSubcommand for ImportSubcommand {
     ) -> Result<SubcommandReturnValue> {
         match self {
             Self::Public { private_key } => {
-                let account_id =
-                    lee::AccountId::from(&lee::PublicKey::new_from_private_key(&private_key));
+                let account_id = lee::AccountId::for_public_key(
+                    lee::PublicKey::new_from_private_key(&private_key).value(),
+                );
 
                 wallet_core
                     .storage_mut()
@@ -581,11 +586,12 @@ impl WalletSubcommand for ImportSubcommand {
                 let key_chain: KeyChain = serde_json::from_str(&key_chain_json)
                     .map_err(|err| anyhow::anyhow!("Invalid key chain JSON: {err}"))?;
                 let account = lee::Account::from(account_state);
-                let account_id = lee::AccountId::from((
+                let account_id = lee::AccountId::for_regular_private_account(
                     &key_chain.nullifier_public_key,
+                    &key_chain.authorization_public_key,
                     &key_chain.viewing_public_key,
                     identifier,
-                ));
+                );
 
                 wallet_core
                     .storage_mut()

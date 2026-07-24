@@ -113,7 +113,8 @@ async fn import_public_account() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
     let private_key = lee::PrivateKey::new_os_random();
-    let account_id = lee::AccountId::from(&lee::PublicKey::new_from_private_key(&private_key));
+    let account_id =
+        lee::AccountId::for_public_key(lee::PublicKey::new_from_private_key(&private_key).value());
 
     let command = Command::Account(AccountSubcommand::Import(ImportSubcommand::Public {
         private_key,
@@ -141,11 +142,12 @@ async fn import_private_account() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
     let key_chain = KeyChain::new_os_random();
-    let account_id = lee::AccountId::from((
+    let account_id = lee::AccountId::for_regular_private_account(
         &key_chain.nullifier_public_key,
+        &key_chain.authorization_public_key,
         &key_chain.viewing_public_key,
         0,
-    ));
+    );
     let account = lee::Account {
         program_owner: programs::authenticated_transfer().id(),
         balance: 777,
@@ -202,11 +204,12 @@ async fn import_private_account_second_time_overrides_account_data() -> Result<(
     let mut ctx = TestContext::new().await?;
 
     let key_chain = KeyChain::new_os_random();
-    let account_id = lee::AccountId::from((
+    let account_id = lee::AccountId::for_regular_private_account(
         &key_chain.nullifier_public_key,
+        &key_chain.authorization_public_key,
         &key_chain.viewing_public_key,
         0,
-    ));
+    );
     let key_chain_json =
         serde_json::to_string(&key_chain).context("Failed to serialize key chain")?;
 

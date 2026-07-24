@@ -1,8 +1,8 @@
-use lee_core::PrivacyPreservingCircuitInput;
+use lee_core::{PrivacyPreservingCircuitInput, program::ChainedCall, validate_state_diff};
 use risc0_zkvm::guest::env;
 
-mod execution_state;
 mod output;
+mod private_env;
 
 fn main() {
     let PrivacyPreservingCircuitInput {
@@ -11,13 +11,21 @@ fn main() {
         program_id,
     } = env::read();
 
-    let execution_state = execution_state::ExecutionState::derive_from_outputs(
-        &account_identities,
+    let initial_call = ChainedCall {
         program_id,
-        program_outputs,
-    );
+        instruction_data: program_outputs
+            .first()
+            .expect("No program outputs provided")
+            .instruction_data
+            .clone(),
+        pre_states: Vec::new(),
+        pda_seeds: Vec::new(),
+    };
+    let mut protocol_env = private_env::PrivateEnv::new(&account_identities, program_outputs);
+    let threaded = validate_state_diff(&mut protocol_env, initial_call)
+        .expect("private transaction validation failed");
 
-    let output = output::compute_circuit_output(execution_state, &account_identities);
+    let output = output::compute_circuit_output(protocol_env, threaded, &account_identities);
 
     env::commit(&output);
 }

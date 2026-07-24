@@ -60,7 +60,7 @@ impl ChildKeysPublic {
 
     #[must_use]
     pub fn account_id(&self) -> lee::AccountId {
-        lee::AccountId::from(&self.pk)
+        lee::AccountId::for_public_key(self.pk.value())
     }
 
     fn compute_hash_value(&self, cci: u32) -> [u8; 64] {

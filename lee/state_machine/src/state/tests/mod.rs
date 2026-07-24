@@ -7,8 +7,10 @@
 use std::collections::HashMap;
 
 use lee_core::{
-    BlockId, Commitment, DUMMY_COMMITMENT_HASH, Identifier, InputAccountIdentity, Nullifier,
-    NullifierPublicKey, NullifierSecretKey, PrivateAccountKind, Timestamp,
+    AuthWitness, AuthorizationPublicKey, AuthorizationSecretKey, BlockId, Commitment,
+    DUMMY_COMMITMENT_HASH, Identifier, InputAccountIdentity, Nullifier, NullifierPublicKey,
+    NullifierSecretKey, NullifierWitness, PrivateAccountKind, PrivateKind, PrivateWitness,
+    Timestamp,
     account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
     encryption::ViewingPublicKey,
     program::{
@@ -131,12 +133,13 @@ pub struct TestPublicKeys {
 
 impl TestPublicKeys {
     pub fn account_id(&self) -> AccountId {
-        AccountId::from(&PublicKey::new_from_private_key(&self.signing_key))
+        AccountId::for_public_key(PublicKey::new_from_private_key(&self.signing_key).value())
     }
 }
 
 pub struct TestPrivateKeys {
     pub nsk: NullifierSecretKey,
+    pub ask: AuthorizationSecretKey,
     pub d: [u8; 32],
     pub z: [u8; 32],
 }
@@ -146,12 +149,16 @@ impl TestPrivateKeys {
         NullifierPublicKey::from(&self.nsk)
     }
 
+    pub fn apk(&self) -> AuthorizationPublicKey {
+        AuthorizationPublicKey::from(&self.ask)
+    }
+
     pub fn vpk(&self) -> ViewingPublicKey {
         ViewingPublicKey::from_seed(&self.d, &self.z)
     }
 
     pub fn account_id(&self, kind: &PrivateAccountKind) -> AccountId {
-        AccountId::for_private_account(&self.npk(), &self.vpk(), kind)
+        AccountId::for_private_account(&self.npk(), &self.apk(), &self.vpk(), kind)
     }
 
     pub fn regular_account_id(&self, identifier: Identifier) -> AccountId {
@@ -261,6 +268,7 @@ fn test_public_account_keys_2() -> TestPublicKeys {
 pub fn test_private_account_keys_1() -> TestPrivateKeys {
     TestPrivateKeys {
         nsk: [13; 32],
+        ask: [14; 32],
         d: [31; 32],
         z: [32; 32],
     }
@@ -269,6 +277,7 @@ pub fn test_private_account_keys_1() -> TestPrivateKeys {
 pub fn test_private_account_keys_2() -> TestPrivateKeys {
     TestPrivateKeys {
         nsk: [38; 32],
+        ask: [39; 32],
         d: [83; 32],
         z: [84; 32],
     }
@@ -291,7 +300,7 @@ fn shielded_balance_transfer_for_tests(
     let recipient = AccountWithMetadata::new(
         Account::default(),
         false,
-        (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
+        recipient_keys.regular_account_id(0),
     );
 
     let (output, proof) = crate::privacy_preserving_transaction::circuit::execute_and_prove(
@@ -299,13 +308,17 @@ fn shielded_balance_transfer_for_tests(
         Program::serialize_instruction(balance_to_move).unwrap(),
         vec![
             InputAccountIdentity::Public,
-            InputAccountIdentity::PrivateUnauthorized {
+            InputAccountIdentity::Private(PrivateWitness {
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
-                npk: recipient_keys.npk(),
                 identifier: 0,
-                commitment_root: DUMMY_COMMITMENT_HASH,
-            },
+                kind: PrivateKind::Regular,
+                auth: AuthWitness::Public(recipient_keys.apk()),
+                nullifier: NullifierWitness::Init {
+                    npk: recipient_keys.npk(),
+                    commitment_root: DUMMY_COMMITMENT_HASH,
+                },
+            }),
         ],
         &crate::test_methods::simple_balance_transfer().into(),
     )
@@ -335,34 +348,42 @@ fn private_balance_transfer_for_tests(
     let sender_pre = AccountWithMetadata::new(
         sender_private_account.clone(),
         true,
-        (&sender_keys.npk(), &sender_keys.vpk(), 0),
+        sender_keys.regular_account_id(0),
     );
     let recipient_pre = AccountWithMetadata::new(
         Account::default(),
         false,
-        (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
+        recipient_keys.regular_account_id(0),
     );
 
     let (output, proof) = crate::privacy_preserving_transaction::circuit::execute_and_prove(
         vec![sender_pre, recipient_pre],
         Program::serialize_instruction(balance_to_move).unwrap(),
         vec![
-            InputAccountIdentity::PrivateAuthorizedUpdate {
+            InputAccountIdentity::Private(PrivateWitness {
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
-                nsk: sender_keys.nsk,
-                membership_proof: state
-                    .get_proof_for_commitment(&sender_commitment)
-                    .expect("sender's commitment must be in state"),
                 identifier: 0,
-            },
-            InputAccountIdentity::PrivateUnauthorized {
+                kind: PrivateKind::Regular,
+                auth: AuthWitness::Held(sender_keys.ask),
+                nullifier: NullifierWitness::Update {
+                    nsk: sender_keys.nsk,
+                    membership_proof: state
+                        .get_proof_for_commitment(&sender_commitment)
+                        .expect("sender's commitment must be in state"),
+                },
+            }),
+            InputAccountIdentity::Private(PrivateWitness {
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
-                npk: recipient_keys.npk(),
                 identifier: 0,
-                commitment_root: DUMMY_COMMITMENT_HASH,
-            },
+                kind: PrivateKind::Regular,
+                auth: AuthWitness::Public(recipient_keys.apk()),
+                nullifier: NullifierWitness::Init {
+                    npk: recipient_keys.npk(),
+                    commitment_root: DUMMY_COMMITMENT_HASH,
+                },
+            }),
         ],
         &program.into(),
     )
@@ -388,7 +409,7 @@ fn deshielded_balance_transfer_for_tests(
     let sender_pre = AccountWithMetadata::new(
         sender_private_account.clone(),
         true,
-        (&sender_keys.npk(), &sender_keys.vpk(), 0),
+        sender_keys.regular_account_id(0),
     );
     let recipient_pre = AccountWithMetadata::new(
         state.get_account_by_id(*recipient_account_id),
@@ -400,15 +421,19 @@ fn deshielded_balance_transfer_for_tests(
         vec![sender_pre, recipient_pre],
         Program::serialize_instruction(balance_to_move).unwrap(),
         vec![
-            InputAccountIdentity::PrivateAuthorizedUpdate {
+            InputAccountIdentity::Private(PrivateWitness {
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
-                nsk: sender_keys.nsk,
-                membership_proof: state
-                    .get_proof_for_commitment(&sender_commitment)
-                    .expect("sender's commitment must be in state"),
                 identifier: 0,
-            },
+                kind: PrivateKind::Regular,
+                auth: AuthWitness::Held(sender_keys.ask),
+                nullifier: NullifierWitness::Update {
+                    nsk: sender_keys.nsk,
+                    membership_proof: state
+                        .get_proof_for_commitment(&sender_commitment)
+                        .expect("sender's commitment must be in state"),
+                },
+            }),
             InputAccountIdentity::Public,
         ],
         &program.into(),

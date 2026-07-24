@@ -43,7 +43,7 @@ impl PrivacyPreservingTransaction {
         self.witness_set
             .signatures_and_public_keys()
             .iter()
-            .map(|(_, public_key)| AccountId::from(public_key))
+            .map(|(_, public_key)| AccountId::for_public_key(public_key.value()))
             .collect()
     }
 
@@ -71,8 +71,8 @@ mod tests {
     fn keys_for_tests() -> (PrivateKey, PrivateKey, AccountId, AccountId) {
         let key1 = PrivateKey::try_new([1; 32]).unwrap();
         let key2 = PrivateKey::try_new([2; 32]).unwrap();
-        let addr1 = AccountId::from(&PublicKey::new_from_private_key(&key1));
-        let addr2 = AccountId::from(&PublicKey::new_from_private_key(&key2));
+        let addr1 = AccountId::for_public_key(PublicKey::new_from_private_key(&key1).value());
+        let addr2 = AccountId::for_public_key(PublicKey::new_from_private_key(&key2).value());
         (key1, key2, addr1, addr2)
     }
 

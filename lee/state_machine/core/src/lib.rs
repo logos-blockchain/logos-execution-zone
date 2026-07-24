@@ -5,7 +5,8 @@
 
 pub use authorization::{AuthorizationPublicKey, AuthorizationSecretKey};
 pub use circuit_io::{
-    InputAccountIdentity, PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput,
+    AuthWitness, InputAccountIdentity, NullifierWitness, PrivacyPreservingCircuitInput,
+    PrivacyPreservingCircuitOutput, PrivateKind, PrivateWitness,
 };
 pub use commitment::{
     Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, DUMMY_COMMITMENT_HASH, MembershipProof,
@@ -17,6 +18,9 @@ pub use encryption::{
 };
 pub use nullifier::{Identifier, Nullifier, NullifierPublicKey, NullifierSecretKey};
 pub use program::PrivateAccountKind;
+pub use validation::{
+    Authorization, Backend, Resolved, ThreadedDiff, ValidationError, validate_state_diff,
+};
 
 pub mod account;
 mod authorization;
@@ -26,8 +30,8 @@ mod encoding;
 pub mod encryption;
 mod nullifier;
 pub mod program;
+mod validation;
 
-#[cfg(feature = "host")]
 pub mod error;
 
 pub const GENESIS_BLOCK_ID: BlockId = 1;

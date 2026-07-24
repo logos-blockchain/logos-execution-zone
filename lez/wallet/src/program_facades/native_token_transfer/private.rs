@@ -2,7 +2,10 @@ use std::vec;
 
 use common::HashType;
 use lee::{AccountId, program::Program};
-use lee_core::{Identifier, NullifierPublicKey, SharedSecretKey, encryption::ViewingPublicKey};
+use lee_core::{
+    AuthorizationPublicKey, Identifier, NullifierPublicKey, SharedSecretKey,
+    encryption::ViewingPublicKey,
+};
 
 use super::{NativeTokenTransfer, auth_transfer_preparation};
 use crate::{AccountIdentity, ExecutionFailureKind};
@@ -37,6 +40,7 @@ impl NativeTokenTransfer<'_> {
         &self,
         from: AccountId,
         to_npk: NullifierPublicKey,
+        to_apk: AuthorizationPublicKey,
         to_vpk: ViewingPublicKey,
         to_identifier: Identifier,
         balance_to_move: u128,
@@ -51,6 +55,7 @@ impl NativeTokenTransfer<'_> {
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
                     AccountIdentity::PrivateForeign {
                         npk: to_npk,
+                        apk: to_apk,
                         vpk: to_vpk,
                         identifier: to_identifier,
                     },

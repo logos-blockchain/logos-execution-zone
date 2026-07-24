@@ -4,8 +4,8 @@ use super::*;
 fn new_works() {
     let key1 = PrivateKey::try_new([1; 32]).unwrap();
     let key2 = PrivateKey::try_new([2; 32]).unwrap();
-    let addr1 = AccountId::from(&PublicKey::new_from_private_key(&key1));
-    let addr2 = AccountId::from(&PublicKey::new_from_private_key(&key2));
+    let addr1 = AccountId::for_public_key(PublicKey::new_from_private_key(&key1).value());
+    let addr2 = AccountId::for_public_key(PublicKey::new_from_private_key(&key2).value());
     let expected_public_state = {
         let mut this = HashMap::new();
         this.insert(
@@ -77,7 +77,7 @@ fn insert_program() {
 #[test]
 fn get_account_by_account_id_non_default_account() {
     let key = PrivateKey::try_new([1; 32]).unwrap();
-    let account_id = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let account_id = AccountId::for_public_key(PublicKey::new_from_private_key(&key).value());
     let initial_data = [(
         account_id,
         Account {

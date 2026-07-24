@@ -49,6 +49,7 @@ pub async fn run(ctx: &mut TestContext) -> Result<ScenarioOutput> {
                         from: public_mention(supply_id),
                         to: Some(public_mention(recipient_id)),
                         to_npk: None,
+                        to_apk: None,
                         to_vpk: None,
                         to_keys: None,
                         to_identifier: Some(0),

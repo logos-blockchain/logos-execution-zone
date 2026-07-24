@@ -35,12 +35,15 @@ pub enum AuthTransferSubcommand {
         /// `to_npk` - valid 32 byte hex string.
         #[arg(long, conflicts_with = "to_keys")]
         to_npk: Option<String>,
+        /// `to_apk` - valid 32 byte hex string.
+        #[arg(long, conflicts_with = "to_keys")]
+        to_apk: Option<String>,
         /// `to_vpk` - valid hex-encoded ML-KEM-768 encapsulation key (1184 bytes).
         #[arg(long, conflicts_with = "to_keys")]
         to_vpk: Option<String>,
-        /// Path to a keys file exported by `wallet account show-keys`, containing npk
-        /// and vpk on separate lines. Replaces `--to-npk` and `--to-vpk`.
-        #[arg(long, conflicts_with_all = ["to_npk", "to_vpk"])]
+        /// Path to a keys file exported by `wallet account show-keys`, containing npk,
+        /// apk and vpk on separate lines. Replaces `--to-npk`/`--to-apk`/`--to-vpk`.
+        #[arg(long, conflicts_with_all = ["to_npk", "to_apk", "to_vpk"])]
         to_keys: Option<String>,
         /// Identifier for the recipient's private account (only used when sending to a foreign
         /// private account via `--to-npk`/`--to-vpk` or `--to-keys`).
@@ -88,18 +91,23 @@ impl AuthTransferSubcommand {
         from_account: CliAccountMention,
         to_account: Option<CliAccountMention>,
         to_npk: Option<String>,
+        to_apk: Option<String>,
         to_vpk: Option<String>,
         to_keys: Option<String>,
         to_identifier: Option<u128>,
         amount: u128,
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
-        // Resolve --to-keys into --to-npk / --to-vpk equivalents.
-        let (to_npk, to_vpk) = if let Some(path) = to_keys {
-            let (npk_bytes, vpk_bytes) = crate::cli::read_keys_file(&path)?;
-            (Some(hex::encode(npk_bytes)), Some(hex::encode(vpk_bytes)))
+        // Resolve --to-keys into --to-npk / --to-apk / --to-vpk equivalents.
+        let (to_npk, to_apk, to_vpk) = if let Some(path) = to_keys {
+            let (npk_bytes, apk_bytes, vpk_bytes) = crate::cli::read_keys_file(&path)?;
+            (
+                Some(hex::encode(npk_bytes)),
+                Some(hex::encode(apk_bytes)),
+                Some(hex::encode(vpk_bytes)),
+            )
         } else {
-            (to_npk, to_vpk)
+            (to_npk, to_apk, to_vpk)
         };
 
         let from = from_account.resolve(wallet_core.storage())?;
@@ -107,19 +115,11 @@ impl AuthTransferSubcommand {
             .as_ref()
             .map(|m| m.resolve(wallet_core.storage()))
             .transpose()?;
-        let underlying_subcommand = match (to, to_npk, to_vpk) {
-            (None, None, None) => {
+        let underlying_subcommand = match (to, to_npk, to_apk, to_vpk) {
+            (None, None, None, None) => {
                 anyhow::bail!("Provide either account account_id of receiver or their public keys");
             }
-            (Some(_), Some(_), Some(_)) => {
-                anyhow::bail!(
-                    "Provide only one variant: either account account_id of receiver or their public keys"
-                );
-            }
-            (_, Some(_), None) | (_, None, Some(_)) => {
-                anyhow::bail!("List of public keys is uncomplete");
-            }
-            (Some(to), None, None) => match (from, to) {
+            (Some(to), None, None, None) => match (from, to) {
                 (AccountIdWithPrivacy::Public(from), AccountIdWithPrivacy::Public(to)) => {
                     let to_mention = to_account.expect("matched Some branch");
                     NativeTokenTransferProgramSubcommand::Public {
@@ -150,12 +150,13 @@ impl AuthTransferSubcommand {
                     )
                 }
             },
-            (None, Some(to_npk), Some(to_vpk)) => match from {
+            (None, Some(to_npk), Some(to_apk), Some(to_vpk)) => match from {
                 AccountIdWithPrivacy::Private(from) => {
                     NativeTokenTransferProgramSubcommand::Private(
                         NativeTokenTransferProgramSubcommandPrivate::PrivateForeign {
                             from,
                             to_npk,
+                            to_apk,
                             to_vpk,
                             to_identifier,
                             amount,
@@ -167,6 +168,7 @@ impl AuthTransferSubcommand {
                         NativeTokenTransferProgramSubcommandShielded::ShieldedForeign {
                             from: Some(from_account.into_public_identity(from)),
                             to_npk,
+                            to_apk,
                             to_vpk,
                             to_identifier,
                             amount,
@@ -174,6 +176,14 @@ impl AuthTransferSubcommand {
                     )
                 }
             },
+            (Some(_), _, _, _) => {
+                anyhow::bail!(
+                    "Provide only one variant: either account account_id of receiver or their public keys"
+                );
+            }
+            _ => {
+                anyhow::bail!("List of public keys is uncomplete");
+            }
         };
 
         underlying_subcommand.handle_subcommand(wallet_core).await
@@ -191,6 +201,7 @@ impl WalletSubcommand for AuthTransferSubcommand {
                 from,
                 to,
                 to_npk,
+                to_apk,
                 to_vpk,
                 to_keys,
                 to_identifier,
@@ -200,6 +211,7 @@ impl WalletSubcommand for AuthTransferSubcommand {
                     from,
                     to,
                     to_npk,
+                    to_apk,
                     to_vpk,
                     to_keys,
                     to_identifier,
@@ -276,6 +288,9 @@ pub enum NativeTokenTransferProgramSubcommandShielded {
         /// `to_npk` - valid 32 byte hex string.
         #[arg(long)]
         to_npk: String,
+        /// `to_apk` - valid 32 byte hex string.
+        #[arg(long)]
+        to_apk: String,
         /// `to_vpk` - valid hex-encoded ML-KEM-768 encapsulation key (1184 bytes).
         #[arg(long)]
         to_vpk: String,
@@ -316,6 +331,9 @@ pub enum NativeTokenTransferProgramSubcommandPrivate {
         /// `to_npk` - valid 32 byte hex string.
         #[arg(long)]
         to_npk: String,
+        /// `to_apk` - valid 32 byte hex string.
+        #[arg(long)]
+        to_apk: String,
         /// `to_vpk` - valid hex-encoded ML-KEM-768 encapsulation key (1184 bytes).
         #[arg(long)]
         to_vpk: String,
@@ -350,17 +368,19 @@ impl NativeTokenTransferProgramSubcommandPrivate {
     async fn handle_private_foreign(
         from: AccountId,
         to_npk: String,
+        to_apk: String,
         to_vpk: String,
         to_identifier: Option<u128>,
         amount: u128,
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
-        let (to_npk, to_vpk) = crate::cli::decode_npk_vpk(&to_npk, &to_vpk)?;
+        let (to_npk, to_apk, to_vpk) = crate::cli::decode_npk_apk_vpk(&to_npk, &to_apk, &to_vpk)?;
 
         let (tx_hash, [secret_from, _]) = NativeTokenTransfer(wallet_core)
             .send_private_transfer_to_outer_account(
                 from,
                 to_npk,
+                to_apk,
                 to_vpk,
                 to_identifier.unwrap_or_else(rand::random),
                 amount,
@@ -385,6 +405,7 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandPrivate {
             Self::PrivateForeign {
                 from,
                 to_npk,
+                to_apk,
                 to_vpk,
                 to_identifier,
                 amount,
@@ -392,6 +413,7 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandPrivate {
                 Self::handle_private_foreign(
                     from,
                     to_npk,
+                    to_apk,
                     to_vpk,
                     to_identifier,
                     amount,
@@ -422,17 +444,19 @@ impl NativeTokenTransferProgramSubcommandShielded {
     async fn handle_shielded_foreign(
         from: Option<AccountIdentity>,
         to_npk: String,
+        to_apk: String,
         to_vpk: String,
         to_identifier: Option<u128>,
         amount: u128,
         wallet_core: &WalletCore,
     ) -> Result<SubcommandReturnValue> {
-        let (to_npk, to_vpk) = crate::cli::decode_npk_vpk(&to_npk, &to_vpk)?;
+        let (to_npk, to_apk, to_vpk) = crate::cli::decode_npk_apk_vpk(&to_npk, &to_apk, &to_vpk)?;
 
         let (tx_hash, _) = NativeTokenTransfer(wallet_core)
             .send_shielded_transfer_to_outer_account(
                 from.expect("from set during Send dispatch"),
                 to_npk,
+                to_apk,
                 to_vpk,
                 to_identifier.unwrap_or_else(rand::random),
                 amount,
@@ -459,6 +483,7 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandShielded {
             Self::ShieldedForeign {
                 from,
                 to_npk,
+                to_apk,
                 to_vpk,
                 to_identifier,
                 amount,
@@ -466,6 +491,7 @@ impl WalletSubcommand for NativeTokenTransferProgramSubcommandShielded {
                 Self::handle_shielded_foreign(
                     from,
                     to_npk,
+                    to_apk,
                     to_vpk,
                     to_identifier,
                     amount,

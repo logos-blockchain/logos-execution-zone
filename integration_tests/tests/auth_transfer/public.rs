@@ -87,6 +87,7 @@ async fn failed_transfer_with_insufficient_balance() -> Result<()> {
         from: public_mention(ctx.existing_public_accounts()[0]),
         to: Some(public_mention(ctx.existing_public_accounts()[1])),
         to_npk: None,
+        to_apk: None,
         to_vpk: None,
         to_keys: None,
         to_identifier: Some(0),

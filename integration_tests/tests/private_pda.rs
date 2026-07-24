@@ -21,7 +21,8 @@ use lee::{
     program::Program,
 };
 use lee_core::{
-    DUMMY_COMMITMENT_HASH, InputAccountIdentity, NullifierPublicKey,
+    AuthWitness, AuthorizationPublicKey, DUMMY_COMMITMENT_HASH, InputAccountIdentity,
+    NullifierPublicKey, NullifierWitness, PrivateKind, PrivateWitness,
     account::{Account, AccountWithMetadata},
     encryption::ViewingPublicKey,
     program::PdaSeed,
@@ -40,6 +41,7 @@ async fn fund_private_pda(
     wallet: &WalletCore,
     sender: AccountId,
     npk: NullifierPublicKey,
+    apk: AuthorizationPublicKey,
     vpk: ViewingPublicKey,
     identifier: u128,
     seed: PdaSeed,
@@ -48,7 +50,7 @@ async fn fund_private_pda(
     auth_transfer: &ProgramWithDependencies,
 ) -> Result<()> {
     let pda_account_id =
-        AccountId::for_private_pda(&authority_program_id, &seed, &npk, &vpk, identifier);
+        AccountId::for_private_pda(&authority_program_id, &seed, &npk, &apk, &vpk, identifier);
     let sender_account = wallet
         .get_account_public(sender)
         .await
@@ -65,14 +67,19 @@ async fn fund_private_pda(
 
     let account_identities = vec![
         InputAccountIdentity::Public,
-        InputAccountIdentity::PrivatePdaInit {
+        InputAccountIdentity::Private(PrivateWitness {
             vpk,
             random_seed: [0; 32],
-            npk,
             identifier,
-            commitment_root: DUMMY_COMMITMENT_HASH,
-            seed: Some((seed, authority_program_id)),
-        },
+            kind: PrivateKind::Pda {
+                seed: Some((seed, authority_program_id)),
+            },
+            auth: AuthWitness::Public(apk),
+            nullifier: NullifierWitness::Init {
+                npk,
+                commitment_root: DUMMY_COMMITMENT_HASH,
+            },
+        }),
     ];
 
     let (output, proof) = execute_and_prove(
@@ -110,6 +117,7 @@ async fn spend_private_pda(
     wallet: &WalletCore,
     pda_account_id: AccountId,
     recipient_npk: NullifierPublicKey,
+    recipient_apk: AuthorizationPublicKey,
     recipient_vpk: ViewingPublicKey,
     seed: PdaSeed,
     amount: u128,
@@ -122,6 +130,7 @@ async fn spend_private_pda(
                 AccountIdentity::PrivatePdaOwned(pda_account_id),
                 AccountIdentity::PrivateForeign {
                     npk: recipient_npk,
+                    apk: recipient_apk,
                     vpk: recipient_vpk,
                     identifier: 0,
                 },
@@ -146,7 +155,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
 
     // ── Build alice's key chain ──────────────────────────────────────────────────────────────────
     let (alice_id, _alice_chain_index) = ctx.wallet_mut().create_new_account_private(None);
-    let (alice_npk, alice_vpk) = {
+    let (alice_npk, alice_apk, alice_vpk) = {
         let account = ctx
             .wallet()
             .storage()
@@ -154,7 +163,11 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
             .private_account(alice_id)
             .expect("Account was just created, should be present");
         let kc = account.key_chain;
-        (kc.nullifier_public_key, kc.viewing_public_key.clone())
+        (
+            kc.nullifier_public_key,
+            kc.authorization_public_key,
+            kc.viewing_public_key.clone(),
+        )
     };
 
     let proxy = test_programs::pda_spend_proxy();
@@ -168,8 +181,10 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
     let spend_program =
         ProgramWithDependencies::new(proxy, [(auth_transfer_id, auth_transfer)].into());
 
-    let alice_pda_0_id = AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, &alice_vpk, 0);
-    let alice_pda_1_id = AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, &alice_vpk, 1);
+    let alice_pda_0_id =
+        AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, &alice_apk, &alice_vpk, 0);
+    let alice_pda_1_id =
+        AccountId::for_private_pda(&proxy_id, &seed, &alice_npk, &alice_apk, &alice_vpk, 1);
 
     // Use two different public senders to avoid nonce conflicts between the back-to-back txs.
     let senders = ctx.existing_public_accounts();
@@ -183,6 +198,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         ctx.wallet(),
         sender_0,
         alice_npk,
+        alice_apk,
         alice_vpk.clone(),
         0,
         seed,
@@ -197,6 +213,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         ctx.wallet(),
         sender_1,
         alice_npk,
+        alice_apk,
         alice_vpk.clone(),
         1,
         seed,
@@ -252,9 +269,11 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
 
     // Fresh recipients — hardcoded npks not in any wallet.
     let recipient_npk_0 = NullifierPublicKey([0xAA; 32]);
+    let recipient_apk_0 = AuthorizationPublicKey([0xAA; 32]);
     let recipient_vpk_0 = ViewingPublicKey::from_seed(&[0_u8; 32], &[1_u8; 32]);
 
     let recipient_npk_1 = NullifierPublicKey([0xBB; 32]);
+    let recipient_apk_1 = AuthorizationPublicKey([0xBB; 32]);
     let recipient_vpk_1 = ViewingPublicKey::from_seed(&[2_u8; 32], &[3_u8; 32]);
 
     let amount_spend_0: u128 = 13;
@@ -265,6 +284,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         ctx.wallet(),
         alice_pda_0_id,
         recipient_npk_0,
+        recipient_apk_0,
         recipient_vpk_0,
         seed,
         amount_spend_0,
@@ -278,6 +298,7 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         ctx.wallet(),
         alice_pda_1_id,
         recipient_npk_1,
+        recipient_apk_1,
         recipient_vpk_1,
         seed,
         amount_spend_1,

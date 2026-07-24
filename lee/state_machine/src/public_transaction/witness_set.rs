@@ -65,8 +65,8 @@ mod tests {
         let key2 = PrivateKey::try_new([2; 32]).unwrap();
         let pubkey1 = PublicKey::new_from_private_key(&key1);
         let pubkey2 = PublicKey::new_from_private_key(&key2);
-        let addr1 = AccountId::from(&pubkey1);
-        let addr2 = AccountId::from(&pubkey2);
+        let addr1 = AccountId::for_public_key(pubkey1.value());
+        let addr2 = AccountId::for_public_key(pubkey2.value());
         let nonces = vec![1_u128.into(), 2_u128.into()];
         let instruction = vec![1, 2, 3, 4];
         let message = Message::try_new([0; 8], vec![addr1, addr2], nonces, instruction).unwrap();

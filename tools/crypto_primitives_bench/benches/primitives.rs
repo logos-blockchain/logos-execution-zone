@@ -48,8 +48,12 @@ fn bench_encryption(c: &mut Criterion) {
     let recipient_kc = KeyChain::new_os_random();
     let npk = recipient_kc.nullifier_public_key;
     let account = Account::default();
-    let account_id =
-        AccountId::for_regular_private_account(&npk, &recipient_kc.viewing_public_key, 0);
+    let account_id = AccountId::for_regular_private_account(
+        &npk,
+        &recipient_kc.authorization_public_key,
+        &recipient_kc.viewing_public_key,
+        0,
+    );
     let commitment = Commitment::new(&account_id, &account);
     let (shared, _epk) = SharedSecretKey::encapsulate(&recipient_kc.viewing_public_key);
     let kind = PrivateAccountKind::Regular(0_u128);

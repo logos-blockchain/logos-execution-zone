@@ -12,7 +12,8 @@ use lee::{
     program::Program,
 };
 use lee_core::{
-    DUMMY_COMMITMENT_HASH, InputAccountIdentity, Nullifier, NullifierPublicKey,
+    AuthWitness, AuthorizationPublicKey, DUMMY_COMMITMENT_HASH, InputAccountIdentity, Nullifier,
+    NullifierPublicKey, NullifierWitness, PrivateKind, PrivateWitness,
     account::{Account, AccountWithMetadata},
     encryption::ViewingPublicKey,
 };
@@ -55,12 +56,14 @@ async fn private_transfer_to_foreign_account() -> Result<()> {
     let from: AccountId = ctx.existing_private_accounts()[0];
     let to_npk = NullifierPublicKey([42; 32]);
     let to_npk_string = hex::encode(to_npk.0);
+    let to_apk_string = hex::encode(AuthorizationPublicKey([42; 32]).0);
     let to_vpk = ViewingPublicKey::from_seed(&[0_u8; 32], &[1_u8; 32]);
 
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
         from: private_mention(from),
         to: None,
         to_npk: Some(to_npk_string),
+        to_apk: Some(to_apk_string),
         to_vpk: Some(hex::encode(to_vpk.to_bytes())),
         to_keys: None,
         to_identifier: Some(0),
@@ -150,6 +153,7 @@ async fn private_transfer_to_owned_account_using_claiming_path() -> Result<()> {
         from: private_mention(from),
         to: None,
         to_npk: Some(hex::encode(to.key_chain.nullifier_public_key.0)),
+        to_apk: Some(hex::encode(to.key_chain.authorization_public_key.0)),
         to_vpk: Some(hex::encode(to.key_chain.viewing_public_key.to_bytes())),
         to_keys: None,
         to_identifier: Some(to.kind.identifier()),
@@ -222,6 +226,7 @@ async fn shielded_transfer_to_foreign_account() -> Result<()> {
 
     let to_npk = NullifierPublicKey([42; 32]);
     let to_npk_string = hex::encode(to_npk.0);
+    let to_apk_string = hex::encode(AuthorizationPublicKey([42; 32]).0);
     let to_vpk = ViewingPublicKey::from_seed(&[0_u8; 32], &[1_u8; 32]);
     let from: AccountId = ctx.existing_public_accounts()[0];
 
@@ -229,6 +234,7 @@ async fn shielded_transfer_to_foreign_account() -> Result<()> {
         from: public_mention(from),
         to: None,
         to_npk: Some(to_npk_string),
+        to_apk: Some(to_apk_string),
         to_vpk: Some(hex::encode(to_vpk.to_bytes())),
         to_keys: None,
         to_identifier: Some(0),
@@ -289,6 +295,7 @@ async fn private_transfer_to_owned_account_continuous_run_path() -> Result<()> {
         from: private_mention(from),
         to: None,
         to_npk: Some(hex::encode(to.key_chain.nullifier_public_key.0)),
+        to_apk: Some(hex::encode(to.key_chain.authorization_public_key.0)),
         to_vpk: Some(hex::encode(to.key_chain.viewing_public_key.to_bytes())),
         to_keys: None,
         to_identifier: Some(to.kind.identifier()),
@@ -441,7 +448,7 @@ async fn shielded_transfers_to_two_identifiers_same_npk() -> Result<()> {
 
     // Both transfers below will target this same node with distinct identifiers.
     let chain_index = ctx.wallet_mut().create_private_accounts_key(None);
-    let (npk, vpk) = {
+    let (npk, apk, vpk) = {
         let key_chain = ctx
             .wallet()
             .storage()
@@ -450,11 +457,13 @@ async fn shielded_transfers_to_two_identifiers_same_npk() -> Result<()> {
             .expect("Failed to get private account key chain for chain index");
         (
             key_chain.nullifier_public_key,
+            key_chain.authorization_public_key,
             key_chain.viewing_public_key.clone(),
         )
     };
 
     let npk_hex = hex::encode(npk.0);
+    let apk_hex = hex::encode(apk.0);
     let vpk_hex = hex::encode(vpk.to_bytes());
 
     let identifier_1 = 1_u128;
@@ -469,6 +478,7 @@ async fn shielded_transfers_to_two_identifiers_same_npk() -> Result<()> {
             from: public_mention(sender_0),
             to: None,
             to_npk: Some(npk_hex.clone()),
+            to_apk: Some(apk_hex.clone()),
             to_vpk: Some(vpk_hex.clone()),
             to_keys: None,
             to_identifier: Some(identifier_1),
@@ -483,6 +493,7 @@ async fn shielded_transfers_to_two_identifiers_same_npk() -> Result<()> {
             from: public_mention(sender_1),
             to: None,
             to_npk: Some(npk_hex),
+            to_apk: Some(apk_hex),
             to_vpk: Some(vpk_hex),
             to_keys: None,
             to_identifier: Some(identifier_2),
@@ -497,14 +508,14 @@ async fn shielded_transfers_to_two_identifiers_same_npk() -> Result<()> {
     sync_private(&mut ctx).await?;
 
     // Both accounts must be discovered with the correct balances.
-    let account_id_1 = AccountId::for_regular_private_account(&npk, &vpk, identifier_1);
+    let account_id_1 = AccountId::for_regular_private_account(&npk, &apk, &vpk, identifier_1);
     let acc_1 = ctx
         .wallet()
         .get_account_private(account_id_1)
         .context("account for identifier 1 not found after sync")?;
     assert_eq!(acc_1.balance, 100);
 
-    let account_id_2 = AccountId::for_regular_private_account(&npk, &vpk, identifier_2);
+    let account_id_2 = AccountId::for_regular_private_account(&npk, &apk, &vpk, identifier_2);
     let acc_2 = ctx
         .wallet()
         .get_account_private(account_id_2)
@@ -559,10 +570,11 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
     let auth_transfer_program_id = programs::authenticated_transfer().id();
     let nsk: lee_core::NullifierSecretKey = [3; 32];
     let npk = NullifierPublicKey::from(&nsk);
+    let apk = AuthorizationPublicKey::from(&[8; 32]);
     let vpk = ViewingPublicKey::from_bytes(vec![4_u8; 1184]).unwrap();
     let attacker_vault_id = {
         let seed = vault_core::compute_vault_seed(attacker_id);
-        AccountId::for_private_pda(&vault_program_id, &seed, &npk, &vpk, 1337)
+        AccountId::for_private_pda(&vault_program_id, &seed, &npk, &apk, &vpk, 1337)
     };
     let amount: u128 = 1;
 
@@ -595,14 +607,17 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
         instruction,
         vec![
             InputAccountIdentity::Public,
-            InputAccountIdentity::PrivatePdaInit {
+            InputAccountIdentity::Private(PrivateWitness {
                 vpk,
                 random_seed: [0; 32],
-                npk,
                 identifier: 1337,
-                commitment_root: DUMMY_COMMITMENT_HASH,
-                seed: None,
-            },
+                kind: PrivateKind::Pda { seed: None },
+                auth: AuthWitness::Public(apk),
+                nullifier: NullifierWitness::Init {
+                    npk,
+                    commitment_root: DUMMY_COMMITMENT_HASH,
+                },
+            }),
         ],
         &program_with_deps,
     );
@@ -626,8 +641,9 @@ async fn prove_init_with_commitment_root(
 
     let nsk: lee_core::NullifierSecretKey = [7; 32];
     let npk = NullifierPublicKey::from(&nsk);
+    let apk = AuthorizationPublicKey::from(&[9; 32]);
     let vpk = ViewingPublicKey::from_bytes(vec![4_u8; 1184]).unwrap();
-    let recipient_account_id = AccountId::for_regular_private_account(&npk, &vpk, 0);
+    let recipient_account_id = AccountId::for_regular_private_account(&npk, &apk, &vpk, 0);
     let recipient = AccountWithMetadata::new(Account::default(), false, recipient_account_id);
 
     let (output, _) = execute_and_prove(
@@ -637,13 +653,17 @@ async fn prove_init_with_commitment_root(
         })?,
         vec![
             InputAccountIdentity::Public,
-            InputAccountIdentity::PrivateUnauthorized {
+            InputAccountIdentity::Private(PrivateWitness {
                 vpk,
                 random_seed: [0; 32],
-                npk,
                 identifier: 0,
-                commitment_root,
-            },
+                kind: PrivateKind::Regular,
+                auth: AuthWitness::Public(apk),
+                nullifier: NullifierWitness::Init {
+                    npk,
+                    commitment_root,
+                },
+            }),
         ],
         &program.into(),
     )?;
@@ -659,8 +679,9 @@ async fn init_with_dummy_commitment_root_produces_valid_root() -> Result<()> {
 
     let nsk: lee_core::NullifierSecretKey = [7; 32];
     let npk = NullifierPublicKey::from(&nsk);
+    let apk = AuthorizationPublicKey::from(&[9; 32]);
     let vpk = ViewingPublicKey::from_bytes(vec![4_u8; 1184]).unwrap();
-    let recipient_account_id = AccountId::for_regular_private_account(&npk, &vpk, 0);
+    let recipient_account_id = AccountId::for_regular_private_account(&npk, &apk, &vpk, 0);
 
     let output = prove_init_with_commitment_root(&ctx, expected_digest).await?;
 

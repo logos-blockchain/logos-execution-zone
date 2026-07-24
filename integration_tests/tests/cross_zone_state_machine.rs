@@ -169,7 +169,7 @@ fn lock_escrows_balance_and_emits_to_outbox() {
     let mut state = base_state();
 
     let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
-    let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
+    let holder_id = AccountId::for_public_key(PublicKey::new_from_private_key(&holder_key).value());
     state.insert_genesis_account(
         holder_id,
         Account {

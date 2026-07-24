@@ -1,9 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Commitment, CommitmentSetDigest, Identifier, MembershipProof, Nullifier, NullifierPublicKey,
-    NullifierSecretKey,
-    account::{Account, AccountWithMetadata},
+    AuthorizationPublicKey, AuthorizationSecretKey, Commitment, CommitmentSetDigest, Identifier,
+    MembershipProof, Nullifier, NullifierPublicKey, NullifierSecretKey,
+    account::{Account, AccountId, AccountWithMetadata},
     encryption::{EncryptedAccountData, ViewingPublicKey},
     program::{BlockValidityWindow, PdaSeed, ProgramId, ProgramOutput, TimestampValidityWindow},
 };
@@ -14,81 +14,97 @@ pub struct PrivacyPreservingCircuitInput {
     pub program_outputs: Vec<ProgramOutput>,
     /// One entry per `pre_state`, in the same order as the program's `pre_states`.
     /// Length must equal the number of `pre_states` derived from `program_outputs`.
-    /// The guest's `private_pda_by_position` and `private_pda_bound_positions`
-    /// rely on this position alignment.
+    /// The guest's `private_pda_bound_positions` relies on this position alignment.
     pub account_identities: Vec<InputAccountIdentity>,
     /// Program ID.
     pub program_id: ProgramId,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Private carries the ML-KEM viewing key and dominates; boxing it would add a guest heap allocation per witness, and the footprint matches the pre-refactor enum"
+)]
 pub enum InputAccountIdentity {
-    /// Public account. The guest reads pre/post state from `program_outputs` and emits no
-    /// commitment, ciphertext, or nullifier.
+    /// Public (transparent) account. The guest reads pre/post state from `program_outputs` and
+    /// emits no commitment, ciphertext, or nullifier.
     Public,
-    /// Init of an authorized standalone private account: no membership proof. The `pre_state`
-    /// must be `Account::default()`. The `account_id` is derived as
-    /// `AccountId::for_regular_private_account(&NullifierPublicKey::from(nsk), vpk, identifier)`
-    /// and matched against `pre_state.account_id`.
-    PrivateAuthorizedInit {
-        vpk: ViewingPublicKey,
-        random_seed: [u8; 32],
-        nsk: NullifierSecretKey,
-        identifier: Identifier,
+    Private(PrivateWitness),
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct PrivateWitness {
+    pub vpk: ViewingPublicKey,
+    pub random_seed: [u8; 32],
+    pub identifier: Identifier,
+    pub kind: PrivateKind,
+    pub auth: AuthWitness,
+    pub nullifier: NullifierWitness,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub enum PrivateKind {
+    Regular,
+    Pda { seed: Option<(PdaSeed, ProgramId)> },
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub enum AuthWitness {
+    Held(AuthorizationSecretKey),
+    Public(AuthorizationPublicKey),
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub enum NullifierWitness {
+    Init {
+        npk: NullifierPublicKey,
         commitment_root: CommitmentSetDigest,
     },
-    /// Update of an authorized standalone private account: existing on-chain commitment, with
-    /// membership proof.
-    PrivateAuthorizedUpdate {
-        vpk: ViewingPublicKey,
-        random_seed: [u8; 32],
+    Update {
         nsk: NullifierSecretKey,
         membership_proof: MembershipProof,
-        identifier: Identifier,
     },
-    /// Init of a standalone private account the caller does not own (e.g. a recipient who
-    /// doesn't yet exist on chain). No `nsk`, no membership proof.
-    PrivateUnauthorized {
-        vpk: ViewingPublicKey,
-        random_seed: [u8; 32],
-        npk: NullifierPublicKey,
-        identifier: Identifier,
-        commitment_root: CommitmentSetDigest,
-    },
-    /// Init of a private PDA, unauthorized. The npk-to-account_id binding is proven upstream
-    /// via `Claim::Pda(seed)` or a caller's `pda_seeds` match. The identifier diversifies the
-    /// PDA within the `(program_id, seed, npk)` family: `AccountId::for_private_pda` uses it
-    /// as the 4th input.
-    PrivatePdaInit {
-        vpk: ViewingPublicKey,
-        random_seed: [u8; 32],
-        npk: NullifierPublicKey,
-        identifier: Identifier,
-        commitment_root: CommitmentSetDigest,
-        /// When `Some((seed, authority_program_id))`, the circuit binds this position via the
-        /// external derivation check
-        /// `AccountId::for_private_pda(authority_program_id, seed, npk, vpk, identifier) ==
-        /// pre_state.account_id` rather than requiring a `Claim::Pda` or caller
-        /// `pda_seeds` to establish the binding. The `pre_state` must have `is_authorized
-        /// == false`.
-        seed: Option<(PdaSeed, ProgramId)>,
-    },
-    /// Update of an existing private PDA, with membership proof. `npk` is derived
-    /// from `nsk`. Authorization may be established upstream by a caller `pda_seeds` match or a
-    /// previously-seen authorization in a chained call.
-    PrivatePdaUpdate {
-        vpk: ViewingPublicKey,
-        random_seed: [u8; 32],
-        nsk: NullifierSecretKey,
-        membership_proof: MembershipProof,
-        identifier: Identifier,
-        /// When `Some((seed, authority_program_id))`, the circuit binds this position via the
-        /// external derivation check
-        /// `AccountId::for_private_pda(authority_program_id, seed, npk, vpk, identifier) ==
-        /// pre_state.account_id` rather than requiring a caller `pda_seeds` to establish
-        /// the binding. The `pre_state` must have `is_authorized == false`.
-        seed: Option<(PdaSeed, ProgramId)>,
-    },
+}
+
+impl NullifierWitness {
+    #[must_use]
+    pub fn npk(&self) -> NullifierPublicKey {
+        match self {
+            Self::Init { npk, .. } => *npk,
+            Self::Update { nsk, .. } => NullifierPublicKey::from(nsk),
+        }
+    }
+}
+
+impl AuthWitness {
+    fn apk(&self) -> AuthorizationPublicKey {
+        match self {
+            Self::Held(ask) => AuthorizationPublicKey::from(ask),
+            Self::Public(apk) => *apk,
+        }
+    }
+}
+
+impl PrivateWitness {
+    fn regular_id(&self) -> AccountId {
+        AccountId::for_regular_private_account(
+            &self.nullifier.npk(),
+            &self.auth.apk(),
+            &self.vpk,
+            self.identifier,
+        )
+    }
+
+    fn pda_id(&self, program_id: &ProgramId, seed: &PdaSeed) -> AccountId {
+        AccountId::for_private_pda(
+            program_id,
+            seed,
+            &self.nullifier.npk(),
+            &self.auth.apk(),
+            &self.vpk,
+            self.identifier,
+        )
+    }
 }
 
 impl InputAccountIdentity {
@@ -101,31 +117,37 @@ impl InputAccountIdentity {
     pub const fn is_private_pda(&self) -> bool {
         matches!(
             self,
-            Self::PrivatePdaInit { .. } | Self::PrivatePdaUpdate { .. }
+            Self::Private(PrivateWitness {
+                kind: PrivateKind::Pda { .. },
+                ..
+            })
         )
     }
 
     #[must_use]
-    pub fn npk_vpk_if_private_pda(
-        &self,
-    ) -> Option<(NullifierPublicKey, ViewingPublicKey, Identifier)> {
+    pub fn regular_account_id(&self) -> Option<AccountId> {
         match self {
-            Self::PrivatePdaInit {
-                npk,
-                vpk,
-                identifier,
-                ..
-            } => Some((*npk, vpk.clone(), *identifier)),
-            Self::PrivatePdaUpdate {
-                nsk,
-                vpk,
-                identifier,
-                ..
-            } => Some((NullifierPublicKey::from(nsk), vpk.clone(), *identifier)),
-            Self::Public
-            | Self::PrivateAuthorizedInit { .. }
-            | Self::PrivateAuthorizedUpdate { .. }
-            | Self::PrivateUnauthorized { .. } => None,
+            Self::Private(
+                witness @ PrivateWitness {
+                    kind: PrivateKind::Regular,
+                    ..
+                },
+            ) => Some(witness.regular_id()),
+            Self::Public | Self::Private(_) => None,
+        }
+    }
+
+    #[must_use]
+    pub fn pda_account_id(&self, program_id: &ProgramId, seed: &PdaSeed) -> Option<AccountId> {
+        match self {
+            Self::Public => Some(AccountId::for_public_pda(program_id, seed)),
+            Self::Private(
+                witness @ PrivateWitness {
+                    kind: PrivateKind::Pda { .. },
+                    ..
+                },
+            ) => Some(witness.pda_id(program_id, seed)),
+            Self::Private(_) => None,
         }
     }
 }

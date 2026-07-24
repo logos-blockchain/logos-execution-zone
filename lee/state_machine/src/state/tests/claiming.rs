@@ -4,14 +4,14 @@ use super::*;
 fn claiming_mechanism() {
     let program = crate::test_methods::simple_balance_transfer();
     let from_key = PrivateKey::try_new([1; 32]).unwrap();
-    let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
+    let from = AccountId::for_public_key(PublicKey::new_from_private_key(&from_key).value());
     let initial_balance = 100;
     let initial_data = [(from, initial_balance)];
     let mut state = V03State::new()
         .with_public_accounts(public_state_from_balances(&initial_data))
         .with_test_programs();
     let to_key = PrivateKey::try_new([2; 32]).unwrap();
-    let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
+    let to = AccountId::for_public_key(PublicKey::new_from_private_key(&to_key).value());
     let amount: u128 = 37;
 
     // Check the recipient is an uninitialized account
@@ -42,10 +42,11 @@ fn claiming_mechanism() {
 }
 
 #[test]
-fn unauthorized_public_account_claiming_fails() {
+fn unauthorized_public_account_claiming_succeeds() {
     let program = crate::test_methods::simple_balance_transfer();
     let account_key = PrivateKey::try_new([9; 32]).unwrap();
-    let account_id = AccountId::from(&PublicKey::new_from_private_key(&account_key));
+    let account_id =
+        AccountId::for_public_key(PublicKey::new_from_private_key(&account_key).value());
     let mut state = V03State::new().with_test_programs();
 
     assert_eq!(state.get_account_by_id(account_id), Account::default());
@@ -58,15 +59,19 @@ fn unauthorized_public_account_claiming_fails() {
 
     let result = state.transition_from_public_transaction(&tx, 2, 0);
 
-    assert!(matches!(result, Err(LeeError::InvalidProgramBehavior(_))));
-    assert_eq!(state.get_account_by_id(account_id), Account::default());
+    assert!(result.is_ok());
+    assert_eq!(
+        state.get_account_by_id(account_id).program_owner,
+        program.id()
+    );
 }
 
 #[test]
 fn authorized_public_account_claiming_succeeds() {
     let program = crate::test_methods::simple_balance_transfer();
     let account_key = PrivateKey::try_new([10; 32]).unwrap();
-    let account_id = AccountId::from(&PublicKey::new_from_private_key(&account_key));
+    let account_id =
+        AccountId::for_public_key(PublicKey::new_from_private_key(&account_key).value());
     let mut state = V03State::new().with_test_programs();
 
     assert_eq!(state.get_account_by_id(account_id), Account::default());
@@ -97,7 +102,7 @@ fn authorized_public_account_claiming_succeeds() {
 fn public_chained_call() {
     let program = crate::test_methods::chain_caller();
     let key = PrivateKey::try_new([1; 32]).unwrap();
-    let from = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let from = AccountId::for_public_key(PublicKey::new_from_private_key(&key).value());
     let to = AccountId::new([2; 32]);
     let initial_balance = 1000;
     let initial_data = [(from, initial_balance), (to, 0)];
@@ -143,7 +148,7 @@ fn public_chained_call() {
 fn execution_fails_if_chained_calls_exceeds_depth() {
     let program = crate::test_methods::chain_caller();
     let key = PrivateKey::try_new([1; 32]).unwrap();
-    let from = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let from = AccountId::for_public_key(PublicKey::new_from_private_key(&key).value());
     let to = AccountId::new([2; 32]);
     let initial_balance = 100;
     let initial_data = [(from, initial_balance), (to, 0)];
@@ -229,14 +234,14 @@ fn claiming_mechanism_within_chain_call() {
     let chain_caller = crate::test_methods::chain_caller();
     let simple_transfer = crate::test_methods::simple_balance_transfer();
     let from_key = PrivateKey::try_new([1; 32]).unwrap();
-    let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
+    let from = AccountId::for_public_key(PublicKey::new_from_private_key(&from_key).value());
     let initial_balance = 100;
     let initial_data = [(from, initial_balance)];
     let mut state = V03State::new()
         .with_public_accounts(public_state_from_balances(&initial_data))
         .with_test_programs();
     let to_key = PrivateKey::try_new([2; 32]).unwrap();
-    let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
+    let to = AccountId::for_public_key(PublicKey::new_from_private_key(&to_key).value());
     let amount: u128 = 37;
 
     // Check the recipient is an uninitialized account
@@ -278,19 +283,22 @@ fn claiming_mechanism_within_chain_call() {
 }
 
 #[test]
-fn unauthorized_public_account_claiming_fails_when_executed_privately() {
+fn unauthorized_public_account_claiming_succeeds_when_executed_privately() {
     let program = crate::test_methods::simple_balance_transfer();
+    let program_id = program.id();
     let account_id = AccountId::new([11; 32]);
     let public_account = AccountWithMetadata::new(Account::default(), false, account_id);
 
-    let result = execute_and_prove(
+    let (output, _proof) = execute_and_prove(
         vec![public_account],
         Program::serialize_instruction(0_u128).unwrap(),
         vec![InputAccountIdentity::Public],
         &program.into(),
-    );
+    )
+    .unwrap();
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    // Claiming an empty account needs no authorization (uniform-permissive, parity with public).
+    assert_eq!(output.public_post_states[0].program_owner, program_id);
 }
 
 #[test]
@@ -311,11 +319,11 @@ fn authorized_public_account_claiming_succeeds_when_executed_privately() {
     let sender_pre = AccountWithMetadata::new(
         sender_private_account,
         true,
-        (&sender_keys.npk(), &sender_keys.vpk(), 0),
+        sender_keys.regular_account_id(0),
     );
     let recipient_private_key = PrivateKey::try_new([2; 32]).unwrap();
     let recipient_account_id =
-        AccountId::from(&PublicKey::new_from_private_key(&recipient_private_key));
+        AccountId::for_public_key(PublicKey::new_from_private_key(&recipient_private_key).value());
     let recipient_pre = AccountWithMetadata::new(Account::default(), true, recipient_account_id);
 
     let balance = 37;
@@ -324,15 +332,19 @@ fn authorized_public_account_claiming_succeeds_when_executed_privately() {
         vec![sender_pre, recipient_pre],
         Program::serialize_instruction(balance).unwrap(),
         vec![
-            InputAccountIdentity::PrivateAuthorizedUpdate {
+            InputAccountIdentity::Private(PrivateWitness {
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
-                nsk: sender_keys.nsk,
-                membership_proof: state
-                    .get_proof_for_commitment(&sender_commitment)
-                    .expect("sender's commitment must be in state"),
                 identifier: 0,
-            },
+                kind: PrivateKind::Regular,
+                auth: AuthWitness::Held(sender_keys.ask),
+                nullifier: NullifierWitness::Update {
+                    nsk: sender_keys.nsk,
+                    membership_proof: state
+                        .get_proof_for_commitment(&sender_commitment)
+                        .expect("sender's commitment must be in state"),
+                },
+            }),
             InputAccountIdentity::Public,
         ],
         &program.into(),
@@ -380,7 +392,7 @@ fn private_chained_call(number_of_calls: u32) {
             ..Account::default()
         },
         true,
-        (&from_keys.npk(), &from_keys.vpk(), 0),
+        from_keys.regular_account_id(0),
     );
     let to_account = AccountWithMetadata::new(
         Account {
@@ -388,7 +400,7 @@ fn private_chained_call(number_of_calls: u32) {
             ..Account::default()
         },
         true,
-        (&to_keys.npk(), &to_keys.vpk(), 0),
+        to_keys.regular_account_id(0),
     );
 
     let from_account_id = from_keys.regular_account_id(0);
@@ -438,24 +450,32 @@ fn private_chained_call(number_of_calls: u32) {
         vec![to_account, from_account],
         Program::serialize_instruction(instruction).unwrap(),
         vec![
-            InputAccountIdentity::PrivateAuthorizedUpdate {
+            InputAccountIdentity::Private(PrivateWitness {
                 vpk: from_keys.vpk(),
                 random_seed: [0; 32],
-                nsk: from_keys.nsk,
-                membership_proof: state
-                    .get_proof_for_commitment(&from_commitment)
-                    .expect("from's commitment must be in state"),
                 identifier: 0,
-            },
-            InputAccountIdentity::PrivateAuthorizedUpdate {
+                kind: PrivateKind::Regular,
+                auth: AuthWitness::Held(from_keys.ask),
+                nullifier: NullifierWitness::Update {
+                    nsk: from_keys.nsk,
+                    membership_proof: state
+                        .get_proof_for_commitment(&from_commitment)
+                        .expect("from's commitment must be in state"),
+                },
+            }),
+            InputAccountIdentity::Private(PrivateWitness {
                 vpk: to_keys.vpk(),
                 random_seed: [0; 32],
-                nsk: to_keys.nsk,
-                membership_proof: state
-                    .get_proof_for_commitment(&to_commitment)
-                    .expect("to's commitment must be in state"),
                 identifier: 0,
-            },
+                kind: PrivateKind::Regular,
+                auth: AuthWitness::Held(to_keys.ask),
+                nullifier: NullifierWitness::Update {
+                    nsk: to_keys.nsk,
+                    membership_proof: state
+                        .get_proof_for_commitment(&to_commitment)
+                        .expect("to's commitment must be in state"),
+                },
+            }),
         ],
         &program_with_deps,
     )
@@ -517,11 +537,12 @@ fn claiming_mechanism_cannot_claim_initialied_accounts() {
 #[test]
 fn malicious_program_cannot_break_balance_validation_if_not_in_genesis() {
     let sender_key = PrivateKey::try_new([37; 32]).unwrap();
-    let sender_id = AccountId::from(&PublicKey::new_from_private_key(&sender_key));
+    let sender_id = AccountId::for_public_key(PublicKey::new_from_private_key(&sender_key).value());
     let sender_init_balance: u128 = 10;
 
     let recipient_key = PrivateKey::try_new([42; 32]).unwrap();
-    let recipient_id = AccountId::from(&PublicKey::new_from_private_key(&recipient_key));
+    let recipient_id =
+        AccountId::for_public_key(PublicKey::new_from_private_key(&recipient_key).value());
     let recipient_init_balance: u128 = 10;
 
     let modified_transfer_id = crate::test_methods::modified_transfer_program().id();

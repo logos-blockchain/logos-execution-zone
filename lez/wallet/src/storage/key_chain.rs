@@ -212,8 +212,12 @@ impl UserKeyChain {
             .1
             .first_key_value()
             .expect("Newly created key chain node must have at least one account");
-        let account_id =
-            AccountId::for_private_account(&npk, &node.value.0.viewing_public_key, kind);
+        let account_id = AccountId::for_private_account(
+            &npk,
+            &node.value.0.authorization_public_key,
+            &node.value.0.viewing_public_key,
+            kind,
+        );
         (account_id, chain_index)
     }
 
@@ -251,6 +255,7 @@ impl UserKeyChain {
         self.private_accounts().find_map(|found| {
             let expected_id = AccountId::for_private_account(
                 &found.key_chain.nullifier_public_key,
+                &found.key_chain.authorization_public_key,
                 &found.key_chain.viewing_public_key,
                 found.kind,
             );
@@ -311,6 +316,7 @@ impl UserKeyChain {
                 data.accounts.keys().map(|kind| {
                     let account_id = AccountId::for_private_account(
                         &key.key_chain.nullifier_public_key,
+                        &key.key_chain.authorization_public_key,
                         &key.key_chain.viewing_public_key,
                         kind,
                     );
@@ -355,6 +361,7 @@ impl UserKeyChain {
         for found in self.private_accounts() {
             let account_id = AccountId::for_private_account(
                 &found.key_chain.nullifier_public_key,
+                &found.key_chain.authorization_public_key,
                 &found.key_chain.viewing_public_key,
                 found.kind,
             );
@@ -448,7 +455,8 @@ impl UserKeyChain {
     }
 
     pub fn add_imported_public_account(&mut self, private_key: lee::PrivateKey) {
-        let account_id = AccountId::from(&lee::PublicKey::new_from_private_key(&private_key));
+        let account_id =
+            AccountId::for_public_key(lee::PublicKey::new_from_private_key(&private_key).value());
 
         self.imported_public_accounts
             .insert(account_id, private_key);
@@ -508,6 +516,7 @@ impl UserKeyChain {
             for (kind, imported_account) in &mut data.accounts {
                 let expected_id = AccountId::for_private_account(
                     &key.key_chain.nullifier_public_key,
+                    &key.key_chain.authorization_public_key,
                     &key.key_chain.viewing_public_key,
                     kind,
                 );
@@ -549,6 +558,7 @@ impl UserKeyChain {
         for (ci, node) in &mut self.private_key_tree.key_map {
             let expected_id = lee::AccountId::for_private_account(
                 &node.value.0.nullifier_public_key,
+                &node.value.0.authorization_public_key,
                 &node.value.0.viewing_public_key,
                 &kind,
             );
@@ -603,6 +613,7 @@ impl UserKeyChain {
                 data.accounts.keys().map(|kind| {
                     let account_id = AccountId::for_private_account(
                         &key.key_chain.nullifier_public_key,
+                        &key.key_chain.authorization_public_key,
                         &key.key_chain.viewing_public_key,
                         kind,
                     );
@@ -870,6 +881,7 @@ mod tests {
         let identifier = 0;
         let account_id = AccountId::for_private_account(
             &key_chain.nullifier_public_key,
+            &key_chain.authorization_public_key,
             &key_chain.viewing_public_key,
             &PrivateAccountKind::Regular(identifier),
         );
@@ -931,9 +943,10 @@ mod tests {
         let identifier = 0;
         let keys = holder.derive_regular_shared_account_keys_from_identifier(identifier);
         let npk = keys.generate_nullifier_public_key();
+        let apk = keys.generate_authorization_public_key();
         let vpk = keys.generate_viewing_public_key();
         let nsk = keys.nullifier_secret_key;
-        let account_id = AccountId::from((&npk, &vpk, identifier));
+        let account_id = AccountId::for_regular_private_account(&npk, &apk, &vpk, identifier);
 
         kc.insert_group_key_holder(label.clone(), holder);
         let old_account = Account::default();
@@ -995,6 +1008,7 @@ mod tests {
         let identifier = 0;
         let account_id = AccountId::for_private_account(
             &key_chain.nullifier_public_key,
+            &key_chain.authorization_public_key,
             &key_chain.viewing_public_key,
             &PrivateAccountKind::Regular(identifier),
         );
@@ -1039,7 +1053,8 @@ mod tests {
         let mut user_data = UserKeyChain::default();
 
         let private_key = lee::PrivateKey::new_os_random();
-        let account_id = AccountId::from(&lee::PublicKey::new_from_private_key(&private_key));
+        let account_id =
+            AccountId::for_public_key(lee::PublicKey::new_from_private_key(&private_key).value());
 
         user_data.add_imported_public_account(private_key);
 
@@ -1053,11 +1068,12 @@ mod tests {
         let mut user_data = UserKeyChain::default();
 
         let key_chain = KeyChain::new_os_random();
-        let account_id = AccountId::from((
+        let account_id = AccountId::for_regular_private_account(
             &key_chain.nullifier_public_key,
+            &key_chain.authorization_public_key,
             &key_chain.viewing_public_key,
             0,
-        ));
+        );
         let account = lee_core::account::Account::default();
 
         user_data.add_imported_private_account(key_chain, None, 0, account);
@@ -1072,11 +1088,12 @@ mod tests {
         let mut user_data = UserKeyChain::default();
 
         let key_chain = KeyChain::new_os_random();
-        let account_id = AccountId::from((
+        let account_id = AccountId::for_regular_private_account(
             &key_chain.nullifier_public_key,
+            &key_chain.authorization_public_key,
             &key_chain.viewing_public_key,
             0,
-        ));
+        );
         let account = lee_core::account::Account::default();
 
         user_data.add_imported_private_account(key_chain, None, 0, account.clone());
@@ -1121,11 +1138,12 @@ mod tests {
         let mut user_data = UserKeyChain::default();
 
         let key_chain = KeyChain::new_os_random();
-        let account_id = AccountId::from((
+        let account_id = AccountId::for_regular_private_account(
             &key_chain.nullifier_public_key,
+            &key_chain.authorization_public_key,
             &key_chain.viewing_public_key,
             0,
-        ));
+        );
 
         let new_account = lee_core::account::Account {
             balance: 100,
@@ -1146,11 +1164,12 @@ mod tests {
         let mut user_data = UserKeyChain::default();
 
         let key_chain = KeyChain::new_os_random();
-        let account_id1 = AccountId::from((
+        let account_id1 = AccountId::for_regular_private_account(
             &key_chain.nullifier_public_key,
+            &key_chain.authorization_public_key,
             &key_chain.viewing_public_key,
             0,
-        ));
+        );
         let account = lee_core::account::Account::default();
         user_data.add_imported_private_account(key_chain, None, 0, account);
 

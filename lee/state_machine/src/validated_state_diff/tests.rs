@@ -33,9 +33,9 @@ fn public_diff_reflects_a_successful_transfer() {
     // `public_diff()`.  Catches the mutation that replaces `public_diff` with
     // `HashMap::new()` (which would hide every account change).
     let from_key = PrivateKey::try_new([1_u8; 32]).unwrap();
-    let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
+    let from = AccountId::for_public_key(PublicKey::new_from_private_key(&from_key).value());
     let to_key = PrivateKey::try_new([2_u8; 32]).unwrap();
-    let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
+    let to = AccountId::for_public_key(PublicKey::new_from_private_key(&to_key).value());
 
     let state = V03State::new()
         .with_public_accounts(public_state_from_balances(&[(from, 100)]))
@@ -78,7 +78,8 @@ fn public_diff_reflects_a_successful_transfer() {
 #[test]
 fn privacy_malicious_programs_cannot_drain_public_victim() {
     use lee_core::{
-        Commitment, InputAccountIdentity,
+        AuthWitness, Commitment, InputAccountIdentity, NullifierWitness, PrivateKind,
+        PrivateWitness,
         account::{Account, AccountWithMetadata},
     };
 
@@ -163,13 +164,17 @@ fn privacy_malicious_programs_cannot_drain_public_victim() {
     //   [1] victim   — first seen in simple_balance_transfer's program_output.pre_states
     //   [2] recipient — first seen in simple_balance_transfer's program_output.pre_states
     let account_identities = vec![
-        InputAccountIdentity::PrivateAuthorizedUpdate {
+        InputAccountIdentity::Private(PrivateWitness {
             vpk: attacker_keys.vpk(),
             random_seed: [0; 32],
-            nsk: attacker_keys.nsk,
-            membership_proof,
             identifier: 0,
-        },
+            kind: PrivateKind::Regular,
+            auth: AuthWitness::Held(attacker_keys.ask),
+            nullifier: NullifierWitness::Update {
+                nsk: attacker_keys.nsk,
+                membership_proof,
+            },
+        }),
         InputAccountIdentity::Public, // victim
         InputAccountIdentity::Public, // recipient
     ];
@@ -213,10 +218,11 @@ fn privacy_malicious_programs_cannot_drain_public_victim() {
 /// verbatim, the attacker must choose how to declare the victim in `account_identities`.
 /// There are two routes, both closed:
 ///
-/// - **mask=1 (`PrivateAuthorizedUpdate`)**: the circuit derives `account_id =
-///   AccountId::for_regular_private_account(&npk_from(nsk), identifier)` and asserts it matches
-///   `pre_state.account_id`. Passing this check requires the victim's `nsk`, which the attacker
-///   does not have. `execute_and_prove` panics inside the ZKVM and no proof is produced.
+/// - **mask=1 (authorized regular update)**: the circuit derives `account_id =
+///   AccountId::for_regular_private_account(&npk_from(nsk), &apk_from(ask), vpk, identifier)` and
+///   asserts it matches `pre_state.account_id`. Passing this check requires the victim's `nsk`,
+///   which the attacker does not have. `execute_and_prove` panics inside the ZKVM and no proof is
+///   produced.
 ///
 /// - **mask=0 (`Public`)**: the circuit places the account in `public_pre_states` and
 ///   `execute_and_prove` succeeds. The host-side validator then reconstructs `public_pre_states`
@@ -227,7 +233,8 @@ fn privacy_malicious_programs_cannot_drain_public_victim() {
 #[test]
 fn privacy_malicious_programs_cannot_drain_private_victim() {
     use lee_core::{
-        Commitment, InputAccountIdentity,
+        AuthWitness, Commitment, InputAccountIdentity, NullifierWitness, PrivateKind,
+        PrivateWitness,
         account::{Account, AccountWithMetadata},
     };
 
@@ -319,15 +326,19 @@ fn privacy_malicious_programs_cannot_drain_private_victim() {
     //   [2] recipient — first seen in simple_balance_transfer's program_output.pre_states
     //
     // Victim is marked Public: the attacker has no nsk for the victim's private account,
-    // so PrivateAuthorizedUpdate is not an option.
+    // so an authorized regular update is not an option.
     let account_identities = vec![
-        InputAccountIdentity::PrivateAuthorizedUpdate {
+        InputAccountIdentity::Private(PrivateWitness {
             vpk: attacker_keys.vpk(),
             random_seed: [0; 32],
-            nsk: attacker_keys.nsk,
-            membership_proof,
             identifier: 0,
-        },
+            kind: PrivateKind::Regular,
+            auth: AuthWitness::Held(attacker_keys.ask),
+            nullifier: NullifierWitness::Update {
+                nsk: attacker_keys.nsk,
+                membership_proof,
+            },
+        }),
         InputAccountIdentity::Public, // victim — attacker lacks victim's nsk
         InputAccountIdentity::Public, // recipient
     ];
@@ -399,10 +410,11 @@ fn malicious_programs_cannot_drain_victim_without_signature() {
     );
 
     let attacker_key = PrivateKey::try_new([10; 32]).unwrap();
-    let attacker_id = AccountId::from(&PublicKey::new_from_private_key(&attacker_key));
+    let attacker_id =
+        AccountId::for_public_key(PublicKey::new_from_private_key(&attacker_key).value());
 
     let victim_key = PrivateKey::try_new([20; 32]).unwrap();
-    let victim_id = AccountId::from(&PublicKey::new_from_private_key(&victim_key));
+    let victim_id = AccountId::for_public_key(PublicKey::new_from_private_key(&victim_key).value());
 
     let recipient_id = AccountId::new([42; 32]);
 
@@ -493,9 +505,9 @@ fn privacy_garbage_proof_is_rejected() {
     // commitment satisfies the non-empty requirement, no signers makes the
     // nonce/signature checks vacuously true, and unbounded validity windows are valid
     // for any block/timestamp.
-    let account_id = AccountId::from(&PublicKey::new_from_private_key(
-        &PrivateKey::try_new([1_u8; 32]).unwrap(),
-    ));
+    let account_id = AccountId::for_public_key(
+        PublicKey::new_from_private_key(&PrivateKey::try_new([1_u8; 32]).unwrap()).value(),
+    );
     let commitment = Commitment::new(&account_id, &Account::default());
     let message = Message {
         public_account_ids: vec![],

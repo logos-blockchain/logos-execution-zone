@@ -17,11 +17,11 @@ fn acc2_sign_key() -> lee::PrivateKey {
 }
 
 fn acc1() -> AccountId {
-    AccountId::from(&PublicKey::new_from_private_key(&acc1_sign_key()))
+    AccountId::for_public_key(PublicKey::new_from_private_key(&acc1_sign_key()).value())
 }
 
 fn acc2() -> AccountId {
-    AccountId::from(&PublicKey::new_from_private_key(&acc2_sign_key()))
+    AccountId::for_public_key(PublicKey::new_from_private_key(&acc2_sign_key()).value())
 }
 
 fn initial_state() -> lee::V03State {

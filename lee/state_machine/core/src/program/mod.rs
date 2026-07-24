@@ -5,7 +5,7 @@ use risc0_zkvm::{DeserializeOwned, guest::env, serde::Deserializer};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    BlockId, Identifier, NullifierPublicKey, Timestamp,
+    AuthorizationPublicKey, BlockId, Identifier, NullifierPublicKey, Timestamp,
     account::{Account, AccountId, AccountWithMetadata},
     encryption::ViewingPublicKey,
 };
@@ -122,10 +122,19 @@ impl PrivateAccountKind {
 }
 
 impl AccountId {
+    pub(crate) fn from_preimage(bytes: &[u8]) -> Self {
+        use risc0_zkvm::sha::{Impl, Sha256 as _};
+        Self::new(
+            Impl::hash_bytes(bytes)
+                .as_bytes()
+                .try_into()
+                .expect("SHA-256 output must be exactly 32 bytes long"),
+        )
+    }
+
     /// Derives an [`AccountId`] for a public PDA from the program ID and seed.
     #[must_use]
     pub fn for_public_pda(program_id: &ProgramId, seed: &PdaSeed) -> Self {
-        use risc0_zkvm::sha::{Impl, Sha256 as _};
         const PROGRAM_DERIVED_ACCOUNT_ID_PREFIX: &[u8; 32] =
             b"/LEE/v0.2/AccountId/PDA/\x00\x00\x00\x00\x00\x00\x00\x00";
 
@@ -135,12 +144,12 @@ impl AccountId {
             bytemuck::try_cast_slice(program_id).expect("ProgramId should be castable to &[u8]");
         bytes[32..64].copy_from_slice(program_id_bytes);
         bytes[64..].copy_from_slice(&seed.0);
-        Self::new(
-            Impl::hash_bytes(&bytes)
-                .as_bytes()
-                .try_into()
-                .expect("Hash output must be exactly 32 bytes long"),
-        )
+        Self::from_preimage(&bytes)
+    }
+
+    #[must_use]
+    pub fn matches_public_pda(&self, program_id: &ProgramId, seed: &PdaSeed) -> bool {
+        *self == Self::for_public_pda(program_id, seed)
     }
 
     /// Derives an [`AccountId`] for a private PDA from the program ID, seed, nullifier public
@@ -155,46 +164,55 @@ impl AccountId {
         program_id: &ProgramId,
         seed: &PdaSeed,
         npk: &NullifierPublicKey,
+        apk: &AuthorizationPublicKey,
         vpk: &ViewingPublicKey,
         identifier: Identifier,
     ) -> Self {
-        use risc0_zkvm::sha::{Impl, Sha256 as _};
         const PRIVATE_PDA_PREFIX: &[u8; 32] = b"/LEE/v0.3/AccountId/PrivatePDA/\x00";
 
-        let mut bytes = [0_u8; 32 + 32 + 32 + 32 + ViewingPublicKey::LEN + 16];
+        let mut bytes = [0_u8; 32 + 32 + 32 + 32 + 32 + ViewingPublicKey::LEN + 16];
         bytes[0..32].copy_from_slice(PRIVATE_PDA_PREFIX);
         let program_id_bytes: &[u8] =
             bytemuck::try_cast_slice(program_id).expect("ProgramId should be castable to &[u8]");
         bytes[32..64].copy_from_slice(program_id_bytes);
         bytes[64..96].copy_from_slice(&seed.0);
         bytes[96..128].copy_from_slice(&npk.to_byte_array());
-        bytes[128..128 + ViewingPublicKey::LEN].copy_from_slice(vpk.to_bytes());
-        bytes[128 + ViewingPublicKey::LEN..].copy_from_slice(&identifier.to_le_bytes());
-        Self::new(
-            Impl::hash_bytes(&bytes)
-                .as_bytes()
-                .try_into()
-                .expect("Hash output must be exactly 32 bytes long"),
-        )
+        bytes[128..160].copy_from_slice(&apk.0);
+        bytes[160..160 + ViewingPublicKey::LEN].copy_from_slice(vpk.to_bytes());
+        bytes[160 + ViewingPublicKey::LEN..].copy_from_slice(&identifier.to_le_bytes());
+        Self::from_preimage(&bytes)
     }
 
     /// Derives the [`AccountId`] for a private account from the nullifier public key and kind.
     #[must_use]
     pub fn for_private_account(
         npk: &NullifierPublicKey,
+        apk: &AuthorizationPublicKey,
         vpk: &ViewingPublicKey,
         kind: &PrivateAccountKind,
     ) -> Self {
         match kind {
             PrivateAccountKind::Regular(identifier) => {
-                Self::for_regular_private_account(npk, vpk, *identifier)
+                Self::for_regular_private_account(npk, apk, vpk, *identifier)
             }
             PrivateAccountKind::Pda {
                 program_id,
                 seed,
                 identifier,
-            } => Self::for_private_pda(program_id, seed, npk, vpk, *identifier),
+            } => Self::for_private_pda(program_id, seed, npk, apk, vpk, *identifier),
         }
+    }
+
+    /// Derives an [`AccountId`] for a signature-authorized public account from its public key.
+    #[must_use]
+    pub fn for_public_key(public_key: &[u8; 32]) -> Self {
+        const PUBLIC_ACCOUNT_ID_PREFIX: &[u8; 32] =
+            b"/LEE/v0.3/AccountId/Public/\x00\x00\x00\x00\x00";
+
+        let mut bytes = [0_u8; 64];
+        bytes[0..32].copy_from_slice(PUBLIC_ACCOUNT_ID_PREFIX);
+        bytes[32..64].copy_from_slice(public_key);
+        Self::from_preimage(&bytes)
     }
 }
 
@@ -620,26 +638,6 @@ pub enum ExecutionValidationError {
         total_balance_pre_states: WrappedBalanceSum,
         total_balance_post_states: WrappedBalanceSum,
     },
-}
-
-/// Computes the set of public-PDA `AccountId`s the callee is authorized to mutate.
-///
-/// Returns only public-form derivations, suitable for contexts where all accounts are public
-/// (e.g. the public-execution path). The privacy circuit must additionally check each mask-3
-/// `pre_state` against [`AccountId::for_private_pda`] with the supplied npk for that
-/// `pre_state`.
-#[must_use]
-pub fn compute_public_authorized_pdas(
-    caller_program_id: Option<ProgramId>,
-    pda_seeds: &[PdaSeed],
-) -> HashSet<AccountId> {
-    let Some(caller) = caller_program_id else {
-        return HashSet::new();
-    };
-    pda_seeds
-        .iter()
-        .map(|seed| AccountId::for_public_pda(&caller, seed))
-        .collect()
 }
 
 /// Reads the LEE inputs from the guest environment.

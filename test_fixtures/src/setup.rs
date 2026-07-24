@@ -273,7 +273,8 @@ pub async fn setup_public_accounts_with_initial_supply(
     initial_public_accounts: &[(PrivateKey, u128)],
 ) -> Result<()> {
     for (private_key, amount) in initial_public_accounts {
-        let account_id = AccountId::from(&PublicKey::new_from_private_key(private_key));
+        let account_id =
+            AccountId::for_public_key(PublicKey::new_from_private_key(private_key).value());
         wallet::cli::execute_subcommand(
             wallet,
             Command::Vault(VaultSubcommand::Claim {

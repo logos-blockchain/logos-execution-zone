@@ -32,11 +32,12 @@ pub struct InitialPrivateAccountForWallet {
 impl InitialPrivateAccountForWallet {
     #[must_use]
     pub fn account_id(&self) -> AccountId {
-        AccountId::from((
+        AccountId::for_regular_private_account(
             &self.key_chain.nullifier_public_key,
+            &self.key_chain.authorization_public_key,
             &self.key_chain.viewing_public_key,
             self.identifier,
-        ))
+        )
     }
 }
 
@@ -116,7 +117,7 @@ pub fn default_public_accounts_for_wallet() -> Vec<(PrivateKey, u128)> {
         .map(|seed| PrivateKey::try_new(*seed).expect("Fixed public account seed must be valid"))
         .collect::<Vec<_>>();
     private_keys.sort_unstable_by_key(|private_key| {
-        AccountId::from(&PublicKey::new_from_private_key(private_key))
+        AccountId::for_public_key(PublicKey::new_from_private_key(private_key).value())
     });
 
     private_keys
@@ -153,12 +154,14 @@ fn deterministic_private_key_chain(entropy: [u8; 32]) -> KeyChain {
     let secret_spending_key = seed_holder.produce_top_secret_key_holder();
     let private_key_holder = secret_spending_key.produce_private_key_holder(None);
     let nullifier_public_key = private_key_holder.generate_nullifier_public_key();
+    let authorization_public_key = private_key_holder.generate_authorization_public_key();
     let viewing_public_key = private_key_holder.generate_viewing_public_key();
 
     KeyChain {
         secret_spending_key,
         private_key_holder,
         nullifier_public_key,
+        authorization_public_key,
         viewing_public_key,
     }
 }
@@ -170,7 +173,7 @@ pub fn genesis_from_accounts(
 ) -> Vec<GenesisAction> {
     let public_genesis = public_accounts.iter().map(|(private_key, balance)| {
         let public_key = PublicKey::new_from_private_key(private_key);
-        let account_id = AccountId::from(&public_key);
+        let account_id = AccountId::for_public_key(public_key.value());
         GenesisAction::SupplyAccount {
             account_id,
             balance: *balance,

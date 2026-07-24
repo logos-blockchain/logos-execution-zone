@@ -1,28 +1,25 @@
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, HashSet},
     hash::Hash,
 };
 
 use lee_core::{
-    BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, Timestamp,
+    Authorization, Backend, BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput,
+    Resolved, Timestamp, ValidationError,
     account::{Account, AccountId, AccountWithMetadata},
-    program::{
-        ChainedCall, Claim, DEFAULT_PROGRAM_ID, ProgramId, compute_public_authorized_pdas,
-        validate_execution,
-    },
+    program::{ChainedCall, PdaSeed, ProgramId, ProgramOutput},
+    validate_state_diff,
 };
-use log::debug;
 
 use crate::{
     V03State, ensure,
-    error::{InvalidProgramBehaviorError, LeeError},
+    error::LeeError,
     privacy_preserving_transaction::{
         PrivacyPreservingTransaction, circuit::Proof, message::Message,
     },
     program::Program,
     program_deployment_transaction::ProgramDeploymentTransaction,
     public_transaction::PublicTransaction,
-    state::MAX_NUMBER_CHAINED_CALLS,
 };
 
 pub struct StateDiff {
@@ -73,8 +70,6 @@ impl ValidatedStateDiff {
             })
             .collect();
 
-        let mut state_diff: HashMap<AccountId, Account> = HashMap::new();
-
         let initial_call = ChainedCall {
             program_id: message.program_id,
             instruction_data: message.instruction_data.clone(),
@@ -82,220 +77,27 @@ impl ValidatedStateDiff {
             pda_seeds: vec![],
         };
 
-        let initial_caller_data = CallerData {
-            program_id: None,
-            authorized_accounts: signer_account_ids.iter().copied().collect(),
+        let mut env = PublicEnv {
+            state,
+            signers: signer_account_ids.iter().copied().collect(),
         };
+        let threaded = validate_state_diff(&mut env, initial_call)?;
 
-        let mut chained_calls =
-            VecDeque::<(ChainedCall, CallerData)>::from_iter([(initial_call, initial_caller_data)]);
-        let mut chain_calls_counter = 0;
+        ensure!(
+            threaded.block_validity_window.is_valid_for(block_id)
+                && threaded.timestamp_validity_window.is_valid_for(timestamp),
+            LeeError::OutOfValidityWindow
+        );
 
-        while let Some((chained_call, caller_data)) = chained_calls.pop_front() {
-            ensure!(
-                chain_calls_counter <= MAX_NUMBER_CHAINED_CALLS,
-                LeeError::MaxChainedCallsDepthExceeded
-            );
-
-            // Check that the `program_id` corresponds to a deployed program
-            let Some(program) = state.programs().get(&chained_call.program_id) else {
-                return Err(LeeError::InvalidInput("Unknown program".into()));
-            };
-
-            debug!(
-                "Program {:?} pre_states: {:?}, instruction_data: {:?}",
-                chained_call.program_id, chained_call.pre_states, chained_call.instruction_data
-            );
-            let mut program_output = program.execute(
-                caller_data.program_id,
-                &chained_call.pre_states,
-                &chained_call.instruction_data,
-            )?;
-            debug!(
-                "Program {:?} output: {:?}",
-                chained_call.program_id, program_output
-            );
-
-            let authorized_pdas =
-                compute_public_authorized_pdas(caller_data.program_id, &chained_call.pda_seeds);
-
-            // Account is authorized if it is either in the caller's authorized accounts or in the
-            // list of PDAs the caller has authorized.
-            let is_authorized = |account_id: &AccountId| {
-                authorized_pdas.contains(account_id)
-                    || caller_data.authorized_accounts.contains(account_id)
-            };
-
-            for pre in &program_output.pre_states {
-                let account_id = pre.account_id;
-                // Check that the program output pre_states coincide with the values in the public
-                // state or with any modifications to those values during the chain of calls.
-                let expected_pre = state_diff
-                    .get(&account_id)
-                    .cloned()
-                    .unwrap_or_else(|| state.get_account_by_id(account_id));
-                ensure!(
-                    pre.account == expected_pre,
-                    InvalidProgramBehaviorError::InconsistentAccountPreState {
-                        account_id,
-                        expected: Box::new(expected_pre),
-                        actual: Box::new(pre.account.clone())
-                    }
-                );
-
-                // Check that the program output pre_states marked as authorized are indeed
-                // authorized, and vice-versa.
-                let is_indeed_authorized = is_authorized(&account_id);
-                ensure!(
-                    !pre.is_authorized || is_indeed_authorized,
-                    InvalidProgramBehaviorError::InvalidAccountAuthorization { account_id }
-                );
-                ensure!(
-                    pre.is_authorized || !is_indeed_authorized,
-                    InvalidProgramBehaviorError::AuthorizedAccountMarkedAsNotAuthorized {
-                        account_id
-                    }
-                );
-            }
-
-            // Verify that the program output's self_program_id matches the expected program ID.
-            ensure!(
-                program_output.self_program_id == chained_call.program_id,
-                InvalidProgramBehaviorError::MismatchedProgramId {
-                    expected: chained_call.program_id,
-                    actual: program_output.self_program_id
-                }
-            );
-
-            // Verify that the program output's caller_program_id matches the actual caller.
-            ensure!(
-                program_output.caller_program_id == caller_data.program_id,
-                InvalidProgramBehaviorError::MismatchedCallerProgramId {
-                    expected: caller_data.program_id,
-                    actual: program_output.caller_program_id,
-                }
-            );
-
-            // Verify execution corresponds to a well-behaved program.
-            // See the # Programs section for the definition of the `validate_execution` method.
-            validate_execution(
-                &program_output.pre_states,
-                &program_output.post_states,
-                chained_call.program_id,
-            )
-            .map_err(InvalidProgramBehaviorError::ExecutionValidationFailed)?;
-
-            // Verify validity window
-            ensure!(
-                program_output.block_validity_window.is_valid_for(block_id)
-                    && program_output
-                        .timestamp_validity_window
-                        .is_valid_for(timestamp),
-                LeeError::OutOfValidityWindow
-            );
-
-            for (i, post) in program_output.post_states.iter_mut().enumerate() {
-                let Some(claim) = post.required_claim() else {
-                    continue;
-                };
-                let pre = &program_output.pre_states[i];
-                let account_id = pre.account_id;
-
-                // The invoked program can only claim accounts with default program id.
-                ensure!(
-                    post.account().program_owner == DEFAULT_PROGRAM_ID,
-                    InvalidProgramBehaviorError::ClaimedNonDefaultAccount { account_id }
-                );
-
-                match claim {
-                    Claim::Authorized => {
-                        // The program can only claim accounts that were authorized by the signer.
-                        ensure!(
-                            pre.is_authorized,
-                            InvalidProgramBehaviorError::ClaimedUnauthorizedAccount { account_id }
-                        );
-                    }
-                    Claim::Pda(seed) => {
-                        // The program can only claim accounts that correspond to the PDAs it is
-                        // authorized to claim. The public-execution path only sees public
-                        // accounts, so the public-PDA derivation is the correct formula here.
-                        let pda = AccountId::for_public_pda(&chained_call.program_id, &seed);
-                        ensure!(
-                            account_id == pda,
-                            InvalidProgramBehaviorError::MismatchedPdaClaim {
-                                expected: pda,
-                                actual: account_id
-                            }
-                        );
-                    }
-                }
-
-                post.account_mut().program_owner = chained_call.program_id;
-            }
-
-            // Update the state diff
-            for (pre, post) in program_output
-                .pre_states
-                .iter()
-                .zip(program_output.post_states.iter())
-            {
-                state_diff.insert(pre.account_id, post.account().clone());
-            }
-
-            // Source from `program_output.pre_states`, not `chained_call.pre_states`:
-            // the loop above already gates program_output's `is_authorized` via the
-            // `!pre.is_authorized || is_indeed_authorized` check, while `chained_call.
-            // pre_states` is caller-controlled and can be forged (audit-issue 91).
-            //
-            // Union with the caller's authorized set so that authorization is monotonically
-            // growing: once an account is authorized at any point in the chain it remains
-            // authorized for all subsequent calls.
-            let authorized_accounts: HashSet<_> = caller_data
-                .authorized_accounts
-                .into_iter()
-                .chain(
-                    program_output
-                        .pre_states
-                        .iter()
-                        .filter(|pre| pre.is_authorized)
-                        .map(|pre| pre.account_id),
-                )
-                .collect();
-            for new_call in program_output.chained_calls.into_iter().rev() {
-                chained_calls.push_front((
-                    new_call,
-                    CallerData {
-                        program_id: Some(chained_call.program_id),
-                        authorized_accounts: authorized_accounts.clone(),
-                    },
-                ));
-            }
-
-            chain_calls_counter = chain_calls_counter
-                .checked_add(1)
-                .expect("we check the max depth at the beginning of the loop");
-        }
-
-        // Check that all modified uninitialized accounts where claimed
-        for (account_id, post) in state_diff.iter().filter_map(|(account_id, post)| {
-            let pre = state.get_account_by_id(*account_id);
-            if pre.program_owner != DEFAULT_PROGRAM_ID {
-                return None;
-            }
-            if pre == *post {
-                return None;
-            }
-            Some((*account_id, post))
-        }) {
-            ensure!(
-                post.program_owner != DEFAULT_PROGRAM_ID,
-                InvalidProgramBehaviorError::DefaultAccountModifiedWithoutClaim { account_id }
-            );
-        }
+        let public_diff = threaded
+            .accounts
+            .into_iter()
+            .map(|(pre, post)| (pre.account_id, post))
+            .collect();
 
         Ok(Self(StateDiff {
             signer_account_ids,
-            public_diff: state_diff,
+            public_diff,
             new_commitments: vec![],
             new_nullifiers: vec![],
             program: None,
@@ -455,10 +257,66 @@ impl ValidatedStateDiff {
     }
 }
 
-#[derive(Debug)]
-struct CallerData {
-    program_id: Option<ProgramId>,
-    authorized_accounts: HashSet<AccountId>,
+struct PublicEnv<'state> {
+    state: &'state V03State,
+    signers: HashSet<AccountId>,
+}
+
+impl Backend for PublicEnv<'_> {
+    type Error = LeeError;
+
+    fn output_for_call(
+        &mut self,
+        call: &ChainedCall,
+        caller: Option<ProgramId>,
+    ) -> Result<ProgramOutput, LeeError> {
+        let Some(program) = self.state.programs().get(&call.program_id) else {
+            return Err(LeeError::InvalidInput("Unknown program".into()));
+        };
+        program.execute(caller, &call.pre_states, &call.instruction_data)
+    }
+
+    fn resolve_pre_state(
+        &mut self,
+        pre: &AccountWithMetadata,
+    ) -> Result<Resolved, ValidationError> {
+        let authorization = if self.signers.contains(&pre.account_id) {
+            Authorization::Holder
+        } else {
+            Authorization::None
+        };
+        Ok(Resolved {
+            account: self.state.get_account_by_id(pre.account_id),
+            authorization,
+        })
+    }
+
+    fn try_bind_pda(
+        &mut self,
+        program_id: ProgramId,
+        seed: PdaSeed,
+        account_id: AccountId,
+    ) -> Result<bool, ValidationError> {
+        Ok(account_id.matches_public_pda(&program_id, &seed))
+    }
+
+    fn finalize(&self) -> Result<(), ValidationError> {
+        Ok(())
+    }
+
+    fn authorization_bound_elsewhere(&self) -> bool {
+        false
+    }
+}
+
+impl From<ValidationError> for LeeError {
+    fn from(error: ValidationError) -> Self {
+        match error {
+            ValidationError::ProgramBehavior(error) => Self::InvalidProgramBehavior(error),
+            ValidationError::MaxChainedCallsDepthExceeded => Self::MaxChainedCallsDepthExceeded,
+            ValidationError::OutOfValidityWindow => Self::OutOfValidityWindow,
+        }
+    }
 }
 
 fn authenticate_public_transaction_signers(

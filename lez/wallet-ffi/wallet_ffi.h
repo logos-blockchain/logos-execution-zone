@@ -154,6 +154,10 @@ typedef struct FfiPrivateAccountKeys {
    */
   struct FfiBytes32 nullifier_public_key;
   /**
+   * Authorization public key (32 bytes).
+   */
+  struct FfiBytes32 authorization_public_key;
+  /**
    * Viewing public key (ML-KEM-768 encapsulation key, 1184 bytes).
    */
   const uint8_t *viewing_public_key;
@@ -251,6 +255,8 @@ typedef struct FfiAccountIdentity {
   char *key_path;
   struct FfiBytes32 nullifier_secret_key;
   struct FfiBytes32 nullifier_public_key;
+  struct FfiBytes32 authorization_secret_key;
+  struct FfiBytes32 authorization_public_key;
   const uint8_t *viewing_public_key;
   uintptr_t viewing_public_key_len;
   struct FfiU128 identifier;
@@ -957,6 +963,7 @@ struct FfiBytes32 wallet_ffi_account_id_for_public_pda(struct FfiProgramId progr
 enum WalletFfiError wallet_ffi_account_id_for_private_pda(struct FfiProgramId program_id,
                                                           FfiPdaSeed pda_seed,
                                                           FfiNullifierPublicKey npk,
+                                                          struct FfiBytes32 apk,
                                                           const uint8_t *viewing_public_key,
                                                           uintptr_t viewing_public_key_len,
                                                           struct FfiU128 identifier,

@@ -2,7 +2,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde::{Deserialize, Serialize};
 
-use crate::{Commitment, account::AccountId, encryption::ViewingPublicKey};
+use crate::{AuthorizationPublicKey, Commitment, account::AccountId, encryption::ViewingPublicKey};
 
 const PRIVATE_ACCOUNT_ID_PREFIX: &[u8; 32] = b"/LEE/v0.3/AccountId/Private/\x00\x00\x00\x00";
 
@@ -18,27 +18,18 @@ impl AccountId {
     #[must_use]
     pub fn for_regular_private_account(
         npk: &NullifierPublicKey,
+        apk: &AuthorizationPublicKey,
         vpk: &ViewingPublicKey,
         identifier: Identifier,
     ) -> Self {
-        let mut bytes = [0_u8; 32 + 32 + ViewingPublicKey::LEN + 16];
+        let mut bytes = [0_u8; 32 + 32 + 32 + ViewingPublicKey::LEN + 16];
         bytes[0..32].copy_from_slice(PRIVATE_ACCOUNT_ID_PREFIX);
         bytes[32..64].copy_from_slice(&npk.0);
-        bytes[64..64 + ViewingPublicKey::LEN].copy_from_slice(vpk.to_bytes());
-        bytes[64 + ViewingPublicKey::LEN..].copy_from_slice(&identifier.to_le_bytes());
+        bytes[64..96].copy_from_slice(&apk.0);
+        bytes[96..96 + ViewingPublicKey::LEN].copy_from_slice(vpk.to_bytes());
+        bytes[96 + ViewingPublicKey::LEN..].copy_from_slice(&identifier.to_le_bytes());
 
-        Self::new(
-            Impl::hash_bytes(&bytes)
-                .as_bytes()
-                .try_into()
-                .expect("Conversion should not fail"),
-        )
-    }
-}
-
-impl From<(&NullifierPublicKey, &ViewingPublicKey, Identifier)> for AccountId {
-    fn from((npk, vpk, identifier): (&NullifierPublicKey, &ViewingPublicKey, Identifier)) -> Self {
-        Self::for_regular_private_account(npk, vpk, identifier)
+        Self::from_preimage(&bytes)
     }
 }
 
@@ -163,12 +154,13 @@ mod tests {
         ];
         let npk = NullifierPublicKey::from(&nsk);
         let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
+        let apk = AuthorizationPublicKey::from(&[0_u8; 32]);
         let expected_account_id = AccountId::new([
-            242, 239, 57, 244, 89, 109, 65, 201, 223, 100, 43, 87, 205, 83, 148, 161, 176, 22, 208,
-            220, 68, 135, 10, 171, 182, 80, 54, 74, 228, 244, 236, 7,
+            42, 9, 42, 240, 164, 236, 108, 212, 207, 70, 3, 36, 45, 100, 174, 224, 196, 120, 230,
+            121, 141, 3, 107, 107, 218, 174, 90, 205, 224, 196, 121, 226,
         ]);
 
-        let account_id = AccountId::for_regular_private_account(&npk, &vpk, 0);
+        let account_id = AccountId::for_regular_private_account(&npk, &apk, &vpk, 0);
 
         assert_eq!(account_id, expected_account_id);
     }
@@ -181,12 +173,13 @@ mod tests {
         ];
         let npk = NullifierPublicKey::from(&nsk);
         let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
+        let apk = AuthorizationPublicKey::from(&[0_u8; 32]);
         let expected_account_id = AccountId::new([
-            149, 125, 157, 109, 119, 81, 9, 163, 231, 181, 214, 43, 57, 113, 221, 72, 180, 149,
-            189, 170, 32, 181, 255, 231, 19, 92, 235, 59, 153, 185, 172, 206,
+            118, 221, 158, 206, 184, 31, 48, 37, 62, 91, 133, 5, 11, 118, 62, 67, 219, 234, 142,
+            199, 97, 104, 46, 214, 251, 107, 188, 57, 48, 104, 137, 189,
         ]);
 
-        let account_id = AccountId::for_regular_private_account(&npk, &vpk, 1);
+        let account_id = AccountId::for_regular_private_account(&npk, &apk, &vpk, 1);
 
         assert_eq!(account_id, expected_account_id);
     }
@@ -200,12 +193,13 @@ mod tests {
         ];
         let npk = NullifierPublicKey::from(&nsk);
         let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
+        let apk = AuthorizationPublicKey::from(&[0_u8; 32]);
         let expected_account_id = AccountId::new([
-            30, 232, 222, 201, 233, 125, 124, 194, 58, 39, 121, 96, 185, 84, 168, 109, 80, 111,
-            159, 112, 84, 100, 133, 244, 16, 34, 221, 35, 128, 131, 98, 159,
+            250, 189, 137, 39, 9, 107, 233, 79, 185, 205, 249, 114, 177, 45, 180, 43, 17, 147, 120,
+            175, 118, 210, 93, 32, 51, 16, 10, 34, 243, 89, 192, 101,
         ]);
 
-        let account_id = AccountId::for_regular_private_account(&npk, &vpk, identifier);
+        let account_id = AccountId::for_regular_private_account(&npk, &apk, &vpk, identifier);
 
         assert_eq!(account_id, expected_account_id);
     }
