@@ -40,38 +40,8 @@ impl<'ids> PrivateEnv<'ids> {
     pub fn into_bound_pda_seeds(self) -> HashMap<usize, (ProgramId, PdaSeed)> {
         self.private_pda_bound_positions
     }
-}
 
-impl Backend for PrivateEnv<'_> {
-    type Error = ValidationError;
-
-    fn output_for_call(
-        &mut self,
-        call: &ChainedCall,
-        _caller: Option<ProgramId>,
-    ) -> Result<ProgramOutput, ValidationError> {
-        let output = self
-            .remaining_outputs
-            .pop_front()
-            .expect("Insufficient program outputs for chained calls");
-        assert_eq!(
-            call.instruction_data, output.instruction_data,
-            "Mismatched instruction data between chained call and program output"
-        );
-        let words = to_vec(&output).expect("program_output must be serializable");
-        env::verify(call.program_id, &words)
-            .unwrap_or_else(|_: Infallible| unreachable!("Infallible error is never constructed"));
-        Ok(output)
-    }
-
-    fn resolve_pre_state(
-        &mut self,
-        pre: &AccountWithMetadata,
-    ) -> Result<Resolved, ValidationError> {
-        let position = self.next_position;
-        self.next_position = position.checked_add(1).expect("position counter overflow");
-        self.position_by_id.insert(pre.account_id, position);
-
+    fn bind_external_seed(&mut self, position: usize, pre: &AccountWithMetadata) {
         let ids = self.account_identities;
         let external_seed = match ids.get(position) {
             Some(InputAccountIdentity::Private(PrivateWitness {
@@ -106,6 +76,42 @@ impl Backend for PrivateEnv<'_> {
                 pre.account_id,
             );
         }
+    }
+}
+
+impl Backend for PrivateEnv<'_> {
+    type Error = ValidationError;
+
+    fn output_for_call(
+        &mut self,
+        call: &ChainedCall,
+        _caller: Option<ProgramId>,
+    ) -> Result<ProgramOutput, ValidationError> {
+        let output = self
+            .remaining_outputs
+            .pop_front()
+            .expect("Insufficient program outputs for chained calls");
+        assert_eq!(
+            call.instruction_data, output.instruction_data,
+            "Mismatched instruction data between chained call and program output"
+        );
+        let words = to_vec(&output).expect("program_output must be serializable");
+        env::verify(call.program_id, &words)
+            .unwrap_or_else(|_: Infallible| unreachable!("Infallible error is never constructed"));
+        Ok(output)
+    }
+
+    fn resolve_pre_state(
+        &mut self,
+        pre: &AccountWithMetadata,
+    ) -> Result<Resolved, ValidationError> {
+        let position = self.next_position;
+        self.next_position = position.checked_add(1).expect("position counter overflow");
+        self.position_by_id.insert(pre.account_id, position);
+
+        self.bind_external_seed(position, pre);
+
+        let ids = self.account_identities;
         let authorization = match ids.get(position) {
             // A public account is root-authorized iff it signed; the circuit's only signal is the
             // verifier-bound `is_authorized`. Trusted here and enforced by the verifier — this just

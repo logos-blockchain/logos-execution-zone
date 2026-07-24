@@ -44,8 +44,6 @@ pub enum AccountIdentity {
         identifier: Identifier,
     },
     /// A shared regular private account with externally-provided keys (e.g. from GMS).
-    /// Uses standard `AccountId = from((&npk, identifier))` with authorized/unauthorized private
-    /// paths. Works with `authenticated_transfer` and all existing programs out of the box.
     PrivateShared {
         nsk: NullifierSecretKey,
         ask: AuthorizationSecretKey,
