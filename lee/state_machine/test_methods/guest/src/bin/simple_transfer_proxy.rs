@@ -80,7 +80,7 @@ fn main() {
         let pda_post = AccountPostState::new(pda_pre.account.clone());
 
         // Chain to simple_transfer with instruction=0 (init path) and pda_seeds
-        // to authorize the PDA. simple_transfer will claim it with Claim::Authorized.
+        // to authorize the PDA. simple_transfer will claim it with Claim::Key.
         let mut auth_pda_pre = pda_pre;
         auth_pda_pre.is_authorized = true;
         let auth_call = ChainedCall::new(simple_transfer_id, vec![auth_pda_pre], &amount)

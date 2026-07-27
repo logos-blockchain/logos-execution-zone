@@ -15,7 +15,7 @@ fn main() {
 
     if let Ok([account_pre]) = <[_; 1]>::try_from(pre_states.clone()) {
         let account_post =
-            AccountPostState::new_claimed_if_default(account_pre.account, Claim::Authorized);
+            AccountPostState::new_claimed_if_default(account_pre.account, Claim::Key);
 
         ProgramOutput::new(
             self_program_id,
@@ -49,8 +49,8 @@ fn main() {
         instruction_words,
         vec![sender_pre, receiver_pre],
         vec![
-            AccountPostState::new_claimed_if_default(sender_post, Claim::Authorized),
-            AccountPostState::new_claimed_if_default(receiver_post, Claim::Authorized),
+            AccountPostState::new_claimed_if_default(sender_post, Claim::Key),
+            AccountPostState::new_claimed_if_default(receiver_post, Claim::Key),
         ],
     )
     .write();

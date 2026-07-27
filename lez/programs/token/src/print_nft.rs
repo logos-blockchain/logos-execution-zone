@@ -50,6 +50,6 @@ pub fn print_nft(
 
     vec![
         AccountPostState::new(master_account_post),
-        AccountPostState::new_claimed(printed_account_post, Claim::Authorized),
+        AccountPostState::new_claimed(printed_account_post, Claim::Key),
     ]
 }

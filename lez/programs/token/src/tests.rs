@@ -854,7 +854,7 @@ fn mint_uninit_holding_success() {
         *holding_post.account(),
         AccountForTests::init_mint().account
     );
-    assert_eq!(holding_post.required_claim(), Some(Claim::Authorized));
+    assert_eq!(holding_post.required_claim(), Some(Claim::Key));
 }
 
 #[test]

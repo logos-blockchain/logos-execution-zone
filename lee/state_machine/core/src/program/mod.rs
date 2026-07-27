@@ -288,10 +288,10 @@ pub enum Claim {
     /// The program requests ownership of the account which was authorized by the signer.
     ///
     /// Note that it's possible to successfully execute program outputting [`AccountPostState`] with
-    /// `is_authorized == false` and `claim == Some(Claim::Authorized)`.
+    /// `is_authorized == false` and `claim == Some(Claim::Key)`.
     /// This will give no error if program had authorization in pre state and may be useful
     /// if program decides to give up authorization for a chained call.
-    Authorized,
+    Key,
     /// The program requests ownership of the account through a PDA. The program emits the
     /// seed; the `AccountId` is derived from `(program_id, seed)`, regardless of whether the
     /// account is public or private.

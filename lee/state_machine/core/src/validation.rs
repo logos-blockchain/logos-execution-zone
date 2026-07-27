@@ -201,7 +201,7 @@ pub fn validate_state_diff<E: Backend>(
             }
 
             match claim {
-                Claim::Authorized => {}
+                Claim::Key => {}
                 Claim::Pda(seed) => {
                     if !env.try_bind_pda(chained_call.program_id, seed, account_id)? {
                         return Err(ValidationError::ProgramBehavior(

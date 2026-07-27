@@ -138,10 +138,10 @@ fn post_state_new_with_claim_constructor() {
         nonce: 10_u128.into(),
     };
 
-    let account_post_state = AccountPostState::new_claimed(account.clone(), Claim::Authorized);
+    let account_post_state = AccountPostState::new_claimed(account.clone(), Claim::Key);
 
     assert_eq!(account, account_post_state.account);
-    assert_eq!(account_post_state.required_claim(), Some(Claim::Authorized));
+    assert_eq!(account_post_state.required_claim(), Some(Claim::Key));
 }
 
 #[test]

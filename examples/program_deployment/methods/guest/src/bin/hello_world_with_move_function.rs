@@ -36,7 +36,7 @@ fn write(pre_state: AccountWithMetadata, greeting: &[u8]) -> AccountPostState {
         this
     };
 
-    AccountPostState::new_claimed_if_default(post_account, Claim::Authorized)
+    AccountPostState::new_claimed_if_default(post_account, Claim::Key)
 }
 
 fn move_data(from_pre: AccountWithMetadata, to_pre: AccountWithMetadata) -> Vec<AccountPostState> {
@@ -46,7 +46,7 @@ fn move_data(from_pre: AccountWithMetadata, to_pre: AccountWithMetadata) -> Vec<
     let from_post = {
         let mut this = from_pre.account;
         this.data = Data::default();
-        AccountPostState::new_claimed_if_default(this, Claim::Authorized)
+        AccountPostState::new_claimed_if_default(this, Claim::Key)
     };
 
     let to_post = {
@@ -56,7 +56,7 @@ fn move_data(from_pre: AccountWithMetadata, to_pre: AccountWithMetadata) -> Vec<
         this.data = bytes
             .try_into()
             .expect("Data should fit within the allowed limits");
-        AccountPostState::new_claimed_if_default(this, Claim::Authorized)
+        AccountPostState::new_claimed_if_default(this, Claim::Key)
     };
 
     vec![from_post, to_post]
