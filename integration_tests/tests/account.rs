@@ -144,7 +144,6 @@ async fn import_private_account() -> Result<()> {
     let key_chain = KeyChain::new_os_random();
     let account_id = lee::AccountId::for_regular_private_account(
         &key_chain.nullifier_public_key,
-        &key_chain.authorization_public_key,
         &key_chain.viewing_public_key,
         0,
     );
@@ -206,7 +205,6 @@ async fn import_private_account_second_time_overrides_account_data() -> Result<(
     let key_chain = KeyChain::new_os_random();
     let account_id = lee::AccountId::for_regular_private_account(
         &key_chain.nullifier_public_key,
-        &key_chain.authorization_public_key,
         &key_chain.viewing_public_key,
         0,
     );

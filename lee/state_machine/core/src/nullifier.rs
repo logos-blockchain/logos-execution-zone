@@ -2,36 +2,13 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde::{Deserialize, Serialize};
 
-use crate::{AuthorizationPublicKey, Commitment, account::AccountId, encryption::ViewingPublicKey};
-
-const PRIVATE_ACCOUNT_ID_PREFIX: &[u8; 32] = b"/LEE/v0.3/AccountId/Private/\x00\x00\x00\x00";
+use crate::{AuthorizationSecretKey, Commitment, account::AccountId};
 
 pub type Identifier = u128;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Hash))]
 pub struct NullifierPublicKey(pub [u8; 32]);
-
-impl AccountId {
-    /// Derives an [`AccountId`] for a regular (non-PDA) private account from the nullifier public
-    /// key and identifier.
-    #[must_use]
-    pub fn for_regular_private_account(
-        npk: &NullifierPublicKey,
-        apk: &AuthorizationPublicKey,
-        vpk: &ViewingPublicKey,
-        identifier: Identifier,
-    ) -> Self {
-        let mut bytes = [0_u8; 32 + 32 + 32 + ViewingPublicKey::LEN + 16];
-        bytes[0..32].copy_from_slice(PRIVATE_ACCOUNT_ID_PREFIX);
-        bytes[32..64].copy_from_slice(&npk.0);
-        bytes[64..96].copy_from_slice(&apk.0);
-        bytes[96..96 + ViewingPublicKey::LEN].copy_from_slice(vpk.to_bytes());
-        bytes[96 + ViewingPublicKey::LEN..].copy_from_slice(&identifier.to_le_bytes());
-
-        Self::from_preimage(&bytes)
-    }
-}
 
 impl AsRef<[u8]> for NullifierPublicKey {
     fn as_ref(&self) -> &[u8] {
@@ -41,14 +18,11 @@ impl AsRef<[u8]> for NullifierPublicKey {
 
 impl From<&NullifierSecretKey> for NullifierPublicKey {
     fn from(value: &NullifierSecretKey) -> Self {
-        const PREFIX: &[u8; 8] = b"LEE/keys";
-        const SUFFIX_1: &[u8; 1] = &[7];
-        const SUFFIX_2: &[u8; 23] = &[0; 23];
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(PREFIX);
-        bytes.extend_from_slice(value);
-        bytes.extend_from_slice(SUFFIX_1);
-        bytes.extend_from_slice(SUFFIX_2);
+        const DOMAIN: &[u8; 31] = b"/LEE/v0.3/Keys/Nullifier/Public";
+
+        let mut bytes = [0_u8; 31 + 32];
+        bytes[0..31].copy_from_slice(DOMAIN);
+        bytes[31..].copy_from_slice(value);
         Self(
             Impl::hash_bytes(&bytes)
                 .as_bytes()
@@ -102,6 +76,20 @@ impl Nullifier {
     }
 }
 
+#[must_use]
+pub fn derive_nullifier_secret_key(ask: &AuthorizationSecretKey) -> NullifierSecretKey {
+    const DOMAIN: &[u8; 31] = b"/LEE/v0.3/Keys/Nullifier/Secret";
+
+    let mut bytes = [0_u8; 31 + 32];
+    bytes[0..31].copy_from_slice(DOMAIN);
+    bytes[31..].copy_from_slice(ask);
+
+    Impl::hash_bytes(&bytes)
+        .as_bytes()
+        .try_into()
+        .expect("hash should be exactly 32 bytes long")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -133,74 +121,60 @@ mod tests {
     }
 
     #[test]
+    fn nsk_matches_pinned_vectors() {
+        // nsk = SHA256("/LEE/v0.3/Keys/Nullifier/Secret" ‖ ask); pinned via independent Python
+        // SHA-256, itself validated against `for_private_pda_matches_pinned_value`.
+        assert_eq!(
+            derive_nullifier_secret_key(&[0; 32]),
+            [
+                0x1f, 0x21, 0x5a, 0x59, 0xc1, 0x0e, 0x95, 0x2e, 0x6b, 0x26, 0x33, 0x41, 0xb2, 0xf2,
+                0x76, 0x0b, 0xeb, 0xc6, 0xf2, 0x90, 0xc0, 0x40, 0x27, 0xcd, 0xf4, 0x7a, 0xd2, 0x37,
+                0x0b, 0xf5, 0x75, 0x1d,
+            ]
+        );
+        assert_eq!(
+            derive_nullifier_secret_key(&[1; 32]),
+            [
+                0xf5, 0xec, 0x71, 0x8f, 0x3e, 0x6a, 0xcb, 0x73, 0x56, 0x93, 0x8b, 0x57, 0x44, 0x96,
+                0xc3, 0x41, 0x50, 0x74, 0x8a, 0xa6, 0xe2, 0x6f, 0x96, 0xc3, 0xca, 0x5d, 0xbc, 0xd1,
+                0xa7, 0x7b, 0x9b, 0x69,
+            ]
+        );
+    }
+
+    #[test]
+    fn nsk_differs_for_different_ask() {
+        assert_ne!(
+            derive_nullifier_secret_key(&[0; 32]),
+            derive_nullifier_secret_key(&[1; 32]),
+        );
+    }
+
+    #[test]
+    fn npk_chains_through_nsk_from_ask() {
+        // npk = KDF²(ask): the transitive binding a regular account id relies on.
+        let nsk = derive_nullifier_secret_key(&[0; 32]);
+        assert_eq!(
+            NullifierPublicKey::from(&nsk).0,
+            [
+                0x20, 0xff, 0x04, 0x29, 0x15, 0xb4, 0xf3, 0x6a, 0xf1, 0x5a, 0x64, 0x06, 0x42, 0x08,
+                0x35, 0x28, 0xea, 0x6f, 0xea, 0x0b, 0x93, 0x59, 0x26, 0x8a, 0xa4, 0xa7, 0x61, 0x8f,
+                0x70, 0x1f, 0x4f, 0x01,
+            ]
+        );
+    }
+
+    #[test]
     fn from_secret_key() {
         let nsk = [
             57, 5, 64, 115, 153, 56, 184, 51, 207, 238, 99, 165, 147, 214, 213, 151, 30, 251, 30,
             196, 134, 22, 224, 211, 237, 120, 136, 225, 188, 220, 249, 28,
         ];
         let expected_npk = NullifierPublicKey([
-            78, 20, 20, 5, 177, 198, 233, 100, 175, 134, 174, 200, 24, 205, 68, 215, 130, 74, 35,
-            54, 154, 184, 219, 42, 168, 106, 126, 147, 133, 244, 18, 218,
+            58, 181, 207, 24, 227, 133, 192, 231, 242, 216, 230, 219, 31, 227, 236, 94, 99, 245,
+            206, 251, 237, 189, 88, 218, 215, 106, 66, 227, 136, 152, 140, 218,
         ]);
         let npk = NullifierPublicKey::from(&nsk);
         assert_eq!(npk, expected_npk);
-    }
-
-    #[test]
-    fn account_id_from_nullifier_public_key() {
-        let nsk = [
-            57, 5, 64, 115, 153, 56, 184, 51, 207, 238, 99, 165, 147, 214, 213, 151, 30, 251, 30,
-            196, 134, 22, 224, 211, 237, 120, 136, 225, 188, 220, 249, 28,
-        ];
-        let npk = NullifierPublicKey::from(&nsk);
-        let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
-        let apk = AuthorizationPublicKey::from(&[0_u8; 32]);
-        let expected_account_id = AccountId::new([
-            42, 9, 42, 240, 164, 236, 108, 212, 207, 70, 3, 36, 45, 100, 174, 224, 196, 120, 230,
-            121, 141, 3, 107, 107, 218, 174, 90, 205, 224, 196, 121, 226,
-        ]);
-
-        let account_id = AccountId::for_regular_private_account(&npk, &apk, &vpk, 0);
-
-        assert_eq!(account_id, expected_account_id);
-    }
-
-    #[test]
-    fn account_id_from_nullifier_public_key_identifier_1() {
-        let nsk = [
-            57, 5, 64, 115, 153, 56, 184, 51, 207, 238, 99, 165, 147, 214, 213, 151, 30, 251, 30,
-            196, 134, 22, 224, 211, 237, 120, 136, 225, 188, 220, 249, 28,
-        ];
-        let npk = NullifierPublicKey::from(&nsk);
-        let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
-        let apk = AuthorizationPublicKey::from(&[0_u8; 32]);
-        let expected_account_id = AccountId::new([
-            118, 221, 158, 206, 184, 31, 48, 37, 62, 91, 133, 5, 11, 118, 62, 67, 219, 234, 142,
-            199, 97, 104, 46, 214, 251, 107, 188, 57, 48, 104, 137, 189,
-        ]);
-
-        let account_id = AccountId::for_regular_private_account(&npk, &apk, &vpk, 1);
-
-        assert_eq!(account_id, expected_account_id);
-    }
-
-    #[test]
-    fn account_id_from_nullifier_public_key_byte_asymmetric_identifier() {
-        let identifier: u128 = 0x0123_4567_89AB_CDEF_FEDC_BA98_7654_3210;
-        let nsk = [
-            57, 5, 64, 115, 153, 56, 184, 51, 207, 238, 99, 165, 147, 214, 213, 151, 30, 251, 30,
-            196, 134, 22, 224, 211, 237, 120, 136, 225, 188, 220, 249, 28,
-        ];
-        let npk = NullifierPublicKey::from(&nsk);
-        let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
-        let apk = AuthorizationPublicKey::from(&[0_u8; 32]);
-        let expected_account_id = AccountId::new([
-            250, 189, 137, 39, 9, 107, 233, 79, 185, 205, 249, 114, 177, 45, 180, 43, 17, 147, 120,
-            175, 118, 210, 93, 32, 51, 16, 10, 34, 243, 89, 192, 101,
-        ]);
-
-        let account_id = AccountId::for_regular_private_account(&npk, &apk, &vpk, identifier);
-
-        assert_eq!(account_id, expected_account_id);
     }
 }

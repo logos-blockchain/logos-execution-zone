@@ -58,7 +58,6 @@ pub unsafe extern "C" fn wallet_ffi_account_id_for_private_pda(
 
     let ffi_private_keys = FfiPrivateAccountKeys {
         nullifier_public_key: npk,
-        authorization_public_key: FfiBytes32::default(),
         viewing_public_key,
         viewing_public_key_len,
     };

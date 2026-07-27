@@ -4,11 +4,11 @@ use anyhow::Result;
 use keycard_wallet::{KeycardWallet, python_path};
 use lee::{AccountId, PrivateKey, PublicKey, Signature};
 use lee_core::{
-    AuthWitness, AuthorizationPublicKey, AuthorizationSecretKey, Commitment, CommitmentSetDigest,
-    Identifier, InputAccountIdentity, MembershipProof, NullifierPublicKey, NullifierSecretKey,
-    NullifierWitness, PrivateKind, PrivateWitness, SharedSecretKey,
+    AuthorizationSecretKey, Commitment, CommitmentSetDigest, Identifier, InputAccountIdentity,
+    MembershipProof, NullifierPublicKey, NullifierSecretKey, NullifierWitness, PrivateKind,
+    PrivateWitness, SharedSecretKey,
     account::{AccountWithMetadata, Nonce},
-    compute_digest_for_path,
+    compute_digest_for_path, derive_nullifier_secret_key,
     encryption::ViewingPublicKey,
 };
 use rand::{RngCore as _, rngs::OsRng};
@@ -28,7 +28,6 @@ pub enum AccountIdentity {
     PrivateOwned(AccountId),
     PrivateForeign {
         npk: NullifierPublicKey,
-        apk: AuthorizationPublicKey,
         vpk: ViewingPublicKey,
         identifier: Identifier,
     },
@@ -45,9 +44,7 @@ pub enum AccountIdentity {
     },
     /// A shared regular private account with externally-provided keys (e.g. from GMS).
     PrivateShared {
-        nsk: NullifierSecretKey,
         ask: AuthorizationSecretKey,
-        npk: NullifierPublicKey,
         vpk: ViewingPublicKey,
         identifier: Identifier,
     },
@@ -78,13 +75,11 @@ impl fmt::Debug for AccountIdentity {
             Self::PrivateOwned(id) => f.debug_tuple("PrivateOwned").field(id).finish(),
             Self::PrivateForeign {
                 npk,
-                apk,
                 vpk,
                 identifier,
             } => f
                 .debug_struct("PrivateForeign")
                 .field("npk", npk)
-                .field("apk", apk)
                 .field("vpk", vpk)
                 .field("identifier", identifier)
                 .finish(),
@@ -102,14 +97,10 @@ impl fmt::Debug for AccountIdentity {
                 .field("identifier", identifier)
                 .finish(),
             Self::PrivateShared {
-                npk,
-                vpk,
-                identifier,
-                ..
+                vpk, identifier, ..
             } => f
                 .debug_struct("PrivateShared")
-                .field("nsk", &"<redacted>")
-                .field("npk", npk)
+                .field("ask", &"<redacted>")
                 .field("vpk", vpk)
                 .field("identifier", identifier)
                 .finish(),
@@ -262,16 +253,12 @@ impl AccountManager {
                 }
                 AccountIdentity::PrivateForeign {
                     npk,
-                    apk,
                     vpk,
                     identifier,
                 } => {
                     let acc = lee_core::account::Account::default();
-                    let account_id =
-                        AccountId::for_regular_private_account(&npk, &apk, &vpk, identifier);
-                    let kind = PreparedKind::Regular {
-                        auth: AuthWitness::Public(apk),
-                    };
+                    let account_id = AccountId::for_regular_private_account(&npk, &vpk, identifier);
+                    let kind = PreparedKind::Regular { ask: None };
                     let auth_acc = AccountWithMetadata::new(acc, kind.is_authorized(), account_id);
                     let mut random_seed: [u8; 32] = [0; 32];
                     OsRng.fill_bytes(&mut random_seed);
@@ -316,15 +303,13 @@ impl AccountManager {
                     State::Private(pre)
                 }
                 AccountIdentity::PrivateShared {
-                    nsk,
                     ask,
-                    npk,
                     vpk,
                     identifier,
                 } => {
-                    let apk = AuthorizationPublicKey::from(&ask);
-                    let account_id =
-                        AccountId::for_regular_private_account(&npk, &apk, &vpk, identifier);
+                    let nsk = derive_nullifier_secret_key(&ask);
+                    let npk = NullifierPublicKey::from(&nsk);
+                    let account_id = AccountId::for_regular_private_account(&npk, &vpk, identifier);
                     let pre = private_shared_acc_preparation(
                         wallet,
                         account_id,
@@ -332,9 +317,7 @@ impl AccountManager {
                         npk,
                         vpk,
                         identifier,
-                        PreparedKind::Regular {
-                            auth: AuthWitness::Held(ask),
-                        },
+                        PreparedKind::Regular { ask: Some(ask) },
                     );
 
                     State::Private(pre)
@@ -436,9 +419,7 @@ impl AccountManager {
                 State::Public { .. } | State::PublicKeycard { .. } => InputAccountIdentity::Public,
                 State::Private(pre) => {
                     let kind = match &pre.kind {
-                        PreparedKind::Regular { auth } => {
-                            PrivateKind::Regular { auth: auth.clone() }
-                        }
+                        PreparedKind::Regular { ask } => PrivateKind::Regular { ask: *ask },
                         PreparedKind::Pda => PrivateKind::Pda { seed: None },
                     };
                     let nullifier = match (pre.nsk, pre.proof.clone()) {
@@ -525,18 +506,13 @@ impl AccountManager {
 }
 
 enum PreparedKind {
-    Regular { auth: AuthWitness },
+    Regular { ask: Option<AuthorizationSecretKey> },
     Pda,
 }
 
 impl PreparedKind {
     const fn is_authorized(&self) -> bool {
-        matches!(
-            self,
-            Self::Regular {
-                auth: AuthWitness::Held(_)
-            }
-        )
+        matches!(self, Self::Regular { ask: Some(_) })
     }
 }
 
@@ -572,7 +548,7 @@ fn private_key_tree_acc_preparation(
         PreparedKind::Pda
     } else {
         PreparedKind::Regular {
-            auth: AuthWitness::Held(from_keys.private_key_holder.authorization_secret_key),
+            ask: Some(from_keys.private_key_holder.authorization_secret_key),
         }
     };
 
@@ -689,9 +665,7 @@ mod tests {
     #[test]
     fn private_shared_is_private() {
         let acc = AccountIdentity::PrivateShared {
-            nsk: [0; 32],
             ask: [4; 32],
-            npk: NullifierPublicKey([1; 32]),
             vpk: ViewingPublicKey::from_seed(&[2_u8; 32], &[3_u8; 32]),
             identifier: 42,
         };

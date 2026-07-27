@@ -1014,7 +1014,6 @@ fn test_wallet_ffi_transfer_shielded() -> Result<()> {
         wallet_ffi_create_private_accounts_key(wallet_ffi_handle, &raw mut out_keys).unwrap();
         let account_id = lee::AccountId::for_regular_private_account(
             &out_keys.npk(),
-            &out_keys.apk(),
             &out_keys.vpk().unwrap(),
             0_u128,
         );
@@ -1162,7 +1161,6 @@ fn test_wallet_ffi_transfer_private() -> Result<()> {
         wallet_ffi_create_private_accounts_key(wallet_ffi_handle, &raw mut out_keys).unwrap();
         let account_id = lee::AccountId::for_regular_private_account(
             &out_keys.npk(),
-            &out_keys.apk(),
             &out_keys.vpk().unwrap(),
             0_u128,
         );
@@ -1248,7 +1246,6 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
         wallet_ffi_create_private_accounts_key(wallet_ffi_handle, &raw mut out_keys).unwrap();
         let account_id = lee::AccountId::for_regular_private_account(
             &out_keys.npk(),
-            &out_keys.apk(),
             &out_keys.vpk().unwrap(),
             0_u128,
         );
@@ -1261,7 +1258,6 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
         wallet_ffi_create_private_accounts_key(wallet_ffi_handle, &raw mut out_keys).unwrap();
         let account_id = lee::AccountId::for_regular_private_account(
             &out_keys.npk(),
-            &out_keys.apk(),
             &out_keys.vpk().unwrap(),
             0_u128,
         );

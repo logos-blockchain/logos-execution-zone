@@ -7,11 +7,11 @@
 use std::collections::HashMap;
 
 use lee_core::{
-    AuthWitness, AuthorizationPublicKey, AuthorizationSecretKey, BlockId, Commitment,
-    DUMMY_COMMITMENT_HASH, Identifier, InputAccountIdentity, Nullifier, NullifierPublicKey,
-    NullifierSecretKey, NullifierWitness, PrivateAccountKind, PrivateKind, PrivateWitness,
-    Timestamp,
+    AuthorizationSecretKey, BlockId, Commitment, DUMMY_COMMITMENT_HASH, Identifier,
+    InputAccountIdentity, Nullifier, NullifierPublicKey, NullifierSecretKey, NullifierWitness,
+    PrivateAccountKind, PrivateKind, PrivateWitness, Timestamp,
     account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
+    derive_nullifier_secret_key,
     encryption::ViewingPublicKey,
     program::{
         BlockValidityWindow, ExecutionValidationError, MAX_NUMBER_CHAINED_CALLS, PdaSeed,
@@ -139,19 +139,18 @@ impl TestPublicKeys {
 }
 
 pub struct TestPrivateKeys {
-    pub nsk: NullifierSecretKey,
     pub ask: AuthorizationSecretKey,
     pub d: [u8; 32],
     pub z: [u8; 32],
 }
 
 impl TestPrivateKeys {
-    pub fn npk(&self) -> NullifierPublicKey {
-        NullifierPublicKey::from(&self.nsk)
+    pub fn nsk(&self) -> NullifierSecretKey {
+        derive_nullifier_secret_key(&self.ask)
     }
 
-    pub fn apk(&self) -> AuthorizationPublicKey {
-        AuthorizationPublicKey::from(&self.ask)
+    pub fn npk(&self) -> NullifierPublicKey {
+        NullifierPublicKey::from(&self.nsk())
     }
 
     pub fn vpk(&self) -> ViewingPublicKey {
@@ -159,7 +158,7 @@ impl TestPrivateKeys {
     }
 
     pub fn account_id(&self, kind: &PrivateAccountKind) -> AccountId {
-        AccountId::for_private_account(&self.npk(), &self.apk(), &self.vpk(), kind)
+        AccountId::for_private_account(&self.npk(), &self.vpk(), kind)
     }
 
     pub fn regular_account_id(&self, identifier: Identifier) -> AccountId {
@@ -268,7 +267,6 @@ fn test_public_account_keys_2() -> TestPublicKeys {
 
 pub fn test_private_account_keys_1() -> TestPrivateKeys {
     TestPrivateKeys {
-        nsk: [13; 32],
         ask: [14; 32],
         d: [31; 32],
         z: [32; 32],
@@ -277,7 +275,6 @@ pub fn test_private_account_keys_1() -> TestPrivateKeys {
 
 pub fn test_private_account_keys_2() -> TestPrivateKeys {
     TestPrivateKeys {
-        nsk: [38; 32],
         ask: [39; 32],
         d: [83; 32],
         z: [84; 32],
@@ -313,9 +310,7 @@ fn shielded_balance_transfer_for_tests(
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: PrivateKind::Regular {
-                    auth: AuthWitness::Public(recipient_keys.apk()),
-                },
+                kind: PrivateKind::Regular { ask: None },
                 nullifier: NullifierWitness::Init {
                     npk: recipient_keys.npk(),
                     commitment_root: DUMMY_COMMITMENT_HASH,
@@ -367,10 +362,10 @@ fn private_balance_transfer_for_tests(
                 random_seed: [0; 32],
                 identifier: 0,
                 kind: PrivateKind::Regular {
-                    auth: AuthWitness::Held(sender_keys.ask),
+                    ask: Some(sender_keys.ask),
                 },
                 nullifier: NullifierWitness::Update {
-                    nsk: sender_keys.nsk,
+                    nsk: sender_keys.nsk(),
                     membership_proof: state
                         .get_proof_for_commitment(&sender_commitment)
                         .expect("sender's commitment must be in state"),
@@ -380,9 +375,7 @@ fn private_balance_transfer_for_tests(
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: PrivateKind::Regular {
-                    auth: AuthWitness::Public(recipient_keys.apk()),
-                },
+                kind: PrivateKind::Regular { ask: None },
                 nullifier: NullifierWitness::Init {
                     npk: recipient_keys.npk(),
                     commitment_root: DUMMY_COMMITMENT_HASH,
@@ -430,10 +423,10 @@ fn deshielded_balance_transfer_for_tests(
                 random_seed: [0; 32],
                 identifier: 0,
                 kind: PrivateKind::Regular {
-                    auth: AuthWitness::Held(sender_keys.ask),
+                    ask: Some(sender_keys.ask),
                 },
                 nullifier: NullifierWitness::Update {
-                    nsk: sender_keys.nsk,
+                    nsk: sender_keys.nsk(),
                     membership_proof: state
                         .get_proof_for_commitment(&sender_commitment)
                         .expect("sender's commitment must be in state"),

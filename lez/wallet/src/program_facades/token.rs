@@ -1,9 +1,6 @@
 use common::HashType;
 use lee::{AccountId, program::Program};
-use lee_core::{
-    AuthorizationPublicKey, Identifier, NullifierPublicKey, SharedSecretKey,
-    encryption::ViewingPublicKey,
-};
+use lee_core::{Identifier, NullifierPublicKey, SharedSecretKey, encryption::ViewingPublicKey};
 use token_core::Instruction;
 
 use crate::{AccountIdentity, ExecutionFailureKind, WalletCore};
@@ -187,7 +184,6 @@ impl Token<'_> {
         &self,
         sender_account_id: AccountId,
         recipient_npk: NullifierPublicKey,
-        recipient_apk: AuthorizationPublicKey,
         recipient_vpk: ViewingPublicKey,
         recipient_identifier: Identifier,
         amount: u128,
@@ -206,7 +202,6 @@ impl Token<'_> {
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
                     AccountIdentity::PrivateForeign {
                         npk: recipient_npk,
-                        apk: recipient_apk,
                         vpk: recipient_vpk,
                         identifier: recipient_identifier,
                     },
@@ -292,7 +287,6 @@ impl Token<'_> {
         &self,
         sender: AccountIdentity,
         recipient_npk: NullifierPublicKey,
-        recipient_apk: AuthorizationPublicKey,
         recipient_vpk: ViewingPublicKey,
         recipient_identifier: Identifier,
         amount: u128,
@@ -308,7 +302,6 @@ impl Token<'_> {
                     sender,
                     AccountIdentity::PrivateForeign {
                         npk: recipient_npk,
-                        apk: recipient_apk,
                         vpk: recipient_vpk,
                         identifier: recipient_identifier,
                     },
@@ -506,7 +499,6 @@ impl Token<'_> {
         &self,
         definition_account_id: AccountId,
         holder_npk: NullifierPublicKey,
-        holder_apk: AuthorizationPublicKey,
         holder_vpk: ViewingPublicKey,
         holder_identifier: Identifier,
         amount: u128,
@@ -525,7 +517,6 @@ impl Token<'_> {
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
                     AccountIdentity::PrivateForeign {
                         npk: holder_npk,
-                        apk: holder_apk,
                         vpk: holder_vpk,
                         identifier: holder_identifier,
                     },
@@ -612,7 +603,6 @@ impl Token<'_> {
         &self,
         definition_account_id: AccountId,
         holder_npk: NullifierPublicKey,
-        holder_apk: AuthorizationPublicKey,
         holder_vpk: ViewingPublicKey,
         holder_identifier: Identifier,
         amount: u128,
@@ -629,7 +619,6 @@ impl Token<'_> {
                     AccountIdentity::Public(definition_account_id),
                     AccountIdentity::PrivateForeign {
                         npk: holder_npk,
-                        apk: holder_apk,
                         vpk: holder_vpk,
                         identifier: holder_identifier,
                     },

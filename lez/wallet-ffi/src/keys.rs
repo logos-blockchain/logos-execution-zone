@@ -364,7 +364,6 @@ pub unsafe extern "C" fn wallet_ffi_free_account_identity(
             nullifier_secret_key: _,
             nullifier_public_key: _,
             authorization_secret_key: _,
-            authorization_public_key: _,
             viewing_public_key,
             viewing_public_key_len,
             identifier: _,

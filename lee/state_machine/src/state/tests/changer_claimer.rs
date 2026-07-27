@@ -73,10 +73,10 @@ fn private_changer_claimer_no_data_change_no_claim_succeeds() {
             random_seed: [0; 32],
             identifier: 0,
             kind: PrivateKind::Regular {
-                auth: AuthWitness::Held(sender_keys.ask),
+                ask: Some(sender_keys.ask),
             },
             nullifier: NullifierWitness::Update {
-                nsk: sender_keys.nsk,
+                nsk: sender_keys.nsk(),
                 membership_proof: (0, vec![]),
             },
         })],
@@ -105,10 +105,10 @@ fn private_changer_claimer_data_change_no_claim_fails() {
             random_seed: [0; 32],
             identifier: 0,
             kind: PrivateKind::Regular {
-                auth: AuthWitness::Held(sender_keys.ask),
+                ask: Some(sender_keys.ask),
             },
             nullifier: NullifierWitness::Update {
-                nsk: sender_keys.nsk,
+                nsk: sender_keys.nsk(),
                 membership_proof: (0, vec![]),
             },
         })],

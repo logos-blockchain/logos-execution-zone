@@ -44,7 +44,6 @@ fn indexer_ffi_state_consistency_with_labels() -> Result<()> {
         from: from_label.into(),
         to: Some(to_label.into()),
         to_npk: None,
-        to_apk: None,
         to_vpk: None,
         to_keys: None,
         amount: 100,

@@ -42,15 +42,12 @@ pub enum TokenProgramAgnosticSubcommand {
         /// `to_npk` - valid 32 byte hex string.
         #[arg(long, conflicts_with = "to_keys")]
         to_npk: Option<String>,
-        /// `to_apk` - valid 32 byte hex string.
-        #[arg(long, conflicts_with = "to_keys")]
-        to_apk: Option<String>,
         /// `to_vpk` - valid hex-encoded ML-KEM-768 encapsulation key (1184 bytes).
         #[arg(long, conflicts_with = "to_keys")]
         to_vpk: Option<String>,
-        /// Path to a keys file exported by `wallet account show-keys`, containing npk,
-        /// apk and vpk on separate lines. Replaces `--to-npk`/`--to-apk`/`--to-vpk`.
-        #[arg(long, conflicts_with_all = ["to_npk", "to_apk", "to_vpk"])]
+        /// Path to a keys file exported by `wallet account show-keys`, containing npk
+        /// and vpk on separate lines. Replaces `--to-npk`/`--to-vpk`.
+        #[arg(long, conflicts_with_all = ["to_npk", "to_vpk"])]
         to_keys: Option<String>,
         /// Identifier for the recipient's private account (only used when sending to a foreign
         /// private account via `--to-npk`/`--to-vpk` or `--to-keys`).
@@ -95,15 +92,12 @@ pub enum TokenProgramAgnosticSubcommand {
         /// `holder_npk` - valid 32 byte hex string.
         #[arg(long, conflicts_with = "holder_keys")]
         holder_npk: Option<String>,
-        /// `holder_apk` - valid 32 byte hex string.
-        #[arg(long, conflicts_with = "holder_keys")]
-        holder_apk: Option<String>,
         /// `holder_vpk` - valid hex-encoded ML-KEM-768 encapsulation key (1184 bytes).
         #[arg(long, conflicts_with = "holder_keys")]
         holder_vpk: Option<String>,
-        /// Path to a keys file exported by `wallet account show-keys`, containing npk,
-        /// apk and vpk on separate lines. Replaces `--holder-npk`/`--holder-apk`/`--holder-vpk`.
-        #[arg(long, conflicts_with_all = ["holder_npk", "holder_apk", "holder_vpk"])]
+        /// Path to a keys file exported by `wallet account show-keys`, containing npk
+        /// and vpk on separate lines. Replaces `--holder-npk`/`--holder-vpk`.
+        #[arg(long, conflicts_with_all = ["holder_npk", "holder_vpk"])]
         holder_keys: Option<String>,
         /// Identifier for the holder's private account (only used when minting to a foreign
         /// private account via `--holder-npk`/`--holder-vpk` or `--holder-keys`).
@@ -227,7 +221,6 @@ impl TokenProgramAgnosticSubcommand {
         from: AccountIdWithPrivacy,
         from_mention: CliAccountMention,
         to_npk: String,
-        to_apk: String,
         to_vpk: String,
         to_identifier: Option<u128>,
         amount: u128,
@@ -237,7 +230,6 @@ impl TokenProgramAgnosticSubcommand {
                 TokenProgramSubcommandPrivate::TransferTokenPrivateForeign {
                     sender_account_id: from,
                     recipient_npk: to_npk,
-                    recipient_apk: to_apk,
                     recipient_vpk: to_vpk,
                     recipient_identifier: to_identifier,
                     balance_to_move: amount,
@@ -247,7 +239,6 @@ impl TokenProgramAgnosticSubcommand {
                 TokenProgramSubcommandShielded::TransferTokenShieldedForeign {
                     sender: Some(from_mention.into_public_identity(from)),
                     recipient_npk: to_npk,
-                    recipient_apk: to_apk,
                     recipient_vpk: to_vpk,
                     recipient_identifier: to_identifier,
                     balance_to_move: amount,
@@ -264,7 +255,6 @@ impl TokenProgramAgnosticSubcommand {
         from: CliAccountMention,
         to: Option<CliAccountMention>,
         to_npk: Option<String>,
-        to_apk: Option<String>,
         to_vpk: Option<String>,
         to_keys: Option<String>,
         to_identifier: Option<u128>,
@@ -273,38 +263,28 @@ impl TokenProgramAgnosticSubcommand {
     ) -> Result<SubcommandReturnValue> {
         let from_mention = from.clone();
         let to_mention = to.clone();
-        let (to_npk, to_apk, to_vpk) = if let Some(path) = to_keys {
-            let (npk_bytes, apk_bytes, vpk_bytes) = crate::cli::read_keys_file(&path)?;
-            (
-                Some(hex::encode(npk_bytes)),
-                Some(hex::encode(apk_bytes)),
-                Some(hex::encode(vpk_bytes)),
-            )
+        let (to_npk, to_vpk) = if let Some(path) = to_keys {
+            let (npk_bytes, vpk_bytes) = crate::cli::read_keys_file(&path)?;
+            (Some(hex::encode(npk_bytes)), Some(hex::encode(vpk_bytes)))
         } else {
-            (to_npk, to_apk, to_vpk)
+            (to_npk, to_vpk)
         };
 
         let from = from.resolve(wallet_core.storage())?;
         let to = to
             .map(|account_mention| account_mention.resolve(wallet_core.storage()))
             .transpose()?;
-        let underlying_subcommand = match (to, to_npk, to_apk, to_vpk) {
-            (None, None, None, None) => {
+        let underlying_subcommand = match (to, to_npk, to_vpk) {
+            (None, None, None) => {
                 anyhow::bail!("Provide either account account_id of receiver or their public keys");
             }
-            (Some(to), None, None, None) => {
+            (Some(to), None, None) => {
                 Self::route_send_owned(from, to, from_mention, to_mention, amount)
             }
-            (None, Some(to_npk), Some(to_apk), Some(to_vpk)) => Self::route_send_foreign(
-                from,
-                from_mention,
-                to_npk,
-                to_apk,
-                to_vpk,
-                to_identifier,
-                amount,
-            ),
-            (Some(_), _, _, _) => {
+            (None, Some(to_npk), Some(to_vpk)) => {
+                Self::route_send_foreign(from, from_mention, to_npk, to_vpk, to_identifier, amount)
+            }
+            (Some(_), _, _) => {
                 anyhow::bail!(
                     "Provide only one variant: either account account_id of receiver or their public keys"
                 );
@@ -414,7 +394,6 @@ impl TokenProgramAgnosticSubcommand {
     const fn route_mint_foreign(
         definition: AccountIdWithPrivacy,
         holder_npk: String,
-        holder_apk: String,
         holder_vpk: String,
         holder_identifier: Option<u128>,
         amount: u128,
@@ -424,7 +403,6 @@ impl TokenProgramAgnosticSubcommand {
                 TokenProgramSubcommandPrivate::MintTokenPrivateForeign {
                     definition_account_id: definition,
                     holder_npk,
-                    holder_apk,
                     holder_vpk,
                     holder_identifier,
                     amount,
@@ -434,7 +412,6 @@ impl TokenProgramAgnosticSubcommand {
                 TokenProgramSubcommandShielded::MintTokenShieldedForeign {
                     definition_account_id: definition,
                     holder_npk,
-                    holder_apk,
                     holder_vpk,
                     holder_identifier,
                     amount,
@@ -451,7 +428,6 @@ impl TokenProgramAgnosticSubcommand {
         definition: CliAccountMention,
         holder: Option<CliAccountMention>,
         holder_npk: Option<String>,
-        holder_apk: Option<String>,
         holder_vpk: Option<String>,
         holder_keys: Option<String>,
         holder_identifier: Option<u128>,
@@ -460,39 +436,32 @@ impl TokenProgramAgnosticSubcommand {
     ) -> Result<SubcommandReturnValue> {
         let def_mention = definition.clone();
         let holder_mention = holder.clone();
-        let (holder_npk, holder_apk, holder_vpk) = if let Some(path) = holder_keys {
-            let (npk_bytes, apk_bytes, vpk_bytes) = crate::cli::read_keys_file(&path)?;
-            (
-                Some(hex::encode(npk_bytes)),
-                Some(hex::encode(apk_bytes)),
-                Some(hex::encode(vpk_bytes)),
-            )
+        let (holder_npk, holder_vpk) = if let Some(path) = holder_keys {
+            let (npk_bytes, vpk_bytes) = crate::cli::read_keys_file(&path)?;
+            (Some(hex::encode(npk_bytes)), Some(hex::encode(vpk_bytes)))
         } else {
-            (holder_npk, holder_apk, holder_vpk)
+            (holder_npk, holder_vpk)
         };
 
         let definition = definition.resolve(wallet_core.storage())?;
         let holder = holder
             .map(|account_mention| account_mention.resolve(wallet_core.storage()))
             .transpose()?;
-        let underlying_subcommand = match (holder, holder_npk, holder_apk, holder_vpk) {
-            (None, None, None, None) => {
+        let underlying_subcommand = match (holder, holder_npk, holder_vpk) {
+            (None, None, None) => {
                 anyhow::bail!("Provide either account account_id of holder or their public keys");
             }
-            (Some(holder), None, None, None) => {
+            (Some(holder), None, None) => {
                 Self::route_mint_owned(definition, holder, def_mention, holder_mention, amount)
             }
-            (None, Some(holder_npk), Some(holder_apk), Some(holder_vpk)) => {
-                Self::route_mint_foreign(
-                    definition,
-                    holder_npk,
-                    holder_apk,
-                    holder_vpk,
-                    holder_identifier,
-                    amount,
-                )
-            }
-            (Some(_), _, _, _) => {
+            (None, Some(holder_npk), Some(holder_vpk)) => Self::route_mint_foreign(
+                definition,
+                holder_npk,
+                holder_vpk,
+                holder_identifier,
+                amount,
+            ),
+            (Some(_), _, _) => {
                 anyhow::bail!(
                     "Provide only one variant: either account_id of holder or their public keys"
                 );
@@ -531,7 +500,6 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                 from,
                 to,
                 to_npk,
-                to_apk,
                 to_vpk,
                 to_keys,
                 to_identifier,
@@ -541,7 +509,6 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                     from,
                     to,
                     to_npk,
-                    to_apk,
                     to_vpk,
                     to_keys,
                     to_identifier,
@@ -559,7 +526,6 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                 definition,
                 holder,
                 holder_npk,
-                holder_apk,
                 holder_vpk,
                 holder_keys,
                 holder_identifier,
@@ -569,7 +535,6 @@ impl WalletSubcommand for TokenProgramAgnosticSubcommand {
                     definition,
                     holder,
                     holder_npk,
-                    holder_apk,
                     holder_vpk,
                     holder_keys,
                     holder_identifier,
@@ -653,9 +618,7 @@ pub enum TokenProgramSubcommandPrivate {
         /// `recipient_npk` - valid 32 byte hex string.
         #[arg(long)]
         recipient_npk: String,
-        /// `recipient_apk` - valid 32 byte hex string.
         #[arg(long)]
-        recipient_apk: String,
         /// `recipient_vpk` - valid hex-encoded ML-KEM-768 encapsulation key (1184 bytes).
         #[arg(long)]
         recipient_vpk: String,
@@ -690,7 +653,6 @@ pub enum TokenProgramSubcommandPrivate {
         #[arg(short, long)]
         holder_npk: String,
         #[arg(short, long)]
-        holder_apk: String,
         #[arg(short, long)]
         holder_vpk: String,
         /// Identifier for the holder's private account.
@@ -752,9 +714,7 @@ pub enum TokenProgramSubcommandShielded {
         /// `recipient_npk` - valid 32 byte hex string.
         #[arg(long)]
         recipient_npk: String,
-        /// `recipient_apk` - valid 32 byte hex string.
         #[arg(long)]
-        recipient_apk: String,
         /// `recipient_vpk` - valid hex-encoded ML-KEM-768 encapsulation key (1184 bytes).
         #[arg(long)]
         recipient_vpk: String,
@@ -789,7 +749,6 @@ pub enum TokenProgramSubcommandShielded {
         #[arg(short, long)]
         holder_npk: String,
         #[arg(short, long)]
-        holder_apk: String,
         #[arg(short, long)]
         holder_vpk: String,
         /// Identifier for the holder's private account.
@@ -1015,20 +974,18 @@ impl TokenProgramSubcommandPrivate {
     async fn handle_transfer_token_private_foreign(
         sender_account_id: AccountId,
         recipient_npk: String,
-        recipient_apk: String,
         recipient_vpk: String,
         recipient_identifier: Option<u128>,
         balance_to_move: u128,
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
-        let (recipient_npk, recipient_apk, recipient_vpk) =
-            crate::cli::decode_npk_apk_vpk(&recipient_npk, &recipient_apk, &recipient_vpk)?;
+        let (recipient_npk, recipient_vpk) =
+            crate::cli::decode_npk_vpk(&recipient_npk, &recipient_vpk)?;
 
         let (tx_hash, [secret_sender, _]) = Token(wallet_core)
             .send_transfer_transaction_private_foreign_account(
                 sender_account_id,
                 recipient_npk,
-                recipient_apk,
                 recipient_vpk,
                 recipient_identifier.unwrap_or_else(rand::random),
                 balance_to_move,
@@ -1093,20 +1050,17 @@ impl TokenProgramSubcommandPrivate {
     async fn handle_mint_token_private_foreign(
         definition_account_id: AccountId,
         holder_npk: String,
-        holder_apk: String,
         holder_vpk: String,
         holder_identifier: Option<u128>,
         amount: u128,
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
-        let (holder_npk, holder_apk, holder_vpk) =
-            crate::cli::decode_npk_apk_vpk(&holder_npk, &holder_apk, &holder_vpk)?;
+        let (holder_npk, holder_vpk) = crate::cli::decode_npk_vpk(&holder_npk, &holder_vpk)?;
 
         let (tx_hash, [secret_definition, _]) = Token(wallet_core)
             .send_mint_transaction_private_foreign_account(
                 definition_account_id,
                 holder_npk,
-                holder_apk,
                 holder_vpk,
                 holder_identifier.unwrap_or_else(rand::random),
                 amount,
@@ -1144,7 +1098,6 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
             Self::TransferTokenPrivateForeign {
                 sender_account_id,
                 recipient_npk,
-                recipient_apk,
                 recipient_vpk,
                 recipient_identifier,
                 balance_to_move,
@@ -1152,7 +1105,6 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                 Self::handle_transfer_token_private_foreign(
                     sender_account_id,
                     recipient_npk,
-                    recipient_apk,
                     recipient_vpk,
                     recipient_identifier,
                     balance_to_move,
@@ -1189,7 +1141,6 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
             Self::MintTokenPrivateForeign {
                 definition_account_id,
                 holder_npk,
-                holder_apk,
                 holder_vpk,
                 holder_identifier,
                 amount,
@@ -1197,7 +1148,6 @@ impl WalletSubcommand for TokenProgramSubcommandPrivate {
                 Self::handle_mint_token_private_foreign(
                     definition_account_id,
                     holder_npk,
-                    holder_apk,
                     holder_vpk,
                     holder_identifier,
                     amount,
@@ -1323,20 +1273,18 @@ impl TokenProgramSubcommandShielded {
     async fn handle_transfer_token_shielded_foreign(
         sender: Option<AccountIdentity>,
         recipient_npk: String,
-        recipient_apk: String,
         recipient_vpk: String,
         recipient_identifier: Option<u128>,
         balance_to_move: u128,
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
-        let (recipient_npk, recipient_apk, recipient_vpk) =
-            crate::cli::decode_npk_apk_vpk(&recipient_npk, &recipient_apk, &recipient_vpk)?;
+        let (recipient_npk, recipient_vpk) =
+            crate::cli::decode_npk_vpk(&recipient_npk, &recipient_vpk)?;
 
         let (tx_hash, _) = Token(wallet_core)
             .send_transfer_transaction_shielded_foreign_account(
                 sender.expect("sender set during Send dispatch"),
                 recipient_npk,
-                recipient_apk,
                 recipient_vpk,
                 recipient_identifier.unwrap_or_else(rand::random),
                 balance_to_move,
@@ -1407,20 +1355,17 @@ impl TokenProgramSubcommandShielded {
     async fn handle_mint_token_shielded_foreign(
         definition_account_id: AccountId,
         holder_npk: String,
-        holder_apk: String,
         holder_vpk: String,
         holder_identifier: Option<u128>,
         amount: u128,
         wallet_core: &mut WalletCore,
     ) -> Result<SubcommandReturnValue> {
-        let (holder_npk, holder_apk, holder_vpk) =
-            crate::cli::decode_npk_apk_vpk(&holder_npk, &holder_apk, &holder_vpk)?;
+        let (holder_npk, holder_vpk) = crate::cli::decode_npk_vpk(&holder_npk, &holder_vpk)?;
 
         let (tx_hash, _) = Token(wallet_core)
             .send_mint_transaction_shielded_foreign_account(
                 definition_account_id,
                 holder_npk,
-                holder_apk,
                 holder_vpk,
                 holder_identifier.unwrap_or_else(rand::random),
                 amount,
@@ -1442,7 +1387,6 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
             Self::TransferTokenShieldedForeign {
                 sender,
                 recipient_npk,
-                recipient_apk,
                 recipient_vpk,
                 recipient_identifier,
                 balance_to_move,
@@ -1450,7 +1394,6 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                 Self::handle_transfer_token_shielded_foreign(
                     sender,
                     recipient_npk,
-                    recipient_apk,
                     recipient_vpk,
                     recipient_identifier,
                     balance_to_move,
@@ -1500,7 +1443,6 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
             Self::MintTokenShieldedForeign {
                 definition_account_id,
                 holder_npk,
-                holder_apk,
                 holder_vpk,
                 holder_identifier,
                 amount,
@@ -1508,7 +1450,6 @@ impl WalletSubcommand for TokenProgramSubcommandShielded {
                 Self::handle_mint_token_shielded_foreign(
                     definition_account_id,
                     holder_npk,
-                    holder_apk,
                     holder_vpk,
                     holder_identifier,
                     amount,

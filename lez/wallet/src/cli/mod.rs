@@ -327,7 +327,7 @@ pub fn read_password_from_stdin() -> Result<String> {
 /// - Line 2: vpk as hex (2368 chars, 1184 bytes).
 ///
 /// Returns `(npk_bytes, vpk_bytes)`.
-pub fn read_keys_file(path: &str) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>)> {
+pub fn read_keys_file(path: &str) -> Result<(Vec<u8>, Vec<u8>)> {
     let content = std::fs::read_to_string(path).with_context(|| {
         format!("wallet::cli::read_keys_file: failed to read keys file: {path}")
     })?;
@@ -335,28 +335,21 @@ pub fn read_keys_file(path: &str) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>)> {
     let npk_hex = lines.next().ok_or_else(|| {
         anyhow::anyhow!("wallet::cli::read_keys_file: keys file is missing npk (line 1)")
     })?;
-    let apk_hex = lines.next().ok_or_else(|| {
-        anyhow::anyhow!("wallet::cli::read_keys_file: keys file is missing apk (line 2)")
-    })?;
     let vpk_hex = lines.next().ok_or_else(|| {
-        anyhow::anyhow!("wallet::cli::read_keys_file: keys file is missing vpk (line 3)")
+        anyhow::anyhow!("wallet::cli::read_keys_file: keys file is missing vpk (line 2)")
     })?;
     let npk = hex::decode(npk_hex.trim())
         .context("wallet::cli::read_keys_file: npk in keys file must be valid hex")?;
-    let apk = hex::decode(apk_hex.trim())
-        .context("wallet::cli::read_keys_file: apk in keys file must be valid hex")?;
     let vpk = hex::decode(vpk_hex.trim())
         .context("wallet::cli::read_keys_file: vpk in keys file must be valid hex")?;
-    Ok((npk, apk, vpk))
+    Ok((npk, vpk))
 }
 
-pub(crate) fn decode_npk_apk_vpk(
+pub(crate) fn decode_npk_vpk(
     npk_hex: &str,
-    apk_hex: &str,
     vpk_hex: &str,
 ) -> Result<(
     lee_core::NullifierPublicKey,
-    lee_core::AuthorizationPublicKey,
     lee_core::encryption::ViewingPublicKey,
 )> {
     let npk_bytes: [u8; 32] = hex::decode(npk_hex)
@@ -364,21 +357,12 @@ pub(crate) fn decode_npk_apk_vpk(
         .try_into()
         .map_err(|v: Vec<u8>| anyhow::anyhow!("npk must be exactly 32 bytes, got {}", v.len()))?;
 
-    let apk_bytes: [u8; 32] = hex::decode(apk_hex)
-        .context("apk must be valid hex")?
-        .try_into()
-        .map_err(|v: Vec<u8>| anyhow::anyhow!("apk must be exactly 32 bytes, got {}", v.len()))?;
-
     let vpk = lee_core::encryption::ViewingPublicKey::from_bytes(
         hex::decode(vpk_hex).context("vpk must be valid hex")?,
     )
     .map_err(|e| anyhow::anyhow!("{e}"))?;
 
-    Ok((
-        lee_core::NullifierPublicKey(npk_bytes),
-        lee_core::AuthorizationPublicKey(apk_bytes),
-        vpk,
-    ))
+    Ok((lee_core::NullifierPublicKey(npk_bytes), vpk))
 }
 
 pub fn read_mnemonic_from_stdin() -> Result<Mnemonic> {
@@ -432,7 +416,6 @@ mod tests {
     #[test]
     fn read_keys_file_roundtrip() {
         let npk = [0xab_u8; 32];
-        let apk = [0xef_u8; 32];
         let vpk = [0xcd_u8; 1184];
 
         let dir = tempfile::tempdir().unwrap();
@@ -441,19 +424,13 @@ mod tests {
         // Simulate what `wallet account show-keys` writes.
         std::fs::write(
             &path,
-            format!(
-                "{}\n{}\n{}\n",
-                hex::encode(npk),
-                hex::encode(apk),
-                hex::encode(vpk)
-            ),
+            format!("{}\n{}\n", hex::encode(npk), hex::encode(vpk)),
         )
         .unwrap();
 
-        let (parsed_npk, parsed_apk, parsed_vpk) = read_keys_file(path.to_str().unwrap()).unwrap();
+        let (parsed_npk, parsed_vpk) = read_keys_file(path.to_str().unwrap()).unwrap();
 
         assert_eq!(parsed_npk, npk, "npk must round-trip through the keys file");
-        assert_eq!(parsed_apk, apk, "apk must round-trip through the keys file");
         assert_eq!(
             parsed_vpk,
             vpk.to_vec(),
@@ -465,15 +442,7 @@ mod tests {
     fn read_keys_file_missing_vpk_returns_error() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("incomplete.keys");
-        std::fs::write(
-            &path,
-            format!(
-                "{}\n{}\n",
-                hex::encode([0xab_u8; 32]),
-                hex::encode([0xcd_u8; 32])
-            ),
-        )
-        .unwrap();
+        std::fs::write(&path, format!("{}\n", hex::encode([0xab_u8; 32]))).unwrap();
 
         let result = read_keys_file(path.to_str().unwrap());
         assert!(result.is_err(), "missing vpk line must return an error");
@@ -496,7 +465,6 @@ mod tests {
     #[test]
     fn read_keys_file_ignores_blank_lines() {
         let npk = [0x11_u8; 32];
-        let apk = [0x33_u8; 32];
         let vpk = [0x22_u8; 1184];
 
         let dir = tempfile::tempdir().unwrap();
@@ -505,18 +473,12 @@ mod tests {
         // Extra blank lines around the data should be tolerated.
         std::fs::write(
             &path,
-            format!(
-                "\n{}\n\n{}\n\n{}\n\n",
-                hex::encode(npk),
-                hex::encode(apk),
-                hex::encode(vpk)
-            ),
+            format!("\n{}\n\n{}\n\n", hex::encode(npk), hex::encode(vpk)),
         )
         .unwrap();
 
-        let (parsed_npk, parsed_apk, parsed_vpk) = read_keys_file(path.to_str().unwrap()).unwrap();
+        let (parsed_npk, parsed_vpk) = read_keys_file(path.to_str().unwrap()).unwrap();
         assert_eq!(parsed_npk, npk);
-        assert_eq!(parsed_apk, apk.to_vec());
         assert_eq!(parsed_vpk, vpk.to_vec());
     }
 }

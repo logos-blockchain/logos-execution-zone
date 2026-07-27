@@ -174,7 +174,6 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded(
 
     let from_id = AccountId::new(unsafe { (*from).data });
     let to_npk = (*to_keys).npk();
-    let to_apk = (*to_keys).apk();
     let to_vpk = match (*to_keys).vpk() {
         Ok(vpk) => vpk,
         Err(e) => {
@@ -194,7 +193,6 @@ pub unsafe extern "C" fn wallet_ffi_transfer_shielded(
     match block_on(transfer.send_shielded_transfer_to_outer_account(
         from_mention.into_public_identity(from_id),
         to_npk,
-        to_apk,
         to_vpk,
         to_identifier,
         amount,
@@ -360,7 +358,6 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private(
 
     let from_id = AccountId::new(unsafe { (*from).data });
     let to_npk = (*to_keys).npk();
-    let to_apk = (*to_keys).apk();
     let to_vpk = match (*to_keys).vpk() {
         Ok(vpk) => vpk,
         Err(e) => {
@@ -375,7 +372,6 @@ pub unsafe extern "C" fn wallet_ffi_transfer_private(
     match block_on(transfer.send_private_transfer_to_outer_account(
         from_id,
         to_npk,
-        to_apk,
         to_vpk,
         to_identifier,
         amount,

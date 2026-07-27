@@ -154,10 +154,6 @@ typedef struct FfiPrivateAccountKeys {
    */
   struct FfiBytes32 nullifier_public_key;
   /**
-   * Authorization public key (32 bytes).
-   */
-  struct FfiBytes32 authorization_public_key;
-  /**
    * Viewing public key (ML-KEM-768 encapsulation key, 1184 bytes).
    */
   const uint8_t *viewing_public_key;
@@ -256,7 +252,6 @@ typedef struct FfiAccountIdentity {
   struct FfiBytes32 nullifier_secret_key;
   struct FfiBytes32 nullifier_public_key;
   struct FfiBytes32 authorization_secret_key;
-  struct FfiBytes32 authorization_public_key;
   const uint8_t *viewing_public_key;
   uintptr_t viewing_public_key_len;
   struct FfiU128 identifier;

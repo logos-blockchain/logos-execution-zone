@@ -1,5 +1,5 @@
 use lee_core::{
-    AuthorizationPublicKey, NullifierPublicKey, SharedSecretKey,
+    NullifierPublicKey, SharedSecretKey,
     encryption::{EphemeralPublicKey, ViewingPublicKey},
 };
 use secret_holders::{PrivateKeyHolder, SecretSpendingKey, SeedHolder};
@@ -18,7 +18,6 @@ pub struct KeyChain {
     pub secret_spending_key: SecretSpendingKey,
     pub private_key_holder: PrivateKeyHolder,
     pub nullifier_public_key: NullifierPublicKey,
-    pub authorization_public_key: AuthorizationPublicKey,
     pub viewing_public_key: ViewingPublicKey,
 }
 
@@ -47,14 +46,12 @@ impl KeyChain {
         let private_key_holder = secret_spending_key.produce_private_key_holder(None);
 
         let nullifier_public_key = private_key_holder.generate_nullifier_public_key();
-        let authorization_public_key = private_key_holder.generate_authorization_public_key();
         let viewing_public_key = private_key_holder.generate_viewing_public_key();
 
         Self {
             secret_spending_key,
             private_key_holder,
             nullifier_public_key,
-            authorization_public_key,
             viewing_public_key,
         }
     }

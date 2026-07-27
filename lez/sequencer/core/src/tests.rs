@@ -18,8 +18,7 @@ use lee::{
     program::Program,
 };
 use lee_core::{
-    AuthWitness, Commitment, InputAccountIdentity, Nullifier, NullifierWitness, PrivateKind,
-    PrivateWitness,
+    Commitment, InputAccountIdentity, Nullifier, NullifierWitness, PrivateKind, PrivateWitness,
     account::{AccountWithMetadata, Nonce},
     program::PdaSeed,
 };
@@ -806,7 +805,6 @@ fn private_bridge_withdraw_invocation_is_dropped() {
     let sender_keys = KeyChain::new_os_random();
     let sender_account_id = AccountId::for_regular_private_account(
         &sender_keys.nullifier_public_key,
-        &sender_keys.authorization_public_key,
         &sender_keys.viewing_public_key,
         0,
     );
@@ -858,9 +856,7 @@ fn private_bridge_withdraw_invocation_is_dropped() {
                 random_seed: [0; 32],
                 identifier: 0,
                 kind: PrivateKind::Regular {
-                    auth: AuthWitness::Held(
-                        sender_keys.private_key_holder.authorization_secret_key,
-                    ),
+                    ask: Some(sender_keys.private_key_holder.authorization_secret_key),
                 },
                 nullifier: NullifierWitness::Update {
                     nsk: sender_keys.private_key_holder.nullifier_secret_key,

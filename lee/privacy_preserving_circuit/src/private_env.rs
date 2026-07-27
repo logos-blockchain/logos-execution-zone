@@ -4,9 +4,10 @@ use std::{
 };
 
 use lee_core::{
-    AuthWitness, Authorization, Backend, InputAccountIdentity, PrivateKind, PrivateWitness,
-    Resolved, ValidationError,
+    Authorization, AuthorizationSecretKey, Backend, InputAccountIdentity, NullifierPublicKey,
+    NullifierWitness, PrivateKind, PrivateWitness, Resolved, ValidationError,
     account::{AccountId, AccountWithMetadata},
+    derive_nullifier_secret_key,
     program::{ChainedCall, PdaSeed, ProgramId, ProgramOutput},
 };
 use risc0_zkvm::{guest::env, serde::to_vec};
@@ -118,12 +119,13 @@ impl Backend for PrivateEnv<'_> {
             // feeds the cross-call scoping set.
             Some(InputAccountIdentity::Public) if pre.is_authorized => Authorization::Holder,
             Some(InputAccountIdentity::Private(PrivateWitness {
-                kind:
-                    PrivateKind::Regular {
-                        auth: AuthWitness::Held(_),
-                    },
+                kind: PrivateKind::Regular { ask: Some(ask) },
+                nullifier,
                 ..
-            })) => Authorization::Holder,
+            })) => {
+                assert_authorization_chain(ask, nullifier, position);
+                Authorization::Holder
+            }
             _ => Authorization::None,
         };
         Ok(Resolved {
@@ -169,6 +171,27 @@ impl Backend for PrivateEnv<'_> {
             }
         }
         Ok(())
+    }
+}
+
+fn assert_authorization_chain(
+    ask: &AuthorizationSecretKey,
+    nullifier: &NullifierWitness,
+    position: usize,
+) {
+    let nsk = derive_nullifier_secret_key(ask);
+    match nullifier {
+        NullifierWitness::Update {
+            nsk: witness_nsk, ..
+        } => assert_eq!(
+            nsk, *witness_nsk,
+            "Authorization key does not derive the nullifier secret key at position {position}"
+        ),
+        NullifierWitness::Init { npk, .. } => assert_eq!(
+            NullifierPublicKey::from(&nsk),
+            *npk,
+            "Authorization key does not derive the nullifier public key at position {position}"
+        ),
     }
 }
 

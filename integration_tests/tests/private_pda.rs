@@ -21,8 +21,8 @@ use lee::{
     program::Program,
 };
 use lee_core::{
-    AuthorizationPublicKey, DUMMY_COMMITMENT_HASH, InputAccountIdentity, NullifierPublicKey,
-    NullifierWitness, PrivateKind, PrivateWitness,
+    DUMMY_COMMITMENT_HASH, InputAccountIdentity, NullifierPublicKey, NullifierWitness, PrivateKind,
+    PrivateWitness,
     account::{Account, AccountWithMetadata},
     encryption::ViewingPublicKey,
     program::PdaSeed,
@@ -115,7 +115,6 @@ async fn spend_private_pda(
     wallet: &WalletCore,
     pda_account_id: AccountId,
     recipient_npk: NullifierPublicKey,
-    recipient_apk: AuthorizationPublicKey,
     recipient_vpk: ViewingPublicKey,
     seed: PdaSeed,
     amount: u128,
@@ -128,7 +127,6 @@ async fn spend_private_pda(
                 AccountIdentity::PrivatePdaOwned(pda_account_id),
                 AccountIdentity::PrivateForeign {
                     npk: recipient_npk,
-                    apk: recipient_apk,
                     vpk: recipient_vpk,
                     identifier: 0,
                 },
@@ -261,11 +259,9 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
 
     // Fresh recipients — hardcoded npks not in any wallet.
     let recipient_npk_0 = NullifierPublicKey([0xAA; 32]);
-    let recipient_apk_0 = AuthorizationPublicKey([0xAA; 32]);
     let recipient_vpk_0 = ViewingPublicKey::from_seed(&[0_u8; 32], &[1_u8; 32]);
 
     let recipient_npk_1 = NullifierPublicKey([0xBB; 32]);
-    let recipient_apk_1 = AuthorizationPublicKey([0xBB; 32]);
     let recipient_vpk_1 = ViewingPublicKey::from_seed(&[2_u8; 32], &[3_u8; 32]);
 
     let amount_spend_0: u128 = 13;
@@ -276,7 +272,6 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         ctx.wallet(),
         alice_pda_0_id,
         recipient_npk_0,
-        recipient_apk_0,
         recipient_vpk_0,
         seed,
         amount_spend_0,
@@ -290,7 +285,6 @@ async fn private_pda_family_members_receive_and_spend() -> Result<()> {
         ctx.wallet(),
         alice_pda_1_id,
         recipient_npk_1,
-        recipient_apk_1,
         recipient_vpk_1,
         seed,
         amount_spend_1,

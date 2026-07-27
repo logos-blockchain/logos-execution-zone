@@ -78,8 +78,7 @@ fn public_diff_reflects_a_successful_transfer() {
 #[test]
 fn privacy_malicious_programs_cannot_drain_public_victim() {
     use lee_core::{
-        AuthWitness, Commitment, InputAccountIdentity, NullifierWitness, PrivateKind,
-        PrivateWitness,
+        Commitment, InputAccountIdentity, NullifierWitness, PrivateKind, PrivateWitness,
         account::{Account, AccountWithMetadata},
     };
 
@@ -169,10 +168,10 @@ fn privacy_malicious_programs_cannot_drain_public_victim() {
             random_seed: [0; 32],
             identifier: 0,
             kind: PrivateKind::Regular {
-                auth: AuthWitness::Held(attacker_keys.ask),
+                ask: Some(attacker_keys.ask),
             },
             nullifier: NullifierWitness::Update {
-                nsk: attacker_keys.nsk,
+                nsk: attacker_keys.nsk(),
                 membership_proof,
             },
         }),
@@ -220,10 +219,9 @@ fn privacy_malicious_programs_cannot_drain_public_victim() {
 /// There are two routes, both closed:
 ///
 /// - **mask=1 (authorized regular update)**: the circuit derives `account_id =
-///   AccountId::for_regular_private_account(&npk_from(nsk), &apk_from(ask), vpk, identifier)` and
-///   asserts it matches `pre_state.account_id`. Passing this check requires the victim's `nsk`,
-///   which the attacker does not have. `execute_and_prove` panics inside the ZKVM and no proof is
-///   produced.
+///   AccountId::for_regular_private_account(&npk_from(nsk), vpk, identifier)` and asserts it
+///   matches `pre_state.account_id`. Passing this check requires the victim's `nsk`, which the
+///   attacker does not have. `execute_and_prove` panics inside the ZKVM and no proof is produced.
 ///
 /// - **mask=0 (`Public`)**: the circuit places the account in `public_pre_states` and
 ///   `execute_and_prove` succeeds. The host-side validator then reconstructs `public_pre_states`
@@ -234,8 +232,7 @@ fn privacy_malicious_programs_cannot_drain_public_victim() {
 #[test]
 fn privacy_malicious_programs_cannot_drain_private_victim() {
     use lee_core::{
-        AuthWitness, Commitment, InputAccountIdentity, NullifierWitness, PrivateKind,
-        PrivateWitness,
+        Commitment, InputAccountIdentity, NullifierWitness, PrivateKind, PrivateWitness,
         account::{Account, AccountWithMetadata},
     };
 
@@ -334,10 +331,10 @@ fn privacy_malicious_programs_cannot_drain_private_victim() {
             random_seed: [0; 32],
             identifier: 0,
             kind: PrivateKind::Regular {
-                auth: AuthWitness::Held(attacker_keys.ask),
+                ask: Some(attacker_keys.ask),
             },
             nullifier: NullifierWitness::Update {
-                nsk: attacker_keys.nsk,
+                nsk: attacker_keys.nsk(),
                 membership_proof,
             },
         }),

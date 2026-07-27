@@ -296,23 +296,75 @@ fn private_account_kind_unknown_discriminant_returns_none() {
     assert_eq!(PrivateAccountKind::from_header_bytes(&bytes), None);
 }
 
+// ---- AccountId::for_regular_private_account tests ----
+#[test]
+fn account_id_from_nullifier_public_key() {
+    let nsk = [
+        57, 5, 64, 115, 153, 56, 184, 51, 207, 238, 99, 165, 147, 214, 213, 151, 30, 251, 30, 196,
+        134, 22, 224, 211, 237, 120, 136, 225, 188, 220, 249, 28,
+    ];
+    let npk = NullifierPublicKey::from(&nsk);
+    let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
+    let expected_account_id = AccountId::new([
+        226, 149, 99, 147, 82, 211, 97, 152, 31, 46, 87, 113, 237, 244, 197, 108, 71, 191, 161,
+        199, 140, 177, 247, 73, 95, 64, 202, 90, 8, 157, 188, 147,
+    ]);
+
+    let account_id = AccountId::for_regular_private_account(&npk, &vpk, 0);
+
+    assert_eq!(account_id, expected_account_id);
+}
+#[test]
+fn account_id_from_nullifier_public_key_identifier_1() {
+    let nsk = [
+        57, 5, 64, 115, 153, 56, 184, 51, 207, 238, 99, 165, 147, 214, 213, 151, 30, 251, 30, 196,
+        134, 22, 224, 211, 237, 120, 136, 225, 188, 220, 249, 28,
+    ];
+    let npk = NullifierPublicKey::from(&nsk);
+    let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
+    let expected_account_id = AccountId::new([
+        44, 36, 222, 50, 57, 159, 215, 6, 246, 54, 45, 150, 94, 148, 148, 71, 212, 113, 165, 10,
+        187, 162, 184, 70, 96, 35, 42, 230, 251, 72, 237, 80,
+    ]);
+
+    let account_id = AccountId::for_regular_private_account(&npk, &vpk, 1);
+
+    assert_eq!(account_id, expected_account_id);
+}
+#[test]
+fn account_id_from_nullifier_public_key_byte_asymmetric_identifier() {
+    let identifier: u128 = 0x0123_4567_89AB_CDEF_FEDC_BA98_7654_3210;
+    let nsk = [
+        57, 5, 64, 115, 153, 56, 184, 51, 207, 238, 99, 165, 147, 214, 213, 151, 30, 251, 30, 196,
+        134, 22, 224, 211, 237, 120, 136, 225, 188, 220, 249, 28,
+    ];
+    let npk = NullifierPublicKey::from(&nsk);
+    let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
+    let expected_account_id = AccountId::new([
+        50, 122, 67, 122, 59, 36, 150, 204, 128, 54, 55, 152, 14, 220, 163, 211, 246, 221, 197, 75,
+        12, 199, 163, 151, 234, 194, 188, 13, 27, 120, 249, 220,
+    ]);
+
+    let account_id = AccountId::for_regular_private_account(&npk, &vpk, identifier);
+
+    assert_eq!(account_id, expected_account_id);
+}
+
 #[test]
 fn for_private_account_dispatches_correctly() {
     let program_id: ProgramId = [1; 8];
     let seed = PdaSeed::new([2; 32]);
     let npk = NullifierPublicKey([3; 32]);
     let vpk = ViewingPublicKey::from_seed(&[1_u8; 32], &[2_u8; 32]);
-    let apk = AuthorizationPublicKey::from(&[0_u8; 32]);
     let identifier: Identifier = 77;
 
     assert_eq!(
-        AccountId::for_private_account(&npk, &apk, &vpk, &PrivateAccountKind::Regular(identifier)),
-        AccountId::for_regular_private_account(&npk, &apk, &vpk, identifier),
+        AccountId::for_private_account(&npk, &vpk, &PrivateAccountKind::Regular(identifier)),
+        AccountId::for_regular_private_account(&npk, &vpk, identifier),
     );
     assert_eq!(
         AccountId::for_private_account(
             &npk,
-            &apk,
             &vpk,
             &PrivateAccountKind::Pda {
                 program_id,

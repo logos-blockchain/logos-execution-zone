@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AuthorizationPublicKey, AuthorizationSecretKey, Commitment, CommitmentSetDigest, Identifier,
-    MembershipProof, Nullifier, NullifierPublicKey, NullifierSecretKey,
+    AuthorizationSecretKey, Commitment, CommitmentSetDigest, Identifier, MembershipProof,
+    Nullifier, NullifierPublicKey, NullifierSecretKey,
     account::{Account, AccountId, AccountWithMetadata},
     encryption::{EncryptedAccountData, ViewingPublicKey},
     program::{BlockValidityWindow, PdaSeed, ProgramId, ProgramOutput, TimestampValidityWindow},
@@ -43,14 +43,8 @@ pub struct PrivateWitness {
 
 #[derive(Serialize, Deserialize, Clone)]
 pub enum PrivateKind {
-    Regular { auth: AuthWitness },
+    Regular { ask: Option<AuthorizationSecretKey> },
     Pda { seed: Option<(PdaSeed, ProgramId)> },
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-pub enum AuthWitness {
-    Held(AuthorizationSecretKey),
-    Public(AuthorizationPublicKey),
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -75,23 +69,9 @@ impl NullifierWitness {
     }
 }
 
-impl AuthWitness {
-    fn apk(&self) -> AuthorizationPublicKey {
-        match self {
-            Self::Held(ask) => AuthorizationPublicKey::from(ask),
-            Self::Public(apk) => *apk,
-        }
-    }
-}
-
 impl PrivateWitness {
-    fn regular_id(&self, auth: &AuthWitness) -> AccountId {
-        AccountId::for_regular_private_account(
-            &self.nullifier.npk(),
-            &auth.apk(),
-            &self.vpk,
-            self.identifier,
-        )
+    fn regular_id(&self) -> AccountId {
+        AccountId::for_regular_private_account(&self.nullifier.npk(), &self.vpk, self.identifier)
     }
 
     fn pda_id(&self, program_id: &ProgramId, seed: &PdaSeed) -> AccountId {
@@ -127,10 +107,10 @@ impl InputAccountIdentity {
         match self {
             Self::Private(
                 witness @ PrivateWitness {
-                    kind: PrivateKind::Regular { auth },
+                    kind: PrivateKind::Regular { .. },
                     ..
                 },
-            ) => Some(witness.regular_id(auth)),
+            ) => Some(witness.regular_id()),
             Self::Public | Self::Private(_) => None,
         }
     }

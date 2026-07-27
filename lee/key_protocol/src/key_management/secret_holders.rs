@@ -1,7 +1,7 @@
 use bip39::Mnemonic;
 use common::HashType;
 use lee_core::{
-    AuthorizationPublicKey, AuthorizationSecretKey, NullifierPublicKey, NullifierSecretKey,
+    AuthorizationSecretKey, NullifierPublicKey, NullifierSecretKey, derive_nullifier_secret_key,
     encryption::ViewingPublicKey,
 };
 use ml_kem;
@@ -91,38 +91,15 @@ impl SeedHolder {
 impl SecretSpendingKey {
     #[must_use]
     #[expect(clippy::big_endian_bytes, reason = "BIP-032 uses big endian")]
-    pub fn generate_nullifier_secret_key(&self, index: Option<u32>) -> NullifierSecretKey {
-        const PREFIX: &[u8; 8] = b"LEE/keys";
-        const SUFFIX_1: &[u8; 1] = &[1];
-        const SUFFIX_2: &[u8; 19] = &[0; 19];
-
-        let index = index.unwrap_or(0);
-
-        let mut hasher = sha2::Sha256::new();
-        hasher.update(PREFIX);
-        hasher.update(self.0);
-        hasher.update(SUFFIX_1);
-        hasher.update(index.to_be_bytes());
-        hasher.update(SUFFIX_2);
-
-        <NullifierSecretKey>::from(hasher.finalize_fixed())
-    }
-
-    #[must_use]
-    #[expect(clippy::big_endian_bytes, reason = "BIP-032 uses big endian")]
     pub fn generate_authorization_secret_key(&self, index: Option<u32>) -> AuthorizationSecretKey {
-        const PREFIX: &[u8; 8] = b"LEE/keys";
-        const SUFFIX_1: &[u8; 1] = &[3];
-        const SUFFIX_2: &[u8; 19] = &[0; 19];
+        const DOMAIN: &[u8; 35] = b"/LEE/v0.3/Keys/Authorization/Secret";
 
         let index = index.unwrap_or(0);
 
         let mut hasher = sha2::Sha256::new();
-        hasher.update(PREFIX);
+        hasher.update(DOMAIN);
         hasher.update(self.0);
-        hasher.update(SUFFIX_1);
         hasher.update(index.to_be_bytes());
-        hasher.update(SUFFIX_2);
 
         <AuthorizationSecretKey>::from(hasher.finalize_fixed())
     }
@@ -130,21 +107,14 @@ impl SecretSpendingKey {
     #[must_use]
     #[expect(clippy::big_endian_bytes, reason = "BIP-032 uses big endian")]
     pub fn generate_viewing_secret_seed_key(&self, index: Option<u32>) -> ViewingSecretKey {
-        const PREFIX: &[u8; 8] = b"LEE/keys";
-        const SUFFIX_1: &[u8; 1] = &[2];
-        const SUFFIX_2: &[u8; 19] = &[0; 19];
+        const DOMAIN: &[u8; 29] = b"/LEE/v0.3/Keys/Viewing/Secret";
 
         let index = index.unwrap_or(0);
 
-        let mut bytes: Vec<u8> = Vec::with_capacity(64);
-        bytes.extend_from_slice(PREFIX);
-        bytes.extend_from_slice(&self.0);
-        bytes.extend_from_slice(SUFFIX_1);
-        bytes.extend_from_slice(&index.to_be_bytes());
-        bytes.extend_from_slice(SUFFIX_2);
-        let bytes: [u8; 64] = bytes
-            .try_into()
-            .expect("`generate_viewing_secret_seed_key`: bytes must be exactly 64");
+        let mut bytes = [0_u8; 29 + 32 + 4];
+        bytes[0..29].copy_from_slice(DOMAIN);
+        bytes[29..61].copy_from_slice(&self.0);
+        bytes[61..].copy_from_slice(&index.to_be_bytes());
 
         let full_seed = hmac_sha512::HMAC::mac(bytes, b"LEE_viewing_seed");
 
@@ -161,9 +131,10 @@ impl SecretSpendingKey {
 
     #[must_use]
     pub fn produce_private_key_holder(&self, index: Option<u32>) -> PrivateKeyHolder {
+        let ask = self.generate_authorization_secret_key(index);
         PrivateKeyHolder {
-            nullifier_secret_key: self.generate_nullifier_secret_key(index),
-            authorization_secret_key: self.generate_authorization_secret_key(index),
+            nullifier_secret_key: derive_nullifier_secret_key(&ask),
+            authorization_secret_key: ask,
             viewing_secret_key: self.generate_viewing_secret_seed_key(index),
         }
     }
@@ -188,11 +159,6 @@ impl PrivateKeyHolder {
     }
 
     #[must_use]
-    pub fn generate_authorization_public_key(&self) -> AuthorizationPublicKey {
-        (&self.authorization_secret_key).into()
-    }
-
-    #[must_use]
     pub fn generate_viewing_public_key(&self) -> ViewingPublicKey {
         ViewingPublicKey::from(&self.viewing_secret_key)
     }
@@ -204,14 +170,15 @@ mod tests {
 
     #[test]
     fn ask_matches_pinned_vectors() {
-        // ask = SHA256("LEE/keys" ‖ SSK ‖ [3] ‖ index_be ‖ [0; 19]); pinned via Python SHA-256.
+        // ask = SHA256("/LEE/v0.3/Keys/Authorization/Secret" ‖ SSK ‖ index_be); pinned via
+        // independent Python SHA-256.
         let ssk = SecretSpendingKey([0; 32]);
         assert_eq!(
             ssk.generate_authorization_secret_key(None),
             [
-                0x27, 0x28, 0xee, 0xf0, 0xd0, 0xbf, 0xc2, 0x8c, 0xc5, 0x58, 0x8b, 0x69, 0x1d, 0x22,
-                0x06, 0x10, 0xb3, 0x19, 0x65, 0x11, 0xf4, 0x2c, 0x50, 0xb8, 0x35, 0xf7, 0x5e, 0x2a,
-                0x4d, 0x12, 0x18, 0x95,
+                0x2d, 0x87, 0x98, 0xbf, 0x85, 0x4e, 0xbd, 0xd4, 0xf0, 0x75, 0x70, 0xad, 0xdf, 0x61,
+                0x23, 0x75, 0xb7, 0xdd, 0x7b, 0xac, 0xda, 0xdc, 0xa6, 0x18, 0xd6, 0xb1, 0x62, 0x94,
+                0x10, 0xbe, 0xfb, 0x63,
             ]
         );
     }

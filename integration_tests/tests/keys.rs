@@ -48,7 +48,6 @@ async fn sync_private_account_with_non_zero_chain_index() -> Result<()> {
         from: private_mention(from),
         to: None,
         to_npk: Some(hex::encode(to_account.key_chain.nullifier_public_key.0)),
-        to_apk: Some(hex::encode(to_account.key_chain.authorization_public_key.0)),
         to_vpk: Some(hex::encode(
             to_account.key_chain.viewing_public_key.to_bytes(),
         )),

@@ -142,9 +142,7 @@ fn validity_window_works_in_privacy_preserving_transactions(
                 vpk: account_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: PrivateKind::Regular {
-                    auth: AuthWitness::Public(account_keys.apk()),
-                },
+                kind: PrivateKind::Regular { ask: None },
                 nullifier: NullifierWitness::Init {
                     npk: account_keys.npk(),
                     commitment_root: DUMMY_COMMITMENT_HASH,
@@ -212,9 +210,7 @@ fn timestamp_validity_window_works_in_privacy_preserving_transactions(
                 vpk: account_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: PrivateKind::Regular {
-                    auth: AuthWitness::Public(account_keys.apk()),
-                },
+                kind: PrivateKind::Regular { ask: None },
                 nullifier: NullifierWitness::Init {
                     npk: account_keys.npk(),
                     commitment_root: DUMMY_COMMITMENT_HASH,

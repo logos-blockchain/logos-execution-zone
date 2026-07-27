@@ -6,7 +6,7 @@ use key_protocol::key_management::{
     secret_holders::{PrivateKeyHolder, SecretSpendingKey, ViewingSecretKey},
 };
 use lee::{Account, AccountId, Data, PrivateKey, PublicKey, V03State, program::Program};
-use lee_core::{AuthorizationPublicKey, NullifierPublicKey, encryption::ViewingPublicKey};
+use lee_core::{NullifierPublicKey, derive_nullifier_secret_key, encryption::ViewingPublicKey};
 use serde::{Deserialize, Serialize};
 
 const PRIVATE_KEY_PUB_ACC_A: [u8; 32] = [
@@ -29,44 +29,24 @@ const SSK_PRIV_ACC_B: [u8; 32] = [
     180, 43, 120, 55, 151, 50, 21, 113, 22, 254, 83, 148, 56,
 ];
 
-const NSK_PRIV_ACC_A: [u8; 32] = [
-    25, 21, 186, 59, 180, 224, 101, 64, 163, 208, 228, 43, 13, 185, 100, 123, 156, 47, 80, 179, 72,
-    51, 115, 11, 180, 99, 21, 201, 48, 194, 118, 144,
-];
-
-const NSK_PRIV_ACC_B: [u8; 32] = [
-    99, 82, 190, 140, 234, 10, 61, 163, 15, 211, 179, 54, 70, 166, 87, 5, 182, 68, 117, 244, 217,
-    23, 99, 9, 4, 177, 230, 125, 109, 91, 160, 30,
-];
-
 const VSK_D_PRIV_ACC_A: [u8; 32] = [
-    255, 250, 140, 26, 222, 223, 174, 95, 132, 108, 124, 88, 30, 247, 82, 72, 52, 70, 84, 139, 241,
-    187, 41, 163, 19, 231, 232, 122, 225, 55, 134, 184,
+    4, 118, 187, 42, 14, 254, 144, 150, 125, 176, 205, 240, 109, 81, 234, 177, 244, 236, 108, 71,
+    107, 10, 107, 169, 95, 134, 75, 193, 213, 57, 81, 218,
 ];
 
 const VSK_Z_PRIV_ACC_A: [u8; 32] = [
-    225, 24, 98, 78, 31, 203, 175, 248, 213, 17, 133, 207, 10, 135, 132, 151, 59, 184, 5, 81, 28,
-    238, 137, 62, 233, 227, 99, 17, 236, 159, 244, 63,
+    117, 29, 113, 136, 175, 148, 38, 38, 110, 220, 157, 155, 245, 13, 239, 244, 106, 126, 188, 90,
+    204, 28, 82, 70, 200, 16, 219, 33, 43, 210, 125, 239,
 ];
 
 const VSK_D_PRIV_ACC_B: [u8; 32] = [
-    128, 85, 85, 103, 226, 218, 119, 56, 60, 252, 31, 113, 232, 215, 156, 2, 159, 247, 156, 192,
-    12, 178, 229, 236, 255, 120, 146, 211, 169, 117, 153, 180,
+    100, 59, 111, 232, 245, 32, 102, 179, 205, 119, 145, 238, 9, 235, 62, 38, 55, 252, 179, 217,
+    219, 211, 6, 188, 85, 160, 68, 54, 61, 114, 102, 81,
 ];
 
 const VSK_Z_PRIV_ACC_B: [u8; 32] = [
-    165, 80, 169, 87, 248, 88, 167, 154, 27, 67, 131, 122, 50, 130, 111, 40, 164, 180, 204, 75,
-    188, 140, 110, 132, 113, 133, 222, 8, 49, 123, 187, 18,
-];
-
-const NPK_PRIV_ACC_A: [u8; 32] = [
-    167, 108, 50, 153, 74, 47, 151, 188, 140, 79, 195, 31, 181, 9, 40, 167, 201, 32, 175, 129, 45,
-    245, 223, 193, 210, 170, 247, 128, 167, 140, 155, 129,
-];
-
-const NPK_PRIV_ACC_B: [u8; 32] = [
-    32, 67, 72, 164, 106, 53, 66, 239, 141, 15, 52, 230, 136, 177, 2, 236, 207, 243, 134, 135, 210,
-    143, 87, 232, 215, 128, 194, 120, 113, 224, 4, 165,
+    123, 246, 87, 46, 116, 95, 39, 122, 251, 71, 207, 144, 70, 227, 120, 27, 98, 59, 67, 247, 209,
+    194, 110, 231, 250, 247, 205, 243, 31, 142, 104, 208,
 ];
 
 const DEFAULT_PROGRAM_OWNER: [u32; 8] = [0, 0, 0, 0, 0, 0, 0, 0];
@@ -86,7 +66,6 @@ pub struct PublicAccountPublicInitialData {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PrivateAccountPublicInitialData {
     pub npk: lee_core::NullifierPublicKey,
-    pub apk: lee_core::AuthorizationPublicKey,
     pub vpk: lee_core::encryption::ViewingPublicKey,
     pub account: lee_core::account::Account,
 }
@@ -110,7 +89,6 @@ impl PrivateAccountPrivateInitialData {
     pub fn account_id(&self) -> lee::AccountId {
         lee::AccountId::for_regular_private_account(
             &self.key_chain.nullifier_public_key,
-            &self.key_chain.authorization_public_key,
             &self.key_chain.viewing_public_key,
             self.identifier,
         )
@@ -141,28 +119,28 @@ pub fn initial_pub_accounts_private_keys() -> Vec<PublicAccountPrivateInitialDat
 
 fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialData> {
     let ask_a = SecretSpendingKey(SSK_PRIV_ACC_A).generate_authorization_secret_key(None);
+    let nsk_a = derive_nullifier_secret_key(&ask_a);
     let key_chain_1 = KeyChain {
         secret_spending_key: SecretSpendingKey(SSK_PRIV_ACC_A),
         private_key_holder: PrivateKeyHolder {
-            nullifier_secret_key: NSK_PRIV_ACC_A,
+            nullifier_secret_key: nsk_a,
             authorization_secret_key: ask_a,
             viewing_secret_key: ViewingSecretKey::new(VSK_D_PRIV_ACC_A, VSK_Z_PRIV_ACC_A),
         },
-        nullifier_public_key: NullifierPublicKey(NPK_PRIV_ACC_A),
-        authorization_public_key: AuthorizationPublicKey::from(&ask_a),
+        nullifier_public_key: NullifierPublicKey::from(&nsk_a),
         viewing_public_key: ViewingPublicKey::from_seed(&VSK_D_PRIV_ACC_A, &VSK_Z_PRIV_ACC_A),
     };
 
     let ask_b = SecretSpendingKey(SSK_PRIV_ACC_B).generate_authorization_secret_key(None);
+    let nsk_b = derive_nullifier_secret_key(&ask_b);
     let key_chain_2 = KeyChain {
         secret_spending_key: SecretSpendingKey(SSK_PRIV_ACC_B),
         private_key_holder: PrivateKeyHolder {
-            nullifier_secret_key: NSK_PRIV_ACC_B,
+            nullifier_secret_key: nsk_b,
             authorization_secret_key: ask_b,
             viewing_secret_key: ViewingSecretKey::new(VSK_D_PRIV_ACC_B, VSK_Z_PRIV_ACC_B),
         },
-        nullifier_public_key: NullifierPublicKey(NPK_PRIV_ACC_B),
-        authorization_public_key: AuthorizationPublicKey::from(&ask_b),
+        nullifier_public_key: NullifierPublicKey::from(&nsk_b),
         viewing_public_key: ViewingPublicKey::from_seed(&VSK_D_PRIV_ACC_B, &VSK_Z_PRIV_ACC_B),
     };
 
@@ -197,7 +175,6 @@ fn initial_commitments() -> Vec<PrivateAccountPublicInitialData> {
         .into_iter()
         .map(|data| PrivateAccountPublicInitialData {
             npk: data.key_chain.nullifier_public_key,
-            apk: data.key_chain.authorization_public_key,
             vpk: data.key_chain.viewing_public_key.clone(),
             account: data.account,
         })
@@ -209,12 +186,8 @@ fn initial_private_accounts() -> Vec<(lee_core::Commitment, lee_core::Nullifier)
         .iter()
         .map(|init_comm_data| {
             let npk = &init_comm_data.npk;
-            let account_id = lee::AccountId::for_regular_private_account(
-                npk,
-                &init_comm_data.apk,
-                &init_comm_data.vpk,
-                0,
-            );
+            let account_id =
+                lee::AccountId::for_regular_private_account(npk, &init_comm_data.vpk, 0);
 
             let mut acc = init_comm_data.account.clone();
 
@@ -352,8 +325,8 @@ mod tests {
     const PUB_ACC_A_TEXT_ADDR: &str = "6iArKUXxhUJqS7kCaPNhwMWt3ro71PDyBj7jwAyE2VQV";
     const PUB_ACC_B_TEXT_ADDR: &str = "7wHg9sbJwc6h3NP1S9bekfAzB8CHifEcxKswCKUt3YQo";
 
-    const PRIV_ACC_A_TEXT_ADDR: &str = "ED1ggYMyMCJ38Yyt2PmpPskHh8UqYKfGTJQLZszLoYwf";
-    const PRIV_ACC_B_TEXT_ADDR: &str = "8tnxhwEisCnUuvk3EpCYnM3o1GSDW164VeZVgsbh2kjc";
+    const PRIV_ACC_A_TEXT_ADDR: &str = "GSx3EttJzQqhFPibttxguyhKXkiD4DJmA2dMmuszEmFv";
+    const PRIV_ACC_B_TEXT_ADDR: &str = "Dec1rT4DynCafh6k5pmywLGUU16RpxcxCdrSVYq8ukaN";
 
     #[test]
     fn pub_state_consistency() {
@@ -392,133 +365,42 @@ mod tests {
         let init_private_accs_keys = initial_priv_accounts_private_keys();
         let init_comms = initial_commitments();
 
-        assert_eq!(
-            init_private_accs_keys[0]
-                .key_chain
-                .secret_spending_key
-                .produce_private_key_holder(None)
-                .nullifier_secret_key,
-            init_private_accs_keys[0]
-                .key_chain
-                .private_key_holder
-                .nullifier_secret_key
-        );
-        assert_eq!(
-            init_private_accs_keys[0]
-                .key_chain
-                .secret_spending_key
-                .produce_private_key_holder(None)
-                .viewing_secret_key,
-            init_private_accs_keys[0]
-                .key_chain
-                .private_key_holder
-                .viewing_secret_key
-        );
-        assert_eq!(
-            init_private_accs_keys[0]
-                .key_chain
-                .private_key_holder
-                .generate_nullifier_public_key(),
-            init_private_accs_keys[0].key_chain.nullifier_public_key
-        );
-        assert_eq!(
-            init_private_accs_keys[0]
-                .key_chain
-                .private_key_holder
-                .generate_viewing_public_key(),
-            init_private_accs_keys[0].key_chain.viewing_public_key
-        );
+        // nsk and npk are derived from each key chain's own ask, so asserting they equal that
+        // derivation cannot fail; the pinned text addresses are the drift canary instead.
+        for ((keys, comm), (expected_addr, expected_balance)) in
+            init_private_accs_keys.iter().zip(&init_comms).zip([
+                (PRIV_ACC_A_TEXT_ADDR, PRIV_ACC_A_INITIAL_BALANCE),
+                (PRIV_ACC_B_TEXT_ADDR, PRIV_ACC_B_INITIAL_BALANCE),
+            ])
+        {
+            let key_chain = &keys.key_chain;
 
-        assert_eq!(
-            init_private_accs_keys[1]
-                .key_chain
-                .secret_spending_key
-                .produce_private_key_holder(None)
-                .nullifier_secret_key,
-            init_private_accs_keys[1]
-                .key_chain
-                .private_key_holder
-                .nullifier_secret_key
-        );
-        assert_eq!(
-            init_private_accs_keys[1]
-                .key_chain
-                .secret_spending_key
-                .produce_private_key_holder(None)
-                .viewing_secret_key,
-            init_private_accs_keys[1]
-                .key_chain
-                .private_key_holder
-                .viewing_secret_key
-        );
-        assert_eq!(
-            init_private_accs_keys[1]
-                .key_chain
-                .private_key_holder
-                .generate_nullifier_public_key(),
-            init_private_accs_keys[1].key_chain.nullifier_public_key
-        );
-        assert_eq!(
-            init_private_accs_keys[1]
-                .key_chain
-                .private_key_holder
-                .generate_viewing_public_key(),
-            init_private_accs_keys[1].key_chain.viewing_public_key
-        );
-
-        assert_eq!(
-            init_private_accs_keys[0].account_id().to_string(),
-            PRIV_ACC_A_TEXT_ADDR
-        );
-        assert_eq!(
-            init_private_accs_keys[1].account_id().to_string(),
-            PRIV_ACC_B_TEXT_ADDR
-        );
-
-        assert_eq!(
-            init_private_accs_keys[0].key_chain.nullifier_public_key,
-            init_comms[0].npk
-        );
-        assert_eq!(
-            init_private_accs_keys[1].key_chain.nullifier_public_key,
-            init_comms[1].npk
-        );
-
-        assert_eq!(
-            init_comms[0],
-            PrivateAccountPublicInitialData {
-                npk: NullifierPublicKey(NPK_PRIV_ACC_A),
-                apk: init_private_accs_keys[0].key_chain.authorization_public_key,
-                vpk: init_private_accs_keys[0]
-                    .key_chain
-                    .viewing_public_key
-                    .clone(),
-                account: Account {
-                    program_owner: DEFAULT_PROGRAM_OWNER,
-                    balance: PRIV_ACC_A_INITIAL_BALANCE,
-                    data: Data::default(),
-                    nonce: 0.into(),
-                },
-            }
-        );
-
-        assert_eq!(
-            init_comms[1],
-            PrivateAccountPublicInitialData {
-                npk: NullifierPublicKey(NPK_PRIV_ACC_B),
-                apk: init_private_accs_keys[1].key_chain.authorization_public_key,
-                vpk: init_private_accs_keys[1]
-                    .key_chain
-                    .viewing_public_key
-                    .clone(),
-                account: Account {
-                    program_owner: DEFAULT_PROGRAM_OWNER,
-                    balance: PRIV_ACC_B_INITIAL_BALANCE,
-                    data: Data::default(),
-                    nonce: 0.into(),
-                },
-            }
-        );
+            assert_eq!(
+                key_chain
+                    .secret_spending_key
+                    .produce_private_key_holder(None)
+                    .viewing_secret_key,
+                key_chain.private_key_holder.viewing_secret_key
+            );
+            assert_eq!(
+                key_chain.private_key_holder.generate_viewing_public_key(),
+                key_chain.viewing_public_key
+            );
+            assert_eq!(keys.account_id().to_string(), expected_addr);
+            assert_eq!(
+                *comm,
+                PrivateAccountPublicInitialData {
+                    npk: key_chain.nullifier_public_key,
+                    vpk: key_chain.viewing_public_key.clone(),
+                    account: Account {
+                        program_owner: DEFAULT_PROGRAM_OWNER,
+                        balance: expected_balance,
+                        data: Data::default(),
+                        nonce: 0.into(),
+                    },
+                }
+            );
+        }
     }
 
     #[test]

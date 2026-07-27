@@ -34,7 +34,6 @@ impl InitialPrivateAccountForWallet {
     pub fn account_id(&self) -> AccountId {
         AccountId::for_regular_private_account(
             &self.key_chain.nullifier_public_key,
-            &self.key_chain.authorization_public_key,
             &self.key_chain.viewing_public_key,
             self.identifier,
         )
@@ -154,14 +153,12 @@ fn deterministic_private_key_chain(entropy: [u8; 32]) -> KeyChain {
     let secret_spending_key = seed_holder.produce_top_secret_key_holder();
     let private_key_holder = secret_spending_key.produce_private_key_holder(None);
     let nullifier_public_key = private_key_holder.generate_nullifier_public_key();
-    let authorization_public_key = private_key_holder.generate_authorization_public_key();
     let viewing_public_key = private_key_holder.generate_viewing_public_key();
 
     KeyChain {
         secret_spending_key,
         private_key_holder,
         nullifier_public_key,
-        authorization_public_key,
         viewing_public_key,
     }
 }

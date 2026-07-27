@@ -123,8 +123,6 @@ pub mod tests {
 
         let npk1 = NullifierPublicKey::from(&nsk1);
         let npk2 = NullifierPublicKey::from(&nsk2);
-        let apk1 = lee_core::AuthorizationPublicKey::from(&[9; 32]);
-        let apk2 = lee_core::AuthorizationPublicKey::from(&[10; 32]);
         let vpk = ViewingPublicKey::from_seed(&[7; 32], &[8; 32]);
 
         let public_account_ids = vec![AccountId::new([1; 32])];
@@ -135,12 +133,10 @@ pub mod tests {
 
         let encrypted_private_post_states = Vec::new();
 
-        let account_id2 =
-            lee_core::account::AccountId::for_regular_private_account(&npk2, &apk2, &vpk, 0);
+        let account_id2 = lee_core::account::AccountId::for_regular_private_account(&npk2, &vpk, 0);
         let new_commitments = vec![Commitment::new(&account_id2, &account2)];
 
-        let account_id1 =
-            lee_core::account::AccountId::for_regular_private_account(&npk1, &apk1, &vpk, 0);
+        let account_id1 = lee_core::account::AccountId::for_regular_private_account(&npk1, &vpk, 0);
         let old_commitment = Commitment::new(&account_id1, &account1);
         let new_nullifiers = vec![(
             Nullifier::for_account_update(&old_commitment, &nsk1),
@@ -228,11 +224,9 @@ pub mod tests {
     #[test]
     fn encrypted_account_data_constructor() {
         let npk = NullifierPublicKey::from(&[1; 32]);
-        let apk = lee_core::AuthorizationPublicKey::from(&[4; 32]);
         let vpk = ViewingPublicKey::from_seed(&[2_u8; 32], &[3_u8; 32]);
         let account = Account::default();
-        let account_id =
-            lee_core::account::AccountId::for_regular_private_account(&npk, &apk, &vpk, 0);
+        let account_id = lee_core::account::AccountId::for_regular_private_account(&npk, &vpk, 0);
         let commitment = Commitment::new(&account_id, &account);
         let (shared_secret, epk) =
             SharedSecretKey::encapsulate_deterministic(&vpk, &EphemeralSecretKey([0_u8; 32]));

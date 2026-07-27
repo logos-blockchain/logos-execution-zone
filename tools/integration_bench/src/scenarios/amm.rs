@@ -179,7 +179,6 @@ async fn timed_token_send(
                     from: public_mention(from_id),
                     to: Some(public_mention(to_id)),
                     to_npk: None,
-                    to_apk: None,
                     to_vpk: None,
                     to_keys: None,
                     to_identifier: Some(0),

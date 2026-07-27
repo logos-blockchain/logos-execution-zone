@@ -3,9 +3,9 @@
     reason = "We prefer to group methods by functionality rather than by type for encoding"
 )]
 
-pub use authorization::{AuthorizationPublicKey, AuthorizationSecretKey};
+pub use authorization::AuthorizationSecretKey;
 pub use circuit_io::{
-    AuthWitness, InputAccountIdentity, NullifierWitness, PrivacyPreservingCircuitInput,
+    InputAccountIdentity, NullifierWitness, PrivacyPreservingCircuitInput,
     PrivacyPreservingCircuitOutput, PrivateKind, PrivateWitness,
 };
 pub use commitment::{
@@ -16,7 +16,9 @@ pub use encryption::{
     EncryptedAccountData, EncryptionScheme, EphemeralPublicKey, EphemeralSecretKey,
     ML_KEM_768_CIPHERTEXT_LEN, SharedSecretKey, ViewTag,
 };
-pub use nullifier::{Identifier, Nullifier, NullifierPublicKey, NullifierSecretKey};
+pub use nullifier::{
+    Identifier, Nullifier, NullifierPublicKey, NullifierSecretKey, derive_nullifier_secret_key,
+};
 pub use program::PrivateAccountKind;
 pub use validation::{
     Authorization, Backend, Resolved, ThreadedDiff, ValidationError, validate_state_diff,

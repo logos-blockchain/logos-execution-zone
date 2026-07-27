@@ -484,10 +484,6 @@ impl AccountSubcommand {
         println!("{}", hex::encode(entry.key_chain.nullifier_public_key.0));
         println!(
             "{}",
-            hex::encode(entry.key_chain.authorization_public_key.0)
-        );
-        println!(
-            "{}",
             hex::encode(entry.key_chain.viewing_public_key.to_bytes())
         );
         Ok(SubcommandReturnValue::Empty)
@@ -588,7 +584,6 @@ impl WalletSubcommand for ImportSubcommand {
                 let account = lee::Account::from(account_state);
                 let account_id = lee::AccountId::for_regular_private_account(
                     &key_chain.nullifier_public_key,
-                    &key_chain.authorization_public_key,
                     &key_chain.viewing_public_key,
                     identifier,
                 );

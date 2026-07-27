@@ -316,9 +316,7 @@ impl WalletCore {
             })
         } else {
             Some(AccountIdentity::PrivateShared {
-                nsk,
                 ask,
-                npk,
                 vpk,
                 identifier,
             })
@@ -404,9 +402,8 @@ impl WalletCore {
 
         let keys = holder.derive_regular_shared_account_keys_from_identifier(identifier);
         let npk = keys.generate_nullifier_public_key();
-        let apk = keys.generate_authorization_public_key();
         let vpk = keys.generate_viewing_public_key();
-        let account_id = AccountId::for_regular_private_account(&npk, &apk, &vpk, identifier);
+        let account_id = AccountId::for_regular_private_account(&npk, &vpk, identifier);
 
         self.register_shared_account(account_id, group_name, identifier, None, None);
 
@@ -796,7 +793,6 @@ impl WalletCore {
                             let npk = &key_chain.nullifier_public_key;
                             let account_id = lee::AccountId::for_private_account(
                                 npk,
-                                &key_chain.authorization_public_key,
                                 &key_chain.viewing_public_key,
                                 &kind,
                             );

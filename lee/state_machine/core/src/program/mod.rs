@@ -5,7 +5,7 @@ use risc0_zkvm::{DeserializeOwned, guest::env, serde::Deserializer};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AuthorizationPublicKey, BlockId, Identifier, NullifierPublicKey, Timestamp,
+    BlockId, Identifier, NullifierPublicKey, Timestamp,
     account::{Account, AccountId, AccountWithMetadata},
     encryption::ViewingPublicKey,
 };
@@ -181,17 +181,36 @@ impl AccountId {
         Self::from_preimage(&bytes)
     }
 
+    /// Derives an [`AccountId`] for a regular (non-PDA) private account from the nullifier public
+    /// key and identifier.
+    #[must_use]
+    pub fn for_regular_private_account(
+        npk: &NullifierPublicKey,
+        vpk: &ViewingPublicKey,
+        identifier: Identifier,
+    ) -> Self {
+        const PRIVATE_ACCOUNT_ID_PREFIX: &[u8; 32] =
+            b"/LEE/v0.3/AccountId/Private/\x00\x00\x00\x00";
+
+        let mut bytes = [0_u8; 32 + 32 + ViewingPublicKey::LEN + 16];
+        bytes[0..32].copy_from_slice(PRIVATE_ACCOUNT_ID_PREFIX);
+        bytes[32..64].copy_from_slice(&npk.to_byte_array());
+        bytes[64..64 + ViewingPublicKey::LEN].copy_from_slice(vpk.to_bytes());
+        bytes[64 + ViewingPublicKey::LEN..].copy_from_slice(&identifier.to_le_bytes());
+
+        Self::from_preimage(&bytes)
+    }
+
     /// Derives the [`AccountId`] for a private account from the nullifier public key and kind.
     #[must_use]
     pub fn for_private_account(
         npk: &NullifierPublicKey,
-        apk: &AuthorizationPublicKey,
         vpk: &ViewingPublicKey,
         kind: &PrivateAccountKind,
     ) -> Self {
         match kind {
             PrivateAccountKind::Regular(identifier) => {
-                Self::for_regular_private_account(npk, apk, vpk, *identifier)
+                Self::for_regular_private_account(npk, vpk, *identifier)
             }
             PrivateAccountKind::Pda {
                 program_id,
