@@ -61,7 +61,7 @@ pub trait Backend {
         account_id: AccountId,
     ) -> Result<bool, ValidationError>;
 
-    fn key_preimage_presented(&self, pre: &AccountWithMetadata) -> bool;
+    fn witness_derives_account_id(&self, pre: &AccountWithMetadata) -> bool;
 
     fn finalize(&self) -> Result<(), ValidationError>;
 }
@@ -91,6 +91,8 @@ pub fn validate_state_diff<E: Backend>(
     let mut block_bounds: (Option<BlockId>, Option<BlockId>) = (None, None);
     let mut ts_bounds: (Option<Timestamp>, Option<Timestamp>) = (None, None);
 
+    let mut indeed_authorized: Vec<bool> = Vec::new();
+
     let mut chained_calls = VecDeque::from_iter([(
         initial_call,
         CallerData {
@@ -106,6 +108,7 @@ pub fn validate_state_diff<E: Backend>(
         }
 
         let mut program_output = env.output_for_call(&chained_call, caller_data.program_id)?;
+        indeed_authorized.clear();
 
         for pre in &program_output.pre_states {
             let account_id = pre.account_id;
@@ -157,6 +160,8 @@ pub fn validate_state_diff<E: Backend>(
                 )
                 .into());
             }
+
+            indeed_authorized.push(is_indeed_authorized);
         }
 
         if program_output.self_program_id != chained_call.program_id {
@@ -204,7 +209,7 @@ pub fn validate_state_diff<E: Backend>(
 
             match claim {
                 Claim::Key => {
-                    if !env.key_preimage_presented(pre) {
+                    if !(indeed_authorized[index] || env.witness_derives_account_id(pre)) {
                         return Err(ValidationError::ProgramBehavior(
                             InvalidProgramBehaviorError::UnprovenAccountClaim { account_id },
                         )
@@ -239,8 +244,9 @@ pub fn validate_state_diff<E: Backend>(
                 program_output
                     .pre_states
                     .iter()
-                    .filter(|pre| pre.is_authorized)
-                    .map(|pre| pre.account_id),
+                    .zip(indeed_authorized.iter().copied())
+                    .filter(|&(_, authorized)| authorized)
+                    .map(|(pre, _)| pre.account_id),
             )
             .collect();
         for new_call in program_output.chained_calls.into_iter().rev() {

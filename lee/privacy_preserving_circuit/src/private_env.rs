@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, VecDeque, hash_map::Entry},
+    collections::{HashMap, HashSet, VecDeque, hash_map::Entry},
     convert::Infallible,
 };
 
@@ -19,6 +19,7 @@ pub struct PrivateEnv<'ids> {
     pda_family_binding: HashMap<(ProgramId, PdaSeed), AccountId>,
     next_position: usize,
     position_by_id: HashMap<AccountId, usize>,
+    proven_derivations: HashSet<AccountId>,
 }
 
 impl<'ids> PrivateEnv<'ids> {
@@ -34,6 +35,7 @@ impl<'ids> PrivateEnv<'ids> {
             pda_family_binding: HashMap::new(),
             next_position: 0,
             position_by_id: HashMap::new(),
+            proven_derivations: HashSet::new(),
         }
     }
 
@@ -64,6 +66,7 @@ impl<'ids> PrivateEnv<'ids> {
                 !pre.is_authorized,
                 "Private PDA with externally-provided seed must not be authorized at position {position}"
             );
+            self.proven_derivations.insert(pre.account_id);
             bind_private_pda_position(
                 &mut self.private_pda_bound_positions,
                 position,
@@ -112,6 +115,15 @@ impl Backend for PrivateEnv<'_> {
 
         self.bind_external_seed(position, pre);
 
+        if self
+            .account_identities
+            .get(position)
+            .and_then(InputAccountIdentity::regular_account_id)
+            == Some(pre.account_id)
+        {
+            self.proven_derivations.insert(pre.account_id);
+        }
+
         let ids = self.account_identities;
         let authorization = match ids.get(position) {
             // A public account is root-authorized iff it signed; the circuit's only signal is the
@@ -153,22 +165,13 @@ impl Backend for PrivateEnv<'_> {
                 program_id,
                 seed,
             );
+            self.proven_derivations.insert(account_id);
         }
         Ok(true)
     }
 
-    fn key_preimage_presented(&self, pre: &AccountWithMetadata) -> bool {
-        let position = self.position_by_id[&pre.account_id];
-        // Regular private: the witness carries npk/vpk/identifier, so the derivation IS the
-        // preimage and needs no signature — this is what keeps receive-to-fresh working.
-        self.account_identities[position].regular_account_id() == Some(pre.account_id)
-            // Private PDA: the for_private_pda derivation was proven against the witness, either
-            // by an externally-supplied seed at resolve time or by a caller's pda_seeds. An
-            // external seed is required to be unauthorized, so is_authorized cannot cover it.
-            || self.private_pda_bound_positions.contains_key(&position)
-            // Public-in-PP: the verifier byte-binds is_authorized to the signer set, so a true
-            // flag means a pubkey preimage was presented off-circuit.
-            || pre.is_authorized
+    fn witness_derives_account_id(&self, pre: &AccountWithMetadata) -> bool {
+        self.proven_derivations.contains(&pre.account_id)
     }
 
     fn finalize(&self) -> Result<(), ValidationError> {

@@ -300,8 +300,8 @@ impl Backend for PublicEnv<'_> {
         Ok(account_id.matches_public_pda(&program_id, &seed))
     }
 
-    fn key_preimage_presented(&self, pre: &AccountWithMetadata) -> bool {
-        pre.is_authorized
+    fn witness_derives_account_id(&self, _pre: &AccountWithMetadata) -> bool {
+        false
     }
 
     fn finalize(&self) -> Result<(), ValidationError> {
