@@ -55,6 +55,9 @@ pub enum InvalidProgramBehaviorError {
     #[error("PDA claim for account {account_id} does not match its (program, seed) derivation")]
     MismatchedPdaClaim { account_id: AccountId },
 
+    #[error("Claim for account {account_id} does not exhibit the preimage of its address")]
+    UnprovenAccountClaim { account_id: AccountId },
+
     #[error("Default account {account_id} was modified without being claimed")]
     DefaultAccountModifiedWithoutClaim { account_id: AccountId },
 

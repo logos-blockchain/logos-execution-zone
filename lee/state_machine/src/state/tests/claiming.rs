@@ -42,7 +42,7 @@ fn claiming_mechanism() {
 }
 
 #[test]
-fn unauthorized_public_account_claiming_succeeds() {
+fn unauthorized_public_account_claiming_fails() {
     let program = crate::test_methods::simple_balance_transfer();
     let account_key = PrivateKey::try_new([9; 32]).unwrap();
     let account_id =
@@ -59,11 +59,13 @@ fn unauthorized_public_account_claiming_succeeds() {
 
     let result = state.transition_from_public_transaction(&tx, 2, 0);
 
-    assert!(result.is_ok());
-    assert_eq!(
-        state.get_account_by_id(account_id).program_owner,
-        program.id()
-    );
+    assert!(matches!(
+        result,
+        Err(LeeError::InvalidProgramBehavior(
+            InvalidProgramBehaviorError::UnprovenAccountClaim { .. }
+        ))
+    ));
+    assert_eq!(state.get_account_by_id(account_id), Account::default());
 }
 
 #[test]
@@ -283,22 +285,74 @@ fn claiming_mechanism_within_chain_call() {
 }
 
 #[test]
-fn unauthorized_public_account_claiming_succeeds_when_executed_privately() {
+fn unauthorized_public_account_claiming_fails_when_executed_privately() {
     let program = crate::test_methods::simple_balance_transfer();
-    let program_id = program.id();
     let account_id = AccountId::new([11; 32]);
     let public_account = AccountWithMetadata::new(Account::default(), false, account_id);
 
-    let (output, _proof) = execute_and_prove(
+    // A public account inside a privacy-preserving tx presents its pubkey preimage only through
+    // the signature witness, and the verifier binds `is_authorized` to that signer set. Unsigned,
+    // there is no preimage to exhibit, so the claim is rejected in-circuit.
+    let result = execute_and_prove(
         vec![public_account],
         Program::serialize_instruction(0_u128).unwrap(),
         vec![InputAccountIdentity::Public],
         &program.into(),
-    )
-    .unwrap();
+    );
 
-    // Claiming an empty account needs no authorization (uniform-permissive, parity with public).
-    assert_eq!(output.public_post_states[0].program_owner, program_id);
+    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+}
+
+// The squat this rule closes: every never-used deterministic address (every future ATA, say) is
+// computable by anyone from on-chain data and is `default` until first use. Without the preimage
+// rule an attacker deploys a trivial program, claims the slot with a bare key claim, and rule #4
+// makes the stamped `program_owner` permanent — the legitimate claimant is a program, which only
+// claims on first use, so the poisoning is unpre-emptable and unrecoverable.
+#[test]
+fn key_claim_on_pda_shaped_address_is_rejected() {
+    let victim_program = crate::test_methods::simple_balance_transfer();
+    let attacker_program = crate::test_methods::claimer();
+    let seed = PdaSeed::new([7; 32]);
+    let squatted = AccountId::for_public_pda(&victim_program.id(), &seed);
+    let mut state = V03State::new().with_test_programs();
+
+    assert_eq!(state.get_account_by_id(squatted), Account::default());
+
+    let message =
+        public_transaction::Message::try_new(attacker_program.id(), vec![squatted], vec![], ())
+            .unwrap();
+    let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+    let tx = PublicTransaction::new(message, witness_set);
+
+    let result = state.transition_from_public_transaction(&tx, 1, 0);
+
+    assert!(matches!(
+        result,
+        Err(LeeError::InvalidProgramBehavior(
+            InvalidProgramBehaviorError::UnprovenAccountClaim { .. }
+        ))
+    ));
+    assert_eq!(state.get_account_by_id(squatted), Account::default());
+}
+
+// The private mirror of the squat, driven through the circuit so PrivateEnv's arm is exercised
+// rather than argued: the address is `Public` in the witness with no signature behind it.
+#[test]
+fn key_claim_on_pda_shaped_address_is_rejected_when_executed_privately() {
+    let victim_program = crate::test_methods::simple_balance_transfer();
+    let attacker_program = crate::test_methods::claimer();
+    let seed = PdaSeed::new([7; 32]);
+    let squatted = AccountId::for_public_pda(&victim_program.id(), &seed);
+    let squatted_pre = AccountWithMetadata::new(Account::default(), false, squatted);
+
+    let result = execute_and_prove(
+        vec![squatted_pre],
+        Program::serialize_instruction(()).unwrap(),
+        vec![InputAccountIdentity::Public],
+        &attacker_program.into(),
+    );
+
+    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
 }
 
 #[test]

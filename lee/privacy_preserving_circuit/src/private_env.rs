@@ -157,6 +157,20 @@ impl Backend for PrivateEnv<'_> {
         Ok(true)
     }
 
+    fn key_preimage_presented(&self, pre: &AccountWithMetadata) -> bool {
+        let position = self.position_by_id[&pre.account_id];
+        // Regular private: the witness carries npk/vpk/identifier, so the derivation IS the
+        // preimage and needs no signature — this is what keeps receive-to-fresh working.
+        self.account_identities[position].regular_account_id() == Some(pre.account_id)
+            // Private PDA: the for_private_pda derivation was proven against the witness, either
+            // by an externally-supplied seed at resolve time or by a caller's pda_seeds. An
+            // external seed is required to be unauthorized, so is_authorized cannot cover it.
+            || self.private_pda_bound_positions.contains_key(&position)
+            // Public-in-PP: the verifier byte-binds is_authorized to the signer set, so a true
+            // flag means a pubkey preimage was presented off-circuit.
+            || pre.is_authorized
+    }
+
     fn finalize(&self) -> Result<(), ValidationError> {
         assert!(
             self.remaining_outputs.is_empty(),

@@ -61,6 +61,8 @@ pub trait Backend {
         account_id: AccountId,
     ) -> Result<bool, ValidationError>;
 
+    fn key_preimage_presented(&self, pre: &AccountWithMetadata) -> bool;
+
     fn finalize(&self) -> Result<(), ValidationError>;
 }
 
@@ -201,7 +203,14 @@ pub fn validate_state_diff<E: Backend>(
             }
 
             match claim {
-                Claim::Key => {}
+                Claim::Key => {
+                    if !env.key_preimage_presented(pre) {
+                        return Err(ValidationError::ProgramBehavior(
+                            InvalidProgramBehaviorError::UnprovenAccountClaim { account_id },
+                        )
+                        .into());
+                    }
+                }
                 Claim::Pda(seed) => {
                     if !env.try_bind_pda(chained_call.program_id, seed, account_id)? {
                         return Err(ValidationError::ProgramBehavior(
