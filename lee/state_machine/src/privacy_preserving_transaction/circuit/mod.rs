@@ -132,7 +132,7 @@ pub fn execute_and_prove(
     env_builder.write(&circuit_input).unwrap();
     let env = env_builder.build().unwrap();
     let prover = default_prover();
-    let opts = ProverOpts::succinct();
+    let opts = ProverOpts::groth16();
     let prove_info = prover
         .prove_with_opts(env, PRIVACY_PRESERVING_CIRCUIT_ELF, &opts)
         .map_err(|e| LeeError::CircuitProvingError(e.to_string()))?;
