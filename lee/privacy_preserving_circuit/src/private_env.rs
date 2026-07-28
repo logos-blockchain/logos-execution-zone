@@ -4,8 +4,8 @@ use std::{
 };
 
 use lee_core::{
-    Authorization, AuthorizationSecretKey, Backend, Commitment, CommitmentSetDigest, Identifier,
-    Nullifier, NullifierPublicKey, NullifierWitness, PrivateKind, PrivateWitness, Resolved,
+    Attestation, Authorization, AuthorizationSecretKey, Backend, Commitment, CommitmentSetDigest,
+    Identifier, Nullifier, NullifierPublicKey, NullifierWitness, PrivateKind, PrivateWitness,
     ValidationError,
     account::{Account, AccountId, AccountWithMetadata, Nonce},
     compute_digest_for_path, derive_nullifier_secret_key,
@@ -118,6 +118,10 @@ impl PrivateEnv {
 
     #[must_use]
     pub fn into_registry(self) -> HashMap<AccountId, Row> {
+        assert!(
+            self.remaining_outputs.is_empty(),
+            "Inner call without a chained call found"
+        );
         self.registry
     }
 }
@@ -144,59 +148,41 @@ impl Backend for PrivateEnv {
         Ok(output)
     }
 
-    fn resolve_pre_state(
-        &mut self,
-        pre: &AccountWithMetadata,
-    ) -> Result<Resolved, ValidationError> {
-        let Some(row) = self.registry.get(&pre.account_id) else {
+    fn attest(&self, pre: &AccountWithMetadata) -> Attestation {
+        self.registry.get(&pre.account_id).map_or_else(
             // A public account is root-authorized iff it signed; the circuit's only signal is the
-            // verifier-bound `is_authorized`. Trusted here and enforced by the verifier — this just
-            // feeds the cross-call scoping set.
-            return Ok(Resolved {
+            // verifier-bound `is_authorized`. Trusted here and enforced by the verifier — this
+            // just feeds the cross-call scoping set.
+            || Attestation {
                 account: pre.account.clone(),
                 authorization: if pre.is_authorized {
                     Authorization::Holder
                 } else {
                     Authorization::None
                 },
-            });
-        };
-        Ok(Resolved {
-            account: row.pre.clone(),
-            authorization: if matches!(row.kind, PrivateKind::Regular { ask: Some(_) }) {
-                Authorization::Holder
-            } else {
-                Authorization::None
+                exhibits_preimage: false,
             },
-        })
+            |row| Attestation {
+                account: row.pre.clone(),
+                authorization: if matches!(row.kind, PrivateKind::Regular { ask: Some(_) }) {
+                    Authorization::Holder
+                } else {
+                    Authorization::None
+                },
+                exhibits_preimage: true,
+            },
+        )
     }
 
-    fn try_bind_pda(
-        &mut self,
-        program_id: ProgramId,
-        seed: PdaSeed,
-        account_id: AccountId,
-    ) -> Result<bool, ValidationError> {
-        Ok(match self.registry.get(&account_id) {
+    fn seed_derives(&self, program_id: ProgramId, seed: PdaSeed, account_id: AccountId) -> bool {
+        match self.registry.get(&account_id) {
             Some(Row {
                 kind: PrivateKind::Pda { seed: bound },
                 ..
             }) => *bound == (seed, program_id),
             Some(_) => false,
             None => account_id.matches_public_pda(&program_id, &seed),
-        })
-    }
-
-    fn witness_derives_account_id(&self, pre: &AccountWithMetadata) -> bool {
-        self.registry.contains_key(&pre.account_id)
-    }
-
-    fn finalize(&self) -> Result<(), ValidationError> {
-        assert!(
-            self.remaining_outputs.is_empty(),
-            "Inner call without a chained call found"
-        );
-        Ok(())
+        }
     }
 }
 

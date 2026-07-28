@@ -21,7 +21,7 @@ pub use nullifier::{
 };
 pub use program::PrivateAccountKind;
 pub use validation::{
-    Authorization, Backend, Resolved, ThreadedDiff, ValidationError, validate_state_diff,
+    Attestation, Authorization, Backend, ThreadedDiff, ValidationError, validate_state_diff,
 };
 
 pub mod account;

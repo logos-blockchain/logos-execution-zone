@@ -4,8 +4,8 @@ use std::{
 };
 
 use lee_core::{
-    Authorization, Backend, BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput,
-    Resolved, Timestamp, ValidationError,
+    Attestation, Authorization, Backend, BlockId, Commitment, Nullifier,
+    PrivacyPreservingCircuitOutput, Timestamp, ValidationError,
     account::{Account, AccountId, AccountWithMetadata},
     program::{ChainedCall, PdaSeed, ProgramId, ProgramOutput},
     validate_state_diff,
@@ -276,36 +276,21 @@ impl Backend for PublicEnv<'_> {
         program.execute(caller, &call.pre_states, &call.instruction_data)
     }
 
-    fn resolve_pre_state(
-        &mut self,
-        pre: &AccountWithMetadata,
-    ) -> Result<Resolved, ValidationError> {
+    fn attest(&self, pre: &AccountWithMetadata) -> Attestation {
         let authorization = if self.signers.contains(&pre.account_id) {
             Authorization::Holder
         } else {
             Authorization::None
         };
-        Ok(Resolved {
+        Attestation {
             account: self.state.get_account_by_id(pre.account_id),
             authorization,
-        })
+            exhibits_preimage: false,
+        }
     }
 
-    fn try_bind_pda(
-        &mut self,
-        program_id: ProgramId,
-        seed: PdaSeed,
-        account_id: AccountId,
-    ) -> Result<bool, ValidationError> {
-        Ok(account_id.matches_public_pda(&program_id, &seed))
-    }
-
-    fn witness_derives_account_id(&self, _pre: &AccountWithMetadata) -> bool {
-        false
-    }
-
-    fn finalize(&self) -> Result<(), ValidationError> {
-        Ok(())
+    fn seed_derives(&self, program_id: ProgramId, seed: PdaSeed, account_id: AccountId) -> bool {
+        account_id.matches_public_pda(&program_id, &seed)
     }
 }
 

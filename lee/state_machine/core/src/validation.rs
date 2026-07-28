@@ -37,9 +37,10 @@ pub enum Authorization {
     None,
 }
 
-pub struct Resolved {
+pub struct Attestation {
     pub account: Account,
     pub authorization: Authorization,
+    pub exhibits_preimage: bool,
 }
 
 pub trait Backend {
@@ -51,19 +52,9 @@ pub trait Backend {
         caller: Option<ProgramId>,
     ) -> Result<ProgramOutput, Self::Error>;
 
-    fn resolve_pre_state(&mut self, pre: &AccountWithMetadata)
-    -> Result<Resolved, ValidationError>;
+    fn attest(&self, pre: &AccountWithMetadata) -> Attestation;
 
-    fn try_bind_pda(
-        &mut self,
-        program_id: ProgramId,
-        seed: PdaSeed,
-        account_id: AccountId,
-    ) -> Result<bool, ValidationError>;
-
-    fn witness_derives_account_id(&self, pre: &AccountWithMetadata) -> bool;
-
-    fn finalize(&self) -> Result<(), ValidationError>;
+    fn seed_derives(&self, program_id: ProgramId, seed: PdaSeed, account_id: AccountId) -> bool;
 }
 
 fn intersect_window<T: Copy + Ord>(
@@ -88,6 +79,7 @@ pub fn validate_state_diff<E: Backend>(
     let mut state_diff: HashMap<AccountId, Account> = HashMap::new();
     let mut pre_states: Vec<AccountWithMetadata> = Vec::new();
     let mut globally_authorized: HashSet<AccountId> = HashSet::new();
+    let mut preimage_exhibited: HashSet<AccountId> = HashSet::new();
     let mut block_bounds: (Option<BlockId>, Option<BlockId>) = (None, None);
     let mut ts_bounds: (Option<Timestamp>, Option<Timestamp>) = (None, None);
 
@@ -113,16 +105,20 @@ pub fn validate_state_diff<E: Backend>(
         for pre in &program_output.pre_states {
             let account_id = pre.account_id;
 
-            let expected = if let Some(post) = state_diff.get(&account_id) {
-                post.clone()
-            } else {
-                pre_states.push(pre.clone());
-                let resolved = env.resolve_pre_state(pre)?;
-                if matches!(resolved.authorization, Authorization::Holder) {
-                    globally_authorized.insert(account_id);
-                }
-                resolved.account
-            };
+            let expected = state_diff.get(&account_id).map_or_else(
+                || {
+                    pre_states.push(pre.clone());
+                    let attestation = env.attest(pre);
+                    if matches!(attestation.authorization, Authorization::Holder) {
+                        globally_authorized.insert(account_id);
+                    }
+                    if attestation.exhibits_preimage {
+                        preimage_exhibited.insert(account_id);
+                    }
+                    attestation.account
+                },
+                Clone::clone,
+            );
             if pre.account != expected {
                 return Err(ValidationError::ProgramBehavior(
                     InvalidProgramBehaviorError::InconsistentAccountPreState {
@@ -137,7 +133,7 @@ pub fn validate_state_diff<E: Backend>(
             let mut seed_authorizes = false;
             if let Some(caller) = caller_data.program_id {
                 for &seed in &chained_call.pda_seeds {
-                    if env.try_bind_pda(caller, seed, account_id)? {
+                    if env.seed_derives(caller, seed, account_id) {
                         seed_authorizes = true;
                         break;
                     }
@@ -209,7 +205,7 @@ pub fn validate_state_diff<E: Backend>(
 
             match claim {
                 Claim::Key => {
-                    if !(indeed_authorized[index] || env.witness_derives_account_id(pre)) {
+                    if !(indeed_authorized[index] || preimage_exhibited.contains(&account_id)) {
                         return Err(ValidationError::ProgramBehavior(
                             InvalidProgramBehaviorError::UnprovenAccountClaim { account_id },
                         )
@@ -217,7 +213,7 @@ pub fn validate_state_diff<E: Backend>(
                     }
                 }
                 Claim::Pda(seed) => {
-                    if !env.try_bind_pda(chained_call.program_id, seed, account_id)? {
+                    if !env.seed_derives(chained_call.program_id, seed, account_id) {
                         return Err(ValidationError::ProgramBehavior(
                             InvalidProgramBehaviorError::MismatchedPdaClaim { account_id },
                         )
@@ -270,8 +266,6 @@ pub fn validate_state_diff<E: Backend>(
     let timestamp_validity_window: TimestampValidityWindow = ts_bounds
         .try_into()
         .map_err(|_err| ValidationError::OutOfValidityWindow)?;
-
-    env.finalize()?;
 
     let accounts: Vec<(AccountWithMetadata, Account)> = pre_states
         .into_iter()
