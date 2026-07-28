@@ -271,13 +271,12 @@ impl AccountManager {
                     let mut random_seed: [u8; 32] = [0; 32];
                     OsRng.fill_bytes(&mut random_seed);
                     let pre = AccountPreparedData {
-                        nsk: None,
+                        nullifier: PreparedNullifier::Foreign,
                         npk,
                         kind,
                         identifier,
                         vpk,
                         pre_state: auth_acc,
-                        proof: None,
                         random_seed,
                     };
 
@@ -296,13 +295,12 @@ impl AccountManager {
                     let mut random_seed: [u8; 32] = [0; 32];
                     OsRng.fill_bytes(&mut random_seed);
                     let pre = AccountPreparedData {
-                        nsk: None,
+                        nullifier: PreparedNullifier::Foreign,
                         npk,
                         kind,
                         identifier,
                         vpk,
                         pre_state: auth_acc,
-                        proof: None,
                         random_seed,
                     };
                     State::Private(Box::new(pre))
@@ -395,12 +393,20 @@ impl AccountManager {
                 State::Public { .. } | State::PublicKeycard { .. } => None,
             })
             .map(|pre| {
-                let nonce = if pre.proof.is_some() {
-                    pre.pre_state.account.nonce.private_account_nonce_increment(
-                        pre.nsk.as_ref().expect("update variant must have nsk"),
-                    )
-                } else {
-                    lee_core::account::Nonce::private_account_nonce_init(&pre.pre_state.account_id)
+                let nonce = match &pre.nullifier {
+                    PreparedNullifier::Owned {
+                        nsk,
+                        proof: Some(_),
+                    } => pre
+                        .pre_state
+                        .account
+                        .nonce
+                        .private_account_nonce_increment(nsk),
+                    PreparedNullifier::Owned { proof: None, .. } | PreparedNullifier::Foreign => {
+                        lee_core::account::Nonce::private_account_nonce_init(
+                            &pre.pre_state.account_id,
+                        )
+                    }
                 };
                 let esk = lee_core::EphemeralSecretKey::new(
                     &pre.pre_state.account_id,
@@ -428,16 +434,21 @@ impl AccountManager {
                 State::Private(pre) => Some(pre),
             })
             .map(|pre| {
-                let nullifier = match (pre.nsk, pre.proof.clone()) {
-                    (Some(nsk), Some(membership_proof)) => NullifierWitness::Update {
+                let nullifier = match &pre.nullifier {
+                    PreparedNullifier::Owned {
                         nsk,
-                        membership_proof,
+                        proof: Some(membership_proof),
+                    } => NullifierWitness::Update {
+                        nsk: *nsk,
+                        membership_proof: membership_proof.clone(),
                         pre_account: pre.pre_state.account.clone(),
                     },
-                    _ => NullifierWitness::Init {
-                        npk: pre.npk,
-                        commitment_root: self.dummy_commitment_root,
-                    },
+                    PreparedNullifier::Owned { proof: None, .. } | PreparedNullifier::Foreign => {
+                        NullifierWitness::Init {
+                            npk: pre.npk,
+                            commitment_root: self.dummy_commitment_root,
+                        }
+                    }
                 };
                 PrivateWitness {
                     vpk: pre.vpk.clone(),
@@ -511,14 +522,26 @@ impl AccountManager {
     }
 }
 
+/// What the wallet knows about consuming an account at preparation time: whether it holds the
+/// spend key. Init-vs-update is *not* known here — it is decided later by
+/// [`fetch_private_proofs_and_root`], since a fresh owned account has no commitment in the tree
+/// yet. Keeping the proof inside `Owned` makes a membership proof without a spend key
+/// unrepresentable.
+enum PreparedNullifier {
+    Foreign,
+    Owned {
+        nsk: NullifierSecretKey,
+        proof: Option<MembershipProof>,
+    },
+}
+
 struct AccountPreparedData {
-    nsk: Option<NullifierSecretKey>,
+    nullifier: PreparedNullifier,
     npk: NullifierPublicKey,
     kind: PrivateKind,
     identifier: Identifier,
     vpk: ViewingPublicKey,
     pre_state: AccountWithMetadata,
-    proof: Option<MembershipProof>,
     random_seed: [u8; 32],
 }
 
@@ -560,13 +583,12 @@ fn private_key_tree_acc_preparation(
     OsRng.fill_bytes(&mut random_seed);
 
     Ok(AccountPreparedData {
-        nsk: Some(nsk),
+        nullifier: PreparedNullifier::Owned { nsk, proof: None },
         npk: from_npk,
         kind,
         identifier: from_identifier,
         vpk: from_vpk,
         pre_state: sender_pre,
-        proof: None,
         random_seed,
     })
 }
@@ -593,13 +615,12 @@ fn private_shared_acc_preparation(
     OsRng.fill_bytes(&mut random_seed);
 
     AccountPreparedData {
-        nsk: Some(nsk),
+        nullifier: PreparedNullifier::Owned { nsk, proof: None },
         npk,
         kind,
         identifier,
         vpk,
         pre_state,
-        proof: None,
         random_seed,
     }
 }
@@ -627,7 +648,18 @@ async fn fetch_private_proofs_and_root(
     validate_proofs_against_root(&commitments, &proofs, root)?;
 
     for (pre, proof) in private.iter_mut().zip(proofs) {
-        pre.proof = proof;
+        match (&mut pre.nullifier, proof) {
+            (PreparedNullifier::Owned { proof: slot, .. }, proof) => *slot = proof,
+            (PreparedNullifier::Foreign, None) => {}
+            // The caller declared an account foreign, but it is spendable on-chain and the wallet
+            // holds no key for it. Building an init witness here would nullify an already-consumed
+            // initialization; fail now rather than ship a doomed transaction.
+            (PreparedNullifier::Foreign, Some(_)) => {
+                return Err(ExecutionFailureKind::AccountDataError(
+                    pre.pre_state.account_id,
+                ));
+            }
+        }
     }
 
     Ok(root)
