@@ -2,7 +2,7 @@ use lee_core::{PrivacyPreservingCircuitInput, program::ChainedCall, validate_sta
 use risc0_zkvm::guest::env;
 
 mod output;
-mod private_env;
+mod private_backend;
 
 fn main() {
     let PrivacyPreservingCircuitInput {
@@ -21,7 +21,7 @@ fn main() {
         pre_states: Vec::new(),
         pda_seeds: Vec::new(),
     };
-    let mut protocol_env = private_env::PrivateEnv::new(private_rows, program_outputs);
+    let mut protocol_env = private_backend::PrivateBackend::new(private_rows, program_outputs);
     let threaded = validate_state_diff(&mut protocol_env, initial_call)
         .expect("private transaction validation failed");
 

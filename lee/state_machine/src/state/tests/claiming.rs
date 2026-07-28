@@ -335,8 +335,9 @@ fn key_claim_on_pda_shaped_address_is_rejected() {
     assert_eq!(state.get_account_by_id(squatted), Account::default());
 }
 
-// The private mirror of the squat, driven through the circuit so PrivateEnv's arm is exercised
-// rather than argued: the address is `Public` in the witness with no signature behind it.
+// The private mirror of the squat, driven through the circuit so PrivateBackend's arm is exercised
+// rather than argued: the address carries no witness row — it is public by absence — with no
+// signature behind it.
 #[test]
 fn key_claim_on_pda_shaped_address_is_rejected_when_executed_privately() {
     let victim_program = crate::test_methods::simple_balance_transfer();

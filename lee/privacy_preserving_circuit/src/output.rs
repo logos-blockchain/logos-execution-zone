@@ -4,10 +4,10 @@ use lee_core::{
     account::{Account, AccountId},
 };
 
-use crate::private_env::{PrivateEnv, Row};
+use crate::private_backend::{PrivateBackend, Row};
 
 pub fn compute_circuit_output(
-    env: PrivateEnv,
+    env: PrivateBackend,
     threaded: ThreadedDiff,
 ) -> PrivacyPreservingCircuitOutput {
     let mut registry = env.into_registry();

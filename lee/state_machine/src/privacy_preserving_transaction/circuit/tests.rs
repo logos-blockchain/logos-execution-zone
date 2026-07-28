@@ -841,7 +841,7 @@ fn regular_authorized_without_held_key_is_rejected() {
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
 }
 
-// Gate for the chain check in `PrivateEnv::new`: a regular account id commits only `npk`, so
+// Gate for the chain check in `PrivateBackend::new`: a regular account id commits only `npk`, so
 // `npk == KDF(KDF(ask))` is the sole binding between an id and an authorization credential. A
 // well-formed but non-chaining `ask` must not authorize an account whose `npk` the prover merely
 // knows — the check is verified against the same row's nullifier witness.

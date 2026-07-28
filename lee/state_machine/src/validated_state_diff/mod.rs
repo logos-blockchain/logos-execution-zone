@@ -77,7 +77,7 @@ impl ValidatedStateDiff {
             pda_seeds: vec![],
         };
 
-        let mut env = PublicEnv {
+        let mut env = PublicBackend {
             state,
             signers: signer_account_ids.iter().copied().collect(),
         };
@@ -257,12 +257,12 @@ impl ValidatedStateDiff {
     }
 }
 
-struct PublicEnv<'state> {
+struct PublicBackend<'state> {
     state: &'state V03State,
     signers: HashSet<AccountId>,
 }
 
-impl Backend for PublicEnv<'_> {
+impl Backend for PublicBackend<'_> {
     type Error = LeeError;
 
     fn output_for_call(

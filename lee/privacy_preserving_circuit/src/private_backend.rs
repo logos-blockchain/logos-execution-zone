@@ -25,12 +25,12 @@ pub struct Row {
     pub new_nonce: Nonce,
 }
 
-pub struct PrivateEnv {
+pub struct PrivateBackend {
     registry: HashMap<AccountId, Row>,
     remaining_outputs: VecDeque<ProgramOutput>,
 }
 
-impl PrivateEnv {
+impl PrivateBackend {
     #[must_use]
     pub fn new(private_rows: Vec<PrivateWitness>, program_outputs: Vec<ProgramOutput>) -> Self {
         let mut registry: HashMap<AccountId, Row> = HashMap::new();
@@ -126,7 +126,7 @@ impl PrivateEnv {
     }
 }
 
-impl Backend for PrivateEnv {
+impl Backend for PrivateBackend {
     type Error = ValidationError;
 
     fn output_for_call(
