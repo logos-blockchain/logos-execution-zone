@@ -138,7 +138,7 @@ fn validity_window_works_in_privacy_preserving_transactions(
         let (output, proof) = crate::privacy_preserving_transaction::circuit::execute_and_prove(
             vec![pre],
             Program::serialize_instruction(instruction).unwrap(),
-            vec![InputAccountIdentity::Private(PrivateWitness {
+            vec![PrivateWitness {
                 vpk: account_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
@@ -147,7 +147,7 @@ fn validity_window_works_in_privacy_preserving_transactions(
                     npk: account_keys.npk(),
                     commitment_root: DUMMY_COMMITMENT_HASH,
                 },
-            })],
+            }],
             &validity_window_program.into(),
         )
         .unwrap();
@@ -206,7 +206,7 @@ fn timestamp_validity_window_works_in_privacy_preserving_transactions(
         let (output, proof) = crate::privacy_preserving_transaction::circuit::execute_and_prove(
             vec![pre],
             Program::serialize_instruction(instruction).unwrap(),
-            vec![InputAccountIdentity::Private(PrivateWitness {
+            vec![PrivateWitness {
                 vpk: account_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
@@ -215,7 +215,7 @@ fn timestamp_validity_window_works_in_privacy_preserving_transactions(
                     npk: account_keys.npk(),
                     commitment_root: DUMMY_COMMITMENT_HASH,
                 },
-            })],
+            }],
             &validity_window_program.into(),
         )
         .unwrap();

@@ -4,12 +4,13 @@ use anyhow::Result;
 use keycard_wallet::{KeycardWallet, python_path};
 use lee::{AccountId, PrivateKey, PublicKey, Signature};
 use lee_core::{
-    AuthorizationSecretKey, Commitment, CommitmentSetDigest, Identifier, InputAccountIdentity,
-    MembershipProof, NullifierPublicKey, NullifierSecretKey, NullifierWitness, PrivateKind,
+    AuthorizationSecretKey, Commitment, CommitmentSetDigest, Identifier, MembershipProof,
+    NullifierPublicKey, NullifierSecretKey, NullifierWitness, PrivateAccountKind, PrivateKind,
     PrivateWitness, SharedSecretKey,
     account::{AccountWithMetadata, Nonce},
     compute_digest_for_path, derive_nullifier_secret_key,
     encryption::ViewingPublicKey,
+    program::{PdaSeed, ProgramId},
 };
 use rand::{RngCore as _, rngs::OsRng};
 
@@ -41,6 +42,7 @@ pub enum AccountIdentity {
         npk: NullifierPublicKey,
         vpk: ViewingPublicKey,
         identifier: Identifier,
+        seed: (PdaSeed, ProgramId),
     },
     /// A shared regular private account with externally-provided keys (e.g. from GMS).
     PrivateShared {
@@ -56,6 +58,7 @@ pub enum AccountIdentity {
         npk: NullifierPublicKey,
         vpk: ViewingPublicKey,
         identifier: Identifier,
+        seed: (PdaSeed, ProgramId),
     },
 }
 
@@ -89,12 +92,14 @@ impl fmt::Debug for AccountIdentity {
                 npk,
                 vpk,
                 identifier,
+                seed,
             } => f
                 .debug_struct("PrivatePdaForeign")
                 .field("account_id", account_id)
                 .field("npk", npk)
                 .field("vpk", vpk)
                 .field("identifier", identifier)
+                .field("seed", seed)
                 .finish(),
             Self::PrivateShared {
                 vpk, identifier, ..
@@ -109,6 +114,7 @@ impl fmt::Debug for AccountIdentity {
                 npk,
                 vpk,
                 identifier,
+                seed,
                 ..
             } => f
                 .debug_struct("PrivatePdaShared")
@@ -117,6 +123,7 @@ impl fmt::Debug for AccountIdentity {
                 .field("npk", npk)
                 .field("vpk", vpk)
                 .field("identifier", identifier)
+                .field("seed", seed)
                 .finish(),
         }
     }
@@ -176,7 +183,7 @@ enum State {
         account: AccountWithMetadata,
         key_path: String,
     },
-    Private(AccountPreparedData),
+    Private(Box<AccountPreparedData>),
 }
 
 pub struct AccountManager {
@@ -246,10 +253,11 @@ impl AccountManager {
 
                     State::PublicKeycard { account, key_path }
                 }
-                AccountIdentity::PrivateOwned(account_id) => {
-                    let pre = private_key_tree_acc_preparation(wallet, account_id, false)?;
+                AccountIdentity::PrivateOwned(account_id)
+                | AccountIdentity::PrivatePdaOwned(account_id) => {
+                    let pre = private_key_tree_acc_preparation(wallet, account_id)?;
 
-                    State::Private(pre)
+                    State::Private(Box::new(pre))
                 }
                 AccountIdentity::PrivateForeign {
                     npk,
@@ -273,20 +281,17 @@ impl AccountManager {
                         random_seed,
                     };
 
-                    State::Private(pre)
-                }
-                AccountIdentity::PrivatePdaOwned(account_id) => {
-                    let pre = private_key_tree_acc_preparation(wallet, account_id, true)?;
-                    State::Private(pre)
+                    State::Private(Box::new(pre))
                 }
                 AccountIdentity::PrivatePdaForeign {
                     account_id,
                     npk,
                     vpk,
                     identifier,
+                    seed,
                 } => {
                     let acc = lee_core::account::Account::default();
-                    let kind = PreparedKind::Pda;
+                    let kind = PreparedKind::Pda { seed };
                     let auth_acc = AccountWithMetadata::new(acc, kind.is_authorized(), account_id);
                     let mut random_seed: [u8; 32] = [0; 32];
                     OsRng.fill_bytes(&mut random_seed);
@@ -300,7 +305,7 @@ impl AccountManager {
                         proof: None,
                         random_seed,
                     };
-                    State::Private(pre)
+                    State::Private(Box::new(pre))
                 }
                 AccountIdentity::PrivateShared {
                     ask,
@@ -320,7 +325,7 @@ impl AccountManager {
                         PreparedKind::Regular { ask: Some(ask) },
                     );
 
-                    State::Private(pre)
+                    State::Private(Box::new(pre))
                 }
                 AccountIdentity::PrivatePdaShared {
                     account_id,
@@ -328,6 +333,7 @@ impl AccountManager {
                     npk,
                     vpk,
                     identifier,
+                    seed,
                 } => {
                     let pre = private_shared_acc_preparation(
                         wallet,
@@ -336,10 +342,10 @@ impl AccountManager {
                         npk,
                         vpk,
                         identifier,
-                        PreparedKind::Pda,
+                        PreparedKind::Pda { seed },
                     );
 
-                    State::Private(pre)
+                    State::Private(Box::new(pre))
                 }
             };
 
@@ -408,37 +414,41 @@ impl AccountManager {
             .collect()
     }
 
-    /// Build the per-account input vec for the privacy-preserving circuit. Each variant carries
-    /// exactly the fields the circuit's code path for that account needs, with the ephemeral
-    /// keys (`ssk`) drawn from the cached values that `private_account_keys` and the message
-    /// construction also use, so all three views agree on the same ephemeral key.
-    pub fn account_identities(&self) -> Vec<InputAccountIdentity> {
+    /// Build the witness row for every private account. Public accounts contribute no row —
+    /// that absence is what declares them public. Each row carries exactly the fields the
+    /// circuit's code path for that account needs, with the ephemeral keys (`ssk`) drawn from
+    /// the cached values that `private_account_keys` and the message construction also use, so
+    /// all three views agree on the same ephemeral key. Order is irrelevant: the circuit keys
+    /// rows by the `AccountId` each one derives.
+    pub fn private_rows(&self) -> Vec<PrivateWitness> {
         self.states
             .iter()
-            .map(|state| match state {
-                State::Public { .. } | State::PublicKeycard { .. } => InputAccountIdentity::Public,
-                State::Private(pre) => {
-                    let kind = match &pre.kind {
-                        PreparedKind::Regular { ask } => PrivateKind::Regular { ask: *ask },
-                        PreparedKind::Pda => PrivateKind::Pda { seed: None },
-                    };
-                    let nullifier = match (pre.nsk, pre.proof.clone()) {
-                        (Some(nsk), Some(membership_proof)) => NullifierWitness::Update {
-                            nsk,
-                            membership_proof,
-                        },
-                        _ => NullifierWitness::Init {
-                            npk: pre.npk,
-                            commitment_root: self.dummy_commitment_root,
-                        },
-                    };
-                    InputAccountIdentity::Private(PrivateWitness {
-                        vpk: pre.vpk.clone(),
-                        random_seed: pre.random_seed,
-                        identifier: pre.identifier,
-                        kind,
-                        nullifier,
-                    })
+            .filter_map(|state| match state {
+                State::Public { .. } | State::PublicKeycard { .. } => None,
+                State::Private(pre) => Some(pre),
+            })
+            .map(|pre| {
+                let kind = match &pre.kind {
+                    PreparedKind::Regular { ask } => PrivateKind::Regular { ask: *ask },
+                    PreparedKind::Pda { seed } => PrivateKind::Pda { seed: *seed },
+                };
+                let nullifier = match (pre.nsk, pre.proof.clone()) {
+                    (Some(nsk), Some(membership_proof)) => NullifierWitness::Update {
+                        nsk,
+                        membership_proof,
+                        pre_account: pre.pre_state.account.clone(),
+                    },
+                    _ => NullifierWitness::Init {
+                        npk: pre.npk,
+                        commitment_root: self.dummy_commitment_root,
+                    },
+                };
+                PrivateWitness {
+                    vpk: pre.vpk.clone(),
+                    random_seed: pre.random_seed,
+                    identifier: pre.identifier,
+                    kind,
+                    nullifier,
                 }
             })
             .collect()
@@ -507,7 +517,7 @@ impl AccountManager {
 
 enum PreparedKind {
     Regular { ask: Option<AuthorizationSecretKey> },
-    Pda,
+    Pda { seed: (PdaSeed, ProgramId) },
 }
 
 impl PreparedKind {
@@ -530,7 +540,6 @@ struct AccountPreparedData {
 fn private_key_tree_acc_preparation(
     wallet: &WalletCore,
     account_id: AccountId,
-    is_pda: bool,
 ) -> Result<AccountPreparedData, ExecutionFailureKind> {
     let Some(from_acc) = wallet.storage.key_chain().private_account(account_id) else {
         return Err(ExecutionFailureKind::KeyNotFoundError);
@@ -544,12 +553,15 @@ fn private_key_tree_acc_preparation(
 
     // TODO: Technically we could allow unauthorized owned accounts, but currently we don't have
     // support from that in the wallet.
-    let kind = if is_pda {
-        PreparedKind::Pda
-    } else {
-        PreparedKind::Regular {
+    let kind = match from_acc.kind {
+        PrivateAccountKind::Regular(_) => PreparedKind::Regular {
             ask: Some(from_keys.private_key_holder.authorization_secret_key),
-        }
+        },
+        PrivateAccountKind::Pda {
+            program_id, seed, ..
+        } => PreparedKind::Pda {
+            seed: (*seed, *program_id),
+        },
     };
 
     let sender_pre =
@@ -612,7 +624,7 @@ async fn fetch_private_proofs_and_root(
         .filter_map(|state| match state {
             State::Private(pre) => {
                 let commitment = wallet.get_private_account_commitment(pre.pre_state.account_id)?;
-                Some((pre, commitment))
+                Some((&mut **pre, commitment))
             }
             State::Public { .. } | State::PublicKeycard { .. } => None,
         })

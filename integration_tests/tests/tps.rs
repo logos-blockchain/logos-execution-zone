@@ -22,8 +22,8 @@ use lee::{
     public_transaction as putx,
 };
 use lee_core::{
-    DUMMY_COMMITMENT_HASH, InputAccountIdentity, MembershipProof, NullifierPublicKey,
-    NullifierWitness, PrivateKind, PrivateWitness,
+    DUMMY_COMMITMENT_HASH, MembershipProof, NullifierPublicKey, NullifierWitness, PrivateKind,
+    PrivateWitness,
     account::{AccountWithMetadata, Nonce, data::Data},
     encryption::ViewingPublicKey,
 };
@@ -259,13 +259,14 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
     let sender_vpk = ViewingPublicKey::from_seed(&[99_u8; 32], &[100_u8; 32]);
     let sender_npk = NullifierPublicKey::from(&sender_nsk);
     let sender_ask = [3; 32];
+    let sender_account = Account {
+        balance: 100,
+        nonce: Nonce(0xdead_beef),
+        program_owner: program.id(),
+        data: Data::default(),
+    };
     let sender_pre = AccountWithMetadata::new(
-        Account {
-            balance: 100,
-            nonce: Nonce(0xdead_beef),
-            program_owner: program.id(),
-            data: Data::default(),
-        },
+        sender_account.clone(),
         true,
         AccountId::for_regular_private_account(&sender_npk, &sender_vpk, 0),
     );
@@ -293,7 +294,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
         })
         .unwrap(),
         vec![
-            InputAccountIdentity::Private(PrivateWitness {
+            PrivateWitness {
                 vpk: sender_vpk,
                 random_seed: [0; 32],
                 identifier: 0,
@@ -303,9 +304,10 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
                 nullifier: NullifierWitness::Update {
                     nsk: sender_nsk,
                     membership_proof: proof,
+                    pre_account: sender_account,
                 },
-            }),
-            InputAccountIdentity::Private(PrivateWitness {
+            },
+            PrivateWitness {
                 vpk: recipient_vpk,
                 random_seed: [0; 32],
                 identifier: 0,
@@ -314,7 +316,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
                     npk: recipient_npk,
                     commitment_root: DUMMY_COMMITMENT_HASH,
                 },
-            }),
+            },
         ],
         &program.into(),
     )

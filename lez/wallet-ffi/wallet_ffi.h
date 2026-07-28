@@ -239,6 +239,8 @@ typedef struct FfiInstructionWords {
   enum WalletFfiError error;
 } FfiInstructionWords;
 
+typedef struct FfiBytes32 FfiPdaSeed;
+
 /**
  * Struct representing an account identity, given to `AccountManager` at intialization.
  */
@@ -255,6 +257,8 @@ typedef struct FfiAccountIdentity {
   const uint8_t *viewing_public_key;
   uintptr_t viewing_public_key_len;
   struct FfiU128 identifier;
+  FfiPdaSeed pda_seed;
+  struct FfiProgramId authority_program_id;
 } FfiAccountIdentity;
 
 /**
@@ -320,8 +324,6 @@ typedef struct LabelList {
   uintptr_t labels_size;
   enum WalletFfiError error;
 } LabelList;
-
-typedef struct FfiBytes32 FfiPdaSeed;
 
 typedef struct FfiBytes32 FfiNullifierPublicKey;
 

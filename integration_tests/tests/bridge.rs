@@ -18,7 +18,7 @@ use lee::{
     AccountId, execute_and_prove, privacy_preserving_transaction, program::Program,
     public_transaction,
 };
-use lee_core::{InputAccountIdentity, account::AccountWithMetadata};
+use lee_core::account::AccountWithMetadata;
 use log::info;
 use logos_blockchain_core::mantle::{ledger::Inputs, ops::channel::deposit::DepositOp};
 use logos_blockchain_http_api_common::bodies::{
@@ -195,7 +195,7 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     let (output, proof) = execute_and_prove(
         vec![bridge_pre.clone(), vault_pre.clone()],
         instruction,
-        vec![InputAccountIdentity::Public, InputAccountIdentity::Public],
+        vec![],
         &program_with_deps,
     )
     .context("Failed to execute/prove bridge deposit")?;

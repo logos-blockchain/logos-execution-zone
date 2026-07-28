@@ -7,9 +7,9 @@
 use std::collections::HashMap;
 
 use lee_core::{
-    AuthorizationSecretKey, BlockId, Commitment, DUMMY_COMMITMENT_HASH, Identifier,
-    InputAccountIdentity, Nullifier, NullifierPublicKey, NullifierSecretKey, NullifierWitness,
-    PrivateAccountKind, PrivateKind, PrivateWitness, Timestamp,
+    AuthorizationSecretKey, BlockId, Commitment, DUMMY_COMMITMENT_HASH, Identifier, Nullifier,
+    NullifierPublicKey, NullifierSecretKey, NullifierWitness, PrivateAccountKind, PrivateKind,
+    PrivateWitness, Timestamp,
     account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
     derive_nullifier_secret_key,
     encryption::ViewingPublicKey,
@@ -304,19 +304,16 @@ fn shielded_balance_transfer_for_tests(
     let (output, proof) = crate::privacy_preserving_transaction::circuit::execute_and_prove(
         vec![sender, recipient],
         Program::serialize_instruction(balance_to_move).unwrap(),
-        vec![
-            InputAccountIdentity::Public,
-            InputAccountIdentity::Private(PrivateWitness {
-                vpk: recipient_keys.vpk(),
-                random_seed: [0; 32],
-                identifier: 0,
-                kind: PrivateKind::Regular { ask: None },
-                nullifier: NullifierWitness::Init {
-                    npk: recipient_keys.npk(),
-                    commitment_root: DUMMY_COMMITMENT_HASH,
-                },
-            }),
-        ],
+        vec![PrivateWitness {
+            vpk: recipient_keys.vpk(),
+            random_seed: [0; 32],
+            identifier: 0,
+            kind: PrivateKind::Regular { ask: None },
+            nullifier: NullifierWitness::Init {
+                npk: recipient_keys.npk(),
+                commitment_root: DUMMY_COMMITMENT_HASH,
+            },
+        }],
         &crate::test_methods::simple_balance_transfer().into(),
     )
     .unwrap();
@@ -357,7 +354,7 @@ fn private_balance_transfer_for_tests(
         vec![sender_pre, recipient_pre],
         Program::serialize_instruction(balance_to_move).unwrap(),
         vec![
-            InputAccountIdentity::Private(PrivateWitness {
+            PrivateWitness {
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
@@ -369,9 +366,10 @@ fn private_balance_transfer_for_tests(
                     membership_proof: state
                         .get_proof_for_commitment(&sender_commitment)
                         .expect("sender's commitment must be in state"),
+                    pre_account: sender_private_account.clone(),
                 },
-            }),
-            InputAccountIdentity::Private(PrivateWitness {
+            },
+            PrivateWitness {
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
@@ -380,7 +378,7 @@ fn private_balance_transfer_for_tests(
                     npk: recipient_keys.npk(),
                     commitment_root: DUMMY_COMMITMENT_HASH,
                 },
-            }),
+            },
         ],
         &program.into(),
     )
@@ -417,23 +415,21 @@ fn deshielded_balance_transfer_for_tests(
     let (output, proof) = crate::privacy_preserving_transaction::circuit::execute_and_prove(
         vec![sender_pre, recipient_pre],
         Program::serialize_instruction(balance_to_move).unwrap(),
-        vec![
-            InputAccountIdentity::Private(PrivateWitness {
-                vpk: sender_keys.vpk(),
-                random_seed: [0; 32],
-                identifier: 0,
-                kind: PrivateKind::Regular {
-                    ask: Some(sender_keys.ask),
-                },
-                nullifier: NullifierWitness::Update {
-                    nsk: sender_keys.nsk(),
-                    membership_proof: state
-                        .get_proof_for_commitment(&sender_commitment)
-                        .expect("sender's commitment must be in state"),
-                },
-            }),
-            InputAccountIdentity::Public,
-        ],
+        vec![PrivateWitness {
+            vpk: sender_keys.vpk(),
+            random_seed: [0; 32],
+            identifier: 0,
+            kind: PrivateKind::Regular {
+                ask: Some(sender_keys.ask),
+            },
+            nullifier: NullifierWitness::Update {
+                nsk: sender_keys.nsk(),
+                membership_proof: state
+                    .get_proof_for_commitment(&sender_commitment)
+                    .expect("sender's commitment must be in state"),
+                pre_account: sender_private_account.clone(),
+            },
+        }],
         &program.into(),
     )
     .unwrap();

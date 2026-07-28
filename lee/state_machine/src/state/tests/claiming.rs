@@ -296,7 +296,7 @@ fn unauthorized_public_account_claiming_fails_when_executed_privately() {
     let result = execute_and_prove(
         vec![public_account],
         Program::serialize_instruction(0_u128).unwrap(),
-        vec![InputAccountIdentity::Public],
+        vec![],
         &program.into(),
     );
 
@@ -348,7 +348,7 @@ fn key_claim_on_pda_shaped_address_is_rejected_when_executed_privately() {
     let result = execute_and_prove(
         vec![squatted_pre],
         Program::serialize_instruction(()).unwrap(),
-        vec![InputAccountIdentity::Public],
+        vec![],
         &attacker_program.into(),
     );
 
@@ -371,7 +371,7 @@ fn authorized_public_account_claiming_succeeds_when_executed_privately() {
     let mut state =
         V03State::new().with_private_accounts([(sender_commitment.clone(), sender_init_nullifier)]);
     let sender_pre = AccountWithMetadata::new(
-        sender_private_account,
+        sender_private_account.clone(),
         true,
         sender_keys.regular_account_id(0),
     );
@@ -385,23 +385,21 @@ fn authorized_public_account_claiming_succeeds_when_executed_privately() {
     let (output, proof) = execute_and_prove(
         vec![sender_pre, recipient_pre],
         Program::serialize_instruction(balance).unwrap(),
-        vec![
-            InputAccountIdentity::Private(PrivateWitness {
-                vpk: sender_keys.vpk(),
-                random_seed: [0; 32],
-                identifier: 0,
-                kind: PrivateKind::Regular {
-                    ask: Some(sender_keys.ask),
-                },
-                nullifier: NullifierWitness::Update {
-                    nsk: sender_keys.nsk(),
-                    membership_proof: state
-                        .get_proof_for_commitment(&sender_commitment)
-                        .expect("sender's commitment must be in state"),
-                },
-            }),
-            InputAccountIdentity::Public,
-        ],
+        vec![PrivateWitness {
+            vpk: sender_keys.vpk(),
+            random_seed: [0; 32],
+            identifier: 0,
+            kind: PrivateKind::Regular {
+                ask: Some(sender_keys.ask),
+            },
+            nullifier: NullifierWitness::Update {
+                nsk: sender_keys.nsk(),
+                membership_proof: state
+                    .get_proof_for_commitment(&sender_commitment)
+                    .expect("sender's commitment must be in state"),
+                pre_account: sender_private_account,
+            },
+        }],
         &program.into(),
     )
     .unwrap();
@@ -500,12 +498,15 @@ fn private_chained_call(number_of_calls: u32) {
     };
     let to_expected_commitment = Commitment::new(&to_account_id, &to_expected_post);
 
+    let from_pre_account = from_account.account.clone();
+    let to_pre_account = to_account.account.clone();
+
     // Act
     let (output, proof) = execute_and_prove(
         vec![to_account, from_account],
         Program::serialize_instruction(instruction).unwrap(),
         vec![
-            InputAccountIdentity::Private(PrivateWitness {
+            PrivateWitness {
                 vpk: from_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
@@ -517,9 +518,10 @@ fn private_chained_call(number_of_calls: u32) {
                     membership_proof: state
                         .get_proof_for_commitment(&from_commitment)
                         .expect("from's commitment must be in state"),
+                    pre_account: from_pre_account,
                 },
-            }),
-            InputAccountIdentity::Private(PrivateWitness {
+            },
+            PrivateWitness {
                 vpk: to_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
@@ -531,8 +533,9 @@ fn private_chained_call(number_of_calls: u32) {
                     membership_proof: state
                         .get_proof_for_commitment(&to_commitment)
                         .expect("to's commitment must be in state"),
+                    pre_account: to_pre_account,
                 },
-            }),
+            },
         ],
         &program_with_deps,
     )

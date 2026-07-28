@@ -1,89 +1,128 @@
 use std::{
-    collections::{HashMap, HashSet, VecDeque, hash_map::Entry},
+    collections::{HashMap, HashSet, VecDeque},
     convert::Infallible,
 };
 
 use lee_core::{
-    Authorization, AuthorizationSecretKey, Backend, InputAccountIdentity, NullifierPublicKey,
-    NullifierWitness, PrivateKind, PrivateWitness, Resolved, ValidationError,
-    account::{AccountId, AccountWithMetadata},
-    derive_nullifier_secret_key,
+    Authorization, AuthorizationSecretKey, Backend, Commitment, CommitmentSetDigest, Identifier,
+    Nullifier, NullifierPublicKey, NullifierWitness, PrivateKind, PrivateWitness, Resolved,
+    ValidationError,
+    account::{Account, AccountId, AccountWithMetadata, Nonce},
+    compute_digest_for_path, derive_nullifier_secret_key,
+    encryption::ViewingPublicKey,
     program::{ChainedCall, PdaSeed, ProgramId, ProgramOutput},
 };
 use risc0_zkvm::{guest::env, serde::to_vec};
 
-pub struct PrivateEnv<'ids> {
-    account_identities: &'ids [InputAccountIdentity],
+pub struct Row {
+    pub kind: PrivateKind,
+    pub vpk: ViewingPublicKey,
+    pub random_seed: [u8; 32],
+    pub identifier: Identifier,
+    pub npk: NullifierPublicKey,
+    pub pre: Account,
+    pub nullifier: (Nullifier, CommitmentSetDigest),
+    pub new_nonce: Nonce,
+}
+
+pub struct PrivateEnv {
+    registry: HashMap<AccountId, Row>,
     remaining_outputs: VecDeque<ProgramOutput>,
-    private_pda_bound_positions: HashMap<usize, (ProgramId, PdaSeed)>,
-    pda_family_binding: HashMap<(ProgramId, PdaSeed), AccountId>,
-    next_position: usize,
-    position_by_id: HashMap<AccountId, usize>,
-    proven_derivations: HashSet<AccountId>,
 }
 
-impl<'ids> PrivateEnv<'ids> {
+impl PrivateEnv {
     #[must_use]
-    pub fn new(
-        account_identities: &'ids [InputAccountIdentity],
-        program_outputs: Vec<ProgramOutput>,
-    ) -> Self {
-        Self {
-            account_identities,
-            remaining_outputs: program_outputs.into(),
-            private_pda_bound_positions: HashMap::new(),
-            pda_family_binding: HashMap::new(),
-            next_position: 0,
-            position_by_id: HashMap::new(),
-            proven_derivations: HashSet::new(),
-        }
-    }
+    pub fn new(private_rows: Vec<PrivateWitness>, program_outputs: Vec<ProgramOutput>) -> Self {
+        let mut registry: HashMap<AccountId, Row> = HashMap::new();
+        let mut families: HashSet<(ProgramId, PdaSeed)> = HashSet::new();
 
-    #[must_use]
-    pub fn into_bound_pda_seeds(self) -> HashMap<usize, (ProgramId, PdaSeed)> {
-        self.private_pda_bound_positions
-    }
+        for witness in private_rows {
+            let account_id = witness.self_id();
+            let PrivateWitness {
+                vpk,
+                random_seed,
+                identifier,
+                kind,
+                nullifier,
+            } = witness;
 
-    fn bind_external_seed(&mut self, position: usize, pre: &AccountWithMetadata) {
-        let ids = self.account_identities;
-        let external_seed = match ids.get(position) {
-            Some(InputAccountIdentity::Private(PrivateWitness {
-                kind:
-                    PrivateKind::Pda {
-                        seed: Some((seed, authority_program_id)),
-                    },
-                ..
-            })) => Some((*seed, *authority_program_id)),
-            _ => None,
-        };
-        if let Some((seed, authority_program_id)) = external_seed {
-            assert_eq!(
-                ids[position].pda_account_id(&authority_program_id, &seed),
-                Some(pre.account_id),
-                "External seed mismatch at position {position}"
-            );
+            match &kind {
+                PrivateKind::Regular { ask: Some(ask) } => {
+                    assert_authorization_chain(ask, &nullifier, &account_id);
+                }
+                PrivateKind::Pda {
+                    seed: (seed, program_id),
+                } => assert!(
+                    families.insert((*program_id, *seed)),
+                    "Two witness rows share the same (program, seed) in one transaction: {account_id}"
+                ),
+                PrivateKind::Regular { ask: None } => {}
+            }
+
+            let npk = nullifier.npk();
+            let (pre, new_nullifier, new_nonce) = match nullifier {
+                NullifierWitness::Init {
+                    commitment_root, ..
+                } => (
+                    Account::default(),
+                    (
+                        Nullifier::for_account_initialization(&account_id),
+                        commitment_root,
+                    ),
+                    Nonce::private_account_nonce_init(&account_id),
+                ),
+                NullifierWitness::Update {
+                    nsk,
+                    membership_proof,
+                    pre_account,
+                } => {
+                    let new_nonce = pre_account.nonce.private_account_nonce_increment(&nsk);
+                    let commitment_pre = Commitment::new(&account_id, &pre_account);
+                    let set_digest = compute_digest_for_path(&commitment_pre, &membership_proof);
+                    (
+                        pre_account,
+                        (
+                            Nullifier::for_account_update(&commitment_pre, &nsk),
+                            set_digest,
+                        ),
+                        new_nonce,
+                    )
+                }
+            };
+
             assert!(
-                !pre.is_authorized,
-                "Private PDA with externally-provided seed must not be authorized at position {position}"
-            );
-            self.proven_derivations.insert(pre.account_id);
-            bind_private_pda_position(
-                &mut self.private_pda_bound_positions,
-                position,
-                authority_program_id,
-                seed,
-            );
-            assert_family_binding(
-                &mut self.pda_family_binding,
-                authority_program_id,
-                seed,
-                pre.account_id,
+                registry
+                    .insert(
+                        account_id,
+                        Row {
+                            kind,
+                            vpk,
+                            random_seed,
+                            identifier,
+                            npk,
+                            pre,
+                            nullifier: new_nullifier,
+                            new_nonce,
+                        }
+                    )
+                    .is_none(),
+                "Duplicate witness row for {account_id}"
             );
         }
+
+        Self {
+            registry,
+            remaining_outputs: program_outputs.into(),
+        }
+    }
+
+    #[must_use]
+    pub fn into_registry(self) -> HashMap<AccountId, Row> {
+        self.registry
     }
 }
 
-impl Backend for PrivateEnv<'_> {
+impl Backend for PrivateEnv {
     type Error = ValidationError;
 
     fn output_for_call(
@@ -109,40 +148,26 @@ impl Backend for PrivateEnv<'_> {
         &mut self,
         pre: &AccountWithMetadata,
     ) -> Result<Resolved, ValidationError> {
-        let position = self.next_position;
-        self.next_position = position.checked_add(1).expect("position counter overflow");
-        self.position_by_id.insert(pre.account_id, position);
-
-        self.bind_external_seed(position, pre);
-
-        if self
-            .account_identities
-            .get(position)
-            .and_then(InputAccountIdentity::regular_account_id)
-            == Some(pre.account_id)
-        {
-            self.proven_derivations.insert(pre.account_id);
-        }
-
-        let ids = self.account_identities;
-        let authorization = match ids.get(position) {
+        let Some(row) = self.registry.get(&pre.account_id) else {
             // A public account is root-authorized iff it signed; the circuit's only signal is the
             // verifier-bound `is_authorized`. Trusted here and enforced by the verifier — this just
             // feeds the cross-call scoping set.
-            Some(InputAccountIdentity::Public) if pre.is_authorized => Authorization::Holder,
-            Some(InputAccountIdentity::Private(PrivateWitness {
-                kind: PrivateKind::Regular { ask: Some(ask) },
-                nullifier,
-                ..
-            })) => {
-                assert_authorization_chain(ask, nullifier, position);
-                Authorization::Holder
-            }
-            _ => Authorization::None,
+            return Ok(Resolved {
+                account: pre.account.clone(),
+                authorization: if pre.is_authorized {
+                    Authorization::Holder
+                } else {
+                    Authorization::None
+                },
+            });
         };
         Ok(Resolved {
-            account: pre.account.clone(),
-            authorization,
+            account: row.pre.clone(),
+            authorization: if matches!(row.kind, PrivateKind::Regular { ask: Some(_) }) {
+                Authorization::Holder
+            } else {
+                Authorization::None
+            },
         })
     }
 
@@ -152,26 +177,18 @@ impl Backend for PrivateEnv<'_> {
         seed: PdaSeed,
         account_id: AccountId,
     ) -> Result<bool, ValidationError> {
-        let position = self.position_by_id[&account_id];
-        let ids = self.account_identities;
-        if ids[position].pda_account_id(&program_id, &seed) != Some(account_id) {
-            return Ok(false);
-        }
-        assert_family_binding(&mut self.pda_family_binding, program_id, seed, account_id);
-        if ids[position].is_private_pda() {
-            bind_private_pda_position(
-                &mut self.private_pda_bound_positions,
-                position,
-                program_id,
-                seed,
-            );
-            self.proven_derivations.insert(account_id);
-        }
-        Ok(true)
+        Ok(match self.registry.get(&account_id) {
+            Some(Row {
+                kind: PrivateKind::Pda { seed: bound },
+                ..
+            }) => *bound == (seed, program_id),
+            Some(_) => false,
+            None => account_id.matches_public_pda(&program_id, &seed),
+        })
     }
 
     fn witness_derives_account_id(&self, pre: &AccountWithMetadata) -> bool {
-        self.proven_derivations.contains(&pre.account_id)
+        self.registry.contains_key(&pre.account_id)
     }
 
     fn finalize(&self) -> Result<(), ValidationError> {
@@ -179,14 +196,6 @@ impl Backend for PrivateEnv<'_> {
             self.remaining_outputs.is_empty(),
             "Inner call without a chained call found"
         );
-        for (position, account_identity) in self.account_identities.iter().enumerate() {
-            if account_identity.is_private_pda() {
-                assert!(
-                    self.private_pda_bound_positions.contains_key(&position),
-                    "private PDA pre_state at position {position} has no proven (seed, npk) binding via Claim::Pda or caller pda_seeds"
-                );
-            }
-        }
         Ok(())
     }
 }
@@ -194,7 +203,7 @@ impl Backend for PrivateEnv<'_> {
 fn assert_authorization_chain(
     ask: &AuthorizationSecretKey,
     nullifier: &NullifierWitness,
-    position: usize,
+    account_id: &AccountId,
 ) {
     let nsk = derive_nullifier_secret_key(ask);
     match nullifier {
@@ -202,51 +211,12 @@ fn assert_authorization_chain(
             nsk: witness_nsk, ..
         } => assert_eq!(
             nsk, *witness_nsk,
-            "Authorization key does not derive the nullifier secret key at position {position}"
+            "Authorization key does not derive the nullifier secret key for {account_id}"
         ),
         NullifierWitness::Init { npk, .. } => assert_eq!(
             NullifierPublicKey::from(&nsk),
             *npk,
-            "Authorization key does not derive the nullifier public key at position {position}"
+            "Authorization key does not derive the nullifier public key for {account_id}"
         ),
-    }
-}
-
-fn assert_family_binding(
-    bindings: &mut HashMap<(ProgramId, PdaSeed), AccountId>,
-    program_id: ProgramId,
-    seed: PdaSeed,
-    account_id: AccountId,
-) {
-    match bindings.entry((program_id, seed)) {
-        Entry::Vacant(e) => {
-            e.insert(account_id);
-        }
-        Entry::Occupied(e) => {
-            assert_eq!(
-                *e.get(),
-                account_id,
-                "Two different accounts resolved under the same (program, seed) in one transaction: existing {}, new {account_id}",
-                e.get()
-            );
-        }
-    }
-}
-
-fn bind_private_pda_position(
-    map: &mut HashMap<usize, (ProgramId, PdaSeed)>,
-    position: usize,
-    program_id: ProgramId,
-    seed: PdaSeed,
-) {
-    match map.entry(position) {
-        Entry::Occupied(e) => assert_eq!(
-            *e.get(),
-            (program_id, seed),
-            "Duplicate binding at position {position}: conflicting (program_id, seed)"
-        ),
-        Entry::Vacant(e) => {
-            e.insert((program_id, seed));
-        }
     }
 }

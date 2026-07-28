@@ -78,7 +78,7 @@ fn public_diff_reflects_a_successful_transfer() {
 #[test]
 fn privacy_malicious_programs_cannot_drain_public_victim() {
     use lee_core::{
-        Commitment, InputAccountIdentity, NullifierWitness, PrivateKind, PrivateWitness,
+        Commitment, NullifierWitness, PrivateKind, PrivateWitness,
         account::{Account, AccountWithMetadata},
     };
 
@@ -158,38 +158,33 @@ fn privacy_malicious_programs_cannot_drain_public_victim() {
         [(p2.id(), p2), (at.id(), at)].into(),
     );
 
-    // account_identities order must match self.pre_states as built by the circuit:
-    //   [0] attacker — first seen in P1's program_output.pre_states
-    //   [1] victim   — first seen in simple_balance_transfer's program_output.pre_states
-    //   [2] recipient — first seen in simple_balance_transfer's program_output.pre_states
-    let account_identities = vec![
-        InputAccountIdentity::Private(PrivateWitness {
-            vpk: attacker_keys.vpk(),
-            random_seed: [0; 32],
-            identifier: 0,
-            kind: PrivateKind::Regular {
-                ask: Some(attacker_keys.ask),
-            },
-            nullifier: NullifierWitness::Update {
-                nsk: attacker_keys.nsk(),
-                membership_proof,
-            },
-        }),
-        InputAccountIdentity::Public, // victim
-        InputAccountIdentity::Public, // recipient
-    ];
+    // private_rows is unordered and keyed by the id each row derives. Only the attacker gets a
+    // row; victim and recipient carry none, which is how an account is declared public.
+    let private_rows = vec![PrivateWitness {
+        vpk: attacker_keys.vpk(),
+        random_seed: [0; 32],
+        identifier: 0,
+        kind: PrivateKind::Regular {
+            ask: Some(attacker_keys.ask),
+        },
+        nullifier: NullifierWitness::Update {
+            nsk: attacker_keys.nsk(),
+            membership_proof,
+            pre_account: attacker_pre.account.clone(),
+        },
+    }];
 
     // execute_and_prove succeeds: all inner receipts are valid.
     // The outer circuit commits victim(is_authorized=true) to its journal.
     let (circuit_output, proof) = execute_and_prove(
         vec![attacker_pre],
         instruction_data,
-        account_identities,
+        private_rows,
         &program_with_deps,
     )
     .expect("execute_and_prove should succeed \u{2014} the programs execute correctly");
 
-    // public_account_ids lists the Public entries from account_identities, in order.
+    // public_account_ids lists the accounts with no witness row, in first-sight order.
     // The single ciphertext belongs to attacker's private account update.
     let message = Message::try_from_circuit_output(
         vec![victim_id, recipient_id],
@@ -215,24 +210,26 @@ fn privacy_malicious_programs_cannot_drain_public_victim() {
 /// attack is rejected and the recipient's balance remains zero.
 ///
 /// After the circuit's Vacant branch accepts the injected `victim(is_authorized=true)`
-/// verbatim, the attacker must choose how to declare the victim in `account_identities`.
+/// verbatim, the attacker must choose how to declare the victim in `private_rows`.
 /// There are two routes, both closed:
 ///
-/// - **mask=1 (authorized regular update)**: the circuit derives `account_id =
-///   AccountId::for_regular_private_account(&npk_from(nsk), vpk, identifier)` and asserts it
-///   matches `pre_state.account_id`. Passing this check requires the victim's `nsk`, which the
-///   attacker does not have. `execute_and_prove` panics inside the ZKVM and no proof is produced.
+/// - **a witness row (authorized regular update)**: the row mints `account_id =
+///   AccountId::for_regular_private_account(&npk_from(nsk), vpk, identifier)`, and a row whose id
+///   no `pre_state` matches is left unconsumed. Minting the victim's id needs the victim's `nsk`,
+///   which the attacker does not have. `execute_and_prove` panics inside the ZKVM and no proof is
+///   produced.
 ///
-/// - **mask=0 (`Public`)**: the circuit places the account in `public_pre_states` and
-///   `execute_and_prove` succeeds. The host-side validator then reconstructs `public_pre_states`
-///   from chain state; `state.get_account_by_id(victim_id)` returns the default account (balance=0)
-///   because the victim has no public state entry. The committed journal and the reconstructed
-///   expected output diverge, `receipt.verify` fails, and `from_privacy_preserving_transaction`
-///   returns an error before any state is applied. This test exercises this route.
+/// - **no witness row (public by absence)**: the circuit places the account in `public_pre_states`
+///   and `execute_and_prove` succeeds. The host-side validator then reconstructs
+///   `public_pre_states` from chain state; `state.get_account_by_id(victim_id)` returns the default
+///   account (balance=0) because the victim has no public state entry. The committed journal and
+///   the reconstructed expected output diverge, `receipt.verify` fails, and
+///   `from_privacy_preserving_transaction` returns an error before any state is applied. This test
+///   exercises this route.
 #[test]
 fn privacy_malicious_programs_cannot_drain_private_victim() {
     use lee_core::{
-        Commitment, InputAccountIdentity, NullifierWitness, PrivateKind, PrivateWitness,
+        Commitment, NullifierWitness, PrivateKind, PrivateWitness,
         account::{Account, AccountWithMetadata},
     };
 
@@ -318,29 +315,23 @@ fn privacy_malicious_programs_cannot_drain_private_victim() {
         [(p2.id(), p2), (at.id(), at)].into(),
     );
 
-    // account_identities order must match self.pre_states as built by the circuit:
-    //   [0] attacker  — first seen in P1's program_output.pre_states
-    //   [1] victim    — first seen in simple_balance_transfer's program_output.pre_states
-    //   [2] recipient — first seen in simple_balance_transfer's program_output.pre_states
+    // private_rows is unordered and keyed by the id each row derives.
     //
-    // Victim is marked Public: the attacker has no nsk for the victim's private account,
-    // so an authorized regular update is not an option.
-    let account_identities = vec![
-        InputAccountIdentity::Private(PrivateWitness {
-            vpk: attacker_keys.vpk(),
-            random_seed: [0; 32],
-            identifier: 0,
-            kind: PrivateKind::Regular {
-                ask: Some(attacker_keys.ask),
-            },
-            nullifier: NullifierWitness::Update {
-                nsk: attacker_keys.nsk(),
-                membership_proof,
-            },
-        }),
-        InputAccountIdentity::Public, // victim — attacker lacks victim's nsk
-        InputAccountIdentity::Public, // recipient
-    ];
+    // The victim gets no row, i.e. is declared public: the attacker has no nsk for the victim's
+    // private account, so an authorized regular update is not an option.
+    let private_rows = vec![PrivateWitness {
+        vpk: attacker_keys.vpk(),
+        random_seed: [0; 32],
+        identifier: 0,
+        kind: PrivateKind::Regular {
+            ask: Some(attacker_keys.ask),
+        },
+        nullifier: NullifierWitness::Update {
+            nsk: attacker_keys.nsk(),
+            membership_proof,
+            pre_account: attacker_pre.account.clone(),
+        },
+    }];
 
     // execute_and_prove succeeds: simple_balance_transfer runs against the injected
     // victim(balance=5000, is_authorized=true) and produces valid inner receipts.
@@ -348,12 +339,12 @@ fn privacy_malicious_programs_cannot_drain_private_victim() {
     let (circuit_output, proof) = execute_and_prove(
         vec![attacker_pre],
         instruction_data,
-        account_identities,
+        private_rows,
         &program_with_deps,
     )
     .expect("execute_and_prove should succeed \u{2014} the programs execute correctly");
 
-    // public_account_ids lists the Public entries from account_identities, in order.
+    // public_account_ids lists the accounts with no witness row, in first-sight order.
     // The single ciphertext belongs to attacker's private account update.
     let message = Message::try_from_circuit_output(
         vec![victim_id, recipient_id],

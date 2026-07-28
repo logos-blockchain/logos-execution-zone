@@ -10,7 +10,7 @@ use lee::{
     privacy_preserving_transaction::circuit::{ProgramWithDependencies, Proof},
 };
 use lee_core::{
-    InputAccountIdentity, PrivacyPreservingCircuitOutput,
+    PrivacyPreservingCircuitOutput,
     account::{Account, AccountId, AccountWithMetadata},
 };
 use risc0_zkvm::serde::to_vec;
@@ -68,12 +68,10 @@ pub fn prove_auth_transfer_in_ppe() -> anyhow::Result<(PrivacyPreservingCircuitO
     let instruction = authenticated_transfer_core::Instruction::Transfer { amount: 5_000 };
     let instruction_data = to_vec(&instruction)?;
 
-    let account_identities = vec![InputAccountIdentity::Public; pre_states.len()];
-
     Ok(execute_and_prove(
         pre_states,
         instruction_data,
-        account_identities,
+        vec![],
         &pwd,
     )?)
 }
@@ -140,12 +138,10 @@ fn prove_chain_caller(
     let instruction = (balance, auth_transfer_id, num_chain_calls, pda_seed);
     let instruction_data = to_vec(&instruction)?;
 
-    let account_identities = vec![InputAccountIdentity::Public; pre_states.len()];
-
     Ok(execute_and_prove(
         pre_states,
         instruction_data,
-        account_identities,
+        vec![],
         &pwd,
     )?)
 }

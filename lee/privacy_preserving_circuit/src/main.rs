@@ -7,7 +7,7 @@ mod private_env;
 fn main() {
     let PrivacyPreservingCircuitInput {
         program_outputs,
-        account_identities,
+        private_rows,
         program_id,
     } = env::read();
 
@@ -21,11 +21,11 @@ fn main() {
         pre_states: Vec::new(),
         pda_seeds: Vec::new(),
     };
-    let mut protocol_env = private_env::PrivateEnv::new(&account_identities, program_outputs);
+    let mut protocol_env = private_env::PrivateEnv::new(private_rows, program_outputs);
     let threaded = validate_state_diff(&mut protocol_env, initial_call)
         .expect("private transaction validation failed");
 
-    let output = output::compute_circuit_output(protocol_env, threaded, &account_identities);
+    let output = output::compute_circuit_output(protocol_env, threaded);
 
     env::commit(&output);
 }

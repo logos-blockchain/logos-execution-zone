@@ -21,8 +21,7 @@ use lee::{
     program::Program,
 };
 use lee_core::{
-    DUMMY_COMMITMENT_HASH, InputAccountIdentity, NullifierPublicKey, NullifierWitness, PrivateKind,
-    PrivateWitness,
+    DUMMY_COMMITMENT_HASH, NullifierPublicKey, NullifierWitness, PrivateKind, PrivateWitness,
     account::{Account, AccountWithMetadata},
     encryption::ViewingPublicKey,
     program::PdaSeed,
@@ -64,26 +63,23 @@ async fn fund_private_pda(
     let instruction = Program::serialize_instruction(AuthTransferInstruction::Transfer { amount })
         .context("failed to serialize auth_transfer instruction")?;
 
-    let account_identities = vec![
-        InputAccountIdentity::Public,
-        InputAccountIdentity::Private(PrivateWitness {
-            vpk,
-            random_seed: [0; 32],
-            identifier,
-            kind: PrivateKind::Pda {
-                seed: Some((seed, authority_program_id)),
-            },
-            nullifier: NullifierWitness::Init {
-                npk,
-                commitment_root: DUMMY_COMMITMENT_HASH,
-            },
-        }),
-    ];
+    let private_rows = vec![PrivateWitness {
+        vpk,
+        random_seed: [0; 32],
+        identifier,
+        kind: PrivateKind::Pda {
+            seed: (seed, authority_program_id),
+        },
+        nullifier: NullifierWitness::Init {
+            npk,
+            commitment_root: DUMMY_COMMITMENT_HASH,
+        },
+    }];
 
     let (output, proof) = execute_and_prove(
         vec![sender_pre, pda_pre],
         instruction,
-        account_identities,
+        private_rows,
         auth_transfer,
     )
     .map_err(|e| anyhow::anyhow!("circuit proving failed: {e}"))?;

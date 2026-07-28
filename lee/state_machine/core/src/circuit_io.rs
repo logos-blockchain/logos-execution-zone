@@ -12,24 +12,9 @@ use crate::{
 pub struct PrivacyPreservingCircuitInput {
     /// Outputs of the program execution.
     pub program_outputs: Vec<ProgramOutput>,
-    /// One entry per `pre_state`, in the same order as the program's `pre_states`.
-    /// Length must equal the number of `pre_states` derived from `program_outputs`.
-    /// The guest's `private_pda_bound_positions` relies on this position alignment.
-    pub account_identities: Vec<InputAccountIdentity>,
+    pub private_rows: Vec<PrivateWitness>,
     /// Program ID.
     pub program_id: ProgramId,
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-#[expect(
-    clippy::large_enum_variant,
-    reason = "Private carries the ML-KEM viewing key and dominates; boxing it would add a guest heap allocation per witness, and the footprint matches the pre-refactor enum"
-)]
-pub enum InputAccountIdentity {
-    /// Public (transparent) account. The guest reads pre/post state from `program_outputs` and
-    /// emits no commitment, ciphertext, or nullifier.
-    Public,
-    Private(PrivateWitness),
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -44,7 +29,7 @@ pub struct PrivateWitness {
 #[derive(Serialize, Deserialize, Clone)]
 pub enum PrivateKind {
     Regular { ask: Option<AuthorizationSecretKey> },
-    Pda { seed: Option<(PdaSeed, ProgramId)> },
+    Pda { seed: (PdaSeed, ProgramId) },
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -56,6 +41,7 @@ pub enum NullifierWitness {
     Update {
         nsk: NullifierSecretKey,
         membership_proof: MembershipProof,
+        pre_account: Account,
     },
 }
 
@@ -70,62 +56,16 @@ impl NullifierWitness {
 }
 
 impl PrivateWitness {
-    fn regular_id(&self) -> AccountId {
-        AccountId::for_regular_private_account(&self.nullifier.npk(), &self.vpk, self.identifier)
-    }
-
-    fn pda_id(&self, program_id: &ProgramId, seed: &PdaSeed) -> AccountId {
-        AccountId::for_private_pda(
-            program_id,
-            seed,
-            &self.nullifier.npk(),
-            &self.vpk,
-            self.identifier,
-        )
-    }
-}
-
-impl InputAccountIdentity {
     #[must_use]
-    pub const fn is_public(&self) -> bool {
-        matches!(self, Self::Public)
-    }
-
-    #[must_use]
-    pub const fn is_private_pda(&self) -> bool {
-        matches!(
-            self,
-            Self::Private(PrivateWitness {
-                kind: PrivateKind::Pda { .. },
-                ..
-            })
-        )
-    }
-
-    #[must_use]
-    pub fn regular_account_id(&self) -> Option<AccountId> {
-        match self {
-            Self::Private(
-                witness @ PrivateWitness {
-                    kind: PrivateKind::Regular { .. },
-                    ..
-                },
-            ) => Some(witness.regular_id()),
-            Self::Public | Self::Private(_) => None,
-        }
-    }
-
-    #[must_use]
-    pub fn pda_account_id(&self, program_id: &ProgramId, seed: &PdaSeed) -> Option<AccountId> {
-        match self {
-            Self::Public => Some(AccountId::for_public_pda(program_id, seed)),
-            Self::Private(
-                witness @ PrivateWitness {
-                    kind: PrivateKind::Pda { .. },
-                    ..
-                },
-            ) => Some(witness.pda_id(program_id, seed)),
-            Self::Private(_) => None,
+    pub fn self_id(&self) -> AccountId {
+        let npk = self.nullifier.npk();
+        match &self.kind {
+            PrivateKind::Regular { .. } => {
+                AccountId::for_regular_private_account(&npk, &self.vpk, self.identifier)
+            }
+            PrivateKind::Pda {
+                seed: (seed, program_id),
+            } => AccountId::for_private_pda(program_id, seed, &npk, &self.vpk, self.identifier),
         }
     }
 }

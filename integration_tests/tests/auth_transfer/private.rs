@@ -12,8 +12,8 @@ use lee::{
     program::Program,
 };
 use lee_core::{
-    DUMMY_COMMITMENT_HASH, InputAccountIdentity, Nullifier, NullifierPublicKey, NullifierWitness,
-    PrivateKind, PrivateWitness,
+    DUMMY_COMMITMENT_HASH, Nullifier, NullifierPublicKey, NullifierWitness, PrivateKind,
+    PrivateWitness,
     account::{Account, AccountWithMetadata},
     encryption::ViewingPublicKey,
 };
@@ -561,10 +561,9 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
     let nsk: lee_core::NullifierSecretKey = [3; 32];
     let npk = NullifierPublicKey::from(&nsk);
     let vpk = ViewingPublicKey::from_bytes(vec![4_u8; 1184]).unwrap();
-    let attacker_vault_id = {
-        let seed = vault_core::compute_vault_seed(attacker_id);
-        AccountId::for_private_pda(&vault_program_id, &seed, &npk, &vpk, 1337)
-    };
+    let attacker_vault_seed = vault_core::compute_vault_seed(attacker_id);
+    let attacker_vault_id =
+        AccountId::for_private_pda(&vault_program_id, &attacker_vault_seed, &npk, &vpk, 1337);
     let amount: u128 = 1;
 
     let faucet_pre = AccountWithMetadata::new(
@@ -594,19 +593,18 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
     let res = execute_and_prove(
         vec![faucet_pre, vault_pda_pre],
         instruction,
-        vec![
-            InputAccountIdentity::Public,
-            InputAccountIdentity::Private(PrivateWitness {
-                vpk,
-                random_seed: [0; 32],
-                identifier: 1337,
-                kind: PrivateKind::Pda { seed: None },
-                nullifier: NullifierWitness::Init {
-                    npk,
-                    commitment_root: DUMMY_COMMITMENT_HASH,
-                },
-            }),
-        ],
+        vec![PrivateWitness {
+            vpk,
+            random_seed: [0; 32],
+            identifier: 1337,
+            kind: PrivateKind::Pda {
+                seed: (attacker_vault_seed, vault_program_id),
+            },
+            nullifier: NullifierWitness::Init {
+                npk,
+                commitment_root: DUMMY_COMMITMENT_HASH,
+            },
+        }],
         &program_with_deps,
     );
 
@@ -638,19 +636,16 @@ async fn prove_init_with_commitment_root(
         Program::serialize_instruction(authenticated_transfer_core::Instruction::Transfer {
             amount: 1,
         })?,
-        vec![
-            InputAccountIdentity::Public,
-            InputAccountIdentity::Private(PrivateWitness {
-                vpk,
-                random_seed: [0; 32],
-                identifier: 0,
-                kind: PrivateKind::Regular { ask: None },
-                nullifier: NullifierWitness::Init {
-                    npk,
-                    commitment_root,
-                },
-            }),
-        ],
+        vec![PrivateWitness {
+            vpk,
+            random_seed: [0; 32],
+            identifier: 0,
+            kind: PrivateKind::Regular { ask: None },
+            nullifier: NullifierWitness::Init {
+                npk,
+                commitment_root,
+            },
+        }],
         &program.into(),
     )?;
 

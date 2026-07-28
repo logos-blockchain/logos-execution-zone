@@ -5,8 +5,8 @@
 
 pub use authorization::AuthorizationSecretKey;
 pub use circuit_io::{
-    InputAccountIdentity, NullifierWitness, PrivacyPreservingCircuitInput,
-    PrivacyPreservingCircuitOutput, PrivateKind, PrivateWitness,
+    NullifierWitness, PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput, PrivateKind,
+    PrivateWitness,
 };
 pub use commitment::{
     Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, DUMMY_COMMITMENT_HASH, MembershipProof,

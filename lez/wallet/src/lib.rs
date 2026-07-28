@@ -306,13 +306,14 @@ impl WalletCore {
         let vpk = keys.generate_viewing_public_key();
         let identifier = entry.identifier;
 
-        if entry.pda_seed.is_some() {
+        if let Some(pda_seed) = entry.pda_seed {
             Some(AccountIdentity::PrivatePdaShared {
                 account_id,
                 nsk,
                 npk,
                 vpk,
                 identifier,
+                seed: (pda_seed, entry.authority_program_id?),
             })
         } else {
             Some(AccountIdentity::PrivateShared {
@@ -591,7 +592,7 @@ impl WalletCore {
         let (output, proof) = lee::privacy_preserving_transaction::circuit::execute_and_prove(
             pre_states,
             instruction_data,
-            acc_manager.account_identities(),
+            acc_manager.private_rows(),
             &program.to_owned(),
         )?;
 

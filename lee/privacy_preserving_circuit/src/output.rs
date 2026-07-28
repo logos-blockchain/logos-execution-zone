@@ -1,21 +1,16 @@
 use lee_core::{
-    Commitment, CommitmentSetDigest, EncryptedAccountData, EncryptionScheme, EphemeralSecretKey,
-    InputAccountIdentity, MembershipProof, Nullifier, NullifierPublicKey, NullifierSecretKey,
-    NullifierWitness, PrivacyPreservingCircuitOutput, PrivateAccountKind, PrivateKind,
-    PrivateWitness, SharedSecretKey, ThreadedDiff,
-    account::{Account, AccountId, Nonce},
-    compute_digest_for_path,
-    encryption::ViewingPublicKey,
+    Commitment, EncryptedAccountData, EncryptionScheme, EphemeralSecretKey,
+    PrivacyPreservingCircuitOutput, PrivateAccountKind, PrivateKind, SharedSecretKey, ThreadedDiff,
+    account::{Account, AccountId},
 };
 
-use crate::private_env::PrivateEnv;
+use crate::private_env::{PrivateEnv, Row};
 
 pub fn compute_circuit_output(
     env: PrivateEnv,
     threaded: ThreadedDiff,
-    account_identities: &[InputAccountIdentity],
 ) -> PrivacyPreservingCircuitOutput {
-    let pda_seed_by_position = env.into_bound_pda_seeds();
+    let mut registry = env.into_registry();
     let mut output = PrivacyPreservingCircuitOutput {
         public_pre_states: Vec::new(),
         public_post_states: Vec::new(),
@@ -26,129 +21,64 @@ pub fn compute_circuit_output(
         timestamp_validity_window: threaded.timestamp_validity_window,
     };
 
-    assert_eq!(
-        account_identities.len(),
-        threaded.accounts.len(),
-        "Invalid account_identities length"
-    );
-
     let mut output_index = 0;
-    for (pos, (account_identity, (pre_state, post_state))) in
-        account_identities.iter().zip(threaded.accounts).enumerate()
-    {
-        match account_identity {
-            InputAccountIdentity::Public => {
-                output.public_pre_states.push(pre_state);
-                output.public_post_states.push(post_state);
-            }
-            InputAccountIdentity::Private(witness) => {
-                let PrivateWitness {
-                    vpk,
-                    random_seed,
-                    identifier,
-                    kind,
-                    nullifier,
-                } = witness;
-                let npk = nullifier.npk();
-
-                let (account_id, account_kind) = match kind {
-                    PrivateKind::Regular { .. } => {
-                        let account_id = account_identity
-                            .regular_account_id()
-                            .expect("regular private account id");
-                        assert_eq!(account_id, pre_state.account_id, "AccountId mismatch");
-                        (account_id, PrivateAccountKind::Regular(*identifier))
-                    }
-                    PrivateKind::Pda { .. } => {
-                        let (authority_program_id, seed) = pda_seed_by_position
-                            .get(&pos)
-                            .expect("private PDA position must be in pda_seed_by_position");
-                        (
-                            pre_state.account_id,
-                            PrivateAccountKind::Pda {
-                                program_id: *authority_program_id,
-                                seed: *seed,
-                                identifier: *identifier,
-                            },
-                        )
-                    }
-                };
-
-                let (new_nullifier, new_nonce) = match nullifier {
-                    NullifierWitness::Init {
-                        commitment_root, ..
-                    } => {
-                        assert_eq!(
-                            pre_state.account,
-                            Account::default(),
-                            "Found new private account with non default values"
-                        );
-                        (
-                            (
-                                Nullifier::for_account_initialization(&account_id),
-                                *commitment_root,
-                            ),
-                            Nonce::private_account_nonce_init(&account_id),
-                        )
-                    }
-                    NullifierWitness::Update {
-                        nsk,
-                        membership_proof,
-                    } => (
-                        compute_update_nullifier_and_set_digest(
-                            membership_proof,
-                            &pre_state.account,
-                            &account_id,
-                            nsk,
-                        ),
-                        pre_state.account.nonce.private_account_nonce_increment(nsk),
-                    ),
-                };
-
-                emit_private_output(
-                    &mut output,
-                    &mut output_index,
-                    post_state,
-                    &account_id,
-                    &account_kind,
-                    &npk,
-                    vpk,
-                    random_seed,
-                    new_nullifier,
-                    new_nonce,
-                );
-            }
+    for (pre_state, post_state) in threaded.accounts {
+        if let Some(row) = registry.remove(&pre_state.account_id) {
+            emit_private_output(
+                &mut output,
+                &mut output_index,
+                post_state,
+                &pre_state.account_id,
+                row,
+            );
+        } else {
+            output.public_pre_states.push(pre_state);
+            output.public_post_states.push(post_state);
         }
     }
+
+    assert!(registry.is_empty(), "Unused private witness row");
 
     output
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "Inputs are distinct concerns from the variant arms; bundling would be artificial"
-)]
 fn emit_private_output(
     output: &mut PrivacyPreservingCircuitOutput,
     output_index: &mut u32,
     post_state: Account,
     account_id: &AccountId,
-    kind: &PrivateAccountKind,
-    npk: &NullifierPublicKey,
-    vpk: &ViewingPublicKey,
-    random_seed: &[u8; 32],
-    new_nullifier: (Nullifier, CommitmentSetDigest),
-    new_nonce: Nonce,
+    row: Row,
 ) {
-    output.new_nullifiers.push(new_nullifier);
+    let Row {
+        kind,
+        vpk,
+        random_seed,
+        identifier,
+        npk,
+        pre: _,
+        nullifier,
+        new_nonce,
+    } = row;
+    let account_kind = match kind {
+        PrivateKind::Regular { .. } => PrivateAccountKind::Regular(identifier),
+        PrivateKind::Pda {
+            seed: (seed, program_id),
+        } => PrivateAccountKind::Pda {
+            program_id,
+            seed,
+            identifier,
+        },
+    };
+
+    output.new_nullifiers.push(nullifier);
 
     let mut post_with_updated_nonce = post_state;
     post_with_updated_nonce.nonce = new_nonce;
 
     let commitment_post = Commitment::new(account_id, &post_with_updated_nonce);
 
-    let esk = EphemeralSecretKey::new(account_id, random_seed, &new_nonce);
-    let (shared_secret, epk) = SharedSecretKey::encapsulate_deterministic(vpk, &esk);
+    let esk = EphemeralSecretKey::new(account_id, &random_seed, &new_nonce);
+    let (shared_secret, epk) = SharedSecretKey::encapsulate_deterministic(&vpk, &esk);
 
     // Currently the view tag is properlty generated for all accounts.
     // To increase privacy, this will be changed in the later version
@@ -157,11 +87,11 @@ fn emit_private_output(
     //
     // See issue 573:
     // https://github.com/logos-blockchain/logos-execution-zone/issues/573
-    let view_tag = EncryptedAccountData::compute_view_tag(npk, vpk);
+    let view_tag = EncryptedAccountData::compute_view_tag(&npk, &vpk);
 
     let encrypted_account = EncryptionScheme::encrypt(
         &post_with_updated_nonce,
-        kind,
+        &account_kind,
         &shared_secret,
         &commitment_post,
         *output_index,
@@ -178,16 +108,4 @@ fn emit_private_output(
     *output_index = output_index
         .checked_add(1)
         .unwrap_or_else(|| panic!("Too many private accounts, output index overflow"));
-}
-
-fn compute_update_nullifier_and_set_digest(
-    membership_proof: &MembershipProof,
-    pre_account: &Account,
-    account_id: &AccountId,
-    nsk: &NullifierSecretKey,
-) -> (Nullifier, CommitmentSetDigest) {
-    let commitment_pre = Commitment::new(account_id, pre_account);
-    let set_digest = compute_digest_for_path(&commitment_pre, membership_proof);
-    let nullifier = Nullifier::for_account_update(&commitment_pre, nsk);
-    (nullifier, set_digest)
 }

@@ -253,7 +253,7 @@ fn burner_program_should_fail_in_privacy_preserving_circuit() {
     let result = execute_and_prove(
         vec![public_account],
         Program::serialize_instruction(10_u128).unwrap(),
-        vec![InputAccountIdentity::Public],
+        vec![],
         &program.into(),
     );
 
@@ -276,7 +276,7 @@ fn minter_program_should_fail_in_privacy_preserving_circuit() {
     let result = execute_and_prove(
         vec![public_account],
         Program::serialize_instruction(10_u128).unwrap(),
-        vec![InputAccountIdentity::Public],
+        vec![],
         &program.into(),
     );
 
@@ -299,7 +299,7 @@ fn nonce_changer_program_should_fail_in_privacy_preserving_circuit() {
     let result = execute_and_prove(
         vec![public_account],
         Program::serialize_instruction(()).unwrap(),
-        vec![InputAccountIdentity::Public],
+        vec![],
         &program.into(),
     );
 
@@ -322,7 +322,7 @@ fn data_changer_program_should_fail_for_non_owned_account_in_privacy_preserving_
     let result = execute_and_prove(
         vec![public_account],
         Program::serialize_instruction(vec![0]).unwrap(),
-        vec![InputAccountIdentity::Public],
+        vec![],
         &program.into(),
     );
 
@@ -353,7 +353,7 @@ fn data_changer_program_should_fail_for_too_large_data_in_privacy_preserving_cir
     let result = execute_and_prove(
         vec![public_account],
         Program::serialize_instruction(large_data).unwrap(),
-        vec![InputAccountIdentity::Public],
+        vec![],
         &program.into(),
     );
 
@@ -376,7 +376,7 @@ fn extra_output_program_should_fail_in_privacy_preserving_circuit() {
     let result = execute_and_prove(
         vec![public_account],
         Program::serialize_instruction(()).unwrap(),
-        vec![InputAccountIdentity::Public],
+        vec![],
         &program.into(),
     );
 
@@ -408,7 +408,7 @@ fn missing_output_program_should_fail_in_privacy_preserving_circuit() {
     let result = execute_and_prove(
         vec![public_account_1, public_account_2],
         Program::serialize_instruction(()).unwrap(),
-        vec![InputAccountIdentity::Public, InputAccountIdentity::Public],
+        vec![],
         &program.into(),
     );
 
@@ -431,7 +431,7 @@ fn program_owner_changer_should_fail_in_privacy_preserving_circuit() {
     let result = execute_and_prove(
         vec![public_account],
         Program::serialize_instruction(()).unwrap(),
-        vec![InputAccountIdentity::Public],
+        vec![],
         &program.into(),
     );
 
@@ -463,7 +463,7 @@ fn transfer_from_non_owned_account_should_fail_in_privacy_preserving_circuit() {
     let result = execute_and_prove(
         vec![public_account_1, public_account_2],
         Program::serialize_instruction(10_u128).unwrap(),
-        vec![InputAccountIdentity::Public, InputAccountIdentity::Public],
+        vec![],
         &program.into(),
     );
 
@@ -515,23 +515,21 @@ fn malicious_authorization_changer_should_fail_in_privacy_preserving_circuit() {
     let result = execute_and_prove(
         vec![sender_account, recipient_account],
         Program::serialize_instruction(instruction).unwrap(),
-        vec![
-            InputAccountIdentity::Public,
-            InputAccountIdentity::Private(PrivateWitness {
-                vpk: recipient_keys.vpk(),
-                random_seed: [0; 32],
-                identifier: 0,
-                kind: PrivateKind::Regular {
-                    ask: Some(recipient_keys.ask),
-                },
-                nullifier: NullifierWitness::Update {
-                    nsk: recipient_keys.nsk(),
-                    membership_proof: state
-                        .get_proof_for_commitment(&recipient_commitment)
-                        .expect("recipient's commitment must be in state"),
-                },
-            }),
-        ],
+        vec![PrivateWitness {
+            vpk: recipient_keys.vpk(),
+            random_seed: [0; 32],
+            identifier: 0,
+            kind: PrivateKind::Regular {
+                ask: Some(recipient_keys.ask),
+            },
+            nullifier: NullifierWitness::Update {
+                nsk: recipient_keys.nsk(),
+                membership_proof: state
+                    .get_proof_for_commitment(&recipient_commitment)
+                    .expect("recipient's commitment must be in state"),
+                pre_account: Account::default(),
+            },
+        }],
         &program_with_deps,
     );
 

@@ -2,7 +2,7 @@ use std::collections::{HashMap, VecDeque};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    InputAccountIdentity, PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput,
+    PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput, PrivateWitness,
     account::AccountWithMetadata,
     program::{ChainedCall, InstructionData, ProgramId, ProgramOutput},
 };
@@ -67,7 +67,7 @@ impl From<Program> for ProgramWithDependencies {
 pub fn execute_and_prove(
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: InstructionData,
-    account_identities: Vec<InputAccountIdentity>,
+    private_rows: Vec<PrivateWitness>,
     program_with_dependencies: &ProgramWithDependencies,
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
     let ProgramWithDependencies {
@@ -125,7 +125,7 @@ pub fn execute_and_prove(
 
     let circuit_input = PrivacyPreservingCircuitInput {
         program_outputs,
-        account_identities,
+        private_rows,
         program_id: program_with_dependencies.program.id(),
     };
 

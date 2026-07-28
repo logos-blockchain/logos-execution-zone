@@ -244,6 +244,8 @@ pub struct FfiAccountIdentity {
     pub viewing_public_key: *const u8,
     pub viewing_public_key_len: usize,
     pub identifier: FfiU128,
+    pub pda_seed: FfiPdaSeed,
+    pub authority_program_id: FfiProgramId,
 }
 
 impl Default for FfiAccountIdentity {
@@ -258,6 +260,8 @@ impl Default for FfiAccountIdentity {
             viewing_public_key: std::ptr::null(),
             viewing_public_key_len: 0,
             identifier: FfiU128::default(),
+            pda_seed: FfiPdaSeed::default(),
+            authority_program_id: FfiProgramId::default(),
         }
     }
 }
@@ -425,6 +429,7 @@ impl From<AccountIdentity> for FfiAccountIdentity {
                 npk,
                 vpk,
                 identifier,
+                seed: (pda_seed, authority_program_id),
             } => {
                 let vpk_vec = vpk.to_bytes().to_vec();
                 let vpk_len = vpk_vec.len();
@@ -442,6 +447,8 @@ impl From<AccountIdentity> for FfiAccountIdentity {
                     viewing_public_key: vpk_data,
                     viewing_public_key_len: vpk_len,
                     identifier: identifier.into(),
+                    pda_seed: pda_seed.into(),
+                    authority_program_id: authority_program_id.into(),
                     ..Default::default()
                 }
             }
@@ -474,6 +481,7 @@ impl From<AccountIdentity> for FfiAccountIdentity {
                 npk,
                 vpk,
                 identifier,
+                seed: (pda_seed, authority_program_id),
             } => {
                 let vpk_vec = vpk.to_bytes().to_vec();
                 let vpk_len = vpk_vec.len();
@@ -492,6 +500,8 @@ impl From<AccountIdentity> for FfiAccountIdentity {
                     viewing_public_key: vpk_data,
                     viewing_public_key_len: vpk_len,
                     identifier: identifier.into(),
+                    pda_seed: pda_seed.into(),
+                    authority_program_id: authority_program_id.into(),
                     ..Default::default()
                 }
             }
@@ -562,6 +572,7 @@ impl TryFrom<&FfiAccountIdentity> for AccountIdentity {
                     npk: NullifierPublicKey(value.nullifier_public_key.data),
                     vpk,
                     identifier: value.identifier.into(),
+                    seed: (value.pda_seed.into(), value.authority_program_id.into()),
                 })
             }
             FfiAccountIdentityKind::PrivateShared => {
@@ -604,6 +615,7 @@ impl TryFrom<&FfiAccountIdentity> for AccountIdentity {
                     npk: NullifierPublicKey(value.nullifier_public_key.data),
                     vpk,
                     identifier: value.identifier.into(),
+                    seed: (value.pda_seed.into(), value.authority_program_id.into()),
                 })
             }
         }
@@ -706,6 +718,7 @@ mod tests {
             npk,
             vpk: vpk.clone(),
             identifier,
+            seed: (PdaSeed::new([47; 32]), [46; 8]),
         };
         let acc_identity_7 = AccountIdentity::PrivateShared {
             ask,
@@ -718,6 +731,7 @@ mod tests {
             npk,
             vpk,
             identifier,
+            seed: (PdaSeed::new([47; 32]), [46; 8]),
         };
 
         let ffi_acc_identity_1: FfiAccountIdentity = acc_identity_1.clone().into();
