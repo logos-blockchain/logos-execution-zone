@@ -5,14 +5,17 @@ use common::block::Block;
 use futures::Stream;
 use logos_blockchain_core::{
     header::HeaderId,
-    mantle::ops::channel::{ChannelId, MsgId},
+    mantle::{
+        ledger::{NoteId, Utxo},
+        ops::channel::{ChannelId, MsgId},
+    },
 };
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 use logos_blockchain_zone_sdk::{Slot, ZoneMessage, sequencer::WithdrawArg};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    block_publisher::{BlockPublisherTrait, OnFollowSink, SequencerCheckpoint},
+    block_publisher::{BlockPublisherTrait, OnFollowSink, PublishOutcome, SequencerCheckpoint},
     config::BedrockConfig,
 };
 
@@ -70,12 +73,16 @@ impl BlockPublisherTrait for MockBlockPublisher {
     async fn publish_block(
         &self,
         block: &Block,
-        _bridge_withdrawals: Vec<WithdrawArg>,
-    ) -> Result<(MsgId, SequencerCheckpoint)> {
+        withdrawals: Vec<WithdrawArg>,
+    ) -> Result<PublishOutcome> {
         // Deterministic per-block id so head dedup behaves in tests.
         //
         // TODO: should we allow more "mockability" here?
-        Ok((MsgId::from(block.header.hash.0), mock_checkpoint()))
+        Ok(PublishOutcome {
+            this_msg: MsgId::from(block.header.hash.0),
+            checkpoint: mock_checkpoint(),
+            released_notes: mock_released_notes(&withdrawals),
+        })
     }
 
     fn channel_id(&self) -> ChannelId {
@@ -106,6 +113,20 @@ impl BlockPublisherTrait for MockBlockPublisher {
             .cloned();
         Ok(futures::stream::iter(messages))
     }
+}
+
+/// The notes the mock reports as released by `withdrawals`.
+///
+/// Zone-sdk picks the actual channel notes to release, so a mock has to invent
+/// them: one note id per requested output, derived from the output itself so
+/// tests can recompute the reconciliation keys of a block they produced.
+#[must_use]
+pub(crate) fn mock_released_notes(withdrawals: &[WithdrawArg]) -> Vec<NoteId> {
+    withdrawals
+        .iter()
+        .flat_map(|withdraw| withdraw.outputs.into_iter().enumerate())
+        .map(|(output_index, note)| Utxo::new([0; 32], output_index, *note).id())
+        .collect()
 }
 
 /// A zeroed checkpoint, for [`MockBlockPublisher::publish_block`] and for tests

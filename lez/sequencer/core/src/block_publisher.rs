@@ -4,7 +4,10 @@ use anyhow::{Context as _, Result, anyhow, ensure};
 use common::block::Block;
 use futures::Stream;
 use log::{info, warn};
-pub use logos_blockchain_core::mantle::ops::channel::{Ed25519PublicKey, MsgId};
+pub use logos_blockchain_core::mantle::{
+    ledger::NoteId,
+    ops::channel::{Ed25519PublicKey, MsgId},
+};
 use logos_blockchain_core::{
     mantle::{
         MantleTx, SignedMantleTx,
@@ -30,7 +33,7 @@ use logos_blockchain_zone_sdk::{
     adapter::{Node as _, NodeHttpClient},
     indexer::ZoneIndexer,
     sequencer::{
-        ChannelUpdateTx, DepositInfo, Event, FinalizedOp, InscriptionInfo,
+        ChannelUpdateTx, DepositInfo, Event, FinalizedOp, InscriptionInfo, PendingTx,
         SequencerConfig as ZoneSdkSequencerConfig, TurnNotification, WithdrawArg, WithdrawInfo,
         ZoneSequencer,
     },
@@ -76,14 +79,29 @@ pub struct FollowUpdate {
 /// persist the whole event in one write.
 pub type OnFollowSink = Box<dyn Fn(FollowUpdate) + Send + 'static>;
 
+/// What one publish produced.
+pub struct PublishOutcome {
+    /// The `MsgId` zone-sdk assigned the published inscription.
+    pub this_msg: MsgId,
+    /// The checkpoint that now holds the inscription as pending.
+    pub checkpoint: SequencerCheckpoint,
+    /// Channel notes the bundled withdrawals release, empty for a plain
+    /// publish.
+    /// A [`ChannelWithdrawOp`](logos_blockchain_core::mantle::ops::channel::withdraw::ChannelWithdrawOp)
+    /// carries nothing but the note ids it releases, so these are the only
+    /// handle the local withdraw intent shares with the Bedrock Withdraw event
+    /// that later reports it.
+    pub released_notes: Vec<NoteId>,
+}
+
 /// Commands the drive task executes with `&mut sequencer`.
 enum Command {
-    /// Publish an inscription (+ atomic withdrawals); responds with the assigned
-    /// `MsgId` and the checkpoint that now includes it as pending.
+    /// Publish an inscription (+ atomic withdrawals); responds with the
+    /// [`PublishOutcome`].
     Publish {
         inscription: Inscription,
         withdrawals: Vec<WithdrawArg>,
-        resp: oneshot::Sender<Result<(MsgId, SequencerCheckpoint)>>,
+        resp: oneshot::Sender<Result<PublishOutcome>>,
     },
 }
 
@@ -99,9 +117,8 @@ pub trait BlockPublisherTrait: Sized {
         on_follow: OnFollowSink,
     ) -> Result<Self>;
 
-    /// Publish a block and return the `MsgId` zone-sdk assigned its inscription
-    /// together with the checkpoint that now holds it as pending. Zone-sdk
-    /// drives the actual submission and retries internally.
+    /// Publish a block and return what zone-sdk made of it. Zone-sdk drives the
+    /// actual submission and retries internally.
     ///
     /// The checkpoint must be persisted with the block — restoring an older one
     /// drops the inscription from the pending set, and it is never resubmitted.
@@ -109,7 +126,7 @@ pub trait BlockPublisherTrait: Sized {
         &self,
         block: &Block,
         withdrawals: Vec<WithdrawArg>,
-    ) -> Result<(MsgId, SequencerCheckpoint)>;
+    ) -> Result<PublishOutcome>;
 
     fn channel_id(&self) -> ChannelId;
 
@@ -221,8 +238,11 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                                         .context("Failed to publish block with withdrawals")
                                 };
 
-                                let msg_result = published
-                                    .map(|(result, checkpoint)| (result.tx.inscription().this_msg, checkpoint));
+                                let msg_result = published.map(|(result, checkpoint)| PublishOutcome {
+                                    this_msg: result.tx.inscription().this_msg,
+                                    checkpoint,
+                                    released_notes: released_notes(&result.tx),
+                                });
                                 match &msg_result {
                                     Ok(_) if withdraw_count == 0 => {
                                         info!("Published block with the size of {data_byte_size} bytes");
@@ -328,7 +348,7 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         &self,
         block: &Block,
         withdrawals: Vec<WithdrawArg>,
-    ) -> Result<(MsgId, SequencerCheckpoint)> {
+    ) -> Result<PublishOutcome> {
         let data = borsh::to_vec(block).context("Failed to serialize block")?;
         let data_bounded: Inscription = data
             .try_into()
@@ -392,6 +412,19 @@ fn block_from_inscription(inscription: &InscriptionInfo) -> Option<(MsgId, Block
         })
         .ok()
         .map(|block| (inscription.this_msg, block))
+}
+
+/// Channel notes the withdraws bundled with a published tx release; empty for a
+/// plain inscription. See [`PublishOutcome::released_notes`].
+fn released_notes(tx: &PendingTx) -> Vec<NoteId> {
+    match tx {
+        PendingTx::Inscription(_) => Vec::new(),
+        PendingTx::AtomicWithdraw(bundle) => bundle
+            .withdraws
+            .iter()
+            .flat_map(|withdraw| withdraw.op.inputs.iter().copied())
+            .collect(),
+    }
 }
 
 /// The inscription carried by an orphaned tx (plain or atomic-withdraw bundle).

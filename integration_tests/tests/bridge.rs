@@ -4,7 +4,7 @@
     reason = "We don't care about these in tests"
 )]
 
-use std::{ops::Deref as _, time::Duration};
+use std::{collections::HashSet, ops::Deref as _, time::Duration};
 
 use anyhow::Context as _;
 use borsh::BorshSerialize;
@@ -31,7 +31,6 @@ use logos_blockchain_http_api_common::bodies::{
 use logos_blockchain_zone_sdk::{
     CommonHttpClient, ZoneMessage, adapter::NodeHttpClient, indexer::ZoneIndexer,
 };
-use num_bigint::BigUint;
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::public_mention;
 use tokio::test;
@@ -269,24 +268,7 @@ async fn submit_bedrock_deposit(
     let channel_id = integration_tests::config::bedrock_channel_id();
     let client = reqwest::Client::new();
 
-    let query_balance = || async {
-        let balance_response = client
-            .get(format!(
-                "http://{bedrock_addr}/wallet/{bedrock_account_pk}/balance"
-            ))
-            .send()
-            .await
-            .context("Failed to query Bedrock wallet balance")?;
-
-        let balance_response = check_response_success(balance_response).await?;
-
-        balance_response
-            .json::<WalletBalanceResponseBody>()
-            .await
-            .context("Failed to decode Bedrock balance response")
-    };
-
-    let mut balance = query_balance().await?;
+    let mut balance = bedrock_wallet_balance(bedrock_addr, bedrock_account_pk).await?;
 
     info!(
         "Queried Bedrock balance for key {bedrock_account_pk}: {:?}",
@@ -338,7 +320,7 @@ async fn submit_bedrock_deposit(
         let mut found_note = None;
         for _ in 0..20 {
             tokio::time::sleep(Duration::from_millis(500)).await;
-            balance = query_balance().await?;
+            balance = bedrock_wallet_balance(bedrock_addr, bedrock_account_pk).await?;
             found_note = balance
                 .notes
                 .iter()
@@ -387,6 +369,27 @@ async fn submit_bedrock_deposit(
     );
 
     Ok(())
+}
+
+/// The Bedrock wallet state of `bedrock_account_pk`: its total balance and the
+/// notes it owns, keyed by note id.
+async fn bedrock_wallet_balance(
+    bedrock_addr: std::net::SocketAddr,
+    bedrock_account_pk: &str,
+) -> anyhow::Result<WalletBalanceResponseBody> {
+    let response = reqwest::Client::new()
+        .get(format!(
+            "http://{bedrock_addr}/wallet/{bedrock_account_pk}/balance"
+        ))
+        .send()
+        .await
+        .context("Failed to query Bedrock wallet balance")?;
+
+    check_response_success(response)
+        .await?
+        .json::<WalletBalanceResponseBody>()
+        .await
+        .context("Failed to decode Bedrock balance response")
 }
 
 async fn check_response_success(response: reqwest::Response) -> anyhow::Result<reqwest::Response> {
@@ -530,7 +533,8 @@ async fn bedrock_deposit_claim_and_withdraw_round_trip_succeeds() -> anyhow::Res
     let sender_id = recipient_id;
 
     let observer = create_zone_indexer_observer(ctx.bedrock_addr())?;
-    let observe_fut = wait_for_finalized_withdraw_op(&observer, amount, bedrock_account_pk);
+    let observe_fut =
+        wait_for_finalized_withdraw_op(&observer, ctx.bedrock_addr(), amount, bedrock_account_pk);
 
     let withdraw_fut = execute_subcommand(
         ctx.wallet_mut(),
@@ -571,22 +575,27 @@ fn create_zone_indexer_observer(
     ))
 }
 
+/// Waits for a finalized withdraw that pays `expected_amount` to `receiver_pk`.
+///
+/// A withdraw op releases channel-owned notes and carries nothing but their
+/// ids — the value and recipient live in the note itself. A released note keeps
+/// its id, value and public key, so the pairing is checked on the receiver's
+/// Bedrock wallet: one of the released notes must land there with the expected
+/// value.
 async fn wait_for_finalized_withdraw_op(
     observer: &ZoneIndexer<NodeHttpClient>,
+    bedrock_addr: std::net::SocketAddr,
     expected_amount: u64,
     receiver_pk: &str,
 ) -> anyhow::Result<()> {
     let timeout = TIME_TO_FINALIZE_DEPOSIT_EVENT_ON_BEDROCK
         + Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS);
 
-    let bedrock_account_pk_bytes = hex::decode(receiver_pk)
-        .context("Failed to decode expected receiver public key from hex")?;
-    let expected_receiver_pk =
-        logos_blockchain_key_management_system_service::keys::ZkPublicKey::from(
-            BigUint::from_bytes_le(&bedrock_account_pk_bytes),
-        );
-
     tokio::time::timeout(timeout, async {
+        // The wallet can trail the channel event, so released notes accumulate
+        // across polls instead of being checked once when first observed.
+        let mut released_notes = HashSet::new();
+
         loop {
             let stream = observer
                 .follow()
@@ -597,20 +606,17 @@ async fn wait_for_finalized_withdraw_op(
             while let Some(message) = stream.next().await {
                 info!("Observed zone message {message:?}");
 
-                let ZoneMessage::Withdraw(withdraw) = message else {
-                    continue;
-                };
-
-                let mut iter = withdraw.outputs.iter();
-                let Some(note) = iter.next() else {
-                    continue;
-                };
-                if iter.next().is_some() {
-                    // Withdraw op should only have one output
-                    continue;
+                if let ZoneMessage::Withdraw(withdraw) = message {
+                    released_notes.extend(withdraw.inputs.iter().copied());
                 }
+            }
 
-                if note.value == expected_amount && note.pk == expected_receiver_pk {
+            if !released_notes.is_empty() {
+                let balance = bedrock_wallet_balance(bedrock_addr, receiver_pk).await?;
+                if released_notes
+                    .iter()
+                    .any(|note_id| balance.notes.get(note_id) == Some(&expected_amount))
+                {
                     return Ok(());
                 }
             }

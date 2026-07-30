@@ -278,10 +278,12 @@ impl SimpleWritableCell for PendingDepositEventsCellRef<'_> {
     }
 }
 
+/// Identity of one withdrawal, shared by the intent recorded when the
+/// sequencer publishes it and the Bedrock Withdraw event that later reports
+/// it: the id of the channel note the withdrawal releases.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct WithdrawalReconciliationKey {
-    pub amount: u64,
-    pub bedrock_account_pk: [u8; 32],
+    pub released_note_id: [u8; 32],
 }
 
 #[derive(Debug, BorshSerialize, BorshDeserialize)]
@@ -294,12 +296,9 @@ impl SimpleStorableCell for UnseenWithdrawCountCell {
     const CF_NAME: &'static str = CF_META_NAME;
 
     fn key_constructor(key_params: Self::KeyParams) -> DbResult<Vec<u8>> {
-        let WithdrawalReconciliationKey {
-            amount,
-            bedrock_account_pk,
-        } = key_params;
+        let WithdrawalReconciliationKey { released_note_id } = key_params;
 
-        borsh::to_vec(&(Self::CELL_NAME, amount, bedrock_account_pk)).map_err(|err| {
+        borsh::to_vec(&(Self::CELL_NAME, released_note_id)).map_err(|err| {
             DbError::borsh_cast_message(
                 err,
                 Some(format!(

@@ -405,13 +405,11 @@ fn repeated_withdrawal_key_in_one_update_folds_once_per_occurrence() {
     let (dbio, _genesis) = dbio_with_genesis(temp_dir.path());
 
     let key = WithdrawalReconciliationKey {
-        amount: 7,
-        bedrock_account_pk: [3; 32],
+        released_note_id: [3; 32],
     };
 
-    // Two local intents for the same key in one update — two withdrawals of the
-    // same amount to the same L1 key. A per-occurrence disk read would miss the
-    // staged increment and record the pair as one.
+    // Two local intents for the same key in one update. A per-occurrence disk
+    // read would miss the staged increment and record the pair as one.
     dbio.store_update(&StoreUpdate {
         new_withdraw_intents: &[key, key],
         ..StoreUpdate::new(&state_with_balance(100))
@@ -450,8 +448,7 @@ fn unmatched_withdrawal_is_reported_and_writes_nothing() {
     let (dbio, _genesis) = dbio_with_genesis(temp_dir.path());
 
     let key = WithdrawalReconciliationKey {
-        amount: 5,
-        bedrock_account_pk: [4; 32],
+        released_note_id: [4; 32],
     };
     let outcome = dbio
         .store_update(&StoreUpdate {

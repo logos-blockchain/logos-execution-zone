@@ -4325,7 +4325,6 @@ dependencies = [
  "logos-blockchain-http-api-common",
  "logos-blockchain-key-management-system-service",
  "logos-blockchain-zone-sdk",
- "num-bigint 0.4.6",
  "ping_core",
  "programs",
  "reqwest",

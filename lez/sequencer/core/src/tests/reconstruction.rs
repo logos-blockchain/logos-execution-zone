@@ -10,7 +10,7 @@ use chain_state::ChainState;
 use common::block::Block;
 use logos_blockchain_core::mantle::ops::channel::{MsgId, inscribe::Inscription};
 use logos_blockchain_zone_sdk::{Slot, ZoneBlock, ZoneMessage};
-use storage::sequencer::sequencer_cells::ZoneAnchorRecord;
+use storage::sequencer::sequencer_cells::{WithdrawalReconciliationKey, ZoneAnchorRecord};
 
 use super::*;
 use crate::{
@@ -320,6 +320,18 @@ fn build_public_withdraw_tx(
     LeeTransaction::Public(lee::PublicTransaction::new(message, witness_set))
 }
 
+/// The reconciliation key a produced block carries for `withdraw_tx`, keyed on
+/// the note [`MockBlockPublisher`] reports as released for it.
+fn produced_withdraw_key(withdraw_tx: &LeeTransaction) -> WithdrawalReconciliationKey {
+    let withdraw_arg = crate::extract_bridge_withdraw_data(withdraw_tx).expect("withdraw data");
+    let [note_id] = crate::mock::mock_released_notes(std::slice::from_ref(&withdraw_arg))[..]
+    else {
+        panic!("A bridge withdraw releases exactly one note");
+    };
+
+    crate::withdrawal_reconciliation_key(&note_id)
+}
+
 /// Cold-start backfill re-records an already-finalized deposit event as a
 /// pending record before reconstruction replays the same deposit block.
 /// Reconstruction must drop that record — its mint is permanently reflected in
@@ -443,8 +455,7 @@ async fn reconstructed_deposit_is_not_reminted_after_backfill_redelivery() {
     // A reconstructed withdraw's finalized L1 event was already re-delivered (and
     // dropped) by cold-start backfill, so it will never be consumed again.
     // Reconstruction must not count it, or the count stays phantom-inflated forever.
-    let withdraw_arg = crate::extract_bridge_withdraw_data(&withdraw_tx).expect("withdraw data");
-    let key = crate::withdraw_event_reconciliation_key(&withdraw_arg.outputs).expect("recon key");
+    let key = produced_withdraw_key(&withdraw_tx);
     assert!(
         !seq_b
             .block_store()
@@ -482,8 +493,7 @@ async fn reconstructed_withdraw_leaves_no_phantom_unseen_count() {
         .unwrap();
     seq_a.produce_new_block().await.unwrap();
 
-    let withdraw_arg = crate::extract_bridge_withdraw_data(&withdraw_tx).expect("withdraw data");
-    let key = crate::withdraw_event_reconciliation_key(&withdraw_arg.outputs).expect("recon key");
+    let key = produced_withdraw_key(&withdraw_tx);
     // Producing the withdraw counts it as unseen, awaiting its L1 event.
     assert!(
         seq_a

@@ -51,4 +51,3 @@ tempfile.workspace = true
 bytesize.workspace = true
 reqwest.workspace = true
 borsh.workspace = true
-num-bigint.workspace = true

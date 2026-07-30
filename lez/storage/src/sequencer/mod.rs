@@ -543,8 +543,8 @@ impl RocksDBIO {
     /// returning one entry per occurrence that matched no local counter.
     ///
     /// Occurrences are folded per key for the same reason as the deposit
-    /// records: two withdrawals in one update can share a reconciliation key,
-    /// and a per-occurrence disk read would miss the staged decrement.
+    /// records: should two withdrawals in one update share a reconciliation
+    /// key, a per-occurrence disk read would miss the staged decrement.
     fn stage_consumed_withdrawals(
         &self,
         withdrawals: &[WithdrawalReconciliationKey],
@@ -621,8 +621,8 @@ impl RocksDBIO {
     /// Stages the unseen-withdraw increments for one update into `batch`.
     ///
     /// Occurrences are folded per key for the same reason as
-    /// [`Self::stage_consumed_withdrawals`]: two intents in one update can share
-    /// a reconciliation key, and a per-occurrence disk read would miss the
+    /// [`Self::stage_consumed_withdrawals`]: should two intents in one update
+    /// share a reconciliation key, a per-occurrence disk read would miss the
     /// staged increment and count the pair once.
     fn stage_new_withdraw_intents(
         &self,
