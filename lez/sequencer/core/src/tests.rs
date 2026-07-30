@@ -22,10 +22,13 @@ use lee_core::{
     account::{AccountWithMetadata, Nonce},
     program::PdaSeed,
 };
-use logos_blockchain_core::mantle::{
-    ledger::Inputs,
-    ops::channel::{ChannelId, MsgId, deposit::Metadata},
-    tx::TxHash,
+use logos_blockchain_core::{
+    events::DepositRecreatedNotes,
+    mantle::{
+        TxHash,
+        ledger::Inputs,
+        ops::channel::{ChannelId, MsgId, deposit::Metadata},
+    },
 };
 use logos_blockchain_zone_sdk::sequencer::DepositInfo;
 use mempool::MemPoolHandle;
@@ -1582,6 +1585,7 @@ async fn follow_update_records_deposits_for_the_production_drain() {
         inputs: Inputs::empty(),
         amount: 5,
         metadata: Metadata::try_from(metadata).expect("deposit metadata fits"),
+        notes: DepositRecreatedNotes::default(),
     };
 
     apply_follow_update(

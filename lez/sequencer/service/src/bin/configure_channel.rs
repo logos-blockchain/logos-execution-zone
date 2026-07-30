@@ -31,9 +31,9 @@ struct Args {
     /// Signatures required for future config changes.
     #[clap(long, default_value_t = 1)]
     configuration_threshold: u16,
-    /// Signatures required for channel withdrawals.
+    /// Signatures required for channel transfers.
     #[clap(long, default_value_t = 1)]
-    withdraw_threshold: u16,
+    transfer_threshold: u16,
 }
 
 #[tokio::main]
@@ -58,7 +58,7 @@ async fn main() -> Result<()> {
         args.posting_timeframe,
         args.posting_timeout,
         args.configuration_threshold,
-        args.withdraw_threshold,
+        args.transfer_threshold,
     )
     .await
 }

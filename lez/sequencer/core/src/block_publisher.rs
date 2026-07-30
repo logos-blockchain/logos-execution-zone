@@ -7,7 +7,7 @@ use log::{info, warn};
 pub use logos_blockchain_core::mantle::ops::channel::{Ed25519PublicKey, MsgId};
 use logos_blockchain_core::{
     mantle::{
-        MantleTx, SignedMantleTx, Transaction as _,
+        MantleTx, SignedMantleTx,
         channel::{SlotTimeframe, SlotTimeout},
         ops::{
             Op, OpProof,
@@ -17,6 +17,7 @@ use logos_blockchain_core::{
                 inscribe::Inscription,
             },
         },
+        traits::Hashable as _,
     },
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
@@ -29,7 +30,7 @@ use logos_blockchain_zone_sdk::{
     adapter::{Node as _, NodeHttpClient},
     indexer::ZoneIndexer,
     sequencer::{
-        DepositInfo, Event, FinalizedOp, InscriptionInfo, OrphanedTx,
+        ChannelUpdateTx, DepositInfo, Event, FinalizedOp, InscriptionInfo,
         SequencerConfig as ZoneSdkSequencerConfig, TurnNotification, WithdrawArg, WithdrawInfo,
         ZoneSequencer,
     },
@@ -211,10 +212,12 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                                 let published = if withdrawals.is_empty() {
                                     sequencer.handle()
                                         .publish(data_bounded)
+                                        .await
                                         .context("Failed to publish block")
                                 } else {
                                     sequencer.handle()
                                         .publish_atomic_withdraw(data_bounded, withdrawals)
+                                        .await
                                         .context("Failed to publish block with withdrawals")
                                 };
 
@@ -235,9 +238,6 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                             }
                         },
                         event = sequencer.next_event() => {
-                            let Some(event) = event else {
-                                continue;
-                            };
                             match event {
                                 Event::BlocksProcessed {
                                     checkpoint,
@@ -247,12 +247,13 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                                     let adopted = channel_update
                                         .adopted
                                         .iter()
+                                        .filter_map(channel_update_inscription)
                                         .filter_map(block_from_inscription)
                                         .collect();
                                     let orphaned = channel_update
                                         .orphaned
                                         .iter()
-                                        .map(orphan_inscription)
+                                        .filter_map(channel_update_inscription)
                                         .filter_map(block_from_inscription)
                                         .collect();
 
@@ -297,6 +298,7 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
                                         notification.ends_at_slot
                                     );
                                 }
+                                Event::MempoolPending(_tx_hash) => {}
                             }
                         }
                     }
@@ -393,10 +395,11 @@ fn block_from_inscription(inscription: &InscriptionInfo) -> Option<(MsgId, Block
 }
 
 /// The inscription carried by an orphaned tx (plain or atomic-withdraw bundle).
-const fn orphan_inscription(orphan: &OrphanedTx) -> &InscriptionInfo {
+const fn channel_update_inscription(orphan: &ChannelUpdateTx) -> Option<&InscriptionInfo> {
     match orphan {
-        OrphanedTx::Inscription(info) => info,
-        OrphanedTx::AtomicWithdraw(bundle) => &bundle.inscription,
+        ChannelUpdateTx::Inscription(info) => Some(info),
+        ChannelUpdateTx::AtomicWithdraw(bundle) => Some(&bundle.inscription),
+        ChannelUpdateTx::Custom(_signed_mantle_tx) => None,
     }
 }
 
@@ -414,12 +417,12 @@ pub async fn post_channel_config(
     posting_timeframe: u32,
     posting_timeout: u32,
     configuration_threshold: u16,
-    withdraw_threshold: u16,
+    transfer_threshold: u16,
 ) -> Result<()> {
     ensure!(!keys.is_empty(), "Channel key list must not be empty");
     for (name, threshold) in [
         ("configuration_threshold", configuration_threshold),
-        ("withdraw_threshold", withdraw_threshold),
+        ("transfer_threshold", transfer_threshold),
     ] {
         ensure!(
             threshold >= 1 && usize::from(threshold) <= keys.len(),
@@ -440,7 +443,7 @@ pub async fn post_channel_config(
         posting_timeframe: SlotTimeframe::from(posting_timeframe),
         posting_timeout: SlotTimeout::from(posting_timeout),
         configuration_threshold,
-        withdraw_threshold,
+        transfer_threshold,
     };
 
     let mantle_tx = MantleTx([Op::ChannelConfig(config_op)].into());
@@ -450,12 +453,9 @@ pub async fn post_channel_config(
         0,
         signing_key.sign_payload(tx_hash.as_signing_bytes().as_ref()),
     );
-    let proof = ChannelMultiSigProof::new(vec![signature])
+    let proof = ChannelMultiSigProof::try_new(signature.into())
         .map_err(|err| anyhow!("Failed to assemble channel multi-sig proof: {err:?}"))?;
-    let signed_tx = SignedMantleTx {
-        ops_proofs: vec![OpProof::ChannelMultiSigProof(proof)],
-        mantle_tx,
-    };
+    let signed_tx = SignedMantleTx::new(mantle_tx, OpProof::ChannelMultiSigProof(proof).into());
 
     let node = NodeHttpClient::new(
         CommonHttpClient::new(config.auth.clone().map(Into::into)),
