@@ -9,6 +9,7 @@ pub use data::Data;
 use risc0_zkvm::sha::{Impl, Sha256 as _};
 use serde::{Deserialize, Serialize};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
+use thiserror::Error;
 
 use crate::{NullifierSecretKey, program::ProgramId};
 
@@ -90,6 +91,31 @@ impl BorshDeserialize for Nonce {
 }
 
 pub type Balance = u128;
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
+)]
+pub enum BalanceDiff {
+    Add(Balance),
+    Sub(Balance),
+}
+
+#[derive(Error, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BalanceDiffError {
+    #[error("balance overflow")]
+    Overflow,
+    #[error("insufficient balance")]
+    InsufficientBalance,
+}
+
+pub fn apply_balance_diff(current: Balance, diff: BalanceDiff) -> Result<Balance, BalanceDiffError> {
+    match diff {
+        BalanceDiff::Add(amount) => current.checked_add(amount).ok_or(BalanceDiffError::Overflow),
+        BalanceDiff::Sub(amount) => current
+            .checked_sub(amount)
+            .ok_or(BalanceDiffError::InsufficientBalance),
+    }
+}
 
 /// Account to be used both in public and private contexts.
 #[derive(
@@ -350,5 +376,67 @@ mod tests {
         let nonce_restored = borsh::from_slice(&borsh_serialized_nonce).unwrap();
 
         assert_eq!(nonce, nonce_restored);
+    }
+
+    #[test]
+    fn apply_balance_diff_add_succeeds() {
+        let result = apply_balance_diff(10, BalanceDiff::Add(5));
+        assert_eq!(result, Ok(15));
+    }
+
+    #[test]
+    fn apply_balance_diff_add_zero_is_noop() {
+        let result = apply_balance_diff(10, BalanceDiff::Add(0));
+        assert_eq!(result, Ok(10));
+    }
+
+    #[test]
+    fn apply_balance_diff_add_overflow_is_rejected() {
+        let result = apply_balance_diff(Balance::MAX, BalanceDiff::Add(1));
+        assert_eq!(result, Err(BalanceDiffError::Overflow));
+    }
+
+    #[test]
+    fn apply_balance_diff_sub_succeeds() {
+        let result = apply_balance_diff(10, BalanceDiff::Sub(5));
+        assert_eq!(result, Ok(5));
+    }
+
+    #[test]
+    fn apply_balance_diff_sub_zero_is_noop() {
+        let result = apply_balance_diff(10, BalanceDiff::Sub(0));
+        assert_eq!(result, Ok(10));
+    }
+
+    #[test]
+    fn apply_balance_diff_sub_down_to_exactly_zero_succeeds() {
+        let result = apply_balance_diff(10, BalanceDiff::Sub(10));
+        assert_eq!(result, Ok(0));
+    }
+
+    #[test]
+    fn apply_balance_diff_sub_insufficient_balance_is_rejected() {
+        let result = apply_balance_diff(10, BalanceDiff::Sub(11));
+        assert_eq!(result, Err(BalanceDiffError::InsufficientBalance));
+    }
+
+    #[test]
+    fn serde_roundtrip_for_balance_diff() {
+        let diff = BalanceDiff::Add(7);
+
+        let serde_serialized_diff = serde_json::to_vec(&diff).unwrap();
+        let diff_restored = serde_json::from_slice(&serde_serialized_diff).unwrap();
+
+        assert_eq!(diff, diff_restored);
+    }
+
+    #[test]
+    fn borsh_roundtrip_for_balance_diff() {
+        let diff = BalanceDiff::Sub(7);
+
+        let borsh_serialized_diff = borsh::to_vec(&diff).unwrap();
+        let diff_restored = borsh::from_slice(&borsh_serialized_diff).unwrap();
+
+        assert_eq!(diff, diff_restored);
     }
 }

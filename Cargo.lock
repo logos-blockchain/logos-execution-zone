@@ -4862,6 +4862,7 @@ dependencies = [
  "k256 0.13.4",
  "lee_core",
  "log",
+ "programs",
  "rand 0.8.6",
  "risc0-binfmt",
  "risc0-zkvm",
@@ -4871,6 +4872,7 @@ dependencies = [
  "test-case",
  "test_methods",
  "thiserror 2.0.18",
+ "token_core",
 ]
 
 [[package]]

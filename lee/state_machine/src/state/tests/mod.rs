@@ -38,6 +38,7 @@ mod flash_swap;
 mod genesis;
 mod privacy_preserving;
 mod public_program_rules;
+mod token;
 mod validity_window;
 
 impl V03State {

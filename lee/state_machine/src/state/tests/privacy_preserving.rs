@@ -240,6 +240,118 @@ fn transition_from_privacy_preserving_transaction_deshielded() {
     );
 }
 
+/// A deshielded transfer's proof is generated against the public recipient's balance at proving
+/// time. If a public transaction changes that account's balance before the deshielded transfer
+/// lands on chain, the proof no longer matches the account's actual (now stale) pre-state and
+/// must be rejected — none of its nullifiers or commitments may be applied.
+#[test]
+fn transition_from_privacy_preserving_transaction_deshielded_fails_on_stale_public_prestate() {
+    let sender_keys = test_private_account_keys_1();
+    let sender_nonce = Nonce(0xdead_beef);
+    let sender_private_account = Account {
+        program_owner: crate::test_methods::simple_balance_transfer().id(),
+        balance: 10,
+        nonce: sender_nonce,
+        data: Data::default(),
+    };
+
+    let recipient_keys = test_public_account_keys_1();
+    let payer_keys = test_public_account_keys_2();
+
+    let mut state = V03State::new()
+        .with_public_accounts([
+            (
+                recipient_keys.account_id(),
+                Account {
+                    program_owner: crate::test_methods::simple_balance_transfer().id(),
+                    balance: 10,
+                    ..Account::default()
+                },
+            ),
+            (
+                payer_keys.account_id(),
+                Account {
+                    program_owner: crate::test_methods::simple_balance_transfer().id(),
+                    balance: 10,
+                    ..Account::default()
+                },
+            ),
+        ])
+        .with_private_account(&sender_keys, &sender_private_account)
+        .with_test_programs();
+
+    let balance_to_move = 5;
+
+    // Deshielded transfer from sender_private_account to recipient account. This proof binds
+    // the recipient account's state.
+    let deshielding_tx = deshielded_balance_transfer_for_tests(
+        &sender_keys,
+        &sender_private_account,
+        &recipient_keys.account_id(),
+        balance_to_move,
+        &state,
+    );
+
+    let sender_account_id =
+        AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
+    let sender_pre_commitment = Commitment::new(&sender_account_id, &sender_private_account);
+    let would_be_new_commitment = Commitment::new(
+        &sender_account_id,
+        &Account {
+            program_owner: crate::test_methods::simple_balance_transfer().id(),
+            nonce: sender_nonce.private_account_nonce_increment(&sender_keys.nsk),
+            balance: sender_private_account.balance - balance_to_move,
+            data: Data::default(),
+        },
+    );
+    let would_be_new_nullifier =
+        Nullifier::for_account_update(&sender_pre_commitment, &sender_keys.nsk);
+
+    // A public transaction moves 5 from account 2 to account 1 *before* the deshielding transfer
+    // above is applied, invalidating the pre-state the proof was generated against.
+    let public_transfer = transfer_transaction(
+        payer_keys.account_id(),
+        &payer_keys.signing_key,
+        0,
+        recipient_keys.account_id(),
+        &recipient_keys.signing_key,
+        0,
+        balance_to_move,
+    );
+    state
+        .transition_from_public_transaction(&public_transfer, 1, 0)
+        .unwrap();
+
+    assert_eq!(
+        state.get_account_by_id(recipient_keys.account_id()).balance,
+        15
+    );
+    assert_eq!(state.get_account_by_id(payer_keys.account_id()).balance, 5);
+
+    // The deshielding transfer's proof was generated against account 1's stale balance of 10,
+    // so it must now be rejected at the state level.
+    let result = state.transition_from_privacy_preserving_transaction(&deshielding_tx, 2, 0);
+    assert!(
+        matches!(result, Err(LeeError::InvalidPrivacyPreservingProof)),
+        "expected InvalidPrivacyPreservingProof for a stale public recipient pre-state, got {result:?}"
+    );
+
+    // Balances are exactly as the public transfer left them: the rejected deshielding transfer
+    // had no effect.
+    assert_eq!(
+        state.get_account_by_id(recipient_keys.account_id()).balance,
+        15
+    );
+    assert_eq!(state.get_account_by_id(payer_keys.account_id()).balance, 5);
+
+    // Neither the nullifier for the private sender's spent note nor the new commitment it would
+    // have produced were applied to state.
+    assert!(!state.private_state.1.contains(&would_be_new_nullifier));
+    assert!(!state.private_state.0.contains(&would_be_new_commitment));
+    // The sender's original (unspent) commitment is still present.
+    assert!(state.private_state.0.contains(&sender_pre_commitment));
+}
+
 #[test]
 fn burner_program_should_fail_in_privacy_preserving_circuit() {
     let program = crate::test_methods::burner();

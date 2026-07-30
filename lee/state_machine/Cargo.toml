@@ -29,6 +29,8 @@ build_utils.workspace = true
 [dev-dependencies]
 lee_core = { workspace = true, features = ["test_utils"] }
 test_methods = { path = "test_methods" }
+programs.workspace = true
+token_core.workspace = true
 
 hex-literal = "1.0.0"
 test-case = "3.3.1"
