@@ -38,16 +38,11 @@ programs.workspace = true
 test_programs.workspace = true
 testnet_initial_state.workspace = true
 
-logos-blockchain-http-api-common.workspace = true
 logos-blockchain-core.workspace = true
-logos-blockchain-zone-sdk.workspace = true
 logos-blockchain-key-management-system-service.workspace = true
 anyhow.workspace = true
 log.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
-futures.workspace = true
 hex.workspace = true
 tempfile.workspace = true
 bytesize.workspace = true
-reqwest.workspace = true
-borsh.workspace = true

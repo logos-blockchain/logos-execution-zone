@@ -104,33 +104,35 @@ fn main() {
             }
         }
         Instruction::Withdraw {
-            amount,
+            amount: _,
             bedrock_account_pk: _,
         } => {
-            let [sender, bridge] = pre_states
-                .try_into()
-                .expect("Withdraw requires exactly 2 accounts");
+            panic!("Withdraws are disabled in the current version of LEZ");
 
-            assert_eq!(
-                bridge.account_id,
-                bridge_core::compute_bridge_account_id(self_program_id),
-                "Second account must be bridge PDA"
-            );
+            // let [sender, bridge] = pre_states
+            //     .try_into()
+            //     .expect("Withdraw requires exactly 2 accounts");
 
-            let auth_transfer_program_id = bridge.account.program_owner;
-            assert_eq!(
-                sender.account.program_owner, auth_transfer_program_id,
-                "Sender account must be owned by the authenticated transfer program"
-            );
+            // assert_eq!(
+            //     bridge.account_id,
+            //     bridge_core::compute_bridge_account_id(self_program_id),
+            //     "Second account must be bridge PDA"
+            // );
 
-            let chained_calls = vec![ChainedCall::new(
-                auth_transfer_program_id,
-                vec![sender, bridge],
-                &authenticated_transfer_core::Instruction::Transfer {
-                    amount: u128::from(amount),
-                },
-            )];
-            (unchanged_post_states(&pre_states_clone), chained_calls)
+            // let auth_transfer_program_id = bridge.account.program_owner;
+            // assert_eq!(
+            //     sender.account.program_owner, auth_transfer_program_id,
+            //     "Sender account must be owned by the authenticated transfer program"
+            // );
+
+            // let chained_calls = vec![ChainedCall::new(
+            //     auth_transfer_program_id,
+            //     vec![sender, bridge],
+            //     &authenticated_transfer_core::Instruction::Transfer {
+            //         amount: u128::from(amount),
+            //     },
+            // )];
+            // (unchanged_post_states(&pre_states_clone), chained_calls)
         }
     };
 

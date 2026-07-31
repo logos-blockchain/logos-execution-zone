@@ -10,7 +10,7 @@ use chain_state::ChainState;
 use common::block::Block;
 use logos_blockchain_core::mantle::ops::channel::{MsgId, inscribe::Inscription};
 use logos_blockchain_zone_sdk::{Slot, ZoneBlock, ZoneMessage};
-use storage::sequencer::sequencer_cells::{WithdrawalReconciliationKey, ZoneAnchorRecord};
+use storage::sequencer::sequencer_cells::ZoneAnchorRecord;
 
 use super::*;
 use crate::{
@@ -298,229 +298,230 @@ fn deposit_event_record(
     }
 }
 
-/// Builds a signed public bridge `Withdraw` transaction (the normal user path).
-fn build_public_withdraw_tx(
-    sender: lee::AccountId,
-    nonce: u128,
-    amount: u64,
-    bedrock_account_pk: [u8; 32],
-    signing_key: &lee::PrivateKey,
-) -> LeeTransaction {
-    let message = lee::public_transaction::Message::try_new(
-        programs::bridge().id(),
-        vec![sender, system_accounts::bridge_account_id()],
-        vec![nonce.into()],
-        bridge_core::Instruction::Withdraw {
-            amount,
-            bedrock_account_pk,
-        },
-    )
-    .unwrap();
-    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[signing_key]);
-    LeeTransaction::Public(lee::PublicTransaction::new(message, witness_set))
-}
+// /// Builds a signed public bridge `Withdraw` transaction (the normal user path).
+// fn build_public_withdraw_tx(
+//     sender: lee::AccountId,
+//     nonce: u128,
+//     amount: u64,
+//     bedrock_account_pk: [u8; 32],
+//     signing_key: &lee::PrivateKey,
+// ) -> LeeTransaction {
+//     let message = lee::public_transaction::Message::try_new(
+//         programs::bridge().id(),
+//         vec![sender, system_accounts::bridge_account_id()],
+//         vec![nonce.into()],
+//         bridge_core::Instruction::Withdraw {
+//             amount,
+//             bedrock_account_pk,
+//         },
+//     )
+//     .unwrap();
+//     let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[signing_key]);
+//     LeeTransaction::Public(lee::PublicTransaction::new(message, witness_set))
+// }
 
-/// The reconciliation key a produced block carries for `withdraw_tx`, keyed on
-/// the note [`MockBlockPublisher`] reports as released for it.
-fn produced_withdraw_key(withdraw_tx: &LeeTransaction) -> WithdrawalReconciliationKey {
-    let withdraw_arg = crate::extract_bridge_withdraw_data(withdraw_tx).expect("withdraw data");
-    let [note_id] = crate::mock::mock_released_notes(std::slice::from_ref(&withdraw_arg))[..]
-    else {
-        panic!("A bridge withdraw releases exactly one note");
-    };
+// /// The reconciliation key a produced block carries for `withdraw_tx`, keyed on
+// /// the note [`MockBlockPublisher`] reports as released for it.
+// fn produced_withdraw_key(withdraw_tx: &LeeTransaction) -> WithdrawalReconciliationKey {
+//     let withdraw_arg = crate::extract_bridge_withdraw_data(withdraw_tx).expect("withdraw data");
+//     let [note_id] = crate::mock::mock_released_notes(std::slice::from_ref(&withdraw_arg))[..]
+//     else {
+//         panic!("A bridge withdraw releases exactly one note");
+//     };
 
-    crate::withdrawal_reconciliation_key(&note_id)
-}
+//     crate::withdrawal_reconciliation_key(&note_id)
+// }
 
-/// Cold-start backfill re-records an already-finalized deposit event as a
-/// pending record before reconstruction replays the same deposit block.
-/// Reconstruction must drop that record — its mint is permanently reflected in
-/// the reconstructed state (the receipt PDA) — so the next production neither
-/// re-mints the vault nor emits a stray deposit tx.
-#[tokio::test]
-async fn reconstructed_deposit_is_not_reminted_after_backfill_redelivery() {
-    let recipient = initial_public_user_accounts()[0].account_id;
-    let deposit_amount = 500_u64;
-    let withdraw_amount = 100_u64;
-    let bedrock_account_pk = [0x22_u8; 32];
-    let deposit_op_id = [0x0d_u8; 32];
+// /// Cold-start backfill re-records an already-finalized deposit event as a
+// /// pending record before reconstruction replays the same deposit block.
+// /// Reconstruction must drop that record — its mint is permanently reflected in
+// /// the reconstructed state (the receipt PDA) — so the next production neither
+// /// re-mints the vault nor emits a stray deposit tx.
+// #[tokio::test]
+// async fn reconstructed_deposit_is_not_reminted_after_backfill_redelivery() {
+//     let recipient = initial_public_user_accounts()[0].account_id;
+//     let deposit_amount = 500_u64;
+//     let withdraw_amount = 100_u64;
+//     let bedrock_account_pk = [0x22_u8; 32];
+//     let deposit_op_id = [0x0d_u8; 32];
 
-    // Sequencer A produces a deposit block then a withdraw block.
-    let config_a = bridge_funded_config();
-    let (mut seq_a, mempool_a) =
-        SequencerCoreWithMockClients::start_from_config(config_a.clone()).await;
+//     // Sequencer A produces a deposit block then a withdraw block.
+//     let config_a = bridge_funded_config();
+//     let (mut seq_a, mempool_a) =
+//         SequencerCoreWithMockClients::start_from_config(config_a.clone()).await;
 
-    let deposit_record = deposit_event_record(deposit_op_id, deposit_amount, recipient);
-    let deposit_tx =
-        crate::build_bridge_deposit_tx_from_event(&deposit_record).expect("build deposit tx");
-    mempool_a
-        .push((TransactionOrigin::Sequencer, deposit_tx))
-        .await
-        .unwrap();
-    seq_a.produce_new_block().await.unwrap();
+//     let deposit_record = deposit_event_record(deposit_op_id, deposit_amount, recipient);
+//     let deposit_tx =
+//         crate::build_bridge_deposit_tx_from_event(&deposit_record).expect("build deposit tx");
+//     mempool_a
+//         .push((TransactionOrigin::Sequencer, deposit_tx))
+//         .await
+//         .unwrap();
+//     seq_a.produce_new_block().await.unwrap();
 
-    let withdraw_tx = build_public_withdraw_tx(
-        recipient,
-        0,
-        withdraw_amount,
-        bedrock_account_pk,
-        &create_signing_key_for_account1(),
-    );
-    mempool_a
-        .push((TransactionOrigin::User, withdraw_tx.clone()))
-        .await
-        .unwrap();
-    seq_a.produce_new_block().await.unwrap();
+//     let withdraw_tx = build_public_withdraw_tx(
+//         recipient,
+//         0,
+//         withdraw_amount,
+//         bedrock_account_pk,
+//         &create_signing_key_for_account1(),
+//     );
+//     mempool_a
+//         .push((TransactionOrigin::User, withdraw_tx.clone()))
+//         .await
+//         .unwrap();
+//     seq_a.produce_new_block().await.unwrap();
 
-    let tip_a = seq_a.block_store().latest_block_meta().unwrap().unwrap();
-    let messages = channel_from_store(seq_a.block_store(), 10);
-    let tip_slot = messages.last().unwrap().1;
-    let channel_id = config_a.bedrock_config.channel_id;
+//     let tip_a = seq_a.block_store().latest_block_meta().unwrap().unwrap();
+//     let messages = channel_from_store(seq_a.block_store(), 10);
+//     let tip_slot = messages.last().unwrap().1;
+//     let channel_id = config_a.bedrock_config.channel_id;
 
-    let config_b = bridge_funded_config();
-    let (mut seq_b, _mempool_b) = SequencerCoreWithMockClients::start_from_config(config_b).await;
+//     let config_b = bridge_funded_config();
+//     let (mut seq_b, _mempool_b) =
+// SequencerCoreWithMockClients::start_from_config(config_b).await;
 
-    // Backfill re-delivery: the deposit event is re-recorded as a pending record
-    // before reconstruction runs. The mint no longer flows through the mempool
-    // (that sink was removed); the store drain is the only source.
-    assert!(
-        seq_b
-            .block_store()
-            .dbio()
-            .add_pending_deposit_event(deposit_record.clone())
-            .unwrap()
-    );
+//     // Backfill re-delivery: the deposit event is re-recorded as a pending record
+//     // before reconstruction runs. The mint no longer flows through the mempool
+//     // (that sink was removed); the store drain is the only source.
+//     assert!(
+//         seq_b
+//             .block_store()
+//             .dbio()
+//             .add_pending_deposit_event(deposit_record.clone())
+//             .unwrap()
+//     );
 
-    let mock_b = MockBlockPublisher::with_canned_channel(channel_id, Some(tip_slot), messages);
-    SequencerCore::<MockBlockPublisher>::verify_and_reconstruct(
-        &mock_b,
-        &seq_b.store,
-        &seq_b.chain,
-        true,
-    )
-    .await
-    .expect("reconstruct");
+//     let mock_b = MockBlockPublisher::with_canned_channel(channel_id, Some(tip_slot), messages);
+//     SequencerCore::<MockBlockPublisher>::verify_and_reconstruct(
+//         &mock_b,
+//         &seq_b.store,
+//         &seq_b.chain,
+//         true,
+//     )
+//     .await
+//     .expect("reconstruct");
 
-    let tip_b = seq_b.block_store().latest_block_meta().unwrap().unwrap();
-    assert_eq!(tip_b.id, tip_a.id);
-    assert_eq!(tip_b.hash, tip_a.hash);
+//     let tip_b = seq_b.block_store().latest_block_meta().unwrap().unwrap();
+//     assert_eq!(tip_b.id, tip_a.id);
+//     assert_eq!(tip_b.hash, tip_a.hash);
 
-    // Reconstruction replays the finalized deposit block, minting the receipt
-    // into state and dropping the re-recorded pending event — so the drain has
-    // nothing left to re-mint. This is the mechanism that protects against the
-    // re-delivery, in place of the removed mempool sink.
-    assert!(
-        seq_b
-            .block_store()
-            .dbio()
-            .get_pending_deposit_events()
-            .unwrap()
-            .is_empty(),
-        "reconstruction must drop the re-delivered pending deposit record"
-    );
+//     // Reconstruction replays the finalized deposit block, minting the receipt
+//     // into state and dropping the re-recorded pending event — so the drain has
+//     // nothing left to re-mint. This is the mechanism that protects against the
+//     // re-delivery, in place of the removed mempool sink.
+//     assert!(
+//         seq_b
+//             .block_store()
+//             .dbio()
+//             .get_pending_deposit_events()
+//             .unwrap()
+//             .is_empty(),
+//         "reconstruction must drop the re-delivered pending deposit record"
+//     );
 
-    seq_b.produce_new_block().await.unwrap();
+//     seq_b.produce_new_block().await.unwrap();
 
-    let vault_id = vault_core::compute_vault_account_id(programs::vault().id(), recipient);
-    let bridge_id = system_accounts::bridge_account_id();
-    let state_b = seq_b.chain().lock().unwrap().head_state().clone();
-    let state_a = seq_a.chain().lock().unwrap().head_state().clone();
-    for account in [vault_id, bridge_id, recipient] {
-        assert_eq!(
-            state_b.get_account_by_id(account).balance,
-            state_a.get_account_by_id(account).balance,
-            "reconstructed balance mismatch for {account:?}",
-        );
-    }
-    assert_eq!(
-        state_b.get_account_by_id(vault_id).balance,
-        u128::from(deposit_amount),
-        "deposit must mint into the recipient vault exactly once, not twice"
-    );
+//     let vault_id = vault_core::compute_vault_account_id(programs::vault().id(), recipient);
+//     let bridge_id = system_accounts::bridge_account_id();
+//     let state_b = seq_b.chain().lock().unwrap().head_state().clone();
+//     let state_a = seq_a.chain().lock().unwrap().head_state().clone();
+//     for account in [vault_id, bridge_id, recipient] {
+//         assert_eq!(
+//             state_b.get_account_by_id(account).balance,
+//             state_a.get_account_by_id(account).balance,
+//             "reconstructed balance mismatch for {account:?}",
+//         );
+//     }
+//     assert_eq!(
+//         state_b.get_account_by_id(vault_id).balance,
+//         u128::from(deposit_amount),
+//         "deposit must mint into the recipient vault exactly once, not twice"
+//     );
 
-    let produced = seq_b
-        .block_store()
-        .get_block_at_id(tip_b.id + 1)
-        .unwrap()
-        .expect("produced block present");
-    assert!(
-        !produced
-            .body
-            .transactions
-            .iter()
-            .any(|tx| crate::extract_bridge_deposit_id(tx) == Some(HashType(deposit_op_id))),
-        "the re-delivered mint must be skipped, not re-included in a block"
-    );
+//     let produced = seq_b
+//         .block_store()
+//         .get_block_at_id(tip_b.id + 1)
+//         .unwrap()
+//         .expect("produced block present");
+//     assert!(
+//         !produced
+//             .body
+//             .transactions
+//             .iter()
+//             .any(|tx| crate::extract_bridge_deposit_id(tx) == Some(HashType(deposit_op_id))),
+//         "the re-delivered mint must be skipped, not re-included in a block"
+//     );
 
-    // A reconstructed withdraw's finalized L1 event was already re-delivered (and
-    // dropped) by cold-start backfill, so it will never be consumed again.
-    // Reconstruction must not count it, or the count stays phantom-inflated forever.
-    let key = produced_withdraw_key(&withdraw_tx);
-    assert!(
-        !seq_b
-            .block_store()
-            .dbio()
-            .consume_unseen_withdraw_count(key)
-            .unwrap(),
-        "reconstruction must not leave a phantom unseen-withdraw count"
-    );
-}
+//     // A reconstructed withdraw's finalized L1 event was already re-delivered (and
+//     // dropped) by cold-start backfill, so it will never be consumed again.
+//     // Reconstruction must not count it, or the count stays phantom-inflated forever.
+//     let key = produced_withdraw_key(&withdraw_tx);
+//     assert!(
+//         !seq_b
+//             .block_store()
+//             .dbio()
+//             .consume_unseen_withdraw_count(key)
+//             .unwrap(),
+//         "reconstruction must not leave a phantom unseen-withdraw count"
+//     );
+// }
 
-/// A reconstructed withdraw block must not touch the unseen-withdraw counter.
-/// Its finalized L1 Withdraw event was already re-delivered (and dropped as a
-/// no-op) by cold-start backfill, so counting it during reconstruction would
-/// leave a permanent phantom that nothing ever consumes.
-#[tokio::test]
-async fn reconstructed_withdraw_leaves_no_phantom_unseen_count() {
-    let recipient = initial_public_user_accounts()[0].account_id;
-    let withdraw_amount = 100_u64;
-    let bedrock_account_pk = [0x33_u8; 32];
+// /// A reconstructed withdraw block must not touch the unseen-withdraw counter.
+// /// Its finalized L1 Withdraw event was already re-delivered (and dropped as a
+// /// no-op) by cold-start backfill, so counting it during reconstruction would
+// /// leave a permanent phantom that nothing ever consumes.
+// #[tokio::test]
+// async fn reconstructed_withdraw_leaves_no_phantom_unseen_count() {
+//     let recipient = initial_public_user_accounts()[0].account_id;
+//     let withdraw_amount = 100_u64;
+//     let bedrock_account_pk = [0x33_u8; 32];
 
-    // Sequencer A produces a single withdraw block; treat its chain as the channel.
-    let config_a = bridge_funded_config();
-    let (mut seq_a, mempool_a) =
-        SequencerCoreWithMockClients::start_from_config(config_a.clone()).await;
-    let withdraw_tx = build_public_withdraw_tx(
-        recipient,
-        0,
-        withdraw_amount,
-        bedrock_account_pk,
-        &create_signing_key_for_account1(),
-    );
-    mempool_a
-        .push((TransactionOrigin::User, withdraw_tx.clone()))
-        .await
-        .unwrap();
-    seq_a.produce_new_block().await.unwrap();
+//     // Sequencer A produces a single withdraw block; treat its chain as the channel.
+//     let config_a = bridge_funded_config();
+//     let (mut seq_a, mempool_a) =
+//         SequencerCoreWithMockClients::start_from_config(config_a.clone()).await;
+//     let withdraw_tx = build_public_withdraw_tx(
+//         recipient,
+//         0,
+//         withdraw_amount,
+//         bedrock_account_pk,
+//         &create_signing_key_for_account1(),
+//     );
+//     mempool_a
+//         .push((TransactionOrigin::User, withdraw_tx.clone()))
+//         .await
+//         .unwrap();
+//     seq_a.produce_new_block().await.unwrap();
 
-    let key = produced_withdraw_key(&withdraw_tx);
-    // Producing the withdraw counts it as unseen, awaiting its L1 event.
-    assert!(
-        seq_a
-            .block_store()
-            .dbio()
-            .consume_unseen_withdraw_count(key)
-            .unwrap(),
-        "producing a withdraw must count it as unseen"
-    );
+//     let key = produced_withdraw_key(&withdraw_tx);
+//     // Producing the withdraw counts it as unseen, awaiting its L1 event.
+//     assert!(
+//         seq_a
+//             .block_store()
+//             .dbio()
+//             .consume_unseen_withdraw_count(key)
+//             .unwrap(),
+//         "producing a withdraw must count it as unseen"
+//     );
 
-    let messages = channel_from_store(seq_a.block_store(), 10);
-    let tip_slot = messages.last().unwrap().1;
-    let channel_id = config_a.bedrock_config.channel_id;
+//     let messages = channel_from_store(seq_a.block_store(), 10);
+//     let tip_slot = messages.last().unwrap().1;
+//     let channel_id = config_a.bedrock_config.channel_id;
 
-    // Sequencer B reconstructs A's chain from a fresh store.
-    let config_b = bridge_funded_config();
-    let (store_b, chain_b) = fresh_store_and_chain(&config_b);
-    let mock_b = MockBlockPublisher::with_canned_channel(channel_id, Some(tip_slot), messages);
-    SequencerCore::<MockBlockPublisher>::verify_and_reconstruct(&mock_b, &store_b, &chain_b, true)
-        .await
-        .expect("reconstruct");
+//     // Sequencer B reconstructs A's chain from a fresh store.
+//     let config_b = bridge_funded_config();
+//     let (store_b, chain_b) = fresh_store_and_chain(&config_b);
+//     let mock_b = MockBlockPublisher::with_canned_channel(channel_id, Some(tip_slot), messages);
+//     SequencerCore::<MockBlockPublisher>::verify_and_reconstruct(&mock_b, &store_b, &chain_b,
+// true)         .await
+//         .expect("reconstruct");
 
-    assert!(
-        !store_b.dbio().consume_unseen_withdraw_count(key).unwrap(),
-        "reconstruction must not leave a phantom unseen-withdraw count"
-    );
-}
+//     assert!(
+//         !store_b.dbio().consume_unseen_withdraw_count(key).unwrap(),
+//         "reconstruction must not leave a phantom unseen-withdraw count"
+//     );
+// }
 
 /// A deposit whose L1 event was observed (an unfulfilled pending record
 /// exists) and whose L2 mint is already contained in a finalized channel block.
