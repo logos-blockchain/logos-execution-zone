@@ -24,13 +24,15 @@ build-artifacts:
         just regenerate-test-fixture; \
     fi
 
+RISC0_DOCKER_CONTAINER_TAG := "r0.1.97.0"
+
 build-artifact methods_path features="":
     @echo "Building artifacts for {{methods_path}}"
     @rm -rf target/{{methods_path}}/riscv32im-risc0-zkvm-elf/docker/*.bin
     @if [ "{{features}}" = "" ]; then \
-        CARGO_TARGET_DIR=target/{{methods_path}} cargo risczero build --manifest-path {{methods_path}}/Cargo.toml; \
+        RISC0_DOCKER_CONTAINER_TAG={{RISC0_DOCKER_CONTAINER_TAG}} CARGO_TARGET_DIR=target/{{methods_path}} cargo risczero build --manifest-path {{methods_path}}/Cargo.toml; \
     else \
-        CARGO_TARGET_DIR=target/{{methods_path}} cargo risczero build --no-default-features --features {{features}} --manifest-path {{methods_path}}/Cargo.toml; \
+        RISC0_DOCKER_CONTAINER_TAG={{RISC0_DOCKER_CONTAINER_TAG}} CARGO_TARGET_DIR=target/{{methods_path}} cargo risczero build --no-default-features --features {{features}} --manifest-path {{methods_path}}/Cargo.toml; \
     fi
     @mkdir -p {{ARTIFACTS}}/{{methods_path}}
     @cp target/{{methods_path}}/riscv32im-risc0-zkvm-elf/docker/*.bin {{ARTIFACTS}}/{{methods_path}}

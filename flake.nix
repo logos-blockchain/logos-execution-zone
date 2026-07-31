@@ -124,7 +124,7 @@
 
           commonArgs = {
             inherit src;
-            buildInputs = [ pkgs.openssl ];
+            buildInputs = [ pkgs.openssl pkgs.pcsclite ];
             nativeBuildInputs = [
               pkgs.pkg-config
               pkgs.clang
