@@ -24,7 +24,7 @@ build-artifacts:
         just regenerate-test-fixture; \
     fi
 
-RISC0_DOCKER_CONTAINER_TAG := "r0.1.97.0"
+RISC0_DOCKER_CONTAINER_TAG := "r0.1.91.1"
 
 build-artifact methods_path features="":
     @echo "Building artifacts for {{methods_path}}"
