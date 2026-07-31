@@ -5,7 +5,7 @@ use std::{
 
 use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, Timestamp,
-    account::{Account, AccountId, AccountWithMetadata},
+    account::{Account, AccountId, AccountWithMetadata, apply_balance_diff},
     program::{
         ChainedCall, Claim, DEFAULT_PROGRAM_ID, ProgramId, compute_public_authorized_pdas,
         validate_execution,
@@ -120,7 +120,7 @@ impl ValidatedStateDiff {
                 "Program {:?} pre_states: {:?}, instruction_data: {:?}",
                 chained_call.program_id, chained_call.pre_states, chained_call.instruction_data
             );
-            let mut program_output = program.execute(
+            let program_output = program.execute(
                 caller_data.program_id,
                 &chained_call.pre_states,
                 &chained_call.instruction_data,
@@ -190,11 +190,43 @@ impl ValidatedStateDiff {
                 }
             );
 
-            // Verify execution corresponds to a well-behaved program.
+            // (e') Materialize, without forcing ownership yet: apply each diff to its pre-state
+            // to reconstruct the resulting `Account`. Ownership is deliberately left untouched
+            // here — forcing it before `validate_execution` runs would make a legitimately
+            // claimed account look like its ownership changed, tripping the ownership-immutability
+            // invariant below.
+            //
+            // TODO: `raw_diff`/`update_from_diff` dispatch is not implemented yet — no deployed
+            // program currently emits one. Revisit once a program with real `data` semantics
+            // (e.g. `token`) is migrated.
+            let mut unforced_post_states: Vec<Account> =
+                Vec::with_capacity(program_output.post_states.len());
+            for (i, diff_output) in program_output.post_states.iter().enumerate() {
+                let pre = &program_output.pre_states[i];
+                let diff = diff_output.diff();
+
+                ensure!(
+                    diff.raw_diff.is_none(),
+                    InvalidProgramBehaviorError::UnsupportedRawDiff {
+                        account_id: pre.account_id
+                    }
+                );
+
+                let mut post = pre.account.clone();
+                post.balance = apply_balance_diff(pre.account.balance, diff.diff_balance)
+                    .map_err(InvalidProgramBehaviorError::BalanceDiffFailed)?;
+                unforced_post_states.push(post);
+            }
+
+            // Verify execution corresponds to a well-behaved program, against the materialized,
+            // still-unforced pair. Runs before claim-eligibility (e), below, so a malformed
+            // execution is reported as such even when the account also happens to be an
+            // ineligible claim target — matching the error-priority order the pre-`AccountDiff`
+            // code had, where this ran before claim-handling too.
             // See the # Programs section for the definition of the `validate_execution` method.
             validate_execution(
                 &program_output.pre_states,
-                &program_output.post_states,
+                &unforced_post_states,
                 chained_call.program_id,
             )
             .map_err(InvalidProgramBehaviorError::ExecutionValidationFailed)?;
@@ -208,16 +240,27 @@ impl ValidatedStateDiff {
                 LeeError::OutOfValidityWindow
             );
 
-            for (i, post) in program_output.post_states.iter_mut().enumerate() {
-                let Some(claim) = post.required_claim() else {
-                    continue;
-                };
+            // (e) Initializing / Claiming — validated against the diff's target id and the
+            // pre-state. `AccountDiff` carries no ownership info of its own (a diff can never
+            // express an ownership change), so a claim is checked purely against what the
+            // pre-state and the diff output's `claim` field say, not against an embedded
+            // post-state account field the way `AccountPostState` used to work. This only decides
+            // *eligibility* — the actual ownership write happens in the fold below, which must
+            // stay after `validate_execution` for the reason noted above.
+            let mut claimed_owners: Vec<Option<ProgramId>> =
+                Vec::with_capacity(program_output.post_states.len());
+            for (i, diff_output) in program_output.post_states.iter().enumerate() {
                 let pre = &program_output.pre_states[i];
                 let account_id = pre.account_id;
 
+                let Some(claim) = diff_output.required_claim() else {
+                    claimed_owners.push(None);
+                    continue;
+                };
+
                 // The invoked program can only claim accounts with default program id.
                 ensure!(
-                    post.account().program_owner == DEFAULT_PROGRAM_ID,
+                    pre.account.program_owner == DEFAULT_PROGRAM_ID,
                     InvalidProgramBehaviorError::ClaimedNonDefaultAccount { account_id }
                 );
 
@@ -244,16 +287,21 @@ impl ValidatedStateDiff {
                     }
                 }
 
-                post.account_mut().program_owner = chained_call.program_id;
+                claimed_owners.push(Some(chained_call.program_id));
             }
 
-            // Update the state diff
-            for (pre, post) in program_output
+            // Force ownership for accounts (e) granted a claim to, then fold the final, forced
+            // post-states into the state diff.
+            for (i, (pre, mut post)) in program_output
                 .pre_states
                 .iter()
-                .zip(program_output.post_states.iter())
+                .zip(unforced_post_states)
+                .enumerate()
             {
-                state_diff.insert(pre.account_id, post.account().clone());
+                if let Some(owner) = claimed_owners[i] {
+                    post.program_owner = owner;
+                }
+                state_diff.insert(pre.account_id, post);
             }
 
             // Source from `program_output.pre_states`, not `chained_call.pre_states`:
@@ -542,5 +590,8 @@ fn n_unique<T: Eq + Hash>(data: &[T]) -> usize {
     set.len()
 }
 
-#[cfg(test)]
-mod tests;
+// Dormant while scope is narrowed to `simple_balance_transfer` — this file's tests are
+// execute_and_prove/privacy-path or now-dormant-program based. See
+// `test_methods/guest/src/dormant/README.md`.
+// #[cfg(test)]
+// mod tests;

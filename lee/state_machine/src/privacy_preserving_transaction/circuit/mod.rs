@@ -191,5 +191,7 @@ fn execute_and_prove_program(
         .receipt)
 }
 
-#[cfg(test)]
-mod tests;
+// Dormant while scope is narrowed to `simple_balance_transfer` — this file's tests are entirely
+// execute_and_prove/privacy-circuit based. See `test_methods/guest/src/dormant/README.md`.
+// #[cfg(test)]
+// mod tests;

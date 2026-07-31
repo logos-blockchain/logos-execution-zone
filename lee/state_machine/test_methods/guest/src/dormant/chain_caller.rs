@@ -1,5 +1,9 @@
-use lee_core::program::{
-    AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+use lee_core::{
+    account::{AccountDiff, BalanceDiff},
+    program::{
+        AccountDiffOutput, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput,
+        read_lee_inputs,
+    },
 };
 use risc0_zkvm::serde::to_vec;
 
@@ -55,14 +59,25 @@ fn main() {
             };
     }
 
+    let sender_diff = AccountDiff {
+        id: sender_pre.account_id,
+        diff_balance: BalanceDiff::Add(0),
+        raw_diff: None,
+    };
+    let recipient_diff = AccountDiff {
+        id: recipient_pre.account_id,
+        diff_balance: BalanceDiff::Add(0),
+        raw_diff: None,
+    };
+
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_words,
-        vec![sender_pre.clone(), recipient_pre.clone()],
+        vec![sender_pre, recipient_pre],
         vec![
-            AccountPostState::new(sender_pre.account),
-            AccountPostState::new(recipient_pre.account),
+            AccountDiffOutput::new(sender_diff),
+            AccountDiffOutput::new(recipient_diff),
         ],
     )
     .with_chained_calls(chained_calls)

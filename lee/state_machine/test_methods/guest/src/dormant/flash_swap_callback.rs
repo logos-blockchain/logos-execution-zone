@@ -24,8 +24,12 @@
 //! called by any program. In production, a callback would typically verify the caller
 //! if it needs to trust the context it is called from.
 
-use lee_core::program::{
-    AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+use lee_core::{
+    account::{AccountDiff, BalanceDiff},
+    program::{
+        AccountDiffOutput, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput,
+        read_lee_inputs,
+    },
 };
 use serde::{Deserialize, Serialize};
 
@@ -78,14 +82,25 @@ fn main() {
 
     // The callback itself makes no direct state changes, accounts pass through unchanged.
     // All mutations go through the token program via chained calls.
+    let vault_diff = AccountDiff {
+        id: vault_pre.account_id,
+        diff_balance: BalanceDiff::Add(0),
+        raw_diff: None,
+    };
+    let receiver_diff = AccountDiff {
+        id: receiver_pre.account_id,
+        diff_balance: BalanceDiff::Add(0),
+        raw_diff: None,
+    };
+
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_words,
-        vec![vault_pre.clone(), receiver_pre.clone()],
+        vec![vault_pre, receiver_pre],
         vec![
-            AccountPostState::new(vault_pre.account),
-            AccountPostState::new(receiver_pre.account),
+            AccountDiffOutput::new(vault_diff),
+            AccountDiffOutput::new(receiver_diff),
         ],
     )
     .with_chained_calls(chained_calls)

@@ -117,6 +117,15 @@ pub fn apply_balance_diff(current: Balance, diff: BalanceDiff) -> Result<Balance
     }
 }
 
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
+)]
+pub struct AccountDiff {
+    pub id: AccountId,
+    pub diff_balance: BalanceDiff,
+    pub raw_diff: Option<Vec<u8>>,
+}
+
 /// Account to be used both in public and private contexts.
 #[derive(
     Default, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,

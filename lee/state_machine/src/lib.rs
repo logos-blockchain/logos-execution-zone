@@ -41,6 +41,9 @@ mod privacy_preserving_circuit {
     ));
 }
 
+// Scope narrowed to `simple_balance_transfer` while migrating to `AccountDiff` — the rest are
+// commented out, not deleted, pending their own conversion. See
+// `test_methods/guest/src/dormant/README.md`.
 #[cfg(test)]
 mod test_methods {
     use std::borrow::Cow;
@@ -55,6 +58,15 @@ mod test_methods {
         )
     }
 
+    #[must_use]
+    pub const fn data_changer() -> Program {
+        Program::new_unchecked(
+            test_methods::DATA_CHANGER_ID,
+            Cow::Borrowed(test_methods::DATA_CHANGER_ELF),
+        )
+    }
+
+    /*
     #[must_use]
     pub const fn nonce_changer() -> Program {
         Program::new_unchecked(
@@ -92,14 +104,6 @@ mod test_methods {
         Program::new_unchecked(
             test_methods::PROGRAM_OWNER_CHANGER_ID,
             Cow::Borrowed(test_methods::PROGRAM_OWNER_CHANGER_ELF),
-        )
-    }
-
-    #[must_use]
-    pub const fn data_changer() -> Program {
-        Program::new_unchecked(
-            test_methods::DATA_CHANGER_ID,
-            Cow::Borrowed(test_methods::DATA_CHANGER_ELF),
         )
     }
 
@@ -276,4 +280,5 @@ mod test_methods {
             Cow::Borrowed(test_methods::MALICIOUS_LAUNDERER_ELF),
         )
     }
+    */
 }

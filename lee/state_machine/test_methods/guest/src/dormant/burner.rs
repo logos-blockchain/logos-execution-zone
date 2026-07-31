@@ -1,6 +1,9 @@
-use lee_core::program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::{
+    account::{AccountDiff, BalanceDiff},
+    program::{AccountDiffOutput, ProgramInput, ProgramOutput, read_lee_inputs},
+};
 
-type Instruction = ();
+type Instruction = u128;
 
 fn main() {
     let (
@@ -8,7 +11,7 @@ fn main() {
             self_program_id,
             caller_program_id,
             pre_states,
-            instruction: (),
+            instruction: balance_to_burn,
         },
         instruction_words,
     ) = read_lee_inputs::<Instruction>();
@@ -17,14 +20,18 @@ fn main() {
         return;
     };
 
-    let account_post = AccountPostState::new_claimed(pre.account.clone(), Claim::Authorized);
+    let diff = AccountDiff {
+        id: pre.account_id,
+        diff_balance: BalanceDiff::Sub(balance_to_burn),
+        raw_diff: None,
+    };
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_words,
         vec![pre],
-        vec![account_post],
+        vec![AccountDiffOutput::new(diff)],
     )
     .write();
 }

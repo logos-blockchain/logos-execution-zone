@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     BlockId, Identifier, NullifierPublicKey, Timestamp,
-    account::{Account, AccountId, AccountWithMetadata},
+    account::{Account, AccountDiff, AccountId, AccountWithMetadata},
     encryption::ViewingPublicKey,
 };
 
@@ -321,6 +321,63 @@ impl AccountPostState {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(any(feature = "host", test), derive(PartialEq, Eq))]
+pub struct AccountDiffOutput {
+    diff: AccountDiff,
+    claim: Option<Claim>,
+}
+
+impl AccountDiffOutput {
+    #[must_use]
+    pub const fn new(diff: AccountDiff) -> Self {
+        Self { diff, claim: None }
+    }
+
+    #[must_use]
+    pub const fn new_claimed(diff: AccountDiff, claim: Claim) -> Self {
+        Self {
+            diff,
+            claim: Some(claim),
+        }
+    }
+
+    // `AccountDiff` deliberately carries no ownership info, unlike `Account`, so unlike
+    // `AccountPostState::new_claimed_if_default` this needs the pre-state's owner passed in.
+    #[must_use]
+    pub fn new_claimed_if_default(
+        diff: AccountDiff,
+        pre_state_program_owner: ProgramId,
+        claim: Claim,
+    ) -> Self {
+        let is_default_owner = pre_state_program_owner == DEFAULT_PROGRAM_ID;
+        Self {
+            diff,
+            claim: is_default_owner.then_some(claim),
+        }
+    }
+
+    #[must_use]
+    pub const fn required_claim(&self) -> Option<Claim> {
+        self.claim
+    }
+
+    #[must_use]
+    pub const fn diff(&self) -> &AccountDiff {
+        &self.diff
+    }
+
+    #[must_use]
+    pub const fn diff_mut(&mut self) -> &mut AccountDiff {
+        &mut self.diff
+    }
+
+    #[must_use]
+    pub fn into_diff(self) -> AccountDiff {
+        self.diff
+    }
+}
+
 pub type BlockValidityWindow = ValidityWindow<BlockId>;
 pub type TimestampValidityWindow = ValidityWindow<Timestamp>;
 
@@ -437,8 +494,8 @@ pub struct ProgramOutput {
     pub instruction_data: InstructionData,
     /// The account pre states the program received to produce this output.
     pub pre_states: Vec<AccountWithMetadata>,
-    /// The account post states the program execution produced.
-    pub post_states: Vec<AccountPostState>,
+    /// The account diffs the program execution produced.
+    pub post_states: Vec<AccountDiffOutput>,
     /// The list of chained calls to other programs.
     pub chained_calls: Vec<ChainedCall>,
     /// The block ID window where the program output is valid.
@@ -453,7 +510,7 @@ impl ProgramOutput {
         caller_program_id: Option<ProgramId>,
         instruction_data: InstructionData,
         pre_states: Vec<AccountWithMetadata>,
-        post_states: Vec<AccountPostState>,
+        post_states: Vec<AccountDiffOutput>,
     ) -> Self {
         Self {
             self_program_id,
@@ -669,7 +726,7 @@ pub fn read_lee_inputs<T: DeserializeOwned>() -> (ProgramInput<T>, InstructionDa
 /// - `executing_program_id`: The identifier of the program that was executed.
 pub fn validate_execution(
     pre_states: &[AccountWithMetadata],
-    post_states: &[AccountPostState],
+    post_states: &[Account],
     executing_program_id: ProgramId,
 ) -> Result<(), ExecutionValidationError> {
     // 1. Check account ids are all different
@@ -689,14 +746,14 @@ pub fn validate_execution(
 
     for (pre, post) in pre_states.iter().zip(post_states) {
         // 3. Nonce must remain unchanged
-        if pre.account.nonce != post.account.nonce {
+        if pre.account.nonce != post.nonce {
             return Err(ExecutionValidationError::ModifiedNonce {
                 account_id: pre.account_id,
             });
         }
 
         // 4. Program ownership changes are not allowed
-        if pre.account.program_owner != post.account.program_owner {
+        if pre.account.program_owner != post.program_owner {
             return Err(ExecutionValidationError::ModifiedProgramOwner {
                 account_id: pre.account_id,
             });
@@ -705,9 +762,7 @@ pub fn validate_execution(
         let account_program_owner = pre.account.program_owner;
 
         // 5. Decreasing balance only allowed if owned by executing program
-        if post.account.balance < pre.account.balance
-            && account_program_owner != executing_program_id
-        {
+        if post.balance < pre.account.balance && account_program_owner != executing_program_id {
             return Err(ExecutionValidationError::UnauthorizedBalanceDecrease {
                 account_id: pre.account_id,
                 owner_program_id: account_program_owner,
@@ -717,7 +772,7 @@ pub fn validate_execution(
 
         // 6. Data changes only allowed if owned by executing program or if account pre state has
         //    default values
-        if pre.account.data != post.account.data
+        if pre.account.data != post.data
             && pre.account != Account::default()
             && account_program_owner != executing_program_id
         {
@@ -729,7 +784,7 @@ pub fn validate_execution(
 
         // 7. If a post state has default program owner, the pre state must have been a default
         //    account
-        if post.account.program_owner == DEFAULT_PROGRAM_ID && pre.account != Account::default() {
+        if post.program_owner == DEFAULT_PROGRAM_ID && pre.account != Account::default() {
             return Err(
                 ExecutionValidationError::NonDefaultAccountWithDefaultOwner {
                     account_id: pre.account_id,
@@ -746,7 +801,7 @@ pub fn validate_execution(
     };
 
     let Some(total_balance_post_states) =
-        WrappedBalanceSum::from_balances(post_states.iter().map(|post| post.account.balance))
+        WrappedBalanceSum::from_balances(post_states.iter().map(|post| post.balance))
     else {
         return Err(ExecutionValidationError::BalanceSumOverflow);
     };

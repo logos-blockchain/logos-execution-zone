@@ -1,6 +1,6 @@
 use lee_core::{
-    account::Account,
-    program::{AccountPostState, ProgramInput, ProgramOutput, read_lee_inputs},
+    account::{AccountDiff, AccountId, BalanceDiff},
+    program::{AccountDiffOutput, ProgramInput, ProgramOutput, read_lee_inputs},
 };
 
 type Instruction = ();
@@ -20,7 +20,16 @@ fn main() {
         return;
     };
 
-    let account_pre = pre.account.clone();
+    let diff = AccountDiff {
+        id: pre.account_id,
+        diff_balance: BalanceDiff::Add(0),
+        raw_diff: None,
+    };
+    let extra_diff = AccountDiff {
+        id: AccountId::default(),
+        diff_balance: BalanceDiff::Add(0),
+        raw_diff: None,
+    };
 
     ProgramOutput::new(
         self_program_id,
@@ -28,8 +37,8 @@ fn main() {
         instruction_words,
         vec![pre],
         vec![
-            AccountPostState::new(account_pre),
-            AccountPostState::new(Account::default()),
+            AccountDiffOutput::new(diff),
+            AccountDiffOutput::new(extra_diff),
         ],
     )
     .write();
