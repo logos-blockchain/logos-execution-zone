@@ -10,7 +10,7 @@ pub use logos_blockchain_core::mantle::{
 };
 use logos_blockchain_core::{
     mantle::{
-        MantleTx, SignedMantleTx,
+        SignedMantleTx,
         channel::{SlotTimeframe, SlotTimeout},
         gas::GasCost,
         ops::{
@@ -22,9 +22,11 @@ use logos_blockchain_core::{
             },
         },
         traits::Hashable as _,
+        transactions::{MantleTxBuilder, OpsProofs},
     },
     proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignature},
 };
+use logos_blockchain_http_api_common::bodies::wallet::fund::WalletFundRequestBody;
 pub use logos_blockchain_key_management_system_service::keys::{
     ED25519_SECRET_KEY_SIZE, Ed25519Key, ZkKey,
 };
@@ -443,7 +445,8 @@ const fn channel_update_inscription(orphan: &ChannelUpdateTx) -> Option<&Inscrip
 }
 
 /// Signs a `ChannelConfig` op (accredited keys + rotation params) with
-/// `signing_key` and posts it straight to the bedrock node.
+/// `signing_key`, funds it from `config.funding_key` via the node's wallet,
+/// and posts it straight to the bedrock node.
 ///
 /// A standalone one-shot — no running sequencer involved, so authorization is
 /// holding the admin key: the L1 rejects non-admin signers. `Ok(())` means the
@@ -485,7 +488,30 @@ pub async fn post_channel_config(
         transfer_threshold,
     };
 
-    let mantle_tx = MantleTx([Op::ChannelConfig(config_op)].into());
+    let node = NodeHttpClient::new(
+        CommonHttpClient::new(config.auth.clone().map(Into::into)),
+        config.node_url.clone(),
+    );
+
+    // Fund the op from the node's wallet: the node appends a fee transfer
+    // (paid from `funding_key`, change back to it) and returns its proof.
+    let tx_builder = MantleTxBuilder::new()
+        .extend_ops([Op::ChannelConfig(config_op)])
+        .map_err(|err| anyhow!("Too many ops in channel config transaction: {err:?}"))?;
+    let funded = node
+        .fund_tx(WalletFundRequestBody {
+            tip: None,
+            tx_builder,
+            change_public_key: config.funding_key,
+            funding_public_keys: vec![config.funding_key],
+            max_tx_fee: GasCost::new(logos_blockchain_core::mantle::Value::MAX),
+            priority_fee: FundingConfig::DEFAULT_PRIORITY_FEE,
+        })
+        .await
+        .context("Failed to fund channel config transaction")?;
+    let mantle_tx = funded.funded_tx;
+
+    // Sign the funded tx: the appended fee transfer changes the hash.
     let tx_hash = mantle_tx.hash();
     // The admin key is `keys[0]`, hence signature index 0.
     let signature = IndexedSignature::new(
@@ -494,12 +520,16 @@ pub async fn post_channel_config(
     );
     let proof = ChannelMultiSigProof::try_new(signature.into())
         .map_err(|err| anyhow!("Failed to assemble channel multi-sig proof: {err:?}"))?;
-    let signed_tx = SignedMantleTx::new(mantle_tx, OpProof::ChannelMultiSigProof(proof).into());
 
-    let node = NodeHttpClient::new(
-        CommonHttpClient::new(config.auth.clone().map(Into::into)),
-        config.node_url.clone(),
-    );
+    // Proofs follow op order; funding appends the transfer as the last op.
+    let mut ops_proofs: OpsProofs = OpProof::ChannelMultiSigProof(proof).into();
+    if let Some(transfer_proof) = funded.transfer_proof {
+        ops_proofs
+            .try_push(transfer_proof)
+            .map_err(|err| anyhow!("Too many operation proofs: {err:?}"))?;
+    }
+    let signed_tx = SignedMantleTx::new(mantle_tx, ops_proofs);
+
     node.post_transaction(signed_tx)
         .await
         .context("Failed to post channel config transaction")
