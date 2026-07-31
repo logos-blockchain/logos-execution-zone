@@ -12,6 +12,7 @@ use logos_blockchain_core::{
     mantle::{
         MantleTx, SignedMantleTx,
         channel::{SlotTimeframe, SlotTimeout},
+        gas::GasCost,
         ops::{
             Op, OpProof,
             channel::{
@@ -33,9 +34,9 @@ use logos_blockchain_zone_sdk::{
     adapter::{Node as _, NodeHttpClient},
     indexer::ZoneIndexer,
     sequencer::{
-        ChannelUpdateTx, DepositInfo, Event, FinalizedOp, InscriptionInfo, PendingTx,
-        SequencerConfig as ZoneSdkSequencerConfig, TurnNotification, WithdrawArg, WithdrawInfo,
-        ZoneSequencer,
+        ChannelUpdateTx, DepositInfo, Event, FinalizedOp, FundingConfig, InscriptionInfo,
+        PendingTx, SequencerConfig as ZoneSdkSequencerConfig, TurnNotification, WithdrawArg,
+        WithdrawInfo, ZoneSequencer,
     },
 };
 use tokio::{
@@ -187,6 +188,11 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
 
         let zone_sdk_config = ZoneSdkSequencerConfig {
             resubmit_interval,
+            funding: Some(FundingConfig {
+                funding_pk: config.funding_key,
+                max_tx_fee: GasCost::new(logos_blockchain_core::mantle::Value::MAX),
+                priority_fee: FundingConfig::DEFAULT_PRIORITY_FEE,
+            }),
             ..ZoneSdkSequencerConfig::default()
         };
 

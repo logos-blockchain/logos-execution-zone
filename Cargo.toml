@@ -132,6 +132,7 @@ openssl = { version = "0.10", features = ["vendored"] }
 openssl-probe = { version = "0.1.2" }
 serde = { version = "1.0.60", default-features = false, features = ["derive"] }
 serde_json = "1.0.81"
+serde_yaml = "0.9.34"
 serde_with = "3.16.1"
 actix = "0.13.0"
 actix-cors = "0.7.1"
@@ -162,6 +163,7 @@ base64 = "0.22.1"
 bip39 = "2.2.0"
 hmac-sha512 = "1.1.7"
 chrono = "0.4.41"
+time = "0.3"
 borsh = "1.5.7"
 zstd = "0.13"
 base58 = "0.2.0"
@@ -174,6 +176,7 @@ async-stream = "0.3.6"
 
 logos-blockchain-common-http-client = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "0dc34e2c5a6e2ff772140378659489a602ee06bc" }
 logos-blockchain-key-management-system-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "0dc34e2c5a6e2ff772140378659489a602ee06bc" }
+logos-blockchain-codec = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "0dc34e2c5a6e2ff772140378659489a602ee06bc" }
 logos-blockchain-core = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "0dc34e2c5a6e2ff772140378659489a602ee06bc" }
 logos-blockchain-chain-broadcast-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "0dc34e2c5a6e2ff772140378659489a602ee06bc" }
 logos-blockchain-chain-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "0dc34e2c5a6e2ff772140378659489a602ee06bc" }

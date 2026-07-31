@@ -131,11 +131,12 @@ impl SequencerSetup {
             Vec::new()
         };
 
-        let config = config::sequencer_config_with_channel(
+        let config = config::sequencer_config(
             partial,
             home.to_owned(),
             bedrock_addr,
             channel_id,
+            config::bedrock_funding_key(),
             genesis_transactions,
             cross_zone,
         )

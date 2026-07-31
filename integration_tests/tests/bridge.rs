@@ -349,7 +349,7 @@ async fn submit_bedrock_deposit(
         },
         change_public_key: balance.address,
         funding_public_keys: vec![balance.address],
-        max_tx_fee: 1_000_u64.into(),
+        max_tx_fee: u64::MAX.into(),
     };
 
     let response = client

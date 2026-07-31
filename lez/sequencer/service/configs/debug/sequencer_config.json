@@ -11,7 +11,8 @@
             "max_retries": 5
         },
         "channel_id": "0101010101010101010101010101010101010101010101010101010101010101",
-        "node_url": "http://localhost:18080"
+        "node_url": "http://localhost:18080",
+        "funding_key": "2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26"
     },
     "genesis": [
         {

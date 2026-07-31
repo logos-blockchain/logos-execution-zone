@@ -6,6 +6,8 @@ use indexer_service::{ChannelId, ClientConfig, IndexerConfig};
 use key_protocol::key_management::{KeyChain, secret_holders::SeedHolder};
 use lee::{AccountId, PrivateKey, PublicKey};
 use lee_core::Identifier;
+use logos_blockchain_key_management_system_service::keys::ZkPublicKey;
+use num_bigint::BigUint;
 use sequencer_core::config::{BedrockConfig, CrossZoneConfig, GenesisAction, SequencerConfig};
 use url::Url;
 use wallet::config::{MultiSequencerClientConfig, SequencerConnectionData, WalletConfig};
@@ -79,26 +81,8 @@ pub fn sequencer_config(
     partial: SequencerPartialConfig,
     home: PathBuf,
     bedrock_addr: SocketAddr,
-    genesis_transactions: Vec<GenesisAction>,
-    cross_zone: Option<CrossZoneConfig>,
-) -> Result<SequencerConfig> {
-    sequencer_config_with_channel(
-        partial,
-        home,
-        bedrock_addr,
-        bedrock_channel_id(),
-        genesis_transactions,
-        cross_zone,
-    )
-}
-
-/// Like [`sequencer_config`] but with an explicit Bedrock `channel_id`, so tests
-/// can point a sequencer at a fresh/empty channel (e.g. to model a wiped Bedrock).
-pub fn sequencer_config_with_channel(
-    partial: SequencerPartialConfig,
-    home: PathBuf,
-    bedrock_addr: SocketAddr,
     channel_id: ChannelId,
+    funding_key: ZkPublicKey,
     genesis_transactions: Vec<GenesisAction>,
     cross_zone: Option<CrossZoneConfig>,
 ) -> Result<SequencerConfig> {
@@ -122,6 +106,7 @@ pub fn sequencer_config_with_channel(
             channel_id,
             node_url: addr_to_url(UrlProtocol::Http, bedrock_addr)
                 .context("Failed to convert bedrock addr to URL")?,
+            funding_key,
             auth: None,
         },
         cross_zone,
@@ -279,4 +264,13 @@ pub fn bedrock_channel_id_b() -> ChannelId {
         .try_into()
         .unwrap_or_else(|_| unreachable!());
     ChannelId::from(channel_id)
+}
+
+/// Funding key of the Bedrock test node, matching `funding_pk` in `bedrock/node-config.yaml`.
+#[must_use]
+pub fn bedrock_funding_key() -> ZkPublicKey {
+    const PUBLIC_KEY_HEX: &str = "2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26";
+
+    let bytes = hex::decode(PUBLIC_KEY_HEX).expect("Fixed funding key must be valid hex");
+    ZkPublicKey::from(BigUint::from_bytes_le(&bytes))
 }

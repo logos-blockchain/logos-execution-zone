@@ -70,6 +70,7 @@ async fn multi_sequencer_committee_converges() -> Result<()> {
         &BedrockConfig {
             channel_id: config::bedrock_channel_id(),
             node_url: config::addr_to_url(config::UrlProtocol::Http, bedrock_addr)?,
+            funding_key: config::bedrock_funding_key(),
             auth: None,
         },
         &Ed25519Key::from_bytes(&key_a),

@@ -12,6 +12,7 @@ pub use cross_zone_inbox_core::{CrossZoneConfig, CrossZonePeer};
 use humantime_serde;
 use lee::{AccountId, Balance};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
+use logos_blockchain_key_management_system_service::keys::ZkPublicKey;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -72,6 +73,7 @@ pub struct BedrockConfig {
     pub node_url: Url,
     /// Bedrock auth.
     pub auth: Option<BasicAuth>,
+    pub funding_key: ZkPublicKey,
 }
 
 impl SequencerConfig {
