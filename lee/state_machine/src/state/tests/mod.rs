@@ -8,7 +8,8 @@ use std::collections::HashMap;
 
 use lee_core::{
     BlockId, Commitment, DUMMY_COMMITMENT_HASH, InputAccountIdentity, Nullifier,
-    NullifierPublicKey, NullifierSecretKey, Timestamp,
+    NullifierPublicKey, NullifierSecretKey, NullifierWitness, PrivateWitness, Timestamp,
+    WitnessKind,
     account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
     encryption::ViewingPublicKey,
     program::{
@@ -279,13 +280,16 @@ fn shielded_balance_transfer_for_tests(
         Program::serialize_instruction(balance_to_move).unwrap(),
         vec![
             InputAccountIdentity::Public,
-            InputAccountIdentity::PrivateForeignInit {
+            InputAccountIdentity::Private(PrivateWitness {
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
-                npk: recipient_keys.npk(),
                 identifier: 0,
-                commitment_root: DUMMY_COMMITMENT_HASH,
-            },
+                kind: WitnessKind::Regular,
+                nullifier: NullifierWitness::Init {
+                    npk: recipient_keys.npk(),
+                    commitment_root: DUMMY_COMMITMENT_HASH,
+                },
+            }),
         ],
         &crate::test_methods::simple_balance_transfer().into(),
     )
@@ -323,23 +327,29 @@ fn private_balance_transfer_for_tests(
         vec![sender_pre, recipient_pre],
         Program::serialize_instruction(balance_to_move).unwrap(),
         vec![
-            InputAccountIdentity::PrivateAuthorizedUpdate {
+            InputAccountIdentity::Private(PrivateWitness {
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
-                view_tag: 0,
-                nsk: sender_keys.nsk,
-                membership_proof: state
-                    .get_proof_for_commitment(&sender_commitment)
-                    .expect("sender's commitment must be in state"),
                 identifier: 0,
-            },
-            InputAccountIdentity::PrivateForeignInit {
+                kind: WitnessKind::Regular,
+                nullifier: NullifierWitness::Update {
+                    view_tag: 0,
+                    nsk: sender_keys.nsk,
+                    membership_proof: state
+                        .get_proof_for_commitment(&sender_commitment)
+                        .expect("sender's commitment must be in state"),
+                },
+            }),
+            InputAccountIdentity::Private(PrivateWitness {
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
-                npk: recipient_keys.npk(),
                 identifier: 0,
-                commitment_root: DUMMY_COMMITMENT_HASH,
-            },
+                kind: WitnessKind::Regular,
+                nullifier: NullifierWitness::Init {
+                    npk: recipient_keys.npk(),
+                    commitment_root: DUMMY_COMMITMENT_HASH,
+                },
+            }),
         ],
         &program.into(),
     )
@@ -378,16 +388,19 @@ fn deshielded_balance_transfer_for_tests(
         vec![sender_pre, recipient_pre],
         Program::serialize_instruction(balance_to_move).unwrap(),
         vec![
-            InputAccountIdentity::PrivateAuthorizedUpdate {
+            InputAccountIdentity::Private(PrivateWitness {
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
-                view_tag: 0,
-                nsk: sender_keys.nsk,
-                membership_proof: state
-                    .get_proof_for_commitment(&sender_commitment)
-                    .expect("sender's commitment must be in state"),
                 identifier: 0,
-            },
+                kind: WitnessKind::Regular,
+                nullifier: NullifierWitness::Update {
+                    view_tag: 0,
+                    nsk: sender_keys.nsk,
+                    membership_proof: state
+                        .get_proof_for_commitment(&sender_commitment)
+                        .expect("sender's commitment must be in state"),
+                },
+            }),
             InputAccountIdentity::Public,
         ],
         &program.into(),

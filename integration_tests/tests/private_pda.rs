@@ -21,7 +21,8 @@ use lee::{
     program::Program,
 };
 use lee_core::{
-    DUMMY_COMMITMENT_HASH, InputAccountIdentity, NullifierPublicKey,
+    DUMMY_COMMITMENT_HASH, InputAccountIdentity, NullifierPublicKey, NullifierWitness,
+    PrivateWitness, WitnessKind,
     account::{Account, AccountWithMetadata},
     encryption::ViewingPublicKey,
     program::PdaSeed,
@@ -65,14 +66,18 @@ async fn fund_private_pda(
 
     let account_identities = vec![
         InputAccountIdentity::Public,
-        InputAccountIdentity::PrivatePdaInit {
+        InputAccountIdentity::Private(PrivateWitness {
             vpk,
             random_seed: [0; 32],
-            npk,
             identifier,
-            commitment_root: DUMMY_COMMITMENT_HASH,
-            seed: Some((seed, authority_program_id)),
-        },
+            kind: WitnessKind::Pda {
+                binding: Some((authority_program_id, seed)),
+            },
+            nullifier: NullifierWitness::Init {
+                npk,
+                commitment_root: DUMMY_COMMITMENT_HASH,
+            },
+        }),
     ];
 
     let (output, proof) = execute_and_prove(

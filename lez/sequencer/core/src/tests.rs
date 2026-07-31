@@ -18,7 +18,7 @@ use lee::{
     program::Program,
 };
 use lee_core::{
-    Commitment, InputAccountIdentity, Nullifier,
+    Commitment, InputAccountIdentity, Nullifier, NullifierWitness, PrivateWitness, WitnessKind,
     account::{AccountWithMetadata, Nonce},
     program::PdaSeed,
 };
@@ -1093,16 +1093,19 @@ fn private_bridge_withdraw_invocation_is_dropped() {
         vec![sender_pre, bridge_pre],
         instruction,
         vec![
-            InputAccountIdentity::PrivateAuthorizedUpdate {
+            InputAccountIdentity::Private(PrivateWitness {
                 vpk: sender_keys.viewing_public_key.clone(),
                 random_seed: [0; 32],
-                view_tag: 0,
-                nsk: sender_keys.private_key_holder.nullifier_secret_key,
-                membership_proof: state
-                    .get_proof_for_commitment(&sender_commitment)
-                    .expect("sender commitment must be in state"),
                 identifier: 0,
-            },
+                kind: WitnessKind::Regular,
+                nullifier: NullifierWitness::Update {
+                    view_tag: 0,
+                    nsk: sender_keys.private_key_holder.nullifier_secret_key,
+                    membership_proof: state
+                        .get_proof_for_commitment(&sender_commitment)
+                        .expect("sender commitment must be in state"),
+                },
+            }),
             InputAccountIdentity::Public,
         ],
         &program_with_deps,

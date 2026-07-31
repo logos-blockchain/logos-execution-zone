@@ -2,7 +2,8 @@
 
 use lee_core::{
     Commitment, DUMMY_COMMITMENT_HASH, EncryptedAccountData, EncryptionScheme, EphemeralSecretKey,
-    Nullifier, PrivacyPreservingCircuitOutput, SharedSecretKey,
+    Nullifier, NullifierPublicKey, NullifierWitness, PrivacyPreservingCircuitOutput,
+    PrivateWitness, SharedSecretKey, WitnessKind,
     account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
     program::{PdaSeed, PrivateAccountKind},
 };
@@ -88,13 +89,16 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_pre_accounts() 
         Program::serialize_instruction(balance_to_move).unwrap(),
         vec![
             InputAccountIdentity::Public,
-            InputAccountIdentity::PrivateForeignInit {
+            InputAccountIdentity::Private(PrivateWitness {
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
-                npk: recipient_keys.npk(),
                 identifier: 0,
-                commitment_root: DUMMY_COMMITMENT_HASH,
-            },
+                kind: WitnessKind::Regular,
+                nullifier: NullifierWitness::Init {
+                    npk: recipient_keys.npk(),
+                    commitment_root: DUMMY_COMMITMENT_HASH,
+                },
+            }),
         ],
         &crate::test_methods::simple_balance_transfer().into(),
     )
@@ -191,23 +195,29 @@ fn prove_privacy_preserving_execution_circuit_fully_private() {
         vec![sender_pre, recipient],
         Program::serialize_instruction(balance_to_move).unwrap(),
         vec![
-            InputAccountIdentity::PrivateAuthorizedUpdate {
+            InputAccountIdentity::Private(PrivateWitness {
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
-                view_tag: 0,
-                nsk: sender_keys.nsk,
-                membership_proof: commitment_set
-                    .get_proof_for(&commitment_sender)
-                    .expect("sender's commitment must be in the set"),
                 identifier: 0,
-            },
-            InputAccountIdentity::PrivateForeignInit {
+                kind: WitnessKind::Regular,
+                nullifier: NullifierWitness::Update {
+                    view_tag: 0,
+                    nsk: sender_keys.nsk,
+                    membership_proof: commitment_set
+                        .get_proof_for(&commitment_sender)
+                        .expect("sender's commitment must be in the set"),
+                },
+            }),
+            InputAccountIdentity::Private(PrivateWitness {
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
-                npk: recipient_keys.npk(),
                 identifier: 0,
-                commitment_root: DUMMY_COMMITMENT_HASH,
-            },
+                kind: WitnessKind::Regular,
+                nullifier: NullifierWitness::Init {
+                    npk: recipient_keys.npk(),
+                    commitment_root: DUMMY_COMMITMENT_HASH,
+                },
+            }),
         ],
         &program.into(),
     )
@@ -270,13 +280,16 @@ fn init_note_view_tag_is_derived_from_account_keys() {
     let (output, proof) = execute_and_prove(
         vec![account],
         Program::serialize_instruction(()).unwrap(),
-        vec![InputAccountIdentity::PrivateForeignInit {
+        vec![InputAccountIdentity::Private(PrivateWitness {
             vpk: keys.vpk(),
             random_seed: [0; 32],
-            npk: keys.npk(),
             identifier,
-            commitment_root: DUMMY_COMMITMENT_HASH,
-        }],
+            kind: WitnessKind::Regular,
+            nullifier: NullifierWitness::Init {
+                npk: keys.npk(),
+                commitment_root: DUMMY_COMMITMENT_HASH,
+            },
+        })],
         &program.into(),
     )
     .unwrap();
@@ -312,14 +325,17 @@ fn update_note_view_tag_is_the_supplied_value() {
     let (output, proof) = execute_and_prove(
         vec![sender],
         Program::serialize_instruction(()).unwrap(),
-        vec![InputAccountIdentity::PrivateAuthorizedUpdate {
+        vec![InputAccountIdentity::Private(PrivateWitness {
             vpk: keys.vpk(),
             random_seed: [0; 32],
-            view_tag: fed_tag,
-            nsk: keys.nsk,
-            membership_proof: commitment_set.get_proof_for(&commitment).unwrap(),
             identifier,
-        }],
+            kind: WitnessKind::Regular,
+            nullifier: NullifierWitness::Update {
+                view_tag: fed_tag,
+                nsk: keys.nsk,
+                membership_proof: commitment_set.get_proof_for(&commitment).unwrap(),
+            },
+        })],
         &program.into(),
     )
     .unwrap();
@@ -361,13 +377,16 @@ fn circuit_fails_when_chained_validity_windows_have_empty_intersection() {
     let result = execute_and_prove(
         vec![pre],
         instruction,
-        vec![InputAccountIdentity::PrivateForeignInit {
+        vec![InputAccountIdentity::Private(PrivateWitness {
             vpk: account_keys.vpk(),
             random_seed: [0; 32],
-            npk: account_keys.npk(),
             identifier: 0,
-            commitment_root: DUMMY_COMMITMENT_HASH,
-        }],
+            kind: WitnessKind::Regular,
+            nullifier: NullifierWitness::Init {
+                npk: account_keys.npk(),
+                commitment_root: DUMMY_COMMITMENT_HASH,
+            },
+        })],
         &program_with_deps,
     );
 
@@ -394,14 +413,16 @@ fn private_pda_claim_with_custom_identifier_encrypts_correct_kind() {
     let (output, _proof) = execute_and_prove(
         vec![pre_state],
         Program::serialize_instruction(seed).unwrap(),
-        vec![InputAccountIdentity::PrivatePdaInit {
+        vec![InputAccountIdentity::Private(PrivateWitness {
             vpk: keys.vpk(),
             random_seed: [0; 32],
-            npk,
             identifier,
-            commitment_root: DUMMY_COMMITMENT_HASH,
-            seed: None,
-        }],
+            kind: WitnessKind::Pda { binding: None },
+            nullifier: NullifierWitness::Init {
+                npk,
+                commitment_root: DUMMY_COMMITMENT_HASH,
+            },
+        })],
         &program.clone().into(),
     )
     .unwrap();
@@ -440,14 +461,16 @@ fn private_pda_init() {
     let result = execute_and_prove(
         vec![pda_pre],
         instruction,
-        vec![InputAccountIdentity::PrivatePdaInit {
+        vec![InputAccountIdentity::Private(PrivateWitness {
             vpk: keys.vpk(),
             random_seed: [0; 32],
-            npk,
             identifier: 0,
-            commitment_root: DUMMY_COMMITMENT_HASH,
-            seed: None,
-        }],
+            kind: WitnessKind::Pda { binding: None },
+            nullifier: NullifierWitness::Init {
+                npk,
+                commitment_root: DUMMY_COMMITMENT_HASH,
+            },
+        })],
         &program_with_deps,
     );
 
@@ -492,14 +515,16 @@ fn private_pda_withdraw() {
         vec![pda_pre, recipient_pre],
         instruction,
         vec![
-            InputAccountIdentity::PrivatePdaInit {
+            InputAccountIdentity::Private(PrivateWitness {
                 vpk: keys.vpk(),
                 random_seed: [0; 32],
-                npk,
                 identifier: 0,
-                commitment_root: DUMMY_COMMITMENT_HASH,
-                seed: None,
-            },
+                kind: WitnessKind::Pda { binding: None },
+                nullifier: NullifierWitness::Init {
+                    npk,
+                    commitment_root: DUMMY_COMMITMENT_HASH,
+                },
+            }),
             InputAccountIdentity::Public,
         ],
         &program_with_deps,
@@ -545,13 +570,16 @@ fn shared_account_receives_via_simple_transfer() {
         instruction,
         vec![
             InputAccountIdentity::Public,
-            InputAccountIdentity::PrivateForeignInit {
+            InputAccountIdentity::Private(PrivateWitness {
                 vpk: shared_keys.vpk(),
                 random_seed: [0; 32],
-                npk: shared_npk,
                 identifier: shared_identifier,
-                commitment_root: DUMMY_COMMITMENT_HASH,
-            },
+                kind: WitnessKind::Regular,
+                nullifier: NullifierWitness::Init {
+                    npk: shared_npk,
+                    commitment_root: DUMMY_COMMITMENT_HASH,
+                },
+            }),
         ],
         &program.into(),
     );
@@ -561,8 +589,9 @@ fn shared_account_receives_via_simple_transfer() {
     assert_eq!(output.private_actions.len(), 1);
 }
 
-/// `PrivateAuthorizedInit` with a non-default identifier produces a ciphertext that decrypts
-/// to `PrivateAccountKind::Regular` carrying the correct identifier.
+/// A regular init with an npk derived from the held `nsk` and a non-default identifier
+/// produces a ciphertext that decrypts to `PrivateAccountKind::Regular` carrying the correct
+/// identifier.
 #[test]
 fn private_authorized_init_encrypts_regular_kind_with_identifier() {
     let program = crate::test_methods::claimer();
@@ -580,13 +609,16 @@ fn private_authorized_init_encrypts_regular_kind_with_identifier() {
     let (output, _) = execute_and_prove(
         vec![pre],
         Program::serialize_instruction(()).unwrap(),
-        vec![InputAccountIdentity::PrivateAuthorizedInit {
+        vec![InputAccountIdentity::Private(PrivateWitness {
             vpk: keys.vpk(),
             random_seed: [0; 32],
-            nsk: keys.nsk,
             identifier,
-            commitment_root: DUMMY_COMMITMENT_HASH,
-        }],
+            kind: WitnessKind::Regular,
+            nullifier: NullifierWitness::Init {
+                npk: NullifierPublicKey::from(&keys.nsk),
+                commitment_root: DUMMY_COMMITMENT_HASH,
+            },
+        })],
         &program.into(),
     )
     .unwrap();
@@ -597,8 +629,9 @@ fn private_authorized_init_encrypts_regular_kind_with_identifier() {
     );
 }
 
-/// `PrivateForeignInit` with a non-default identifier produces a ciphertext that decrypts
-/// to `PrivateAccountKind::Regular` carrying the correct identifier.
+/// A regular init with a directly-supplied npk (the caller does not own the account) and a
+/// non-default identifier produces a ciphertext that decrypts to `PrivateAccountKind::Regular`
+/// carrying the correct identifier.
 #[test]
 fn private_foreign_init_encrypts_regular_kind_with_identifier() {
     let program = crate::test_methods::claimer();
@@ -616,13 +649,16 @@ fn private_foreign_init_encrypts_regular_kind_with_identifier() {
     let (output, _) = execute_and_prove(
         vec![recipient],
         Program::serialize_instruction(()).unwrap(),
-        vec![InputAccountIdentity::PrivateForeignInit {
+        vec![InputAccountIdentity::Private(PrivateWitness {
             vpk: keys.vpk(),
             random_seed: [0; 32],
-            npk: keys.npk(),
             identifier,
-            commitment_root: DUMMY_COMMITMENT_HASH,
-        }],
+            kind: WitnessKind::Regular,
+            nullifier: NullifierWitness::Init {
+                npk: keys.npk(),
+                commitment_root: DUMMY_COMMITMENT_HASH,
+            },
+        })],
         &program.into(),
     )
     .unwrap();
@@ -633,7 +669,7 @@ fn private_foreign_init_encrypts_regular_kind_with_identifier() {
     );
 }
 
-/// `PrivateAuthorizedUpdate` with a non-default identifier produces a ciphertext that decrypts
+/// A regular update with a non-default identifier produces a ciphertext that decrypts
 /// to `PrivateAccountKind::Regular` carrying the correct identifier.
 #[test]
 fn private_authorized_update_encrypts_regular_kind_with_identifier() {
@@ -661,14 +697,17 @@ fn private_authorized_update_encrypts_regular_kind_with_identifier() {
     let (output, _) = execute_and_prove(
         vec![sender],
         Program::serialize_instruction(()).unwrap(),
-        vec![InputAccountIdentity::PrivateAuthorizedUpdate {
+        vec![InputAccountIdentity::Private(PrivateWitness {
             vpk: keys.vpk(),
             random_seed: [0; 32],
-            view_tag: 0,
-            nsk: keys.nsk,
-            membership_proof: commitment_set.get_proof_for(&commitment).unwrap(),
             identifier,
-        }],
+            kind: WitnessKind::Regular,
+            nullifier: NullifierWitness::Update {
+                view_tag: 0,
+                nsk: keys.nsk,
+                membership_proof: commitment_set.get_proof_for(&commitment).unwrap(),
+            },
+        })],
         &program.into(),
     )
     .unwrap();
@@ -679,7 +718,7 @@ fn private_authorized_update_encrypts_regular_kind_with_identifier() {
     );
 }
 
-/// `PrivatePdaUpdate` with a non-default identifier produces a ciphertext that decrypts
+/// A private-PDA update with a non-default identifier produces a ciphertext that decrypts
 /// to `PrivateAccountKind::Pda` carrying the correct `(program_id, seed, identifier)`.
 #[test]
 fn private_pda_update_encrypts_pda_kind_with_identifier() {
@@ -718,15 +757,17 @@ fn private_pda_update_encrypts_pda_kind_with_identifier() {
         vec![pda_pre, recipient_pre],
         Program::serialize_instruction((seed, 1_u128, simple_transfer_id, false)).unwrap(),
         vec![
-            InputAccountIdentity::PrivatePdaUpdate {
+            InputAccountIdentity::Private(PrivateWitness {
                 vpk: keys.vpk(),
                 random_seed: [0; 32],
-                view_tag: 0,
-                nsk: keys.nsk,
-                membership_proof: commitment_set.get_proof_for(&pda_commitment).unwrap(),
                 identifier,
-                seed: None,
-            },
+                kind: WitnessKind::Pda { binding: None },
+                nullifier: NullifierWitness::Update {
+                    view_tag: 0,
+                    nsk: keys.nsk,
+                    membership_proof: commitment_set.get_proof_for(&pda_commitment).unwrap(),
+                },
+            }),
             InputAccountIdentity::Public,
         ],
         &program_with_deps,
@@ -755,14 +796,16 @@ fn private_pda_init_identifier_mismatch_fails() {
     let result = execute_and_prove(
         vec![pre_state],
         Program::serialize_instruction(seed).unwrap(),
-        vec![InputAccountIdentity::PrivatePdaInit {
+        vec![InputAccountIdentity::Private(PrivateWitness {
             vpk: keys.vpk(),
             random_seed: [0; 32],
-            npk,
             identifier: 99,
-            commitment_root: DUMMY_COMMITMENT_HASH,
-            seed: None,
-        }],
+            kind: WitnessKind::Pda { binding: None },
+            nullifier: NullifierWitness::Init {
+                npk,
+                commitment_root: DUMMY_COMMITMENT_HASH,
+            },
+        })],
         &program.into(),
     );
 
@@ -797,15 +840,17 @@ fn private_pda_update_identifier_mismatch_fails() {
         vec![pda_pre, recipient_pre],
         Program::serialize_instruction((seed, 1_u128, simple_transfer_id, false)).unwrap(),
         vec![
-            InputAccountIdentity::PrivatePdaUpdate {
+            InputAccountIdentity::Private(PrivateWitness {
                 vpk: keys.vpk(),
                 random_seed: [0; 32],
-                view_tag: 0,
-                nsk: keys.nsk,
-                membership_proof: commitment_set.get_proof_for(&pda_commitment).unwrap(),
                 identifier: 99,
-                seed: None,
-            },
+                kind: WitnessKind::Pda { binding: None },
+                nullifier: NullifierWitness::Update {
+                    view_tag: 0,
+                    nsk: keys.nsk,
+                    membership_proof: commitment_set.get_proof_for(&pda_commitment).unwrap(),
+                },
+            }),
             InputAccountIdentity::Public,
         ],
         &program_with_deps,
