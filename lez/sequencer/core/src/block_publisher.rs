@@ -551,11 +551,14 @@ mod tests {
     /// committed to local storage but `publish_block` can never inscribe it on Bedrock, silently
     /// losing its transactions.
     ///
-    /// Currently fails: the default `max_block_size` (1 MiB) exceeds the base layer's inscription
-    /// cap (`Inscription::MAX` = `MAX_BLOCK_SIZE * 7 / 8` = 917 504 bytes), so any block sized in
-    /// the 917 505..=1 048 576 byte gap passes zone validation but is rejected by the
-    /// `Vec<u8> -> Inscription` conversion in `publish_block`. Deploying several programs in one
-    /// block (e.g. the scaffold's bundled examples) lands in this gap in practice.
+    /// Regression guard: with the base layer's inscription cap at 917 504 bytes
+    /// (`MAX_BLOCK_SIZE * 7 / 8` before logos-blockchain@0dc34e2c raised it), the default
+    /// `max_block_size` (1 MiB) exceeded the cap and any block sized in the gap passed zone
+    /// validation but was rejected by the `Vec<u8> -> Inscription` conversion in `publish_block`
+    /// — e.g. deploying the scaffold's bundled example programs in one block. Nothing ties the
+    /// two limits together, so this test fails if either drifts back out of range. Note the
+    /// inscribed payload is the full signed `Block`, slightly larger than the
+    /// `HashableBlockData` the admission check measures.
     #[test]
     fn max_sized_block_fits_in_a_single_inscription() {
         let max_block_size = usize::try_from(crate::config::default_max_block_size().as_u64())
