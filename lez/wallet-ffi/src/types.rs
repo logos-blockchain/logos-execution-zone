@@ -474,7 +474,6 @@ impl From<AccountIdentity> for FfiAccountIdentity {
             AccountIdentity::PrivatePdaShared {
                 account_id,
                 nsk,
-                npk,
                 vpk,
                 identifier,
             } => {
@@ -491,7 +490,6 @@ impl From<AccountIdentity> for FfiAccountIdentity {
                     kind: FfiAccountIdentityKind::PrivatePdaShared,
                     account_id: account_id.into(),
                     nullifier_secret_key: nsk.into(),
-                    nullifier_public_key: npk.0.into(),
                     viewing_public_key: vpk_data,
                     viewing_public_key_len: vpk_len,
                     identifier: identifier.into(),
@@ -604,7 +602,6 @@ impl TryFrom<&FfiAccountIdentity> for AccountIdentity {
                 Ok(Self::PrivatePdaShared {
                     account_id: value.account_id.into(),
                     nsk: value.nullifier_secret_key.data,
-                    npk: NullifierPublicKey(value.nullifier_public_key.data),
                     vpk,
                     identifier: value.identifier.into(),
                 })
@@ -721,7 +718,6 @@ mod tests {
         let acc_identity_8 = AccountIdentity::PrivatePdaShared {
             account_id: private_pda_acc_id,
             nsk,
-            npk,
             vpk,
             identifier,
         };

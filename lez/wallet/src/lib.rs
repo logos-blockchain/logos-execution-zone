@@ -380,7 +380,6 @@ impl WalletCore {
             Some(AccountIdentity::PrivatePdaShared {
                 account_id,
                 nsk: keys.nullifier_secret_key(),
-                npk: keys.generate_nullifier_public_key(),
                 vpk,
                 identifier,
             })

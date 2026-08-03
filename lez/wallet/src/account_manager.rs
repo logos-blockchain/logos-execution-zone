@@ -54,11 +54,11 @@ pub enum AccountIdentity {
         identifier: Identifier,
     },
     /// A shared private PDA with externally-provided keys (e.g. from GMS).
-    /// `account_id` was derived via [`AccountId::for_private_pda`].
+    /// `account_id` was derived via [`AccountId::for_private_pda`]; its `npk` is derived from
+    /// the `nsk` at use.
     PrivatePdaShared {
         account_id: AccountId,
         nsk: NullifierSecretKey,
-        npk: NullifierPublicKey,
         vpk: ViewingPublicKey,
         identifier: Identifier,
     },
@@ -111,7 +111,6 @@ impl fmt::Debug for AccountIdentity {
                 .finish(),
             Self::PrivatePdaShared {
                 account_id,
-                npk,
                 vpk,
                 identifier,
                 ..
@@ -119,7 +118,6 @@ impl fmt::Debug for AccountIdentity {
                 .debug_struct("PrivatePdaShared")
                 .field("account_id", account_id)
                 .field("nsk", &"<redacted>")
-                .field("npk", npk)
                 .field("vpk", vpk)
                 .field("identifier", identifier)
                 .finish(),
@@ -291,7 +289,6 @@ impl AccountManager {
                         wallet,
                         account_id,
                         nsk,
-                        npk,
                         vpk,
                         identifier,
                         Some(ask),
@@ -303,12 +300,11 @@ impl AccountManager {
                 AccountIdentity::PrivatePdaShared {
                     account_id,
                     nsk,
-                    npk,
                     vpk,
                     identifier,
                 } => {
                     let pre = private_shared_acc_preparation(
-                        wallet, account_id, nsk, npk, vpk, identifier, None, true,
+                        wallet, account_id, nsk, vpk, identifier, None, true,
                     );
 
                     State::Private(pre)
@@ -580,17 +576,16 @@ fn private_foreign_acc_preparation(
     }
 }
 
-#[expect(clippy::too_many_arguments, reason = "All keys need to be supplied")]
 fn private_shared_acc_preparation(
     wallet: &WalletCore,
     account_id: AccountId,
     nsk: NullifierSecretKey,
-    npk: NullifierPublicKey,
     vpk: ViewingPublicKey,
     identifier: Identifier,
     ask: Option<AuthorizationSecretKey>,
     is_pda: bool,
 ) -> AccountPreparedData {
+    let npk = NullifierPublicKey::from(&nsk);
     let acc = wallet
         .storage()
         .key_chain()
