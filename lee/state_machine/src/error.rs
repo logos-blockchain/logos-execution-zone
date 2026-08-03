@@ -140,8 +140,11 @@ pub enum InvalidProgramBehaviorError {
     #[error(transparent)]
     BalanceDiffFailed(#[from] BalanceDiffError),
 
-    #[error("Raw data diff for account {account_id} is not yet supported")]
-    UnsupportedRawDiff { account_id: AccountId },
+    #[error(
+        "Account {account_id} has a data diff to materialize but no deployed owner program to \
+         dispatch it to"
+    )]
+    NoOwnerProgramForDataUpdate { account_id: AccountId },
 }
 
 #[cfg(test)]

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     BlockId, Identifier, NullifierPublicKey, Timestamp,
-    account::{Account, AccountDiff, AccountId, AccountWithMetadata},
+    account::{Account, AccountDiff, AccountId, AccountWithMetadata, BalanceDiff, Data},
     encryption::ViewingPublicKey,
 };
 
@@ -639,12 +639,6 @@ pub enum ExecutionValidationError {
         post_state_length: usize,
     },
 
-    #[error("Unallowed modification of nonce for account {account_id}")]
-    ModifiedNonce { account_id: AccountId },
-
-    #[error("Unallowed modification of program owner for account {account_id}")]
-    ModifiedProgramOwner { account_id: AccountId },
-
     #[error(
         "Trying to decrease balance of account {account_id} owned by {owner_program_id:?} in a program {executing_program_id:?} which is not the owner"
     )]
@@ -662,20 +656,15 @@ pub enum ExecutionValidationError {
         executing_program_id: ProgramId,
     },
 
-    #[error(
-        "Post-state for account {account_id} has default program owner but pre-state was not default"
-    )]
-    NonDefaultAccountWithDefaultOwner { account_id: AccountId },
-
     #[error("Total balance across accounts overflowed 2^256 - 1")]
     BalanceSumOverflow,
 
     #[error(
-        "Total balance across accounts is not preserved: total balance in pre-states {total_balance_pre_states}, total balance in post-states {total_balance_post_states}"
+        "Total balance across accounts is not preserved: total added {total_added}, total subtracted {total_subbed}"
     )]
     MismatchedTotalBalance {
-        total_balance_pre_states: WrappedBalanceSum,
-        total_balance_post_states: WrappedBalanceSum,
+        total_added: WrappedBalanceSum,
+        total_subbed: WrappedBalanceSum,
     },
 }
 
@@ -718,15 +707,81 @@ pub fn read_lee_inputs<T: DeserializeOwned>() -> (ProgramInput<T>, InstructionDa
     )
 }
 
+/// Discriminates which entrypoint a single guest invocation is for. Written by the (trusted)
+/// orchestrator only — never derived from caller-supplied `instruction_data` — so a calling
+/// program can never trick a callee into running its `update_from_diff` path instead of its
+/// real logic.
+#[derive(Serialize, Deserialize)]
+pub enum CallKind {
+    Execute,
+    UpdateFromDiff,
+}
+
+/// The guest-side view of a single invocation: either a normal instruction execution, or a
+/// request to materialize an `AccountDiff`'s `diff_data` into the account's new `data`, via
+/// that program's own `update_from_diff`.
+pub enum ProgramCall<T> {
+    Execute(ProgramInput<T>, InstructionData),
+    UpdateFromDiff { pre_state: Account, diff_data: Vec<u8> },
+}
+
+/// Reads a single LEE guest invocation, dispatching on [`CallKind`]. Replaces
+/// [`read_lee_inputs`] as the entrypoint read — every guest `main` should match on the
+/// returned [`ProgramCall`] rather than assume it was invoked to execute.
+#[must_use]
+pub fn read_lee_call<T: DeserializeOwned>() -> ProgramCall<T> {
+    match env::read() {
+        CallKind::Execute => {
+            let self_program_id: ProgramId = env::read();
+            let caller_program_id: Option<ProgramId> = env::read();
+            let pre_states: Vec<AccountWithMetadata> = env::read();
+            let instruction_words: InstructionData = env::read();
+            let instruction =
+                T::deserialize(&mut Deserializer::new(instruction_words.as_ref())).unwrap();
+            ProgramCall::Execute(
+                ProgramInput {
+                    self_program_id,
+                    caller_program_id,
+                    pre_states,
+                    instruction,
+                },
+                instruction_words,
+            )
+        }
+        CallKind::UpdateFromDiff => {
+            let pre_state: Account = env::read();
+            let diff_data: Vec<u8> = env::read();
+            ProgramCall::UpdateFromDiff {
+                pre_state,
+                diff_data,
+            }
+        }
+    }
+}
+
+/// Commits an `update_from_diff` result to the journal. The host always knows it invoked
+/// `UpdateFromDiff` mode, so it decodes the journal as `Data` directly — no discriminant is
+/// needed on the output side, only on the input side (see [`CallKind`]).
+pub fn write_update_from_diff_output(data: &Data) {
+    env::commit(data);
+}
+
 /// Validates well-behaved program execution.
+///
+/// Diff-native: every rule here reads only `pre_states` and each `AccountDiff`'s
+/// `diff_balance`/`diff_data`, never a materialized post-state. `AccountDiff` has no `nonce` or
+/// `program_owner` field, so a program cannot express a nonce or ownership change through it at
+/// all — those used to be explicit rules here (comparing `pre.account.nonce`/`program_owner`
+/// against a program-constructed post-state) but are now enforced by the type itself, not by a
+/// runtime check. Ownership is exclusively handled by the separate claim-eligibility check.
 ///
 /// # Parameters
 /// - `pre_states`: The list of input accounts, each annotated with authorization metadata.
-/// - `post_states`: The list of resulting accounts after executing the program logic.
+/// - `post_diff`: The diff each account underwent, as reported by the executing program.
 /// - `executing_program_id`: The identifier of the program that was executed.
 pub fn validate_execution(
     pre_states: &[AccountWithMetadata],
-    post_states: &[Account],
+    post_diff: &[AccountDiffOutput],
     executing_program_id: ProgramId,
 ) -> Result<(), ExecutionValidationError> {
     // 1. Check account ids are all different
@@ -735,34 +790,23 @@ pub fn validate_execution(
     }
 
     // 2. Lengths must match
-    if pre_states.len() != post_states.len() {
+    if pre_states.len() != post_diff.len() {
         return Err(
             ExecutionValidationError::MismatchedPreStatePostStateLength {
                 pre_state_length: pre_states.len(),
-                post_state_length: post_states.len(),
+                post_state_length: post_diff.len(),
             },
         );
     }
 
-    for (pre, post) in pre_states.iter().zip(post_states) {
-        // 3. Nonce must remain unchanged
-        if pre.account.nonce != post.nonce {
-            return Err(ExecutionValidationError::ModifiedNonce {
-                account_id: pre.account_id,
-            });
-        }
-
-        // 4. Program ownership changes are not allowed
-        if pre.account.program_owner != post.program_owner {
-            return Err(ExecutionValidationError::ModifiedProgramOwner {
-                account_id: pre.account_id,
-            });
-        }
-
+    for (pre, diff_output) in pre_states.iter().zip(post_diff) {
+        let diff = diff_output.diff();
         let account_program_owner = pre.account.program_owner;
 
-        // 5. Decreasing balance only allowed if owned by executing program
-        if post.balance < pre.account.balance && account_program_owner != executing_program_id {
+        // 3. Decreasing balance only allowed if owned by executing program
+        if matches!(diff.diff_balance, BalanceDiff::Sub(amount) if amount > 0)
+            && account_program_owner != executing_program_id
+        {
             return Err(ExecutionValidationError::UnauthorizedBalanceDecrease {
                 account_id: pre.account_id,
                 owner_program_id: account_program_owner,
@@ -770,9 +814,9 @@ pub fn validate_execution(
             });
         }
 
-        // 6. Data changes only allowed if owned by executing program or if account pre state has
+        // 4. Data changes only allowed if owned by executing program or if account pre state has
         //    default values
-        if pre.account.data != post.data
+        if diff.diff_data.is_some()
             && pre.account != Account::default()
             && account_program_owner != executing_program_id
         {
@@ -781,35 +825,32 @@ pub fn validate_execution(
                 executing_program_id,
             });
         }
-
-        // 7. If a post state has default program owner, the pre state must have been a default
-        //    account
-        if post.program_owner == DEFAULT_PROGRAM_ID && pre.account != Account::default() {
-            return Err(
-                ExecutionValidationError::NonDefaultAccountWithDefaultOwner {
-                    account_id: pre.account_id,
-                },
-            );
-        }
     }
 
-    // 8. Total balance is preserved
-    let Some(total_balance_pre_states) =
-        WrappedBalanceSum::from_balances(pre_states.iter().map(|pre| pre.account.balance))
-    else {
+    // 5. Total balance is preserved: within this call's own diffs, every decrease must be
+    //    balanced by an equal increase.
+    let Some(total_added) = WrappedBalanceSum::from_balances(post_diff.iter().filter_map(
+        |diff_output| match diff_output.diff().diff_balance {
+            BalanceDiff::Add(amount) => Some(amount),
+            BalanceDiff::Sub(_) => None,
+        },
+    )) else {
         return Err(ExecutionValidationError::BalanceSumOverflow);
     };
 
-    let Some(total_balance_post_states) =
-        WrappedBalanceSum::from_balances(post_states.iter().map(|post| post.balance))
-    else {
+    let Some(total_subbed) = WrappedBalanceSum::from_balances(post_diff.iter().filter_map(
+        |diff_output| match diff_output.diff().diff_balance {
+            BalanceDiff::Sub(amount) => Some(amount),
+            BalanceDiff::Add(_) => None,
+        },
+    )) else {
         return Err(ExecutionValidationError::BalanceSumOverflow);
     };
 
-    if total_balance_pre_states != total_balance_post_states {
+    if total_added != total_subbed {
         return Err(ExecutionValidationError::MismatchedTotalBalance {
-            total_balance_pre_states,
-            total_balance_post_states,
+            total_added,
+            total_subbed,
         });
     }
 

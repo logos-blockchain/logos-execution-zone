@@ -1,6 +1,9 @@
 use lee_core::{
     account::{Account, AccountDiff, BalanceDiff, data::Data, data::DataTooBigError},
-    program::{AccountDiffOutput, Claim, ProgramInput, ProgramOutput, read_lee_inputs},
+    program::{
+        AccountDiffOutput, Claim, ProgramCall, ProgramInput, ProgramOutput, read_lee_call,
+        write_update_from_diff_output,
+    },
 };
 
 type Instruction = Vec<u8>;
@@ -15,15 +18,27 @@ fn main() {
             instruction: data,
         },
         instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    ) = match read_lee_call::<Instruction>() {
+        ProgramCall::Execute(input, instruction_words) => (input, instruction_words),
+        ProgramCall::UpdateFromDiff {
+            pre_state,
+            diff_data,
+        } => {
+            let data =
+                update_from_diff(pre_state, diff_data).expect("update_from_diff should not fail");
+            write_update_from_diff_output(&data);
+            return;
+        }
+    };
 
     let Ok([pre]) = <[_; 1]>::try_from(pre_states) else {
         return;
     };
 
-    // Sanity check only — the authoritative check happens wherever `raw_diff` actually gets
-    // applied (`update_from_diff`, not yet wired up on the orchestrator side); this just gives an
-    // early, in-guest failure for the same case, same as the program did before.
+    // Sanity check only — the authoritative check happens wherever `diff_data` actually gets
+    // applied (`update_from_diff`, invoked separately as a `CallKind::UpdateFromDiff` call);
+    // this just gives an early, in-guest failure for the same case, same as the program did
+    // before.
     let _: Data = data
         .clone()
         .try_into()
@@ -32,7 +47,7 @@ fn main() {
     let diff = AccountDiff {
         id: pre.account_id,
         diff_balance: BalanceDiff::Add(0),
-        raw_diff: Some(data),
+        diff_data: Some(data),
     };
 
     ProgramOutput::new(
@@ -45,18 +60,6 @@ fn main() {
     .write();
 }
 
-
-#[expect(
-    dead_code,
-    reason = "placeholder: not called by main() yet — the orchestrator's raw_diff dispatch \
-              mechanism isn't wired up. Kept as a tested building block for once it is."
-)]
-fn update_from_diff(pre_state: Account, diff: AccountDiff) -> Result<Account, DataTooBigError> {
-    let mut post_state = pre_state;
-
-    if let Some(raw_diff) = diff.raw_diff {
-        post_state.data = raw_diff.try_into()?;
-    }
-
-    Ok(post_state)
+fn update_from_diff(_pre_state: Account, diff_data: Vec<u8>) -> Result<Data, DataTooBigError> {
+    diff_data.try_into()
 }

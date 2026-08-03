@@ -23,7 +23,7 @@ fn main() {
     let diff = AccountDiff {
         id: pre.account_id,
         diff_balance: BalanceDiff::Sub(balance_to_burn),
-        raw_diff: None,
+        diff_data: None,
     };
 
     ProgramOutput::new(

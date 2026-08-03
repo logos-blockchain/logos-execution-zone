@@ -22,12 +22,12 @@ fn program_execution() {
     let expected_sender_diff = AccountDiff {
         id: sender_id,
         diff_balance: BalanceDiff::Sub(balance_to_move),
-        raw_diff: None,
+        diff_data: None,
     };
     let expected_recipient_diff = AccountDiff {
         id: recipient_id,
         diff_balance: BalanceDiff::Add(balance_to_move),
-        raw_diff: None,
+        diff_data: None,
     };
     let program_output = program
         .execute(None, &[sender, recipient], &instruction_data)

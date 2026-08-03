@@ -85,12 +85,12 @@ fn main() {
     let vault_diff = AccountDiff {
         id: vault_pre.account_id,
         diff_balance: BalanceDiff::Add(0),
-        raw_diff: None,
+        diff_data: None,
     };
     let receiver_diff = AccountDiff {
         id: receiver_pre.account_id,
         diff_balance: BalanceDiff::Add(0),
-        raw_diff: None,
+        diff_data: None,
     };
 
     ProgramOutput::new(

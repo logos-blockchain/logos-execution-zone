@@ -62,12 +62,12 @@ fn main() {
     let sender_diff = AccountDiff {
         id: sender_pre.account_id,
         diff_balance: BalanceDiff::Add(0),
-        raw_diff: None,
+        diff_data: None,
     };
     let recipient_diff = AccountDiff {
         id: recipient_pre.account_id,
         diff_balance: BalanceDiff::Add(0),
-        raw_diff: None,
+        diff_data: None,
     };
 
     ProgramOutput::new(

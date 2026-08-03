@@ -23,7 +23,7 @@ fn main() {
     let diff = AccountDiff {
         id: pre.account_id,
         diff_balance: BalanceDiff::Add(0),
-        raw_diff: None,
+        diff_data: None,
     };
     let account_post = AccountDiffOutput::new_claimed(diff, Claim::Authorized);
 

@@ -2,8 +2,8 @@ use std::borrow::Cow;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::AccountWithMetadata,
-    program::{InstructionData, ProgramId, ProgramOutput},
+    account::{Account, AccountWithMetadata, Data},
+    program::{CallKind, InstructionData, ProgramId, ProgramOutput},
 };
 use risc0_zkvm::{ExecutorEnv, ExecutorEnvBuilder, default_executor, serde::to_vec};
 use serde::Serialize;
@@ -85,7 +85,8 @@ impl Program {
         Ok(program_output)
     }
 
-    /// Writes inputs to `env_builder` in the order expected by the programs.
+    /// Writes inputs to `env_builder` in the order expected by the programs, as a
+    /// `CallKind::Execute` invocation.
     pub(crate) fn write_inputs(
         program_id: ProgramId,
         caller_program_id: Option<ProgramId>,
@@ -93,6 +94,9 @@ impl Program {
         instruction_data: &[u32],
         env_builder: &mut ExecutorEnvBuilder,
     ) -> Result<(), LeeError> {
+        env_builder
+            .write(&CallKind::Execute)
+            .map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
         env_builder
             .write(&program_id)
             .map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
@@ -107,6 +111,37 @@ impl Program {
             .write(&instruction_data)
             .map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
         Ok(())
+    }
+
+    /// Invokes a program's `update_from_diff` entrypoint to materialize an `AccountDiff`'s
+    /// `diff_data` into the account's new `data`, unproven (mirrors `execute`).
+    pub(crate) fn execute_update_from_diff(
+        &self,
+        pre_state: Account,
+        diff_data: Vec<u8>,
+    ) -> Result<Data, LeeError> {
+        let mut env_builder = ExecutorEnv::builder();
+        env_builder.session_limit(Some(MAX_NUM_CYCLES_PUBLIC_EXECUTION));
+        env_builder
+            .write(&CallKind::UpdateFromDiff)
+            .map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
+        env_builder
+            .write(&pre_state)
+            .map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
+        env_builder
+            .write(&diff_data)
+            .map_err(|e| LeeError::ProgramWriteInputFailed(e.to_string()))?;
+        let env = env_builder.build().unwrap();
+
+        let executor = default_executor();
+        let session_info = executor
+            .execute(env, self.elf())
+            .map_err(|e| LeeError::ProgramExecutionFailed(e.to_string()))?;
+
+        session_info
+            .journal
+            .decode()
+            .map_err(|e| LeeError::ProgramExecutionFailed(e.to_string()))
     }
 }
 

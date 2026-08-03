@@ -190,43 +190,17 @@ impl ValidatedStateDiff {
                 }
             );
 
-            // (e') Materialize, without forcing ownership yet: apply each diff to its pre-state
-            // to reconstruct the resulting `Account`. Ownership is deliberately left untouched
-            // here — forcing it before `validate_execution` runs would make a legitimately
-            // claimed account look like its ownership changed, tripping the ownership-immutability
-            // invariant below.
-            //
-            // TODO: `raw_diff`/`update_from_diff` dispatch is not implemented yet — no deployed
-            // program currently emits one. Revisit once a program with real `data` semantics
-            // (e.g. `token`) is migrated.
-            let mut unforced_post_states: Vec<Account> =
-                Vec::with_capacity(program_output.post_states.len());
-            for (i, diff_output) in program_output.post_states.iter().enumerate() {
-                let pre = &program_output.pre_states[i];
-                let diff = diff_output.diff();
-
-                ensure!(
-                    diff.raw_diff.is_none(),
-                    InvalidProgramBehaviorError::UnsupportedRawDiff {
-                        account_id: pre.account_id
-                    }
-                );
-
-                let mut post = pre.account.clone();
-                post.balance = apply_balance_diff(pre.account.balance, diff.diff_balance)
-                    .map_err(InvalidProgramBehaviorError::BalanceDiffFailed)?;
-                unforced_post_states.push(post);
-            }
-
-            // Verify execution corresponds to a well-behaved program, against the materialized,
-            // still-unforced pair. Runs before claim-eligibility (e), below, so a malformed
-            // execution is reported as such even when the account also happens to be an
-            // ineligible claim target — matching the error-priority order the pre-`AccountDiff`
-            // code had, where this ran before claim-handling too.
+            // Verify execution corresponds to a well-behaved program. Diff-native — reads only
+            // `pre_states` and each diff's `diff_balance`/`diff_data`, never a materialized
+            // post-state, so this can run before both claim-eligibility (e) and materialization
+            // below. Runs before claim-eligibility so a malformed execution is reported as such
+            // even when the account also happens to be an ineligible claim target — matching the
+            // error-priority order the pre-`AccountDiff` code had, where this ran before
+            // claim-handling too.
             // See the # Programs section for the definition of the `validate_execution` method.
             validate_execution(
                 &program_output.pre_states,
-                &unforced_post_states,
+                &program_output.post_states,
                 chained_call.program_id,
             )
             .map_err(InvalidProgramBehaviorError::ExecutionValidationFailed)?;
@@ -290,15 +264,34 @@ impl ValidatedStateDiff {
                 claimed_owners.push(Some(chained_call.program_id));
             }
 
-            // Force ownership for accounts (e) granted a claim to, then fold the final, forced
-            // post-states into the state diff.
-            for (i, (pre, mut post)) in program_output
-                .pre_states
-                .iter()
-                .zip(unforced_post_states)
-                .enumerate()
-            {
-                if let Some(owner) = claimed_owners[i] {
+            // Materialize each diff into the resulting `Account`, force ownership for accounts
+            // (e) granted a claim to, then fold into the state diff. Comes last: both
+            // `validate_execution` and claim-eligibility are fully diff-native and never needed
+            // a materialized post-state, so there's no ordering hazard in leaving this for the
+            // end — unlike the old `AccountPostState` code, where the program's own post-state
+            // *was* the material to validate. It also means the account's final owner for this
+            // call is already known by the time dispatch needs it below — either its
+            // pre-existing owner, or the program that was just validated to claim it.
+            for (i, diff_output) in program_output.post_states.iter().enumerate() {
+                let pre = &program_output.pre_states[i];
+                let diff = diff_output.diff();
+                let owner = claimed_owners[i];
+
+                let mut post = pre.account.clone();
+                post.balance = apply_balance_diff(pre.account.balance, diff.diff_balance)
+                    .map_err(InvalidProgramBehaviorError::BalanceDiffFailed)?;
+
+                if let Some(diff_data) = diff.diff_data.clone() {
+                    let owner_id = owner.unwrap_or(pre.account.program_owner);
+                    let owner_program = state.programs().get(&owner_id).ok_or(
+                        InvalidProgramBehaviorError::NoOwnerProgramForDataUpdate {
+                            account_id: pre.account_id,
+                        },
+                    )?;
+                    post.data = owner_program.execute_update_from_diff(pre.account.clone(), diff_data)?;
+                }
+
+                if let Some(owner) = owner {
                     post.program_owner = owner;
                 }
                 state_diff.insert(pre.account_id, post);

@@ -123,7 +123,7 @@ pub fn apply_balance_diff(current: Balance, diff: BalanceDiff) -> Result<Balance
 pub struct AccountDiff {
     pub id: AccountId,
     pub diff_balance: BalanceDiff,
-    pub raw_diff: Option<Vec<u8>>,
+    pub diff_data: Option<Vec<u8>>,
 }
 
 /// Account to be used both in public and private contexts.

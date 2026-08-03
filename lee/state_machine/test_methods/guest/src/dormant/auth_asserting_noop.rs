@@ -34,7 +34,7 @@ fn main() {
             AccountDiffOutput::new(AccountDiff {
                 id: account.account_id,
                 diff_balance: BalanceDiff::Add(0),
-                raw_diff: None,
+                diff_data: None,
             })
         })
         .collect();

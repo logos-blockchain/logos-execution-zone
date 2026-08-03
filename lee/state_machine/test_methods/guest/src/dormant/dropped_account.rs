@@ -28,7 +28,7 @@ fn main() {
     let diff = AccountDiff {
         id: pre1.account_id,
         diff_balance: BalanceDiff::Add(0),
-        raw_diff: None,
+        diff_data: None,
     };
 
     ProgramOutput::new(

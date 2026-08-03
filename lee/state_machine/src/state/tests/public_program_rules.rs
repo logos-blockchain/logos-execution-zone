@@ -1,5 +1,33 @@
 use super::*;
 
+/// Exercises the full `update_from_diff` dispatch path end to end: claiming a still-default
+/// account, materializing its balance (a no-op here), and dispatching to `data_changer`'s own
+/// `update_from_diff` via `CallKind::UpdateFromDiff` to materialize the new `data`.
+#[test]
+fn program_should_successfully_update_data_via_update_from_diff() {
+    let key = PrivateKey::try_new([9; 32]).unwrap();
+    let account_id = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let mut state = V03State::new().with_test_programs();
+    let program_id = crate::test_methods::data_changer().id();
+    let new_data = vec![1, 2, 3, 4];
+
+    let message = public_transaction::Message::try_new(
+        program_id,
+        vec![account_id],
+        vec![Nonce(0)],
+        new_data.clone(),
+    )
+    .unwrap();
+    let witness_set = public_transaction::WitnessSet::for_message(&message, &[&key]);
+    let tx = PublicTransaction::new(message, witness_set);
+
+    state.transition_from_public_transaction(&tx, 1, 0).unwrap();
+
+    let account = state.get_account_by_id(account_id);
+    assert_eq!(account.program_owner, program_id);
+    assert_eq!(account.data.into_inner(), new_data);
+}
+
 #[test]
 // Dormant: nonce_changer is dormant, see test_methods/guest/src/dormant/README.md
 #[cfg(any())]
@@ -28,9 +56,6 @@ fn program_should_fail_if_modifies_nonces() {
 }
 
 #[test]
-// Dormant: extra_output is already AccountDiff-converted but out of scope for this
-// narrow pass (only program_should_fail_if_modifies_data_of_non_owned_account is active).
-#[cfg(any())]
 fn program_should_fail_if_output_accounts_exceed_inputs() {
     let mut state = V03State::new()
         .with_public_account_balances([(AccountId::new([1; 32]), 0)])
@@ -314,12 +339,18 @@ fn program_should_fail_if_transfers_balance_from_non_owned_account() {
 
 #[test]
 fn program_should_fail_if_modifies_data_of_non_owned_account() {
-    let initial_data = HashMap::new();
+    let account_id = AccountId::new([1; 32]);
+    let initial_data = [(
+        account_id,
+        Account {
+            program_owner: crate::test_methods::simple_balance_transfer().id(),
+            balance: 100,
+            ..Account::default()
+        },
+    )];
     let mut state = V03State::new()
         .with_public_accounts(initial_data)
-        .with_test_programs()
-        .with_non_default_accounts_but_default_program_owners();
-    let account_id = AccountId::new([255; 32]);
+        .with_test_programs();
     let program_id = crate::test_methods::data_changer().id();
 
     assert_ne!(state.get_account_by_id(account_id), Account::default());

@@ -66,20 +66,20 @@ mod test_methods {
         )
     }
 
+    #[must_use]
+    pub const fn extra_output() -> Program {
+        Program::new_unchecked(
+            test_methods::EXTRA_OUTPUT_ID,
+            Cow::Borrowed(test_methods::EXTRA_OUTPUT_ELF),
+        )
+    }
+
     /*
     #[must_use]
     pub const fn nonce_changer() -> Program {
         Program::new_unchecked(
             test_methods::NONCE_CHANGER_ID,
             Cow::Borrowed(test_methods::NONCE_CHANGER_ELF),
-        )
-    }
-
-    #[must_use]
-    pub const fn extra_output() -> Program {
-        Program::new_unchecked(
-            test_methods::EXTRA_OUTPUT_ID,
-            Cow::Borrowed(test_methods::EXTRA_OUTPUT_ELF),
         )
     }
 

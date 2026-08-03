@@ -1,4 +1,6 @@
-use lee_core::{account::{Account, AccountDiff, BalanceDiff, BalanceDiffError}, program::{AccountDiffOutput, Claim, ProgramInput, ProgramOutput, read_lee_inputs}};
+use std::convert::Infallible;
+
+use lee_core::{account::{Account, AccountDiff, BalanceDiff, data::Data}, program::{AccountDiffOutput, Claim, ProgramCall, ProgramInput, ProgramOutput, read_lee_call, write_update_from_diff_output}};
 
 type Instruction = u128;
 
@@ -11,13 +13,24 @@ fn main() {
             instruction: balance,
         },
         instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    ) = match read_lee_call::<Instruction>() {
+        ProgramCall::Execute(input, instruction_words) => (input, instruction_words),
+        ProgramCall::UpdateFromDiff {
+            pre_state,
+            diff_data,
+        } => {
+            let data =
+                update_from_diff(pre_state, diff_data).expect("update_from_diff should not fail");
+            write_update_from_diff_output(&data);
+            return;
+        }
+    };
 
     if let Ok([account_pre]) = <[_; 1]>::try_from(pre_states.clone()) {
         let diff = AccountDiff {
             id: account_pre.account_id,
             diff_balance: BalanceDiff::Add(0),
-            raw_diff: None,
+            diff_data: None,
         };
         let account_post = AccountDiffOutput::new_claimed_if_default(
             diff,
@@ -40,48 +53,20 @@ fn main() {
         return;
     };
 
-   // let mut sender_post = sender_pre.account.clone();
-  //  let mut receiver_post = receiver_pre.account.clone();
-
     let sender_diff = AccountDiff {
         id: sender_pre.account_id,
         diff_balance: BalanceDiff::Sub(balance),
-        raw_diff: None,
+        diff_data: None,
     };
 
     let receiver_diff = AccountDiff{
         id: receiver_pre.account_id,
         diff_balance: BalanceDiff::Add(balance),
-        raw_diff: None,
+        diff_data: None,
     };
 
     let sender_program_owner = sender_pre.account.program_owner;
     let receiver_program_owner = receiver_pre.account.program_owner;
-
-
-    /*
-    Marvin-todo: original code: to delete
-    sender_post.balance = sender_post
-        .balance
-        .checked_sub(balance)
-        .expect("Not enough balance to transfer");
-    receiver_post.balance = receiver_post
-        .balance
-        .checked_add(balance)
-        .expect("Overflow when adding balance");
-
-    ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
-        instruction_words,
-        vec![sender_pre, receiver_pre],
-        vec![
-            AccountPostState::new_claimed_if_default(sender_post, Claim::Authorized),
-            AccountPostState::new_claimed_if_default(receiver_post, Claim::Authorized),
-        ],
-    )
-    .write();
-    */
 
     ProgramOutput::new(
         self_program_id,
@@ -96,13 +81,6 @@ fn main() {
     .write();
 }
 
-
-#[expect(
-    dead_code,
-    reason = "placeholder: this program only touches balance, so apply_balance_diff alone is \
-              sufficient for now and the orchestrator calls it directly. This becomes the real \
-              per-program materialization function once raw_diff/data handling exists."
-)]
-fn update_from_diff(pre_state: Account, _diff: AccountDiff) -> Result<Account, BalanceDiffError> {
-    Ok(pre_state)
+fn update_from_diff(_pre_state: Account, _diff_data: Vec<u8>) -> Result<Data, Infallible> {
+    Ok(Data::default())
 }

@@ -46,9 +46,9 @@ impl V03State {
     pub fn with_test_programs(mut self) -> Self {
         self.insert_program(crate::test_methods::simple_balance_transfer());
         self.insert_program(crate::test_methods::data_changer());
+        self.insert_program(crate::test_methods::extra_output());
         /*
         self.insert_program(crate::test_methods::nonce_changer());
-        self.insert_program(crate::test_methods::extra_output());
         self.insert_program(crate::test_methods::missing_output());
         self.insert_program(crate::test_methods::dropped_account());
         self.insert_program(crate::test_methods::program_owner_changer());

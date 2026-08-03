@@ -34,8 +34,16 @@ fn transition_from_authenticated_transfer_program_invocation_default_account_des
 fn transition_from_authenticated_transfer_program_invocation_insuficient_balance() {
     let key = PrivateKey::try_new([1; 32]).unwrap();
     let account_id = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let initial_data = [(
+        account_id,
+        Account {
+            program_owner: crate::test_methods::simple_balance_transfer().id(),
+            balance: 100,
+            ..Account::default()
+        },
+    )];
     let mut state = V03State::new()
-        .with_public_account_balances([(account_id, 100)])
+        .with_public_accounts(initial_data)
         .with_test_programs();
     let from = account_id;
     let from_key = key;
