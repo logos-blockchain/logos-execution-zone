@@ -151,7 +151,7 @@ fn prove_privacy_preserving_execution_circuit_fully_private() {
     commitment_set.extend(std::slice::from_ref(&commitment_sender));
     let expected_new_nullifiers = vec![
         (
-            Nullifier::for_account_update(&commitment_sender, &sender_keys.nsk),
+            Nullifier::for_account_update(&commitment_sender, &sender_keys.nsk()),
             commitment_set.digest(),
         ),
         (
@@ -165,7 +165,7 @@ fn prove_privacy_preserving_execution_circuit_fully_private() {
     let expected_private_account_1 = Account {
         program_owner: program.id(),
         balance: 100 - balance_to_move,
-        nonce: sender_nonce.private_account_nonce_increment(&sender_keys.nsk),
+        nonce: sender_nonce.private_account_nonce_increment(&sender_keys.nsk()),
         ..Default::default()
     };
     let expected_private_account_2 = Account {
@@ -182,7 +182,7 @@ fn prove_privacy_preserving_execution_circuit_fully_private() {
     let esk_1 = EphemeralSecretKey::new(
         &sender_account_id,
         &[0; 32],
-        &sender_nonce.private_account_nonce_increment(&sender_keys.nsk),
+        &sender_nonce.private_account_nonce_increment(&sender_keys.nsk()),
     );
     let shared_secret_1 = SharedSecretKey::encapsulate_deterministic(&sender_keys.vpk(), &esk_1).0;
 
@@ -202,7 +202,7 @@ fn prove_privacy_preserving_execution_circuit_fully_private() {
                 kind: WitnessKind::Regular,
                 nullifier: NullifierWitness::Update {
                     view_tag: 0,
-                    nsk: sender_keys.nsk,
+                    nsk: sender_keys.nsk(),
                     membership_proof: commitment_set
                         .get_proof_for(&commitment_sender)
                         .expect("sender's commitment must be in the set"),
@@ -332,7 +332,7 @@ fn update_note_view_tag_is_the_supplied_value() {
             kind: WitnessKind::Regular,
             nullifier: NullifierWitness::Update {
                 view_tag: fed_tag,
-                nsk: keys.nsk,
+                nsk: keys.nsk(),
                 membership_proof: commitment_set.get_proof_for(&commitment).unwrap(),
             },
         })],
@@ -615,7 +615,7 @@ fn private_authorized_init_encrypts_regular_kind_with_identifier() {
             identifier,
             kind: WitnessKind::Regular,
             nullifier: NullifierWitness::Init {
-                npk: NullifierPublicKey::from(&keys.nsk),
+                npk: NullifierPublicKey::from(&keys.nsk()),
                 commitment_root: DUMMY_COMMITMENT_HASH,
             },
         })],
@@ -680,7 +680,7 @@ fn private_authorized_update_encrypts_regular_kind_with_identifier() {
     let esk = EphemeralSecretKey::new(
         &account_id,
         &[0; 32],
-        &Nonce::default().private_account_nonce_increment(&keys.nsk),
+        &Nonce::default().private_account_nonce_increment(&keys.nsk()),
     );
     let ssk = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &esk).0;
     let account = Account {
@@ -704,7 +704,7 @@ fn private_authorized_update_encrypts_regular_kind_with_identifier() {
             kind: WitnessKind::Regular,
             nullifier: NullifierWitness::Update {
                 view_tag: 0,
-                nsk: keys.nsk,
+                nsk: keys.nsk(),
                 membership_proof: commitment_set.get_proof_for(&commitment).unwrap(),
             },
         })],
@@ -733,7 +733,7 @@ fn private_pda_update_encrypts_pda_kind_with_identifier() {
     let esk = EphemeralSecretKey::new(
         &pda_id,
         &[0; 32],
-        &Nonce::default().private_account_nonce_increment(&keys.nsk),
+        &Nonce::default().private_account_nonce_increment(&keys.nsk()),
     );
     let ssk = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &esk).0;
     let pda_account = Account {
@@ -764,7 +764,7 @@ fn private_pda_update_encrypts_pda_kind_with_identifier() {
                 kind: WitnessKind::Pda { binding: None },
                 nullifier: NullifierWitness::Update {
                     view_tag: 0,
-                    nsk: keys.nsk,
+                    nsk: keys.nsk(),
                     membership_proof: commitment_set.get_proof_for(&pda_commitment).unwrap(),
                 },
             }),
@@ -847,7 +847,7 @@ fn private_pda_update_identifier_mismatch_fails() {
                 kind: WitnessKind::Pda { binding: None },
                 nullifier: NullifierWitness::Update {
                     view_tag: 0,
-                    nsk: keys.nsk,
+                    nsk: keys.nsk(),
                     membership_proof: commitment_set.get_proof_for(&pda_commitment).unwrap(),
                 },
             }),

@@ -373,7 +373,7 @@ impl WalletCore {
             .key_chain()
             .shared_private_account(account_id)?;
         let keys = self.storage.key_chain().derive_shared_account_keys(entry)?;
-        let nsk = keys.nullifier_secret_key;
+        let nsk = keys.nullifier_secret_key();
         let npk = keys.generate_nullifier_public_key();
         let vpk = keys.generate_viewing_public_key();
         let identifier = entry.identifier;
@@ -989,7 +989,7 @@ impl WalletCore {
                                 &key_chain.viewing_public_key,
                                 &kind,
                             );
-                            let nsk = key_chain.private_key_holder.nullifier_secret_key;
+                            let nsk = key_chain.private_key_holder.nullifier_secret_key();
                             (account_id, kind, res_acc, nsk)
                         })
                     })
@@ -1028,7 +1028,7 @@ impl WalletCore {
                 let keys = self.storage.key_chain().derive_shared_account_keys(entry)?;
                 let npk = keys.generate_nullifier_public_key();
                 let vpk = keys.generate_viewing_public_key();
-                let nsk = keys.nullifier_secret_key;
+                let nsk = keys.nullifier_secret_key();
                 let vsk = keys.viewing_secret_key;
                 Some((account_id, npk, vpk, vsk, nsk))
             })

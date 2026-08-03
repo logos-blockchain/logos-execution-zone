@@ -78,7 +78,7 @@ fn private_changer_claimer_no_data_change_no_claim_succeeds() {
             kind: WitnessKind::Regular,
             nullifier: NullifierWitness::Update {
                 view_tag: 0,
-                nsk: sender_keys.nsk,
+                nsk: sender_keys.nsk(),
                 membership_proof: (0, vec![]),
             },
         })],
@@ -112,7 +112,7 @@ fn private_changer_claimer_data_change_no_claim_fails() {
             kind: WitnessKind::Regular,
             nullifier: NullifierWitness::Update {
                 view_tag: 0,
-                nsk: sender_keys.nsk,
+                nsk: sender_keys.nsk(),
                 membership_proof: (0, vec![]),
             },
         })],

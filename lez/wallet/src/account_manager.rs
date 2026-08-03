@@ -550,7 +550,7 @@ fn private_key_tree_acc_preparation(
 
     let from_identifier = from_acc.kind.identifier();
     let from_keys = &from_acc.key_chain;
-    let nsk = from_keys.private_key_holder.nullifier_secret_key;
+    let nsk = from_keys.private_key_holder.nullifier_secret_key();
     let from_npk = from_keys.nullifier_public_key;
     let from_vpk = from_keys.viewing_public_key.clone();
 

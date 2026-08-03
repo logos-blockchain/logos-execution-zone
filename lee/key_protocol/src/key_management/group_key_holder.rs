@@ -339,7 +339,7 @@ mod tests {
     }
 
     /// Pins the end-to-end derivation for a fixed (GMS, `ProgramId`, `PdaSeed`). Any change
-    /// to `secret_spending_key_for_pda`, the `PrivateKeyHolder` nsk/npk chain, or the
+    /// to `secret_spending_key_for_pda`, the `PrivateKeyHolder` ask/nsk/npk chain, or the
     /// `AccountId::for_private_pda` formula breaks this test. Mirrors the pinned-value
     /// pattern from `for_private_pda_matches_pinned_value` in `lee_core`.
     #[test]
@@ -357,8 +357,8 @@ mod tests {
         let account_id = AccountId::for_private_pda(&program_id, &seed, &npk, &vpk, u128::MAX);
 
         let expected_npk = NullifierPublicKey([
-            136, 176, 234, 71, 208, 8, 143, 142, 126, 155, 132, 18, 71, 27, 88, 56, 100, 90, 79,
-            215, 76, 92, 60, 166, 104, 35, 51, 91, 16, 114, 188, 112,
+            73, 227, 101, 209, 210, 127, 85, 171, 217, 20, 52, 68, 63, 127, 88, 157, 162, 165, 221,
+            15, 86, 162, 128, 15, 56, 89, 95, 33, 216, 229, 181, 123,
         ]);
         // AccountId is derived from (program_id, seed, npk), so it changes when npk changes.
         // We verify npk is pinned, and AccountId is deterministically derived from it.

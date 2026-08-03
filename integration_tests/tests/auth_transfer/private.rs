@@ -592,7 +592,8 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
     let faucet_program_id = programs::faucet().id();
     let vault_program_id = programs::vault().id();
     let auth_transfer_program_id = programs::authenticated_transfer().id();
-    let nsk: lee_core::NullifierSecretKey = [3; 32];
+    let ask = lee_core::AuthorizationSecretKey([3; 32]);
+    let nsk = lee_core::NullifierSecretKey::from(&ask);
     let npk = NullifierPublicKey::from(&nsk);
     let vpk = ViewingPublicKey::from_bytes(vec![4_u8; 1184]).unwrap();
     let attacker_vault_id = {
@@ -661,7 +662,8 @@ async fn prove_init_with_commitment_root(
         sender_id,
     );
 
-    let nsk: lee_core::NullifierSecretKey = [7; 32];
+    let ask = lee_core::AuthorizationSecretKey([7; 32]);
+    let nsk = lee_core::NullifierSecretKey::from(&ask);
     let npk = NullifierPublicKey::from(&nsk);
     let vpk = ViewingPublicKey::from_bytes(vec![4_u8; 1184]).unwrap();
     let recipient_account_id = AccountId::for_regular_private_account(&npk, &vpk, 0);
@@ -697,7 +699,8 @@ async fn init_with_dummy_commitment_root_produces_valid_root() -> Result<()> {
 
     let (_, expected_digest) = ctx.sequencer_client().get_proofs_and_root(vec![]).await?;
 
-    let nsk: lee_core::NullifierSecretKey = [7; 32];
+    let ask = lee_core::AuthorizationSecretKey([7; 32]);
+    let nsk = lee_core::NullifierSecretKey::from(&ask);
     let npk = NullifierPublicKey::from(&nsk);
     let vpk = ViewingPublicKey::from_bytes(vec![4_u8; 1184]).unwrap();
     let recipient_account_id = AccountId::for_regular_private_account(&npk, &vpk, 0);

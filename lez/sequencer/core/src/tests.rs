@@ -1100,7 +1100,7 @@ fn private_bridge_withdraw_invocation_is_dropped() {
                 kind: WitnessKind::Regular,
                 nullifier: NullifierWitness::Update {
                     view_tag: 0,
-                    nsk: sender_keys.private_key_holder.nullifier_secret_key,
+                    nsk: sender_keys.private_key_holder.nullifier_secret_key(),
                     membership_proof: state
                         .get_proof_for_commitment(&sender_commitment)
                         .expect("sender commitment must be in state"),
