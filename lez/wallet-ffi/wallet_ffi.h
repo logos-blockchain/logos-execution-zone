@@ -249,6 +249,7 @@ typedef struct FfiAccountIdentity {
    * C-compatible string.
    */
   char *key_path;
+  struct FfiBytes32 authorization_secret_key;
   struct FfiBytes32 nullifier_secret_key;
   struct FfiBytes32 nullifier_public_key;
   const uint8_t *viewing_public_key;

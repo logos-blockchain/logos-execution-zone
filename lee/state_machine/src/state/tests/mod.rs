@@ -288,7 +288,9 @@ fn shielded_balance_transfer_for_tests(
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: WitnessKind::Regular,
+                kind: WitnessKind::Regular {
+                    ask: Some(recipient_keys.ask),
+                },
                 nullifier: NullifierWitness::Init {
                     npk: recipient_keys.npk(),
                     commitment_root: DUMMY_COMMITMENT_HASH,
@@ -335,7 +337,9 @@ fn private_balance_transfer_for_tests(
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: WitnessKind::Regular,
+                kind: WitnessKind::Regular {
+                    ask: Some(sender_keys.ask),
+                },
                 nullifier: NullifierWitness::Update {
                     view_tag: 0,
                     nsk: sender_keys.nsk(),
@@ -348,7 +352,9 @@ fn private_balance_transfer_for_tests(
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: WitnessKind::Regular,
+                kind: WitnessKind::Regular {
+                    ask: Some(recipient_keys.ask),
+                },
                 nullifier: NullifierWitness::Init {
                     npk: recipient_keys.npk(),
                     commitment_root: DUMMY_COMMITMENT_HASH,
@@ -396,7 +402,9 @@ fn deshielded_balance_transfer_for_tests(
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: WitnessKind::Regular,
+                kind: WitnessKind::Regular {
+                    ask: Some(sender_keys.ask),
+                },
                 nullifier: NullifierWitness::Update {
                     view_tag: 0,
                     nsk: sender_keys.nsk(),

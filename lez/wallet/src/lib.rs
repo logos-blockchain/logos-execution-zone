@@ -373,23 +373,20 @@ impl WalletCore {
             .key_chain()
             .shared_private_account(account_id)?;
         let keys = self.storage.key_chain().derive_shared_account_keys(entry)?;
-        let nsk = keys.nullifier_secret_key();
-        let npk = keys.generate_nullifier_public_key();
         let vpk = keys.generate_viewing_public_key();
         let identifier = entry.identifier;
 
         if entry.pda_seed.is_some() {
             Some(AccountIdentity::PrivatePdaShared {
                 account_id,
-                nsk,
-                npk,
+                nsk: keys.nullifier_secret_key(),
+                npk: keys.generate_nullifier_public_key(),
                 vpk,
                 identifier,
             })
         } else {
             Some(AccountIdentity::PrivateShared {
-                nsk,
-                npk,
+                ask: keys.authorization_secret_key,
                 vpk,
                 identifier,
             })

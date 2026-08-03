@@ -680,7 +680,7 @@ async fn prove_init_with_commitment_root(
                 vpk,
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: WitnessKind::Regular,
+                kind: WitnessKind::Regular { ask: Some(ask) },
                 nullifier: NullifierWitness::Init {
                     npk,
                     commitment_root,

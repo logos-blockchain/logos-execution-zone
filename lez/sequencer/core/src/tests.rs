@@ -1097,7 +1097,9 @@ fn private_bridge_withdraw_invocation_is_dropped() {
                 vpk: sender_keys.viewing_public_key.clone(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: WitnessKind::Regular,
+                kind: WitnessKind::Regular {
+                    ask: Some(sender_keys.private_key_holder.authorization_secret_key),
+                },
                 nullifier: NullifierWitness::Update {
                     view_tag: 0,
                     nsk: sender_keys.private_key_holder.nullifier_secret_key(),

@@ -525,7 +525,9 @@ fn malicious_authorization_changer_should_fail_in_privacy_preserving_circuit() {
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: WitnessKind::Regular,
+                kind: WitnessKind::Regular {
+                    ask: Some(recipient_keys.ask),
+                },
                 nullifier: NullifierWitness::Update {
                     view_tag: 0,
                     nsk: recipient_keys.nsk(),

@@ -298,7 +298,9 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
                 vpk: sender_vpk,
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: WitnessKind::Regular,
+                kind: WitnessKind::Regular {
+                    ask: Some(sender_ask),
+                },
                 nullifier: NullifierWitness::Update {
                     view_tag: 0,
                     nsk: sender_nsk,
@@ -309,7 +311,9 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
                 vpk: recipient_vpk,
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: WitnessKind::Regular,
+                kind: WitnessKind::Regular {
+                    ask: Some(recipient_ask),
+                },
                 nullifier: NullifierWitness::Init {
                     npk: recipient_npk,
                     commitment_root: DUMMY_COMMITMENT_HASH,

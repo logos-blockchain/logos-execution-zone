@@ -8,7 +8,10 @@ use std::{
 };
 
 use lee::{Data, ProgramId, SharedSecretKey};
-use lee_core::{encryption::MlKem768EncapsulationKey, program::PdaSeed, NullifierPublicKey};
+use lee_core::{
+    encryption::MlKem768EncapsulationKey, program::PdaSeed, AuthorizationSecretKey,
+    NullifierPublicKey,
+};
 use wallet::{account::AccountIdWithPrivacy, AccountIdentity};
 
 use crate::error::WalletFfiError;
@@ -238,6 +241,7 @@ pub struct FfiAccountIdentity {
     pub account_id: FfiBytes32,
     /// C-compatible string.
     pub key_path: *mut c_char,
+    pub authorization_secret_key: FfiBytes32,
     pub nullifier_secret_key: FfiBytes32,
     pub nullifier_public_key: FfiBytes32,
     pub viewing_public_key: *const u8,
@@ -251,6 +255,7 @@ impl Default for FfiAccountIdentity {
             kind: FfiAccountIdentityKind::Public,
             account_id: FfiBytes32::default(),
             key_path: std::ptr::null_mut(),
+            authorization_secret_key: FfiBytes32::default(),
             nullifier_secret_key: FfiBytes32::default(),
             nullifier_public_key: FfiBytes32::default(),
             viewing_public_key: std::ptr::null(),
@@ -444,8 +449,7 @@ impl From<AccountIdentity> for FfiAccountIdentity {
                 }
             }
             AccountIdentity::PrivateShared {
-                nsk,
-                npk,
+                ask,
                 vpk,
                 identifier,
             } => {
@@ -460,8 +464,7 @@ impl From<AccountIdentity> for FfiAccountIdentity {
 
                 Self {
                     kind: FfiAccountIdentityKind::PrivateShared,
-                    nullifier_secret_key: nsk.into(),
-                    nullifier_public_key: npk.0.into(),
+                    authorization_secret_key: ask.0.into(),
                     viewing_public_key: vpk_data,
                     viewing_public_key_len: vpk_len,
                     identifier: identifier.into(),
@@ -579,8 +582,7 @@ impl TryFrom<&FfiAccountIdentity> for AccountIdentity {
                 }?;
 
                 Ok(Self::PrivateShared {
-                    nsk: value.nullifier_secret_key.data,
-                    npk: NullifierPublicKey(value.nullifier_public_key.data),
+                    ask: AuthorizationSecretKey(value.authorization_secret_key.data),
                     vpk,
                     identifier: value.identifier.into(),
                 })
@@ -658,7 +660,10 @@ impl From<FfiAccountIdWithPrivacy> for AccountIdWithPrivacy {
 #[cfg(test)]
 mod tests {
     use lee::{AccountId, PrivateKey, PublicKey};
-    use lee_core::{encryption::ViewingPublicKey, program::PdaSeed, PrivateAccountKind};
+    use lee_core::{
+        encryption::ViewingPublicKey, program::PdaSeed, AuthorizationSecretKey, NullifierSecretKey,
+        PrivateAccountKind,
+    };
     use wallet::AccountIdentity;
 
     use crate::{FfiAccountIdentity, FfiAccountIdentityKind};
@@ -669,7 +674,8 @@ mod tests {
         let public_key = PublicKey::new_from_private_key(&private_key);
         let pub_acc_id = (&public_key).into();
 
-        let nsk = [43; 32];
+        let ask = AuthorizationSecretKey([43; 32]);
+        let nsk = NullifierSecretKey::from(&ask);
         let vpk = ViewingPublicKey::from_seed(&[44; 32], &[54; 32]);
         let npk = (&nsk).into();
         let identifier = u128::from_le_bytes([45; 16]);
@@ -708,8 +714,7 @@ mod tests {
             identifier,
         };
         let acc_identity_7 = AccountIdentity::PrivateShared {
-            nsk,
-            npk,
+            ask,
             vpk: vpk.clone(),
             identifier,
         };
