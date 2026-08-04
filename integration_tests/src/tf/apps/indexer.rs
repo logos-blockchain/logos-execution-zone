@@ -1,0 +1,75 @@
+use std::{net::SocketAddr, sync::Arc};
+
+use anyhow::Context as _;
+use async_trait::async_trait;
+use indexer_service::IndexerHandle;
+use tempfile::TempDir;
+use testing_framework_app::{AppDeployment, AppHostEnv, DeployContext};
+use testing_framework_core::scenario::DynError;
+
+use crate::{
+    config::{self, UrlProtocol},
+    indexer_client::IndexerClient,
+    setup::setup_indexer,
+};
+
+struct IndexerInstance {
+    client: Arc<IndexerClient>,
+    _service: IndexerHandle,
+    _state_dir: TempDir,
+}
+
+/// Client and lifetime handle for a deployed LEZ indexer.
+///
+/// Clones share the existing indexer client and keep the indexer service and
+/// its state directory alive until the final clone is dropped.
+#[derive(Clone)]
+pub struct LezIndexerClient(Arc<IndexerInstance>);
+
+impl LezIndexerClient {
+    fn new(client: Arc<IndexerClient>, service: IndexerHandle, state_dir: TempDir) -> Self {
+        Self(Arc::new(IndexerInstance {
+            client,
+            _service: service,
+            _state_dir: state_dir,
+        }))
+    }
+
+    /// Returns the existing LEZ indexer client.
+    #[must_use]
+    pub fn client(&self) -> &IndexerClient {
+        &self.0.client
+    }
+}
+
+/// Deployable LEZ indexer configured with an explicit Bedrock API address.
+#[derive(Clone)]
+pub struct IndexerApp {
+    bedrock_addr: SocketAddr,
+}
+
+impl IndexerApp {
+    /// Creates an indexer deployment connected to `bedrock_addr`.
+    #[must_use]
+    pub const fn new(bedrock_addr: SocketAddr) -> Self {
+        Self { bedrock_addr }
+    }
+}
+
+#[async_trait]
+impl AppDeployment<AppHostEnv> for IndexerApp {
+    type Handle = LezIndexerClient;
+
+    async fn deploy(self, _ctx: &mut DeployContext<AppHostEnv>) -> Result<Self::Handle, DynError> {
+        // If the indexer moves to a separate process, create a `LocalProcessApp`
+        // with its `LaunchSpec` here so TF owns the process lifecycle.
+        let (service, state_dir) =
+            setup_indexer(self.bedrock_addr, config::bedrock_channel_id(), None)
+                .await
+                .context("failed to set up LEZ indexer")?;
+        let url = config::addr_to_url(UrlProtocol::Ws, service.addr())?;
+        let client = Arc::new(IndexerClient::new(&url).await?);
+
+        Ok(LezIndexerClient::new(client, service, state_dir))
+    }
+}

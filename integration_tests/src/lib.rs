@@ -24,6 +24,8 @@ use wallet::{
     storage::key_chain::FoundPrivateAccount,
 };
 
+pub mod tf;
+
 /// Maximum time to wait for the indexer to catch up to the sequencer.
 pub const L2_TO_L1_TIMEOUT: Duration = Duration::from_mins(6);
 

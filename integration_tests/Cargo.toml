@@ -8,6 +8,8 @@ license = { workspace = true }
 workspace = true
 
 [dependencies]
+async-trait = "0.1"
+cucumber = { workspace = true, features = ["macros"] }
 test_fixtures.workspace = true
 lee_core = { workspace = true, features = ["host"] }
 lee.workspace = true
@@ -29,7 +31,9 @@ bridge_lock_core.workspace = true
 wrapped_token_core.workspace = true
 risc0-zkvm.workspace = true
 indexer_service_rpc = { workspace = true, features = ["client"] }
+indexer_service.workspace = true
 sequencer_service_rpc = { workspace = true, features = ["client"] }
+sequencer_service.workspace = true
 wallet-ffi.workspace = true
 indexer_ffi.workspace = true
 indexer_service_protocol.workspace = true
@@ -40,9 +44,15 @@ testnet_initial_state.workspace = true
 
 logos-blockchain-core.workspace = true
 logos-blockchain-key-management-system-service.workspace = true
+logos-blockchain-testing-framework.workspace = true
 anyhow.workspace = true
 log.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 hex.workspace = true
 tempfile.workspace = true
 bytesize.workspace = true
+num-bigint.workspace = true
+
+testing-framework-app.workspace = true
+testing-framework-core.workspace = true
+testing-framework-runner-local.workspace = true
