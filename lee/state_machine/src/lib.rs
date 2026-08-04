@@ -134,6 +134,22 @@ mod test_methods {
     }
 
     #[must_use]
+    pub const fn selective_pda_delegator() -> Program {
+        Program::new_unchecked(
+            test_methods::SELECTIVE_PDA_DELEGATOR_ID,
+            Cow::Borrowed(test_methods::SELECTIVE_PDA_DELEGATOR_ELF),
+        )
+    }
+
+    #[must_use]
+    pub const fn non_delegating_forwarder() -> Program {
+        Program::new_unchecked(
+            test_methods::NON_DELEGATING_FORWARDER_ID,
+            Cow::Borrowed(test_methods::NON_DELEGATING_FORWARDER_ELF),
+        )
+    }
+
+    #[must_use]
     pub const fn pda_claimer() -> Program {
         Program::new_unchecked(
             test_methods::PDA_CLAIMER_ID,

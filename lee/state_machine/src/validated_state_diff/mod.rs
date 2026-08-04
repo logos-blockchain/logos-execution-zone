@@ -7,7 +7,7 @@ use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, PublicAction, Timestamp,
     account::{Account, AccountId, AccountWithMetadata},
     program::{
-        ChainedCall, Claim, DEFAULT_PROGRAM_ID, ProgramId, compute_public_authorized_pdas,
+        CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_ID, compute_public_authorized_pdas,
         validate_execution,
     },
 };
@@ -454,12 +454,6 @@ impl ValidatedStateDiff {
     pub(crate) fn into_state_diff(self) -> StateDiff {
         self.0
     }
-}
-
-#[derive(Debug)]
-struct CallerData {
-    program_id: Option<ProgramId>,
-    authorized_accounts: HashSet<AccountId>,
 }
 
 fn authenticate_public_transaction_signers(
