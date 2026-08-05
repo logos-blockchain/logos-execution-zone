@@ -52,7 +52,7 @@ fn main() {
 
     // Wrap the post state account values inside a `AccountPostState` instance.
     // This is used to forward the account claiming request if any
-    let post_state = AccountPostState::new_claimed_if_default(post_account, Claim::Authorized);
+    let post_state = AccountPostState::new_claimed_if_default(post_account, Claim::Key);
 
     // The output is a proposed state difference. It will only succeed if the pre states coincide
     // with the previous values of the accounts, and the transition to the post states conforms

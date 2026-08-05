@@ -8,7 +8,7 @@ use lee_core::{
 
 /// Initializes a default account under the ownership of this program.
 fn initialize_account(pre_state: AccountWithMetadata) -> AccountPostState {
-    let account_to_claim = AccountPostState::new_claimed(pre_state.account, Claim::Authorized);
+    let account_to_claim = AccountPostState::new_claimed(pre_state.account, Claim::Key);
 
     // Continue only if the account to claim has default values
     assert!(
@@ -49,7 +49,7 @@ fn transfer(
 
         // Claim recipient account if it has default program owner
         if recipient_post_account.program_owner == DEFAULT_PROGRAM_ID {
-            AccountPostState::new_claimed(recipient_post_account, Claim::Authorized)
+            AccountPostState::new_claimed(recipient_post_account, Claim::Key)
         } else {
             AccountPostState::new(recipient_post_account)
         }

@@ -30,7 +30,7 @@ fn main() {
 
     // Claim or not based on the boolean flag
     let post_state = if should_claim {
-        AccountPostState::new_claimed(account_post, Claim::Authorized)
+        AccountPostState::new_claimed(account_post, Claim::Key)
     } else {
         AccountPostState::new(account_post)
     };

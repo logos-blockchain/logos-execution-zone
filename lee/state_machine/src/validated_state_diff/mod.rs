@@ -208,7 +208,7 @@ impl ValidatedStateDiff {
                 );
 
                 match claim {
-                    Claim::Authorized => {
+                    Claim::Key => {
                         // The program can only claim accounts that were authorized by the signer.
                         ensure!(
                             pre.is_authorized,

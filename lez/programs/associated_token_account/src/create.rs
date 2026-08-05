@@ -22,7 +22,7 @@ pub fn create_associated_token_account(
     if ata_account.account != Account::default() {
         return (
             vec![
-                AccountPostState::new_claimed_if_default(owner.account.clone(), Claim::Authorized),
+                AccountPostState::new_claimed_if_default(owner.account.clone(), Claim::Key),
                 AccountPostState::new(token_definition.account.clone()),
                 AccountPostState::new(ata_account.account.clone()),
             ],
@@ -31,7 +31,7 @@ pub fn create_associated_token_account(
     }
 
     let post_states = vec![
-        AccountPostState::new_claimed_if_default(owner.account.clone(), Claim::Authorized),
+        AccountPostState::new_claimed_if_default(owner.account.clone(), Claim::Key),
         AccountPostState::new(token_definition.account.clone()),
         AccountPostState::new(ata_account.account.clone()),
     ];

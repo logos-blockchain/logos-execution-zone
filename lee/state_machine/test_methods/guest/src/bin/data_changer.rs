@@ -29,10 +29,7 @@ fn main() {
         caller_program_id,
         instruction_words,
         vec![pre],
-        vec![AccountPostState::new_claimed(
-            account_post,
-            Claim::Authorized,
-        )],
+        vec![AccountPostState::new_claimed(account_post, Claim::Key)],
     )
     .write();
 }

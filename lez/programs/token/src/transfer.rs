@@ -106,6 +106,6 @@ pub fn transfer(
 
     vec![
         AccountPostState::new(sender_post),
-        AccountPostState::new_claimed_if_default(recipient_post, Claim::Authorized),
+        AccountPostState::new_claimed_if_default(recipient_post, Claim::Key),
     ]
 }

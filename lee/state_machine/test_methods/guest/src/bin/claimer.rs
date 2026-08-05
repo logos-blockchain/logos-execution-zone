@@ -17,7 +17,7 @@ fn main() {
         return;
     };
 
-    let account_post = AccountPostState::new_claimed(pre.account.clone(), Claim::Authorized);
+    let account_post = AccountPostState::new_claimed(pre.account.clone(), Claim::Key);
 
     ProgramOutput::new(
         self_program_id,

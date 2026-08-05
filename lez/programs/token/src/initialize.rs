@@ -30,6 +30,6 @@ pub fn initialize_account(
 
     vec![
         AccountPostState::new(definition_post),
-        AccountPostState::new_claimed(account_to_initialize, Claim::Authorized),
+        AccountPostState::new_claimed(account_to_initialize, Claim::Key),
     ]
 }

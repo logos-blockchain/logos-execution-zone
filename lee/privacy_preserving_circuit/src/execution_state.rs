@@ -402,7 +402,7 @@ impl ExecutionState {
                 let account_identity = &account_identities[pre_state_position];
                 if account_identity.is_public() {
                     match claim {
-                        Claim::Authorized => {
+                        Claim::Key => {
                             // Note: no need to check authorized pdas because we have already
                             // checked consistency of authorization above.
                             assert!(
@@ -428,7 +428,7 @@ impl ExecutionState {
                     // Private accounts: don't enforce the claim semantics. Unauthorized private
                     // claiming is intentionally allowed
                     match claim {
-                        Claim::Authorized => {}
+                        Claim::Key => {}
                         Claim::Pda(seed) => {
                             let (npk, vpk, identifier) = self
                                 .private_pda_by_position

@@ -42,8 +42,8 @@ pub fn new_fungible_definition(
     holding_target_account_post.data = Data::from(&token_holding);
 
     vec![
-        AccountPostState::new_claimed(definition_target_account_post, Claim::Authorized),
-        AccountPostState::new_claimed(holding_target_account_post, Claim::Authorized),
+        AccountPostState::new_claimed(definition_target_account_post, Claim::Key),
+        AccountPostState::new_claimed(holding_target_account_post, Claim::Key),
     ]
 }
 
@@ -119,8 +119,8 @@ pub fn new_definition_with_metadata(
     metadata_target_account_post.data = Data::from(&token_metadata);
 
     vec![
-        AccountPostState::new_claimed(definition_target_account_post, Claim::Authorized),
-        AccountPostState::new_claimed(holding_target_account_post, Claim::Authorized),
-        AccountPostState::new_claimed(metadata_target_account_post, Claim::Authorized),
+        AccountPostState::new_claimed(definition_target_account_post, Claim::Key),
+        AccountPostState::new_claimed(holding_target_account_post, Claim::Key),
+        AccountPostState::new_claimed(metadata_target_account_post, Claim::Key),
     ]
 }

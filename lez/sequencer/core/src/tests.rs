@@ -1420,7 +1420,7 @@ fn pda_mechanism_with_pinata_token_program() {
     );
 
     // Set up the token accounts directly (bypassing public transactions which
-    // would require signers for Claim::Authorized). The focus of this test is
+    // would require signers for Claim::Key). The focus of this test is
     // the PDA mechanism in the pinata program's chained call, not token creation.
     let total_supply: u128 = 10_000_000;
     let token_definition = token_core::TokenDefinition::Fungible {
