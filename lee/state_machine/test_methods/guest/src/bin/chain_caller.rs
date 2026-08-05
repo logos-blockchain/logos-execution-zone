@@ -1,8 +1,8 @@
 use lee_core::{
     account::{AccountDiff, BalanceDiff},
     program::{
-        AccountDiffOutput, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput,
-        read_lee_inputs,
+        AccountDiffOutput, ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput,
+        ProgramOutput, read_lee_call,
     },
 };
 use risc0_zkvm::serde::to_vec;
@@ -22,7 +22,15 @@ fn main() {
             instruction: (balance, simple_transfer_id, num_chain_calls, pda_seed),
         },
         instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    ) = match read_lee_call::<Instruction>() {
+        ProgramCall::Execute(input, instruction_words) => (input, instruction_words),
+        ProgramCall::UpdateFromDiff { .. } => {
+            unreachable!(
+                "chain_caller never produces an AccountDiffOutput with diff_data, so its \
+                 UpdateFromDiff entrypoint is never invoked"
+            )
+        }
+    };
 
     let Ok([recipient_pre, sender_pre]) = <[_; 2]>::try_from(pre_states) else {
         return;

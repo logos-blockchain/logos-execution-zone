@@ -14,16 +14,23 @@ pub fn compute_circuit_output(
     account_identities: &[InputAccountIdentity],
     dummy_inputs: Vec<DummyInput>,
 ) -> PrivacyPreservingCircuitOutput {
-    let (block_validity_window, timestamp_validity_window, pda_seed_by_position, states_iter) =
-        execution_state.into_parts();
+    let (
+        block_validity_window,
+        timestamp_validity_window,
+        pda_seed_by_position,
+        signer_account_ids,
+        public_diffs,
+        states_iter,
+    ) = execution_state.into_parts();
     let mut output = PrivacyPreservingCircuitOutput {
         public_pre_states: Vec::new(),
-        public_post_states: Vec::new(),
+        public_diffs,
         encrypted_private_post_states: Vec::new(),
         new_commitments: Vec::new(),
         new_nullifiers: Vec::new(),
         block_validity_window,
         timestamp_validity_window,
+        signer_account_ids,
     };
 
     assert_eq!(
@@ -38,7 +45,6 @@ pub fn compute_circuit_output(
         match account_identity {
             InputAccountIdentity::Public => {
                 output.public_pre_states.push(pre_state);
-                output.public_post_states.push(post_state);
             }
             InputAccountIdentity::PrivateAuthorizedInit {
                 vpk,

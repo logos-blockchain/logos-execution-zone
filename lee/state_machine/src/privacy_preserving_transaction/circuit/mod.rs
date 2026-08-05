@@ -4,8 +4,11 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     DummyInput, InputAccountIdentity, PrivacyPreservingCircuitInput,
     PrivacyPreservingCircuitOutput,
-    account::AccountWithMetadata,
-    program::{ChainedCall, InstructionData, ProgramId, ProgramOutput},
+    account::{AccountId, AccountWithMetadata},
+    program::{
+        ChainedCall, DEFAULT_PROGRAM_ID, InstructionData, ProgramId, ProgramOutput,
+        UpdateFromDiffOutput,
+    },
 };
 use risc0_zkvm::{ExecutorEnv, InnerReceipt, ProverOpts, Receipt, default_prover};
 
@@ -93,6 +96,21 @@ pub fn execute_and_prove_with_padded_inputs(
     } = program_with_dependencies;
     let mut env_builder = ExecutorEnv::builder();
     let mut program_outputs = Vec::new();
+    let mut update_from_diff_results = Vec::new();
+
+    // Captured before `pre_states` moves into `initial_call` below — this is the only place
+    // `is_authorized` is caller-supplied (every later pre_state's authorization is resolved
+    // inside the circuit from this same list), so it's also the only place we need to derive
+    // the committed signer set from. Scoped to public accounts only: this list is committed and
+    // cross-checked by the sequencer against real, signature-derived `AccountId`s
+    // (`tx.signer_account_ids()`), which a private (`npk`/`vpk`-derived) `AccountId` can never
+    // match — including a private account here would make it permanently unverifiable.
+    let signer_account_ids: Vec<AccountId> = pre_states
+        .iter()
+        .zip(&account_identities)
+        .filter(|(pre, identity)| pre.is_authorized && identity.is_public())
+        .map(|(pre, _)| pre.account_id)
+        .collect();
 
     let initial_call = ChainedCall {
         program_id: initial_program.id(),
@@ -120,6 +138,42 @@ pub fn execute_and_prove_with_padded_inputs(
             .decode()
             .map_err(|e| LeeError::ProgramOutputDeserializationError(e.to_string()))?;
 
+        // Prove `update_from_diff` for every account this call's diff touches `data` on. This
+        // is needed even for public accounts, purely for chain-threading: a later call may need
+        // a concrete `pre_state` for an account this call already changed, and the only way to
+        // produce one is to actually apply the diff. Nothing about the *result* is trusted
+        // externally for public accounts, though — the sequencer independently replays
+        // `public_diffs` against its own live state and never sees these intermediate values.
+        for (pre, diff_output) in program_output.pre_states.iter().zip(&program_output.post_states)
+        {
+            let diff = diff_output.diff();
+            let Some(diff_data) = diff.diff_data.clone() else {
+                continue;
+            };
+            let owner_id = if pre.account.program_owner == DEFAULT_PROGRAM_ID {
+                chained_call.program_id
+            } else {
+                pre.account.program_owner
+            };
+            let owner_program = if owner_id == program_with_dependencies.program.id() {
+                &program_with_dependencies.program
+            } else {
+                dependencies.get(&owner_id).ok_or(
+                    InvalidProgramBehaviorError::UndeclaredProgramDependency {
+                        program_id: owner_id,
+                    },
+                )?
+            };
+            let update_receipt =
+                owner_program.prove_update_from_diff(pre.account.clone(), diff_data)?;
+            let update_output: UpdateFromDiffOutput = update_receipt
+                .journal
+                .decode()
+                .map_err(|e| LeeError::ProgramOutputDeserializationError(e.to_string()))?;
+            update_from_diff_results.push(update_output.data);
+            env_builder.add_assumption(update_receipt);
+        }
+
         // TODO: remove clone
         program_outputs.push(program_output.clone());
 
@@ -145,6 +199,8 @@ pub fn execute_and_prove_with_padded_inputs(
         account_identities,
         program_id: program_with_dependencies.program.id(),
         dummy_inputs,
+        signer_account_ids,
+        update_from_diff_results,
     };
 
     env_builder.write(&circuit_input).unwrap();
@@ -191,7 +247,5 @@ fn execute_and_prove_program(
         .receipt)
 }
 
-// Dormant while scope is narrowed to `simple_balance_transfer` — this file's tests are entirely
-// execute_and_prove/privacy-circuit based. See `test_methods/guest/src/dormant/README.md`.
-// #[cfg(test)]
-// mod tests;
+#[cfg(test)]
+mod tests;

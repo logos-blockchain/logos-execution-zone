@@ -375,8 +375,6 @@ fn program_should_fail_if_modifies_data_of_non_owned_account() {
 }
 
 #[test]
-// Dormant: minter is not yet converted to AccountDiff.
-#[cfg(any())]
 fn program_should_fail_if_does_not_preserve_total_balance_by_minting() {
     let initial_data = HashMap::new();
     let mut state = V03State::new()
@@ -395,15 +393,12 @@ fn program_should_fail_if_does_not_preserve_total_balance_by_minting() {
     assert!(matches!(
         result,
         Err(LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::ExecutionValidationFailed(
-            ExecutionValidationError::MismatchedTotalBalance { total_balance_pre_states, total_balance_post_states }
-        ))) if total_balance_pre_states == 0.into() && total_balance_post_states == 1.into()
+            ExecutionValidationError::MismatchedTotalBalance { total_added, total_subbed }
+        ))) if total_added == 1.into() && total_subbed == 0.into()
     ));
 }
 
 #[test]
-// Dormant: burner is already AccountDiff-converted but out of scope for this
-// narrow pass (only program_should_fail_if_modifies_data_of_non_owned_account is active).
-#[cfg(any())]
 fn program_should_fail_if_does_not_preserve_total_balance_by_burning() {
     let initial_data = HashMap::new();
     let mut state = V03State::new()
@@ -429,7 +424,7 @@ fn program_should_fail_if_does_not_preserve_total_balance_by_burning() {
     assert!(matches!(
         result,
         Err(LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::ExecutionValidationFailed(
-            ExecutionValidationError::MismatchedTotalBalance { total_balance_pre_states, total_balance_post_states }
-        ))) if total_balance_pre_states == 100.into() && total_balance_post_states == 99.into()
+            ExecutionValidationError::MismatchedTotalBalance { total_added, total_subbed }
+        ))) if total_added == 0.into() && total_subbed == 1.into()
     ));
 }

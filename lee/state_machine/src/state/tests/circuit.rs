@@ -1,5 +1,21 @@
 use super::*;
 
+use lee_core::{
+    InputAccountIdentity,
+    account::{AccountWithMetadata, data::Data},
+    program::PdaSeed,
+};
+
+use crate::{
+    PrivacyPreservingTransaction,
+    privacy_preserving_transaction::{
+        circuit::{ProgramWithDependencies, execute_and_prove},
+        message::Message,
+        witness_set::WitnessSet,
+    },
+    program::Program,
+};
+
 #[test]
 fn circuit_fails_if_visibility_masks_have_incorrect_lenght() {
     let program = crate::test_methods::simple_balance_transfer();
@@ -406,7 +422,7 @@ fn private_pda_claim_succeeds() {
     assert_eq!(output.new_commitments.len(), 1);
     assert_eq!(output.encrypted_private_post_states.len(), 1);
     assert!(output.public_pre_states.is_empty());
-    assert!(output.public_post_states.is_empty());
+    assert!(output.public_diffs.is_empty());
 }
 
 /// An npk is supplied that does not match the `pre_state`'s `account_id` under
@@ -440,143 +456,6 @@ fn private_pda_npk_mismatch_fails() {
             commitment_root: DUMMY_COMMITMENT_HASH,
             seed: None,
         }],
-        &program.into(),
-    );
-
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
-}
-
-/// Happy path for the caller-seeds authorization of a private PDA. The delegator claims a
-/// private PDA via `Claim::Pda(seed)`, then chains to a callee (`noop`) delegating the same
-/// seed via `ChainedCall.pda_seeds`. In the callee's step, the `pre_state`'s authorization
-/// is established via the private derivation
-/// `AccountId::for_private_pda(delegator, seed, npk) == pre.account_id`.
-#[test]
-fn caller_pda_seeds_authorize_private_pda_for_callee() {
-    let delegator = crate::test_methods::private_pda_delegator();
-    let callee = crate::test_methods::auth_asserting_noop();
-    let keys = test_private_account_keys_1();
-    let npk = keys.npk();
-    let seed = PdaSeed::new([77; 32]);
-
-    let account_id =
-        AccountId::for_private_pda(&delegator.id(), &seed, &npk, &keys.vpk(), u128::MAX);
-    let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
-
-    let callee_id = callee.id();
-    let program_with_deps = ProgramWithDependencies::new(delegator, [(callee_id, callee)].into());
-
-    let result = execute_and_prove(
-        vec![pre_state],
-        Program::serialize_instruction((seed, seed, callee_id)).unwrap(),
-        vec![InputAccountIdentity::PrivatePdaInit {
-            vpk: keys.vpk(),
-            random_seed: [0; 32],
-            npk,
-            identifier: u128::MAX,
-            commitment_root: DUMMY_COMMITMENT_HASH,
-            seed: None,
-        }],
-        &program_with_deps,
-    );
-
-    let (output, _proof) =
-        result.expect("caller-seeds authorization of private PDA should succeed");
-    assert_eq!(output.new_commitments.len(), 1);
-    assert_eq!(output.new_nullifiers.len(), 1);
-}
-
-/// The delegator chains with a different seed than the one it claimed with. In the callee
-/// step, neither public nor private caller-seeds authorization matches; `pre.is_authorized`
-/// was set to `true` by the delegator but no proven source supports it, so the consistency
-/// assertion rejects.
-#[test]
-fn caller_pda_seeds_with_wrong_seed_rejects_private_pda_for_callee() {
-    let delegator = crate::test_methods::private_pda_delegator();
-    let callee = crate::test_methods::auth_asserting_noop();
-    let keys = test_private_account_keys_1();
-    let npk = keys.npk();
-    let claim_seed = PdaSeed::new([77; 32]);
-    let wrong_delegated_seed = PdaSeed::new([88; 32]);
-
-    let account_id =
-        AccountId::for_private_pda(&delegator.id(), &claim_seed, &npk, &keys.vpk(), u128::MAX);
-    let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
-
-    let callee_id = callee.id();
-    let program_with_deps = ProgramWithDependencies::new(delegator, [(callee_id, callee)].into());
-
-    let result = execute_and_prove(
-        vec![pre_state],
-        Program::serialize_instruction((claim_seed, wrong_delegated_seed, callee_id)).unwrap(),
-        vec![InputAccountIdentity::PrivatePdaInit {
-            vpk: keys.vpk(),
-            random_seed: [0; 32],
-            npk,
-            identifier: u128::MAX,
-            commitment_root: DUMMY_COMMITMENT_HASH,
-            seed: None,
-        }],
-        &program_with_deps,
-    );
-
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
-}
-
-/// Exploit-scenario pin. A single `(program_id, seed)` pair can derive a family of
-/// `AccountId`s, one public PDA and one private PDA per distinct npk. Without the tx-wide
-/// family-binding check, a program could claim `PDA_alice` (`alice_npk`) and
-/// `PDA_bob` (`bob_npk`) under the same seed in one transaction, and once reuse
-/// is supported a later chained call could delegate both to a callee via
-/// `pda_seeds: [S]` and mix balances across them. The binding check rejects the setup
-/// here: after the first claim records `(program, seed) → PDA_alice`, the second claim
-/// tries to record `(program, seed) → PDA_bob` and panics.
-#[test]
-fn two_private_pda_claims_under_same_seed_are_rejected() {
-    let program = crate::test_methods::two_pda_claimer();
-    let keys_a = test_private_account_keys_1();
-    let keys_b = test_private_account_keys_2();
-    let seed = PdaSeed::new([55; 32]);
-
-    let account_a = AccountId::for_private_pda(
-        &program.id(),
-        &seed,
-        &keys_a.npk(),
-        &keys_a.vpk(),
-        u128::MAX,
-    );
-    let account_b = AccountId::for_private_pda(
-        &program.id(),
-        &seed,
-        &keys_b.npk(),
-        &keys_b.vpk(),
-        u128::MAX,
-    );
-
-    let pre_a = AccountWithMetadata::new(Account::default(), false, account_a);
-    let pre_b = AccountWithMetadata::new(Account::default(), false, account_b);
-
-    let result = execute_and_prove(
-        vec![pre_a, pre_b],
-        Program::serialize_instruction(seed).unwrap(),
-        vec![
-            InputAccountIdentity::PrivatePdaInit {
-                vpk: keys_a.vpk(),
-                random_seed: [0; 32],
-                npk: keys_a.npk(),
-                identifier: u128::MAX,
-                commitment_root: DUMMY_COMMITMENT_HASH,
-                seed: None,
-            },
-            InputAccountIdentity::PrivatePdaInit {
-                vpk: keys_b.vpk(),
-                random_seed: [0; 32],
-                npk: keys_b.npk(),
-                identifier: u128::MAX,
-                commitment_root: DUMMY_COMMITMENT_HASH,
-                seed: None,
-            },
-        ],
         &program.into(),
     );
 
@@ -1144,4 +1023,141 @@ fn two_private_pda_family_members_receive_and_spend() {
     }
 
     assert_eq!(state.get_account_by_id(recipient_id).balance, amount);
+}
+
+/// Happy path for the caller-seeds authorization of a private PDA. The delegator claims a
+/// private PDA via `Claim::Pda(seed)`, then chains to a callee (`noop`) delegating the same
+/// seed via `ChainedCall.pda_seeds`. In the callee's step, the `pre_state`'s authorization
+/// is established via the private derivation
+/// `AccountId::for_private_pda(delegator, seed, npk) == pre.account_id`.
+#[test]
+fn caller_pda_seeds_authorize_private_pda_for_callee() {
+    let delegator = crate::test_methods::private_pda_delegator();
+    let callee = crate::test_methods::auth_asserting_noop();
+    let keys = test_private_account_keys_1();
+    let npk = keys.npk();
+    let seed = PdaSeed::new([77; 32]);
+
+    let account_id =
+        AccountId::for_private_pda(&delegator.id(), &seed, &npk, &keys.vpk(), u128::MAX);
+    let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
+
+    let callee_id = callee.id();
+    let program_with_deps = ProgramWithDependencies::new(delegator, [(callee_id, callee)].into());
+
+    let result = execute_and_prove(
+        vec![pre_state],
+        Program::serialize_instruction((seed, seed, callee_id)).unwrap(),
+        vec![InputAccountIdentity::PrivatePdaInit {
+            vpk: keys.vpk(),
+            random_seed: [0; 32],
+            npk,
+            identifier: u128::MAX,
+            commitment_root: DUMMY_COMMITMENT_HASH,
+            seed: None,
+        }],
+        &program_with_deps,
+    );
+
+    let (output, _proof) =
+        result.expect("caller-seeds authorization of private PDA should succeed");
+    assert_eq!(output.new_commitments.len(), 1);
+    assert_eq!(output.new_nullifiers.len(), 1);
+}
+
+/// The delegator chains with a different seed than the one it claimed with. In the callee
+/// step, neither public nor private caller-seeds authorization matches; `pre.is_authorized`
+/// was set to `true` by the delegator but no proven source supports it, so the consistency
+/// assertion rejects.
+#[test]
+fn caller_pda_seeds_with_wrong_seed_rejects_private_pda_for_callee() {
+    let delegator = crate::test_methods::private_pda_delegator();
+    let callee = crate::test_methods::auth_asserting_noop();
+    let keys = test_private_account_keys_1();
+    let npk = keys.npk();
+    let claim_seed = PdaSeed::new([77; 32]);
+    let wrong_delegated_seed = PdaSeed::new([88; 32]);
+
+    let account_id =
+        AccountId::for_private_pda(&delegator.id(), &claim_seed, &npk, &keys.vpk(), u128::MAX);
+    let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
+
+    let callee_id = callee.id();
+    let program_with_deps = ProgramWithDependencies::new(delegator, [(callee_id, callee)].into());
+
+    let result = execute_and_prove(
+        vec![pre_state],
+        Program::serialize_instruction((claim_seed, wrong_delegated_seed, callee_id)).unwrap(),
+        vec![InputAccountIdentity::PrivatePdaInit {
+            vpk: keys.vpk(),
+            random_seed: [0; 32],
+            npk,
+            identifier: u128::MAX,
+            commitment_root: DUMMY_COMMITMENT_HASH,
+            seed: None,
+        }],
+        &program_with_deps,
+    );
+
+    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+}
+
+/// Exploit-scenario pin. A single `(program_id, seed)` pair can derive a family of
+/// `AccountId`s, one public PDA and one private PDA per distinct npk. Without the tx-wide
+/// family-binding check, a program could claim `PDA_alice` (`alice_npk`) and
+/// `PDA_bob` (`bob_npk`) under the same seed in one transaction, and once reuse
+/// is supported a later chained call could delegate both to a callee via
+/// `pda_seeds: [S]` and mix balances across them. The binding check rejects the setup
+/// here: after the first claim records `(program, seed) → PDA_alice`, the second claim
+/// tries to record `(program, seed) → PDA_bob` and panics.
+#[test]
+fn two_private_pda_claims_under_same_seed_are_rejected() {
+    let program = crate::test_methods::two_pda_claimer();
+    let keys_a = test_private_account_keys_1();
+    let keys_b = test_private_account_keys_2();
+    let seed = PdaSeed::new([55; 32]);
+
+    let account_a = AccountId::for_private_pda(
+        &program.id(),
+        &seed,
+        &keys_a.npk(),
+        &keys_a.vpk(),
+        u128::MAX,
+    );
+    let account_b = AccountId::for_private_pda(
+        &program.id(),
+        &seed,
+        &keys_b.npk(),
+        &keys_b.vpk(),
+        u128::MAX,
+    );
+
+    let pre_a = AccountWithMetadata::new(Account::default(), false, account_a);
+    let pre_b = AccountWithMetadata::new(Account::default(), false, account_b);
+
+    let result = execute_and_prove(
+        vec![pre_a, pre_b],
+        Program::serialize_instruction(seed).unwrap(),
+        vec![
+            InputAccountIdentity::PrivatePdaInit {
+                vpk: keys_a.vpk(),
+                random_seed: [0; 32],
+                npk: keys_a.npk(),
+                identifier: u128::MAX,
+                commitment_root: DUMMY_COMMITMENT_HASH,
+                seed: None,
+            },
+            InputAccountIdentity::PrivatePdaInit {
+                vpk: keys_b.vpk(),
+                random_seed: [0; 32],
+                npk: keys_b.npk(),
+                identifier: u128::MAX,
+                commitment_root: DUMMY_COMMITMENT_HASH,
+                seed: None,
+            },
+        ],
+        &program.into(),
+    );
+
+    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
 }

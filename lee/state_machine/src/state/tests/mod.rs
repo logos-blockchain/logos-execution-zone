@@ -7,17 +7,21 @@
 use std::collections::HashMap;
 
 use lee_core::{
-    Commitment, Nullifier, NullifierPublicKey, NullifierSecretKey,
-    account::{Account, AccountId, BalanceDiffError, Nonce},
+    Commitment, DUMMY_COMMITMENT_HASH, InputAccountIdentity, Nullifier, NullifierPublicKey,
+    NullifierSecretKey,
+    account::{Account, AccountId, AccountWithMetadata, BalanceDiffError, Nonce},
     encryption::ViewingPublicKey,
-    program::ExecutionValidationError,
+    program::{BlockValidityWindow, ExecutionValidationError, ProgramId, TimestampValidityWindow},
 };
 
 use crate::{
-    PublicKey, PublicTransaction, V03State,
+    PrivacyPreservingTransaction, PublicKey, PublicTransaction, V03State,
     error::{InvalidProgramBehaviorError, LeeError},
+    privacy_preserving_transaction::{message::Message, witness_set::WitnessSet},
+    program::Program,
     public_transaction,
     signature::PrivateKey,
+    state::{BlockId, Timestamp},
 };
 
 mod authenticated_transfer;
@@ -30,14 +34,15 @@ mod public_program_rules;
 // the modules below (and the helpers further down this file that only they used) are commented
 // out, not deleted, pending their own conversion. See
 // `test_methods/guest/src/dormant/README.md`.
-/*
-mod changer_claimer;
-mod circuit;
 mod claiming;
+mod circuit;
 mod flash_swap;
+mod validity_window;
+mod changer_claimer;
+
+/*
 mod privacy_preserving;
 mod token;
-mod validity_window;
 */
 
 impl V03State {
@@ -52,6 +57,7 @@ impl V03State {
         self.insert_program(crate::test_methods::missing_output());
         self.insert_program(crate::test_methods::dropped_account());
         self.insert_program(crate::test_methods::program_owner_changer());
+        */
         self.insert_program(crate::test_methods::minter());
         self.insert_program(crate::test_methods::burner());
         self.insert_program(crate::test_methods::auth_asserting_noop());
@@ -60,18 +66,21 @@ impl V03State {
         self.insert_program(crate::test_methods::two_pda_claimer());
         self.insert_program(crate::test_methods::noop());
         self.insert_program(crate::test_methods::chain_caller());
-        self.insert_program(crate::test_methods::modified_transfer_program());
-        self.insert_program(crate::test_methods::malicious_authorization_changer());
-        self.insert_program(crate::test_methods::validity_window());
         self.insert_program(crate::test_methods::flash_swap_initiator());
         self.insert_program(crate::test_methods::flash_swap_callback());
+        self.insert_program(crate::test_methods::validity_window());
         self.insert_program(crate::test_methods::malicious_self_program_id());
         self.insert_program(crate::test_methods::malicious_caller_program_id());
+        /*
+        self.insert_program(crate::test_methods::modified_transfer_program());
+        self.insert_program(crate::test_methods::malicious_authorization_changer());
+        */
         self.insert_program(crate::test_methods::pda_spend_proxy());
         self.insert_program(crate::test_methods::claimer());
-        self.insert_program(crate::test_methods::changer_claimer());
         self.insert_program(crate::test_methods::validity_window_chain_caller());
+        self.insert_program(crate::test_methods::changer_claimer());
         self.insert_program(crate::test_methods::simple_transfer_proxy());
+        /*
         self.insert_program(crate::test_methods::malicious_injector());
         self.insert_program(crate::test_methods::malicious_launderer());
         self.insert_program(crate::test_methods::modified_transfer_program());
@@ -108,7 +117,6 @@ impl V03State {
         self
     }
 
-    /*
     #[must_use]
     pub fn with_account_owned_by_burner_program(mut self) -> Self {
         let account = Account {
@@ -127,10 +135,8 @@ impl V03State {
         self.private_state.0.extend(&[commitment]);
         self
     }
-    */
 }
 
-/*
 pub struct TestPublicKeys {
     pub signing_key: PrivateKey,
 }
@@ -140,7 +146,6 @@ impl TestPublicKeys {
         AccountId::from(&PublicKey::new_from_private_key(&self.signing_key))
     }
 }
-*/
 
 pub struct TestPrivateKeys {
     pub nsk: NullifierSecretKey,
@@ -158,7 +163,6 @@ impl TestPrivateKeys {
     }
 }
 
-/*
 // ── Flash Swap types (mirrors of guest types for host-side serialisation) ──
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -180,7 +184,6 @@ enum FlashSwapInstruction {
         min_vault_balance: u128,
     },
 }
-*/
 
 fn public_state_from_balances(initial_data: &[(AccountId, u128)]) -> HashMap<AccountId, Account> {
     initial_data
@@ -217,7 +220,6 @@ fn transfer_transaction(
     PublicTransaction::new(message, witness_set)
 }
 
-/*
 fn build_flash_swap_tx(
     initiator: &Program,
     vault_id: AccountId,
@@ -246,7 +248,6 @@ fn test_public_account_keys_2() -> TestPublicKeys {
         signing_key: PrivateKey::try_new([38; 32]).unwrap(),
     }
 }
-*/
 
 pub fn test_private_account_keys_1() -> TestPrivateKeys {
     TestPrivateKeys {
@@ -312,6 +313,7 @@ fn shielded_balance_transfer_for_tests(
     let witness_set = WitnessSet::for_message(&message, proof, &[&sender_keys.signing_key]);
     PrivacyPreservingTransaction::new(message, witness_set)
 }
+*/
 
 fn private_balance_transfer_for_tests(
     sender_keys: &TestPrivateKeys,
@@ -368,6 +370,7 @@ fn private_balance_transfer_for_tests(
     PrivacyPreservingTransaction::new(message, witness_set)
 }
 
+/*
 fn deshielded_balance_transfer_for_tests(
     sender_keys: &TestPrivateKeys,
     sender_private_account: &Account,

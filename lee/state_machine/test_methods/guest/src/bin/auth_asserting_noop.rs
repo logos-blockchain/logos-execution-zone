@@ -1,6 +1,6 @@
 use lee_core::{
     account::{AccountDiff, BalanceDiff},
-    program::{AccountDiffOutput, ProgramInput, ProgramOutput, read_lee_inputs},
+    program::{AccountDiffOutput, ProgramCall, ProgramInput, ProgramOutput, read_lee_call},
 };
 
 /// A variant of `noop` that asserts every `pre_state.is_authorized == true` before echoing
@@ -18,7 +18,15 @@ fn main() {
             ..
         },
         instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    ) = match read_lee_call::<Instruction>() {
+        ProgramCall::Execute(input, instruction_words) => (input, instruction_words),
+        ProgramCall::UpdateFromDiff { .. } => {
+            unreachable!(
+                "auth_asserting_noop never produces an AccountDiffOutput with diff_data, so \
+                 its UpdateFromDiff entrypoint is never invoked"
+            )
+        }
+    };
 
     for pre in &pre_states {
         assert!(

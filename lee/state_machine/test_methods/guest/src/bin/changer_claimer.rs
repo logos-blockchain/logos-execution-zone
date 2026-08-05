@@ -6,16 +6,17 @@ use lee_core::{
     },
 };
 
-type Instruction = Vec<u8>;
+type Instruction = (Option<Vec<u8>>, bool);
 
-/// A program that modifies the account data by setting bytes sent in instruction.
+/// A program that optionally modifies the account data and optionally claims it — the two
+/// decisions are independent of each other, unlike `data_changer` which always claims.
 fn main() {
     let (
         ProgramInput {
             self_program_id,
             caller_program_id,
             pre_states,
-            instruction: data,
+            instruction: (data_opt, should_claim),
         },
         instruction_words,
     ) = match read_lee_call::<Instruction>() {
@@ -39,15 +40,23 @@ fn main() {
     // applied (`update_from_diff`, invoked separately as a `CallKind::UpdateFromDiff` call);
     // this just gives an early, in-guest failure for the same case, same as the program did
     // before.
-    let _: Data = data
-        .clone()
-        .try_into()
-        .expect("provided data should fit into data limit");
+    if let Some(data) = &data_opt {
+        let _: Data = data
+            .clone()
+            .try_into()
+            .expect("provided data should fit into data limit");
+    }
 
     let diff = AccountDiff {
         id: pre.account_id,
         diff_balance: BalanceDiff::Add(0),
-        diff_data: Some(data),
+        diff_data: data_opt,
+    };
+
+    let post_state = if should_claim {
+        AccountDiffOutput::new_claimed(diff, Claim::Authorized)
+    } else {
+        AccountDiffOutput::new(diff)
     };
 
     ProgramOutput::new(
@@ -55,7 +64,7 @@ fn main() {
         caller_program_id,
         instruction_words,
         vec![pre],
-        vec![AccountDiffOutput::new_claimed(diff, Claim::Authorized)],
+        vec![post_state],
     )
     .write();
 }

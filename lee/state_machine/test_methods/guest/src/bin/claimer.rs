@@ -1,6 +1,6 @@
 use lee_core::{
     account::{AccountDiff, BalanceDiff},
-    program::{AccountDiffOutput, Claim, ProgramInput, ProgramOutput, read_lee_inputs},
+    program::{AccountDiffOutput, Claim, ProgramCall, ProgramInput, ProgramOutput, read_lee_call},
 };
 
 type Instruction = ();
@@ -14,7 +14,15 @@ fn main() {
             instruction: (),
         },
         instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    ) = match read_lee_call::<Instruction>() {
+        ProgramCall::Execute(input, instruction_words) => (input, instruction_words),
+        ProgramCall::UpdateFromDiff { .. } => {
+            unreachable!(
+                "claimer never produces an AccountDiffOutput with diff_data, so its \
+                 UpdateFromDiff entrypoint is never invoked"
+            )
+        }
+    };
 
     let Ok([pre]) = <[_; 1]>::try_from(pre_states) else {
         return;

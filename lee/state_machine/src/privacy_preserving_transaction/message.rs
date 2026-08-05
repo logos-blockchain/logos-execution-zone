@@ -1,8 +1,8 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     Commitment, CommitmentSetDigest, Nullifier, PrivacyPreservingCircuitOutput,
-    account::{Account, Nonce},
-    program::{BlockValidityWindow, TimestampValidityWindow},
+    account::{AccountWithMetadata, Nonce},
+    program::{AccountDiffOutput, BlockValidityWindow, ProgramId, TimestampValidityWindow},
 };
 pub use lee_core::{EncryptedAccountData, ViewTag};
 use sha2::{Digest as _, Sha256};
@@ -15,12 +15,23 @@ const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Privacy/\x00\x00\x00\x00\x00\x00";
 pub struct Message {
     pub public_account_ids: Vec<AccountId>,
     pub nonces: Vec<Nonce>,
-    pub public_post_states: Vec<Account>,
+    /// What the circuit witnessed as each public account's pre-state — deliberately *not*
+    /// reconciled against live sequencer state. Used only to verify the proof is internally
+    /// consistent (see `check_privacy_preserving_circuit_proof_is_valid`); materialization uses
+    /// live state instead, via `public_diffs` below, which is what actually avoids tying this
+    /// transaction's validity to a specific public-account snapshot.
+    pub public_pre_states: Vec<AccountWithMetadata>,
+    /// Raw, per-call, unaggregated diffs for public accounts. See
+    /// `PrivacyPreservingCircuitOutput::public_diffs`.
+    pub public_diffs: Vec<(AccountId, ProgramId, AccountDiffOutput)>,
     pub encrypted_private_post_states: Vec<EncryptedAccountData>,
     pub new_commitments: Vec<Commitment>,
     pub new_nullifiers: Vec<(Nullifier, CommitmentSetDigest)>,
     pub block_validity_window: BlockValidityWindow,
     pub timestamp_validity_window: TimestampValidityWindow,
+    /// The accounts the circuit claims are signers — cross-checked by the sequencer against real
+    /// signatures. See `PrivacyPreservingCircuitOutput::signer_account_ids`.
+    pub signer_account_ids: Vec<AccountId>,
 }
 
 impl std::fmt::Debug for Message {
@@ -39,7 +50,8 @@ impl std::fmt::Debug for Message {
         f.debug_struct("Message")
             .field("public_account_ids", &self.public_account_ids)
             .field("nonces", &self.nonces)
-            .field("public_post_states", &self.public_post_states)
+            .field("public_pre_states", &self.public_pre_states)
+            .field("public_diffs", &self.public_diffs)
             .field(
                 "encrypted_private_post_states",
                 &self.encrypted_private_post_states,
@@ -48,6 +60,7 @@ impl std::fmt::Debug for Message {
             .field("new_nullifiers", &nullifiers)
             .field("block_validity_window", &self.block_validity_window)
             .field("timestamp_validity_window", &self.timestamp_validity_window)
+            .field("signer_account_ids", &self.signer_account_ids)
             .finish()
     }
 }
@@ -61,11 +74,13 @@ impl Message {
         Ok(Self {
             public_account_ids,
             nonces,
-            public_post_states: output.public_post_states,
+            public_pre_states: output.public_pre_states,
+            public_diffs: output.public_diffs,
             encrypted_private_post_states: output.encrypted_private_post_states,
             new_commitments: output.new_commitments,
             new_nullifiers: output.new_nullifiers,
             block_validity_window: output.block_validity_window,
+            signer_account_ids: output.signer_account_ids,
             timestamp_validity_window: output.timestamp_validity_window,
         })
     }
@@ -129,7 +144,8 @@ pub mod tests {
 
         let nonces = vec![1_u128.into(), 2_u128.into(), 3_u128.into()];
 
-        let public_post_states = vec![Account::default()];
+        let public_pre_states = Vec::new();
+        let public_diffs = Vec::new();
 
         let encrypted_private_post_states = Vec::new();
 
@@ -146,12 +162,14 @@ pub mod tests {
         Message {
             public_account_ids,
             nonces,
-            public_post_states,
+            public_pre_states,
+            public_diffs,
             encrypted_private_post_states,
             new_commitments,
             new_nullifiers,
             block_validity_window: BlockValidityWindow::new_unbounded(),
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
+            signer_account_ids: Vec::new(),
         }
     }
 
@@ -174,12 +192,14 @@ pub mod tests {
         let msg = Message {
             public_account_ids: vec![AccountId::new([42_u8; 32])],
             nonces: vec![Nonce(5)],
-            public_post_states: vec![],
+            public_pre_states: vec![],
+            public_diffs: vec![],
             encrypted_private_post_states: vec![],
             new_commitments: vec![],
             new_nullifiers: vec![],
             block_validity_window: BlockValidityWindow::new_unbounded(),
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
+            signer_account_ids: vec![],
         };
 
         let public_account_ids_bytes: &[u8] = &[42_u8; 32];
@@ -193,12 +213,14 @@ pub mod tests {
             &[1_u8, 0, 0, 0], // public_account_ids
             public_account_ids_bytes,
             nonces_bytes,
-            empty_vec_bytes,        // public_post_state
+            empty_vec_bytes,        // public_pre_states
+            empty_vec_bytes,        // public_diffs
             empty_vec_bytes,        // encrypted_private_post_states
             empty_vec_bytes,        // new_commitments
             empty_vec_bytes,        // new_nullifiers
             unbounded_window_bytes, // block_validity_window
             unbounded_window_bytes, // timestamp_validity_window
+            empty_vec_bytes,        // signer_account_ids
         ]
         .concat();
         let expected_borsh: &[u8] = &expected_borsh_vec;

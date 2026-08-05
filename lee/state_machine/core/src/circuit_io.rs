@@ -3,9 +3,12 @@ use serde::{Deserialize, Serialize};
 use crate::{
     Commitment, CommitmentSetDigest, Identifier, MembershipProof, Nullifier, NullifierPublicKey,
     NullifierSecretKey,
-    account::{Account, AccountWithMetadata},
+    account::{AccountId, AccountWithMetadata, Data},
     encryption::{EncryptedAccountData, ViewTag, ViewingPublicKey},
-    program::{BlockValidityWindow, PdaSeed, ProgramId, ProgramOutput, TimestampValidityWindow},
+    program::{
+        AccountDiffOutput, BlockValidityWindow, PdaSeed, ProgramId, ProgramOutput,
+        TimestampValidityWindow,
+    },
 };
 
 #[derive(Serialize, Deserialize)]
@@ -20,6 +23,19 @@ pub struct PrivacyPreservingCircuitInput {
     /// Program ID.
     pub program_id: ProgramId,
     pub dummy_inputs: Vec<DummyInput>,
+    /// The accounts this transaction claims are signers. `is_authorized` for every account is
+    /// *derived* from membership in this single list — never accepted as an independent
+    /// per-account witness — and the list itself is committed to the output so the sequencer can
+    /// cross-check it against real signatures. Without that, a prover could satisfy
+    /// claim-eligibility's authorization check for an account it never actually controls.
+    pub signer_account_ids: Vec<AccountId>,
+    /// Claimed `Data` results for each `diff_data.is_some()` materialization the circuit needs,
+    /// consumed in the same order `validate_and_sync_states` encounters them. Flat rather than
+    /// keyed by account, because the same account can be materialized more than once within one
+    /// chain. Each entry is only trusted once `env::verify` confirms a real
+    /// `UpdateFromDiffOutput` receipt exists binding it to the exact `pre_state`/`diff_data` the
+    /// circuit already knows for that step.
+    pub update_from_diff_results: Vec<Data>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -151,12 +167,26 @@ impl InputAccountIdentity {
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq, Default))]
 pub struct PrivacyPreservingCircuitOutput {
     pub public_pre_states: Vec<AccountWithMetadata>,
-    pub public_post_states: Vec<Account>,
+    /// Raw, per-call, unaggregated diffs for public accounts — `(account_id,
+    /// executing_program_id, diff)` triples, one per call that touched a public account, in
+    /// processing order. Deliberately not collapsed into one diff per account
+    /// (`AccountDiffOutput`/`AccountDiff` have no "combine two diffs" operation, especially for
+    /// `diff_data`, which only composes by being applied in sequence). The sequencer replays
+    /// these one at a time against its own live state — never trusting anything the circuit
+    /// internally materialized for a public account, which is why the account's *value* (as
+    /// opposed to its diffs) never appears in this output. `executing_program_id` is carried
+    /// alongside each diff because the sequencer's replay-time authorization re-check (and PDA
+    /// claim resolution) needs to know which program produced it — the same role
+    /// `chained_call.program_id` plays in the public-transaction path's live materialize loop.
+    pub public_diffs: Vec<(AccountId, ProgramId, AccountDiffOutput)>,
     pub encrypted_private_post_states: Vec<EncryptedAccountData>,
     pub new_commitments: Vec<Commitment>,
     pub new_nullifiers: Vec<(Nullifier, CommitmentSetDigest)>,
     pub block_validity_window: BlockValidityWindow,
     pub timestamp_validity_window: TimestampValidityWindow,
+    /// Committed so the sequencer can verify every account this circuit treated as authorized
+    /// really did sign the transaction — see `PrivacyPreservingCircuitInput::signer_account_ids`.
+    pub signer_account_ids: Vec<AccountId>,
 }
 
 #[cfg(feature = "host")]
@@ -176,7 +206,7 @@ mod tests {
     use super::*;
     use crate::{
         Commitment, Nullifier,
-        account::{Account, AccountId, AccountWithMetadata, Nonce},
+        account::{Account, AccountDiff, AccountId, AccountWithMetadata, BalanceDiff, Nonce},
         encryption::{Ciphertext, EphemeralPublicKey},
     };
 
@@ -205,12 +235,15 @@ mod tests {
                     AccountId::new([1; 32]),
                 ),
             ],
-            public_post_states: vec![Account {
-                program_owner: [1, 2, 3, 4, 5, 6, 7, 8],
-                balance: 100,
-                data: b"post state data".to_vec().try_into().unwrap(),
-                nonce: Nonce(0xFFFF_FFFF_FFFF_FFFF),
-            }],
+            public_diffs: vec![(
+                AccountId::new([1; 32]),
+                [1, 2, 3, 4, 5, 6, 7, 8],
+                AccountDiffOutput::new(AccountDiff {
+                    id: AccountId::new([1; 32]),
+                    diff_balance: BalanceDiff::Add(100),
+                    diff_data: Some(b"post state data".to_vec()),
+                }),
+            )],
             encrypted_private_post_states: vec![EncryptedAccountData {
                 ciphertext: Ciphertext(vec![255, 255, 1, 1, 2, 2]),
                 epk: EphemeralPublicKey(vec![9, 9, 9]),
@@ -229,6 +262,7 @@ mod tests {
             )],
             block_validity_window: (1..).into(),
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
+            signer_account_ids: vec![AccountId::new([0; 32])],
         };
         let bytes = output.to_bytes();
         let output_from_slice: PrivacyPreservingCircuitOutput = from_slice(&bytes).unwrap();

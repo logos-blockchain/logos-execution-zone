@@ -1,5 +1,9 @@
-use lee_core::program::{
-    AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+use lee_core::{
+    account::{AccountDiff, BalanceDiff},
+    program::{
+        AccountDiffOutput, ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput,
+        ProgramOutput, read_lee_call,
+    },
 };
 
 /// PDA authorization program that delegates balance operations to `simple_transfer`.
@@ -38,17 +42,33 @@ fn main() {
             instruction: (pda_seed, simple_transfer_id, amount, is_withdraw),
         },
         instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    ) = match read_lee_call::<Instruction>() {
+        ProgramCall::Execute(input, instruction_words) => (input, instruction_words),
+        ProgramCall::UpdateFromDiff { .. } => {
+            unreachable!(
+                "simple_transfer_proxy never produces an AccountDiffOutput with diff_data, so \
+                 its UpdateFromDiff entrypoint is never invoked"
+            )
+        }
+    };
 
     if is_withdraw {
         let Ok([pda_pre, recipient_pre]) = <[_; 2]>::try_from(pre_states.clone()) else {
             panic!("expected exactly 2 pre_states for withdraw: [pda, recipient]");
         };
 
-        // Post-states stay unchanged in this program. The actual balance transfer
-        // happens in the chained call to simple_transfer.
-        let pda_post = AccountPostState::new(pda_pre.account.clone());
-        let recipient_post = AccountPostState::new(recipient_pre.account.clone());
+        // Post-states stay unchanged in this program (no-op diffs). The actual balance
+        // transfer happens in the chained call to simple_transfer.
+        let pda_post = AccountDiffOutput::new(AccountDiff {
+            id: pda_pre.account_id,
+            diff_balance: BalanceDiff::Add(0),
+            diff_data: None,
+        });
+        let recipient_post = AccountDiffOutput::new(AccountDiff {
+            id: recipient_pre.account_id,
+            diff_balance: BalanceDiff::Add(0),
+            diff_data: None,
+        });
 
         // Chain to simple_transfer with pda_seeds to authorize the PDA.
         // The circuit's resolve_authorization_and_record_bindings establishes the
@@ -77,7 +97,11 @@ fn main() {
             panic!("expected exactly 1 pre_state for init: [pda]");
         };
 
-        let pda_post = AccountPostState::new(pda_pre.account.clone());
+        let pda_post = AccountDiffOutput::new(AccountDiff {
+            id: pda_pre.account_id,
+            diff_balance: BalanceDiff::Add(0),
+            diff_data: None,
+        });
 
         // Chain to simple_transfer with instruction=0 (init path) and pda_seeds
         // to authorize the PDA. simple_transfer will claim it with Claim::Authorized.

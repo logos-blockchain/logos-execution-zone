@@ -1,5 +1,9 @@
-use lee_core::program::{
-    AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+use lee_core::{
+    account::{AccountDiff, BalanceDiff},
+    program::{
+        AccountDiffOutput, ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput,
+        ProgramOutput, read_lee_call,
+    },
 };
 use risc0_zkvm::serde::to_vec;
 
@@ -18,7 +22,15 @@ fn main() {
             instruction: (seed, amount, simple_transfer_id),
         },
         instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    ) = match read_lee_call::<Instruction>() {
+        ProgramCall::Execute(input, instruction_words) => (input, instruction_words),
+        ProgramCall::UpdateFromDiff { .. } => {
+            unreachable!(
+                "pda_spend_proxy never produces an AccountDiffOutput with diff_data, so its \
+                 UpdateFromDiff entrypoint is never invoked"
+            )
+        }
+    };
 
     let Ok([first, second]) = <[_; 2]>::try_from(pre_states) else {
         return;
@@ -26,8 +38,16 @@ fn main() {
 
     assert!(first.is_authorized, "first pre_state must be authorized");
 
-    let first_post = AccountPostState::new(first.account.clone());
-    let second_post = AccountPostState::new(second.account.clone());
+    let first_post = AccountDiffOutput::new(AccountDiff {
+        id: first.account_id,
+        diff_balance: BalanceDiff::Add(0),
+        diff_data: None,
+    });
+    let second_post = AccountDiffOutput::new(AccountDiff {
+        id: second.account_id,
+        diff_balance: BalanceDiff::Add(0),
+        diff_data: None,
+    });
 
     let chained_call = ChainedCall {
         program_id: simple_transfer_id,

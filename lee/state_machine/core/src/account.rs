@@ -156,7 +156,7 @@ impl std::fmt::Debug for Account {
     }
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct AccountWithMetadata {
     pub account: Account,
     pub is_authorized: bool,

@@ -107,6 +107,8 @@ mod test_methods {
         )
     }
 
+    */
+
     #[must_use]
     pub const fn minter() -> Program {
         Program::new_unchecked(
@@ -168,6 +170,7 @@ mod test_methods {
         )
     }
 
+    /*
     #[must_use]
     pub const fn modified_transfer_program() -> Program {
         Program::new_unchecked(
@@ -183,6 +186,8 @@ mod test_methods {
             Cow::Borrowed(test_methods::MALICIOUS_AUTHORIZATION_CHANGER_ELF),
         )
     }
+
+    */
 
     #[must_use]
     pub const fn validity_window() -> Program {
@@ -280,5 +285,4 @@ mod test_methods {
             Cow::Borrowed(test_methods::MALICIOUS_LAUNDERER_ELF),
         )
     }
-    */
 }

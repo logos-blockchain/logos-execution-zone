@@ -248,7 +248,7 @@ pub struct AccountPostState {
 
 /// A claim request for an account, indicating that the executing program intends to take ownership
 /// of the account.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub enum Claim {
     /// The program requests ownership of the account which was authorized by the signer.
     ///
@@ -321,7 +321,7 @@ impl AccountPostState {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(PartialEq, Eq))]
 pub struct AccountDiffOutput {
     diff: AccountDiff,
@@ -759,11 +759,28 @@ pub fn read_lee_call<T: DeserializeOwned>() -> ProgramCall<T> {
     }
 }
 
-/// Commits an `update_from_diff` result to the journal. The host always knows it invoked
-/// `UpdateFromDiff` mode, so it decodes the journal as `Data` directly — no discriminant is
-/// needed on the output side, only on the input side (see [`CallKind`]).
-pub fn write_update_from_diff_output(data: &Data) {
-    env::commit(data);
+/// Journal committed by an `UpdateFromDiff` invocation. Binds `pre_state`/`diff_data` alongside
+/// the result `data` — not just for the caller's benefit (a direct, unproven caller like
+/// `Program::execute_update_from_diff` already knows what it sent), but so that anyone verifying
+/// this journal via `env::verify` (e.g. the privacy-preserving circuit, recursively composing
+/// this receipt into its own proof) can confirm the result was produced *from these specific
+/// inputs*, not just "some execution of this program in `UpdateFromDiff` mode." Without this, a
+/// journal carrying only `data` would let an unrelated valid receipt be substituted for this
+/// account's materialization.
+#[derive(Serialize, Deserialize)]
+pub struct UpdateFromDiffOutput {
+    pub pre_state: Account,
+    pub diff_data: Vec<u8>,
+    pub data: Data,
+}
+
+/// Commits an `update_from_diff` result to the journal, bound to the inputs that produced it.
+pub fn write_update_from_diff_output(pre_state: &Account, diff_data: &[u8], data: &Data) {
+    env::commit(&UpdateFromDiffOutput {
+        pre_state: pre_state.clone(),
+        diff_data: diff_data.to_vec(),
+        data: data.clone(),
+    });
 }
 
 /// Validates well-behaved program execution.

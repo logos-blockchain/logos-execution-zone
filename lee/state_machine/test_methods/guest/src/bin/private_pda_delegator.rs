@@ -1,6 +1,9 @@
-use lee_core::program::{
-    AccountPostState, ChainedCall, Claim, PdaSeed, ProgramId, ProgramInput, ProgramOutput,
-    read_lee_inputs,
+use lee_core::{
+    account::{AccountDiff, BalanceDiff},
+    program::{
+        AccountDiffOutput, ChainedCall, Claim, PdaSeed, ProgramCall, ProgramId, ProgramInput,
+        ProgramOutput, read_lee_call,
+    },
 };
 use risc0_zkvm::serde::to_vec;
 
@@ -20,13 +23,26 @@ fn main() {
             instruction: (claim_seed, delegated_seed, callee_program_id),
         },
         instruction_words,
-    ) = read_lee_inputs::<Instruction>();
+    ) = match read_lee_call::<Instruction>() {
+        ProgramCall::Execute(input, instruction_words) => (input, instruction_words),
+        ProgramCall::UpdateFromDiff { .. } => {
+            unreachable!(
+                "private_pda_delegator never produces an AccountDiffOutput with diff_data, so \
+                 its UpdateFromDiff entrypoint is never invoked"
+            )
+        }
+    };
 
     let Ok([pre]) = <[_; 1]>::try_from(pre_states) else {
         return;
     };
 
-    let claimed = AccountPostState::new_claimed(pre.account.clone(), Claim::Pda(claim_seed));
+    let diff = AccountDiff {
+        id: pre.account_id,
+        diff_balance: BalanceDiff::Add(0),
+        diff_data: None,
+    };
+    let claimed = AccountDiffOutput::new_claimed(diff, Claim::Pda(claim_seed));
 
     let mut pre_for_callee = pre.clone();
     pre_for_callee.is_authorized = true;

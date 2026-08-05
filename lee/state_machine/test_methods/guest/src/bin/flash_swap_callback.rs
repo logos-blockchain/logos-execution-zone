@@ -27,8 +27,8 @@
 use lee_core::{
     account::{AccountDiff, BalanceDiff},
     program::{
-        AccountDiffOutput, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput,
-        read_lee_inputs,
+        AccountDiffOutput, ChainedCall, PdaSeed, ProgramCall, ProgramId, ProgramInput,
+        ProgramOutput, read_lee_call,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -51,7 +51,15 @@ fn main() {
             instruction,
         },
         instruction_words,
-    ) = read_lee_inputs::<CallbackInstruction>();
+    ) = match read_lee_call::<CallbackInstruction>() {
+        ProgramCall::Execute(input, instruction_words) => (input, instruction_words),
+        ProgramCall::UpdateFromDiff { .. } => {
+            unreachable!(
+                "flash_swap_callback never produces an AccountDiffOutput with diff_data, so \
+                 its UpdateFromDiff entrypoint is never invoked"
+            )
+        }
+    };
 
     // pre_states[0] = vault (after transfer out), pre_states[1] = receiver (after transfer out)
     let Ok([vault_pre, receiver_pre]) = <[_; 2]>::try_from(pre_states) else {

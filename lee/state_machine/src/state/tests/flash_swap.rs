@@ -1,5 +1,7 @@
 use super::*;
 
+use lee_core::program::PdaSeed;
+
 #[test]
 fn flash_swap_successful() {
     let initiator = crate::test_methods::flash_swap_initiator();
