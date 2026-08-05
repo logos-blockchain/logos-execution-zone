@@ -32,6 +32,7 @@ pub mod public_transaction;
 pub mod sequencer_aggregator;
 mod signature;
 mod state;
+pub mod union_aggregation;
 mod validated_state_diff;
 
 pub mod program_methods {

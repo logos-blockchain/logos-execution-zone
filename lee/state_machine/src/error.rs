@@ -79,6 +79,9 @@ pub enum LeeError {
 
     #[error("Execution outside of the validity window")]
     OutOfValidityWindow,
+
+    #[error("Union aggregation error: {0}")]
+    UnionAggregation(String),
 }
 
 #[derive(Error, Debug)]
