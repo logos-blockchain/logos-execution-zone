@@ -4,7 +4,9 @@
 )]
 
 use anyhow::Result;
-use integration_tests::{TestContext, fetch_privacy_preserving_tx, new_account, private_mention};
+use integration_tests::{
+    TestContext, fetch_privacy_preserving_tx, private_mention, utils::new_account,
+};
 use tokio::test;
 use wallet::cli::{
     Command, SubcommandReturnValue, programs::native_token_transfer::AuthTransferSubcommand,

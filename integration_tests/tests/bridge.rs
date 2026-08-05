@@ -8,7 +8,8 @@ use std::time::Duration;
 use anyhow::Context as _;
 use common::transaction::LeeTransaction;
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, account_balance, get_account,
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext,
+    utils::{account_balance, get_account},
 };
 use lee::{
     execute_and_prove, privacy_preserving_transaction, program::Program, public_transaction,
@@ -16,7 +17,6 @@ use lee::{
 use lee_core::{InputAccountIdentity, account::AccountWithMetadata};
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
-
 // const TIME_TO_FINALIZE_DEPOSIT_EVENT_ON_BEDROCK: Duration = Duration::from_mins(2);
 
 #[test]

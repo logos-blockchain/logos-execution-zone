@@ -8,7 +8,7 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 use indexer_service_protocol::IndexerSyncState;
 use indexer_service_rpc::RpcClient as _;
-use integration_tests::{TestContext, wait_for_indexer_to_catch_up};
+use integration_tests::{TestContext, utils::wait_for_indexer_to_catch_up};
 use log::info;
 
 const CAUGHT_UP_STATUS_TIMEOUT: Duration = Duration::from_secs(60);

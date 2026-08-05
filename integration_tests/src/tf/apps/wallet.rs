@@ -1,6 +1,8 @@
 use std::{
     net::SocketAddr,
-    sync::{Arc, Mutex, MutexGuard},
+    path::PathBuf,
+    sync::{Arc, Mutex},
+    thread::JoinHandle,
 };
 
 use anyhow::{Context as _, anyhow};
@@ -9,69 +11,224 @@ use lee::{AccountId, PrivateKey};
 use tempfile::TempDir;
 use testing_framework_app::{AppDeployment, AppHostEnv, DeployContext};
 use testing_framework_core::scenario::DynError;
+use tokio::sync::{mpsc, oneshot};
 use wallet::{WalletCore, config::WalletConfigOverrides};
 
 use super::LezSequencerClient;
-use crate::{config::InitialPrivateAccountForWallet, setup::setup_wallet};
+use crate::{
+    config::InitialPrivateAccountForWallet,
+    setup::{
+        setup_private_accounts_with_initial_supply, setup_public_accounts_with_initial_supply,
+        setup_wallet,
+    },
+};
 
 struct WalletComponents {
     wallet: WalletCore,
-    _state_dir: TempDir,
+    _state_dir: Option<TempDir>,
     password: String,
+}
+
+enum WalletRequest {
+    ExistingPublicAccounts {
+        response: oneshot::Sender<Result<Vec<AccountId>, String>>,
+    },
+    ExistingPrivateAccounts {
+        response: oneshot::Sender<Result<Vec<AccountId>, String>>,
+    },
+    PrivateAccountBalance {
+        account_id: AccountId,
+        response: oneshot::Sender<Result<Option<u128>, String>>,
+    },
+    FirstPublicAccount {
+        response: oneshot::Sender<Result<Option<AccountId>, String>>,
+    },
+    WalletPassword {
+        response: oneshot::Sender<Result<String, String>>,
+    },
+    Shutdown {
+        response: oneshot::Sender<Result<(), String>>,
+    },
+}
+
+struct WalletActor {
+    requests: mpsc::Sender<WalletRequest>,
+    join_handle: Mutex<Option<JoinHandle<()>>>,
+}
+
+impl WalletActor {
+    fn new(components: WalletComponents) -> Result<Self, DynError> {
+        let (requests, mut receiver) = mpsc::channel(16);
+        let join_handle = std::thread::Builder::new()
+            .name("lez-wallet".to_owned())
+            .spawn(move || {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("LEZ wallet actor runtime should be constructible");
+
+                runtime.block_on(async move {
+                    let components = components;
+                    while let Some(request) = receiver.recv().await {
+                        match request {
+                            WalletRequest::ExistingPublicAccounts { response } => {
+                                let accounts = components
+                                    .wallet
+                                    .storage()
+                                    .key_chain()
+                                    .public_account_ids()
+                                    .map(|(account_id, _)| account_id)
+                                    .collect();
+                                let _unused = response.send(Ok(accounts));
+                            }
+                            WalletRequest::ExistingPrivateAccounts { response } => {
+                                let accounts = components
+                                    .wallet
+                                    .storage()
+                                    .key_chain()
+                                    .private_account_ids()
+                                    .map(|(account_id, _)| account_id)
+                                    .collect();
+                                let _unused = response.send(Ok(accounts));
+                            }
+                            WalletRequest::PrivateAccountBalance {
+                                account_id,
+                                response,
+                            } => {
+                                let balance = components
+                                    .wallet
+                                    .get_account_private(account_id)
+                                    .map(|account| account.balance);
+                                let _unused = response.send(Ok(balance));
+                            }
+                            WalletRequest::FirstPublicAccount { response } => {
+                                let account = components
+                                    .wallet
+                                    .storage()
+                                    .key_chain()
+                                    .public_account_ids()
+                                    .next()
+                                    .map(|(account_id, _)| account_id);
+                                let _unused = response.send(Ok(account));
+                            }
+                            WalletRequest::WalletPassword { response } => {
+                                let _unused = response.send(Ok(components.password.clone()));
+                            }
+                            WalletRequest::Shutdown { response } => {
+                                let _unused = response.send(Ok(()));
+                                break;
+                            }
+                        }
+                    }
+                });
+            })
+            .context("failed to start LEZ wallet actor")?;
+
+        Ok(Self {
+            requests,
+            join_handle: Mutex::new(Some(join_handle)),
+        })
+    }
 }
 
 /// Runtime handle for the deployed LEZ wallet and its state.
 #[derive(Clone)]
 pub struct LezRuntime {
-    wallet: Arc<Mutex<WalletComponents>>,
+    actor: Arc<WalletActor>,
 }
 
 impl LezRuntime {
-    fn new(wallet: WalletCore, state_dir: TempDir, password: String) -> Self {
-        Self {
-            wallet: Arc::new(Mutex::new(WalletComponents {
+    fn new(
+        wallet: WalletCore,
+        state_dir: Option<TempDir>,
+        password: String,
+    ) -> Result<Self, DynError> {
+        Ok(Self {
+            actor: Arc::new(WalletActor::new(WalletComponents {
                 wallet,
                 _state_dir: state_dir,
                 password,
-            })),
-        }
+            })?),
+        })
     }
 
-    /// Runs `f` with shared access to the wallet.
-    pub fn with_wallet<R>(&self, f: impl FnOnce(&WalletCore) -> R) -> Result<R, DynError> {
-        let components = self.lock_wallet()?;
-        Ok(f(&components.wallet))
-    }
-
-    /// Runs `f` with exclusive access to the wallet.
-    pub fn with_wallet_mut<R>(&self, f: impl FnOnce(&mut WalletCore) -> R) -> Result<R, DynError> {
-        let mut components = self.lock_wallet()?;
-        Ok(f(&mut components.wallet))
+    async fn request<T>(
+        &self,
+        request: impl FnOnce(oneshot::Sender<Result<T, String>>) -> WalletRequest,
+    ) -> Result<T, DynError> {
+        let (response, receiver) = oneshot::channel();
+        self.actor
+            .requests
+            .send(request(response))
+            .await
+            .map_err(|error| anyhow!("LEZ wallet actor is no longer running: {error}"))?;
+        receiver
+            .await
+            .map_err(|error| anyhow!("LEZ wallet actor dropped its response: {error}"))?
+            .map_err(|error| anyhow!(error).into())
     }
 
     /// Returns the first public account configured in the wallet.
-    pub fn first_public_account(&self) -> Result<AccountId, DynError> {
-        self.with_wallet(|wallet| {
-            wallet
-                .storage()
-                .key_chain()
-                .public_account_ids()
-                .next()
-                .map(|(account_id, _)| account_id)
-        })?
-        .ok_or_else(|| anyhow!("LEZ wallet has no public account").into())
+    pub async fn first_public_account(&self) -> Result<AccountId, DynError> {
+        self.request(|response| WalletRequest::FirstPublicAccount { response })
+            .await?
+            .ok_or_else(|| anyhow!("LEZ wallet has no public account").into())
+    }
+
+    /// Returns all public account IDs configured in the wallet.
+    pub async fn existing_public_accounts(&self) -> Result<Vec<AccountId>, DynError> {
+        self.request(|response| WalletRequest::ExistingPublicAccounts { response })
+            .await
+    }
+
+    /// Returns all private account IDs configured in the wallet.
+    pub async fn existing_private_accounts(&self) -> Result<Vec<AccountId>, DynError> {
+        self.request(|response| WalletRequest::ExistingPrivateAccounts { response })
+            .await
+    }
+
+    /// Returns the locally synchronized balance of an imported private account.
+    pub async fn private_account_balance(
+        &self,
+        account_id: AccountId,
+    ) -> Result<Option<u128>, DynError> {
+        self.request(|response| WalletRequest::PrivateAccountBalance {
+            account_id,
+            response,
+        })
+        .await
     }
 
     /// Returns the password used to open the test wallet.
-    pub fn wallet_password(&self) -> Result<String, DynError> {
-        let components = self.lock_wallet()?;
-        Ok(components.password.clone())
+    pub async fn wallet_password(&self) -> Result<String, DynError> {
+        self.request(|response| WalletRequest::WalletPassword { response })
+            .await
     }
 
-    fn lock_wallet(&self) -> Result<MutexGuard<'_, WalletComponents>, DynError> {
-        self.wallet
+    /// Stop the wallet actor and wait for its owning thread to finish.
+    pub async fn shutdown(&self) -> Result<(), DynError> {
+        let join_handle = self
+            .actor
+            .join_handle
             .lock()
-            .map_err(|error| anyhow!("LEZ wallet lock poisoned: {error}").into())
+            .map_err(|error| anyhow!("LEZ wallet actor join lock poisoned: {error}"))?
+            .take();
+
+        let Some(join_handle) = join_handle else {
+            return Ok(());
+        };
+
+        let request_result = self
+            .request(|response| WalletRequest::Shutdown { response })
+            .await;
+        let join_result = tokio::task::spawn_blocking(move || join_handle.join())
+            .await
+            .map_err(|error| anyhow!("failed to join LEZ wallet actor: {error}"))?;
+        if join_result.is_err() {
+            return Err(anyhow!("LEZ wallet actor panicked").into());
+        }
+
+        request_result
     }
 }
 
@@ -81,6 +238,8 @@ pub struct WalletApp {
     sequencer_addr: SocketAddr,
     public_accounts: Vec<(PrivateKey, u128)>,
     private_accounts: Vec<InitialPrivateAccountForWallet>,
+    state_dir: Option<PathBuf>,
+    initialize_private_accounts: bool,
 }
 
 impl WalletApp {
@@ -92,7 +251,26 @@ impl WalletApp {
             sequencer_addr: sequencer.addr(),
             public_accounts: sequencer.public_accounts().to_vec(),
             private_accounts: sequencer.private_accounts().to_vec(),
+            state_dir: None,
+            initialize_private_accounts: true,
         }
+    }
+
+    /// Places wallet state and logs below the supplied scenario artifact
+    /// directory.
+    #[must_use]
+    pub fn with_state_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.state_dir = Some(dir.into());
+        self
+    }
+
+    /// Skip privacy-preserving account funding when the caller only needs the
+    /// public-account fixture. The normal TF wallet fixture keeps this enabled
+    /// so it matches [`test_fixtures::TestContext`] initialization semantics.
+    #[must_use]
+    pub const fn without_private_account_initialization(mut self) -> Self {
+        self.initialize_private_accounts = false;
+        self
     }
 }
 
@@ -101,15 +279,74 @@ impl AppDeployment<AppHostEnv> for WalletApp {
     type Handle = LezRuntime;
 
     async fn deploy(self, _ctx: &mut DeployContext<AppHostEnv>) -> Result<Self::Handle, DynError> {
-        let (wallet, state_dir, password) = setup_wallet(
-            self.sequencer_addr,
-            &self.public_accounts,
-            &self.private_accounts,
-            WalletConfigOverrides::default(),
+        let Self {
+            sequencer_addr,
+            public_accounts,
+            private_accounts,
+            state_dir: configured_state_dir,
+            initialize_private_accounts: initialize_private_account_funding,
+        } = self;
+        // WalletCore initialization currently exposes a non-general borrowed
+        // lifetime in its async API. Keep that implementation detail inside a
+        // dedicated blocking thread/runtime; scenario operations use the
+        // actor below and never create nested runtimes.
+        let setup_public_accounts = public_accounts.clone();
+        let setup_private_accounts = private_accounts.clone();
+        let setup_state_dir = configured_state_dir.clone();
+        let initialize_public_accounts = public_accounts.clone();
+        let private_accounts_to_initialize = private_accounts.clone();
+        let (wallet, state_dir, password) = tokio::task::spawn_blocking(
+            move || -> anyhow::Result<(WalletCore, Option<TempDir>, String)> {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .context("failed to create LEZ wallet setup runtime")?;
+                runtime.block_on(async move {
+                    let (wallet, initialized_state_dir, password) = match setup_state_dir {
+                        Some(setup_home) => crate::setup::setup_wallet_at(
+                            sequencer_addr,
+                            &setup_public_accounts,
+                            &setup_private_accounts,
+                            WalletConfigOverrides::default(),
+                            &setup_home,
+                        )
+                        .await
+                        .context("failed to set up LEZ wallet")
+                        .map(|(wallet, _, password)| (wallet, None, password)),
+                        None => setup_wallet(
+                            sequencer_addr,
+                            &setup_public_accounts,
+                            &setup_private_accounts,
+                            WalletConfigOverrides::default(),
+                        )
+                        .await
+                        .context("failed to set up LEZ wallet")
+                        .map(|(wallet, wallet_state_dir, password)| {
+                            (wallet, Some(wallet_state_dir), password)
+                        }),
+                    }?;
+                    let mut wallet = wallet;
+                    setup_public_accounts_with_initial_supply(
+                        &mut wallet,
+                        &initialize_public_accounts,
+                    )
+                    .await
+                    .context("failed to initialize LEZ public wallet accounts")?;
+                    if initialize_private_account_funding {
+                        setup_private_accounts_with_initial_supply(
+                            &mut wallet,
+                            &private_accounts_to_initialize,
+                        )
+                        .await
+                        .context("failed to initialize LEZ private wallet accounts")?;
+                    }
+                    Ok((wallet, initialized_state_dir, password))
+                })
+            },
         )
         .await
-        .context("failed to set up LEZ wallet")?;
+        .context("LEZ wallet setup task failed")??;
 
-        Ok(LezRuntime::new(wallet, state_dir, password))
+        LezRuntime::new(wallet, state_dir, password)
     }
 }

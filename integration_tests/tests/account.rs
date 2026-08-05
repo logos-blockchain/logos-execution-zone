@@ -4,7 +4,10 @@
 )]
 
 use anyhow::{Context as _, Result};
-use integration_tests::{TestContext, get_account, new_account, private_mention};
+use integration_tests::{
+    TestContext, private_mention,
+    utils::{get_account, new_account},
+};
 use key_protocol::key_management::KeyChain;
 use lee::Data;
 use lee_core::account::Nonce;

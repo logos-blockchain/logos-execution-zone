@@ -9,7 +9,7 @@ workspace = true
 
 [dependencies]
 async-trait = "0.1"
-cucumber = { workspace = true, features = ["macros"] }
+cucumber = { features = ["macros", "output-junit"], workspace = true }
 test_fixtures.workspace = true
 lee_core = { workspace = true, features = ["host"] }
 lee.workspace = true
@@ -44,6 +44,7 @@ logos-blockchain-core.workspace = true
 logos-blockchain-key-management-system-service.workspace = true
 logos-blockchain-testing-framework.workspace = true
 anyhow.workspace = true
+chrono.workspace = true
 log.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 hex.workspace = true
@@ -54,3 +55,14 @@ num-bigint.workspace = true
 testing-framework-app.workspace = true
 testing-framework-core.workspace = true
 testing-framework-runner-local.workspace = true
+derivative = "2.2.0"
+thiserror = "2.0.18"
+
+[features]
+cucumber = []
+
+[[test]]
+harness = false                     # Cucumber has its own main() function to run tests.
+name = "cucumber"
+path = "cucumber_tests/cucumber.rs"
+required-features = ["cucumber"]

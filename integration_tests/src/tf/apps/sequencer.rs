@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, path::PathBuf, sync::Arc};
 
 use anyhow::Context as _;
 use async_trait::async_trait;
@@ -20,7 +20,7 @@ struct SequencerInstance {
     public_accounts: Vec<(PrivateKey, u128)>,
     private_accounts: Vec<InitialPrivateAccountForWallet>,
     _service: SequencerHandle,
-    _state_dir: TempDir,
+    _state_dir: Option<TempDir>,
 }
 
 /// Client and lifetime handle for a deployed LEZ sequencer.
@@ -37,7 +37,7 @@ impl LezSequencerClient {
         public_accounts: Vec<(PrivateKey, u128)>,
         private_accounts: Vec<InitialPrivateAccountForWallet>,
         service: SequencerHandle,
-        state_dir: TempDir,
+        state_dir: Option<TempDir>,
     ) -> Self {
         Self(Arc::new(SequencerInstance {
             client,
@@ -75,6 +75,7 @@ impl LezSequencerClient {
 pub struct SequencerApp {
     config: SequencerPartialConfig,
     bedrock_addr: SocketAddr,
+    state_dir: Option<PathBuf>,
 }
 
 impl SequencerApp {
@@ -84,7 +85,16 @@ impl SequencerApp {
         Self {
             config,
             bedrock_addr,
+            state_dir: None,
         }
+    }
+
+    /// Places sequencer state and logs below the supplied scenario artifact
+    /// directory.
+    #[must_use]
+    pub fn with_state_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.state_dir = Some(dir.into());
+        self
     }
 }
 
@@ -98,11 +108,22 @@ impl AppDeployment<AppHostEnv> for SequencerApp {
         let genesis = config::genesis_from_accounts(&public_accounts, &private_accounts);
         // If the sequencer moves to a separate process, create a `LocalProcessApp`
         // with its `LaunchSpec` here so TF owns the process lifecycle.
-        let (service, state_dir) = SequencerSetup::new(self.config, self.bedrock_addr)
-            .with_genesis(genesis)
-            .setup()
-            .await
-            .context("failed to set up LEZ sequencer")?;
+        let setup = SequencerSetup::new(self.config, self.bedrock_addr).with_genesis(genesis);
+        let (service, state_dir);
+        if let Some(home) = self.state_dir {
+            service = setup
+                .setup_in(&home)
+                .await
+                .context("failed to set up LEZ sequencer")?;
+            state_dir = None;
+        } else {
+            let (sequencer, temp_dir) = setup
+                .setup()
+                .await
+                .context("failed to set up LEZ sequencer")?;
+            service = sequencer;
+            state_dir = Some(temp_dir);
+        }
         let addr = service.addr();
         let url = config::addr_to_url(UrlProtocol::Http, addr)?;
         let client = SequencerClientBuilder::default().build(url)?;

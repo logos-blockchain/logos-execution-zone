@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, num::NonZeroU32, sync::Arc};
+use std::{net::SocketAddr, num::NonZeroU32, path::PathBuf, sync::Arc};
 
 use anyhow::{Context as _, anyhow};
 use async_trait::async_trait;
@@ -20,6 +20,7 @@ use testing_framework_core::scenario::DynError;
 #[derive(Clone)]
 pub struct BedrockApp {
     builder: DeploymentBuilder,
+    scenario_base_dir: Option<PathBuf>,
 }
 
 impl Default for BedrockApp {
@@ -48,13 +49,24 @@ impl BedrockApp {
     /// deployment starts; all other builder settings are preserved.
     #[must_use]
     pub const fn from_builder(builder: DeploymentBuilder) -> Self {
-        Self { builder }
+        Self {
+            builder,
+            scenario_base_dir: None,
+        }
     }
 
     /// Replaces the validator count while preserving other builder settings.
     #[must_use]
     pub fn with_nodes(mut self, nodes: usize) -> Self {
         self.builder = self.builder.with_node_count(nodes);
+        self
+    }
+
+    /// Places Bedrock node runtime directories below the supplied scenario
+    /// artifact directory.
+    #[must_use]
+    pub fn with_scenario_base_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.scenario_base_dir = Some(dir.into());
         self
     }
 }
@@ -64,10 +76,20 @@ impl AppDeployment<AppHostEnv> for BedrockApp {
     type Handle = BedrockCluster;
 
     async fn deploy(self, ctx: &mut DeployContext<AppHostEnv>) -> Result<Self::Handle, DynError> {
-        let state_dir = tempfile::tempdir().context("failed to create Bedrock state directory")?;
+        let (scenario_base_dir, state_dir);
+        if let Some(dir) = self.scenario_base_dir {
+            std::fs::create_dir_all(&dir).context("failed to create Bedrock scenario directory")?;
+            scenario_base_dir = dir;
+            state_dir = None;
+        } else {
+            let temp_dir =
+                tempfile::tempdir().context("failed to create Bedrock state directory")?;
+            scenario_base_dir = temp_dir.path().to_owned();
+            state_dir = Some(Arc::new(temp_dir));
+        }
         let deployment = self
             .builder
-            .scenario_base_dir(state_dir.path().to_owned())
+            .scenario_base_dir(scenario_base_dir)
             .build()
             .context("failed to build Bedrock cluster deployment")?;
         let cluster = Box::pin(ctx.deploy_local_cluster::<LbcEnv>(deployment)).await?;
@@ -76,7 +98,7 @@ impl AppDeployment<AppHostEnv> for BedrockApp {
         Ok(BedrockCluster {
             cluster,
             primary_api_addr,
-            _state_dir: Arc::new(state_dir),
+            _state_dir: state_dir,
         })
     }
 }
@@ -86,7 +108,7 @@ impl AppDeployment<AppHostEnv> for BedrockApp {
 pub struct BedrockCluster {
     cluster: LocalAppCluster<LbcEnv>,
     primary_api_addr: SocketAddr,
-    _state_dir: Arc<TempDir>,
+    _state_dir: Option<Arc<TempDir>>,
 }
 
 impl BedrockCluster {

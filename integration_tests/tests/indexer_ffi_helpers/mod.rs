@@ -17,7 +17,7 @@ use indexer_ffi::{
         types::{FfiAccountId, FfiOption, FfiVec, account::FfiAccount, block::FfiBlock},
     },
 };
-use integration_tests::{BlockingTestContext, TestContext};
+use integration_tests::{BlockingTestContext, TestContext, utils::L2_TO_L1_TIMEOUT};
 use tempfile::TempDir;
 
 unsafe extern "C" {
@@ -93,7 +93,7 @@ pub fn setup() -> Result<(BlockingTestContext, IndexerServiceFFI, TempDir)> {
 }
 
 /// Poll the indexer FFI until its last finalized block id reaches `min_block_id`
-/// or until [`integration_tests::L2_TO_L1_TIMEOUT`] elapses.
+/// or until [`integration_tests::utils::L2_TO_L1_TIMEOUT`] elapses.
 ///
 /// This avoids blindly sleeping for the full timeout: the indexer typically
 /// catches up in a fraction of that time, so we return as soon as it does and
@@ -106,10 +106,10 @@ pub fn wait_for_indexer_ffi_block(indexer: &IndexerServiceFFI, min_block_id: u64
         if res.error.is_ok() && res.is_some && res.block_id >= min_block_id {
             return Ok(res.block_id);
         }
-        if start.elapsed() >= integration_tests::L2_TO_L1_TIMEOUT {
+        if start.elapsed() >= L2_TO_L1_TIMEOUT {
             anyhow::bail!(
                 "Indexer FFI did not reach block {min_block_id} within {:?}. Last observed block id: {}",
-                integration_tests::L2_TO_L1_TIMEOUT,
+                L2_TO_L1_TIMEOUT,
                 res.block_id
             );
         }

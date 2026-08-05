@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use indexer_service_protocol::Account;
-use integration_tests::{L2_TO_L1_TIMEOUT, TIME_TO_WAIT_FOR_BLOCK_SECONDS, public_mention};
+use integration_tests::{TIME_TO_WAIT_FOR_BLOCK_SECONDS, public_mention, utils::L2_TO_L1_TIMEOUT};
 use log::info;
 use wallet::{
     account::Label,

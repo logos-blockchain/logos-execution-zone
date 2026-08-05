@@ -20,3 +20,6 @@ bedrock_signing_key
 integration_tests/configs/debug/
 
 .DS_Store
+
+/integration_tests/cucumber_tests/temp/
+MyLogFile.log

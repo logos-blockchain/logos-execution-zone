@@ -7,7 +7,10 @@ use std::{io::Write as _, time::Duration};
 
 use anyhow::Result;
 use common::transaction::LeeTransaction;
-use integration_tests::{TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, get_account, new_account};
+use integration_tests::{
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext,
+    utils::{get_account, new_account},
+};
 use log::info;
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;

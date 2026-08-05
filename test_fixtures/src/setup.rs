@@ -94,6 +94,12 @@ impl SequencerSetup {
         Ok((sequencer_handle, temp_sequencer_dir))
     }
 
+    /// Set up the sequencer in an explicit home directory owned by the caller.
+    pub async fn setup_in(self, home: &Path) -> Result<SequencerHandle> {
+        std::fs::create_dir_all(home).context("Failed to create sequencer home")?;
+        self.setup_at(home).await
+    }
+
     /// Set up the sequencer in an explicit `home` directory owned by the caller.
     ///
     /// Useful for tests that restart the sequencer against the same on-disk store.
@@ -258,23 +264,39 @@ pub async fn setup_indexer(
     let temp_indexer_dir =
         tempfile::tempdir().context("Failed to create temp dir for indexer home")?;
 
-    debug!(
-        "Using temp indexer home at {}",
-        temp_indexer_dir.path().display()
-    );
+    let handle = setup_indexer_at(
+        bedrock_addr,
+        channel_id,
+        cross_zone,
+        temp_indexer_dir.path(),
+    )
+    .await?;
+
+    Ok((handle, temp_indexer_dir))
+}
+
+/// Set up the indexer in an explicit home directory owned by the caller.
+pub async fn setup_indexer_at(
+    bedrock_addr: SocketAddr,
+    channel_id: ChannelId,
+    cross_zone: Option<sequencer_core::config::CrossZoneConfig>,
+    home: &Path,
+) -> Result<IndexerHandle> {
+    std::fs::create_dir_all(home).context("Failed to create indexer home")?;
+
+    debug!("Using indexer home at {}", home.display());
 
     let indexer_config = config::indexer_config(bedrock_addr, channel_id, cross_zone)
         .context("Failed to create Indexer config")?;
 
     indexer_service::run_server(
         indexer_config,
-        temp_indexer_dir.path(),
+        home,
         0,
         tokio_util::sync::CancellationToken::new(),
     )
     .await
     .context("Failed to run Indexer Service")
-    .map(|handle| (handle, temp_indexer_dir))
 }
 
 pub async fn setup_wallet(
@@ -283,19 +305,39 @@ pub async fn setup_wallet(
     initial_private_accounts: &[InitialPrivateAccountForWallet],
     config_overrides: WalletConfigOverrides,
 ) -> Result<(WalletCore, TempDir, String)> {
+    let temp_wallet_dir =
+        tempfile::tempdir().context("Failed to create temp dir for wallet home")?;
+    let (wallet, _state_dir, password) = setup_wallet_at(
+        sequencer_addr,
+        initial_public_accounts,
+        initial_private_accounts,
+        config_overrides,
+        temp_wallet_dir.path(),
+    )
+    .await?;
+
+    Ok((wallet, temp_wallet_dir, password))
+}
+
+/// Set up the wallet in an explicit home directory owned by the caller.
+pub async fn setup_wallet_at(
+    sequencer_addr: SocketAddr,
+    initial_public_accounts: &[(PrivateKey, u128)],
+    initial_private_accounts: &[InitialPrivateAccountForWallet],
+    config_overrides: WalletConfigOverrides,
+    home: &Path,
+) -> Result<(WalletCore, PathBuf, String)> {
     let config = config::wallet_config(sequencer_addr).context("Failed to create Wallet config")?;
     let config_serialized =
         serde_json::to_string_pretty(&config).context("Failed to serialize Wallet config")?;
 
-    let temp_wallet_dir =
-        tempfile::tempdir().context("Failed to create temp dir for wallet home")?;
+    std::fs::create_dir_all(home).context("Failed to create wallet home")?;
 
-    let config_path = temp_wallet_dir.path().join("wallet_config.json");
-    std::fs::write(&config_path, config_serialized)
-        .context("Failed to write wallet config in temp dir")?;
+    let config_path = home.join("wallet_config.json");
+    std::fs::write(&config_path, config_serialized).context("Failed to write wallet config")?;
 
-    let storage_path = temp_wallet_dir.path().join("storage.json");
-    let metrics_path = temp_wallet_dir.path().join("metrics.json");
+    let storage_path = home.join("storage.json");
+    let metrics_path = home.join("metrics.json");
 
     let wallet_password = "test_pass".to_owned();
     let (mut wallet, _mnemonic) = WalletCore::new_init_storage(
@@ -331,20 +373,27 @@ pub async fn setup_wallet(
         .store_persistent_data()
         .context("Failed to store wallet persistent data")?;
 
-    Ok((wallet, temp_wallet_dir, wallet_password))
+    Ok((wallet, home.to_owned(), wallet_password))
 }
 
 pub async fn setup_public_accounts_with_initial_supply(
     wallet: &mut WalletCore,
     initial_public_accounts: &[(PrivateKey, u128)],
 ) -> Result<()> {
+    setup_public_accounts_with_initial_supply_owned(wallet, initial_public_accounts.to_vec()).await
+}
+
+async fn setup_public_accounts_with_initial_supply_owned(
+    wallet: &mut WalletCore,
+    initial_public_accounts: Vec<(PrivateKey, u128)>,
+) -> Result<()> {
     for (private_key, amount) in initial_public_accounts {
-        let account_id = AccountId::from(&PublicKey::new_from_private_key(private_key));
+        let account_id = AccountId::from(&PublicKey::new_from_private_key(&private_key));
         wallet::cli::execute_subcommand(
             wallet,
             Command::Vault(VaultSubcommand::Claim {
                 account_id: public_mention(account_id),
-                amount: *amount,
+                amount,
             }),
         )
         .await
@@ -369,6 +418,22 @@ pub async fn setup_private_accounts_with_initial_supply(
     }
 
     Ok(())
+}
+
+pub fn initialize_wallet_public_accounts(
+    mut wallet: WalletCore,
+    initial_public_accounts: Vec<(PrivateKey, u128)>,
+) -> Result<WalletCore> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("Failed to create wallet initialization runtime")?;
+
+    runtime.block_on(async move {
+        setup_public_accounts_with_initial_supply_owned(&mut wallet, initial_public_accounts)
+            .await?;
+        Ok(wallet)
+    })
 }
 
 pub async fn sync_wallet_from_prebuilt(wallet: &mut WalletCore) -> Result<()> {

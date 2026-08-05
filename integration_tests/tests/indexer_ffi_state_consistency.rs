@@ -10,7 +10,7 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 use indexer_service_protocol::Account;
 use integration_tests::{
-    L2_TO_L1_TIMEOUT, TIME_TO_WAIT_FOR_BLOCK_SECONDS, private_mention, public_mention,
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, private_mention, public_mention, utils::L2_TO_L1_TIMEOUT,
     verify_commitment_is_in_state,
 };
 use lee::AccountId;

@@ -8,9 +8,11 @@ use std::time::Duration;
 use anyhow::Result;
 use indexer_service_rpc::RpcClient as _;
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, account_balance,
-    assert_private_commitment_in_state, get_account, private_mention, public_mention, send,
-    wait_for_indexer_to_catch_up,
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, private_mention, public_mention,
+    utils::{
+        account_balance, assert_private_commitment_in_state, get_account, send,
+        wait_for_indexer_to_catch_up,
+    },
 };
 use lee::AccountId;
 use log::info;

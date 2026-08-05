@@ -4,7 +4,7 @@
 )]
 
 use anyhow::Result;
-use integration_tests::{TestContext, wait_for_indexer_to_catch_up};
+use integration_tests::{TestContext, utils::wait_for_indexer_to_catch_up};
 use log::info;
 
 #[tokio::test]

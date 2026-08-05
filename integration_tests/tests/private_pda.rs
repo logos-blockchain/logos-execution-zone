@@ -9,7 +9,7 @@ use anyhow::{Context as _, Result};
 use authenticated_transfer_core::Instruction as AuthTransferInstruction;
 use common::transaction::LeeTransaction;
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, sync_private, verify_commitment_is_in_state,
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, utils::sync_private, verify_commitment_is_in_state,
 };
 use lee::{
     AccountId, PrivacyPreservingTransaction, ProgramId,
