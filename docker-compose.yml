@@ -11,3 +11,5 @@ include:
       lez/indexer/service/docker-compose.yml
   - path:
       lez/explorer_service/docker-compose.yml
+  - path:
+      monitoring/docker-compose.yml

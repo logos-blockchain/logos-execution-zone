@@ -18,6 +18,7 @@ services:
     container_name: sequencer_service
     ports:
       - "3040:3040"
+      - "9000:9000"
     volumes:
       # Mount configuration file
       - ./configs/docker/sequencer_config.json:/etc/sequencer_service/sequencer_config.json

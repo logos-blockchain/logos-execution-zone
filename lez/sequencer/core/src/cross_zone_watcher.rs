@@ -2,10 +2,9 @@ use std::{sync::Arc, time::Duration};
 
 use common::{block::Block, transaction::LeeTransaction};
 use cross_zone::{build_dispatch_from_emission, extract_emission};
-use cross_zone_inbox_core::message_key;
+use cross_zone_inbox_core::{CrossZoneRoute, message_key, routes_permit};
 use futures::{Stream, StreamExt as _};
 use lee::PublicKey;
-use lee_core::program::ProgramId;
 use log::{debug, error, info, warn};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_zone_sdk::{
@@ -33,7 +32,7 @@ const DECODE_RETRY_LIMIT: u32 = 20;
 struct PeerContext {
     peer_zone: [u8; 32],
     self_zone: [u8; 32],
-    allowed_targets: Vec<ProgramId>,
+    allowed_routes: Vec<CrossZoneRoute>,
     expected_pubkey: Option<PublicKey>,
 }
 
@@ -216,7 +215,7 @@ pub fn spawn_watchers(
             PeerContext {
                 peer_zone: peer.channel_id,
                 self_zone,
-                allowed_targets: peer.allowed_targets,
+                allowed_routes: peer.allowed_routes,
                 expected_pubkey,
             },
             poll_interval,
@@ -432,7 +431,7 @@ fn advance_cursor(
 fn record_block_deliveries(block: &Block, peer: &PeerContext, dbio: &RocksDBIO) -> bool {
     let peer_zone = peer.peer_zone;
     let self_zone = peer.self_zone;
-    let allowed_targets = peer.allowed_targets.as_slice();
+    let allowed_routes = peer.allowed_routes.as_slice();
     // Collected and written once. The pending list is a single value, so a write
     // per delivery would rewrite the whole list once per message, which is
     // quadratic in a peer block that carries many of them, on a task holding the
@@ -450,9 +449,16 @@ fn record_block_deliveries(block: &Block, peer: &PeerContext, dbio: &RocksDBIO) 
         if emission.target_zone != self_zone {
             continue;
         }
-        if !allowed_targets.contains(&emission.target_program_id) {
+        // Mirrors the inbox guest, which is the authority. Dropping here keeps
+        // an unroutable message from becoming a record that production would
+        // feed in and give up on three blocks later.
+        if !routes_permit(
+            allowed_routes,
+            message.program_id,
+            emission.target_program_id,
+        ) {
             warn!(
-                "Watcher dropping message to disallowed target from peer {}",
+                "Watcher dropping message from peer {}: no route from that source program to that target",
                 hex::encode(peer_zone)
             );
             continue;
@@ -546,7 +552,10 @@ mod tests {
         PeerContext {
             peer_zone: PEER_ZONE,
             self_zone: SELF_ZONE,
-            allowed_targets: vec![programs::ping_receiver().id()],
+            allowed_routes: vec![CrossZoneRoute {
+                src_program_id: programs::ping_sender().id(),
+                target_program_id: programs::ping_receiver().id(),
+            }],
             expected_pubkey: None,
         }
     }
@@ -561,11 +570,18 @@ mod tests {
 
     /// A `ping_sender` emission addressed to `SELF_ZONE`.
     fn emission() -> LeeTransaction {
+        emission_to(programs::ping_receiver().id())
+    }
+
+    /// A `ping_sender` emission aimed at `target_program_id`. The sender lets its
+    /// caller name any target, which is exactly why the route has to pin the
+    /// pair rather than the target alone.
+    fn emission_to(target_program_id: lee_core::program::ProgramId) -> LeeTransaction {
         let receiver_id = programs::ping_receiver().id();
         let send = SenderInstruction::Send {
             outbox_program_id: programs::cross_zone_outbox().id(),
             target_zone: SELF_ZONE,
-            target_program_id: receiver_id,
+            target_program_id,
             target_accounts: vec![ping_record_pda(receiver_id).into_value()],
             payload: b"hi".to_vec(),
             ordinal: 0,
@@ -591,6 +607,17 @@ mod tests {
     /// A stream item carrying block `block_id` with one emission for this zone.
     fn peer_block_msg(block_id: u64, slot: u64) -> (ZoneMessage, Slot) {
         let block = produce_dummy_block(block_id, None, vec![emission()]);
+        peer_msg(borsh::to_vec(&block).expect("block serializes"), slot)
+    }
+
+    /// A stream item carrying a block whose one emission targets
+    /// `target_program_id`.
+    fn peer_block_msg_to(
+        block_id: u64,
+        slot: u64,
+        target_program_id: lee_core::program::ProgramId,
+    ) -> (ZoneMessage, Slot) {
+        let block = produce_dummy_block(block_id, None, vec![emission_to(target_program_id)]);
         peer_msg(borsh::to_vec(&block).expect("block serializes"), slot)
     }
 
@@ -778,6 +805,46 @@ mod tests {
         assert_eq!(
             recorded_keys(&dbio),
             vec![message_key(&PEER_ZONE, 1, 0), message_key(&PEER_ZONE, 2, 0)]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_delivery_with_no_route_is_never_recorded() {
+        // The peer is routed to ping_receiver only. A bridging zone would also
+        // route its lock program to wrapped_token, and `ping_sender` lets its
+        // caller name wrapped_token as the target, so without the pair check
+        // this emission would be recorded and delivered, minting with nothing
+        // locked behind it. The guest rejects it too; dropping here keeps it
+        // from becoming a record production feeds in and gives up on.
+        let (_dir, dbio) = store();
+        let mut cursor = None;
+
+        let outcome = consume_peer_stream(
+            stream::iter(vec![peer_block_msg_to(
+                1,
+                0,
+                programs::wrapped_token().id(),
+            )]),
+            &peer_context(),
+            &dbio,
+            &mut cursor,
+            SkipPolicy::DeliverAll,
+        )
+        .await;
+
+        assert_eq!(
+            outcome,
+            PassOutcome::Drained,
+            "an unroutable message is not a failure"
+        );
+        assert!(
+            recorded_keys(&dbio).is_empty(),
+            "a message with no route must not be recorded"
+        );
+        assert_eq!(
+            get_cross_zone_peer_floor(&dbio, PEER_ZONE).unwrap(),
+            Some(Slot::from(0)),
+            "the slot was fully read, so the floor still advances"
         );
     }
 

@@ -18,6 +18,19 @@ impl<T> MemPool<T> {
         (mem_pool, sender)
     }
 
+    /// Returns the total number of items in the mempool, including both the front buffer and the
+    /// channel.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.front_buffer.len().saturating_add(self.receiver.len())
+    }
+
+    /// Returns true if the mempool is empty, false otherwise.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.front_buffer.is_empty() && self.receiver.is_empty()
+    }
+
     /// Pop an item from the mempool first checking the front buffer (LIFO) then the channel (FIFO).
     pub fn pop(&mut self) -> Option<T> {
         use tokio::sync::mpsc::error::TryRecvError;
@@ -74,6 +87,7 @@ impl<T> MemPoolHandle<T> {
 
 #[cfg(test)]
 mod tests {
+    use futures::FutureExt as _;
     use tokio::test;
 
     use super::*;
@@ -82,6 +96,7 @@ mod tests {
     async fn mempool_new() {
         let (mut pool, _handle): (MemPool<u64>, _) = MemPool::new(10);
         assert_eq!(pool.pop(), None);
+        assert_eq!(pool.len(), 0);
     }
 
     #[test]
@@ -89,10 +104,12 @@ mod tests {
         let (mut pool, handle) = MemPool::new(10);
 
         handle.push(1).await.unwrap();
+        assert_eq!(pool.len(), 1);
 
         let item = pool.pop();
         assert_eq!(item, Some(1));
         assert_eq!(pool.pop(), None);
+        assert_eq!(pool.len(), 0);
     }
 
     #[test]
@@ -103,29 +120,23 @@ mod tests {
         handle.push(2).await.unwrap();
         handle.push(3).await.unwrap();
 
+        assert_eq!(pool.len(), 3);
         assert_eq!(pool.pop(), Some(1));
         assert_eq!(pool.pop(), Some(2));
         assert_eq!(pool.pop(), Some(3));
         assert_eq!(pool.pop(), None);
-    }
-
-    #[test]
-    async fn pop_empty() {
-        let (mut pool, _handle): (MemPool<u64>, _) = MemPool::new(10);
-        assert_eq!(pool.pop(), None);
+        assert_eq!(pool.len(), 0);
     }
 
     #[test]
     async fn max_size() {
-        let (mut pool, handle) = MemPool::new(2);
+        let (_pool, handle) = MemPool::new(2);
 
         handle.push(1).await.unwrap();
         handle.push(2).await.unwrap();
 
-        // This should block if buffer is full, but we'll use try_send in a real scenario
-        // For now, just verify we can pop items
-        assert_eq!(pool.pop(), Some(1));
-        assert_eq!(pool.pop(), Some(2));
+        // This should block if buffer is full
+        assert_eq!(handle.push(3).now_or_never(), None);
     }
 
     #[test]

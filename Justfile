@@ -53,6 +53,13 @@ regenerate-test-fixture:
     @echo "🧪 Regenerating test fixture"
     RISC0_DEV_MODE=1 cargo run -p test_fixtures --bin regenerate_test_fixture
 
+# Regenerate the committed Grafana dashboards from the Rust generator
+# (tools/dashboard_gen) and commit the result. CI checks these are up to date.
+regenerate-dashboards:
+    @echo "📊 Regenerating Grafana dashboards"
+    @cargo build -q -p dashboard_gen
+    @cargo run -q -p dashboard_gen -- sequencer > monitoring/grafana/dashboards/sequencer.json
+
 # Run criterion benches: fast crypto primitives, then the slow PPE verify (real proving setup).
 bench:
     @echo "📊 Running criterion benches"
@@ -65,19 +72,24 @@ run-bedrock:
     @echo "⛓️ Running bedrock"
     docker compose up
 
-# Run Sequencer. Run with RISC0_DEV_MODE=1 to disable proof verification for faster iteration.
-# Optional home/port let a second instance run off the same config, e.g.
-# `just run-sequencer "" "$TMPDIR/lez-sequencer2" 3041` for the multi-sequencer demo.
+# Run Prometheus + Grafana in docker. Grafana: http://localhost:3000 (anonymous
+# admin), Prometheus: http://localhost:9090. Scrapes the sequencer's /metrics.
+[working-directory: 'monitoring']
+run-monitoring:
+    @echo "📊 Running Prometheus (http://localhost:9090) + Grafana (http://localhost:3000)"
+    docker compose up
+
+# Run Sequencer. Extra args are forwarded to the binary. Run with RISC0_DEV_MODE=1 to disable proof verification for faster iteration.
 [working-directory: 'lez/sequencer/service']
-run-sequencer standalone="" home="" port="3040":
+run-sequencer *args:
     @echo "🧠 Running sequencer"
-    @if [ "{{standalone}}" = "standalone" ]; then \
-        echo "🧪 Running in standalone mode"; \
-        RUST_LOG=info cargo run --features standalone --release -p sequencer_service -- configs/debug/sequencer_config.json --port {{port}} {{ if home != "" { "--home " + quote(home) } else { "" } }}; \
-    else \
-        echo "🚀 Running in normal mode"; \
-        RUST_LOG=info cargo run --release -p sequencer_service -- configs/debug/sequencer_config.json --port {{port}} {{ if home != "" { "--home " + quote(home) } else { "" } }}; \
-    fi
+    RUST_LOG=info cargo run --release -p sequencer_service -- configs/debug/sequencer_config.json {{args}}
+
+# Run Sequencer with mocked Bedrock clients. Takes the same args as `run-sequencer`.
+[working-directory: 'lez/sequencer/service']
+run-sequencer-standalone *args:
+    @echo "🧪 Running sequencer in standalone mode"
+    RUST_LOG=info cargo run --features standalone --release -p sequencer_service -- configs/debug/sequencer_config.json {{args}}
 
 # Run Indexer. Run with RISC0_DEV_MODE=1 to disable proof verification for faster iteration.
 [working-directory: 'lez/indexer/service']
@@ -102,6 +114,11 @@ run-explorer:
 run-wallet +args:
     @echo "🔑 Running wallet"
     LEE_WALLET_HOME_DIR=$(pwd)/configs/debug cargo run --release -p wallet -- {{args}}
+
+# Query sequencer metrics in raw format. Useful for quick debugging. For a more detailed view, use `just run-monitoring`.
+get-sequencer-metrics:
+    @echo "📊 Querying sequencer's metrics"
+    curl http://localhost:9000/metrics
 
 # Import test accounts supplied in sequencer configuration.
 wallet-import-test-accounts:
@@ -143,4 +160,5 @@ clean:
     rm -rf lez/wallet/configs/debug/storage.json
     rm -rf lez/wallet/configs/debug/statistics.json
     rm -rf rocksdb*
-    cd bedrock && docker compose down -v
+    cd bedrock && docker compose down -v && cd ..
+    cd monitoring && docker compose down -v && cd ..

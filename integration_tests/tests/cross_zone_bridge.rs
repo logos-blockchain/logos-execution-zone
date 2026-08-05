@@ -30,7 +30,7 @@ use lee::{
     AccountId, PrivateKey, PublicKey, PublicTransaction,
     public_transaction::{Message, WitnessSet},
 };
-use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, GenesisAction};
+use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute, GenesisAction};
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 
@@ -58,7 +58,10 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
     let cross_zone = CrossZoneConfig {
         peers: vec![CrossZonePeer {
             channel_id: *channel_a.as_ref(),
-            allowed_targets: vec![wrapped_token_id],
+            allowed_routes: vec![CrossZoneRoute {
+                src_program_id: programs::bridge_lock().id(),
+                target_program_id: wrapped_token_id,
+            }],
             expected_block_signing_pubkey: None,
         }],
     };

@@ -191,7 +191,7 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
             funding: Some(FundingConfig {
                 funding_pk: config.funding_key,
                 max_tx_fee: GasCost::new(logos_blockchain_core::mantle::Value::MAX),
-                priority_fee: FundingConfig::DEFAULT_PRIORITY_FEE,
+                priority_fee: config.priority_fee,
             }),
             ..ZoneSdkSequencerConfig::default()
         };

@@ -26,9 +26,7 @@ async fn private_transaction_pads_notes_to_max() -> Result<()> {
 
     let tx = fetch_privacy_preserving_tx(ctx.sequencer_client(), tx_hash).await;
 
-    assert_eq!(tx.message.new_commitments.len(), 7);
-    assert_eq!(tx.message.new_nullifiers.len(), 7);
-    assert_eq!(tx.message.encrypted_private_post_states.len(), 7);
+    assert_eq!(tx.message.private_actions.len(), 7);
 
     Ok(())
 }

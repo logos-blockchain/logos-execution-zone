@@ -68,15 +68,18 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
         witness_set,
     } = tx;
     let PrivacyPreservingMessage {
-        public_account_ids,
+        public_actions,
         nonces,
-        public_post_states: _,
-        encrypted_private_post_states,
-        new_commitments,
-        new_nullifiers,
+        private_actions,
         block_validity_window,
         timestamp_validity_window,
     } = message;
+    let private_action_count = private_actions.len();
+    let public_account_ids: Vec<_> = public_actions
+        .into_iter()
+        .map(|action| action.account_id)
+        .collect();
+    let public_account_count = public_account_ids.len();
     let WitnessSet {
         signatures_and_public_keys: _,
         proof,
@@ -90,22 +93,12 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
                 <div class="info-row">
                     <span class="info-label">"Public Accounts:"</span>
                     <span class="info-value">
-                        {public_account_ids.len().to_string()}
+                        {public_account_count.to_string()}
                     </span>
                 </div>
                 <div class="info-row">
-                    <span class="info-label">"New Commitments:"</span>
-                    <span class="info-value">{new_commitments.len().to_string()}</span>
-                </div>
-                <div class="info-row">
-                    <span class="info-label">"Nullifiers:"</span>
-                    <span class="info-value">{new_nullifiers.len().to_string()}</span>
-                </div>
-                <div class="info-row">
-                    <span class="info-label">"Encrypted States:"</span>
-                    <span class="info-value">
-                        {encrypted_private_post_states.len().to_string()}
-                    </span>
+                    <span class="info-label">"Private Actions:"</span>
+                    <span class="info-value">{private_action_count.to_string()}</span>
                 </div>
                 <div class="info-row">
                     <span class="info-label">"Proof Size:"</span>

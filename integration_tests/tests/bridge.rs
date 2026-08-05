@@ -191,16 +191,14 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     .context("Failed to execute/prove bridge deposit")?;
 
     // Create privacy-preserving transaction from circuit output
-    let message = privacy_preserving_transaction::Message::try_from_circuit_output(
-        vec![bridge_account_id, recipient_vault_id, receipt_id],
+    let message = privacy_preserving_transaction::Message::from_circuit_output(
         vec![
             bridge_pre.account.nonce,
             vault_pre.account.nonce,
             receipt_pre.account.nonce,
         ],
         output,
-    )
-    .context("Failed to build privacy-preserving bridge deposit message")?;
+    );
 
     let witness_set = privacy_preserving_transaction::WitnessSet::for_message(&message, proof, &[]);
     let attack_tx = LeeTransaction::PrivacyPreserving(lee::PrivacyPreservingTransaction::new(

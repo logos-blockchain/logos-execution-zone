@@ -456,7 +456,6 @@ impl WalletCore {
                 let LeeTransaction::PrivacyPreserving(pp_tx) = &tx else {
                     continue;
                 };
-                pp_tx.message.validate_note_lengths()?;
                 // Sync updates while watching only the init nullifier.
                 self.storage
                     .key_chain_mut()
@@ -677,7 +676,7 @@ impl WalletCore {
         tx: &lee::privacy_preserving_transaction::PrivacyPreservingTransaction,
         acc_decode_mask: &[AccDecodeData],
     ) -> Result<()> {
-        let note_count = tx.message.validate_note_lengths()?;
+        let note_count = tx.message.private_actions.len();
         anyhow::ensure!(
             note_count >= acc_decode_mask.len(),
             "Decode mask has {} entries but the transaction has {note_count} notes",
@@ -785,12 +784,10 @@ impl WalletCore {
                 &program.to_owned(),
             )?;
 
-        let message =
-            lee::privacy_preserving_transaction::message::Message::try_from_circuit_output(
-                acc_manager.public_account_ids(),
-                acc_manager.public_account_nonces(),
-                output,
-            )?;
+        let message = lee::privacy_preserving_transaction::message::Message::from_circuit_output(
+            acc_manager.public_account_nonces(),
+            output,
+        );
 
         let message_hash = message.hash();
         let signatures_public_keys = acc_manager
@@ -933,7 +930,6 @@ impl WalletCore {
                 let LeeTransaction::PrivacyPreserving(pp_tx) = &tx else {
                     continue;
                 };
-                pp_tx.message.validate_note_lengths()?;
                 // Eagerly decrypt note updates using expected nullifiers.
                 let handled = self
                     .storage
@@ -972,18 +968,19 @@ impl WalletCore {
                     &key_chain.viewing_public_key,
                 );
                 message
-                    .encrypted_private_post_states
+                    .private_actions
                     .iter()
                     .enumerate()
-                    .filter(move |(ciph_id, encrypted_data)| {
+                    .filter(move |(ciph_id, action)| {
                         // If we have not decrypted the update using the nullifiers,
                         // the note may be an initialized one, for which we should
                         // scan.
-                        !handled.contains(ciph_id) && encrypted_data.view_tag == view_tag
+                        !handled.contains(ciph_id)
+                            && action.encrypted_post_state.view_tag == view_tag
                     })
-                    .filter_map(move |(ciph_id, encrypted_data)| {
-                        let shared_secret =
-                            key_chain.calculate_shared_secret_receiver(&encrypted_data.epk)?;
+                    .filter_map(move |(ciph_id, action)| {
+                        let shared_secret = key_chain
+                            .calculate_shared_secret_receiver(&action.encrypted_post_state.epk)?;
 
                         decrypt_note_at(message, ciph_id, &shared_secret).map(|(kind, res_acc)| {
                             let npk = &key_chain.nullifier_public_key;
@@ -1040,16 +1037,14 @@ impl WalletCore {
         for (account_id, npk, vpk, vsk, nsk) in shared_keys {
             let view_tag = EncryptedAccountData::compute_view_tag(&npk, &vpk);
 
-            for (ciph_id, encrypted_data) in
-                message.encrypted_private_post_states.iter().enumerate()
-            {
+            for (ciph_id, action) in message.private_actions.iter().enumerate() {
                 // If already decrypted or the tag does not match, skip.
-                if handled.contains(&ciph_id) || encrypted_data.view_tag != view_tag {
+                if handled.contains(&ciph_id) || action.encrypted_post_state.view_tag != view_tag {
                     continue;
                 }
 
                 let Some(shared_secret) =
-                    SharedSecretKey::decapsulate(&encrypted_data.epk, &vsk.d, &vsk.z)
+                    SharedSecretKey::decapsulate(&action.encrypted_post_state.epk, &vsk.d, &vsk.z)
                 else {
                     continue;
                 };
@@ -1086,9 +1081,9 @@ fn decrypt_note_at(
     secret: &SharedSecretKey,
 ) -> Option<(lee_core::PrivateAccountKind, Account)> {
     lee_core::EncryptionScheme::decrypt(
-        &message.encrypted_private_post_states[i].ciphertext,
+        &message.private_actions[i].encrypted_post_state.ciphertext,
         secret,
-        &message.new_nullifiers[i].0,
+        &message.private_actions[i].nullifier,
     )
 }
 

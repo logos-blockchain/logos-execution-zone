@@ -108,8 +108,10 @@ pub fn sequencer_config(
                 .context("Failed to convert bedrock addr to URL")?,
             funding_key,
             auth: None,
+            priority_fee: sequencer_core::config::default_priority_fee(),
         },
         cross_zone,
+        metrics_address: Some(SequencerConfig::DEFAULT_METRICS_ADDRESS),
     })
 }
 

@@ -6,7 +6,7 @@ use jsonrpsee::{
     types::{ErrorCode, ErrorObjectOwned},
 };
 use lee;
-use log::warn;
+use log::{error, warn};
 use mempool::MemPoolHandle;
 use sequencer_core::{
     DbError, SequencerCore, TransactionOrigin, block_publisher::BlockPublisherTrait,
@@ -44,49 +44,62 @@ impl<BC: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::Rpc
     for SequencerService<BC>
 {
     async fn send_transaction(&self, tx: LeeTransaction) -> Result<HashType, ErrorObjectOwned> {
-        // Reserve ~200 bytes for block header overhead
-        const BLOCK_HEADER_OVERHEAD: u64 = 200;
+        sequencer_service_metrics::increment_submitted_transactions_total();
 
         let tx_hash = tx.hash();
 
-        let encoded_tx =
-            borsh::to_vec(&tx).expect("Transaction borsh serialization should not fail");
-        let tx_size = u64::try_from(encoded_tx.len()).expect("Transaction size should fit in u64");
+        let res = async move {
+            // Reserve ~200 bytes for block header overhead
+            const BLOCK_HEADER_OVERHEAD: u64 = 200;
 
-        let max_tx_size = self.max_block_size.saturating_sub(BLOCK_HEADER_OVERHEAD);
+            let encoded_tx =
+                borsh::to_vec(&tx).expect("Transaction borsh serialization should not fail");
+            let tx_size =
+                u64::try_from(encoded_tx.len()).expect("Transaction size should fit in u64");
 
-        if tx_size > max_tx_size {
-            return Err(ErrorObjectOwned::owned(
-                ErrorCode::InvalidParams.code(),
-                format!("Transaction too large: size {tx_size}, max {max_tx_size}"),
-                None::<()>,
-            ));
-        }
+            let max_tx_size = self.max_block_size.saturating_sub(BLOCK_HEADER_OVERHEAD);
 
-        let authenticated_tx = tx
-            .transaction_stateless_check()
-            .inspect_err(|err| warn!("Error at pre_check {err:#?}"))
-            .map_err(|err| {
-                ErrorObjectOwned::owned(
+            if tx_size > max_tx_size {
+                return Err(ErrorObjectOwned::owned(
                     ErrorCode::InvalidParams.code(),
-                    format!("{err:?}"),
+                    format!("Transaction too large: size {tx_size}, max {max_tx_size}"),
                     None::<()>,
-                )
-            })?;
+                ));
+            }
 
-        // Sequencer-only programs (the cross-zone inbox) are injected by the
-        // watcher; a user must not invoke them top-level, or anyone could forge
-        // an inbound cross-zone delivery. Chained user calls are already rejected
-        // by the inbox guest's caller-is-none assertion.
-        if let LeeTransaction::Public(public_tx) = &authenticated_tx
-            && sequencer_core::is_sequencer_only_program(public_tx.message().program_id)
-        {
-            return Err(ErrorObjectOwned::owned(
-                ErrorCode::InvalidParams.code(),
-                "Program is sequencer-only and cannot be invoked by a user transaction".to_owned(),
-                None::<()>,
-            ));
-        }
+            let authenticated_tx = tx
+                .transaction_stateless_check()
+                .inspect_err(|err| warn!("Error at pre_check {err:#?}"))
+                .map_err(|err| {
+                    ErrorObjectOwned::owned(
+                        ErrorCode::InvalidParams.code(),
+                        format!("{err:?}"),
+                        None::<()>,
+                    )
+                })?;
+
+            // Sequencer-only programs (the cross-zone inbox) are injected by the
+            // watcher; a user must not invoke them top-level, or anyone could forge
+            // an inbound cross-zone delivery. Chained user calls are already rejected
+            // by the inbox guest's caller-is-none assertion.
+            if let LeeTransaction::Public(public_tx) = &authenticated_tx
+                && sequencer_core::is_sequencer_only_program(public_tx.message().program_id)
+            {
+                return Err(ErrorObjectOwned::owned(
+                    ErrorCode::InvalidParams.code(),
+                    "Program is sequencer-only and cannot be invoked by a user transaction"
+                        .to_owned(),
+                    None::<()>,
+                ));
+            }
+
+            Ok(authenticated_tx)
+        };
+
+        let authenticated_tx = res.await.inspect_err(|err| {
+            sequencer_service_metrics::increment_before_mempool_failed_transactions_total();
+            error!("Transaction failed before reaching mempool: {err:#?}");
+        })?;
 
         self.mempool_handle
             .push((TransactionOrigin::User, authenticated_tx))

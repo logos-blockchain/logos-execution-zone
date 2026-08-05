@@ -390,9 +390,9 @@ impl UserKeyChain {
         index: &mut NullifierIndex,
     ) -> HashSet<usize> {
         let mut handled = HashSet::new();
-        for (i, (old_nullifier, _)) in message.new_nullifiers.iter().enumerate() {
+        for (i, action) in message.private_actions.iter().enumerate() {
             // Get the nullifier information if awaiting the nullifier.
-            let Some(account_id) = index.account_for(old_nullifier) else {
+            let Some(account_id) = index.account_for(&action.nullifier) else {
                 continue;
             };
             // Try decrypting the commitment connected to the nullifier and get the next
@@ -400,7 +400,7 @@ impl UserKeyChain {
             if let Some(new_nullifier) = self.apply_nullifier_update(account_id, message, i) {
                 // Update the index to await for the new state of the account, i.e.
                 // the new nullifier.
-                index.update(old_nullifier, new_nullifier, account_id);
+                index.update(&action.nullifier, new_nullifier, account_id);
                 // Record that this nullifier's position can be skipped for scanning.
                 handled.insert(i);
             }
@@ -416,7 +416,7 @@ impl UserKeyChain {
         message: &Message,
         i: usize,
     ) -> Option<Nullifier> {
-        let encrypted = &message.encrypted_private_post_states[i];
+        let encrypted = &message.private_actions[i].encrypted_post_state;
 
         let (nsk, secret, is_shared) = if let Some(entry) = self.shared_private_account(account_id)
         {
@@ -474,10 +474,9 @@ impl UserKeyChain {
     pub fn locate_spend(&self, account_id: AccountId, message: &Message) -> Option<usize> {
         let init = Nullifier::for_account_initialization(&account_id);
         let update = self.next_update_nullifier(account_id);
-        message
-            .new_nullifiers
-            .iter()
-            .position(|(nullifier, _)| *nullifier == init || Some(nullifier) == update.as_ref())
+        message.private_actions.iter().position(|action| {
+            action.nullifier == init || Some(&action.nullifier) == update.as_ref()
+        })
     }
 
     pub fn add_imported_public_account(&mut self, private_key: lee::PrivateKey) {
@@ -890,7 +889,7 @@ impl Default for UserKeyChain {
 
 #[cfg(test)]
 mod tests {
-    use lee_core::{EncryptionScheme, encryption::EncryptedAccountData};
+    use lee_core::{EncryptionScheme, PrivateAction, encryption::EncryptedAccountData};
 
     use super::*;
 
@@ -935,9 +934,12 @@ mod tests {
         );
 
         let message = Message {
-            encrypted_private_post_states: vec![note],
-            new_commitments: vec![new_commitment],
-            new_nullifiers: vec![(old_nullifier, [0; 32])],
+            private_actions: vec![PrivateAction {
+                nullifier: old_nullifier,
+                commitment: new_commitment,
+                encrypted_post_state: note,
+                ..Default::default()
+            }],
             ..Default::default()
         };
 
@@ -999,9 +1001,12 @@ mod tests {
         );
         let note = EncryptedAccountData::new(ciphertext, &npk, &vpk, epk);
         let message = Message {
-            encrypted_private_post_states: vec![note],
-            new_commitments: vec![new_commitment],
-            new_nullifiers: vec![(old_nullifier, [0; 32])],
+            private_actions: vec![PrivateAction {
+                nullifier: old_nullifier,
+                commitment: new_commitment,
+                encrypted_post_state: note,
+                ..Default::default()
+            }],
             ..Default::default()
         };
 
@@ -1061,9 +1066,12 @@ mod tests {
             );
             let note = EncryptedAccountData::new(ciphertext, &npk, &vpk, epk);
             Message {
-                encrypted_private_post_states: vec![note],
-                new_commitments: vec![commitment],
-                new_nullifiers: vec![(spent, [0; 32])],
+                private_actions: vec![PrivateAction {
+                    nullifier: spent,
+                    commitment,
+                    encrypted_post_state: note,
+                    ..Default::default()
+                }],
                 ..Default::default()
             }
         };
@@ -1124,7 +1132,10 @@ mod tests {
             &[9; 32],
         );
         let message = Message {
-            new_nullifiers: vec![(unindexed, [0; 32])],
+            private_actions: vec![PrivateAction {
+                nullifier: unindexed,
+                ..Default::default()
+            }],
             ..Default::default()
         };
 

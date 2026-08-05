@@ -83,9 +83,7 @@ async fn fund_private_pda(
     )
     .map_err(|e| anyhow::anyhow!("circuit proving failed: {e}"))?;
 
-    let message =
-        Message::try_from_circuit_output(vec![sender], vec![sender_account.nonce], output)
-            .map_err(|e| anyhow::anyhow!("message build failed: {e}"))?;
+    let message = Message::from_circuit_output(vec![sender_account.nonce], output);
 
     let witness_set = WitnessSet::for_message(&message, proof, &[sender_sk]);
     let tx = PrivacyPreservingTransaction::new(message, witness_set);

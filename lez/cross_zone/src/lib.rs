@@ -143,17 +143,16 @@ pub fn build_dispatch_from_emission(
     build_inbox_dispatch_tx(programs::cross_zone_inbox().id(), &msg, target_ids)
 }
 
-/// The inbox config a zone derives from its cross-zone config: the per-peer target
-/// allowlists plus its own zone id.
+/// The inbox config a zone derives from its cross-zone config: the per-peer
+/// delivery routes plus its own zone id.
 fn inbox_config(self_zone: ZoneId, cross_zone: &CrossZoneConfig) -> InboxConfig {
-    let mut allowed_targets = BTreeMap::new();
+    let mut allowed_routes = BTreeMap::new();
     for peer in &cross_zone.peers {
-        allowed_targets.insert(peer.channel_id, peer.allowed_targets.clone());
+        allowed_routes.insert(peer.channel_id, peer.allowed_routes.clone());
     }
     InboxConfig {
         self_zone,
-        allowed_peers: BTreeMap::new(),
-        allowed_targets,
+        allowed_routes,
     }
 }
 

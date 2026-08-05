@@ -225,13 +225,18 @@ typedef struct FfiAccount {
   struct FfiU128 nonce;
 } FfiAccount;
 
-typedef struct FfiVec_FfiAccount {
-  struct FfiAccount *entries;
+typedef struct FfiPublicAction {
+  FfiAccountId account_id;
+  struct FfiAccount post_state;
+} FfiPublicAction;
+
+typedef struct FfiVec_FfiPublicAction {
+  struct FfiPublicAction *entries;
   uintptr_t len;
   uintptr_t capacity;
-} FfiVec_FfiAccount;
+} FfiVec_FfiPublicAction;
 
-typedef struct FfiVec_FfiAccount FfiAccountList;
+typedef struct FfiVec_FfiPublicAction FfiPublicActionList;
 
 typedef struct FfiVec_u8 {
   uint8_t *entries;
@@ -247,42 +252,25 @@ typedef struct FfiEncryptedAccountData {
   uint8_t view_tag;
 } FfiEncryptedAccountData;
 
-typedef struct FfiVec_FfiEncryptedAccountData {
-  struct FfiEncryptedAccountData *entries;
-  uintptr_t len;
-  uintptr_t capacity;
-} FfiVec_FfiEncryptedAccountData;
-
-typedef struct FfiVec_FfiEncryptedAccountData FfiEncryptedAccountDataList;
-
-typedef struct FfiVec_FfiBytes32 {
-  struct FfiBytes32 *entries;
-  uintptr_t len;
-  uintptr_t capacity;
-} FfiVec_FfiBytes32;
-
-typedef struct FfiVec_FfiBytes32 FfiVecBytes32;
-
-typedef struct FfiNullifierCommitmentSet {
+typedef struct FfiPrivateAction {
   struct FfiBytes32 nullifier;
-  struct FfiBytes32 commitment_set_digest;
-} FfiNullifierCommitmentSet;
+  struct FfiBytes32 root;
+  struct FfiBytes32 commitment;
+  struct FfiEncryptedAccountData encrypted_post_state;
+} FfiPrivateAction;
 
-typedef struct FfiVec_FfiNullifierCommitmentSet {
-  struct FfiNullifierCommitmentSet *entries;
+typedef struct FfiVec_FfiPrivateAction {
+  struct FfiPrivateAction *entries;
   uintptr_t len;
   uintptr_t capacity;
-} FfiVec_FfiNullifierCommitmentSet;
+} FfiVec_FfiPrivateAction;
 
-typedef struct FfiVec_FfiNullifierCommitmentSet FfiNullifierCommitmentSetList;
+typedef struct FfiVec_FfiPrivateAction FfiPrivateActionList;
 
 typedef struct FfiPrivacyPreservingMessage {
-  FfiAccountIdList public_account_ids;
+  FfiPublicActionList public_actions;
   FfiNonceList nonces;
-  FfiAccountList public_post_states;
-  FfiEncryptedAccountDataList encrypted_private_post_states;
-  FfiVecBytes32 new_commitments;
-  FfiNullifierCommitmentSetList new_nullifiers;
+  FfiPrivateActionList private_actions;
   uint64_t block_validity_window[2];
   uint64_t timestamp_validity_window[2];
 } FfiPrivacyPreservingMessage;

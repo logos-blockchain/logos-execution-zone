@@ -36,7 +36,10 @@ use crate::{
     block_publisher::FollowUpdate,
     block_store::SequencerStore,
     build_bridge_deposit_tx_from_event, build_genesis_state, classify_settled_deliveries,
-    config::{BedrockConfig, CrossZoneConfig, CrossZonePeer, GenesisAction, SequencerConfig},
+    config::{
+        self, BedrockConfig, CrossZoneConfig, CrossZonePeer, CrossZoneRoute, GenesisAction,
+        SequencerConfig,
+    },
     deposit_already_minted, dispatch_already_delivered, extract_cross_zone_dispatch,
     extract_cross_zone_dispatch_key, is_sequencer_only_program,
     mock::{SequencerCoreWithMockClients, mock_checkpoint},
@@ -83,10 +86,12 @@ fn setup_sequencer_config() -> SequencerConfig {
             node_url: "http://not-used-in-unit-tests".parse().unwrap(),
             auth: None,
             funding_key: ZkPublicKey::zero(),
+            priority_fee: config::default_priority_fee(),
         },
         retry_pending_blocks_timeout: Duration::from_mins(4),
         genesis: vec![],
         cross_zone: None,
+        metrics_address: None,
     }
 }
 
@@ -174,7 +179,10 @@ fn cross_zone_test_config() -> SequencerConfig {
         cross_zone: Some(CrossZoneConfig {
             peers: vec![CrossZonePeer {
                 channel_id: PEER_ZONE,
-                allowed_targets: vec![programs::ping_receiver().id()],
+                allowed_routes: vec![CrossZoneRoute {
+                    src_program_id: programs::ping_sender().id(),
+                    target_program_id: programs::ping_receiver().id(),
+                }],
                 expected_block_signing_pubkey: None,
             }],
         }),

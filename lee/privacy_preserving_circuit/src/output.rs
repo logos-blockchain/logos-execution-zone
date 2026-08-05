@@ -1,7 +1,8 @@
 use lee_core::{
     Commitment, CommitmentSetDigest, DummyInput, EncryptedAccountData, EncryptionScheme,
     EphemeralSecretKey, InputAccountIdentity, MembershipProof, Nullifier, NullifierPublicKey,
-    NullifierSecretKey, PrivacyPreservingCircuitOutput, PrivateAccountKind, SharedSecretKey,
+    NullifierSecretKey, PrivacyPreservingCircuitOutput, PrivateAccountKind, PrivateAction,
+    PublicAction, SharedSecretKey,
     account::{Account, AccountId, Nonce},
     compute_digest_for_path,
     encryption::{ViewTag, ViewingPublicKey},
@@ -17,11 +18,8 @@ pub fn compute_circuit_output(
     let (block_validity_window, timestamp_validity_window, pda_seed_by_position, states_iter) =
         execution_state.into_parts();
     let mut output = PrivacyPreservingCircuitOutput {
-        public_pre_states: Vec::new(),
-        public_post_states: Vec::new(),
-        encrypted_private_post_states: Vec::new(),
-        new_commitments: Vec::new(),
-        new_nullifiers: Vec::new(),
+        public_actions: Vec::new(),
+        private_actions: Vec::new(),
         block_validity_window,
         timestamp_validity_window,
     };
@@ -37,8 +35,10 @@ pub fn compute_circuit_output(
     {
         match account_identity {
             InputAccountIdentity::Public => {
-                output.public_pre_states.push(pre_state);
-                output.public_post_states.push(post_state);
+                output.public_actions.push(PublicAction {
+                    pre: pre_state,
+                    post: post_state,
+                });
             }
             InputAccountIdentity::PrivateAuthorizedInit {
                 vpk,
@@ -267,16 +267,20 @@ pub fn compute_circuit_output(
 }
 
 fn obfuscate_output_ordering(output: &mut PrivacyPreservingCircuitOutput) {
-    output
-        .new_commitments
-        .sort_unstable_by_key(Commitment::to_byte_array);
-
-    let mut notes: Vec<_> = core::mem::take(&mut output.new_nullifiers)
-        .into_iter()
-        .zip(core::mem::take(&mut output.encrypted_private_post_states))
+    let mut commitments: Vec<_> = output
+        .private_actions
+        .iter()
+        .map(|action| action.commitment)
         .collect();
-    notes.sort_unstable_by_key(|((nullifier, _), _)| nullifier.to_byte_array());
-    (output.new_nullifiers, output.encrypted_private_post_states) = notes.into_iter().unzip();
+    commitments.sort_unstable_by_key(Commitment::to_byte_array);
+
+    output
+        .private_actions
+        .sort_unstable_by_key(|action| action.nullifier.to_byte_array());
+
+    for (action, commitment) in output.private_actions.iter_mut().zip(commitments) {
+        action.commitment = commitment;
+    }
 }
 
 fn emit_dummy_output(output: &mut PrivacyPreservingCircuitOutput, dummy: DummyInput) {
@@ -284,17 +288,18 @@ fn emit_dummy_output(output: &mut PrivacyPreservingCircuitOutput, dummy: DummyIn
     // The prover is responsible for their randomness.
     let nullifier = Nullifier::for_dummy(&dummy.nullifier_seed);
     let commitment = Commitment::for_dummy(&nullifier, &dummy.commitment_seed);
-    output
-        .new_nullifiers
-        .push((nullifier, dummy.commitment_root));
-    output.new_commitments.push(commitment);
     // Note: the encrypted post states are pushed as fed into the circuit.
     // That means that the prover is responsible for managing the randomness
     // so as to not reveal the padding.
     //
     // In particular, it is recommended to generate the ML KEM ciphertext
     // explicitly as these are not uniformly random.
-    output.encrypted_private_post_states.push(dummy.note);
+    output.private_actions.push(PrivateAction {
+        nullifier,
+        root: dummy.commitment_root,
+        commitment,
+        encrypted_post_state: dummy.note,
+    });
 }
 
 #[expect(
@@ -327,15 +332,16 @@ fn emit_private_output(
         &new_nullifier.0,
     );
 
-    output.new_nullifiers.push(new_nullifier);
-    output.new_commitments.push(commitment_post);
-    output
-        .encrypted_private_post_states
-        .push(EncryptedAccountData {
+    output.private_actions.push(PrivateAction {
+        nullifier: new_nullifier.0,
+        root: new_nullifier.1,
+        commitment: commitment_post,
+        encrypted_post_state: EncryptedAccountData {
             ciphertext: encrypted_account,
             epk,
             view_tag,
-        });
+        },
+    });
 }
 
 fn compute_update_nullifier_and_set_digest(
@@ -358,7 +364,7 @@ mod tests {
 
     use super::*;
 
-    fn note(tag: u8) -> (Nullifier, Commitment, EncryptedAccountData) {
+    fn note(tag: u8) -> PrivateAction {
         let nullifier = Nullifier::for_dummy(&[tag; 32]);
         let commitment = Commitment::for_dummy(&nullifier, &[tag; 32]);
         let ciphertext = EncryptionScheme::encrypt(
@@ -367,37 +373,36 @@ mod tests {
             &SharedSecretKey([0; 32]),
             &nullifier,
         );
-        let encrypted = EncryptedAccountData {
-            ciphertext,
-            epk: EphemeralPublicKey(vec![tag]),
-            view_tag: 0,
-        };
-        (nullifier, commitment, encrypted)
+        PrivateAction {
+            nullifier,
+            root: DUMMY_COMMITMENT_HASH,
+            commitment,
+            encrypted_post_state: EncryptedAccountData {
+                ciphertext,
+                epk: EphemeralPublicKey(vec![tag]),
+                view_tag: 0,
+            },
+        }
     }
 
     #[test]
     fn obfuscate_byte_sorts_commitments_and_nullifiers() {
         let mut output = PrivacyPreservingCircuitOutput::default();
         for tag in 0..3 {
-            let (nullifier, commitment, encrypted) = note(tag);
-            output
-                .new_nullifiers
-                .push((nullifier, DUMMY_COMMITMENT_HASH));
-            output.new_commitments.push(commitment);
-            output.encrypted_private_post_states.push(encrypted);
+            output.private_actions.push(note(tag));
         }
 
         obfuscate_output_ordering(&mut output);
 
         assert!(
             output
-                .new_commitments
-                .is_sorted_by_key(Commitment::to_byte_array)
+                .private_actions
+                .is_sorted_by_key(|action| action.nullifier.to_byte_array())
         );
         assert!(
             output
-                .new_nullifiers
-                .is_sorted_by_key(|(nullifier, _)| nullifier.to_byte_array())
+                .private_actions
+                .is_sorted_by_key(|action| action.commitment.to_byte_array())
         );
     }
 
@@ -405,27 +410,26 @@ mod tests {
     fn obfuscate_keeps_each_nullifier_with_its_ciphertext() {
         let mut output = PrivacyPreservingCircuitOutput::default();
         for tag in 0..3 {
-            let (nullifier, _, encrypted) = note(tag);
-            output
-                .new_nullifiers
-                .push((nullifier, DUMMY_COMMITMENT_HASH));
-            output.encrypted_private_post_states.push(encrypted);
+            output.private_actions.push(note(tag));
         }
         let paired: HashMap<[u8; 32], EphemeralPublicKey> = output
-            .new_nullifiers
+            .private_actions
             .iter()
-            .zip(&output.encrypted_private_post_states)
-            .map(|((nullifier, _), note)| (nullifier.to_byte_array(), note.epk.clone()))
+            .map(|action| {
+                (
+                    action.nullifier.to_byte_array(),
+                    action.encrypted_post_state.epk.clone(),
+                )
+            })
             .collect();
 
         obfuscate_output_ordering(&mut output);
 
-        for ((nullifier, _), note) in output
-            .new_nullifiers
-            .iter()
-            .zip(&output.encrypted_private_post_states)
-        {
-            assert_eq!(paired[&nullifier.to_byte_array()], note.epk);
+        for action in &output.private_actions {
+            assert_eq!(
+                paired[&action.nullifier.to_byte_array()],
+                action.encrypted_post_state.epk
+            );
         }
     }
 }

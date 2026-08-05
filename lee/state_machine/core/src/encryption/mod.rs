@@ -45,13 +45,15 @@ pub struct SharedSecretKey(pub [u8; 32]);
 
 /// The ML-KEM-768 ciphertext produced during encapsulation; transmitted on-wire in place of the
 /// former ECDH ephemeral public key. Always `ML_KEM_768_CIPHERTEXT_LEN` (1088) bytes.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(
+    Serialize, Deserialize, Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize,
+)]
 pub struct EphemeralPublicKey(pub Vec<u8>);
 
 pub struct EncryptionScheme;
 
 #[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
-#[cfg_attr(any(feature = "host", test), derive(Clone, PartialEq, Eq))]
+#[cfg_attr(any(feature = "host", test), derive(Clone, Default, PartialEq, Eq))]
 pub struct Ciphertext(pub(crate) Vec<u8>);
 
 #[cfg(any(feature = "host", test))]
@@ -71,7 +73,10 @@ pub type ViewTag = u8;
 
 /// Encrypted private-account note for one output.
 #[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
-#[cfg_attr(any(feature = "host", test), derive(Debug, Clone, PartialEq, Eq))]
+#[cfg_attr(
+    any(feature = "host", test),
+    derive(Debug, Clone, Default, PartialEq, Eq)
+)]
 pub struct EncryptedAccountData {
     pub ciphertext: Ciphertext,
     pub epk: EphemeralPublicKey,

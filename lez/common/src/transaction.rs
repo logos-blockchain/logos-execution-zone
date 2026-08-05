@@ -36,6 +36,15 @@ impl LeeTransaction {
     }
 
     #[must_use]
+    pub const fn kind(&self) -> TxKind {
+        match self {
+            Self::Public(_) => TxKind::Public,
+            Self::PrivacyPreserving(_) => TxKind::PrivacyPreserving,
+            Self::ProgramDeployment(_) => TxKind::ProgramDeployment,
+        }
+    }
+
+    #[must_use]
     pub fn affected_public_account_ids(&self) -> Vec<AccountId> {
         match self {
             Self::ProgramDeployment(tx) => tx.affected_public_account_ids(),

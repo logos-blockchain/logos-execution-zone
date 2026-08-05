@@ -1,3 +1,4 @@
+use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -147,16 +148,54 @@ impl InputAccountIdentity {
     }
 }
 
+#[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+#[cfg_attr(
+    any(feature = "host", test),
+    derive(Debug, Clone, Default, PartialEq, Eq)
+)]
+pub struct PrivateAction {
+    pub nullifier: Nullifier,
+    pub root: CommitmentSetDigest,
+    // IMPORTANT: The commitment in the action is not necessarily connected
+    // to the nullifier in content. That is, the commitment's plaintext is
+    // not necessarily the updated account state of the nullifier's plaintext.
+    pub commitment: Commitment,
+    pub encrypted_post_state: EncryptedAccountData,
+}
+
+#[derive(Serialize, Deserialize)]
+#[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
+pub struct PublicAction {
+    pub pre: AccountWithMetadata,
+    pub post: Account,
+}
+
 #[derive(Serialize, Deserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq, Default))]
 pub struct PrivacyPreservingCircuitOutput {
-    pub public_pre_states: Vec<AccountWithMetadata>,
-    pub public_post_states: Vec<Account>,
-    pub encrypted_private_post_states: Vec<EncryptedAccountData>,
-    pub new_commitments: Vec<Commitment>,
-    pub new_nullifiers: Vec<(Nullifier, CommitmentSetDigest)>,
+    pub public_actions: Vec<PublicAction>,
+    pub private_actions: Vec<PrivateAction>,
     pub block_validity_window: BlockValidityWindow,
     pub timestamp_validity_window: TimestampValidityWindow,
+}
+
+#[cfg(any(feature = "host", test))]
+impl PrivacyPreservingCircuitOutput {
+    #[must_use]
+    pub fn commitments(&self) -> Vec<Commitment> {
+        self.private_actions
+            .iter()
+            .map(|action| action.commitment)
+            .collect()
+    }
+
+    #[must_use]
+    pub fn nullifiers(&self) -> Vec<(Nullifier, CommitmentSetDigest)> {
+        self.private_actions
+            .iter()
+            .map(|action| (action.nullifier, action.root))
+            .collect()
+    }
 }
 
 #[cfg(feature = "host")]
@@ -183,50 +222,57 @@ mod tests {
     #[test]
     fn privacy_preserving_circuit_output_to_bytes_is_compatible_with_from_slice() {
         let output = PrivacyPreservingCircuitOutput {
-            public_pre_states: vec![
-                AccountWithMetadata::new(
-                    Account {
+            public_actions: vec![
+                PublicAction {
+                    pre: AccountWithMetadata::new(
+                        Account {
+                            program_owner: [1, 2, 3, 4, 5, 6, 7, 8],
+                            balance: 12_345_678_901_234_567_890,
+                            data: b"test data".to_vec().try_into().unwrap(),
+                            nonce: Nonce(0xFFFF_FFFF_FFFF_FFFE),
+                        },
+                        true,
+                        AccountId::new([0; 32]),
+                    ),
+                    post: Account {
                         program_owner: [1, 2, 3, 4, 5, 6, 7, 8],
-                        balance: 12_345_678_901_234_567_890,
-                        data: b"test data".to_vec().try_into().unwrap(),
-                        nonce: Nonce(0xFFFF_FFFF_FFFF_FFFE),
+                        balance: 100,
+                        data: b"post state data".to_vec().try_into().unwrap(),
+                        nonce: Nonce(0xFFFF_FFFF_FFFF_FFFF),
                     },
-                    true,
-                    AccountId::new([0; 32]),
-                ),
-                AccountWithMetadata::new(
-                    Account {
-                        program_owner: [9, 9, 9, 8, 8, 8, 7, 7],
-                        balance: 123_123_123_456_456_567_112,
-                        data: b"test data".to_vec().try_into().unwrap(),
-                        nonce: Nonce(9_999_999_999_999_999_999_999),
+                },
+                PublicAction {
+                    pre: AccountWithMetadata::new(
+                        Account {
+                            program_owner: [9, 9, 9, 8, 8, 8, 7, 7],
+                            balance: 123_123_123_456_456_567_112,
+                            data: b"test data".to_vec().try_into().unwrap(),
+                            nonce: Nonce(9_999_999_999_999_999_999_999),
+                        },
+                        false,
+                        AccountId::new([1; 32]),
+                    ),
+                    post: Account {
+                        program_owner: [2, 3, 4, 5, 6, 7, 8, 9],
+                        balance: 200,
+                        data: b"post state data 2".to_vec().try_into().unwrap(),
+                        nonce: Nonce(0xFFFF_FFFF_FFFF_FFFD),
                     },
-                    false,
-                    AccountId::new([1; 32]),
-                ),
+                },
             ],
-            public_post_states: vec![Account {
-                program_owner: [1, 2, 3, 4, 5, 6, 7, 8],
-                balance: 100,
-                data: b"post state data".to_vec().try_into().unwrap(),
-                nonce: Nonce(0xFFFF_FFFF_FFFF_FFFF),
-            }],
-            encrypted_private_post_states: vec![EncryptedAccountData {
-                ciphertext: Ciphertext(vec![255, 255, 1, 1, 2, 2]),
-                epk: EphemeralPublicKey(vec![9, 9, 9]),
-                view_tag: 42,
-            }],
-            new_commitments: vec![Commitment::new(
-                &AccountId::new([1; 32]),
-                &Account::default(),
-            )],
-            new_nullifiers: vec![(
-                Nullifier::for_account_update(
+            private_actions: vec![PrivateAction {
+                nullifier: Nullifier::for_account_update(
                     &Commitment::new(&AccountId::new([2; 32]), &Account::default()),
                     &[1; 32],
                 ),
-                [0xab; 32],
-            )],
+                root: [0xab; 32],
+                commitment: Commitment::new(&AccountId::new([1; 32]), &Account::default()),
+                encrypted_post_state: EncryptedAccountData {
+                    ciphertext: Ciphertext(vec![255, 255, 1, 1, 2, 2]),
+                    epk: EphemeralPublicKey(vec![9, 9, 9]),
+                    view_tag: 42,
+                },
+            }],
             block_validity_window: (1..).into(),
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
         };

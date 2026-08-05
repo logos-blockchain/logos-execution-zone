@@ -85,13 +85,13 @@ fn dispatch(
         msg.src_zone != cfg.self_zone,
         "Source zone must not be this zone"
     );
-    let allowed_targets = cfg
-        .allowed_targets
-        .get(&msg.src_zone)
-        .expect("Source zone is not an allowed peer");
+    // Checked as a pair. The emitting program is as much a part of the
+    // authorization as the target: an emitter whose caller chooses the target
+    // reaches everything the peer may reach, so a target allowlist on its own
+    // lets any such emitter stand in for every other one.
     assert!(
-        allowed_targets.contains(&msg.target_program_id),
-        "Target program is not allowed for this peer"
+        cfg.permits(&msg.src_zone, msg.src_program_id, msg.target_program_id),
+        "No route from this source program to this target program for this peer"
     );
 
     let key = message_key(&msg.src_zone, msg.src_block_id, msg.src_tx_index);

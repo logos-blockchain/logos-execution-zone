@@ -149,7 +149,7 @@ fn validity_window_works_in_privacy_preserving_transactions(
         )
         .unwrap();
 
-        let message = Message::try_from_circuit_output(vec![], vec![], output).unwrap();
+        let message = Message::from_circuit_output(vec![], output);
 
         let witness_set = WitnessSet::for_message(&message, proof, &[]);
         PrivacyPreservingTransaction::new(message, witness_set)
@@ -214,7 +214,7 @@ fn timestamp_validity_window_works_in_privacy_preserving_transactions(
         )
         .unwrap();
 
-        let message = Message::try_from_circuit_output(vec![], vec![], output).unwrap();
+        let message = Message::from_circuit_output(vec![], output);
 
         let witness_set = WitnessSet::for_message(&message, proof, &[]);
         PrivacyPreservingTransaction::new(message, witness_set)

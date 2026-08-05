@@ -22,7 +22,7 @@ use integration_tests::{
 use lee::{AccountId, PublicTransaction, public_transaction::Message};
 use lee_core::program::ProgramId;
 use ping_core::{ReceiverInstruction, SenderInstruction, ping_record_pda};
-use sequencer_core::config::{CrossZoneConfig, CrossZonePeer};
+use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 
@@ -46,7 +46,10 @@ async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
     let cross_zone = CrossZoneConfig {
         peers: vec![CrossZonePeer {
             channel_id: zone_a,
-            allowed_targets: vec![receiver_id],
+            allowed_routes: vec![CrossZoneRoute {
+                src_program_id: programs::ping_sender().id(),
+                target_program_id: receiver_id,
+            }],
             expected_block_signing_pubkey: None,
         }],
     };

@@ -1,0 +1,17 @@
+[package]
+name = "dashboard_gen"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+sequencer_core_metrics.workspace = true
+sequencer_service_metrics.workspace = true
+
+clap = { workspace = true, features = ["derive"] }
+serde = { workspace = true, features = ["derive", "alloc"] }
+serde_json.workspace = true
+json-pretty-compact = "0.1.2"

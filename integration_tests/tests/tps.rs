@@ -310,7 +310,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
         &program.into(),
     )
     .unwrap();
-    let message = pptx::message::Message::try_from_circuit_output(vec![], vec![], output).unwrap();
+    let message = pptx::message::Message::from_circuit_output(vec![], output);
     let witness_set = pptx::witness_set::WitnessSet::for_message(&message, proof, &[]);
     pptx::PrivacyPreservingTransaction::new(message, witness_set)
 }

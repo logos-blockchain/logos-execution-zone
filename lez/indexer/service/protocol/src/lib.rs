@@ -227,13 +227,27 @@ pub struct PublicMessage {
 pub type InstructionData = Vec<u32>;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct PublicActionWithID {
+    pub account_id: AccountId,
+    pub post_state: Account,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct PrivateAction {
+    pub nullifier: Nullifier,
+    pub root: CommitmentSetDigest,
+    // IMPORTANT: The commitment in the action is not necessarily connected
+    // to the nullifier in content. That is, the commitment's plaintext is
+    // not necessarily the updated account state of the nullifier's plaintext.
+    pub commitment: Commitment,
+    pub encrypted_post_state: EncryptedAccountData,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct PrivacyPreservingMessage {
-    pub public_account_ids: Vec<AccountId>,
+    pub public_actions: Vec<PublicActionWithID>,
     pub nonces: Vec<Nonce>,
-    pub public_post_states: Vec<Account>,
-    pub encrypted_private_post_states: Vec<EncryptedAccountData>,
-    pub new_commitments: Vec<Commitment>,
-    pub new_nullifiers: Vec<(Nullifier, CommitmentSetDigest)>,
+    pub private_actions: Vec<PrivateAction>,
     pub block_validity_window: ValidityWindow,
     pub timestamp_validity_window: ValidityWindow,
 }

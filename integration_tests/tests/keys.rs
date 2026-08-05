@@ -71,9 +71,9 @@ async fn sync_private_account_with_non_zero_chain_index() -> Result<()> {
         .wallet()
         .get_private_account_commitment(from)
         .context("Failed to get private account commitment for sender")?;
-    assert!(tx.message.new_commitments.contains(&new_commitment1));
+    assert!(tx.message.commitments().contains(&new_commitment1));
 
-    for commitment in tx.message.new_commitments {
+    for commitment in tx.message.commitments() {
         assert!(verify_commitment_is_in_state(commitment, ctx.sequencer_client()).await);
     }
 

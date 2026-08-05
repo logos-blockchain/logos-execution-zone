@@ -211,6 +211,8 @@ async fn wait_for_store_release(store: &StoreRelease) {
 }
 
 pub async fn run(config: SequencerConfig, listen_addr: SocketAddr) -> Result<SequencerHandle> {
+    sequencer_service_metrics::init();
+
     let block_timeout = config.block_create_timeout;
     let max_block_size = config.max_block_size;
 

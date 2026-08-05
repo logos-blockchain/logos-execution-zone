@@ -26,7 +26,7 @@ fn transition_from_privacy_preserving_transaction_shielded() {
         this
     };
 
-    let [expected_new_commitment] = tx.message().new_commitments.clone().try_into().unwrap();
+    let [expected_new_commitment] = tx.message().commitments().try_into().unwrap();
     assert!(!state.private_state.0.contains(&expected_new_commitment));
 
     state
@@ -128,7 +128,7 @@ fn privacy_tampered_epk_is_rejected() {
     );
 
     // Flip a byte of the first note's epk
-    tx.message.encrypted_private_post_states[0].epk.0[0] ^= 0xFF;
+    tx.message.private_actions[0].encrypted_post_state.epk.0[0] ^= 0xFF;
 
     assert!(
         matches!(
@@ -154,7 +154,7 @@ fn privacy_tampered_view_tag_is_rejected() {
     );
 
     // Flip the first note's view_tag
-    tx.message.encrypted_private_post_states[0].view_tag ^= 0xFF;
+    tx.message.private_actions[0].encrypted_post_state.view_tag ^= 0xFF;
 
     assert!(
         matches!(

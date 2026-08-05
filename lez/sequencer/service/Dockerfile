@@ -63,8 +63,9 @@ COPY --from=builder --chown=sequencer_service_user:sequencer_service_user /usr/l
 
 VOLUME /var/lib/sequencer_service
 
-# Expose default port
+# Expose default ports
 EXPOSE 3040
+EXPOSE 9000
 
 # Health check (TODO #244: Replace when a real health endpoint is available)
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \

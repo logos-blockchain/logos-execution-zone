@@ -80,6 +80,15 @@ pub enum TransactionOrigin {
     Sequencer,
 }
 
+impl From<TransactionOrigin> for sequencer_core_metrics::TransactionOrigin {
+    fn from(origin: TransactionOrigin) -> Self {
+        match origin {
+            TransactionOrigin::User => Self::User,
+            TransactionOrigin::Sequencer => Self::Sequencer,
+        }
+    }
+}
+
 #[derive(Clone, Debug, BorshDeserialize)]
 struct DepositMetadata {
     recipient_id: lee::AccountId,
@@ -144,6 +153,9 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             )
             .expect("Failed to create database with genesis block");
 
+            // Incrementing count for genesis.
+            sequencer_core_metrics::increment_blocks_produced_total();
+
             (store, genesis_state)
         }
     }
@@ -195,6 +207,8 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     pub async fn start_from_config(
         config: SequencerConfig,
     ) -> (Self, MemPoolHandle<(TransactionOrigin, LeeTransaction)>) {
+        sequencer_core_metrics::init();
+
         let bedrock_signing_key =
             load_or_create_signing_key(&config.home.join("bedrock_signing_key"))
                 .expect("Failed to load or create bedrock signing key");
@@ -215,6 +229,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         let is_fresh_start = initial_checkpoint.is_none();
 
         let (mempool, mempool_handle) = MemPool::new(config.mempool_max_size);
+        sequencer_core_metrics::record_mempool_max_size(config.mempool_max_size);
 
         let block_publisher = BP::new(
             &config.bedrock_config,
@@ -298,6 +313,8 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             block_publisher,
             watchers,
         };
+
+        sequencer_core_metrics::record_chain_height(sequencer_core.chain_height());
 
         (sequencer_core, mempool_handle)
     }
@@ -596,6 +613,9 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                     chain.head_state(),
                     Some(&checkpoint_bytes),
                 )?;
+
+                sequencer_core_metrics::increment_blocks_produced_total();
+                sequencer_core_metrics::record_chain_height(block.header.block_id);
             }
             // Neither branch persists anything, checkpoint included: the
             // inscription it holds as pending belongs to a block that is not
@@ -802,6 +822,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         let clock_tx = clock_invocation(new_block_timestamp);
         let clock_lee_tx = LeeTransaction::Public(clock_tx.clone());
 
+        sequencer_core_metrics::record_mempool_size(self.mempool.len());
         // Everything drained from the store first, then user work. `from_store`
         // is not the same as a `Sequencer` origin: it says the transaction has a
         // record behind it and so needs no requeue, where the origin only says
@@ -872,16 +893,31 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                 break;
             }
 
-            if Self::apply_mempool_transaction(
+            let before_tx_apply = Instant::now();
+            let applied = Self::apply_mempool_transaction(
                 &mut working_state,
                 origin,
                 &tx,
                 new_block_height,
                 new_block_timestamp,
                 &mut withdrawals,
-            ) {
+            );
+            if applied {
+                sequencer_core_metrics::record_mempool_transaction_application_time(
+                    origin.into(),
+                    tx.kind().into(),
+                    sequencer_core_metrics::ApplyStatus::Applied,
+                    before_tx_apply.elapsed(),
+                );
                 valid_transactions.push(tx);
             } else {
+                sequencer_core_metrics::increment_mempool_failed_transactions_total();
+                sequencer_core_metrics::record_mempool_transaction_application_time(
+                    origin.into(),
+                    tx.kind().into(),
+                    sequencer_core_metrics::ApplyStatus::Failed,
+                    before_tx_apply.elapsed(),
+                );
                 // A failed transaction is simply left out of the block, except a
                 // dispatch: that one is re-fed from the store every turn, so one
                 // that can never execute would fail on every block for ever.
@@ -897,6 +933,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             .transition_from_public_transaction(&clock_tx, new_block_height, new_block_timestamp)
             .context("Clock transaction failed. Aborting block production.")?;
         valid_transactions.push(clock_lee_tx);
+        sequencer_core_metrics::record_transactions_per_block(valid_transactions.len());
 
         let hashable_data = HashableBlockData {
             block_id: new_block_height,
@@ -914,6 +951,8 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             hashable_data.transactions.len(),
             now.elapsed().as_secs()
         );
+
+        sequencer_core_metrics::record_block_creation_time(now.elapsed());
 
         Ok(BlockWithMeta { block, withdrawals })
     }
@@ -1159,7 +1198,7 @@ fn apply_follow_update(
 
     // The lock is held across the persist below so disk writes land in apply
     // order — the produce path persists under this same lock.
-    let (resubmit_txs, outcome) = {
+    let (resubmit_txs, outcome, head_height) = {
         let mut chain = chain.lock().expect("chain state mutex poisoned");
 
         // Outcomes align with `adopted`.
@@ -1259,8 +1298,10 @@ fn apply_follow_update(
             })
             .unwrap_or_else(|err| panic!("Failed to persist follow update: {err:#}"));
 
-        (resubmit_txs, outcome)
+        (resubmit_txs, outcome, head_tip.map_or(0, |tip| tip.id))
     };
+
+    sequencer_core_metrics::record_chain_height(head_height);
 
     if outcome.accepted_deposits > 0 {
         info!(

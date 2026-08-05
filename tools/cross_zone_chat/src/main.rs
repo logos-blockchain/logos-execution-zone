@@ -54,7 +54,7 @@ use axum::{
     routing::{get, post},
 };
 use common::{block::BedrockStatus, transaction::LeeTransaction};
-use cross_zone_inbox_core::{CrossZoneConfig, CrossZonePeer, Instruction, ZoneId};
+use cross_zone_inbox_core::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute, Instruction, ZoneId};
 use cross_zone_outbox_core::outbox_pda;
 use lee::{
     ProgramId, PublicTransaction,
@@ -348,7 +348,10 @@ fn watch_peer(peer: ZoneId, receiver_id: ProgramId) -> CrossZoneConfig {
     CrossZoneConfig {
         peers: vec![CrossZonePeer {
             channel_id: peer,
-            allowed_targets: vec![receiver_id],
+            allowed_routes: vec![CrossZoneRoute {
+                src_program_id: programs::ping_sender().id(),
+                target_program_id: receiver_id,
+            }],
             expected_block_signing_pubkey: None,
         }],
     }

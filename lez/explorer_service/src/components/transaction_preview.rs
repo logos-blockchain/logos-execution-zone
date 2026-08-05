@@ -40,8 +40,8 @@ pub fn TransactionPreview(transaction: Transaction) -> impl IntoView {
             } = tx;
             format!(
                 "{} public accounts, {} commitments",
-                message.public_account_ids.len(),
-                message.new_commitments.len()
+                message.public_actions.len(),
+                message.private_actions.len()
             )
         }
         Transaction::ProgramDeployment(tx) => {

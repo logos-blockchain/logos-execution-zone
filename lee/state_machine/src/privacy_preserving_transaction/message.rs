@@ -1,24 +1,27 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    Commitment, CommitmentSetDigest, Nullifier, PrivacyPreservingCircuitOutput,
+    Commitment, CommitmentSetDigest, Nullifier, PrivacyPreservingCircuitOutput, PrivateAction,
     account::{Account, Nonce},
     program::{BlockValidityWindow, TimestampValidityWindow},
 };
 pub use lee_core::{EncryptedAccountData, ViewTag};
 use sha2::{Digest as _, Sha256};
 
-use crate::{AccountId, error::LeeError};
+use crate::AccountId;
 
 const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Privacy/\x00\x00\x00\x00\x00\x00";
 
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PublicActionWithID {
+    pub account_id: AccountId,
+    pub post_state: Account,
+}
+
 #[derive(Clone, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Message {
-    pub public_account_ids: Vec<AccountId>,
+    pub public_actions: Vec<PublicActionWithID>,
     pub nonces: Vec<Nonce>,
-    pub public_post_states: Vec<Account>,
-    pub encrypted_private_post_states: Vec<EncryptedAccountData>,
-    pub new_commitments: Vec<Commitment>,
-    pub new_nullifiers: Vec<(Nullifier, CommitmentSetDigest)>,
+    pub private_actions: Vec<PrivateAction>,
     pub block_validity_window: BlockValidityWindow,
     pub timestamp_validity_window: TimestampValidityWindow,
 }
@@ -31,21 +34,22 @@ impl std::fmt::Debug for Message {
                 write!(f, "{}", hex::encode(self.0))
             }
         }
-        let nullifiers: Vec<_> = self
-            .new_nullifiers
+        let private_actions: Vec<_> = self
+            .private_actions
             .iter()
-            .map(|(n, d)| (n, HexDigest(d)))
+            .map(|a| {
+                (
+                    &a.nullifier,
+                    HexDigest(&a.root),
+                    &a.commitment,
+                    &a.encrypted_post_state,
+                )
+            })
             .collect();
         f.debug_struct("Message")
-            .field("public_account_ids", &self.public_account_ids)
+            .field("public_actions", &self.public_actions)
             .field("nonces", &self.nonces)
-            .field("public_post_states", &self.public_post_states)
-            .field(
-                "encrypted_private_post_states",
-                &self.encrypted_private_post_states,
-            )
-            .field("new_commitments", &self.new_commitments)
-            .field("new_nullifiers", &nullifiers)
+            .field("private_actions", &private_actions)
             .field("block_validity_window", &self.block_validity_window)
             .field("timestamp_validity_window", &self.timestamp_validity_window)
             .finish()
@@ -53,21 +57,47 @@ impl std::fmt::Debug for Message {
 }
 
 impl Message {
-    pub fn try_from_circuit_output(
-        public_account_ids: Vec<AccountId>,
-        nonces: Vec<Nonce>,
-        output: PrivacyPreservingCircuitOutput,
-    ) -> Result<Self, LeeError> {
-        Ok(Self {
-            public_account_ids,
+    #[must_use]
+    pub fn from_circuit_output(nonces: Vec<Nonce>, output: PrivacyPreservingCircuitOutput) -> Self {
+        let public_actions = output
+            .public_actions
+            .into_iter()
+            .map(|action| PublicActionWithID {
+                account_id: action.pre.account_id,
+                post_state: action.post,
+            })
+            .collect();
+        Self {
+            public_actions,
             nonces,
-            public_post_states: output.public_post_states,
-            encrypted_private_post_states: output.encrypted_private_post_states,
-            new_commitments: output.new_commitments,
-            new_nullifiers: output.new_nullifiers,
+            private_actions: output.private_actions,
             block_validity_window: output.block_validity_window,
             timestamp_validity_window: output.timestamp_validity_window,
-        })
+        }
+    }
+
+    #[must_use]
+    pub fn commitments(&self) -> Vec<Commitment> {
+        self.private_actions
+            .iter()
+            .map(|action| action.commitment)
+            .collect()
+    }
+
+    #[must_use]
+    pub fn nullifiers(&self) -> Vec<(Nullifier, CommitmentSetDigest)> {
+        self.private_actions
+            .iter()
+            .map(|action| (action.nullifier, action.root))
+            .collect()
+    }
+
+    #[must_use]
+    pub fn public_account_ids(&self) -> Vec<AccountId> {
+        self.public_actions
+            .iter()
+            .map(|action| action.account_id)
+            .collect()
     }
 
     #[must_use]
@@ -84,34 +114,20 @@ impl Message {
 
         Sha256::digest(bytes).into()
     }
-
-    /// Ensure that the commitments, nullifiers, and ciphertexts agree.
-    pub fn validate_note_lengths(&self) -> Result<usize, LeeError> {
-        let count = self.new_nullifiers.len();
-        if self.new_commitments.len() != count || self.encrypted_private_post_states.len() != count
-        {
-            return Err(LeeError::InvalidInput(format!(
-                "Note vectors disagree in length with {count} nullifiers, {} commitments, and {} ciphertexts",
-                self.new_commitments.len(),
-                self.encrypted_private_post_states.len(),
-            )));
-        }
-        Ok(count)
-    }
 }
 
 #[cfg(test)]
 pub mod tests {
     use lee_core::{
-        Commitment, EncryptionScheme, EphemeralSecretKey, Nullifier, NullifierPublicKey,
-        PrivateAccountKind, SharedSecretKey,
+        Commitment, EncryptionScheme, EphemeralPublicKey, EphemeralSecretKey, Nullifier,
+        NullifierPublicKey, PrivateAccountKind, PrivateAction, SharedSecretKey,
         account::{Account, AccountId, Nonce},
-        encryption::ViewingPublicKey,
+        encryption::{Ciphertext, ViewingPublicKey},
         program::{BlockValidityWindow, TimestampValidityWindow},
     };
     use sha2::{Digest as _, Sha256};
 
-    use super::{EncryptedAccountData, Message, PREFIX};
+    use super::{EncryptedAccountData, Message, PREFIX, PublicActionWithID};
 
     #[must_use]
     pub fn message_for_tests() -> Message {
@@ -125,78 +141,57 @@ pub mod tests {
         let npk2 = NullifierPublicKey::from(&nsk2);
         let vpk = ViewingPublicKey::from_seed(&[7; 32], &[8; 32]);
 
-        let public_account_ids = vec![AccountId::new([1; 32])];
-
         let nonces = vec![1_u128.into(), 2_u128.into(), 3_u128.into()];
 
-        let public_post_states = vec![Account::default()];
-
-        let encrypted_private_post_states = Vec::new();
-
         let account_id2 = lee_core::account::AccountId::for_regular_private_account(&npk2, &vpk, 0);
-        let new_commitments = vec![Commitment::new(&account_id2, &account2)];
+        let commitment = Commitment::new(&account_id2, &account2);
 
         let account_id1 = lee_core::account::AccountId::for_regular_private_account(&npk1, &vpk, 0);
         let old_commitment = Commitment::new(&account_id1, &account1);
-        let new_nullifiers = vec![(
-            Nullifier::for_account_update(&old_commitment, &nsk1),
-            [0; 32],
-        )];
+        let nullifier = Nullifier::for_account_update(&old_commitment, &nsk1);
 
         Message {
-            public_account_ids,
+            public_actions: vec![PublicActionWithID {
+                account_id: AccountId::new([1; 32]),
+                post_state: Account::default(),
+            }],
             nonces,
-            public_post_states,
-            encrypted_private_post_states,
-            new_commitments,
-            new_nullifiers,
+            private_actions: vec![PrivateAction {
+                nullifier,
+                root: [0; 32],
+                commitment,
+                encrypted_post_state: EncryptedAccountData {
+                    ciphertext: Ciphertext::from_inner(vec![]),
+                    epk: EphemeralPublicKey(vec![]),
+                    view_tag: 0,
+                },
+            }],
             block_validity_window: BlockValidityWindow::new_unbounded(),
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
         }
     }
 
     #[test]
-    fn validate_note_lengths_accepts_matching_and_rejects_mismatched() {
-        assert_eq!(Message::default().validate_note_lengths().unwrap(), 0);
-
-        let mismatched = Message {
-            new_commitments: vec![Commitment::new(
-                &AccountId::new([0; 32]),
-                &Account::default(),
-            )],
-            ..Default::default()
-        };
-        assert!(mismatched.validate_note_lengths().is_err());
-    }
-
-    #[test]
     fn hash_privacy_pinned() {
         let msg = Message {
-            public_account_ids: vec![AccountId::new([42_u8; 32])],
+            public_actions: vec![],
             nonces: vec![Nonce(5)],
-            public_post_states: vec![],
-            encrypted_private_post_states: vec![],
-            new_commitments: vec![],
-            new_nullifiers: vec![],
+            private_actions: vec![],
             block_validity_window: BlockValidityWindow::new_unbounded(),
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
         };
 
-        let public_account_ids_bytes: &[u8] = &[42_u8; 32];
+        // empty vec fields: u32 len=0
+        let public_actions_bytes: &[u8] = &[0, 0, 0, 0];
         let nonces_bytes: &[u8] = &[1, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-        // all remaining vec fields are empty: u32 len=0
-        let empty_vec_bytes: &[u8] = &[0_u8; 4];
+        let private_actions_bytes: &[u8] = &[0, 0, 0, 0];
         // validity windows: unbounded = {from: None (0_u8), to: None (0_u8)}
-        let unbounded_window_bytes: &[u8] = &[0_u8; 2];
+        let unbounded_window_bytes: &[u8] = &[0, 0];
 
         let expected_borsh_vec: Vec<u8> = [
-            &[1_u8, 0, 0, 0], // public_account_ids
-            public_account_ids_bytes,
+            public_actions_bytes,
             nonces_bytes,
-            empty_vec_bytes,        // public_post_state
-            empty_vec_bytes,        // encrypted_private_post_states
-            empty_vec_bytes,        // new_commitments
-            empty_vec_bytes,        // new_nullifiers
+            private_actions_bytes,
             unbounded_window_bytes, // block_validity_window
             unbounded_window_bytes, // timestamp_validity_window
         ]

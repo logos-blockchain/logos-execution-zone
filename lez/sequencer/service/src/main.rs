@@ -3,9 +3,10 @@ use std::{
     path::PathBuf,
 };
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use clap::Parser;
 use log::{error, info};
+use metrics_exporter_prometheus::{Matcher, PrometheusBuilder};
 use tokio::signal::unix::{SignalKind, signal};
 use tokio_util::sync::CancellationToken;
 
@@ -24,6 +25,10 @@ struct Args {
     /// so multiple instances can share one config file.
     #[clap(long)]
     home: Option<PathBuf>,
+    /// Override the config's `metrics_address`, so multiple instances can share
+    /// one config file without fighting over the exporter port.
+    #[clap(long)]
+    metrics_address: Option<SocketAddr>,
 }
 
 #[tokio::main]
@@ -34,21 +39,18 @@ struct Args {
 async fn main() -> Result<()> {
     env_logger::init();
 
-    let Args {
-        config_path,
-        port,
-        listen_address,
-        home,
-    } = Args::parse();
+    let args = Args::parse();
 
     let cancellation_token = listen_for_shutdown_signal();
 
-    let mut config = sequencer_service::SequencerConfig::from_path(&config_path)?;
-    if let Some(home) = home {
-        config.home = home;
+    let mut config = sequencer_service::SequencerConfig::from_path(&args.config_path)?;
+    apply_config_overrides(&args, &mut config);
+
+    if let Some(metrics_address) = config.metrics_address {
+        install_prometheus_recorder(metrics_address)?;
     }
     let mut sequencer_handle =
-        sequencer_service::run(config, SocketAddr::new(listen_address, port)).await?;
+        sequencer_service::run(config, SocketAddr::new(args.listen_address, args.port)).await?;
 
     tokio::select! {
         () = cancellation_token.cancelled() => {
@@ -69,6 +71,45 @@ async fn main() -> Result<()> {
     info!("Sequencer shutdown complete");
 
     Ok(())
+}
+
+fn apply_config_overrides(args: &Args, config: &mut sequencer_service::SequencerConfig) {
+    let Args {
+        home,
+        metrics_address,
+        config_path: _,
+        port: _,
+        listen_address: _,
+    } = args;
+
+    if let Some(home) = home {
+        config.home.clone_from(home);
+    }
+    if let Some(metrics_address) = metrics_address {
+        config.metrics_address = Some(*metrics_address);
+    }
+}
+
+/// Installs the recorder on `metrics_address`.
+fn install_prometheus_recorder(metrics_address: SocketAddr) -> Result<()> {
+    /// Ladder for `*_seconds` histograms, densest across the 1–100 ms band where
+    /// block production and transaction application actually land.
+    const LATENCY_BUCKETS: &[f64] = &[
+        0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+    ];
+
+    /// Fallback ladder for histograms that count things rather than measure time.
+    const COUNT_BUCKETS: &[f64] = &[1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0, 1000.0];
+
+    PrometheusBuilder::new()
+        .with_http_listener(metrics_address)
+        .with_recommended_naming(true)
+        .set_buckets(COUNT_BUCKETS)
+        .context("Failed to set default histogram buckets")?
+        .set_buckets_for_metric(Matcher::Suffix("_seconds".to_owned()), LATENCY_BUCKETS)
+        .context("Failed to set latency histogram buckets")?
+        .install()
+        .context("Failed to install Prometheus recorder")
 }
 
 /// Cancelled on Ctrl-C or `SIGTERM`.
