@@ -158,6 +158,14 @@ mod test_methods {
     }
 
     #[must_use]
+    pub const fn non_claiming_pda_delegator() -> Program {
+        Program::new_unchecked(
+            test_methods::NON_CLAIMING_PDA_DELEGATOR_ID,
+            Cow::Borrowed(test_methods::NON_CLAIMING_PDA_DELEGATOR_ELF),
+        )
+    }
+
+    #[must_use]
     pub const fn pda_claimer() -> Program {
         Program::new_unchecked(
             test_methods::PDA_CLAIMER_ID,

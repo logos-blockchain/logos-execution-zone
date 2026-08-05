@@ -1144,10 +1144,6 @@ fn private_unauthorized_uninitialized_account_can_still_be_claimed() {
     let mut state = V03State::new().with_test_programs();
 
     let private_keys = test_private_account_keys_1();
-    // This is intentional: claim authorization was introduced to protect public accounts,
-    // especially PDAs. Private PDAs are not useful in practice because there is no way to
-    // operate them without the corresponding private keys, so unauthorized private claiming
-    // remains allowed.
     let unauthorized_account = AccountWithMetadata::new(
         Account::default(),
         true,
@@ -1539,4 +1535,88 @@ fn two_private_pda_family_members_receive_and_spend() {
     }
 
     assert_eq!(state.get_account_by_id(recipient_id).balance, amount);
+}
+
+#[test]
+fn unbound_private_pda_cannot_be_claimed_undelegated() {
+    let program = crate::test_methods::claimer();
+    let keys = test_private_account_keys_1();
+    let npk = keys.npk();
+    let seed = PdaSeed::new([88; 32]);
+    let account_id = AccountId::for_private_pda(&program.id(), &seed, &npk, &keys.vpk(), 0);
+    let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
+
+    let result = execute_and_prove(
+        vec![pre_state],
+        Program::serialize_instruction(()).unwrap(),
+        vec![InputAccountIdentity::Private(PrivateWitness {
+            vpk: keys.vpk(),
+            random_seed: [0; 32],
+            identifier: 0,
+            kind: WitnessKind::Pda { binding: None },
+            nullifier: NullifierWitness::Init {
+                npk,
+                commitment_root: DUMMY_COMMITMENT_HASH,
+            },
+        })],
+        &program.into(),
+    );
+
+    let Err(LeeError::CircuitProvingError(message)) = result else {
+        panic!("an unexhibited private PDA must not be claimed undelegated");
+    };
+    assert!(
+        message.contains(&format!("Unproven claim for account {account_id}")),
+        "claim arm did not reject; got: {message}"
+    );
+}
+
+#[test]
+fn sibling_bound_private_pda_cannot_be_claimed_undelegated() {
+    let delegator = crate::test_methods::non_claiming_pda_delegator();
+    let delegatee = crate::test_methods::noop();
+    let claimer = crate::test_methods::claimer();
+    let keys = test_private_account_keys_1();
+    let npk = keys.npk();
+    let seed = PdaSeed::new([77; 32]);
+
+    let account_id = AccountId::for_private_pda(&delegator.id(), &seed, &npk, &keys.vpk(), 0);
+    let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
+
+    let delegatee_id = delegatee.id();
+    let claimer_id = claimer.id();
+    let program_with_deps = ProgramWithDependencies::new(
+        delegator,
+        [(delegatee_id, delegatee), (claimer_id, claimer)].into(),
+    );
+
+    let result = execute_and_prove(
+        vec![pre_state],
+        Program::serialize_instruction((
+            seed,
+            delegatee_id,
+            claimer_id,
+            Program::serialize_instruction(()).unwrap(),
+        ))
+        .unwrap(),
+        vec![InputAccountIdentity::Private(PrivateWitness {
+            vpk: keys.vpk(),
+            random_seed: [0; 32],
+            identifier: 0,
+            kind: WitnessKind::Pda { binding: None },
+            nullifier: NullifierWitness::Init {
+                npk,
+                commitment_root: DUMMY_COMMITMENT_HASH,
+            },
+        })],
+        &program_with_deps,
+    );
+
+    let Err(LeeError::CircuitProvingError(message)) = result else {
+        panic!("a sibling-bound private PDA must not be claimed by an undelegated call");
+    };
+    assert!(
+        message.contains(&format!("Unproven claim for account {account_id}")),
+        "claim arm did not reject; got: {message}"
+    );
 }

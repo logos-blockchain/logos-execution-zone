@@ -209,10 +209,9 @@ impl ValidatedStateDiff {
 
                 match claim {
                     Claim::Key => {
-                        // The program can only claim accounts that were authorized by the signer.
                         ensure!(
                             pre.is_authorized,
-                            InvalidProgramBehaviorError::ClaimedUnauthorizedAccount { account_id }
+                            InvalidProgramBehaviorError::UnprovenAccountClaim { account_id }
                         );
                     }
                     Claim::Pda(seed) => {

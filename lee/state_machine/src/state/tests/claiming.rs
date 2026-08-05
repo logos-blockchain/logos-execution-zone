@@ -621,3 +621,88 @@ fn malicious_program_cannot_break_balance_validation_if_not_in_genesis() {
     assert_eq!(expected_sender_post, sender_post);
     assert_eq!(expected_recipient_post, recipient_post);
 }
+
+fn uniform_claim_accepted_publicly(authorized: bool) -> bool {
+    let program = crate::test_methods::claimer();
+    let account_key = PrivateKey::try_new([21; 32]).unwrap();
+    let account_id = AccountId::from(&PublicKey::new_from_private_key(&account_key));
+    let mut state = V03State::new().with_test_programs();
+
+    let nonces = if authorized { vec![Nonce(0)] } else { vec![] };
+    let keys: Vec<&PrivateKey> = if authorized {
+        vec![&account_key]
+    } else {
+        vec![]
+    };
+
+    let message =
+        public_transaction::Message::try_new(program.id(), vec![account_id], nonces, ()).unwrap();
+    let witness_set = public_transaction::WitnessSet::for_message(&message, &keys);
+    let tx = PublicTransaction::new(message, witness_set);
+
+    state.transition_from_public_transaction(&tx, 1, 0).is_ok()
+}
+
+fn uniform_claim_accepted_privately(authorized: bool) -> bool {
+    let program = crate::test_methods::claimer();
+    let account_key = PrivateKey::try_new([21; 32]).unwrap();
+    let account_id = AccountId::from(&PublicKey::new_from_private_key(&account_key));
+    let account = AccountWithMetadata::new(Account::default(), authorized, account_id);
+
+    execute_and_prove(
+        vec![account],
+        Program::serialize_instruction(()).unwrap(),
+        vec![InputAccountIdentity::Public],
+        &program.into(),
+    )
+    .is_ok()
+}
+
+#[test]
+fn claim_rule_is_uniform_across_paths() {
+    assert_eq!(
+        uniform_claim_accepted_publicly(false),
+        uniform_claim_accepted_privately(false),
+        "the two paths disagree on an unauthorized public account"
+    );
+    assert_eq!(
+        uniform_claim_accepted_publicly(true),
+        uniform_claim_accepted_privately(true),
+        "the two paths disagree on an authorized public account"
+    );
+    assert!(!uniform_claim_accepted_publicly(false));
+    assert!(uniform_claim_accepted_publicly(true));
+}
+
+#[test]
+fn delegated_pda_claim_survives_with_no_signer() {
+    let chain_caller = crate::test_methods::chain_caller();
+    let simple_transfer = crate::test_methods::simple_balance_transfer();
+    let pda_seed = PdaSeed::new([37; 32]);
+    let pda_id = AccountId::for_public_pda(&chain_caller.id(), &pda_seed);
+    let recipient_id = AccountId::new([2; 32]);
+    let mut state = V03State::new()
+        .with_public_accounts(public_state_from_balances(&[(recipient_id, 0)]))
+        .with_test_programs();
+
+    assert_eq!(state.get_account_by_id(pda_id), Account::default());
+
+    let instruction: (u128, ProgramId, u32, Option<PdaSeed>) =
+        (0, simple_transfer.id(), 1, Some(pda_seed));
+    let message = public_transaction::Message::try_new(
+        chain_caller.id(),
+        vec![recipient_id, pda_id],
+        vec![],
+        instruction,
+    )
+    .unwrap();
+    let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+    let tx = PublicTransaction::new(message, witness_set);
+
+    state.transition_from_public_transaction(&tx, 1, 0).unwrap();
+
+    assert_eq!(
+        state.get_account_by_id(pda_id).program_owner,
+        simple_transfer.id()
+    );
+}

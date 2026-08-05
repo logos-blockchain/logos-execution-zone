@@ -52,6 +52,7 @@ pub struct ExecutionState {
     /// pre_state.account_id`.
     private_pda_by_position: HashMap<usize, (NullifierPublicKey, ViewingPublicKey, Identifier)>,
     globally_authorized: HashSet<AccountId>,
+    witness_derived_accounts: HashSet<AccountId>,
 }
 
 impl ExecutionState {
@@ -69,9 +70,40 @@ impl ExecutionState {
             usize,
             (NullifierPublicKey, ViewingPublicKey, Identifier),
         > = HashMap::new();
+        let mut witness_derived_accounts: HashSet<AccountId> = HashSet::new();
         for (pos, account_identity) in account_identities.iter().enumerate() {
             if let Some((npk, vpk, identifier)) = account_identity.npk_vpk_if_private_pda() {
                 private_pda_by_position.insert(pos, (npk, vpk, identifier));
+            }
+            if let InputAccountIdentity::Private(PrivateWitness {
+                vpk,
+                identifier,
+                kind,
+                nullifier,
+                ..
+            }) = account_identity
+            {
+                match kind {
+                    WitnessKind::Regular { .. } => {
+                        witness_derived_accounts.insert(AccountId::for_regular_private_account(
+                            &nullifier.npk(),
+                            vpk,
+                            *identifier,
+                        ));
+                    }
+                    WitnessKind::Pda {
+                        binding: Some((authority_program_id, seed)),
+                    } => {
+                        witness_derived_accounts.insert(AccountId::for_private_pda(
+                            authority_program_id,
+                            seed,
+                            &nullifier.npk(),
+                            vpk,
+                            *identifier,
+                        ));
+                    }
+                    WitnessKind::Pda { binding: None } => {}
+                }
             }
         }
 
@@ -113,6 +145,7 @@ impl ExecutionState {
             pda_family_binding: HashMap::new(),
             private_pda_by_position,
             globally_authorized: HashSet::new(),
+            witness_derived_accounts,
         };
 
         let Some(first_output) = program_outputs.first() else {
@@ -399,67 +432,45 @@ impl ExecutionState {
                     .position(|acc| acc.account_id == pre_account_id)
                     .expect("Pre state must exist at this point");
 
-                let account_identity = &account_identities[pre_state_position];
-                if account_identity.is_public() {
-                    match claim {
-                        Claim::Key => {
-                            // Note: no need to check authorized pdas because we have already
-                            // checked consistency of authorization above.
-                            assert!(
-                                pre_is_authorized,
-                                "Cannot claim unauthorized account {pre_account_id}"
-                            );
-                        }
-                        Claim::Pda(seed) => {
-                            let pda = AccountId::for_public_pda(&program_id, &seed);
-                            assert_eq!(
-                                pre_account_id, pda,
-                                "Invalid PDA claim for account {pre_account_id} which does not match derived PDA {pda}"
-                            );
-                            assert_family_binding(
-                                &mut self.pda_family_binding,
-                                program_id,
-                                seed,
-                                pre_account_id,
-                            );
-                        }
-                    }
-                } else {
-                    // Private accounts: don't enforce the claim semantics. Unauthorized private
-                    // claiming is intentionally allowed
-                    match claim {
-                        Claim::Key => {}
-                        Claim::Pda(seed) => {
-                            let (npk, vpk, identifier) = self
-                                .private_pda_by_position
-                                .get(&pre_state_position)
-                                .expect(
-                                    "private PDA pre_state must have an npk in the position map",
-                                );
-                            let pda = AccountId::for_private_pda(
-                                &program_id,
-                                &seed,
-                                npk,
-                                vpk,
-                                *identifier,
-                            );
-                            assert_eq!(
-                                pre_account_id, pda,
-                                "Invalid private PDA claim for account {pre_account_id}"
-                            );
+                match claim {
+                    Claim::Key => assert!(
+                        pre_is_authorized
+                            || self.witness_derived_accounts.contains(&pre_account_id),
+                        "Unproven claim for account {pre_account_id}"
+                    ),
+                    Claim::Pda(seed) => {
+                        let (pda, is_private_pda_position) =
+                            match self.private_pda_by_position.get(&pre_state_position) {
+                                Some((npk, vpk, identifier)) => (
+                                    AccountId::for_private_pda(
+                                        &program_id,
+                                        &seed,
+                                        npk,
+                                        vpk,
+                                        *identifier,
+                                    ),
+                                    true,
+                                ),
+                                None => (AccountId::for_public_pda(&program_id, &seed), false),
+                            };
+                        assert_eq!(
+                            pre_account_id, pda,
+                            "Invalid PDA claim for account {pre_account_id} which does not match derived PDA {pda}"
+                        );
+                        if is_private_pda_position {
                             bind_private_pda_position(
                                 &mut self.private_pda_bound_positions,
                                 pre_state_position,
                                 program_id,
                                 seed,
                             );
-                            assert_family_binding(
-                                &mut self.pda_family_binding,
-                                program_id,
-                                seed,
-                                pre_account_id,
-                            );
                         }
+                        assert_family_binding(
+                            &mut self.pda_family_binding,
+                            program_id,
+                            seed,
+                            pre_account_id,
+                        );
                     }
                 }
 
