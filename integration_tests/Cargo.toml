@@ -44,3 +44,5 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 hex.workspace = true
 tempfile.workspace = true
 bytesize.workspace = true
+
+env_logger.workspace = true

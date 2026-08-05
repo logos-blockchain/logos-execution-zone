@@ -41,6 +41,8 @@ const RECIPIENT: [u8; 32] = [9; 32];
 
 #[test]
 async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
+    env_logger::init();
+
     // Declared first so it outlives both zones (drops run in reverse order).
     let (_bedrock, bedrock_addr) = setup_bedrock_node()
         .await
@@ -78,6 +80,9 @@ async fn lock_on_zone_a_mints_wrapped_token_on_zone_b() -> Result<()> {
         .setup()
         .await
         .context("Failed to set up zone A sequencer")?;
+    let (_idx_a, _idx_a_home) = setup_indexer(bedrock_addr, channel_a, None)
+        .await
+        .context("Failed to set up zone A indexer")?;
     let (_seq_b, _seq_b_home) = SequencerSetup::new(partial, bedrock_addr)
         .with_channel_id(channel_b)
         .with_genesis(vec![])
