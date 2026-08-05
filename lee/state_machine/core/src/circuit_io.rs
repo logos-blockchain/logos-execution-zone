@@ -54,15 +54,12 @@ pub enum WitnessKind {
     /// Private PDA. The npk-to-account_id binding is proven upstream via `Claim::Pda(seed)` or a
     /// caller's `pda_seeds` match. The identifier diversifies the PDA within the
     /// `(program_id, seed, npk)` family: `AccountId::for_private_pda` uses it as the 4th input.
-    /// An init is unauthorized; on an update, authorization may be established upstream by a
-    /// caller `pda_seeds` match or a previously-seen authorization in a chained call.
     Pda {
         /// When `Some((authority_program_id, seed))`, the circuit binds this position via the
         /// external derivation check
         /// `AccountId::for_private_pda(authority_program_id, seed, npk, vpk, identifier) ==
         /// pre_state.account_id` rather than requiring a `Claim::Pda` or caller
-        /// `pda_seeds` to establish the binding. The `pre_state` must have `is_authorized
-        /// == false`.
+        /// `pda_seeds` to establish the binding.
         binding: Option<(ProgramId, PdaSeed)>,
     },
 }

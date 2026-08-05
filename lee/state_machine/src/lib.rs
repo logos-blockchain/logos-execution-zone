@@ -142,6 +142,14 @@ mod test_methods {
     }
 
     #[must_use]
+    pub const fn undeclaring_pda_delegator() -> Program {
+        Program::new_unchecked(
+            test_methods::UNDECLARING_PDA_DELEGATOR_ID,
+            Cow::Borrowed(test_methods::UNDECLARING_PDA_DELEGATOR_ELF),
+        )
+    }
+
+    #[must_use]
     pub const fn non_delegating_forwarder() -> Program {
         Program::new_unchecked(
             test_methods::NON_DELEGATING_FORWARDER_ID,

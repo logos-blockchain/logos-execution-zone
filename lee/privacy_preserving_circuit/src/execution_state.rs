@@ -300,21 +300,16 @@ impl ExecutionState {
                             )
                         });
 
-                    let is_authorized = resolve_authorization_and_record_bindings(
+                    assert_authorization_and_record_bindings(
                         &mut self.pda_family_binding,
                         &mut self.private_pda_bound_positions,
                         &self.private_pda_by_position,
                         &self.globally_authorized,
-                        &caller.authorized_accounts,
+                        &caller,
+                        caller_pda_seeds,
                         pre_account_id,
                         pre_state_position,
-                        caller.program_id,
-                        caller_pda_seeds,
-                    );
-
-                    assert_eq!(
-                        pre_is_authorized, is_authorized,
-                        "Inconsistent authorization for account {pre_account_id}",
+                        pre_is_authorized,
                     );
                 }
                 Entry::Vacant(_) => {
@@ -350,10 +345,6 @@ impl ExecutionState {
                     // Subsequent calls need no re-check because the entry is already recorded on
                     // private_pda_bound_positions.
                     if let Some((authority_program_id, seed)) = external_seed {
-                        assert!(
-                            !pre.is_authorized,
-                            "Private PDA with externally-provided seed must not be authorized at position {pre_state_position}"
-                        );
                         bind_private_pda_position(
                             &mut self.private_pda_bound_positions,
                             pre_state_position,
@@ -367,11 +358,23 @@ impl ExecutionState {
                             pre_account_id,
                         );
                     }
-                    if pre_is_authorized
-                        && !self
-                            .private_pda_by_position
-                            .contains_key(&pre_state_position)
-                    {
+                    let is_private_pda = self
+                        .private_pda_by_position
+                        .contains_key(&pre_state_position);
+                    if is_private_pda {
+                        assert_authorization_and_record_bindings(
+                            &mut self.pda_family_binding,
+                            &mut self.private_pda_bound_positions,
+                            &self.private_pda_by_position,
+                            &self.globally_authorized,
+                            &caller,
+                            caller_pda_seeds,
+                            pre_account_id,
+                            pre_state_position,
+                            pre_is_authorized,
+                        );
+                    }
+                    if pre_is_authorized && !is_private_pda {
                         self.globally_authorized.insert(pre_account_id);
                     }
                     self.pre_states.push(pre);
@@ -554,58 +557,60 @@ fn bind_private_pda_position(
     }
 }
 
-/// Resolve the authorization state of a `pre_state` seen again in a chained call and record
-/// any resulting bindings. When a caller seed matches, also records the
-/// `(caller, seed) → account_id` family binding and, for the private form, marks the position
-/// in `private_pda_bound_positions`. Only reachable when `caller_program_id.is_some()`,
-/// top-level flows have no caller-emitted seeds, so binding at top level must come from the
-/// claim path. Free function so callers can pass individual `&mut self.*` field borrows
-/// without holding a borrow on the surrounding struct's other fields.
+/// When a caller seed matches, also records the `(caller, seed) → account_id` family binding
+/// and, for the private form, marks the position in `private_pda_bound_positions`. Free
+/// function so callers can pass individual `&mut self.*` field borrows without holding a borrow
+/// on the surrounding struct's other fields.
 #[expect(
     clippy::too_many_arguments,
     reason = "breaking out a context struct does not buy us anything here"
 )]
-fn resolve_authorization_and_record_bindings(
+fn assert_authorization_and_record_bindings(
     pda_family_binding: &mut HashMap<(ProgramId, PdaSeed), AccountId>,
     private_pda_bound_positions: &mut HashMap<usize, (ProgramId, PdaSeed)>,
     private_pda_by_position: &HashMap<usize, (NullifierPublicKey, ViewingPublicKey, Identifier)>,
     globally_authorized: &HashSet<AccountId>,
-    caller_authorized: &HashSet<AccountId>,
+    caller: &CallerData,
+    caller_pda_seeds: &[PdaSeed],
     pre_account_id: AccountId,
     pre_state_position: usize,
-    caller_program_id: Option<ProgramId>,
-    caller_pda_seeds: &[PdaSeed],
-) -> bool {
+    pre_is_authorized: bool,
+) {
     let matched_caller_seed: Option<(PdaSeed, bool, ProgramId)> =
-        caller_program_id.and_then(|caller| {
+        caller.program_id.and_then(|caller_program_id| {
             caller_pda_seeds.iter().find_map(|seed| {
-                if AccountId::for_public_pda(&caller, seed) == pre_account_id {
-                    return Some((*seed, false, caller));
+                if AccountId::for_public_pda(&caller_program_id, seed) == pre_account_id {
+                    return Some((*seed, false, caller_program_id));
                 }
                 if let Some((npk, vpk, identifier)) =
                     private_pda_by_position.get(&pre_state_position)
-                    && AccountId::for_private_pda(&caller, seed, npk, vpk, *identifier)
+                    && AccountId::for_private_pda(&caller_program_id, seed, npk, vpk, *identifier)
                         == pre_account_id
                 {
-                    return Some((*seed, true, caller));
+                    return Some((*seed, true, caller_program_id));
                 }
                 None
             })
         });
 
-    if let Some((seed, is_private_form, caller)) = matched_caller_seed {
-        assert_family_binding(pda_family_binding, caller, seed, pre_account_id);
+    if let Some((seed, is_private_form, caller_program_id)) = matched_caller_seed {
+        assert_family_binding(pda_family_binding, caller_program_id, seed, pre_account_id);
         if is_private_form {
             bind_private_pda_position(
                 private_pda_bound_positions,
                 pre_state_position,
-                caller,
+                caller_program_id,
                 seed,
             );
         }
     }
 
-    matched_caller_seed.is_some()
+    let is_authorized = matched_caller_seed.is_some()
         || globally_authorized.contains(&pre_account_id)
-        || caller_authorized.contains(&pre_account_id)
+        || caller.authorized_accounts.contains(&pre_account_id);
+
+    assert_eq!(
+        pre_is_authorized, is_authorized,
+        "Inconsistent authorization for account {pre_account_id}",
+    );
 }
