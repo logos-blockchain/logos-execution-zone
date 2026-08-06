@@ -13,7 +13,7 @@
 //!   [prize: u64 LE | `cooldown_ms`: u64 LE | `last_claim_timestamp`: u64 LE].
 
 use clock_core::{CLOCK_01_PROGRAM_ACCOUNT_ID, ClockAccountData};
-use lee_core::program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::program::{AccountPostState, ProgramInput, ProgramOutput, read_lee_inputs};
 
 type Instruction = ();
 
@@ -107,7 +107,7 @@ fn main() {
         instruction_words,
         vec![pinata, winner, clock_pre],
         vec![
-            AccountPostState::new_claimed_if_default(pinata_post, Claim::Authorized),
+            AccountPostState::new(pinata_post),
             AccountPostState::new(winner_post),
             AccountPostState::new(clock_post),
         ],

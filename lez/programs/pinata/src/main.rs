@@ -1,4 +1,4 @@
-use lee_core::program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::program::{AccountPostState, ProgramInput, ProgramOutput, read_lee_inputs};
 use risc0_zkvm::sha::{Impl, Sha256 as _};
 
 const PRIZE: u128 = 150;
@@ -86,7 +86,7 @@ fn main() {
         instruction_words,
         vec![pinata, winner],
         vec![
-            AccountPostState::new_claimed_if_default(pinata_post, Claim::Authorized),
+            AccountPostState::new(pinata_post),
             AccountPostState::new(winner_post),
         ],
     )
