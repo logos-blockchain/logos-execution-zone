@@ -414,7 +414,7 @@ async fn wait_for_account_balance(
 /// withdraw test depends on the deposit to set up the necessary state (deposited funds) for
 /// testing withdraw functionality.
 #[test]
-async fn bedrock_deposit_claim_and_withdraw_round_trip_succeeds() -> anyhow::Result<()> {
+async fn bedrock_deposit_and_withdraw_round_trip_succeeds() -> anyhow::Result<()> {
     let mut ctx = TestContext::new().await?;
 
     let bedrock_account_pk = "2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26";

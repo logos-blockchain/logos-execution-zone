@@ -419,6 +419,11 @@ async fn an_orphaned_deposit_is_reminted_exactly_once_in_the_replacement() {
         initial_public_user_accounts()[0].balance + u128::from(amount),
         "the recipient is credited exactly once across the reorg"
     );
+    assert_eq!(
+        sequencer.with_state(|s| s.get_account_by_id(recipient_id).program_owner),
+        lee_core::program::DEFAULT_PROGRAM_ID,
+        "a deposit credits the recipient without claiming it"
+    );
 }
 
 #[tokio::test]
@@ -472,6 +477,11 @@ async fn a_replayed_deposit_mint_no_ops_in_the_guest() {
         state.get_account_by_id(recipient_id).balance,
         initial_public_user_accounts()[0].balance + u128::from(amount),
         "a replayed deposit must not re-credit the recipient"
+    );
+    assert_eq!(
+        state.get_account_by_id(recipient_id).program_owner,
+        lee_core::program::DEFAULT_PROGRAM_ID,
+        "a deposit credits the recipient without claiming it"
     );
 }
 

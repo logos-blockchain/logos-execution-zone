@@ -14,6 +14,7 @@ use integration_tests::{
 };
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use lee::AccountId;
+use lee_core::program::DEFAULT_PROGRAM_ID;
 use log::info;
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
@@ -138,14 +139,8 @@ async fn restore_keys_from_seed() -> Result<()> {
     assert_public_account_restored(&ctx, to_account_id3, "Acc 3");
     assert_public_account_restored(&ctx, to_account_id4, "Acc 4");
 
-    assert_eq!(
-        acc1.account.program_owner,
-        programs::authenticated_transfer().id()
-    );
-    assert_eq!(
-        acc2.account.program_owner,
-        programs::authenticated_transfer().id()
-    );
+    assert_eq!(acc1.account.program_owner, DEFAULT_PROGRAM_ID);
+    assert_eq!(acc2.account.program_owner, DEFAULT_PROGRAM_ID);
 
     assert_eq!(acc1.account.balance, 100);
     assert_eq!(acc2.account.balance, 101);

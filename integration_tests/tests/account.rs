@@ -7,7 +7,7 @@ use anyhow::{Context as _, Result};
 use integration_tests::{TestContext, get_account, new_account, private_mention};
 use key_protocol::key_management::KeyChain;
 use lee::Data;
-use lee_core::account::Nonce;
+use lee_core::{account::Nonce, program::DEFAULT_PROGRAM_ID};
 use log::info;
 use tokio::test;
 use wallet::{
@@ -25,13 +25,10 @@ async fn get_existing_account() -> Result<()> {
 
     let account = get_account(&ctx, ctx.existing_public_accounts()[0]).await?;
 
-    assert_eq!(
-        account.program_owner,
-        programs::authenticated_transfer().id()
-    );
+    assert_eq!(account.program_owner, DEFAULT_PROGRAM_ID);
     assert_eq!(account.balance, 10000);
     assert!(account.data.is_empty());
-    assert_eq!(account.nonce.0, 1);
+    assert_eq!(account.nonce.0, 0);
 
     info!("Successfully retrieved account with correct details");
 

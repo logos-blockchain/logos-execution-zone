@@ -26,6 +26,7 @@ use lee::{
     Account, AccountId, PrivateKey, PublicKey,
     privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
 };
+use lee_core::program::DEFAULT_PROGRAM_ID;
 use log::info;
 use wallet::account::HumanReadableAccount;
 use wallet_ffi::{
@@ -589,13 +590,10 @@ fn test_wallet_ffi_get_account_public() -> Result<()> {
         (&out_account).try_into().unwrap()
     };
 
-    assert_eq!(
-        account.program_owner,
-        programs::authenticated_transfer().id()
-    );
+    assert_eq!(account.program_owner, DEFAULT_PROGRAM_ID);
     assert_eq!(account.balance, 10000);
     assert!(account.data.is_empty());
-    assert_eq!(account.nonce.0, 1);
+    assert_eq!(account.nonce.0, 0);
 
     unsafe {
         wallet_ffi_free_account_data(&raw mut out_account);
@@ -629,10 +627,7 @@ fn test_wallet_ffi_get_account_private() -> Result<()> {
         (&out_account).try_into().unwrap()
     };
 
-    assert_eq!(
-        account.program_owner,
-        programs::authenticated_transfer().id()
-    );
+    assert_eq!(account.program_owner, DEFAULT_PROGRAM_ID);
     assert_eq!(account.balance, 10000);
     assert!(account.data.is_empty());
 
