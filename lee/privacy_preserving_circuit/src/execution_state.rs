@@ -417,10 +417,13 @@ impl ExecutionState {
                         }
                     }
                 } else {
-                    // Private accounts: don't enforce the claim semantics. Unauthorized private
-                    // claiming is intentionally allowed
                     match claim {
-                        Claim::Authorized => {}
+                        Claim::Authorized => {
+                            assert!(
+                                pre_is_authorized,
+                                "Cannot claim unauthorized private account {pre_account_id}"
+                            );
+                        }
                         Claim::Pda(seed) => {
                             let (npk, vpk, identifier) = self
                                 .private_pda_by_position
