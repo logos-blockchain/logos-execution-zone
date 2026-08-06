@@ -1125,18 +1125,12 @@ fn build_supply_account_genesis_transaction(
     balance: u128,
 ) -> PublicTransaction {
     let faucet_program_id = programs::faucet().id();
-    let vault_program_id = programs::vault().id();
-    let recipient_vault_id = vault_core::compute_vault_account_id(vault_program_id, *account_id);
 
     let message = Message::try_new(
         faucet_program_id,
-        vec![system_accounts::faucet_account_id(), recipient_vault_id],
+        vec![system_accounts::faucet_account_id(), *account_id],
         vec![],
-        faucet_core::Instruction::GenesisTransferVault {
-            vault_program_id,
-            recipient_id: *account_id,
-            amount: balance,
-        },
+        faucet_core::Instruction::GenesisTransferDirect { amount: balance },
     )
     .expect("Failed to serialize genesis transfer instruction");
     let witness_set = lee::public_transaction::WitnessSet::from_raw_parts(vec![]);
