@@ -171,8 +171,6 @@ cargo install --path lez/wallet --force
 |-----------------------|--------------------------------------------------------------------------|
 | `wallet pinata claim` | Claims a testnet pinata reward to a public or private recipient account  |
 
-Note: The recipient account must already hold balance before claiming.
-
 `--to` accepts any of:
 - A BIP32 key path — uses Keycard (e.g. `m/44'/60'/0'/0/0`)
 - An account ID with privacy prefix (e.g. `Public/9bKm...`)
