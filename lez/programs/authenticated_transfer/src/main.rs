@@ -1,9 +1,7 @@
 use authenticated_transfer_core::Instruction;
 use lee_core::{
     account::{Account, AccountWithMetadata},
-    program::{
-        AccountPostState, Claim, DEFAULT_PROGRAM_ID, ProgramInput, ProgramOutput, read_lee_inputs,
-    },
+    program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_lee_inputs},
 };
 
 /// Initializes a default account under the ownership of this program.
@@ -47,12 +45,7 @@ fn transfer(
             .checked_add(balance_to_move)
             .expect("Recipient balance overflow");
 
-        // Claim recipient account if it has default program owner
-        if recipient_post_account.program_owner == DEFAULT_PROGRAM_ID {
-            AccountPostState::new_claimed(recipient_post_account, Claim::Authorized)
-        } else {
-            AccountPostState::new(recipient_post_account)
-        }
+        AccountPostState::new(recipient_post_account)
     };
 
     vec![sender_post, recipient_post]
