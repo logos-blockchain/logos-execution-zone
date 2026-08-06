@@ -1,7 +1,11 @@
 use common::HashType;
 use lee::{AccountId, program::Program};
-use lee_core::{Identifier, NullifierPublicKey, SharedSecretKey, encryption::ViewingPublicKey};
-use token_core::Instruction;
+use lee_core::{
+    Identifier, NullifierPublicKey, PrivateAccountKind, SharedSecretKey,
+    encryption::ViewingPublicKey, program::PdaSeed,
+};
+use rand::{RngCore as _, rngs::OsRng};
+use token_core::{Instruction, TokenHolding};
 
 use crate::{AccountIdentity, ExecutionFailureKind, WalletCore};
 
@@ -188,8 +192,36 @@ impl Token<'_> {
         recipient_identifier: Identifier,
         amount: u128,
     ) -> Result<(HashType, [SharedSecretKey; 2]), ExecutionFailureKind> {
-        let instruction = Instruction::Transfer {
-            amount_to_transfer: amount,
+        let (definition_id, sender_seed) = {
+            let sender = self
+                .0
+                .storage()
+                .key_chain()
+                .private_account(sender_account_id)
+                .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
+            let definition_id = TokenHolding::try_from(&sender.account.data)
+                .map_err(|_err| ExecutionFailureKind::AccountDataError(sender_account_id))?
+                .definition_id();
+            let PrivateAccountKind::Pda { seed, .. } = sender.kind else {
+                return Err(ExecutionFailureKind::AccountDataError(sender_account_id));
+            };
+            (definition_id, *seed)
+        };
+
+        let mut recipient_seed = [0; 32];
+        OsRng.fill_bytes(&mut recipient_seed);
+        let recipient_seed = PdaSeed::new(recipient_seed);
+        let recipient_id = AccountId::for_private_pda(
+            &programs::ata().id(),
+            &recipient_seed,
+            &recipient_npk,
+            &recipient_vpk,
+            recipient_identifier,
+        );
+
+        let instruction = associated_token_account_core::Instruction::TransferPrivate {
+            recipient_seed,
+            senders: vec![(sender_seed, amount)],
         };
         let instruction_data =
             Program::serialize_instruction(instruction).expect("Instruction should serialize");
@@ -197,17 +229,19 @@ impl Token<'_> {
         self.0
             .send_privacy_preserving_tx(
                 vec![
+                    AccountIdentity::PublicNoSign(definition_id),
                     self.0
                         .resolve_private_account(sender_account_id)
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
-                    AccountIdentity::PrivateForeign {
+                    AccountIdentity::PrivatePdaForeign {
+                        account_id: recipient_id,
                         npk: recipient_npk,
                         vpk: recipient_vpk,
                         identifier: recipient_identifier,
                     },
                 ],
                 instruction_data,
-                &programs::token().into(),
+                &super::ata::ata_with_token_dependency(),
             )
             .await
             .map(|(resp, secrets)| {
