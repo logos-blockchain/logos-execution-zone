@@ -41,6 +41,34 @@ fn main() {
                 amount,
             )
         }
+        Instruction::TransferPrivate {
+            recipient_seed,
+            senders,
+        } => {
+            let mut accounts = pre_states;
+            let recipient = accounts
+                .pop()
+                .expect("TransferPrivate instruction requires a recipient account");
+            let mut accounts = accounts.into_iter();
+            let token_definition = accounts
+                .next()
+                .expect("TransferPrivate instruction requires a token definition account");
+            assert_eq!(
+                accounts.len(),
+                senders.len(),
+                "TransferPrivate instruction requires exactly one account per sender"
+            );
+            let sender_states = accounts
+                .zip(senders)
+                .map(|(account, (seed, amount))| (account, seed, amount))
+                .collect();
+            associated_token_account_program::transfer_private::transfer_to_private_associated_token_account(
+                token_definition,
+                sender_states,
+                recipient,
+                recipient_seed,
+            )
+        }
         Instruction::Burn {
             ata_program_id,
             amount,

@@ -32,6 +32,11 @@ pub enum Instruction {
         amount: u128,
     },
 
+    TransferPrivate {
+        recipient_seed: PdaSeed,
+        senders: Vec<(PdaSeed, u128)>,
+    },
+
     /// Burn tokens FROM owner's ATA.
     /// Uses PDA seeds to authorize the ATA in the chained Token::Burn call.
     ///
