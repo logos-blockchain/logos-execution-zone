@@ -24,9 +24,7 @@ use wallet::{
 use crate::{
     indexer_client::IndexerClient,
     setup::{
-        SequencerSetup, setup_bedrock_node, setup_indexer,
-        setup_private_accounts_with_initial_supply, setup_public_accounts_with_initial_supply,
-        setup_wallet, sync_wallet_from_prebuilt,
+        SequencerSetup, setup_bedrock_node, setup_indexer, setup_wallet, sync_wallet_from_prebuilt,
     },
 };
 
@@ -359,8 +357,7 @@ impl TestContextBuilder {
 
         let mut sequencer_setup = SequencerSetup::new(partial_config, bedrock_addr);
         if !use_prebuilt {
-            // Wallet genesis must always be present so that
-            // setup_public/private_accounts_with_initial_supply can claim from the vault PDAs.
+            // Wallet genesis must always be present so the wallet's accounts exist on chain.
             // When a test supplies custom genesis, merge rather than replace.
             let wallet_genesis =
                 config::genesis_from_accounts(&initial_public_accounts, &initial_private_accounts);
@@ -392,14 +389,6 @@ impl TestContextBuilder {
             sync_wallet_from_prebuilt(&mut wallet)
                 .await
                 .context("Failed to sync wallet from prebuilt database")?;
-        } else {
-            setup_public_accounts_with_initial_supply(&mut wallet, &initial_public_accounts)
-                .await
-                .context("Failed to initialize public accounts in wallet")?;
-
-            setup_private_accounts_with_initial_supply(&mut wallet, &initial_private_accounts)
-                .await
-                .context("Failed to initialize private accounts in wallet")?;
         }
 
         let sequencer_client = setup::sequencer_client(sequencer_handle.addr())

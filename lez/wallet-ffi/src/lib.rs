@@ -53,7 +53,6 @@ pub mod program_deployment;
 pub mod sync;
 pub mod transfer;
 pub mod types;
-pub mod vault;
 pub mod wallet;
 
 static TOKIO_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
