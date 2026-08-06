@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     BlockId, Identifier, NullifierPublicKey, Timestamp,
-    account::{Account, AccountId, AccountWithMetadata},
+    account::{Account, AccountId, AccountWithMetadata, Data},
     encryption::ViewingPublicKey,
 };
 
@@ -612,9 +612,9 @@ pub enum ExecutionValidationError {
     },
 
     #[error(
-        "Post-state for account {account_id} has default program owner but pre-state was not default"
+        "Post-state for account {account_id} has default program owner but pre-state carries data"
     )]
-    NonDefaultAccountWithDefaultOwner { account_id: AccountId },
+    DataBearingAccountWithDefaultOwner { account_id: AccountId },
 
     #[error("Total balance across accounts overflowed 2^256 - 1")]
     BalanceSumOverflow,
@@ -710,9 +710,11 @@ pub fn validate_execution(
 
         let account_program_owner = pre.account.program_owner;
 
-        // 5. Decreasing balance only allowed if owned by executing program
+        // 5. Decreasing balance only allowed if owned by executing program, or if the account is
+        //    default-owned and authorized the operation
         if post.account.balance < pre.account.balance
             && account_program_owner != executing_program_id
+            && !(account_program_owner == DEFAULT_PROGRAM_ID && pre.is_authorized)
         {
             return Err(ExecutionValidationError::UnauthorizedBalanceDecrease {
                 account_id: pre.account_id,
@@ -733,11 +735,10 @@ pub fn validate_execution(
             });
         }
 
-        // 7. If a post state has default program owner, the pre state must have been a default
-        //    account
-        if post.account.program_owner == DEFAULT_PROGRAM_ID && pre.account != Account::default() {
+        // 7. A post state with default program owner must not have carried data in its pre state
+        if post.account.program_owner == DEFAULT_PROGRAM_ID && pre.account.data != Data::default() {
             return Err(
-                ExecutionValidationError::NonDefaultAccountWithDefaultOwner {
+                ExecutionValidationError::DataBearingAccountWithDefaultOwner {
                     account_id: pre.account_id,
                 },
             );
