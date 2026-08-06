@@ -1,6 +1,6 @@
 use lee_core::{
     account::{Account, AccountWithMetadata, Data},
-    program::{AccountPostState, Claim},
+    program::AccountPostState,
 };
 use token_core::{TokenDefinition, TokenHolding};
 
@@ -67,6 +67,6 @@ pub fn mint(
 
     vec![
         AccountPostState::new(definition_post),
-        AccountPostState::new_claimed_if_default(holding_post, Claim::Authorized),
+        AccountPostState::new(holding_post),
     ]
 }

@@ -5,10 +5,7 @@
     reason = "We don't care about it in tests"
 )]
 
-use lee_core::{
-    account::{Account, AccountId, AccountWithMetadata, Data},
-    program::Claim,
-};
+use lee_core::account::{Account, AccountId, AccountWithMetadata, Data};
 use token_core::{
     MetadataStandard, NewTokenDefinition, NewTokenMetadata, TokenDefinition, TokenHolding,
 };
@@ -854,7 +851,7 @@ fn mint_uninit_holding_success() {
         *holding_post.account(),
         AccountForTests::init_mint().account
     );
-    assert_eq!(holding_post.required_claim(), Some(Claim::Authorized));
+    assert_eq!(holding_post.required_claim(), None);
 }
 
 #[test]
