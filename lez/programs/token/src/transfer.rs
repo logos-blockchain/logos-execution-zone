@@ -1,6 +1,6 @@
 use lee_core::{
     account::{Account, AccountWithMetadata, Data},
-    program::AccountPostState,
+    program::{AccountPostState, Claim},
 };
 use token_core::TokenHolding;
 
@@ -106,6 +106,6 @@ pub fn transfer(
 
     vec![
         AccountPostState::new(sender_post),
-        AccountPostState::new(recipient_post),
+        AccountPostState::new_claimed_if_default(recipient_post, Claim::Authorized),
     ]
 }
