@@ -2,7 +2,7 @@ use lee_core::{
     account::{Account, AccountWithMetadata, Data},
     program::{AccountPostState, ChainedCall, PdaSeed},
 };
-use token_core::{TokenDefinition, TokenHolding};
+use token_core::TokenHolding;
 
 pub fn transfer_to_private_associated_token_account(
     token_definition: AccountWithMetadata,
@@ -11,61 +11,56 @@ pub fn transfer_to_private_associated_token_account(
     recipient_seed: PdaSeed,
 ) -> (Vec<AccountPostState>, Vec<ChainedCall>) {
     let token_program_id = token_definition.account.program_owner;
-    let definition = TokenDefinition::try_from(&token_definition.account.data)
-        .expect("Token definition account must be valid");
-    let mut holding =
-        TokenHolding::zeroized_from_definition(token_definition.account_id, &definition);
 
-    let mut chained_calls = vec![
-        ChainedCall::new(
-            token_program_id,
-            vec![
-                token_definition.clone(),
-                AccountWithMetadata {
-                    is_authorized: true,
-                    ..recipient.clone()
-                },
-            ],
-            &token_core::Instruction::InitializeAccount,
-        )
-        .with_pda_seeds(vec![recipient_seed]),
-    ];
-
-    let mut credited = AccountWithMetadata {
-        account: Account {
-            program_owner: token_program_id,
-            data: Data::from(&holding),
-            ..recipient.account.clone()
-        },
-        is_authorized: false,
-        account_id: recipient.account_id,
-    };
-
+    let mut chained_calls = Vec::new();
     let mut post_states = vec![AccountPostState::new(token_definition.account)];
+    let mut credited: Option<TokenHolding> = None;
+
     for (sender, seed, amount) in senders {
         post_states.push(AccountPostState::new(sender.account.clone()));
-        let (sender, pda_seeds) = match seed {
-            Some(seed) => (
+
+        let sender_holding = TokenHolding::try_from(&sender.account.data)
+            .expect("Sender must hold a valid token holding");
+        let recipient_pre = AccountWithMetadata {
+            account: match &credited {
+                Some(holding) => Account {
+                    program_owner: token_program_id,
+                    data: Data::from(holding),
+                    ..recipient.account.clone()
+                },
+                None => recipient.account.clone(),
+            },
+            is_authorized: true,
+            account_id: recipient.account_id,
+        };
+
+        let mut pda_seeds = vec![recipient_seed];
+        let sender_pre = match seed {
+            Some(seed) => {
+                pda_seeds.push(seed);
                 AccountWithMetadata {
                     is_authorized: true,
                     ..sender
-                },
-                vec![seed],
-            ),
-            None => (sender, Vec::new()),
+                }
+            }
+            None => sender,
         };
+
         chained_calls.push(
             ChainedCall::new(
                 token_program_id,
-                vec![sender, credited.clone()],
+                vec![sender_pre, recipient_pre],
                 &token_core::Instruction::Transfer {
                     amount_to_transfer: amount,
                 },
             )
             .with_pda_seeds(pda_seeds),
         );
+
+        let mut holding =
+            credited.unwrap_or_else(|| TokenHolding::zeroized_clone_from(&sender_holding));
         credit(&mut holding, amount);
-        credited.account.data = Data::from(&holding);
+        credited = Some(holding);
     }
     post_states.push(AccountPostState::new(recipient.account));
 
