@@ -1140,15 +1140,11 @@ fn private_authorized_uninitialized_account() {
 }
 
 #[test]
-fn private_unauthorized_uninitialized_account_can_still_be_claimed() {
+fn private_authorized_uninitialized_account_can_be_claimed() {
     let mut state = V03State::new().with_test_programs();
 
     let private_keys = test_private_account_keys_1();
-    // This is intentional: claim authorization was introduced to protect public accounts,
-    // especially PDAs. Private PDAs are not useful in practice because there is no way to
-    // operate them without the corresponding private keys, so unauthorized private claiming
-    // remains allowed.
-    let unauthorized_account = AccountWithMetadata::new(
+    let authorized_account = AccountWithMetadata::new(
         Account::default(),
         true,
         (&private_keys.npk(), &private_keys.vpk(), 0),
@@ -1157,7 +1153,7 @@ fn private_unauthorized_uninitialized_account_can_still_be_claimed() {
     let program = crate::test_methods::claimer();
 
     let (output, proof) = execute_and_prove(
-        vec![unauthorized_account],
+        vec![authorized_account],
         Program::serialize_instruction(()).unwrap(),
         vec![InputAccountIdentity::Private(PrivateWitness {
             vpk: private_keys.vpk(),

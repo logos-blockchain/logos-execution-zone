@@ -878,20 +878,13 @@ fn regular_init_with_non_chaining_ask_npk_is_rejected() {
 }
 
 #[test]
-fn unauthorized_private_init_can_be_claimed() {
+fn unauthorized_private_init_cannot_be_claimed() {
     let program = crate::test_methods::claimer();
-    let program_id = program.id();
     let keys = test_private_account_keys_1();
     let recipient_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), 0);
     let recipient = AccountWithMetadata::new(Account::default(), false, recipient_id);
-    let esk = EphemeralSecretKey::new(
-        &recipient_id,
-        &[0; 32],
-        &Nonce::private_account_nonce_init(&recipient_id),
-    );
-    let ssk = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &esk).0;
 
-    let (output, _) = execute_and_prove(
+    let result = execute_and_prove(
         vec![recipient],
         Program::serialize_instruction(()).unwrap(),
         vec![InputAccountIdentity::Private(PrivateWitness {
@@ -905,16 +898,15 @@ fn unauthorized_private_init_can_be_claimed() {
             },
         })],
         &program.into(),
-    )
-    .unwrap();
+    );
 
-    let (_, claimed) = EncryptionScheme::decrypt(
-        &output.private_actions[0].encrypted_post_state.ciphertext,
-        &ssk,
-        &output.private_actions[0].nullifier,
-    )
-    .unwrap();
-    assert_eq!(claimed.program_owner, program_id);
+    let Err(LeeError::CircuitProvingError(message)) = result else {
+        panic!("knowing an account's preimage must not grant ownership of it")
+    };
+    assert!(
+        message.contains("Cannot claim unauthorized private account"),
+        "expected the private claim-authorization gate, got {message}"
+    );
 }
 
 /// A program that asserts authorization over its pre-states rejects a regular private account
