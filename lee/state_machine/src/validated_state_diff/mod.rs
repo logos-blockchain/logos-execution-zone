@@ -5,7 +5,7 @@ use std::{
 
 use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, PublicAction, Timestamp,
-    account::{Account, AccountId, AccountWithMetadata},
+    account::{Account, AccountId, AccountWithMetadata, Data},
     program::{
         CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_ID, compute_public_authorized_pdas,
         validate_execution,
@@ -276,20 +276,17 @@ impl ValidatedStateDiff {
                 .expect("we check the max depth at the beginning of the loop");
         }
 
-        // Check that all modified uninitialized accounts where claimed
-        for (account_id, post) in state_diff.iter().filter_map(|(account_id, post)| {
-            let pre = state.get_account_by_id(*account_id);
-            if pre.program_owner != DEFAULT_PROGRAM_ID {
-                return None;
-            }
-            if pre == *post {
-                return None;
-            }
-            Some((*account_id, post))
-        }) {
+        // Check that no final default-owned account carries data
+        #[expect(
+            clippy::iter_over_hash_type,
+            reason = "Iteration order doesn't matter here"
+        )]
+        for (account_id, post) in &state_diff {
             ensure!(
-                post.program_owner != DEFAULT_PROGRAM_ID,
-                InvalidProgramBehaviorError::DefaultAccountModifiedWithoutClaim { account_id }
+                post.program_owner != DEFAULT_PROGRAM_ID || post.data == Data::default(),
+                InvalidProgramBehaviorError::DefaultAccountRetainsData {
+                    account_id: *account_id
+                }
             );
         }
 

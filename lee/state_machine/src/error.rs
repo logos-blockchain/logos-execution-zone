@@ -126,8 +126,8 @@ pub enum InvalidProgramBehaviorError {
         actual: AccountId,
     },
 
-    #[error("Default account {account_id} was modified without being claimed")]
-    DefaultAccountModifiedWithoutClaim { account_id: AccountId },
+    #[error("Default-owned account {account_id} retains data")]
+    DefaultAccountRetainsData { account_id: AccountId },
 
     #[error("Called program {program_id:?} which is not listed in dependencies")]
     UndeclaredProgramDependency { program_id: ProgramId },

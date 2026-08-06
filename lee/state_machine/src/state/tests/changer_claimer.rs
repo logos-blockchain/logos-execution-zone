@@ -49,7 +49,7 @@ fn public_changer_claimer_data_change_no_claim_fails() {
     assert!(matches!(
         result,
         Err(LeeError::InvalidProgramBehavior(
-            InvalidProgramBehaviorError::DefaultAccountModifiedWithoutClaim {
+            InvalidProgramBehaviorError::DefaultAccountRetainsData {
                 account_id: err_account_id
             }
         )) if err_account_id == account_id

@@ -5,7 +5,7 @@ use std::{
 
 use lee_core::{
     Identifier, InputAccountIdentity, NullifierPublicKey, PrivateWitness, WitnessKind,
-    account::{Account, AccountId, AccountWithMetadata},
+    account::{Account, AccountId, AccountWithMetadata, Data},
     encryption::ViewingPublicKey,
     program::{
         AccountPostState, BlockValidityWindow, CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_ID,
@@ -232,24 +232,16 @@ impl ExecutionState {
             }
         }
 
-        // Check that all modified uninitialized accounts were claimed
-        for (account_id, post) in execution_state
-            .pre_states
-            .iter()
-            .filter(|a| a.account.program_owner == DEFAULT_PROGRAM_ID)
-            .map(|a| {
-                let post = execution_state
-                    .post_states
-                    .get(&a.account_id)
-                    .expect("Post state must exist for pre state");
-                (a, post)
-            })
-            .filter(|(pre_default, post)| pre_default.account != **post)
-            .map(|(pre, post)| (pre.account_id, post))
-        {
-            assert_ne!(
-                post.program_owner, DEFAULT_PROGRAM_ID,
-                "Account {account_id} was modified but not claimed"
+        // Check that no final default-owned account carries data
+        for pre in &execution_state.pre_states {
+            let account_id = pre.account_id;
+            let post = execution_state
+                .post_states
+                .get(&account_id)
+                .expect("Post state must exist for pre state");
+            assert!(
+                post.program_owner != DEFAULT_PROGRAM_ID || post.data == Data::default(),
+                "Default-owned account {account_id} retains data"
             );
         }
 
