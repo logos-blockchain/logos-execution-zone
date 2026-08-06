@@ -623,8 +623,7 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
         .into(),
     );
 
-    let instruction =
-        Program::serialize_instruction((faucet_program_id, vault_program_id, attacker_id, amount))?;
+    let instruction = Program::serialize_instruction((faucet_program_id, attacker_id, amount))?;
 
     let res = execute_and_prove(
         vec![faucet_pre, vault_pda_pre],

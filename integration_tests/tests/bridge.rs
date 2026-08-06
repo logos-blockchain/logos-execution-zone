@@ -55,7 +55,6 @@ async fn public_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
         vec![],
         bridge_core::Instruction::Deposit {
             l1_deposit_op_id: [0_u8; 32],
-            vault_program_id,
             recipient_id,
             amount: 1,
         },
@@ -104,7 +103,6 @@ async fn public_bridge_deposit_with_zero_amount_is_rejected() -> anyhow::Result<
         vec![],
         bridge_core::Instruction::Deposit {
             l1_deposit_op_id: [0_u8; 32],
-            vault_program_id,
             recipient_id,
             amount: 0,
         },
@@ -191,7 +189,6 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     // Serialize the bridge deposit instruction
     let instruction = Program::serialize_instruction(bridge_core::Instruction::Deposit {
         l1_deposit_op_id: [0_u8; 32],
-        vault_program_id,
         recipient_id,
         amount: 1,
     })

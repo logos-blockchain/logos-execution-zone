@@ -357,11 +357,7 @@ async fn cannot_execute_faucet_program() -> Result<()> {
         programs::faucet().id(),
         vec![faucet_account_id, recipient_vault_id],
         vec![],
-        faucet_core::Instruction::GenesisTransferVault {
-            vault_program_id,
-            recipient_id: recipient,
-            amount,
-        },
+        faucet_core::Instruction::GenesisTransferDirect { amount },
     )?;
     let tx = lee::PublicTransaction::new(
         message,
@@ -410,7 +406,7 @@ async fn user_tx_that_chain_calls_faucet_is_dropped() -> Result<()> {
         faucet_chain_caller.id(),
         vec![faucet_account_id, attacker_vault_id],
         vec![],
-        (faucet_program_id, vault_program_id, attacker, amount),
+        (faucet_program_id, attacker, amount),
     )?;
     let attack_tx = LeeTransaction::Public(lee::PublicTransaction::new(
         message,

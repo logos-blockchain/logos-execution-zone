@@ -34,11 +34,10 @@ fn main() {
     let (post_states, chained_calls) = match instruction {
         Instruction::Deposit {
             l1_deposit_op_id,
-            vault_program_id,
             recipient_id,
             amount,
         } => {
-            let [bridge, recipient_vault, receipt] = pre_states
+            let [bridge, recipient, receipt] = pre_states
                 .try_into()
                 .expect("Deposit requires exactly 3 accounts");
 
@@ -49,9 +48,8 @@ fn main() {
             );
 
             assert_eq!(
-                recipient_vault.account_id,
-                vault_core::compute_vault_account_id(vault_program_id, recipient_id),
-                "Second account must be recipient vault PDA"
+                recipient.account_id, recipient_id,
+                "Second account must be the deposit recipient"
             );
 
             assert_eq!(
@@ -74,7 +72,7 @@ fn main() {
                 (unchanged_post_states(&pre_states_clone), vec![])
             } else {
                 // First mint: claim the receipt — its existence is the record,
-                // the account's contents are never read — and chain the vault
+                // the account's contents are never read — and chain the
                 // transfer.
                 let receipt_post = AccountPostState::new_claimed_if_default(
                     receipt.account,
@@ -83,18 +81,17 @@ fn main() {
 
                 let post_states = vec![
                     AccountPostState::new(bridge.account.clone()),
-                    AccountPostState::new(recipient_vault.account.clone()),
+                    AccountPostState::new(recipient.account.clone()),
                     receipt_post,
                 ];
 
-                let mut bridge_for_vault = bridge;
-                bridge_for_vault.is_authorized = true;
+                let mut bridge_for_transfer = bridge;
+                bridge_for_transfer.is_authorized = true;
                 let chained_calls = vec![
                     ChainedCall::new(
-                        vault_program_id,
-                        vec![bridge_for_vault, recipient_vault],
-                        &vault_core::Instruction::Transfer {
-                            recipient_id,
+                        bridge_for_transfer.account.program_owner,
+                        vec![bridge_for_transfer, recipient],
+                        &authenticated_transfer_core::Instruction::Transfer {
                             amount: u128::from(amount),
                         },
                     )
@@ -118,10 +115,6 @@ fn main() {
             );
 
             let auth_transfer_program_id = bridge.account.program_owner;
-            assert_eq!(
-                sender.account.program_owner, auth_transfer_program_id,
-                "Sender account must be owned by the authenticated transfer program"
-            );
 
             let chained_calls = vec![ChainedCall::new(
                 auth_transfer_program_id,

@@ -1168,9 +1168,6 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
         .context("Failed to decode finalized Bedrock deposit metadata")?;
 
     let bridge_program_id = programs::bridge().id();
-    let vault_program_id = programs::vault().id();
-    let recipient_vault_id =
-        vault_core::compute_vault_account_id(vault_program_id, metadata.recipient_id);
     // The receipt PDA carries the exactly-once check: the program reads it to
     // detect a replay, so it must be in the tx's account list.
     let receipt_id =
@@ -1180,13 +1177,12 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
         bridge_program_id,
         vec![
             system_accounts::bridge_account_id(),
-            recipient_vault_id,
+            metadata.recipient_id,
             receipt_id,
         ],
         vec![],
         bridge_core::Instruction::Deposit {
             l1_deposit_op_id: event.deposit_op_id.0,
-            vault_program_id,
             recipient_id: metadata.recipient_id,
             amount: event.amount,
         },

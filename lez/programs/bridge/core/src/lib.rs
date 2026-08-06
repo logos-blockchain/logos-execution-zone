@@ -7,12 +7,12 @@ const DEPOSIT_RECEIPT_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/BridgeDepositReceipt/
 
 #[derive(Serialize, Deserialize)]
 pub enum Instruction {
-    /// Transfers native tokens from the bridge PDA account to a recipient vault,
+    /// Transfers native tokens from the bridge PDA account to a recipient account,
     /// exactly once per `l1_deposit_op_id`.
     ///
     /// Required accounts (3):
     /// - Bridge PDA account
-    /// - Recipient vault PDA account
+    /// - Recipient account
     /// - Deposit-receipt PDA account, derived from `l1_deposit_op_id`. Its existence records that
     ///   this op id was already minted; a second application of the same op id finds it present and
     ///   transfers nothing.
@@ -20,7 +20,6 @@ pub enum Instruction {
         /// Deposit OP ID from L1, stored here to pin each [`Deposit`](Instruction::Deposit) to a
         /// Deposit Event on L1.
         l1_deposit_op_id: [u8; 32],
-        vault_program_id: ProgramId,
         recipient_id: AccountId,
         amount: u64,
     },

@@ -6,8 +6,8 @@ use lee_core::{
 };
 use risc0_zkvm::serde::to_vec;
 
-type Instruction = (ProgramId, ProgramId, AccountId, u128);
-// (faucet_program_id, vault_program_id, recipient_id, amount)
+type Instruction = (ProgramId, AccountId, u128);
+// (faucet_program_id, recipient_id, amount)
 
 fn main() {
     let (
@@ -15,7 +15,7 @@ fn main() {
             self_program_id,
             caller_program_id,
             pre_states,
-            instruction: (faucet_program_id, vault_program_id, recipient_id, amount),
+            instruction: (faucet_program_id, _recipient_id, amount),
         },
         instruction_words,
     ) = read_lee_inputs::<Instruction>();
@@ -26,17 +26,13 @@ fn main() {
         .collect();
 
     assert_eq!(pre_states.len(), 2);
-    let [faucet_pre, vault_pda_pre] = [pre_states[0].clone(), pre_states[1].clone()];
+    let [faucet_pre, recipient_pre] = [pre_states[0].clone(), pre_states[1].clone()];
 
     let chained_calls = vec![ChainedCall {
         program_id: faucet_program_id,
-        instruction_data: to_vec(&faucet_core::Instruction::GenesisTransferVault {
-            vault_program_id,
-            recipient_id,
-            amount,
-        })
-        .unwrap(),
-        pre_states: vec![faucet_pre, vault_pda_pre],
+        instruction_data: to_vec(&faucet_core::Instruction::GenesisTransferDirect { amount })
+            .unwrap(),
+        pre_states: vec![faucet_pre, recipient_pre],
         pda_seeds: vec![],
     }];
 
