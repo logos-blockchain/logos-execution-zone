@@ -72,10 +72,9 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_pre_accounts() 
     };
 
     let expected_recipient_post = Account {
-        program_owner: program.id(),
         balance: balance_to_move,
         nonce: Nonce::private_account_nonce_init(&recipient_account_id),
-        data: Data::default(),
+        ..Account::default()
     };
 
     let expected_sender_pre = sender.clone();
@@ -171,7 +170,6 @@ fn prove_privacy_preserving_execution_circuit_fully_private() {
         ..Default::default()
     };
     let expected_private_account_2 = Account {
-        program_owner: program.id(),
         balance: balance_to_move,
         nonce: Nonce::private_account_nonce_init(&recipient_account_id),
         ..Default::default()

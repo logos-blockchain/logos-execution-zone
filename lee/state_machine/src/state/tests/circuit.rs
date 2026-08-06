@@ -1309,13 +1309,11 @@ fn two_private_pda_family_members_receive_and_spend() {
         V03State::new().with_public_accounts(public_state_from_balances(&[(funder_id, 500)]));
 
     let alice_pda_0_account = Account {
-        program_owner: simple_transfer_id,
         balance: amount,
         nonce: Nonce::private_account_nonce_init(&alice_pda_0_id),
         ..Account::default()
     };
     let alice_pda_1_account = Account {
-        program_owner: simple_transfer_id,
         balance: amount,
         nonce: Nonce::private_account_nonce_init(&alice_pda_1_id),
         ..Account::default()
@@ -1488,7 +1486,6 @@ fn two_private_pda_family_members_receive_and_spend() {
     // Re-fund alice_pda_1 top-level via simple_transfer using a private-PDA update with an
     // external seed.
     let alice_pda_1_account_after_spend = Account {
-        program_owner: simple_transfer_id,
         balance: 0,
         nonce: alice_pda_1_account
             .nonce

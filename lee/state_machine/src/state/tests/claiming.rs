@@ -18,7 +18,6 @@ fn claiming_mechanism() {
     assert_eq!(state.get_account_by_id(to), Account::default());
 
     let expected_recipient_post = Account {
-        program_owner: program.id(),
         balance: amount,
         nonce: Nonce(1),
         ..Account::default()
@@ -43,7 +42,7 @@ fn claiming_mechanism() {
 
 #[test]
 fn unauthorized_public_account_claiming_fails() {
-    let program = crate::test_methods::simple_balance_transfer();
+    let program = crate::test_methods::claimer();
     let account_key = PrivateKey::try_new([9; 32]).unwrap();
     let account_id = AccountId::from(&PublicKey::new_from_private_key(&account_key));
     let mut state = V03State::new().with_test_programs();
@@ -51,8 +50,7 @@ fn unauthorized_public_account_claiming_fails() {
     assert_eq!(state.get_account_by_id(account_id), Account::default());
 
     let message =
-        public_transaction::Message::try_new(program.id(), vec![account_id], vec![], 0_u128)
-            .unwrap();
+        public_transaction::Message::try_new(program.id(), vec![account_id], vec![], ()).unwrap();
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
     let tx = PublicTransaction::new(message, witness_set);
 
@@ -64,20 +62,16 @@ fn unauthorized_public_account_claiming_fails() {
 
 #[test]
 fn authorized_public_account_claiming_succeeds() {
-    let program = crate::test_methods::simple_balance_transfer();
+    let program = crate::test_methods::claimer();
     let account_key = PrivateKey::try_new([10; 32]).unwrap();
     let account_id = AccountId::from(&PublicKey::new_from_private_key(&account_key));
     let mut state = V03State::new().with_test_programs();
 
     assert_eq!(state.get_account_by_id(account_id), Account::default());
 
-    let message = public_transaction::Message::try_new(
-        program.id(),
-        vec![account_id],
-        vec![Nonce(0)],
-        0_u128,
-    )
-    .unwrap();
+    let message =
+        public_transaction::Message::try_new(program.id(), vec![account_id], vec![Nonce(0)], ())
+            .unwrap();
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[&account_key]);
     let tx = PublicTransaction::new(message, witness_set);
 
@@ -227,7 +221,6 @@ fn claiming_mechanism_within_chain_call() {
     // it is expected that the recipient account is claimed by the authenticated transfer
     // program and not the chained_caller program.
     let chain_caller = crate::test_methods::chain_caller();
-    let simple_transfer = crate::test_methods::simple_balance_transfer();
     let from_key = PrivateKey::try_new([1; 32]).unwrap();
     let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
     let initial_balance = 100;
@@ -243,8 +236,6 @@ fn claiming_mechanism_within_chain_call() {
     assert_eq!(state.get_account_by_id(to), Account::default());
 
     let expected_to_post = Account {
-        // The expected program owner is the authenticated transfer program
-        program_owner: simple_transfer.id(),
         balance: amount,
         nonce: Nonce(1),
         ..Account::default()
@@ -279,13 +270,13 @@ fn claiming_mechanism_within_chain_call() {
 
 #[test]
 fn unauthorized_public_account_claiming_fails_when_executed_privately() {
-    let program = crate::test_methods::simple_balance_transfer();
+    let program = crate::test_methods::claimer();
     let account_id = AccountId::new([11; 32]);
     let public_account = AccountWithMetadata::new(Account::default(), false, account_id);
 
     let result = execute_and_prove(
         vec![public_account],
-        Program::serialize_instruction(0_u128).unwrap(),
+        Program::serialize_instruction(()).unwrap(),
         vec![InputAccountIdentity::Public],
         &program.into(),
     );
@@ -361,7 +352,6 @@ fn authorized_public_account_claiming_succeeds_when_executed_privately() {
     assert_eq!(
         state.get_account_by_id(recipient_account_id),
         Account {
-            program_owner: program_id,
             balance,
             nonce: Nonce(1),
             ..Account::default()
