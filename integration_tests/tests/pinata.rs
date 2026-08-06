@@ -14,10 +14,7 @@ use integration_tests::{
 use log::info;
 use tokio::test;
 use wallet::cli::{
-    Command, SubcommandReturnValue,
-    programs::{
-        native_token_transfer::AuthTransferSubcommand, pinata::PinataProgramAgnosticSubcommand,
-    },
+    Command, SubcommandReturnValue, programs::pinata::PinataProgramAgnosticSubcommand,
 };
 
 #[test]
@@ -42,7 +39,7 @@ async fn claim_pinata_to_uninitialized_public_account_fails_fast() -> Result<()>
     );
     let err = claim_result.unwrap_err().to_string();
     assert!(
-        err.contains("wallet auth-transfer init --account-id Public/"),
+        err.contains("wallet auth-transfer send --from <funded-account> --to Public/"),
         "Expected init guidance, got: {err}",
     );
 
@@ -75,7 +72,7 @@ async fn claim_pinata_to_uninitialized_private_account_fails_fast() -> Result<()
     );
     let err = claim_result.unwrap_err().to_string();
     assert!(
-        err.contains("wallet auth-transfer init --account-id Private/"),
+        err.contains("wallet auth-transfer send --from <funded-account> --to Private/"),
         "Expected init guidance, got: {err}",
     );
 
@@ -195,15 +192,6 @@ async fn claim_pinata_to_new_private_account() -> Result<()> {
 
     // Create new private account
     let winner_account_id = new_account(&mut ctx, true, None).await?;
-
-    // Initialize account under auth transfer program
-    let command = Command::AuthTransfer(AuthTransferSubcommand::Init {
-        account_id: private_mention(winner_account_id),
-    });
-    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
-
-    info!("Waiting for next block creation");
-    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     let new_commitment = ctx
         .wallet()

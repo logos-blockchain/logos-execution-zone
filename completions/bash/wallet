@@ -98,20 +98,7 @@ _wallet() {
         auth-transfer)
             case "$subcmd" in
                 "")
-                    COMPREPLY=($(compgen -W "init send help" -- "$cur"))
-                    ;;
-                init)
-                    case "$prev" in
-                        --account-id)
-                            _wallet_complete_account_id "$cur"
-                            ;;
-                        --account-label)
-                            _wallet_complete_account_label "$cur"
-                            ;;
-                        *)
-                            COMPREPLY=($(compgen -W "--account-id --account-label" -- "$cur"))
-                            ;;
-                    esac
+                    COMPREPLY=($(compgen -W "send help" -- "$cur"))
                     ;;
                 send)
                     case "$prev" in

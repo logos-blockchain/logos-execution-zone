@@ -1,21 +1,8 @@
 use authenticated_transfer_core::Instruction;
 use lee_core::{
-    account::{Account, AccountWithMetadata},
-    program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_lee_inputs},
+    account::AccountWithMetadata,
+    program::{AccountPostState, ProgramInput, ProgramOutput, read_lee_inputs},
 };
-
-/// Initializes a default account under the ownership of this program.
-fn initialize_account(pre_state: AccountWithMetadata) -> AccountPostState {
-    let account_to_claim = AccountPostState::new_claimed(pre_state.account, Claim::Authorized);
-
-    // Continue only if the account to claim has default values
-    assert!(
-        account_to_claim.account() == &Account::default(),
-        "Account must be uninitialized"
-    );
-
-    account_to_claim
-}
 
 /// Transfers `balance_to_move` native balance from `sender` to `recipient`.
 fn transfer(
@@ -66,11 +53,6 @@ fn main() {
     ) = read_lee_inputs::<Instruction>();
 
     let post_states = match instruction {
-        Instruction::Initialize => {
-            let [account_to_claim] = <[_; 1]>::try_from(pre_states.clone())
-                .expect("Initialize requires exactly 1 account");
-            vec![initialize_account(account_to_claim)]
-        }
         Instruction::Transfer {
             amount: balance_to_move,
         } => {

@@ -88,7 +88,6 @@ _wallet_auth_transfer() {
     case $state in
         subcommand)
             subcommands=(
-                'init:Initialize account under authenticated transfer program'
                 'send:Send native tokens from one account to another with variable privacy'
                 'help:Print this message or the help of the given subcommand(s)'
             )
@@ -96,11 +95,6 @@ _wallet_auth_transfer() {
             ;;
         args)
             case $line[1] in
-                init)
-                    _arguments \
-                        '--account-id[Account ID to initialize]:account_id:_wallet_account_ids' \
-                        '--account-label[Account label (alternative to --account-id)]:label:'
-                    ;;
                 send)
                     _arguments \
                         '--from[Source account ID]:from_account:_wallet_account_ids' \

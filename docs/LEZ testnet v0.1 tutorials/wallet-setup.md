@@ -10,7 +10,7 @@ To check that everythin is working, run `wallet help`.
 
 | Command                | Description                                                 |
 |------------------------|-------------------------------------------------------------|
-| `wallet auth-transfer` | Authenticated transfer (init, send)                         |
+| `wallet auth-transfer` | Authenticated transfer (send)                               |
 | `wallet chain-info`    | Chain info queries (current-block-id, block, transaction)   |
 | `wallet account`       | Account management (get, list, new, sync-private)           |
 | `wallet pinata`        | Piñata faucet (claim)                                       |

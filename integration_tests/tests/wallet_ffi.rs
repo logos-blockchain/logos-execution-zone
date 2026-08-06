@@ -26,7 +26,6 @@ use lee::{
     Account, AccountId, PrivateKey, PublicKey,
     privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
 };
-use lee_core::program::DEFAULT_PROGRAM_ID;
 use log::info;
 use wallet::account::HumanReadableAccount;
 use wallet_ffi::{
@@ -55,11 +54,6 @@ unsafe extern "C" {
     fn wallet_ffi_destroy(handle: *mut WalletHandle);
 
     fn wallet_ffi_create_account_public(
-        handle: *mut WalletHandle,
-        out_account_id: *mut FfiBytes32,
-    ) -> error::WalletFfiError;
-
-    fn wallet_ffi_create_account_private(
         handle: *mut WalletHandle,
         out_account_id: *mut FfiBytes32,
     ) -> error::WalletFfiError;
@@ -175,18 +169,6 @@ unsafe extern "C" {
         from: *const FfiBytes32,
         amount: u64,
         bedrock_account_pk: *const FfiBytes32,
-        out_result: *mut FfiTransferResult,
-    ) -> error::WalletFfiError;
-
-    fn wallet_ffi_register_public_account(
-        handle: *mut WalletHandle,
-        account_id: *const FfiBytes32,
-        out_result: *mut FfiTransferResult,
-    ) -> error::WalletFfiError;
-
-    fn wallet_ffi_register_private_account(
-        handle: *mut WalletHandle,
-        account_id: *const FfiBytes32,
         out_result: *mut FfiTransferResult,
     ) -> error::WalletFfiError;
 
@@ -788,132 +770,6 @@ fn wallet_ffi_base58_to_account_id() -> Result<()> {
     let expected_account_id = account_id_str.parse()?;
 
     assert_eq!(account_id, expected_account_id);
-
-    Ok(())
-}
-
-#[test]
-fn wallet_ffi_init_public_account_auth_transfer() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
-    let home = tempfile::tempdir()?;
-    let FfiCreateWalletOutput {
-        wallet: wallet_ffi_handle,
-        mnemonic: _,
-    } = new_wallet_ffi_with_test_context_config(&ctx, home.path())?;
-
-    // Create a new uninitialized public account
-    let mut out_account_id = FfiBytes32::from_bytes([0; 32]);
-    unsafe {
-        wallet_ffi_create_account_public(wallet_ffi_handle, &raw mut out_account_id).unwrap();
-    }
-
-    // Check its program owner is the default program id
-    let account: Account = unsafe {
-        let mut out_account = FfiAccount::default();
-        wallet_ffi_get_account_public(
-            wallet_ffi_handle,
-            &raw const out_account_id,
-            &raw mut out_account,
-        )
-        .unwrap();
-        (&out_account).try_into().unwrap()
-    };
-    assert_eq!(account.program_owner, DEFAULT_PROGRAM_ID);
-
-    // Call the init funciton
-    let mut transfer_result = FfiTransferResult::default();
-    unsafe {
-        wallet_ffi_register_public_account(
-            wallet_ffi_handle,
-            &raw const out_account_id,
-            &raw mut transfer_result,
-        )
-        .unwrap();
-    }
-
-    info!("Waiting for next block creation");
-    std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
-
-    // Check that the program owner is now the authenticated transfer program
-    let account: Account = unsafe {
-        let mut out_account = FfiAccount::default();
-        wallet_ffi_get_account_public(
-            wallet_ffi_handle,
-            &raw const out_account_id,
-            &raw mut out_account,
-        )
-        .unwrap();
-        (&out_account).try_into().unwrap()
-    };
-    assert_eq!(
-        account.program_owner,
-        programs::authenticated_transfer().id()
-    );
-
-    unsafe {
-        wallet_ffi_free_transfer_result(&raw mut transfer_result);
-        wallet_ffi_destroy(wallet_ffi_handle);
-    }
-
-    Ok(())
-}
-
-#[test]
-fn wallet_ffi_init_private_account_auth_transfer() -> Result<()> {
-    let ctx = BlockingTestContext::new()?;
-    let home = tempfile::tempdir()?;
-    let FfiCreateWalletOutput {
-        wallet: wallet_ffi_handle,
-        mnemonic: _,
-    } = new_wallet_ffi_with_test_context_config(&ctx, home.path())?;
-
-    // Create a new private account
-    let mut out_account_id = FfiBytes32::default();
-    unsafe {
-        wallet_ffi_create_account_private(wallet_ffi_handle, &raw mut out_account_id).unwrap();
-    }
-
-    // Call the init function
-    let mut transfer_result = FfiTransferResult::default();
-    unsafe {
-        wallet_ffi_register_private_account(
-            wallet_ffi_handle,
-            &raw const out_account_id,
-            &raw mut transfer_result,
-        )
-        .unwrap();
-    }
-
-    info!("Waiting for next block creation");
-    std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
-
-    // Sync private account local storage with onchain encrypted state
-    unsafe {
-        let mut current_height = 0;
-        wallet_ffi_get_current_block_height(wallet_ffi_handle, &raw mut current_height).unwrap();
-        wallet_ffi_sync_to_block(wallet_ffi_handle, current_height).unwrap();
-    };
-
-    // Check that the program owner is now the authenticated transfer program
-    let account: Account = unsafe {
-        let mut out_account = FfiAccount::default();
-        wallet_ffi_get_account_private(
-            wallet_ffi_handle,
-            &raw const out_account_id,
-            &raw mut out_account,
-        )
-        .unwrap();
-        (&out_account).try_into().unwrap()
-    };
-    assert_eq!(
-        account.program_owner,
-        programs::authenticated_transfer().id()
-    );
-
-    unsafe {
-        wallet_ffi_free_transfer_result(&raw mut transfer_result);
-        wallet_ffi_destroy(wallet_ffi_handle);
-    }
 
     Ok(())
 }

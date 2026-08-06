@@ -1,6 +1,4 @@
-use authenticated_transfer_core::Instruction as AuthTransferInstruction;
 use common::HashType;
-use lee::program::Program;
 
 use super::NativeTokenTransfer;
 use crate::{
@@ -23,21 +21,6 @@ impl NativeTokenTransfer<'_> {
                 instruction_data,
                 program.id(),
                 tx_pre_check,
-            )
-            .await
-    }
-
-    pub async fn register_account(
-        &self,
-        account: AccountIdentity,
-    ) -> Result<HashType, ExecutionFailureKind> {
-        let instruction_data = Program::serialize_instruction(AuthTransferInstruction::Initialize)?;
-
-        self.0
-            .send_pub_tx(
-                vec![account],
-                instruction_data,
-                programs::authenticated_transfer().id(),
             )
             .await
     }

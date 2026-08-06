@@ -34,44 +34,8 @@ Generated new account with account_id Public/9ypzv6GGr3fwsgxY7EZezg5rz6zj52DPCkm
 > [!Tip]
 > Save this account ID. You will use it in later commands.
 
-### b. Account initialization
-
-To query the account’s current status, run:
-
-```bash
-# Replace the id with yours
-wallet account get --account-id Public/9ypzv6GGr3fwsgxY7EZezg5rz6zj52DPCkmf1vVujEiJ
-
-# Output:
-Account is Uninitialized
-```
-
-In this example, we initialize the account for the authenticated-transfer program, which manages native token transfers and enforces authenticated debits.
-
-1. Initialize the account:
-```bash
-# This command submits a public transaction executing the `init` function of the
-# authenticated-transfer program. The wallet polls the sequencer until the
-# transaction is included in a block, which may take several seconds.
-wallet auth-transfer init --account-id Public/9ypzv6GGr3fwsgxY7EZezg5rz6zj52DPCkmf1vVujEiJ
-```
-
-2. Check the updated account status:
-```bash
-wallet account get --account-id Public/9ypzv6GGr3fwsgxY7EZezg5rz6zj52DPCkmf1vVujEiJ
-
-# Output:
-Account owned by authenticated-transfer program
-{"balance":0}
-```
-
-> [!NOTE]
-> New accounts start uninitialized, meaning no program owns them yet. Any program may claim an uninitialized account; once claimed, that program owns it.
-> Owned accounts can only be modified through executions of the owning program. The only exception is native-token credits: any program may credit native tokens to any account.
-> Debiting native tokens must always be performed by the owning program.
-
 ## 2. Account funding through the Piñata program
-Now that the account is initialized under the authenticated-tansfer program, fund it using the testnet Piñata program.
+Now that the account exists, fund it using the testnet Piñata program.
 
 ```bash
 # Replace with your id

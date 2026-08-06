@@ -35,7 +35,7 @@ Only `Public/2gJJjtG9UivBGEhA1Jz6waZQx1cwfYupC5yvKEweHaeH` is used for completio
 
 | Command                | Description                                                 |
 |------------------------|-------------------------------------------------------------|
-| `wallet auth-transfer` | Authenticated transfer (init, send)                         |
+| `wallet auth-transfer` | Authenticated transfer (send)                               |
 | `wallet chain-info`    | Chain info queries (current-block-id, block, transaction)   |
 | `wallet account`       | Account management (get, list, new, sync-private)           |
 | `wallet pinata`        | Piñata faucet (claim)                                       |

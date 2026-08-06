@@ -178,8 +178,8 @@ async fn ensure_public_recipient_initialized(
     if account == Account::default() {
         anyhow::bail!(
             "Recipient account Public/{winner_account_id} is uninitialized.\n\
-             Initialize it first:\n  \
-             wallet auth-transfer init --account-id Public/{winner_account_id}"
+             Fund it first:\n  \
+             wallet auth-transfer send --from <funded-account> --to Public/{winner_account_id} --amount <amount>"
         );
     }
 
@@ -200,8 +200,8 @@ fn ensure_private_owned_recipient_initialized(
     if account == Account::default() {
         anyhow::bail!(
             "Recipient account Private/{winner_account_id} is uninitialized.\n\
-             Initialize it first:\n  \
-             wallet auth-transfer init --account-id Private/{winner_account_id}\n\
+             Fund it first:\n  \
+             wallet auth-transfer send --from <funded-account> --to Private/{winner_account_id} --amount <amount>\n\
              Then sync private state:\n  \
              wallet account sync-private"
         );

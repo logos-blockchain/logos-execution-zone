@@ -9,9 +9,4 @@ pub enum Instruction {
     ///
     /// Required accounts: `[sender, recipient]`.
     Transfer { amount: u128 },
-
-    /// Initialize a new account under the ownership of this program.
-    ///
-    /// Required accounts: `[account_to_initialize]`.
-    Initialize,
 }
