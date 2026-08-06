@@ -9,7 +9,7 @@ use std::time::Duration;
 use anyhow::Result;
 use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, create_token, get_account, new_account,
-    public_mention, token_send_claiming_new_account,
+    public_mention, token_send_to_fresh_account,
 };
 use log::info;
 use tokio::test;
@@ -57,8 +57,14 @@ async fn amm_public() -> Result<()> {
     // Transfer 7 tokens from `supply_acc` to the account at account_id `recipient_account_id_1`.
     // `recipient_account_id_1` is still unclaimed, so this bypasses the wallet CLI (which never
     // signs with the recipient's key) and signs with the recipient's own key directly.
-    token_send_claiming_new_account(&mut ctx, supply_account_id_1, recipient_account_id_1, 7)
-        .await?;
+    token_send_to_fresh_account(
+        &mut ctx,
+        definition_account_id_1,
+        supply_account_id_1,
+        recipient_account_id_1,
+        7,
+    )
+    .await?;
 
     // Create new token
     create_token(
@@ -72,8 +78,14 @@ async fn amm_public() -> Result<()> {
 
     // Transfer 7 tokens from `supply_acc` to the account at account_id `recipient_account_id_2`.
     // `recipient_account_id_2` is still unclaimed, so this bypasses the wallet CLI the same way.
-    token_send_claiming_new_account(&mut ctx, supply_account_id_2, recipient_account_id_2, 7)
-        .await?;
+    token_send_to_fresh_account(
+        &mut ctx,
+        definition_account_id_2,
+        supply_account_id_2,
+        recipient_account_id_2,
+        7,
+    )
+    .await?;
 
     info!("=================== SETUP FINISHED ===============");
 
@@ -345,8 +357,15 @@ async fn amm_new_pool_using_labels() -> Result<()> {
     .await?;
 
     // `holding_a_id` is still unclaimed, so bypass the wallet CLI (see
-    // `token_send_claiming_new_account`'s docs for why).
-    token_send_claiming_new_account(&mut ctx, supply_account_id_1, holding_a_id, 5).await?;
+    // `token_send_to_fresh_account`'s docs for why).
+    token_send_to_fresh_account(
+        &mut ctx,
+        definition_account_id_1,
+        supply_account_id_1,
+        holding_a_id,
+        5,
+    )
+    .await?;
 
     // Create token 2 and distribute to holding_b
     create_token(
@@ -359,7 +378,14 @@ async fn amm_new_pool_using_labels() -> Result<()> {
     .await?;
 
     // `holding_b_id` is still unclaimed, so bypass the wallet CLI the same way.
-    token_send_claiming_new_account(&mut ctx, supply_account_id_2, holding_b_id, 5).await?;
+    token_send_to_fresh_account(
+        &mut ctx,
+        definition_account_id_2,
+        supply_account_id_2,
+        holding_b_id,
+        5,
+    )
+    .await?;
 
     // Create AMM pool using account labels instead of IDs
     let subcommand = AmmProgramAgnosticSubcommand::New {

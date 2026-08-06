@@ -129,6 +129,23 @@ impl Token<'_> {
             })
     }
 
+    pub async fn send_initialize_account(
+        &self,
+        definition: AccountIdentity,
+        holding: AccountIdentity,
+    ) -> Result<HashType, ExecutionFailureKind> {
+        let instruction_data = Program::serialize_instruction(Instruction::InitializeAccount)
+            .expect("Instruction should serialize");
+
+        self.0
+            .send_pub_tx(
+                vec![definition, holding],
+                instruction_data,
+                programs::token().id(),
+            )
+            .await
+    }
+
     pub async fn send_transfer_transaction(
         &self,
         sender: AccountIdentity,

@@ -140,14 +140,21 @@ pub async fn token_send(
     Ok(())
 }
 
-/// Like [`token_send`], but for a `to` that is still a fresh, unclaimed holding account. See
-/// [`send_claiming_new_account`] for why the CLI can't be used here.
-pub async fn token_send_claiming_new_account(
+pub async fn token_send_to_fresh_account(
     ctx: &mut TestContext,
+    definition: AccountId,
     from: AccountId,
     to: AccountId,
     amount: u128,
 ) -> Result<()> {
+    Token(ctx.wallet())
+        .send_initialize_account(
+            AccountIdentity::PublicNoSign(definition),
+            AccountIdentity::Public(to),
+        )
+        .await?;
+    info!("Waiting for next block creation");
+    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
     Token(ctx.wallet())
         .send_transfer_transaction(
             AccountIdentity::Public(from),

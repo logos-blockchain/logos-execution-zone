@@ -1210,6 +1210,38 @@ mod tests {
     }
 
     #[test]
+    fn persistence_round_trip_preserves_the_pda_kind() {
+        let mut user_data = UserKeyChain::default();
+
+        let key_chain = KeyChain::new_os_random();
+        let kind = PrivateAccountKind::Pda {
+            program_id: [3; 8],
+            seed: lee_core::program::PdaSeed::new([5; 32]),
+            identifier: 7,
+        };
+        let account_id = AccountId::for_private_account(
+            &key_chain.nullifier_public_key,
+            &key_chain.viewing_public_key,
+            &kind,
+        );
+
+        user_data.add_imported_private_account(
+            key_chain,
+            None,
+            kind.clone(),
+            lee_core::account::Account::default(),
+        );
+
+        let restored = UserKeyChain::from_persistent(user_data.to_persistent())
+            .expect("persistent data must restore");
+
+        let found = restored
+            .private_account(account_id)
+            .expect("a Pda-kind note must keep its id across a persistence round trip");
+        assert_eq!(*found.kind, kind);
+    }
+
+    #[test]
     fn insert_private_imported_account() {
         let mut user_data = UserKeyChain::default();
 

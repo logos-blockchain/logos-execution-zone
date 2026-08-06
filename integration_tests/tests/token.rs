@@ -9,7 +9,7 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, get_account, new_account, private_mention,
-    public_mention, sync_private, token_send_claiming_new_account, verify_commitment_is_in_state,
+    public_mention, sync_private, token_send_to_fresh_account, verify_commitment_is_in_state,
 };
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use log::info;
@@ -79,12 +79,13 @@ async fn create_and_transfer_public_token() -> Result<()> {
         }
     );
 
-    // Transfer 7 tokens from supply_acc to recipient_account_id. `recipient_account_id` is
-    // still unclaimed, so this bypasses the wallet CLI (which never signs with the recipient's
+    // Transfer 7 tokens from supply_acc to recipient_account_id. `recipient_account_id` has no
+    // holding yet, so this bypasses the wallet CLI (which never signs with the recipient's
     // key) and signs with the recipient's own key directly.
     let transfer_amount = 7;
-    token_send_claiming_new_account(
+    token_send_to_fresh_account(
         &mut ctx,
+        definition_account_id,
         supply_account_id,
         recipient_account_id,
         transfer_amount,
@@ -968,12 +969,13 @@ async fn transfer_token_using_from_label() -> Result<()> {
         wallet::account::AccountIdWithPrivacy::Public(supply_account_id)
     );
 
-    // Transfer token from the label-resolved account. `recipient_account_id` is still
-    // unclaimed, so this bypasses the wallet CLI (which never signs with the recipient's key)
+    // Transfer token from the label-resolved account. `recipient_account_id` has no holding
+    // yet, so this bypasses the wallet CLI (which never signs with the recipient's key)
     // and signs with the recipient's own key directly.
     let transfer_amount = 20;
-    token_send_claiming_new_account(
+    token_send_to_fresh_account(
         &mut ctx,
+        definition_account_id,
         supply_account_id,
         recipient_account_id,
         transfer_amount,
