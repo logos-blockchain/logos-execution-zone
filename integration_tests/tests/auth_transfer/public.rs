@@ -346,8 +346,6 @@ async fn cannot_execute_faucet_program() -> Result<()> {
     let faucet_account_id = system_accounts::faucet_account_id();
 
     let recipient = ctx.existing_public_accounts()[0];
-    let vault_program_id = programs::vault().id();
-    let recipient_vault_id = vault_core::compute_vault_account_id(vault_program_id, recipient);
 
     let recipient_balance_before = account_balance(&ctx, recipient).await?;
     let faucet_balance_before = account_balance(&ctx, faucet_account_id).await?;
@@ -355,7 +353,7 @@ async fn cannot_execute_faucet_program() -> Result<()> {
     let amount = 1_u128;
     let message = public_transaction::Message::try_new(
         programs::faucet().id(),
-        vec![faucet_account_id, recipient_vault_id],
+        vec![faucet_account_id, recipient],
         vec![],
         faucet_core::Instruction::GenesisTransferDirect { amount },
     )?;
@@ -398,13 +396,11 @@ async fn user_tx_that_chain_calls_faucet_is_dropped() -> Result<()> {
     let faucet_account_id = system_accounts::faucet_account_id();
     let attacker = ctx.existing_public_accounts()[0];
     let faucet_program_id = programs::faucet().id();
-    let vault_program_id = programs::vault().id();
-    let attacker_vault_id = vault_core::compute_vault_account_id(vault_program_id, attacker);
     let amount: u128 = 1;
 
     let message = public_transaction::Message::try_new(
         faucet_chain_caller.id(),
-        vec![faucet_account_id, attacker_vault_id],
+        vec![faucet_account_id, attacker],
         vec![],
         (faucet_program_id, attacker, amount),
     )?;
@@ -414,7 +410,7 @@ async fn user_tx_that_chain_calls_faucet_is_dropped() -> Result<()> {
     ));
 
     let faucet_balance_before = account_balance(&ctx, faucet_account_id).await?;
-    let vault_balance_before = account_balance(&ctx, attacker_vault_id).await?;
+    let attacker_balance_before = account_balance(&ctx, attacker).await?;
 
     let tx_hash = ctx.sequencer_client().send_transaction(attack_tx).await?;
 
@@ -422,11 +418,11 @@ async fn user_tx_that_chain_calls_faucet_is_dropped() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     let faucet_balance_after = account_balance(&ctx, faucet_account_id).await?;
-    let vault_balance_after = account_balance(&ctx, attacker_vault_id).await?;
+    let attacker_balance_after = account_balance(&ctx, attacker).await?;
     let tx_on_chain = ctx.sequencer_client().get_transaction(tx_hash).await?;
 
     assert_eq!(faucet_balance_after, faucet_balance_before);
-    assert_eq!(vault_balance_after, vault_balance_before);
+    assert_eq!(attacker_balance_after, attacker_balance_before);
     assert!(tx_on_chain.is_none());
 
     Ok(())

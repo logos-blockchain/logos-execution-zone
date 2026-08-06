@@ -222,7 +222,6 @@ fn initial_programs() -> Vec<Program> {
         programs::amm(),
         programs::clock(),
         programs::ata(),
-        programs::vault(),
         programs::faucet(),
         programs::bridge(),
         // Cross-zone programs are builtins: their bytecode is baked into every node,

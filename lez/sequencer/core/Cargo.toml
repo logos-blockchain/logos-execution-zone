@@ -18,7 +18,6 @@ logos-blockchain-zone-sdk.workspace = true
 testnet_initial_state.workspace = true
 faucet_core.workspace = true
 bridge_core.workspace = true
-vault_core.workspace = true
 programs.workspace = true
 system_accounts.workspace = true
 cross_zone.workspace = true

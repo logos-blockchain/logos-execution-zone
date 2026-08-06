@@ -11,7 +11,7 @@
 
 use std::time::{Duration, Instant};
 
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 use bytesize::ByteSize;
 use common::transaction::LeeTransaction;
 use integration_tests::{TestContext, config::SequencerPartialConfig};
@@ -66,64 +66,7 @@ impl TpsTestManager {
         Duration::from_secs_f64(number_transactions as f64 / self.target_tps as f64)
     }
 
-    /// Claim funds from each account's vault PDA into the account itself.
-    ///
-    /// `GenesisAction::SupplyAccount` funds vault PDAs (not accounts directly), so this step is
-    /// required before sending `authenticated_transfer` transactions from these accounts.
-    /// All claim transactions are submitted at once and then confirmed sequentially.
-    /// After this call every account has nonce 1, so `build_public_txs` must be called after it.
-    pub async fn claim_vault_funds(
-        &self,
-        sequencer_client: &sequencer_service_rpc::SequencerClient,
-    ) -> Result<()> {
-        let vault_program_id = programs::vault().id();
-
-        let mut tx_hashes = Vec::with_capacity(self.public_keypairs.len());
-        for (private_key, account_id) in &self.public_keypairs {
-            let owner_vault_id =
-                vault_core::compute_vault_account_id(vault_program_id, *account_id);
-            let message = putx::Message::try_new(
-                vault_program_id,
-                vec![*account_id, owner_vault_id],
-                vec![Nonce(0_u128)],
-                vault_core::Instruction::Claim { amount: 10 },
-            )
-            .context("Failed to build vault claim message")?;
-            let witness_set =
-                lee::public_transaction::WitnessSet::for_message(&message, &[private_key]);
-            let tx = PublicTransaction::new(message, witness_set);
-            let hash = sequencer_client
-                .send_transaction(LeeTransaction::Public(tx))
-                .await
-                .context("Failed to submit vault claim")?;
-            tx_hashes.push(hash);
-        }
-
-        let deadline = Instant::now() + Duration::from_mins(5);
-        for (i, tx_hash) in tx_hashes.iter().enumerate() {
-            loop {
-                anyhow::ensure!(
-                    Instant::now() < deadline,
-                    "Vault claims timed out after 5 minutes ({i}/{} confirmed)",
-                    tx_hashes.len()
-                );
-                let found = sequencer_client
-                    .get_transaction(*tx_hash)
-                    .await
-                    .ok()
-                    .flatten()
-                    .is_some();
-                if found {
-                    break;
-                }
-            }
-        }
-        Ok(())
-    }
-
     /// Build a batch of public transactions to submit to the node.
-    ///
-    /// Must be called after `claim_vault_funds`, which sets each account's nonce to 1.
     pub fn build_public_txs(&self) -> Vec<PublicTransaction> {
         // Create valid public transactions
         let program = programs::authenticated_transfer();
@@ -183,12 +126,6 @@ pub async fn tps_test() -> Result<()> {
         .with_genesis(tps_test.generate_genesis())
         .build()
         .await?;
-
-    // Genesis funds vault PDAs, not accounts directly. Claim into accounts before measuring.
-    tps_test
-        .claim_vault_funds(ctx.sequencer_client())
-        .await
-        .context("Failed to claim vault funds for TPS accounts")?;
 
     let target_time = tps_test.target_time();
     info!(

@@ -351,7 +351,7 @@ async fn an_orphaned_deposit_is_reminted_exactly_once_in_the_replacement() {
     // Manifestation 2 from #639: a deposit-carrying block is orphaned. Recovery
     // rests entirely on the receipt PDA reverting with the block — no requeue,
     // no bookkeeping of our own — so the still-pending record is drained again
-    // on the next turn and the vault is credited exactly once across the reorg.
+    // on the next turn and the recipient is credited exactly once across the reorg.
     let mut config = setup_sequencer_config();
     config.genesis = vec![GenesisAction::SupplyBridgeAccount { balance: 1_000_000 }];
     let recipient_id = initial_public_user_accounts()[0].account_id;
@@ -414,11 +414,10 @@ async fn an_orphaned_deposit_is_reminted_exactly_once_in_the_replacement() {
         mints, 1,
         "the deposit is re-minted exactly once after the orphan"
     );
-    let vault_id = vault_core::compute_vault_account_id(programs::vault().id(), recipient_id);
     assert_eq!(
-        sequencer.with_state(|s| s.get_account_by_id(vault_id).balance),
+        sequencer.with_state(|s| s.get_account_by_id(recipient_id).balance),
         u128::from(amount),
-        "the vault is credited exactly once across the reorg"
+        "the recipient is credited exactly once across the reorg"
     );
 }
 
@@ -449,15 +448,14 @@ async fn a_replayed_deposit_mint_no_ops_in_the_guest() {
         panic!("bridge deposit tx is public");
     };
 
-    let vault_id = vault_core::compute_vault_account_id(programs::vault().id(), recipient_id);
     let mut state = sequencer.chain().lock().unwrap().head_state().clone();
 
-    // First mint: claims the receipt and credits the recipient vault.
+    // First mint: claims the receipt and credits the recipient.
     state
         .transition_from_public_transaction(public_tx, 1, 0)
         .expect("first mint executes");
     assert_eq!(
-        state.get_account_by_id(vault_id).balance,
+        state.get_account_by_id(recipient_id).balance,
         u128::from(amount)
     );
     assert!(
@@ -466,14 +464,14 @@ async fn a_replayed_deposit_mint_no_ops_in_the_guest() {
     );
 
     // Replay the identical mint. The guest sees the receipt already exists and
-    // no-ops instead of failing, so the vault is credited exactly once.
+    // no-ops instead of failing, so the recipient is credited exactly once.
     state
         .transition_from_public_transaction(public_tx, 2, 0)
         .expect("a replayed deposit is a no-op, not an error");
     assert_eq!(
-        state.get_account_by_id(vault_id).balance,
+        state.get_account_by_id(recipient_id).balance,
         u128::from(amount),
-        "a replayed deposit must not re-credit the vault"
+        "a replayed deposit must not re-credit the recipient"
     );
 }
 

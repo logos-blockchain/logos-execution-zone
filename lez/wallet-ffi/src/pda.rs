@@ -85,8 +85,7 @@ pub unsafe extern "C" fn wallet_ffi_account_id_for_private_pda(
 #[cfg(test)]
 mod tests {
     use lee::AccountId;
-    use lee_core::{encryption::ViewingPublicKey, NullifierPublicKey};
-    use vault_core::PdaSeed;
+    use lee_core::{encryption::ViewingPublicKey, program::PdaSeed, NullifierPublicKey};
 
     use crate::{
         error::WalletFfiError,

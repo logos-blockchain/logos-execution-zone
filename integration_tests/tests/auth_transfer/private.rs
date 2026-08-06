@@ -590,15 +590,14 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
     let faucet_account_id = system_accounts::faucet_account_id();
     let attacker_id = ctx.existing_public_accounts()[0];
     let faucet_program_id = programs::faucet().id();
-    let vault_program_id = programs::vault().id();
     let auth_transfer_program_id = programs::authenticated_transfer().id();
     let ask = lee_core::AuthorizationSecretKey([3; 32]);
     let nsk = lee_core::NullifierSecretKey::from(&ask);
     let npk = NullifierPublicKey::from(&nsk);
     let vpk = ViewingPublicKey::from_bytes(vec![4_u8; 1184]).unwrap();
-    let attacker_vault_id = {
-        let seed = vault_core::compute_vault_seed(attacker_id);
-        AccountId::for_private_pda(&vault_program_id, &seed, &npk, &vpk, 1337)
+    let attacker_pda_id = {
+        let seed = lee_core::program::PdaSeed::new([0; 32]);
+        AccountId::for_private_pda(&auth_transfer_program_id, &seed, &npk, &vpk, 1337)
     };
     let amount: u128 = 1;
 
@@ -607,17 +606,16 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
         false,
         faucet_account_id,
     );
-    let vault_pda_pre = AccountWithMetadata::new(
-        get_account(&ctx, attacker_vault_id).await?,
+    let attacker_pda_pre = AccountWithMetadata::new(
+        get_account(&ctx, attacker_pda_id).await?,
         false,
-        attacker_vault_id,
+        attacker_pda_id,
     );
 
     let program_with_deps = ProgramWithDependencies::new(
         faucet_chain_caller,
         [
             (faucet_program_id, programs::faucet()),
-            (vault_program_id, programs::vault()),
             (auth_transfer_program_id, programs::authenticated_transfer()),
         ]
         .into(),
@@ -626,7 +624,7 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
     let instruction = Program::serialize_instruction((faucet_program_id, attacker_id, amount))?;
 
     let res = execute_and_prove(
-        vec![faucet_pre, vault_pda_pre],
+        vec![faucet_pre, attacker_pda_pre],
         instruction,
         vec![
             InputAccountIdentity::Public,

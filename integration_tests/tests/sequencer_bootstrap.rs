@@ -104,16 +104,14 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
         .unwrap_or_else(|| "<non-string panic payload>".to_owned())
 }
 
-/// A `SupplyAccount` genesis action for a fresh account, returning the vault
-/// account id the funds land in (genesis supply goes into a claimable vault, not
-/// the account directly), so tests can assert genesis state is present.
+/// A `SupplyAccount` genesis action for a fresh account, returning the account id
+/// the funds land in, so tests can assert genesis state is present.
 fn supplied_account(balance: u128) -> (AccountId, GenesisAction) {
     let account_id = AccountId::from(&PublicKey::new_from_private_key(
         &PrivateKey::new_os_random(),
     ));
-    let vault_id = vault_core::compute_vault_account_id(programs::vault().id(), account_id);
     (
-        vault_id,
+        account_id,
         GenesisAction::SupplyAccount {
             account_id,
             balance,
@@ -156,7 +154,7 @@ async fn empty_local_and_empty_bedrock_bootstraps_from_genesis() -> Result<()> {
         .context("Failed to setup Bedrock")?;
     let home = tempfile::tempdir().context("Failed to create sequencer home")?;
 
-    let (vault_id, supply) = supplied_account(12_345);
+    let (account_id, supply) = supplied_account(12_345);
     let genesis = vec![
         supply,
         GenesisAction::SupplyBridgeAccount { balance: 1_000_000 },
@@ -171,9 +169,9 @@ async fn empty_local_and_empty_bedrock_bootstraps_from_genesis() -> Result<()> {
 
     // Fresh store + empty channel: startup bootstrapped genesis state directly.
     assert_eq!(
-        client.get_account_balance(vault_id).await?,
+        client.get_account_balance(account_id).await?,
         12_345,
-        "genesis-supplied vault balance must be present after bootstrap"
+        "genesis-supplied balance must be present after bootstrap"
     );
 
     // The sequencer is live and producing on the freshly opened channel.
@@ -212,7 +210,7 @@ async fn empty_local_reconstructs_from_populated_bedrock() -> Result<()> {
         .await
         .context("Failed to build indexer client")?;
 
-    let (vault_id, supply) = supplied_account(7_777);
+    let (account_id, supply) = supplied_account(7_777);
     let genesis = vec![
         supply,
         GenesisAction::SupplyBridgeAccount { balance: 1_000_000 },
@@ -262,9 +260,9 @@ async fn empty_local_reconstructs_from_populated_bedrock() -> Result<()> {
 
     // Genesis state was rebuilt as part of the reconstruction.
     assert_eq!(
-        client_b.get_account_balance(vault_id).await?,
+        client_b.get_account_balance(account_id).await?,
         7_777,
-        "reconstructed genesis vault balance must be present"
+        "reconstructed genesis balance must be present"
     );
     assert!(handle_b.is_healthy(), "sequencer B must stay healthy");
 
@@ -287,7 +285,7 @@ async fn nonempty_local_against_empty_channel_fails_startup() -> Result<()> {
         .await
         .context("Failed to setup Bedrock")?;
 
-    let (_vault_id, supply) = supplied_account(1);
+    let (_account_id, supply) = supplied_account(1);
     let genesis = vec![
         supply,
         GenesisAction::SupplyBridgeAccount { balance: 1_000_000 },
@@ -386,7 +384,7 @@ async fn local_ahead_of_channel_resumes() -> Result<()> {
         .await
         .context("Failed to build indexer client")?;
 
-    let (vault_id, supply) = supplied_account(4_242);
+    let (account_id, supply) = supplied_account(4_242);
     let genesis = vec![
         supply,
         GenesisAction::SupplyBridgeAccount { balance: 1_000_000 },
@@ -425,7 +423,7 @@ async fn local_ahead_of_channel_resumes() -> Result<()> {
         "restart must not lose locally-produced blocks; tip_b={tip_b}, before={tip_before}"
     );
     assert_eq!(
-        client_b.get_account_balance(vault_id).await?,
+        client_b.get_account_balance(account_id).await?,
         4_242,
         "genesis state must survive the restart"
     );
@@ -466,7 +464,7 @@ async fn local_behind_channel_reconstructs_forward() -> Result<()> {
         .await
         .context("Failed to build indexer client")?;
 
-    let (vault_id, supply) = supplied_account(5_005);
+    let (account_id, supply) = supplied_account(5_005);
     let genesis = vec![
         supply,
         GenesisAction::SupplyBridgeAccount { balance: 1_000_000 },
@@ -531,7 +529,7 @@ async fn local_behind_channel_reconstructs_forward() -> Result<()> {
         "reconstruction must advance beyond the snapshot tip; tip={tip}"
     );
     assert_eq!(
-        client.get_account_balance(vault_id).await?,
+        client.get_account_balance(account_id).await?,
         5_005,
         "genesis state must be intact after reconstruction"
     );

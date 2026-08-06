@@ -6,6 +6,5 @@ license = { workspace = true }
 
 [dependencies]
 bridge_core.workspace = true
-vault_core.workspace = true
 authenticated_transfer_core.workspace = true
 lee_core.workspace = true

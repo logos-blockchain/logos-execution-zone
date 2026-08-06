@@ -324,7 +324,7 @@ fn build_public_withdraw_tx(
 /// pending record before reconstruction replays the same deposit block.
 /// Reconstruction must drop that record — its mint is permanently reflected in
 /// the reconstructed state (the receipt PDA) — so the next production neither
-/// re-mints the vault nor emits a stray deposit tx.
+/// re-mints the recipient nor emits a stray deposit tx.
 #[tokio::test]
 async fn reconstructed_deposit_is_not_reminted_after_backfill_redelivery() {
     let recipient = initial_public_user_accounts()[0].account_id;
@@ -409,11 +409,10 @@ async fn reconstructed_deposit_is_not_reminted_after_backfill_redelivery() {
 
     seq_b.produce_new_block().await.unwrap();
 
-    let vault_id = vault_core::compute_vault_account_id(programs::vault().id(), recipient);
     let bridge_id = system_accounts::bridge_account_id();
     let state_b = seq_b.chain().lock().unwrap().head_state().clone();
     let state_a = seq_a.chain().lock().unwrap().head_state().clone();
-    for account in [vault_id, bridge_id, recipient] {
+    for account in [bridge_id, recipient] {
         assert_eq!(
             state_b.get_account_by_id(account).balance,
             state_a.get_account_by_id(account).balance,
@@ -421,9 +420,9 @@ async fn reconstructed_deposit_is_not_reminted_after_backfill_redelivery() {
         );
     }
     assert_eq!(
-        state_b.get_account_by_id(vault_id).balance,
+        state_b.get_account_by_id(recipient).balance,
         u128::from(deposit_amount),
-        "deposit must mint into the recipient vault exactly once, not twice"
+        "deposit must mint into the recipient exactly once, not twice"
     );
 
     let produced = seq_b
@@ -558,13 +557,12 @@ async fn reconstruction_reconciles_already_finished_deposit() {
         .expect("reconstruct");
 
     // The mint was applied exactly once.
-    let vault_id = vault_core::compute_vault_account_id(programs::vault().id(), recipient);
     assert_eq!(
         chain_b
             .lock()
             .unwrap()
             .head_state()
-            .get_account_by_id(vault_id)
+            .get_account_by_id(recipient)
             .balance,
         u128::from(deposit_amount),
         "already-finished deposit must be applied exactly once"

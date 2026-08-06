@@ -43,7 +43,6 @@ members = [
   "lez/programs/pinata",
   "lez/programs/pinata_token",
   "lez/programs/token",
-  "lez/programs/vault",
   "lez/programs/cross_zone_inbox",
   "lez/programs/cross_zone_outbox",
   "lez/programs/bridge_lock",
@@ -103,7 +102,6 @@ ata_program = { path = "lez/programs/associated_token_account" }
 authenticated_transfer_core = { path = "lez/programs/authenticated_transfer/core" }
 faucet_core = { path = "lez/programs/faucet/core" }
 bridge_core = { path = "lez/programs/bridge/core" }
-vault_core = { path = "lez/programs/vault/core" }
 cross_zone_inbox_core = { path = "lez/programs/cross_zone_inbox/core" }
 cross_zone_outbox_core = { path = "lez/programs/cross_zone_outbox/core" }
 bridge_lock_core = { path = "lez/programs/bridge_lock/core" }

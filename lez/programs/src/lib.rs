@@ -14,8 +14,8 @@ mod inner {
         BRIDGE_LOCK_ELF, BRIDGE_LOCK_ID, CLOCK_ELF, CLOCK_ID, CROSS_ZONE_INBOX_ELF,
         CROSS_ZONE_INBOX_ID, CROSS_ZONE_OUTBOX_ELF, CROSS_ZONE_OUTBOX_ID, FAUCET_ELF, FAUCET_ID,
         PINATA_ELF, PINATA_ID, PINATA_TOKEN_ELF, PINATA_TOKEN_ID, PING_RECEIVER_ELF,
-        PING_RECEIVER_ID, PING_SENDER_ELF, PING_SENDER_ID, TOKEN_ELF, TOKEN_ID, VAULT_ELF,
-        VAULT_ID, WRAPPED_TOKEN_ELF, WRAPPED_TOKEN_ID,
+        PING_RECEIVER_ID, PING_SENDER_ELF, PING_SENDER_ID, TOKEN_ELF, TOKEN_ID, WRAPPED_TOKEN_ELF,
+        WRAPPED_TOKEN_ID,
     };
     use lee::program::Program;
 
@@ -74,12 +74,6 @@ mod inner {
 
     #[must_use]
     #[inline]
-    pub const fn vault() -> Program {
-        Program::new_unchecked(VAULT_ID, Cow::Borrowed(VAULT_ELF))
-    }
-
-    #[must_use]
-    #[inline]
     pub const fn faucet() -> Program {
         Program::new_unchecked(FAUCET_ID, Cow::Borrowed(FAUCET_ELF))
     }
@@ -134,7 +128,6 @@ mod inner {
         fn builtin_programs() {
             let auth_transfer_program = authenticated_transfer();
             let token_program = token();
-            let vault_program = vault();
             let faucet_program = faucet();
             let bridge_program = bridge();
             let pinata_program = pinata();
@@ -143,8 +136,6 @@ mod inner {
             assert_eq!(auth_transfer_program.elf(), AUTHENTICATED_TRANSFER_ELF);
             assert_eq!(token_program.id(), TOKEN_ID);
             assert_eq!(token_program.elf(), TOKEN_ELF);
-            assert_eq!(vault_program.id(), VAULT_ID);
-            assert_eq!(vault_program.elf(), VAULT_ELF);
             assert_eq!(faucet_program.id(), FAUCET_ID);
             assert_eq!(faucet_program.elf(), FAUCET_ELF);
             assert_eq!(bridge_program.id(), BRIDGE_ID);
@@ -165,7 +156,6 @@ mod inner {
                 (PINATA_ELF, PINATA_ID),
                 (PINATA_TOKEN_ELF, PINATA_TOKEN_ID),
                 (TOKEN_ELF, TOKEN_ID),
-                (VAULT_ELF, VAULT_ID),
                 (CROSS_ZONE_OUTBOX_ELF, CROSS_ZONE_OUTBOX_ID),
                 (CROSS_ZONE_INBOX_ELF, CROSS_ZONE_INBOX_ID),
                 (PING_SENDER_ELF, PING_SENDER_ID),
