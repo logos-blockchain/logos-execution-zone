@@ -26,8 +26,8 @@ use lee::{
     },
 };
 use lee_core::{
-    BlockId, Commitment, CommitmentSetDigest, MembershipProof, SharedSecretKey, account::Nonce,
-    program::InstructionData,
+    BlockId, Commitment, CommitmentSetDigest, MembershipProof, PrivateAccountKind, SharedSecretKey,
+    account::Nonce, program::InstructionData,
 };
 use log::{info, warn};
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
@@ -353,18 +353,24 @@ impl WalletCore {
         self.storage.key_chain_mut().set_sealing_secret_key(key);
     }
 
+    #[must_use]
+    pub fn private_account_kind(&self, account_id: lee::AccountId) -> Option<PrivateAccountKind> {
+        self.storage
+            .key_chain()
+            .private_account(account_id)
+            .map(|found| found.kind.clone())
+    }
+
     /// Resolve an `AccountId` to the appropriate `AccountIdentity` variant.
     /// Checks the key tree first, then shared private accounts.
     #[must_use]
     pub fn resolve_private_account(&self, account_id: lee::AccountId) -> Option<AccountIdentity> {
         // Check key tree first
-        if self
-            .storage
-            .key_chain()
-            .private_account(account_id)
-            .is_some()
-        {
-            return Some(AccountIdentity::PrivateOwned(account_id));
+        if let Some(kind) = self.private_account_kind(account_id) {
+            return Some(match kind {
+                PrivateAccountKind::Regular(_) => AccountIdentity::PrivateOwned(account_id),
+                PrivateAccountKind::Pda { .. } => AccountIdentity::PrivatePdaOwned(account_id),
+            });
         }
 
         // Check shared private accounts
