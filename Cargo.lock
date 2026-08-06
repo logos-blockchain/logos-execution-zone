@@ -10178,6 +10178,7 @@ name = "test_fixtures"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "authenticated_transfer_core",
  "bip39",
  "bytesize",
  "common",

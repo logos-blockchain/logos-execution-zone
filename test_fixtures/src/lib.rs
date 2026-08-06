@@ -389,6 +389,10 @@ impl TestContextBuilder {
             sync_wallet_from_prebuilt(&mut wallet)
                 .await
                 .context("Failed to sync wallet from prebuilt database")?;
+        } else {
+            setup::fund_private_accounts(&wallet, &initial_private_accounts)
+                .await
+                .context("Failed to fund fixture private accounts")?;
         }
 
         let sequencer_client = setup::sequencer_client(sequencer_handle.addr())

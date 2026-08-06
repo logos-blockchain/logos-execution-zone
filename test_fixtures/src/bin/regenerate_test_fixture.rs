@@ -61,6 +61,10 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
     .await
     .context("Failed to setup wallet for fixture generation")?;
 
+    test_fixtures::setup::fund_private_accounts(&wallet, &initial_private_accounts)
+        .await
+        .context("Failed to fund fixture private accounts")?;
+
     // Shut down gracefully to release the rocksdb lock before reopening the store.
     drop(wallet);
     drop(sequencer_handle);

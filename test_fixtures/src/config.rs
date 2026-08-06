@@ -22,6 +22,12 @@ pub const SEQUENCER_SIGNING_KEY: [u8; 32] = [37; 32];
 const DEFAULT_PUBLIC_ACCOUNT_SEEDS: [[u8; 32]; 2] = [[0x11; 32], [0x22; 32]];
 const DEFAULT_PRIVATE_ACCOUNT_SEEDS: [[u8; 32]; 2] = [[0x33; 32], [0x44; 32]];
 
+// The private accounts cannot be supplied directly at genesis: a genesis `SupplyAccount` writes
+// the public map, which has no entry for a private account id. They are funded instead by real
+// transfers out of this source account, which exists only for that purpose and is never imported
+// into the wallet.
+const PRIVATE_FUNDING_SOURCE_SEED: [u8; 32] = [0x55; 32];
+
 #[derive(Clone)]
 pub struct InitialPrivateAccountForWallet {
     pub key_chain: KeyChain,
@@ -196,19 +202,28 @@ pub fn genesis_from_accounts(
         }
     });
 
-    let private_genesis = private_accounts
-        .iter()
-        .map(|account| GenesisAction::SupplyAccount {
-            account_id: account.account_id(),
-            balance: account.balance,
-        });
+    let private_funding_source = std::iter::once(GenesisAction::SupplyAccount {
+        account_id: AccountId::from(&PublicKey::new_from_private_key(
+            &private_funding_source_key(),
+        )),
+        balance: private_accounts
+            .iter()
+            .map(|account| account.balance)
+            .sum::<u128>(),
+    });
 
     let supply_bridge_account = GenesisAction::SupplyBridgeAccount { balance: 1_000_000 };
 
     public_genesis
-        .chain(private_genesis)
+        .chain(private_funding_source)
         .chain(std::iter::once(supply_bridge_account))
         .collect()
+}
+
+#[must_use]
+pub fn private_funding_source_key() -> PrivateKey {
+    PrivateKey::try_new(PRIVATE_FUNDING_SOURCE_SEED)
+        .expect("Fixed private funding source seed must be valid")
 }
 
 pub fn wallet_config(sequencer_addr: SocketAddr) -> Result<WalletConfig> {

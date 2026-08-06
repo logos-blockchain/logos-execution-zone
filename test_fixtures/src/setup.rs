@@ -4,15 +4,27 @@ use std::{
 };
 
 use anyhow::{Context as _, Result, bail};
+use authenticated_transfer_core::Instruction as AuthTransferInstruction;
+use common::transaction::LeeTransaction;
 use indexer_service::{ChannelId, IndexerHandle};
-use lee::PrivateKey;
+use lee::{
+    AccountId, PrivacyPreservingTransaction, PrivateKey, PublicKey,
+    privacy_preserving_transaction::{
+        circuit::execute_and_prove, message::Message, witness_set::WitnessSet,
+    },
+    program::Program,
+};
+use lee_core::{
+    DUMMY_COMMITMENT_HASH, InputAccountIdentity, NullifierWitness, PrivateWitness, WitnessKind,
+    account::{Account, AccountWithMetadata},
+};
 use log::{debug, warn};
 use sequencer_core::{
     block_publisher::ED25519_SECRET_KEY_SIZE,
     block_store::{DbDump, SequencerStore},
 };
 use sequencer_service::{GenesisAction, SequencerHandle};
-use sequencer_service_rpc::{SequencerClient, SequencerClientBuilder};
+use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
 use tempfile::TempDir;
 use testcontainers::compose::DockerCompose;
 use wallet::{WalletCore, config::WalletConfigOverrides};
@@ -333,6 +345,69 @@ pub async fn sync_wallet_from_prebuilt(wallet: &mut WalletCore) -> Result<()> {
         .sync_to_latest_block()
         .await
         .context("Failed to sync wallet from prebuilt chain")?;
+
+    Ok(())
+}
+
+pub async fn fund_private_accounts(
+    wallet: &WalletCore,
+    private_accounts: &[InitialPrivateAccountForWallet],
+) -> Result<()> {
+    let source_key = config::private_funding_source_key();
+    let source_id = AccountId::from(&PublicKey::new_from_private_key(&source_key));
+    let program = programs::authenticated_transfer();
+
+    for account in private_accounts {
+        let source = wallet
+            .get_account_public(source_id)
+            .await
+            .map_err(|err| anyhow::anyhow!("failed to fetch private funding source: {err}"))?;
+        let nonce = source.nonce;
+        let recipient_id = account.account_id();
+
+        let instruction = Program::serialize_instruction(AuthTransferInstruction::Transfer {
+            amount: account.balance,
+        })
+        .context("failed to serialize authenticated_transfer instruction")?;
+
+        let (output, proof) = execute_and_prove(
+            vec![
+                AccountWithMetadata::new(source, true, source_id),
+                AccountWithMetadata::new(Account::default(), false, recipient_id),
+            ],
+            instruction,
+            vec![
+                InputAccountIdentity::Public,
+                InputAccountIdentity::Private(PrivateWitness {
+                    vpk: account.key_chain.viewing_public_key.clone(),
+                    random_seed: [0; 32],
+                    identifier: account.identifier,
+                    kind: WitnessKind::Regular { ask: None },
+                    nullifier: NullifierWitness::Init {
+                        npk: account.key_chain.nullifier_public_key,
+                        commitment_root: DUMMY_COMMITMENT_HASH,
+                    },
+                }),
+            ],
+            &program.clone().into(),
+        )
+        .map_err(|err| anyhow::anyhow!("failed to prove fixture funding transfer: {err}"))?;
+
+        let message = Message::from_circuit_output(vec![nonce], output);
+        let witness_set = WitnessSet::for_message(&message, proof, &[&source_key]);
+        wallet
+            .helm_owned()
+            .send_transaction(LeeTransaction::PrivacyPreserving(
+                PrivacyPreservingTransaction::new(message, witness_set),
+            ))
+            .await
+            .map_err(|err| anyhow::anyhow!("failed to submit fixture funding transfer: {err}"))?;
+
+        tokio::time::sleep(std::time::Duration::from_secs(
+            crate::TIME_TO_WAIT_FOR_BLOCK_SECONDS,
+        ))
+        .await;
+    }
 
     Ok(())
 }
