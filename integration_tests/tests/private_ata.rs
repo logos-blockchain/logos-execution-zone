@@ -524,3 +524,56 @@ fn a_public_token_send_to_a_fresh_recipient_is_rejected() {
         "expected the data-on-default rejection, got {err:?}"
     );
 }
+
+#[test]
+fn an_owned_private_holding_initializes_under_its_own_authorization() {
+    let keys = KeyChain::new_os_random();
+    let identifier = 4;
+    let holding_id = AccountId::for_regular_private_account(
+        &keys.nullifier_public_key,
+        &keys.viewing_public_key,
+        identifier,
+    );
+    let state = V03State::new()
+        .with_programs([programs::token()])
+        .with_public_accounts([(DEFINITION_ID, definition_account())]);
+
+    let (output, proof) = execute_and_prove(
+        vec![
+            AccountWithMetadata::new(definition_account(), false, DEFINITION_ID),
+            AccountWithMetadata::new(Account::default(), true, holding_id),
+        ],
+        Program::serialize_instruction(token_core::Instruction::InitializeAccount)
+            .expect("instruction must serialize"),
+        vec![
+            InputAccountIdentity::Public,
+            InputAccountIdentity::Private(PrivateWitness {
+                vpk: keys.viewing_public_key.clone(),
+                random_seed: [9; 32],
+                identifier,
+                kind: WitnessKind::Regular {
+                    ask: Some(keys.private_key_holder.authorization_secret_key),
+                },
+                nullifier: NullifierWitness::Init {
+                    npk: keys.nullifier_public_key,
+                    commitment_root: DUMMY_COMMITMENT_HASH,
+                },
+            }),
+        ],
+        &programs::token().into(),
+    )
+    .expect("an authorized owned private holding must be initializable");
+
+    let message = Message::from_circuit_output(vec![], output);
+    let witness_set = WitnessSet::for_message(&message, proof, &[]);
+    let tx = PrivacyPreservingTransaction::new(message.clone(), witness_set);
+    let mut state = state;
+    state
+        .transition_from_privacy_preserving_transaction(&tx, 1, 0)
+        .expect("the initialize transaction must validate");
+
+    let (kind, account) = decrypt_for(&message, &keys);
+    assert_eq!(kind, PrivateAccountKind::Regular(identifier));
+    assert_eq!(account.program_owner, programs::token().id());
+    assert_eq!(holding_balance(&account), 0);
+}

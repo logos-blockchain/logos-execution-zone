@@ -146,6 +146,65 @@ impl Token<'_> {
             .await
     }
 
+    pub async fn send_initialize_account_private_owned_account(
+        &self,
+        definition_account_id: AccountId,
+        holding_account_id: AccountId,
+    ) -> Result<(HashType, [SharedSecretKey; 2]), ExecutionFailureKind> {
+        let instruction_data = Program::serialize_instruction(Instruction::InitializeAccount)
+            .expect("Instruction should serialize");
+
+        self.0
+            .send_privacy_preserving_tx(
+                vec![
+                    self.0
+                        .resolve_private_account(definition_account_id)
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
+                    self.0
+                        .resolve_private_account(holding_account_id)
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
+                ],
+                instruction_data,
+                &programs::token().into(),
+            )
+            .await
+            .map(|(resp, secrets)| {
+                let mut iter = secrets.into_iter();
+                let first = iter.next().expect("expected definition's secret");
+                let second = iter.next().expect("expected holding's secret");
+                (resp, [first, second])
+            })
+    }
+
+    pub async fn send_initialize_account_shielded_owned_account(
+        &self,
+        definition_account_id: AccountId,
+        holding_account_id: AccountId,
+    ) -> Result<(HashType, SharedSecretKey), ExecutionFailureKind> {
+        let instruction_data = Program::serialize_instruction(Instruction::InitializeAccount)
+            .expect("Instruction should serialize");
+
+        self.0
+            .send_privacy_preserving_tx(
+                vec![
+                    AccountIdentity::PublicNoSign(definition_account_id),
+                    self.0
+                        .resolve_private_account(holding_account_id)
+                        .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
+                ],
+                instruction_data,
+                &programs::token().into(),
+            )
+            .await
+            .map(|(resp, secrets)| {
+                let first = secrets
+                    .into_iter()
+                    .next()
+                    .expect("expected holding's secret");
+                (resp, first)
+            })
+    }
+
     pub async fn send_transfer_transaction(
         &self,
         sender: AccountIdentity,
