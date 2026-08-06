@@ -40,6 +40,7 @@ mod flash_swap;
 mod genesis;
 mod privacy_preserving;
 mod public_program_rules;
+mod unclaimed_credit_armor;
 mod validity_window;
 
 impl V03State {
