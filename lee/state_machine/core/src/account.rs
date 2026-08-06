@@ -177,6 +177,22 @@ impl AccountId {
     pub const fn into_value(self) -> [u8; 32] {
         self.value
     }
+
+    #[must_use]
+    pub fn for_public_key(key: &[u8; 32]) -> Self {
+        const PUBLIC_ACCOUNT_ID_PREFIX: &[u8; 32] =
+            b"/LEE/v0.3/AccountId/Public/\x00\x00\x00\x00\x00";
+
+        let mut bytes = [0_u8; 64];
+        bytes[0..32].copy_from_slice(PUBLIC_ACCOUNT_ID_PREFIX);
+        bytes[32..64].copy_from_slice(key);
+        Self::new(
+            Impl::hash_bytes(&bytes)
+                .as_bytes()
+                .try_into()
+                .expect("Hash output must be exactly 32 bytes long"),
+        )
+    }
 }
 
 impl AsRef<[u8]> for AccountId {
@@ -350,5 +366,15 @@ mod tests {
         let nonce_restored = borsh::from_slice(&borsh_serialized_nonce).unwrap();
 
         assert_eq!(nonce, nonce_restored);
+    }
+
+    #[test]
+    fn for_public_key_matches_pinned_value() {
+        let expected = AccountId::new([
+            109, 1, 100, 15, 223, 4, 203, 227, 239, 76, 198, 176, 77, 210, 101, 91, 29, 240, 248,
+            237, 99, 193, 147, 100, 174, 74, 73, 173, 204, 155, 153, 189,
+        ]);
+
+        assert_eq!(AccountId::for_public_key(&[1; 32]), expected);
     }
 }

@@ -4,7 +4,6 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use k256::elliptic_curve::sec1::ToEncodedPoint as _;
 use lee_core::account::AccountId;
 use serde_with::{DeserializeFromStr, SerializeDisplay};
-use sha2::{Digest as _, Sha256};
 
 use crate::{PrivateKey, error::LeeError};
 
@@ -75,13 +74,7 @@ impl PublicKey {
 
 impl From<&PublicKey> for AccountId {
     fn from(key: &PublicKey) -> Self {
-        const PUBLIC_ACCOUNT_ID_PREFIX: &[u8; 32] =
-            b"/LEE/v0.3/AccountId/Public/\x00\x00\x00\x00\x00";
-
-        let mut hasher = Sha256::new();
-        hasher.update(PUBLIC_ACCOUNT_ID_PREFIX);
-        hasher.update(key.0);
-        Self::new(hasher.finalize().into())
+        Self::for_public_key(&key.0)
     }
 }
 
