@@ -642,7 +642,12 @@ pub unsafe extern "C" fn wallet_ffi_import_private_account(
     wallet
         .storage_mut()
         .key_chain_mut()
-        .add_imported_private_account(key_chain, chain_index, identifier, account);
+        .add_imported_private_account(
+            key_chain,
+            chain_index,
+            lee_core::PrivateAccountKind::Regular(identifier),
+            account,
+        );
 
     match wallet.store_persistent_data() {
         Ok(()) => WalletFfiError::Success,

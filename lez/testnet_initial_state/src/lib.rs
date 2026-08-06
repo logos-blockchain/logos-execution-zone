@@ -58,16 +58,16 @@ pub struct PrivateAccountPrivateInitialData {
     pub account: lee_core::account::Account,
     pub key_chain: KeyChain,
     pub chain_index: Option<ChainIndex>,
-    pub identifier: lee_core::Identifier,
+    pub kind: lee_core::PrivateAccountKind,
 }
 
 impl PrivateAccountPrivateInitialData {
     #[must_use]
     pub fn account_id(&self) -> lee::AccountId {
-        lee::AccountId::for_regular_private_account(
+        lee::AccountId::for_private_account(
             &self.key_chain.nullifier_public_key,
             &self.key_chain.viewing_public_key,
-            self.identifier,
+            &self.kind,
         )
     }
 }
@@ -118,7 +118,7 @@ fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialData>
             },
             key_chain: key_chain_1,
             chain_index: None,
-            identifier: 0,
+            kind: lee_core::PrivateAccountKind::Regular(0),
         },
         PrivateAccountPrivateInitialData {
             account: Account {
@@ -129,7 +129,7 @@ fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialData>
             },
             key_chain: key_chain_2,
             chain_index: None,
-            identifier: 0,
+            kind: lee_core::PrivateAccountKind::Regular(0),
         },
     ]
 }

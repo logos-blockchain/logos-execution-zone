@@ -316,7 +316,7 @@ pub async fn setup_wallet(
             .add_imported_private_account(
                 private_account.key_chain.clone(),
                 None,
-                private_account.identifier,
+                lee_core::PrivateAccountKind::Regular(private_account.identifier),
                 lee::Account::default(),
             );
     }

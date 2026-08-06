@@ -490,14 +490,13 @@ impl UserKeyChain {
         &mut self,
         key_chain: KeyChain,
         chain_index: Option<ChainIndex>,
-        identifier: Identifier,
+        kind: PrivateAccountKind,
         account: Account,
     ) {
         let key = ImportedPrivateAccountKey {
             key_chain,
             chain_index,
         };
-        let kind = PrivateAccountKind::Regular(identifier);
         let entry = self.imported_private_accounts.entry(key.clone());
         match entry {
             Entry::Occupied(mut occupied) => {
@@ -783,7 +782,7 @@ impl UserKeyChain {
                         account: account.clone(),
                         key_chain: key_chain.clone(),
                         chain_index: chain_index.clone(),
-                        identifier: kind.identifier(),
+                        kind: kind.clone(),
                     },
                 )));
             }
@@ -860,7 +859,7 @@ impl UserKeyChain {
                             accounts: BTreeMap::new(),
                         })
                         .accounts
-                        .insert(PrivateAccountKind::Regular(data.identifier), data.account);
+                        .insert(data.kind, data.account);
                 }
             }
         }
@@ -907,7 +906,12 @@ mod tests {
         );
 
         let old_account = Account::default();
-        kc.add_imported_private_account(key_chain.clone(), None, identifier, old_account.clone());
+        kc.add_imported_private_account(
+            key_chain.clone(),
+            None,
+            PrivateAccountKind::Regular(identifier),
+            old_account.clone(),
+        );
 
         let old_nullifier =
             Nullifier::for_account_update(&Commitment::new(&account_id, &old_account), &nsk);
@@ -1124,7 +1128,12 @@ mod tests {
             &PrivateAccountKind::Regular(identifier),
         );
         let account = Account::default();
-        kc.add_imported_private_account(key_chain, None, identifier, account.clone());
+        kc.add_imported_private_account(
+            key_chain,
+            None,
+            PrivateAccountKind::Regular(identifier),
+            account.clone(),
+        );
 
         let mut index = kc.build_latest_nullifier_index();
         let unindexed = Nullifier::for_account_update(
@@ -1188,7 +1197,12 @@ mod tests {
         ));
         let account = lee_core::account::Account::default();
 
-        user_data.add_imported_private_account(key_chain, None, 0, account);
+        user_data.add_imported_private_account(
+            key_chain,
+            None,
+            PrivateAccountKind::Regular(0),
+            account,
+        );
 
         let is_account_added = user_data.private_account(account_id).is_some();
 
@@ -1207,7 +1221,12 @@ mod tests {
         ));
         let account = lee_core::account::Account::default();
 
-        user_data.add_imported_private_account(key_chain, None, 0, account.clone());
+        user_data.add_imported_private_account(
+            key_chain,
+            None,
+            PrivateAccountKind::Regular(0),
+            account.clone(),
+        );
 
         let new_account = lee_core::account::Account {
             balance: 100,
@@ -1280,7 +1299,12 @@ mod tests {
             0,
         ));
         let account = lee_core::account::Account::default();
-        user_data.add_imported_private_account(key_chain, None, 0, account);
+        user_data.add_imported_private_account(
+            key_chain,
+            None,
+            PrivateAccountKind::Regular(0),
+            account,
+        );
 
         let (account_id2, chain_index2) = user_data
             .generate_new_privacy_preserving_transaction_key_chain(Some(ChainIndex::root()));

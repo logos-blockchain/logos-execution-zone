@@ -629,7 +629,12 @@ impl WalletSubcommand for ImportSubcommand {
                 wallet_core
                     .storage_mut()
                     .key_chain_mut()
-                    .add_imported_private_account(key_chain, chain_index, identifier, account);
+                    .add_imported_private_account(
+                        key_chain,
+                        chain_index,
+                        lee_core::PrivateAccountKind::Regular(identifier),
+                        account,
+                    );
 
                 wallet_core.store_persistent_data()?;
 
