@@ -79,7 +79,7 @@ fn credited_private_account_burns_its_init_nullifier() {
 #[test]
 fn replayed_init_over_a_credited_private_account_is_rejected_by_the_verifier() {
     let (mut state, keys, account_id, _credited) = credited_private_account();
-    let program = crate::test_methods::claimer();
+    let program = crate::test_methods::noop();
     let attacker_pre = AccountWithMetadata::new(Account::default(), false, account_id);
 
     let (output, proof) = execute_and_prove(
@@ -107,7 +107,7 @@ fn replayed_init_over_a_credited_private_account_is_rejected_by_the_verifier() {
         state
             .check_commitments_are_new(&tx.message.commitments())
             .is_ok(),
-        "the claim produces a fresh commitment, so the commitment check cannot preempt"
+        "the replay produces a fresh commitment, so the commitment check cannot preempt"
     );
     assert!(
         tx.message.nullifiers().iter().all(|(_, digest)| state
@@ -122,6 +122,37 @@ fn replayed_init_over_a_credited_private_account_is_rejected_by_the_verifier() {
     assert!(
         matches!(&error, LeeError::InvalidInput(message) if message == "Nullifier already seen"),
         "expected the burned init nullifier to reject the replay, got {error:?}"
+    );
+}
+
+#[test]
+fn claiming_replay_over_a_credited_private_account_is_rejected_in_circuit() {
+    let (state, keys, account_id, _credited) = credited_private_account();
+    let program = crate::test_methods::claimer();
+    let attacker_pre = AccountWithMetadata::new(Account::default(), false, account_id);
+
+    let result = execute_and_prove(
+        vec![attacker_pre],
+        Program::serialize_instruction(()).unwrap(),
+        vec![InputAccountIdentity::Private(PrivateWitness {
+            vpk: keys.vpk(),
+            random_seed: [1; 32],
+            identifier: 0,
+            kind: WitnessKind::Regular { ask: None },
+            nullifier: NullifierWitness::Init {
+                npk: keys.npk(),
+                commitment_root: state.commitment_root(),
+            },
+        })],
+        &program.into(),
+    );
+
+    let Err(LeeError::CircuitProvingError(message)) = result else {
+        panic!("a claiming replay must be rejected in circuit")
+    };
+    assert!(
+        message.contains("Cannot claim unauthorized private account"),
+        "expected the private claim-authorization gate, got {message}"
     );
 }
 
