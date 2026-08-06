@@ -371,6 +371,7 @@ fn mock_public_tx(
             signatures_and_public_keys: vec![],
             proof: None,
         },
+        exhibited_keys: vec![],
     })
 }
 

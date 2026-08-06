@@ -29,6 +29,7 @@ pub fn TransactionPreview(transaction: Transaction) -> impl IntoView {
                 hash: _,
                 message,
                 witness_set: _,
+                exhibited_keys: _,
             } = tx;
             format!("{} accounts involved", message.account_ids.len())
         }

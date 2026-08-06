@@ -1,4 +1,5 @@
 use super::*;
+use crate::privacy_preserving_transaction::circuit::execute_and_prove_with_padded_inputs;
 
 #[test]
 fn claiming_mechanism() {
@@ -705,4 +706,255 @@ fn delegated_pda_claim_survives_with_no_signer() {
         state.get_account_by_id(pda_id).program_owner,
         simple_transfer.id()
     );
+}
+
+fn claim_exhibited_publicly(
+    account_id: AccountId,
+    exhibited: Vec<[u8; 32]>,
+) -> (V03State, Result<(), LeeError>) {
+    let program = crate::test_methods::claimer();
+    let mut state = V03State::new().with_test_programs();
+
+    let message =
+        public_transaction::Message::try_new(program.id(), vec![account_id], vec![], ()).unwrap();
+    let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+    let tx = PublicTransaction::new(message, witness_set).with_exhibited_keys(exhibited);
+
+    let result = state.transition_from_public_transaction(&tx, 1, 0);
+    (state, result)
+}
+
+fn assert_unproven_claim(result: &Result<(), LeeError>, expected: AccountId) {
+    let Err(LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::UnprovenAccountClaim {
+        account_id,
+    })) = result
+    else {
+        panic!("expected an UnprovenAccountClaim rejection, got: {result:?}");
+    };
+    assert_eq!(*account_id, expected);
+}
+
+fn exhibited_key_bytes(keys: &TestPublicKeys) -> [u8; 32] {
+    *PublicKey::new_from_private_key(&keys.signing_key).value()
+}
+
+#[test]
+fn exhibited_key_account_can_be_claimed_publicly() {
+    let keys = test_public_account_keys_1();
+    let account_id = keys.account_id();
+    let program_id = crate::test_methods::claimer().id();
+
+    let (state, result) = claim_exhibited_publicly(account_id, vec![exhibited_key_bytes(&keys)]);
+    result.expect("an exhibited key account must be claimable without a signature");
+    assert_eq!(
+        state.get_account_by_id(account_id).program_owner,
+        program_id
+    );
+
+    let (state, result) = claim_exhibited_publicly(account_id, vec![]);
+    assert_unproven_claim(&result, account_id);
+    assert_eq!(state.get_account_by_id(account_id), Account::default());
+}
+
+fn claim_exhibited_privately(
+    account_id: AccountId,
+    exhibited: Vec<[u8; 32]>,
+) -> Result<(), LeeError> {
+    let program = crate::test_methods::claimer();
+    execute_and_prove_with_padded_inputs(
+        vec![AccountWithMetadata::new(
+            Account::default(),
+            false,
+            account_id,
+        )],
+        Program::serialize_instruction(()).unwrap(),
+        vec![InputAccountIdentity::Public],
+        vec![],
+        exhibited,
+        &program.into(),
+    )
+    .map(|_| ())
+}
+
+#[test]
+fn exhibited_key_account_can_be_claimed_privately() {
+    let keys = test_public_account_keys_1();
+    let account_id = keys.account_id();
+
+    claim_exhibited_privately(account_id, vec![exhibited_key_bytes(&keys)])
+        .expect("an exhibited key account must be claimable inside the circuit");
+
+    let result = claim_exhibited_privately(account_id, vec![]);
+    let Err(LeeError::CircuitProvingError(message)) = result else {
+        panic!("the empty-exhibition leg must be rejected, got: {result:?}");
+    };
+    assert!(
+        message.contains(&format!("Unproven claim for account {account_id}")),
+        "claim arm did not reject; got: {message}"
+    );
+}
+
+fn drain_with_forged_authorization(exhibited: Vec<[u8; 32]>) -> (V03State, Result<(), LeeError>) {
+    let changer = crate::test_methods::malicious_authorization_changer();
+    let transfer = crate::test_methods::simple_balance_transfer();
+    let victim_keys = test_public_account_keys_1();
+    let victim_id = victim_keys.account_id();
+    let recipient_id = AccountId::new([42; 32]);
+
+    let mut state = V03State::new()
+        .with_public_accounts(public_state_from_balances(&[
+            (victim_id, 100),
+            (recipient_id, 0),
+        ]))
+        .with_test_programs();
+
+    let message = public_transaction::Message::try_new(
+        changer.id(),
+        vec![victim_id, recipient_id],
+        vec![],
+        (100_u128, transfer.id()),
+    )
+    .unwrap();
+    let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+    let tx = PublicTransaction::new(message, witness_set).with_exhibited_keys(exhibited);
+
+    let result = state.transition_from_public_transaction(&tx, 1, 0);
+    (state, result)
+}
+
+#[test]
+fn exhibition_does_not_authorize_publicly() {
+    let victim_keys = test_public_account_keys_1();
+    let victim_id = victim_keys.account_id();
+
+    for exhibited in [vec![], vec![exhibited_key_bytes(&victim_keys)]] {
+        let exhibiting = !exhibited.is_empty();
+        let (state, result) = drain_with_forged_authorization(exhibited);
+
+        let Err(LeeError::InvalidProgramBehavior(
+            InvalidProgramBehaviorError::InvalidAccountAuthorization { account_id },
+        )) = result
+        else {
+            panic!(
+                "a forged authorization must be rejected (exhibiting: {exhibiting}), got: {result:?}"
+            );
+        };
+        assert_eq!(account_id, victim_id);
+        assert_eq!(state.get_account_by_id(victim_id).balance, 100);
+    }
+}
+
+fn transfer_to_forged_authorized_recipient(
+    recipient_id: AccountId,
+    exhibited: Vec<[u8; 32]>,
+) -> (V03State, Result<(), LeeError>) {
+    let program = crate::test_methods::simple_balance_transfer();
+    let sender_keys = test_private_account_keys_1();
+    let sender_account = Account {
+        program_owner: program.id(),
+        balance: 100,
+        ..Account::default()
+    };
+    let sender_account_id =
+        AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
+    let sender_commitment = Commitment::new(&sender_account_id, &sender_account);
+    let sender_init_nullifier = Nullifier::for_account_initialization(&sender_account_id);
+    let mut state =
+        V03State::new().with_private_accounts([(sender_commitment, sender_init_nullifier)]);
+
+    let sender_pre = AccountWithMetadata::new(
+        sender_account,
+        true,
+        (&sender_keys.npk(), &sender_keys.vpk(), 0),
+    );
+    let recipient_pre = AccountWithMetadata::new(Account::default(), true, recipient_id);
+
+    let (output, proof) = execute_and_prove_with_padded_inputs(
+        vec![sender_pre, recipient_pre],
+        Program::serialize_instruction(37_u128).unwrap(),
+        vec![
+            InputAccountIdentity::Private(PrivateWitness {
+                vpk: sender_keys.vpk(),
+                random_seed: [0; 32],
+                identifier: 0,
+                kind: WitnessKind::Regular {
+                    ask: Some(sender_keys.ask),
+                },
+                nullifier: NullifierWitness::Update {
+                    view_tag: 0,
+                    nsk: sender_keys.nsk(),
+                    membership_proof: state
+                        .get_proof_for_commitment(&sender_commitment)
+                        .expect("sender's commitment must be in state"),
+                },
+            }),
+            InputAccountIdentity::Public,
+        ],
+        vec![],
+        exhibited,
+        &program.into(),
+    )
+    .expect("the guest accepts a declared flag on a public account at first sight");
+
+    let message = Message::from_circuit_output(vec![], output);
+    let witness_set = WitnessSet::for_message(&message, proof, &[]);
+    let tx = PrivacyPreservingTransaction::new(message, witness_set);
+
+    let result = state.transition_from_privacy_preserving_transaction(&tx, 1, 0);
+    (state, result)
+}
+
+#[test]
+fn exhibition_does_not_authorize_privately() {
+    let keys = test_public_account_keys_1();
+    let recipient_id = keys.account_id();
+
+    for exhibited in [vec![], vec![exhibited_key_bytes(&keys)]] {
+        let exhibiting = !exhibited.is_empty();
+        let (state, result) = transfer_to_forged_authorized_recipient(recipient_id, exhibited);
+
+        assert!(
+            matches!(result, Err(LeeError::InvalidPrivacyPreservingProof)),
+            "a forged authorization must be rejected (exhibiting: {exhibiting}), got: {result:?}"
+        );
+        assert_eq!(state.get_account_by_id(recipient_id), Account::default());
+    }
+}
+
+#[test]
+fn no_exhibited_bytes_derive_into_the_pda_domain() {
+    let program = crate::test_methods::claimer();
+    let seed = PdaSeed::new([88; 32]);
+    let pda_id = AccountId::for_public_pda(&program.id(), &seed);
+
+    for bytes in [[7; 32], [88; 32], *pda_id.value()] {
+        assert_ne!(AccountId::for_public_key(&bytes), pda_id);
+
+        let (state, result) = claim_exhibited_publicly(pda_id, vec![bytes]);
+        assert_unproven_claim(&result, pda_id);
+        assert_eq!(state.get_account_by_id(pda_id), Account::default());
+    }
+}
+
+#[test]
+fn non_point_exhibited_bytes_still_claim() {
+    let garbage = [
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+        255, 255, 255, 255, 255, 255, 255, 255, 255, 254, 255, 255, 252, 48,
+    ];
+    assert!(PublicKey::try_new(garbage).is_err());
+
+    let account_id = AccountId::for_public_key(&garbage);
+    let program_id = crate::test_methods::claimer().id();
+
+    let (state, result) = claim_exhibited_publicly(account_id, vec![garbage]);
+    result.expect("bytes that are not a curve point must still claim their derived id");
+    assert_eq!(
+        state.get_account_by_id(account_id).program_owner,
+        program_id
+    );
+
+    let (state, result) = claim_exhibited_publicly(account_id, vec![]);
+    assert_unproven_claim(&result, account_id);
+    assert_eq!(state.get_account_by_id(account_id), Account::default());
 }

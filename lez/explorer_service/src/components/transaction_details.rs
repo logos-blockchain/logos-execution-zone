@@ -13,6 +13,7 @@ pub fn PublicTxDetails(tx: PublicTransaction) -> impl IntoView {
         hash: _,
         message,
         witness_set,
+        exhibited_keys: _,
     } = tx;
     let PublicMessage {
         program_id,

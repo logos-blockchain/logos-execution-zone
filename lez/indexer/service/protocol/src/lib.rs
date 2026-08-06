@@ -207,6 +207,7 @@ pub struct PublicTransaction {
     pub hash: HashType,
     pub message: PublicMessage,
     pub witness_set: WitnessSet,
+    pub exhibited_keys: Vec<[u8; 32]>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]

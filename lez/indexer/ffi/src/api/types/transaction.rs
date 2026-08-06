@@ -30,6 +30,7 @@ impl From<PublicTransaction> for FfiPublicTransactionBody {
             hash,
             message,
             witness_set,
+            exhibited_keys: _,
         } = value;
 
         Self {
@@ -81,6 +82,7 @@ impl From<Box<FfiPublicTransactionBody>> for PublicTransaction {
                 },
                 proof: None,
             },
+            exhibited_keys: Vec::new(),
         }
     }
 }

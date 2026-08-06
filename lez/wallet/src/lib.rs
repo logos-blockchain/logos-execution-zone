@@ -777,6 +777,7 @@ impl WalletCore {
                 instruction_data,
                 acc_manager.account_identities(),
                 acc_manager.dummy_inputs_default(),
+                vec![],
                 &program.to_owned(),
             )?;
 

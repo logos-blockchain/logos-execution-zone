@@ -60,6 +60,12 @@ impl ValidatedStateDiff {
             LeeError::InvalidInput("Duplicate account_ids found in message".into(),)
         );
 
+        let exhibited: HashSet<AccountId> = tx
+            .exhibited_keys
+            .iter()
+            .map(AccountId::for_public_key)
+            .collect();
+
         // Build pre_states for execution
         let input_pre_states: Vec<_> = message
             .account_ids
@@ -210,7 +216,7 @@ impl ValidatedStateDiff {
                 match claim {
                     Claim::Key => {
                         ensure!(
-                            pre.is_authorized,
+                            pre.is_authorized || exhibited.contains(&account_id),
                             InvalidProgramBehaviorError::UnprovenAccountClaim { account_id }
                         );
                     }

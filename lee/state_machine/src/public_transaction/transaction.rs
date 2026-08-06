@@ -10,6 +10,7 @@ use crate::public_transaction::{Message, WitnessSet};
 pub struct PublicTransaction {
     pub message: Message,
     pub witness_set: WitnessSet,
+    pub exhibited_keys: Vec<[u8; 32]>,
 }
 
 impl PublicTransaction {
@@ -18,7 +19,14 @@ impl PublicTransaction {
         Self {
             message,
             witness_set,
+            exhibited_keys: Vec::new(),
         }
+    }
+
+    #[must_use]
+    pub fn with_exhibited_keys(mut self, keys: Vec<[u8; 32]>) -> Self {
+        self.exhibited_keys = keys;
+        self
     }
 
     #[must_use]

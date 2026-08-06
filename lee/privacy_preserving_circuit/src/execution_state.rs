@@ -61,6 +61,7 @@ impl ExecutionState {
         account_identities: &[InputAccountIdentity],
         program_id: ProgramId,
         program_outputs: Vec<ProgramOutput>,
+        exhibited_keys: &[[u8; 32]],
     ) -> Self {
         // Build position → (npk, identifier) map for private-PDA pre_states, indexed by position
         // in `account_identities`. The vec is documented as 1:1 with the program's pre_state
@@ -105,6 +106,9 @@ impl ExecutionState {
                     WitnessKind::Pda { binding: None } => {}
                 }
             }
+        }
+        for key in exhibited_keys {
+            witness_derived_accounts.insert(AccountId::for_public_key(key));
         }
 
         let block_valid_from = program_outputs

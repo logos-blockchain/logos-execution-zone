@@ -457,12 +457,14 @@ impl From<lee::PublicTransaction> for PublicTransaction {
         let lee::PublicTransaction {
             message,
             witness_set,
+            exhibited_keys,
         } = value;
 
         Self {
             hash,
             message: message.into(),
             witness_set: witness_set.into(),
+            exhibited_keys,
         }
     }
 }
@@ -475,6 +477,7 @@ impl TryFrom<PublicTransaction> for lee::PublicTransaction {
             hash: _,
             message,
             witness_set,
+            exhibited_keys,
         } = value;
         let WitnessSet {
             signatures_and_public_keys,
@@ -489,7 +492,8 @@ impl TryFrom<PublicTransaction> for lee::PublicTransaction {
                     .map(|(sig, pk)| Ok((sig.into(), pk.try_into()?)))
                     .collect::<Result<Vec<_>, Self::Error>>()?,
             ),
-        ))
+        )
+        .with_exhibited_keys(exhibited_keys))
     }
 }
 
