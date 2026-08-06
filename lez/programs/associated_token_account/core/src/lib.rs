@@ -34,7 +34,7 @@ pub enum Instruction {
 
     TransferPrivate {
         recipient_seed: PdaSeed,
-        senders: Vec<(PdaSeed, u128)>,
+        senders: Vec<(Option<PdaSeed>, u128)>,
     },
 
     /// Burn tokens FROM owner's ATA.

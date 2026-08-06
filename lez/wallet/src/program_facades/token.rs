@@ -202,10 +202,11 @@ impl Token<'_> {
             let definition_id = TokenHolding::try_from(&sender.account.data)
                 .map_err(|_err| ExecutionFailureKind::AccountDataError(sender_account_id))?
                 .definition_id();
-            let PrivateAccountKind::Pda { seed, .. } = sender.kind else {
-                return Err(ExecutionFailureKind::AccountDataError(sender_account_id));
+            let sender_seed = match sender.kind {
+                PrivateAccountKind::Pda { seed, .. } => Some(*seed),
+                PrivateAccountKind::Regular(_) => None,
             };
-            (definition_id, *seed)
+            (definition_id, sender_seed)
         };
 
         let mut recipient_seed = [0; 32];

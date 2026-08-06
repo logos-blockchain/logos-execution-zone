@@ -6,7 +6,7 @@ use token_core::{TokenDefinition, TokenHolding};
 
 pub fn transfer_to_private_associated_token_account(
     token_definition: AccountWithMetadata,
-    senders: Vec<(AccountWithMetadata, PdaSeed, u128)>,
+    senders: Vec<(AccountWithMetadata, Option<PdaSeed>, u128)>,
     recipient: AccountWithMetadata,
     recipient_seed: PdaSeed,
 ) -> (Vec<AccountPostState>, Vec<ChainedCall>) {
@@ -44,21 +44,25 @@ pub fn transfer_to_private_associated_token_account(
     let mut post_states = vec![AccountPostState::new(token_definition.account)];
     for (sender, seed, amount) in senders {
         post_states.push(AccountPostState::new(sender.account.clone()));
+        let (sender, pda_seeds) = match seed {
+            Some(seed) => (
+                AccountWithMetadata {
+                    is_authorized: true,
+                    ..sender
+                },
+                vec![seed],
+            ),
+            None => (sender, Vec::new()),
+        };
         chained_calls.push(
             ChainedCall::new(
                 token_program_id,
-                vec![
-                    AccountWithMetadata {
-                        is_authorized: true,
-                        ..sender
-                    },
-                    credited.clone(),
-                ],
+                vec![sender, credited.clone()],
                 &token_core::Instruction::Transfer {
                     amount_to_transfer: amount,
                 },
             )
-            .with_pda_seeds(vec![seed]),
+            .with_pda_seeds(pda_seeds),
         );
         credit(&mut holding, amount);
         credited.account.data = Data::from(&holding);
