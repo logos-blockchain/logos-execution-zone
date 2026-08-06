@@ -416,7 +416,7 @@ async fn an_orphaned_deposit_is_reminted_exactly_once_in_the_replacement() {
     );
     assert_eq!(
         sequencer.with_state(|s| s.get_account_by_id(recipient_id).balance),
-        u128::from(amount),
+        initial_public_user_accounts()[0].balance + u128::from(amount),
         "the recipient is credited exactly once across the reorg"
     );
 }
@@ -456,7 +456,7 @@ async fn a_replayed_deposit_mint_no_ops_in_the_guest() {
         .expect("first mint executes");
     assert_eq!(
         state.get_account_by_id(recipient_id).balance,
-        u128::from(amount)
+        initial_public_user_accounts()[0].balance + u128::from(amount)
     );
     assert!(
         deposit_already_minted(&state, HashType(deposit_op_id)),
@@ -470,7 +470,7 @@ async fn a_replayed_deposit_mint_no_ops_in_the_guest() {
         .expect("a replayed deposit is a no-op, not an error");
     assert_eq!(
         state.get_account_by_id(recipient_id).balance,
-        u128::from(amount),
+        initial_public_user_accounts()[0].balance + u128::from(amount),
         "a replayed deposit must not re-credit the recipient"
     );
 }

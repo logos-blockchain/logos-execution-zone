@@ -78,7 +78,7 @@ impl TpsTestManager {
                 let message = putx::Message::try_new(
                     program.id(),
                     [pair[0].1, pair[1].1].to_vec(),
-                    [Nonce(1_u128)].to_vec(),
+                    [Nonce(0_u128)].to_vec(),
                     authenticated_transfer_core::Instruction::Transfer { amount },
                 )
                 .unwrap();

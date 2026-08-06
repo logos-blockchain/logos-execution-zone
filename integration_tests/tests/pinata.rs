@@ -14,7 +14,10 @@ use integration_tests::{
 use log::info;
 use tokio::test;
 use wallet::cli::{
-    Command, SubcommandReturnValue, programs::pinata::PinataProgramAgnosticSubcommand,
+    Command, SubcommandReturnValue,
+    programs::{
+        native_token_transfer::AuthTransferSubcommand, pinata::PinataProgramAgnosticSubcommand,
+    },
 };
 
 #[test]
@@ -192,6 +195,22 @@ async fn claim_pinata_to_new_private_account() -> Result<()> {
 
     // Create new private account
     let winner_account_id = new_account(&mut ctx, true, None).await?;
+
+    let funder = ctx.existing_public_accounts()[0];
+    let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
+        from: public_mention(funder),
+        to: Some(private_mention(winner_account_id)),
+        to_npk: None,
+        to_vpk: None,
+        to_keys: None,
+        to_identifier: None,
+        amount: 1,
+    });
+    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
+
+    info!("Waiting for next block creation");
+    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
+    sync_private(&mut ctx).await?;
 
     let new_commitment = ctx
         .wallet()

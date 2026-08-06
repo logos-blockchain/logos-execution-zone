@@ -421,7 +421,8 @@ async fn reconstructed_deposit_is_not_reminted_after_backfill_redelivery() {
     }
     assert_eq!(
         state_b.get_account_by_id(recipient).balance,
-        u128::from(deposit_amount),
+        initial_public_user_accounts()[0].balance + u128::from(deposit_amount)
+            - u128::from(withdraw_amount),
         "deposit must mint into the recipient exactly once, not twice"
     );
 
@@ -564,7 +565,7 @@ async fn reconstruction_reconciles_already_finished_deposit() {
             .head_state()
             .get_account_by_id(recipient)
             .balance,
-        u128::from(deposit_amount),
+        initial_public_user_accounts()[0].balance + u128::from(deposit_amount),
         "already-finished deposit must be applied exactly once"
     );
 
