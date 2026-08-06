@@ -426,17 +426,17 @@ fn consolidate_n(n: u128) -> Result<Message, lee::error::LeeError> {
 }
 
 #[test]
-fn eight_notes_consolidate_and_nine_exceed_the_call_ceiling() {
+fn nine_notes_consolidate_and_ten_exceed_the_call_ceiling() {
     assert!(
-        consolidate_n(8).is_ok(),
-        "eight sender notes must fit inside the chained-call ceiling"
+        consolidate_n(9).is_ok(),
+        "nine sender notes must fit inside the chained-call ceiling"
     );
     assert!(
         matches!(
-            consolidate_n(9),
+            consolidate_n(10),
             Err(lee::error::LeeError::MaxChainedCallsDepthExceeded)
         ),
-        "nine sender notes must exceed the chained-call ceiling"
+        "ten sender notes must exceed the chained-call ceiling"
     );
 }
 
@@ -488,11 +488,14 @@ fn a_received_ata_is_spendable_by_its_owner() {
     assert_eq!(holding_balance(&carol_account), 175);
 }
 
-#[test]
-fn a_public_token_send_to_a_fresh_recipient_is_rejected() {
+fn public_send_to_fresh_recipient(
+    signers: &[&PrivateKey],
+) -> Result<lee::ValidatedStateDiff, lee::error::LeeError> {
     let sender_key = PrivateKey::try_new([7; 32]).expect("valid key");
     let sender_id = AccountId::from(&PublicKey::new_from_private_key(&sender_key));
-    let recipient_id = AccountId::new([0x5C; 32]);
+    let recipient_id = AccountId::from(&PublicKey::new_from_private_key(
+        &PrivateKey::try_new([8; 32]).expect("valid key"),
+    ));
 
     let state = V03State::new()
         .with_programs([programs::token()])
@@ -504,7 +507,7 @@ fn a_public_token_send_to_a_fresh_recipient_is_rejected() {
     let message = PublicMessage::try_new(
         programs::token().id(),
         vec![sender_id, recipient_id],
-        vec![0_u128.into()],
+        vec![0_u128.into(); signers.len()],
         token_core::Instruction::Transfer {
             amount_to_transfer: 40,
         },
@@ -512,17 +515,34 @@ fn a_public_token_send_to_a_fresh_recipient_is_rejected() {
     .expect("build transfer message");
     let tx = PublicTransaction::new(
         message.clone(),
-        PublicWitnessSet::for_message(&message, &[&sender_key]),
+        PublicWitnessSet::for_message(&message, signers),
     );
 
-    let Err(err) = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0) else {
-        panic!("a direct send may no longer bring a holding into existence")
+    ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0)
+}
+
+#[test]
+fn a_public_send_claims_a_fresh_recipient_only_when_it_authorized() {
+    let sender_key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let recipient_key = PrivateKey::try_new([8; 32]).expect("valid key");
+    let recipient_id = AccountId::from(&PublicKey::new_from_private_key(&recipient_key));
+
+    let Err(err) = public_send_to_fresh_recipient(&[&sender_key]) else {
+        panic!("an unauthorized fresh recipient must not be claimable")
     };
-
     assert!(
-        format!("{err:?}").contains("DefaultAccountRetainsData"),
-        "expected the data-on-default rejection, got {err:?}"
+        format!("{err:?}").contains("ClaimedUnauthorizedAccount"),
+        "expected the unauthorized-claim rejection, got {err:?}"
     );
+
+    let diff = public_send_to_fresh_recipient(&[&sender_key, &recipient_key])
+        .expect("a fresh recipient that authorized the send must receive its holding");
+    assert_eq!(
+        diff.public_diff()[&recipient_id].program_owner,
+        programs::token().id(),
+        "the authorized recipient's holding must end up token-owned"
+    );
+    assert_eq!(holding_balance(&diff.public_diff()[&recipient_id]), 40);
 }
 
 #[test]
