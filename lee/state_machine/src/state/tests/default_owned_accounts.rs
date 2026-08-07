@@ -2,8 +2,6 @@ use lee_core::program::DEFAULT_PROGRAM_ID;
 
 use super::*;
 
-const MODIFIED_TRANSFER_OFFSET: u128 = 0x0002_0000;
-
 fn public_transfer_tx(
     program: &Program,
     sender_keys: &TestPublicKeys,
@@ -52,7 +50,7 @@ fn signer_can_authorize_a_claim_free_program_twice() {
 fn credit_to_default_owned_account_without_claim_succeeds() {
     let sender_keys = test_public_account_keys_1();
     let recipient_id = AccountId::new([7; 32]);
-    let program = crate::test_methods::modified_transfer_program();
+    let program = crate::test_methods::simple_balance_transfer();
     let mut state = V03State::new().with_test_programs();
     state.force_insert_account(
         sender_keys.account_id(),
@@ -68,7 +66,7 @@ fn credit_to_default_owned_account_without_claim_succeeds() {
 
     let recipient = state.get_account_by_id(recipient_id);
     assert_eq!(recipient.program_owner, DEFAULT_PROGRAM_ID);
-    assert_eq!(recipient.balance, 1 + MODIFIED_TRANSFER_OFFSET);
+    assert_eq!(recipient.balance, 1);
     assert!(recipient.data.is_empty());
 }
 
@@ -76,7 +74,7 @@ fn credit_to_default_owned_account_without_claim_succeeds() {
 fn authorized_debit_from_funded_default_owned_account_succeeds() {
     let sender_keys = test_public_account_keys_1();
     let recipient_id = AccountId::new([9; 32]);
-    let program = crate::test_methods::modified_transfer_program();
+    let program = crate::test_methods::simple_balance_transfer();
     let mut state = V03State::new().with_test_programs();
     state.force_insert_account(
         sender_keys.account_id(),
@@ -91,7 +89,7 @@ fn authorized_debit_from_funded_default_owned_account_succeeds() {
 
     let sender = state.get_account_by_id(sender_keys.account_id());
     assert_eq!(sender.program_owner, DEFAULT_PROGRAM_ID);
-    assert_eq!(sender.balance, 1_000_000 - 1 - MODIFIED_TRANSFER_OFFSET);
+    assert_eq!(sender.balance, 1_000_000 - 1);
 }
 
 #[test]
