@@ -121,10 +121,11 @@ fn funded_default_owned_account_can_be_claimed_by_authorized_program() {
 
 #[test]
 fn fresh_private_note_with_balance_and_no_claim_succeeds() {
+    const CREDIT: u128 = 1;
     let sender_keys = test_public_account_keys_1();
     let sender_id = sender_keys.account_id();
     let recipient_keys = test_private_account_keys_1();
-    let program = crate::test_methods::modified_transfer_program();
+    let program = crate::test_methods::simple_balance_transfer();
     let mut state = V03State::new().with_test_programs();
     state.force_insert_account(
         sender_id,
@@ -135,16 +136,14 @@ fn fresh_private_note_with_balance_and_no_claim_succeeds() {
         },
     );
 
+    let recipient_id =
+        AccountId::for_regular_private_account(&recipient_keys.npk(), &recipient_keys.vpk(), 0);
     let sender_pre = AccountWithMetadata::new(state.get_account_by_id(sender_id), true, sender_id);
-    let recipient_pre = AccountWithMetadata::new(
-        Account::default(),
-        false,
-        (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
-    );
+    let recipient_pre = AccountWithMetadata::new(Account::default(), false, recipient_id);
 
     let (output, proof) = execute_and_prove(
         vec![sender_pre, recipient_pre],
-        Program::serialize_instruction(1_u128).unwrap(),
+        Program::serialize_instruction(CREDIT).unwrap(),
         vec![
             InputAccountIdentity::Public,
             InputAccountIdentity::Private(PrivateWitness {
@@ -169,4 +168,16 @@ fn fresh_private_note_with_balance_and_no_claim_succeeds() {
     state
         .transition_from_privacy_preserving_transaction(&tx, 1, 0)
         .unwrap();
+
+    let credited = Account {
+        balance: CREDIT,
+        nonce: Nonce::private_account_nonce_init(&recipient_id),
+        ..Account::default()
+    };
+    assert!(
+        state
+            .get_proof_for_commitment(&Commitment::new(&recipient_id, &credited))
+            .is_some(),
+        "the fresh note must be credited and remain default-owned"
+    );
 }
