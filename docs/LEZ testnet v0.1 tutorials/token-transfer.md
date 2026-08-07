@@ -1,5 +1,5 @@
-This tutorial walks through native token transfers between public and private accounts using the Authenticated-Transfers program. You will create and initialize accounts, fund them with the Pinata program, and run transfers across different privacy combinations. By the end, you will have practiced:
-1. Public account creation and initialization.
+This tutorial walks through native token transfers between public and private accounts using the Authenticated-Transfers program. You will create accounts, fund them with the Pinata program, and run transfers across different privacy combinations. By the end, you will have practiced:
+1. Public account creation.
 2. Account funding through the Pinata program.
 3. Native token transfers between public accounts.
 4. Private account creation.
@@ -18,7 +18,7 @@ Commands:
   help  Print this message or the help of the given subcommand(s)
 ```
 
-## 1. Public account creation and initialization
+## 1. Public account creation
 > [!Important]
 > Public accounts live on-chain and are identified by a 32-byte Account ID. Running `wallet account new public` generates a fresh keypair for the signature scheme used in LEZ.
 > The account ID is derived from the public key, and the private key signs transactions and authorizes program executions.
@@ -48,7 +48,7 @@ After the claim succeeds, the account is funded:
 wallet account get --account-id Public/9ypzv6GGr3fwsgxY7EZezg5rz6zj52DPCkmf1vVujEiJ
 
 # Output:
-Account owned by authenticated-transfer program
+Account
 {"balance":150}
 ```
 
@@ -56,12 +56,11 @@ Account owned by authenticated-transfer program
 LEZ includes a program for managing native tokens. Run `wallet auth-transfer` to see the available commands:
 ```bash
 Commands:
-  init  Initialize account under the authenticated-transfer program
   send  Send native tokens from one account to another with variable privacy
   help  Print this message or the help of the given subcommand(s)
 ```
 
-We already used `init`. Now use `send` to execute a transfer.
+Use `send` to execute a transfer.
 
 ### a. Create a recipient account
 ```bash
@@ -72,7 +71,11 @@ Generated new account with account_id Public/Ev1JprP9BmhbFVQyBcbznU8bAXcwrzwRoPT
 ```
 
 > [!NOTE]
-> The new account is uninitialized. The authenticated-transfer program will claim any uninitialized account used in a transfer, so manual initialization isn’t required.
+> The new account is unowned, and it stays that way. No program owns it, and none needs to. Three rules govern ownership in LEZ:
+>
+> 1. **Receiving never confers or requires ownership.** Any program may credit balance to an unowned account, and the account's owner does not change when it does.
+> 2. **Unowned accounts may hold balance and a nonce, but no data.** Data lives only on accounts a program owns.
+> 3. **Ownership is granted, never taken.** A program becomes an account's owner only if that account authorized the transaction, or if the program derived the account's address from its own seed. Knowing an address — or the values it was derived from — grants nothing.
 
 ### b. Send 37 tokens to the new account
 ```bash
@@ -88,7 +91,7 @@ wallet auth-transfer send \
 wallet account get --account-id Public/HrA8TVjBS8UVf9akV7LRhyh6k4c7F6PS7PvqgtPmKAT8
 
 # Output:
-Account owned by authenticated-transfer program
+Account
 {"balance":113}
 ```
 
@@ -97,7 +100,7 @@ Account owned by authenticated-transfer program
 wallet account get --account-id Public/Ev1JprP9BmhbFVQyBcbznU8bAXcwrzwRoPTetXdQPAWS
 
 # Output:
-Account owned by authenticated-transfer program
+Account
 {"balance":37}
 ```
 
@@ -108,7 +111,7 @@ Account owned by authenticated-transfer program
 > Transactions include encrypted private values so the owner can recover them, and the decryption keys are never shared.
 > Private accounts use two keypairs: nullifier keys for privacy-preserving executions and viewing keys for encrypting and decrypting values.
 > The private account ID is derived from the nullifier public key and a numeric identifier: `SHA256(prefix || npk || identifier)`. The same `npk` paired with different identifiers yields different, independent account IDs.
-> Private accounts can be initialized by anyone, but once initialized they can only be modified by the owner’s keys.
+> Anyone can bring a private account into existence by sending to it, but only the holder of its keys can change it afterwards.
 > Updates include a new commitment and a nullifier for the old state, which prevents linkage between versions.
 
 ### a. Create a private account
@@ -142,7 +145,7 @@ Account is Uninitialized
 ## 5. Native token transfer from a public account to a private account
 
 > [!Important]
-> Sending tokens to an uninitialized private account causes the authenticated-transfer program to claim it, just like with public accounts. Program logic is the same regardless of account type.
+> Sending tokens to a private account that does not exist yet brings it into existence, unowned — just like with public accounts. The three ownership rules above hold identically for private accounts; program logic is the same regardless of account type.
 
 ### a. Send 17 tokens to the private account
 
@@ -163,7 +166,7 @@ wallet auth-transfer send \
 wallet account get --account-id Public/Ev1JprP9BmhbFVQyBcbznU8bAXcwrzwRoPTetXdQPAWS
 
 # Output:
-Account owned by authenticated-transfer program
+Account
 {"balance":20}
 ```
 
@@ -172,7 +175,7 @@ Account owned by authenticated-transfer program
 wallet account get --account-id Private/HacPU3hakLYzWtSqUPw6TUr8fqoMieVWovsUR6sJf7cL
 
 # Output:
-Account owned by authenticated-transfer program
+Account
 {"balance":17}
 ```
 
@@ -180,7 +183,7 @@ Account owned by authenticated-transfer program
 > The last command does not query the network. It works offline because private account data is stored locally. Other users cannot read your private balances.
 
 > [!Caution]
-> Private accounts can only be modified by their owner’s keys. The exception is initialization: any user can initialize an uninitialized private account. This enables transfers to a private account owned by someone else, as long as that account is uninitialized.
+> Private accounts can only be modified by the holder of their keys. Creating one is the exception: any user can bring a private account into existence by sending to it, which is what makes transfers to someone else’s private account possible. The sender creates the account and credits it, but gains no control over it.
 
 ## 6. Native token transfer from a public account to a private account owned by someone else
 

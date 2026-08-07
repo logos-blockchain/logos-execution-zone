@@ -598,8 +598,9 @@ In LEE there are two distinct concepts that control who can modify an account:
 **Program Ownership:** Each account has a field: `program_owner: ProgramId`.
 This indicates which program is allowed to update the account’s state during execution.
 - If a program is the program_owner of an account, it can freely mutate its fields.
-- If the account is uninitialized (`program_owner = DEFAULT_PROGRAM_ID`), a program may claim it and become its owner.
-- If a program is not the owner and the account is not claimable, any attempt to modify it will cause the transition to fail.
+- If the account is unowned (`program_owner = DEFAULT_PROGRAM_ID`), any program may credit balance to it without becoming its owner. An account that ends a transaction unowned carries no data.
+- A program becomes an account's owner only if that account authorized the transaction, or if the program derived the account's address from its own seed. Ownership is granted, never taken.
+- If a program is not the owner and does not acquire ownership, any attempt to write the account's data will cause the transition to fail.
 Program ownership is about mutation rights during program execution.
 
 **Account authority**: Independent from program ownership, each account also has an authority. The entity that is allowed to set: `is_authorized = true`. This flag indicates that the account has been authorized for use in a transaction.
