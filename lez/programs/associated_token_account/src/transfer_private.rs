@@ -14,7 +14,7 @@ pub fn transfer_to_private_associated_token_account(
 
     let mut chained_calls = Vec::new();
     let mut post_states = vec![AccountPostState::new(token_definition.account)];
-    let mut credited: Option<TokenHolding> = None;
+    let mut recipient_holding: Option<TokenHolding> = None;
 
     for (sender, seed, amount) in senders {
         post_states.push(AccountPostState::new(sender.account.clone()));
@@ -22,7 +22,7 @@ pub fn transfer_to_private_associated_token_account(
         let sender_holding = TokenHolding::try_from(&sender.account.data)
             .expect("Sender must hold a valid token holding");
         let recipient_pre = AccountWithMetadata {
-            account: match &credited {
+            account: match &recipient_holding {
                 Some(holding) => Account {
                     program_owner: token_program_id,
                     data: Data::from(holding),
@@ -58,9 +58,9 @@ pub fn transfer_to_private_associated_token_account(
         );
 
         let mut holding =
-            credited.unwrap_or_else(|| TokenHolding::zeroized_clone_from(&sender_holding));
+            recipient_holding.unwrap_or_else(|| TokenHolding::zeroized_clone_from(&sender_holding));
         credit(&mut holding, amount);
-        credited = Some(holding);
+        recipient_holding = Some(holding);
     }
     post_states.push(AccountPostState::new(recipient.account));
 
