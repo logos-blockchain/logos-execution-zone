@@ -10,7 +10,7 @@ use anyhow::{Context as _, Result};
 use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, assert_public_account_restored,
     fetch_privacy_preserving_tx, new_account, private_mention, public_mention,
-    restored_private_account, send, send_claiming_new_account, verify_commitment_is_in_state,
+    restored_private_account, send, verify_commitment_is_in_state,
 };
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use lee::AccountId;
@@ -121,10 +121,21 @@ async fn restore_keys_from_seed() -> Result<()> {
     let to_account_id3 = new_account(&mut ctx, false, Some(ChainIndex::root())).await?;
     let to_account_id4 = new_account(&mut ctx, false, Some(ChainIndex::from_str("/0")?)).await?;
 
-    // Send to both public accounts. Both are still unclaimed, so bypass the wallet CLI (which
-    // never signs with the recipient's key) and sign with the recipient's own key directly.
-    send_claiming_new_account(&mut ctx, from, to_account_id3, 102).await?;
-    send_claiming_new_account(&mut ctx, from, to_account_id4, 103).await?;
+    // Send to both public accounts.
+    send(
+        &mut ctx,
+        public_mention(from),
+        public_mention(to_account_id3),
+        102,
+    )
+    .await?;
+    send(
+        &mut ctx,
+        public_mention(from),
+        public_mention(to_account_id4),
+        103,
+    )
+    .await?;
 
     info!("Preparation complete, performing keys restoration");
 

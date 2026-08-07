@@ -20,7 +20,7 @@ use wallet::{
             native_token_transfer::AuthTransferSubcommand, token::TokenProgramAgnosticSubcommand,
         },
     },
-    program_facades::{native_token_transfer::NativeTokenTransfer, token::Token},
+    program_facades::token::Token,
     storage::key_chain::FoundPrivateAccount,
 };
 
@@ -67,34 +67,6 @@ pub async fn send(
         amount,
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
-    Ok(())
-}
-
-/// Like [`send`], but for a `to` that is still a fresh, unclaimed account.
-///
-/// The wallet CLI's `AuthTransfer::Send` never signs with the recipient's key (by design: the
-/// sender's wallet must not sign on behalf of an account it doesn't own). But claiming a fresh
-/// account is only possible if that account's own key signs the transaction, so this bypasses
-/// the CLI and calls the program facade directly with an explicit `AccountIdentity::Public` for
-/// the recipient, using the key the test wallet holds for the account it just created.
-///
-/// Unlike `send`, this doesn't go through the CLI's own poll-until-included step, so it waits
-/// for block creation itself before returning.
-pub async fn send_claiming_new_account(
-    ctx: &mut TestContext,
-    from: AccountId,
-    to: AccountId,
-    amount: u128,
-) -> Result<()> {
-    NativeTokenTransfer(ctx.wallet())
-        .send_public_transfer(
-            AccountIdentity::Public(from),
-            AccountIdentity::Public(to),
-            amount,
-        )
-        .await?;
-    info!("Waiting for next block creation");
-    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
     Ok(())
 }
 

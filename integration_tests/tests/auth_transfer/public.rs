@@ -3,8 +3,7 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, account_balance, new_account, public_mention,
-    send, send_claiming_new_account,
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, account_balance, new_account, public_mention, send,
 };
 use lee::{PublicKey, public_transaction};
 use log::info;
@@ -90,9 +89,13 @@ pub async fn successful_transfer_to_new_account() -> Result<()> {
     let new_persistent_account_id = new_account(&mut ctx, false, None).await?;
 
     let sender = ctx.existing_public_accounts()[0];
-    // The wallet CLI never signs with the recipient's key, but claiming this fresh account
-    // requires it, so bypass the CLI for this one send.
-    send_claiming_new_account(&mut ctx, sender, new_persistent_account_id, 100).await?;
+    send(
+        &mut ctx,
+        public_mention(sender),
+        public_mention(new_persistent_account_id),
+        100,
+    )
+    .await?;
 
     info!("Checking correct balance move");
     let acc_1_balance = account_balance(&ctx, sender).await?;
