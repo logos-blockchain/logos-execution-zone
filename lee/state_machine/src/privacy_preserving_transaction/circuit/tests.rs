@@ -486,6 +486,20 @@ fn private_pda_init() {
 
     let (output, _proof) = result.expect("PDA init should succeed");
     assert_eq!(output.private_actions.len(), 1);
+
+    let esk = EphemeralSecretKey::new(
+        &pda_id,
+        &[0; 32],
+        &Nonce::private_account_nonce_init(&pda_id),
+    );
+    let ssk = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &esk).0;
+    let (_kind, pda_post) = EncryptionScheme::decrypt(
+        &output.private_actions[0].encrypted_post_state.ciphertext,
+        &ssk,
+        &output.private_actions[0].nullifier,
+    )
+    .unwrap();
+    assert_eq!(pda_post.program_owner, auth_id);
 }
 
 /// PDA withdraw: chains to `simple_balance_transfer` to move balance from PDA to recipient.

@@ -561,9 +561,6 @@ fn private_foreign_acc_preparation(
     is_pda: bool,
 ) -> AccountPreparedData {
     AccountPreparedData {
-        // The wallet holds no key for a recipient, so it can neither spend the account nor
-        // consent on its behalf. The program still claims it: a private claim never requires
-        // authorization.
         ask: None,
         nsk: None,
         npk,
