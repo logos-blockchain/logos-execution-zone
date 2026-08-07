@@ -16,7 +16,8 @@ use lee::{
     program::Program,
 };
 use lee_core::{
-    DUMMY_COMMITMENT_HASH, InputAccountIdentity, Nullifier, NullifierPublicKey,
+    DUMMY_COMMITMENT_HASH, InputAccountIdentity, Nullifier, NullifierPublicKey, NullifierWitness,
+    PrivateWitness, WitnessKind,
     account::{Account, AccountWithMetadata},
     encryption::ViewingPublicKey,
 };
@@ -633,14 +634,16 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
         instruction,
         vec![
             InputAccountIdentity::Public,
-            InputAccountIdentity::PrivatePdaInit {
+            InputAccountIdentity::Private(PrivateWitness {
                 vpk,
                 random_seed: [0; 32],
-                npk,
                 identifier: 1337,
-                commitment_root: DUMMY_COMMITMENT_HASH,
-                seed: None,
-            },
+                kind: WitnessKind::Pda { binding: None },
+                nullifier: NullifierWitness::Init {
+                    npk,
+                    commitment_root: DUMMY_COMMITMENT_HASH,
+                },
+            }),
         ],
         &program_with_deps,
     );
@@ -675,13 +678,16 @@ async fn prove_init_with_commitment_root(
         })?,
         vec![
             InputAccountIdentity::Public,
-            InputAccountIdentity::PrivateForeignInit {
+            InputAccountIdentity::Private(PrivateWitness {
                 vpk,
                 random_seed: [0; 32],
-                npk,
                 identifier: 0,
-                commitment_root,
-            },
+                kind: WitnessKind::Regular,
+                nullifier: NullifierWitness::Init {
+                    npk,
+                    commitment_root,
+                },
+            }),
         ],
         &program.into(),
     )?;

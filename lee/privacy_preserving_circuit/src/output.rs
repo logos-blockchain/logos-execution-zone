@@ -1,8 +1,8 @@
 use lee_core::{
     Commitment, CommitmentSetDigest, DummyInput, EncryptedAccountData, EncryptionScheme,
-    EphemeralSecretKey, InputAccountIdentity, MembershipProof, Nullifier, NullifierPublicKey,
-    NullifierSecretKey, PrivacyPreservingCircuitOutput, PrivateAccountKind, PrivateAction,
-    PublicAction, SharedSecretKey,
+    EphemeralSecretKey, InputAccountIdentity, MembershipProof, Nullifier, NullifierSecretKey,
+    NullifierWitness, PrivacyPreservingCircuitOutput, PrivateAccountKind, PrivateAction,
+    PrivateWitness, PublicAction, SharedSecretKey, WitnessKind,
     account::{Account, AccountId, Nonce},
     compute_digest_for_path,
     encryption::{ViewTag, ViewingPublicKey},
@@ -40,214 +40,111 @@ pub fn compute_circuit_output(
                     post: post_state,
                 });
             }
-            InputAccountIdentity::PrivateAuthorizedInit {
+            InputAccountIdentity::Private(PrivateWitness {
                 vpk,
                 random_seed,
-                nsk,
                 identifier,
-                commitment_root,
-            } => {
-                let npk = NullifierPublicKey::from(nsk);
-                let account_id = AccountId::for_regular_private_account(&npk, vpk, *identifier);
+                kind,
+                nullifier,
+            }) => {
+                let account_id = match kind {
+                    WitnessKind::Regular => {
+                        let derived = AccountId::for_regular_private_account(
+                            &nullifier.npk(),
+                            vpk,
+                            *identifier,
+                        );
+                        assert_eq!(derived, pre_state.account_id, "AccountId mismatch");
+                        derived
+                    }
+                    // The npk-to-account_id binding is established upstream in
+                    // `validate_and_sync_states` via `Claim::Pda(seed)` or a caller `pda_seeds`
+                    // match. Here we only enforce the lifecycle pre-conditions. The supplied npk
+                    // on the witness has been recorded into `private_pda_by_position` and used
+                    // for the binding check; we use `pre_state.account_id` directly for nullifier
+                    // and commitment derivation.
+                    WitnessKind::Pda { .. } => pre_state.account_id,
+                };
 
-                assert_eq!(account_id, pre_state.account_id, "AccountId mismatch");
-                assert!(
-                    pre_state.is_authorized,
-                    "Pre-state not authorized for authenticated private account"
-                );
-                assert_eq!(
-                    pre_state.account,
-                    Account::default(),
-                    "Found new private account with non default values"
-                );
+                match (kind, nullifier) {
+                    (
+                        WitnessKind::Regular,
+                        NullifierWitness::Init { .. } | NullifierWitness::Update { .. },
+                    ) => assert!(
+                        pre_state.is_authorized,
+                        "Regular private account pre-state must be authorized"
+                    ),
+                    (WitnessKind::Pda { .. }, NullifierWitness::Init { .. }) => assert!(
+                        !pre_state.is_authorized,
+                        "Private PDA init requires unauthorized pre_state"
+                    ),
+                    // With an external seed the binding comes from the circuit input and the
+                    // pre_state is intentionally unauthorized; without one the binding comes from
+                    // a Claim or caller pda_seeds, so the pre_state must already be authorized.
+                    // When `binding` is `Some`, execution_state already asserted
+                    // `!pre_state.is_authorized`.
+                    (WitnessKind::Pda { binding }, NullifierWitness::Update { .. }) => assert!(
+                        pre_state.is_authorized ^ binding.is_some(),
+                        "Private PDA update requires authorized pre_state or external seed"
+                    ),
+                }
 
-                let new_nullifier = (
-                    Nullifier::for_account_initialization(&account_id),
-                    *commitment_root,
-                );
-                let new_nonce = Nonce::private_account_nonce_init(&account_id);
-                let view_tag = EncryptedAccountData::compute_view_tag(&npk, vpk);
+                let (new_nullifier, new_nonce, view_tag) = match nullifier {
+                    NullifierWitness::Init {
+                        npk,
+                        commitment_root,
+                    } => {
+                        assert_eq!(
+                            pre_state.account,
+                            Account::default(),
+                            "Private account init requires a default pre-state"
+                        );
+
+                        (
+                            (
+                                Nullifier::for_account_initialization(&account_id),
+                                *commitment_root,
+                            ),
+                            Nonce::private_account_nonce_init(&account_id),
+                            EncryptedAccountData::compute_view_tag(npk, vpk),
+                        )
+                    }
+                    NullifierWitness::Update {
+                        view_tag,
+                        nsk,
+                        membership_proof,
+                    } => (
+                        compute_update_nullifier_and_set_digest(
+                            membership_proof,
+                            &pre_state.account,
+                            &account_id,
+                            nsk,
+                        ),
+                        pre_state.account.nonce.private_account_nonce_increment(nsk),
+                        *view_tag,
+                    ),
+                };
+
+                let account_kind = match kind {
+                    WitnessKind::Regular => PrivateAccountKind::Regular(*identifier),
+                    WitnessKind::Pda { .. } => {
+                        let (authority_program_id, seed) = pda_seed_by_position
+                            .get(&pos)
+                            .expect("private PDA position must be in pda_seed_by_position");
+                        PrivateAccountKind::Pda {
+                            program_id: *authority_program_id,
+                            seed: *seed,
+                            identifier: *identifier,
+                        }
+                    }
+                };
 
                 emit_private_output(
                     &mut output,
                     post_state,
                     &account_id,
-                    &PrivateAccountKind::Regular(*identifier),
+                    &account_kind,
                     view_tag,
-                    vpk,
-                    random_seed,
-                    new_nullifier,
-                    new_nonce,
-                );
-            }
-            InputAccountIdentity::PrivateAuthorizedUpdate {
-                vpk,
-                random_seed,
-                view_tag,
-                nsk,
-                membership_proof,
-                identifier,
-            } => {
-                let npk = NullifierPublicKey::from(nsk);
-                let account_id = AccountId::for_regular_private_account(&npk, vpk, *identifier);
-
-                assert_eq!(account_id, pre_state.account_id, "AccountId mismatch");
-                assert!(
-                    pre_state.is_authorized,
-                    "Pre-state not authorized for authenticated private account"
-                );
-
-                let new_nullifier = compute_update_nullifier_and_set_digest(
-                    membership_proof,
-                    &pre_state.account,
-                    &account_id,
-                    nsk,
-                );
-                let new_nonce = pre_state.account.nonce.private_account_nonce_increment(nsk);
-
-                emit_private_output(
-                    &mut output,
-                    post_state,
-                    &account_id,
-                    &PrivateAccountKind::Regular(*identifier),
-                    *view_tag,
-                    vpk,
-                    random_seed,
-                    new_nullifier,
-                    new_nonce,
-                );
-            }
-            InputAccountIdentity::PrivateForeignInit {
-                vpk,
-                random_seed,
-                npk,
-                identifier,
-                commitment_root,
-            } => {
-                let account_id = AccountId::for_regular_private_account(npk, vpk, *identifier);
-
-                assert_eq!(account_id, pre_state.account_id, "AccountId mismatch");
-                assert_eq!(
-                    pre_state.account,
-                    Account::default(),
-                    "Found new private account with non default values",
-                );
-                assert!(
-                    pre_state.is_authorized,
-                    "Found new private account marked as unauthorized."
-                );
-
-                let new_nullifier = (
-                    Nullifier::for_account_initialization(&account_id),
-                    *commitment_root,
-                );
-                let new_nonce = Nonce::private_account_nonce_init(&account_id);
-                let view_tag = EncryptedAccountData::compute_view_tag(npk, vpk);
-
-                emit_private_output(
-                    &mut output,
-                    post_state,
-                    &account_id,
-                    &PrivateAccountKind::Regular(*identifier),
-                    view_tag,
-                    vpk,
-                    random_seed,
-                    new_nullifier,
-                    new_nonce,
-                );
-            }
-            InputAccountIdentity::PrivatePdaInit {
-                vpk,
-                random_seed,
-                npk,
-                identifier,
-                commitment_root,
-                seed: _,
-            } => {
-                // The npk-to-account_id binding is established upstream in
-                // `validate_and_sync_states` via `Claim::Pda(seed)` or a caller `pda_seeds`
-                // match. Here we only enforce the init pre-conditions. The supplied npk on
-                // the variant has been recorded into `private_pda_by_position` and used
-                // for the binding check; we use `pre_state.account_id` directly for nullifier
-                // and commitment derivation.
-                assert!(
-                    !pre_state.is_authorized,
-                    "PrivatePdaInit requires unauthorized pre_state"
-                );
-                assert_eq!(
-                    pre_state.account,
-                    Account::default(),
-                    "New private PDA must be default"
-                );
-
-                let new_nullifier = (
-                    Nullifier::for_account_initialization(&pre_state.account_id),
-                    *commitment_root,
-                );
-                let new_nonce = Nonce::private_account_nonce_init(&pre_state.account_id);
-
-                let account_id = pre_state.account_id;
-                let (authority_program_id, seed) = pda_seed_by_position
-                    .get(&pos)
-                    .expect("PrivatePdaInit position must be in pda_seed_by_position");
-                let view_tag = EncryptedAccountData::compute_view_tag(npk, vpk);
-                emit_private_output(
-                    &mut output,
-                    post_state,
-                    &account_id,
-                    &PrivateAccountKind::Pda {
-                        program_id: *authority_program_id,
-                        seed: *seed,
-                        identifier: *identifier,
-                    },
-                    view_tag,
-                    vpk,
-                    random_seed,
-                    new_nullifier,
-                    new_nonce,
-                );
-            }
-            InputAccountIdentity::PrivatePdaUpdate {
-                vpk,
-                random_seed,
-                view_tag,
-                nsk,
-                membership_proof,
-                identifier,
-                seed: external_seed,
-            } => {
-                // With an external seed the binding comes from the circuit input and the
-                // pre_state is intentionally unauthorized; without one the binding comes from
-                // a Claim or caller pda_seeds, so the pre_state must already be authorized.
-                // When `external_seed` is `Some`, execution_state already asserted
-                // `!pre_state.is_authorized`.
-                assert!(
-                    pre_state.is_authorized ^ external_seed.is_some(),
-                    "PrivatePdaUpdate requires authorized pre_state or external seed"
-                );
-
-                let new_nullifier = compute_update_nullifier_and_set_digest(
-                    membership_proof,
-                    &pre_state.account,
-                    &pre_state.account_id,
-                    nsk,
-                );
-                let new_nonce = pre_state.account.nonce.private_account_nonce_increment(nsk);
-
-                let account_id = pre_state.account_id;
-                let (authority_program_id, seed) = pda_seed_by_position
-                    .get(&pos)
-                    .expect("PrivatePdaUpdate position must be in pda_seed_by_position");
-                emit_private_output(
-                    &mut output,
-                    post_state,
-                    &account_id,
-                    &PrivateAccountKind::Pda {
-                        program_id: *authority_program_id,
-                        seed: *seed,
-                        identifier: *identifier,
-                    },
-                    *view_tag,
                     vpk,
                     random_seed,
                     new_nullifier,

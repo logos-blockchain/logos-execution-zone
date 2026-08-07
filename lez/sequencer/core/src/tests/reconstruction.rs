@@ -190,15 +190,17 @@ async fn fails_when_channel_reinscribes_genesis_with_a_different_hash() {
 }
 
 #[tokio::test]
-async fn fails_when_a_stored_block_hash_diverges_from_the_channel() {
+async fn fails_when_a_below_tip_channel_block_does_not_validate() {
     // A sequencer that committed blocks past genesis but never recorded an anchor.
     let config = setup_sequencer_config();
     let (mut seq, _handle) = SequencerCoreWithMockClients::start_from_config(config.clone()).await;
     seq.produce_new_block().await.unwrap();
     seq.produce_new_block().await.unwrap();
 
-    // A below-tip block re-served with a corrupted hash: we already hold this id
-    // with a different hash, so the channel is a different chain.
+    // A below-tip block re-served with a corrupted hash. Holding a different
+    // block at that id is not itself grounds to abort — the head tier is
+    // reorg-able — but this one's header hash does not cover its contents, so it
+    // parks on validation.
     let below_tip_id = seq.block_store().genesis_id() + 1;
     let mut block = seq
         .block_store()
@@ -219,17 +221,18 @@ async fn fails_when_a_stored_block_hash_diverges_from_the_channel() {
     .await;
     assert!(
         result.is_err(),
-        "a diverging below-tip block hash must abort startup"
+        "an unverifiable below-tip block must abort startup"
     );
 }
 
 #[tokio::test]
-async fn fails_when_a_channel_block_is_missing_locally() {
+async fn fails_when_a_channel_block_is_numbered_below_genesis() {
     let config = setup_sequencer_config();
     let (store, chain) = fresh_store_and_chain(&config);
 
-    // A block numbered below our genesis is at/below the local tip yet absent from
-    // the store — a foreign chain with a lower numbering.
+    // A block numbered below our genesis — a foreign chain with a lower
+    // numbering. Nothing local sits at that id, so it goes straight to
+    // validation and parks there.
     let mut foreign = store.get_block_at_id(store.genesis_id()).unwrap().unwrap();
     foreign.header.block_id = store.genesis_id() - 1;
 
@@ -269,6 +272,152 @@ async fn fails_when_a_channel_block_does_not_extend_the_tip() {
     assert!(
         result.is_err(),
         "a non-contiguous channel block must abort startup"
+    );
+}
+
+// The two cases below reproduce the real startup order: zone-sdk's cold-start
+// backfill runs inside `BP::new` and populates the store *before*
+// `verify_and_reconstruct`, so reconstruction re-reads history it already holds.
+// A conflict there is a competing sequencer, not a foreign chain.
+
+/// The channel carries two inscriptions for one block id — competing sequencers
+/// around a turn change — and the final tier already settled that height.
+/// Finality is irreversible, so the loser is ignored rather than fatal.
+#[tokio::test]
+async fn reconstruction_ignores_a_duplicate_height_the_final_tier_settled() {
+    // Sequencer A's chain is what the channel finalized.
+    let config_a = setup_sequencer_config();
+    let (mut seq_a, _mempool_a) =
+        SequencerCoreWithMockClients::start_from_config(config_a.clone()).await;
+    seq_a.produce_new_block().await.unwrap();
+    let tip_a = seq_a.block_store().latest_block_meta().unwrap().unwrap();
+    let mut messages = channel_from_store(seq_a.block_store(), 10);
+    let settled_slot = messages.last().unwrap().1;
+
+    // Sequencer B: the cold-start backfill finalizes A's chain into its store.
+    let (seq_b, mempool_b) =
+        SequencerCoreWithMockClients::start_from_config(setup_sequencer_config()).await;
+    let finalized: Vec<(MsgId, Block)> = (seq_b.block_store().genesis_id()..=tip_a.id)
+        .map(|id| {
+            let block = seq_a.block_store().get_block_at_id(id).unwrap().unwrap();
+            (
+                MsgId::from([u8::try_from(id).expect("should be u8"); 32]),
+                block,
+            )
+        })
+        .collect();
+    apply_follow_update(
+        &seq_b.store.dbio(),
+        &seq_b.chain(),
+        &mempool_b,
+        FollowUpdate {
+            finalized,
+            ..empty_follow_update()
+        },
+    );
+    assert_eq!(
+        seq_b
+            .chain()
+            .lock()
+            .unwrap()
+            .final_tip()
+            .expect("backfill finalized A's chain")
+            .block_id,
+        tip_a.id,
+    );
+
+    // A competitor published its own block at that same height.
+    let parent = seq_a
+        .block_store()
+        .get_block_at_id(tip_a.id - 1)
+        .unwrap()
+        .unwrap();
+    let competitor =
+        common::test_utils::produce_dummy_block(tip_a.id, Some(parent.header.hash), vec![]);
+    assert_ne!(competitor.header.hash, tip_a.hash);
+    messages.push(block_to_channel_message(&competitor, 999));
+
+    let mock_b = MockBlockPublisher::with_canned_channel(
+        config_a.bedrock_config.channel_id,
+        Some(Slot::from(999)),
+        messages,
+    );
+    SequencerCore::<MockBlockPublisher>::verify_and_reconstruct(
+        &mock_b,
+        &seq_b.store,
+        &seq_b.chain,
+        true,
+    )
+    .await
+    .expect("a duplicate height the final tier settled must not abort startup");
+
+    let tip_b = seq_b.block_store().latest_block_meta().unwrap().unwrap();
+    assert_eq!(tip_b.hash, tip_a.hash, "the finalized block stands");
+
+    // The anchor tracks the block we hold, never the one we dropped.
+    let anchor = seq_b
+        .block_store()
+        .get_zone_anchor()
+        .unwrap()
+        .expect("anchor");
+    assert_eq!(anchor.slot, settled_slot.into_inner());
+    assert_eq!(anchor.hash, tip_a.hash);
+}
+
+/// A block the head tier holds is reorg-able by construction, so finalized
+/// channel history at that height wins and the head rebases onto it.
+#[tokio::test]
+async fn reconstruction_replaces_a_conflicting_head_block_with_finalized_history() {
+    // Sequencer A's chain is what the channel finalized.
+    let config_a = setup_sequencer_config();
+    let (mut seq_a, _mempool_a) =
+        SequencerCoreWithMockClients::start_from_config(config_a.clone()).await;
+    seq_a.produce_new_block().await.unwrap();
+    let tip_a = seq_a.block_store().latest_block_meta().unwrap().unwrap();
+    let messages = channel_from_store(seq_a.block_store(), 10);
+    let tip_slot = messages.last().unwrap().1;
+
+    // Sequencer B adopted a competitor at that height and never saw it finalize.
+    let (seq_b, mempool_b) =
+        SequencerCoreWithMockClients::start_from_config(setup_sequencer_config()).await;
+    let genesis_b = seq_b.block_store().latest_block_meta().unwrap().unwrap();
+    let competitor =
+        common::test_utils::produce_dummy_block(tip_a.id, Some(genesis_b.hash), vec![]);
+    assert_ne!(competitor.header.hash, tip_a.hash);
+    apply_follow_update(
+        &seq_b.store.dbio(),
+        &seq_b.chain(),
+        &mempool_b,
+        FollowUpdate {
+            adopted: vec![(MsgId::from([7_u8; 32]), competitor)],
+            ..empty_follow_update()
+        },
+    );
+    assert_eq!(
+        seq_b.block_store().latest_block_meta().unwrap().unwrap().id,
+        tip_a.id,
+        "the competitor is the head tip going in"
+    );
+
+    let mock_b = MockBlockPublisher::with_canned_channel(
+        config_a.bedrock_config.channel_id,
+        Some(tip_slot),
+        messages,
+    );
+    SequencerCore::<MockBlockPublisher>::verify_and_reconstruct(
+        &mock_b,
+        &seq_b.store,
+        &seq_b.chain,
+        true,
+    )
+    .await
+    .expect("finalized history must replace a conflicting head block");
+
+    let tip_b = seq_b.block_store().latest_block_meta().unwrap().unwrap();
+    assert_eq!(tip_b.id, tip_a.id);
+    assert_eq!(
+        tip_b.hash, tip_a.hash,
+        "the finalized block replaces the head competitor"
     );
 }
 

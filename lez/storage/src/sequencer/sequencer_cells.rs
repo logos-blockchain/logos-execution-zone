@@ -8,9 +8,10 @@ use crate::{
     error::DbError,
     sequencer::{
         CF_LEE_STATE_NAME, DB_FINAL_BLOCK_META_KEY, DB_FINAL_LEE_STATE_KEY, DB_LEE_STATE_KEY,
-        DB_META_CROSS_ZONE_PEER_FLOOR_KEY, DB_META_LAST_FINALIZED_BLOCK_ID,
-        DB_META_LATEST_BLOCK_META_KEY, DB_META_PENDING_CROSS_ZONE_DISPATCHES_KEY,
-        DB_META_PENDING_DEPOSIT_EVENTS_KEY, DB_META_UNSEEN_WITHDRAW_COUNT_KEY,
+        DB_META_CROSS_ZONE_PEER_FLOOR_KEY, DB_META_CROSS_ZONE_PEER_TIP_KEY,
+        DB_META_LAST_FINALIZED_BLOCK_ID, DB_META_LATEST_BLOCK_META_KEY,
+        DB_META_PENDING_CROSS_ZONE_DISPATCHES_KEY, DB_META_PENDING_DEPOSIT_EVENTS_KEY,
+        DB_META_PUBLISHED_HIGH_WATER_KEY, DB_META_UNSEEN_WITHDRAW_COUNT_KEY,
         DB_META_ZONE_CURSOR_KEY, DB_META_ZONE_SDK_CHECKPOINT_KEY,
     },
 };
@@ -129,6 +130,30 @@ impl SimpleWritableCell for LastFinalizedBlockIdCell {
             DbError::borsh_cast_message(
                 err,
                 Some("Failed to serialize last finalized block id".to_owned()),
+            )
+        })
+    }
+}
+
+/// The highest block id ever inscribed on the channel by this sequencer.
+#[derive(Debug, BorshSerialize, BorshDeserialize)]
+pub struct PublishedHighWaterCell(pub u64);
+
+impl SimpleStorableCell for PublishedHighWaterCell {
+    type KeyParams = ();
+
+    const CELL_NAME: &'static str = DB_META_PUBLISHED_HIGH_WATER_KEY;
+    const CF_NAME: &'static str = CF_META_NAME;
+}
+
+impl SimpleReadableCell for PublishedHighWaterCell {}
+
+impl SimpleWritableCell for PublishedHighWaterCell {
+    fn value_constructor(&self) -> DbResult<Vec<u8>> {
+        borsh::to_vec(&self).map_err(|err| {
+            DbError::borsh_cast_message(
+                err,
+                Some("Failed to serialize published high water mark".to_owned()),
             )
         })
     }
@@ -416,6 +441,57 @@ impl SimpleWritableCell for PeerFloorCellRef<'_> {
             DbError::borsh_cast_message(
                 err,
                 Some("Failed to serialize cross-zone peer floor cell".to_owned()),
+            )
+        })
+    }
+}
+
+/// The last peer block a cross-zone watcher delivered from, and the link the
+/// next one has to carry.
+///
+/// `block_hash` is the recomputed hash, not `header.hash` as read: the
+/// signature does not cover that field, so a signed block may carry a bogus one
+/// and break the link against the peer's next honest block.
+///
+/// Durable, not in-memory: a watcher that re-anchored on restart would accept a
+/// block claiming any id.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PeerChainTip {
+    pub block_id: u64,
+    pub block_hash: HashType,
+}
+
+#[derive(Debug, BorshSerialize, BorshDeserialize)]
+pub struct PeerTipCell(pub PeerChainTip);
+
+impl SimpleStorableCell for PeerTipCell {
+    type KeyParams = PeerZoneKey;
+
+    const CELL_NAME: &'static str = DB_META_CROSS_ZONE_PEER_TIP_KEY;
+    const CF_NAME: &'static str = CF_META_NAME;
+
+    /// Folds the peer zone into the key so each peer keeps its own tip.
+    fn key_constructor(peer_zone: Self::KeyParams) -> DbResult<Vec<u8>> {
+        borsh::to_vec(&(Self::CELL_NAME, peer_zone)).map_err(|err| {
+            DbError::borsh_cast_message(
+                err,
+                Some(format!(
+                    "Failed to serialize {:?} key params",
+                    Self::CELL_NAME
+                )),
+            )
+        })
+    }
+}
+
+impl SimpleReadableCell for PeerTipCell {}
+
+impl SimpleWritableCell for PeerTipCell {
+    fn value_constructor(&self) -> DbResult<Vec<u8>> {
+        borsh::to_vec(&self).map_err(|err| {
+            DbError::borsh_cast_message(
+                err,
+                Some("Failed to serialize cross-zone peer tip cell".to_owned()),
             )
         })
     }

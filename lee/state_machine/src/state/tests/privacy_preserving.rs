@@ -521,16 +521,19 @@ fn malicious_authorization_changer_should_fail_in_privacy_preserving_circuit() {
         Program::serialize_instruction(instruction).unwrap(),
         vec![
             InputAccountIdentity::Public,
-            InputAccountIdentity::PrivateAuthorizedUpdate {
+            InputAccountIdentity::Private(PrivateWitness {
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
-                view_tag: 0,
-                nsk: recipient_keys.nsk,
-                membership_proof: state
-                    .get_proof_for_commitment(&recipient_commitment)
-                    .expect("recipient's commitment must be in state"),
                 identifier: 0,
-            },
+                kind: WitnessKind::Regular,
+                nullifier: NullifierWitness::Update {
+                    view_tag: 0,
+                    nsk: recipient_keys.nsk,
+                    membership_proof: state
+                        .get_proof_for_commitment(&recipient_commitment)
+                        .expect("recipient's commitment must be in state"),
+                },
+            }),
         ],
         &program_with_deps,
     );

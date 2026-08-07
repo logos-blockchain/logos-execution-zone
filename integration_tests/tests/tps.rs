@@ -23,6 +23,7 @@ use lee::{
 };
 use lee_core::{
     DUMMY_COMMITMENT_HASH, InputAccountIdentity, MembershipProof, NullifierPublicKey,
+    NullifierWitness, PrivateWitness, WitnessKind,
     account::{AccountWithMetadata, Nonce, data::Data},
     encryption::ViewingPublicKey,
 };
@@ -291,21 +292,27 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
         })
         .unwrap(),
         vec![
-            InputAccountIdentity::PrivateAuthorizedUpdate {
+            InputAccountIdentity::Private(PrivateWitness {
                 vpk: sender_vpk,
                 random_seed: [0; 32],
-                view_tag: 0,
-                nsk: sender_nsk,
-                membership_proof: proof,
                 identifier: 0,
-            },
-            InputAccountIdentity::PrivateForeignInit {
+                kind: WitnessKind::Regular,
+                nullifier: NullifierWitness::Update {
+                    view_tag: 0,
+                    nsk: sender_nsk,
+                    membership_proof: proof,
+                },
+            }),
+            InputAccountIdentity::Private(PrivateWitness {
                 vpk: recipient_vpk,
                 random_seed: [0; 32],
-                npk: recipient_npk,
                 identifier: 0,
-                commitment_root: DUMMY_COMMITMENT_HASH,
-            },
+                kind: WitnessKind::Regular,
+                nullifier: NullifierWitness::Init {
+                    npk: recipient_npk,
+                    commitment_root: DUMMY_COMMITMENT_HASH,
+                },
+            }),
         ],
         &program.into(),
     )

@@ -71,14 +71,17 @@ fn private_changer_claimer_no_data_change_no_claim_succeeds() {
     let result = execute_and_prove(
         vec![private_account],
         Program::serialize_instruction(instruction).unwrap(),
-        vec![InputAccountIdentity::PrivateAuthorizedUpdate {
+        vec![InputAccountIdentity::Private(PrivateWitness {
             vpk: sender_keys.vpk(),
             random_seed: [0; 32],
-            view_tag: 0,
-            nsk: sender_keys.nsk,
-            membership_proof: (0, vec![]),
             identifier: 0,
-        }],
+            kind: WitnessKind::Regular,
+            nullifier: NullifierWitness::Update {
+                view_tag: 0,
+                nsk: sender_keys.nsk,
+                membership_proof: (0, vec![]),
+            },
+        })],
         &program.into(),
     );
 
@@ -102,14 +105,17 @@ fn private_changer_claimer_data_change_no_claim_fails() {
     let result = execute_and_prove(
         vec![private_account],
         Program::serialize_instruction(instruction).unwrap(),
-        vec![InputAccountIdentity::PrivateAuthorizedUpdate {
+        vec![InputAccountIdentity::Private(PrivateWitness {
             vpk: sender_keys.vpk(),
             random_seed: [0; 32],
-            view_tag: 0,
-            nsk: sender_keys.nsk,
-            membership_proof: (0, vec![]),
             identifier: 0,
-        }],
+            kind: WitnessKind::Regular,
+            nullifier: NullifierWitness::Update {
+                view_tag: 0,
+                nsk: sender_keys.nsk,
+                membership_proof: (0, vec![]),
+            },
+        })],
         &program.into(),
     );
 

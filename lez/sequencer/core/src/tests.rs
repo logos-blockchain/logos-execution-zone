@@ -2011,6 +2011,79 @@ async fn follow_update_persists_the_checkpoint_with_its_effects() {
     assert!(sequencer.store.get_block_at_id(2).unwrap().is_some());
 }
 
+/// The channel orphaning our own still-unfinalized blocks rewinds the head and
+/// prunes them from the store, so nothing in the chain state remembers we ever
+/// produced them. Producing again there would put a second, different block at
+/// a height the channel already carries — the fork that has to be prevented.
+#[tokio::test]
+async fn head_rewound_below_published_height_blocks_production() {
+    let config = setup_sequencer_config();
+    let (mut sequencer, mempool_handle) =
+        SequencerCoreWithMockClients::start_from_config(config).await;
+
+    let first = sequencer.produce_new_block().await.unwrap();
+    let published_tip = sequencer.produce_new_block().await.unwrap();
+    assert_eq!(
+        sequencer.store.published_high_water().unwrap(),
+        Some(published_tip),
+        "publishing records the high water mark"
+    );
+    assert!(
+        sequencer.rewound_below_published().is_none(),
+        "an intact head is free to produce"
+    );
+
+    let produced: Vec<Block> = [first, published_tip]
+        .into_iter()
+        .map(|id| sequencer.store.get_block_at_id(id).unwrap().unwrap())
+        .collect();
+
+    // The sdk reports both of them as orphaned.
+    apply_follow_update(
+        &sequencer.store.dbio(),
+        &sequencer.chain(),
+        &mempool_handle,
+        FollowUpdate {
+            orphaned: produced
+                .iter()
+                .map(|block| (MsgId::from([0_u8; 32]), block.clone()))
+                .collect(),
+            ..empty_follow_update()
+        },
+    );
+
+    assert!(
+        sequencer.store.latest_block_meta().unwrap().unwrap().id < published_tip,
+        "the orphan report rewound the stored tip"
+    );
+    assert_eq!(
+        sequencer.rewound_below_published(),
+        Some(published_tip),
+        "the mark outlives the pruning and blocks the turn"
+    );
+
+    // Those inscriptions were on the channel all along: finalizing them rebases
+    // the head onto them, and production is free again. The guard is a wait.
+    apply_follow_update(
+        &sequencer.store.dbio(),
+        &sequencer.chain(),
+        &mempool_handle,
+        FollowUpdate {
+            finalized: produced
+                .iter()
+                .map(|block| (MsgId::from([1_u8; 32]), block.clone()))
+                .collect(),
+            ..empty_follow_update()
+        },
+    );
+
+    assert_eq!(sequencer.next_block_height(), published_tip + 1);
+    assert!(
+        sequencer.rewound_below_published().is_none(),
+        "a recovered head resumes producing"
+    );
+}
+
 #[tokio::test]
 async fn follow_update_records_deposits_for_the_production_drain() {
     let config = setup_sequencer_config();

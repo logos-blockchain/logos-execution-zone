@@ -325,16 +325,19 @@ fn authorized_public_account_claiming_succeeds_when_executed_privately() {
         vec![sender_pre, recipient_pre],
         Program::serialize_instruction(balance).unwrap(),
         vec![
-            InputAccountIdentity::PrivateAuthorizedUpdate {
+            InputAccountIdentity::Private(PrivateWitness {
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
-                view_tag: 0,
-                nsk: sender_keys.nsk,
-                membership_proof: state
-                    .get_proof_for_commitment(&sender_commitment)
-                    .expect("sender's commitment must be in state"),
                 identifier: 0,
-            },
+                kind: WitnessKind::Regular,
+                nullifier: NullifierWitness::Update {
+                    view_tag: 0,
+                    nsk: sender_keys.nsk,
+                    membership_proof: state
+                        .get_proof_for_commitment(&sender_commitment)
+                        .expect("sender's commitment must be in state"),
+                },
+            }),
             InputAccountIdentity::Public,
         ],
         &program.into(),
@@ -439,26 +442,32 @@ fn private_chained_call(number_of_calls: u32) {
         vec![to_account, from_account],
         Program::serialize_instruction(instruction).unwrap(),
         vec![
-            InputAccountIdentity::PrivateAuthorizedUpdate {
+            InputAccountIdentity::Private(PrivateWitness {
                 vpk: from_keys.vpk(),
                 random_seed: [0; 32],
-                view_tag: 0,
-                nsk: from_keys.nsk,
-                membership_proof: state
-                    .get_proof_for_commitment(&from_commitment)
-                    .expect("from's commitment must be in state"),
                 identifier: 0,
-            },
-            InputAccountIdentity::PrivateAuthorizedUpdate {
+                kind: WitnessKind::Regular,
+                nullifier: NullifierWitness::Update {
+                    view_tag: 0,
+                    nsk: from_keys.nsk,
+                    membership_proof: state
+                        .get_proof_for_commitment(&from_commitment)
+                        .expect("from's commitment must be in state"),
+                },
+            }),
+            InputAccountIdentity::Private(PrivateWitness {
                 vpk: to_keys.vpk(),
                 random_seed: [0; 32],
-                view_tag: 0,
-                nsk: to_keys.nsk,
-                membership_proof: state
-                    .get_proof_for_commitment(&to_commitment)
-                    .expect("to's commitment must be in state"),
                 identifier: 0,
-            },
+                kind: WitnessKind::Regular,
+                nullifier: NullifierWitness::Update {
+                    view_tag: 0,
+                    nsk: to_keys.nsk,
+                    membership_proof: state
+                        .get_proof_for_commitment(&to_commitment)
+                        .expect("to's commitment must be in state"),
+                },
+            }),
         ],
         &program_with_deps,
     )

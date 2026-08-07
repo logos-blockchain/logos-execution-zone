@@ -22,12 +22,12 @@ use crate::{
     sequencer::sequencer_cells::{
         FinalBlockMetaCellOwned, FinalBlockMetaCellRef, FinalLeeStateCellOwned,
         FinalLeeStateCellRef, LEEStateCellOwned, LEEStateCellRef, LastFinalizedBlockIdCell,
-        LatestBlockMetaCellOwned, LatestBlockMetaCellRef, PeerFloorCellOwned, PeerFloorCellRef,
-        PeerZoneKey, PendingCrossZoneDispatchRecord, PendingCrossZoneDispatchesCellOwned,
-        PendingCrossZoneDispatchesCellRef, PendingDepositEventRecord,
-        PendingDepositEventsCellOwned, PendingDepositEventsCellRef, UnseenWithdrawCountCell,
-        WithdrawalReconciliationKey, ZoneAnchorCell, ZoneAnchorRecord, ZoneSdkCheckpointCellOwned,
-        ZoneSdkCheckpointCellRef,
+        LatestBlockMetaCellOwned, LatestBlockMetaCellRef, PeerChainTip, PeerFloorCellOwned,
+        PeerFloorCellRef, PeerTipCell, PeerZoneKey, PendingCrossZoneDispatchRecord,
+        PendingCrossZoneDispatchesCellOwned, PendingCrossZoneDispatchesCellRef,
+        PendingDepositEventRecord, PendingDepositEventsCellOwned, PendingDepositEventsCellRef,
+        PublishedHighWaterCell, UnseenWithdrawCountCell, WithdrawalReconciliationKey,
+        ZoneAnchorCell, ZoneAnchorRecord, ZoneSdkCheckpointCellOwned, ZoneSdkCheckpointCellRef,
     },
 };
 
@@ -49,12 +49,20 @@ pub const DB_META_PENDING_DEPOSIT_EVENTS_KEY: &str = "pending_deposit_events";
 /// Key base for storing a cross-zone watcher's delivery floor on one peer
 /// channel (opaque bytes). Keyed per peer zone.
 pub const DB_META_CROSS_ZONE_PEER_FLOOR_KEY: &str = "cross_zone_peer_floor";
+/// Key base for storing the last peer block a cross-zone watcher delivered
+/// from, as an id and hash pair. Keyed per peer zone.
+pub const DB_META_CROSS_ZONE_PEER_TIP_KEY: &str = "cross_zone_peer_tip";
 /// Key base for storing cross-zone deliveries the watcher has recorded but
 /// which are not yet known to be irreversibly delivered.
 pub const DB_META_PENDING_CROSS_ZONE_DISPATCHES_KEY: &str = "pending_cross_zone_dispatches";
 
 /// Key base for counting unseen L2 withdraw intents.
 pub const DB_META_UNSEEN_WITHDRAW_COUNT_KEY: &str = "unseen_withdraw_count";
+
+/// Key base for the highest block id this sequencer has ever inscribed on the
+/// channel. Never decreases, and deliberately survives the block pruning a
+/// head rewind performs.
+pub const DB_META_PUBLISHED_HIGH_WATER_KEY: &str = "published_high_water";
 
 /// How many cross-zone deliveries may be pending at once.
 ///
@@ -491,6 +499,25 @@ impl RocksDBIO {
         self.del::<ZoneSdkCheckpointCellOwned>(())
     }
 
+    /// The highest block id this sequencer has ever inscribed, or `None` if it
+    /// has never published. Read fresh: a head rewind prunes blocks, so the
+    /// stored tip is not a safe substitute.
+    pub fn published_high_water(&self) -> DbResult<Option<u64>> {
+        self.get_opt::<PublishedHighWaterCell>(())
+            .map(|val| val.map(|cell| cell.0))
+    }
+
+    /// Raises the published high water mark to `block_id`, never lowering it.
+    pub fn raise_published_high_water(&self, block_id: u64) -> DbResult<()> {
+        if self
+            .published_high_water()?
+            .is_some_and(|mark| mark >= block_id)
+        {
+            return Ok(());
+        }
+        self.put(&PublishedHighWaterCell(block_id), ())
+    }
+
     pub fn get_zone_anchor(&self) -> DbResult<Option<ZoneAnchorRecord>> {
         Ok(self.get_opt::<ZoneAnchorCell>(())?.map(|cell| cell.0))
     }
@@ -609,6 +636,38 @@ impl RocksDBIO {
         bytes: &[u8],
     ) -> DbResult<()> {
         self.put(&PeerFloorCellRef(bytes), peer_zone)
+    }
+
+    /// The last peer block one cross-zone watcher delivered from, or `None`
+    /// before it has delivered anything from that peer.
+    ///
+    /// Write it only after that block's deliveries are recorded: a crash in
+    /// between leaves a tip past deliveries that were never made, and nothing
+    /// re-reads them.
+    pub fn get_cross_zone_peer_tip(
+        &self,
+        peer_zone: PeerZoneKey,
+    ) -> DbResult<Option<PeerChainTip>> {
+        Ok(self.get_opt::<PeerTipCell>(peer_zone)?.map(|cell| cell.0))
+    }
+
+    pub fn put_cross_zone_peer_tip(
+        &self,
+        peer_zone: PeerZoneKey,
+        tip: PeerChainTip,
+    ) -> DbResult<()> {
+        self.put(&PeerTipCell(tip), peer_zone)
+    }
+
+    /// Forgets one peer's delivery floor, so its watcher reads that channel from
+    /// the peer's genesis again. Only sound while that peer has no stored tip:
+    /// with one, the re-read starts below a tip nothing it reads can link to.
+    ///
+    /// A floor above a tip is unusable either way, since the first block read is
+    /// too far ahead to link, so clearing the floor is what makes rebuilding a
+    /// tip survive a crash halfway through.
+    pub fn delete_cross_zone_peer_floor(&self, peer_zone: PeerZoneKey) -> DbResult<()> {
+        self.del::<PeerFloorCellOwned>(peer_zone)
     }
 
     pub fn get_pending_cross_zone_dispatches(

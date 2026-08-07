@@ -215,6 +215,17 @@ impl SequencerStore {
         self.dbio.put_zone_anchor(anchor)
     }
 
+    /// The highest block id ever inscribed on the channel by this sequencer,
+    /// or `None` before it has published anything.
+    pub fn published_high_water(&self) -> DbResult<Option<u64>> {
+        self.dbio.published_high_water()
+    }
+
+    /// Raises the published high water mark to `block_id`, never lowering it.
+    pub fn raise_published_high_water(&self, block_id: u64) -> DbResult<()> {
+        self.dbio.raise_published_high_water(block_id)
+    }
+
     pub fn get_pending_deposit_events(&self) -> DbResult<Vec<PendingDepositEventRecord>> {
         self.dbio.get_pending_deposit_events()
     }
@@ -262,6 +273,13 @@ pub fn set_cross_zone_peer_floor(
     floor: Slot,
 ) -> Result<()> {
     dbio.put_cross_zone_peer_floor_bytes(peer_zone, &floor.to_le_bytes())?;
+    Ok(())
+}
+
+/// Drops the stored floor so the watcher reads `peer_zone`'s channel from the
+/// peer's genesis again.
+pub fn clear_cross_zone_peer_floor(dbio: &RocksDBIO, peer_zone: PeerZoneKey) -> Result<()> {
+    dbio.delete_cross_zone_peer_floor(peer_zone)?;
     Ok(())
 }
 

@@ -5,7 +5,7 @@ use bytesize::ByteSize;
 use common::transaction::LeeTransaction;
 use futures::never::Never;
 use jsonrpsee::server::ServerHandle;
-use log::{error, info};
+use log::{error, info, warn};
 use mempool::MemPoolHandle;
 #[cfg(not(feature = "standalone"))]
 use sequencer_core::SequencerCore;
@@ -291,6 +291,19 @@ async fn main_loop(seq_core: Arc<Mutex<SequencerCore>>, block_timeout: Duration)
 
         // Only produce on our turn.
         if !state.is_our_turn() {
+            continue;
+        }
+
+        // Never inscribe a second block at a height we already published: the
+        // channel would carry two chains from there and nothing resolves that.
+        // The head rewinds under us when the sdk orphans our own unfinalized
+        // blocks, and recovers once they finalize, so this is a wait.
+        if let Some(high_water) = state.rewound_below_published() {
+            warn!(
+                "Skipping turn: head rewound to {} but block {high_water} is already inscribed; \
+                 waiting for the channel to restore it",
+                state.next_block_height().saturating_sub(1),
+            );
             continue;
         }
 

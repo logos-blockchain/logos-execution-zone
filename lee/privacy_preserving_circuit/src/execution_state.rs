@@ -4,7 +4,7 @@ use std::{
 };
 
 use lee_core::{
-    Identifier, InputAccountIdentity, NullifierPublicKey,
+    Identifier, InputAccountIdentity, NullifierPublicKey, PrivateWitness, WitnessKind,
     account::{Account, AccountId, AccountWithMetadata},
     encryption::ViewingPublicKey,
     program::{
@@ -311,53 +311,35 @@ impl ExecutionState {
                     // Pre state for the initial call
                     let pre_state_position = self.pre_states.len();
                     let external_seed = match account_identities.get(pre_state_position) {
-                        Some(InputAccountIdentity::PrivatePdaInit {
-                            npk,
+                        Some(InputAccountIdentity::Private(PrivateWitness {
                             vpk,
                             identifier,
-                            seed: Some((seed, authority_program_id)),
+                            kind:
+                                WitnessKind::Pda {
+                                    binding: Some((authority_program_id, seed)),
+                                },
+                            nullifier,
                             ..
-                        }) => {
+                        })) => {
                             let expected = AccountId::for_private_pda(
                                 authority_program_id,
                                 seed,
-                                npk,
+                                &nullifier.npk(),
                                 vpk,
                                 *identifier,
                             );
                             assert_eq!(
                                 pre_account_id, expected,
-                                "External seed mismatch for PrivatePdaInit at position {pre_state_position}"
+                                "External seed mismatch for private PDA at position {pre_state_position}"
                             );
-                            Some((*seed, *authority_program_id))
-                        }
-                        Some(InputAccountIdentity::PrivatePdaUpdate {
-                            nsk,
-                            vpk,
-                            identifier,
-                            seed: Some((seed, authority_program_id)),
-                            ..
-                        }) => {
-                            let npk = NullifierPublicKey::from(nsk);
-                            let expected = AccountId::for_private_pda(
-                                authority_program_id,
-                                seed,
-                                &npk,
-                                vpk,
-                                *identifier,
-                            );
-                            assert_eq!(
-                                pre_account_id, expected,
-                                "External seed mismatch for PrivatePdaUpdate at position {pre_state_position}"
-                            );
-                            Some((*seed, *authority_program_id))
+                            Some((*authority_program_id, *seed))
                         }
                         _ => None,
                     };
                     // External seed is only consulted the first time the account is seen.
                     // Subsequent calls need no re-check because the entry is already recorded on
                     // private_pda_bound_positions.
-                    if let Some((seed, authority_program_id)) = external_seed {
+                    if let Some((authority_program_id, seed)) = external_seed {
                         assert!(
                             !pre.is_authorized,
                             "Private PDA with externally-provided seed must not be authorized at position {pre_state_position}"

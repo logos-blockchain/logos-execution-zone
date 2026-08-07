@@ -21,7 +21,7 @@ use futures::StreamExt as _;
 use itertools::Itertools as _;
 use lee::{AccountId, PublicTransaction, public_transaction::Message};
 use lee_core::GENESIS_BLOCK_ID;
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use logos_blockchain_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
 use logos_blockchain_zone_sdk::{
     Slot, ZoneMessage,
@@ -262,6 +262,21 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                 .await
                 .expect("Failed to verify/reconstruct sequencer state from Bedrock");
 
+        // Seed the high water mark from the tip we are starting on. Every stored
+        // block reached the store by being published or by being adopted from
+        // the channel, so the channel holds them all and none is ours to write
+        // again. Without this the mark is absent until the first publish of this
+        // run, leaving that window unguarded — which is exactly the window a
+        // store written before the mark existed starts in.
+        if let Some(tip) = store
+            .latest_block_meta()
+            .expect("Failed to read latest block meta")
+        {
+            store
+                .raise_published_high_water(tip.id)
+                .expect("Failed to seed published high water mark");
+        }
+
         // Publish our blocks only when we are bootstrapping a channel that does
         // not exist yet (no channel tip). If the channel already exists (another
         // sequencer created it), we adopted its blocks during reconstruction
@@ -293,6 +308,9 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                         )
                     });
                 last_checkpoint = Some(outcome.checkpoint);
+                store
+                    .raise_published_high_water(block.header.block_id)
+                    .expect("Failed to persist published high water mark");
             }
 
             // These blocks are already stored, so only the sdk's pending set
@@ -322,7 +340,8 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     /// Verifies the local store still belongs to the chain the connected channel
     /// serves and replays any finalized channel blocks missing locally into
     /// `state`/`store`, recording each block's L1 inscription slot as the new
-    /// anchor. Fails (never parks) on any divergence.
+    /// anchor. Fails (never parks) when the channel proves a different chain:
+    /// the anchor consistency check, or a block that will not validate.
     ///
     /// Returns whether the channel does not exist yet (has no tip), i.e. whether
     /// this sequencer is the one that must bootstrap-publish its own blocks.
@@ -440,8 +459,9 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     }
 
     /// Applies a single channel block during reconstruction: idempotent for
-    /// blocks we already hold (verifying their hash), a validated continuation
-    /// for new ones. Advances the persisted anchor to the block's slot.
+    /// blocks we already hold, ignored when it conflicts at a height the final
+    /// tier already settled, a validated continuation otherwise. Advances the
+    /// persisted anchor to the block's slot.
     fn apply_reconstructed_block(
         store: &SequencerStore,
         chain: &mut ChainState,
@@ -460,44 +480,44 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             hash: block_hash,
         };
 
-        // A block at/below the tip must match what we already stored, otherwise
-        // the channel is a different chain.
+        // A block we already hold verbatim needs no replay, but the channel
+        // serving it is what makes it irreversible, so its deliveries are
+        // settled and their records are owed nothing. Without this a restart
+        // leaves a record for every delivery it already published, and nothing
+        // downstream would ever remove them.
         if let Some(tip) = &tip
             && block_id <= tip.id
-        {
-            match store
+            && let Some(stored) = store
                 .get_block_at_id(block_id)
                 .context("Failed to read stored block")?
-            {
-                Some(stored) if stored.header.hash == block_hash => {
-                    // Already applied, but the channel serving it is what makes
-                    // it irreversible, so its deliveries are settled and their
-                    // records are owed nothing. Without this a restart leaves a
-                    // record for every delivery it already published, and
-                    // nothing downstream would ever remove them.
-                    settle_reconstructed_deliveries(store, &stored);
-                    store
-                        .set_zone_anchor(&record)
-                        .context("Failed to persist zone anchor")?;
-                    return Ok(());
-                }
-                Some(stored) => {
-                    return Err(anyhow!(
-                        "Channel block {block_id} hash {block_hash} does not match stored hash {}",
-                        stored.header.hash
-                    ));
-                }
-                None => {
-                    return Err(anyhow!(
-                        "Channel block {block_id} is at/below local tip {} but is missing locally",
-                        tip.id
-                    ));
-                }
-            }
+            && stored.header.hash == block_hash
+        {
+            settle_reconstructed_deliveries(store, &stored);
+            store
+                .set_zone_anchor(&record)
+                .context("Failed to persist zone anchor")?;
+            return Ok(());
         }
 
-        // New continuation: channel history is finalized, so it goes through
-        // the final tier — validation happens inside `apply_finalized`.
+        // A conflict at a height the final tier already settled: the channel
+        // carries two inscriptions for one block id — competing sequencers
+        // around a turn change — and finality already picked one, so the other
+        // is dropped. `apply_adopted` ignores the same conflict. A genuinely
+        // foreign channel is caught upstream by the anchor consistency check,
+        // not here; the anchor stays on the block we hold.
+        if let Some(final_tip) = chain.final_tip()
+            && block_id <= final_tip.block_id
+        {
+            log::warn!(
+                "Ignoring channel block {block_id} with hash {block_hash} conflicting with the \
+                 finalized block at this height"
+            );
+            return Ok(());
+        }
+
+        // Above the final tier the head is reorg-able, so finalized history
+        // wins: `apply_finalized` finalizes the matching prefix and rebases the
+        // head onto what the channel settled. Validation happens inside it.
         match chain.apply_finalized(MsgId::from(block.header.hash.0), block, slot) {
             AcceptOutcome::Applied | AcceptOutcome::AlreadyApplied => {}
             AcceptOutcome::Parked(err) | AcceptOutcome::RetryableFailure(err) => {
@@ -568,6 +588,12 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             .publish_block(&block, withdrawals)
             .await
             .context("Failed to publish block to Bedrock")?;
+
+        // The inscription is on L1 from here on, whatever the head does with the
+        // block below, so this height must never be published again.
+        self.store
+            .raise_published_high_water(block.header.block_id)
+            .context("Failed to persist published high water mark")?;
 
         let withdrawal_reconciliation_keys: Vec<_> = released_notes
             .iter()
@@ -1106,6 +1132,37 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         self.block_publisher.is_our_turn()
     }
 
+    /// The height the next produced block would claim.
+    #[must_use]
+    pub fn next_block_height(&self) -> u64 {
+        self.chain
+            .lock()
+            .expect("chain state mutex poisoned")
+            .head_tip()
+            .map_or(GENESIS_BLOCK_ID, |tip| {
+                tip.block_id
+                    .checked_add(1)
+                    .expect("block id should not overflow")
+            })
+    }
+
+    /// `Some(high_water)` when the head has rewound below what we already
+    /// inscribed, so the next block would be a *second*, different block at a
+    /// height the channel already carries. Callers must skip their turn.
+    ///
+    /// The head alone cannot detect this: an orphan report for our own
+    /// still-unfinalized blocks rewinds it (`ChainState::apply_channel_update`)
+    /// and prunes those blocks from the store, so the tip reads as if they were
+    /// never produced. The mark is kept outside that pruning for exactly this.
+    ///
+    /// This is not a stall — the head recovers by itself once the inscriptions
+    /// we are protecting finalize and the final tier rebases onto them.
+    #[must_use]
+    pub fn rewound_below_published(&self) -> Option<u64> {
+        let high_water = self.store.published_high_water().ok().flatten()?;
+        (self.next_block_height() <= high_water).then_some(high_water)
+    }
+
     /// Shared handle to the two-tier follow state, for tests to drive the
     /// follow path directly.
     #[cfg(all(test, feature = "mock"))]
@@ -1201,8 +1258,48 @@ fn apply_follow_update(
     let (resubmit_txs, outcome, head_height) = {
         let mut chain = chain.lock().expect("chain state mutex poisoned");
 
+        // An orphan report rewinds the head to the earliest orphaned block and
+        // prunes the store above it, which is how a run of our own inscriptions
+        // can silently stop being ours. Loud on the way in: it is the only
+        // trace, and the rewind it causes is the expensive one.
+        // Debug, not warn: the sdk orphans our blocks routinely once LIB pruning
+        // drops them from the lineage, and most of those no longer sit in the
+        // head. The rewind below is the part that costs something.
+        let head_before = chain.head_tip().map(|tip| tip.block_id);
+        if !orphaned.is_empty() {
+            let ids: Vec<u64> = orphaned
+                .iter()
+                .map(|(_, block)| block.header.block_id)
+                .collect();
+            debug!(
+                "Channel orphaned {} block(s) {:?}..={:?}, head tip is {head_before:?}",
+                ids.len(),
+                ids.iter().min(),
+                ids.iter().max(),
+            );
+        }
+
         // Outcomes align with `adopted`.
         let outcomes = chain.apply_channel_update(&orphaned, &adopted);
+
+        // An adoption that does not apply freezes the head where it is, and
+        // every later one then fails the same way. Nothing else reports it.
+        for ((_, block), outcome) in adopted.iter().zip(&outcomes) {
+            if let AcceptOutcome::Parked(err) | AcceptOutcome::RetryableFailure(err) = outcome {
+                warn!(
+                    "Adopted block {} did not apply, head stays at {:?}: {err}",
+                    block.header.block_id,
+                    chain.head_tip().map(|tip| tip.block_id),
+                );
+            }
+        }
+
+        if let (Some(before), Some(after)) = (head_before, chain.head_tip().map(|tip| tip.block_id))
+            && after < before
+        {
+            warn!("Head rewound from {before} to {after}");
+        }
+
         let mut to_persist: Vec<(&Block, bool)> = adopted
             .iter()
             .zip(&outcomes)

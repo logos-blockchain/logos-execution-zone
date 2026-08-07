@@ -5,7 +5,8 @@ use keycard_wallet::KeycardWallet;
 use lee::{AccountId, PrivateKey, PublicKey, Signature};
 use lee_core::{
     Commitment, CommitmentSetDigest, DummyInput, Identifier, InputAccountIdentity, MembershipProof,
-    NullifierPublicKey, NullifierSecretKey, PrivateAccountKind, SharedSecretKey,
+    NullifierPublicKey, NullifierSecretKey, NullifierWitness, PrivateAccountKind, PrivateWitness,
+    SharedSecretKey, WitnessKind,
     account::{Account, AccountWithMetadata, Nonce},
     compute_digest_for_path,
     encryption::{
@@ -430,60 +431,42 @@ impl AccountManager {
         self.dummy_inputs(Self::MAX_PRIVATE_ACCOUNTS.saturating_sub(private_count))
     }
 
-    /// Build the per-account input vec for the privacy-preserving circuit. Each variant carries
-    /// exactly the fields the circuit's code path for that account needs, with the ephemeral
-    /// keys (`ssk`) drawn from the cached values that `private_account_keys` and the message
-    /// construction also use, so all three views agree on the same ephemeral key.
+    /// Build the per-account input vec for the privacy-preserving circuit. The `kind` and
+    /// `nullifier` axes select exactly the fields the circuit's code path for that account
+    /// needs, with the ephemeral keys (`ssk`) drawn from the cached values that
+    /// `private_account_keys` and the message construction also use, so all three views agree
+    /// on the same ephemeral key.
     pub fn account_identities(&self) -> Vec<InputAccountIdentity> {
         self.states
             .iter()
             .map(|state| match state {
                 State::Public { .. } | State::PublicKeycard { .. } => InputAccountIdentity::Public,
-                State::Private(pre) if pre.is_pda => match (pre.nsk, pre.proof.clone()) {
-                    (Some(nsk), Some(membership_proof)) => InputAccountIdentity::PrivatePdaUpdate {
-                        vpk: pre.vpk.clone(),
-                        random_seed: pre.random_seed,
-                        view_tag: random_view_tag(),
-                        nsk,
-                        membership_proof,
-                        identifier: pre.identifier,
-                        seed: None,
+                State::Private(pre) => InputAccountIdentity::Private(PrivateWitness {
+                    vpk: pre.vpk.clone(),
+                    random_seed: pre.random_seed,
+                    identifier: pre.identifier,
+                    kind: if pre.is_pda {
+                        WitnessKind::Pda { binding: None }
+                    } else {
+                        WitnessKind::Regular
                     },
-                    _ => InputAccountIdentity::PrivatePdaInit {
-                        vpk: pre.vpk.clone(),
-                        random_seed: pre.random_seed,
-                        npk: pre.npk,
-                        identifier: pre.identifier,
-                        commitment_root: self.dummy_commitment_root,
-                        seed: None,
-                    },
-                },
-                State::Private(pre) => match (pre.nsk, pre.proof.clone()) {
-                    (Some(nsk), Some(membership_proof)) => {
-                        InputAccountIdentity::PrivateAuthorizedUpdate {
-                            vpk: pre.vpk.clone(),
-                            random_seed: pre.random_seed,
+                    nullifier: match (pre.nsk, pre.proof.clone()) {
+                        (Some(nsk), Some(membership_proof)) => NullifierWitness::Update {
                             view_tag: random_view_tag(),
                             nsk,
                             membership_proof,
-                            identifier: pre.identifier,
-                        }
-                    }
-                    (Some(nsk), None) => InputAccountIdentity::PrivateAuthorizedInit {
-                        vpk: pre.vpk.clone(),
-                        random_seed: pre.random_seed,
-                        nsk,
-                        identifier: pre.identifier,
-                        commitment_root: self.dummy_commitment_root,
+                        },
+                        (nsk, _) => NullifierWitness::Init {
+                            // A regular init recomputes the npk from the key the wallet holds;
+                            // a PDA's stored npk is the owner's, so it is passed through.
+                            npk: match nsk {
+                                Some(nsk) if !pre.is_pda => NullifierPublicKey::from(&nsk),
+                                _ => pre.npk,
+                            },
+                            commitment_root: self.dummy_commitment_root,
+                        },
                     },
-                    (None, _) => InputAccountIdentity::PrivateForeignInit {
-                        vpk: pre.vpk.clone(),
-                        random_seed: pre.random_seed,
-                        npk: pre.npk,
-                        identifier: pre.identifier,
-                        commitment_root: self.dummy_commitment_root,
-                    },
-                },
+                }),
             })
             .collect()
     }
@@ -552,7 +535,7 @@ struct AccountPreparedData {
     proof: Option<MembershipProof>,
     random_seed: [u8; 32],
     /// True when this account is a private PDA (owned or foreign). Used by `account_identities()`
-    /// to select `PrivatePdaInit`/`PrivatePdaUpdate` rather than the standalone private variants.
+    /// to select `WitnessKind::Pda` rather than `WitnessKind::Regular`.
     is_pda: bool,
 }
 

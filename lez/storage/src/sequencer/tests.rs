@@ -411,6 +411,77 @@ fn finalized_deposit_records_are_removed_by_op_id() {
 }
 
 #[test]
+fn peer_chain_tips_round_trip_and_are_kept_per_peer() {
+    let temp_dir = tempdir().unwrap();
+    let (dbio, _genesis) = dbio_with_genesis(temp_dir.path());
+
+    let peer_a = [1_u8; 32];
+    let peer_b = [2_u8; 32];
+    assert_eq!(dbio.get_cross_zone_peer_tip(peer_a).unwrap(), None);
+
+    let tip_a = PeerChainTip {
+        block_id: 7,
+        block_hash: HashType([9; 32]),
+    };
+    let tip_b = PeerChainTip {
+        block_id: 3,
+        block_hash: HashType([4; 32]),
+    };
+    // The floor shares this peer key with the tip. Asserting the tip alone
+    // passes even when the two cells occupy one key space.
+    dbio.put_cross_zone_peer_floor_bytes(peer_a, &11_u64.to_le_bytes())
+        .unwrap();
+    dbio.put_cross_zone_peer_tip(peer_a, tip_a).unwrap();
+    dbio.put_cross_zone_peer_tip(peer_b, tip_b).unwrap();
+
+    // One tip per peer: a shared key would let one peer's chain decide which
+    // blocks another peer's watcher accepts.
+    assert_eq!(dbio.get_cross_zone_peer_tip(peer_a).unwrap(), Some(tip_a));
+    assert_eq!(dbio.get_cross_zone_peer_tip(peer_b).unwrap(), Some(tip_b));
+    assert_eq!(
+        dbio.get_cross_zone_peer_floor_bytes(peer_a).unwrap(),
+        Some(11_u64.to_le_bytes().to_vec()),
+        "the tip must not land in the floor's key space"
+    );
+
+    let advanced = PeerChainTip {
+        block_id: 8,
+        block_hash: HashType([10; 32]),
+    };
+    dbio.put_cross_zone_peer_tip(peer_a, advanced).unwrap();
+    assert_eq!(
+        dbio.get_cross_zone_peer_tip(peer_a).unwrap(),
+        Some(advanced)
+    );
+    assert_eq!(dbio.get_cross_zone_peer_tip(peer_b).unwrap(), Some(tip_b));
+
+    // Clearing the floor is how a watcher with no tip rebuilds one, so it has
+    // to leave the tip alone: the two share the peer key and differ only in
+    // their key base.
+    dbio.delete_cross_zone_peer_floor(peer_a).unwrap();
+    assert_eq!(dbio.get_cross_zone_peer_floor_bytes(peer_a).unwrap(), None);
+    assert_eq!(
+        dbio.get_cross_zone_peer_tip(peer_a).unwrap(),
+        Some(advanced)
+    );
+    dbio.delete_cross_zone_peer_floor(peer_a)
+        .expect("clearing a floor that is already gone is not an error");
+
+    // On disk, not in memory: a watcher that re-anchored on restart would take
+    // whatever block reached it first, which is the id the attack picks.
+    drop(dbio);
+    let reopened = RocksDBIO::open(temp_dir.path()).unwrap();
+    assert_eq!(
+        reopened.get_cross_zone_peer_tip(peer_a).unwrap(),
+        Some(advanced)
+    );
+    assert_eq!(
+        reopened.get_cross_zone_peer_tip(peer_b).unwrap(),
+        Some(tip_b)
+    );
+}
+
+#[test]
 fn dispatch_records_round_trip_and_dedupe_by_message_key() {
     let temp_dir = tempdir().unwrap();
     let (dbio, _genesis) = dbio_with_genesis(temp_dir.path());
