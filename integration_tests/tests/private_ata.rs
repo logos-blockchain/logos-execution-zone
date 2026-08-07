@@ -76,12 +76,20 @@ impl Note {
         }
     }
 
+    const fn is_self_authorized(&self) -> bool {
+        self.seed().is_none()
+    }
+
     fn commitment(&self) -> Commitment {
         Commitment::new(&self.account_id, &self.account)
     }
 
     fn pre_state(&self) -> AccountWithMetadata {
-        AccountWithMetadata::new(self.account.clone(), self.seed().is_none(), self.account_id)
+        AccountWithMetadata::new(
+            self.account.clone(),
+            self.is_self_authorized(),
+            self.account_id,
+        )
     }
 
     fn witness(&self, state: &V03State) -> InputAccountIdentity {
@@ -148,6 +156,16 @@ fn holding_balance(account: &Account) -> u128 {
     }
 }
 
+fn ata_recipient_id(keys: &KeyChain, seed: PdaSeed, identifier: u128) -> AccountId {
+    AccountId::for_private_pda(
+        &programs::ata().id(),
+        &seed,
+        &keys.nullifier_public_key,
+        &keys.viewing_public_key,
+        identifier,
+    )
+}
+
 fn state_with(notes: &[&Note]) -> V03State {
     V03State::new()
         .with_programs([programs::ata(), programs::token()])
@@ -159,6 +177,7 @@ fn state_with(notes: &[&Note]) -> V03State {
             )
         }))
 }
+
 fn transfer_private(
     state: &mut V03State,
     senders: &[(&Note, u128)],
@@ -211,6 +230,7 @@ fn transfer_private(
     *state = applied;
     Ok(message)
 }
+
 fn decrypt_for(message: &Message, keys: &KeyChain) -> (PrivateAccountKind, Account) {
     message
         .private_actions
@@ -232,13 +252,7 @@ fn private_token_send_lands_a_pda_kind_note() {
     let sender = Note::ata(KeyChain::new_os_random(), PdaSeed::new([11; 32]), 0, 500);
     let recipient_keys = KeyChain::new_os_random();
     let recipient_seed = PdaSeed::new([22; 32]);
-    let recipient_id = AccountId::for_private_pda(
-        &programs::ata().id(),
-        &recipient_seed,
-        &recipient_keys.nullifier_public_key,
-        &recipient_keys.viewing_public_key,
-        3,
-    );
+    let recipient_id = ata_recipient_id(&recipient_keys, recipient_seed, 3);
     let mut state = state_with(&[&sender]);
 
     let message = transfer_private(
@@ -284,13 +298,7 @@ fn regular_kind_holding_spends_through_the_private_ata_path() {
     let sender = Note::regular(KeyChain::new_os_random(), 9, 500);
     let recipient_keys = KeyChain::new_os_random();
     let recipient_seed = PdaSeed::new([23; 32]);
-    let recipient_id = AccountId::for_private_pda(
-        &programs::ata().id(),
-        &recipient_seed,
-        &recipient_keys.nullifier_public_key,
-        &recipient_keys.viewing_public_key,
-        0,
-    );
+    let recipient_id = ata_recipient_id(&recipient_keys, recipient_seed, 0);
     let mut state = state_with(&[&sender]);
 
     let message = transfer_private(
@@ -314,13 +322,7 @@ fn two_received_notes_consolidate_under_distinct_seeds() {
     let second = Note::ata(keys, PdaSeed::new([32; 32]), 1, 300);
     let recipient_keys = KeyChain::new_os_random();
     let recipient_seed = PdaSeed::new([33; 32]);
-    let recipient_id = AccountId::for_private_pda(
-        &programs::ata().id(),
-        &recipient_seed,
-        &recipient_keys.nullifier_public_key,
-        &recipient_keys.viewing_public_key,
-        0,
-    );
+    let recipient_id = ata_recipient_id(&recipient_keys, recipient_seed, 0);
     let mut state = state_with(&[&first, &second]);
 
     let message = transfer_private(
@@ -345,13 +347,7 @@ fn two_notes_forced_onto_one_seed_collide_in_the_pda_family() {
     let second = Note::ata(keys, seed, 1, 300);
     let recipient_keys = KeyChain::new_os_random();
     let recipient_seed = PdaSeed::new([42; 32]);
-    let recipient_id = AccountId::for_private_pda(
-        &programs::ata().id(),
-        &recipient_seed,
-        &recipient_keys.nullifier_public_key,
-        &recipient_keys.viewing_public_key,
-        0,
-    );
+    let recipient_id = ata_recipient_id(&recipient_keys, recipient_seed, 0);
     let mut state = state_with(&[&first, &second]);
 
     let err = transfer_private(
@@ -393,6 +389,7 @@ fn a_bogus_private_ata_id_is_rejected() {
         "expected the delegated-authorization rejection, got {err:?}"
     );
 }
+
 fn consolidate_n(n: u128) -> Result<Message, lee::error::LeeError> {
     let keys = KeyChain::new_os_random();
     let notes: Vec<Note> = (0..n)
@@ -406,13 +403,7 @@ fn consolidate_n(n: u128) -> Result<Message, lee::error::LeeError> {
         .collect();
     let recipient_keys = KeyChain::new_os_random();
     let recipient_seed = PdaSeed::new([59; 32]);
-    let recipient_id = AccountId::for_private_pda(
-        &programs::ata().id(),
-        &recipient_seed,
-        &recipient_keys.nullifier_public_key,
-        &recipient_keys.viewing_public_key,
-        0,
-    );
+    let recipient_id = ata_recipient_id(&recipient_keys, recipient_seed, 0);
     let mut state = state_with(&notes.iter().collect::<Vec<_>>());
     let senders: Vec<(&Note, u128)> = notes.iter().map(|note| (note, 1)).collect();
     transfer_private(
