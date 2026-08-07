@@ -69,10 +69,6 @@ fn main() {
         account_id: AccountId::new(victim_id_raw),
     };
 
-    // Recipient is already initialized under authenticated_transfer (program_owner =
-    // auth_transfer_id, balance = 0). Using the default account would trigger
-    // Claim::Authorized inside authenticated_transfer, which requires is_authorized=true
-    // on the recipient — a check that would block the transfer.
     let recipient = AccountWithMetadata {
         account: Account {
             program_owner: auth_transfer_id,
