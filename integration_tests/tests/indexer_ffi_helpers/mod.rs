@@ -8,13 +8,14 @@ use std::{
 };
 
 use anyhow::{Context as _, Result};
+use ffi_core::api::types::{FfiAccountId, FfiOption, FfiVec, account::FfiAccount};
 use indexer_ffi::{
     IndexerServiceFFI, OperationStatus, Runtime,
     api::{
         PointerResult,
         lifecycle::InitializedIndexerServiceFFIResult,
         query::LastBlockIdResult,
-        types::{FfiAccountId, FfiOption, FfiVec, account::FfiAccount, block::FfiBlock},
+        types::{block::FfiBlock},
     },
 };
 use integration_tests::{BlockingTestContext, TestContext};

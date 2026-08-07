@@ -5,7 +5,7 @@
 )]
 
 use anyhow::Result;
-use indexer_ffi::api::types::FfiOption;
+use ffi_core::api::types::FfiOption;
 use log::info;
 
 #[path = "indexer_ffi_helpers/mod.rs"]

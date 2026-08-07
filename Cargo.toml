@@ -54,6 +54,8 @@ members = [
   "lez/programs/ping_receiver",
   "lez/cross_zone",
 
+  "ffi_core",
+
   "test_programs",
   "test_programs/guest",
 
@@ -69,7 +71,7 @@ members = [
   "tools/crypto_primitives_bench",
   "tools/integration_bench",
   "tools/cross_zone_chat",
-  "tools/dashboard_gen",
+  "tools/dashboard_gen", 
 ]
 
 [workspace.dependencies]
@@ -93,6 +95,7 @@ indexer_service_rpc = { path = "lez/indexer/service/rpc" }
 wallet = { path = "lez/wallet" }
 wallet-ffi = { path = "lez/wallet-ffi", default-features = false }
 indexer_ffi = { path = "lez/indexer/ffi" }
+ffi_core = { path = "ffi_core" }
 lez = { path = "lez" }
 programs = { path = "lez/programs", default-features = false, features = [
   "artifacts",

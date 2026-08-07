@@ -3054,6 +3054,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "ffi_core"
+version = "0.1.0"
+
+[[package]]
 name = "fiat-crypto"
 version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4237,6 +4241,7 @@ version = "0.1.0"
 dependencies = [
  "cbindgen",
  "env_logger",
+ "ffi_core",
  "futures",
  "indexer_core",
  "indexer_service_protocol",
@@ -4273,6 +4278,7 @@ dependencies = [
  "base58",
  "base64 0.22.1",
  "common",
+ "ffi_core",
  "hex",
  "indexer_core",
  "lee",
@@ -4380,6 +4386,7 @@ dependencies = [
  "cross_zone_inbox_core",
  "cross_zone_outbox_core",
  "faucet_core",
+ "ffi_core",
  "hex",
  "indexer_ffi",
  "indexer_service_protocol",
@@ -4994,6 +5001,7 @@ dependencies = [
  "bytemuck",
  "bytesize",
  "chacha20",
+ "ffi_core",
  "ml-kem",
  "risc0-zkvm",
  "serde",

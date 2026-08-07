@@ -8,6 +8,7 @@ license = { workspace = true }
 workspace = true
 
 [dependencies]
+ffi_core.workspace = true
 risc0-zkvm.workspace = true
 borsh.workspace = true
 serde.workspace = true

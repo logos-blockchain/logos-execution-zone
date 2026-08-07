@@ -10,6 +10,7 @@ workspace = true
 [dependencies]
 lee_core = { workspace = true, optional = true, features = ["host"] }
 lee = { workspace = true, optional = true }
+ffi_core.workspace = true
 common = { workspace = true, optional = true }
 indexer_core = { workspace = true, optional = true }
 

@@ -1,5 +1,6 @@
 use std::ffi::{CString, c_char};
 
+use ffi_core::api::types::{FfiAccountId, FfiBlockId, FfiHashType, FfiOption, FfiVec, account::FfiAccount, transaction::FfiTransaction};
 use indexer_service_protocol::AccountId;
 
 use crate::{
@@ -7,10 +8,7 @@ use crate::{
     api::{
         PointerResult,
         types::{
-            FfiAccountId, FfiBlockId, FfiHashType, FfiOption, FfiVec,
-            account::FfiAccount,
             block::{FfiBlock, FfiBlockOpt},
-            transaction::FfiTransaction,
         },
     },
     errors::OperationStatus,

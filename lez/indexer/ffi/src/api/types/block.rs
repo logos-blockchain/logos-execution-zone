@@ -1,7 +1,7 @@
+use ffi_core::api::types::{FfiBlockId, FfiHashType, FfiOption, FfiSignature, FfiTimestamp, FfiVec};
 use indexer_service_protocol::{BedrockStatus, Block, BlockHeader, HashType, Signature};
 
 use crate::api::types::{
-    FfiBlockId, FfiHashType, FfiOption, FfiSignature, FfiTimestamp, FfiVec,
     transaction::free_transaction_vec_value, vectors::FfiBlockBody,
 };
 

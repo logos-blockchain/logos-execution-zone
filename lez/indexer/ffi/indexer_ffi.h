@@ -12,12 +12,6 @@ typedef enum OperationStatus {
   ClientError = 3,
 } OperationStatus;
 
-typedef enum FfiTransactionKind {
-  Public = 0,
-  Private,
-  ProgramDeploy,
-} FfiTransactionKind;
-
 typedef enum FfiBedrockStatus {
   Pending = 0,
   Safe,
@@ -95,28 +89,6 @@ typedef struct LastBlockIdResult {
   enum OperationStatus error;
 } LastBlockIdResult;
 
-typedef uint64_t FfiBlockId;
-
-/**
- * 32-byte array type for `AccountId`, keys, hashes, etc.
- */
-typedef struct FfiBytes32 {
-  uint8_t data[32];
-} FfiBytes32;
-
-typedef struct FfiBytes32 FfiHashType;
-
-typedef uint64_t FfiTimestamp;
-
-/**
- * 64-byte array type for signatures, etc.
- */
-typedef struct FfiBytes64 {
-  uint8_t data[64];
-} FfiBytes64;
-
-typedef struct FfiBytes64 FfiSignature;
-
 typedef struct FfiBlockHeader {
   FfiBlockId block_id;
   FfiHashType prev_block_hash;
@@ -125,190 +97,7 @@ typedef struct FfiBlockHeader {
   FfiSignature signature;
 } FfiBlockHeader;
 
-/**
- * Program ID - 8 u32 values (32 bytes total).
- */
-typedef struct FfiProgramId {
-  uint32_t data[8];
-} FfiProgramId;
-
-typedef struct FfiBytes32 FfiAccountId;
-
-typedef struct FfiVec_FfiAccountId {
-  FfiAccountId *entries;
-  uintptr_t len;
-  uintptr_t capacity;
-} FfiVec_FfiAccountId;
-
-typedef struct FfiVec_FfiAccountId FfiAccountIdList;
-
-/**
- * U128 - 16 bytes little endian.
- */
-typedef struct FfiU128 {
-  uint8_t data[16];
-} FfiU128;
-
-typedef struct FfiU128 FfiNonce;
-
-typedef struct FfiVec_FfiNonce {
-  FfiNonce *entries;
-  uintptr_t len;
-  uintptr_t capacity;
-} FfiVec_FfiNonce;
-
-typedef struct FfiVec_FfiNonce FfiNonceList;
-
-typedef struct FfiVec_u32 {
-  uint32_t *entries;
-  uintptr_t len;
-  uintptr_t capacity;
-} FfiVec_u32;
-
-typedef struct FfiVec_u32 FfiInstructionDataList;
-
-typedef struct FfiPublicMessage {
-  struct FfiProgramId program_id;
-  FfiAccountIdList account_ids;
-  FfiNonceList nonces;
-  FfiInstructionDataList instruction_data;
-} FfiPublicMessage;
-
-typedef struct FfiBytes32 FfiPublicKey;
-
-typedef struct FfiSignaturePubKeyEntry {
-  FfiSignature signature;
-  FfiPublicKey public_key;
-} FfiSignaturePubKeyEntry;
-
-typedef struct FfiVec_FfiSignaturePubKeyEntry {
-  struct FfiSignaturePubKeyEntry *entries;
-  uintptr_t len;
-  uintptr_t capacity;
-} FfiVec_FfiSignaturePubKeyEntry;
-
-typedef struct FfiVec_FfiSignaturePubKeyEntry FfiSignaturePubKeyList;
-
-typedef struct FfiPublicTransactionBody {
-  FfiHashType hash;
-  struct FfiPublicMessage message;
-  FfiSignaturePubKeyList witness_set;
-} FfiPublicTransactionBody;
-
-/**
- * Account data structure - C-compatible version of lee Account.
- *
- * Note: `balance` and `nonce` are u128 values represented as little-endian
- * byte arrays since C doesn't have native u128 support.
- */
-typedef struct FfiAccount {
-  struct FfiProgramId program_owner;
-  /**
-   * Balance as little-endian [u8; 16].
-   */
-  struct FfiU128 balance;
-  /**
-   * Pointer to account data bytes.
-   */
-  uint8_t *data;
-  /**
-   * Length of account data.
-   */
-  uintptr_t data_len;
-  /**
-   * Capacity of account data.
-   */
-  uintptr_t data_cap;
-  /**
-   * Nonce as little-endian [u8; 16].
-   */
-  struct FfiU128 nonce;
-} FfiAccount;
-
-typedef struct FfiPublicAction {
-  FfiAccountId account_id;
-  struct FfiAccount post_state;
-} FfiPublicAction;
-
-typedef struct FfiVec_FfiPublicAction {
-  struct FfiPublicAction *entries;
-  uintptr_t len;
-  uintptr_t capacity;
-} FfiVec_FfiPublicAction;
-
-typedef struct FfiVec_FfiPublicAction FfiPublicActionList;
-
-typedef struct FfiVec_u8 {
-  uint8_t *entries;
-  uintptr_t len;
-  uintptr_t capacity;
-} FfiVec_u8;
-
-typedef struct FfiVec_u8 FfiVecU8;
-
-typedef struct FfiEncryptedAccountData {
-  FfiVecU8 ciphertext;
-  FfiVecU8 epk;
-  uint8_t view_tag;
-} FfiEncryptedAccountData;
-
-typedef struct FfiPrivateAction {
-  struct FfiBytes32 nullifier;
-  struct FfiBytes32 root;
-  struct FfiBytes32 commitment;
-  struct FfiEncryptedAccountData encrypted_post_state;
-} FfiPrivateAction;
-
-typedef struct FfiVec_FfiPrivateAction {
-  struct FfiPrivateAction *entries;
-  uintptr_t len;
-  uintptr_t capacity;
-} FfiVec_FfiPrivateAction;
-
-typedef struct FfiVec_FfiPrivateAction FfiPrivateActionList;
-
-typedef struct FfiPrivacyPreservingMessage {
-  FfiPublicActionList public_actions;
-  FfiNonceList nonces;
-  FfiPrivateActionList private_actions;
-  uint64_t block_validity_window[2];
-  uint64_t timestamp_validity_window[2];
-} FfiPrivacyPreservingMessage;
-
-typedef FfiVecU8 FfiProof;
-
-typedef struct FfiPrivateTransactionBody {
-  FfiHashType hash;
-  struct FfiPrivacyPreservingMessage message;
-  FfiSignaturePubKeyList witness_set;
-  FfiProof proof;
-} FfiPrivateTransactionBody;
-
-typedef FfiVecU8 FfiProgramDeploymentMessage;
-
-typedef struct FfiProgramDeploymentTransactionBody {
-  FfiHashType hash;
-  FfiProgramDeploymentMessage message;
-} FfiProgramDeploymentTransactionBody;
-
-typedef struct FfiTransactionBody {
-  struct FfiPublicTransactionBody *public_body;
-  struct FfiPrivateTransactionBody *private_body;
-  struct FfiProgramDeploymentTransactionBody *program_deployment_body;
-} FfiTransactionBody;
-
-typedef struct FfiTransaction {
-  struct FfiTransactionBody body;
-  enum FfiTransactionKind kind;
-} FfiTransaction;
-
-typedef struct FfiVec_FfiTransaction {
-  struct FfiTransaction *entries;
-  uintptr_t len;
-  uintptr_t capacity;
-} FfiVec_FfiTransaction;
-
-typedef struct FfiVec_FfiTransaction FfiBlockBody;
+typedef FfiVec<FfiTransaction> FfiBlockBody;
 
 typedef struct FfiBlock {
   struct FfiBlockHeader header;
@@ -316,12 +105,7 @@ typedef struct FfiBlock {
   enum FfiBedrockStatus bedrock_status;
 } FfiBlock;
 
-typedef struct FfiOption_FfiBlock {
-  struct FfiBlock *value;
-  bool is_some;
-} FfiOption_FfiBlock;
-
-typedef struct FfiOption_FfiBlock FfiBlockOpt;
+typedef FfiOption<FfiBlock> FfiBlockOpt;
 
 /**
  * Simple wrapper around a pointer to a value or an error.
@@ -341,14 +125,9 @@ typedef struct PointerResult_FfiBlockOpt__OperationStatus {
  * dereferencing the pointer.
  */
 typedef struct PointerResult_FfiAccount__OperationStatus {
-  struct FfiAccount *value;
+  FfiAccount *value;
   enum OperationStatus error;
 } PointerResult_FfiAccount__OperationStatus;
-
-typedef struct FfiOption_FfiTransaction {
-  struct FfiTransaction *value;
-  bool is_some;
-} FfiOption_FfiTransaction;
 
 /**
  * Simple wrapper around a pointer to a value or an error.
@@ -357,15 +136,9 @@ typedef struct FfiOption_FfiTransaction {
  * dereferencing the pointer.
  */
 typedef struct PointerResult_FfiOption_FfiTransaction_____OperationStatus {
-  struct FfiOption_FfiTransaction *value;
+  FfiOption<FfiTransaction> *value;
   enum OperationStatus error;
 } PointerResult_FfiOption_FfiTransaction_____OperationStatus;
-
-typedef struct FfiVec_FfiBlock {
-  struct FfiBlock *entries;
-  uintptr_t len;
-  uintptr_t capacity;
-} FfiVec_FfiBlock;
 
 /**
  * Simple wrapper around a pointer to a value or an error.
@@ -374,14 +147,9 @@ typedef struct FfiVec_FfiBlock {
  * dereferencing the pointer.
  */
 typedef struct PointerResult_FfiVec_FfiBlock_____OperationStatus {
-  struct FfiVec_FfiBlock *value;
+  FfiVec<FfiBlock> *value;
   enum OperationStatus error;
 } PointerResult_FfiVec_FfiBlock_____OperationStatus;
-
-typedef struct FfiOption_u64 {
-  uint64_t *value;
-  bool is_some;
-} FfiOption_u64;
 
 /**
  * Simple wrapper around a pointer to a value or an error.
@@ -390,7 +158,7 @@ typedef struct FfiOption_u64 {
  * dereferencing the pointer.
  */
 typedef struct PointerResult_FfiVec_FfiTransaction_____OperationStatus {
-  struct FfiVec_FfiTransaction *value;
+  FfiVec<FfiTransaction> *value;
   enum OperationStatus error;
 } PointerResult_FfiVec_FfiTransaction_____OperationStatus;
 
@@ -611,7 +379,7 @@ struct PointerResult_FfiOption_FfiTransaction_____OperationStatus query_transact
  * - `indexer` is a valid pointer to a [`IndexerServiceFFI`] instance.
  */
 struct PointerResult_FfiVec_FfiBlock_____OperationStatus query_block_vec(const struct IndexerServiceFFI *indexer,
-                                                                         struct FfiOption_u64 before,
+                                                                         FfiOption<uint64_t> before,
                                                                          uint64_t limit);
 
 /**
@@ -659,7 +427,7 @@ struct PointerResult_FfiVec_FfiTransaction_____OperationStatus query_transaction
  * The caller must ensure that:
  * - `val` is a pointer to an `FfiAccount` produced by this library and not yet freed.
  */
-void free_ffi_account(struct FfiAccount *val);
+void free_ffi_account(FfiAccount *val);
 
 /**
  * Frees the resources owned by an `FfiBlock` value.
@@ -727,7 +495,7 @@ void free_ffi_block_opt(FfiBlockOpt *val);
  * The caller must ensure that:
  * - `val` is a pointer to an `FfiVec<FfiBlock>` produced by this library and not yet freed.
  */
-void free_ffi_block_vec(struct FfiVec_FfiBlock *val);
+void free_ffi_block_vec(FfiVec<FfiBlock> *val);
 
 /**
  * Frees the resources associated with the given ffi transaction.
@@ -745,7 +513,7 @@ void free_ffi_block_vec(struct FfiVec_FfiBlock *val);
  * The caller must ensure that:
  * - `val` is a valid instance of `FfiTransaction`.
  */
-void free_ffi_transaction(struct FfiTransaction val);
+void free_ffi_transaction(FfiTransaction val);
 
 /**
  * Frees the resources associated with the given ffi transaction option.
@@ -768,7 +536,7 @@ void free_ffi_transaction(struct FfiTransaction val);
  * - `val` is a pointer to an `FfiOption<FfiTransaction>` produced by this library and not yet
  *   freed.
  */
-void free_ffi_transaction_opt(struct FfiOption_FfiTransaction *val);
+void free_ffi_transaction_opt(FfiOption<FfiTransaction> *val);
 
 /**
  * Frees the resources associated with the given vector of ffi transactions.
@@ -790,7 +558,7 @@ void free_ffi_transaction_opt(struct FfiOption_FfiTransaction *val);
  * The caller must ensure that:
  * - `val` is a pointer to an `FfiVec<FfiTransaction>` produced by this library and not yet freed.
  */
-void free_ffi_transaction_vec(struct FfiVec_FfiTransaction *val);
+void free_ffi_transaction_vec(FfiVec<FfiTransaction> *val);
 
 bool is_ok(const enum OperationStatus *self);
 

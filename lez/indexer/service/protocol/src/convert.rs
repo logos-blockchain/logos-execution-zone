@@ -1,5 +1,6 @@
 //! Conversions between `indexer_service_protocol` types and `lee/lee_core` types.
 
+use ffi_core::api::types::{FfiAccountId, FfiBytes32, FfiHashType, FfiProgramId, FfiPublicKey, FfiSignature, account::FfiAccount, transaction::{FfiEncryptedAccountData, FfiPrivacyPreservingMessage, FfiPrivateAction, FfiPrivateTransactionBody, FfiProgramDeploymentTransactionBody, FfiPublicAction, FfiPublicMessage, FfiPublicTransactionBody, FfiSignaturePubKeyEntry, FfiTransaction, FfiTransactionBody, FfiTransactionKind}};
 use lee_core::account::Nonce;
 
 use crate::{
@@ -94,6 +95,68 @@ impl TryFrom<Data> for lee_core::account::Data {
     }
 }
 
+impl From<FfiAccount> for Account {
+    fn from(value: FfiAccount) -> Self {
+        let FfiAccount {
+            program_owner,
+            balance,
+            data,
+            data_cap,
+            data_len,
+            nonce,
+        } = value;
+
+        Self {
+            program_owner: ProgramId(program_owner.data),
+            balance: balance.into(),
+            data: Data(unsafe {
+                Vec::from_raw_parts(data, data_len, data_cap)
+            }),
+            nonce: nonce.into(),
+        }
+    }
+}
+
+impl From<&FfiAccount> for Account {
+    fn from(value: &FfiAccount) -> Self {
+        let &FfiAccount {
+            program_owner,
+            balance,
+            data,
+            data_cap,
+            data_len,
+            nonce,
+        } = value;
+
+        Self {
+            program_owner: ProgramId(program_owner.data),
+            balance: balance.into(),
+            data: Data(unsafe {
+                Vec::from_raw_parts(data, data_len, data_cap)
+            }),
+            nonce: nonce.into(),
+        }
+    }
+}
+
+impl From<ProgramId> for FfiProgramId {
+    fn from(value: ProgramId) -> Self {
+        Self { data: value.0 }
+    }
+}
+
+impl From<HashType> for FfiHashType {
+    fn from(value: HashType) -> Self {
+        Self { data: value.0 }
+    }
+}
+
+impl From<AccountId> for FfiAccountId {
+    fn from(value: AccountId) -> Self {
+        Self { data: value.value }
+    }
+}
+
 // ============================================================================
 // Commitment and Nullifier conversions
 // ============================================================================
@@ -162,6 +225,12 @@ impl From<EphemeralPublicKey> for lee_core::encryption::EphemeralPublicKey {
     }
 }
 
+impl From<PublicKey> for FfiPublicKey {
+    fn from(value: PublicKey) -> Self {
+        Self { data: value.0 }
+    }
+}
+
 // ============================================================================
 // Signature and PublicKey conversions
 // ============================================================================
@@ -191,6 +260,12 @@ impl TryFrom<PublicKey> for lee::PublicKey {
 
     fn try_from(value: PublicKey) -> Result<Self, Self::Error> {
         Self::try_new(value.0)
+    }
+}
+
+impl From<Signature> for FfiSignature {
+    fn from(value: Signature) -> Self {
+        Self { data: value.0 }
     }
 }
 
@@ -234,6 +309,22 @@ impl From<EncryptedAccountData>
             ciphertext: value.ciphertext.into(),
             epk: value.epk.into(),
             view_tag: value.view_tag,
+        }
+    }
+}
+
+impl From<EncryptedAccountData> for FfiEncryptedAccountData {
+    fn from(value: EncryptedAccountData) -> Self {
+        let EncryptedAccountData {
+            ciphertext,
+            epk,
+            view_tag,
+        } = value;
+
+        Self {
+            ciphertext: ciphertext.0.into(),
+            epk: epk.0.into(),
+            view_tag,
         }
     }
 }
@@ -392,6 +483,92 @@ impl From<ProgramDeploymentMessage> for lee::program_deployment_transaction::Mes
     fn from(value: ProgramDeploymentMessage) -> Self {
         let ProgramDeploymentMessage { bytecode } = value;
         Self::new(bytecode)
+    }
+}
+
+impl From<PublicMessage> for FfiPublicMessage {
+    fn from(value: PublicMessage) -> Self {
+        let PublicMessage {
+            program_id,
+            account_ids,
+            nonces,
+            instruction_data,
+        } = value;
+
+        Self {
+            program_id: program_id.into(),
+            account_ids: account_ids
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<_>>()
+                .into(),
+            nonces: nonces
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<_>>()
+                .into(),
+            instruction_data: instruction_data.into(),
+        }
+    }
+}
+
+impl From<PublicActionWithID> for FfiPublicAction {
+    fn from(value: PublicActionWithID) -> Self {
+        let post_state: lee::Account = value
+            .post_state
+            .try_into()
+            .expect("Source is in blocks, must fit");
+        Self {
+            account_id: value.account_id.into(),
+            post_state: post_state.into(),
+        }
+    }
+}
+
+impl From<PrivateAction> for FfiPrivateAction {
+    fn from(value: PrivateAction) -> Self {
+        Self {
+            nullifier: FfiBytes32 {
+                data: value.nullifier.0,
+            },
+            root: FfiBytes32 { data: value.root.0 },
+            commitment: FfiBytes32 {
+                data: value.commitment.0,
+            },
+            encrypted_post_state: value.encrypted_post_state.into(),
+        }
+    }
+}
+
+impl From<PrivacyPreservingMessage> for FfiPrivacyPreservingMessage {
+    fn from(value: PrivacyPreservingMessage) -> Self {
+        let PrivacyPreservingMessage {
+            public_actions,
+            nonces,
+            private_actions,
+            block_validity_window,
+            timestamp_validity_window,
+        } = value;
+
+        Self {
+            public_actions: public_actions
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<_>>()
+                .into(),
+            nonces: nonces
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<_>>()
+                .into(),
+            private_actions: private_actions
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<_>>()
+                .into(),
+            block_validity_window: cast_validity_window(block_validity_window),
+            timestamp_validity_window: cast_validity_window(timestamp_validity_window),
+        }
     }
 }
 
@@ -564,6 +741,211 @@ impl TryFrom<Transaction> for common::transaction::LeeTransaction {
             Transaction::Public(tx) => Ok(Self::Public(tx.try_into()?)),
             Transaction::PrivacyPreserving(tx) => Ok(Self::PrivacyPreserving(tx.try_into()?)),
             Transaction::ProgramDeployment(tx) => Ok(Self::ProgramDeployment(tx.into())),
+        }
+    }
+}
+
+impl From<PublicTransaction> for FfiPublicTransactionBody {
+    fn from(value: PublicTransaction) -> Self {
+        let PublicTransaction {
+            hash,
+            message,
+            witness_set,
+        } = value;
+
+        Self {
+            hash: hash.into(),
+            message: message.into(),
+            witness_set: witness_set
+                .signatures_and_public_keys
+                .into_iter()
+                .map(cast_signature_pub_key)
+                .collect::<Vec<_>>()
+                .into(),
+        }
+    }
+}
+
+impl From<Box<FfiPublicTransactionBody>> for PublicTransaction {
+    fn from(value: Box<FfiPublicTransactionBody>) -> Self {
+        Self {
+            hash: HashType(value.hash.data),
+            message: PublicMessage {
+                program_id: ProgramId(value.message.program_id.data),
+                account_ids: {
+                    let std_vec: Vec<_> = value.message.account_ids.into();
+                    std_vec
+                        .into_iter()
+                        .map(|ffi_val| AccountId {
+                            value: ffi_val.data,
+                        })
+                        .collect()
+                },
+                nonces: {
+                    let std_vec: Vec<_> = value.message.nonces.into();
+                    std_vec.into_iter().map(Into::into).collect()
+                },
+                instruction_data: value.message.instruction_data.into(),
+            },
+            witness_set: WitnessSet {
+                signatures_and_public_keys: {
+                    let std_vec: Vec<_> = value.witness_set.into();
+                    std_vec
+                        .into_iter()
+                        .map(|ffi_val| {
+                            (
+                                Signature(ffi_val.signature.data),
+                                PublicKey(ffi_val.public_key.data),
+                            )
+                        })
+                        .collect()
+                },
+                proof: None,
+            },
+        }
+    }
+}
+
+impl From<PrivacyPreservingTransaction> for FfiPrivateTransactionBody {
+    fn from(value: PrivacyPreservingTransaction) -> Self {
+        let PrivacyPreservingTransaction {
+            hash,
+            message,
+            witness_set,
+        } = value;
+
+        Self {
+            hash: hash.into(),
+            message: message.into(),
+            witness_set: witness_set
+                .signatures_and_public_keys
+                .into_iter()
+                .map(cast_signature_pub_key)
+                .collect::<Vec<_>>()
+                .into(),
+            proof: witness_set
+                .proof
+                .expect("Private execution: proof must be present")
+                .0
+                .into(),
+        }
+    }
+}
+
+impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
+    fn from(value: Box<FfiPrivateTransactionBody>) -> Self {
+        Self {
+            hash: HashType(value.hash.data),
+            message: PrivacyPreservingMessage {
+                public_actions: {
+                    let std_vec: Vec<_> = value.message.public_actions.into();
+                    std_vec
+                        .into_iter()
+                        .map(|ffi_val| PublicActionWithID {
+                            account_id: AccountId {
+                                value: ffi_val.account_id.data,
+                            },
+                            post_state: ffi_val.post_state.into(),
+                        })
+                        .collect()
+                },
+                nonces: {
+                    let std_vec: Vec<_> = value.message.nonces.into();
+                    std_vec.into_iter().map(Into::into).collect()
+                },
+                private_actions: {
+                    let std_vec: Vec<_> = value.message.private_actions.into();
+                    std_vec
+                        .into_iter()
+                        .map(|ffi_val| PrivateAction {
+                            nullifier: Nullifier(ffi_val.nullifier.data),
+                            root: CommitmentSetDigest(ffi_val.root.data),
+                            commitment: Commitment(ffi_val.commitment.data),
+                            encrypted_post_state: EncryptedAccountData {
+                                ciphertext: Ciphertext(
+                                    ffi_val.encrypted_post_state.ciphertext.into(),
+                                ),
+                                epk: EphemeralPublicKey(ffi_val.encrypted_post_state.epk.into()),
+                                view_tag: ffi_val.encrypted_post_state.view_tag,
+                            },
+                        })
+                        .collect()
+                },
+                block_validity_window: cast_ffi_validity_window(
+                    value.message.block_validity_window,
+                ),
+                timestamp_validity_window: cast_ffi_validity_window(
+                    value.message.timestamp_validity_window,
+                ),
+            },
+            witness_set: WitnessSet {
+                signatures_and_public_keys: {
+                    let std_vec: Vec<_> = value.witness_set.into();
+                    std_vec
+                        .into_iter()
+                        .map(|ffi_val| {
+                            (
+                                Signature(ffi_val.signature.data),
+                                PublicKey(ffi_val.public_key.data),
+                            )
+                        })
+                        .collect()
+                },
+                proof: Some(Proof(value.proof.into())),
+            },
+        }
+    }
+}
+
+impl From<Box<FfiProgramDeploymentTransactionBody>> for ProgramDeploymentTransaction {
+    fn from(value: Box<FfiProgramDeploymentTransactionBody>) -> Self {
+        Self {
+            hash: HashType(value.hash.data),
+            message: ProgramDeploymentMessage {
+                bytecode: value.message.into(),
+            },
+        }
+    }
+}
+
+impl From<ProgramDeploymentTransaction> for FfiProgramDeploymentTransactionBody {
+    fn from(value: ProgramDeploymentTransaction) -> Self {
+        let ProgramDeploymentTransaction { hash, message } = value;
+
+        Self {
+            hash: hash.into(),
+            message: message.bytecode.into(),
+        }
+    }
+}
+
+impl From<Transaction> for FfiTransaction {
+    fn from(value: Transaction) -> Self {
+        match value {
+            Transaction::Public(pub_tx) => Self {
+                body: FfiTransactionBody {
+                    public_body: Box::into_raw(Box::new(pub_tx.into())),
+                    private_body: std::ptr::null_mut(),
+                    program_deployment_body: std::ptr::null_mut(),
+                },
+                kind: FfiTransactionKind::Public,
+            },
+            Transaction::PrivacyPreserving(priv_tx) => Self {
+                body: FfiTransactionBody {
+                    public_body: std::ptr::null_mut(),
+                    private_body: Box::into_raw(Box::new(priv_tx.into())),
+                    program_deployment_body: std::ptr::null_mut(),
+                },
+                kind: FfiTransactionKind::Private,
+            },
+            Transaction::ProgramDeployment(pr_dep_tx) => Self {
+                body: FfiTransactionBody {
+                    public_body: std::ptr::null_mut(),
+                    private_body: std::ptr::null_mut(),
+                    program_deployment_body: Box::into_raw(Box::new(pr_dep_tx.into())),
+                },
+                kind: FfiTransactionKind::ProgramDeploy,
+            },
         }
     }
 }
@@ -824,4 +1206,31 @@ impl From<indexer_core::status::IndexerStatus> for IndexerStatus {
             stall_reason: stall_reason.map(Into::into),
         }
     }
+}
+
+fn cast_validity_window(window: ValidityWindow) -> [u64; 2] {
+    [
+        window.0.0.unwrap_or_default(),
+        window.0.1.unwrap_or(u64::MAX),
+    ]
+}
+
+const fn cast_ffi_validity_window(ffi_window: [u64; 2]) -> ValidityWindow {
+    let left = if ffi_window[0] == 0 {
+        None
+    } else {
+        Some(ffi_window[0])
+    };
+
+    let right = if ffi_window[1] == u64::MAX {
+        None
+    } else {
+        Some(ffi_window[1])
+    };
+
+    ValidityWindow((left, right))
+}
+
+fn cast_signature_pub_key(val: (Signature, PublicKey)) -> FfiSignaturePubKeyEntry {
+    FfiSignaturePubKeyEntry { signature: val.0.into(), public_key: val.1.into() }
 }

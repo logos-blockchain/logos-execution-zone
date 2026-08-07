@@ -25,6 +25,7 @@ mod encoding;
 pub mod encryption;
 mod nullifier;
 pub mod program;
+pub mod ffi_convert;
 
 #[cfg(feature = "host")]
 pub mod error;

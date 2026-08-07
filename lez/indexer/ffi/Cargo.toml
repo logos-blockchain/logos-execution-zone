@@ -6,6 +6,7 @@ version = "0.1.0"
 
 [dependencies]
 lee.workspace = true
+ffi_core.workspace = true
 indexer_core = { workspace = true, features = ["testnet"] }
 indexer_service_protocol = { workspace = true, features = ["convert"] }
 
