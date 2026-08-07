@@ -510,7 +510,6 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     let faucet_account_id = system_accounts::faucet_account_id();
-    let attacker_id = ctx.existing_public_accounts()[0];
     let faucet_program_id = programs::faucet().id();
     let auth_transfer_program_id = programs::authenticated_transfer().id();
     let ask = lee_core::AuthorizationSecretKey([3; 32]);
@@ -543,7 +542,7 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
         .into(),
     );
 
-    let instruction = Program::serialize_instruction((faucet_program_id, attacker_id, amount))?;
+    let instruction = Program::serialize_instruction((faucet_program_id, amount))?;
 
     let res = execute_and_prove(
         vec![faucet_pre, attacker_pda_pre],

@@ -1183,7 +1183,6 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
         vec![],
         bridge_core::Instruction::Deposit {
             l1_deposit_op_id: event.deposit_op_id.0,
-            recipient_id: metadata.recipient_id,
             amount: event.amount,
         },
     )

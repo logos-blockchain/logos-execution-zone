@@ -378,7 +378,7 @@ async fn user_tx_that_chain_calls_faucet_is_dropped() -> Result<()> {
         faucet_chain_caller.id(),
         vec![faucet_account_id, attacker],
         vec![],
-        (faucet_program_id, attacker, amount),
+        (faucet_program_id, amount),
     )?;
     let attack_tx = LeeTransaction::Public(lee::PublicTransaction::new(
         message,

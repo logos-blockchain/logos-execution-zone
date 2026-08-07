@@ -1,13 +1,9 @@
-use lee_core::{
-    account::AccountId,
-    program::{
-        AccountPostState, ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
-    },
+use lee_core::program::{
+    AccountPostState, ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
 };
 use risc0_zkvm::serde::to_vec;
 
-type Instruction = (ProgramId, AccountId, u128);
-// (faucet_program_id, recipient_id, amount)
+type Instruction = (ProgramId, u128);
 
 fn main() {
     let (
@@ -15,7 +11,7 @@ fn main() {
             self_program_id,
             caller_program_id,
             pre_states,
-            instruction: (faucet_program_id, _recipient_id, amount),
+            instruction: (faucet_program_id, amount),
         },
         instruction_words,
     ) = read_lee_inputs::<Instruction>();

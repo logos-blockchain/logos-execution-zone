@@ -34,7 +34,6 @@ fn main() {
     let (post_states, chained_calls) = match instruction {
         Instruction::Deposit {
             l1_deposit_op_id,
-            recipient_id,
             amount,
         } => {
             let [bridge, recipient, receipt] = pre_states
@@ -45,11 +44,6 @@ fn main() {
                 bridge.account_id,
                 bridge_core::compute_bridge_account_id(self_program_id),
                 "First account must be bridge PDA"
-            );
-
-            assert_eq!(
-                recipient.account_id, recipient_id,
-                "Second account must be the deposit recipient"
             );
 
             assert_eq!(
