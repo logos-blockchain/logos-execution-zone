@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn claiming_mechanism() {
+fn public_transfer_credits_recipient_without_claiming() {
     let program = crate::test_methods::simple_balance_transfer();
     let from_key = PrivateKey::try_new([1; 32]).unwrap();
     let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
@@ -14,7 +14,7 @@ fn claiming_mechanism() {
     let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
     let amount: u128 = 37;
 
-    // Check the recipient is an uninitialized account
+    // Check the recipient is a default-owned account
     assert_eq!(state.get_account_by_id(to), Account::default());
 
     let expected_recipient_post = Account {
@@ -215,11 +215,10 @@ fn execution_that_requires_authentication_of_a_program_derived_account_id_succee
 }
 
 #[test]
-fn claiming_mechanism_within_chain_call() {
-    // This test calls the authenticated transfer program through the chain_caller program.
-    // The transfer is made from an initialized sender to an uninitialized recipient. And
-    // it is expected that the recipient account is claimed by the authenticated transfer
-    // program and not the chained_caller program.
+fn chained_transfer_credits_recipient_without_claiming() {
+    // This test calls the inner transfer program through the chain_caller program. The
+    // transfer is made from a program-owned sender to a default-owned recipient, which is
+    // credited without being claimed by either program.
     let chain_caller = crate::test_methods::chain_caller();
     let from_key = PrivateKey::try_new([1; 32]).unwrap();
     let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
@@ -232,7 +231,7 @@ fn claiming_mechanism_within_chain_call() {
     let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
     let amount: u128 = 37;
 
-    // Check the recipient is an uninitialized account
+    // Check the recipient is a default-owned account
     assert_eq!(state.get_account_by_id(to), Account::default());
 
     let expected_to_post = Account {

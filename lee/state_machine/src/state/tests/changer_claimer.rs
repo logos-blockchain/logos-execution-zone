@@ -45,7 +45,7 @@ fn public_changer_claimer_data_change_no_claim_fails() {
 
     let result = state.transition_from_public_transaction(&tx, 1, 0);
 
-    // Should fail - cannot modify data without claiming the account
+    // Should fail - a default-owned account may not retain data
     assert!(matches!(
         result,
         Err(LeeError::InvalidProgramBehavior(
@@ -123,6 +123,6 @@ fn private_changer_claimer_data_change_no_claim_fails() {
         &program.into(),
     );
 
-    // Should fail - cannot modify data without claiming the account
+    // Should fail - a default-owned account may not retain data
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
 }
