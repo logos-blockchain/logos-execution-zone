@@ -391,70 +391,46 @@ impl ExecutionState {
                     .position(|acc| acc.account_id == pre_account_id)
                     .expect("Pre state must exist at this point");
 
-                let account_identity = &account_identities[pre_state_position];
-                if account_identity.is_public() {
-                    match claim {
-                        Claim::Authorized => {
-                            // Note: no need to check authorized pdas because we have already
-                            // checked consistency of authorization above.
-                            assert!(
-                                pre_is_authorized,
-                                "Cannot claim unauthorized account {pre_account_id}"
-                            );
-                        }
-                        Claim::Pda(seed) => {
-                            let pda = AccountId::for_public_pda(&program_id, &seed);
-                            assert_eq!(
-                                pre_account_id, pda,
-                                "Invalid PDA claim for account {pre_account_id} which does not match derived PDA {pda}"
-                            );
-                            assert_family_binding(
-                                &mut self.pda_family_binding,
-                                program_id,
-                                seed,
-                                pre_account_id,
-                            );
-                        }
+                let is_public = account_identities[pre_state_position].is_public();
+                match claim {
+                    Claim::Authorized => {
+                        // Note: no need to check authorized pdas because we have already
+                        // checked consistency of authorization above.
+                        assert!(
+                            pre_is_authorized,
+                            "Cannot claim unauthorized account {pre_account_id}"
+                        );
                     }
-                } else {
-                    match claim {
-                        Claim::Authorized => {
-                            assert!(
-                                pre_is_authorized,
-                                "Cannot claim unauthorized private account {pre_account_id}"
-                            );
-                        }
-                        Claim::Pda(seed) => {
+                    Claim::Pda(seed) => {
+                        let pda = if is_public {
+                            AccountId::for_public_pda(&program_id, &seed)
+                        } else {
                             let (npk, vpk, identifier) = self
                                 .private_pda_by_position
                                 .get(&pre_state_position)
                                 .expect(
                                     "private PDA pre_state must have an npk in the position map",
                                 );
-                            let pda = AccountId::for_private_pda(
-                                &program_id,
-                                &seed,
-                                npk,
-                                vpk,
-                                *identifier,
-                            );
-                            assert_eq!(
-                                pre_account_id, pda,
-                                "Invalid private PDA claim for account {pre_account_id}"
-                            );
+                            AccountId::for_private_pda(&program_id, &seed, npk, vpk, *identifier)
+                        };
+                        assert_eq!(
+                            pre_account_id, pda,
+                            "Invalid PDA claim for account {pre_account_id} which does not match derived PDA {pda}"
+                        );
+                        if !is_public {
                             bind_private_pda_position(
                                 &mut self.private_pda_bound_positions,
                                 pre_state_position,
                                 program_id,
                                 seed,
                             );
-                            assert_family_binding(
-                                &mut self.pda_family_binding,
-                                program_id,
-                                seed,
-                                pre_account_id,
-                            );
                         }
+                        assert_family_binding(
+                            &mut self.pda_family_binding,
+                            program_id,
+                            seed,
+                            pre_account_id,
+                        );
                     }
                 }
 

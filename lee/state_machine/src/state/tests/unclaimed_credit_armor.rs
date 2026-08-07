@@ -151,7 +151,7 @@ fn claiming_replay_over_a_credited_private_account_is_rejected_in_circuit() {
         panic!("a claiming replay must be rejected in circuit")
     };
     assert!(
-        message.contains("Cannot claim unauthorized private account"),
+        message.contains("Cannot claim unauthorized account"),
         "expected the private claim-authorization gate, got {message}"
     );
 }

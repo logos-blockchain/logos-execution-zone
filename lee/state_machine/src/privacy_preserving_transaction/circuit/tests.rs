@@ -918,7 +918,7 @@ fn unauthorized_private_init_cannot_be_claimed() {
         panic!("knowing an account's preimage must not grant ownership of it")
     };
     assert!(
-        message.contains("Cannot claim unauthorized private account"),
+        message.contains("Cannot claim unauthorized account"),
         "expected the private claim-authorization gate, got {message}"
     );
 }
