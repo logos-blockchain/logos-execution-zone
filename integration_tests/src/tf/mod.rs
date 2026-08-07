@@ -6,7 +6,7 @@ pub use apps::{
     SequencerApp, WalletApp,
 };
 /// Complete-stack deployment helpers.
-pub use stack::{LezLocalApp, LezStackHandle};
+pub use stack::{LezLocalApp, LezStackHandle, shutdown_lez_deployment};
 /// Indexer convergence polling helpers and errors.
 pub use wait::{IndexerCatchUpError, L2_TO_L1_TIMEOUT, wait_for_indexer_to_catch_up};
 

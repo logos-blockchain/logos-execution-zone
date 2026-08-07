@@ -1,4 +1,8 @@
-use std::{net::SocketAddr, path::PathBuf, sync::Arc};
+use std::{
+    net::SocketAddr,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 
 use anyhow::Context as _;
 use async_trait::async_trait;
@@ -19,7 +23,7 @@ struct SequencerInstance {
     addr: SocketAddr,
     public_accounts: Vec<(PrivateKey, u128)>,
     private_accounts: Vec<InitialPrivateAccountForWallet>,
-    _service: SequencerHandle,
+    service: Mutex<Option<SequencerHandle>>,
     _state_dir: Option<TempDir>,
 }
 
@@ -44,7 +48,7 @@ impl LezSequencerClient {
             addr,
             public_accounts,
             private_accounts,
-            _service: service,
+            service: Mutex::new(Some(service)),
             _state_dir: state_dir,
         }))
     }
@@ -59,6 +63,23 @@ impl LezSequencerClient {
     #[must_use]
     pub fn addr(&self) -> SocketAddr {
         self.0.addr
+    }
+
+    /// Stops the sequencer service and waits for its owned tasks and store to
+    /// be released. Repeated calls are harmless.
+    pub async fn shutdown(&self) -> Result<(), DynError> {
+        let service = self
+            .0
+            .service
+            .lock()
+            .map_err(|error| anyhow::anyhow!("LEZ sequencer shutdown lock poisoned: {error}"))?
+            .take();
+
+        if let Some(service) = service {
+            service.shutdown().await?;
+        }
+
+        Ok(())
     }
 
     pub(super) fn public_accounts(&self) -> &[(PrivateKey, u128)] {

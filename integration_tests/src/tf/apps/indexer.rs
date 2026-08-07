@@ -1,4 +1,8 @@
-use std::{net::SocketAddr, path::PathBuf, sync::Arc};
+use std::{
+    net::SocketAddr,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 
 use anyhow::Context as _;
 use async_trait::async_trait;
@@ -15,7 +19,7 @@ use crate::{
 
 struct IndexerInstance {
     client: Arc<IndexerClient>,
-    _service: IndexerHandle,
+    service: Mutex<Option<IndexerHandle>>,
     _state_dir: Option<TempDir>,
 }
 
@@ -30,7 +34,7 @@ impl LezIndexerClient {
     fn new(client: Arc<IndexerClient>, service: IndexerHandle, state_dir: Option<TempDir>) -> Self {
         Self(Arc::new(IndexerInstance {
             client,
-            _service: service,
+            service: Mutex::new(Some(service)),
             _state_dir: state_dir,
         }))
     }
@@ -39,6 +43,23 @@ impl LezIndexerClient {
     #[must_use]
     pub fn client(&self) -> &IndexerClient {
         &self.0.client
+    }
+
+    /// Stops the indexer service and waits for its RPC server to terminate.
+    /// Repeated calls are harmless.
+    pub async fn shutdown(&self) -> Result<(), DynError> {
+        let service = self
+            .0
+            .service
+            .lock()
+            .map_err(|error| anyhow::anyhow!("LEZ indexer shutdown lock poisoned: {error}"))?
+            .take();
+
+        if let Some(service) = service {
+            service.shutdown().await?;
+        }
+
+        Ok(())
     }
 }
 

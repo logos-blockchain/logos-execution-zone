@@ -16,13 +16,19 @@ pub struct IndexerHandle {
     addr: SocketAddr,
     /// Option because of `Drop` which forbids to simply move out of `self` in `stopped()`.
     server_handle: Option<ServerHandle>,
+    subscription_shutdown: Option<service::SubscriptionShutdown>,
 }
 
 impl IndexerHandle {
-    const fn new(addr: SocketAddr, server_handle: ServerHandle) -> Self {
+    const fn new(
+        addr: SocketAddr,
+        server_handle: ServerHandle,
+        subscription_shutdown: Option<service::SubscriptionShutdown>,
+    ) -> Self {
         Self {
             addr,
             server_handle: Some(server_handle),
+            subscription_shutdown,
         }
     }
 
@@ -41,6 +47,25 @@ impl IndexerHandle {
         handle.stopped().await;
     }
 
+    /// Stops the ingestion task and RPC server, waiting for both to terminate.
+    pub async fn shutdown(mut self) -> Result<()> {
+        let handle = self
+            .server_handle
+            .take()
+            .expect("Indexer server handle is set");
+
+        let subscription_result =
+            if let Some(subscription_shutdown) = self.subscription_shutdown.take() {
+                subscription_shutdown.shutdown().await
+            } else {
+                Ok(())
+            };
+        let stop_result = handle.stop().context("failed to stop Indexer RPC server");
+        handle.stopped().await;
+        subscription_result?;
+        stop_result
+    }
+
     #[must_use]
     pub fn is_healthy(&self) -> bool {
         self.server_handle
@@ -54,6 +79,7 @@ impl Drop for IndexerHandle {
         let Self {
             addr: _,
             server_handle,
+            subscription_shutdown: _,
         } = self;
 
         let Some(handle) = server_handle else {
@@ -87,14 +113,18 @@ pub async fn run_server(
     info!("Starting Indexer Service RPC server on {addr}");
 
     #[cfg(not(feature = "mock-responses"))]
-    let handle = {
+    let (handle, subscription_shutdown) = {
         let service = service::IndexerService::new(config, storage_dir, shutdown.child_token())
             .await
             .context("Failed to initialize indexer service")?;
-        server.start(service.into_rpc())
+        let subscription_shutdown = Some(service.subscription_shutdown());
+        (server.start(service.into_rpc()), subscription_shutdown)
     };
     #[cfg(feature = "mock-responses")]
-    let handle = server.start(mock_service::MockIndexerService::new_with_mock_blocks().into_rpc());
+    let (handle, subscription_shutdown) = (
+        server.start(mock_service::MockIndexerService::new_with_mock_blocks().into_rpc()),
+        None,
+    );
 
-    Ok(IndexerHandle::new(addr, handle))
+    Ok(IndexerHandle::new(addr, handle, subscription_shutdown))
 }

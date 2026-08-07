@@ -1,4 +1,8 @@
-use std::{path::Path, pin::pin, sync::Arc};
+use std::{
+    path::Path,
+    pin::pin,
+    sync::{Arc, Mutex},
+};
 
 use anyhow::{Context as _, Result, bail};
 use arc_swap::ArcSwap;
@@ -13,7 +17,7 @@ use jsonrpsee::{
     types::{ErrorCode, ErrorObject, ErrorObjectOwned},
 };
 use log::{debug, error, info, warn};
-use tokio::sync::mpsc::UnboundedSender;
+use tokio::{sync::mpsc::UnboundedSender, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
 pub struct IndexerService {
@@ -34,6 +38,11 @@ impl IndexerService {
             subscription_service,
             indexer,
         })
+    }
+
+    #[cfg(not(feature = "mock-responses"))]
+    pub(crate) fn subscription_shutdown(&self) -> SubscriptionShutdown {
+        self.subscription_service.shutdown_handle()
     }
 }
 
@@ -173,7 +182,7 @@ impl indexer_service_rpc::RpcServer for IndexerService {
 }
 
 struct SubscriptionService {
-    parts: ArcSwap<SubscriptionLoopParts>,
+    parts: Arc<ArcSwap<SubscriptionLoopParts>>,
     indexer: IndexerCore,
     /// Cancellation token that is used to signal the subscription service to shut down.
     ///
@@ -184,12 +193,22 @@ struct SubscriptionService {
 
 impl SubscriptionService {
     pub fn spawn_new(indexer: IndexerCore, shutdown: CancellationToken) -> Self {
-        let parts = Self::spawn_respond_subscribers_loop(indexer.clone(), shutdown.clone());
+        let parts = Arc::new(ArcSwap::new(Arc::new(
+            Self::spawn_respond_subscribers_loop(indexer.clone(), shutdown.clone()),
+        )));
 
         Self {
-            parts: ArcSwap::new(Arc::new(parts)),
+            parts,
             indexer,
             shutdown,
+        }
+    }
+
+    #[cfg(not(feature = "mock-responses"))]
+    fn shutdown_handle(&self) -> SubscriptionShutdown {
+        SubscriptionShutdown {
+            parts: Arc::clone(&self.parts),
+            shutdown: self.shutdown.clone(),
         }
     }
 
@@ -201,7 +220,12 @@ impl SubscriptionService {
             );
 
             // Respawn the subscription service loop if it has finished (either with error or panic)
-            if guard.handle.is_finished() && !self.shutdown.is_cancelled() {
+            let loop_finished = guard
+                .handle
+                .lock()
+                .ok()
+                .is_some_and(|handle| handle.as_ref().is_some_and(JoinHandle::is_finished));
+            if loop_finished && !self.shutdown.is_cancelled() {
                 drop(guard);
                 let new_parts = Self::spawn_respond_subscribers_loop(
                     self.indexer.clone(),
@@ -211,15 +235,22 @@ impl SubscriptionService {
                 let old_parts = Arc::into_inner(old_handle_and_sender)
                     .expect("There should be no other references to the old handle and sender");
 
-                match old_parts.handle.await {
-                    Ok(Ok(())) => {}
-                    Ok(Err(err)) => {
-                        error!(
-                            "Subscription service loop has unexpectedly finished with error: {err:#}"
-                        );
-                    }
-                    Err(err) => {
-                        error!("Subscription service loop has panicked with err: {err:#}");
+                if let Some(handle) = old_parts
+                    .handle
+                    .lock()
+                    .ok()
+                    .and_then(|mut handle| handle.take())
+                {
+                    match handle.await {
+                        Ok(Ok(())) => {}
+                        Ok(Err(err)) => {
+                            error!(
+                                "Subscription service loop has unexpectedly finished with error: {err:#}"
+                            );
+                        }
+                        Err(err) => {
+                            error!("Subscription service loop has panicked with err: {err:#}");
+                        }
                     }
                 }
             }
@@ -288,7 +319,7 @@ impl SubscriptionService {
             res
         });
         SubscriptionLoopParts {
-            handle,
+            handle: Mutex::new(Some(handle)),
             new_subscription_sender,
         }
     }
@@ -297,13 +328,47 @@ impl SubscriptionService {
 impl Drop for SubscriptionService {
     fn drop(&mut self) {
         self.shutdown.cancel();
-        self.parts.load().handle.abort();
+        if let Ok(mut handle) = self.parts.load().handle.lock()
+            && let Some(handle) = handle.take()
+        {
+            handle.abort();
+        }
     }
 }
 
 struct SubscriptionLoopParts {
-    handle: tokio::task::JoinHandle<Result<()>>,
+    handle: Mutex<Option<JoinHandle<Result<()>>>>,
     new_subscription_sender: UnboundedSender<Subscription<BlockId>>,
+}
+
+#[derive(Clone)]
+pub(crate) struct SubscriptionShutdown {
+    parts: Arc<ArcSwap<SubscriptionLoopParts>>,
+    shutdown: CancellationToken,
+}
+
+impl SubscriptionShutdown {
+    pub(crate) async fn shutdown(&self) -> Result<()> {
+        self.shutdown.cancel();
+
+        let handle = self
+            .parts
+            .load()
+            .handle
+            .lock()
+            .ok()
+            .and_then(|mut handle| handle.take());
+
+        let Some(handle) = handle else {
+            return Ok(());
+        };
+
+        match handle.await {
+            Ok(result) => result,
+            Err(error) if error.is_cancelled() => Ok(()),
+            Err(error) => Err(error.into()),
+        }
+    }
 }
 
 struct Subscription<T> {

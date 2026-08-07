@@ -100,7 +100,7 @@ async fn restarted_watcher_resumes_instead_of_replaying_the_peer_channel() -> Re
     // `shutdown` rather than `drop`: dropping aborts the main loop without
     // awaiting it and leaves the watchers and the publisher's drive task holding
     // the store, so the reopen below would race the `RocksDB` lock.
-    seq_b.shutdown().await;
+    seq_b.shutdown().await?;
     seq_b = SequencerSetup::new(partial, bedrock_addr)
         .with_channel_id(channel_b)
         .with_genesis(vec![])

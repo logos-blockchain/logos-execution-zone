@@ -66,7 +66,7 @@ async fn main() -> Result<()> {
     // open for an unbounded stretch after that, so a restart can find its own
     // home directory locked, and a watcher can be killed between recording a
     // delivery and handing it over.
-    sequencer_handle.shutdown().await;
+    sequencer_handle.shutdown().await?;
 
     info!("Sequencer shutdown complete");
 

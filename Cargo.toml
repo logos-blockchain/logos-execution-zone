@@ -185,6 +185,7 @@ strum = { version = "0.28.0", features = ["derive"] }
 
 logos-blockchain-common-http-client = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "e2a1c3b7ef2191c224f998b94332c5926c789f9d" }
 logos-blockchain-key-management-system-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "e2a1c3b7ef2191c224f998b94332c5926c789f9d" }
+logos-blockchain-key-management-system-service-c7 = { package = "logos-blockchain-key-management-system-service", git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "c7de79aee6fc32c6b2cfc7df2d526af92b2be9b5" }
 logos-blockchain-codec = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "e2a1c3b7ef2191c224f998b94332c5926c789f9d" }
 logos-blockchain-core = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "e2a1c3b7ef2191c224f998b94332c5926c789f9d" }
 logos-blockchain-chain-broadcast-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "e2a1c3b7ef2191c224f998b94332c5926c789f9d" }

@@ -42,6 +42,7 @@ testnet_initial_state.workspace = true
 
 logos-blockchain-core.workspace = true
 logos-blockchain-key-management-system-service.workspace = true
+logos-blockchain-key-management-system-service-c7.workspace = true
 logos-blockchain-testing-framework.workspace = true
 anyhow.workspace = true
 chrono.workspace = true

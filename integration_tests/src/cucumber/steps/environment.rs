@@ -12,8 +12,8 @@ use crate::{
     tf::{IndexerCatchUpError, LezLocalApp, wait_for_indexer_to_catch_up},
 };
 
-#[given("a default LEZ stack")]
-async fn deploy_default_lez_stack(world: &mut CucumberWorld) -> StepResult {
+#[given("a LEZ smoke stack")]
+async fn deploy_lez_smoke_stack(world: &mut CucumberWorld) -> StepResult {
     if world.lez.is_some() {
         return Err(StepError::FixtureAlreadyDeployed);
     }

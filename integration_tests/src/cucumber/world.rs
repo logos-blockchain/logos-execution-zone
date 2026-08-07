@@ -15,8 +15,20 @@ use crate::{
         default::CUCUMBER_NODE_CONFIG_OVERRIDE,
         error::{StepError, StepResult},
     },
-    tf::LezRuntime,
+    tf::shutdown_lez_deployment,
 };
+
+/// Lifecycle state recorded for explicit and fallback runtime teardown.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub enum RuntimeTeardownState {
+    /// No teardown attempt has started.
+    #[default]
+    NotAttempted,
+    /// All exposed LEZ services stopped successfully.
+    Succeeded,
+    /// Teardown failed; the original diagnostic is retained for later calls.
+    Failed(String),
+}
 
 #[derive(Clone, Debug, Default)]
 /// Observable account and indexer state recorded during a scenario.
@@ -52,12 +64,8 @@ pub struct CucumberWorld {
     /// If set, nodes use a `DeploymentSettings` loaded from disk
     /// bypassing generated genesis/test deployment.
     pub deployment_config_override_path: Option<PathBuf>,
-    /// Whether explicit or fallback runtime teardown has started.
-    pub runtime_teardown_attempted: bool,
-    /// Whether runtime teardown completed without an error.
-    pub runtime_teardown_completed: bool,
-    /// Diagnostic text from a failed runtime teardown, if any.
-    pub teardown_error: Option<String>,
+    /// Sticky state shared by explicit and fallback runtime teardown.
+    pub runtime_teardown: RuntimeTeardownState,
     /// Runtime observations preserved while releasing scenario handles.
     pub teardown_environment: Option<EnvironmentState>,
 }
@@ -96,50 +104,37 @@ impl CucumberWorld {
     /// handles. This is intentionally explicit because artifact cleanup must
     /// never race a still-running LEZ service.
     pub async fn stop_runtime(&mut self) -> StepResult {
-        self.runtime_teardown_attempted = true;
-        self.teardown_error = None;
+        match &self.runtime_teardown {
+            RuntimeTeardownState::NotAttempted => {}
+            RuntimeTeardownState::Succeeded => return Ok(()),
+            RuntimeTeardownState::Failed(message) => {
+                return Err(StepError::TeardownFailed {
+                    message: message.clone(),
+                });
+            }
+        }
 
-        let runtime = self
-            .lez
-            .as_ref()
-            .map(|context| context.wallet().clone())
-            .or_else(|| self.deployment.require::<LezRuntime>().ok());
+        let observations = self.environment.clone();
+        drop(self.lez.take());
 
-        let shutdown_result = if let Some(runtime) = runtime {
-            runtime.shutdown().await
-        } else {
-            Ok(())
-        };
-
-        // Always release the cloned context and registry-owned handles, even
-        // if the wallet actor reports a shutdown error.
-        let context = self.lez.take();
-        drop(context);
+        let shutdown_result = shutdown_lez_deployment(&self.deployment).await;
         let deployment = std::mem::replace(
             &mut self.deployment,
             DeployContext::new(AppHostTopology, NodeClients::default()),
         );
         drop(deployment);
-        if self.environment.selected_account.is_some()
-            || self.environment.observed_balance.is_some()
-            || self.environment.expected_balance.is_some()
-            || self.environment.observed_indexer_height.is_some()
-        {
-            self.teardown_environment = Some(self.environment.clone());
-        }
+        self.teardown_environment = Some(observations);
         self.environment = EnvironmentState::default();
 
         match shutdown_result {
             Ok(()) => {
-                self.runtime_teardown_completed = true;
+                self.runtime_teardown = RuntimeTeardownState::Succeeded;
                 Ok(())
             }
             Err(error) => {
-                self.runtime_teardown_completed = false;
-                self.teardown_error = Some(error.to_string());
-                Err(StepError::TeardownFailed {
-                    message: error.to_string(),
-                })
+                let message = error.to_string();
+                self.runtime_teardown = RuntimeTeardownState::Failed(message.clone());
+                Err(StepError::TeardownFailed { message })
             }
         }
     }
@@ -176,13 +171,20 @@ impl CucumberWorld {
             .field("environment", &self.environment)
             .field(
                 "runtime_teardown_attempted",
-                &self.runtime_teardown_attempted,
+                &!matches!(&self.runtime_teardown, RuntimeTeardownState::NotAttempted),
             )
             .field(
                 "runtime_teardown_completed",
-                &self.runtime_teardown_completed,
+                &matches!(&self.runtime_teardown, RuntimeTeardownState::Succeeded),
             )
-            .field("teardown_error", &self.teardown_error)
+            .field("runtime_teardown", &self.runtime_teardown)
+            .field(
+                "teardown_error",
+                &match &self.runtime_teardown {
+                    RuntimeTeardownState::Failed(message) => Some(message),
+                    RuntimeTeardownState::NotAttempted | RuntimeTeardownState::Succeeded => None,
+                },
+            )
             .field("selected_account", &diagnostic_environment.selected_account)
             .field("observed_balance", &diagnostic_environment.observed_balance)
             .field("expected_balance", &diagnostic_environment.expected_balance)
@@ -243,9 +245,7 @@ impl Default for CucumberWorld {
             test_context: None,
             scenario_base_dir: PathBuf::default(),
             deployment_config_override_path: None,
-            runtime_teardown_attempted: false,
-            runtime_teardown_completed: false,
-            teardown_error: None,
+            runtime_teardown: RuntimeTeardownState::NotAttempted,
             teardown_environment: None,
         }
     }
@@ -264,4 +264,37 @@ fn deployment_config_override_path_display(
         || "None".to_owned(),
         |path| format!("Some({})", path.display()),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CucumberWorld, RuntimeTeardownState};
+
+    #[tokio::test]
+    async fn empty_runtime_teardown_is_idempotently_successful() {
+        let mut world = CucumberWorld::default();
+
+        world.stop_runtime().await.unwrap();
+        world.stop_runtime().await.unwrap();
+
+        assert_eq!(world.runtime_teardown, RuntimeTeardownState::Succeeded);
+    }
+
+    #[tokio::test]
+    async fn failed_runtime_teardown_state_is_sticky() {
+        let mut world = CucumberWorld {
+            runtime_teardown: RuntimeTeardownState::Failed("original failure".to_owned()),
+            ..CucumberWorld::default()
+        };
+
+        let first_error = world.stop_runtime().await.unwrap_err().to_string();
+        let second_error = world.stop_runtime().await.unwrap_err().to_string();
+
+        assert_eq!(first_error, "Runtime teardown failed: original failure");
+        assert_eq!(second_error, first_error);
+        assert_eq!(
+            world.runtime_teardown,
+            RuntimeTeardownState::Failed("original failure".to_owned())
+        );
+    }
 }

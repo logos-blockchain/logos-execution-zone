@@ -8,71 +8,103 @@ use integration_tests::{
         SequencerPartialConfig, default_private_accounts_for_wallet,
         default_public_accounts_for_wallet,
     },
-    cucumber::world::CucumberWorld,
     tf::{
         BedrockApp, BedrockCluster, IndexerApp, LezIndexerClient, LezLocalApp, LezRuntime,
-        LezSequencerClient, SequencerApp, WalletApp,
+        LezSequencerClient, SequencerApp, WalletApp, shutdown_lez_deployment,
+        wait_for_indexer_to_catch_up,
     },
 };
 use sequencer_service_rpc::RpcClient as _;
-use testing_framework_core::scenario::DynError;
+use tempfile::tempdir;
+use testing_framework_app::{AppHostEnv, AppHostTopology, DeployContext};
+use testing_framework_core::scenario::{DynError, NodeClients};
 
 #[tokio::test]
 async fn complete_lez_stack_can_be_deployed_as_one_app() -> Result<(), DynError> {
-    let mut world = CucumberWorld::default();
+    let mut deployment = new_deployment();
 
-    world
-        .deployment_mut()
+    deployment
         .deploy(LezLocalApp::new().with_bedrock_nodes(2))
         .await?;
 
-    assert_lez_stack_works(&world).await?;
-    world.stop_runtime().await?;
-    world
-        .stop_runtime()
-        .await
-        .map_err(|error| error.to_string().into())
+    assert_lez_stack_works(&deployment).await?;
+    shutdown_lez_deployment(&deployment).await?;
+    shutdown_lez_deployment(&deployment).await?;
+
+    Ok(())
 }
 
 #[tokio::test]
 async fn lez_apps_can_be_deployed_individually() -> Result<(), DynError> {
-    let mut world = CucumberWorld::default();
+    let mut deployment = new_deployment();
 
-    let bedrock = world
-        .deployment_mut()
-        .deploy_and_expose(BedrockApp::nodes(2))
-        .await?;
+    let bedrock = deployment.deploy_and_expose(BedrockApp::nodes(2)).await?;
 
-    world
-        .deployment_mut()
+    deployment
         .deploy_and_expose(IndexerApp::new(bedrock.primary_api_addr()))
         .await?;
 
-    let sequencer = world
-        .deployment_mut()
+    let sequencer = deployment
         .deploy_and_expose(SequencerApp::new(
             SequencerPartialConfig::default(),
             bedrock.primary_api_addr(),
         ))
         .await?;
 
-    world
-        .deployment_mut()
+    deployment
         .deploy_and_expose(WalletApp::from_sequencer(&sequencer))
         .await?;
 
-    assert_lez_stack_works(&world).await?;
-    world
-        .stop_runtime()
-        .await
-        .map_err(|error| error.to_string().into())
+    assert_lez_stack_works(&deployment).await?;
+    shutdown_lez_deployment(&deployment).await?;
+    shutdown_lez_deployment(&deployment).await?;
+
+    Ok(())
 }
 
-async fn assert_lez_stack_works(world: &CucumberWorld) -> Result<(), DynError> {
-    let bedrock = world.deployment().require::<BedrockCluster>()?;
-    let _indexer = world.deployment().require::<LezIndexerClient>()?;
-    let sequencer = world.deployment().require::<LezSequencerClient>()?;
-    let wallet = world.deployment().require::<LezRuntime>()?;
+#[tokio::test]
+async fn lez_services_can_be_redeployed_after_explicit_shutdown() -> Result<(), DynError> {
+    let state_dir = tempdir()?;
+    let mut bedrock_deployment = new_deployment();
+    let bedrock = bedrock_deployment
+        .deploy_and_expose(BedrockApp::nodes(2))
+        .await?;
+
+    for _ in 0..2 {
+        let mut deployment = new_deployment();
+        deployment.expose(bedrock.clone())?;
+        let bedrock_addr = bedrock.primary_api_addr();
+        deployment
+            .deploy_and_expose(
+                IndexerApp::new(bedrock_addr).with_state_dir(state_dir.path().join("lez/indexer")),
+            )
+            .await?;
+        let sequencer = deployment
+            .deploy_and_expose(
+                SequencerApp::new(SequencerPartialConfig::default(), bedrock_addr)
+                    .with_state_dir(state_dir.path().join("lez/sequencer")),
+            )
+            .await?;
+
+        bedrock.cryptarchia_info().await?;
+        sequencer.client().check_health().await?;
+        let indexer = deployment.require::<LezIndexerClient>()?;
+        wait_for_indexer_to_catch_up(&indexer, &sequencer).await?;
+        shutdown_lez_deployment(&deployment).await?;
+    }
+
+    Ok(())
+}
+
+fn new_deployment() -> DeployContext<AppHostEnv> {
+    DeployContext::new(AppHostTopology, NodeClients::default())
+}
+
+async fn assert_lez_stack_works(deployment: &DeployContext<AppHostEnv>) -> Result<(), DynError> {
+    let bedrock = deployment.require::<BedrockCluster>()?;
+    let indexer = deployment.require::<LezIndexerClient>()?;
+    let sequencer = deployment.require::<LezSequencerClient>()?;
+    let wallet = deployment.require::<LezRuntime>()?;
 
     bedrock.cryptarchia_info().await?;
     sequencer.client().check_health().await?;
@@ -118,6 +150,8 @@ async fn assert_lez_stack_works(world: &CucumberWorld) -> Result<(), DynError> {
             .await?,
         Some(private_account.balance)
     );
+
+    wait_for_indexer_to_catch_up(&indexer, &sequencer).await?;
 
     Ok(())
 }

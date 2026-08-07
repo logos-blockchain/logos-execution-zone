@@ -124,3 +124,38 @@ impl AppDeployment<AppHostEnv> for LezLocalApp {
         Ok(LezStackHandle)
     }
 }
+
+/// Stops all exposed LEZ services in dependency order.
+///
+/// The deployment registry remains owned by the caller and must be dropped
+/// after this function returns so Bedrock and its managed state can be
+/// released only after the wallet, indexer, and sequencer have stopped.
+pub async fn shutdown_lez_deployment(
+    deployment: &DeployContext<AppHostEnv>,
+) -> Result<(), DynError> {
+    let mut failures = Vec::new();
+
+    if let Some(wallet) = deployment.get::<super::LezRuntime>()
+        && let Err(error) = wallet.shutdown().await
+    {
+        failures.push(format!("wallet: {error}"));
+    }
+
+    if let Some(indexer) = deployment.get::<super::LezIndexerClient>()
+        && let Err(error) = indexer.shutdown().await
+    {
+        failures.push(format!("indexer: {error}"));
+    }
+
+    if let Some(sequencer) = deployment.get::<super::LezSequencerClient>()
+        && let Err(error) = sequencer.shutdown().await
+    {
+        failures.push(format!("sequencer: {error}"));
+    }
+
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!("LEZ runtime shutdown failed:\n- {}", failures.join("\n- ")).into())
+    }
+}

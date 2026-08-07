@@ -1,6 +1,6 @@
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
-use anyhow::{Context as _, Result, anyhow};
+use anyhow::{Context as _, Result, anyhow, bail};
 use bytesize::ByteSize;
 use common::transaction::LeeTransaction;
 use futures::never::Never;
@@ -77,7 +77,7 @@ impl SequencerHandle {
     /// the publisher is torn down, then the background tasks that hold the store,
     /// then the server. Consuming `self` drops the last references, so the store
     /// is closed by the time this returns.
-    pub async fn shutdown(mut self) {
+    pub async fn shutdown(mut self) -> Result<()> {
         self.main_loop_handle.abort();
         if let Err(err) = (&mut self.main_loop_handle).await
             && err.is_panic()
@@ -97,7 +97,7 @@ impl SequencerHandle {
         // Nothing this handle owns holds the store, so waiting here rather than
         // after the drop is the same thing, and it keeps the guarantee inside
         // the call the caller awaits.
-        wait_for_store_release(&self.store).await;
+        wait_for_store_release(&self.store).await
     }
 
     /// Wait for any of the sequencer tasks to fail and return the error.
@@ -189,7 +189,7 @@ impl Drop for SequencerHandle {
 /// on this one. Without this the caller can reopen the database a moment too
 /// early and hit a `RocksDB` lock error, which is the kind of failure that shows
 /// up as an occasional flake rather than a bug.
-async fn wait_for_store_release(store: &StoreRelease) {
+async fn wait_for_store_release(store: &StoreRelease) -> Result<()> {
     /// Long enough for a drop that is already in flight, short enough that a
     /// leak is reported rather than hung on.
     const RELEASE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -203,11 +203,13 @@ async fn wait_for_store_release(store: &StoreRelease) {
     .await;
 
     if released.is_err() {
-        error!(
+        bail!(
             "Sequencer store still held by {} reference(s) after shutdown; something outlived the tasks it should have died with",
             store.holders()
         );
     }
+
+    Ok(())
 }
 
 pub async fn run(config: SequencerConfig, listen_addr: SocketAddr) -> Result<SequencerHandle> {
