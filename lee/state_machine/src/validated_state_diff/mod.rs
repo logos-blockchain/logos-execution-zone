@@ -277,11 +277,9 @@ impl ValidatedStateDiff {
         }
 
         // Check that no final default-owned account carries data
-        #[expect(
-            clippy::iter_over_hash_type,
-            reason = "Iteration order doesn't matter here"
-        )]
-        for (account_id, post) in &state_diff {
+        let mut final_states: Vec<_> = state_diff.iter().collect();
+        final_states.sort_unstable_by_key(|(account_id, _)| *account_id);
+        for (account_id, post) in final_states {
             ensure!(
                 post.program_owner != DEFAULT_PROGRAM_ID || post.data == Data::default(),
                 InvalidProgramBehaviorError::DefaultAccountRetainsData {
