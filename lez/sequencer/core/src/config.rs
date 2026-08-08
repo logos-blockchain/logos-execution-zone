@@ -95,7 +95,7 @@ impl SequencerConfig {
     }
 }
 
-const fn default_max_block_size() -> ByteSize {
+pub(crate) const fn default_max_block_size() -> ByteSize {
     ByteSize::mib(1)
 }
 

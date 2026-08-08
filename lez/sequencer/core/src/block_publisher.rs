@@ -536,3 +536,74 @@ pub async fn post_channel_config(
         .await
         .context("Failed to post channel config transaction")
 }
+
+#[cfg(test)]
+mod tests {
+    use common::{
+        HashType, block::HashableBlockData, test_utils::sequencer_sign_key_for_testing,
+        transaction::LeeTransaction,
+    };
+
+    use super::*;
+
+    /// Any block that passes the sequencer's own `max_block_size` admission check must also fit
+    /// into a single base-layer `ChannelInscribe` inscription, otherwise the block is built and
+    /// committed to local storage but `publish_block` can never inscribe it on Bedrock, silently
+    /// losing its transactions.
+    ///
+    /// Regression guard: with the base layer's inscription cap at 917 504 bytes
+    /// (`MAX_BLOCK_SIZE * 7 / 8` before logos-blockchain@0dc34e2c raised it), the default
+    /// `max_block_size` (1 MiB) exceeded the cap and any block sized in the gap passed zone
+    /// validation but was rejected by the `Vec<u8> -> Inscription` conversion in `publish_block`
+    /// — e.g. deploying the scaffold's bundled example programs in one block. Nothing ties the
+    /// two limits together, so this test fails if either drifts back out of range. Note the
+    /// inscribed payload is the full signed `Block`, slightly larger than the
+    /// `HashableBlockData` the admission check measures.
+    #[test]
+    fn max_sized_block_fits_in_a_single_inscription() {
+        let max_block_size = usize::try_from(crate::config::default_max_block_size().as_u64())
+            .expect("`max_block_size` should fit into usize");
+
+        // The sequencer's size check (`build_block_from_mempool`) measures the serialized
+        // `HashableBlockData`. Pad a single deployment transaction so the block lands exactly at
+        // the admission limit; the padding bytecode never executes, only its size matters.
+        let block_with_bytecode = |bytecode: Vec<u8>| HashableBlockData {
+            block_id: 2,
+            prev_block_hash: HashType([0; 32]),
+            timestamp: 0,
+            transactions: vec![LeeTransaction::ProgramDeployment(
+                lee::ProgramDeploymentTransaction::new(
+                    lee::program_deployment_transaction::Message::new(bytecode),
+                ),
+            )],
+        };
+
+        let framing = borsh::to_vec(&block_with_bytecode(vec![]))
+            .expect("Failed to serialize empty block")
+            .len();
+        let hashable_data = block_with_bytecode(vec![0_u8; max_block_size - framing]);
+
+        let block_size = borsh::to_vec(&hashable_data)
+            .expect("Failed to serialize block for size check")
+            .len();
+        assert!(
+            block_size <= max_block_size,
+            "test bug: block of {block_size} bytes would already be rejected by the sequencer"
+        );
+
+        // Same conversion `publish_block` performs on the full signed block.
+        let block = hashable_data.into_pending_block(&sequencer_sign_key_for_testing());
+        let data = borsh::to_vec(&block).expect("Failed to serialize block");
+        let published_size = data.len();
+        let result: Result<Inscription, _> = data.try_into();
+
+        assert!(
+            result.is_ok(),
+            "block of {block_size} bytes passed the sequencer's max_block_size check \
+             ({max_block_size} bytes) but its {published_size}-byte inscription payload exceeds \
+             the base layer's cap of {} bytes: {:?}",
+            Inscription::MAX,
+            result.unwrap_err(),
+        );
+    }
+}
