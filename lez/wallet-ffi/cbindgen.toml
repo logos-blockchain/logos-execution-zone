@@ -28,7 +28,7 @@ include_version = true
 no_includes = false
 
 [export]
-include = ["Ffi.*", "WalletFfiError", "WalletHandle"]
+include = ["Ffi.*", "WalletFfiError", "WalletHandle", "WALLET_FFI_MAX_ACCOUNTS_PER_REQUEST"]
 
 [enum]
 rename_variants = "ScreamingSnakeCase"

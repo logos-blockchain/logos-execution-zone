@@ -56,6 +56,14 @@ pub mod types;
 pub mod vault;
 pub mod wallet;
 
+/// Maximum number of account IDs accepted by `wallet_ffi_get_accounts_public`.
+pub const WALLET_FFI_MAX_ACCOUNTS_PER_REQUEST: usize = 24;
+
+const _: () = assert!(
+    WALLET_FFI_MAX_ACCOUNTS_PER_REQUEST == sequencer_service_rpc::MAX_ACCOUNTS_PER_REQUEST,
+    "wallet FFI and sequencer RPC account batch limits must match"
+);
+
 static TOKIO_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
 
 /// Get a reference to the global runtime.

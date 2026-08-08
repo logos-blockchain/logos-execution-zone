@@ -9,6 +9,7 @@ use key_protocol::key_management::KeyChain;
 use lee::Data;
 use lee_core::account::Nonce;
 use log::info;
+use sequencer_service_rpc::{ClientError, MAX_ACCOUNTS_PER_REQUEST, RpcClient as _};
 use tokio::test;
 use wallet::{
     account::{AccountIdWithPrivacy, HumanReadableAccount, Label},
@@ -34,6 +35,51 @@ async fn get_existing_account() -> Result<()> {
     assert_eq!(account.nonce.0, 1);
 
     info!("Successfully retrieved account with correct details");
+
+    Ok(())
+}
+
+#[test]
+async fn get_public_accounts_returns_states_in_input_order() -> Result<()> {
+    let ctx = TestContext::new().await?;
+    let account_ids = ctx.existing_public_accounts();
+    let ordered_account_ids = vec![account_ids[1], account_ids[0], account_ids[1]];
+
+    let empty_accounts = ctx.sequencer_client().get_accounts(Vec::new()).await?;
+    let single_account = ctx
+        .sequencer_client()
+        .get_accounts(vec![account_ids[0]])
+        .await?;
+    let accounts = ctx
+        .sequencer_client()
+        .get_accounts(ordered_account_ids)
+        .await?;
+    let unknown_account = ctx
+        .sequencer_client()
+        .get_accounts(vec![lee::AccountId::new([0; 32])])
+        .await?;
+    let oversized_error = ctx
+        .sequencer_client()
+        .get_accounts(vec![account_ids[0]; MAX_ACCOUNTS_PER_REQUEST + 1])
+        .await
+        .expect_err("oversized account batches must be rejected");
+
+    assert!(empty_accounts.is_empty());
+    assert_eq!(single_account, vec![accounts[1].clone()]);
+    assert_eq!(accounts.len(), 3);
+    assert_eq!(accounts[0].balance, 20_000);
+    assert_eq!(accounts[1].balance, 10_000);
+    assert_eq!(accounts[2], accounts[0]);
+    assert_eq!(unknown_account, vec![lee::Account::default()]);
+    let ClientError::Call(oversized_error) = oversized_error else {
+        panic!("expected an RPC call error for oversized batch")
+    };
+    assert_eq!(oversized_error.code(), -32602);
+    assert!(
+        oversized_error
+            .message()
+            .contains("Too many accounts requested")
+    );
 
     Ok(())
 }

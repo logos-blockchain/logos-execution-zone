@@ -16,6 +16,7 @@ use std::{
     ffi::{CStr, CString, c_char},
     io::Write as _,
     path::Path,
+    ptr, slice,
     str::FromStr as _,
     time::Duration,
 };
@@ -30,9 +31,9 @@ use lee_core::program::DEFAULT_PROGRAM_ID;
 use log::info;
 use wallet::{account::HumanReadableAccount, program_facades::vault::Vault};
 use wallet_ffi::{
-    FfiAccount, FfiAccountIdWithPrivacy, FfiAccountIdentity, FfiAccountList, FfiBytes32,
-    FfiPrivateAccountKeys, FfiProgramId, FfiPublicAccountKey, FfiTransferResult, FfiU128,
-    WalletHandle, error,
+    FfiAccount, FfiAccountDataList, FfiAccountIdWithPrivacy, FfiAccountIdentity, FfiAccountList,
+    FfiBytes32, FfiPrivateAccountKeys, FfiProgramId, FfiPublicAccountKey, FfiTransferResult,
+    FfiU128, WALLET_FFI_MAX_ACCOUNTS_PER_REQUEST, WalletHandle, error,
     generic_transaction::{FfiProgramWithDependencies, FfiTransactionResult},
     label::{AccountIdResolvedFromLabel, LabelAvailability, LabelList},
     wallet::FfiCreateWalletOutput,
@@ -102,6 +103,13 @@ unsafe extern "C" {
         out_account: *mut FfiAccount,
     ) -> error::WalletFfiError;
 
+    fn wallet_ffi_get_accounts_public(
+        handle: *mut WalletHandle,
+        account_ids: *const FfiBytes32,
+        account_ids_len: usize,
+        out_accounts: *mut FfiAccountDataList,
+    ) -> error::WalletFfiError;
+
     fn wallet_ffi_get_account_private(
         handle: *mut WalletHandle,
         account_id: *const FfiBytes32,
@@ -109,6 +117,8 @@ unsafe extern "C" {
     ) -> error::WalletFfiError;
 
     fn wallet_ffi_free_account_data(account: *mut FfiAccount);
+
+    fn wallet_ffi_free_accounts_public(accounts: *mut FfiAccountDataList);
 
     fn wallet_ffi_get_public_account_key(
         handle: *mut WalletHandle,
@@ -641,6 +651,69 @@ fn test_wallet_ffi_get_account_public() -> Result<()> {
     }
 
     info!("Successfully retrieved account with correct details");
+
+    Ok(())
+}
+
+#[test]
+fn test_wallet_ffi_get_accounts_public() -> Result<()> {
+    let ctx = BlockingTestContext::new()?;
+    let existing_account_ids = ctx.ctx().existing_public_accounts();
+    let account_ids = [existing_account_ids[1], existing_account_ids[0]];
+    let home = tempfile::tempdir()?;
+    let FfiCreateWalletOutput {
+        wallet: wallet_ffi_handle,
+        mnemonic: _,
+    } = new_wallet_ffi_with_test_context_config(&ctx, home.path())?;
+    let ffi_account_ids = account_ids.map(FfiBytes32::from);
+    let mut ffi_accounts = FfiAccountDataList::default();
+
+    unsafe {
+        wallet_ffi_get_accounts_public(
+            wallet_ffi_handle,
+            ffi_account_ids.as_ptr(),
+            ffi_account_ids.len(),
+            &raw mut ffi_accounts,
+        )
+        .unwrap();
+    }
+
+    let accounts = unsafe { slice::from_raw_parts(ffi_accounts.accounts, ffi_accounts.count) };
+    let [first, second] = accounts else {
+        panic!("expected two accounts, got {}", accounts.len());
+    };
+    assert_eq!(first.balance.data, 20_000_u128.to_le_bytes());
+    assert_eq!(second.balance.data, 10_000_u128.to_le_bytes());
+
+    let mut empty_accounts = FfiAccountDataList::default();
+    unsafe {
+        wallet_ffi_get_accounts_public(wallet_ffi_handle, ptr::null(), 0, &raw mut empty_accounts)
+            .unwrap();
+    }
+    assert!(empty_accounts.accounts.is_null());
+    assert_eq!(empty_accounts.count, 0);
+
+    let error = unsafe {
+        wallet_ffi_get_accounts_public(wallet_ffi_handle, ptr::null(), 1, &raw mut empty_accounts)
+    };
+    assert_eq!(error, error::WalletFfiError::NullPointer);
+
+    let oversized_ids = vec![FfiBytes32::default(); WALLET_FFI_MAX_ACCOUNTS_PER_REQUEST + 1];
+    let error = unsafe {
+        wallet_ffi_get_accounts_public(
+            wallet_ffi_handle,
+            oversized_ids.as_ptr(),
+            oversized_ids.len(),
+            &raw mut empty_accounts,
+        )
+    };
+    assert_eq!(error, error::WalletFfiError::InvalidArgument);
+
+    unsafe {
+        wallet_ffi_free_accounts_public(&raw mut ffi_accounts);
+        wallet_ffi_free_accounts_public(&raw mut empty_accounts);
+        wallet_ffi_destroy(wallet_ffi_handle);
+    }
 
     Ok(())
 }

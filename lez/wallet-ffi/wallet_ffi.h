@@ -32,6 +32,11 @@
 #include <stdlib.h>
 
 /**
+ * Maximum number of account IDs accepted by `wallet_ffi_get_accounts_public`.
+ */
+#define WALLET_FFI_MAX_ACCOUNTS_PER_REQUEST 24
+
+/**
  * Error codes returned by FFI functions.
  */
 typedef enum WalletFfiError {
@@ -107,6 +112,10 @@ typedef enum WalletFfiError {
    * Invalid program bytecode.
    */
   INVALID_BYTECODE = 17,
+  /**
+   * An argument is outside the supported range.
+   */
+  INVALID_ARGUMENT = 18,
   /**
    * Internal error (catch-all).
    */
@@ -218,6 +227,14 @@ typedef struct FfiAccount {
    */
   struct FfiU128 nonce;
 } FfiAccount;
+
+/**
+ * List of full account data returned by `wallet_ffi_get_accounts_public`.
+ */
+typedef struct FfiAccountDataList {
+  struct FfiAccount *accounts;
+  uintptr_t count;
+} FfiAccountDataList;
 
 /**
  * Result of a transfer operation.
@@ -489,6 +506,35 @@ enum WalletFfiError wallet_ffi_get_account_public(struct WalletHandle *handle,
                                                   struct FfiAccount *out_account);
 
 /**
+ * Get full public account data from the network in input order.
+ *
+ * # Parameters
+ * - `handle`: Valid wallet handle
+ * - `account_ids`: Array of account IDs (32 bytes each); may be null when `account_ids_len` is 0
+ * - `account_ids_len`: Number of account IDs; must not exceed
+ *   `WALLET_FFI_MAX_ACCOUNTS_PER_REQUEST`
+ * - `out_accounts`: Output list for account data
+ *
+ * # Returns
+ * - `Success` on successful query
+ * - `InvalidArgument` when `account_ids_len` exceeds `WALLET_FFI_MAX_ACCOUNTS_PER_REQUEST`
+ * - Error code on failure
+ *
+ * # Memory
+ * The returned list must be freed with `wallet_ffi_free_accounts_public()`.
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+ * - `account_ids` must point to an array of `account_ids_len` `FfiBytes32` values when the length
+ *   is non-zero
+ * - `out_accounts` must be a valid pointer to an `FfiAccountDataList` struct
+ */
+enum WalletFfiError wallet_ffi_get_accounts_public(struct WalletHandle *handle,
+                                                   const struct FfiBytes32 *account_ids,
+                                                   uintptr_t account_ids_len,
+                                                   struct FfiAccountDataList *out_accounts);
+
+/**
  * Get full private account data from the local storage.
  *
  * # Parameters
@@ -520,6 +566,15 @@ enum WalletFfiError wallet_ffi_get_account_private(struct WalletHandle *handle,
  * `wallet_ffi_get_account_public`.
  */
 void wallet_ffi_free_account_data(struct FfiAccount *account);
+
+/**
+ * Free public accounts returned by `wallet_ffi_get_accounts_public`.
+ *
+ * # Safety
+ * The list must be either null or a valid list returned by
+ * `wallet_ffi_get_accounts_public`.
+ */
+void wallet_ffi_free_accounts_public(struct FfiAccountDataList *accounts);
 
 /**
  * Import a public account private key into wallet storage.

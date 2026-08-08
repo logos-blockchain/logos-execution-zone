@@ -1,6 +1,6 @@
 //! Account management functions.
 
-use std::{ffi::c_char, ptr, str::FromStr as _};
+use std::{ffi::c_char, ptr, slice, str::FromStr as _};
 
 use key_protocol::key_management::{key_tree::chain_index::ChainIndex, KeyChain};
 use lee::AccountId;
@@ -10,11 +10,11 @@ use crate::{
     block_on, c_str_to_string,
     error::{print_error, WalletFfiError},
     types::{
-        FfiAccount, FfiAccountList, FfiAccountListEntry, FfiBytes32, FfiPrivateAccountKeys,
-        WalletHandle,
+        FfiAccount, FfiAccountDataList, FfiAccountList, FfiAccountListEntry, FfiBytes32,
+        FfiPrivateAccountKeys, WalletHandle,
     },
     wallet::get_wallet,
-    FfiU128,
+    FfiU128, WALLET_FFI_MAX_ACCOUNTS_PER_REQUEST,
 };
 
 /// Create a new public account.
@@ -414,6 +414,99 @@ pub unsafe extern "C" fn wallet_ffi_get_account_public(
     WalletFfiError::Success
 }
 
+/// Get full public account data from the network in input order.
+///
+/// # Parameters
+/// - `handle`: Valid wallet handle
+/// - `account_ids`: Array of account IDs (32 bytes each); may be null when `account_ids_len` is 0
+/// - `account_ids_len`: Number of account IDs; must not exceed
+///   `WALLET_FFI_MAX_ACCOUNTS_PER_REQUEST`
+/// - `out_accounts`: Output list for account data
+///
+/// # Returns
+/// - `Success` on successful query
+/// - `InvalidArgument` when `account_ids_len` exceeds `WALLET_FFI_MAX_ACCOUNTS_PER_REQUEST`
+/// - Error code on failure
+///
+/// # Memory
+/// The returned list must be freed with `wallet_ffi_free_accounts_public()`.
+///
+/// # Safety
+/// - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+/// - `account_ids` must point to an array of `account_ids_len` `FfiBytes32` values when the length
+///   is non-zero
+/// - `out_accounts` must be a valid pointer to an `FfiAccountDataList` struct
+#[no_mangle]
+pub unsafe extern "C" fn wallet_ffi_get_accounts_public(
+    handle: *mut WalletHandle,
+    account_ids: *const FfiBytes32,
+    account_ids_len: usize,
+    out_accounts: *mut FfiAccountDataList,
+) -> WalletFfiError {
+    let wrapper = match get_wallet(handle) {
+        Ok(w) => w,
+        Err(e) => return e,
+    };
+
+    if out_accounts.is_null() || (account_ids_len > 0 && account_ids.is_null()) {
+        print_error("Null pointer argument");
+        return WalletFfiError::NullPointer;
+    }
+
+    if account_ids_len > WALLET_FFI_MAX_ACCOUNTS_PER_REQUEST {
+        print_error(format!(
+            "Too many accounts requested: got {account_ids_len}, maximum is \
+             {WALLET_FFI_MAX_ACCOUNTS_PER_REQUEST}"
+        ));
+        return WalletFfiError::InvalidArgument;
+    }
+
+    let account_ids = if account_ids_len == 0 {
+        Vec::new()
+    } else {
+        unsafe { slice::from_raw_parts(account_ids, account_ids_len) }
+            .iter()
+            .map(|account_id| AccountId::new(account_id.data))
+            .collect()
+    };
+
+    let wallet = match wrapper.core.lock() {
+        Ok(w) => w,
+        Err(e) => {
+            print_error(format!("Failed to lock wallet: {e}"));
+            return WalletFfiError::InternalError;
+        }
+    };
+
+    let accounts = match block_on(wallet.get_accounts_public(account_ids)) {
+        Ok(accounts) => accounts,
+        Err(e) => {
+            print_error(format!("Failed to get accounts: {e}"));
+            return WalletFfiError::NetworkError;
+        }
+    };
+
+    let count = accounts.len();
+    if count == 0 {
+        unsafe {
+            *out_accounts = FfiAccountDataList::default();
+        }
+    } else {
+        let accounts = accounts
+            .into_iter()
+            .map(FfiAccount::from)
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        let accounts = Box::into_raw(accounts).cast::<FfiAccount>();
+
+        unsafe {
+            *out_accounts = FfiAccountDataList { accounts, count };
+        }
+    }
+
+    WalletFfiError::Success
+}
+
 /// Get full private account data from the local storage.
 ///
 /// # Parameters
@@ -481,12 +574,42 @@ pub unsafe extern "C" fn wallet_ffi_free_account_data(account: *mut FfiAccount) 
     }
 
     unsafe {
-        let account = &*account;
-        if !account.data.is_null() && account.data_len > 0 {
-            let slice = std::slice::from_raw_parts_mut(account.data.cast_mut(), account.data_len);
-            drop(Box::from_raw(std::ptr::from_mut::<[u8]>(slice)));
+        free_account_data(&mut *account);
+    }
+}
+
+/// Free public accounts returned by `wallet_ffi_get_accounts_public`.
+///
+/// # Safety
+/// The list must be either null or a valid list returned by
+/// `wallet_ffi_get_accounts_public`.
+#[no_mangle]
+pub unsafe extern "C" fn wallet_ffi_free_accounts_public(accounts: *mut FfiAccountDataList) {
+    if accounts.is_null() {
+        return;
+    }
+
+    unsafe {
+        let accounts = &mut *accounts;
+        if !accounts.accounts.is_null() && accounts.count > 0 {
+            let list = slice::from_raw_parts_mut(accounts.accounts, accounts.count);
+            for account in list.iter_mut() {
+                free_account_data(account);
+            }
+            drop(Box::from_raw(std::ptr::from_mut::<[FfiAccount]>(list)));
+        }
+        *accounts = FfiAccountDataList::default();
+    }
+}
+
+fn free_account_data(account: &mut FfiAccount) {
+    if !account.data.is_null() && account.data_len > 0 {
+        unsafe {
+            let data = slice::from_raw_parts_mut(account.data.cast_mut(), account.data_len);
+            drop(Box::from_raw(std::ptr::from_mut::<[u8]>(data)));
         }
     }
+    *account = FfiAccount::default();
 }
 
 /// Import a public account private key into wallet storage.
@@ -651,5 +774,34 @@ pub unsafe extern "C" fn wallet_ffi_import_private_account(
             print_error(format!("Failed to save wallet after private import: {e}"));
             WalletFfiError::StorageError
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use lee::{Account, Data};
+
+    use super::*;
+
+    #[test]
+    fn free_accounts_public_releases_nested_account_data() {
+        let expected_data = vec![1, 2, 3, 4];
+        let account = Account {
+            data: Data::try_from(expected_data.clone()).expect("account data should be valid"),
+            ..Account::default()
+        };
+        let accounts = vec![FfiAccount::from(account)].into_boxed_slice();
+        let count = accounts.len();
+        let accounts = Box::into_raw(accounts).cast::<FfiAccount>();
+        let mut list = FfiAccountDataList { accounts, count };
+
+        let data = unsafe { slice::from_raw_parts((*list.accounts).data, expected_data.len()) };
+        assert_eq!(data, expected_data);
+
+        unsafe {
+            wallet_ffi_free_accounts_public(&raw mut list);
+        }
+        assert!(list.accounts.is_null());
+        assert_eq!(list.count, 0);
     }
 }

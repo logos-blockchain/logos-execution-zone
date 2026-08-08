@@ -9582,6 +9582,7 @@ version = "0.1.0"
 dependencies = [
  "jsonrpsee",
  "sequencer_service_protocol",
+ "serde_json",
 ]
 
 [[package]]

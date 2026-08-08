@@ -15,6 +15,7 @@ use sequencer_service_protocol::{
     Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest, HashType,
     MembershipProof, Nonce, ProgramId,
 };
+use sequencer_service_rpc::MAX_ACCOUNTS_PER_REQUEST;
 use tokio::sync::Mutex;
 
 const NOT_FOUND_ERROR_CODE: i32 = -31999;
@@ -175,6 +176,28 @@ impl<BC: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::Rpc
                 .collect()
         });
         Ok(nonces)
+    }
+
+    async fn get_accounts(
+        &self,
+        account_ids: Vec<AccountId>,
+    ) -> Result<Vec<Account>, ErrorObjectOwned> {
+        if account_ids.len() > MAX_ACCOUNTS_PER_REQUEST {
+            return Err(ErrorObjectOwned::owned(
+                ErrorCode::InvalidParams.code(),
+                format!(
+                    "Too many accounts requested: got {}, maximum is {MAX_ACCOUNTS_PER_REQUEST}",
+                    account_ids.len()
+                ),
+                None::<()>,
+            ));
+        }
+
+        let sequencer = self.sequencer.lock().await;
+        Ok(account_ids
+            .into_iter()
+            .map(|account_id| sequencer.state().get_account_by_id(account_id))
+            .collect())
     }
 
     async fn get_proofs_and_root(

@@ -10,6 +10,13 @@ use sequencer_service_protocol::{
     LeeTransaction, MembershipProof, Nonce, ProgramId,
 };
 
+/// Maximum number of full accounts returned by one `getAccounts` request.
+///
+/// A full account may contain 100 KiB of data. JSON encodes each byte as a decimal number, so this
+/// limit keeps a worst-case batch below jsonrpsee's default 10 MiB response-body limit, with at
+/// least 512 KiB of headroom for the JSON-RPC envelope.
+pub const MAX_ACCOUNTS_PER_REQUEST: usize = 24;
+
 #[cfg(all(not(feature = "server"), not(feature = "client")))]
 compile_error!("At least one of `server` or `client` features must be enabled.");
 
@@ -76,6 +83,16 @@ pub trait Rpc {
         account_ids: Vec<AccountId>,
     ) -> Result<Vec<Nonce>, ErrorObjectOwned>;
 
+    /// Get full account states in input order.
+    ///
+    /// Returns an invalid-params error when more than [`MAX_ACCOUNTS_PER_REQUEST`] IDs are
+    /// supplied.
+    #[method(name = "getAccounts")]
+    async fn get_accounts(
+        &self,
+        account_ids: Vec<AccountId>,
+    ) -> Result<Vec<Account>, ErrorObjectOwned>;
+
     #[method(name = "getProofsAndRoot")]
     async fn get_proofs_and_root(
         &self,
@@ -90,4 +107,37 @@ pub trait Rpc {
 
     #[method(name = "getChannelId")]
     async fn get_channel_id(&self) -> Result<ChannelId, ErrorObjectOwned>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MAX_ACCOUNT_DATA_SIZE: usize = 100 * 1024;
+    const DEFAULT_MAX_RESPONSE_BODY_SIZE: usize = 10 * 1024 * 1024;
+    const RESPONSE_BODY_HEADROOM: usize = 512 * 1024;
+
+    #[test]
+    fn maximum_accounts_response_fits_default_response_body_limit() {
+        let mut account = Account {
+            program_owner: [u32::MAX; 8],
+            balance: u128::MAX,
+            nonce: u128::MAX.into(),
+            ..Account::default()
+        };
+        account.data = vec![u8::MAX; MAX_ACCOUNT_DATA_SIZE]
+            .try_into()
+            .expect("maximum-size account data should be valid");
+
+        let mut encoded = br#"{"jsonrpc":"2.0","result":"#.to_vec();
+        serde_json::to_writer(&mut encoded, &vec![account; MAX_ACCOUNTS_PER_REQUEST])
+            .expect("response result should serialize");
+        encoded.extend_from_slice(br#", "id":18446744073709551615}"#);
+
+        assert!(
+            encoded.len() <= DEFAULT_MAX_RESPONSE_BODY_SIZE - RESPONSE_BODY_HEADROOM,
+            "maximum batch response is {} bytes",
+            encoded.len()
+        );
+    }
 }

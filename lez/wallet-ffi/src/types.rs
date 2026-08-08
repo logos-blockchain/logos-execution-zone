@@ -102,6 +102,22 @@ impl Default for FfiAccount {
     }
 }
 
+/// List of full account data returned by `wallet_ffi_get_accounts_public`.
+#[repr(C)]
+pub struct FfiAccountDataList {
+    pub accounts: *mut FfiAccount,
+    pub count: usize,
+}
+
+impl Default for FfiAccountDataList {
+    fn default() -> Self {
+        Self {
+            accounts: std::ptr::null_mut(),
+            count: 0,
+        }
+    }
+}
+
 /// Public keys for a private account (safe to expose).
 #[repr(C)]
 pub struct FfiPrivateAccountKeys {

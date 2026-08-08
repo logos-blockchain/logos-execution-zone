@@ -570,6 +570,11 @@ impl WalletCore {
             .await?)
     }
 
+    /// Get public accounts from the sequencer in input order.
+    pub async fn get_accounts_public(&self, account_ids: Vec<AccountId>) -> Result<Vec<Account>> {
+        Ok(self.sequencer_client.get_accounts(account_ids).await?)
+    }
+
     pub async fn get_account(&self, account_id: AccountIdWithPrivacy) -> Result<Account> {
         match account_id {
             AccountIdWithPrivacy::Public(acc_id) => self.get_account_public(acc_id).await,

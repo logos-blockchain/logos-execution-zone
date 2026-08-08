@@ -45,6 +45,8 @@ pub enum WalletFfiError {
     InvalidKeyValue = 16,
     /// Invalid program bytecode.
     InvalidBytecode = 17,
+    /// An argument is outside the supported range.
+    InvalidArgument = 18,
     /// Internal error (catch-all).
     InternalError = 99,
 }
