@@ -53,6 +53,8 @@ pub mod poller;
 pub mod program_facades;
 pub mod storage;
 
+const LEZ_CUCUMBER_RUN: &str = "LEZ_CUCUMBER_RUN";
+
 pub const HOME_DIR_ENV_VAR: &str = "LEE_WALLET_HOME_DIR";
 
 pub enum AccDecodeData {
@@ -719,7 +721,9 @@ impl WalletCore {
         println!("Transaction hash is {tx_hash}");
         let (tx, block_id) = self.poll_transaction(tx_hash).await?;
         println!("Transaction is included in block {block_id}");
-        println!("Transaction data is {tx:?}");
+        if std::env::var_os(LEZ_CUCUMBER_RUN).is_none() {
+            println!("Transaction data is {tx:?}");
+        }
         self.store_persistent_data()?;
         Ok(cli::SubcommandReturnValue::TransactionExecuted { tx_hash })
     }
@@ -733,7 +737,9 @@ impl WalletCore {
         println!("Transaction hash is {tx_hash}");
         let (tx, block_id) = self.poll_transaction(tx_hash).await?;
         println!("Transaction is included in block {block_id}");
-        println!("Transaction data is {tx:?}");
+        if std::env::var_os(LEZ_CUCUMBER_RUN).is_none() {
+            println!("Transaction data is {tx:?}");
+        }
         if let common::transaction::LeeTransaction::PrivacyPreserving(private_tx) = tx {
             self.decode_insert_privacy_preserving_transaction_results(
                 &private_tx,

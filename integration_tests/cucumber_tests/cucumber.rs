@@ -22,11 +22,13 @@ use logos_blockchain_testing_framework::{
     is_truthy_env, reap_all_stale_port_blocks, release_reserved_port_block,
 };
 
+const LEZ_CUCUMBER_RUN: &str = "LEZ_CUCUMBER_RUN";
 type ScenarioAttempts = Arc<Mutex<HashMap<String, u8>>>;
 
 #[tokio::main]
 #[expect(clippy::print_stdout, reason = "Cucumber logs test code")]
 async fn main() {
+    logos_blockchain_testing_framework::env::set_default_env(LEZ_CUCUMBER_RUN, "true");
     reap_all_stale_port_blocks();
     println!("args: {:?}", std::env::args());
 
