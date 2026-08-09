@@ -26,6 +26,9 @@ pub enum StepError {
     /// No account balance was recorded by an earlier scenario step.
     #[error("No observed balance is available")]
     MissingObservedBalance,
+    /// No transfer was recorded by an earlier scenario step.
+    #[error("No transfer is available")]
+    MissingTransfer,
     /// LEZ application deployment failed.
     #[error("Deployment failed: {message}")]
     DeploymentFailed { message: String },

@@ -41,6 +41,24 @@ pub struct EnvironmentState {
     pub expected_balance: Option<u128>,
     /// Last indexer block observed by the convergence step.
     pub observed_indexer_height: Option<u64>,
+    /// Sender account for the public transfer scenario.
+    pub transfer_sender: Option<lee::AccountId>,
+    /// Receiver account for the public transfer scenario.
+    pub transfer_receiver: Option<lee::AccountId>,
+    /// Amount submitted in the public transfer scenario.
+    pub transfer_amount: Option<u128>,
+    /// Sender balance recorded before the public transfer.
+    pub sender_initial_balance: Option<u128>,
+    /// Receiver balance recorded before the public transfer.
+    pub receiver_initial_balance: Option<u128>,
+    /// Sender balance observed after the public transfer.
+    pub sender_observed_balance: Option<u128>,
+    /// Receiver balance observed after the public transfer.
+    pub receiver_observed_balance: Option<u128>,
+    /// Hash returned for the public transfer.
+    pub transfer_hash: Option<common::HashType>,
+    /// Block containing the public transfer.
+    pub transfer_included_block: Option<u64>,
 }
 
 /// Per-scenario state for Cucumber tests that deploy LEZ applications.

@@ -1,3 +1,4 @@
+use common::HashType;
 use lee::AccountId;
 use sequencer_service_rpc::SequencerClient;
 use testing_framework_app::{AppHostEnv, DeployContext};
@@ -117,6 +118,21 @@ impl LezScenarioContext {
     ) -> Result<Option<u128>, StepError> {
         self.wallet
             .private_account_balance(account_id)
+            .await
+            .map_err(|error| StepError::QueryFailed {
+                message: error.to_string(),
+            })
+    }
+
+    /// Executes an authenticated transfer between two owned public accounts.
+    pub async fn public_transfer(
+        &self,
+        from: AccountId,
+        to: AccountId,
+        amount: u128,
+    ) -> Result<HashType, StepError> {
+        self.wallet
+            .public_transfer(from, to, amount)
             .await
             .map_err(|error| StepError::QueryFailed {
                 message: error.to_string(),

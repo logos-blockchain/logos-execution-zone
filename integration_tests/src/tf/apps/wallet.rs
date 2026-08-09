@@ -7,12 +7,21 @@ use std::{
 
 use anyhow::{Context as _, anyhow};
 use async_trait::async_trait;
+use common::HashType;
 use lee::{AccountId, PrivateKey};
 use tempfile::TempDir;
 use testing_framework_app::{AppDeployment, AppHostEnv, DeployContext};
 use testing_framework_core::scenario::DynError;
 use tokio::sync::{mpsc, oneshot};
-use wallet::{WalletCore, config::WalletConfigOverrides};
+use wallet::{
+    WalletCore,
+    account::AccountIdWithPrivacy,
+    cli::{
+        CliAccountMention, Command, SubcommandReturnValue,
+        programs::native_token_transfer::AuthTransferSubcommand,
+    },
+    config::WalletConfigOverrides,
+};
 
 use super::LezSequencerClient;
 use crate::{
@@ -43,6 +52,12 @@ enum WalletRequest {
     FirstPublicAccount {
         response: oneshot::Sender<Result<Option<AccountId>, String>>,
     },
+    PublicTransfer {
+        from: AccountId,
+        to: AccountId,
+        amount: u128,
+        response: oneshot::Sender<Result<HashType, String>>,
+    },
     WalletPassword {
         response: oneshot::Sender<Result<String, String>>,
     },
@@ -68,7 +83,7 @@ impl WalletActor {
                     .expect("LEZ wallet actor runtime should be constructible");
 
                 runtime.block_on(async move {
-                    let components = components;
+                    let mut components = components;
                     while let Some(request) = receiver.recv().await {
                         match request {
                             WalletRequest::ExistingPublicAccounts { response } => {
@@ -110,6 +125,48 @@ impl WalletActor {
                                     .next()
                                     .map(|(account_id, _)| account_id);
                                 let _unused = response.send(Ok(account));
+                            }
+                            WalletRequest::PublicTransfer {
+                                from,
+                                to,
+                                amount,
+                                response,
+                            } => {
+                                let result = wallet::cli::execute_subcommand(
+                                    &mut components.wallet,
+                                    Command::AuthTransfer(AuthTransferSubcommand::Send {
+                                        from: CliAccountMention::Id(AccountIdWithPrivacy::Public(
+                                            from,
+                                        )),
+                                        to: Some(CliAccountMention::Id(
+                                            AccountIdWithPrivacy::Public(to),
+                                        )),
+                                        to_npk: None,
+                                        to_vpk: None,
+                                        to_keys: None,
+                                        to_identifier: Some(0),
+                                        amount,
+                                    }),
+                                )
+                                .await
+                                .and_then(|result| {
+                                    #[expect(
+                                        clippy::wildcard_enum_match_arm,
+                                        reason = "Only TransactionExecuted is valid for a transfer request"
+                                    )]
+                                    match result {
+                                        SubcommandReturnValue::TransactionExecuted { tx_hash } => {
+                                            Ok(tx_hash)
+                                        }
+                                        other => {
+                                            anyhow::bail!(
+                                                "expected TransactionExecuted, got {other:?}"
+                                            )
+                                        }
+                                    }
+                                })
+                                .map_err(|error| error.to_string());
+                                let _unused = response.send(result);
                             }
                             WalletRequest::WalletPassword { response } => {
                                 let _unused = response.send(Ok(components.password.clone()));
@@ -203,6 +260,22 @@ impl LezRuntime {
     pub async fn wallet_password(&self) -> Result<String, DynError> {
         self.request(|response| WalletRequest::WalletPassword { response })
             .await
+    }
+
+    /// Executes an authenticated transfer between two owned public accounts.
+    pub async fn public_transfer(
+        &self,
+        from: AccountId,
+        to: AccountId,
+        amount: u128,
+    ) -> Result<HashType, DynError> {
+        self.request(|response| WalletRequest::PublicTransfer {
+            from,
+            to,
+            amount,
+            response,
+        })
+        .await
     }
 
     /// Stop the wallet actor and wait for its owning thread to finish.
