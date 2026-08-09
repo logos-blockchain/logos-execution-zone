@@ -1,5 +1,7 @@
 use std::{error::Error, fmt, fmt::Display, time::Duration};
 
+use common::HashType;
+use indexer_service_protocol::HashType as IndexerHashType;
 use indexer_service_rpc::RpcClient as _;
 use sequencer_service_rpc::RpcClient as _;
 
@@ -74,6 +76,14 @@ pub async fn wait_for_indexer_to_catch_up(
         .map_err(|error| IndexerCatchUpError::SequencerQuery {
             message: error.to_string(),
         })?;
+    wait_for_indexer_to_reach(indexer, block_id_to_catch_up).await
+}
+
+/// Polls the indexer until it reaches a specific finalized block.
+pub async fn wait_for_indexer_to_reach(
+    indexer: &LezIndexerClient,
+    block_id_to_reach: u64,
+) -> Result<u64, IndexerCatchUpError> {
     let mut last_indexer_block = 0;
 
     let poll = async {
@@ -86,7 +96,7 @@ pub async fn wait_for_indexer_to_catch_up(
                 .unwrap_or(0);
             last_indexer_block = indexer_block;
 
-            if indexer_block >= block_id_to_catch_up && indexer_block > 0 {
+            if indexer_block >= block_id_to_reach && indexer_block > 0 {
                 return Ok::<u64, String>(indexer_block);
             }
 
@@ -98,7 +108,56 @@ pub async fn wait_for_indexer_to_catch_up(
         Ok(Ok(height)) => Ok(height),
         Ok(Err(error)) => Err(IndexerCatchUpError::IndexerQuery { message: error }),
         Err(_elapsed) => Err(IndexerCatchUpError::Timeout {
-            target: block_id_to_catch_up,
+            target: block_id_to_reach,
+            last_observed: last_indexer_block,
+            elapsed: L2_TO_L1_TIMEOUT,
+        }),
+    }
+}
+
+/// Polls the indexer until all supplied transactions are present in its
+/// finalized transaction store.
+pub async fn wait_for_indexer_to_index_transactions(
+    indexer: &LezIndexerClient,
+    transaction_hashes: &[HashType],
+    target_block: u64,
+) -> Result<u64, IndexerCatchUpError> {
+    let mut last_indexer_block = 0;
+
+    let poll = async {
+        loop {
+            last_indexer_block = indexer
+                .client()
+                .get_last_finalized_block_id()
+                .await
+                .map_err(|error| error.to_string())?
+                .unwrap_or(0);
+
+            let mut all_indexed = true;
+            for hash in transaction_hashes {
+                let indexed = indexer_service_rpc::RpcClient::get_transaction(
+                    &**indexer.client(),
+                    IndexerHashType(hash.0),
+                )
+                .await
+                .map_err(|error| error.to_string())?
+                .is_some();
+                all_indexed &= indexed;
+            }
+
+            if all_indexed {
+                return Ok::<u64, String>(last_indexer_block);
+            }
+
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    };
+
+    match tokio::time::timeout(L2_TO_L1_TIMEOUT, poll).await {
+        Ok(Ok(height)) => Ok(height),
+        Ok(Err(error)) => Err(IndexerCatchUpError::IndexerQuery { message: error }),
+        Err(_elapsed) => Err(IndexerCatchUpError::Timeout {
+            target: target_block,
             last_observed: last_indexer_block,
             elapsed: L2_TO_L1_TIMEOUT,
         }),

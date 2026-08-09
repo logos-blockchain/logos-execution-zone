@@ -36,10 +36,18 @@ impl BedrockApp {
     /// Creates a Bedrock deployment with the requested validator count.
     #[must_use]
     pub fn nodes(nodes: usize) -> Self {
-        let builder = DeploymentBuilder::new(TopologyConfig::with_node_numbers(nodes))
-            .with_security_param(NonZeroU32::new(5).expect("five is non-zero"))
-            .with_slot_activation_coeff(1, NonZeroU32::new(2).expect("two is non-zero"))
-            .with_wallet_config(lez_funding_wallet());
+        Self::nodes_with_blend_core_nodes(nodes, nodes)
+    }
+
+    /// Creates a Bedrock deployment with explicit validator and Blend counts.
+    #[must_use]
+    pub fn nodes_with_blend_core_nodes(nodes: usize, blend_core_nodes: usize) -> Self {
+        let builder = DeploymentBuilder::new(
+            TopologyConfig::with_node_numbers(nodes).with_blend_core_nodes(blend_core_nodes),
+        )
+        .with_security_param(NonZeroU32::new(5).expect("five is non-zero"))
+        .with_slot_activation_coeff(1, NonZeroU32::new(2).expect("two is non-zero"))
+        .with_wallet_config(lez_funding_wallet());
         Self::from_builder(builder)
     }
 

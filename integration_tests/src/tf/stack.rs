@@ -1,10 +1,11 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Duration};
 
 use async_trait::async_trait;
 use testing_framework_app::{AppDeployment, AppHostEnv, DeployContext};
 use testing_framework_core::scenario::DynError;
+use tokio::time::{Instant, sleep};
 
-use super::{BedrockApp, IndexerApp, SequencerApp, WalletApp};
+use super::{BedrockApp, BedrockCluster, IndexerApp, SequencerApp, WalletApp};
 use crate::config::SequencerPartialConfig;
 
 /// Complete process-based LEZ stack: Bedrock, indexer, sequencer, and wallet.
@@ -94,6 +95,7 @@ impl AppDeployment<AppHostEnv> for LezLocalApp {
             },
         );
         let bedrock = ctx.deploy_and_expose(bedrock_app).await?;
+        wait_for_bedrock_ready(&bedrock).await?;
 
         let indexer = IndexerApp::new(bedrock.primary_api_addr());
         let indexer = scenario_base_dir.as_ref().map_or_else(
@@ -123,6 +125,28 @@ impl AppDeployment<AppHostEnv> for LezLocalApp {
 
         Ok(LezStackHandle)
     }
+}
+
+async fn wait_for_bedrock_ready(bedrock: &BedrockCluster) -> Result<(), DynError> {
+    const TIMEOUT: Duration = Duration::from_secs(60);
+    let started = Instant::now();
+    let mut last_error = None;
+
+    while started.elapsed() < TIMEOUT {
+        match bedrock.cryptarchia_info().await {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                last_error = Some(error.to_string());
+                sleep(Duration::from_secs(1)).await;
+            }
+        }
+    }
+
+    Err(anyhow::anyhow!(
+        "Bedrock did not become ready after {TIMEOUT:?}: {}",
+        last_error.unwrap_or_else(|| "no readiness response".to_owned())
+    )
+    .into())
 }
 
 /// Stops all exposed LEZ services in dependency order.

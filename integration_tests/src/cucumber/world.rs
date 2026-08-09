@@ -45,7 +45,7 @@ pub struct EnvironmentState {
     pub transfer_sender: Option<lee::AccountId>,
     /// Receiver account for the public transfer scenario.
     pub transfer_receiver: Option<lee::AccountId>,
-    /// Amount submitted in the public transfer scenario.
+    /// Cumulative amount submitted in the public transfer scenario.
     pub transfer_amount: Option<u128>,
     /// Sender balance recorded before the public transfer.
     pub sender_initial_balance: Option<u128>,
@@ -59,6 +59,14 @@ pub struct EnvironmentState {
     pub transfer_hash: Option<common::HashType>,
     /// Block containing the public transfer.
     pub transfer_included_block: Option<u64>,
+    /// All public transfer hashes submitted in this scenario.
+    pub transfer_hashes: Vec<common::HashType>,
+    /// Blocks containing the public transfers in submission order.
+    pub transfer_included_blocks: Vec<u64>,
+    /// Sender nonce before the first public transfer.
+    pub sender_initial_nonce: Option<lee_core::account::Nonce>,
+    /// Error returned when a public transfer is rejected.
+    pub transfer_rejection: Option<String>,
 }
 
 /// Per-scenario state for Cucumber tests that deploy LEZ applications.
