@@ -109,4 +109,17 @@ impl LezScenarioContext {
                 message: error.to_string(),
             })
     }
+
+    /// Returns the locally synchronized balance of an imported private account.
+    pub async fn private_account_balance(
+        &self,
+        account_id: AccountId,
+    ) -> Result<Option<u128>, StepError> {
+        self.wallet
+            .private_account_balance(account_id)
+            .await
+            .map_err(|error| StepError::QueryFailed {
+                message: error.to_string(),
+            })
+    }
 }

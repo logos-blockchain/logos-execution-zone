@@ -7,3 +7,11 @@ Feature: LEZ integration environment
     Then its balance matches the configured initial balance
     And the indexer catches up to the sequencer
     Then I stop the runtime
+
+  @smoke_private
+  Scenario: LEZ private smoke stack initializes its configured private account
+    Given a LEZ private smoke stack
+    When I query the balance of the first configured private account
+    Then its balance matches the configured initial balance
+    And the indexer catches up to the sequencer
+    Then I stop the runtime

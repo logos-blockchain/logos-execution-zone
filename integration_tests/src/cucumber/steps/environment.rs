@@ -3,7 +3,7 @@ use lee::{AccountId, PublicKey};
 use sequencer_service_rpc::RpcClient as _;
 
 use crate::{
-    config::default_public_accounts_for_wallet,
+    config::{default_private_accounts_for_wallet, default_public_accounts_for_wallet},
     cucumber::{
         context::LezScenarioContext,
         error::{StepError, StepResult},
@@ -14,6 +14,18 @@ use crate::{
 
 #[given("a LEZ smoke stack")]
 async fn deploy_lez_smoke_stack(world: &mut CucumberWorld) -> StepResult {
+    deploy_lez_stack(world, false).await
+}
+
+#[given("a LEZ private smoke stack")]
+async fn deploy_lez_private_smoke_stack(world: &mut CucumberWorld) -> StepResult {
+    deploy_lez_stack(world, true).await
+}
+
+async fn deploy_lez_stack(
+    world: &mut CucumberWorld,
+    initialize_private_accounts: bool,
+) -> StepResult {
     if world.lez.is_some() {
         return Err(StepError::FixtureAlreadyDeployed);
     }
@@ -23,16 +35,19 @@ async fn deploy_lez_smoke_stack(world: &mut CucumberWorld) -> StepResult {
         .clone()
         .unwrap_or_else(|| "unknown-time".to_owned());
     let scenario_base_dir = world.scenario_base_dir.join(entropy);
+    let app = LezLocalApp::new().with_scenario_base_dir(scenario_base_dir);
+    let app = if initialize_private_accounts {
+        app
+    } else {
+        // The public smoke scenario deliberately exercises only the
+        // public-account path. The private smoke scenario uses the default
+        // fixture so private-account initialization is covered separately.
+        app.without_private_account_initialization()
+    };
+
     world
         .deployment_mut()
-        .deploy(
-            LezLocalApp::new()
-                .with_scenario_base_dir(scenario_base_dir)
-                // This smoke scenario deliberately exercises the public-account path. The
-                // default TF deployment still initializes both public and private accounts;
-                // the normal TF deployment test covers that complete fixture.
-                .without_private_account_initialization(),
-        )
+        .deploy(app)
         .await
         .map_err(|error| StepError::DeploymentFailed {
             message: format!("{error:?}"),
@@ -63,6 +78,39 @@ async fn query_first_public_account_balance(world: &mut CucumberWorld) -> StepRe
     let expected_balance =
         expected_public_balance(account).ok_or_else(|| StepError::QueryFailed {
             message: format!("account {account:?} is not in the configured public accounts"),
+        })?;
+
+    world.environment.selected_account = Some(account);
+    world.environment.observed_balance = Some(observed_balance);
+    world.environment.expected_balance = Some(expected_balance);
+    Ok(())
+}
+
+#[when("I query the balance of the first configured private account")]
+async fn query_first_private_account_balance(world: &mut CucumberWorld) -> StepResult {
+    let context = world.lez()?;
+    let account = context
+        .existing_private_accounts()
+        .await?
+        .into_iter()
+        .next()
+        .ok_or(StepError::MissingSelectedAccount)?;
+
+    let observed_balance = context
+        .private_account_balance(account)
+        .await?
+        .ok_or_else(|| StepError::QueryFailed {
+            message: format!("private account {account:?} has no synchronized balance"),
+        })?;
+
+    let expected_balance = default_private_accounts_for_wallet()
+        .into_iter()
+        .find(|configured| configured.account_id() == account)
+        .map(|configured| configured.balance)
+        .ok_or_else(|| StepError::QueryFailed {
+            message: format!(
+                "private account {account:?} is not in the configured private accounts"
+            ),
         })?;
 
     world.environment.selected_account = Some(account);
