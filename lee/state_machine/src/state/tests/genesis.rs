@@ -74,6 +74,49 @@ fn insert_program() {
     assert!(state.programs.contains_key(&program_id));
 }
 
+/// Phase 1 of the program-upgrade proposal (`upgrade_proposal.md`): inserting a program —
+/// whether genesis-seeded or via a real deployment transaction, both go through
+/// `insert_program` — must make a membership proof for its `ProgramCommitment` fetchable.
+/// (The Merkle-path math itself is covered by `merkle_tree`'s own test suite; this only pins
+/// that `ProgramCommitmentDigest` is actually wired up and populated.)
+#[test]
+fn insert_program_makes_program_commitment_provable() {
+    let mut state = V03State::new();
+    let program_to_insert = crate::test_methods::simple_balance_transfer();
+    let commitment = ProgramCommitment::for_program_id(program_to_insert.id());
+    assert!(state.get_proof_for_program_commitment(&commitment).is_none());
+
+    state.insert_program(program_to_insert);
+
+    assert!(
+        state.get_proof_for_program_commitment(&commitment).is_some(),
+        "the inserted program's commitment should be provable"
+    );
+}
+
+/// A program deployed via a real deployment transaction (not genesis-seeded) must also be
+/// committed — `insert_program` is the single path both go through, so this pins that the
+/// unification actually holds for the transaction path, not just the direct `insert_program`
+/// call the test above exercises.
+#[test]
+fn program_deployment_transaction_makes_program_commitment_provable() {
+    let mut state = V03State::new();
+    let bytecode = crate::test_methods::simple_balance_transfer().elf().to_vec();
+    let message = crate::program_deployment_transaction::Message::new(bytecode);
+    let tx = crate::program_deployment_transaction::ProgramDeploymentTransaction::new(message);
+
+    state
+        .transition_from_program_deployment_transaction(&tx)
+        .expect("a fresh program deployment should succeed");
+
+    let program_id = crate::test_methods::simple_balance_transfer().id();
+    let commitment = ProgramCommitment::for_program_id(program_id);
+    assert!(
+        state.get_proof_for_program_commitment(&commitment).is_some(),
+        "the deployed program's commitment should be provable"
+    );
+}
+
 #[test]
 fn get_account_by_account_id_non_default_account() {
     let key = PrivateKey::try_new([1; 32]).unwrap();

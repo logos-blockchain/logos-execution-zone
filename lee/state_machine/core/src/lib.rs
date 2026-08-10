@@ -19,6 +19,7 @@ pub use nullifier::{
     AuthorizationSecretKey, Identifier, Nullifier, NullifierPublicKey, NullifierSecretKey,
 };
 pub use program::PrivateAccountKind;
+pub use program_commitment::ProgramCommitment;
 
 pub mod account;
 mod circuit_io;
@@ -27,6 +28,7 @@ mod encoding;
 pub mod encryption;
 mod nullifier;
 pub mod program;
+mod program_commitment;
 
 #[cfg(feature = "host")]
 pub mod error;
