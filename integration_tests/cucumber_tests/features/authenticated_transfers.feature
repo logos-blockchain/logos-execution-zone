@@ -45,3 +45,19 @@ Feature: Authenticated transfers
     And the sender nonce advances across both transfers
     And the indexer catches up to the sequencer
     Then I stop the runtime
+
+  @auth_transfer_ci
+  # Mirrors integration_tests/tests/auth_transfer/public.rs::successful_transfer_to_new_account.
+  # Coverage is equivalent for funding a previously absent public account. Cucumber additionally
+  # verifies the recipient is absent before submission, transaction inclusion, both required
+  # signatures, indexer convergence, and explicit runtime teardown.
+  Scenario: Transfer funds to a new public account
+    Given a LEZ stack with configured accounts
+    And a new public account
+    When I transfer 100 from the first configured public account to the new account
+    Then the sender balance decreases by 100
+    And the new account balance is 100
+    And the transfer is included in a block
+    And the sender and new account sign the transfer
+    And the indexer catches up to the sequencer
+    Then I stop the runtime

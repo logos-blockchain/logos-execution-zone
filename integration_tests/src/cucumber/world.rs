@@ -45,6 +45,8 @@ pub struct EnvironmentState {
     pub transfer_sender: Option<lee::AccountId>,
     /// Receiver account for the public transfer scenario.
     pub transfer_receiver: Option<lee::AccountId>,
+    /// Fresh recipient account created for the new-account transfer scenario.
+    pub new_public_account: Option<lee::AccountId>,
     /// Cumulative amount submitted in the public transfer scenario.
     pub transfer_amount: Option<u128>,
     /// Sender balance recorded before the public transfer.

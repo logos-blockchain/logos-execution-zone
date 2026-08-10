@@ -1,6 +1,6 @@
 use common::transaction::LeeTransaction;
 use cucumber::{given, then, when};
-use lee::{AccountId, PublicKey};
+use lee::{Account, AccountId, PublicKey};
 use lee_core::account::Nonce;
 use sequencer_service_rpc::RpcClient as _;
 
@@ -30,6 +30,25 @@ async fn deploy_lez_private_smoke_stack(world: &mut CucumberWorld) -> StepResult
 #[given("a LEZ stack with configured accounts")]
 async fn deploy_lez_configured_accounts(world: &mut CucumberWorld) -> StepResult {
     deploy_lez_stack(world, false).await
+}
+
+#[given("a new public account")]
+async fn create_new_public_account(world: &mut CucumberWorld) -> StepResult {
+    let context = world.lez()?;
+    let account = context.new_public_account().await?;
+    match context.sequencer_client().get_account(account).await {
+        Ok(state) if state == Account::default() => {}
+        Ok(state) => {
+            return Err(StepError::AssertionFailed {
+                message: format!(
+                    "new public account {account:?} already has sequencer state: {state:?}"
+                ),
+            });
+        }
+        Err(_) => {}
+    }
+    world.environment.new_public_account = Some(account);
+    Ok(())
 }
 
 async fn deploy_lez_stack(
@@ -173,6 +192,54 @@ async fn transfer_between_configured_public_accounts(world: &mut CucumberWorld) 
             message: format!("no nonce returned for sender {sender:?}"),
         })?;
     let transfer_hash = context.public_transfer(sender, receiver, 100).await?;
+
+    world.environment.transfer_sender = Some(sender);
+    world.environment.transfer_receiver = Some(receiver);
+    world.environment.transfer_amount = Some(100);
+    world.environment.sender_initial_balance = Some(sender_initial_balance);
+    world.environment.receiver_initial_balance = Some(receiver_initial_balance);
+    world.environment.sender_initial_nonce = Some(sender_initial_nonce);
+    world.environment.transfer_hash = Some(transfer_hash);
+    world.environment.transfer_hashes = vec![transfer_hash];
+    Ok(())
+}
+
+#[when("I transfer 100 from the first configured public account to the new account")]
+async fn transfer_to_new_public_account(world: &mut CucumberWorld) -> StepResult {
+    let context = world.lez()?;
+    let sender = context
+        .existing_public_accounts()
+        .await?
+        .into_iter()
+        .next()
+        .ok_or(StepError::MissingSelectedAccount)?;
+    let receiver = world
+        .environment
+        .new_public_account
+        .ok_or(StepError::MissingSelectedAccount)?;
+    let sender_initial_balance = context
+        .sequencer_client()
+        .get_account_balance(sender)
+        .await
+        .map_err(|error| StepError::QueryFailed {
+            message: error.to_string(),
+        })?;
+    let receiver_initial_balance = 0;
+    let sender_initial_nonce = context
+        .sequencer_client()
+        .get_accounts_nonces(vec![sender])
+        .await
+        .map_err(|error| StepError::QueryFailed {
+            message: error.to_string(),
+        })?
+        .into_iter()
+        .next()
+        .ok_or_else(|| StepError::QueryFailed {
+            message: format!("no nonce returned for sender {sender:?}"),
+        })?;
+    let transfer_hash = context
+        .public_transfer_to_new_account(sender, receiver, 100)
+        .await?;
 
     world.environment.transfer_sender = Some(sender);
     world.environment.transfer_receiver = Some(receiver);
@@ -358,6 +425,31 @@ async fn assert_receiver_balance_increased(world: &mut CucumberWorld) -> StepRes
         return Err(StepError::AssertionFailed {
             message: format!(
                 "receiver {receiver:?} has balance {observed_balance}, expected {expected_balance}"
+            ),
+        });
+    }
+    world.environment.receiver_observed_balance = Some(observed_balance);
+    Ok(())
+}
+
+#[then("the new account balance is 100")]
+async fn assert_new_account_balance(world: &mut CucumberWorld) -> StepResult {
+    let account = world
+        .environment
+        .new_public_account
+        .ok_or(StepError::MissingSelectedAccount)?;
+    let observed_balance = world
+        .lez()?
+        .sequencer_client()
+        .get_account_balance(account)
+        .await
+        .map_err(|error| StepError::QueryFailed {
+            message: error.to_string(),
+        })?;
+    if observed_balance != 100 {
+        return Err(StepError::AssertionFailed {
+            message: format!(
+                "new public account {account:?} has balance {observed_balance}, expected 100"
             ),
         });
     }
@@ -570,6 +662,57 @@ async fn assert_only_sender_signs(world: &mut CucumberWorld) -> StepResult {
     if signers != vec![&expected_sender] {
         return Err(StepError::AssertionFailed {
             message: format!("expected only sender {expected_sender:?} to sign, got {signers:?}"),
+        });
+    }
+    Ok(())
+}
+
+#[then("the sender and new account sign the transfer")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step functions require `&mut World` as the first parameter"
+)]
+async fn assert_sender_and_new_account_sign(world: &mut CucumberWorld) -> StepResult {
+    let sender = world
+        .environment
+        .transfer_sender
+        .ok_or(StepError::MissingTransfer)?;
+    let receiver = world
+        .environment
+        .new_public_account
+        .ok_or(StepError::MissingSelectedAccount)?;
+    let transfer_hash = world
+        .environment
+        .transfer_hash
+        .ok_or(StepError::MissingTransfer)?;
+    let context = world.lez()?;
+    let (transaction, _) = get_transfer_transaction(context, transfer_hash).await?;
+    let LeeTransaction::Public(transaction) = transaction else {
+        return Err(StepError::AssertionFailed {
+            message: "expected the transfer to be public".to_owned(),
+        });
+    };
+    let expected_sender =
+        expected_public_signing_key(sender).ok_or_else(|| StepError::QueryFailed {
+            message: format!("sender {sender:?} is not in the configured public accounts"),
+        })?;
+    let expected_receiver = context
+        .public_account_signing_key(receiver)
+        .await?
+        .ok_or_else(|| StepError::QueryFailed {
+            message: format!("new account {receiver:?} has no wallet signing key"),
+        })?;
+    let signers: Vec<_> = transaction
+        .witness_set()
+        .signatures_and_public_keys()
+        .iter()
+        .map(|(_, public_key)| public_key)
+        .collect();
+    if signers != vec![&expected_sender, &expected_receiver] {
+        return Err(StepError::AssertionFailed {
+            message: format!(
+                "expected sender {expected_sender:?} and new account {expected_receiver:?} to sign, got {signers:?}"
+            ),
         });
     }
     Ok(())

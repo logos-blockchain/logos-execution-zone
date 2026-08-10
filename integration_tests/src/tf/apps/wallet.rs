@@ -8,19 +8,20 @@ use std::{
 use anyhow::{Context as _, anyhow};
 use async_trait::async_trait;
 use common::HashType;
-use lee::{AccountId, PrivateKey};
+use lee::{AccountId, PrivateKey, PublicKey};
 use tempfile::TempDir;
 use testing_framework_app::{AppDeployment, AppHostEnv, DeployContext};
 use testing_framework_core::scenario::DynError;
 use tokio::sync::{mpsc, oneshot};
 use wallet::{
-    WalletCore,
+    AccountIdentity, WalletCore,
     account::AccountIdWithPrivacy,
     cli::{
         CliAccountMention, Command, SubcommandReturnValue,
         programs::native_token_transfer::AuthTransferSubcommand,
     },
     config::WalletConfigOverrides,
+    program_facades::native_token_transfer::NativeTokenTransfer,
 };
 
 use super::LezSequencerClient;
@@ -49,10 +50,23 @@ enum WalletRequest {
         account_id: AccountId,
         response: oneshot::Sender<Result<Option<u128>, String>>,
     },
+    PublicAccountSigningKey {
+        account_id: AccountId,
+        response: oneshot::Sender<Result<Option<PublicKey>, String>>,
+    },
     FirstPublicAccount {
         response: oneshot::Sender<Result<Option<AccountId>, String>>,
     },
     PublicTransfer {
+        from: AccountId,
+        to: AccountId,
+        amount: u128,
+        response: oneshot::Sender<Result<HashType, String>>,
+    },
+    NewPublicAccount {
+        response: oneshot::Sender<Result<AccountId, String>>,
+    },
+    PublicTransferToNewAccount {
         from: AccountId,
         to: AccountId,
         amount: u128,
@@ -116,6 +130,16 @@ impl WalletActor {
                                     .map(|account| account.balance);
                                 let _unused = response.send(Ok(balance));
                             }
+                            WalletRequest::PublicAccountSigningKey {
+                                account_id,
+                                response,
+                            } => {
+                                let public_key = components
+                                    .wallet
+                                    .get_account_public_signing_key(account_id)
+                                    .map(PublicKey::new_from_private_key);
+                                let _unused = response.send(Ok(public_key));
+                            }
                             WalletRequest::FirstPublicAccount { response } => {
                                 let account = components
                                     .wallet
@@ -166,6 +190,46 @@ impl WalletActor {
                                     }
                                 })
                                 .map_err(|error| error.to_string());
+                                let _unused = response.send(result);
+                            }
+                            WalletRequest::NewPublicAccount { response } => {
+                                let (account_id, _) =
+                                    components.wallet.create_new_account_public(None);
+                                let result = components
+                                    .wallet
+                                    .store_persistent_data()
+                                    .map(|()| account_id)
+                                    .map_err(|error| error.to_string());
+                                let _unused = response.send(result);
+                            }
+                            WalletRequest::PublicTransferToNewAccount {
+                                from,
+                                to,
+                                amount,
+                                response,
+                            } => {
+                                let result = async {
+                                    let tx_hash = NativeTokenTransfer(&components.wallet)
+                                        .send_public_transfer(
+                                            AccountIdentity::Public(from),
+                                            AccountIdentity::Public(to),
+                                            amount,
+                                        )
+                                        .await
+                                        .map_err(|error| anyhow!(error.to_string()))?;
+                                    components
+                                        .wallet
+                                        .poll_transaction(tx_hash)
+                                        .await
+                                        .map_err(|error| anyhow!(error.to_string()))?;
+                                    components
+                                        .wallet
+                                        .store_persistent_data()
+                                        .map_err(|error| anyhow!(error.to_string()))?;
+                                    Ok(tx_hash)
+                                }
+                                .await
+                                .map_err(|error: anyhow::Error| error.to_string());
                                 let _unused = response.send(result);
                             }
                             WalletRequest::WalletPassword { response } => {
@@ -256,6 +320,18 @@ impl LezRuntime {
         .await
     }
 
+    /// Returns the public signing key for an imported public account.
+    pub async fn public_account_signing_key(
+        &self,
+        account_id: AccountId,
+    ) -> Result<Option<PublicKey>, DynError> {
+        self.request(|response| WalletRequest::PublicAccountSigningKey {
+            account_id,
+            response,
+        })
+        .await
+    }
+
     /// Returns the password used to open the test wallet.
     pub async fn wallet_password(&self) -> Result<String, DynError> {
         self.request(|response| WalletRequest::WalletPassword { response })
@@ -270,6 +346,28 @@ impl LezRuntime {
         amount: u128,
     ) -> Result<HashType, DynError> {
         self.request(|response| WalletRequest::PublicTransfer {
+            from,
+            to,
+            amount,
+            response,
+        })
+        .await
+    }
+
+    /// Creates and persists a fresh public account in the wallet.
+    pub async fn new_public_account(&self) -> Result<AccountId, DynError> {
+        self.request(|response| WalletRequest::NewPublicAccount { response })
+            .await
+    }
+
+    /// Executes a public transfer that claims a fresh recipient account.
+    pub async fn public_transfer_to_new_account(
+        &self,
+        from: AccountId,
+        to: AccountId,
+        amount: u128,
+    ) -> Result<HashType, DynError> {
+        self.request(|response| WalletRequest::PublicTransferToNewAccount {
             from,
             to,
             amount,

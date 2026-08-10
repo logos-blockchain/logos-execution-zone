@@ -124,6 +124,19 @@ impl LezScenarioContext {
             })
     }
 
+    /// Returns the public signing key for an imported public account.
+    pub async fn public_account_signing_key(
+        &self,
+        account_id: AccountId,
+    ) -> Result<Option<lee::PublicKey>, StepError> {
+        self.wallet
+            .public_account_signing_key(account_id)
+            .await
+            .map_err(|error| StepError::QueryFailed {
+                message: error.to_string(),
+            })
+    }
+
     /// Executes an authenticated transfer between two owned public accounts.
     pub async fn public_transfer(
         &self,
@@ -133,6 +146,31 @@ impl LezScenarioContext {
     ) -> Result<HashType, StepError> {
         self.wallet
             .public_transfer(from, to, amount)
+            .await
+            .map_err(|error| StepError::QueryFailed {
+                message: error.to_string(),
+            })
+    }
+
+    /// Creates a fresh public account in the scenario wallet.
+    pub async fn new_public_account(&self) -> Result<AccountId, StepError> {
+        self.wallet
+            .new_public_account()
+            .await
+            .map_err(|error| StepError::QueryFailed {
+                message: error.to_string(),
+            })
+    }
+
+    /// Executes an authenticated transfer that claims a fresh public account.
+    pub async fn public_transfer_to_new_account(
+        &self,
+        from: AccountId,
+        to: AccountId,
+        amount: u128,
+    ) -> Result<HashType, StepError> {
+        self.wallet
+            .public_transfer_to_new_account(from, to, amount)
             .await
             .map_err(|error| StepError::QueryFailed {
                 message: error.to_string(),
