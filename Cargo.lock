@@ -1330,9 +1330,15 @@ name = "cacp_demo"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "authenticated_transfer_core",
  "cross_zone",
+ "lee",
  "logos-blockchain-core",
  "logos-blockchain-key-management-system-service",
+ "programs",
+ "serde",
+ "testnet_initial_state",
+ "vault_core",
 ]
 
 [[package]]

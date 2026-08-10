@@ -6,9 +6,10 @@
 use anyhow::{Context as _, Result, ensure};
 use cross_zone::cacp::{
     BedrockError, BedrockModel, ChannelParent, CounterpartySession, CrossZoneIntent,
-    InitiatorSession, InscribeIntent, Phase, SubmissionResult, SubmittedBy, TimeoutOutcome,
-    TwoZoneTopology, ZoneSequencer,
+    CustodialBondTerms, InitiatorSession, InscribeIntent, Phase, SubmissionResult, SubmittedBy,
+    TimeoutOutcome, TwoZoneTopology, ZoneSequencer,
 };
+use lee::{AccountId, PrivateKey, PublicKey, PublicTransaction, V03State, public_transaction};
 use logos_blockchain_core::mantle::{
     ops::{
         Op,
@@ -18,26 +19,35 @@ use logos_blockchain_core::mantle::{
 };
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
 
+const STAKE_AMOUNT: u128 = 1_000;
+
 struct Fixture {
     key_a: Ed25519Key,
     key_b: Ed25519Key,
     intent: CrossZoneIntent,
     topology: TwoZoneTopology,
     parents: [ChannelParent; 2],
+    lee_account_a: AccountId,
+    lee_key_a: PrivateKey,
+    lee_account_b: AccountId,
+    lee_key_b: PrivateKey,
+    bond_enforcer: AccountId,
+    bond_enforcer_key: PrivateKey,
 }
 
 fn main() -> Result<()> {
-    println!("CACP reference-model demo");
+    println!("CACP + externally enforced bond demo");
     println!("Scope: 1 Bedrock | 2 zones | 1 sequencer per zone | 2 ChannelInscribe ops");
-    println!("Note: inscriptions carry data; they do not enforce stake custody or forfeiture.\n");
+    println!("Note: inscriptions carry data; LEZ public-account programs enforce the bond.\n");
 
     let fixture = fixture()?;
     happy_path(&fixture)?;
     counterparty_fallback(&fixture)?;
     safe_pre_phase_three_abort(&fixture)?;
     stale_parent_atomic_rejection(&fixture)?;
+    public_account_stake_forfeiture(&fixture)?;
 
-    println!("\nALL 4 CACP SCENARIOS PASSED");
+    println!("\nALL 5 CACP SCENARIOS PASSED");
     Ok(())
 }
 
@@ -46,6 +56,12 @@ fn fixture() -> Result<Fixture> {
     let key_b = Ed25519Key::from_bytes(&[0xB2; 32]);
     let channel_a = ChannelId::from([1; 32]);
     let channel_b = ChannelId::from([2; 32]);
+    let [lee_a, lee_b] =
+        <[_; 2]>::try_from(testnet_initial_state::initial_pub_accounts_private_keys())
+            .map_err(|_keys| anyhow::anyhow!("testnet must expose exactly two public accounts"))?;
+    let bond_enforcer_key = PrivateKey::try_new([0xC3; 32])
+        .map_err(|error| anyhow::anyhow!("invalid bond enforcer key: {error}"))?;
+    let bond_enforcer = AccountId::from(&PublicKey::new_from_private_key(&bond_enforcer_key));
     let intent = CrossZoneIntent::new(
         [
             InscribeIntent {
@@ -58,7 +74,11 @@ fn fixture() -> Result<Fixture> {
             },
         ],
         7,
-    )?;
+    )?
+    .with_custodial_bond(CustodialBondTerms {
+        enforcer_account_id: bond_enforcer,
+        stake_amount: STAKE_AMOUNT,
+    })?;
     let topology = TwoZoneTopology::new(
         ZoneSequencer {
             channel_id: channel_a,
@@ -86,6 +106,12 @@ fn fixture() -> Result<Fixture> {
         intent,
         topology,
         parents,
+        lee_account_a: lee_a.account_id,
+        lee_key_a: lee_a.pub_sign_key,
+        lee_account_b: lee_b.account_id,
+        lee_key_b: lee_b.pub_sign_key,
+        bond_enforcer,
+        bond_enforcer_key,
     })
 }
 
@@ -233,6 +259,178 @@ fn stale_parent_atomic_rejection(fixture: &Fixture) -> Result<()> {
     Ok(())
 }
 
+fn public_account_stake_forfeiture(fixture: &Fixture) -> Result<()> {
+    heading(5, "real public-account stakes; Sequencer A forfeits");
+    let terms = fixture
+        .intent
+        .custodial_bond()
+        .context("the CACP proposal must bind its external bond terms")?;
+    ensure!(terms.enforcer_account_id == fixture.bond_enforcer);
+    ensure!(terms.stake_amount == STAKE_AMOUNT);
+
+    let mut state = testnet_initial_state::initial_state();
+    let vault_id =
+        vault_core::compute_vault_account_id(programs::vault().id(), fixture.bond_enforcer);
+    let balance_a_before = state.get_account_by_id(fixture.lee_account_a).balance;
+    let balance_b_before = state.get_account_by_id(fixture.lee_account_b).balance;
+    let balance_a_after_deposit = balance_a_before
+        .checked_sub(STAKE_AMOUNT)
+        .context("Sequencer A must be able to fund its stake")?;
+    let balance_b_after_deposit = balance_b_before
+        .checked_sub(STAKE_AMOUNT)
+        .context("Sequencer B must be able to fund its stake")?;
+    let balance_b_after_forfeit = balance_b_before
+        .checked_add(STAKE_AMOUNT)
+        .context("Sequencer B's compensated balance must not overflow")?;
+    let total_stake = STAKE_AMOUNT
+        .checked_mul(2)
+        .context("the combined stake must not overflow")?;
+
+    apply_lee_tx(
+        &mut state,
+        &vault_deposit(
+            fixture.lee_account_a,
+            &fixture.lee_key_a,
+            fixture.bond_enforcer,
+            0,
+            STAKE_AMOUNT,
+        )?,
+        1,
+    )?;
+    apply_lee_tx(
+        &mut state,
+        &vault_deposit(
+            fixture.lee_account_b,
+            &fixture.lee_key_b,
+            fixture.bond_enforcer,
+            0,
+            STAKE_AMOUNT,
+        )?,
+        2,
+    )?;
+
+    ensure!(state.get_account_by_id(fixture.lee_account_a).balance == balance_a_after_deposit);
+    ensure!(state.get_account_by_id(fixture.lee_account_b).balance == balance_b_after_deposit);
+    ensure!(state.get_account_by_id(vault_id).balance == total_stake);
+
+    let unauthorized = vault_claim(fixture.bond_enforcer, &fixture.lee_key_a, 0, total_stake)?;
+    ensure!(
+        state
+            .transition_from_public_transaction(&unauthorized, 3, 3)
+            .is_err(),
+        "a sequencer must not be able to claim the external enforcer's vault"
+    );
+    ensure!(state.get_account_by_id(vault_id).balance == total_stake);
+
+    apply_lee_tx(
+        &mut state,
+        &vault_claim(
+            fixture.bond_enforcer,
+            &fixture.bond_enforcer_key,
+            0,
+            total_stake,
+        )?,
+        4,
+    )?;
+    apply_lee_tx(
+        &mut state,
+        &native_transfer(
+            fixture.bond_enforcer,
+            &fixture.bond_enforcer_key,
+            fixture.lee_account_b,
+            1,
+            total_stake,
+        )?,
+        5,
+    )?;
+
+    ensure!(state.get_account_by_id(vault_id).balance == 0);
+    ensure!(state.get_account_by_id(fixture.bond_enforcer).balance == 0);
+    ensure!(state.get_account_by_id(fixture.lee_account_a).balance == balance_a_after_deposit);
+    ensure!(state.get_account_by_id(fixture.lee_account_b).balance == balance_b_after_forfeit);
+
+    println!("  A and B each deposited {STAKE_AMOUNT} native units from signed public accounts");
+    println!("  The LEZ vault rejected A's unauthorized claim");
+    println!("  External resolver paid both stakes to B after A's attributed abort");
+    println!("  PASS: A lost 1000; B gained 1000; escrow and resolver ended at zero");
+    Ok(())
+}
+
+fn vault_deposit(
+    sender: AccountId,
+    signing_key: &PrivateKey,
+    enforcer: AccountId,
+    nonce: u128,
+    amount: u128,
+) -> Result<PublicTransaction> {
+    let vault_id = vault_core::compute_vault_account_id(programs::vault().id(), enforcer);
+    signed_lee_tx(
+        programs::vault().id(),
+        vec![sender, vault_id],
+        nonce,
+        vault_core::Instruction::Transfer {
+            recipient_id: enforcer,
+            amount,
+        },
+        signing_key,
+    )
+}
+
+fn vault_claim(
+    enforcer: AccountId,
+    signing_key: &PrivateKey,
+    nonce: u128,
+    amount: u128,
+) -> Result<PublicTransaction> {
+    let vault_id = vault_core::compute_vault_account_id(programs::vault().id(), enforcer);
+    signed_lee_tx(
+        programs::vault().id(),
+        vec![enforcer, vault_id],
+        nonce,
+        vault_core::Instruction::Claim { amount },
+        signing_key,
+    )
+}
+
+fn native_transfer(
+    sender: AccountId,
+    signing_key: &PrivateKey,
+    recipient: AccountId,
+    nonce: u128,
+    amount: u128,
+) -> Result<PublicTransaction> {
+    signed_lee_tx(
+        programs::authenticated_transfer().id(),
+        vec![sender, recipient],
+        nonce,
+        authenticated_transfer_core::Instruction::Transfer { amount },
+        signing_key,
+    )
+}
+
+fn signed_lee_tx<I: serde::Serialize>(
+    program_id: lee::ProgramId,
+    account_ids: Vec<AccountId>,
+    nonce: u128,
+    instruction: I,
+    signing_key: &PrivateKey,
+) -> Result<PublicTransaction> {
+    let message = public_transaction::Message::try_new(
+        program_id,
+        account_ids,
+        vec![nonce.into()],
+        instruction,
+    )?;
+    let witness = public_transaction::WitnessSet::for_message(&message, &[signing_key]);
+    Ok(PublicTransaction::new(message, witness))
+}
+
+fn apply_lee_tx(state: &mut V03State, tx: &PublicTransaction, block_id: u64) -> Result<()> {
+    state
+        .transition_from_public_transaction(tx, block_id, block_id)
+        .map_err(|error| anyhow::anyhow!("LEE rejected bond transaction: {error}"))
+}
+
 fn heading(number: u8, title: &str) {
-    println!("[{number}/4] {title}");
+    println!("[{number}/5] {title}");
 }
