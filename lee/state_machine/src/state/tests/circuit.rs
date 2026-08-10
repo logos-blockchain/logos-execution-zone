@@ -815,6 +815,64 @@ fn inherited_scope_passes_through_intermediate_calls() {
     );
 }
 
+fn undeclaring_delegation(delegated: bool, external_binding: bool) -> Result<(), LeeError> {
+    let delegator = crate::test_methods::undeclaring_pda_delegator();
+    let callee = crate::test_methods::auth_asserting_noop();
+    let keys = test_private_account_keys_1();
+    let npk = keys.npk();
+    let seed = PdaSeed::new([77; 32]);
+
+    let delegator_id = delegator.id();
+    let account_id = AccountId::for_private_pda(&delegator_id, &seed, &npk, &keys.vpk(), 0);
+    let pre_state = AccountWithMetadata::new(Account::default(), false, account_id);
+
+    let callee_id = callee.id();
+    let program_with_deps = ProgramWithDependencies::new(delegator, [(callee_id, callee)].into());
+
+    execute_and_prove(
+        vec![pre_state],
+        Program::serialize_instruction((
+            delegated.then_some(seed),
+            callee_id,
+            Program::serialize_instruction(()).unwrap(),
+        ))
+        .unwrap(),
+        vec![InputAccountIdentity::Private(PrivateWitness {
+            vpk: keys.vpk(),
+            random_seed: [0; 32],
+            identifier: 0,
+            kind: WitnessKind::Pda {
+                binding: external_binding.then_some((delegator_id, seed)),
+            },
+            nullifier: NullifierWitness::Init {
+                npk,
+                commitment_root: DUMMY_COMMITMENT_HASH,
+            },
+        })],
+        &program_with_deps,
+    )
+    .map(|_| ())
+}
+
+#[test]
+fn delegated_private_pda_first_seen_in_callee_is_authorized() {
+    undeclaring_delegation(true, true)
+        .expect("a caller's pda_seeds must authorize a private PDA it delegates at first sight");
+}
+
+#[test]
+fn caller_seeds_bind_a_private_pda_first_seen_in_the_callee() {
+    undeclaring_delegation(true, false)
+        .expect("a caller's pda_seeds must bind a private PDA it delegates at first sight");
+}
+
+#[test]
+fn undelegated_private_pda_in_a_callee_may_not_declare_authorization() {
+    let result = undeclaring_delegation(false, true);
+
+    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+}
+
 /// Exploit-scenario pin. A single `(program_id, seed)` pair can derive a family of
 /// `AccountId`s, one public PDA and one private PDA per distinct npk. Without the tx-wide
 /// family-binding check, a program could claim `PDA_alice` (`alice_npk`) and
@@ -891,15 +949,13 @@ fn private_pda_top_level_reuse_rejected_by_binding_check() {
     let npk = keys.npk();
     let seed = PdaSeed::new([99; 32]);
 
-    // Simulate a previously-claimed private PDA: program_owner != DEFAULT, is_authorized =
-    // true, account_id derived via the private formula.
     let account_id = AccountId::for_private_pda(&program.id(), &seed, &npk, &keys.vpk(), u128::MAX);
     let owned_pre_state = AccountWithMetadata::new(
         Account {
             program_owner: program.id(),
             ..Account::default()
         },
-        true,
+        false,
         account_id,
     );
 
@@ -1354,7 +1410,7 @@ fn two_private_pda_family_members_receive_and_spend() {
         let recipient_account = state.get_account_by_id(recipient_id);
         let (output, proof) = execute_and_prove(
             vec![
-                AccountWithMetadata::new(alice_pda_0_account, true, alice_pda_0_id),
+                AccountWithMetadata::new(alice_pda_0_account, false, alice_pda_0_id),
                 AccountWithMetadata::new(recipient_account, true, recipient_id),
             ],
             Program::serialize_instruction((seed, amount, simple_transfer_id)).unwrap(),
@@ -1393,7 +1449,7 @@ fn two_private_pda_family_members_receive_and_spend() {
         let recipient_account = state.get_account_by_id(recipient_id);
         let (output, proof) = execute_and_prove(
             vec![
-                AccountWithMetadata::new(alice_pda_1_account.clone(), true, alice_pda_1_id),
+                AccountWithMetadata::new(alice_pda_1_account.clone(), false, alice_pda_1_id),
                 AccountWithMetadata::new(recipient_account, false, recipient_id),
             ],
             Program::serialize_instruction((seed, amount, simple_transfer_id)).unwrap(),

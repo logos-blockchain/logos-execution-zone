@@ -51,7 +51,7 @@ fn main() {
         let recipient_post = AccountPostState::new(recipient_pre.account.clone());
 
         // Chain to simple_transfer with pda_seeds to authorize the PDA.
-        // The circuit's resolve_authorization_and_record_bindings establishes the
+        // The circuit's assert_authorization_and_record_bindings establishes the
         // private PDA (seed, npk) binding when pda_seeds match the private PDA derivation.
         let mut auth_pda_pre = pda_pre;
         auth_pda_pre.is_authorized = true;
