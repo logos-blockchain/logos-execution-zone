@@ -10,12 +10,19 @@ workspace = true
 
 [dependencies]
 anyhow.workspace = true
-authenticated_transfer_core.workspace = true
+cacp_bond_core.workspace = true
+clock_core.workspace = true
+common.workspace = true
 cross_zone.workspace = true
 lee.workspace = true
 logos-blockchain-core.workspace = true
+logos-blockchain-http-api-common.workspace = true
 logos-blockchain-key-management-system-service.workspace = true
+logos-blockchain-zone-sdk.workspace = true
 programs.workspace = true
-serde.workspace = true
+sequencer_service.workspace = true
+sequencer_service_rpc = { workspace = true, features = ["client"] }
+tempfile.workspace = true
 testnet_initial_state.workspace = true
-vault_core.workspace = true
+test_fixtures.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

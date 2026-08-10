@@ -226,6 +226,7 @@ fn initial_programs() -> Vec<Program> {
         programs::clock(),
         programs::ata(),
         programs::vault(),
+        programs::cacp_bond(),
         programs::faucet(),
         programs::bridge(),
         programs::sequencer_stake(),

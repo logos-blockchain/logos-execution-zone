@@ -21,6 +21,7 @@ cross_zone_marker_core.workspace = true
 bridge_lock_core.workspace = true
 ping_core.workspace = true
 wrapped_token_core.workspace = true
+cacp_bond_core.workspace = true
 serde.workspace = true
 risc0-zkvm.workspace = true
 hex.workspace = true

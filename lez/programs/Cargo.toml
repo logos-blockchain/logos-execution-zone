@@ -55,6 +55,11 @@ path = "vault/src/main.rs"
 required-features = ["programs"]
 
 [[bin]]
+name = "cacp_bond"
+path = "cacp_bond/src/main.rs"
+required-features = ["programs"]
+
+[[bin]]
 name = "cross_zone_outbox"
 path = "cross_zone_outbox/src/main.rs"
 required-features = ["programs"]
@@ -113,6 +118,8 @@ programs = [
   "dep:faucet_core",
   "dep:token_core",
   "dep:vault_core",
+  "dep:cacp_bond_core",
+  "dep:ed25519-dalek",
   "dep:cross_zone_inbox_core",
   "dep:cross_zone_marker_core",
   "dep:cross_zone_outbox_core",
@@ -134,6 +141,8 @@ clock_core = { workspace = true, optional = true }
 faucet_core = { workspace = true, optional = true }
 token_core = { workspace = true, optional = true }
 vault_core = { workspace = true, optional = true }
+cacp_bond_core = { workspace = true, optional = true }
+ed25519-dalek = { workspace = true, optional = true }
 cross_zone_inbox_core = { workspace = true, optional = true }
 cross_zone_marker_core = { workspace = true, optional = true }
 cross_zone_outbox_core = { workspace = true, optional = true }

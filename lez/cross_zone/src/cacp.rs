@@ -1,10 +1,3 @@
-//! Two-sequencer CACP reference implementation for L1 channel inscriptions.
-//!
-//! This module coordinates and validates one joint Mantle transaction.
-//! `ChannelInscribe` payloads remain data, not executable bond operations. An
-//! intent may bind terms for a separately executed custodial bond, but custody
-//! and settlement must happen in that external execution environment.
-
 use std::collections::{HashMap, HashSet};
 
 use logos_blockchain_core::mantle::{
@@ -32,15 +25,14 @@ pub struct InscribeIntent {
     pub payload: Vec<u8>,
 }
 
-/// Economic terms enforced outside Bedrock by an explicitly named custodian.
-///
-/// The enforcer is a LEE public account. Binding it into the proposal does not
-/// make inscriptions executable; it lets both sequencers agree which separate
-/// custody flow and stake amount belong to this CACP run.
+/// Economic terms executed by the neutral LEZ bond zone.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct CustodialBondTerms {
-    pub enforcer_account_id: lee::AccountId,
+pub struct CostlyAbortBondTerms {
+    pub bond_zone: ChannelId,
+    pub bond_program_id: lee::ProgramId,
     pub stake_amount: u128,
+    pub challenge_bond: u128,
+    pub response_window_blocks: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -48,7 +40,7 @@ pub struct CrossZoneIntent {
     version: u8,
     operations: [InscribeIntent; PARTICIPANT_COUNT],
     nonce: u64,
-    custodial_bond: Option<CustodialBondTerms>,
+    costly_abort_bond: Option<CostlyAbortBondTerms>,
 }
 
 impl CrossZoneIntent {
@@ -77,16 +69,20 @@ impl CrossZoneIntent {
             version: INTENT_VERSION,
             operations,
             nonce,
-            custodial_bond: None,
+            costly_abort_bond: None,
         })
     }
 
-    /// Binds a separately executed custodial bond to this proposal.
-    pub fn with_custodial_bond(mut self, terms: CustodialBondTerms) -> Result<Self, CacpError> {
-        if terms.stake_amount == 0 {
-            return Err(CacpError::ZeroStake);
+    /// Binds a separately executed neutral-zone bond to this proposal.
+    pub fn with_costly_abort_bond(
+        mut self,
+        terms: CostlyAbortBondTerms,
+    ) -> Result<Self, CacpError> {
+        if terms.stake_amount == 0 || terms.challenge_bond == 0 || terms.response_window_blocks == 0
+        {
+            return Err(CacpError::InvalidBondTerms);
         }
-        self.custodial_bond = Some(terms);
+        self.costly_abort_bond = Some(terms);
         Ok(self)
     }
 
@@ -106,8 +102,8 @@ impl CrossZoneIntent {
     }
 
     #[must_use]
-    pub const fn custodial_bond(&self) -> Option<CustodialBondTerms> {
-        self.custodial_bond
+    pub const fn costly_abort_bond(&self) -> Option<CostlyAbortBondTerms> {
+        self.costly_abort_bond
     }
 
     /// Fixed-field-order encoding used to identify one CACP proposal.
@@ -124,10 +120,15 @@ impl CrossZoneIntent {
             bytes.extend_from_slice(&operation.payload);
         }
         bytes.extend_from_slice(&self.nonce.to_le_bytes());
-        if let Some(terms) = self.custodial_bond {
-            bytes.extend_from_slice(b"/CACP/CustodialBond/v1/");
-            bytes.extend_from_slice(terms.enforcer_account_id.as_ref());
+        if let Some(terms) = self.costly_abort_bond {
+            bytes.extend_from_slice(b"/CACP/CostlyAbortBond/v1/");
+            bytes.extend_from_slice(terms.bond_zone.as_ref());
+            for word in terms.bond_program_id {
+                bytes.extend_from_slice(&word.to_le_bytes());
+            }
             bytes.extend_from_slice(&terms.stake_amount.to_le_bytes());
+            bytes.extend_from_slice(&terms.challenge_bond.to_le_bytes());
+            bytes.extend_from_slice(&terms.response_window_blocks.to_le_bytes());
         }
         bytes
     }
@@ -201,6 +202,8 @@ pub struct Propose {
 pub struct Accept {
     pub tx: MantleTx,
     pub counterparty_proof: Ed25519Signature,
+    /// Proof for the optional Bedrock fee operation appended by the node wallet.
+    pub funding_proof: Option<OpProof>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -287,6 +290,7 @@ impl InitiatorSession {
             &self.topology,
             initiator_proof,
             accept.counterparty_proof,
+            accept.funding_proof,
         )?;
         let signed_tx = SignedMantleTx::new(accept.tx, proofs);
         signed_tx
@@ -370,6 +374,46 @@ impl CounterpartySession {
         Ok(Accept {
             tx,
             counterparty_proof: proof,
+            funding_proof: None,
+        })
+    }
+
+    /// Accepts a node-funded form of the joint transaction. The first two
+    /// operations must be the exact CACP inscriptions; the only permitted
+    /// additional operation is the final fee transfer supplied by Bedrock's
+    /// wallet endpoint.
+    pub fn receive_funded_propose(
+        &mut self,
+        propose: &Propose,
+        funded_tx: MantleTx,
+        funding_proof: OpProof,
+        signing_key: &Ed25519Key,
+    ) -> Result<Accept, CacpError> {
+        if self.phase != Phase::WaitingForAccept {
+            return Err(CacpError::UnexpectedPhase);
+        }
+        if propose.intent != self.expected_intent {
+            return Err(CacpError::IntentMismatch);
+        }
+        require_key(signing_key, &self.topology.counterparty)?;
+        validate_joint_tx(
+            &funded_tx,
+            &self.expected_intent,
+            &self.topology,
+            &self.parents,
+        )?;
+        if funded_tx.ops().len() != PARTICIPANT_COUNT + 1
+            || !matches!(funded_tx.ops().last(), Some(Op::Transfer(_)))
+        {
+            return Err(CacpError::InvalidJointTransaction);
+        }
+        let proof = signing_key.sign_payload(funded_tx.hash().as_signing_bytes().as_ref());
+        self.phase = Phase::WaitingForFinalize;
+        self.accepted_tx = Some(funded_tx.clone());
+        Ok(Accept {
+            tx: funded_tx,
+            counterparty_proof: proof,
+            funding_proof: Some(funding_proof),
         })
     }
 
@@ -532,8 +576,8 @@ pub enum CacpError {
     EmptyInscription,
     #[error("an inscription exceeds the Mantle bound")]
     InscriptionTooLarge,
-    #[error("a custodial bond stake must be greater than zero")]
-    ZeroStake,
+    #[error("stake, challenge bond, and response window must all be greater than zero")]
+    InvalidBondTerms,
     #[error("the intent does not match the fixed two-zone topology")]
     TopologyMismatch,
     #[error("a channel parent is missing")]
@@ -548,7 +592,9 @@ pub enum CacpError {
     WrongSequencerKey,
     #[error("the counterparty signature is invalid")]
     InvalidCounterpartyProof,
-    #[error("the joint transaction is not exactly two channel inscriptions")]
+    #[error(
+        "the joint transaction must contain two inscriptions and at most one final fee transfer"
+    )]
     InvalidJointTransaction,
     #[error("the fully signed transaction is invalid")]
     InvalidSignedTransaction,
@@ -607,11 +653,20 @@ fn validate_joint_tx(
     parents: &[ChannelParent; PARTICIPANT_COUNT],
 ) -> Result<(), CacpError> {
     let expected = build_joint_tx(intent, topology, parents)?;
-    if *tx == expected {
-        Ok(())
-    } else {
-        Err(CacpError::TransactionMismatch)
+    let expected_ops = expected.ops();
+    let actual_ops = tx.ops();
+    if actual_ops.len() < PARTICIPANT_COUNT || actual_ops.len() > PARTICIPANT_COUNT + 1 {
+        return Err(CacpError::TransactionMismatch);
     }
+    if actual_ops[..PARTICIPANT_COUNT] != expected_ops[..] {
+        return Err(CacpError::TransactionMismatch);
+    }
+    if actual_ops.len() == PARTICIPANT_COUNT + 1
+        && !matches!(actual_ops.last(), Some(Op::Transfer(_)))
+    {
+        return Err(CacpError::TransactionMismatch);
+    }
+    Ok(())
 }
 
 fn proofs_in_operation_order(
@@ -619,6 +674,7 @@ fn proofs_in_operation_order(
     topology: &TwoZoneTopology,
     initiator_proof: Ed25519Signature,
     counterparty_proof: Ed25519Signature,
+    funding_proof: Option<OpProof>,
 ) -> Result<OpsProofs, CacpError> {
     #[expect(
         clippy::wildcard_enum_match_arm,
@@ -638,6 +694,9 @@ fn proofs_in_operation_order(
             {
                 Ok(OpProof::Ed25519Sig(counterparty_proof))
             }
+            Op::Transfer(_) => funding_proof
+                .clone()
+                .ok_or(CacpError::InvalidJointTransaction),
             _ => Err(CacpError::InvalidJointTransaction),
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -735,42 +794,46 @@ mod tests {
     }
 
     #[test]
-    fn custodial_bond_terms_are_bound_to_the_proposal() {
+    fn costly_abort_bond_terms_are_bound_to_the_proposal() {
         let fixture = fixture();
+        let terms = CostlyAbortBondTerms {
+            bond_zone: ChannelId::from([9; 32]),
+            bond_program_id: [7; 8],
+            stake_amount: 1_000,
+            challenge_bond: 100,
+            response_window_blocks: 4,
+        };
         let first = fixture
             .intent
             .clone()
-            .with_custodial_bond(CustodialBondTerms {
-                enforcer_account_id: lee::AccountId::new([9; 32]),
-                stake_amount: 1_000,
-            })
+            .with_costly_abort_bond(terms)
             .unwrap();
         let different_amount = fixture
             .intent
             .clone()
-            .with_custodial_bond(CustodialBondTerms {
-                enforcer_account_id: lee::AccountId::new([9; 32]),
+            .with_costly_abort_bond(CostlyAbortBondTerms {
                 stake_amount: 2_000,
+                ..terms
             })
             .unwrap();
-        let different_enforcer = fixture
+        let different_zone = fixture
             .intent
             .clone()
-            .with_custodial_bond(CustodialBondTerms {
-                enforcer_account_id: lee::AccountId::new([8; 32]),
-                stake_amount: 1_000,
+            .with_costly_abort_bond(CostlyAbortBondTerms {
+                bond_zone: ChannelId::from([8; 32]),
+                ..terms
             })
             .unwrap();
 
         assert_ne!(first.proposal_id(), fixture.intent.proposal_id());
         assert_ne!(first.proposal_id(), different_amount.proposal_id());
-        assert_ne!(first.proposal_id(), different_enforcer.proposal_id());
+        assert_ne!(first.proposal_id(), different_zone.proposal_id());
         assert!(matches!(
-            fixture.intent.with_custodial_bond(CustodialBondTerms {
-                enforcer_account_id: lee::AccountId::new([9; 32]),
+            fixture.intent.with_costly_abort_bond(CostlyAbortBondTerms {
                 stake_amount: 0,
+                ..terms
             }),
-            Err(CacpError::ZeroStake)
+            Err(CacpError::InvalidBondTerms)
         ));
     }
 

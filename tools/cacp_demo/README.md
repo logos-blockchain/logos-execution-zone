@@ -1,63 +1,56 @@
-# CACP demo
+# CACP + costly-abort live demo
 
-This command runs a presentation-oriented reference model for the locked demo
-scope:
+This command boots a real local multi-process LEZ development network:
 
-- one in-memory Bedrock model;
-- two distinct zones, each with one sequencer key;
-- one joint Mantle transaction containing exactly two `ChannelInscribe`
-  operations;
-- no bridge, application token, ping, indexer, web UI, or ZK flow;
-- one external LEZ custody step using existing native public-account balances,
-  `authenticated_transfer`, and `vault`.
+- one Bedrock Docker node;
+- participant Zone A with its own sequencer and channel;
+- participant Zone B with its own sequencer and channel;
+- a third, neutral LEZ execution zone for the `cacp_bond` program;
+- no bridge, application token, ping, indexer, web UI, or proof generation.
 
-It is not a live Bedrock node or a pair of running sequencer services. The
-binary exercises the real Mantle transaction and signature types through the
-`cross_zone` CACP state machines and an in-memory atomic Bedrock model.
+The joint Bedrock transaction has exactly two business operations, both
+`ChannelInscribe`. Bedrock's wallet appends one `Transfer` operation to pay the
+real transaction fee. The CACP implementation rejects every other shape.
 
-## Real token commitment and its boundary
+## What changed from the reference model
 
-The fifth scenario executes real LEZ public transactions. Each sequencer signs
-a transfer from its funded public account into a vault PDA controlled by an
-external resolver. LEZ execution decreases both public balances, increases the
-vault balance, rejects a claim signed by a sequencer instead of the resolver,
-and finally transfers the forfeited stake to the honest counterparty.
+The stakes now come from two funded LEZ public accounts. They are transferred
+through sequencer JSON-RPC into a proposal-specific escrow PDA owned through
+the `cacp_bond` program. Challenges, response deadlines, Ed25519 evidence and
+payouts execute inside the neutral zone. There is no resolver/custodian private
+key that can choose a winner or seize escrow.
 
-This does not make the inscriptions executable. The CACP intent commits to the
-external enforcer account and stake amount, while custody and settlement are
-separate LEE transactions. The demo's resolver is explicitly trusted to map an
-abort to the correct payout. Replacing that trust with on-chain challenge rules
-and authenticated Bedrock-inclusion evidence remains an integration task.
+The program verifies the signatures and commitments that identify which party
+failed before Phase 3. After Phase 3, both parties possess the same fully signed
+Bedrock transaction, so the protocol outcome is fallback submission rather
+than abort. The demo checks actual Bedrock channel tips to confirm inclusion.
+
+This is a real local devnet, not an externally hosted public testnet. It spends
+only deterministic development funds created by the local fixtures.
 
 ## Run
 
-From the repository root:
+Docker must be running. From the repository root:
 
 ```console
 just demo-cacp
 ```
 
-The command exits unsuccessfully if any stated invariant fails. A successful
-run ends with:
+A successful run ends with:
 
 ```text
-ALL 5 CACP SCENARIOS PASSED
+ALL 5 LIVE CACP SCENARIOS PASSED
 ```
 
-## Expected scenarios
+## Scenarios
 
-1. **Happy path:** A proposes, B accepts, A finalizes, and Bedrock includes one
-   jointly signed transaction with two inscriptions.
-2. **B fallback after Phase 3:** once both signatures exist, B can submit the
-   same transaction if A stalls; a later duplicate submission is idempotent.
-3. **Safe abort before Phase 3:** a timeout before both signatures exist leaves
-   no submittable transaction and advances neither channel.
-4. **Stale-parent rejection:** a stale parent on either inscription rejects the
-   entire joint transaction, so neither channel tip changes.
-5. **Real public-account forfeiture:** A and B each deposit 1,000 native units
-   through the LEZ vault program. A cannot reclaim the resolver's PDA. After an
-   externally attributed abort by A, B receives both deposits, leaving A down
-   1,000 and B up 1,000.
-
-For a live presentation, run the single command and read each `PASS` line as
-the expected result for that scenario.
+1. Happy path: A submits the jointly signed, fee-funded transaction and both
+   participant channel tips advance.
+2. Phase-3 fallback: A stalls; B submits the identical retained transaction.
+3. Pre-Phase-3 safe abort: no fully signed transaction exists and neither tip
+   advances.
+4. Stale parent: A's parent advances first; Bedrock rejects the old joint
+   transaction atomically, including B's otherwise-current inscription.
+5. Costly abort: the neutral `cacp_bond` program executes both attributed
+   cases—B withholds ACCEPT and A withholds FINALIZE—and transfers escrow to
+   the honest public account after the challenge window expires.

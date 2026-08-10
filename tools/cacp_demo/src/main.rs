@@ -1,436 +1,683 @@
-#![allow(
-    clippy::print_stdout,
-    reason = "this presentation binary intentionally reports each checked scenario"
-)]
+#![allow(clippy::print_stdout, reason = "the demo reports verified scenarios")]
+
+use std::time::Duration;
 
 use anyhow::{Context as _, Result, ensure};
-use cross_zone::cacp::{
-    BedrockError, BedrockModel, ChannelParent, CounterpartySession, CrossZoneIntent,
-    CustodialBondTerms, InitiatorSession, InscribeIntent, Phase, SubmissionResult, SubmittedBy,
-    TimeoutOutcome, TwoZoneTopology, ZoneSequencer,
+use cacp_bond_core::{
+    BondState, Instruction as BondInstruction, MantleSignature, Settlement, escrow_account_id,
+    proof_commitment, state_account_id,
 };
-use lee::{AccountId, PrivateKey, PublicKey, PublicTransaction, V03State, public_transaction};
+use clock_core::CLOCK_01_PROGRAM_ACCOUNT_ID;
+use common::transaction::LeeTransaction;
+use cross_zone::cacp::{
+    ChannelParent, CostlyAbortBondTerms, CounterpartySession, CrossZoneIntent, InitiatorSession,
+    InscribeIntent, Phase, TimeoutOutcome, TwoZoneTopology, ZoneSequencer,
+};
+use lee::{AccountId, PrivateKey, PublicKey, PublicTransaction, public_transaction};
 use logos_blockchain_core::mantle::{
+    SignedMantleTx,
+    gas::GasCost,
     ops::{
-        Op,
-        channel::{ChannelId, MsgId},
+        Op, OpProof,
+        channel::{
+            ChannelId, MsgId,
+            inscribe::{Inscription, InscriptionOp},
+        },
     },
     traits::Hashable as _,
+    transactions::{MantleTx, MantleTxBuilder, OpsProofs, states::Unverified},
 };
+use logos_blockchain_http_api_common::bodies::wallet::fund::WalletFundRequestBody;
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
+use logos_blockchain_zone_sdk::{
+    CommonHttpClient,
+    adapter::{Node as _, NodeHttpClient},
+    sequencer::FundingConfig,
+};
+use sequencer_service_rpc::{RpcClient as _, SequencerClient};
+use test_fixtures::{
+    TestContext,
+    config::{self, SequencerPartialConfig},
+    setup::{SequencerSetup, sequencer_client},
+};
 
-const STAKE_AMOUNT: u128 = 1_000;
+const KEY_A: [u8; 32] = [0xA1; 32];
+const KEY_B: [u8; 32] = [0xB2; 32];
+const STAKE: u128 = 1_000;
+const CHALLENGE_BOND: u128 = 100;
+const WINDOW: u64 = 3;
+const POLL: Duration = Duration::from_millis(500);
+const TIMEOUT: Duration = Duration::from_secs(90);
 
-struct Fixture {
+struct LiveNetwork {
+    _bond: TestContext,
+    bond_client: SequencerClient,
+    node: NodeHttpClient,
+    _zone_a: sequencer_service::SequencerHandle,
+    _zone_a_home: tempfile::TempDir,
+    _zone_b: sequencer_service::SequencerHandle,
+    _zone_b_home: tempfile::TempDir,
     key_a: Ed25519Key,
     key_b: Ed25519Key,
-    intent: CrossZoneIntent,
-    topology: TwoZoneTopology,
-    parents: [ChannelParent; 2],
-    lee_account_a: AccountId,
+    account_a: AccountId,
+    account_b: AccountId,
     lee_key_a: PrivateKey,
-    lee_account_b: AccountId,
     lee_key_b: PrivateKey,
-    bond_enforcer: AccountId,
-    bond_enforcer_key: PrivateKey,
 }
 
-fn main() -> Result<()> {
-    println!("CACP + externally enforced bond demo");
-    println!("Scope: 1 Bedrock | 2 zones | 1 sequencer per zone | 2 ChannelInscribe ops");
-    println!("Note: inscriptions carry data; LEZ public-account programs enforce the bond.\n");
+#[tokio::main]
+async fn main() -> Result<()> {
+    println!("CACP + protocol-enforced costly-abort live demo");
+    println!("1 local Bedrock | 2 participant zones | 1 neutral bond execution zone");
+    println!(
+        "The two business operations are ChannelInscribe; Bedrock may append one fee transfer.\n"
+    );
 
-    let fixture = fixture()?;
-    happy_path(&fixture)?;
-    counterparty_fallback(&fixture)?;
-    safe_pre_phase_three_abort(&fixture)?;
-    stale_parent_atomic_rejection(&fixture)?;
-    public_account_stake_forfeiture(&fixture)?;
+    let network = LiveNetwork::start().await?;
+    happy_path(&network, 1).await?;
+    fallback_submission(&network, 2).await?;
+    safe_abort(&network, 3).await?;
+    stale_parent_rejection(&network, 4).await?;
+    automatic_forfeiture(&network, 5).await?;
 
-    println!("\nALL 5 CACP SCENARIOS PASSED");
+    println!("\nALL 5 LIVE CACP SCENARIOS PASSED");
     Ok(())
 }
 
-fn fixture() -> Result<Fixture> {
-    let key_a = Ed25519Key::from_bytes(&[0xA1; 32]);
-    let key_b = Ed25519Key::from_bytes(&[0xB2; 32]);
-    let channel_a = ChannelId::from([1; 32]);
-    let channel_b = ChannelId::from([2; 32]);
-    let [lee_a, lee_b] =
-        <[_; 2]>::try_from(testnet_initial_state::initial_pub_accounts_private_keys())
-            .map_err(|_keys| anyhow::anyhow!("testnet must expose exactly two public accounts"))?;
-    let bond_enforcer_key = PrivateKey::try_new([0xC3; 32])
-        .map_err(|error| anyhow::anyhow!("invalid bond enforcer key: {error}"))?;
-    let bond_enforcer = AccountId::from(&PublicKey::new_from_private_key(&bond_enforcer_key));
-    let intent = CrossZoneIntent::new(
-        [
-            InscribeIntent {
-                channel_id: channel_a,
-                payload: b"zone-a inscription".to_vec(),
+impl LiveNetwork {
+    async fn start() -> Result<Self> {
+        let bond = TestContext::builder()
+            .disable_indexer()
+            .from_scratch()
+            .with_sequencer_partial_config(SequencerPartialConfig {
+                // Live wallet initialization proves several transactions. A moderate interval
+                // preserves the shared Bedrock fee fixture before participant zones start.
+                block_create_timeout: Duration::from_secs(5),
+                ..SequencerPartialConfig::default()
+            })
+            .build()
+            .await
+            .context("starting Bedrock and the neutral bond zone")?;
+        let bedrock_addr = bond.bedrock_addr();
+        let participant_config = SequencerPartialConfig {
+            block_create_timeout: Duration::from_secs(60),
+            ..SequencerPartialConfig::default()
+        };
+        let (zone_a, zone_a_home) = SequencerSetup::new(participant_config, bedrock_addr)
+            .with_genesis(vec![])
+            .with_channel_id(channel_a())
+            .with_bedrock_signing_key(KEY_A)
+            .setup()
+            .await
+            .context("starting participant-zone sequencer A")?;
+        let (zone_b, zone_b_home) = SequencerSetup::new(participant_config, bedrock_addr)
+            .with_genesis(vec![])
+            .with_channel_id(channel_b())
+            .with_bedrock_signing_key(KEY_B)
+            .setup()
+            .await
+            .context("starting participant-zone sequencer B")?;
+        let client_a = sequencer_client(zone_a.addr())?;
+        let client_b = sequencer_client(zone_b.addr())?;
+        ensure!(client_a.get_channel_id().await?.0 == *channel_a().as_ref());
+        ensure!(client_b.get_channel_id().await?.0 == *channel_b().as_ref());
+
+        let node_url = config::addr_to_url(config::UrlProtocol::Http, bedrock_addr)?;
+        let node = NodeHttpClient::new(CommonHttpClient::new(None), node_url);
+        wait_for_channel(&node, channel_a()).await?;
+        wait_for_channel(&node, channel_b()).await?;
+
+        let mut public_accounts = config::default_public_accounts_for_wallet();
+        public_accounts
+            .sort_by_key(|(key, _)| AccountId::from(&PublicKey::new_from_private_key(key)));
+        let [(lee_key_a, _), (lee_key_b, _)] = <[_; 2]>::try_from(public_accounts)
+            .map_err(|_| anyhow::anyhow!("fixture must provide two public accounts"))?;
+        let account_a = AccountId::from(&PublicKey::new_from_private_key(&lee_key_a));
+        let account_b = AccountId::from(&PublicKey::new_from_private_key(&lee_key_b));
+        let bond_client = bond.sequencer_client().clone();
+
+        println!(
+            "Started real HTTP services: Bedrock + sequencer A + sequencer B + neutral bond sequencer\n"
+        );
+        Ok(Self {
+            _bond: bond,
+            bond_client,
+            node,
+            _zone_a: zone_a,
+            _zone_a_home: zone_a_home,
+            _zone_b: zone_b,
+            _zone_b_home: zone_b_home,
+            key_a: Ed25519Key::from_bytes(&KEY_A),
+            key_b: Ed25519Key::from_bytes(&KEY_B),
+            account_a,
+            account_b,
+            lee_key_a,
+            lee_key_b,
+        })
+    }
+
+    async fn parents(&self) -> Result<[ChannelParent; 2]> {
+        Ok([
+            ChannelParent {
+                channel_id: channel_a(),
+                parent: channel_tip(&self.node, channel_a()).await?,
             },
-            InscribeIntent {
-                channel_id: channel_b,
-                payload: b"zone-b inscription".to_vec(),
+            ChannelParent {
+                channel_id: channel_b(),
+                parent: channel_tip(&self.node, channel_b()).await?,
             },
-        ],
-        7,
-    )?
-    .with_custodial_bond(CustodialBondTerms {
-        enforcer_account_id: bond_enforcer,
-        stake_amount: STAKE_AMOUNT,
-    })?;
-    let topology = TwoZoneTopology::new(
-        ZoneSequencer {
-            channel_id: channel_a,
-            public_key: key_a.public_key(),
-        },
-        ZoneSequencer {
-            channel_id: channel_b,
-            public_key: key_b.public_key(),
-        },
-        &intent,
-    )?;
-    let parents = [
-        ChannelParent {
-            channel_id: channel_a,
-            parent: MsgId::from([3; 32]),
-        },
-        ChannelParent {
-            channel_id: channel_b,
-            parent: MsgId::from([4; 32]),
-        },
-    ];
-    Ok(Fixture {
-        key_a,
-        key_b,
-        intent,
-        topology,
-        parents,
-        lee_account_a: lee_a.account_id,
-        lee_key_a: lee_a.pub_sign_key,
-        lee_account_b: lee_b.account_id,
-        lee_key_b: lee_b.pub_sign_key,
-        bond_enforcer,
-        bond_enforcer_key,
-    })
+        ])
+    }
+
+    fn intent(&self, nonce: u64) -> Result<CrossZoneIntent> {
+        CrossZoneIntent::new(
+            [
+                InscribeIntent {
+                    channel_id: channel_a(),
+                    payload: format!("CACP zone A / run {nonce}").into_bytes(),
+                },
+                InscribeIntent {
+                    channel_id: channel_b(),
+                    payload: format!("CACP zone B / run {nonce}").into_bytes(),
+                },
+            ],
+            nonce,
+        )?
+        .with_costly_abort_bond(CostlyAbortBondTerms {
+            bond_zone: config::bedrock_channel_id(),
+            bond_program_id: programs::cacp_bond().id(),
+            stake_amount: STAKE,
+            challenge_bond: CHALLENGE_BOND,
+            response_window_blocks: WINDOW,
+        })
+        .map_err(Into::into)
+    }
+
+    fn topology(&self, intent: &CrossZoneIntent) -> Result<TwoZoneTopology> {
+        Ok(TwoZoneTopology::new(
+            ZoneSequencer {
+                channel_id: channel_a(),
+                public_key: self.key_a.public_key(),
+            },
+            ZoneSequencer {
+                channel_id: channel_b(),
+                public_key: self.key_b.public_key(),
+            },
+            intent,
+        )?)
+    }
 }
 
-fn phase_three(fixture: &Fixture) -> Result<(InitiatorSession, CounterpartySession)> {
-    let mut initiator = InitiatorSession::new(
-        fixture.topology.clone(),
-        fixture.intent.clone(),
-        fixture.parents,
+async fn funded_phase_three(
+    network: &LiveNetwork,
+    nonce: u64,
+) -> Result<(InitiatorSession, CounterpartySession)> {
+    let intent = network.intent(nonce)?;
+    let topology = network.topology(&intent)?;
+    let parents = network.parents().await?;
+    let mut initiator = InitiatorSession::new(topology.clone(), intent.clone(), parents)?;
+    let mut counterparty = CounterpartySession::new(topology, intent, parents)?;
+    let raw = cross_zone::cacp::build_joint_tx(
+        &initiator.propose().intent,
+        &network.topology(&initiator.propose().intent)?,
+        &parents,
     )?;
-    let mut counterparty = CounterpartySession::new(
-        fixture.topology.clone(),
-        fixture.intent.clone(),
-        fixture.parents,
+    let funded = fund_ops(&network.node, raw).await?;
+    let transfer_proof = funded
+        .1
+        .context("Bedrock funding must append a fee-transfer proof")?;
+    let accept = counterparty.receive_funded_propose(
+        &initiator.propose(),
+        funded.0,
+        transfer_proof,
+        &network.key_b,
     )?;
-    let accept = counterparty.receive_propose(&initiator.propose(), &fixture.key_b)?;
-    let finalize = initiator.receive_accept(accept, &fixture.key_a)?;
+    let finalize = initiator.receive_accept(accept, &network.key_a)?;
     counterparty.receive_finalize(finalize)?;
-
     ensure!(initiator.phase() == Phase::SignaturesExchanged);
     ensure!(counterparty.phase() == Phase::SignaturesExchanged);
     Ok((initiator, counterparty))
 }
 
-fn happy_path(fixture: &Fixture) -> Result<()> {
+async fn happy_path(network: &LiveNetwork, nonce: u64) -> Result<()> {
     heading(1, "happy path");
-    let (mut initiator, mut counterparty) = phase_three(fixture)?;
-    let signed_tx = initiator
+    let (mut a, mut b) = funded_phase_three(network, nonce).await?;
+    let tx = a
         .signed_tx()
-        .context("initiator should hold the jointly signed transaction")?;
-    let counterparty_hash = counterparty
+        .context("missing Phase-3 transaction")?
+        .clone();
+    assert_live_shape(&tx)?;
+    let expected = inscription_tips(&tx)?;
+    network.node.post_transaction(tx).await?;
+    wait_for_tips(&network.node, expected).await?;
+    a.mark_submitted()?;
+    b.mark_submitted()?;
+    println!(
+        "  PASS: Sequencer A submitted; Bedrock advanced both participant channels atomically"
+    );
+    Ok(())
+}
+
+async fn fallback_submission(network: &LiveNetwork, nonce: u64) -> Result<()> {
+    heading(2, "Phase 3 fallback submission by Sequencer B");
+    let (_a, mut b) = funded_phase_three(network, nonce).await?;
+    let TimeoutOutcome::FallbackSubmission(tx) = b.on_timeout() else {
+        anyhow::bail!("B did not retain the fully signed fallback transaction");
+    };
+    let expected = inscription_tips(&tx)?;
+    network.node.post_transaction(tx).await?;
+    wait_for_tips(&network.node, expected).await?;
+    b.mark_submitted()?;
+    println!(
+        "  PASS: A stalled after Phase 3; B posted the identical transaction over Bedrock HTTP"
+    );
+    Ok(())
+}
+
+async fn safe_abort(network: &LiveNetwork, nonce: u64) -> Result<()> {
+    heading(3, "safe abort before Phase 3");
+    let before = network.parents().await?;
+    let intent = network.intent(nonce)?;
+    let topology = network.topology(&intent)?;
+    let mut a = InitiatorSession::new(topology, intent, before)?;
+    ensure!(a.on_timeout() == TimeoutOutcome::Aborted);
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    ensure!(network.parents().await? == before);
+    println!(
+        "  PASS: no fully signed tx was created or posted; both Bedrock tips stayed unchanged"
+    );
+    Ok(())
+}
+
+async fn stale_parent_rejection(network: &LiveNetwork, nonce: u64) -> Result<()> {
+    heading(4, "stale parent atomically rejects both inscriptions");
+    let (a, _b) = funded_phase_three(network, nonce).await?;
+    let stale_tx = a
         .signed_tx()
-        .context("counterparty should hold the jointly signed transaction")?
-        .hash();
-    ensure!(signed_tx.hash() == counterparty_hash);
-    ensure!(signed_tx.mantle_tx().ops().len() == 2);
+        .context("missing signed stale candidate")?
+        .clone();
+    let stale_expected = inscription_tips(&stale_tx)?;
+    post_single_inscription(network, channel_a(), &network.key_a, b"advance A parent").await?;
+    let before_submit = network.parents().await?;
+    network.node.post_transaction(stale_tx).await?;
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    let after = network.parents().await?;
     ensure!(
-        signed_tx
-            .mantle_tx()
-            .ops()
+        after == before_submit,
+        "a stale joint tx changed a channel tip"
+    );
+    ensure!(after[0].parent != stale_expected[0].1);
+    ensure!(after[1].parent != stale_expected[1].1);
+    println!("  PASS: after A's parent changed, the old joint tx advanced neither A nor B");
+    Ok(())
+}
+
+async fn automatic_forfeiture(network: &LiveNetwork, nonce: u64) -> Result<()> {
+    heading(5, "program-enforced stake forfeiture");
+    run_counterparty_forfeit(network, nonce).await?;
+    run_initiator_forfeit(network, nonce + 1).await?;
+    println!(
+        "  PASS: both A-abort and B-abort paths were settled by cacp_bond with no resolver key"
+    );
+    Ok(())
+}
+
+async fn run_counterparty_forfeit(network: &LiveNetwork, nonce: u64) -> Result<()> {
+    let evidence = bond_evidence(network, nonce).await?;
+    submit_bond(
+        network,
+        evidence.proposal,
+        &network.lee_key_a,
+        BondInstruction::Open {
+            proposal_id: evidence.proposal,
+            counterparty: network.account_b,
+            initiator_mantle_key: network.key_a.public_key().to_bytes(),
+            counterparty_mantle_key: network.key_b.public_key().to_bytes(),
+            stake_amount: STAKE,
+            challenge_bond: CHALLENGE_BOND,
+            response_window_blocks: WINDOW,
+        },
+    )
+    .await?;
+    submit_bond(
+        network,
+        evidence.proposal,
+        &network.lee_key_b,
+        BondInstruction::Join {
+            proposal_id: evidence.proposal,
+            tx_hash: evidence.tx_hash,
+            accept_commitment: proof_commitment(&evidence.b_proof),
+        },
+    )
+    .await?;
+    wait_bond_deadline(network, evidence.proposal).await?;
+    submit_bond(
+        network,
+        evidence.proposal,
+        &network.lee_key_a,
+        BondInstruction::ChallengeAccept {
+            proposal_id: evidence.proposal,
+        },
+    )
+    .await?;
+    wait_bond_deadline(network, evidence.proposal).await?;
+    submit_bond(
+        network,
+        evidence.proposal,
+        &network.lee_key_a,
+        BondInstruction::SettleTimeout {
+            proposal_id: evidence.proposal,
+        },
+    )
+    .await?;
+    ensure!(
+        bond_state(network, evidence.proposal).await?.settlement
+            == Some(Settlement::CounterpartyForfeited)
+    );
+    Ok(())
+}
+
+async fn run_initiator_forfeit(network: &LiveNetwork, nonce: u64) -> Result<()> {
+    let evidence = bond_evidence(network, nonce).await?;
+    submit_bond(
+        network,
+        evidence.proposal,
+        &network.lee_key_a,
+        BondInstruction::Open {
+            proposal_id: evidence.proposal,
+            counterparty: network.account_b,
+            initiator_mantle_key: network.key_a.public_key().to_bytes(),
+            counterparty_mantle_key: network.key_b.public_key().to_bytes(),
+            stake_amount: STAKE,
+            challenge_bond: CHALLENGE_BOND,
+            response_window_blocks: WINDOW,
+        },
+    )
+    .await?;
+    submit_bond(
+        network,
+        evidence.proposal,
+        &network.lee_key_b,
+        BondInstruction::Join {
+            proposal_id: evidence.proposal,
+            tx_hash: evidence.tx_hash,
+            accept_commitment: proof_commitment(&evidence.b_proof),
+        },
+    )
+    .await?;
+    submit_bond(
+        network,
+        evidence.proposal,
+        &network.lee_key_b,
+        BondInstruction::DiscloseAccept {
+            proposal_id: evidence.proposal,
+            proof: evidence.b_proof,
+        },
+    )
+    .await?;
+    wait_bond_deadline(network, evidence.proposal).await?;
+    submit_bond(
+        network,
+        evidence.proposal,
+        &network.lee_key_b,
+        BondInstruction::ChallengeFinalize {
+            proposal_id: evidence.proposal,
+        },
+    )
+    .await?;
+    wait_bond_deadline(network, evidence.proposal).await?;
+    submit_bond(
+        network,
+        evidence.proposal,
+        &network.lee_key_b,
+        BondInstruction::SettleTimeout {
+            proposal_id: evidence.proposal,
+        },
+    )
+    .await?;
+    ensure!(
+        bond_state(network, evidence.proposal).await?.settlement
+            == Some(Settlement::InitiatorForfeited)
+    );
+    Ok(())
+}
+
+struct BondEvidence {
+    proposal: [u8; 32],
+    tx_hash: [u8; 32],
+    b_proof: MantleSignature,
+}
+
+async fn bond_evidence(network: &LiveNetwork, nonce: u64) -> Result<BondEvidence> {
+    let intent = network.intent(nonce)?;
+    let tx = cross_zone::cacp::build_joint_tx(
+        &intent,
+        &network.topology(&intent)?,
+        &network.parents().await?,
+    )?;
+    let hash = tx.hash();
+    let tx_hash = *hash.as_ref();
+    Ok(BondEvidence {
+        proposal: intent.proposal_id().0,
+        tx_hash,
+        b_proof: MantleSignature::new(
+            network
+                .key_b
+                .sign_payload(hash.as_signing_bytes().as_ref())
+                .to_bytes(),
+        ),
+    })
+}
+
+async fn submit_bond(
+    network: &LiveNetwork,
+    proposal: [u8; 32],
+    signer: &PrivateKey,
+    instruction: BondInstruction,
+) -> Result<()> {
+    let state = state_account_id(programs::cacp_bond().id(), &proposal);
+    let escrow = escrow_account_id(programs::cacp_bond().id(), &proposal);
+    let nonce = network
+        .bond_client
+        .get_accounts_nonces(vec![network.account_a, network.account_b])
+        .await?;
+    let signer_id = AccountId::from(&PublicKey::new_from_private_key(signer));
+    let signer_nonce = if signer_id == network.account_a {
+        nonce[0]
+    } else {
+        nonce[1]
+    };
+    let message = public_transaction::Message::try_new(
+        programs::cacp_bond().id(),
+        vec![
+            network.account_a,
+            network.account_b,
+            escrow,
+            state,
+            CLOCK_01_PROGRAM_ACCOUNT_ID,
+        ],
+        vec![signer_nonce],
+        instruction,
+    )?;
+    let witness = public_transaction::WitnessSet::for_message(&message, &[signer]);
+    let hash = network
+        .bond_client
+        .send_transaction(LeeTransaction::Public(PublicTransaction::new(
+            message, witness,
+        )))
+        .await?;
+    wait_for_lee_tx(&network.bond_client, hash).await
+}
+
+async fn bond_state(network: &LiveNetwork, proposal: [u8; 32]) -> Result<BondState> {
+    let account = network
+        .bond_client
+        .get_account(state_account_id(programs::cacp_bond().id(), &proposal))
+        .await?;
+    BondState::from_bytes(&account.data).context("decoding on-chain bond state")
+}
+
+async fn wait_bond_deadline(network: &LiveNetwork, proposal: [u8; 32]) -> Result<()> {
+    let deadline = bond_state(network, proposal).await?.expires_at_block;
+    let wait = async {
+        loop {
+            if network.bond_client.get_last_block_id().await? >= deadline {
+                return Ok::<_, anyhow::Error>(());
+            }
+            tokio::time::sleep(POLL).await;
+        }
+    };
+    tokio::time::timeout(TIMEOUT, wait)
+        .await
+        .context("waiting for bond deadline")?
+}
+
+async fn wait_for_lee_tx(client: &SequencerClient, hash: common::HashType) -> Result<()> {
+    let wait = async {
+        loop {
+            if client.get_transaction(hash).await?.is_some() {
+                return Ok::<_, anyhow::Error>(());
+            }
+            tokio::time::sleep(POLL).await;
+        }
+    };
+    tokio::time::timeout(TIMEOUT, wait)
+        .await
+        .context("waiting for bond transaction inclusion")?
+}
+
+async fn fund_ops(node: &NodeHttpClient, tx: MantleTx) -> Result<(MantleTx, Option<OpProof>)> {
+    let tx_builder = MantleTxBuilder::new().extend_ops(tx.ops().iter().cloned())?;
+    let funded = node
+        .fund_tx(WalletFundRequestBody {
+            tip: None,
+            tx_builder,
+            change_public_key: config::bedrock_funding_key(),
+            funding_public_keys: vec![config::bedrock_funding_key()],
+            max_tx_fee: GasCost::new(logos_blockchain_core::mantle::Value::MAX),
+            priority_fee: FundingConfig::DEFAULT_PRIORITY_FEE,
+        })
+        .await?;
+    Ok((funded.funded_tx, funded.transfer_proof))
+}
+
+async fn post_single_inscription(
+    network: &LiveNetwork,
+    channel: ChannelId,
+    key: &Ed25519Key,
+    payload: &[u8],
+) -> Result<()> {
+    let parent = channel_tip(&network.node, channel).await?;
+    let inscription = Inscription::try_from(payload.to_vec())?;
+    let raw = MantleTxBuilder::new()
+        .extend_ops([Op::ChannelInscribe(InscriptionOp {
+            channel_id: channel,
+            inscription,
+            parent,
+            signer: key.public_key(),
+        })])?
+        .build()?;
+    let (tx, transfer_proof) = fund_ops(&network.node, raw).await?;
+    let mut proofs: OpsProofs =
+        OpProof::Ed25519Sig(key.sign_payload(tx.hash().as_signing_bytes().as_ref())).into();
+    proofs.try_push(transfer_proof.context("missing fee proof")?)?;
+    let signed = SignedMantleTx::new(tx, proofs);
+    let expected = signed
+        .mantle_tx()
+        .ops()
+        .iter()
+        .find_map(|op| match op {
+            Op::ChannelInscribe(inscription) => Some(inscription.id()),
+            _ => None,
+        })
+        .context("missing inscription")?;
+    network.node.post_transaction(signed).await?;
+    wait_for_tip(&network.node, channel, expected).await
+}
+
+fn assert_live_shape(tx: &SignedMantleTx<Unverified>) -> Result<()> {
+    ensure!(tx.mantle_tx().ops().len() == 3);
+    ensure!(
+        tx.mantle_tx().ops()[..2]
             .iter()
             .all(|op| matches!(op, Op::ChannelInscribe(_)))
     );
+    ensure!(matches!(tx.mantle_tx().ops()[2], Op::Transfer(_)));
+    Ok(())
+}
 
-    let mut bedrock = BedrockModel::new(fixture.parents);
-    let result = bedrock.submit(signed_tx, SubmittedBy::Initiator)?;
-    let SubmissionResult::Included(tx_hash) = result else {
-        anyhow::bail!("the first submission must be included");
+fn inscription_tips(tx: &SignedMantleTx<Unverified>) -> Result<[(ChannelId, MsgId); 2]> {
+    let tips = tx
+        .mantle_tx()
+        .ops()
+        .iter()
+        .filter_map(|op| match op {
+            Op::ChannelInscribe(inscription) => Some((inscription.channel_id, inscription.id())),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    <[_; 2]>::try_from(tips).map_err(|_| anyhow::anyhow!("expected exactly two inscriptions"))
+}
+
+async fn wait_for_channel(node: &NodeHttpClient, channel: ChannelId) -> Result<()> {
+    let wait = async {
+        loop {
+            if node.channel_state(channel).await?.is_some() {
+                return Ok::<_, anyhow::Error>(());
+            }
+            tokio::time::sleep(POLL).await;
+        }
     };
-    ensure!(bedrock.submitted_by(tx_hash) == Some(SubmittedBy::Initiator));
-    initiator.mark_submitted()?;
-    counterparty.mark_submitted()?;
-
-    println!("  PROPOSE -> ACCEPT -> FINALIZE -> submit by Sequencer A");
-    println!("  PASS: Bedrock included one joint tx with exactly two ChannelInscribe ops");
-    Ok(())
+    tokio::time::timeout(TIMEOUT, wait)
+        .await
+        .context("waiting for participant channel")?
 }
 
-fn counterparty_fallback(fixture: &Fixture) -> Result<()> {
-    heading(
-        2,
-        "Phase 3 reached; Sequencer B performs fallback submission",
-    );
-    let (mut initiator, mut counterparty) = phase_three(fixture)?;
-    let TimeoutOutcome::FallbackSubmission(signed_tx) = counterparty.on_timeout() else {
-        anyhow::bail!("Sequencer B must retain fallback submission rights after Phase 3");
+async fn channel_tip(node: &NodeHttpClient, channel: ChannelId) -> Result<MsgId> {
+    node.channel_state(channel)
+        .await?
+        .map(|state| state.tip_message)
+        .with_context(|| format!("Bedrock has no channel {channel:?}"))
+}
+
+async fn wait_for_tips(node: &NodeHttpClient, expected: [(ChannelId, MsgId); 2]) -> Result<()> {
+    let wait = async {
+        loop {
+            if channel_tip(node, expected[0].0).await? == expected[0].1
+                && channel_tip(node, expected[1].0).await? == expected[1].1
+            {
+                return Ok::<_, anyhow::Error>(());
+            }
+            tokio::time::sleep(POLL).await;
+        }
     };
+    tokio::time::timeout(TIMEOUT, wait)
+        .await
+        .context("waiting for atomic Bedrock inclusion")?
+}
 
-    let mut bedrock = BedrockModel::new(fixture.parents);
-    let SubmissionResult::Included(tx_hash) =
-        bedrock.submit(&signed_tx, SubmittedBy::CounterpartyFallback)?
-    else {
-        anyhow::bail!("Sequencer B's first submission must be included");
+async fn wait_for_tip(node: &NodeHttpClient, channel: ChannelId, expected: MsgId) -> Result<()> {
+    let wait = async {
+        loop {
+            if channel_tip(node, channel).await? == expected {
+                return Ok::<_, anyhow::Error>(());
+            }
+            tokio::time::sleep(POLL).await;
+        }
     };
-    ensure!(
-        bedrock.submitted_by(tx_hash) == Some(SubmittedBy::CounterpartyFallback),
-        "Bedrock must attribute inclusion to the fallback submitter"
-    );
-    let duplicate = bedrock.submit(&signed_tx, SubmittedBy::Initiator)?;
-    ensure!(duplicate == SubmissionResult::AlreadyIncluded(tx_hash));
-    counterparty.mark_submitted()?;
-    initiator.mark_submitted()?;
-
-    println!("  Sequencer A stalls after FINALIZE; B submits the identical signed tx");
-    println!("  PASS: fallback included once; a later duplicate is idempotent");
-    Ok(())
-}
-
-fn safe_pre_phase_three_abort(fixture: &Fixture) -> Result<()> {
-    heading(3, "safe abort before Phase 3");
-    let mut initiator = InitiatorSession::new(
-        fixture.topology.clone(),
-        fixture.intent.clone(),
-        fixture.parents,
-    )?;
-    ensure!(initiator.on_timeout() == TimeoutOutcome::Aborted);
-    ensure!(initiator.phase() == Phase::Aborted);
-    ensure!(initiator.signed_tx().is_none());
-
-    let proposer = InitiatorSession::new(
-        fixture.topology.clone(),
-        fixture.intent.clone(),
-        fixture.parents,
-    )?;
-    let mut counterparty = CounterpartySession::new(
-        fixture.topology.clone(),
-        fixture.intent.clone(),
-        fixture.parents,
-    )?;
-    counterparty.receive_propose(&proposer.propose(), &fixture.key_b)?;
-    ensure!(counterparty.phase() == Phase::WaitingForFinalize);
-    ensure!(counterparty.on_timeout() == TimeoutOutcome::Aborted);
-    ensure!(counterparty.signed_tx().is_none());
-
-    println!("  Tested timeout before ACCEPT and timeout while waiting for FINALIZE");
-    println!("  PASS: no fully signed transaction exists, so no channel tip can advance");
-    Ok(())
-}
-
-fn stale_parent_atomic_rejection(fixture: &Fixture) -> Result<()> {
-    heading(4, "stale parent causes atomic rejection");
-    let (initiator, _counterparty) = phase_three(fixture)?;
-    let signed_tx = initiator
-        .signed_tx()
-        .context("Phase 3 should produce a jointly signed transaction")?;
-    let current_parents = [
-        ChannelParent {
-            channel_id: fixture.parents[0].channel_id,
-            parent: MsgId::from([0xCC; 32]),
-        },
-        fixture.parents[1],
-    ];
-    let mut bedrock = BedrockModel::new(current_parents);
-    let before_a = bedrock.tip(fixture.parents[0].channel_id);
-    let before_b = bedrock.tip(fixture.parents[1].channel_id);
-
-    let error = bedrock
-        .submit(signed_tx, SubmittedBy::Initiator)
-        .expect_err("the stale parent must reject the whole transaction");
-    ensure!(error == BedrockError::StaleParent);
-    ensure!(bedrock.tip(fixture.parents[0].channel_id) == before_a);
-    ensure!(bedrock.tip(fixture.parents[1].channel_id) == before_b);
-
-    println!("  Zone A parent is stale when the joint tx reaches Bedrock");
-    println!("  PASS: both inscriptions rejected; neither channel tip changed");
-    Ok(())
-}
-
-fn public_account_stake_forfeiture(fixture: &Fixture) -> Result<()> {
-    heading(5, "real public-account stakes; Sequencer A forfeits");
-    let terms = fixture
-        .intent
-        .custodial_bond()
-        .context("the CACP proposal must bind its external bond terms")?;
-    ensure!(terms.enforcer_account_id == fixture.bond_enforcer);
-    ensure!(terms.stake_amount == STAKE_AMOUNT);
-
-    let mut state = testnet_initial_state::initial_state();
-    let vault_id =
-        vault_core::compute_vault_account_id(programs::vault().id(), fixture.bond_enforcer);
-    let balance_a_before = state.get_account_by_id(fixture.lee_account_a).balance;
-    let balance_b_before = state.get_account_by_id(fixture.lee_account_b).balance;
-    let balance_a_after_deposit = balance_a_before
-        .checked_sub(STAKE_AMOUNT)
-        .context("Sequencer A must be able to fund its stake")?;
-    let balance_b_after_deposit = balance_b_before
-        .checked_sub(STAKE_AMOUNT)
-        .context("Sequencer B must be able to fund its stake")?;
-    let balance_b_after_forfeit = balance_b_before
-        .checked_add(STAKE_AMOUNT)
-        .context("Sequencer B's compensated balance must not overflow")?;
-    let total_stake = STAKE_AMOUNT
-        .checked_mul(2)
-        .context("the combined stake must not overflow")?;
-
-    apply_lee_tx(
-        &mut state,
-        &vault_deposit(
-            fixture.lee_account_a,
-            &fixture.lee_key_a,
-            fixture.bond_enforcer,
-            0,
-            STAKE_AMOUNT,
-        )?,
-        1,
-    )?;
-    apply_lee_tx(
-        &mut state,
-        &vault_deposit(
-            fixture.lee_account_b,
-            &fixture.lee_key_b,
-            fixture.bond_enforcer,
-            0,
-            STAKE_AMOUNT,
-        )?,
-        2,
-    )?;
-
-    ensure!(state.get_account_by_id(fixture.lee_account_a).balance == balance_a_after_deposit);
-    ensure!(state.get_account_by_id(fixture.lee_account_b).balance == balance_b_after_deposit);
-    ensure!(state.get_account_by_id(vault_id).balance == total_stake);
-
-    let unauthorized = vault_claim(fixture.bond_enforcer, &fixture.lee_key_a, 0, total_stake)?;
-    ensure!(
-        state
-            .transition_from_public_transaction(&unauthorized, 3, 3)
-            .is_err(),
-        "a sequencer must not be able to claim the external enforcer's vault"
-    );
-    ensure!(state.get_account_by_id(vault_id).balance == total_stake);
-
-    apply_lee_tx(
-        &mut state,
-        &vault_claim(
-            fixture.bond_enforcer,
-            &fixture.bond_enforcer_key,
-            0,
-            total_stake,
-        )?,
-        4,
-    )?;
-    apply_lee_tx(
-        &mut state,
-        &native_transfer(
-            fixture.bond_enforcer,
-            &fixture.bond_enforcer_key,
-            fixture.lee_account_b,
-            1,
-            total_stake,
-        )?,
-        5,
-    )?;
-
-    ensure!(state.get_account_by_id(vault_id).balance == 0);
-    ensure!(state.get_account_by_id(fixture.bond_enforcer).balance == 0);
-    ensure!(state.get_account_by_id(fixture.lee_account_a).balance == balance_a_after_deposit);
-    ensure!(state.get_account_by_id(fixture.lee_account_b).balance == balance_b_after_forfeit);
-
-    println!("  A and B each deposited {STAKE_AMOUNT} native units from signed public accounts");
-    println!("  The LEZ vault rejected A's unauthorized claim");
-    println!("  External resolver paid both stakes to B after A's attributed abort");
-    println!("  PASS: A lost 1000; B gained 1000; escrow and resolver ended at zero");
-    Ok(())
-}
-
-fn vault_deposit(
-    sender: AccountId,
-    signing_key: &PrivateKey,
-    enforcer: AccountId,
-    nonce: u128,
-    amount: u128,
-) -> Result<PublicTransaction> {
-    let vault_id = vault_core::compute_vault_account_id(programs::vault().id(), enforcer);
-    signed_lee_tx(
-        programs::vault().id(),
-        vec![sender, vault_id],
-        nonce,
-        vault_core::Instruction::Transfer {
-            recipient_id: enforcer,
-            amount,
-        },
-        signing_key,
-    )
-}
-
-fn vault_claim(
-    enforcer: AccountId,
-    signing_key: &PrivateKey,
-    nonce: u128,
-    amount: u128,
-) -> Result<PublicTransaction> {
-    let vault_id = vault_core::compute_vault_account_id(programs::vault().id(), enforcer);
-    signed_lee_tx(
-        programs::vault().id(),
-        vec![enforcer, vault_id],
-        nonce,
-        vault_core::Instruction::Claim { amount },
-        signing_key,
-    )
-}
-
-fn native_transfer(
-    sender: AccountId,
-    signing_key: &PrivateKey,
-    recipient: AccountId,
-    nonce: u128,
-    amount: u128,
-) -> Result<PublicTransaction> {
-    signed_lee_tx(
-        programs::authenticated_transfer().id(),
-        vec![sender, recipient],
-        nonce,
-        authenticated_transfer_core::Instruction::Transfer { amount },
-        signing_key,
-    )
-}
-
-fn signed_lee_tx<I: serde::Serialize>(
-    program_id: lee::ProgramId,
-    account_ids: Vec<AccountId>,
-    nonce: u128,
-    instruction: I,
-    signing_key: &PrivateKey,
-) -> Result<PublicTransaction> {
-    let message = public_transaction::Message::try_new(
-        program_id,
-        account_ids,
-        vec![nonce.into()],
-        instruction,
-    )?;
-    let witness = public_transaction::WitnessSet::for_message(&message, &[signing_key]);
-    Ok(PublicTransaction::new(message, witness))
-}
-
-fn apply_lee_tx(state: &mut V03State, tx: &PublicTransaction, block_id: u64) -> Result<()> {
-    state
-        .transition_from_public_transaction(tx, block_id, block_id)
-        .map_err(|error| anyhow::anyhow!("LEE rejected bond transaction: {error}"))
+    tokio::time::timeout(TIMEOUT, wait)
+        .await
+        .context("waiting for Bedrock inclusion")?
 }
 
 fn heading(number: u8, title: &str) {
     println!("[{number}/5] {title}");
+}
+
+fn channel_a() -> ChannelId {
+    ChannelId::from([0xA1; 32])
+}
+
+fn channel_b() -> ChannelId {
+    ChannelId::from([0xB2; 32])
 }
