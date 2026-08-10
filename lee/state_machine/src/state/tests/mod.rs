@@ -7,9 +7,9 @@
 use std::collections::HashMap;
 
 use lee_core::{
-    AuthorizationSecretKey, BlockId, Commitment, DUMMY_COMMITMENT_HASH, InputAccountIdentity,
-    Nullifier, NullifierPublicKey, NullifierSecretKey, NullifierWitness, PrivateWitness, Timestamp,
-    WitnessKind,
+    AuthorizationSecretKey, BlockId, Commitment, DUMMY_COMMITMENT_HASH, Identifier,
+    InputAccountIdentity, Nullifier, NullifierPublicKey, NullifierSecretKey, NullifierWitness,
+    PrivateWitness, Timestamp, WitnessKind,
     account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
     encryption::ViewingPublicKey,
     program::{
@@ -257,6 +257,24 @@ pub fn test_private_account_keys_2() -> TestPrivateKeys {
         d: [83; 32],
         z: [84; 32],
     }
+}
+
+/// Init-lifecycle private-PDA witness for `keys`, the shape every PDA circuit test starts from.
+pub fn init_pda_witness(
+    keys: &TestPrivateKeys,
+    identifier: Identifier,
+    binding: Option<(ProgramId, PdaSeed)>,
+) -> InputAccountIdentity {
+    InputAccountIdentity::Private(PrivateWitness {
+        vpk: keys.vpk(),
+        random_seed: [0; 32],
+        identifier,
+        kind: WitnessKind::Pda { binding },
+        nullifier: NullifierWitness::Init {
+            npk: keys.npk(),
+            commitment_root: DUMMY_COMMITMENT_HASH,
+        },
+    })
 }
 
 fn shielded_balance_transfer_for_tests(

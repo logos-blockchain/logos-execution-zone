@@ -364,10 +364,10 @@ impl ExecutionState {
                             pre_account_id,
                         );
                     }
-                    let is_private_pda = self
+                    let has_private_pda_witness = self
                         .private_pda_by_position
                         .contains_key(&pre_state_position);
-                    if is_private_pda {
+                    if has_private_pda_witness {
                         assert_authorization_and_record_bindings(
                             &mut self.pda_family_binding,
                             &mut self.private_pda_bound_positions,
@@ -380,8 +380,8 @@ impl ExecutionState {
                             pre_is_authorized,
                         );
                     }
-                    if !is_private_pda
-                        && authorize_public_first_sight(
+                    if !has_private_pda_witness
+                        && authorize_first_sight_without_pda_witness(
                             &mut self.pda_family_binding,
                             &mut self.globally_authorized,
                             &caller,
@@ -582,7 +582,7 @@ fn bind_private_pda_position(
 
 /// Match `account_id` against the caller's seeds under the public-PDA derivation. `None`
 /// if no appropriate authorization given.
-fn match_caller_public_seed(
+fn match_caller_seed_as_public_pda(
     caller: &CallerData,
     caller_pda_seeds: &[PdaSeed],
     account_id: AccountId,
@@ -597,10 +597,10 @@ fn match_caller_public_seed(
     })
 }
 
-/// Match `account_id` against the caller's seeds under the private-PDA derivation, using the
+/// Match `account_id` against the caller's seeds interpreted as private-PDA derivations, using the
 /// (npk, vpk, identifier) supplied for this position. `None` when the position carries no
 /// private-PDA witness.
-fn match_caller_private_seed(
+fn match_caller_seed_as_private_pda(
     private_pda_by_position: &HashMap<usize, (NullifierPublicKey, ViewingPublicKey, Identifier)>,
     caller: &CallerData,
     caller_pda_seeds: &[PdaSeed],
@@ -624,7 +624,7 @@ fn match_caller_private_seed(
 /// Either the account is a public PDA in which case the public mask should be changed, or
 /// it is a regular account. For PDAs, we assert the family bindings. For regular accounts,
 /// add to global authorization set.
-fn authorize_public_first_sight(
+fn authorize_first_sight_without_pda_witness(
     pda_family_binding: &mut HashMap<(ProgramId, PdaSeed), AccountId>,
     globally_authorized: &mut HashSet<AccountId>,
     caller: &CallerData,
@@ -633,7 +633,7 @@ fn authorize_public_first_sight(
     pre_is_authorized: bool,
 ) -> bool {
     if let Some((seed, caller_program_id)) =
-        match_caller_public_seed(caller, caller_pda_seeds, pre_account_id)
+        match_caller_seed_as_public_pda(caller, caller_pda_seeds, pre_account_id)
     {
         assert!(
             pre_is_authorized,
@@ -671,10 +671,10 @@ fn assert_authorization_and_record_bindings(
     pre_is_authorized: bool,
 ) {
     let matched_caller_seed: Option<(PdaSeed, bool, ProgramId)> =
-        match_caller_public_seed(caller, caller_pda_seeds, pre_account_id)
+        match_caller_seed_as_public_pda(caller, caller_pda_seeds, pre_account_id)
             .map(|(seed, caller_program_id)| (seed, false, caller_program_id))
             .or_else(|| {
-                match_caller_private_seed(
+                match_caller_seed_as_private_pda(
                     private_pda_by_position,
                     caller,
                     caller_pda_seeds,
