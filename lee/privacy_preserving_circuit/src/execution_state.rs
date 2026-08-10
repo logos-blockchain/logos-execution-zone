@@ -273,7 +273,7 @@ impl ExecutionState {
         output_post_states: Vec<AccountPostState>,
     ) -> HashSet<AccountId> {
         let mut authorized_output_accounts = Vec::new();
-        for (pre, mut post) in output_pre_states.into_iter().zip(output_post_states) {
+        for (mut pre, mut post) in output_pre_states.into_iter().zip(output_post_states) {
             let pre_account_id = pre.account_id;
             let pre_is_authorized = pre.is_authorized;
             let post_states_entry = self.post_states.entry(pre.account_id);
@@ -380,10 +380,24 @@ impl ExecutionState {
                             pre_is_authorized,
                         );
                     }
-
-                    // If an account is regular and authorized, make it globally-authorized.
-                    if pre_is_authorized && !is_private_pda {
-                        self.globally_authorized.insert(pre_account_id);
+                    if !is_private_pda
+                        && authorize_public_first_sight(
+                            &mut self.pda_family_binding,
+                            &mut self.globally_authorized,
+                            &caller,
+                            caller_pda_seeds,
+                            pre_account_id,
+                            pre_is_authorized,
+                        )
+                    {
+                        // authorize_public_first_sight is only true for PDAs
+                        // which will be recorded in output journal.
+                        //
+                        // Since we are in a privacy circuit, the verifier cannot
+                        // replay the transaction to see which public PDAs were
+                        // actually authorized. We mark them false as the
+                        // verifier checks regular account signatures as well.
+                        pre.is_authorized = false;
                     }
                     self.pre_states.push(pre);
                 }
@@ -566,6 +580,77 @@ fn bind_private_pda_position(
     }
 }
 
+/// Match `account_id` against the caller's seeds under the public-PDA derivation. `None`
+/// if no appropriate authorization given.
+fn match_caller_public_seed(
+    caller: &CallerData,
+    caller_pda_seeds: &[PdaSeed],
+    account_id: AccountId,
+) -> Option<(PdaSeed, ProgramId)> {
+    let caller_program_id = caller.program_id?;
+    // Costy for calls with multiple seeds in one call.
+    caller_pda_seeds.iter().find_map(|seed| {
+        if AccountId::for_public_pda(&caller_program_id, seed) == account_id {
+            return Some((*seed, caller_program_id));
+        }
+        None
+    })
+}
+
+/// Match `account_id` against the caller's seeds under the private-PDA derivation, using the
+/// (npk, vpk, identifier) supplied for this position. `None` when the position carries no
+/// private-PDA witness.
+fn match_caller_private_seed(
+    private_pda_by_position: &HashMap<usize, (NullifierPublicKey, ViewingPublicKey, Identifier)>,
+    caller: &CallerData,
+    caller_pda_seeds: &[PdaSeed],
+    account_id: AccountId,
+    pre_state_position: usize,
+) -> Option<(PdaSeed, ProgramId)> {
+    let (npk, vpk, identifier) = private_pda_by_position.get(&pre_state_position)?;
+    let caller_program_id = caller.program_id?;
+    // Costy for calls with multiple seeds in one call.
+    caller_pda_seeds.iter().find_map(|seed| {
+        if AccountId::for_private_pda(&caller_program_id, seed, npk, vpk, *identifier) == account_id
+        {
+            return Some((*seed, caller_program_id));
+        }
+        None
+    })
+}
+
+/// Judge a non-private-PDA `pre_state` at its first sighting and resolve its journal mask.
+///
+/// Either the account is a public PDA in which case the public mask should be changed, or
+/// it is a regular account. For PDAs, we assert the family bindings. For regular accounts,
+/// add to global authorization set.
+fn authorize_public_first_sight(
+    pda_family_binding: &mut HashMap<(ProgramId, PdaSeed), AccountId>,
+    globally_authorized: &mut HashSet<AccountId>,
+    caller: &CallerData,
+    caller_pda_seeds: &[PdaSeed],
+    pre_account_id: AccountId,
+    pre_is_authorized: bool,
+) -> bool {
+    if let Some((seed, caller_program_id)) =
+        match_caller_public_seed(caller, caller_pda_seeds, pre_account_id)
+    {
+        assert!(
+            pre_is_authorized,
+            "Caller-seeded public PDA must be declared authorized at first sight: {pre_account_id}"
+        );
+        assert_family_binding(pda_family_binding, caller_program_id, seed, pre_account_id);
+        true
+    } else {
+        // If an authorized account is a non-PDA one, it is a regular account and hence globally
+        // authorized.
+        if pre_is_authorized {
+            globally_authorized.insert(pre_account_id);
+        }
+        false
+    }
+}
+
 /// When a caller seed matches, also records the `(caller, seed) → account_id` family binding
 /// and, for the private form, marks the position in `private_pda_bound_positions`. Free
 /// function so callers can pass individual `&mut self.*` field borrows without holding a borrow
@@ -586,21 +671,18 @@ fn assert_authorization_and_record_bindings(
     pre_is_authorized: bool,
 ) {
     let matched_caller_seed: Option<(PdaSeed, bool, ProgramId)> =
-        caller.program_id.and_then(|caller_program_id| {
-            caller_pda_seeds.iter().find_map(|seed| {
-                if AccountId::for_public_pda(&caller_program_id, seed) == pre_account_id {
-                    return Some((*seed, false, caller_program_id));
-                }
-                if let Some((npk, vpk, identifier)) =
-                    private_pda_by_position.get(&pre_state_position)
-                    && AccountId::for_private_pda(&caller_program_id, seed, npk, vpk, *identifier)
-                        == pre_account_id
-                {
-                    return Some((*seed, true, caller_program_id));
-                }
-                None
-            })
-        });
+        match_caller_public_seed(caller, caller_pda_seeds, pre_account_id)
+            .map(|(seed, caller_program_id)| (seed, false, caller_program_id))
+            .or_else(|| {
+                match_caller_private_seed(
+                    private_pda_by_position,
+                    caller,
+                    caller_pda_seeds,
+                    pre_account_id,
+                    pre_state_position,
+                )
+                .map(|(seed, caller_program_id)| (seed, true, caller_program_id))
+            });
 
     if let Some((seed, is_private_form, caller_program_id)) = matched_caller_seed {
         assert_family_binding(pda_family_binding, caller_program_id, seed, pre_account_id);
