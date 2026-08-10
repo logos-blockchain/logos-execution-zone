@@ -1,8 +1,9 @@
 //! Two-sequencer CACP reference implementation for L1 channel inscriptions.
 //!
-//! This module coordinates and validates one joint Mantle transaction. It does
-//! not implement stake custody or forfeiture: `ChannelInscribe` payloads are
-//! data, not executable bond operations.
+//! This module coordinates and validates one joint Mantle transaction.
+//! `ChannelInscribe` payloads remain data, not executable bond operations. An
+//! intent may bind terms for a separately executed custodial bond, but custody
+//! and settlement must happen in that external execution environment.
 
 use std::collections::{HashMap, HashSet};
 
@@ -31,11 +32,23 @@ pub struct InscribeIntent {
     pub payload: Vec<u8>,
 }
 
+/// Economic terms enforced outside Bedrock by an explicitly named custodian.
+///
+/// The enforcer is a LEE public account. Binding it into the proposal does not
+/// make inscriptions executable; it lets both sequencers agree which separate
+/// custody flow and stake amount belong to this CACP run.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CustodialBondTerms {
+    pub enforcer_account_id: lee::AccountId,
+    pub stake_amount: u128,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CrossZoneIntent {
     version: u8,
     operations: [InscribeIntent; PARTICIPANT_COUNT],
     nonce: u64,
+    custodial_bond: Option<CustodialBondTerms>,
 }
 
 impl CrossZoneIntent {
@@ -64,7 +77,17 @@ impl CrossZoneIntent {
             version: INTENT_VERSION,
             operations,
             nonce,
+            custodial_bond: None,
         })
+    }
+
+    /// Binds a separately executed custodial bond to this proposal.
+    pub fn with_custodial_bond(mut self, terms: CustodialBondTerms) -> Result<Self, CacpError> {
+        if terms.stake_amount == 0 {
+            return Err(CacpError::ZeroStake);
+        }
+        self.custodial_bond = Some(terms);
+        Ok(self)
     }
 
     #[must_use]
@@ -82,6 +105,11 @@ impl CrossZoneIntent {
         self.nonce
     }
 
+    #[must_use]
+    pub const fn custodial_bond(&self) -> Option<CustodialBondTerms> {
+        self.custodial_bond
+    }
+
     /// Fixed-field-order encoding used to identify one CACP proposal.
     #[must_use]
     pub fn canonical_bytes(&self) -> Vec<u8> {
@@ -96,6 +124,11 @@ impl CrossZoneIntent {
             bytes.extend_from_slice(&operation.payload);
         }
         bytes.extend_from_slice(&self.nonce.to_le_bytes());
+        if let Some(terms) = self.custodial_bond {
+            bytes.extend_from_slice(b"/CACP/CustodialBond/v1/");
+            bytes.extend_from_slice(terms.enforcer_account_id.as_ref());
+            bytes.extend_from_slice(&terms.stake_amount.to_le_bytes());
+        }
         bytes
     }
 
@@ -499,6 +532,8 @@ pub enum CacpError {
     EmptyInscription,
     #[error("an inscription exceeds the Mantle bound")]
     InscriptionTooLarge,
+    #[error("a custodial bond stake must be greater than zero")]
+    ZeroStake,
     #[error("the intent does not match the fixed two-zone topology")]
     TopologyMismatch,
     #[error("a channel parent is missing")]
@@ -697,6 +732,46 @@ mod tests {
             topology,
             parents,
         }
+    }
+
+    #[test]
+    fn custodial_bond_terms_are_bound_to_the_proposal() {
+        let fixture = fixture();
+        let first = fixture
+            .intent
+            .clone()
+            .with_custodial_bond(CustodialBondTerms {
+                enforcer_account_id: lee::AccountId::new([9; 32]),
+                stake_amount: 1_000,
+            })
+            .unwrap();
+        let different_amount = fixture
+            .intent
+            .clone()
+            .with_custodial_bond(CustodialBondTerms {
+                enforcer_account_id: lee::AccountId::new([9; 32]),
+                stake_amount: 2_000,
+            })
+            .unwrap();
+        let different_enforcer = fixture
+            .intent
+            .clone()
+            .with_custodial_bond(CustodialBondTerms {
+                enforcer_account_id: lee::AccountId::new([8; 32]),
+                stake_amount: 1_000,
+            })
+            .unwrap();
+
+        assert_ne!(first.proposal_id(), fixture.intent.proposal_id());
+        assert_ne!(first.proposal_id(), different_amount.proposal_id());
+        assert_ne!(first.proposal_id(), different_enforcer.proposal_id());
+        assert!(matches!(
+            fixture.intent.with_custodial_bond(CustodialBondTerms {
+                enforcer_account_id: lee::AccountId::new([9; 32]),
+                stake_amount: 0,
+            }),
+            Err(CacpError::ZeroStake)
+        ));
     }
 
     fn phase_three(fixture: &Fixture) -> (InitiatorSession, CounterpartySession, Finalize) {
