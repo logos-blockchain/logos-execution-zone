@@ -70,6 +70,7 @@ members = [
   "tools/integration_bench",
   "tools/cross_zone_chat",
   "tools/dashboard_gen",
+  "tools/cacp_demo",
 ]
 
 [workspace.dependencies]

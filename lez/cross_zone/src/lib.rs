@@ -22,6 +22,8 @@ use lee_core::{
 };
 use serde::Serialize;
 
+pub mod cacp;
+
 /// The cross-zone emission fields a watcher or verifier reads off a source
 /// transaction, common to every emitter program.
 pub struct Emission {

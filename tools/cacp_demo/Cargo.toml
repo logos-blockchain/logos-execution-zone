@@ -1,0 +1,15 @@
+[package]
+name = "cacp_demo"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+cross_zone.workspace = true
+logos-blockchain-core.workspace = true
+logos-blockchain-key-management-system-service.workspace = true

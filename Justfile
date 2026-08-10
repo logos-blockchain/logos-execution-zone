@@ -151,6 +151,12 @@ cross-zone-chat:
     @echo "💬 Cross-zone chat demo — open the printed localhost URL"
     {{DEMO_ENV}} RISC0_DEV_MODE=1 cargo run -p cross_zone_chat --release
 
+# Demo: two-zone CACP reference model. Runs four asserted protocol scenarios;
+# inscriptions do not provide stake custody or costly-abort enforcement.
+demo-cacp:
+    @echo "🔐 CACP reference-model demo"
+    cargo run -p cacp_demo
+
 # Clean runtime data
 clean:
     @echo "🧹 Cleaning run artifacts"
