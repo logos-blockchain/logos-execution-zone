@@ -35,6 +35,7 @@ mod authenticated_transfer;
 mod changer_claimer;
 mod circuit;
 mod claiming;
+mod events;
 mod flash_swap;
 mod genesis;
 mod privacy_preserving;
@@ -60,6 +61,7 @@ impl V03State {
         self.insert_program(&crate::test_methods::two_pda_claimer());
         self.insert_program(&crate::test_methods::noop());
         self.insert_program(&crate::test_methods::chain_caller());
+        self.insert_program(&crate::test_methods::event_emitter());
         self.insert_program(&crate::test_methods::modified_transfer_program());
         self.insert_program(&crate::test_methods::malicious_authorization_changer());
         self.insert_program(&crate::test_methods::validity_window());
@@ -177,6 +179,14 @@ enum FlashSwapInstruction {
     InvariantCheck {
         min_vault_balance: u128,
     },
+}
+
+// ── Event emitter type (mirror of the guest type for host-side serialisation) ──
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct EmitterInstruction {
+    events: Vec<Vec<u8>>,
+    chain: Vec<(ProgramId, Vec<u32>)>,
 }
 
 fn public_state_from_balances(initial_data: &[(AccountId, u128)]) -> HashMap<AccountId, Account> {
