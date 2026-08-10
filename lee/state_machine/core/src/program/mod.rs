@@ -489,6 +489,7 @@ pub struct ProgramOutput {
     pub block_validity_window: BlockValidityWindow,
     /// The timestamp window where the program output is valid.
     pub timestamp_validity_window: TimestampValidityWindow,
+    pub events: Vec<Vec<u8>>,
 }
 
 impl ProgramOutput {
@@ -508,6 +509,7 @@ impl ProgramOutput {
             chained_calls: Vec::new(),
             block_validity_window: ValidityWindow::new_unbounded(),
             timestamp_validity_window: ValidityWindow::new_unbounded(),
+            events: Vec::new(),
         }
     }
 
@@ -517,6 +519,11 @@ impl ProgramOutput {
 
     pub fn with_chained_calls(mut self, chained_calls: Vec<ChainedCall>) -> Self {
         self.chained_calls = chained_calls;
+        self
+    }
+
+    pub fn with_events(mut self, events: Vec<Vec<u8>>) -> Self {
+        self.events = events;
         self
     }
 
@@ -568,6 +575,13 @@ impl ProgramOutput {
         self.timestamp_validity_window = (self.timestamp_validity_window.start(), ts).try_into()?;
         Ok(self)
     }
+}
+
+#[cfg(feature = "host")]
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct Event {
+    pub program_id: ProgramId,
+    pub data: Vec<u8>,
 }
 
 /// Representation of a number as `lo + hi * 2^128`.
