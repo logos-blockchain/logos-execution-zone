@@ -8,8 +8,8 @@ use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, PublicAction, Timestamp,
     account::{Account, AccountId, AccountWithMetadata},
     program::{
-        CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, compute_public_authorized_pdas,
-        validate_execution,
+        CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, Event,
+        compute_public_authorized_pdas, validate_execution,
     },
 };
 use log::debug;
@@ -32,6 +32,7 @@ pub struct StateDiff {
     pub new_commitments: Vec<Commitment>,
     pub new_nullifiers: Vec<Nullifier>,
     pub program: Option<Program>,
+    pub events: Vec<Event>,
 }
 
 /// The validated output of executing or verifying a transaction, ready to be applied to the state.
@@ -89,6 +90,7 @@ impl ValidatedStateDiff {
             .collect();
 
         let mut state_diff: HashMap<AccountId, Account> = HashMap::new();
+        let mut events: Vec<Event> = Vec::new();
 
         let initial_call = ChainedCall {
             program_id: message.program_id,
@@ -260,6 +262,11 @@ impl ValidatedStateDiff {
                 state_diff.insert(pre.account_id, post.account().clone());
             }
 
+            events.extend(program_output.events.into_iter().map(|data| Event {
+                program_id: chained_call.program_id,
+                data,
+            }));
+
             // Source from `program_output.pre_states`, not `chained_call.pre_states`:
             // the loop above already gates program_output's `is_authorized` via the
             // `!pre.is_authorized || is_indeed_authorized` check, while `chained_call.
@@ -325,6 +332,7 @@ impl ValidatedStateDiff {
             new_commitments: vec![],
             new_nullifiers: vec![],
             program: None,
+            events,
         }))
     }
 
@@ -436,6 +444,7 @@ impl ValidatedStateDiff {
             new_commitments: commitments,
             new_nullifiers,
             program: None,
+            events: vec![],
         }))
     }
 
@@ -454,6 +463,7 @@ impl ValidatedStateDiff {
             new_commitments: vec![],
             new_nullifiers: vec![],
             program: Some(program),
+            events: vec![],
         }))
     }
 
