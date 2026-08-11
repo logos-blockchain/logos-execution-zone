@@ -118,6 +118,7 @@ fn build_ping_tx(target_zone: [u8; 32], receiver_id: ProgramId) -> LeeTransactio
         vec![outbox_account],
         vec![],
         send,
+        lee::FeeFields::ZERO,
     )
     .expect("build ping message");
     LeeTransaction::Public(PublicTransaction::new(

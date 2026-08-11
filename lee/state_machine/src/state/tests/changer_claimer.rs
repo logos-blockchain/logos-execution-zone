@@ -12,8 +12,7 @@ fn public_changer_claimer_no_data_change_no_claim_succeeds() {
     let instruction: (Option<Vec<u8>>, bool) = (None, false);
 
     let message =
-        public_transaction::Message::try_new(program_id, vec![account_id], vec![], instruction)
-            .unwrap();
+        public_transaction::Message::new_feeless(program_id, vec![account_id], vec![], instruction);
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
     let tx = PublicTransaction::new(message, witness_set);
 
@@ -38,8 +37,7 @@ fn public_changer_claimer_data_change_no_claim_fails() {
     let instruction: (Option<Vec<u8>>, bool) = (Some(new_data), false);
 
     let message =
-        public_transaction::Message::try_new(program_id, vec![account_id], vec![], instruction)
-            .unwrap();
+        public_transaction::Message::new_feeless(program_id, vec![account_id], vec![], instruction);
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
     let tx = PublicTransaction::new(message, witness_set);
 

@@ -14,15 +14,21 @@ pub fn PublicTxDetails(tx: PublicTransaction) -> impl IntoView {
         message,
         witness_set,
     } = tx;
+    // TODO(T8): surface the fee fields once they carry real values.
     let PublicMessage {
         program_id,
         account_ids,
         nonces,
         instruction_data,
+        payer: _,
+        gas_limit: _,
+        tip: _,
+        max_fee: _,
     } = message;
     let WitnessSet {
         signatures_and_public_keys,
         proof,
+        fee_witness: _,
     } = witness_set;
 
     let program_id_str = program_id.to_string();
@@ -83,6 +89,7 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
     let WitnessSet {
         signatures_and_public_keys: _,
         proof,
+        fee_witness: _,
     } = witness_set;
     let proof_len = proof.map_or(0, |p| p.0.len());
 
@@ -123,8 +130,19 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
 /// Program deployment transaction details component
 #[component]
 pub fn ProgramDeploymentTxDetails(tx: ProgramDeploymentTransaction) -> impl IntoView {
-    let ProgramDeploymentTransaction { hash: _, message } = tx;
-    let ProgramDeploymentMessage { bytecode } = message;
+    let ProgramDeploymentTransaction {
+        hash: _,
+        message,
+        witness_set: _,
+    } = tx;
+    // TODO(T8): surface the fee fields once they carry real values.
+    let ProgramDeploymentMessage {
+        bytecode,
+        payer: _,
+        gas_limit: _,
+        tip: _,
+        max_fee: _,
+    } = message;
 
     let bytecode_len = bytecode.len();
     view! {

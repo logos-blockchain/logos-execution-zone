@@ -13,7 +13,8 @@ use indexer_service_protocol::{
     CommitmentSetDigest, Data, EncryptedAccountData, HashType, IndexerStatus, IndexerSyncState,
     PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction,
     ProgramDeploymentMessage, ProgramDeploymentTransaction, ProgramId, PublicActionWithID,
-    PublicMessage, PublicTransaction, Signature, Transaction, ValidityWindow, WitnessSet,
+    PublicKey, PublicMessage, PublicTransaction, Signature, Transaction, ValidityWindow,
+    WitnessSet,
 };
 use jsonrpsee::{
     core::{SubscriptionResult, async_trait},
@@ -366,10 +367,15 @@ fn mock_public_tx(
             ],
             nonces: vec![block_id as u128, (block_id + 1) as u128],
             instruction_data: vec![1, 2, 3, 4],
+            payer: account_ids[tx_idx as usize % account_ids.len()],
+            gas_limit: 60_000,
+            tip: 100,
+            max_fee: 1_000_000,
         },
         witness_set: WitnessSet {
             signatures_and_public_keys: vec![],
             proof: None,
+            fee_witness: None,
         },
     })
 }
@@ -409,6 +415,7 @@ fn mock_privacy_preserving_tx(
         witness_set: WitnessSet {
             signatures_and_public_keys: vec![],
             proof: Some(indexer_service_protocol::Proof(vec![0; 32])),
+            fee_witness: None,
         },
     })
 }
@@ -418,6 +425,15 @@ fn mock_program_deployment_tx(tx_hash: HashType) -> Transaction {
         hash: tx_hash,
         message: ProgramDeploymentMessage {
             bytecode: vec![0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00],
+            payer: AccountId { value: [0; 32] },
+            gas_limit: 0,
+            tip: 0,
+            max_fee: 0,
+        },
+        witness_set: WitnessSet {
+            signatures_and_public_keys: vec![],
+            proof: None,
+            fee_witness: None,
         },
     })
 }
@@ -462,6 +478,8 @@ fn build_mock_block(
             prev_block_hash: prev_hash,
             hash: block_hash,
             timestamp,
+            // Fake feed: zeroed like the signature beside it, not a real key.
+            producer: PublicKey([0_u8; 32]),
             signature: Signature([0_u8; 64]),
         },
         body: BlockBody {

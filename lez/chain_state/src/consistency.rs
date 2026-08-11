@@ -323,13 +323,15 @@ mod tests {
     use super::*;
 
     fn test_block(block_id: BlockId, timestamp: u64) -> Block {
+        let signing_key = lee::PrivateKey::try_new([7; 32]).expect("valid key");
         HashableBlockData {
             block_id,
             prev_block_hash: HashType([0; 32]),
             timestamp,
+            producer: lee::PublicKey::new_from_private_key(&signing_key),
             transactions: vec![],
         }
-        .into_pending_block(&lee::PrivateKey::try_new([7; 32]).expect("valid key"))
+        .into_pending_block(&signing_key)
     }
 
     fn block_msg(block: &Block) -> ZoneMessage {

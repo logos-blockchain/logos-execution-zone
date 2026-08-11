@@ -412,9 +412,12 @@ impl CrossZoneVerifier {
             .await?;
 
         // Equivocation defense: the source block must be signed by the peer's
-        // pinned block-signing key, not merely inscribed on the channel.
+        // pinned block-signing key, not merely inscribed on the channel. The
+        // header now names its producer, so the pinned key is checked against
+        // that too — the signature verification below is what proves the claim,
+        // and the comparison keeps the externally-pinned key authoritative.
         if let Some(expected) = self.peer_pubkeys.get(&msg.src_zone)
-            && !peer_block.is_signed_by(expected)
+            && (&peer_block.header.producer != expected || !peer_block.is_signed_by(expected))
         {
             return Err(CrossZoneVerifyError::Forged(anyhow!(
                 "forged cross-zone dispatch: peer zone {} block {} is not signed by the pinned block-signing key",
@@ -552,7 +555,7 @@ fn accept_peer_block(
     }
 
     if let Some(expected) = expected_pubkey
-        && !block.is_signed_by(expected)
+        && (&block.header.producer != expected || !block.is_signed_by(expected))
     {
         warn!(
             "Peer reader dropping block {} from {}: not signed by the pinned block-signing key",
@@ -739,8 +742,14 @@ mod tests {
             payload: payload.to_vec(),
             ordinal: 0,
         };
-        let message = Message::try_new(programs::ping_sender().id(), vec![], vec![], send)
-            .expect("emission serializes");
+        let message = Message::try_new(
+            programs::ping_sender().id(),
+            vec![],
+            vec![],
+            send,
+            lee::FeeFields::ZERO,
+        )
+        .expect("emission serializes");
         LeeTransaction::Public(PublicTransaction::new(
             message,
             WitnessSet::from_raw_parts(vec![]),

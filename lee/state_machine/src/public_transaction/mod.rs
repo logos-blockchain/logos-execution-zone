@@ -1,6 +1,6 @@
 pub use message::Message;
 pub use transaction::PublicTransaction;
-pub use witness_set::WitnessSet;
+pub use witness_set::{Witness, WitnessSet};
 
 mod message;
 mod transaction;

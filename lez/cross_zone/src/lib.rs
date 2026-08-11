@@ -102,6 +102,7 @@ fn build_inbox_dispatch_tx(
         account_ids,
         vec![],
         Instruction::Dispatch(msg.clone()),
+        lee::FeeFields::ZERO,
     )
     .expect("inbox dispatch instruction must serialize");
 
@@ -209,9 +210,14 @@ fn genesis_public_tx<I: Serialize>(
     account_ids: Vec<AccountId>,
     instruction: I,
 ) -> lee::PublicTransaction {
-    let message =
-        lee::public_transaction::Message::try_new(program_id, account_ids, vec![], instruction)
-            .expect("genesis instruction must serialize");
+    let message = lee::public_transaction::Message::try_new(
+        program_id,
+        account_ids,
+        vec![],
+        instruction,
+        lee::FeeFields::ZERO,
+    )
+    .expect("genesis instruction must serialize");
     lee::PublicTransaction::new(
         message,
         lee::public_transaction::WitnessSet::from_raw_parts(vec![]),

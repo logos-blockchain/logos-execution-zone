@@ -23,6 +23,7 @@ pub fn BlockPreview(block: Block) -> impl IntoView {
                 prev_block_hash,
                 hash,
                 timestamp,
+                producer: _,
                 signature: _,
             },
         body: BlockBody { transactions },

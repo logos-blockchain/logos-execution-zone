@@ -24,13 +24,12 @@ fn claiming_mechanism() {
         ..Account::default()
     };
 
-    let message = public_transaction::Message::try_new(
+    let message = public_transaction::Message::new_feeless(
         program.id(),
         vec![from, to],
         vec![Nonce(0), Nonce(0)],
         amount,
-    )
-    .unwrap();
+    );
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[&from_key, &to_key]);
     let tx = PublicTransaction::new(message, witness_set);
 
@@ -51,8 +50,7 @@ fn unauthorized_public_account_claiming_fails() {
     assert_eq!(state.get_account_by_id(account_id), Account::default());
 
     let message =
-        public_transaction::Message::try_new(program.id(), vec![account_id], vec![], 0_u128)
-            .unwrap();
+        public_transaction::Message::new_feeless(program.id(), vec![account_id], vec![], 0_u128);
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
     let tx = PublicTransaction::new(message, witness_set);
 
@@ -71,13 +69,12 @@ fn authorized_public_account_claiming_succeeds() {
 
     assert_eq!(state.get_account_by_id(account_id), Account::default());
 
-    let message = public_transaction::Message::try_new(
+    let message = public_transaction::Message::new_feeless(
         program.id(),
         vec![account_id],
         vec![Nonce(0)],
         0_u128,
-    )
-    .unwrap();
+    );
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[&account_key]);
     let tx = PublicTransaction::new(message, witness_set);
 
@@ -119,14 +116,13 @@ fn public_chained_call() {
         ..Account::default()
     };
 
-    let message = public_transaction::Message::try_new(
+    let message = public_transaction::Message::new_feeless(
         program.id(),
         vec![to, from], // The chain_caller program permutes the account order in the chain
         // call
         vec![Nonce(0)],
         instruction,
-    )
-    .unwrap();
+    );
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[&from_key]);
     let tx = PublicTransaction::new(message, witness_set);
 
@@ -159,14 +155,13 @@ fn execution_fails_if_chained_calls_exceeds_depth() {
         None,
     );
 
-    let message = public_transaction::Message::try_new(
+    let message = public_transaction::Message::new_feeless(
         program.id(),
         vec![to, from], // The chain_caller program permutes the account order in the chain
         // call
         vec![Nonce(0)],
         instruction,
-    )
-    .unwrap();
+    );
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[&from_key]);
     let tx = PublicTransaction::new(message, witness_set);
 
@@ -201,14 +196,13 @@ fn execution_that_requires_authentication_of_a_program_derived_account_id_succee
         balance: amount, // The `chain_caller` chains the program twice
         ..Account::default()
     };
-    let message = public_transaction::Message::try_new(
+    let message = public_transaction::Message::new_feeless(
         chain_caller.id(),
         vec![to, from], // The chain_caller program permutes the account order in the chain
         // call
         vec![],
         instruction,
-    )
-    .unwrap();
+    );
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
     let tx = PublicTransaction::new(message, witness_set);
 
@@ -258,14 +252,13 @@ fn claiming_mechanism_within_chain_call() {
         1,
         None,
     );
-    let message = public_transaction::Message::try_new(
+    let message = public_transaction::Message::new_feeless(
         chain_caller.id(),
         vec![to, from], // The chain_caller program permutes the account order in the chain
         // call
         vec![Nonce(0), Nonce(0)],
         instruction,
-    )
-    .unwrap();
+    );
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[&from_key, &to_key]);
     let tx = PublicTransaction::new(message, witness_set);
 
@@ -516,7 +509,7 @@ fn claiming_mechanism_cannot_claim_initialied_accounts() {
     );
 
     let message =
-        public_transaction::Message::try_new(claimer.id(), vec![account_id], vec![], ()).unwrap();
+        public_transaction::Message::new_feeless(claimer.id(), vec![account_id], vec![], ());
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
     let tx = PublicTransaction::new(message, witness_set);
 
@@ -574,13 +567,12 @@ fn malicious_program_cannot_break_balance_validation_if_not_in_genesis() {
     let _recipient =
         AccountWithMetadata::new(state.get_account_by_id(recipient_id), false, sender_id);
 
-    let message = public_transaction::Message::try_new(
+    let message = public_transaction::Message::new_feeless(
         modified_transfer_id,
         vec![sender_id, recipient_id],
         vec![sender_nonce],
         balance_to_move,
-    )
-    .unwrap();
+    );
 
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[&sender_key]);
     let tx = PublicTransaction::new(message, witness_set);

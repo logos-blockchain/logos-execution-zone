@@ -81,6 +81,7 @@ async fn main() {
                 vec![account_id],
                 nonces,
                 instruction,
+                lee::FeeFields::ZERO,
             )
             .unwrap();
             let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
@@ -120,6 +121,7 @@ async fn main() {
                 vec![from, to],
                 nonces,
                 instruction,
+                lee::FeeFields::ZERO,
             )
             .unwrap();
             let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);

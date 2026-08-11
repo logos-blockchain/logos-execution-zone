@@ -56,6 +56,7 @@ async fn user_origin_inbox_call_rejected() -> Result<()> {
         vec![inbox_config_account_id(inbox_id), seen_id],
         vec![],
         Instruction::Dispatch(msg),
+        lee::FeeFields::ZERO,
     )
     .expect("build dispatch message");
     let tx = LeeTransaction::Public(PublicTransaction::new(

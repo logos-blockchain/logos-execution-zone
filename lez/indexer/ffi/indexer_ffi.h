@@ -108,6 +108,8 @@ typedef struct FfiBytes32 FfiHashType;
 
 typedef uint64_t FfiTimestamp;
 
+typedef struct FfiBytes32 FfiPublicKey;
+
 /**
  * 64-byte array type for signatures, etc.
  */
@@ -122,6 +124,7 @@ typedef struct FfiBlockHeader {
   FfiHashType prev_block_hash;
   FfiHashType hash;
   FfiTimestamp timestamp;
+  FfiPublicKey producer;
   FfiSignature signature;
 } FfiBlockHeader;
 
@@ -173,8 +176,6 @@ typedef struct FfiPublicMessage {
   FfiNonceList nonces;
   FfiInstructionDataList instruction_data;
 } FfiPublicMessage;
-
-typedef struct FfiBytes32 FfiPublicKey;
 
 typedef struct FfiSignaturePubKeyEntry {
   FfiSignature signature;

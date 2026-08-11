@@ -24,6 +24,9 @@ pub struct SequencerStore {
     tx_hash_to_block_map: HashMap<HashType, BlockId>,
     genesis_id: u64,
     signing_key: lee::PrivateKey,
+    /// Derived from `signing_key` once, since every block produced carries it
+    /// and deriving it is an elliptic-curve multiplication.
+    producer_key: lee::PublicKey,
 }
 
 impl SequencerStore {
@@ -61,6 +64,7 @@ impl SequencerStore {
             dbio,
             tx_hash_to_block_map,
             genesis_id,
+            producer_key: lee::PublicKey::new_from_private_key(&signing_key),
             signing_key,
         })
     }
@@ -93,6 +97,7 @@ impl SequencerStore {
             dbio,
             tx_hash_to_block_map,
             genesis_id,
+            producer_key: lee::PublicKey::new_from_private_key(&signing_key),
             signing_key,
         })
     }
@@ -148,6 +153,13 @@ impl SequencerStore {
     #[must_use]
     pub const fn signing_key(&self) -> &lee::PrivateKey {
         &self.signing_key
+    }
+
+    /// Public key this sequencer stamps into `header.producer`, matching
+    /// [`Self::signing_key`].
+    #[must_use]
+    pub const fn producer_key(&self) -> &lee::PublicKey {
+        &self.producer_key
     }
 
     pub fn get_all_blocks(&self) -> impl Iterator<Item = DbResult<Block>> {
@@ -285,7 +297,10 @@ pub fn clear_cross_zone_peer_floor(dbio: &RocksDBIO, peer_zone: PeerZoneKey) -> 
 
 #[cfg(test)]
 mod tests {
-    use common::{block::HashableBlockData, test_utils::sequencer_sign_key_for_testing};
+    use common::{
+        block::HashableBlockData,
+        test_utils::{sequencer_producer_key_for_testing, sequencer_sign_key_for_testing},
+    };
     use tempfile::tempdir;
 
     use super::*;
@@ -301,6 +316,7 @@ mod tests {
             block_id: 0,
             prev_block_hash: HashType([0; 32]),
             timestamp: 0,
+            producer: sequencer_producer_key_for_testing(),
             transactions: vec![],
         };
 
@@ -339,6 +355,7 @@ mod tests {
             block_id: 0,
             prev_block_hash: HashType([0; 32]),
             timestamp: 0,
+            producer: sequencer_producer_key_for_testing(),
             transactions: vec![],
         };
 
@@ -369,6 +386,7 @@ mod tests {
             block_id: 0,
             prev_block_hash: HashType([0; 32]),
             timestamp: 0,
+            producer: sequencer_producer_key_for_testing(),
             transactions: vec![],
         };
 
@@ -405,6 +423,7 @@ mod tests {
             block_id: 0,
             prev_block_hash: HashType([0; 32]),
             timestamp: 0,
+            producer: sequencer_producer_key_for_testing(),
             transactions: vec![],
         };
 
@@ -454,6 +473,7 @@ mod tests {
             block_id: 0,
             prev_block_hash: HashType([0; 32]),
             timestamp: 0,
+            producer: sequencer_producer_key_for_testing(),
             transactions: vec![],
         };
 

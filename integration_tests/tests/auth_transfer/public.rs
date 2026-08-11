@@ -316,6 +316,7 @@ async fn cannot_transfer_funds_from_system_faucet_account() -> Result<()> {
         vec![faucet_account_id, recipient],
         vec![],
         authenticated_transfer_core::Instruction::Transfer { amount },
+        lee::FeeFields::ZERO,
     )?;
     let tx = lee::PublicTransaction::new(
         message,
@@ -362,6 +363,7 @@ async fn cannot_execute_faucet_program() -> Result<()> {
             recipient_id: recipient,
             amount,
         },
+        lee::FeeFields::ZERO,
     )?;
     let tx = lee::PublicTransaction::new(
         message,
@@ -392,7 +394,11 @@ async fn user_tx_that_chain_calls_faucet_is_dropped() -> Result<()> {
 
     let faucet_chain_caller = test_programs::faucet_chain_caller();
     let deploy_tx = LeeTransaction::ProgramDeployment(lee::ProgramDeploymentTransaction::new(
-        lee::program_deployment_transaction::Message::new(faucet_chain_caller.elf().to_owned()),
+        lee::program_deployment_transaction::Message::new(
+            faucet_chain_caller.elf().to_owned(),
+            lee::FeeFields::ZERO,
+        ),
+        lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
     ));
     ctx.sequencer_client().send_transaction(deploy_tx).await?;
 
@@ -411,6 +417,7 @@ async fn user_tx_that_chain_calls_faucet_is_dropped() -> Result<()> {
         vec![faucet_account_id, attacker_vault_id],
         vec![],
         (faucet_program_id, vault_program_id, attacker, amount),
+        lee::FeeFields::ZERO,
     )?;
     let attack_tx = LeeTransaction::Public(lee::PublicTransaction::new(
         message,

@@ -91,13 +91,12 @@ pub mod tests {
         let (key1, key2, addr1, addr2) = keys_for_tests();
         let nonces = vec![0_u128.into(), 0_u128.into()];
         let instruction = 1337;
-        let message = Message::try_new(
+        let message = Message::new_feeless(
             crate::test_methods::simple_balance_transfer().id(),
             vec![addr1, addr2],
             nonces,
             instruction,
-        )
-        .unwrap();
+        );
 
         let witness_set = WitnessSet::for_message(&message, &[&key1, &key2]);
         PublicTransaction::new(message, witness_set)
@@ -150,6 +149,64 @@ pub mod tests {
         assert_eq!(tx, tx_from_bytes);
     }
 
+    /// Nonzero fee fields and a fee witness survive serialize -> deserialize
+    /// -> hash unchanged. The message hash matters most: the fee fields are
+    /// inside the signed content, so any drift invalidates every signature.
+    #[test]
+    fn roundtrip_preserves_nonzero_fee_fields() {
+        let (key1, key2, addr1, addr2) = keys_for_tests();
+        let sponsor = PrivateKey::try_new([9; 32]).unwrap();
+        let sponsor_id = AccountId::from(&PublicKey::new_from_private_key(&sponsor));
+        let fees = crate::FeeFields::new(sponsor_id, 60_000, 100, 10_u128.pow(9));
+        let message = Message::try_new(
+            crate::test_methods::simple_balance_transfer().id(),
+            vec![addr1, addr2],
+            vec![0_u128.into(), 0_u128.into()],
+            1337,
+            fees,
+        )
+        .unwrap();
+        let witness_set =
+            WitnessSet::for_message(&message, &[&key1, &key2]).with_fee_signer(&message, &sponsor);
+        let tx = PublicTransaction::new(message, witness_set);
+
+        let tx_from_bytes = PublicTransaction::from_bytes(&tx.to_bytes()).unwrap();
+        assert_eq!(tx, tx_from_bytes);
+        assert_eq!(tx.hash(), tx_from_bytes.hash());
+        assert_eq!(tx.message().hash(), tx_from_bytes.message().hash());
+        assert_eq!(tx_from_bytes.message().fees(), fees);
+        assert!(
+            tx_from_bytes
+                .witness_set()
+                .is_valid_for(tx_from_bytes.message())
+        );
+        assert!(crate::is_fee_authorized(
+            tx_from_bytes.message(),
+            tx_from_bytes.witness_set()
+        ));
+    }
+
+    /// The fee fields are part of the signed content: change one and the
+    /// existing signatures no longer verify.
+    #[test]
+    fn changing_a_fee_field_invalidates_the_signatures() {
+        let (key1, key2, addr1, addr2) = keys_for_tests();
+        let message = Message::try_new(
+            crate::test_methods::simple_balance_transfer().id(),
+            vec![addr1, addr2],
+            vec![0_u128.into(), 0_u128.into()],
+            1337,
+            crate::FeeFields::new(addr1, 60_000, 100, 10_u128.pow(9)),
+        )
+        .unwrap();
+        let witness_set = WitnessSet::for_message(&message, &[&key1, &key2]);
+        assert!(witness_set.is_valid_for(&message));
+
+        let mut tampered = message;
+        tampered.tip = tampered.tip.checked_add(1).unwrap();
+        assert!(!witness_set.is_valid_for(&tampered));
+    }
+
     #[test]
     fn hash_is_sha256_of_transaction_bytes() {
         let tx = transaction_for_tests();
@@ -169,13 +226,12 @@ pub mod tests {
         let state = state_for_tests();
         let nonces = vec![0_u128.into(), 0_u128.into()];
         let instruction = 1337;
-        let message = Message::try_new(
+        let message = Message::new_feeless(
             crate::test_methods::simple_balance_transfer().id(),
             vec![addr1, addr1],
             nonces,
             instruction,
-        )
-        .unwrap();
+        );
 
         let witness_set = WitnessSet::for_message(&message, &[&key1, &key1]);
         let tx = PublicTransaction::new(message, witness_set);
@@ -189,13 +245,12 @@ pub mod tests {
         let state = state_for_tests();
         let nonces = vec![0_u128.into()];
         let instruction = 1337;
-        let message = Message::try_new(
+        let message = Message::new_feeless(
             crate::test_methods::simple_balance_transfer().id(),
             vec![addr1, addr2],
             nonces,
             instruction,
-        )
-        .unwrap();
+        );
 
         let witness_set = WitnessSet::for_message(&message, &[&key1, &key2]);
         let tx = PublicTransaction::new(message, witness_set);
@@ -209,13 +264,12 @@ pub mod tests {
         let state = state_for_tests();
         let nonces = vec![0_u128.into(), 0_u128.into()];
         let instruction = 1337;
-        let message = Message::try_new(
+        let message = Message::new_feeless(
             crate::test_methods::simple_balance_transfer().id(),
             vec![addr1, addr2],
             nonces,
             instruction,
-        )
-        .unwrap();
+        );
 
         let mut witness_set = WitnessSet::for_message(&message, &[&key1, &key2]);
         witness_set.signatures_and_public_keys[0].0 = Signature::new_for_tests([1; 64]);
@@ -230,13 +284,12 @@ pub mod tests {
         let state = state_for_tests();
         let nonces = vec![0_u128.into(), 1_u128.into()];
         let instruction = 1337;
-        let message = Message::try_new(
+        let message = Message::new_feeless(
             crate::test_methods::simple_balance_transfer().id(),
             vec![addr1, addr2],
             nonces,
             instruction,
-        )
-        .unwrap();
+        );
 
         let witness_set = WitnessSet::for_message(&message, &[&key1, &key2]);
         let tx = PublicTransaction::new(message, witness_set);
@@ -252,6 +305,7 @@ pub mod tests {
             vec![],
             vec![],
             vec![0; 4],
+            crate::fees::FeeFields::ZERO,
         );
         let witness_set = WitnessSet::from_raw_parts(vec![]);
         let tx = PublicTransaction::new(message, witness_set);
@@ -267,7 +321,7 @@ pub mod tests {
         let instruction = 1337;
         let unknown_program_id = [0xdead_beef; 8];
         let message =
-            Message::try_new(unknown_program_id, vec![addr1, addr2], nonces, instruction).unwrap();
+            Message::new_feeless(unknown_program_id, vec![addr1, addr2], nonces, instruction);
 
         let witness_set = WitnessSet::for_message(&message, &[&key1, &key2]);
         let tx = PublicTransaction::new(message, witness_set);

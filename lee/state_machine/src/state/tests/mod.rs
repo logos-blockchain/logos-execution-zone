@@ -209,7 +209,7 @@ fn transfer_transaction(
     let nonces = vec![Nonce(from_nonce), Nonce(to_nonce)];
     let program_id = crate::test_methods::simple_balance_transfer().id();
     let message =
-        public_transaction::Message::try_new(program_id, account_ids, nonces, balance).unwrap();
+        public_transaction::Message::new_feeless(program_id, account_ids, nonces, balance);
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[from_key, to_key]);
     PublicTransaction::new(message, witness_set)
 }
@@ -220,13 +220,12 @@ fn build_flash_swap_tx(
     receiver_id: AccountId,
     instruction: FlashSwapInstruction,
 ) -> PublicTransaction {
-    let message = public_transaction::Message::try_new(
+    let message = public_transaction::Message::new_feeless(
         initiator.id(),
         vec![vault_id, receiver_id],
         vec![], // no signers — vault is PDA-authorised
         instruction,
-    )
-    .unwrap();
+    );
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
     PublicTransaction::new(message, witness_set)
 }

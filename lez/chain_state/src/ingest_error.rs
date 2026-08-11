@@ -22,6 +22,8 @@ pub enum BlockIngestError {
         computed: HashType,
         header: HashType,
     },
+    #[error("Block signature is not by the producer {producer} named in the header")]
+    InvalidProducerSignature { producer: lee::PublicKey },
     #[error("Block has no transactions")]
     EmptyBlock,
     #[error("Last transaction must be the public clock invocation for the block timestamp")]
@@ -76,5 +78,23 @@ mod tests {
                 got: 7
             }
         ));
+    }
+
+    #[test]
+    fn invalid_producer_signature_round_trips() {
+        // Stall reasons are persisted, so the producer key has to survive a
+        // storage round trip.
+        let producer = lee::PublicKey::new_from_private_key(
+            &lee::PrivateKey::try_new([7_u8; 32]).expect("valid key"),
+        );
+        let err = BlockIngestError::InvalidProducerSignature {
+            producer: producer.clone(),
+        };
+        let value = serde_json::to_value(&err).expect("serialize");
+        let back: BlockIngestError = serde_json::from_value(value).expect("deserialize");
+        let BlockIngestError::InvalidProducerSignature { producer: back } = back else {
+            panic!("wrong variant");
+        };
+        assert_eq!(back, producer);
     }
 }

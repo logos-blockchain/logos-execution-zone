@@ -3,6 +3,9 @@
     reason = "We prefer to group methods by functionality rather than by type for encoding"
 )]
 
+pub use fees::{
+    FeeFields, SYSTEM_PAYER, SignedMessage, fee_authorized_account_ids, is_fee_authorized,
+};
 pub use lee_core::{
     GENESIS_BLOCK_ID, SharedSecretKey,
     account::{Account, AccountId, Balance, Data},
@@ -23,6 +26,7 @@ pub use validated_state_diff::{ExecutionOutcome, ValidatedStateDiff};
 
 pub mod encoding;
 pub mod error;
+pub mod fees;
 mod merkle_tree;
 pub mod privacy_preserving_transaction;
 pub mod program;

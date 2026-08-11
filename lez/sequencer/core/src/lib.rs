@@ -137,11 +137,15 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
 
             let (genesis_state, genesis_txs) = build_genesis_state(config);
 
+            // Genesis is produced by this sequencer like any other block, so it
+            // names it as producer and is signed by it: no exemption is needed
+            // in the apply path, which validates genesis the same way.
             let hashable_data = HashableBlockData {
                 block_id: GENESIS_BLOCK_ID,
                 transactions: genesis_txs,
                 prev_block_hash: HashType([0; 32]),
                 timestamp: 0,
+                producer: lee::PublicKey::new_from_private_key(&signing_key),
             };
             let genesis_block = hashable_data.into_pending_block(&signing_key);
 
@@ -874,6 +878,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                 transactions: temp_valid_transactions,
                 prev_block_hash,
                 timestamp: new_block_timestamp,
+                producer: self.store.producer_key().clone(),
             };
 
             let block_size = borsh::to_vec(&temp_hashable_data)
@@ -967,6 +972,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             transactions: valid_transactions,
             prev_block_hash,
             timestamp: new_block_timestamp,
+            producer: self.store.producer_key().clone(),
         };
 
         let block = hashable_data
@@ -1060,6 +1066,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             transactions: vec![tx.clone(), clock_tx.clone()],
             prev_block_hash,
             timestamp,
+            producer: self.store.producer_key().clone(),
         };
         let size = borsh::to_vec(&alone)
             .context("Failed to serialize block for size check")?
@@ -1542,6 +1549,7 @@ fn build_supply_account_genesis_transaction(
             recipient_id: *account_id,
             amount: balance,
         },
+        lee::FeeFields::ZERO,
     )
     .expect("Failed to serialize genesis transfer instruction");
     let witness_set = lee::public_transaction::WitnessSet::from_raw_parts(vec![]);
@@ -1558,6 +1566,7 @@ fn build_supply_bridge_account_genesis_transaction(balance: u128) -> PublicTrans
         vec![system_accounts::faucet_account_id(), bridge_account_id],
         vec![],
         faucet_core::Instruction::GenesisTransferDirect { amount: balance },
+        lee::FeeFields::ZERO,
     )
     .expect("Failed to serialize bridge genesis transfer instruction");
     let witness_set = lee::public_transaction::WitnessSet::from_raw_parts(vec![]);
@@ -1601,6 +1610,7 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
             recipient_id: metadata.recipient_id,
             amount: event.amount,
         },
+        lee::FeeFields::ZERO,
     )
     .context("Failed to build bridge deposit message")?;
 

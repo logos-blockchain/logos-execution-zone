@@ -249,12 +249,20 @@ impl From<lee::public_transaction::Message> for PublicMessage {
             account_ids,
             nonces,
             instruction_data,
+            payer,
+            gas_limit,
+            tip,
+            max_fee,
         } = value;
         Self {
             program_id: program_id.into(),
             account_ids: account_ids.into_iter().map(Into::into).collect(),
             nonces: nonces.iter().map(|x| x.0).collect(),
             instruction_data,
+            payer: payer.into(),
+            gas_limit,
+            tip,
+            max_fee,
         }
     }
 }
@@ -266,6 +274,10 @@ impl From<PublicMessage> for lee::public_transaction::Message {
             account_ids,
             nonces,
             instruction_data,
+            payer,
+            gas_limit,
+            tip,
+            max_fee,
         } = value;
         Self::new_preserialized(
             program_id.into(),
@@ -275,6 +287,7 @@ impl From<PublicMessage> for lee::public_transaction::Message {
                 .map(|x| lee_core::account::Nonce(*x))
                 .collect(),
             instruction_data,
+            lee::FeeFields::new(payer.into(), gas_limit, tip, max_fee),
         )
     }
 }
@@ -382,16 +395,35 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
 
 impl From<lee::program_deployment_transaction::Message> for ProgramDeploymentMessage {
     fn from(value: lee::program_deployment_transaction::Message) -> Self {
+        let lee::FeeFields {
+            payer,
+            gas_limit,
+            tip,
+            max_fee,
+        } = value.fees();
         Self {
             bytecode: value.into_bytecode(),
+            payer: payer.into(),
+            gas_limit,
+            tip,
+            max_fee,
         }
     }
 }
 
 impl From<ProgramDeploymentMessage> for lee::program_deployment_transaction::Message {
     fn from(value: ProgramDeploymentMessage) -> Self {
-        let ProgramDeploymentMessage { bytecode } = value;
-        Self::new(bytecode)
+        let ProgramDeploymentMessage {
+            bytecode,
+            payer,
+            gas_limit,
+            tip,
+            max_fee,
+        } = value;
+        Self::new(
+            bytecode,
+            lee::FeeFields::new(payer.into(), gas_limit, tip, max_fee),
+        )
     }
 }
 
@@ -408,6 +440,9 @@ impl From<lee::public_transaction::WitnessSet> for WitnessSet {
                 .map(|(sig, pk)| (sig.clone().into(), pk.clone().into()))
                 .collect(),
             proof: None,
+            fee_witness: value
+                .fee_witness()
+                .map(|(sig, pk)| (sig.clone().into(), pk.clone().into())),
         }
     }
 }
@@ -421,6 +456,7 @@ impl From<lee::privacy_preserving_transaction::witness_set::WitnessSet> for Witn
                 .map(|(sig, pk)| (sig.into(), pk.into()))
                 .collect(),
             proof: Some(proof.into()),
+            fee_witness: None,
         }
     }
 }
@@ -432,6 +468,7 @@ impl TryFrom<WitnessSet> for lee::privacy_preserving_transaction::witness_set::W
         let WitnessSet {
             signatures_and_public_keys,
             proof,
+            fee_witness: _,
         } = value;
         let signatures_and_public_keys = signatures_and_public_keys
             .into_iter()
@@ -443,6 +480,29 @@ impl TryFrom<WitnessSet> for lee::privacy_preserving_transaction::witness_set::W
             proof
                 .map(Into::into)
                 .ok_or_else(|| lee::error::LeeError::InvalidInput("Missing proof".to_owned()))?,
+        ))
+    }
+}
+
+impl TryFrom<WitnessSet> for lee::public_transaction::WitnessSet {
+    type Error = lee::error::LeeError;
+
+    fn try_from(value: WitnessSet) -> Result<Self, Self::Error> {
+        let WitnessSet {
+            signatures_and_public_keys,
+            proof: _,
+            fee_witness,
+        } = value;
+        let convert = |(sig, pk): (Signature, PublicKey)| -> Result<_, Self::Error> {
+            Ok((sig.into(), pk.try_into()?))
+        };
+
+        Ok(Self::from_parts(
+            signatures_and_public_keys
+                .into_iter()
+                .map(convert)
+                .collect::<Result<Vec<_>, Self::Error>>()?,
+            fee_witness.map(convert).transpose()?,
         ))
     }
 }
@@ -476,20 +536,7 @@ impl TryFrom<PublicTransaction> for lee::PublicTransaction {
             message,
             witness_set,
         } = value;
-        let WitnessSet {
-            signatures_and_public_keys,
-            proof: _,
-        } = witness_set;
-
-        Ok(Self::new(
-            message.into(),
-            lee::public_transaction::WitnessSet::from_raw_parts(
-                signatures_and_public_keys
-                    .into_iter()
-                    .map(|(sig, pk)| Ok((sig.into(), pk.try_into()?)))
-                    .collect::<Result<Vec<_>, Self::Error>>()?,
-            ),
-        ))
+        Ok(Self::new(message.into(), witness_set.try_into()?))
     }
 }
 
@@ -526,19 +573,29 @@ impl TryFrom<PrivacyPreservingTransaction> for lee::PrivacyPreservingTransaction
 impl From<lee::ProgramDeploymentTransaction> for ProgramDeploymentTransaction {
     fn from(value: lee::ProgramDeploymentTransaction) -> Self {
         let hash = HashType(value.hash());
-        let lee::ProgramDeploymentTransaction { message } = value;
+        let lee::ProgramDeploymentTransaction {
+            message,
+            witness_set,
+        } = value;
 
         Self {
             hash,
             message: message.into(),
+            witness_set: witness_set.into(),
         }
     }
 }
 
-impl From<ProgramDeploymentTransaction> for lee::ProgramDeploymentTransaction {
-    fn from(value: ProgramDeploymentTransaction) -> Self {
-        let ProgramDeploymentTransaction { hash: _, message } = value;
-        Self::new(message.into())
+impl TryFrom<ProgramDeploymentTransaction> for lee::ProgramDeploymentTransaction {
+    type Error = lee::error::LeeError;
+
+    fn try_from(value: ProgramDeploymentTransaction) -> Result<Self, Self::Error> {
+        let ProgramDeploymentTransaction {
+            hash: _,
+            message,
+            witness_set,
+        } = value;
+        Ok(Self::new(message.into(), witness_set.try_into()?))
     }
 }
 
@@ -563,7 +620,7 @@ impl TryFrom<Transaction> for common::transaction::LeeTransaction {
         match value {
             Transaction::Public(tx) => Ok(Self::Public(tx.try_into()?)),
             Transaction::PrivacyPreserving(tx) => Ok(Self::PrivacyPreserving(tx.try_into()?)),
-            Transaction::ProgramDeployment(tx) => Ok(Self::ProgramDeployment(tx.into())),
+            Transaction::ProgramDeployment(tx) => Ok(Self::ProgramDeployment(tx.try_into()?)),
         }
     }
 }
@@ -579,6 +636,7 @@ impl From<common::block::BlockHeader> for BlockHeader {
             prev_block_hash,
             hash,
             timestamp,
+            producer,
             signature,
         } = value;
         Self {
@@ -586,6 +644,7 @@ impl From<common::block::BlockHeader> for BlockHeader {
             prev_block_hash: prev_block_hash.into(),
             hash: hash.into(),
             timestamp,
+            producer: producer.into(),
             signature: signature.into(),
         }
     }
@@ -600,6 +659,7 @@ impl TryFrom<BlockHeader> for common::block::BlockHeader {
             prev_block_hash,
             hash,
             timestamp,
+            producer,
             signature,
         } = value;
         Ok(Self {
@@ -607,6 +667,7 @@ impl TryFrom<BlockHeader> for common::block::BlockHeader {
             prev_block_hash: prev_block_hash.into(),
             hash: hash.into(),
             timestamp,
+            producer: producer.try_into()?,
             signature: signature.into(),
         })
     }
@@ -769,6 +830,11 @@ impl From<indexer_core::BlockIngestError> for BlockIngestError {
                 Self::HashMismatch {
                     computed: computed.into(),
                     header: header.into(),
+                }
+            }
+            indexer_core::BlockIngestError::InvalidProducerSignature { producer } => {
+                Self::InvalidProducerSignature {
+                    producer: producer.into(),
                 }
             }
             indexer_core::BlockIngestError::EmptyBlock => Self::EmptyBlock,

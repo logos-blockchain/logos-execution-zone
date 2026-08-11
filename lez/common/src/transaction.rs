@@ -72,7 +72,13 @@ impl LeeTransaction {
                     Err(TransactionMalformationError::InvalidSignature)
                 }
             }
-            Self::ProgramDeployment(tx) => Ok(Self::ProgramDeployment(tx)),
+            Self::ProgramDeployment(tx) => {
+                if tx.witness_set().is_valid_for(tx.message()) {
+                    Ok(Self::ProgramDeployment(tx))
+                } else {
+                    Err(TransactionMalformationError::InvalidSignature)
+                }
+            }
         }
     }
 
@@ -248,6 +254,7 @@ pub fn clock_invocation(timestamp: clock_core::Instruction) -> lee::PublicTransa
         clock_core::CLOCK_PROGRAM_ACCOUNT_IDS.to_vec(),
         vec![],
         timestamp,
+        lee::FeeFields::ZERO,
     )
     .expect("Clock invocation message should always be constructable");
     lee::PublicTransaction::new(
@@ -279,10 +286,28 @@ mod tests {
     use lee::{Account, AccountId, PrivateKey, PublicKey, V03State};
     use lee_core::account::Nonce;
 
-    use super::validate_doesnt_modify_account;
+    use super::{clock_invocation, validate_doesnt_modify_account};
     use crate::test_utils::{
         any_public_transaction, create_transaction_native_token_transfer, state_and_diff,
     };
+
+    /// The clock transaction is canonical and unsigned, and `apply_block_to_state`
+    /// checks it by equality — so the build side and the check side must agree
+    /// byte for byte, fee fields included. It is a system transaction, hence
+    /// zeroed fees and the system payer.
+    #[test]
+    fn clock_invocation_is_canonical_and_carries_zeroed_fees() {
+        let tx = clock_invocation(1234);
+        let rebuilt = clock_invocation(1234);
+        assert_eq!(tx, rebuilt);
+        assert_eq!(tx.hash(), rebuilt.hash());
+        assert_ne!(tx, clock_invocation(1235));
+
+        assert_eq!(tx.message().fees(), lee::FeeFields::ZERO);
+        assert_eq!(tx.message().payer, lee::SYSTEM_PAYER);
+        assert!(tx.witness_set().signatures_and_public_keys().is_empty());
+        assert!(tx.witness_set().fee_witness().is_none());
+    }
 
     #[test]
     fn bridge_guard_allows_balance_only_increase() {

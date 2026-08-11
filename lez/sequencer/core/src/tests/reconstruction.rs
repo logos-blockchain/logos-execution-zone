@@ -463,6 +463,7 @@ fn deposit_event_record(
 //             amount,
 //             bedrock_account_pk,
 //         },
+//         lee::FeeFields::ZERO,
 //     )
 //     .unwrap();
 //     let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[signing_key]);

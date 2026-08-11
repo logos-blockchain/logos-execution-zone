@@ -12,22 +12,22 @@ use crate::{
 };
 
 /// D2 seam: the fee treatment of program deployments.
-// TBA(Q2)
+// TBA(Q2): answered — deployments are folded into the public fee model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeploymentFeePolicy {
-    /// Deployments pay no execution/storage base fee but their storage
-    /// contribution is still capped.
+    /// Deployments are priced exactly like public transactions: storage gas
+    /// over the full serialized transaction (ELF included), execution gas over
+    /// their metered cycles.
     ///
-    /// Enforcement (recognizing a deployment and applying the cap) is the
-    /// block-level caller's job (T8); `fee_core` only exposes the knob.
-    FeeExemptStorageCapped,
+    /// Charging (recognizing a deployment and assessing it) is the block-level
+    /// caller's job (T8); `fee_core` only exposes the knob.
+    PricedAsPublic,
 }
 
-/// The default deployment fee policy.
+/// The deployment fee policy (tokenomics ruling Q2).
 #[must_use]
-// TBA(Q2)
 pub const fn deployment_policy() -> DeploymentFeePolicy {
-    DeploymentFeePolicy::FeeExemptStorageCapped
+    DeploymentFeePolicy::PricedAsPublic
 }
 
 /// Static per-transaction fee-validity (SPECS §Fee-validity).
@@ -136,17 +136,27 @@ pub fn accumulate_gas_used(running_total: u64, amount: u64, cap: u64) -> Result<
     Ok(total)
 }
 
-/// D1 seam: authorizes a transaction's payer against its signer set.
+/// D1 seam: authorizes a transaction's designated payer.
 ///
-/// Default rule: the payer must be a member of the signers.
+/// Q1 (answered): the payer is any account whose fee authorization accompanies
+/// the transaction — an explicit designation plus a signature over the fee
+/// fields and the exact transaction they cover. The payer MAY be one of the
+/// transaction's signers and MAY be a third party outside the witness set
+/// (sponsored transactions), and is never inferred from the witness set.
+///
+/// `fee_core` is pure arithmetic and cannot verify signatures, so the caller
+/// supplies `authorized`: the account ids whose fee authorization verified at
+/// the wire layer (`lee::fee_authorized_account_ids`). All this seam decides is
+/// membership.
 ///
 /// # Errors
 ///
 /// Returns `InvalidBlock(UnauthorizedPayer)` if `payer` is not one of
-/// `signers`.
-// TBA(Q1)
-pub fn authorize_payer(payer: PayerId, signers: &[PayerId]) -> Result<(), FeeError> {
-    if signers.contains(&payer) {
+/// `authorized`.
+// TBA(Q1-program-auth): the ruling also allows a program authorization; it
+// enters through `authorized`, not through this function.
+pub fn authorize_payer(payer: PayerId, authorized: &[PayerId]) -> Result<(), FeeError> {
+    if authorized.contains(&payer) {
         Ok(())
     } else {
         Err(FeeError::InvalidBlock(InvalidBlockError::UnauthorizedPayer))
@@ -154,26 +164,29 @@ pub fn authorize_payer(payer: PayerId, signers: &[PayerId]) -> Result<(), FeeErr
 }
 
 /// D3 seam: authorizes a private transaction's payer against the tx's
-/// public-signer set.
+/// public fee-authorized set.
 ///
 /// A private transaction still names public signers for authorization; the
 /// proof itself carries no public fee fields. Default rule: the payer must
-/// be one of the public signers, and an empty public-signer set is
+/// be one of the publicly authorized accounts, and an empty set is
 /// rejected, so fully-shielded transactions cannot pay fees until Q3 is
 /// decided.
 ///
 /// # Errors
 ///
-/// Returns `InvalidBlock(EmptyPublicSignerSet)` if `public_signers` is
+/// Returns `InvalidBlock(EmptyPublicSignerSet)` if `public_authorized` is
 /// empty, or `InvalidBlock(UnauthorizedPayer)` if `payer` is not among them.
 // TBA(Q3)
-pub fn authorize_private_payer(payer: PayerId, public_signers: &[PayerId]) -> Result<(), FeeError> {
-    if public_signers.is_empty() {
+pub fn authorize_private_payer(
+    payer: PayerId,
+    public_authorized: &[PayerId],
+) -> Result<(), FeeError> {
+    if public_authorized.is_empty() {
         return Err(FeeError::InvalidBlock(
             InvalidBlockError::EmptyPublicSignerSet,
         ));
     }
-    authorize_payer(payer, public_signers)
+    authorize_payer(payer, public_authorized)
 }
 
 #[cfg(test)]
@@ -333,13 +346,27 @@ mod tests {
         ));
     }
 
+    /// Q1: membership in the caller-supplied authorized set, whether the payer
+    /// got there as a signer or as a sponsor outside the witness set.
     #[test]
-    fn authorize_payer_requires_membership() {
+    fn authorize_payer_requires_membership_in_the_authorized_set() {
         assert!(authorize_payer(PAYER, &[PAYER, OTHER]).is_ok());
+        // Sponsored: the payer is authorized without being a transaction signer.
+        assert!(authorize_payer(PAYER, &[OTHER, PAYER]).is_ok());
         assert_eq!(
             authorize_payer(PAYER, &[OTHER]),
             Err(FeeError::InvalidBlock(InvalidBlockError::UnauthorizedPayer))
         );
+        assert_eq!(
+            authorize_payer(PAYER, &[]),
+            Err(FeeError::InvalidBlock(InvalidBlockError::UnauthorizedPayer))
+        );
+    }
+
+    /// Q2: deployments are priced as public transactions, not fee-exempt.
+    #[test]
+    fn deployment_policy_prices_deployments_as_public() {
+        assert_eq!(deployment_policy(), DeploymentFeePolicy::PricedAsPublic);
     }
 
     #[test]

@@ -39,6 +39,7 @@ async fn public_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
             recipient_id,
             amount: 1,
         },
+        lee::FeeFields::ZERO,
     )
     .context("Failed to build public bridge deposit transaction")?;
 
@@ -88,6 +89,7 @@ async fn public_bridge_deposit_with_zero_amount_is_rejected() -> anyhow::Result<
             recipient_id,
             amount: 0,
         },
+        lee::FeeFields::ZERO,
     )
     .context("Failed to build zero-amount public bridge deposit transaction")?;
 
@@ -456,6 +458,7 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
 //         vault_core::Instruction::Claim {
 //             amount: u128::from(amount),
 //         },
+//         lee::FeeFields::ZERO,
 //     )
 //     .context("Failed to build vault claim message")?;
 

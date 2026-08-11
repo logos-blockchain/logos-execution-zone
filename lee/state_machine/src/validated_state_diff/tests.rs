@@ -48,7 +48,7 @@ fn public_diff_reflects_a_successful_transfer() {
         ));
     let program_id = crate::test_methods::simple_balance_transfer().id();
     let message =
-        Message::try_new(program_id, vec![from, to], vec![Nonce(0), Nonce(0)], 5_u128).unwrap();
+        Message::new_feeless(program_id, vec![from, to], vec![Nonce(0), Nonce(0)], 5_u128);
     let witness_set = WitnessSet::for_message(&message, &[&from_key, &to_key]);
     let tx = crate::PublicTransaction::new(message, witness_set);
 
@@ -449,13 +449,12 @@ fn malicious_programs_cannot_drain_victim_without_signature() {
         victim_balance,
     );
 
-    let message = Message::try_new(
+    let message = Message::new_feeless(
         crate::test_methods::malicious_injector().id(),
         vec![attacker_id],
         vec![Nonce(0)],
         instruction,
-    )
-    .unwrap();
+    );
 
     let witness_set = WitnessSet::for_message(&message, &[&attacker_key]);
     let tx = crate::PublicTransaction::new(message, witness_set);
@@ -558,14 +557,13 @@ fn chained_transfer_transaction(
         num_chain_calls,
         None,
     );
-    let message = Message::try_new(
+    let message = Message::new_feeless(
         crate::test_methods::chain_caller().id(),
         // The `chain_caller` program permutes the account order in the chained call.
         vec![to, from],
         vec![Nonce(0)],
         instruction,
-    )
-    .unwrap();
+    );
     let witness_set = WitnessSet::for_message(&message, &[from_key]);
     crate::PublicTransaction::new(message, witness_set)
 }
@@ -611,4 +609,123 @@ fn chained_calls_share_a_single_cycle_budget() {
         matches!(result, Err(LeeError::OutOfGas { budget }) if budget == one_call_outcome.cycles),
         "a chain outgrowing its budget must halt with OutOfGas",
     );
+}
+
+/// A program-deployment transaction whose bytecode deploys cleanly, so the only thing under test
+/// below is its witness set.
+fn deployment_tx(
+    fees: crate::FeeFields,
+    witness: impl FnOnce(&crate::program_deployment_transaction::Message) -> WitnessSet,
+) -> crate::ProgramDeploymentTransaction {
+    let message = crate::program_deployment_transaction::Message::new(
+        crate::test_methods::noop().elf().to_owned(),
+        fees,
+    );
+    let witness_set = witness(&message);
+    crate::ProgramDeploymentTransaction::new(message, witness_set)
+}
+
+/// The apply path — not just ingest — must reject a deployment whose witness signature does not
+/// verify. Deployments also arrive inside peer blocks and are replayed from storage, neither of
+/// which goes through `transaction_stateless_check`, so T8 could otherwise read a forged fee
+/// witness as an authorization fact.
+#[test]
+fn deployment_with_an_invalid_witness_is_rejected_on_the_apply_path() {
+    let deployer = PrivateKey::try_new([1; 32]).unwrap();
+    let payer = AccountId::from(&PublicKey::new_from_private_key(&deployer));
+    let fees = crate::FeeFields::new(payer, 60_000, 0, 1_000_000);
+
+    // Control: the same transaction with a valid witness deploys.
+    let valid = deployment_tx(fees, |message| {
+        WitnessSet::for_message(message, &[&deployer])
+    });
+    let mut state = V03State::new();
+    state
+        .transition_from_program_deployment_transaction(&valid)
+        .expect("a correctly witnessed deployment must apply");
+
+    // Same message, same signer, but the signature bytes are garbage.
+    let tampered = deployment_tx(fees, |message| {
+        let mut witness_set = WitnessSet::for_message(message, &[&deployer]);
+        witness_set.signatures_and_public_keys[0].0 = crate::Signature::new_for_tests([1; 64]);
+        witness_set
+    });
+    assert!(
+        matches!(
+            ValidatedStateDiff::from_program_deployment_transaction(&tampered, &V03State::new()),
+            Err(LeeError::InvalidInput(_))
+        ),
+        "a deployment with an invalid witness signature must not produce a diff"
+    );
+    let mut fresh_state = V03State::new();
+    assert!(
+        matches!(
+            fresh_state.transition_from_program_deployment_transaction(&tampered),
+            Err(LeeError::InvalidInput(_))
+        ),
+        "and must not apply to state"
+    );
+    assert!(
+        fresh_state.programs().is_empty(),
+        "a rejected deployment must leave no program behind"
+    );
+}
+
+/// A sponsored deployment whose fee witness does not verify is rejected on the apply path too —
+/// the fee witness is checked, not merely carried.
+#[test]
+fn deployment_with_an_invalid_fee_witness_is_rejected_on_the_apply_path() {
+    let deployer = PrivateKey::try_new([1; 32]).unwrap();
+    let sponsor = PrivateKey::try_new([3; 32]).unwrap();
+    let forger = PrivateKey::try_new([4; 32]).unwrap();
+    let sponsor_id = AccountId::from(&PublicKey::new_from_private_key(&sponsor));
+    let fees = crate::FeeFields::new(sponsor_id, 60_000, 0, 1_000_000);
+
+    // Control: a genuine sponsor signature deploys, and the payer is fee-authorized.
+    let sponsored = deployment_tx(fees, |message| {
+        WitnessSet::for_message(message, &[&deployer]).with_fee_signer(message, &sponsor)
+    });
+    assert!(crate::is_fee_authorized(
+        sponsored.message(),
+        sponsored.witness_set()
+    ));
+    let mut state = V03State::new();
+    state
+        .transition_from_program_deployment_transaction(&sponsored)
+        .expect("a correctly sponsored deployment must apply");
+
+    // The fee witness claims the sponsor's public key but was signed by somebody else.
+    let forged = deployment_tx(fees, |message| {
+        let mut witness_set = WitnessSet::for_message(message, &[&deployer]);
+        witness_set.fee_witness = Some((
+            crate::Signature::new(&forger, &message.hash()),
+            PublicKey::new_from_private_key(&sponsor),
+        ));
+        witness_set
+    });
+    let mut fresh_state = V03State::new();
+    assert!(
+        matches!(
+            fresh_state.transition_from_program_deployment_transaction(&forged),
+            Err(LeeError::InvalidInput(_))
+        ),
+        "a forged fee witness must be rejected on the apply path"
+    );
+    assert!(fresh_state.programs().is_empty());
+}
+
+/// The existing unsigned-deployment shape stays valid: an empty witness set authorizes nobody but
+/// is not itself a signature failure, so today's deployment flows keep working.
+#[test]
+fn deployment_without_a_witness_still_applies_but_authorizes_nobody() {
+    let tx = deployment_tx(crate::FeeFields::ZERO, |_| {
+        WitnessSet::from_raw_parts(vec![])
+    });
+    assert!(!crate::is_fee_authorized(tx.message(), tx.witness_set()));
+
+    let mut state = V03State::new();
+    state
+        .transition_from_program_deployment_transaction(&tx)
+        .expect("an unwitnessed deployment must still apply");
+    assert_eq!(state.programs().len(), 1);
 }

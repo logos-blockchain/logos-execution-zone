@@ -65,6 +65,12 @@ impl From<Box<FfiPublicTransactionBody>> for PublicTransaction {
                     std_vec.into_iter().map(Into::into).collect()
                 },
                 instruction_data: value.message.instruction_data.into(),
+                // TODO(T8): the C ABI does not carry fee fields yet, so they
+                // come back zeroed here, as `proof` already does below.
+                payer: AccountId { value: [0; 32] },
+                gas_limit: 0,
+                tip: 0,
+                max_fee: 0,
             },
             witness_set: WitnessSet {
                 signatures_and_public_keys: {
@@ -80,6 +86,7 @@ impl From<Box<FfiPublicTransactionBody>> for PublicTransaction {
                         .collect()
                 },
                 proof: None,
+                fee_witness: None,
             },
         }
     }
@@ -100,6 +107,11 @@ impl From<PublicMessage> for FfiPublicMessage {
             account_ids,
             nonces,
             instruction_data,
+            // TODO(T8): surface the fee fields over the C ABI.
+            payer: _,
+            gas_limit: _,
+            tip: _,
+            max_fee: _,
         } = value;
 
         Self {
@@ -213,6 +225,7 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
                         .collect()
                 },
                 proof: Some(Proof(value.proof.into())),
+                fee_witness: None,
             },
         }
     }
@@ -351,6 +364,16 @@ impl From<Box<FfiProgramDeploymentTransactionBody>> for ProgramDeploymentTransac
             hash: HashType(value.hash.data),
             message: ProgramDeploymentMessage {
                 bytecode: value.message.into(),
+                // TODO(T8): the C ABI does not carry fee fields yet.
+                payer: AccountId { value: [0; 32] },
+                gas_limit: 0,
+                tip: 0,
+                max_fee: 0,
+            },
+            witness_set: WitnessSet {
+                signatures_and_public_keys: vec![],
+                proof: None,
+                fee_witness: None,
             },
         }
     }
@@ -358,7 +381,11 @@ impl From<Box<FfiProgramDeploymentTransactionBody>> for ProgramDeploymentTransac
 
 impl From<ProgramDeploymentTransaction> for FfiProgramDeploymentTransactionBody {
     fn from(value: ProgramDeploymentTransaction) -> Self {
-        let ProgramDeploymentTransaction { hash, message } = value;
+        let ProgramDeploymentTransaction {
+            hash,
+            message,
+            witness_set: _,
+        } = value;
 
         Self {
             hash: hash.into(),

@@ -145,6 +145,7 @@ fn inbox_dispatch_delivers_payload_to_ping_receiver() {
         vec![inbox_config_account_id(inbox_id), seen_id, record_id],
         vec![],
         InboxInstruction::Dispatch(msg),
+        lee::FeeFields::ZERO,
     )
     .expect("build dispatch message");
     let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
@@ -209,6 +210,7 @@ fn lock_escrows_balance_and_emits_to_outbox() {
         vec![holder_id, escrow_id, outbox_record_id],
         vec![0_u128.into()],
         lock,
+        lee::FeeFields::ZERO,
     )
     .expect("build lock message");
     let witness = WitnessSet::for_message(&message, &[&holder_key]);
@@ -285,6 +287,7 @@ fn inbox_dispatch_mints_wrapped_token() {
         ],
         vec![],
         InboxInstruction::Dispatch(msg),
+        lee::FeeFields::ZERO,
     )
     .expect("build dispatch message");
     let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
@@ -352,6 +355,7 @@ fn a_mint_from_an_unrouted_emitter_is_rejected() {
         ],
         vec![],
         InboxInstruction::Dispatch(msg),
+        lee::FeeFields::ZERO,
     )
     .expect("build dispatch message");
     let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
@@ -409,6 +413,7 @@ fn a_mint_from_the_routed_emitter_is_accepted() {
         ],
         vec![],
         InboxInstruction::Dispatch(msg),
+        lee::FeeFields::ZERO,
     )
     .expect("build dispatch message");
     let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
@@ -487,6 +492,7 @@ fn mint_replay_rejected() {
         ],
         vec![],
         InboxInstruction::Dispatch(msg),
+        lee::FeeFields::ZERO,
     )
     .expect("build dispatch message");
     let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));

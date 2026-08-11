@@ -858,6 +858,7 @@ impl WalletCore {
             account_ids,
             nonces,
             instruction_data,
+            lee::FeeFields::ZERO,
         );
 
         let message_hash = message.hash();
@@ -879,8 +880,13 @@ impl WalletCore {
     }
 
     pub async fn send_program_deployment_transaction(&self, bytecode: Vec<u8>) -> Result<HashType> {
-        let message = lee::program_deployment_transaction::Message::new(bytecode);
-        let transaction = ProgramDeploymentTransaction::new(message);
+        // TODO(T8): designate and sign for a real fee payer once deployments are charged.
+        let message =
+            lee::program_deployment_transaction::Message::new(bytecode, lee::FeeFields::ZERO);
+        let transaction = ProgramDeploymentTransaction::new(
+            message,
+            lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
+        );
 
         Ok(self
             .multi_sequencer_client

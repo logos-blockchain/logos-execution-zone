@@ -499,6 +499,14 @@ impl ValidatedStateDiff {
         tx: &ProgramDeploymentTransaction,
         state: &V03State,
     ) -> Result<Self, LeeError> {
+        // Re-verified here, not only at ingest: a deployment can also arrive inside a peer block
+        // or be replayed from storage, and the fee witness it carries must be an authorization
+        // fact on every path that applies it.
+        ensure!(
+            tx.witness_set().is_valid_for(tx.message()),
+            LeeError::InvalidInput("Invalid signature for given message and public key".into())
+        );
+
         // TODO: remove clone
         let program = Program::new(tx.message.bytecode.clone().into())?;
         if state.programs().contains_key(&program.id()) {

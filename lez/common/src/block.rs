@@ -42,6 +42,9 @@ pub struct BlockHeader {
     pub prev_block_hash: BlockHash,
     pub hash: BlockHash,
     pub timestamp: Timestamp,
+    /// Public key of the sequencer that produced the block. Part of the hashed
+    /// content, so `signature` covers it and it cannot be swapped in transit.
+    pub producer: lee::PublicKey,
     pub signature: lee::Signature,
 }
 
@@ -73,6 +76,7 @@ impl Block {
             block_id: self.header.block_id,
             prev_block_hash: self.header.prev_block_hash,
             timestamp: self.header.timestamp,
+            producer: self.header.producer.clone(),
             transactions: self.body.transactions.clone(),
         }
         .compute_hash()
@@ -84,8 +88,9 @@ impl Block {
     /// sequencer is rejected even if it reached the channel.
     #[must_use]
     pub fn is_signed_by(&self, expected_pubkey: &lee::PublicKey) -> bool {
-        let hash = HashableBlockData::from(self.clone()).compute_hash();
-        self.header.signature.is_valid_for(&hash.0, expected_pubkey)
+        self.header
+            .signature
+            .is_valid_for(&self.recompute_hash().0, expected_pubkey)
     }
 }
 
@@ -106,6 +111,11 @@ pub struct HashableBlockData {
     pub block_id: BlockId,
     pub prev_block_hash: BlockHash,
     pub timestamp: Timestamp,
+    /// The producing sequencer's block-signing public key. Hashed with the rest
+    /// of the contents, so [`Block::is_signed_by`] only accepts a signature by
+    /// this exact key: a relayer cannot re-point the header at another producer
+    /// without breaking the hash.
+    pub producer: lee::PublicKey,
     pub transactions: Vec<LeeTransaction>,
 }
 
@@ -128,6 +138,10 @@ impl HashableBlockData {
         OwnHasher::hash(&bytes)
     }
 
+    /// Hashes the contents and signs the hash with `signing_key`.
+    ///
+    /// `signing_key` must be the private key behind `self.producer`; the shared
+    /// apply path rejects a block whose signature is not by `header.producer`.
     #[must_use]
     pub fn into_pending_block(self, signing_key: &lee::PrivateKey) -> Block {
         let hash = self.compute_hash();
@@ -138,6 +152,7 @@ impl HashableBlockData {
                 prev_block_hash: self.prev_block_hash,
                 hash,
                 timestamp: self.timestamp,
+                producer: self.producer,
                 signature,
             },
             body: BlockBody {
@@ -154,6 +169,7 @@ impl From<Block> for HashableBlockData {
             block_id: value.header.block_id,
             prev_block_hash: value.header.prev_block_hash,
             timestamp: value.header.timestamp,
+            producer: value.header.producer,
             transactions: value.body.transactions,
         }
     }
@@ -173,32 +189,50 @@ mod tests {
         assert_eq!(hashable, block_from_bytes);
     }
 
-    #[test]
-    fn recompute_hash_matches_header_for_well_formed_block() {
-        let key = lee::PrivateKey::try_new([7_u8; 32]).expect("valid key");
-        let block = HashableBlockData {
+    fn block_signed_by(key: &lee::PrivateKey) -> crate::block::Block {
+        HashableBlockData {
             block_id: 5,
             prev_block_hash: HashType([9_u8; 32]),
             timestamp: 42,
+            producer: lee::PublicKey::new_from_private_key(key),
             transactions: vec![test_utils::produce_dummy_empty_transaction()],
         }
-        .into_pending_block(&key);
+        .into_pending_block(key)
+    }
+
+    #[test]
+    fn recompute_hash_matches_header_for_well_formed_block() {
+        let key = lee::PrivateKey::try_new([7_u8; 32]).expect("valid key");
+        let block = block_signed_by(&key);
         assert_eq!(block.recompute_hash(), block.header.hash);
     }
 
     #[test]
     fn recompute_hash_detects_tampering() {
         let key = lee::PrivateKey::try_new([7_u8; 32]).expect("valid key");
-        let block = HashableBlockData {
-            block_id: 5,
-            prev_block_hash: HashType([9_u8; 32]),
-            timestamp: 42,
-            transactions: vec![test_utils::produce_dummy_empty_transaction()],
-        }
-        .into_pending_block(&key);
-
-        let mut tampered = block;
+        let mut tampered = block_signed_by(&key);
         tampered.header.timestamp = 99; // header changed; stale hash no longer matches
         assert_ne!(tampered.recompute_hash(), tampered.header.hash);
+    }
+
+    #[test]
+    fn block_is_signed_by_its_producer() {
+        let key = lee::PrivateKey::try_new([7_u8; 32]).expect("valid key");
+        let block = block_signed_by(&key);
+        assert!(block.is_signed_by(&block.header.producer));
+    }
+
+    #[test]
+    fn recompute_hash_detects_producer_tampering() {
+        let key = lee::PrivateKey::try_new([7_u8; 32]).expect("valid key");
+        let other = lee::PrivateKey::try_new([8_u8; 32]).expect("valid key");
+        let mut tampered = block_signed_by(&key);
+
+        // Re-pointing the header at another producer is what a relayer would do
+        // to have the payout credited elsewhere; the producer is hashed, so the
+        // stored hash (and with it the signature) no longer matches.
+        tampered.header.producer = lee::PublicKey::new_from_private_key(&other);
+        assert_ne!(tampered.recompute_hash(), tampered.header.hash);
+        assert!(!tampered.is_signed_by(&tampered.header.producer));
     }
 }

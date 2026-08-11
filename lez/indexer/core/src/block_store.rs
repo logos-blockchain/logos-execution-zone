@@ -421,6 +421,7 @@ mod accept_tests {
             block_id,
             prev_block_hash: prev,
             timestamp: 0,
+            producer: lee::PublicKey::new_from_private_key(&signing_key()),
             transactions: vec![],
         }
         .into_pending_block(&signing_key())
@@ -447,6 +448,33 @@ mod accept_tests {
         let stall = store.get_stall_reason().expect("get").expect("present");
         assert_eq!(stall.block_id, Some(2));
         assert_eq!(stall.orphans_since, 0);
+    }
+
+    #[tokio::test]
+    async fn signature_by_a_key_other_than_the_producer_parks() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = IndexerStore::open_db(dir.path(), Vec::new()).expect("open store");
+
+        // Correctly chained and correctly hashed, but the header names a
+        // producer that did not sign it.
+        let impostor = lee::PrivateKey::try_new([11_u8; 32]).expect("valid key");
+        let block = HashableBlockData {
+            block_id: 1,
+            prev_block_hash: HashType([0_u8; 32]),
+            timestamp: 0,
+            producer: lee::PublicKey::new_from_private_key(&signing_key()),
+            transactions: vec![],
+        }
+        .into_pending_block(&impostor);
+
+        let outcome = store
+            .accept_block(&block, Slot::from(0))
+            .await
+            .expect("accept");
+        assert!(matches!(
+            outcome,
+            AcceptOutcome::Parked(BlockIngestError::InvalidProducerSignature { .. })
+        ));
     }
 
     #[tokio::test]

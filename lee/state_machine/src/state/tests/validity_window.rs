@@ -31,8 +31,7 @@ fn validity_window_works_in_public_transactions(
             TimestampValidityWindow::new_unbounded(),
         );
         let message =
-            public_transaction::Message::try_new(program_id, account_ids, nonces, instruction)
-                .unwrap();
+            public_transaction::Message::new_feeless(program_id, account_ids, nonces, instruction);
         let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
         PublicTransaction::new(message, witness_set)
     };
@@ -82,8 +81,7 @@ fn timestamp_validity_window_works_in_public_transactions(
             timestamp_validity_window,
         );
         let message =
-            public_transaction::Message::try_new(program_id, account_ids, nonces, instruction)
-                .unwrap();
+            public_transaction::Message::new_feeless(program_id, account_ids, nonces, instruction);
         let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
         PublicTransaction::new(message, witness_set)
     };

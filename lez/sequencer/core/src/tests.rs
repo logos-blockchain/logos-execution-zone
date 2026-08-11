@@ -281,6 +281,7 @@ async fn start_from_config_opens_existing_db_if_it_exists() {
         transactions: genesis_txs,
         prev_block_hash: HashType([0; 32]),
         timestamp: 0,
+        producer: lee::PublicKey::new_from_private_key(&signing_key),
     };
     let genesis_block = genesis_hashable_data.into_pending_block(&signing_key);
 
@@ -1352,13 +1353,12 @@ async fn transactions_touching_clock_account_are_dropped_from_block() {
     // Canonical clock invocation and a crafted variant with a different timestamp — both must
     // be dropped because their diffs touch the clock accounts.
     let crafted_clock_tx = {
-        let message = lee::public_transaction::Message::try_new(
+        let message = lee::public_transaction::Message::new_feeless(
             programs::clock().id(),
             system_accounts::clock_account_ids().to_vec(),
             vec![],
             42_u64,
-        )
-        .unwrap();
+        );
         LeeTransaction::Public(lee::PublicTransaction::new(
             message,
             lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
@@ -1399,7 +1399,10 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
     let clock_chain_caller = test_programs::clock_chain_caller();
     // Deploy the clock_chain_caller test program.
     let deploy_tx = LeeTransaction::ProgramDeployment(lee::ProgramDeploymentTransaction::new(
-        lee::program_deployment_transaction::Message::new(clock_chain_caller.elf().to_owned()),
+        lee::program_deployment_transaction::Message::new_feeless(
+            clock_chain_caller.elf().to_owned(),
+        ),
+        lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
     ));
     mempool_handle
         .push((TransactionOrigin::User, deploy_tx))
@@ -1414,13 +1417,12 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
     let clock_program_id = programs::clock().id();
     let timestamp: u64 = 0;
 
-    let message = lee::public_transaction::Message::try_new(
+    let message = lee::public_transaction::Message::new_feeless(
         clock_chain_caller_id,
         system_accounts::clock_account_ids().to_vec(),
         vec![], // no signers
         (clock_program_id, timestamp),
-    )
-    .unwrap();
+    );
     let user_tx = LeeTransaction::Public(lee::PublicTransaction::new(
         message,
         lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
@@ -1590,13 +1592,12 @@ fn time_locked_transfer_transaction(
     deadline: u64,
 ) -> PublicTransaction {
     let program_id = test_programs::time_locked_transfer().id();
-    let message = lee::public_transaction::Message::try_new(
+    let message = lee::public_transaction::Message::new_feeless(
         program_id,
         vec![from, to, clock_account_id],
         vec![Nonce(from_nonce)],
         (amount, deadline),
-    )
-    .unwrap();
+    );
     let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[from_key]);
     PublicTransaction::new(message, witness_set)
 }
@@ -1717,13 +1718,12 @@ fn pinata_cooldown_transaction(
     clock_account_id: AccountId,
 ) -> PublicTransaction {
     let program_id = test_programs::pinata_cooldown().id();
-    let message = lee::public_transaction::Message::try_new(
+    let message = lee::public_transaction::Message::new_feeless(
         program_id,
         vec![pinata_id, winner_id, clock_account_id],
         vec![],
         (),
-    )
-    .unwrap();
+    );
     let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[]);
     PublicTransaction::new(message, witness_set)
 }
@@ -1902,7 +1902,7 @@ fn pda_mechanism_with_pinata_token_program() {
 
     // Submit a solution to the pinata program to claim the prize
     let solution: u128 = 989_106;
-    let message = lee::public_transaction::Message::try_new(
+    let message = lee::public_transaction::Message::new_feeless(
         pinata_token.id(),
         vec![
             pinata_definition_id,
@@ -1911,8 +1911,7 @@ fn pda_mechanism_with_pinata_token_program() {
         ],
         vec![],
         solution,
-    )
-    .unwrap();
+    );
     let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[]);
     let tx = PublicTransaction::new(message, witness_set);
     state.transition_from_public_transaction(&tx, 1, 0).unwrap();
@@ -1938,7 +1937,7 @@ fn resubmittable_txs_drops_clock_and_bridge_deposits() {
     })
     .unwrap();
     let withdraw_tx = {
-        let message = lee::public_transaction::Message::try_new(
+        let message = lee::public_transaction::Message::new_feeless(
             programs::bridge().id(),
             vec![system_accounts::bridge_account_id()],
             vec![],
@@ -1946,8 +1945,7 @@ fn resubmittable_txs_drops_clock_and_bridge_deposits() {
                 amount: 1,
                 bedrock_account_pk: [0; 32],
             },
-        )
-        .unwrap();
+        );
         LeeTransaction::Public(PublicTransaction::new(
             message,
             lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
@@ -1972,6 +1970,7 @@ fn resubmittable_txs_of_blocks_without_user_txs_is_empty() {
         block_id: 1,
         prev_block_hash: HashType([0; 32]),
         timestamp: 0,
+        producer: common::test_utils::sequencer_producer_key_for_testing(),
         transactions: vec![],
     }
     .into_pending_block(&sequencer_sign_key_for_testing());

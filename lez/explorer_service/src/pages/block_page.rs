@@ -58,6 +58,7 @@ pub fn BlockPage() -> impl IntoView {
                                         prev_block_hash,
                                         hash,
                                         timestamp,
+                                        producer: _,
                                         signature,
                                     },
                                     body: BlockBody {

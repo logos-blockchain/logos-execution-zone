@@ -166,8 +166,12 @@ fn link_against(
     expected_pubkey: Option<&PublicKey>,
 ) -> Link {
     // The channel authorizes who may write, not what they may claim, so the
-    // pinned key is what says this node's own sequencer produced the block.
-    if expected_pubkey.is_some_and(|key| !block.is_signed_by(key)) {
+    // pinned key is what says this node's own sequencer produced the block. The
+    // header's own `producer` is checked against it as well: the signature is
+    // what proves authorship, the comparison keeps the pinned key in charge of
+    // which producer is acceptable here.
+    if expected_pubkey.is_some_and(|key| &block.header.producer != key || !block.is_signed_by(key))
+    {
         return Link::OffChain("block-signing key does not match the pinned key".to_owned());
     }
 
@@ -703,8 +707,7 @@ mod tests {
             payload: b"hi".to_vec(),
             ordinal: 0,
         };
-        let message = Message::try_new(programs::ping_sender().id(), vec![], vec![], send)
-            .expect("emission serializes");
+        let message = Message::new_feeless(programs::ping_sender().id(), vec![], vec![], send);
         LeeTransaction::Public(PublicTransaction::new(
             message,
             WitnessSet::from_raw_parts(vec![]),

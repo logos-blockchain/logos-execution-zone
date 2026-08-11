@@ -3112,7 +3112,7 @@ fn simple_amm_remove() {
         min_amount_to_remove_token_b: BalanceForExeTests::remove_min_amount_b(),
     };
 
-    let message = public_transaction::Message::try_new(
+    let message = public_transaction::Message::new_feeless(
         programs::amm().id(),
         vec![
             IdForExeTests::pool_definition_id(),
@@ -3125,8 +3125,7 @@ fn simple_amm_remove() {
         ],
         vec![0_u128.into()],
         instruction,
-    )
-    .unwrap();
+    );
 
     let witness_set = public_transaction::WitnessSet::for_message(
         &message,
@@ -3189,7 +3188,7 @@ fn simple_amm_new_definition_inactive_initialized_pool_and_uninit_user_lp() {
         amm_program_id: programs::amm().id(),
     };
 
-    let message = public_transaction::Message::try_new(
+    let message = public_transaction::Message::new_feeless(
         programs::amm().id(),
         vec![
             IdForExeTests::pool_definition_id(),
@@ -3202,8 +3201,7 @@ fn simple_amm_new_definition_inactive_initialized_pool_and_uninit_user_lp() {
         ],
         vec![0_u128.into(), 0_u128.into(), 0_u128.into()],
         instruction,
-    )
-    .unwrap();
+    );
 
     let witness_set = public_transaction::WitnessSet::for_message(
         &message,
@@ -3274,7 +3272,7 @@ fn simple_amm_new_definition_inactive_initialized_pool_init_user_lp() {
         amm_program_id: programs::amm().id(),
     };
 
-    let message = public_transaction::Message::try_new(
+    let message = public_transaction::Message::new_feeless(
         programs::amm().id(),
         vec![
             IdForExeTests::pool_definition_id(),
@@ -3287,8 +3285,7 @@ fn simple_amm_new_definition_inactive_initialized_pool_init_user_lp() {
         ],
         vec![0_u128.into(), 0_u128.into()],
         instruction,
-    )
-    .unwrap();
+    );
 
     let witness_set = public_transaction::WitnessSet::for_message(
         &message,
@@ -3346,7 +3343,7 @@ fn simple_amm_new_definition_uninitialized_pool() {
         amm_program_id: programs::amm().id(),
     };
 
-    let message = public_transaction::Message::try_new(
+    let message = public_transaction::Message::new_feeless(
         programs::amm().id(),
         vec![
             IdForExeTests::pool_definition_id(),
@@ -3359,8 +3356,7 @@ fn simple_amm_new_definition_uninitialized_pool() {
         ],
         vec![0_u128.into(), 0_u128.into(), 0_u128.into()],
         instruction,
-    )
-    .unwrap();
+    );
 
     let witness_set = public_transaction::WitnessSet::for_message(
         &message,
@@ -3409,7 +3405,7 @@ fn simple_amm_add() {
         max_amount_to_add_token_b: BalanceForExeTests::add_max_amount_b(),
     };
 
-    let message = public_transaction::Message::try_new(
+    let message = public_transaction::Message::new_feeless(
         programs::amm().id(),
         vec![
             IdForExeTests::pool_definition_id(),
@@ -3422,8 +3418,7 @@ fn simple_amm_add() {
         ],
         vec![0_u128.into(), 0_u128.into()],
         instruction,
-    )
-    .unwrap();
+    );
 
     let witness_set = public_transaction::WitnessSet::for_message(
         &message,
@@ -3471,7 +3466,7 @@ fn simple_amm_swap_1() {
         token_definition_id_in: IdForExeTests::token_b_definition_id(),
     };
 
-    let message = public_transaction::Message::try_new(
+    let message = public_transaction::Message::new_feeless(
         programs::amm().id(),
         vec![
             IdForExeTests::pool_definition_id(),
@@ -3482,8 +3477,7 @@ fn simple_amm_swap_1() {
         ],
         vec![0_u128.into()],
         instruction,
-    )
-    .unwrap();
+    );
 
     let witness_set = public_transaction::WitnessSet::for_message(
         &message,
@@ -3521,7 +3515,7 @@ fn simple_amm_swap_2() {
         min_amount_out: BalanceForExeTests::swap_min_amount_out(),
         token_definition_id_in: IdForExeTests::token_a_definition_id(),
     };
-    let message = public_transaction::Message::try_new(
+    let message = public_transaction::Message::new_feeless(
         programs::amm().id(),
         vec![
             IdForExeTests::pool_definition_id(),
@@ -3532,8 +3526,7 @@ fn simple_amm_swap_2() {
         ],
         vec![0_u128.into()],
         instruction,
-    )
-    .unwrap();
+    );
 
     let witness_set = public_transaction::WitnessSet::for_message(
         &message,

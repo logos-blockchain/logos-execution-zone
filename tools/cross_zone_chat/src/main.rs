@@ -501,6 +501,7 @@ fn build_send_tx(other_zone: ZoneId, ordinal: u32, text: &str) -> LeeTransaction
         vec![outbox_account],
         vec![],
         send,
+        lee::FeeFields::ZERO,
     )
     .expect("build ping_sender message");
 

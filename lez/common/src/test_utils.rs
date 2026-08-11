@@ -21,6 +21,13 @@ pub fn sequencer_sign_key_for_testing() -> lee::PrivateKey {
     lee::PrivateKey::try_new([37; 32]).unwrap()
 }
 
+/// The `producer` a block signed with [`sequencer_sign_key_for_testing`] must
+/// carry.
+#[must_use]
+pub fn sequencer_producer_key_for_testing() -> lee::PublicKey {
+    lee::PublicKey::new_from_private_key(&sequencer_sign_key_for_testing())
+}
+
 /// A syntactically valid `Public` transaction. Its contents are irrelevant to the
 /// bridge guard, which only branches on the transaction *variant* and the diff.
 #[cfg(test)]
@@ -71,6 +78,7 @@ pub fn produce_dummy_block(
         block_id: id,
         prev_block_hash: prev_hash.unwrap_or_default(),
         timestamp: id.saturating_mul(100),
+        producer: sequencer_producer_key_for_testing(),
         transactions,
     };
 
@@ -87,6 +95,7 @@ pub fn produce_dummy_empty_transaction() -> LeeTransaction {
         account_ids,
         nonces,
         authenticated_transfer_core::Instruction::Initialize,
+        lee::FeeFields::ZERO,
     )
     .unwrap();
     let private_key = lee::PrivateKey::try_new([1; 32]).unwrap();
@@ -115,6 +124,7 @@ pub fn create_transaction_native_token_transfer(
         authenticated_transfer_core::Instruction::Transfer {
             amount: balance_to_move,
         },
+        lee::FeeFields::ZERO,
     )
     .unwrap();
     let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[signing_key]);

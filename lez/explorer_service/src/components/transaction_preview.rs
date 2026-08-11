@@ -45,7 +45,11 @@ pub fn TransactionPreview(transaction: Transaction) -> impl IntoView {
             )
         }
         Transaction::ProgramDeployment(tx) => {
-            let indexer_service_protocol::ProgramDeploymentTransaction { hash: _, message } = tx;
+            let indexer_service_protocol::ProgramDeploymentTransaction {
+                hash: _,
+                message,
+                witness_set: _,
+            } = tx;
             format!("{} bytes", message.bytecode.len())
         }
     };

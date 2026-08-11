@@ -87,6 +87,7 @@ impl TpsTestManager {
                 vec![*account_id, owner_vault_id],
                 vec![Nonce(0_u128)],
                 vault_core::Instruction::Claim { amount: 10 },
+                lee::FeeFields::ZERO,
             )
             .context("Failed to build vault claim message")?;
             let witness_set =
@@ -137,6 +138,7 @@ impl TpsTestManager {
                     [pair[0].1, pair[1].1].to_vec(),
                     [Nonce(1_u128)].to_vec(),
                     authenticated_transfer_core::Instruction::Transfer { amount },
+                    lee::FeeFields::ZERO,
                 )
                 .unwrap();
                 let witness_set =

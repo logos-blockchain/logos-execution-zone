@@ -580,7 +580,11 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
 
     let faucet_chain_caller = test_programs::faucet_chain_caller();
     let deploy_tx = LeeTransaction::ProgramDeployment(lee::ProgramDeploymentTransaction::new(
-        lee::program_deployment_transaction::Message::new(faucet_chain_caller.elf().to_owned()),
+        lee::program_deployment_transaction::Message::new(
+            faucet_chain_caller.elf().to_owned(),
+            lee::FeeFields::ZERO,
+        ),
+        lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
     ));
     ctx.sequencer_client().send_transaction(deploy_tx).await?;
 

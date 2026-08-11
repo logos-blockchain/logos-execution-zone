@@ -76,15 +76,35 @@ pub fn apply_block(
     Ok(())
 }
 
-/// Checks that `block` is the valid continuation of `tip`: hash integrity,
-/// then block-id continuity, then `prev_block_hash` linkage. A `None` tip
-/// (cold state) expects the genesis block.
+/// Checks that `block` is the valid continuation of `tip`.
+///
+/// In order: hash integrity, the producer's signature over it, block-id
+/// continuity, then `prev_block_hash` linkage. A `None` tip (cold state)
+/// expects the genesis block, which is validated exactly like any other block —
+/// it is produced by a sequencer with its own signing key, so it carries a real
+/// `producer` and a real signature.
 pub fn validate_against_tip(tip: Option<&Tip>, block: &Block) -> Result<(), BlockIngestError> {
     let computed = block.recompute_hash();
     if computed != block.header.hash {
         return Err(BlockIngestError::HashMismatch {
             computed,
             header: block.header.hash,
+        });
+    }
+
+    // The producer is inside the hashed content, so this ties the block to the
+    // key it names: the hash cannot be re-pointed at another producer without
+    // breaking the check above. Verified against the hash just recomputed
+    // rather than through `is_signed_by`, which would hash the body a second
+    // time. Nothing here pins a single key — each block is checked against the
+    // producer it declares, so blocks from other sequencers validate too.
+    if !block
+        .header
+        .signature
+        .is_valid_for(&computed.0, &block.header.producer)
+    {
+        return Err(BlockIngestError::InvalidProducerSignature {
+            producer: block.header.producer.clone(),
         });
     }
 
@@ -177,7 +197,8 @@ mod tests {
         block::HashableBlockData,
         test_utils::{
             create_transaction_native_token_transfer, produce_dummy_block,
-            produce_dummy_empty_transaction, sequencer_sign_key_for_testing,
+            produce_dummy_empty_transaction, sequencer_producer_key_for_testing,
+            sequencer_sign_key_for_testing,
         },
     };
     use testnet_initial_state::{initial_pub_accounts_private_keys, initial_state};
@@ -186,6 +207,44 @@ mod tests {
 
     fn tip_of(block: &Block) -> Tip {
         Tip::from(block)
+    }
+
+    /// Genesis-shaped block claiming `producer` and signed with `signing_key`,
+    /// which the callers below deliberately let disagree.
+    fn genesis_claiming(producer: &lee::PublicKey, signing_key: &lee::PrivateKey) -> Block {
+        HashableBlockData {
+            block_id: GENESIS_BLOCK_ID,
+            prev_block_hash: HashType([0_u8; 32]),
+            timestamp: 100,
+            producer: producer.clone(),
+            transactions: vec![LeeTransaction::Public(clock_invocation(100))],
+        }
+        .into_pending_block(signing_key)
+    }
+
+    #[test]
+    fn signature_by_a_key_other_than_the_producer_is_rejected() {
+        let mut state = initial_state();
+        let impostor = lee::PrivateKey::try_new([11_u8; 32]).expect("valid key");
+        // Names the honest sequencer as producer, but is signed by someone else.
+        let block = genesis_claiming(&sequencer_producer_key_for_testing(), &impostor);
+
+        let err = apply_block(None, &block, &mut state).expect_err("should reject");
+        assert!(matches!(
+            err,
+            BlockIngestError::InvalidProducerSignature { .. }
+        ));
+    }
+
+    #[test]
+    fn block_from_another_producer_applies() {
+        let mut state = initial_state();
+        // Multi-sequencer: the check pins nothing, it only demands that the
+        // signature is by whichever producer the header names.
+        let other = lee::PrivateKey::try_new([11_u8; 32]).expect("valid key");
+        let block = genesis_claiming(&lee::PublicKey::new_from_private_key(&other), &other);
+
+        apply_block(None, &block, &mut state).expect("a well-signed foreign block applies");
     }
 
     #[test]
@@ -259,6 +318,7 @@ mod tests {
             block_id: 1,
             prev_block_hash: HashType([0_u8; 32]),
             timestamp: 0,
+            producer: sequencer_producer_key_for_testing(),
             transactions: vec![],
         }
         .into_pending_block(&sequencer_sign_key_for_testing());
@@ -274,6 +334,7 @@ mod tests {
             block_id: 1,
             prev_block_hash: HashType([0_u8; 32]),
             timestamp: 50,
+            producer: sequencer_producer_key_for_testing(),
             transactions: vec![produce_dummy_empty_transaction()],
         }
         .into_pending_block(&sequencer_sign_key_for_testing());

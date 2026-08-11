@@ -153,6 +153,8 @@ pub struct BlockHeader {
     pub prev_block_hash: HashType,
     pub hash: HashType,
     pub timestamp: Timestamp,
+    /// Block-signing public key of the sequencer that produced the block.
+    pub producer: PublicKey,
     pub signature: Signature,
 }
 
@@ -222,6 +224,10 @@ pub struct PublicMessage {
     pub account_ids: Vec<AccountId>,
     pub nonces: Vec<Nonce>,
     pub instruction_data: InstructionData,
+    pub payer: AccountId,
+    pub gas_limit: u64,
+    pub tip: u64,
+    pub max_fee: u128,
 }
 
 pub type InstructionData = Vec<u32>;
@@ -256,6 +262,9 @@ pub struct PrivacyPreservingMessage {
 pub struct WitnessSet {
     pub signatures_and_public_keys: Vec<(Signature, PublicKey)>,
     pub proof: Option<Proof>,
+    /// Fee authorization for a payer outside the witness set. Public and
+    /// program-deployment transactions only.
+    pub fee_witness: Option<(Signature, PublicKey)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -276,6 +285,7 @@ pub struct EncryptedAccountData {
 pub struct ProgramDeploymentTransaction {
     pub hash: HashType,
     pub message: ProgramDeploymentMessage,
+    pub witness_set: WitnessSet,
 }
 
 pub type ViewTag = u8;
@@ -341,6 +351,10 @@ pub struct ProgramDeploymentMessage {
     #[serde(with = "base64")]
     #[schemars(with = "String", description = "base64-encoded program bytecode")]
     pub bytecode: Vec<u8>,
+    pub payer: AccountId,
+    pub gas_limit: u64,
+    pub tip: u64,
+    pub max_fee: u128,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -410,6 +424,9 @@ pub enum BlockIngestError {
     HashMismatch {
         computed: HashType,
         header: HashType,
+    },
+    InvalidProducerSignature {
+        producer: PublicKey,
     },
     EmptyBlock,
     InvalidClockTransaction,
