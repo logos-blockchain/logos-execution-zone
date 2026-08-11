@@ -25,7 +25,7 @@ pub struct BedrockApp {
 
 impl Default for BedrockApp {
     fn default() -> Self {
-        Self::nodes(Self::DEFAULT_NODES)
+        Self::nodes(Self::DEFAULT_NODES, "BEDROCK_DEFAULT".to_owned())
     }
 }
 
@@ -35,15 +35,21 @@ impl BedrockApp {
 
     /// Creates a Bedrock deployment with the requested validator count.
     #[must_use]
-    pub fn nodes(nodes: usize) -> Self {
-        Self::nodes_with_blend_core_nodes(nodes, nodes)
+    pub fn nodes(nodes: usize, test_context: String) -> Self {
+        Self::nodes_with_blend_core_nodes(nodes, nodes, test_context)
     }
 
     /// Creates a Bedrock deployment with explicit validator and Blend counts.
     #[must_use]
-    pub fn nodes_with_blend_core_nodes(nodes: usize, blend_core_nodes: usize) -> Self {
+    pub fn nodes_with_blend_core_nodes(
+        nodes: usize,
+        blend_core_nodes: usize,
+        test_context: String,
+    ) -> Self {
         let builder = DeploymentBuilder::new(
-            TopologyConfig::with_node_numbers(nodes).with_blend_core_nodes(blend_core_nodes),
+            TopologyConfig::with_node_numbers(nodes)
+                .with_blend_core_nodes(blend_core_nodes)
+                .with_test_context(Some(test_context)),
         )
         .with_security_param(NonZeroU32::new(5).expect("five is non-zero"))
         .with_slot_activation_coeff(1, NonZeroU32::new(2).expect("two is non-zero"))
@@ -169,9 +175,11 @@ fn lez_funding_wallet() -> WalletConfig {
         0x00, 0x00,
     ];
 
-    WalletConfig::new(vec![WalletAccount {
-        label: "lez-sequencer-funding".to_owned(),
-        secret_key: ZkKey::from(BigUint::from_bytes_le(&FUNDING_SECRET_KEY)),
-        value: 1_000_000,
-    }])
+    WalletConfig::new(vec![
+        WalletAccount {
+            label: "lez-sequencer-funding".to_owned(),
+            secret_key: ZkKey::from(BigUint::from_bytes_le(&FUNDING_SECRET_KEY)),
+            value: 1_000_000_000,
+        }
+    ])
 }

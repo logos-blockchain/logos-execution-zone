@@ -49,6 +49,13 @@ impl LezLocalApp {
         self
     }
 
+    /// Sets the priority fee used by the LEZ sequencer when publishing to Bedrock.
+    #[must_use]
+    pub const fn with_priority_fee(mut self, priority_fee: u64) -> Self {
+        self.sequencer.priority_fee = priority_fee;
+        self
+    }
+
     /// Sets the number of Bedrock nodes in the stack.
     #[must_use]
     pub fn with_bedrock_nodes(mut self, nodes: usize) -> Self {

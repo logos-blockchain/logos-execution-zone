@@ -38,7 +38,12 @@ async fn complete_lez_stack_can_be_deployed_as_one_app() -> Result<(), DynError>
 async fn lez_apps_can_be_deployed_individually() -> Result<(), DynError> {
     let mut deployment = new_deployment();
 
-    let bedrock = deployment.deploy_and_expose(BedrockApp::nodes(2)).await?;
+    let bedrock = deployment
+        .deploy_and_expose(BedrockApp::nodes(
+            2,
+            "lez_apps_can_be_deployed_individually".to_owned(),
+        ))
+        .await?;
 
     deployment
         .deploy_and_expose(IndexerApp::new(bedrock.primary_api_addr()))
@@ -67,7 +72,10 @@ async fn lez_services_can_be_redeployed_after_explicit_shutdown() -> Result<(), 
     let state_dir = tempdir()?;
     let mut bedrock_deployment = new_deployment();
     let bedrock = bedrock_deployment
-        .deploy_and_expose(BedrockApp::nodes(2))
+        .deploy_and_expose(BedrockApp::nodes(
+            2,
+            "lez_services_can_be_redeployed_after_explicit_shutdown".to_owned(),
+        ))
         .await?;
 
     for _ in 0..2 {

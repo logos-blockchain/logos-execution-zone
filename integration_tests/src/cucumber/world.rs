@@ -127,6 +127,12 @@ impl CucumberWorld {
         &mut self.deployment
     }
 
+    /// Returns the unique per-scenario context string used to isolate runtime resources.
+    #[must_use]
+    pub fn test_context(&self) -> String {
+        self.test_context.clone().unwrap_or_default()
+    }
+
     /// Returns the deployed LEZ handles, or a typed error before setup.
     pub fn lez(&self) -> Result<&LezScenarioContext, StepError> {
         self.lez.as_ref().ok_or(StepError::FixtureNotDeployed)

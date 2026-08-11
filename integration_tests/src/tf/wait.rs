@@ -7,9 +7,6 @@ use sequencer_service_rpc::RpcClient as _;
 
 use super::{LezIndexerClient, LezSequencerClient};
 
-/// Maximum time to wait for the indexer to catch up to the sequencer.
-pub const L2_TO_L1_TIMEOUT: Duration = Duration::from_mins(6);
-
 /// Failure modes while waiting for the indexer to reach the sequencer.
 #[derive(Debug)]
 pub enum IndexerCatchUpError {
@@ -69,6 +66,15 @@ pub async fn wait_for_indexer_to_catch_up(
     indexer: &LezIndexerClient,
     sequencer: &LezSequencerClient,
 ) -> Result<u64, IndexerCatchUpError> {
+    wait_for_indexer_to_catch_up_with_timeout(indexer, sequencer, Duration::from_secs(360)).await
+}
+
+/// Polls the indexer until it reaches the sequencer's current last block or the timeout elapses.
+pub async fn wait_for_indexer_to_catch_up_with_timeout(
+    indexer: &LezIndexerClient,
+    sequencer: &LezSequencerClient,
+    timeout: Duration,
+) -> Result<u64, IndexerCatchUpError> {
     let block_id_to_catch_up = sequencer
         .client()
         .get_last_block_id()
@@ -76,13 +82,14 @@ pub async fn wait_for_indexer_to_catch_up(
         .map_err(|error| IndexerCatchUpError::SequencerQuery {
             message: error.to_string(),
         })?;
-    wait_for_indexer_to_reach(indexer, block_id_to_catch_up).await
+    wait_for_indexer_to_reach_with_timeout(indexer, block_id_to_catch_up, timeout).await
 }
 
-/// Polls the indexer until it reaches a specific finalized block.
-pub async fn wait_for_indexer_to_reach(
+/// Polls the indexer until it reaches a specific finalized block or the timeout elapses.
+pub async fn wait_for_indexer_to_reach_with_timeout(
     indexer: &LezIndexerClient,
     block_id_to_reach: u64,
+    timeout: Duration,
 ) -> Result<u64, IndexerCatchUpError> {
     let mut last_indexer_block = 0;
 
@@ -104,23 +111,24 @@ pub async fn wait_for_indexer_to_reach(
         }
     };
 
-    match tokio::time::timeout(L2_TO_L1_TIMEOUT, poll).await {
+    match tokio::time::timeout(timeout, poll).await {
         Ok(Ok(height)) => Ok(height),
         Ok(Err(error)) => Err(IndexerCatchUpError::IndexerQuery { message: error }),
         Err(_elapsed) => Err(IndexerCatchUpError::Timeout {
             target: block_id_to_reach,
             last_observed: last_indexer_block,
-            elapsed: L2_TO_L1_TIMEOUT,
+            elapsed: timeout,
         }),
     }
 }
 
 /// Polls the indexer until all supplied transactions are present in its
-/// finalized transaction store.
-pub async fn wait_for_indexer_to_index_transactions(
+/// finalized transaction store or the timeout elapses.
+pub async fn wait_for_indexer_to_index_transactions_with_timeout(
     indexer: &LezIndexerClient,
     transaction_hashes: &[HashType],
     target_block: u64,
+    timeout: Duration,
 ) -> Result<u64, IndexerCatchUpError> {
     let mut last_indexer_block = 0;
 
@@ -153,13 +161,13 @@ pub async fn wait_for_indexer_to_index_transactions(
         }
     };
 
-    match tokio::time::timeout(L2_TO_L1_TIMEOUT, poll).await {
+    match tokio::time::timeout(timeout, poll).await {
         Ok(Ok(height)) => Ok(height),
         Ok(Err(error)) => Err(IndexerCatchUpError::IndexerQuery { message: error }),
         Err(_elapsed) => Err(IndexerCatchUpError::Timeout {
             target: target_block,
             last_observed: last_indexer_block,
-            elapsed: L2_TO_L1_TIMEOUT,
+            elapsed: timeout,
         }),
     }
 }

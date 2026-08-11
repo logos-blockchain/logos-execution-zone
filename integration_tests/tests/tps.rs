@@ -167,6 +167,7 @@ impl TpsTestManager {
             max_block_size: ByteSize::mb(500),
             mempool_max_size: 10_000,
             block_create_timeout: Duration::from_secs(12),
+            priority_fee: sequencer_core::config::default_priority_fee(),
         }
     }
 }

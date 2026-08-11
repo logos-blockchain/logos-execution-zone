@@ -24,6 +24,7 @@ async fn reject_oversized_transaction() -> Result<()> {
             max_block_size: ByteSize::mib(1),
             mempool_max_size: 1000,
             block_create_timeout: Duration::from_secs(10),
+            priority_fee: sequencer_core::config::default_priority_fee(),
         })
         .build()
         .await?;
@@ -67,6 +68,7 @@ async fn accept_transaction_within_limit() -> Result<()> {
             max_block_size: ByteSize::mib(1),
             mempool_max_size: 1000,
             block_create_timeout: Duration::from_secs(10),
+            priority_fee: sequencer_core::config::default_priority_fee(),
         })
         .build()
         .await?;
@@ -108,6 +110,7 @@ async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
             max_block_size: block_size,
             mempool_max_size: 1000,
             block_create_timeout: Duration::from_secs(10),
+            priority_fee: sequencer_core::config::default_priority_fee(),
         })
         .build()
         .await?;

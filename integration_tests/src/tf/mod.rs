@@ -9,8 +9,8 @@ pub use apps::{
 pub use stack::{LezLocalApp, LezStackHandle, shutdown_lez_deployment};
 /// Indexer convergence polling helpers and errors.
 pub use wait::{
-    IndexerCatchUpError, L2_TO_L1_TIMEOUT, wait_for_indexer_to_catch_up,
-    wait_for_indexer_to_index_transactions, wait_for_indexer_to_reach,
+    IndexerCatchUpError, wait_for_indexer_to_catch_up, wait_for_indexer_to_catch_up_with_timeout,
+    wait_for_indexer_to_index_transactions_with_timeout, wait_for_indexer_to_reach_with_timeout,
 };
 
 mod apps;
