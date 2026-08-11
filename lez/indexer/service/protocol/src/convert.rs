@@ -7,9 +7,9 @@ use crate::{
     Commitment, CommitmentSetDigest, Data, EncryptedAccountData, EphemeralPublicKey, HashType,
     IndexerStatus, IndexerSyncState, InitMessage, Nullifier, PrivacyPreservingMessage,
     PrivacyPreservingTransaction, PrivateAction, ProgramDeploymentMessage,
-    ProgramDeploymentTransaction, ProgramId, Proof, PublicActionWithID, PublicKey, PublicMessage,
-    PublicTransaction, Signature, StallReason, Transaction, UpgradeMessage, ValidityWindow,
-    WitnessSet,
+    ProgramDeploymentTransaction, ProgramDeploymentWitnessSet, ProgramId, Proof,
+    PublicActionWithID, PublicKey, PublicMessage, PublicTransaction, Signature, StallReason,
+    Transaction, UpgradeMessage, ValidityWindow, WitnessSet,
 };
 
 // ============================================================================
@@ -388,9 +388,13 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
 impl From<lee::program_deployment_transaction::Message> for ProgramDeploymentMessage {
     fn from(value: lee::program_deployment_transaction::Message) -> Self {
         match value {
-            lee::program_deployment_transaction::Message::Init(init) => Self::Init(InitMessage {
-                elf: init.into_elf(),
-            }),
+            lee::program_deployment_transaction::Message::Init(init) => {
+                let upgrade_auth = init.upgrade_auth().map(Into::into);
+                Self::Init(InitMessage {
+                    elf: init.into_elf(),
+                    upgrade_auth,
+                })
+            }
             lee::program_deployment_transaction::Message::Upgrade(upgrade) => {
                 Self::Upgrade(UpgradeMessage {
                     program_id: upgrade.program_id.into(),
@@ -405,7 +409,9 @@ impl From<lee::program_deployment_transaction::Message> for ProgramDeploymentMes
 impl From<ProgramDeploymentMessage> for lee::program_deployment_transaction::Message {
     fn from(value: ProgramDeploymentMessage) -> Self {
         match value {
-            ProgramDeploymentMessage::Init(InitMessage { elf }) => Self::new(elf),
+            ProgramDeploymentMessage::Init(InitMessage { elf, upgrade_auth }) => {
+                Self::new_with_upgrade_auth(elf, upgrade_auth.map(Into::into))
+            }
             ProgramDeploymentMessage::Upgrade(UpgradeMessage {
                 program_id,
                 auth_withdraw,
@@ -550,19 +556,55 @@ impl TryFrom<PrivacyPreservingTransaction> for lee::PrivacyPreservingTransaction
 impl From<lee::ProgramDeploymentTransaction> for ProgramDeploymentTransaction {
     fn from(value: lee::ProgramDeploymentTransaction) -> Self {
         let hash = HashType(value.hash());
-        let lee::ProgramDeploymentTransaction { message } = value;
+        let lee::ProgramDeploymentTransaction {
+            message,
+            witness_set,
+        } = value;
 
         Self {
             hash,
             message: message.into(),
+            witness_set: witness_set.into(),
         }
     }
 }
 
-impl From<ProgramDeploymentTransaction> for lee::ProgramDeploymentTransaction {
-    fn from(value: ProgramDeploymentTransaction) -> Self {
-        let ProgramDeploymentTransaction { hash: _, message } = value;
-        Self::new(message.into())
+impl TryFrom<ProgramDeploymentTransaction> for lee::ProgramDeploymentTransaction {
+    type Error = lee::error::LeeError;
+
+    fn try_from(value: ProgramDeploymentTransaction) -> Result<Self, Self::Error> {
+        let ProgramDeploymentTransaction {
+            hash: _,
+            message,
+            witness_set,
+        } = value;
+        Ok(Self::new(message.into(), witness_set.try_into()?))
+    }
+}
+
+impl From<lee::program_deployment_transaction::WitnessSet> for ProgramDeploymentWitnessSet {
+    fn from(value: lee::program_deployment_transaction::WitnessSet) -> Self {
+        Self {
+            signature_and_public_key: value
+                .into_raw_parts()
+                .map(|(signature, public_key)| (signature.into(), public_key.into())),
+        }
+    }
+}
+
+impl TryFrom<ProgramDeploymentWitnessSet> for lee::program_deployment_transaction::WitnessSet {
+    type Error = lee::error::LeeError;
+
+    fn try_from(value: ProgramDeploymentWitnessSet) -> Result<Self, Self::Error> {
+        let signature_and_public_key = value
+            .signature_and_public_key
+            .map(
+                |(signature, public_key)| -> Result<_, lee::error::LeeError> {
+                    Ok((signature.into(), public_key.try_into()?))
+                },
+            )
+            .transpose()?;
+        Ok(Self::from_raw_parts(signature_and_public_key))
     }
 }
 
@@ -587,7 +629,7 @@ impl TryFrom<Transaction> for common::transaction::LeeTransaction {
         match value {
             Transaction::Public(tx) => Ok(Self::Public(tx.try_into()?)),
             Transaction::PrivacyPreserving(tx) => Ok(Self::PrivacyPreserving(tx.try_into()?)),
-            Transaction::ProgramDeployment(tx) => Ok(Self::ProgramDeployment(tx.into())),
+            Transaction::ProgramDeployment(tx) => Ok(Self::ProgramDeployment(tx.try_into()?)),
         }
     }
 }

@@ -34,7 +34,10 @@ async fn reject_oversized_transaction() -> Result<()> {
     let oversized_binary = vec![0_u8; 1100 * 1024]; // 1.1 MiB binary
 
     let message = lee::program_deployment_transaction::Message::new(oversized_binary);
-    let tx = lee::ProgramDeploymentTransaction::new(message);
+    let tx = lee::ProgramDeploymentTransaction::new(
+        message,
+        lee::program_deployment_transaction::WitnessSet::none(),
+    );
 
     // Try to submit the transaction and expect an error
     let result = ctx
@@ -75,7 +78,10 @@ async fn accept_transaction_within_limit() -> Result<()> {
     let small_binary = vec![0_u8; 1024]; // 1 KiB binary
 
     let message = lee::program_deployment_transaction::Message::new(small_binary);
-    let tx = lee::ProgramDeploymentTransaction::new(message);
+    let tx = lee::ProgramDeploymentTransaction::new(
+        message,
+        lee::program_deployment_transaction::WitnessSet::none(),
+    );
 
     // This should succeed
     let result = ctx
@@ -119,6 +125,7 @@ async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
         .send_transaction(LeeTransaction::ProgramDeployment(
             lee::ProgramDeploymentTransaction::new(
                 lee::program_deployment_transaction::Message::new(claimer.elf().to_owned()),
+                lee::program_deployment_transaction::WitnessSet::none(),
             ),
         ))
         .await?;
@@ -127,6 +134,7 @@ async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
         .send_transaction(LeeTransaction::ProgramDeployment(
             lee::ProgramDeploymentTransaction::new(
                 lee::program_deployment_transaction::Message::new(chain_caller.elf().to_owned()),
+                lee::program_deployment_transaction::WitnessSet::none(),
             ),
         ))
         .await?;

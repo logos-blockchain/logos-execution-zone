@@ -1400,6 +1400,7 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
     // Deploy the clock_chain_caller test program.
     let deploy_tx = LeeTransaction::ProgramDeployment(lee::ProgramDeploymentTransaction::new(
         lee::program_deployment_transaction::Message::new(clock_chain_caller.elf().to_owned()),
+        lee::program_deployment_transaction::WitnessSet::none(),
     ));
     mempool_handle
         .push((TransactionOrigin::User, deploy_tx))

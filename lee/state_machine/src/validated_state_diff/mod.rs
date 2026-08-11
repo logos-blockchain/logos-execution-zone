@@ -447,14 +447,27 @@ impl ValidatedStateDiff {
         tx: &ProgramDeploymentTransaction,
         state: &V03State,
     ) -> Result<Self, LeeError> {
-        let crate::program_deployment_transaction::InitMessage { elf } = match &tx.message {
-            crate::program_deployment_transaction::Message::Init(init) => init,
-            crate::program_deployment_transaction::Message::Upgrade(_) => {
-                return Err(LeeError::ProgramUpgradeNotYetSupported);
-            }
-        };
+        let crate::program_deployment_transaction::InitMessage { elf, upgrade_auth } =
+            match &tx.message {
+                crate::program_deployment_transaction::Message::Init(init) => init,
+                crate::program_deployment_transaction::Message::Upgrade(_) => {
+                    return Err(LeeError::ProgramUpgradeNotYetSupported);
+                }
+            };
+
+        ensure!(
+            tx.witness_set.is_valid_for(&tx.message),
+            LeeError::InvalidInput("Invalid signature for given message and public key".into())
+        );
+        if let Some(upgrade_auth) = upgrade_auth {
+            ensure!(
+                tx.witness_set.signer_account_id() == Some(*upgrade_auth),
+                LeeError::InvalidInput("Deployment must be signed by upgrade_auth".into())
+            );
+        }
+
         // TODO: remove clone
-        let program = Program::new(elf.clone().into())?;
+        let program = Program::with_upgrade_auth(elf.clone().into(), *upgrade_auth)?;
         if state.programs().contains_key(&program.id()) {
             return Err(LeeError::ProgramAlreadyExists);
         }

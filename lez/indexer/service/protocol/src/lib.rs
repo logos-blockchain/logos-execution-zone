@@ -277,6 +277,12 @@ pub struct EncryptedAccountData {
 pub struct ProgramDeploymentTransaction {
     pub hash: HashType,
     pub message: ProgramDeploymentMessage,
+    pub witness_set: ProgramDeploymentWitnessSet,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct ProgramDeploymentWitnessSet {
+    pub signature_and_public_key: Option<(Signature, PublicKey)>,
 }
 
 pub type ViewTag = u8;
@@ -348,6 +354,7 @@ pub struct InitMessage {
     #[serde(with = "base64")]
     #[schemars(with = "String", description = "base64-encoded program bytecode")]
     pub elf: Vec<u8>,
+    pub upgrade_auth: Option<AccountId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]

@@ -2,17 +2,31 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::account::AccountId;
 use sha2::{Digest as _, digest::FixedOutput as _};
 
-use crate::program_deployment_transaction::message::Message;
+use crate::program_deployment_transaction::{message::Message, witness_set::WitnessSet};
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ProgramDeploymentTransaction {
     pub message: Message,
+    pub witness_set: WitnessSet,
 }
 
 impl ProgramDeploymentTransaction {
     #[must_use]
-    pub const fn new(message: Message) -> Self {
-        Self { message }
+    pub const fn new(message: Message, witness_set: WitnessSet) -> Self {
+        Self {
+            message,
+            witness_set,
+        }
+    }
+
+    #[must_use]
+    pub const fn message(&self) -> &Message {
+        &self.message
+    }
+
+    #[must_use]
+    pub const fn witness_set(&self) -> &WitnessSet {
+        &self.witness_set
     }
 
     #[must_use]

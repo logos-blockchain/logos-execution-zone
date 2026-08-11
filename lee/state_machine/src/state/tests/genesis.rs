@@ -102,7 +102,10 @@ fn program_deployment_transaction_makes_program_commitment_provable() {
         .elf()
         .to_vec();
     let message = crate::program_deployment_transaction::Message::new(bytecode);
-    let tx = crate::program_deployment_transaction::ProgramDeploymentTransaction::new(message);
+    let tx = crate::program_deployment_transaction::ProgramDeploymentTransaction::new(
+        message,
+        crate::program_deployment_transaction::WitnessSet::none(),
+    );
 
     state
         .transition_from_program_deployment_transaction(&tx)
@@ -119,6 +122,84 @@ fn program_deployment_transaction_makes_program_commitment_provable() {
 }
 
 #[test]
+fn program_deployment_transaction_with_upgrade_auth_signed_correctly_succeeds() {
+    let mut state = V03State::new();
+    let upgrade_auth_key = PrivateKey::try_new([7; 32]).unwrap();
+    let upgrade_auth = AccountId::from(&PublicKey::new_from_private_key(&upgrade_auth_key));
+    let elf = crate::test_methods::simple_balance_transfer()
+        .elf()
+        .to_vec();
+    let message = crate::program_deployment_transaction::Message::new_with_upgrade_auth(
+        elf,
+        Some(upgrade_auth),
+    );
+    let witness_set = crate::program_deployment_transaction::WitnessSet::for_message(
+        &message,
+        Some(&upgrade_auth_key),
+    );
+    let tx = crate::program_deployment_transaction::ProgramDeploymentTransaction::new(
+        message,
+        witness_set,
+    );
+
+    state
+        .transition_from_program_deployment_transaction(&tx)
+        .expect("a deployment correctly signed by upgrade_auth should succeed");
+
+    let program_id = crate::test_methods::simple_balance_transfer().id();
+    let program = &state.programs()[&program_id];
+    assert_eq!(program.upgrade_auth(), Some(upgrade_auth));
+    assert_eq!(program.version(), 1);
+}
+
+#[test]
+fn program_deployment_transaction_with_upgrade_auth_and_no_signature_fails() {
+    let mut state = V03State::new();
+    let upgrade_auth_key = PrivateKey::try_new([7; 32]).unwrap();
+    let upgrade_auth = AccountId::from(&PublicKey::new_from_private_key(&upgrade_auth_key));
+    let elf = crate::test_methods::simple_balance_transfer()
+        .elf()
+        .to_vec();
+    let message = crate::program_deployment_transaction::Message::new_with_upgrade_auth(
+        elf,
+        Some(upgrade_auth),
+    );
+    let tx = crate::program_deployment_transaction::ProgramDeploymentTransaction::new(
+        message,
+        crate::program_deployment_transaction::WitnessSet::none(),
+    );
+
+    let result = state.transition_from_program_deployment_transaction(&tx);
+
+    assert!(matches!(result, Err(LeeError::InvalidInput(_))));
+}
+
+#[test]
+fn program_deployment_transaction_with_upgrade_auth_and_wrong_signer_fails() {
+    let mut state = V03State::new();
+    let upgrade_auth_key = PrivateKey::try_new([7; 32]).unwrap();
+    let upgrade_auth = AccountId::from(&PublicKey::new_from_private_key(&upgrade_auth_key));
+    let wrong_key = PrivateKey::try_new([8; 32]).unwrap();
+    let elf = crate::test_methods::simple_balance_transfer()
+        .elf()
+        .to_vec();
+    let message = crate::program_deployment_transaction::Message::new_with_upgrade_auth(
+        elf,
+        Some(upgrade_auth),
+    );
+    let witness_set =
+        crate::program_deployment_transaction::WitnessSet::for_message(&message, Some(&wrong_key));
+    let tx = crate::program_deployment_transaction::ProgramDeploymentTransaction::new(
+        message,
+        witness_set,
+    );
+
+    let result = state.transition_from_program_deployment_transaction(&tx);
+
+    assert!(matches!(result, Err(LeeError::InvalidInput(_))));
+}
+
+#[test]
 fn program_deployment_transaction_upgrade_is_not_yet_supported() {
     let mut state = V03State::new();
     let message = crate::program_deployment_transaction::Message::Upgrade(
@@ -130,7 +211,10 @@ fn program_deployment_transaction_upgrade_is_not_yet_supported() {
                 .to_vec(),
         },
     );
-    let tx = crate::program_deployment_transaction::ProgramDeploymentTransaction::new(message);
+    let tx = crate::program_deployment_transaction::ProgramDeploymentTransaction::new(
+        message,
+        crate::program_deployment_transaction::WitnessSet::none(),
+    );
 
     let result = state.transition_from_program_deployment_transaction(&tx);
 

@@ -419,7 +419,11 @@ fn mock_program_deployment_tx(tx_hash: HashType) -> Transaction {
         hash: tx_hash,
         message: ProgramDeploymentMessage::Init(indexer_service_protocol::InitMessage {
             elf: vec![0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00],
+            upgrade_auth: None,
         }),
+        witness_set: indexer_service_protocol::ProgramDeploymentWitnessSet {
+            signature_and_public_key: None,
+        },
     })
 }
 

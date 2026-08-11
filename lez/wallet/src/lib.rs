@@ -900,7 +900,34 @@ impl WalletCore {
 
     pub async fn send_program_deployment_transaction(&self, bytecode: Vec<u8>) -> Result<HashType> {
         let message = lee::program_deployment_transaction::Message::new(bytecode);
-        let transaction = ProgramDeploymentTransaction::new(message);
+        let witness_set = lee::program_deployment_transaction::WitnessSet::none();
+        let transaction = ProgramDeploymentTransaction::new(message, witness_set);
+
+        Ok(self
+            .multi_sequencer_client
+            .metered_send_transaction(LeeTransaction::ProgramDeployment(transaction))
+            .await
+            .into_iter()
+            .find(std::result::Result::is_ok)
+            .ok_or(ExecutionFailureKind::MultiSequencerTransactionSendError)??)
+    }
+
+    /// Deploys a program that can later be upgraded by `upgrade_auth_key`'s account.
+    pub async fn send_upgradeable_program_deployment_transaction(
+        &self,
+        bytecode: Vec<u8>,
+        upgrade_auth_key: &lee::PrivateKey,
+    ) -> Result<HashType> {
+        let upgrade_auth = AccountId::from(&lee::PublicKey::new_from_private_key(upgrade_auth_key));
+        let message = lee::program_deployment_transaction::Message::new_with_upgrade_auth(
+            bytecode,
+            Some(upgrade_auth),
+        );
+        let witness_set = lee::program_deployment_transaction::WitnessSet::for_message(
+            &message,
+            Some(upgrade_auth_key),
+        );
+        let transaction = ProgramDeploymentTransaction::new(message, witness_set);
 
         Ok(self
             .multi_sequencer_client

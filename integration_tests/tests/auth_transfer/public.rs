@@ -393,6 +393,7 @@ async fn user_tx_that_chain_calls_faucet_is_dropped() -> Result<()> {
     let faucet_chain_caller = test_programs::faucet_chain_caller();
     let deploy_tx = LeeTransaction::ProgramDeployment(lee::ProgramDeploymentTransaction::new(
         lee::program_deployment_transaction::Message::new(faucet_chain_caller.elf().to_owned()),
+        lee::program_deployment_transaction::WitnessSet::none(),
     ));
     ctx.sequencer_client().send_transaction(deploy_tx).await?;
 

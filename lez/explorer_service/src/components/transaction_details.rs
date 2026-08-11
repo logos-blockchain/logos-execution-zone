@@ -124,7 +124,11 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
 /// Program deployment transaction details component
 #[component]
 pub fn ProgramDeploymentTxDetails(tx: ProgramDeploymentTransaction) -> impl IntoView {
-    let ProgramDeploymentTransaction { hash: _, message } = tx;
+    let ProgramDeploymentTransaction {
+        hash: _,
+        message,
+        witness_set: _,
+    } = tx;
 
     let (kind, bytecode_len, upgrade_info) = match message {
         ProgramDeploymentMessage::Init(init) => ("Init".to_owned(), init.elf.len(), None),

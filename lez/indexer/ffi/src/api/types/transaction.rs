@@ -359,7 +359,11 @@ impl From<Box<FfiProgramDeploymentTransactionBody>> for ProgramDeploymentTransac
             hash: HashType(value.hash.data),
             message: ProgramDeploymentMessage::Init(InitMessage {
                 elf: value.message.into(),
+                upgrade_auth: None,
             }),
+            witness_set: indexer_service_protocol::ProgramDeploymentWitnessSet {
+                signature_and_public_key: None,
+            },
         }
     }
 }
@@ -372,7 +376,11 @@ impl From<Box<FfiProgramDeploymentTransactionBody>> for ProgramDeploymentTransac
 )]
 impl From<ProgramDeploymentTransaction> for FfiProgramDeploymentTransactionBody {
     fn from(value: ProgramDeploymentTransaction) -> Self {
-        let ProgramDeploymentTransaction { hash, message } = value;
+        let ProgramDeploymentTransaction {
+            hash,
+            message,
+            witness_set: _,
+        } = value;
 
         let elf = match message {
             ProgramDeploymentMessage::Init(init) => init.elf,

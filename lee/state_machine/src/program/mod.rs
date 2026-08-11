@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::AccountWithMetadata,
+    account::{AccountId, AccountWithMetadata},
     program::{InstructionData, ProgramId, ProgramOutput},
 };
 use risc0_zkvm::{ExecutorEnv, ExecutorEnvBuilder, default_executor, serde::to_vec};
@@ -17,28 +17,57 @@ const MAX_NUM_CYCLES_PUBLIC_EXECUTION: u64 = 1024 * 1024 * 32; // 32M cycles
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Program {
     id: ProgramId,
+    upgrade_auth: Option<AccountId>,
+    version: u64,
     elf: Cow<'static, [u8]>,
 }
 
 impl Program {
     pub fn new(elf: Cow<'static, [u8]>) -> Result<Self, LeeError> {
+        Self::with_upgrade_auth(elf, None)
+    }
+
+    pub fn with_upgrade_auth(
+        elf: Cow<'static, [u8]>,
+        upgrade_auth: Option<AccountId>,
+    ) -> Result<Self, LeeError> {
         let binary = risc0_binfmt::ProgramBinary::decode(elf.as_ref())
             .map_err(LeeError::InvalidProgramBytecode)?;
         let id = binary
             .compute_image_id()
             .map_err(LeeError::InvalidProgramBytecode)?
             .into();
-        Ok(Self { id, elf })
+        Ok(Self {
+            id,
+            upgrade_auth,
+            version: 1,
+            elf,
+        })
     }
 
     #[must_use]
     pub const fn new_unchecked(id: ProgramId, elf: Cow<'static, [u8]>) -> Self {
-        Self { id, elf }
+        Self {
+            id,
+            upgrade_auth: None,
+            version: 1,
+            elf,
+        }
     }
 
     #[must_use]
     pub const fn id(&self) -> ProgramId {
         self.id
+    }
+
+    #[must_use]
+    pub const fn upgrade_auth(&self) -> Option<AccountId> {
+        self.upgrade_auth
+    }
+
+    #[must_use]
+    pub const fn version(&self) -> u64 {
+        self.version
     }
 
     #[must_use]
