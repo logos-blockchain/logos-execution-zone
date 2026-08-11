@@ -9,8 +9,8 @@ struct ExampleEvent {
 }
 
 impl ExampleEvent {
-    const SELECTOR_NAME: &'static str = "lee_test::ExampleEvent";
     const SELECTOR: [u8; 8] = [0x92, 0x8d, 0x12, 0x8c, 0x88, 0x2f, 0x1c, 0x5d];
+    const SELECTOR_NAME: &'static str = "lee_test::ExampleEvent";
 
     fn to_bytes(&self) -> Vec<u8> {
         borsh::to_vec(self).unwrap()
