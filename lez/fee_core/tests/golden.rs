@@ -65,35 +65,51 @@ impl Lcg {
     }
 }
 
-const fn pub_tx(cycles: u64, data: u64, tip: u64, payer: PayerId) -> FeeTxView {
-    FeeTxView::Public {
-        payer,
-        gas_limit: cycles,
-        data_bytes: data,
-        tip,
-        max_fee: 1_000_000_000_000_000_000_000_000_000_u128,
+/// A `FeeTxView` paired with its scripted metered-cycle count.
+///
+/// `cycles` is TEST SCAFFOLD ONLY (mirroring SPECS.md Annex A/B's
+/// `Transaction.mock_cycles`): it is not a `FeeTxView` field — `fee_core`
+/// doesn't execute anything, so a real caller gets `cycles` from the
+/// execution outcome, not from the transaction. Keeping it independent of
+/// `gas_limit` here (rather than always setting `cycles == gas_limit`) is
+/// what lets a test express `cycles < gas_limit`, exercising the
+/// reserve-vs-actual release path (SPECS.md:132).
+#[derive(Debug, Clone, Copy)]
+struct ScenarioTx {
+    view: FeeTxView,
+    cycles: u64,
+}
+
+/// Builds a public tx with independent `gas_limit` and `cycles`. The driver
+/// scenario/fuzz below always call this with `gas_limit == cycles`,
+/// matching Annex B's own `pub_tx(cycles, data, tip, payer)` helper (which
+/// sets `mock_cycles == gas_limit`); the usage-example test below is the
+/// one place that gives them different values, per SPECS.md Annex A
+/// "Usage" (`gas_limit=60_000`, `cycles=50_000`).
+const fn pub_tx(gas_limit: u64, cycles: u64, data: u64, tip: u64, payer: PayerId) -> ScenarioTx {
+    ScenarioTx {
+        view: FeeTxView::Public {
+            payer,
+            gas_limit,
+            data_bytes: data,
+            tip,
+            max_fee: 1_000_000_000_000_000_000_000_000_000_u128,
+        },
+        cycles,
     }
 }
 
-const fn prv_tx(payer: PayerId) -> FeeTxView {
-    FeeTxView::Private { payer }
+const fn prv_tx(payer: PayerId) -> ScenarioTx {
+    ScenarioTx {
+        view: FeeTxView::Private { payer },
+        cycles: PRIVATE_VERIFY_GAS,
+    }
 }
 
 fn tip_of(tx: &FeeTxView) -> u128 {
     match tx {
         FeeTxView::Public { tip, .. } => u128::from(*tip),
         FeeTxView::Private { .. } => 0,
-    }
-}
-
-/// The mock executor: in this harness cycles always equal `gas_limit` for
-/// public transactions (the scenario below never scripts a lower cycle
-/// count), and `PRIVATE_VERIFY_GAS` for private ones — matching Annex B's
-/// `tx_exec_gas`/`pub_tx` (which always sets `mock_cycles == gas_limit`).
-const fn mock_cycles(tx: &FeeTxView) -> u64 {
-    match tx {
-        FeeTxView::Public { gas_limit, .. } => *gas_limit,
-        FeeTxView::Private { .. } => PRIVATE_VERIFY_GAS,
     }
 }
 
@@ -105,9 +121,10 @@ const fn mock_cycles(tx: &FeeTxView) -> u64 {
 fn block_transition(
     state: &mut FeeState,
     balances: &mut HashMap<PayerId, u128>,
-    txs: &[FeeTxView],
+    txs: &[ScenarioTx],
 ) -> Receipt {
-    validate_static_block(txs, state).expect("scenario only ever builds valid blocks");
+    let views: Vec<FeeTxView> = txs.iter().map(|tx| tx.view).collect();
+    validate_static_block(&views, state).expect("scenario only ever builds valid blocks");
 
     let mut revenue_base: u128 = 0;
     let mut revenue_tip: u128 = 0;
@@ -115,22 +132,23 @@ fn block_transition(
     let mut gas_used_stor: u64 = 0;
 
     for tx in txs {
-        let reserve = fee_reserve(tx, state);
-        let bal = balances.entry(tx.payer()).or_insert(0);
+        let view = &tx.view;
+        let reserve = fee_reserve(view, state);
+        let bal = balances.entry(view.payer()).or_insert(0);
         assert!(
             *bal >= reserve,
             "fee debit failed: payer cannot cover reserve"
         );
         *bal -= reserve;
 
-        let cycles = mock_cycles(tx);
+        let cycles = tx.cycles;
         gas_used_exec = accumulate_gas_used(gas_used_exec, cycles, MAX_GAS_EXEC)
             .expect("block exceeds MAX_GAS_EXEC");
-        gas_used_stor += gas_stor(tx);
+        gas_used_stor += gas_stor(view);
 
-        let f_base = fee_actual_base(cycles, tx, state);
-        let tip = tip_of(tx);
-        *balances.get_mut(&tx.payer()).unwrap() += reserve - (f_base + tip);
+        let f_base = fee_actual_base(cycles, view, state);
+        let tip = tip_of(view);
+        *balances.get_mut(&view.payer()).unwrap() += reserve - (f_base + tip);
         revenue_base += f_base;
         revenue_tip += tip;
     }
@@ -167,8 +185,12 @@ mod tests {
     use super::*;
 
     /// SPECS.md Annex A "Usage" example, printed in the spec: from genesis,
-    /// one block with a 60,000-gas_limit/200-byte/100-tip public tx
-    /// (50,000 cycles) plus one private tx.
+    /// one block with a public tx signed at `gas_limit=60_000`,
+    /// `data_bytes=200`, `tip=100` but metered at only 50,000 cycles (SPECS
+    /// §Fee assessment: `fee_reserve` prices `gas_limit`, `fee_actual_base`
+    /// prices the metered `cycles` — they differ here on purpose, so the
+    /// unused part of the reservation gets released back to the payer),
+    /// plus one private tx.
     ///
     /// `print(r)` in the spec prints
     /// `BlockReceipt(height=1, revenue_base=5472216, revenue_tip=100, payout=109444)`,
@@ -176,9 +198,34 @@ mod tests {
     #[test]
     fn usage_example_matches_spec_printed_output() {
         let mut state = FeeState::genesis().unwrap();
-        let mut balances = HashMap::from([(PAYER, 1_000_000_000_000_u128), (PRODUCER, 0)]);
+        let payer_initial_balance = 1_000_000_000_000_u128;
+        let mut balances = HashMap::from([(PAYER, payer_initial_balance), (PRODUCER, 0)]);
 
-        let txs = [pub_tx(50_000, 200, 100, PAYER), prv_tx(PAYER)];
+        let public = pub_tx(60_000, 50_000, 200, 100, PAYER);
+        let private = prv_tx(PAYER);
+
+        let public_reserve = fee_reserve(&public.view, &state);
+        // Genesis fees are 8/8: reserve prices gas_limit=60_000 (+ 200 data
+        // bytes + the 100 tip); the actual fee below prices the metered
+        // 50,000 cycles instead. They must differ for this test to exercise
+        // anything (Important review finding round 1): the released
+        // reservation is `reserve - actual`, and if `cycles == gas_limit`
+        // that release is always zero.
+        assert_eq!(public_reserve, 60_000 * 8 + 200 * 8 + 100);
+        let public_actual_base = fee_actual_base(50_000, &public.view, &state);
+        assert_eq!(public_actual_base, 401_600);
+        let public_released = public_reserve - (public_actual_base + 100);
+        assert_eq!(public_released, (60_000 - 50_000) * 8);
+
+        // The private tx has no reservation to release: fee_reserve and
+        // fee_actual_base are both computed from the same protocol
+        // constants, so they're always equal (SPECS §Fee assessment).
+        let private_reserve = fee_reserve(&private.view, &state);
+        let private_actual_base = fee_actual_base(private.cycles, &private.view, &state);
+        assert_eq!(private_reserve, private_actual_base);
+        assert_eq!(private_actual_base, 5_070_616);
+
+        let txs = [public, private];
         let receipt = block_transition(&mut state, &mut balances, &txs);
 
         assert_eq!(
@@ -188,6 +235,14 @@ mod tests {
                 revenue_tip: 100,
                 payout: 109_444,
             }
+        );
+        // Payer's net change = -(public fee_total) - (private fee_total);
+        // the released part of the public reservation isn't lost, it just
+        // never left the payer in the first place.
+        let public_fee_total = public_actual_base + 100;
+        assert_eq!(
+            balances[&PAYER],
+            payer_initial_balance - public_fee_total - private_actual_base
         );
         assert_eq!(balances[&PAYER], 999_994_527_684);
         assert_eq!(balances[&PRODUCER], 109_544);
@@ -211,15 +266,19 @@ mod tests {
         let mut state = FeeState::genesis().unwrap();
         let mut balances = HashMap::from([(PAYER, 10_u128.pow(30)), (PRODUCER, 10_u128.pow(30))]);
 
-        let scenario: [Vec<FeeTxView>; 8] = [
+        // Annex B's own `pub_tx(cycles, data, tip, payer)` helper always
+        // sets `gas_limit == mock_cycles == cycles`; the scenario below
+        // does the same by passing the same value twice (`pub_tx`'s
+        // `gas_limit` and `cycles` parameters).
+        let scenario: [Vec<ScenarioTx>; 8] = [
             vec![],
-            vec![pub_tx(1_000_000, 40_000, 500, PAYER)],
-            vec![pub_tx(5_000_000, 100_000, 0, PAYER)],
-            vec![pub_tx(9_000_000, 900_000, 2_000, PAYER)],
-            vec![pub_tx(10_000_000, 1_000_000, 0, PAYER)],
+            vec![pub_tx(1_000_000, 1_000_000, 40_000, 500, PAYER)],
+            vec![pub_tx(5_000_000, 5_000_000, 100_000, 0, PAYER)],
+            vec![pub_tx(9_000_000, 9_000_000, 900_000, 2_000, PAYER)],
+            vec![pub_tx(10_000_000, 10_000_000, 1_000_000, 0, PAYER)],
             vec![prv_tx(PAYER), prv_tx(PAYER), prv_tx(PAYER), prv_tx(PAYER)],
             vec![
-                pub_tx(2_500_000, 10_000, 1_000, PAYER),
+                pub_tx(2_500_000, 2_500_000, 10_000, 1_000, PAYER),
                 prv_tx(PAYER),
                 prv_tx(PAYER),
             ],
@@ -263,19 +322,22 @@ mod tests {
         // running state; it does not reset to genesis between them).
         let mut rng = Lcg(42);
         for _ in 0..10_000 {
-            let mut txs: Vec<FeeTxView> = Vec::new();
+            let mut txs: Vec<ScenarioTx> = Vec::new();
             for _ in 0..rng.below(4) {
                 txs.push(prv_tx(PAYER));
             }
-            let mut exec_left = MAX_GAS_EXEC - txs.iter().map(mock_cycles).sum::<u64>();
-            let mut stor_left = MAX_GAS_STOR - txs.iter().map(gas_stor).sum::<u64>();
+            let mut exec_left = MAX_GAS_EXEC - txs.iter().map(|tx| tx.cycles).sum::<u64>();
+            let mut stor_left = MAX_GAS_STOR - txs.iter().map(|tx| gas_stor(&tx.view)).sum::<u64>();
             for _ in 0..rng.below(12) {
                 let c = 40_000 + rng.below(610_000);
                 let d = 1 + rng.below(5_000);
                 let t = rng.below(10_000);
                 let payer = if rng.below(4) == 0 { PRODUCER } else { PAYER };
                 if c <= exec_left && d <= stor_left {
-                    txs.push(pub_tx(c, d, t, payer));
+                    // Annex B's driver `pub_tx(cycles, data, tip, payer)`
+                    // always sets `gas_limit == cycles` (unlike the
+                    // usage-example test above): pass `c` for both.
+                    txs.push(pub_tx(c, c, d, t, payer));
                     exec_left -= c;
                     stor_left -= d;
                 }

@@ -121,6 +121,11 @@ const fn wadd(a: u128, b: u128) -> u128 {
 
 #[cfg(test)]
 mod tests {
+    #![allow(
+        clippy::arithmetic_side_effects,
+        reason = "test code, plain arithmetic is clearer"
+    )]
+
     use super::*;
     use crate::state::FeeState;
 
@@ -160,5 +165,35 @@ mod tests {
         assert_eq!(private_fee, 5_070_616);
         // fee_reserve equals the actual fee for private txs (constants only).
         assert_eq!(fee_reserve(&private, &state), private_fee);
+    }
+
+    /// SPECS.md Annex A "Usage" example: `fee_reserve` prices `gas_limit`
+    /// (60,000), not the metered `cycles` (50,000) that
+    /// `fee_actual_base` prices — the two differ whenever a transaction
+    /// doesn't use its full gas limit, and the difference is the amount
+    /// released back to the payer after settlement (SPECS §Overview
+    /// "Reserve, execute, settle").
+    #[test]
+    fn public_fee_reserve_prices_gas_limit_not_metered_cycles() {
+        let state = FeeState::genesis().unwrap();
+        let tx = FeeTxView::Public {
+            payer: PAYER,
+            gas_limit: 60_000,
+            data_bytes: 200,
+            tip: 100,
+            max_fee: u128::MAX,
+        };
+
+        let reserve = fee_reserve(&tx, &state);
+        assert_eq!(reserve, 60_000 * 8 + 200 * 8 + 100);
+
+        let actual_base = fee_actual_base(50_000, &tx, &state);
+        assert_eq!(actual_base, 401_600);
+
+        // gas_limit (60_000) != cycles (50_000), so the reserve must exceed
+        // the actual fee, and by exactly the unused gas priced at
+        // base_fee_exec.
+        assert!(reserve > actual_base + 100);
+        assert_eq!(reserve - (actual_base + 100), (60_000 - 50_000) * 8);
     }
 }
