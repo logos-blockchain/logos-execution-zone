@@ -44,6 +44,9 @@ pub trait Rpc {
     #[subscription(name = "subscribeToFinalizedBlocks", item = BlockId)]
     async fn subscribe_to_finalized_blocks(&self) -> SubscriptionResult;
 
+    #[subscription(name = "subscribeToEvents", item = EventRecord)]
+    async fn subscribe_to_events(&self, filter: EventSubscriptionFilter) -> SubscriptionResult;
+
     #[method(name = "getLastFinalizedBlockId")]
     async fn get_last_finalized_block_id(&self) -> Result<Option<BlockId>, ErrorObjectOwned>;
 

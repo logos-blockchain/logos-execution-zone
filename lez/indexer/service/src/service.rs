@@ -9,8 +9,8 @@ use arc_swap::ArcSwap;
 use futures::StreamExt as _;
 use indexer_core::{IndexerCore, config::IndexerConfig};
 use indexer_service_protocol::{
-    Account, AccountId, Block, BlockId, EventRecord, GetEventsFilter, HashType, IndexerStatus,
-    Transaction, resolve_event_block_range,
+    Account, AccountId, Block, BlockId, EventRecord, EventSubscriptionFilter, GetEventsFilter,
+    HashType, IndexerStatus, Transaction, resolve_event_block_range,
 };
 use jsonrpsee::{
     SubscriptionSink,
@@ -59,7 +59,24 @@ impl indexer_service_rpc::RpcServer for IndexerService {
             sink.subscription_id()
         );
         self.subscription_service
-            .add_subscription(Subscription::new(sink))
+            .add_subscription(NewSubscription::Blocks(Subscription::new(sink)))
+            .await?;
+
+        Ok(())
+    }
+
+    async fn subscribe_to_events(
+        &self,
+        subscription_sink: jsonrpsee::PendingSubscriptionSink,
+        filter: EventSubscriptionFilter,
+    ) -> SubscriptionResult {
+        let sink = subscription_sink.accept().await?;
+        log::info!(
+            "Accepted new subscription to events with ID {:?}",
+            sink.subscription_id()
+        );
+        self.subscription_service
+            .add_subscription(NewSubscription::Events(Subscription::new(sink), filter))
             .await?;
 
         Ok(())
@@ -257,7 +274,7 @@ impl SubscriptionService {
         }
     }
 
-    pub async fn add_subscription(&self, subscription: Subscription<BlockId>) -> Result<()> {
+    pub async fn add_subscription(&self, subscription: NewSubscription) -> Result<()> {
         let guard = self.parts.load();
         if let Err(send_err) = guard.new_subscription_sender.send(subscription) {
             error!(
@@ -337,11 +354,15 @@ impl SubscriptionService {
         shutdown: CancellationToken,
     ) -> SubscriptionLoopParts {
         let (new_subscription_sender, mut sub_receiver) =
-            tokio::sync::mpsc::unbounded_channel::<Subscription<BlockId>>();
+            tokio::sync::mpsc::unbounded_channel::<NewSubscription>();
 
         let handle = tokio::spawn(async move {
             let run_loop = async {
-                let mut subscribers = Vec::new();
+                let mut block_subscribers: Vec<Subscription<BlockId>> = Vec::new();
+                let mut event_subscribers: Vec<(
+                    Subscription<EventRecord>,
+                    EventSubscriptionFilter,
+                )> = Vec::new();
 
                 let mut block_stream = pin!(indexer.subscribe_parse_block_stream());
 
@@ -359,8 +380,16 @@ impl SubscriptionService {
                             let Some(subscription) = sub else {
                                 bail!("Subscription receiver closed unexpectedly");
                             };
-                            log::info!("Added new subscription with ID {:?}", subscription.sink.subscription_id());
-                            subscribers.push(subscription);
+                            match subscription {
+                                NewSubscription::Blocks(subscription) => {
+                                    log::info!("Added new block subscription with ID {:?}", subscription.sink.subscription_id());
+                                    block_subscribers.push(subscription);
+                                }
+                                NewSubscription::Events(subscription, filter) => {
+                                    log::info!("Added new event subscription with ID {:?}", subscription.sink.subscription_id());
+                                    event_subscribers.push((subscription, filter));
+                                }
+                            }
                         }
                         block_opt = block_stream.next() => {
                             debug!("Got new block from block stream");
@@ -370,14 +399,75 @@ impl SubscriptionService {
                             let block = block.context("Failed to get L2 block data")?;
                             let block: indexer_service_protocol::Block = block.into();
 
-                            subscribers.retain(|sub| !sub.sink.is_closed());
-                            for sub in &mut subscribers {
-                                if let Err(err) = sub.try_send(&block.header.block_id) {
+                            let block_id = block.header.block_id;
+
+                            // Reap closed sinks first: one dead event subscriber would
+                            // otherwise hold the `is_empty` gate below open, charging every
+                            // later block a store read.
+                            block_subscribers.retain(|sub| !sub.sink.is_closed());
+                            event_subscribers.retain(|(sub, _)| !sub.sink.is_closed());
+
+                            for sub in &mut block_subscribers {
+                                if let Err(err) = sub.try_send(&block_id) {
                                     warn!(
                                         "Failed to send block ID {:?} to subscription ID {:?} with error: {err:#?}",
-                                        block.header.block_id,
+                                        block_id,
                                         sub.sink.subscription_id(),
                                     );
+                                }
+                            }
+
+                            // Fan-out must not gate ingestion: a store read failure is
+                            // logged, never propagated.
+                            if !event_subscribers.is_empty() {
+                                match indexer.store.get_events_for_block(block_id) {
+                                    Ok(groups) => {
+                                        let records: Vec<EventRecord> = groups
+                                            .unwrap_or_default()
+                                            .into_iter()
+                                            .flat_map(|group| {
+                                                EventRecord::from_tx_events(block_id, group)
+                                            })
+                                            .collect();
+                                        // An event that cannot be queued would leave an
+                                        // undetectable hole in the stream, so the subscription
+                                        // ends instead: the client re-subscribes and backfills.
+                                        let mut dead = vec![false; event_subscribers.len()];
+                                        for record in &records {
+                                            // Serialized once per record; every matching sink
+                                            // receives the same bytes.
+                                            let mut payload: Option<Box<serde_json::value::RawValue>> = None;
+                                            for (idx, (sub, filter)) in event_subscribers.iter_mut().enumerate() {
+                                                if dead[idx] || !matches_subscription_filter(record, filter) {
+                                                    continue;
+                                                }
+                                                let json = payload
+                                                    .get_or_insert_with(|| {
+                                                        serde_json::value::to_raw_value(record)
+                                                            .expect("event records serialize")
+                                                    })
+                                                    .clone();
+                                                if let Err(err) = sub.sink.try_send(json) {
+                                                    warn!(
+                                                        "Dropping event subscription ID {:?}: {err:#?}",
+                                                        sub.sink.subscription_id(),
+                                                    );
+                                                    dead[idx] = true;
+                                                }
+                                            }
+                                        }
+                                        if dead.contains(&true) {
+                                            let mut idx = 0;
+                                            event_subscribers.retain(|_| {
+                                                let keep = !dead[idx];
+                                                idx = idx.saturating_add(1);
+                                                keep
+                                            });
+                                        }
+                                    }
+                                    Err(err) => warn!(
+                                        "Failed to read events for block {block_id} for event subscribers: {err:#}"
+                                    ),
                                 }
                             }
                         }
@@ -410,7 +500,7 @@ impl Drop for SubscriptionService {
 
 struct SubscriptionLoopParts {
     handle: Mutex<Option<JoinHandle<Result<()>>>>,
-    new_subscription_sender: UnboundedSender<Subscription<BlockId>>,
+    new_subscription_sender: UnboundedSender<NewSubscription>,
 }
 
 #[derive(Clone)]
@@ -476,6 +566,11 @@ impl<T> Drop for Subscription<T> {
     }
 }
 
+enum NewSubscription {
+    Blocks(Subscription<BlockId>),
+    Events(Subscription<EventRecord>, EventSubscriptionFilter),
+}
+
 pub(crate) enum EventQuery {
     ByTxHash(HashType),
     ByRange {
@@ -518,6 +613,16 @@ fn resolve_block_range(
     };
     resolve_event_block_range(from_block, filter.to_block, tip)
         .map_err(|err| invalid_params_error(format!("getEvents {err}")))
+}
+
+pub(crate) fn matches_subscription_filter(
+    record: &EventRecord,
+    filter: &EventSubscriptionFilter,
+) -> bool {
+    record.matches_fields(filter.program_id, filter.selector)
+        && filter
+            .tx_hash
+            .is_none_or(|tx_hash| tx_hash == record.tx_hash)
 }
 
 fn invalid_params_error(message: impl Into<String>) -> ErrorObjectOwned {
@@ -601,6 +706,84 @@ mod tests {
                 to_block: 6
             }
         ));
+    }
+
+    fn subscription_filter(
+        program: Option<u32>,
+        selector: Option<u8>,
+        tx_hash: Option<u8>,
+    ) -> EventSubscriptionFilter {
+        EventSubscriptionFilter {
+            program_id: program.map(|p| ProgramId([p; 8])),
+            selector: selector.map(|s| Selector([s; 8])),
+            tx_hash: tx_hash.map(|h| HashType([h; 32])),
+        }
+    }
+
+    #[test]
+    fn subscription_filter_matches_on_every_field() {
+        let mut target = record(1, 7, 2);
+        target.tx_hash = HashType([5_u8; 32]);
+
+        // Empty filter takes everything.
+        assert!(matches_subscription_filter(
+            &target,
+            &EventSubscriptionFilter::default()
+        ));
+
+        // Each field alone discriminates.
+        assert!(matches_subscription_filter(
+            &target,
+            &subscription_filter(Some(7), None, None)
+        ));
+        assert!(!matches_subscription_filter(
+            &target,
+            &subscription_filter(Some(8), None, None)
+        ));
+        assert!(matches_subscription_filter(
+            &target,
+            &subscription_filter(None, Some(2), None)
+        ));
+        assert!(!matches_subscription_filter(
+            &target,
+            &subscription_filter(None, Some(3), None)
+        ));
+        assert!(matches_subscription_filter(
+            &target,
+            &subscription_filter(None, None, Some(5))
+        ));
+        assert!(!matches_subscription_filter(
+            &target,
+            &subscription_filter(None, None, Some(6))
+        ));
+
+        // All three together are conjunctive: one mismatch rejects.
+        assert!(matches_subscription_filter(
+            &target,
+            &subscription_filter(Some(7), Some(2), Some(5))
+        ));
+        assert!(!matches_subscription_filter(
+            &target,
+            &subscription_filter(Some(7), Some(2), Some(6))
+        ));
+    }
+
+    #[test]
+    fn both_filter_types_agree_on_the_shared_fields() {
+        let target = record(1, 7, 2);
+
+        for (program, selector) in [(7_u32, 2_u8), (7, 3), (8, 2), (8, 3)] {
+            let query = GetEventsFilter {
+                program_id: Some(ProgramId([program; 8])),
+                selector: Some(Selector([selector; 8])),
+                ..GetEventsFilter::default()
+            };
+            let subscription = subscription_filter(Some(program), Some(selector), None);
+            assert_eq!(
+                target.matches_fields(query.program_id, query.selector),
+                matches_subscription_filter(&target, &subscription)
+            );
+        }
     }
 
     #[test]

@@ -566,9 +566,10 @@ pub struct GetEventsFilter {
 
 // A live stream carries no block range.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct EventSubscriptionFilter {
-    pub program_id: Option<ProgramId>,
     pub tx_hash: Option<HashType>,
+    pub program_id: Option<ProgramId>,
     pub selector: Option<Selector>,
 }
 

@@ -10,11 +10,11 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use indexer_service_protocol::{
     Account, AccountId, BedrockStatus, Block, BlockBody, BlockHeader, BlockId, Commitment,
-    CommitmentSetDigest, Data, EncryptedAccountData, EventRecord, GetEventsFilter, HashType,
-    IndexerStatus, IndexerSyncState, PrivacyPreservingMessage, PrivacyPreservingTransaction,
-    PrivateAction, ProgramDeploymentMessage, ProgramDeploymentTransaction, ProgramId,
-    PublicActionWithID, PublicMessage, PublicTransaction, Selector, Signature, Transaction,
-    ValidityWindow, WitnessSet,
+    CommitmentSetDigest, Data, EncryptedAccountData, EventRecord, EventSubscriptionFilter,
+    GetEventsFilter, HashType, IndexerStatus, IndexerSyncState, PrivacyPreservingMessage,
+    PrivacyPreservingTransaction, PrivateAction, ProgramDeploymentMessage,
+    ProgramDeploymentTransaction, ProgramId, PublicActionWithID, PublicMessage, PublicTransaction,
+    Selector, Signature, Transaction, ValidityWindow, WitnessSet,
 };
 use jsonrpsee::{
     core::{SubscriptionResult, async_trait},
@@ -22,7 +22,9 @@ use jsonrpsee::{
 };
 use tokio::sync::{RwLock, broadcast};
 
-use crate::service::{EventQuery, plan_query, unknown_transaction_error};
+use crate::service::{
+    EventQuery, matches_subscription_filter, plan_query, unknown_transaction_error,
+};
 
 const MOCK_GENESIS_TIMESTAMP_MS: u64 = 1_704_067_200_000;
 const MOCK_BLOCK_INTERVAL_MS: u64 = 30_000;
@@ -186,6 +188,34 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
                 Ok(block) => {
                     let json = serde_json::value::to_raw_value(&block).unwrap();
                     sink.send(json).await?;
+                }
+                Err(broadcast::error::RecvError::Lagged(_)) => {}
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn subscribe_to_events(
+        &self,
+        subscription_sink: jsonrpsee::PendingSubscriptionSink,
+        filter: EventSubscriptionFilter,
+    ) -> SubscriptionResult {
+        let sink = subscription_sink.accept().await?;
+
+        // One canned event per generated block, matching `get_events`' shape.
+        let mut receiver = self.finalized_blocks_tx.subscribe();
+        loop {
+            match receiver.recv().await {
+                Ok(block) => {
+                    let Some(record) = mock_event_record(&block) else {
+                        continue;
+                    };
+                    if matches_subscription_filter(&record, &filter) {
+                        let json = serde_json::value::to_raw_value(&record).unwrap();
+                        sink.send(json).await?;
+                    }
                 }
                 Err(broadcast::error::RecvError::Lagged(_)) => {}
                 Err(broadcast::error::RecvError::Closed) => break,
