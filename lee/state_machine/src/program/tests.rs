@@ -64,8 +64,9 @@ fn execution_over_the_cycle_budget_is_out_of_gas() {
     // A budget below what the program needs must surface as the typed `OutOfGas`, so callers can
     // charge for it instead of parsing an opaque failure string.
     //
-    // The executor tests the limit between instructions, so a session can overshoot it by the
-    // cycles of its final instruction (here: 1); `- 2` is the tightest budget that still bails.
+    // The executor tests the limit between instructions, so a session can overshoot it by the cost
+    // of the instruction that crosses the line — 1 cycle for this guest, more for a program ending
+    // on an accelerator ecall. `- 2` is the tightest budget that still bails here.
     let program = crate::test_methods::simple_balance_transfer();
     let instruction_data = Program::serialize_instruction(BALANCE_TO_MOVE).unwrap();
     let budget = SIMPLE_BALANCE_TRANSFER_CYCLES - 2;

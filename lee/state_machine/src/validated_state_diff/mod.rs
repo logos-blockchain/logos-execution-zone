@@ -48,6 +48,14 @@ pub struct ValidatedStateDiff(StateDiff);
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ExecutionOutcome {
     /// Total user cycles metered across all the transaction's zkVM sessions.
+    ///
+    /// **Not bounded by the budget it ran under.** The executor tests its limit *between*
+    /// instructions, so a session ends over its limit by the cost of whichever instruction crosses
+    /// the line — one cycle for a plain instruction, more for an accelerator ecall or a paging
+    /// step. Only the *last* session can do so silently: an earlier overshoot drives the remaining
+    /// budget to zero and the next iteration fails with [`LeeError::OutOfGas`]. So the excess does
+    /// not compound: `cycles <= budget + cost of one instruction`. Charge with
+    /// `min(cycles, gas_limit)`, never `gas_limit - cycles`.
     pub cycles: u64,
 }
 

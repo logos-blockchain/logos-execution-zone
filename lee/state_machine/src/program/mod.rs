@@ -52,9 +52,14 @@ impl Program {
         to_vec(&instruction).map_err(|e| LeeError::InstructionSerializationError(e.to_string()))
     }
 
-    /// Executes the program under a hard `cycle_budget` of user cycles, returning its output
-    /// together with the user cycles it consumed. Going past the budget is
-    /// [`LeeError::OutOfGas`], with no partial cycle count available.
+    /// Executes the program under a `cycle_budget` of user cycles, returning its output together
+    /// with the user cycles it consumed. Outgrowing the budget is [`LeeError::OutOfGas`], with no
+    /// partial cycle count available.
+    ///
+    /// The returned count may exceed `cycle_budget`: the executor tests its limit between
+    /// instructions, so a session that terminates on the instruction crossing the line reports the
+    /// cost of that instruction on top of the budget (one cycle for a plain instruction, more for
+    /// an accelerator ecall or a paging step).
     pub(crate) fn execute(
         &self,
         caller_program_id: Option<ProgramId>,
