@@ -47,6 +47,12 @@ pub struct EnvironmentState {
     pub transfer_receiver: Option<lee::AccountId>,
     /// Fresh recipient account created for the new-account transfer scenario.
     pub new_public_account: Option<lee::AccountId>,
+    /// Sender account for the private transfer scenario.
+    pub private_transfer_sender: Option<lee::AccountId>,
+    /// Receiver account for the private transfer scenario.
+    pub private_transfer_receiver: Option<lee::AccountId>,
+    /// Amount submitted in the private transfer scenario.
+    pub private_transfer_amount: Option<u128>,
     /// Cumulative amount submitted in the public transfer scenario.
     pub transfer_amount: Option<u128>,
     /// Sender balance recorded before the public transfer.
@@ -57,13 +63,21 @@ pub struct EnvironmentState {
     pub sender_observed_balance: Option<u128>,
     /// Receiver balance observed after the public transfer.
     pub receiver_observed_balance: Option<u128>,
+    /// Sender private balance recorded before the private transfer.
+    pub private_sender_initial_balance: Option<u128>,
+    /// Receiver private balance recorded before the private transfer.
+    pub private_receiver_initial_balance: Option<u128>,
+    /// Sender private balance observed after the private transfer.
+    pub private_sender_observed_balance: Option<u128>,
+    /// Receiver private balance observed after the private transfer.
+    pub private_receiver_observed_balance: Option<u128>,
     /// Hash returned for the public transfer.
     pub transfer_hash: Option<common::HashType>,
     /// Block containing the public transfer.
     pub transfer_included_block: Option<u64>,
-    /// All public transfer hashes submitted in this scenario.
+    /// All transfer hashes submitted in this scenario.
     pub transfer_hashes: Vec<common::HashType>,
-    /// Blocks containing the public transfers in submission order.
+    /// Blocks containing the transfers in submission order.
     pub transfer_included_blocks: Vec<u64>,
     /// Sender nonce before the first public transfer.
     pub sender_initial_nonce: Option<lee_core::account::Nonce>,

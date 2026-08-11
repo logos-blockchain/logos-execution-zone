@@ -1,7 +1,8 @@
 use common::transaction::LeeTransaction;
-use cucumber::{given, then, when};
+use cucumber::{gherkin::Step, given, then, when};
 use lee::{Account, AccountId, PublicKey};
 use lee_core::account::Nonce;
+use log::{error, warn};
 use sequencer_service_rpc::RpcClient as _;
 
 use crate::{
@@ -18,34 +19,59 @@ use crate::{
 };
 
 #[given("a LEZ smoke stack")]
-async fn deploy_lez_smoke_stack(world: &mut CucumberWorld) -> StepResult {
-    deploy_lez_stack(world, false).await
+async fn deploy_lez_smoke_stack(world: &mut CucumberWorld, step: &Step) -> StepResult {
+    log_step(step);
+    deploy_lez_stack(world, false, step).await
 }
 
 #[given("a LEZ private smoke stack")]
-async fn deploy_lez_private_smoke_stack(world: &mut CucumberWorld) -> StepResult {
-    deploy_lez_stack(world, true).await
+async fn deploy_lez_private_smoke_stack(world: &mut CucumberWorld, step: &Step) -> StepResult {
+    log_step(step);
+    deploy_lez_stack(world, true, step).await
 }
 
 #[given("a LEZ stack with configured accounts")]
-async fn deploy_lez_configured_accounts(world: &mut CucumberWorld) -> StepResult {
-    deploy_lez_stack(world, false).await
+async fn deploy_lez_configured_accounts(world: &mut CucumberWorld, step: &Step) -> StepResult {
+    log_step(step);
+    deploy_lez_stack(world, false, step).await
+}
+
+#[given("a LEZ stack with configured private accounts")]
+async fn deploy_lez_configured_private_accounts(
+    world: &mut CucumberWorld,
+    step: &Step,
+) -> StepResult {
+    log_step(step);
+    deploy_lez_stack(world, true, step).await
 }
 
 #[given("a new public account")]
-async fn create_new_public_account(world: &mut CucumberWorld) -> StepResult {
+async fn create_new_public_account(world: &mut CucumberWorld, step: &Step) -> StepResult {
+    log_step(step);
     let context = world.lez()?;
     let account = context.new_public_account().await?;
     match context.sequencer_client().get_account(account).await {
         Ok(state) if state == Account::default() => {}
         Ok(state) => {
+            warn!(
+                "Cucumber step '{}' found non-default state for fresh public account {account:?}",
+                step.value
+            );
             return Err(StepError::AssertionFailed {
                 message: format!(
                     "new public account {account:?} already has sequencer state: {state:?}"
                 ),
             });
         }
-        Err(_) => {}
+        Err(error) => {
+            error!(
+                "Cucumber step '{}' failed to query fresh public account {account:?}: {error}",
+                step.value
+            );
+            return Err(StepError::QueryFailed {
+                message: format!("failed to query fresh public account {account:?}: {error}"),
+            });
+        }
     }
     world.environment.new_public_account = Some(account);
     Ok(())
@@ -54,6 +80,7 @@ async fn create_new_public_account(world: &mut CucumberWorld) -> StepResult {
 async fn deploy_lez_stack(
     world: &mut CucumberWorld,
     initialize_private_accounts: bool,
+    step: &Step,
 ) -> StepResult {
     if world.lez.is_some() {
         return Err(StepError::FixtureAlreadyDeployed);
@@ -64,11 +91,9 @@ async fn deploy_lez_stack(
         .clone()
         .unwrap_or_else(|| "unknown-time".to_owned());
     let scenario_base_dir = world.scenario_base_dir.join(entropy);
-    // Keep the default two-validator/two-Blend topology so the local chain can
-    // finalize the last transfer block for the indexer. Readiness is checked
-    // before wallet claims are submitted below.
+    let bedrock = BedrockApp::nodes_with_blend_core_nodes(2, 2);
     let app = LezLocalApp::new()
-        .with_bedrock(BedrockApp::nodes_with_blend_core_nodes(2, 2))
+        .with_bedrock(bedrock)
         .with_scenario_base_dir(scenario_base_dir);
     let app = if initialize_private_accounts {
         app
@@ -79,20 +104,23 @@ async fn deploy_lez_stack(
         app.without_private_account_initialization()
     };
 
-    world
-        .deployment_mut()
-        .deploy(app)
-        .await
-        .map_err(|error| StepError::DeploymentFailed {
+    world.deployment_mut().deploy(app).await.map_err(|error| {
+        error!(
+            "Cucumber step '{}' failed during deployment: {error:?}",
+            step.value
+        );
+        StepError::DeploymentFailed {
             message: format!("{error:?}"),
-        })?;
+        }
+    })?;
 
     let context = LezScenarioContext::from_deployment(world.deployment())?;
     world.set_lez(context)
 }
 
 #[when("I query the balance of the first configured public account")]
-async fn query_first_public_account_balance(world: &mut CucumberWorld) -> StepResult {
+async fn query_first_public_account_balance(world: &mut CucumberWorld, step: &Step) -> StepResult {
+    log_step(step);
     let context = world.lez()?;
     let account = context
         .existing_public_accounts()
@@ -121,7 +149,8 @@ async fn query_first_public_account_balance(world: &mut CucumberWorld) -> StepRe
 }
 
 #[when("I query the balance of the first configured private account")]
-async fn query_first_private_account_balance(world: &mut CucumberWorld) -> StepResult {
+async fn query_first_private_account_balance(world: &mut CucumberWorld, step: &Step) -> StepResult {
+    log_step(step);
     let context = world.lez()?;
     let account = context
         .existing_private_accounts()
@@ -153,8 +182,13 @@ async fn query_first_private_account_balance(world: &mut CucumberWorld) -> StepR
     Ok(())
 }
 
-#[when("I transfer 100 from the first configured public account to the second")]
-async fn transfer_between_configured_public_accounts(world: &mut CucumberWorld) -> StepResult {
+#[when(expr = "I transfer {int} from the first configured public account to the second")]
+async fn transfer_between_configured_public_accounts(
+    world: &mut CucumberWorld,
+    step: &Step,
+    amount: u128,
+) -> StepResult {
+    log_step(step);
     let context = world.lez()?;
     let accounts = context.existing_public_accounts().await?;
     let sender = accounts
@@ -191,11 +225,11 @@ async fn transfer_between_configured_public_accounts(world: &mut CucumberWorld) 
         .ok_or_else(|| StepError::QueryFailed {
             message: format!("no nonce returned for sender {sender:?}"),
         })?;
-    let transfer_hash = context.public_transfer(sender, receiver, 100).await?;
+    let transfer_hash = context.public_transfer(sender, receiver, amount).await?;
 
     world.environment.transfer_sender = Some(sender);
     world.environment.transfer_receiver = Some(receiver);
-    world.environment.transfer_amount = Some(100);
+    world.environment.transfer_amount = Some(amount);
     world.environment.sender_initial_balance = Some(sender_initial_balance);
     world.environment.receiver_initial_balance = Some(receiver_initial_balance);
     world.environment.sender_initial_nonce = Some(sender_initial_nonce);
@@ -204,8 +238,13 @@ async fn transfer_between_configured_public_accounts(world: &mut CucumberWorld) 
     Ok(())
 }
 
-#[when("I transfer 100 from the first configured public account to the new account")]
-async fn transfer_to_new_public_account(world: &mut CucumberWorld) -> StepResult {
+#[when(expr = "I transfer {int} from the first configured public account to the new account")]
+async fn transfer_to_new_public_account(
+    world: &mut CucumberWorld,
+    step: &Step,
+    amount: u128,
+) -> StepResult {
+    log_step(step);
     let context = world.lez()?;
     let sender = context
         .existing_public_accounts()
@@ -238,12 +277,12 @@ async fn transfer_to_new_public_account(world: &mut CucumberWorld) -> StepResult
             message: format!("no nonce returned for sender {sender:?}"),
         })?;
     let transfer_hash = context
-        .public_transfer_to_new_account(sender, receiver, 100)
+        .public_transfer_to_new_account(sender, receiver, amount)
         .await?;
 
     world.environment.transfer_sender = Some(sender);
     world.environment.transfer_receiver = Some(receiver);
-    world.environment.transfer_amount = Some(100);
+    world.environment.transfer_amount = Some(amount);
     world.environment.sender_initial_balance = Some(sender_initial_balance);
     world.environment.receiver_initial_balance = Some(receiver_initial_balance);
     world.environment.sender_initial_nonce = Some(sender_initial_nonce);
@@ -252,10 +291,63 @@ async fn transfer_to_new_public_account(world: &mut CucumberWorld) -> StepResult
     Ok(())
 }
 
-#[when("I transfer another 100 from the first configured public account to the second")]
+#[when(expr = "I transfer {int} from the first configured private account to the second")]
+async fn transfer_between_configured_private_accounts(
+    world: &mut CucumberWorld,
+    step: &Step,
+    amount: u128,
+) -> StepResult {
+    log_step(step);
+    let context = world.lez()?;
+    context.sync_wallet_to_latest_block().await?;
+    let accounts = context.existing_private_accounts().await?;
+    let sender = accounts
+        .first()
+        .copied()
+        .ok_or_else(|| StepError::AssertionFailed {
+            message: "expected at least two configured private accounts, found none".to_owned(),
+        })?;
+    let receiver = accounts
+        .get(1)
+        .copied()
+        .ok_or_else(|| StepError::AssertionFailed {
+            message: format!(
+                "expected at least two configured private accounts, found {}",
+                accounts.len()
+            ),
+        })?;
+    let sender_initial_balance =
+        context
+            .private_account_balance(sender)
+            .await?
+            .ok_or_else(|| StepError::QueryFailed {
+                message: format!("private sender {sender:?} has no synchronized wallet balance"),
+            })?;
+    let receiver_initial_balance = context
+        .private_account_balance(receiver)
+        .await?
+        .ok_or_else(|| StepError::QueryFailed {
+            message: format!("private receiver {receiver:?} has no synchronized wallet balance"),
+        })?;
+    let transfer_hash = context.private_transfer(sender, receiver, amount).await?;
+
+    world.environment.private_transfer_sender = Some(sender);
+    world.environment.private_transfer_receiver = Some(receiver);
+    world.environment.private_transfer_amount = Some(amount);
+    world.environment.private_sender_initial_balance = Some(sender_initial_balance);
+    world.environment.private_receiver_initial_balance = Some(receiver_initial_balance);
+    world.environment.transfer_hash = Some(transfer_hash);
+    world.environment.transfer_hashes = vec![transfer_hash];
+    Ok(())
+}
+
+#[when(expr = "I transfer another {int} from the first configured public account to the second")]
 async fn transfer_again_between_configured_public_accounts(
     world: &mut CucumberWorld,
+    step: &Step,
+    amount: u128,
 ) -> StepResult {
+    log_step(step);
     let sender = world
         .environment
         .transfer_sender
@@ -268,9 +360,12 @@ async fn transfer_again_between_configured_public_accounts(
         .environment
         .transfer_amount
         .ok_or(StepError::MissingTransfer)?;
-    let transfer_hash = world.lez()?.public_transfer(sender, receiver, 100).await?;
+    let transfer_hash = world
+        .lez()?
+        .public_transfer(sender, receiver, amount)
+        .await?;
 
-    world.environment.transfer_amount = Some(previous_amount.checked_add(100).ok_or_else(
+    world.environment.transfer_amount = Some(previous_amount.checked_add(amount).ok_or_else(
         || StepError::AssertionFailed {
             message: format!("cumulative transfer amount overflow after {previous_amount}"),
         },
@@ -280,8 +375,13 @@ async fn transfer_again_between_configured_public_accounts(
     Ok(())
 }
 
-#[when("I attempt to transfer 10001 from the first configured public account to the second")]
-async fn attempt_insufficient_public_transfer(world: &mut CucumberWorld) -> StepResult {
+#[when(expr = "I attempt to transfer {int} from the first configured public account to the second")]
+async fn attempt_insufficient_public_transfer(
+    world: &mut CucumberWorld,
+    step: &Step,
+    amount: u128,
+) -> StepResult {
+    log_step(step);
     let context = world.lez()?;
     let accounts = context.existing_public_accounts().await?;
     let sender = accounts
@@ -319,7 +419,7 @@ async fn attempt_insufficient_public_transfer(world: &mut CucumberWorld) -> Step
             message: format!("no nonce returned for sender {sender:?}"),
         })?;
 
-    let rejection = match context.public_transfer(sender, receiver, 10_001).await {
+    let rejection = match context.public_transfer(sender, receiver, amount).await {
         Ok(transfer_hash) => {
             world.environment.transfer_hash = Some(transfer_hash);
             return Err(StepError::AssertionFailed {
@@ -346,7 +446,8 @@ async fn attempt_insufficient_public_transfer(world: &mut CucumberWorld) -> Step
     clippy::needless_pass_by_ref_mut,
     reason = "Cucumber step functions require `&mut World` as the first parameter"
 )]
-fn assert_first_public_account_balance(world: &mut CucumberWorld) -> StepResult {
+fn assert_first_public_account_balance(world: &mut CucumberWorld, step: &Step) -> StepResult {
+    log_step(step);
     let account = world
         .environment
         .selected_account
@@ -374,9 +475,21 @@ fn assert_first_public_account_balance(world: &mut CucumberWorld) -> StepResult 
     Ok(())
 }
 
-#[then("the sender balance decreases by 100")]
-async fn assert_sender_balance_decreased(world: &mut CucumberWorld) -> StepResult {
+#[then(expr = "the sender balance decreases by {int}")]
+async fn assert_sender_balance_decreased(
+    world: &mut CucumberWorld,
+    step: &Step,
+    expected_amount: u128,
+) -> StepResult {
+    log_step(step);
     let (sender, initial_balance, amount) = transfer_details(world, true)?;
+    if amount != expected_amount {
+        return Err(StepError::AssertionFailed {
+            message: format!(
+                "expected sender balance decrease {expected_amount}, got transfer amount {amount}"
+            ),
+        });
+    }
     let observed_balance = world
         .lez()?
         .sequencer_client()
@@ -404,9 +517,21 @@ async fn assert_sender_balance_decreased(world: &mut CucumberWorld) -> StepResul
     Ok(())
 }
 
-#[then("the receiver balance increases by 100")]
-async fn assert_receiver_balance_increased(world: &mut CucumberWorld) -> StepResult {
+#[then(expr = "the receiver balance increases by {int}")]
+async fn assert_receiver_balance_increased(
+    world: &mut CucumberWorld,
+    step: &Step,
+    expected_amount: u128,
+) -> StepResult {
+    log_step(step);
     let (receiver, initial_balance, amount) = transfer_details(world, false)?;
+    if amount != expected_amount {
+        return Err(StepError::AssertionFailed {
+            message: format!(
+                "expected receiver balance increase {expected_amount}, got transfer amount {amount}"
+            ),
+        });
+    }
     let observed_balance = world
         .lez()?
         .sequencer_client()
@@ -432,8 +557,13 @@ async fn assert_receiver_balance_increased(world: &mut CucumberWorld) -> StepRes
     Ok(())
 }
 
-#[then("the new account balance is 100")]
-async fn assert_new_account_balance(world: &mut CucumberWorld) -> StepResult {
+#[then(expr = "the new account balance is {int}")]
+async fn assert_new_account_balance(
+    world: &mut CucumberWorld,
+    step: &Step,
+    expected_balance: u128,
+) -> StepResult {
+    log_step(step);
     let account = world
         .environment
         .new_public_account
@@ -446,10 +576,10 @@ async fn assert_new_account_balance(world: &mut CucumberWorld) -> StepResult {
         .map_err(|error| StepError::QueryFailed {
             message: error.to_string(),
         })?;
-    if observed_balance != 100 {
+    if observed_balance != expected_balance {
         return Err(StepError::AssertionFailed {
             message: format!(
-                "new public account {account:?} has balance {observed_balance}, expected 100"
+                "new public account {account:?} has balance {observed_balance}, expected {expected_balance}"
             ),
         });
     }
@@ -457,72 +587,132 @@ async fn assert_new_account_balance(world: &mut CucumberWorld) -> StepResult {
     Ok(())
 }
 
-#[then("the sender balance decreases by 200")]
-async fn assert_sender_balance_decreased_by_200(world: &mut CucumberWorld) -> StepResult {
-    let (sender, initial_balance, amount) = transfer_details(world, true)?;
-    if amount != 200 {
+#[then(expr = "the sender private balance decreases by {int}")]
+async fn assert_sender_private_balance_decreased(
+    world: &mut CucumberWorld,
+    step: &Step,
+    expected_amount: u128,
+) -> StepResult {
+    log_step(step);
+    let account = world
+        .environment
+        .private_transfer_sender
+        .ok_or(StepError::MissingTransfer)?;
+    let initial_balance = world
+        .environment
+        .private_sender_initial_balance
+        .ok_or(StepError::MissingTransfer)?;
+    let amount = world
+        .environment
+        .private_transfer_amount
+        .ok_or(StepError::MissingTransfer)?;
+    if amount != expected_amount {
         return Err(StepError::AssertionFailed {
-            message: format!("expected cumulative transfer amount 200, got {amount}"),
+            message: format!(
+                "expected private sender balance decrease {expected_amount}, got transfer amount {amount}"
+            ),
         });
     }
+    let expected_balance = initial_balance.checked_sub(amount).ok_or_else(|| {
+        StepError::AssertionFailed {
+            message: format!(
+                "private sender initial balance {initial_balance} is below transfer amount {amount}"
+            ),
+        }
+    })?;
     let observed_balance = world
         .lez()?
-        .sequencer_client()
-        .get_account_balance(sender)
-        .await
-        .map_err(|error| StepError::QueryFailed {
-            message: error.to_string(),
+        .private_account_balance(account)
+        .await?
+        .ok_or_else(|| StepError::QueryFailed {
+            message: format!("private sender {account:?} has no synchronized wallet balance"),
         })?;
-    let expected_balance =
-        initial_balance
-            .checked_sub(amount)
+    if observed_balance != expected_balance {
+        return Err(StepError::AssertionFailed {
+            message: format!(
+                "private sender {account:?} has balance {observed_balance}, expected {expected_balance}"
+            ),
+        });
+    }
+    world.environment.private_sender_observed_balance = Some(observed_balance);
+    Ok(())
+}
+
+#[then(expr = "the receiver private balance increases by {int}")]
+async fn assert_receiver_private_balance_increased(
+    world: &mut CucumberWorld,
+    step: &Step,
+    expected_amount: u128,
+) -> StepResult {
+    log_step(step);
+    let account = world
+        .environment
+        .private_transfer_receiver
+        .ok_or(StepError::MissingTransfer)?;
+    let initial_balance = world
+        .environment
+        .private_receiver_initial_balance
+        .ok_or(StepError::MissingTransfer)?;
+    let amount = world
+        .environment
+        .private_transfer_amount
+        .ok_or(StepError::MissingTransfer)?;
+    if amount != expected_amount {
+        return Err(StepError::AssertionFailed {
+            message: format!(
+                "expected private receiver balance increase {expected_amount}, got transfer amount {amount}"
+            ),
+        });
+    }
+    let expected_balance = initial_balance
+        .checked_add(amount)
             .ok_or_else(|| StepError::AssertionFailed {
                 message: format!(
-                    "sender initial balance {initial_balance} is below transfer amount {amount}"
+                    "private receiver initial balance {initial_balance} overflowed for transfer amount {amount}"
                 ),
             })?;
+    let observed_balance = world
+        .lez()?
+        .private_account_balance(account)
+        .await?
+        .ok_or_else(|| StepError::QueryFailed {
+            message: format!("private receiver {account:?} has no synchronized wallet balance"),
+        })?;
     if observed_balance != expected_balance {
         return Err(StepError::AssertionFailed {
             message: format!(
-                "sender {sender:?} has balance {observed_balance}, expected {expected_balance}"
+                "private receiver {account:?} has balance {observed_balance}, expected {expected_balance}"
             ),
         });
     }
-    world.environment.sender_observed_balance = Some(observed_balance);
+    world.environment.private_receiver_observed_balance = Some(observed_balance);
     Ok(())
 }
 
-#[then("the receiver balance increases by 200")]
-async fn assert_receiver_balance_increased_by_200(world: &mut CucumberWorld) -> StepResult {
-    let (receiver, initial_balance, amount) = transfer_details(world, false)?;
-    if amount != 200 {
-        return Err(StepError::AssertionFailed {
-            message: format!("expected cumulative transfer amount 200, got {amount}"),
-        });
-    }
-    let observed_balance = world
-        .lez()?
-        .sequencer_client()
-        .get_account_balance(receiver)
-        .await
-        .map_err(|error| StepError::QueryFailed {
-            message: error.to_string(),
-        })?;
-    let expected_balance =
-        initial_balance
-            .checked_add(amount)
-            .ok_or_else(|| StepError::AssertionFailed {
-                message: format!("receiver balance overflow for transfer amount {amount}"),
-            })?;
-    if observed_balance != expected_balance {
-        return Err(StepError::AssertionFailed {
-            message: format!(
-                "receiver {receiver:?} has balance {observed_balance}, expected {expected_balance}"
-            ),
-        });
-    }
-    world.environment.receiver_observed_balance = Some(observed_balance);
-    Ok(())
+#[then("the sender private commitment is in sequencer state")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step handlers receive mutable world references"
+)]
+async fn assert_sender_private_commitment_in_state(
+    world: &mut CucumberWorld,
+    step: &Step,
+) -> StepResult {
+    log_step(step);
+    assert_private_commitment_in_state(world, true, "sender").await
+}
+
+#[then("the receiver private commitment is in sequencer state")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step handlers receive mutable world references"
+)]
+async fn assert_receiver_private_commitment_in_state(
+    world: &mut CucumberWorld,
+    step: &Step,
+) -> StepResult {
+    log_step(step);
+    assert_private_commitment_in_state(world, false, "receiver").await
 }
 
 #[then("the transfer is rejected")]
@@ -530,7 +720,8 @@ async fn assert_receiver_balance_increased_by_200(world: &mut CucumberWorld) -> 
     clippy::needless_pass_by_ref_mut,
     reason = "Cucumber step functions require `&mut World` as the first parameter"
 )]
-fn assert_transfer_is_rejected(world: &mut CucumberWorld) -> StepResult {
+fn assert_transfer_is_rejected(world: &mut CucumberWorld, step: &Step) -> StepResult {
+    log_step(step);
     if world.environment.transfer_rejection.is_none() {
         return Err(StepError::AssertionFailed {
             message: "expected the insufficient-balance transfer to be rejected".to_owned(),
@@ -544,7 +735,8 @@ fn assert_transfer_is_rejected(world: &mut CucumberWorld) -> StepResult {
     clippy::needless_pass_by_ref_mut,
     reason = "Cucumber step functions require `&mut World` as the first parameter"
 )]
-fn assert_no_transfer_is_included(world: &mut CucumberWorld) -> StepResult {
+fn assert_no_transfer_is_included(world: &mut CucumberWorld, step: &Step) -> StepResult {
+    log_step(step);
     if world.environment.transfer_rejection.is_none()
         || world.environment.transfer_hash.is_some()
         || !world.environment.transfer_hashes.is_empty()
@@ -557,7 +749,8 @@ fn assert_no_transfer_is_included(world: &mut CucumberWorld) -> StepResult {
 }
 
 #[then("the sender balance remains unchanged")]
-async fn assert_sender_balance_unchanged(world: &mut CucumberWorld) -> StepResult {
+async fn assert_sender_balance_unchanged(world: &mut CucumberWorld, step: &Step) -> StepResult {
+    log_step(step);
     let (sender, initial_balance, _) = transfer_details(world, true)?;
     let observed_balance = world
         .lez()?
@@ -579,7 +772,8 @@ async fn assert_sender_balance_unchanged(world: &mut CucumberWorld) -> StepResul
 }
 
 #[then("the receiver balance remains unchanged")]
-async fn assert_receiver_balance_unchanged(world: &mut CucumberWorld) -> StepResult {
+async fn assert_receiver_balance_unchanged(world: &mut CucumberWorld, step: &Step) -> StepResult {
+    log_step(step);
     let (receiver, initial_balance, _) = transfer_details(world, false)?;
     let observed_balance = world
         .lez()?
@@ -601,18 +795,27 @@ async fn assert_receiver_balance_unchanged(world: &mut CucumberWorld) -> StepRes
 }
 
 #[then("the transfer is included in a block")]
-async fn assert_transfer_is_included(world: &mut CucumberWorld) -> StepResult {
+async fn assert_transfer_is_included(world: &mut CucumberWorld, step: &Step) -> StepResult {
+    log_step(step);
     let transfer_hash = world
         .environment
         .transfer_hash
         .ok_or(StepError::MissingTransfer)?;
-    let (_, block_id) = get_transfer_transaction(world.lez()?, transfer_hash).await?;
+    let (transaction, block_id) = get_transfer_transaction(world.lez()?, transfer_hash).await?;
+    if world.environment.private_transfer_sender.is_some()
+        && !matches!(transaction, LeeTransaction::PrivacyPreserving(_))
+    {
+        return Err(StepError::AssertionFailed {
+            message: "expected a privacy-preserving private transfer".to_owned(),
+        });
+    }
     world.environment.transfer_included_block = Some(block_id);
     Ok(())
 }
 
 #[then("both transfers are included in blocks")]
-async fn assert_both_transfers_are_included(world: &mut CucumberWorld) -> StepResult {
+async fn assert_both_transfers_are_included(world: &mut CucumberWorld, step: &Step) -> StepResult {
+    log_step(step);
     let hashes = world.environment.transfer_hashes.clone();
     if hashes.len() != 2 {
         return Err(StepError::AssertionFailed {
@@ -634,7 +837,8 @@ async fn assert_both_transfers_are_included(world: &mut CucumberWorld) -> StepRe
     clippy::needless_pass_by_ref_mut,
     reason = "Cucumber step functions require `&mut World` as the first parameter"
 )]
-async fn assert_only_sender_signs(world: &mut CucumberWorld) -> StepResult {
+async fn assert_only_sender_signs(world: &mut CucumberWorld, step: &Step) -> StepResult {
+    log_step(step);
     let sender = world
         .environment
         .transfer_sender
@@ -672,7 +876,8 @@ async fn assert_only_sender_signs(world: &mut CucumberWorld) -> StepResult {
     clippy::needless_pass_by_ref_mut,
     reason = "Cucumber step functions require `&mut World` as the first parameter"
 )]
-async fn assert_sender_and_new_account_sign(world: &mut CucumberWorld) -> StepResult {
+async fn assert_sender_and_new_account_sign(world: &mut CucumberWorld, step: &Step) -> StepResult {
+    log_step(step);
     let sender = world
         .environment
         .transfer_sender
@@ -723,7 +928,11 @@ async fn assert_sender_and_new_account_sign(world: &mut CucumberWorld) -> StepRe
     clippy::needless_pass_by_ref_mut,
     reason = "Cucumber step functions require `&mut World` as the first parameter"
 )]
-async fn assert_only_sender_signs_both_transfers(world: &mut CucumberWorld) -> StepResult {
+async fn assert_only_sender_signs_both_transfers(
+    world: &mut CucumberWorld,
+    step: &Step,
+) -> StepResult {
+    log_step(step);
     let sender = world
         .environment
         .transfer_sender
@@ -768,7 +977,8 @@ async fn assert_only_sender_signs_both_transfers(world: &mut CucumberWorld) -> S
     clippy::needless_pass_by_ref_mut,
     reason = "Cucumber step functions require `&mut World` as the first parameter"
 )]
-async fn assert_sender_nonce_advances(world: &mut CucumberWorld) -> StepResult {
+async fn assert_sender_nonce_advances(world: &mut CucumberWorld, step: &Step) -> StepResult {
+    log_step(step);
     let sender = world
         .environment
         .transfer_sender
@@ -812,7 +1022,8 @@ async fn assert_sender_nonce_advances(world: &mut CucumberWorld) -> StepResult {
 }
 
 #[then("the indexer catches up to the sequencer")]
-async fn wait_for_indexer(world: &mut CucumberWorld) -> StepResult {
+async fn wait_for_indexer(world: &mut CucumberWorld, step: &Step) -> StepResult {
+    log_step(step);
     let transfer_block = world
         .environment
         .transfer_included_blocks
@@ -853,7 +1064,8 @@ async fn wait_for_indexer(world: &mut CucumberWorld) -> StepResult {
 }
 
 #[then("I stop the runtime")]
-async fn stop_runtime(world: &mut CucumberWorld) -> StepResult {
+async fn stop_runtime(world: &mut CucumberWorld, step: &Step) -> StepResult {
+    log_step(step);
     world.stop_runtime().await
 }
 
@@ -897,6 +1109,38 @@ fn transfer_details(
         .transfer_amount
         .ok_or(StepError::MissingTransfer)?;
     Ok((account, initial_balance, amount))
+}
+
+async fn assert_private_commitment_in_state(
+    world: &CucumberWorld,
+    sender: bool,
+    role: &str,
+) -> StepResult {
+    let account = if sender {
+        world.environment.private_transfer_sender
+    } else {
+        world.environment.private_transfer_receiver
+    }
+    .ok_or(StepError::MissingTransfer)?;
+    let context = world.lez()?;
+    let commitment = context
+        .private_account_commitment(account)
+        .await?
+        .ok_or_else(|| StepError::QueryFailed {
+            message: format!("private {role} {account:?} has no current commitment"),
+        })?;
+    if !crate::verify_commitment_is_in_state(commitment, context.sequencer_client()).await {
+        return Err(StepError::AssertionFailed {
+            message: format!(
+                "private {role} commitment for account {account:?} is not in sequencer state"
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn log_step(step: &Step) {
+    log::debug!("Executing Cucumber step: {}", step.value);
 }
 
 async fn get_transfer_transaction(

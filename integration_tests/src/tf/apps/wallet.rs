@@ -50,6 +50,10 @@ enum WalletRequest {
         account_id: AccountId,
         response: oneshot::Sender<Result<Option<u128>, String>>,
     },
+    PrivateAccountCommitment {
+        account_id: AccountId,
+        response: oneshot::Sender<Result<Option<lee_core::Commitment>, String>>,
+    },
     PublicAccountSigningKey {
         account_id: AccountId,
         response: oneshot::Sender<Result<Option<PublicKey>, String>>,
@@ -62,6 +66,15 @@ enum WalletRequest {
         to: AccountId,
         amount: u128,
         response: oneshot::Sender<Result<HashType, String>>,
+    },
+    PrivateTransfer {
+        from: AccountId,
+        to: AccountId,
+        amount: u128,
+        response: oneshot::Sender<Result<HashType, String>>,
+    },
+    SyncToLatestBlock {
+        response: oneshot::Sender<Result<(), String>>,
     },
     NewPublicAccount {
         response: oneshot::Sender<Result<AccountId, String>>,
@@ -130,6 +143,15 @@ impl WalletActor {
                                     .map(|account| account.balance);
                                 let _unused = response.send(Ok(balance));
                             }
+                            WalletRequest::PrivateAccountCommitment {
+                                account_id,
+                                response,
+                            } => {
+                                let commitment = components
+                                    .wallet
+                                    .get_private_account_commitment(account_id);
+                                let _unused = response.send(Ok(commitment));
+                            }
                             WalletRequest::PublicAccountSigningKey {
                                 account_id,
                                 response,
@@ -190,6 +212,57 @@ impl WalletActor {
                                     }
                                 })
                                 .map_err(|error| error.to_string());
+                                let _unused = response.send(result);
+                            }
+                            WalletRequest::PrivateTransfer {
+                                from,
+                                to,
+                                amount,
+                                response,
+                            } => {
+                                let result = wallet::cli::execute_subcommand(
+                                    &mut components.wallet,
+                                    Command::AuthTransfer(AuthTransferSubcommand::Send {
+                                        from: CliAccountMention::Id(
+                                            AccountIdWithPrivacy::Private(from),
+                                        ),
+                                        to: Some(CliAccountMention::Id(
+                                            AccountIdWithPrivacy::Private(to),
+                                        )),
+                                        to_npk: None,
+                                        to_vpk: None,
+                                        to_keys: None,
+                                        to_identifier: Some(0),
+                                        amount,
+                                    }),
+                                )
+                                .await
+                                .and_then(|result| {
+                                    #[expect(
+                                        clippy::wildcard_enum_match_arm,
+                                        reason = "Only TransactionExecuted is valid for a transfer request"
+                                    )]
+                                    match result {
+                                        SubcommandReturnValue::TransactionExecuted { tx_hash } => {
+                                            Ok(tx_hash)
+                                        }
+                                        other => {
+                                            anyhow::bail!(
+                                                "expected TransactionExecuted, got {other:?}"
+                                            )
+                                        }
+                                    }
+                                })
+                                .map_err(|error| error.to_string());
+                                let _unused = response.send(result);
+                            }
+                            WalletRequest::SyncToLatestBlock { response } => {
+                                let result = components
+                                    .wallet
+                                    .sync_to_latest_block()
+                                    .await
+                                    .map(|_| ())
+                                    .map_err(|error| error.to_string());
                                 let _unused = response.send(result);
                             }
                             WalletRequest::NewPublicAccount { response } => {
@@ -320,6 +393,18 @@ impl LezRuntime {
         .await
     }
 
+    /// Returns the current commitment for an imported private account.
+    pub async fn private_account_commitment(
+        &self,
+        account_id: AccountId,
+    ) -> Result<Option<lee_core::Commitment>, DynError> {
+        self.request(|response| WalletRequest::PrivateAccountCommitment {
+            account_id,
+            response,
+        })
+        .await
+    }
+
     /// Returns the public signing key for an imported public account.
     pub async fn public_account_signing_key(
         &self,
@@ -352,6 +437,28 @@ impl LezRuntime {
             response,
         })
         .await
+    }
+
+    /// Executes an authenticated transfer between two owned private accounts.
+    pub async fn private_transfer(
+        &self,
+        from: AccountId,
+        to: AccountId,
+        amount: u128,
+    ) -> Result<HashType, DynError> {
+        self.request(|response| WalletRequest::PrivateTransfer {
+            from,
+            to,
+            amount,
+            response,
+        })
+        .await
+    }
+
+    /// Synchronizes the wallet with the latest sequencer block.
+    pub async fn sync_to_latest_block(&self) -> Result<(), DynError> {
+        self.request(|response| WalletRequest::SyncToLatestBlock { response })
+            .await
     }
 
     /// Creates and persists a fresh public account in the wallet.
@@ -504,12 +611,18 @@ impl AppDeployment<AppHostEnv> for WalletApp {
                     .await
                     .context("failed to initialize LEZ public wallet accounts")?;
                     if initialize_private_account_funding {
-                        setup_private_accounts_with_initial_supply(
-                            &mut wallet,
-                            &private_accounts_to_initialize,
-                        )
-                        .await
-                        .context("failed to initialize LEZ private wallet accounts")?;
+                        for private_account in &private_accounts_to_initialize {
+                            setup_private_accounts_with_initial_supply(
+                                &mut wallet,
+                                std::slice::from_ref(private_account),
+                            )
+                            .await
+                            .context("failed to initialize LEZ private wallet account")?;
+                            wallet
+                                .sync_to_latest_block()
+                                .await
+                                .context("failed to synchronize LEZ private wallet accounts")?;
+                        }
                     }
                     Ok((wallet, initialized_state_dir, password))
                 })

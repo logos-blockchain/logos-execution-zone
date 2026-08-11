@@ -124,6 +124,19 @@ impl LezScenarioContext {
             })
     }
 
+    /// Returns the current commitment for an imported private account.
+    pub async fn private_account_commitment(
+        &self,
+        account_id: AccountId,
+    ) -> Result<Option<lee_core::Commitment>, StepError> {
+        self.wallet
+            .private_account_commitment(account_id)
+            .await
+            .map_err(|error| StepError::QueryFailed {
+                message: error.to_string(),
+            })
+    }
+
     /// Returns the public signing key for an imported public account.
     pub async fn public_account_signing_key(
         &self,
@@ -146,6 +159,31 @@ impl LezScenarioContext {
     ) -> Result<HashType, StepError> {
         self.wallet
             .public_transfer(from, to, amount)
+            .await
+            .map_err(|error| StepError::QueryFailed {
+                message: error.to_string(),
+            })
+    }
+
+    /// Executes an authenticated transfer between two owned private accounts.
+    pub async fn private_transfer(
+        &self,
+        from: AccountId,
+        to: AccountId,
+        amount: u128,
+    ) -> Result<HashType, StepError> {
+        self.wallet
+            .private_transfer(from, to, amount)
+            .await
+            .map_err(|error| StepError::QueryFailed {
+                message: error.to_string(),
+            })
+    }
+
+    /// Synchronizes the wallet with the latest sequencer block.
+    pub async fn sync_wallet_to_latest_block(&self) -> Result<(), StepError> {
+        self.wallet
+            .sync_to_latest_block()
             .await
             .map_err(|error| StepError::QueryFailed {
                 message: error.to_string(),

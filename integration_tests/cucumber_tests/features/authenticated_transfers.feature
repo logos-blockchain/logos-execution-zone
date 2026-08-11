@@ -61,3 +61,18 @@ Feature: Authenticated transfers
     And the sender and new account sign the transfer
     And the indexer catches up to the sequencer
     Then I stop the runtime
+
+  @auth_transfer_ci
+  # Mirrors integration_tests/tests/auth_transfer/private.rs::private_transfer_to_owned_account.
+  # Coverage preserves the post-transfer commitment checks and additionally verifies private
+  # balances, transaction inclusion, indexer convergence, and explicit runtime teardown.
+  Scenario: Transfer funds between configured private accounts
+    Given a LEZ stack with configured private accounts
+    When I transfer 100 from the first configured private account to the second
+    Then the sender private balance decreases by 100
+    And the receiver private balance increases by 100
+    And the sender private commitment is in sequencer state
+    And the receiver private commitment is in sequencer state
+    And the transfer is included in a block
+    And the indexer catches up to the sequencer
+    Then I stop the runtime
