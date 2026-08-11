@@ -1,6 +1,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use borsh::{BorshDeserialize, BorshSerialize};
+use fee_core::params::MAX_GAS_EXEC;
 use lee_core::{
     BlockId, Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, MembershipProof, Nullifier,
     Timestamp,
@@ -15,7 +16,7 @@ use crate::{
     program::Program,
     program_deployment_transaction::ProgramDeploymentTransaction,
     public_transaction::PublicTransaction,
-    validated_state_diff::{StateDiff, ValidatedStateDiff},
+    validated_state_diff::{ExecutionOutcome, StateDiff, ValidatedStateDiff},
 };
 
 pub const MAX_NUMBER_CHAINED_CALLS: usize = 10;
@@ -226,15 +227,24 @@ impl V03State {
         }
     }
 
+    /// Applies `tx`, metering its execution against the protocol-wide cycle ceiling.
+    ///
+    /// TODO: take the transaction's own `gas_limit` as the budget once fees are wired.
     pub fn transition_from_public_transaction(
         &mut self,
         tx: &PublicTransaction,
         block_id: BlockId,
         timestamp: Timestamp,
-    ) -> Result<(), LeeError> {
-        let diff = ValidatedStateDiff::from_public_transaction(tx, self, block_id, timestamp)?;
+    ) -> Result<ExecutionOutcome, LeeError> {
+        let (diff, outcome) = ValidatedStateDiff::from_public_transaction(
+            tx,
+            self,
+            block_id,
+            timestamp,
+            MAX_GAS_EXEC,
+        )?;
         self.apply_state_diff(diff);
-        Ok(())
+        Ok(outcome)
     }
 
     pub fn transition_from_privacy_preserving_transaction(

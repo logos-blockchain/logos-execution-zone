@@ -44,6 +44,9 @@ pub enum LeeError {
     #[error("Failed to execute program: {0}")]
     ProgramExecutionFailed(String),
 
+    #[error("Execution ran out of gas: cycle budget of {budget} exhausted")]
+    OutOfGas { budget: u64 },
+
     #[error("Failed to prove program: {0}")]
     ProgramProveFailed(String),
 

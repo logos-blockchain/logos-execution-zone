@@ -9,6 +9,8 @@ workspace = true
 
 [dependencies]
 lee_core = { workspace = true, features = ["host"] }
+# TODO: only for the temporary protocol-wide cycle ceiling; drop once per-tx gas limits are wired.
+fee_core.workspace = true
 
 anyhow.workspace = true
 thiserror.workspace = true

@@ -1,5 +1,6 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee::{AccountId, V03State, ValidatedStateDiff};
+use fee_core::params::MAX_GAS_EXEC;
+use lee::{AccountId, ExecutionOutcome, V03State, ValidatedStateDiff};
 use lee_core::{BlockId, Timestamp};
 use log::warn;
 use serde::{Deserialize, Serialize};
@@ -86,8 +87,8 @@ impl LeeTransaction {
         state: &V03State,
         block_id: BlockId,
         timestamp: Timestamp,
-    ) -> Result<ValidatedStateDiff, lee::error::LeeError> {
-        let diff = self.compute_state_diff(state, block_id, timestamp)?;
+    ) -> Result<(ValidatedStateDiff, ExecutionOutcome), lee::error::LeeError> {
+        let (diff, outcome) = self.compute_state_diff(state, block_id, timestamp)?;
 
         let restricted_modification_accounts = system_accounts::clock_account_ids()
             .into_iter()
@@ -98,26 +99,37 @@ impl LeeTransaction {
 
         self.validate_bridge_account_modification(state, &diff)?;
 
-        Ok(diff)
+        Ok((diff, outcome))
     }
 
-    /// Computes the validated state diff. Shared by [`Self::validate_on_state`]
-    /// (which adds the system-account guards) and [`Self::execute_on_state`].
+    /// Computes the validated state diff and the transaction's execution outcome. Shared by
+    /// [`Self::validate_on_state`] (which adds the system-account guards) and
+    /// [`Self::execute_on_state`].
+    ///
+    /// Only public transactions run the zkVM; the other kinds are metering-free.
+    ///
+    /// TODO: budget public execution with the transaction's own `gas_limit` once fees are wired.
     fn compute_state_diff(
         &self,
         state: &V03State,
         block_id: BlockId,
         timestamp: Timestamp,
-    ) -> Result<ValidatedStateDiff, lee::error::LeeError> {
+    ) -> Result<(ValidatedStateDiff, ExecutionOutcome), lee::error::LeeError> {
         match self {
-            Self::Public(tx) => {
-                ValidatedStateDiff::from_public_transaction(tx, state, block_id, timestamp)
-            }
+            Self::Public(tx) => ValidatedStateDiff::from_public_transaction(
+                tx,
+                state,
+                block_id,
+                timestamp,
+                MAX_GAS_EXEC,
+            ),
             Self::PrivacyPreserving(tx) => ValidatedStateDiff::from_privacy_preserving_transaction(
                 tx, state, block_id, timestamp,
-            ),
+            )
+            .map(|diff| (diff, ExecutionOutcome::FREE)),
             Self::ProgramDeployment(tx) => {
                 ValidatedStateDiff::from_program_deployment_transaction(tx, state)
+                    .map(|diff| (diff, ExecutionOutcome::FREE))
             }
         }
     }
@@ -129,12 +141,12 @@ impl LeeTransaction {
         state: &mut V03State,
         block_id: BlockId,
         timestamp: Timestamp,
-    ) -> Result<Self, lee::error::LeeError> {
-        let diff = self
+    ) -> Result<(Self, ExecutionOutcome), lee::error::LeeError> {
+        let (diff, outcome) = self
             .validate_on_state(state, block_id, timestamp)
             .inspect_err(|err| warn!("Error at transition {err:#?}"))?;
         state.apply_state_diff(diff);
-        Ok(self)
+        Ok((self, outcome))
     }
 
     /// Executes the transaction against the current state and applies the resulting diff,
@@ -147,12 +159,12 @@ impl LeeTransaction {
         state: &mut V03State,
         block_id: BlockId,
         timestamp: Timestamp,
-    ) -> Result<Self, lee::error::LeeError> {
-        let diff = self
+    ) -> Result<(Self, ExecutionOutcome), lee::error::LeeError> {
+        let (diff, outcome) = self
             .compute_state_diff(state, block_id, timestamp)
             .inspect_err(|err| warn!("Error at transition {err:#?}"))?;
         state.apply_state_diff(diff);
-        Ok(self)
+        Ok((self, outcome))
     }
 
     fn validate_bridge_account_modification(

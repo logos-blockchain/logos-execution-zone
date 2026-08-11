@@ -678,7 +678,8 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         match origin {
             TransactionOrigin::User => {
                 let validated_diff = match tx.validate_on_state(state, block_height, timestamp) {
-                    Ok(diff) => diff,
+                    // TODO: charge the metered cycles once fees are wired.
+                    Ok((diff, _outcome)) => diff,
                     Err(err) => {
                         error!(
                             "Transaction with hash {tx_hash} failed execution check with error: {err:#?}, skipping it",

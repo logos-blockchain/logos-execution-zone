@@ -17,6 +17,7 @@ use cross_zone_inbox_core::{
     inbox_config_account_id, inbox_seen_shard_account_id, message_key,
 };
 use cross_zone_outbox_core::{OutboxRecord, outbox_pda};
+use fee_core::params::MAX_GAS_EXEC;
 use lee::{
     AccountId, PrivateKey, PublicKey, PublicTransaction, V03State, ValidatedStateDiff,
     public_transaction::{Message, WitnessSet},
@@ -148,8 +149,9 @@ fn inbox_dispatch_delivers_payload_to_ping_receiver() {
     .expect("build dispatch message");
     let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
 
-    let diff = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0)
-        .expect("dispatch must validate and execute");
+    let (diff, _outcome) =
+        ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0, MAX_GAS_EXEC)
+            .expect("dispatch must validate and execute");
     let record = diff
         .public_diff()
         .get(&record_id)
@@ -212,8 +214,9 @@ fn lock_escrows_balance_and_emits_to_outbox() {
     let witness = WitnessSet::for_message(&message, &[&holder_key]);
     let tx = PublicTransaction::new(message, witness);
 
-    let diff = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0)
-        .expect("lock must validate and execute");
+    let (diff, _outcome) =
+        ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0, MAX_GAS_EXEC)
+            .expect("lock must validate and execute");
     let public_diff = diff.public_diff();
 
     let holder_after = public_diff[&holder_id].balance;
@@ -286,8 +289,9 @@ fn inbox_dispatch_mints_wrapped_token() {
     .expect("build dispatch message");
     let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
 
-    let diff = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0)
-        .expect("dispatch must validate and execute");
+    let (diff, _outcome) =
+        ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0, MAX_GAS_EXEC)
+            .expect("dispatch must validate and execute");
     let minted = wrapped_token_core::read_balance(
         &diff.public_diff()[&holding_id].data.clone().into_inner(),
     );
@@ -353,7 +357,7 @@ fn a_mint_from_an_unrouted_emitter_is_rejected() {
     let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
 
     assert!(
-        ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0).is_err(),
+        ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0, MAX_GAS_EXEC).is_err(),
         "a delivery from an emitter with no route to wrapped_token must not mint"
     );
 }
@@ -409,8 +413,9 @@ fn a_mint_from_the_routed_emitter_is_accepted() {
     .expect("build dispatch message");
     let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
 
-    let diff = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0)
-        .expect("the routed emitter must still deliver");
+    let (diff, _outcome) =
+        ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0, MAX_GAS_EXEC)
+            .expect("the routed emitter must still deliver");
     let minted = wrapped_token_core::read_balance(
         &diff.public_diff()[&holding_id].data.clone().into_inner(),
     );
@@ -486,8 +491,9 @@ fn mint_replay_rejected() {
     .expect("build dispatch message");
     let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
 
-    let diff = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0)
-        .expect("a replayed dispatch is a valid no-op, not an error");
+    let (diff, _outcome) =
+        ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0, MAX_GAS_EXEC)
+            .expect("a replayed dispatch is a valid no-op, not an error");
     let public_diff = diff.public_diff();
 
     // No mint: the holding is never credited on replay.

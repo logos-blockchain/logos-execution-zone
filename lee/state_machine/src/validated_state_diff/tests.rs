@@ -1,6 +1,10 @@
 use std::collections::HashMap;
 
-use lee_core::account::{Account, AccountId, Nonce};
+use fee_core::params::MAX_GAS_EXEC;
+use lee_core::{
+    account::{Account, AccountId, Nonce},
+    program::{PdaSeed, ProgramId},
+};
 
 use crate::{
     PrivateKey, PublicKey, V03State,
@@ -48,8 +52,9 @@ fn public_diff_reflects_a_successful_transfer() {
     let witness_set = WitnessSet::for_message(&message, &[&from_key, &to_key]);
     let tx = crate::PublicTransaction::new(message, witness_set);
 
-    let diff = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0)
-        .expect("a valid native transfer must validate");
+    let (diff, _outcome) =
+        ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0, MAX_GAS_EXEC)
+            .expect("a valid native transfer must validate");
     let public_diff = diff.public_diff();
 
     assert!(
@@ -455,7 +460,7 @@ fn malicious_programs_cannot_drain_victim_without_signature() {
     let witness_set = WitnessSet::for_message(&message, &[&attacker_key]);
     let tx = crate::PublicTransaction::new(message, witness_set);
 
-    let result = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0);
+    let result = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0, MAX_GAS_EXEC);
 
     assert!(
         matches!(
@@ -538,4 +543,72 @@ fn privacy_garbage_proof_is_rejected() {
         Err(other) => panic!("expected InvalidPrivacyPreservingProof, got {other:?}"),
         Ok(_) => panic!("garbage proof was accepted instead of rejected"),
     }
+}
+
+/// Builds a `chain_caller` transaction that chains `num_chain_calls` balance transfers.
+fn chained_transfer_transaction(
+    from_key: &PrivateKey,
+    to: AccountId,
+    num_chain_calls: u32,
+) -> crate::PublicTransaction {
+    let from = AccountId::from(&PublicKey::new_from_private_key(from_key));
+    let instruction: (u128, ProgramId, u32, Option<PdaSeed>) = (
+        7,
+        crate::test_methods::simple_balance_transfer().id(),
+        num_chain_calls,
+        None,
+    );
+    let message = Message::try_new(
+        crate::test_methods::chain_caller().id(),
+        // The `chain_caller` program permutes the account order in the chained call.
+        vec![to, from],
+        vec![Nonce(0)],
+        instruction,
+    )
+    .unwrap();
+    let witness_set = WitnessSet::for_message(&message, &[from_key]);
+    crate::PublicTransaction::new(message, witness_set)
+}
+
+#[test]
+fn chained_calls_share_a_single_cycle_budget() {
+    // The chain of calls runs one zkVM session per call, all drawing on one budget: the reported
+    // cycles must be their sum, and a budget that only covers a shorter chain must halt the longer
+    // one part-way through with `OutOfGas`.
+    let from_key = PrivateKey::try_new([1_u8; 32]).unwrap();
+    let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
+    let to = AccountId::new([2_u8; 32]);
+    let state = V03State::new()
+        .with_public_accounts(public_state_from_balances(&[(from, 1_000), (to, 0)]))
+        .with_test_programs();
+
+    let one_call = chained_transfer_transaction(&from_key, to, 1);
+    let two_calls = chained_transfer_transaction(&from_key, to, 2);
+
+    let (_, one_call_outcome) =
+        ValidatedStateDiff::from_public_transaction(&one_call, &state, 1, 0, MAX_GAS_EXEC)
+            .expect("a single chained transfer must validate");
+    let (_, two_calls_outcome) =
+        ValidatedStateDiff::from_public_transaction(&two_calls, &state, 1, 0, MAX_GAS_EXEC)
+            .expect("two chained transfers must validate");
+
+    assert!(
+        two_calls_outcome.cycles > one_call_outcome.cycles,
+        "cycles must accumulate over the chain: {} sessions' worth was not more than {}",
+        two_calls_outcome.cycles,
+        one_call_outcome.cycles,
+    );
+
+    // A budget sized for the shorter chain cannot pay for the extra session of the longer one.
+    let result = ValidatedStateDiff::from_public_transaction(
+        &two_calls,
+        &state,
+        1,
+        0,
+        one_call_outcome.cycles,
+    );
+    assert!(
+        matches!(result, Err(LeeError::OutOfGas { budget }) if budget == one_call_outcome.cycles),
+        "a chain outgrowing its budget must halt with OutOfGas",
+    );
 }

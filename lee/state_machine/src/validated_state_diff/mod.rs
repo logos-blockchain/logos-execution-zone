@@ -41,6 +41,21 @@ pub struct StateDiff {
 /// downstream validation logic; that feature must never be enabled in a production build.
 pub struct ValidatedStateDiff(StateDiff);
 
+/// Metering result of validating/executing a single transaction.
+///
+/// Only public transactions run the zkVM, so every other transaction kind reports
+/// [`ExecutionOutcome::FREE`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ExecutionOutcome {
+    /// Total user cycles metered across all the transaction's zkVM sessions.
+    pub cycles: u64,
+}
+
+impl ExecutionOutcome {
+    /// Outcome of a transaction that runs no zkVM session.
+    pub const FREE: Self = Self { cycles: 0 };
+}
+
 #[cfg(feature = "test-utils")]
 impl ValidatedStateDiff {
     /// Test-only constructor that wraps an already-built [`StateDiff`] **without validating it**.
@@ -54,12 +69,16 @@ impl ValidatedStateDiff {
 }
 
 impl ValidatedStateDiff {
+    /// Validates `tx` against `state`, running its chain of calls under a cumulative
+    /// `cycle_budget`: each session is limited to what the previous ones left unspent, and the
+    /// returned [`ExecutionOutcome`] carries the sum of the user cycles they metered.
     pub fn from_public_transaction(
         tx: &PublicTransaction,
         state: &V03State,
         block_id: BlockId,
         timestamp: Timestamp,
-    ) -> Result<Self, LeeError> {
+        cycle_budget: u64,
+    ) -> Result<(Self, ExecutionOutcome), LeeError> {
         let signer_account_ids = authenticate_public_transaction_signers(tx, state)?;
         let message = tx.message();
 
@@ -104,11 +123,22 @@ impl ValidatedStateDiff {
         let mut chained_calls =
             VecDeque::<(ChainedCall, CallerData)>::from_iter([(initial_call, initial_caller_data)]);
         let mut chain_calls_counter = 0;
+        let mut cycles_used: u64 = 0;
 
         while let Some((chained_call, caller_data)) = chained_calls.pop_front() {
             ensure!(
                 chain_calls_counter <= MAX_NUMBER_CHAINED_CALLS,
                 LeeError::MaxChainedCallsDepthExceeded
+            );
+
+            // Every session in the chain shares one budget, so a call can only spend what the
+            // preceding ones left; an exhausted budget halts the chain mid-way.
+            let remaining_cycles = cycle_budget.saturating_sub(cycles_used);
+            ensure!(
+                remaining_cycles > 0,
+                LeeError::OutOfGas {
+                    budget: cycle_budget
+                }
             );
 
             // Check that the `program_id` corresponds to a deployed program
@@ -120,11 +150,25 @@ impl ValidatedStateDiff {
                 "Program {:?} pre_states: {:?}, instruction_data: {:?}",
                 chained_call.program_id, chained_call.pre_states, chained_call.instruction_data
             );
-            let mut program_output = program.execute(
-                caller_data.program_id,
-                &chained_call.pre_states,
-                &chained_call.instruction_data,
-            )?;
+            let (mut program_output, session_cycles) = program
+                .execute(
+                    caller_data.program_id,
+                    &chained_call.pre_states,
+                    &chained_call.instruction_data,
+                    remaining_cycles,
+                )
+                // A session outgrowing what is left of the budget exhausts the whole
+                // transaction's, so report that one rather than the session's share.
+                .map_err(|err| {
+                    if matches!(err, LeeError::OutOfGas { .. }) {
+                        LeeError::OutOfGas {
+                            budget: cycle_budget,
+                        }
+                    } else {
+                        err
+                    }
+                })?;
+            cycles_used = cycles_used.saturating_add(session_cycles);
             debug!(
                 "Program {:?} output: {:?}",
                 chained_call.program_id, program_output
@@ -318,13 +362,18 @@ impl ValidatedStateDiff {
             );
         }
 
-        Ok(Self(StateDiff {
-            signer_account_ids,
-            public_diff: state_diff,
-            new_commitments: vec![],
-            new_nullifiers: vec![],
-            program: None,
-        }))
+        Ok((
+            Self(StateDiff {
+                signer_account_ids,
+                public_diff: state_diff,
+                new_commitments: vec![],
+                new_nullifiers: vec![],
+                program: None,
+            }),
+            ExecutionOutcome {
+                cycles: cycles_used,
+            },
+        ))
     }
 
     pub fn from_privacy_preserving_transaction(

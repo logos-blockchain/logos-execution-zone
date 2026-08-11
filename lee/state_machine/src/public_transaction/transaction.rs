@@ -61,6 +61,7 @@ impl PublicTransaction {
 
 #[cfg(test)]
 pub mod tests {
+    use fee_core::params::MAX_GAS_EXEC;
     use sha2::{Digest as _, digest::FixedOutput as _};
 
     use crate::{
@@ -178,7 +179,7 @@ pub mod tests {
 
         let witness_set = WitnessSet::for_message(&message, &[&key1, &key1]);
         let tx = PublicTransaction::new(message, witness_set);
-        let result = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0);
+        let result = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0, MAX_GAS_EXEC);
         assert!(matches!(result, Err(LeeError::InvalidInput(_))));
     }
 
@@ -198,7 +199,7 @@ pub mod tests {
 
         let witness_set = WitnessSet::for_message(&message, &[&key1, &key2]);
         let tx = PublicTransaction::new(message, witness_set);
-        let result = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0);
+        let result = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0, MAX_GAS_EXEC);
         assert!(matches!(result, Err(LeeError::InvalidInput(_))));
     }
 
@@ -219,7 +220,7 @@ pub mod tests {
         let mut witness_set = WitnessSet::for_message(&message, &[&key1, &key2]);
         witness_set.signatures_and_public_keys[0].0 = Signature::new_for_tests([1; 64]);
         let tx = PublicTransaction::new(message, witness_set);
-        let result = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0);
+        let result = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0, MAX_GAS_EXEC);
         assert!(matches!(result, Err(LeeError::InvalidInput(_))));
     }
 
@@ -239,7 +240,7 @@ pub mod tests {
 
         let witness_set = WitnessSet::for_message(&message, &[&key1, &key2]);
         let tx = PublicTransaction::new(message, witness_set);
-        let result = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0);
+        let result = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0, MAX_GAS_EXEC);
         assert!(matches!(result, Err(LeeError::InvalidInput(_))));
     }
 
@@ -254,7 +255,7 @@ pub mod tests {
         );
         let witness_set = WitnessSet::from_raw_parts(vec![]);
         let tx = PublicTransaction::new(message, witness_set);
-        let result = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0);
+        let result = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0, MAX_GAS_EXEC);
         assert!(matches!(result, Err(LeeError::InvalidInput(_))));
     }
 
@@ -270,7 +271,7 @@ pub mod tests {
 
         let witness_set = WitnessSet::for_message(&message, &[&key1, &key2]);
         let tx = PublicTransaction::new(message, witness_set);
-        let result = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0);
+        let result = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0, MAX_GAS_EXEC);
         assert!(matches!(result, Err(LeeError::InvalidInput(_))));
     }
 }
