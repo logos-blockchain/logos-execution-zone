@@ -3005,6 +3005,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "fee_core"
+version = "0.1.0"
+dependencies = [
+ "borsh",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "ferroid"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -1,0 +1,363 @@
+//! Fee-validity (SPECS.md §Fee-validity).
+//!
+//! Static per-tx and per-block checks, plus the payer-authorization and
+//! deployment-policy seams that are deliberately left open (D1/D2/D3; see
+//! the `TBA(Qn)` markers).
+
+use crate::{
+    assess::{FeeTxView, PayerId, fee_reserve, gas_stor},
+    error::{FeeError, InvalidBlockError},
+    params::{MAX_GAS_EXEC, MAX_GAS_STOR},
+    state::FeeState,
+};
+
+/// D2 seam: the fee treatment of program deployments.
+// TBA(Q2)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeploymentFeePolicy {
+    /// Deployments pay no execution/storage base fee but their storage
+    /// contribution is still capped.
+    ///
+    /// Enforcement (recognizing a deployment and applying the cap) is the
+    /// block-level caller's job (T8); `fee_core` only exposes the knob.
+    FeeExemptStorageCapped,
+}
+
+/// The default deployment fee policy.
+#[must_use]
+// TBA(Q2)
+pub const fn deployment_policy() -> DeploymentFeePolicy {
+    DeploymentFeePolicy::FeeExemptStorageCapped
+}
+
+/// Static per-transaction fee-validity (SPECS §Fee-validity).
+///
+/// The private rule ("no public-only fields") holds structurally:
+/// [`FeeTxView::Private`] has no such fields to check.
+///
+/// # Errors
+///
+/// Returns [`FeeError::InvalidBlock`] describing which condition failed.
+pub fn validate_static_tx(tx: &FeeTxView, state: &FeeState) -> Result<(), FeeError> {
+    let FeeTxView::Public {
+        gas_limit,
+        data_bytes,
+        max_fee,
+        ..
+    } = tx
+    else {
+        return Ok(());
+    };
+    if *data_bytes < 1 {
+        return Err(FeeError::InvalidBlock(InvalidBlockError::EmptyDataBytes));
+    }
+    if *data_bytes > MAX_GAS_STOR {
+        return Err(FeeError::InvalidBlock(
+            InvalidBlockError::DataBytesExceedsMax {
+                data_bytes: *data_bytes,
+                max: MAX_GAS_STOR,
+            },
+        ));
+    }
+    if *gas_limit > MAX_GAS_EXEC {
+        return Err(FeeError::InvalidBlock(
+            InvalidBlockError::GasLimitExceedsMax {
+                gas_limit: *gas_limit,
+                max: MAX_GAS_EXEC,
+            },
+        ));
+    }
+    let reserve = fee_reserve(tx, state);
+    if reserve > *max_fee {
+        return Err(FeeError::InvalidBlock(
+            InvalidBlockError::FeeReserveExceedsMaxFee {
+                fee_reserve: reserve,
+                max_fee: *max_fee,
+            },
+        ));
+    }
+    Ok(())
+}
+
+/// Static block-level fee-validity.
+///
+/// Every transaction must be statically fee-valid, and the cumulative
+/// storage total must stay within `MAX_GAS_STOR` (SPECS §Fee-validity). The
+/// execution cap is dynamic and enforced by the caller as metered cycles
+/// become known; see [`accumulate_gas_used`].
+///
+/// # Errors
+///
+/// Returns [`FeeError::InvalidBlock`] on the first failing transaction, or
+/// if the cumulative storage total exceeds `MAX_GAS_STOR`.
+pub fn validate_static_block(txs: &[FeeTxView], state: &FeeState) -> Result<(), FeeError> {
+    let mut total_stor: u128 = 0;
+    for tx in txs {
+        validate_static_tx(tx, state)?;
+        total_stor = total_stor
+            .checked_add(u128::from(gas_stor(tx)))
+            .expect("cumulative storage total overflow: protocol caps make this fit for any protocol-valid state");
+        if total_stor > u128::from(MAX_GAS_STOR) {
+            return Err(FeeError::InvalidBlock(
+                InvalidBlockError::StorageCapExceeded {
+                    total: total_stor,
+                    max: MAX_GAS_STOR,
+                },
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Adds `amount` to `running_total` and checks the result against `cap`.
+///
+/// Uses checked `u64` addition so a wraparound can never mask an over-cap
+/// total. Convenience for a caller's dynamic gas-cap enforcement (e.g.
+/// `MAX_GAS_EXEC` as metered cycles become known, SPECS §Fee-validity);
+/// `fee_core` does not execute transactions, so it cannot run that loop
+/// itself.
+///
+/// # Errors
+///
+/// Returns [`FeeError::InvalidBlock`] if the addition overflows `u64` or the
+/// new total exceeds `cap`.
+pub fn accumulate_gas_used(running_total: u64, amount: u64, cap: u64) -> Result<u64, FeeError> {
+    let total = running_total
+        .checked_add(amount)
+        .ok_or(FeeError::InvalidBlock(
+            InvalidBlockError::GasAccumulationOverflow,
+        ))?;
+    if total > cap {
+        return Err(FeeError::InvalidBlock(InvalidBlockError::GasCapExceeded {
+            total,
+            cap,
+        }));
+    }
+    Ok(total)
+}
+
+/// D1 seam: authorizes a transaction's payer against its signer set.
+///
+/// Default rule: the payer must be a member of the signers.
+///
+/// # Errors
+///
+/// Returns `InvalidBlock(UnauthorizedPayer)` if `payer` is not one of
+/// `signers`.
+// TBA(Q1)
+pub fn authorize_payer(payer: PayerId, signers: &[PayerId]) -> Result<(), FeeError> {
+    if signers.contains(&payer) {
+        Ok(())
+    } else {
+        Err(FeeError::InvalidBlock(InvalidBlockError::UnauthorizedPayer))
+    }
+}
+
+/// D3 seam: authorizes a private transaction's payer against the tx's
+/// public-signer set.
+///
+/// A private transaction still names public signers for authorization; the
+/// proof itself carries no public fee fields. Default rule: the payer must
+/// be one of the public signers, and an empty public-signer set is
+/// rejected, so fully-shielded transactions cannot pay fees until Q3 is
+/// decided.
+///
+/// # Errors
+///
+/// Returns `InvalidBlock(EmptyPublicSignerSet)` if `public_signers` is
+/// empty, or `InvalidBlock(UnauthorizedPayer)` if `payer` is not among them.
+// TBA(Q3)
+pub fn authorize_private_payer(payer: PayerId, public_signers: &[PayerId]) -> Result<(), FeeError> {
+    if public_signers.is_empty() {
+        return Err(FeeError::InvalidBlock(
+            InvalidBlockError::EmptyPublicSignerSet,
+        ));
+    }
+    authorize_payer(payer, public_signers)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const PAYER: PayerId = PayerId([1_u8; 32]);
+    const OTHER: PayerId = PayerId([2_u8; 32]);
+
+    fn genesis() -> FeeState {
+        FeeState::genesis().unwrap()
+    }
+
+    #[test]
+    fn public_tx_within_bounds_is_valid() {
+        let state = genesis();
+        let tx = FeeTxView::Public {
+            payer: PAYER,
+            gas_limit: 60_000,
+            data_bytes: 200,
+            tip: 100,
+            max_fee: 10_u128.pow(9),
+        };
+        assert!(validate_static_tx(&tx, &state).is_ok());
+    }
+
+    #[test]
+    fn public_tx_with_zero_data_bytes_is_invalid() {
+        let state = genesis();
+        let tx = FeeTxView::Public {
+            payer: PAYER,
+            gas_limit: 1,
+            data_bytes: 0,
+            tip: 0,
+            max_fee: u128::MAX,
+        };
+        assert_eq!(
+            validate_static_tx(&tx, &state),
+            Err(FeeError::InvalidBlock(InvalidBlockError::EmptyDataBytes))
+        );
+    }
+
+    #[test]
+    fn public_tx_over_max_gas_stor_is_invalid() {
+        let state = genesis();
+        let tx = FeeTxView::Public {
+            payer: PAYER,
+            gas_limit: 1,
+            data_bytes: MAX_GAS_STOR.checked_add(1).unwrap(),
+            tip: 0,
+            max_fee: u128::MAX,
+        };
+        assert!(matches!(
+            validate_static_tx(&tx, &state),
+            Err(FeeError::InvalidBlock(
+                InvalidBlockError::DataBytesExceedsMax { .. }
+            ))
+        ));
+    }
+
+    #[test]
+    fn public_tx_over_max_gas_exec_is_invalid() {
+        let state = genesis();
+        let tx = FeeTxView::Public {
+            payer: PAYER,
+            gas_limit: MAX_GAS_EXEC.checked_add(1).unwrap(),
+            data_bytes: 1,
+            tip: 0,
+            max_fee: u128::MAX,
+        };
+        assert!(matches!(
+            validate_static_tx(&tx, &state),
+            Err(FeeError::InvalidBlock(
+                InvalidBlockError::GasLimitExceedsMax { .. }
+            ))
+        ));
+    }
+
+    #[test]
+    fn public_tx_reserve_over_max_fee_is_invalid() {
+        let state = genesis();
+        let tx = FeeTxView::Public {
+            payer: PAYER,
+            gas_limit: 1_000,
+            data_bytes: 100,
+            tip: 0,
+            max_fee: 1,
+        };
+        assert!(matches!(
+            validate_static_tx(&tx, &state),
+            Err(FeeError::InvalidBlock(
+                InvalidBlockError::FeeReserveExceedsMaxFee { .. }
+            ))
+        ));
+    }
+
+    #[test]
+    fn private_tx_is_always_statically_valid() {
+        let state = genesis();
+        let tx = FeeTxView::Private { payer: PAYER };
+        assert!(validate_static_tx(&tx, &state).is_ok());
+    }
+
+    #[test]
+    fn block_storage_cap_is_enforced_cumulatively() {
+        let state = genesis();
+        let big = FeeTxView::Public {
+            payer: PAYER,
+            gas_limit: 1,
+            data_bytes: MAX_GAS_STOR,
+            tip: 0,
+            max_fee: u128::MAX,
+        };
+        let one_more = FeeTxView::Public {
+            payer: PAYER,
+            gas_limit: 1,
+            data_bytes: 1,
+            tip: 0,
+            max_fee: u128::MAX,
+        };
+        assert!(validate_static_block(&[big], &state).is_ok());
+        assert!(matches!(
+            validate_static_block(&[big, one_more], &state),
+            Err(FeeError::InvalidBlock(
+                InvalidBlockError::StorageCapExceeded { .. }
+            ))
+        ));
+    }
+
+    #[test]
+    fn four_private_txs_fit_the_storage_cap_exactly_at_the_operating_limit() {
+        // SPECS §Fee-validity: floor(MAX_GAS_STOR / PRIVATE_GAS_STOR) = 4
+        // private transactions fit under the current proof size.
+        let state = genesis();
+        let txs = [FeeTxView::Private { payer: PAYER }; 4];
+        assert!(validate_static_block(&txs, &state).is_ok());
+    }
+
+    #[test]
+    fn accumulate_gas_used_rejects_over_cap() {
+        assert_eq!(accumulate_gas_used(9, 1, 10), Ok(10));
+        assert!(matches!(
+            accumulate_gas_used(9, 2, 10),
+            Err(FeeError::InvalidBlock(
+                InvalidBlockError::GasCapExceeded { .. }
+            ))
+        ));
+    }
+
+    #[test]
+    fn accumulate_gas_used_rejects_u64_overflow() {
+        assert!(matches!(
+            accumulate_gas_used(u64::MAX, 1, u64::MAX),
+            Err(FeeError::InvalidBlock(
+                InvalidBlockError::GasAccumulationOverflow
+            ))
+        ));
+    }
+
+    #[test]
+    fn authorize_payer_requires_membership() {
+        assert!(authorize_payer(PAYER, &[PAYER, OTHER]).is_ok());
+        assert_eq!(
+            authorize_payer(PAYER, &[OTHER]),
+            Err(FeeError::InvalidBlock(InvalidBlockError::UnauthorizedPayer))
+        );
+    }
+
+    #[test]
+    fn authorize_private_payer_rejects_empty_signer_set() {
+        assert_eq!(
+            authorize_private_payer(PAYER, &[]),
+            Err(FeeError::InvalidBlock(
+                InvalidBlockError::EmptyPublicSignerSet
+            ))
+        );
+    }
+
+    #[test]
+    fn authorize_private_payer_requires_membership() {
+        assert!(authorize_private_payer(PAYER, &[PAYER]).is_ok());
+        assert_eq!(
+            authorize_private_payer(PAYER, &[OTHER]),
+            Err(FeeError::InvalidBlock(InvalidBlockError::UnauthorizedPayer))
+        );
+    }
+}

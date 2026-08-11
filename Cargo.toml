@@ -17,6 +17,7 @@ members = [
   "lez",
   "lez/system_accounts",
   "lez/chain_state",
+  "lez/fee_core",
   "lez/sequencer/core",
   "lez/sequencer/core/metrics",
   "lez/sequencer/service",
@@ -98,6 +99,7 @@ programs = { path = "lez/programs", default-features = false, features = [
   "artifacts",
 ] }
 system_accounts = { path = "lez/system_accounts" }
+fee_core = { path = "lez/fee_core" }
 clock_core = { path = "lez/programs/clock/core" }
 token_core = { path = "lez/programs/token/core" }
 token_program = { path = "lez/programs/token" }
