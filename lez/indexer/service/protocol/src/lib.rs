@@ -48,7 +48,8 @@ mod base64 {
     }
 }
 
-// Bounds the server work one range query can request.
+// Largest block span a single events range query may cover. Lives here so every surface
+// that serves the query (RPC service, FFI) enforces the identical bound.
 pub const MAX_EVENT_QUERY_BLOCK_SPAN: u64 = 1000;
 
 pub type Nonce = u128;
