@@ -489,6 +489,7 @@ pub struct ProgramOutput {
     pub block_validity_window: BlockValidityWindow,
     /// The timestamp window where the program output is valid.
     pub timestamp_validity_window: TimestampValidityWindow,
+    /// A vector of event data.
     pub events: Vec<Vec<u8>>,
 }
 
@@ -577,10 +578,13 @@ impl ProgramOutput {
     }
 }
 
+/// A struct holding an event-output of a program.
 #[cfg(feature = "host")]
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Event {
+    // Which program emitted the event.
     pub program_id: ProgramId,
+    // The arbitrary event-data emitted in the program output.
     pub data: Vec<u8>,
 }
 

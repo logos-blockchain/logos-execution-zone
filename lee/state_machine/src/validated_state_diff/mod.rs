@@ -262,6 +262,8 @@ impl ValidatedStateDiff {
                 state_diff.insert(pre.account_id, post.account().clone());
             }
 
+            // Write all the output event data into a proper event struct,
+            // marking its emitter program.
             events.extend(program_output.events.into_iter().map(|data| Event {
                 program_id: chained_call.program_id,
                 data,

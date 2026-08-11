@@ -35,6 +35,8 @@ fn main() {
         })
         .collect();
 
+    // Emit both the chained calls and a list of events.
+    // This is used to test the end-positioning of events in a transaction.
     ProgramOutput::new(
         self_program_id,
         caller_program_id,

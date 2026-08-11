@@ -181,8 +181,6 @@ enum FlashSwapInstruction {
     },
 }
 
-// ── Event emitter type (mirror of the guest type for host-side serialisation) ──
-
 #[derive(serde::Serialize, serde::Deserialize)]
 struct EmitterInstruction {
     events: Vec<Vec<u8>>,
