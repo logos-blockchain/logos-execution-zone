@@ -1,6 +1,6 @@
 use indexer_service_protocol::{
     AccountId, Ciphertext, Commitment, CommitmentSetDigest, EncryptedAccountData,
-    EphemeralPublicKey, HashType, Nullifier, PrivacyPreservingMessage,
+    EphemeralPublicKey, HashType, InitMessage, Nullifier, PrivacyPreservingMessage,
     PrivacyPreservingTransaction, PrivateAction, ProgramDeploymentMessage,
     ProgramDeploymentTransaction, ProgramId, Proof, PublicActionWithID, PublicKey, PublicMessage,
     PublicTransaction, Signature, Transaction, ValidityWindow, WitnessSet,
@@ -357,20 +357,33 @@ impl From<Box<FfiProgramDeploymentTransactionBody>> for ProgramDeploymentTransac
     fn from(value: Box<FfiProgramDeploymentTransactionBody>) -> Self {
         Self {
             hash: HashType(value.hash.data),
-            message: ProgramDeploymentMessage {
-                bytecode: value.message.into(),
-            },
+            message: ProgramDeploymentMessage::Init(InitMessage {
+                elf: value.message.into(),
+            }),
         }
     }
 }
 
+#[expect(
+    clippy::fallible_impl_from,
+    reason = "Upgrade transactions can't be produced anywhere yet (Message::Upgrade has no \
+              constructor reachable from wallet code); the panic path is unreachable in \
+              practice until FFI support for Upgrade lands"
+)]
 impl From<ProgramDeploymentTransaction> for FfiProgramDeploymentTransactionBody {
     fn from(value: ProgramDeploymentTransaction) -> Self {
         let ProgramDeploymentTransaction { hash, message } = value;
 
+        let elf = match message {
+            ProgramDeploymentMessage::Init(init) => init.elf,
+            ProgramDeploymentMessage::Upgrade(_) => {
+                panic!("FFI does not yet support Upgrade transactions")
+            }
+        };
+
         Self {
             hash: hash.into(),
-            message: message.bytecode.into(),
+            message: elf.into(),
         }
     }
 }

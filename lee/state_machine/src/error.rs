@@ -71,6 +71,9 @@ pub enum LeeError {
     #[error("Program already exists")]
     ProgramAlreadyExists,
 
+    #[error("Program upgrades are not yet supported")]
+    ProgramUpgradeNotYetSupported,
+
     #[error("Chain of calls is too long")]
     MaxChainedCallsDepthExceeded,
 

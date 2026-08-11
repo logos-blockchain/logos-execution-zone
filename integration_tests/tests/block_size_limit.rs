@@ -147,9 +147,11 @@ async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
             .transactions
             .iter()
             .filter_map(|tx| {
-                if let LeeTransaction::ProgramDeployment(deployment) = tx {
-                    let bytecode = deployment.message.clone().into_bytecode();
-                    Program::new(bytecode.into()).ok().map(|p| p.id())
+                if let LeeTransaction::ProgramDeployment(deployment) = tx
+                    && let lee::program_deployment_transaction::Message::Init(init) =
+                        deployment.message.clone()
+                {
+                    Program::new(init.into_elf().into()).ok().map(|p| p.id())
                 } else {
                     None
                 }

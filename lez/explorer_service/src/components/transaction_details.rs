@@ -125,19 +125,43 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
 #[component]
 pub fn ProgramDeploymentTxDetails(tx: ProgramDeploymentTransaction) -> impl IntoView {
     let ProgramDeploymentTransaction { hash: _, message } = tx;
-    let ProgramDeploymentMessage { bytecode } = message;
 
-    let bytecode_len = bytecode.len();
+    let (kind, bytecode_len, upgrade_info) = match message {
+        ProgramDeploymentMessage::Init(init) => ("Init".to_owned(), init.elf.len(), None),
+        ProgramDeploymentMessage::Upgrade(upgrade) => (
+            "Upgrade".to_owned(),
+            upgrade.elf.len(),
+            Some((upgrade.program_id.to_string(), upgrade.auth_withdraw)),
+        ),
+    };
+
     view! {
         <div class="transaction-details">
             <h2>"Program Deployment Transaction Details"</h2>
             <div class="info-grid">
+                <div class="info-row">
+                    <span class="info-label">"Kind:"</span>
+                    <span class="info-value">{kind}</span>
+                </div>
                 <div class="info-row">
                     <span class="info-label">"Bytecode Size:"</span>
                     <span class="info-value">
                         {format!("{bytecode_len} bytes")}
                     </span>
                 </div>
+                {upgrade_info
+                    .map(|(program_id, auth_withdraw)| {
+                        view! {
+                            <div class="info-row">
+                                <span class="info-label">"Program ID:"</span>
+                                <span class="info-value">{program_id}</span>
+                            </div>
+                            <div class="info-row">
+                                <span class="info-label">"Withdraw Auth:"</span>
+                                <span class="info-value">{auth_withdraw.to_string()}</span>
+                            </div>
+                        }
+                    })}
             </div>
         </div>
     }

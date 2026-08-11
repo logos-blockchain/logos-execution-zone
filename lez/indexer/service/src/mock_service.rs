@@ -417,9 +417,9 @@ fn mock_privacy_preserving_tx(
 fn mock_program_deployment_tx(tx_hash: HashType) -> Transaction {
     Transaction::ProgramDeployment(ProgramDeploymentTransaction {
         hash: tx_hash,
-        message: ProgramDeploymentMessage {
-            bytecode: vec![0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00],
-        },
+        message: ProgramDeploymentMessage::Init(indexer_service_protocol::InitMessage {
+            elf: vec![0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00],
+        }),
     })
 }
 

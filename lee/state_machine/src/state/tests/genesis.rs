@@ -119,6 +119,28 @@ fn program_deployment_transaction_makes_program_commitment_provable() {
 }
 
 #[test]
+fn program_deployment_transaction_upgrade_is_not_yet_supported() {
+    let mut state = V03State::new();
+    let message = crate::program_deployment_transaction::Message::Upgrade(
+        crate::program_deployment_transaction::UpgradeMessage {
+            program_id: crate::test_methods::simple_balance_transfer().id(),
+            auth_withdraw: false,
+            elf: crate::test_methods::simple_balance_transfer()
+                .elf()
+                .to_vec(),
+        },
+    );
+    let tx = crate::program_deployment_transaction::ProgramDeploymentTransaction::new(message);
+
+    let result = state.transition_from_program_deployment_transaction(&tx);
+
+    assert!(matches!(
+        result,
+        Err(LeeError::ProgramUpgradeNotYetSupported)
+    ));
+}
+
+#[test]
 fn get_account_by_account_id_non_default_account() {
     let key = PrivateKey::try_new([1; 32]).unwrap();
     let account_id = AccountId::from(&PublicKey::new_from_private_key(&key));

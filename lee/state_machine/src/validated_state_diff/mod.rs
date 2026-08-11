@@ -447,8 +447,14 @@ impl ValidatedStateDiff {
         tx: &ProgramDeploymentTransaction,
         state: &V03State,
     ) -> Result<Self, LeeError> {
+        let crate::program_deployment_transaction::InitMessage { elf } = match &tx.message {
+            crate::program_deployment_transaction::Message::Init(init) => init,
+            crate::program_deployment_transaction::Message::Upgrade(_) => {
+                return Err(LeeError::ProgramUpgradeNotYetSupported);
+            }
+        };
         // TODO: remove clone
-        let program = Program::new(tx.message.bytecode.clone().into())?;
+        let program = Program::new(elf.clone().into())?;
         if state.programs().contains_key(&program.id()) {
             return Err(LeeError::ProgramAlreadyExists);
         }

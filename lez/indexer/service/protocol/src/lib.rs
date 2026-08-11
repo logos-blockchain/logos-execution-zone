@@ -338,10 +338,25 @@ pub struct CommitmentSetDigest(
 );
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub struct ProgramDeploymentMessage {
+pub enum ProgramDeploymentMessage {
+    Init(InitMessage),
+    Upgrade(UpgradeMessage),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct InitMessage {
     #[serde(with = "base64")]
     #[schemars(with = "String", description = "base64-encoded program bytecode")]
-    pub bytecode: Vec<u8>,
+    pub elf: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct UpgradeMessage {
+    pub program_id: ProgramId,
+    pub auth_withdraw: bool,
+    #[serde(with = "base64")]
+    #[schemars(with = "String", description = "base64-encoded program bytecode")]
+    pub elf: Vec<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]

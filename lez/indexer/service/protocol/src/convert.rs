@@ -5,10 +5,11 @@ use lee_core::account::Nonce;
 use crate::{
     Account, AccountId, BedrockStatus, Block, BlockBody, BlockHeader, BlockIngestError, Ciphertext,
     Commitment, CommitmentSetDigest, Data, EncryptedAccountData, EphemeralPublicKey, HashType,
-    IndexerStatus, IndexerSyncState, Nullifier, PrivacyPreservingMessage,
+    IndexerStatus, IndexerSyncState, InitMessage, Nullifier, PrivacyPreservingMessage,
     PrivacyPreservingTransaction, PrivateAction, ProgramDeploymentMessage,
     ProgramDeploymentTransaction, ProgramId, Proof, PublicActionWithID, PublicKey, PublicMessage,
-    PublicTransaction, Signature, StallReason, Transaction, ValidityWindow, WitnessSet,
+    PublicTransaction, Signature, StallReason, Transaction, UpgradeMessage, ValidityWindow,
+    WitnessSet,
 };
 
 // ============================================================================
@@ -386,16 +387,35 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
 
 impl From<lee::program_deployment_transaction::Message> for ProgramDeploymentMessage {
     fn from(value: lee::program_deployment_transaction::Message) -> Self {
-        Self {
-            bytecode: value.into_bytecode(),
+        match value {
+            lee::program_deployment_transaction::Message::Init(init) => Self::Init(InitMessage {
+                elf: init.into_elf(),
+            }),
+            lee::program_deployment_transaction::Message::Upgrade(upgrade) => {
+                Self::Upgrade(UpgradeMessage {
+                    program_id: upgrade.program_id.into(),
+                    auth_withdraw: upgrade.auth_withdraw,
+                    elf: upgrade.elf,
+                })
+            }
         }
     }
 }
 
 impl From<ProgramDeploymentMessage> for lee::program_deployment_transaction::Message {
     fn from(value: ProgramDeploymentMessage) -> Self {
-        let ProgramDeploymentMessage { bytecode } = value;
-        Self::new(bytecode)
+        match value {
+            ProgramDeploymentMessage::Init(InitMessage { elf }) => Self::new(elf),
+            ProgramDeploymentMessage::Upgrade(UpgradeMessage {
+                program_id,
+                auth_withdraw,
+                elf,
+            }) => Self::Upgrade(lee::program_deployment_transaction::UpgradeMessage {
+                program_id: program_id.into(),
+                auth_withdraw,
+                elf,
+            }),
+        }
     }
 }
 
