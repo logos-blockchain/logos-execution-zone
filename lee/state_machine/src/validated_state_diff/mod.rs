@@ -416,10 +416,15 @@ impl ValidatedStateDiff {
             message,
         )?;
 
-        // 5. Commitment freshness
+        // 5. Program commitment digest root recognition
+        state.check_program_commitment_digest_root_is_recognized(
+            message.program_commitment_digest_root,
+        )?;
+
+        // 6. Commitment freshness
         state.check_commitments_are_new(&commitments)?;
 
-        // 6. Nullifier uniqueness
+        // 7. Nullifier uniqueness
         state.check_nullifiers_are_valid(&nullifiers)?;
 
         let public_diff = message
@@ -525,6 +530,7 @@ fn check_privacy_preserving_circuit_proof_is_valid(
         private_actions: message.private_actions.clone(),
         block_validity_window: message.block_validity_window,
         timestamp_validity_window: message.timestamp_validity_window,
+        program_commitment_digest_root: message.program_commitment_digest_root,
     };
     proof
         .is_valid_for(&output)

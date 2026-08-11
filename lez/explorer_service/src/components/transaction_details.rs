@@ -73,6 +73,7 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
         private_actions,
         block_validity_window,
         timestamp_validity_window,
+        program_commitment_digest_root: _,
     } = message;
     let private_action_count = private_actions.len();
     let public_account_ids: Vec<_> = public_actions

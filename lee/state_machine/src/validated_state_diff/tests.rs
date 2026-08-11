@@ -188,6 +188,12 @@ fn privacy_malicious_programs_cannot_drain_public_victim() {
         instruction_data,
         account_identities,
         &program_with_deps,
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program_with_deps,
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program_with_deps,
+        ),
     )
     .expect("execute_and_prove should succeed \u{2014} the programs execute correctly");
 
@@ -353,6 +359,12 @@ fn privacy_malicious_programs_cannot_drain_private_victim() {
         instruction_data,
         account_identities,
         &program_with_deps,
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program_with_deps,
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program_with_deps,
+        ),
     )
     .expect("execute_and_prove should succeed \u{2014} the programs execute correctly");
 
@@ -524,6 +536,7 @@ fn privacy_garbage_proof_is_rejected() {
         }],
         block_validity_window: BlockValidityWindow::new_unbounded(),
         timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
+        program_commitment_digest_root: [0; 32],
     };
 
     // Garbage proof bytes: not a valid borsh-encoded `InnerReceipt`.

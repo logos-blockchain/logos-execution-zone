@@ -287,7 +287,13 @@ fn unauthorized_public_account_claiming_fails_when_executed_privately() {
         vec![public_account],
         Program::serialize_instruction(0_u128).unwrap(),
         vec![InputAccountIdentity::Public],
-        &program.into(),
+        &program.clone().into(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program.clone().into(),
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program.into(),
+        ),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -307,8 +313,9 @@ fn authorized_public_account_claiming_succeeds_when_executed_privately() {
         AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk(), 0);
     let sender_commitment = Commitment::new(&sender_account_id, &sender_private_account);
     let sender_init_nullifier = Nullifier::for_account_initialization(&sender_account_id);
-    let mut state =
-        V03State::new().with_private_accounts([(sender_commitment, sender_init_nullifier)]);
+    let mut state = V03State::new()
+        .with_private_accounts([(sender_commitment, sender_init_nullifier)])
+        .with_programs([crate::test_methods::simple_balance_transfer()]);
     let sender_pre = AccountWithMetadata::new(
         sender_private_account,
         true,
@@ -342,7 +349,13 @@ fn authorized_public_account_claiming_succeeds_when_executed_privately() {
             }),
             InputAccountIdentity::Public,
         ],
-        &program.into(),
+        &program.clone().into(),
+        state.program_commitment_digest(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for(
+            &state,
+            &program.into(),
+        )
+        .expect("simple_balance_transfer must be deployed in state"),
     )
     .unwrap();
 
@@ -476,6 +489,12 @@ fn private_chained_call(number_of_calls: u32) {
             }),
         ],
         &program_with_deps,
+        state.program_commitment_digest(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for(
+            &state,
+            &program_with_deps,
+        )
+        .expect("chain_caller and simple_balance_transfer must be deployed in state"),
     )
     .unwrap();
 

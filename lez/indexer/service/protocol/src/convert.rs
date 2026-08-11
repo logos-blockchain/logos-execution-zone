@@ -307,6 +307,7 @@ impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPres
             private_actions,
             block_validity_window,
             timestamp_validity_window,
+            program_commitment_digest_root,
         } = value;
         Self {
             public_actions: public_actions.into_iter().map(Into::into).collect(),
@@ -314,6 +315,7 @@ impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPres
             private_actions: private_actions.into_iter().map(Into::into).collect(),
             block_validity_window: block_validity_window.into(),
             timestamp_validity_window: timestamp_validity_window.into(),
+            program_commitment_digest_root: CommitmentSetDigest(program_commitment_digest_root),
         }
     }
 }
@@ -355,6 +357,7 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
             private_actions,
             block_validity_window,
             timestamp_validity_window,
+            program_commitment_digest_root,
         } = value;
 
         let public_actions = public_actions
@@ -376,6 +379,7 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
             timestamp_validity_window: timestamp_validity_window
                 .try_into()
                 .map_err(|e| lee::error::LeeError::InvalidInput(format!("{e}")))?,
+            program_commitment_digest_root: program_commitment_digest_root.0,
         })
     }
 }

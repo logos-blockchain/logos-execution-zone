@@ -13,7 +13,7 @@ use sequencer_core::{
 };
 use sequencer_service_protocol::{
     Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest, HashType,
-    MembershipProof, Nonce, ProgramId,
+    MembershipProof, Nonce, ProgramCommitment, ProgramId,
 };
 use tokio::sync::Mutex;
 
@@ -188,6 +188,22 @@ impl<BC: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::Rpc
                 .map(|commitment| state.get_proof_for_commitment(commitment))
                 .collect();
             (proofs, state.commitment_root())
+        }))
+    }
+
+    async fn get_program_commitment_proofs_and_root(
+        &self,
+        program_ids: Vec<ProgramId>,
+    ) -> Result<(Vec<Option<MembershipProof>>, [u8; 32]), ErrorObjectOwned> {
+        let sequencer = self.sequencer.lock().await;
+        Ok(sequencer.with_state(|state| {
+            let proofs = program_ids
+                .iter()
+                .map(|program_id| {
+                    state.get_proof_for_program_commitment(&ProgramCommitment::new(*program_id))
+                })
+                .collect();
+            (proofs, state.program_commitment_digest())
         }))
     }
 

@@ -187,6 +187,12 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
             InputAccountIdentity::Public,
         ],
         &program_with_deps,
+        lee::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program_with_deps,
+        ),
+        lee::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program_with_deps,
+        ),
     )
     .context("Failed to execute/prove bridge deposit")?;
 

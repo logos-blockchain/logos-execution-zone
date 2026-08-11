@@ -27,7 +27,13 @@ fn circuit_fails_if_visibility_masks_have_incorrect_lenght() {
         vec![public_account_1, public_account_2],
         Program::serialize_instruction(10_u128).unwrap(),
         vec![InputAccountIdentity::Public],
-        &program.into(),
+        &program.clone().into(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program.clone().into(),
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program.into(),
+        ),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -87,7 +93,13 @@ fn circuit_fails_if_invalid_auth_keys_are_provided() {
                 },
             }),
         ],
-        &program.into(),
+        &program.clone().into(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program.clone().into(),
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program.into(),
+        ),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -147,7 +159,13 @@ fn circuit_should_fail_if_new_private_account_with_non_default_balance_is_provid
                 },
             }),
         ],
-        &program.into(),
+        &program.clone().into(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program.clone().into(),
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program.into(),
+        ),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -207,7 +225,13 @@ fn circuit_should_fail_if_new_private_account_with_non_default_program_owner_is_
                 },
             }),
         ],
-        &program.into(),
+        &program.clone().into(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program.clone().into(),
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program.into(),
+        ),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -267,7 +291,13 @@ fn circuit_should_fail_if_new_private_account_with_non_default_data_is_provided(
                 },
             }),
         ],
-        &program.into(),
+        &program.clone().into(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program.clone().into(),
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program.into(),
+        ),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -327,7 +357,13 @@ fn circuit_should_fail_if_new_private_account_with_non_default_nonce_is_provided
                 },
             }),
         ],
-        &program.into(),
+        &program.clone().into(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program.clone().into(),
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program.into(),
+        ),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -385,7 +421,13 @@ fn circuit_should_fail_if_new_private_account_is_provided_with_default_values_bu
                 },
             }),
         ],
-        &program.into(),
+        &program.clone().into(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program.clone().into(),
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program.into(),
+        ),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -428,7 +470,13 @@ fn private_pda_without_binding_fails() {
                 },
             }),
         ],
-        &program.into(),
+        &program.clone().into(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program.clone().into(),
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program.into(),
+        ),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -462,7 +510,13 @@ fn private_pda_claim_succeeds() {
                 commitment_root: DUMMY_COMMITMENT_HASH,
             },
         })],
-        &program.into(),
+        &program.clone().into(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program.clone().into(),
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program.into(),
+        ),
     );
 
     let (output, _proof) = result.expect("private PDA claim should succeed");
@@ -503,7 +557,13 @@ fn private_pda_npk_mismatch_fails() {
                 commitment_root: DUMMY_COMMITMENT_HASH,
             },
         })],
-        &program.into(),
+        &program.clone().into(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program.clone().into(),
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program.into(),
+        ),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -543,6 +603,12 @@ fn caller_pda_seeds_authorize_private_pda_for_callee() {
             },
         })],
         &program_with_deps,
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program_with_deps,
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program_with_deps,
+        ),
     );
 
     let (output, _proof) =
@@ -584,6 +650,12 @@ fn caller_pda_seeds_with_wrong_seed_rejects_private_pda_for_callee() {
             },
         })],
         &program_with_deps,
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program_with_deps,
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program_with_deps,
+        ),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -647,7 +719,13 @@ fn two_private_pda_claims_under_same_seed_are_rejected() {
                 },
             }),
         ],
-        &program.into(),
+        &program.clone().into(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program.clone().into(),
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program.into(),
+        ),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -690,7 +768,13 @@ fn private_pda_top_level_reuse_rejected_by_binding_check() {
                 commitment_root: DUMMY_COMMITMENT_HASH,
             },
         })],
-        &program.into(),
+        &program.clone().into(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program.clone().into(),
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program.into(),
+        ),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -709,7 +793,9 @@ fn private_accounts_can_only_be_initialized_once() {
     };
     let recipient_keys = test_private_account_keys_2();
 
-    let mut state = V03State::new().with_private_account(&sender_keys, &sender_private_account);
+    let mut state = V03State::new()
+        .with_private_account(&sender_keys, &sender_private_account)
+        .with_programs([crate::test_methods::simple_balance_transfer()]);
 
     let balance_to_move = 37;
     let balance_to_move_2 = 30;
@@ -796,7 +882,13 @@ fn circuit_should_fail_if_there_are_repeated_ids() {
                 },
             }),
         ],
-        &program.into(),
+        &program.clone().into(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program.clone().into(),
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program.into(),
+        ),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -838,7 +930,13 @@ fn private_authorized_uninitialized_account() {
                 commitment_root: DUMMY_COMMITMENT_HASH,
             },
         })],
-        &program.into(),
+        &program.clone().into(),
+        state.program_commitment_digest(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for(
+            &state,
+            &program.into(),
+        )
+        .expect("simple_balance_transfer must be deployed in state"),
     )
     .unwrap();
 
@@ -889,7 +987,13 @@ fn private_unauthorized_uninitialized_account_can_still_be_claimed() {
                 commitment_root: DUMMY_COMMITMENT_HASH,
             },
         })],
-        &program.into(),
+        &program.clone().into(),
+        state.program_commitment_digest(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for(
+            &state,
+            &program.into(),
+        )
+        .expect("claimer must be deployed in state"),
     )
     .unwrap();
 
@@ -944,7 +1048,13 @@ fn private_account_claimed_then_used_without_init_flag_should_fail() {
                 commitment_root: DUMMY_COMMITMENT_HASH,
             },
         })],
-        &claimer_program.into(),
+        &claimer_program.clone().into(),
+        state.program_commitment_digest(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for(
+            &state,
+            &claimer_program.into(),
+        )
+        .expect("claimer must be deployed in state"),
     )
     .unwrap();
 
@@ -991,7 +1101,13 @@ fn private_account_claimed_then_used_without_init_flag_should_fail() {
                 commitment_root: DUMMY_COMMITMENT_HASH,
             },
         })],
-        &noop_program.into(),
+        &noop_program.clone().into(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &noop_program.clone().into(),
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &noop_program.into(),
+        ),
     );
 
     assert!(matches!(res, Err(LeeError::CircuitProvingError(_))));
@@ -1011,7 +1127,7 @@ fn two_private_pda_family_members_receive_and_spend() {
     let amount: u128 = 100;
 
     let spend_with_deps = ProgramWithDependencies::new(
-        proxy,
+        proxy.clone(),
         [(simple_transfer_id, simple_transfer.clone())].into(),
     );
 
@@ -1023,8 +1139,9 @@ fn two_private_pda_family_members_receive_and_spend() {
     let recipient_id = test_public_account_keys_2().account_id();
     let recipient_signing_key = test_public_account_keys_2().signing_key;
 
-    let mut state =
-        V03State::new().with_public_accounts(public_state_from_balances(&[(funder_id, 500)]));
+    let mut state = V03State::new()
+        .with_public_accounts(public_state_from_balances(&[(funder_id, 500)]))
+        .with_programs([proxy, simple_transfer.clone()]);
 
     let alice_pda_0_account = Account {
         program_owner: simple_transfer_id,
@@ -1065,6 +1182,12 @@ fn two_private_pda_family_members_receive_and_spend() {
                 }),
             ],
             &simple_transfer.clone().into(),
+            state.program_commitment_digest(),
+            crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for(
+                &state,
+                &simple_transfer.clone().into(),
+            )
+            .expect("simple_balance_transfer must be deployed in state"),
         )
         .unwrap();
         let message = Message::from_circuit_output(vec![funder_nonce], output);
@@ -1103,7 +1226,13 @@ fn two_private_pda_family_members_receive_and_spend() {
                     },
                 }),
             ],
-            &simple_transfer.into(),
+            &simple_transfer.clone().into(),
+            state.program_commitment_digest(),
+            crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for(
+                &state,
+                &simple_transfer.into(),
+            )
+            .expect("simple_balance_transfer must be deployed in state"),
         )
         .unwrap();
         let message = Message::from_circuit_output(vec![funder_nonce], output);
@@ -1149,6 +1278,12 @@ fn two_private_pda_family_members_receive_and_spend() {
                 InputAccountIdentity::Public,
             ],
             &spend_with_deps,
+            state.program_commitment_digest(),
+            crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for(
+                &state,
+                &spend_with_deps,
+            )
+            .expect("pda_spend_proxy and simple_balance_transfer must be deployed in state"),
         )
         .unwrap();
         let message = Message::from_circuit_output(vec![Nonce(0)], output);
@@ -1188,6 +1323,12 @@ fn two_private_pda_family_members_receive_and_spend() {
                 InputAccountIdentity::Public,
             ],
             &spend_with_deps,
+            state.program_commitment_digest(),
+            crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for(
+                &state,
+                &spend_with_deps,
+            )
+            .expect("pda_spend_proxy and simple_balance_transfer must be deployed in state"),
         )
         .unwrap();
         let message = Message::from_circuit_output(vec![], output);
@@ -1243,6 +1384,12 @@ fn two_private_pda_family_members_receive_and_spend() {
                 }),
             ],
             &crate::test_methods::simple_balance_transfer().into(),
+            state.program_commitment_digest(),
+            crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for(
+                &state,
+                &crate::test_methods::simple_balance_transfer().into(),
+            )
+            .expect("simple_balance_transfer must be deployed in state"),
         )
         .unwrap();
         let message = Message::from_circuit_output(vec![recipient_nonce], output);

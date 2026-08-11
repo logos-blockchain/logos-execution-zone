@@ -4,7 +4,9 @@ use std::{fmt::Display, str::FromStr};
 
 pub use common::{HashType, block::Block, transaction::LeeTransaction};
 pub use lee::{Account, AccountId, ProgramId};
-pub use lee_core::{BlockId, Commitment, CommitmentSetDigest, MembershipProof, account::Nonce};
+pub use lee_core::{
+    BlockId, Commitment, CommitmentSetDigest, MembershipProof, ProgramCommitment, account::Nonce,
+};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, SerializeDisplay, DeserializeFromStr)]

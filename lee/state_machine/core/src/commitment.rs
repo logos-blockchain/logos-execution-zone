@@ -96,17 +96,11 @@ pub type CommitmentSetDigest = [u8; 32];
 
 pub type MembershipProof = (usize, Vec<[u8; 32]>);
 
-/// Computes the resulting digest for the given membership proof and corresponding commitment.
+/// Computes the resulting digest for the given membership proof and corresponding leaf value
+/// (a `Commitment` or `ProgramCommitment`'s byte encoding).
 #[must_use]
-pub fn compute_digest_for_path(
-    commitment: &Commitment,
-    proof: &MembershipProof,
-) -> CommitmentSetDigest {
-    let value_bytes = commitment.to_byte_array();
-    let mut result: [u8; 32] = Impl::hash_bytes(&value_bytes)
-        .as_bytes()
-        .try_into()
-        .unwrap();
+pub fn compute_digest_for_path(leaf: &[u8; 32], proof: &MembershipProof) -> CommitmentSetDigest {
+    let mut result: [u8; 32] = Impl::hash_bytes(leaf).as_bytes().try_into().unwrap();
     let mut level_index = proof.0;
     for node in &proof.1 {
         let mut bytes = [0_u8; 64];

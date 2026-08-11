@@ -250,6 +250,7 @@ pub struct PrivacyPreservingMessage {
     pub private_actions: Vec<PrivateAction>,
     pub block_validity_window: ValidityWindow,
     pub timestamp_validity_window: ValidityWindow,
+    pub program_commitment_digest_root: CommitmentSetDigest,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]

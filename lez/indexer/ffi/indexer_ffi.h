@@ -273,6 +273,7 @@ typedef struct FfiPrivacyPreservingMessage {
   FfiPrivateActionList private_actions;
   uint64_t block_validity_window[2];
   uint64_t timestamp_validity_window[2];
+  struct FfiBytes32 program_commitment_digest_root;
 } FfiPrivacyPreservingMessage;
 
 typedef FfiVecU8 FfiProof;

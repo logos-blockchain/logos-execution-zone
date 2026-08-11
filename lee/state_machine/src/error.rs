@@ -132,6 +132,9 @@ pub enum InvalidProgramBehaviorError {
     #[error("Called program {program_id:?} which is not listed in dependencies")]
     UndeclaredProgramDependency { program_id: ProgramId },
 
+    #[error("Program {program_id:?} has no program commitment; it must be deployed first")]
+    ProgramNotDeployed { program_id: ProgramId },
+
     #[error(
         "Account {account_id} was declared in the transaction but is missing from the program output"
     )]

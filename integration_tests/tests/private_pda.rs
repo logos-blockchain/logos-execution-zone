@@ -85,6 +85,12 @@ async fn fund_private_pda(
         instruction,
         account_identities,
         auth_transfer,
+        lee::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            auth_transfer,
+        ),
+        lee::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            auth_transfer,
+        ),
     )
     .map_err(|e| anyhow::anyhow!("circuit proving failed: {e}"))?;
 

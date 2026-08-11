@@ -643,6 +643,12 @@ async fn ppt_cant_chain_call_faucet() -> Result<()> {
             }),
         ],
         &program_with_deps,
+        lee::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program_with_deps,
+        ),
+        lee::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program_with_deps,
+        ),
     );
 
     assert!(res.is_err());
@@ -687,7 +693,13 @@ async fn prove_init_with_commitment_root(
                 },
             }),
         ],
-        &program.into(),
+        &program.clone().into(),
+        lee::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program.clone().into(),
+        ),
+        lee::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program.into(),
+        ),
     )?;
 
     Ok(output)

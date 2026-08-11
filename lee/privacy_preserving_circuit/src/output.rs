@@ -14,6 +14,7 @@ pub fn compute_circuit_output(
     execution_state: ExecutionState,
     account_identities: &[InputAccountIdentity],
     dummy_inputs: Vec<DummyInput>,
+    program_commitment_digest_root: [u8; 32],
 ) -> PrivacyPreservingCircuitOutput {
     let (block_validity_window, timestamp_validity_window, pda_seed_by_position, states_iter) =
         execution_state.into_parts();
@@ -22,6 +23,7 @@ pub fn compute_circuit_output(
         private_actions: Vec::new(),
         block_validity_window,
         timestamp_validity_window,
+        program_commitment_digest_root,
     };
 
     assert_eq!(
@@ -267,7 +269,7 @@ fn compute_update_nullifier_and_set_digest(
     nsk: &NullifierSecretKey,
 ) -> (Nullifier, CommitmentSetDigest) {
     let commitment_pre = Commitment::new(account_id, pre_account);
-    let set_digest = compute_digest_for_path(&commitment_pre, membership_proof);
+    let set_digest = compute_digest_for_path(&commitment_pre.to_byte_array(), membership_proof);
     let nullifier = Nullifier::for_account_update(&commitment_pre, nsk);
     (nullifier, set_digest)
 }

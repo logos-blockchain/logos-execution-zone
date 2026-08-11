@@ -2,11 +2,15 @@ use core::fmt;
 
 use anyhow::Result;
 use keycard_wallet::KeycardWallet;
-use lee::{AccountId, PrivateKey, PublicKey, Signature};
+use lee::{
+    AccountId, PrivateKey, ProgramId, PublicKey, Signature,
+    privacy_preserving_transaction::circuit::ProgramWithDependencies,
+};
 use lee_core::{
     AuthorizationSecretKey, Commitment, CommitmentSetDigest, DummyInput, Identifier,
     InputAccountIdentity, MembershipProof, NullifierPublicKey, NullifierSecretKey,
-    NullifierWitness, PrivateAccountKind, PrivateWitness, SharedSecretKey, WitnessKind,
+    NullifierWitness, PrivateAccountKind, PrivateWitness, ProgramCommitment, SharedSecretKey,
+    WitnessKind,
     account::{Account, AccountWithMetadata, Nonce},
     compute_digest_for_path,
     encryption::{
@@ -654,11 +658,68 @@ fn validate_proofs_against_root(
 
     for (commitment, proof) in commitments.iter().zip(proofs) {
         if let Some(proof) = proof
-            && compute_digest_for_path(commitment, proof) != root
+            && compute_digest_for_path(&commitment.to_byte_array(), proof) != root
         {
             return Err(ExecutionFailureKind::SequencerError(anyhow::anyhow!(
                 "Membership proof for {commitment:?} does not reproduce the appropriate root {root:?}.",
             )));
+        }
+    }
+
+    Ok(())
+}
+
+pub async fn fetch_program_commitment_proofs_and_root(
+    wallet: &WalletCore,
+    program_with_dependencies: &ProgramWithDependencies,
+) -> Result<([u8; 32], Vec<(ProgramId, MembershipProof)>), ExecutionFailureKind> {
+    let program_ids: Vec<ProgramId> = std::iter::once(program_with_dependencies.program.id())
+        .chain(program_with_dependencies.dependencies.keys().copied())
+        .collect();
+
+    let (proofs, root) = wallet
+        .get_program_commitment_proofs_and_root(&program_ids)
+        .await
+        .map_err(ExecutionFailureKind::SequencerError)?;
+
+    validate_program_commitment_proofs_against_root(&program_ids, &proofs, root)?;
+
+    let proofs = program_ids
+        .into_iter()
+        .zip(proofs)
+        .map(|(program_id, proof)| {
+            proof.map(|proof| (program_id, proof)).ok_or_else(|| {
+                ExecutionFailureKind::SequencerError(anyhow::anyhow!(
+                    "Sequencer has no program commitment proof for {program_id:?}; is it deployed?"
+                ))
+            })
+        })
+        .collect::<Result<Vec<_>, ExecutionFailureKind>>()?;
+
+    Ok((root, proofs))
+}
+
+fn validate_program_commitment_proofs_against_root(
+    program_ids: &[ProgramId],
+    proofs: &[Option<MembershipProof>],
+    root: [u8; 32],
+) -> Result<(), ExecutionFailureKind> {
+    if proofs.len() != program_ids.len() {
+        return Err(ExecutionFailureKind::SequencerError(anyhow::anyhow!(
+            "Sequencer returned {} proofs for {} program IDs.",
+            proofs.len(),
+            program_ids.len(),
+        )));
+    }
+
+    for (program_id, proof) in program_ids.iter().zip(proofs) {
+        if let Some(proof) = proof {
+            let commitment = ProgramCommitment::new(*program_id);
+            if compute_digest_for_path(&commitment.to_byte_array(), proof) != root {
+                return Err(ExecutionFailureKind::SequencerError(anyhow::anyhow!(
+                    "Program commitment proof for {program_id:?} does not reproduce the appropriate root {root:?}.",
+                )));
+            }
         }
     }
 

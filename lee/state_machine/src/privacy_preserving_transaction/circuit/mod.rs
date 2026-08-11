@@ -2,8 +2,8 @@ use std::collections::{HashMap, VecDeque};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    DummyInput, InputAccountIdentity, PrivacyPreservingCircuitInput,
-    PrivacyPreservingCircuitOutput,
+    DummyInput, InputAccountIdentity, MembershipProof, PrivacyPreservingCircuitInput,
+    PrivacyPreservingCircuitOutput, ProgramCommitment,
     account::AccountWithMetadata,
     program::{ChainedCall, InstructionData, ProgramId, ProgramOutput},
 };
@@ -13,7 +13,7 @@ use crate::{
     PRIVACY_PRESERVING_CIRCUIT_ELF, PRIVACY_PRESERVING_CIRCUIT_ID,
     error::{InvalidProgramBehaviorError, LeeError},
     program::Program,
-    state::MAX_NUMBER_CHAINED_CALLS,
+    state::{MAX_NUMBER_CHAINED_CALLS, V03State},
 };
 
 /// Proof of the privacy preserving execution circuit.
@@ -63,6 +63,48 @@ impl From<Program> for ProgramWithDependencies {
     }
 }
 
+pub fn program_commitment_proofs_for(
+    state: &V03State,
+    program_with_dependencies: &ProgramWithDependencies,
+) -> Result<Vec<(ProgramId, MembershipProof)>, LeeError> {
+    std::iter::once(program_with_dependencies.program.id())
+        .chain(program_with_dependencies.dependencies.keys().copied())
+        .map(|program_id| {
+            let proof = state
+                .get_proof_for_program_commitment(&ProgramCommitment::new(program_id))
+                .ok_or(InvalidProgramBehaviorError::ProgramNotDeployed { program_id })?;
+            Ok((program_id, proof))
+        })
+        .collect()
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+#[must_use]
+pub fn program_commitment_root_for_test(
+    program_with_dependencies: &ProgramWithDependencies,
+) -> [u8; 32] {
+    build_test_program_commitment_state(program_with_dependencies).program_commitment_digest()
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+#[must_use]
+pub fn program_commitment_proofs_for_test(
+    program_with_dependencies: &ProgramWithDependencies,
+) -> Vec<(ProgramId, MembershipProof)> {
+    let state = build_test_program_commitment_state(program_with_dependencies);
+    program_commitment_proofs_for(&state, program_with_dependencies)
+        .expect("every program in program_with_dependencies was just deployed into state")
+}
+
+#[cfg(any(test, feature = "test-utils"))]
+fn build_test_program_commitment_state(
+    program_with_dependencies: &ProgramWithDependencies,
+) -> V03State {
+    let programs = std::iter::once(program_with_dependencies.program.clone())
+        .chain(program_with_dependencies.dependencies.values().cloned());
+    V03State::new().with_programs(programs)
+}
+
 /// Generates a proof of the execution of a LEE program inside the privacy preserving execution
 /// circuit.
 pub fn execute_and_prove(
@@ -70,6 +112,8 @@ pub fn execute_and_prove(
     instruction_data: InstructionData,
     account_identities: Vec<InputAccountIdentity>,
     program_with_dependencies: &ProgramWithDependencies,
+    program_commitment_digest_root: [u8; 32],
+    program_commitment_proofs: Vec<(ProgramId, MembershipProof)>,
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
     execute_and_prove_with_padded_inputs(
         pre_states,
@@ -77,6 +121,8 @@ pub fn execute_and_prove(
         account_identities,
         vec![],
         program_with_dependencies,
+        program_commitment_digest_root,
+        program_commitment_proofs,
     )
 }
 
@@ -86,6 +132,8 @@ pub fn execute_and_prove_with_padded_inputs(
     account_identities: Vec<InputAccountIdentity>,
     dummy_inputs: Vec<DummyInput>,
     program_with_dependencies: &ProgramWithDependencies,
+    program_commitment_digest_root: [u8; 32],
+    program_commitment_proofs: Vec<(ProgramId, MembershipProof)>,
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
     let ProgramWithDependencies {
         program: initial_program,
@@ -145,6 +193,8 @@ pub fn execute_and_prove_with_padded_inputs(
         account_identities,
         program_id: program_with_dependencies.program.id(),
         dummy_inputs,
+        program_commitment_digest_root,
+        program_commitment_proofs,
     };
 
     env_builder.write(&circuit_input).unwrap();

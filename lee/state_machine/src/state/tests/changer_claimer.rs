@@ -84,7 +84,13 @@ fn private_changer_claimer_no_data_change_no_claim_succeeds() {
                 membership_proof: (0, vec![]),
             },
         })],
-        &program.into(),
+        &program.clone().into(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program.clone().into(),
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program.into(),
+        ),
     );
 
     // Should succeed - no changes made, no claim needed
@@ -120,7 +126,13 @@ fn private_changer_claimer_data_change_no_claim_fails() {
                 membership_proof: (0, vec![]),
             },
         })],
-        &program.into(),
+        &program.clone().into(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program.clone().into(),
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program.into(),
+        ),
     );
 
     // Should fail - cannot modify data without claiming the account

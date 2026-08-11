@@ -67,17 +67,12 @@ impl CommitmentSet {
     }
 }
 
-/// Merkle tree of `ProgramCommitment`s, appended to on every program-deployment transaction.
-/// Phase 1 of the program-upgrade proposal (`upgrade_proposal.md`) — see `ProgramCommitment`'s
-/// own doc comment for the bootstrap definition currently in use. Mirrors `CommitmentSet`'s
-/// shape; doesn't need a `root_history` the way `CommitmentSet` does, since nothing currently
-/// checks program-commitment proofs against a historical root (that lands with the
-/// privacy-preserving circuit integration in Phase 1 PR 2).
 #[cfg_attr(test, derive(Debug))]
 #[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ProgramCommitmentDigest {
     merkle_tree: MerkleTree,
     commitments: HashMap<ProgramCommitment, usize>,
+    root_history: HashSet<[u8; 32]>,
 }
 
 impl ProgramCommitmentDigest {
@@ -108,6 +103,7 @@ impl ProgramCommitmentDigest {
             let index = self.merkle_tree.insert(commitment.to_byte_array());
             self.commitments.insert(commitment, index);
         }
+        self.root_history.insert(self.digest());
     }
 
     /// Initializes an empty `ProgramCommitmentDigest` with a given capacity.
@@ -117,6 +113,7 @@ impl ProgramCommitmentDigest {
         Self {
             merkle_tree: MerkleTree::with_capacity(capacity),
             commitments: HashMap::new(),
+            root_history: HashSet::new(),
         }
     }
 }
@@ -464,6 +461,19 @@ impl V03State {
             }
         }
         Ok(())
+    }
+
+    pub(crate) fn check_program_commitment_digest_root_is_recognized(
+        &self,
+        root: [u8; 32],
+    ) -> Result<(), LeeError> {
+        if self.program_commitments.root_history.contains(&root) {
+            Ok(())
+        } else {
+            Err(LeeError::InvalidInput(
+                "Unrecognized program commitment digest root".to_owned(),
+            ))
+        }
     }
 }
 

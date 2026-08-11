@@ -21,6 +21,9 @@ pub struct PrivacyPreservingCircuitInput {
     /// Program ID.
     pub program_id: ProgramId,
     pub dummy_inputs: Vec<DummyInput>,
+    /// Root of the `ProgramCommitmentDigest` that `program_commitment_proofs` are proven against.
+    pub program_commitment_digest_root: [u8; 32],
+    pub program_commitment_proofs: Vec<(ProgramId, MembershipProof)>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -172,6 +175,7 @@ pub struct PrivacyPreservingCircuitOutput {
     pub private_actions: Vec<PrivateAction>,
     pub block_validity_window: BlockValidityWindow,
     pub timestamp_validity_window: TimestampValidityWindow,
+    pub program_commitment_digest_root: [u8; 32],
 }
 
 #[cfg(any(feature = "host", test))]
@@ -270,6 +274,7 @@ mod tests {
             }],
             block_validity_window: (1..).into(),
             timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
+            program_commitment_digest_root: [0xcd; 32],
         };
         let bytes = output.to_bytes();
         let output_from_slice: PrivacyPreservingCircuitOutput = from_slice(&bytes).unwrap();

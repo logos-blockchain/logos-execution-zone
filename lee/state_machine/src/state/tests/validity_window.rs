@@ -150,7 +150,13 @@ fn validity_window_works_in_privacy_preserving_transactions(
                     commitment_root: DUMMY_COMMITMENT_HASH,
                 },
             })],
-            &validity_window_program.into(),
+            &validity_window_program.clone().into(),
+            state.program_commitment_digest(),
+            crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for(
+                &state,
+                &validity_window_program.into(),
+            )
+            .expect("validity_window must be deployed in state"),
         )
         .unwrap();
 
@@ -220,7 +226,13 @@ fn timestamp_validity_window_works_in_privacy_preserving_transactions(
                     commitment_root: DUMMY_COMMITMENT_HASH,
                 },
             })],
-            &validity_window_program.into(),
+            &validity_window_program.clone().into(),
+            state.program_commitment_digest(),
+            crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for(
+                &state,
+                &validity_window_program.into(),
+            )
+            .expect("validity_window must be deployed in state"),
         )
         .unwrap();
 

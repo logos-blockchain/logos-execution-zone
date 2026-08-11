@@ -198,6 +198,9 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
                 timestamp_validity_window: cast_ffi_validity_window(
                     value.message.timestamp_validity_window,
                 ),
+                program_commitment_digest_root: CommitmentSetDigest(
+                    value.message.program_commitment_digest_root.data,
+                ),
             },
             witness_set: WitnessSet {
                 signatures_and_public_keys: {
@@ -267,6 +270,7 @@ pub struct FfiPrivacyPreservingMessage {
     pub private_actions: FfiPrivateActionList,
     pub block_validity_window: [u64; 2],
     pub timestamp_validity_window: [u64; 2],
+    pub program_commitment_digest_root: FfiBytes32,
 }
 
 impl From<PrivacyPreservingMessage> for FfiPrivacyPreservingMessage {
@@ -277,6 +281,7 @@ impl From<PrivacyPreservingMessage> for FfiPrivacyPreservingMessage {
             private_actions,
             block_validity_window,
             timestamp_validity_window,
+            program_commitment_digest_root,
         } = value;
 
         Self {
@@ -297,6 +302,9 @@ impl From<PrivacyPreservingMessage> for FfiPrivacyPreservingMessage {
                 .into(),
             block_validity_window: cast_validity_window(block_validity_window),
             timestamp_validity_window: cast_validity_window(timestamp_validity_window),
+            program_commitment_digest_root: FfiBytes32 {
+                data: program_commitment_digest_root.0,
+            },
         }
     }
 }

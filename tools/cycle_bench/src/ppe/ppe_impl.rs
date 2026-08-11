@@ -75,6 +75,8 @@ pub fn prove_auth_transfer_in_ppe() -> anyhow::Result<(PrivacyPreservingCircuitO
         instruction_data,
         account_identities,
         &pwd,
+        lee::privacy_preserving_transaction::circuit::program_commitment_root_for_test(&pwd),
+        lee::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(&pwd),
     )?)
 }
 
@@ -147,5 +149,7 @@ fn prove_chain_caller(
         instruction_data,
         account_identities,
         &pwd,
+        lee::privacy_preserving_transaction::circuit::program_commitment_root_for_test(&pwd),
+        lee::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(&pwd),
     )?)
 }

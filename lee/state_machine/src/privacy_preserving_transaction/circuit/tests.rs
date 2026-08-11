@@ -103,6 +103,12 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_pre_accounts() 
             }),
         ],
         &crate::test_methods::simple_balance_transfer().into(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &crate::test_methods::simple_balance_transfer().into(),
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &crate::test_methods::simple_balance_transfer().into(),
+        ),
     )
     .unwrap();
 
@@ -225,7 +231,13 @@ fn prove_privacy_preserving_execution_circuit_fully_private() {
                 },
             }),
         ],
-        &program.into(),
+        &program.clone().into(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program.clone().into(),
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program.into(),
+        ),
     )
     .unwrap();
 
@@ -298,7 +310,13 @@ fn init_note_view_tag_is_derived_from_account_keys() {
                 commitment_root: DUMMY_COMMITMENT_HASH,
             },
         })],
-        &program.into(),
+        &program.clone().into(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program.clone().into(),
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program.into(),
+        ),
     )
     .unwrap();
 
@@ -346,7 +364,13 @@ fn update_note_view_tag_is_the_supplied_value() {
                 membership_proof: commitment_set.get_proof_for(&commitment).unwrap(),
             },
         })],
-        &program.into(),
+        &program.clone().into(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program.clone().into(),
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program.into(),
+        ),
     )
     .unwrap();
 
@@ -400,6 +424,12 @@ fn circuit_fails_when_chained_validity_windows_have_empty_intersection() {
             },
         })],
         &program_with_deps,
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program_with_deps,
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program_with_deps,
+        ),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -436,6 +466,12 @@ fn private_pda_claim_with_custom_identifier_encrypts_correct_kind() {
             },
         })],
         &program.clone().into(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program.clone().into(),
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program.clone().into(),
+        ),
     )
     .unwrap();
 
@@ -484,6 +520,12 @@ fn private_pda_init() {
             },
         })],
         &program_with_deps,
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program_with_deps,
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program_with_deps,
+        ),
     );
 
     let (output, _proof) = result.expect("PDA init should succeed");
@@ -540,6 +582,12 @@ fn private_pda_withdraw() {
             InputAccountIdentity::Public,
         ],
         &program_with_deps,
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program_with_deps,
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program_with_deps,
+        ),
     );
 
     let (output, _proof) = result.expect("PDA withdraw should succeed");
@@ -595,7 +643,13 @@ fn shared_account_receives_via_simple_transfer() {
                 },
             }),
         ],
-        &program.into(),
+        &program.clone().into(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program.clone().into(),
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program.into(),
+        ),
     );
 
     let (output, _proof) = result.expect("shared account receive should succeed");
@@ -635,7 +689,13 @@ fn private_authorized_init_encrypts_regular_kind_with_identifier() {
                 commitment_root: DUMMY_COMMITMENT_HASH,
             },
         })],
-        &program.into(),
+        &program.clone().into(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program.clone().into(),
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program.into(),
+        ),
     )
     .unwrap();
 
@@ -677,7 +737,13 @@ fn private_foreign_init_encrypts_regular_kind_with_identifier() {
                 commitment_root: DUMMY_COMMITMENT_HASH,
             },
         })],
-        &program.into(),
+        &program.clone().into(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program.clone().into(),
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program.into(),
+        ),
     )
     .unwrap();
 
@@ -728,7 +794,13 @@ fn private_authorized_update_encrypts_regular_kind_with_identifier() {
                 membership_proof: commitment_set.get_proof_for(&commitment).unwrap(),
             },
         })],
-        &program.into(),
+        &program.clone().into(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program.clone().into(),
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program.into(),
+        ),
     )
     .unwrap();
 
@@ -785,7 +857,13 @@ fn private_regular_update_without_ask_is_spendable() {
                 membership_proof,
             },
         })],
-        &program.into(),
+        &program.clone().into(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program.clone().into(),
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program.into(),
+        ),
     )
     .unwrap();
 }
@@ -812,7 +890,13 @@ fn private_regular_witness_without_ask_cannot_assert_authorization() {
                 membership_proof,
             },
         })],
-        &program.into(),
+        &program.clone().into(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program.clone().into(),
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program.into(),
+        ),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -843,7 +927,13 @@ fn regular_update_with_wrong_ask_nsk_is_rejected() {
                 membership_proof,
             },
         })],
-        &program.into(),
+        &program.clone().into(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program.clone().into(),
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program.into(),
+        ),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -873,7 +963,13 @@ fn regular_init_with_non_chaining_ask_npk_is_rejected() {
                 commitment_root: DUMMY_COMMITMENT_HASH,
             },
         })],
-        &program.into(),
+        &program.clone().into(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program.clone().into(),
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program.into(),
+        ),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -906,7 +1002,13 @@ fn unauthorized_private_init_can_be_claimed() {
                 commitment_root: DUMMY_COMMITMENT_HASH,
             },
         })],
-        &program.into(),
+        &program.clone().into(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program.clone().into(),
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program.into(),
+        ),
     )
     .unwrap();
 
@@ -941,7 +1043,13 @@ fn auth_asserting_program_rejects_unauthorized_regular_private_account() {
                 membership_proof,
             },
         })],
-        &program.into(),
+        &program.clone().into(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program.clone().into(),
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program.into(),
+        ),
     );
 
     assert!(matches!(result, Err(LeeError::ProgramProveFailed(_))));
@@ -1000,6 +1108,12 @@ fn private_pda_update_encrypts_pda_kind_with_identifier() {
             InputAccountIdentity::Public,
         ],
         &program_with_deps,
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program_with_deps,
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program_with_deps,
+        ),
     )
     .unwrap();
 
@@ -1035,7 +1149,13 @@ fn private_pda_init_identifier_mismatch_fails() {
                 commitment_root: DUMMY_COMMITMENT_HASH,
             },
         })],
-        &program.into(),
+        &program.clone().into(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program.clone().into(),
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program.into(),
+        ),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -1083,6 +1203,12 @@ fn private_pda_update_identifier_mismatch_fails() {
             InputAccountIdentity::Public,
         ],
         &program_with_deps,
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program_with_deps,
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program_with_deps,
+        ),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));

@@ -82,6 +82,12 @@ pub trait Rpc {
         commitments: Vec<Commitment>,
     ) -> Result<(Vec<Option<MembershipProof>>, CommitmentSetDigest), ErrorObjectOwned>;
 
+    #[method(name = "getProgramCommitmentProofsAndRoot")]
+    async fn get_program_commitment_proofs_and_root(
+        &self,
+        program_ids: Vec<ProgramId>,
+    ) -> Result<(Vec<Option<MembershipProof>>, [u8; 32]), ErrorObjectOwned>;
+
     #[method(name = "getAccount")]
     async fn get_account(&self, account_id: AccountId) -> Result<Account, ErrorObjectOwned>;
 

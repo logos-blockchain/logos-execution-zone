@@ -667,6 +667,20 @@ impl WalletCore {
             .await?)
     }
 
+    pub async fn get_program_commitment_proofs_and_root(
+        &self,
+        program_ids: &[ProgramId],
+    ) -> Result<(Vec<Option<MembershipProof>>, [u8; 32])> {
+        Ok(self
+            .multi_sequencer_client
+            .metered_get(async |client: &SequencerClient| {
+                client
+                    .get_program_commitment_proofs_and_root(program_ids.to_vec())
+                    .await
+            })
+            .await?)
+    }
+
     pub fn decode_insert_privacy_preserving_transaction_results(
         &mut self,
         tx: &lee::privacy_preserving_transaction::PrivacyPreservingTransaction,
@@ -771,6 +785,10 @@ impl WalletCore {
         )?;
 
         let private_account_keys = acc_manager.private_account_keys();
+
+        let (program_commitment_digest_root, program_commitment_proofs) =
+            account_manager::fetch_program_commitment_proofs_and_root(self, program).await?;
+
         let (output, proof) =
             lee::privacy_preserving_transaction::circuit::execute_and_prove_with_padded_inputs(
                 pre_states,
@@ -778,6 +796,8 @@ impl WalletCore {
                 acc_manager.account_identities(),
                 acc_manager.dummy_inputs_default(),
                 &program.to_owned(),
+                program_commitment_digest_root,
+                program_commitment_proofs,
             )?;
 
         let message = lee::privacy_preserving_transaction::message::Message::from_circuit_output(

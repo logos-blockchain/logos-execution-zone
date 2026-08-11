@@ -320,7 +320,13 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
                 },
             }),
         ],
-        &program.into(),
+        &program.clone().into(),
+        lee::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program.clone().into(),
+        ),
+        lee::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program.into(),
+        ),
     )
     .unwrap();
     let message = pptx::message::Message::from_circuit_output(vec![], output);

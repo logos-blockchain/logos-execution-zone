@@ -279,6 +279,7 @@ fn shielded_balance_transfer_for_tests(
         (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
     );
 
+    let program_with_deps = crate::test_methods::simple_balance_transfer().into();
     let (output, proof) = crate::privacy_preserving_transaction::circuit::execute_and_prove(
         vec![sender, recipient],
         Program::serialize_instruction(balance_to_move).unwrap(),
@@ -297,7 +298,13 @@ fn shielded_balance_transfer_for_tests(
                 },
             }),
         ],
-        &crate::test_methods::simple_balance_transfer().into(),
+        &program_with_deps,
+        state.program_commitment_digest(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for(
+            state,
+            &program_with_deps,
+        )
+        .expect("simple_balance_transfer must be deployed in state"),
     )
     .unwrap();
 
@@ -329,6 +336,7 @@ fn private_balance_transfer_for_tests(
         (&recipient_keys.npk(), &recipient_keys.vpk(), 0),
     );
 
+    let program_with_deps = program.into();
     let (output, proof) = crate::privacy_preserving_transaction::circuit::execute_and_prove(
         vec![sender_pre, recipient_pre],
         Program::serialize_instruction(balance_to_move).unwrap(),
@@ -361,7 +369,13 @@ fn private_balance_transfer_for_tests(
                 },
             }),
         ],
-        &program.into(),
+        &program_with_deps,
+        state.program_commitment_digest(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for(
+            state,
+            &program_with_deps,
+        )
+        .expect("simple_balance_transfer must be deployed in state"),
     )
     .unwrap();
 
@@ -394,6 +408,7 @@ fn deshielded_balance_transfer_for_tests(
         *recipient_account_id,
     );
 
+    let program_with_deps = program.into();
     let (output, proof) = crate::privacy_preserving_transaction::circuit::execute_and_prove(
         vec![sender_pre, recipient_pre],
         Program::serialize_instruction(balance_to_move).unwrap(),
@@ -415,7 +430,13 @@ fn deshielded_balance_transfer_for_tests(
             }),
             InputAccountIdentity::Public,
         ],
-        &program.into(),
+        &program_with_deps,
+        state.program_commitment_digest(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for(
+            state,
+            &program_with_deps,
+        )
+        .expect("simple_balance_transfer must be deployed in state"),
     )
     .unwrap();
 
@@ -435,7 +456,9 @@ fn valid_private_transfer_tx_and_state() -> (V03State, PrivacyPreservingTransact
         ..Account::default()
     };
     let recipient_keys = test_private_account_keys_2();
-    let state = V03State::new().with_private_account(&sender_keys, &sender_private_account);
+    let state = V03State::new()
+        .with_private_account(&sender_keys, &sender_private_account)
+        .with_programs([crate::test_methods::simple_balance_transfer()]);
     let tx = private_balance_transfer_for_tests(
         &sender_keys,
         &sender_private_account,

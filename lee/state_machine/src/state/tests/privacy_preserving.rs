@@ -5,14 +5,16 @@ fn transition_from_privacy_preserving_transaction_shielded() {
     let sender_keys = test_public_account_keys_1();
     let recipient_keys = test_private_account_keys_1();
 
-    let mut state = V03State::new().with_public_accounts([(
-        sender_keys.account_id(),
-        Account {
-            program_owner: crate::test_methods::simple_balance_transfer().id(),
-            balance: 200,
-            ..Account::default()
-        },
-    )]);
+    let mut state = V03State::new()
+        .with_public_accounts([(
+            sender_keys.account_id(),
+            Account {
+                program_owner: crate::test_methods::simple_balance_transfer().id(),
+                balance: 200,
+                ..Account::default()
+            },
+        )])
+        .with_programs([crate::test_methods::simple_balance_transfer()]);
 
     let balance_to_move = 37;
 
@@ -56,7 +58,9 @@ fn transition_from_privacy_preserving_transaction_private() {
     };
     let recipient_keys = test_private_account_keys_2();
 
-    let mut state = V03State::new().with_private_account(&sender_keys, &sender_private_account);
+    let mut state = V03State::new()
+        .with_private_account(&sender_keys, &sender_private_account)
+        .with_programs([crate::test_methods::simple_balance_transfer()]);
 
     let balance_to_move = 37;
 
@@ -187,7 +191,8 @@ fn transition_from_privacy_preserving_transaction_deshielded() {
                 ..Account::default()
             },
         )])
-        .with_private_account(&sender_keys, &sender_private_account);
+        .with_private_account(&sender_keys, &sender_private_account)
+        .with_programs([crate::test_methods::simple_balance_transfer()]);
 
     let balance_to_move = 37;
 
@@ -257,7 +262,13 @@ fn burner_program_should_fail_in_privacy_preserving_circuit() {
         vec![public_account],
         Program::serialize_instruction(10_u128).unwrap(),
         vec![InputAccountIdentity::Public],
-        &program.into(),
+        &program.clone().into(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program.clone().into(),
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program.into(),
+        ),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -280,7 +291,13 @@ fn minter_program_should_fail_in_privacy_preserving_circuit() {
         vec![public_account],
         Program::serialize_instruction(10_u128).unwrap(),
         vec![InputAccountIdentity::Public],
-        &program.into(),
+        &program.clone().into(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program.clone().into(),
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program.into(),
+        ),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -303,7 +320,13 @@ fn nonce_changer_program_should_fail_in_privacy_preserving_circuit() {
         vec![public_account],
         Program::serialize_instruction(()).unwrap(),
         vec![InputAccountIdentity::Public],
-        &program.into(),
+        &program.clone().into(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program.clone().into(),
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program.into(),
+        ),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -326,7 +349,13 @@ fn data_changer_program_should_fail_for_non_owned_account_in_privacy_preserving_
         vec![public_account],
         Program::serialize_instruction(vec![0]).unwrap(),
         vec![InputAccountIdentity::Public],
-        &program.into(),
+        &program.clone().into(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program.clone().into(),
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program.into(),
+        ),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -357,7 +386,13 @@ fn data_changer_program_should_fail_for_too_large_data_in_privacy_preserving_cir
         vec![public_account],
         Program::serialize_instruction(large_data).unwrap(),
         vec![InputAccountIdentity::Public],
-        &program.into(),
+        &program.clone().into(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program.clone().into(),
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program.into(),
+        ),
     );
 
     assert!(matches!(result, Err(LeeError::ProgramProveFailed(_))));
@@ -380,7 +415,13 @@ fn extra_output_program_should_fail_in_privacy_preserving_circuit() {
         vec![public_account],
         Program::serialize_instruction(()).unwrap(),
         vec![InputAccountIdentity::Public],
-        &program.into(),
+        &program.clone().into(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program.clone().into(),
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program.into(),
+        ),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -412,7 +453,13 @@ fn missing_output_program_should_fail_in_privacy_preserving_circuit() {
         vec![public_account_1, public_account_2],
         Program::serialize_instruction(()).unwrap(),
         vec![InputAccountIdentity::Public, InputAccountIdentity::Public],
-        &program.into(),
+        &program.clone().into(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program.clone().into(),
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program.into(),
+        ),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -435,7 +482,13 @@ fn program_owner_changer_should_fail_in_privacy_preserving_circuit() {
         vec![public_account],
         Program::serialize_instruction(()).unwrap(),
         vec![InputAccountIdentity::Public],
-        &program.into(),
+        &program.clone().into(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program.clone().into(),
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program.into(),
+        ),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -467,7 +520,13 @@ fn transfer_from_non_owned_account_should_fail_in_privacy_preserving_circuit() {
         vec![public_account_1, public_account_2],
         Program::serialize_instruction(10_u128).unwrap(),
         vec![InputAccountIdentity::Public, InputAccountIdentity::Public],
-        &program.into(),
+        &program.clone().into(),
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program.clone().into(),
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program.into(),
+        ),
     );
 
     assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
@@ -538,6 +597,12 @@ fn malicious_authorization_changer_should_fail_in_privacy_preserving_circuit() {
             }),
         ],
         &program_with_deps,
+        crate::privacy_preserving_transaction::circuit::program_commitment_root_for_test(
+            &program_with_deps,
+        ),
+        crate::privacy_preserving_transaction::circuit::program_commitment_proofs_for_test(
+            &program_with_deps,
+        ),
     );
 
     // Assert - should fail because the malicious program tries to manipulate is_authorized

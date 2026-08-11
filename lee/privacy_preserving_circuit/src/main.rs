@@ -10,15 +10,24 @@ fn main() {
         account_identities,
         program_id,
         dummy_inputs,
+        program_commitment_digest_root,
+        program_commitment_proofs,
     } = env::read();
 
     let execution_state = execution_state::ExecutionState::derive_from_outputs(
         &account_identities,
         program_id,
         program_outputs,
+        program_commitment_digest_root,
+        &program_commitment_proofs,
     );
 
-    let output = output::compute_circuit_output(execution_state, &account_identities, dummy_inputs);
+    let output = output::compute_circuit_output(
+        execution_state,
+        &account_identities,
+        dummy_inputs,
+        program_commitment_digest_root,
+    );
 
     env::commit(&output);
 }

@@ -4,8 +4,10 @@ use std::{
 };
 
 use lee_core::{
-    Identifier, InputAccountIdentity, NullifierPublicKey, PrivateWitness, WitnessKind,
+    Identifier, InputAccountIdentity, MembershipProof, NullifierPublicKey, PrivateWitness,
+    ProgramCommitment, WitnessKind,
     account::{Account, AccountId, AccountWithMetadata},
+    compute_digest_for_path,
     encryption::ViewingPublicKey,
     program::{
         AccountPostState, BlockValidityWindow, ChainedCall, Claim, DEFAULT_PROGRAM_ID,
@@ -60,6 +62,8 @@ impl ExecutionState {
         account_identities: &[InputAccountIdentity],
         program_id: ProgramId,
         program_outputs: Vec<ProgramOutput>,
+        program_commitment_digest_root: [u8; 32],
+        program_commitment_proofs: &[(ProgramId, MembershipProof)],
     ) -> Self {
         // Build position → (npk, identifier) map for private-PDA pre_states, indexed by position
         // in `account_identities`. The vec is documented as 1:1 with the program's pre_state
@@ -152,6 +156,15 @@ impl ExecutionState {
                 &to_vec(&program_output).expect("program_output must be serializable");
             env::verify(chained_call.program_id, program_output_words).unwrap_or_else(
                 |_: Infallible| unreachable!("Infallible error is never constructed"),
+            );
+
+            // Verify that this program is a legitimate, currently-deployed version of the
+            // claimed program: distinct from `env::verify` above, which only proves this exact
+            // ELF really ran.
+            verify_program_commitment(
+                chained_call.program_id,
+                program_commitment_digest_root,
+                program_commitment_proofs,
             );
 
             // Verify that the program output's self_program_id matches the expected program ID.
@@ -479,6 +492,25 @@ impl ExecutionState {
             states_iter,
         )
     }
+}
+
+fn verify_program_commitment(
+    program_id: ProgramId,
+    program_commitment_digest_root: [u8; 32],
+    program_commitment_proofs: &[(ProgramId, MembershipProof)],
+) {
+    let (_, proof) = program_commitment_proofs
+        .iter()
+        .find(|(id, _)| *id == program_id)
+        .unwrap_or_else(|| {
+            panic!("No program commitment proof supplied for program {program_id:?}")
+        });
+    let commitment = ProgramCommitment::new(program_id);
+    let derived_root = compute_digest_for_path(&commitment.to_byte_array(), proof);
+    assert_eq!(
+        derived_root, program_commitment_digest_root,
+        "Program commitment proof for {program_id:?} does not reproduce the expected root"
+    );
 }
 
 /// Record or re-verify the `(program_id, seed) → account_id` family binding for the
