@@ -590,7 +590,7 @@ fn a_second_emit_at_the_same_slot_is_rejected() {
     let first = lock_tx(&holder_key, holder_id, zone_b, ordinal, 0);
     let diff = ValidatedStateDiff::from_public_transaction(&first, &state, 1, 0)
         .expect("the first lock executes");
-    state.apply_state_diff(diff);
+    drop(state.apply_state_diff(diff));
 
     // Same slot, fresh nonce, so the only thing that can reject it is the slot
     // already holding a record. Matched on the guest's own message rather than
@@ -646,7 +646,7 @@ fn two_emitters_share_an_ordinal_without_colliding() {
     let lock = lock_tx(&holder_key, holder_id, zone_b, ordinal, 0);
     let diff = ValidatedStateDiff::from_public_transaction(&lock, &state, 1, 0)
         .expect("the lock executes");
-    state.apply_state_diff(diff);
+    drop(state.apply_state_diff(diff));
 
     let send = send_tx(
         vec![sender_config_account_id(sender_id), send_slot],
@@ -936,7 +936,7 @@ fn the_bridge_pins_are_written_once_and_replayable() {
         0,
     )
     .expect("the first init claims the config PDA");
-    state.apply_state_diff(diff);
+    drop(state.apply_state_diff(diff));
     assert_eq!(
         bridge_lock_core::read_config(&state.get_account_by_id(config_id).data.into_inner()),
         Some((outbox_id, wrapped_token_id)),
@@ -1042,7 +1042,7 @@ fn the_outbox_pin_is_written_once_and_replayable() {
     let first = init(outbox_id);
     let diff = ValidatedStateDiff::from_public_transaction(&first, &state, 1, 0)
         .expect("the first init claims the config PDA");
-    state.apply_state_diff(diff);
+    drop(state.apply_state_diff(diff));
     assert_eq!(
         read_outbox(&state.get_account_by_id(config_id).data.into_inner()),
         Some(outbox_id),
@@ -1180,7 +1180,7 @@ fn the_token_authority_path_holds() {
         0,
     )
     .expect("the configured authority changes sources");
-    state.apply_state_diff(diff);
+    drop(state.apply_state_diff(diff));
     let cfg = wrapped_token_core::WrappedTokenConfig::from_bytes(
         &state.get_account_by_id(config_id).data.into_inner(),
     )
@@ -1200,7 +1200,7 @@ fn the_token_authority_path_holds() {
         0,
     )
     .expect("the authority acts again");
-    state.apply_state_diff(second);
+    drop(state.apply_state_diff(second));
     let updated_cfg = wrapped_token_core::WrappedTokenConfig::from_bytes(
         &state.get_account_by_id(config_id).data.into_inner(),
     )
@@ -1220,7 +1220,7 @@ fn the_token_authority_path_holds() {
     let renounced =
         ValidatedStateDiff::from_public_transaction(&renounce(authority, &key, 2), &state, 3, 0)
             .expect("the authority renounces itself");
-    state.apply_state_diff(renounced);
+    drop(state.apply_state_diff(renounced));
     let renounced_cfg = wrapped_token_core::WrappedTokenConfig::from_bytes(
         &state.get_account_by_id(config_id).data.into_inner(),
     )
@@ -1431,7 +1431,7 @@ fn the_receiver_authority_path_holds() {
     let diff =
         ValidatedStateDiff::from_public_transaction(&update(authority, &key, 0), &state, 1, 0)
             .expect("the configured authority changes sources");
-    state.apply_state_diff(diff);
+    drop(state.apply_state_diff(diff));
     let cfg = ping_core::ReceiverConfig::from_bytes(
         &state.get_account_by_id(config_id).data.into_inner(),
     )
@@ -1442,7 +1442,7 @@ fn the_receiver_authority_path_holds() {
     let renounce_diff =
         ValidatedStateDiff::from_public_transaction(&renounce(authority, &key, 1), &state, 2, 0)
             .expect("the authority renounces itself");
-    state.apply_state_diff(renounce_diff);
+    drop(state.apply_state_diff(renounce_diff));
     let renounced_cfg = ping_core::ReceiverConfig::from_bytes(
         &state.get_account_by_id(config_id).data.into_inner(),
     )
@@ -1555,7 +1555,7 @@ fn the_governance_path_holds() {
         0,
     )
     .expect("the governance path changes sources");
-    state.apply_state_diff(first);
+    drop(state.apply_state_diff(first));
 
     let cfg = wrapped_token_core::WrappedTokenConfig::from_bytes(
         &state.get_account_by_id(config_id).data.into_inner(),
@@ -1570,7 +1570,7 @@ fn the_governance_path_holds() {
 
     let second = ValidatedStateDiff::from_public_transaction(&update(vec![]), &state, 2, 0)
         .expect("the governance path acts again");
-    state.apply_state_diff(second);
+    drop(state.apply_state_diff(second));
     let cleared_cfg = wrapped_token_core::WrappedTokenConfig::from_bytes(
         &state.get_account_by_id(config_id).data.into_inner(),
     )
@@ -1583,7 +1583,7 @@ fn the_governance_path_holds() {
 
     let renounced = ValidatedStateDiff::from_public_transaction(&renounce(), &state, 3, 0)
         .expect("the governance path renounces");
-    state.apply_state_diff(renounced);
+    drop(state.apply_state_diff(renounced));
     let renounced_cfg = wrapped_token_core::WrappedTokenConfig::from_bytes(
         &state.get_account_by_id(config_id).data.into_inner(),
     )
@@ -1723,7 +1723,7 @@ fn the_receiver_governance_path_holds() {
 
     let diff = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0)
         .expect("the receiver governance path changes sources");
-    state.apply_state_diff(diff);
+    drop(state.apply_state_diff(diff));
     let cfg = ping_core::ReceiverConfig::from_bytes(
         &state.get_account_by_id(config_id).data.into_inner(),
     )
@@ -1767,7 +1767,7 @@ fn a_shared_authority_survives_the_first_claim() {
     );
     let first = ValidatedStateDiff::from_public_transaction(&token_update, &state, 1, 0)
         .expect("the token claims the shared authority");
-    state.apply_state_diff(first);
+    drop(state.apply_state_diff(first));
     assert_eq!(
         state.get_account_by_id(authority).program_owner,
         wrapped_token_id.into(),
@@ -1786,7 +1786,7 @@ fn a_shared_authority_survives_the_first_claim() {
     );
     let second = ValidatedStateDiff::from_public_transaction(&receiver_update, &state, 2, 0)
         .expect("the other target still acts on the token-owned authority");
-    state.apply_state_diff(second);
+    drop(state.apply_state_diff(second));
     let receiver_cfg = ping_core::ReceiverConfig::from_bytes(
         &state
             .get_account_by_id(receiver_config_id)
@@ -1814,7 +1814,7 @@ fn a_shared_authority_survives_the_first_claim() {
     );
     let third = ValidatedStateDiff::from_public_transaction(&receiver_renounce, &state, 3, 0)
         .expect("the other target renounces on the token-owned authority");
-    state.apply_state_diff(third);
+    drop(state.apply_state_diff(third));
     let renounced_cfg = ping_core::ReceiverConfig::from_bytes(
         &state
             .get_account_by_id(receiver_config_id)

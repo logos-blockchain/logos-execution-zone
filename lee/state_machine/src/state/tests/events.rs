@@ -12,8 +12,18 @@ fn program_transaction<T: serde::Serialize>(
     PublicTransaction::new(message, witness_set)
 }
 
-fn payloads(events: &[lee_core::program::Event]) -> Vec<Vec<u8>> {
-    events.iter().map(|event| event.data.clone()).collect()
+fn payloads(events: &[TransactionEvent]) -> Vec<Vec<u8>> {
+    events
+        .iter()
+        .map(|event| event.event.data.clone())
+        .collect()
+}
+
+fn emitted(n: u8) -> ProgramEvent {
+    ProgramEvent {
+        selector: [n; 8],
+        data: vec![n; 4],
+    }
 }
 
 #[test]
@@ -26,7 +36,7 @@ fn emitted_events_are_returned_in_order_and_attributed_to_the_emitter() {
         emitter_id,
         account_id,
         EmitterInstruction {
-            events: vec![vec![0; 4], vec![1; 4]],
+            events: vec![emitted(0), emitted(1)],
             chain: vec![],
         },
     );
@@ -34,6 +44,13 @@ fn emitted_events_are_returned_in_order_and_attributed_to_the_emitter() {
     let events = state.transition_from_public_transaction(&tx, 1, 0).unwrap();
 
     assert_eq!(payloads(&events), vec![vec![0; 4], vec![1; 4]]);
+    assert_eq!(
+        events
+            .iter()
+            .map(|event| event.event.selector)
+            .collect::<Vec<_>>(),
+        vec![[0; 8], [1; 8]]
+    );
     assert!(events.iter().all(|event| event.program_id == emitter_id));
 }
 
@@ -44,7 +61,7 @@ fn parent_events_precede_chained_callee_events() {
     let emitter_id = crate::test_methods::event_emitter().id();
 
     let callee_instruction_data = Program::serialize_instruction(EmitterInstruction {
-        events: vec![vec![1; 4], vec![2; 4]],
+        events: vec![emitted(1), emitted(2)],
         chain: vec![],
     })
     .unwrap();
@@ -53,7 +70,7 @@ fn parent_events_precede_chained_callee_events() {
         emitter_id,
         account_id,
         EmitterInstruction {
-            events: vec![vec![0; 4]],
+            events: vec![emitted(0)],
             chain: vec![(emitter_id, callee_instruction_data)],
         },
     );
@@ -74,17 +91,17 @@ fn chained_events_follow_depth_first_pre_order() {
     let emitter_id = crate::test_methods::event_emitter().id();
 
     let grandchild = Program::serialize_instruction(EmitterInstruction {
-        events: vec![vec![2; 4]],
+        events: vec![emitted(2)],
         chain: vec![],
     })
     .unwrap();
     let first_callee = Program::serialize_instruction(EmitterInstruction {
-        events: vec![vec![1; 4]],
+        events: vec![emitted(1)],
         chain: vec![(emitter_id, grandchild)],
     })
     .unwrap();
     let second_callee = Program::serialize_instruction(EmitterInstruction {
-        events: vec![vec![3; 4]],
+        events: vec![emitted(3)],
         chain: vec![],
     })
     .unwrap();
@@ -93,7 +110,7 @@ fn chained_events_follow_depth_first_pre_order() {
         emitter_id,
         account_id,
         EmitterInstruction {
-            events: vec![vec![0; 4]],
+            events: vec![emitted(0)],
             chain: vec![(emitter_id, first_callee), (emitter_id, second_callee)],
         },
     );
@@ -139,7 +156,7 @@ fn chained_callee_events_are_attributed_to_the_callee_not_the_caller() {
     // three sibling chained calls, so the only emitting program is neither the top-level
     // program nor its caller.
     let callback_instruction_data = Program::serialize_instruction(EmitterInstruction {
-        events: vec![vec![0; 4]],
+        events: vec![emitted(0)],
         chain: vec![],
     })
     .unwrap();

@@ -468,6 +468,14 @@ impl<T> From<std::ops::RangeFull> for ValidityWindow<T> {
 #[error("Invalid window")]
 pub struct InvalidWindow;
 
+#[derive(Serialize, Deserialize, Clone, BorshSerialize, BorshDeserialize)]
+#[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
+pub struct ProgramEvent {
+    pub selector: [u8; 8],
+    /// The arbitrary event-data emitted in the program output.
+    pub data: Vec<u8>,
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
 #[must_use = "ProgramOutput does nothing unless written"]
@@ -491,7 +499,7 @@ pub struct ProgramOutput {
     pub timestamp_validity_window: TimestampValidityWindow,
     /// A vector of event data. Dropped for private transaction for function
     /// privacy.
-    pub events: Vec<Vec<u8>>,
+    pub events: Vec<ProgramEvent>,
 }
 
 impl ProgramOutput {
@@ -524,7 +532,7 @@ impl ProgramOutput {
         self
     }
 
-    pub fn with_events(mut self, events: Vec<Vec<u8>>) -> Self {
+    pub fn with_events(mut self, events: Vec<ProgramEvent>) -> Self {
         self.events = events;
         self
     }
@@ -582,11 +590,10 @@ impl ProgramOutput {
 /// A struct holding an event-output of a program.
 #[cfg(feature = "host")]
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub struct Event {
+pub struct TransactionEvent {
     /// Which program emitted the event.
     pub program_id: ProgramId,
-    /// The arbitrary event-data emitted in the program output.
-    pub data: Vec<u8>,
+    pub event: ProgramEvent,
 }
 
 /// Representation of a number as `lo + hi * 2^128`.

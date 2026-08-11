@@ -14,7 +14,8 @@ use lee_core::{
     encryption::ViewingPublicKey,
     program::{
         BlockValidityWindow, ExecutionValidationError, InstructionData, MAX_NUMBER_CHAINED_CALLS,
-        PdaSeed, ProgramId, TimestampValidityWindow, WrappedBalanceSum,
+        PdaSeed, ProgramEvent, ProgramId, TimestampValidityWindow, TransactionEvent,
+        WrappedBalanceSum,
     },
 };
 
@@ -183,7 +184,7 @@ enum FlashSwapInstruction {
 
 #[derive(serde::Serialize, serde::Deserialize)]
 struct EmitterInstruction {
-    events: Vec<Vec<u8>>,
+    events: Vec<ProgramEvent>,
     chain: Vec<(ProgramId, InstructionData)>,
 }
 
