@@ -81,7 +81,8 @@ impl RocksDBIO {
     // than terminate the scan.
     //
     // Callers bound the span: this materializes one key per block in `from..=to`, so an
-    // unbounded range allocates proportionally.
+    // unbounded range allocates proportionally; the RPC layer rejects spans above
+    // `MAX_EVENT_QUERY_BLOCK_SPAN`.
     pub fn get_block_events_range(
         &self,
         from: u64,

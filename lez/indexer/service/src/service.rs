@@ -9,7 +9,8 @@ use arc_swap::ArcSwap;
 use futures::StreamExt as _;
 use indexer_core::{IndexerCore, config::IndexerConfig};
 use indexer_service_protocol::{
-    Account, AccountId, Block, BlockId, HashType, IndexerStatus, Transaction,
+    Account, AccountId, Block, BlockId, EventRecord, GetEventsFilter, HashType, IndexerStatus,
+    Transaction, resolve_event_block_range,
 };
 use jsonrpsee::{
     SubscriptionSink,
@@ -163,6 +164,50 @@ impl indexer_service_rpc::RpcServer for IndexerService {
         }
 
         Ok(tx_res)
+    }
+
+    async fn get_events(
+        &self,
+        filter: GetEventsFilter,
+    ) -> Result<Vec<EventRecord>, ErrorObjectOwned> {
+        let tip = self
+            .indexer
+            .store
+            .get_last_block_id()
+            .map_err(db_error)?
+            .unwrap_or(0);
+
+        let records = match plan_query(&filter, tip)? {
+            EventQuery::ByTxHash(tx_hash) => self
+                .indexer
+                .store
+                .get_events_by_tx_hash(tx_hash.0)
+                .map_err(db_error)?
+                .map(|(block_id, group)| EventRecord::from_tx_events(block_id, group))
+                .ok_or_else(unknown_transaction_error)?,
+            EventQuery::ByRange {
+                from_block,
+                to_block,
+            } => {
+                let mut records = vec![];
+                for (block_id, groups) in self
+                    .indexer
+                    .store
+                    .get_events_range(from_block, to_block)
+                    .map_err(db_error)?
+                {
+                    for group in groups {
+                        records.extend(EventRecord::from_tx_events(block_id, group));
+                    }
+                }
+                records
+            }
+        };
+
+        Ok(records
+            .into_iter()
+            .filter(|record| record.matches_fields(filter.program_id, filter.selector))
+            .collect())
     }
 
     async fn get_status(&self) -> Result<IndexerStatus, ErrorObjectOwned> {
@@ -430,12 +475,65 @@ impl<T> Drop for Subscription<T> {
     }
 }
 
+pub(crate) enum EventQuery {
+    ByTxHash(HashType),
+    ByRange {
+        from_block: BlockId,
+        to_block: BlockId,
+    },
+}
+
 #[must_use]
 pub fn not_yet_implemented_error() -> ErrorObjectOwned {
     ErrorObject::owned(
         ErrorCode::InternalError.code(),
         "Not yet implemented",
         Option::<String>::None,
+    )
+}
+
+pub(crate) fn plan_query(
+    filter: &GetEventsFilter,
+    tip: BlockId,
+) -> Result<EventQuery, ErrorObjectOwned> {
+    if let Some(tx_hash) = filter.tx_hash {
+        return Ok(EventQuery::ByTxHash(tx_hash));
+    }
+    let (from_block, to_block) = resolve_block_range(filter, tip)?;
+    Ok(EventQuery::ByRange {
+        from_block,
+        to_block,
+    })
+}
+
+fn resolve_block_range(
+    filter: &GetEventsFilter,
+    tip: BlockId,
+) -> Result<(BlockId, BlockId), ErrorObjectOwned> {
+    let Some(from_block) = filter.from_block else {
+        return Err(invalid_params_error(
+            "getEvents requires either `tx_hash` or `from_block`",
+        ));
+    };
+    resolve_event_block_range(from_block, filter.to_block, tip)
+        .map_err(|err| invalid_params_error(format!("getEvents {err}")))
+}
+
+fn invalid_params_error(message: impl Into<String>) -> ErrorObjectOwned {
+    ErrorObjectOwned::owned(
+        ErrorCode::InvalidParams.code(),
+        "InvalidParams".to_owned(),
+        Some(message.into()),
+    )
+}
+
+pub(crate) fn unknown_transaction_error() -> ErrorObjectOwned {
+    ErrorObjectOwned::owned(
+        ErrorCode::InvalidParams.code(),
+        "UnknownTransaction".to_owned(),
+        Some(
+            "no indexed transaction has the requested hash; it may not be ingested yet".to_owned(),
+        ),
     )
 }
 
@@ -449,4 +547,78 @@ fn db_error(err: anyhow::Error) -> ErrorObjectOwned {
         "DBError".to_owned(),
         Some(format!("{err:#?}")),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use indexer_service_protocol::{MAX_EVENT_QUERY_BLOCK_SPAN, ProgramId, Selector};
+
+    use super::*;
+
+    fn record(block_id: BlockId, program: u32, selector: u8) -> EventRecord {
+        EventRecord {
+            block_id,
+            tx_index: 0,
+            tx_hash: HashType([0_u8; 32]),
+            program_id: ProgramId([program; 8]),
+            selector: Selector([selector; 8]),
+            data: vec![],
+        }
+    }
+
+    #[test]
+    fn range_requires_from_block() {
+        let err = resolve_block_range(&GetEventsFilter::default(), 10).unwrap_err();
+        assert_eq!(err.code(), ErrorCode::InvalidParams.code());
+    }
+
+    #[test]
+    fn tx_hash_takes_precedence_over_the_block_range() {
+        // Range fields that would otherwise be rejected (over the span cap) are ignored.
+        let filter = GetEventsFilter {
+            tx_hash: Some(HashType([3_u8; 32])),
+            from_block: Some(1),
+            to_block: Some(MAX_EVENT_QUERY_BLOCK_SPAN.saturating_mul(9)),
+            ..GetEventsFilter::default()
+        };
+        assert!(matches!(
+            plan_query(&filter, 0).unwrap(),
+            EventQuery::ByTxHash(hash) if hash == HashType([3_u8; 32])
+        ));
+    }
+
+    #[test]
+    fn without_tx_hash_the_query_is_a_range() {
+        let filter = GetEventsFilter {
+            from_block: Some(2),
+            ..GetEventsFilter::default()
+        };
+        assert!(matches!(
+            plan_query(&filter, 6).unwrap(),
+            EventQuery::ByRange {
+                from_block: 2,
+                to_block: 6
+            }
+        ));
+    }
+
+    #[test]
+    fn filters_are_exact_and_conjunctive() {
+        let target = record(1, 7, 2);
+        let program = Some(ProgramId([7; 8]));
+        let selector = Some(Selector([2; 8]));
+
+        assert!(target.matches_fields(None, None));
+
+        assert!(target.matches_fields(program, None));
+        assert!(!record(1, 8, 2).matches_fields(program, None));
+
+        assert!(target.matches_fields(None, selector));
+        assert!(!record(1, 7, 3).matches_fields(None, selector));
+
+        // Both set: a record must satisfy each.
+        assert!(target.matches_fields(program, selector));
+        assert!(!record(1, 7, 3).matches_fields(program, selector));
+        assert!(!record(1, 8, 2).matches_fields(program, selector));
+    }
 }

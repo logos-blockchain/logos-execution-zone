@@ -1,12 +1,27 @@
 use indexer_service_protocol::{
-    Account, AccountId, Block, BlockId, HashType, IndexerStatus, Transaction,
+    Account, AccountId, Block, BlockId, EventRecord, EventSubscriptionFilter, GetEventsFilter,
+    HashType, IndexerStatus, Transaction,
 };
 use jsonrpsee::proc_macros::rpc;
 #[cfg(feature = "server")]
 use jsonrpsee::{core::SubscriptionResult, types::ErrorObjectOwned};
+use schemars::JsonSchema;
 
 #[cfg(all(not(feature = "server"), not(feature = "client")))]
 compile_error!("At least one of `server` or `client` features must be enabled.");
+
+/// Schema roots for the block and event query surface; types not reachable from `Block`.
+#[derive(JsonSchema)]
+#[expect(
+    dead_code,
+    reason = "Fields exist only to root the generated JSON schema"
+)]
+struct ProtocolSchema {
+    block: Block,
+    event_record: EventRecord,
+    get_events_filter: GetEventsFilter,
+    event_subscription_filter: EventSubscriptionFilter,
+}
 
 #[cfg_attr(all(feature = "server", not(feature = "client")), rpc(server))]
 #[cfg_attr(all(feature = "client", not(feature = "server")), rpc(client))]
@@ -19,10 +34,11 @@ pub trait Rpc {
         // Currently we can wait until we can auto-generated it: https://github.com/paritytech/jsonrpsee/issues/737
         // and just return JSON schema.
 
-        // Block schema contains all other types used in the protocol, so it's sufficient to return
-        // its schema.
-        let block_schema = schemars::schema_for!(Block);
-        Ok(serde_json::to_value(block_schema).expect("Schema serialization should not fail"))
+        // `Block` reaches most protocol types transitively, but the event request/response
+        // types are not reachable from it, so the schema is derived from a wrapper naming
+        // every root a client needs.
+        let schema = schemars::schema_for!(ProtocolSchema);
+        Ok(serde_json::to_value(schema).expect("Schema serialization should not fail"))
     }
 
     #[subscription(name = "subscribeToFinalizedBlocks", item = BlockId)]
@@ -70,6 +86,12 @@ pub trait Rpc {
         offset: u64,
         limit: u64,
     ) -> Result<Vec<Transaction>, ErrorObjectOwned>;
+
+    #[method(name = "getEvents")]
+    async fn get_events(
+        &self,
+        filter: GetEventsFilter,
+    ) -> Result<Vec<EventRecord>, ErrorObjectOwned>;
 
     #[method(name = "getStatus")]
     async fn get_status(&self) -> Result<IndexerStatus, ErrorObjectOwned>;
