@@ -1,5 +1,26 @@
 use super::*;
 
+// Reference for the selector VALUE convention: selector = first 8 bytes of
+// sha256("<program>::<EventName>"), pinned as a literal so the guest never hashes.
+#[derive(borsh::BorshSerialize, borsh::BorshDeserialize, Debug, PartialEq, Eq)]
+struct ExampleEvent {
+    account: AccountId,
+    amount: Balance,
+}
+
+impl ExampleEvent {
+    const SELECTOR_NAME: &'static str = "lee_test::ExampleEvent";
+    const SELECTOR: [u8; 8] = [0x92, 0x8d, 0x12, 0x8c, 0x88, 0x2f, 0x1c, 0x5d];
+
+    fn to_bytes(&self) -> Vec<u8> {
+        borsh::to_vec(self).unwrap()
+    }
+
+    fn from_bytes(bytes: &[u8]) -> Self {
+        borsh::from_slice(bytes).unwrap()
+    }
+}
+
 fn program_transaction<T: serde::Serialize>(
     program_id: ProgramId,
     account_id: AccountId,
@@ -186,4 +207,99 @@ fn program_that_emits_nothing_yields_no_events() {
     let events = state.transition_from_public_transaction(&tx, 1, 0).unwrap();
 
     assert!(events.is_empty());
+}
+
+#[test]
+fn example_event_selector_matches_its_derivation() {
+    use sha2::Digest as _;
+
+    let digest = sha2::Sha256::digest(ExampleEvent::SELECTOR_NAME.as_bytes());
+
+    assert_eq!(&ExampleEvent::SELECTOR[..], &digest[..8]);
+}
+
+#[test]
+fn events_are_filterable_by_selector_and_decodable() {
+    let account_id = AccountId::new([1; 32]);
+    let mut state = V03State::new().with_test_programs();
+    let emitter_id = crate::test_methods::event_emitter().id();
+
+    let example = ExampleEvent {
+        account: AccountId::new([7; 32]),
+        amount: 42,
+    };
+    let tx = program_transaction(
+        emitter_id,
+        account_id,
+        EmitterInstruction {
+            events: vec![
+                emitted(0),
+                ProgramEvent {
+                    selector: ExampleEvent::SELECTOR,
+                    data: example.to_bytes(),
+                },
+                emitted(1),
+            ],
+            chain: vec![],
+        },
+    );
+
+    let events = state.transition_from_public_transaction(&tx, 1, 0).unwrap();
+
+    let matched: Vec<_> = events
+        .iter()
+        .filter(|event| event.event.selector == ExampleEvent::SELECTOR)
+        .collect();
+    assert_eq!(matched.len(), 1);
+    assert_eq!(matched[0].program_id, emitter_id);
+    assert_eq!(ExampleEvent::from_bytes(&matched[0].event.data), example);
+
+    let unmatched = events
+        .iter()
+        .filter(|event| event.event.selector == [0xff; 8])
+        .count();
+    assert_eq!(unmatched, 0);
+}
+
+#[test]
+fn event_emitting_program_proves_and_validates_on_the_private_path() {
+    let keys = test_private_account_keys_1();
+    let emitter = crate::test_methods::event_emitter();
+
+    let pre = AccountWithMetadata::new(Account::default(), true, (&keys.npk(), &keys.vpk(), 0));
+
+    let (output, proof) = crate::privacy_preserving_transaction::circuit::execute_and_prove(
+        vec![pre],
+        Program::serialize_instruction(EmitterInstruction {
+            events: vec![emitted(0), emitted(1)],
+            chain: vec![],
+        })
+        .unwrap(),
+        vec![InputAccountIdentity::Private(PrivateWitness {
+            vpk: keys.vpk(),
+            random_seed: [0; 32],
+            identifier: 0,
+            kind: WitnessKind::Regular {
+                ask: Some(keys.ask),
+            },
+            nullifier: NullifierWitness::Init {
+                npk: keys.npk(),
+                commitment_root: DUMMY_COMMITMENT_HASH,
+            },
+        })],
+        &emitter.into(),
+    )
+    .expect("emitting guest must prove on the private path");
+
+    assert_eq!(output.private_actions.len(), 1);
+
+    let message = Message::from_circuit_output(vec![], output);
+    let witness_set = WitnessSet::for_message(&message, proof, &[]);
+    let tx = PrivacyPreservingTransaction::new(message, witness_set);
+
+    let mut state = V03State::new();
+
+    state
+        .transition_from_privacy_preserving_transaction(&tx, 1, 0)
+        .unwrap();
 }
