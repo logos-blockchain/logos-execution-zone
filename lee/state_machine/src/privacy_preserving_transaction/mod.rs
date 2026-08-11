@@ -7,3 +7,6 @@ pub mod transaction;
 pub mod witness_set;
 
 pub mod circuit;
+
+#[cfg(test)]
+mod sizes;

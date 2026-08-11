@@ -392,6 +392,38 @@ mod tests {
         assert_ne!(faucet, bridge);
     }
 
+    /// The private transaction's `data_bytes` — the bytes a block body carries — is the
+    /// `LeeTransaction` discriminant plus the transaction's own encoding. This pins the
+    /// discriminant width that `lee`'s envelope measurement
+    /// (`privacy_preserving_transaction::sizes`) has to assume, since `lee` cannot see
+    /// this enum.
+    #[test]
+    fn private_tx_wire_size_is_tag_plus_transaction() {
+        use lee::privacy_preserving_transaction::{
+            Message, PrivacyPreservingTransaction, WitnessSet, circuit::Proof,
+        };
+        use lee_core::program::{BlockValidityWindow, TimestampValidityWindow};
+
+        use super::LeeTransaction;
+
+        let message = Message {
+            public_actions: vec![],
+            nonces: vec![],
+            private_actions: vec![],
+            block_validity_window: BlockValidityWindow::new_unbounded(),
+            timestamp_validity_window: TimestampValidityWindow::new_unbounded(),
+        };
+        let tx = PrivacyPreservingTransaction::new(
+            message,
+            WitnessSet::from_raw_parts(vec![], Proof::from_inner(vec![])),
+        );
+        let inner_len = borsh::to_vec(&tx).unwrap().len();
+        let wire = borsh::to_vec(&LeeTransaction::PrivacyPreserving(tx)).unwrap();
+
+        assert_eq!(wire.len(), inner_len + 1);
+        assert_eq!(wire[0], 1, "PrivacyPreserving is the second enum variant");
+    }
+
     #[test]
     fn validate_on_state_rejects_modifying_a_system_account() {
         // A native transfer that credits a clock system account *changes* that
