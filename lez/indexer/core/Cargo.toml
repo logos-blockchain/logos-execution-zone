@@ -43,3 +43,4 @@ thiserror.workspace = true
 cross_zone = { workspace = true, features = ["test-utils"] }
 tempfile.workspace = true
 ping_core.workspace = true
+test_methods.workspace = true

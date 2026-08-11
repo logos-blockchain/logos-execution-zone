@@ -4614,6 +4614,7 @@ dependencies = [
  "serde_json",
  "storage",
  "tempfile",
+ "test_methods",
  "testnet_initial_state",
  "thiserror 2.0.18",
  "tokio",

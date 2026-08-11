@@ -6,7 +6,7 @@ use chain_state::{
 };
 use common::{
     block::{BedrockStatus, Block, BlockHeader},
-    transaction::LeeTransaction,
+    transaction::{LeeTransaction, TxEvents},
 };
 use lee::{Account, AccountId, V03State};
 use lee_core::BlockId;
@@ -80,6 +80,27 @@ impl IndexerStore {
             .transactions
             .into_iter()
             .find(|enc_tx| enc_tx.hash().0 == tx_hash))
+    }
+
+    pub fn get_events_for_block(&self, block_id: u64) -> Result<Option<Vec<TxEvents>>> {
+        Ok(self.dbio.get_block_events(block_id)?)
+    }
+
+    pub fn get_events_range(&self, from: u64, to: u64) -> Result<Vec<(u64, Vec<TxEvents>)>> {
+        Ok(self.dbio.get_block_events_range(from, to)?)
+    }
+
+    pub fn get_events_by_tx_hash(&self, tx_hash: [u8; 32]) -> Result<Option<(u64, TxEvents)>> {
+        let Some(block_id) = self.dbio.get_block_id_by_tx_hash(tx_hash)? else {
+            return Ok(None);
+        };
+        let Some(groups) = self.dbio.get_block_events(block_id)? else {
+            return Ok(None);
+        };
+        Ok(groups
+            .into_iter()
+            .find(|group| group.tx_hash.0 == tx_hash)
+            .map(|group| (block_id, group)))
     }
 
     pub fn get_block_by_hash(&self, hash: [u8; 32]) -> Result<Option<Block>> {
@@ -249,18 +270,23 @@ impl IndexerStore {
 
         // TODO: we use scratch state to be atomic, but need to revisit how expensive a clone is
         let mut scratch = self.current_state.read().await.clone();
-        if let Err(err) = apply_block_to_state(block, &mut scratch) {
-            if err.is_retryable() {
-                return Ok(AcceptOutcome::RetryableFailure(err));
+        // The events come from the same application that produced `scratch`, and are
+        // written in the same `put_block` batch as the block and that state.
+        let events = match apply_block_to_state(block, &mut scratch) {
+            Ok(events) => events,
+            Err(err) => {
+                if err.is_retryable() {
+                    return Ok(AcceptOutcome::RetryableFailure(err));
+                }
+                self.record_stall(Some(&block.header), l1_slot, err.clone())?;
+                return Ok(AcceptOutcome::Parked(err));
             }
-            self.record_stall(Some(&block.header), l1_slot, err.clone())?;
-            return Ok(AcceptOutcome::Parked(err));
-        }
+        };
 
         let mut stored = block.clone();
         stored.bedrock_status = BedrockStatus::Finalized;
         self.dbio
-            .put_block(&stored, [0_u8; 32], l1_slot.into_inner(), &scratch, &[])
+            .put_block(&stored, [0_u8; 32], l1_slot.into_inner(), &scratch, &events)
             .context("Failed to persist accepted block")?;
 
         // Commit in-memory state (infallible) only after the DB write succeeded.
@@ -345,10 +371,82 @@ mod stall_reason_tests {
 #[cfg(test)]
 mod tests {
     use common::test_utils::{create_transaction_native_token_transfer, produce_dummy_block};
+    use lee_core::program::{InstructionData, ProgramEvent, ProgramId};
     use tempfile::tempdir;
     use testnet_initial_state::initial_pub_accounts_private_keys;
 
     use super::*;
+
+    // Host-side mirror of the `event_emitter` test guest's instruction.
+    #[derive(serde::Serialize)]
+    struct EmitterInstruction {
+        events: Vec<ProgramEvent>,
+        chain: Vec<(ProgramId, InstructionData)>,
+    }
+
+    fn emitted(n: u8) -> ProgramEvent {
+        ProgramEvent {
+            selector: [n; 8],
+            data: vec![n; 4],
+        }
+    }
+
+    fn deploy_emitter_tx() -> LeeTransaction {
+        LeeTransaction::ProgramDeployment(lee::ProgramDeploymentTransaction::new(
+            lee::program_deployment_transaction::Message::new(
+                test_methods::EVENT_EMITTER_ELF.to_vec(),
+            ),
+        ))
+    }
+
+    fn invoke_emitter_tx(events: Vec<ProgramEvent>) -> LeeTransaction {
+        let message = lee::public_transaction::Message::try_new(
+            test_methods::EVENT_EMITTER_ID,
+            vec![AccountId::new([42; 32])],
+            vec![],
+            EmitterInstruction {
+                events,
+                chain: vec![],
+            },
+        )
+        .expect("emitter instruction serializes");
+        let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[]);
+        LeeTransaction::Public(lee::PublicTransaction::new(message, witness_set))
+    }
+
+    // Chains genesis, a block deploying the emitter guest, and a block invoking it;
+    // returns the invoking transaction's hash.
+    async fn seed_emitted_events(store: &IndexerStore) -> common::HashType {
+        let genesis = produce_dummy_block(1, None, vec![]);
+        let mut prev_hash = genesis.header.hash;
+        assert!(matches!(
+            store.accept_block(&genesis, Slot::from(0)).await.unwrap(),
+            AcceptOutcome::Applied
+        ));
+
+        let deploy_block = produce_dummy_block(2, Some(prev_hash), vec![deploy_emitter_tx()]);
+        prev_hash = deploy_block.header.hash;
+        assert!(matches!(
+            store
+                .accept_block(&deploy_block, Slot::from(0))
+                .await
+                .unwrap(),
+            AcceptOutcome::Applied
+        ));
+
+        let invoke = invoke_emitter_tx(vec![emitted(0), emitted(1)]);
+        let invoke_hash = invoke.hash();
+        let invoke_block = produce_dummy_block(3, Some(prev_hash), vec![invoke]);
+        assert!(matches!(
+            store
+                .accept_block(&invoke_block, Slot::from(0))
+                .await
+                .unwrap(),
+            AcceptOutcome::Applied
+        ));
+
+        invoke_hash
+    }
 
     #[test]
     fn correct_startup() {
@@ -443,6 +541,103 @@ mod tests {
             9920
         );
         assert_eq!(store.account_state_at_block(&to, 9).unwrap().balance, 20080);
+    }
+
+    #[tokio::test]
+    async fn accept_block_captures_emitted_events() {
+        let home = tempdir().unwrap();
+        let store = IndexerStore::open_db(home.as_ref(), Vec::new()).unwrap();
+
+        let invoke_hash = seed_emitted_events(&store).await;
+
+        let groups = store
+            .get_events_for_block(3)
+            .unwrap()
+            .expect("invoking block must have an events row");
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].tx_index, 0);
+        assert_eq!(groups[0].tx_hash, invoke_hash);
+
+        let events = &groups[0].events;
+        assert_eq!(events.len(), 2);
+        assert!(
+            events
+                .iter()
+                .all(|event| event.program_id == test_methods::EVENT_EMITTER_ID)
+        );
+        assert_eq!(events[0].event, emitted(0));
+        assert_eq!(events[1].event, emitted(1));
+
+        // The deploying block and genesis emit nothing, so the range holds only block 3.
+        assert_eq!(
+            store.get_events_range(1, 3).unwrap(),
+            vec![(3, groups.clone())]
+        );
+
+        let (block_id, group) = store
+            .get_events_by_tx_hash(invoke_hash.0)
+            .unwrap()
+            .expect("tx-hash lookup must find the group");
+        assert_eq!(block_id, 3);
+        assert_eq!(group, groups[0]);
+    }
+
+    #[tokio::test]
+    async fn events_survive_store_reopen() {
+        let home = tempdir().unwrap();
+        let invoke_hash = {
+            let store = IndexerStore::open_db(home.as_ref(), Vec::new()).unwrap();
+            seed_emitted_events(&store).await
+        }; // drop releases the RocksDB lock
+
+        // Reopening replays state from the breakpoints; the events rows must be untouched.
+        let store = IndexerStore::open_db(home.as_ref(), Vec::new()).unwrap();
+        let groups = store
+            .get_events_for_block(3)
+            .unwrap()
+            .expect("events must survive reopen");
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].tx_hash, invoke_hash);
+        assert_eq!(groups[0].events.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn reaccepting_applied_block_does_not_duplicate_events() {
+        let home = tempdir().unwrap();
+        let store = IndexerStore::open_db(home.as_ref(), Vec::new()).unwrap();
+
+        seed_emitted_events(&store).await;
+        let before = store.get_events_for_block(3).unwrap().unwrap();
+
+        let replayed = store.get_block_at_id(3).unwrap().unwrap();
+        assert!(matches!(
+            store.accept_block(&replayed, Slot::from(0)).await.unwrap(),
+            AcceptOutcome::AlreadyApplied
+        ));
+
+        assert_eq!(store.get_events_for_block(3).unwrap().unwrap(), before);
+    }
+
+    #[tokio::test]
+    async fn blocks_without_events_have_no_row() {
+        let home = tempdir().unwrap();
+        let store = IndexerStore::open_db(home.as_ref(), Vec::new()).unwrap();
+
+        let initial_accounts = initial_pub_accounts_private_keys();
+        let from = initial_accounts[0].account_id;
+        let to = initial_accounts[1].account_id;
+        let sign_key = initial_accounts[0].pub_sign_key.clone();
+
+        let genesis = produce_dummy_block(1, None, vec![]);
+        store.accept_block(&genesis, Slot::from(0)).await.unwrap();
+
+        let tx = create_transaction_native_token_transfer(from, 0, to, 10, &sign_key);
+        let block = produce_dummy_block(2, Some(genesis.header.hash), vec![tx]);
+        store.accept_block(&block, Slot::from(0)).await.unwrap();
+
+        assert_eq!(store.get_events_for_block(1).unwrap(), None);
+        assert_eq!(store.get_events_for_block(2).unwrap(), None);
+        assert!(store.get_events_range(1, 2).unwrap().is_empty());
     }
 }
 
