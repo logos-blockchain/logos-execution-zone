@@ -75,6 +75,50 @@ fn insert_program() {
 }
 
 #[test]
+fn insert_program_makes_program_commitment_provable() {
+    let mut state = V03State::new();
+    let program_to_insert = crate::test_methods::simple_balance_transfer();
+    let commitment = ProgramCommitment::new(program_to_insert.id());
+    assert!(
+        state
+            .get_proof_for_program_commitment(&commitment)
+            .is_none()
+    );
+
+    state.insert_program(program_to_insert);
+
+    assert!(
+        state
+            .get_proof_for_program_commitment(&commitment)
+            .is_some(),
+        "the inserted program's commitment should be provable"
+    );
+}
+
+#[test]
+fn program_deployment_transaction_makes_program_commitment_provable() {
+    let mut state = V03State::new();
+    let bytecode = crate::test_methods::simple_balance_transfer()
+        .elf()
+        .to_vec();
+    let message = crate::program_deployment_transaction::Message::new(bytecode);
+    let tx = crate::program_deployment_transaction::ProgramDeploymentTransaction::new(message);
+
+    state
+        .transition_from_program_deployment_transaction(&tx)
+        .expect("a fresh program deployment should succeed");
+
+    let program_id = crate::test_methods::simple_balance_transfer().id();
+    let commitment = ProgramCommitment::new(program_id);
+    assert!(
+        state
+            .get_proof_for_program_commitment(&commitment)
+            .is_some(),
+        "the deployed program's commitment should be provable"
+    );
+}
+
+#[test]
 fn get_account_by_account_id_non_default_account() {
     let key = PrivateKey::try_new([1; 32]).unwrap();
     let account_id = AccountId::from(&PublicKey::new_from_private_key(&key));

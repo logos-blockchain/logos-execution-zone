@@ -3,7 +3,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     BlockId, Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, MembershipProof, Nullifier,
-    Timestamp,
+    ProgramCommitment, Timestamp,
     account::{Account, AccountId},
     program::ProgramId,
 };
@@ -67,6 +67,60 @@ impl CommitmentSet {
     }
 }
 
+/// Merkle tree of `ProgramCommitment`s, appended to on every program-deployment transaction.
+/// Phase 1 of the program-upgrade proposal (`upgrade_proposal.md`) — see `ProgramCommitment`'s
+/// own doc comment for the bootstrap definition currently in use. Mirrors `CommitmentSet`'s
+/// shape; doesn't need a `root_history` the way `CommitmentSet` does, since nothing currently
+/// checks program-commitment proofs against a historical root (that lands with the
+/// privacy-preserving circuit integration in Phase 1 PR 2).
+#[cfg_attr(test, derive(Debug))]
+#[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct ProgramCommitmentDigest {
+    merkle_tree: MerkleTree,
+    commitments: HashMap<ProgramCommitment, usize>,
+}
+
+impl ProgramCommitmentDigest {
+    pub(crate) fn digest(&self) -> [u8; 32] {
+        self.merkle_tree.root()
+    }
+
+    /// Queries the `ProgramCommitmentDigest` for a membership proof of a program commitment.
+    pub fn get_proof_for(&self, commitment: &ProgramCommitment) -> Option<MembershipProof> {
+        let index = *self.commitments.get(commitment)?;
+
+        self.merkle_tree
+            .get_authentication_path_for(index)
+            .map(|path| (index, path))
+    }
+
+    /// All committed `ProgramCommitment` values, in unspecified (`HashMap` iteration) order.
+    /// For an order-independent view — e.g. for hashing into `genesis_fingerprint` — sort the
+    /// result first; the Merkle root from `digest()` is insertion-order-dependent and not
+    /// suitable for that on its own.
+    pub(crate) fn commitments(&self) -> impl Iterator<Item = &ProgramCommitment> {
+        self.commitments.keys()
+    }
+
+    /// Inserts a list of program commitments to the `ProgramCommitmentDigest`.
+    pub(crate) fn extend(&mut self, commitments: &[ProgramCommitment]) {
+        for commitment in commitments.iter().copied() {
+            let index = self.merkle_tree.insert(commitment.to_byte_array());
+            self.commitments.insert(commitment, index);
+        }
+    }
+
+    /// Initializes an empty `ProgramCommitmentDigest` with a given capacity.
+    /// If the capacity is not a `power_of_two`, then capacity is taken
+    /// to be the next `power_of_two`.
+    pub(crate) fn with_capacity(capacity: usize) -> Self {
+        Self {
+            merkle_tree: MerkleTree::with_capacity(capacity),
+            commitments: HashMap::new(),
+        }
+    }
+}
+
 #[cfg_attr(test, derive(Debug))]
 #[derive(Clone, PartialEq, Eq)]
 struct NullifierSet(BTreeSet<Nullifier>);
@@ -115,6 +169,7 @@ pub struct V03State {
     public_state: HashMap<AccountId, Account>,
     private_state: (CommitmentSet, NullifierSet),
     programs: HashMap<ProgramId, Program>,
+    program_commitments: ProgramCommitmentDigest,
 }
 
 impl Default for V03State {
@@ -128,6 +183,7 @@ impl Default for V03State {
             public_state: HashMap::default(),
             private_state,
             programs: HashMap::default(),
+            program_commitments: ProgramCommitmentDigest::with_capacity(32),
         }
     }
 }
@@ -196,7 +252,14 @@ impl V03State {
     }
 
     pub(crate) fn insert_program(&mut self, program: Program) {
+        let program_id = program.id();
         self.programs.insert(program.id(), program);
+        self.append_new_program_commitment(program_id);
+    }
+
+    pub(crate) fn append_new_program_commitment(&mut self, program_id: ProgramId) {
+        let commitment = ProgramCommitment::new(program_id);
+        self.program_commitments.extend(&[commitment]);
     }
 
     pub fn apply_state_diff(&mut self, diff: ValidatedStateDiff) {
@@ -290,8 +353,22 @@ impl V03State {
         self.private_state.0.digest()
     }
 
+    #[must_use]
+    pub fn get_proof_for_program_commitment(
+        &self,
+        commitment: &ProgramCommitment,
+    ) -> Option<MembershipProof> {
+        self.program_commitments.get_proof_for(commitment)
+    }
+
+    #[must_use]
+    pub fn program_commitment_digest(&self) -> [u8; 32] {
+        self.program_commitments.digest()
+    }
+
     /// Order-independent fingerprint of the genesis-relevant state: the public
-    /// account set, the deployed program set, and the commitment-set digest.
+    /// account set, the deployed program set, the deployed programs' commitments, and the
+    /// private commitment-set digest.
     ///
     /// The sequencer and the indexer build the directly-seeded part of genesis
     /// (base builtins plus any directly-seeded accounts) separately from their own
@@ -309,6 +386,7 @@ impl V03State {
             public_state,
             private_state,
             programs,
+            program_commitments,
         } = self;
 
         let mut accounts: Vec<(&AccountId, &Account)> = public_state.iter().collect();
@@ -317,8 +395,21 @@ impl V03State {
         let mut program_ids: Vec<ProgramId> = programs.keys().copied().collect();
         program_ids.sort_unstable();
 
+        // `program_commitments.digest()` is a Merkle root and therefore
+        // insertion-order-dependent — hashing it directly here would make this
+        // supposedly order-independent fingerprint depend on program *registration*
+        // order, not just the resulting set. Sort the individual commitment values
+        // instead, the same way `program_ids` is sorted above.
+        let mut program_commitment_bytes: Vec<[u8; 32]> = program_commitments
+            .commitments()
+            .map(ProgramCommitment::to_byte_array)
+            .collect();
+        program_commitment_bytes.sort_unstable();
+
         let account_count = u64::try_from(accounts.len()).expect("account count fits in u64");
         let program_count = u64::try_from(program_ids.len()).expect("program count fits in u64");
+        let program_commitment_count = u64::try_from(program_commitment_bytes.len())
+            .expect("program commitment count fits in u64");
 
         let mut hasher = Sha256::new();
         hasher.update(account_count.to_le_bytes());
@@ -334,6 +425,10 @@ impl V03State {
             for word in id {
                 hasher.update(word.to_le_bytes());
             }
+        }
+        hasher.update(program_commitment_count.to_le_bytes());
+        for commitment_bytes in program_commitment_bytes {
+            hasher.update(commitment_bytes);
         }
         hasher.update(private_state.0.digest());
 

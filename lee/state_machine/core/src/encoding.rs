@@ -11,7 +11,7 @@ use crate::encryption::{EphemeralPublicKey, ML_KEM_768_CIPHERTEXT_LEN};
 #[cfg(feature = "host")]
 use crate::error::LeeCoreError;
 use crate::{
-    Commitment, NullifierPublicKey,
+    Commitment, NullifierPublicKey, ProgramCommitment,
     account::{Account, AccountId},
     encryption::Ciphertext,
 };
@@ -92,6 +92,19 @@ impl NullifierPublicKey {
     #[must_use]
     pub const fn to_byte_array(&self) -> [u8; 32] {
         self.0
+    }
+}
+
+impl ProgramCommitment {
+    #[must_use]
+    pub const fn to_byte_array(&self) -> [u8; 32] {
+        self.0
+    }
+
+    #[cfg(feature = "host")]
+    #[must_use]
+    pub const fn from_byte_array(bytes: [u8; 32]) -> Self {
+        Self(bytes)
     }
 }
 

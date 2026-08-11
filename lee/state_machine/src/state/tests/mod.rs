@@ -8,8 +8,8 @@ use std::collections::HashMap;
 
 use lee_core::{
     AuthorizationSecretKey, BlockId, Commitment, DUMMY_COMMITMENT_HASH, InputAccountIdentity,
-    Nullifier, NullifierPublicKey, NullifierSecretKey, NullifierWitness, PrivateWitness, Timestamp,
-    WitnessKind,
+    Nullifier, NullifierPublicKey, NullifierSecretKey, NullifierWitness, PrivateWitness,
+    ProgramCommitment, Timestamp, WitnessKind,
     account::{Account, AccountId, AccountWithMetadata, Nonce, data::Data},
     encryption::ViewingPublicKey,
     program::{
