@@ -5,9 +5,10 @@
 use common::{
     HashType,
     block::{Block, BlockMeta},
-    transaction::{LeeTransaction, clock_invocation},
+    transaction::{LeeTransaction, TxEvents, clock_invocation},
 };
 use lee::{GENESIS_BLOCK_ID, V03State};
+use lee_core::program::TransactionEvent;
 
 use crate::ingest_error::BlockIngestError;
 
@@ -122,27 +123,31 @@ pub fn validate_against_tip(tip: Option<&Tip>, block: &Block) -> Result<(), Bloc
 /// Applies a block's transactions to `state`, mapping every failure to a
 /// [`BlockIngestError`] so the caller can park rather than crash. Operates in
 /// place; the caller commits only on `Ok`.
-pub fn apply_block_to_state(block: &Block, state: &mut V03State) -> Result<(), BlockIngestError> {
-    let (clock_tx, user_txs) = block
+pub fn apply_block_to_state(
+    block: &Block,
+    state: &mut V03State,
+) -> Result<Vec<TxEvents>, BlockIngestError> {
+    let (clock_entry, user_txs) = block
         .body
         .transactions
         .split_last()
         .ok_or(BlockIngestError::EmptyBlock)?;
 
-    let LeeTransaction::Public(clock_tx) = clock_tx else {
+    let LeeTransaction::Public(clock_tx) = clock_entry else {
         return Err(BlockIngestError::InvalidClockTransaction);
     };
     if *clock_tx != clock_invocation(block.header.timestamp) {
         return Err(BlockIngestError::InvalidClockTransaction);
     }
 
+    let mut block_events = Vec::new();
     let is_genesis = block.header.block_id == GENESIS_BLOCK_ID;
     for (tx_index, transaction) in user_txs.iter().enumerate() {
         let state_transition = |err: anyhow::Error| BlockIngestError::StateTransition {
             tx_index: tx_index.try_into().expect("tx index fits in u64"),
             reason: format!("{err:#}"),
         };
-        if is_genesis {
+        let events = if is_genesis {
             let LeeTransaction::Public(public_tx) = transaction else {
                 return Err(BlockIngestError::NonPublicGenesisTransaction);
             };
@@ -152,23 +157,42 @@ pub fn apply_block_to_state(block: &Block, state: &mut V03State) -> Result<(), B
                     block.header.block_id,
                     block.header.timestamp,
                 )
-                .map_err(|err| state_transition(err.into()))?;
+                .map_err(|err| state_transition(err.into()))?
         } else {
-            transaction
+            let (_, events) = transaction
                 .clone()
                 .execute_on_state(state, block.header.block_id, block.header.timestamp)
                 .map_err(|err| state_transition(err.into()))?;
-        }
+            events
+        };
+        collect_tx_events(&mut block_events, tx_index, transaction, events);
     }
 
-    state
+    let clock_events = state
         .transition_from_public_transaction(clock_tx, block.header.block_id, block.header.timestamp)
         .map_err(|err| BlockIngestError::StateTransition {
             tx_index: user_txs.len().try_into().expect("tx index fits in u64"),
             reason: format!("{:#}", anyhow::Error::from(err)),
         })?;
+    collect_tx_events(&mut block_events, user_txs.len(), clock_entry, clock_events);
 
-    Ok(())
+    Ok(block_events)
+}
+
+fn collect_tx_events(
+    block_events: &mut Vec<TxEvents>,
+    tx_index: usize,
+    transaction: &LeeTransaction,
+    events: Vec<TransactionEvent>,
+) {
+    if events.is_empty() {
+        return;
+    }
+    block_events.push(TxEvents {
+        tx_index: tx_index.try_into().expect("tx index fits in u32"),
+        tx_hash: transaction.hash(),
+        events,
+    });
 }
 
 #[cfg(test)]

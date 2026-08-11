@@ -1,6 +1,6 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee::{AccountId, V03State, ValidatedStateDiff};
-use lee_core::{BlockId, Timestamp};
+use lee_core::{BlockId, Timestamp, program::TransactionEvent};
 use log::warn;
 use serde::{Deserialize, Serialize};
 
@@ -147,12 +147,12 @@ impl LeeTransaction {
         state: &mut V03State,
         block_id: BlockId,
         timestamp: Timestamp,
-    ) -> Result<Self, lee::error::LeeError> {
+    ) -> Result<(Self, Vec<TransactionEvent>), lee::error::LeeError> {
         let diff = self
             .compute_state_diff(state, block_id, timestamp)
             .inspect_err(|err| warn!("Error at transition {err:#?}"))?;
-        drop(state.apply_state_diff(diff));
-        Ok(self)
+        let events = state.apply_state_diff(diff);
+        Ok((self, events))
     }
 
     fn validate_bridge_account_modification(
@@ -225,6 +225,13 @@ pub enum TransactionMalformationError {
     FailedToDecode { tx: HashType },
     #[error("Transaction size {size} exceeds maximum allowed size of {max} bytes")]
     TransactionTooLarge { size: usize, max: usize },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct TxEvents {
+    pub tx_index: u32,
+    pub tx_hash: HashType,
+    pub events: Vec<TransactionEvent>,
 }
 
 /// Returns the canonical Clock Program invocation transaction for the given block timestamp.
