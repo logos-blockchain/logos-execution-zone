@@ -38,6 +38,8 @@ pub const BLOCK_HASH_CELL_NAME: &str = "block hash";
 pub const TX_HASH_CELL_NAME: &str = "tx hash";
 /// Cell name for a account number of transactions.
 pub const ACC_NUM_CELL_NAME: &str = "acc id";
+/// Cell name for the events emitted by a block's transactions.
+pub const BLOCK_EVENTS_CELL_NAME: &str = "block events";
 
 /// Name of breakpoint column family.
 pub const CF_BREAKPOINT_NAME: &str = "cf_breakpoint";
@@ -49,6 +51,8 @@ pub const CF_TX_TO_ID: &str = "cf_tx_to_id";
 pub const CF_ACC_META: &str = "cf_acc_meta";
 /// Name of account id to tx hash map column family.
 pub const CF_ACC_TO_TX: &str = "cf_acc_to_tx";
+/// Name of per-block events column family.
+pub const CF_EVENTS: &str = "cf_events";
 
 pub struct RocksDBIO {
     pub db: DBWithThreadMode<MultiThreaded>,
@@ -73,6 +77,7 @@ impl RocksDBIO {
         let cftti = ColumnFamilyDescriptor::new(CF_TX_TO_ID, cf_opts.clone());
         let cfameta = ColumnFamilyDescriptor::new(CF_ACC_META, cf_opts.clone());
         let cfatt = ColumnFamilyDescriptor::new(CF_ACC_TO_TX, cf_opts.clone());
+        let cfevents = ColumnFamilyDescriptor::new(CF_EVENTS, cf_opts.clone());
 
         let mut db_opts = Options::default();
         db_opts.create_missing_column_families(true);
@@ -80,7 +85,16 @@ impl RocksDBIO {
         let db = DBWithThreadMode::<MultiThreaded>::open_cf_descriptors(
             &db_opts,
             path,
-            vec![cfb, cfmeta, cfbreakpoint, cfhti, cftti, cfameta, cfatt],
+            vec![
+                cfb,
+                cfmeta,
+                cfbreakpoint,
+                cfhti,
+                cftti,
+                cfameta,
+                cfatt,
+                cfevents,
+            ],
         )
         .map_err(|err| DbError::RocksDbError {
             error: err,
@@ -139,6 +153,12 @@ impl RocksDBIO {
         self.db
             .cf_handle(CF_ACC_TO_TX)
             .expect("Account id to tx map column should exist")
+    }
+
+    pub fn events_column(&self) -> Arc<BoundColumnFamily<'_>> {
+        self.db
+            .cf_handle(CF_EVENTS)
+            .expect("Events column should exist")
     }
 
     pub fn account_meta_column(&self) -> Arc<BoundColumnFamily<'_>> {

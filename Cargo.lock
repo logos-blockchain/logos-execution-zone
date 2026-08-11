@@ -11752,6 +11752,7 @@ dependencies = [
  "borsh",
  "common",
  "lee",
+ "lee_core",
  "log",
  "programs",
  "rocksdb",

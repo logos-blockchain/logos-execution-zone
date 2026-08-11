@@ -1,4 +1,4 @@
-use common::test_utils::produce_dummy_block;
+use common::{test_utils::produce_dummy_block, transaction::TxEvents};
 use lee::{Account, AccountId, PublicKey};
 use tempfile::tempdir;
 
@@ -87,7 +87,7 @@ fn one_block_insertion() {
     let dbio = RocksDBIO::open_or_create(temdir_path, &initial_state).unwrap();
 
     let genesis_block = genesis_block();
-    dbio.put_block(&genesis_block, [0; 32], 0, &initial_state)
+    dbio.put_block(&genesis_block, [0; 32], 0, &initial_state, &[])
         .unwrap();
 
     let prev_hash = genesis_block.header.hash;
@@ -99,7 +99,8 @@ fn one_block_insertion() {
         common::test_utils::create_transaction_native_token_transfer(from, 0, to, 1, &sign_key);
     let block = produce_dummy_block(2, Some(prev_hash), vec![transfer_tx]);
 
-    dbio.put_block(&block, [1; 32], 0, &initial_state).unwrap();
+    dbio.put_block(&block, [1; 32], 0, &initial_state, &[])
+        .unwrap();
 
     let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
     let first_id = dbio.get_meta_first_block_id_in_db().unwrap();
@@ -138,17 +139,17 @@ fn put_block_records_tip_inscription_slot() {
     assert_eq!(dbio.get_meta_tip_slot_in_db().unwrap(), None);
 
     let genesis_block = genesis_block();
-    dbio.put_block(&genesis_block, [0; 32], 1_000, &initial_state)
+    dbio.put_block(&genesis_block, [0; 32], 1_000, &initial_state, &[])
         .unwrap();
     assert_eq!(dbio.get_meta_tip_slot_in_db().unwrap(), Some(1_000));
 
     let block = produce_dummy_block(2, Some(genesis_block.header.hash), vec![]);
-    dbio.put_block(&block, [1; 32], 1_005, &initial_state)
+    dbio.put_block(&block, [1; 32], 1_005, &initial_state, &[])
         .unwrap();
     assert_eq!(dbio.get_meta_tip_slot_in_db().unwrap(), Some(1_005));
 
     // Re-inserting a block at/below the tip must not move the tip slot.
-    dbio.put_block(&genesis_block, [0; 32], 1_010, &initial_state)
+    dbio.put_block(&genesis_block, [0; 32], 1_010, &initial_state, &[])
         .unwrap();
     assert_eq!(dbio.get_meta_tip_slot_in_db().unwrap(), Some(1_005));
 }
@@ -182,7 +183,8 @@ fn put_block_stores_breakpoint_in_same_batch() {
         );
         let block = produce_dummy_block(i.into(), prev_hash, vec![transfer_tx]);
 
-        dbio.put_block(&block, [i; 32], 0, &initial_state).unwrap();
+        dbio.put_block(&block, [i; 32], 0, &initial_state, &[])
+            .unwrap();
     }
 
     let bp1 = dbio.get_breakpoint(1).unwrap();
@@ -221,7 +223,8 @@ fn state_replay_falls_back_over_missing_breakpoints() {
             &sign_key,
         );
         let block = produce_dummy_block(i, prev_hash, vec![transfer_tx]);
-        dbio.put_block(&block, [0; 32], 0, &initial_state).unwrap();
+        dbio.put_block(&block, [0; 32], 0, &initial_state, &[])
+            .unwrap();
     }
 
     // Simulate a store whose boundary snapshot was lost (#605).
@@ -256,7 +259,8 @@ fn simple_maps() {
 
     let control_hash1 = block.header.hash;
 
-    dbio.put_block(&block, [1; 32], 0, &initial_state).unwrap();
+    dbio.put_block(&block, [1; 32], 0, &initial_state, &[])
+        .unwrap();
 
     let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
     let last_block = dbio.get_block(last_id).unwrap().unwrap();
@@ -268,7 +272,8 @@ fn simple_maps() {
 
     let control_hash2 = block.header.hash;
 
-    dbio.put_block(&block, [2; 32], 0, &initial_state).unwrap();
+    dbio.put_block(&block, [2; 32], 0, &initial_state, &[])
+        .unwrap();
 
     let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
     let last_block = dbio.get_block(last_id).unwrap().unwrap();
@@ -280,7 +285,8 @@ fn simple_maps() {
     let control_tx_hash1 = transfer_tx.hash();
 
     let block = produce_dummy_block(3, Some(prev_hash), vec![transfer_tx]);
-    dbio.put_block(&block, [3; 32], 0, &initial_state).unwrap();
+    dbio.put_block(&block, [3; 32], 0, &initial_state, &[])
+        .unwrap();
 
     let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
     let last_block = dbio.get_block(last_id).unwrap().unwrap();
@@ -292,7 +298,8 @@ fn simple_maps() {
     let control_tx_hash2 = transfer_tx.hash();
 
     let block = produce_dummy_block(4, Some(prev_hash), vec![transfer_tx]);
-    dbio.put_block(&block, [4; 32], 0, &initial_state).unwrap();
+    dbio.put_block(&block, [4; 32], 0, &initial_state, &[])
+        .unwrap();
 
     let control_block_id1 = dbio.get_block_id_by_hash(control_hash1.0).unwrap().unwrap();
     let control_block_id2 = dbio.get_block_id_by_hash(control_hash2.0).unwrap().unwrap();
@@ -330,7 +337,8 @@ fn block_batch() {
     let block = produce_dummy_block(1, None, vec![transfer_tx]);
 
     block_res.push(block.clone());
-    dbio.put_block(&block, [1; 32], 0, &initial_state).unwrap();
+    dbio.put_block(&block, [1; 32], 0, &initial_state, &[])
+        .unwrap();
 
     let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
     let last_block = dbio.get_block(last_id).unwrap().unwrap();
@@ -341,7 +349,8 @@ fn block_batch() {
     let block = produce_dummy_block(2, Some(prev_hash), vec![transfer_tx]);
 
     block_res.push(block.clone());
-    dbio.put_block(&block, [2; 32], 0, &initial_state).unwrap();
+    dbio.put_block(&block, [2; 32], 0, &initial_state, &[])
+        .unwrap();
 
     let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
     let last_block = dbio.get_block(last_id).unwrap().unwrap();
@@ -352,7 +361,8 @@ fn block_batch() {
 
     let block = produce_dummy_block(3, Some(prev_hash), vec![transfer_tx]);
     block_res.push(block.clone());
-    dbio.put_block(&block, [3; 32], 0, &initial_state).unwrap();
+    dbio.put_block(&block, [3; 32], 0, &initial_state, &[])
+        .unwrap();
 
     let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
     let last_block = dbio.get_block(last_id).unwrap().unwrap();
@@ -363,7 +373,8 @@ fn block_batch() {
 
     let block = produce_dummy_block(4, Some(prev_hash), vec![transfer_tx]);
     block_res.push(block.clone());
-    dbio.put_block(&block, [4; 32], 0, &initial_state).unwrap();
+    dbio.put_block(&block, [4; 32], 0, &initial_state, &[])
+        .unwrap();
 
     let block_hashes_mem: Vec<[u8; 32]> =
         block_res.into_iter().map(|bl| bl.header.hash.0).collect();
@@ -423,7 +434,8 @@ fn account_map() {
 
     let block = produce_dummy_block(1, None, vec![transfer_tx1, transfer_tx2]);
 
-    dbio.put_block(&block, [1; 32], 0, &initial_state).unwrap();
+    dbio.put_block(&block, [1; 32], 0, &initial_state, &[])
+        .unwrap();
 
     let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
     let last_block = dbio.get_block(last_id).unwrap().unwrap();
@@ -438,7 +450,8 @@ fn account_map() {
 
     let block = produce_dummy_block(2, Some(prev_hash), vec![transfer_tx1, transfer_tx2]);
 
-    dbio.put_block(&block, [2; 32], 0, &initial_state).unwrap();
+    dbio.put_block(&block, [2; 32], 0, &initial_state, &[])
+        .unwrap();
 
     let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
     let last_block = dbio.get_block(last_id).unwrap().unwrap();
@@ -453,7 +466,8 @@ fn account_map() {
 
     let block = produce_dummy_block(3, Some(prev_hash), vec![transfer_tx1, transfer_tx2]);
 
-    dbio.put_block(&block, [3; 32], 0, &initial_state).unwrap();
+    dbio.put_block(&block, [3; 32], 0, &initial_state, &[])
+        .unwrap();
 
     let last_id = dbio.get_meta_last_block_id_in_db().unwrap().unwrap();
     let last_block = dbio.get_block(last_id).unwrap().unwrap();
@@ -465,7 +479,8 @@ fn account_map() {
 
     let block = produce_dummy_block(4, Some(prev_hash), vec![transfer_tx]);
 
-    dbio.put_block(&block, [4; 32], 0, &initial_state).unwrap();
+    dbio.put_block(&block, [4; 32], 0, &initial_state, &[])
+        .unwrap();
 
     let acc1_tx = dbio.get_acc_transactions(*acc1().value(), 0, 7).unwrap();
     let acc1_tx_hashes: Vec<[u8; 32]> = acc1_tx.into_iter().map(|tx| tx.hash().0).collect();
@@ -489,4 +504,102 @@ fn reopen_preserves_seeded_breakpoint() {
     } // drop releases the RocksDB lock
     let dbio = RocksDBIO::open_or_create(temp_dir.path(), &initial_state).unwrap();
     assert!(dbio.get_breakpoint_opt(0).unwrap().is_some());
+}
+
+fn tx_events_fixture(tx_index: u32, tx_hash: [u8; 32]) -> TxEvents {
+    TxEvents {
+        tx_index,
+        tx_hash: tx_hash.into(),
+        events: vec![
+            lee_core::program::TransactionEvent {
+                program_id: [7; 8],
+                event: lee_core::program::ProgramEvent {
+                    selector: [1; 8],
+                    data: vec![1, 2, 3],
+                },
+            },
+            lee_core::program::TransactionEvent {
+                program_id: [9; 8],
+                event: lee_core::program::ProgramEvent {
+                    selector: [2; 8],
+                    data: vec![],
+                },
+            },
+        ],
+    }
+}
+
+#[test]
+fn put_block_stores_events_in_same_batch() {
+    let initial_state = initial_state();
+    let temp_dir = tempdir().unwrap();
+    let dbio = RocksDBIO::open_or_create(temp_dir.path(), &initial_state).unwrap();
+
+    let block = genesis_block();
+    let events = vec![
+        tx_events_fixture(0, [11; 32]),
+        tx_events_fixture(3, [12; 32]),
+    ];
+
+    dbio.put_block(&block, [0; 32], 0, &initial_state, &events)
+        .unwrap();
+
+    // One put_block call makes both the block and its events readable.
+    assert!(dbio.get_block(1).unwrap().is_some());
+    assert_eq!(dbio.get_block_events(1).unwrap(), Some(events));
+}
+
+#[test]
+fn block_without_events_writes_no_row() {
+    let initial_state = initial_state();
+    let temp_dir = tempdir().unwrap();
+    let dbio = RocksDBIO::open_or_create(temp_dir.path(), &initial_state).unwrap();
+
+    dbio.put_block(&genesis_block(), [0; 32], 0, &initial_state, &[])
+        .unwrap();
+
+    assert!(dbio.get_block(1).unwrap().is_some());
+    assert_eq!(dbio.get_block_events(1).unwrap(), None);
+}
+
+#[test]
+fn get_block_events_is_none_for_unknown_block() {
+    let initial_state = initial_state();
+    let temp_dir = tempdir().unwrap();
+    let dbio = RocksDBIO::open_or_create(temp_dir.path(), &initial_state).unwrap();
+
+    assert_eq!(dbio.get_block_events(999).unwrap(), None);
+}
+
+#[test]
+fn get_block_events_range_skips_blocks_without_events() {
+    let initial_state = initial_state();
+    let temp_dir = tempdir().unwrap();
+    let dbio = RocksDBIO::open_or_create(temp_dir.path(), &initial_state).unwrap();
+
+    let mut prev_hash = None;
+    let mut expected = vec![];
+    for block_id in 1..=4_u64 {
+        let block = produce_dummy_block(block_id, prev_hash, vec![]);
+        prev_hash = Some(block.header.hash);
+
+        // Only odd blocks emit.
+        let events = if block_id.is_multiple_of(2) {
+            vec![]
+        } else {
+            vec![tx_events_fixture(0, [u8::try_from(block_id).unwrap(); 32])]
+        };
+        if !events.is_empty() {
+            expected.push((block_id, events.clone()));
+        }
+        dbio.put_block(&block, [0; 32], 0, &initial_state, &events)
+            .unwrap();
+    }
+
+    assert_eq!(dbio.get_block_events_range(1, 4).unwrap(), expected);
+    assert_eq!(
+        dbio.get_block_events_range(2, 2).unwrap(),
+        Vec::<(u64, Vec<TxEvents>)>::new()
+    );
+    assert_eq!(dbio.get_block_events_range(3, 3).unwrap(), expected[1..]);
 }

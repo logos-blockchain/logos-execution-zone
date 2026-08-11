@@ -1,11 +1,13 @@
+use common::transaction::TxEvents;
+
 use super::{Block, DbResult, RocksDBIO, V03State};
 use crate::{
     DBIO as _,
     cells::shared_cells::{BlockCell, FirstBlockCell, FirstBlockSetCell, LastBlockCell},
     indexer::indexer_cells::{
-        AccNumTxCell, BlockHashToBlockIdMapCell, BreakpointCellOwned, CrossZoneHaltCellOwned,
-        LastObservedL1LibHeaderCell, StallReasonCellOwned, TipSlotCell, TxHashToBlockIdMapCell,
-        ZoneSdkIndexerCursorCellOwned,
+        AccNumTxCell, BlockEventsCellOwned, BlockHashToBlockIdMapCell, BreakpointCellOwned,
+        CrossZoneHaltCellOwned, LastObservedL1LibHeaderCell, StallReasonCellOwned, TipSlotCell,
+        TxHashToBlockIdMapCell, ZoneSdkIndexerCursorCellOwned,
     },
 };
 
@@ -42,6 +44,11 @@ impl RocksDBIO {
     pub fn get_block(&self, block_id: u64) -> DbResult<Option<Block>> {
         self.get_opt::<BlockCell>(block_id)
             .map(|opt| opt.map(|val| val.0))
+    }
+
+    pub fn get_block_events(&self, block_id: u64) -> DbResult<Option<Vec<TxEvents>>> {
+        self.get_opt::<BlockEventsCellOwned>(block_id)
+            .map(|opt| opt.map(|cell| cell.0))
     }
 
     // State
