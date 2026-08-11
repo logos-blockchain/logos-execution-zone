@@ -177,7 +177,11 @@ impl From<Block> for HashableBlockData {
 
 #[cfg(test)]
 mod tests {
-    use crate::{HashType, block::HashableBlockData, test_utils};
+    use crate::{
+        HashType,
+        block::{Block, HashableBlockData},
+        test_utils,
+    };
 
     #[test]
     fn encoding_roundtrip() {
@@ -189,7 +193,7 @@ mod tests {
         assert_eq!(hashable, block_from_bytes);
     }
 
-    fn block_signed_by(key: &lee::PrivateKey) -> crate::block::Block {
+    fn block_signed_by(key: &lee::PrivateKey) -> Block {
         HashableBlockData {
             block_id: 5,
             prev_block_hash: HashType([9_u8; 32]),
