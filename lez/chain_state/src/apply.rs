@@ -123,6 +123,8 @@ pub fn validate_against_tip(tip: Option<&Tip>, block: &Block) -> Result<(), Bloc
 /// Applies a block's transactions to `state`, mapping every failure to a
 /// [`BlockIngestError`] so the caller can park rather than crash. Operates in
 /// place; the caller commits only on `Ok`.
+///
+/// On `Ok` also returns the vector of indexed transaction events in the emitted order.
 pub fn apply_block_to_state(
     block: &Block,
     state: &mut V03State,
@@ -147,6 +149,8 @@ pub fn apply_block_to_state(
             tx_index: tx_index.try_into().expect("tx index fits in u64"),
             reason: format!("{err:#}"),
         };
+
+        // Collect all events based on user-submitted transactions.
         let events = if is_genesis {
             let LeeTransaction::Public(public_tx) = transaction else {
                 return Err(BlockIngestError::NonPublicGenesisTransaction);
@@ -168,6 +172,10 @@ pub fn apply_block_to_state(
         collect_tx_events(&mut block_events, tx_index, transaction, events);
     }
 
+    // Collect all events connected to the clock program separately.
+    // NOTE: Currently clock program does not have any events.
+    // This future-proofs the design in case they are introduced and has no bearing
+    // on current semantics.
     let clock_events = state
         .transition_from_public_transaction(clock_tx, block.header.block_id, block.header.timestamp)
         .map_err(|err| BlockIngestError::StateTransition {
@@ -179,6 +187,8 @@ pub fn apply_block_to_state(
     Ok(block_events)
 }
 
+/// Function collecting all block events into a vector of transaction events
+/// with a stamp indicating which transaction emitted it.
 fn collect_tx_events(
     block_events: &mut Vec<TxEvents>,
     tx_index: usize,

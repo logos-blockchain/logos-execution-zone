@@ -142,6 +142,8 @@ impl LeeTransaction {
     ///
     /// The indexer replays blocks the sequencer already validated and inscribed on Bedrock,
     /// so it trusts those inscriptions and re-derives state without re-validating them.
+    ///
+    /// Alongside the state, returns a vector of events the transaction emitted.
     pub fn execute_on_state(
         self,
         state: &mut V03State,
@@ -227,10 +229,15 @@ pub enum TransactionMalformationError {
     TransactionTooLarge { size: usize, max: usize },
 }
 
+/// A struct encoding a vector of transaction events alongside a fingerprint of a
+/// transaction which emitted it relative to the block it was in.
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct TxEvents {
+    // Index of an emitting transaction in a block.
     pub tx_index: u32,
+    // Hash of the emitting transaction.
     pub tx_hash: HashType,
+    // Vector of events in the order of emission.
     pub events: Vec<TransactionEvent>,
 }
 
