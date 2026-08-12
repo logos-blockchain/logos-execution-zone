@@ -32,6 +32,10 @@ use sequencer_core::config::GenesisAction;
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 
+/// Genesis balance per generated account. Has to cover a real transaction fee (a transfer costs
+/// its bytes plus its metered cycles at 8 atomic units each), with ample headroom.
+const TPS_ACCOUNT_BALANCE: u128 = 1_000_000_000_000;
+
 pub(crate) struct TpsTestManager {
     public_keypairs: Vec<(PrivateKey, AccountId)>,
     target_tps: u64,
@@ -86,7 +90,12 @@ impl TpsTestManager {
                 vault_program_id,
                 vec![*account_id, owner_vault_id],
                 vec![Nonce(0_u128)],
-                vault_core::Instruction::Claim { amount: 10 },
+                // A *full* sweep: the claim is the ledger's bootstrap transaction and is
+                // fee-exempt only when it moves the vault's entire balance. A partial claim would
+                // be charged, and the account has nothing to pay with until this lands.
+                vault_core::Instruction::Claim {
+                    amount: TPS_ACCOUNT_BALANCE,
+                },
                 lee::FeeFields::ZERO,
             )
             .context("Failed to build vault claim message")?;
@@ -138,7 +147,8 @@ impl TpsTestManager {
                     [pair[0].1, pair[1].1].to_vec(),
                     [Nonce(1_u128)].to_vec(),
                     authenticated_transfer_core::Instruction::Transfer { amount },
-                    lee::FeeFields::ZERO,
+                    // The sender signs below, so it is fee-authorized for this exact message.
+                    common::test_utils::test_fee_fields(pair[0].1),
                 )
                 .unwrap();
                 let witness_set =
@@ -158,7 +168,7 @@ impl TpsTestManager {
             .iter()
             .map(|(_, account_id)| GenesisAction::SupplyAccount {
                 account_id: *account_id,
-                balance: 10,
+                balance: TPS_ACCOUNT_BALANCE,
             })
             .collect()
     }

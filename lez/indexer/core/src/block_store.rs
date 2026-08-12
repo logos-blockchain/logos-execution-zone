@@ -348,17 +348,106 @@ mod tests {
             ));
         }
 
-        assert_eq!(
-            store.account_current_state(&from).await.unwrap().balance,
-            9900
-        );
+        // The recipient is fee-free, so its balance is exact; the sender also paid ten fees.
         assert_eq!(
             store.account_current_state(&to).await.unwrap().balance,
-            20100
+            2_000_000_000_100
+        );
+        assert!(
+            store.account_current_state(&from).await.unwrap().balance < 1_000_000_000_000 - 100,
         );
         // Tip advanced to the last applied block; a clean run leaves no stall.
         assert_eq!(store.get_last_block_id().unwrap(), Some(11));
         assert!(store.get_stall_reason().unwrap().is_none());
+    }
+
+    /// The indexer's fee state must land byte for byte on the sequencer's, over a chain that
+    /// includes a **reverted** transaction — the case where the two could most easily diverge,
+    /// because a revert keeps its fee and its nonce advance while discarding its effects.
+    ///
+    /// Driven through the indexer's real `accept_block` (`RocksDB`, breakpoints, state
+    /// reconstruction) against a state built the way the sequencer builds one. Calling
+    /// `apply_block_to_state` twice and comparing the results would prove only that the function is
+    /// deterministic.
+    #[tokio::test]
+    async fn indexer_reproduces_the_sequencers_fee_state_across_a_revert() {
+        let home = tempdir().unwrap();
+        let store = IndexerStore::open_db(home.as_ref(), Vec::new()).unwrap();
+
+        let initial_accounts = initial_pub_accounts_private_keys();
+        let from = initial_accounts[0].account_id;
+        let to = initial_accounts[1].account_id;
+        let sign_key = initial_accounts[0].pub_sign_key.clone();
+
+        // The sequencer side: the same blocks, applied through `chain_state` directly.
+        let mut expected = testnet_initial_state::initial_state();
+
+        let genesis = produce_dummy_block(1, None, vec![]);
+        chain_state::apply_block(None, &genesis, &mut expected).unwrap();
+        assert!(matches!(
+            store.accept_block(&genesis, Slot::from(0)).await.unwrap(),
+            AcceptOutcome::Applied
+        ));
+
+        let mut prev = &genesis;
+        let mut blocks = Vec::new();
+        for i in 0..4_u64 {
+            // Block 3 carries a transfer of more than the account holds: the guest panics, the
+            // transaction reverts, and it is still charged and still burns its nonce.
+            let amount = if i == 1 { u128::MAX } else { 10 };
+            let tx =
+                create_transaction_native_token_transfer(from, i.into(), to, amount, &sign_key);
+            blocks.push(produce_dummy_block(i + 2, Some(prev.header.hash), vec![tx]));
+            prev = blocks.last().unwrap();
+        }
+
+        let mut saw_revert = false;
+        for block in &blocks {
+            let summary = chain_state::apply_block(
+                Some(&chain_state::Tip::from(
+                    &store
+                        .get_block_at_id(block.header.block_id - 1)
+                        .unwrap()
+                        .unwrap(),
+                )),
+                block,
+                &mut expected,
+            )
+            .unwrap();
+            saw_revert |= summary
+                .tx_outcomes
+                .iter()
+                .any(|outcome| matches!(outcome, chain_state::TxApplyOutcome::Reverted { .. }));
+            assert!(matches!(
+                store.accept_block(block, Slot::from(0)).await.unwrap(),
+                AcceptOutcome::Applied
+            ));
+        }
+        assert!(
+            saw_revert,
+            "the chain must contain a reverted transaction, or this proves nothing",
+        );
+
+        let indexed = store
+            .get_state_at_block(blocks.last().unwrap().header.block_id)
+            .unwrap();
+        assert_eq!(
+            indexed.fee_state(),
+            expected.fee_state(),
+            "the indexer's fee state must equal the sequencer's, escrow and window included",
+        );
+        assert!(
+            indexed.fee_state().escrow > 0,
+            "fees were actually collected over this chain",
+        );
+        for account_id in [from, to] {
+            assert_eq!(
+                indexed.get_account_by_id(account_id),
+                expected.get_account_by_id(account_id),
+                "account {account_id} diverged: the fee debit or the revert's nonce advance did \
+                 not replay identically",
+            );
+        }
     }
 
     #[tokio::test]
@@ -382,25 +471,32 @@ mod tests {
             store.accept_block(&block, Slot::from(0)).await.unwrap();
         }
 
-        // State at block N is inclusive of block N.
+        // State at block N is inclusive of block N. The recipient pays no fees, so its balance
+        // counts the transfers exactly; the sender's also carries the fee of each block.
         // Block 1 (genesis, clock-only): no transfers yet.
         assert_eq!(
             store.account_state_at_block(&from, 1).unwrap().balance,
-            10000
+            1_000_000_000_000
         );
-        assert_eq!(store.account_state_at_block(&to, 1).unwrap().balance, 20000);
+        assert_eq!(
+            store.account_state_at_block(&to, 1).unwrap().balance,
+            2_000_000_000_000
+        );
         // Through block 5: 4 transfers applied (blocks 2..=5).
         assert_eq!(
-            store.account_state_at_block(&from, 5).unwrap().balance,
-            9960
+            store.account_state_at_block(&to, 5).unwrap().balance,
+            2_000_000_000_040
         );
-        assert_eq!(store.account_state_at_block(&to, 5).unwrap().balance, 20040);
         // Through block 9: 8 transfers applied (blocks 2..=9).
         assert_eq!(
-            store.account_state_at_block(&from, 9).unwrap().balance,
-            9920
+            store.account_state_at_block(&to, 9).unwrap().balance,
+            2_000_000_000_080
         );
-        assert_eq!(store.account_state_at_block(&to, 9).unwrap().balance, 20080);
+        // Monotonically decreasing for the sender: each block costs it the transfer plus a fee.
+        assert!(
+            store.account_state_at_block(&from, 9).unwrap().balance
+                < store.account_state_at_block(&from, 5).unwrap().balance,
+        );
     }
 }
 
@@ -770,7 +866,7 @@ mod accept_tests {
 
         // Snapshot at block 100 = genesis + 99 transfers, written with the block.
         let bp1 = store.dbio.get_breakpoint(1).expect("breakpoint 1 present");
-        assert_eq!(bp1.get_account_by_id(from).balance, 10000 - 99);
+        assert!(bp1.get_account_by_id(from).balance < 1_000_000_000_000 - 99);
 
         // The #605 restart: reopening past the boundary must work.
         drop(store);
@@ -796,13 +892,11 @@ mod accept_tests {
             .await
             .expect("accept genesis");
 
-        // Overdraft: rejected during execution → StateTransition → retryable.
+        // A stale nonce: an *authentication* failure, so it is still a block-level rejection
+        // (StateTransition → retryable). An overdraft no longer works here — it reverts, is
+        // charged, and leaves the block valid.
         let tx = common::test_utils::create_transaction_native_token_transfer(
-            from,
-            0,
-            to,
-            1_000_000_000,
-            &sign_key,
+            from, 7, to, 1_000, &sign_key,
         );
         let block = produce_dummy_block(2, Some(genesis.header.hash), vec![tx]);
         let outcome = store.accept_block(&block, Slot::from(0)).await.unwrap();

@@ -611,6 +611,155 @@ fn chained_calls_share_a_single_cycle_budget() {
     );
 }
 
+/// An out-of-gas transaction meters at **at least its whole budget**, so the fee path's
+/// `min(cycles, gas_limit)` charges the full limit.
+///
+/// The executor discards the cycle count of the session it bails out of, so metering only the
+/// sessions that ran to completion would report zero for the single-session shape — a transaction
+/// that really burned its whole budget would then ride the block's execution cap for free. Both
+/// shapes are covered here, and for the chain both failure timings are: whether the budget runs
+/// out *inside* the second session or is already spent when the loop reaches it depends on where
+/// the first session lands, and the guarantee has to hold either way.
+#[test]
+fn an_out_of_gas_transaction_meters_its_whole_budget() {
+    let from_key = PrivateKey::try_new([1_u8; 32]).unwrap();
+    let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
+    let to = AccountId::new([2_u8; 32]);
+    let state = V03State::new()
+        .with_public_accounts(public_state_from_balances(&[(from, 1_000), (to, 0)]))
+        .with_test_programs();
+
+    // Single session: a budget of one cycle cannot fund it, so it halts having completed nothing.
+    let one_call = chained_transfer_transaction(&from_key, to, 1);
+    let (outcome, result) =
+        ValidatedStateDiff::from_public_transaction_metered(&one_call, &state, 1, 0, 1);
+    assert!(matches!(result, Err(LeeError::OutOfGas { budget: 1 })));
+    assert_eq!(
+        outcome.cycles.min(1),
+        1,
+        "a single-session halt must still be charged its whole budget, not zero",
+    );
+
+    // Chained: a budget sized for the shorter chain leaves the longer one short mid-way.
+    let (_, one_call_outcome) =
+        ValidatedStateDiff::from_public_transaction(&one_call, &state, 1, 0, MAX_GAS_EXEC)
+            .expect("a single chained transfer must validate");
+    let budget = one_call_outcome.cycles;
+    let two_calls = chained_transfer_transaction(&from_key, to, 2);
+    let (chain_outcome, chain_result) =
+        ValidatedStateDiff::from_public_transaction_metered(&two_calls, &state, 1, 0, budget);
+    assert!(matches!(chain_result, Err(LeeError::OutOfGas { .. })));
+    assert!(
+        chain_outcome.cycles >= budget,
+        "an out-of-gas chain meters at least its budget: {} < {budget}",
+        chain_outcome.cycles,
+    );
+    assert_eq!(chain_outcome.cycles.min(budget), budget);
+}
+
+/// A guest panic is metered at the **whole budget**: the executor bails without a `SessionInfo`,
+/// so the session that failed took its own measurement with it, and the bound it was granted is
+/// the only sound price for it.
+///
+/// TBA(revert-metering): the guest exit-code refactor (`.claude/lez-fees/EXIT-CODES.md`) will make
+/// a *deliberate* revert exit with a code instead of panicking, which halts as `Ok(SessionInfo)`
+/// and so bills its real cycles. This arm stays regardless — guests build with `panic=abort`, so
+/// user-supplied bytecode can always choose to panic and must not be cheaper for it.
+#[test]
+fn a_guest_panic_is_metered_at_its_whole_budget() {
+    let signer_key = PrivateKey::try_new([1_u8; 32]).unwrap();
+    let signer = AccountId::from(&PublicKey::new_from_private_key(&signer_key));
+    let unsigned = AccountId::new([2_u8; 32]);
+    let state = V03State::new()
+        .with_public_accounts(public_state_from_balances(&[
+            (signer, 1_000),
+            (unsigned, 0),
+        ]))
+        .with_test_programs();
+
+    // `auth_asserting_noop` asserts every pre-state is authorized. The second account is not
+    // signed for, so the assert trips and the guest panics — a real `sys_panic`, not an early
+    // return.
+    let panicking = |nonce: u128| {
+        let message = Message::new_feeless(
+            crate::test_methods::auth_asserting_noop().id(),
+            vec![signer, unsigned],
+            vec![Nonce(nonce)],
+            (),
+        );
+        let witness_set = WitnessSet::for_message(&message, &[&signer_key]);
+        crate::PublicTransaction::new(message, witness_set)
+    };
+
+    let budget = 5_000_000;
+    let (outcome, result) =
+        ValidatedStateDiff::from_public_transaction_metered(&panicking(0), &state, 1, 0, budget);
+    assert!(
+        matches!(result, Err(LeeError::ProgramExecutionFailed(_))),
+        "the guest must panic, got {:?}",
+        result.err(),
+    );
+    assert_eq!(
+        outcome.cycles, budget,
+        "a panicking session is charged the budget it was granted, not zero",
+    );
+
+    // The charge tracks the declared bound rather than being a flat penalty: a smaller budget, a
+    // smaller charge. So it stays a price the payer chose and already reserved against.
+    let smaller_budget = 2_000_000;
+    let (smaller_outcome, _) = ValidatedStateDiff::from_public_transaction_metered(
+        &panicking(0),
+        &state,
+        1,
+        0,
+        smaller_budget,
+    );
+    assert_eq!(smaller_outcome.cycles, smaller_budget);
+}
+
+/// A guest that halts cleanly without writing a decodable output keeps its **exact** cycles.
+///
+/// This shape is the one failure risc0 reports as `Ok(SessionInfo)`, so the count is real and is
+/// strictly better information than the budget. It used to be discarded along with the
+/// journal-decode error, billing a whole class of failures at zero execution gas.
+#[test]
+fn a_guest_that_writes_no_output_is_metered_at_its_real_cycles() {
+    let from_key = PrivateKey::try_new([1_u8; 32]).unwrap();
+    let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
+    let state = V03State::new()
+        .with_public_accounts(public_state_from_balances(&[(from, 1_000)]))
+        .with_test_programs();
+
+    // `missing_output` returns early unless it is handed exactly two accounts. One account, so it
+    // takes the early return: the session halts at zero, having committed nothing.
+    let message = Message::new_feeless(
+        crate::test_methods::missing_output().id(),
+        vec![from],
+        vec![Nonce(0)],
+        (),
+    );
+    let witness_set = WitnessSet::for_message(&message, &[&from_key]);
+    let tx = crate::PublicTransaction::new(message, witness_set);
+
+    let budget = 5_000_000;
+    let (outcome, result) =
+        ValidatedStateDiff::from_public_transaction_metered(&tx, &state, 1, 0, budget);
+    assert!(
+        matches!(result, Err(LeeError::MalformedProgramOutput { .. })),
+        "a guest that writes no output must surface as a malformed output, got {:?}",
+        result.err(),
+    );
+    assert!(
+        outcome.cycles > 0,
+        "the session ran, so it must be metered at something",
+    );
+    assert!(
+        outcome.cycles < budget,
+        "and at its real cost, well under the budget: {} is not below {budget}",
+        outcome.cycles,
+    );
+}
+
 /// A program-deployment transaction whose bytecode deploys cleanly, so the only thing under test
 /// below is its witness set.
 fn deployment_tx(

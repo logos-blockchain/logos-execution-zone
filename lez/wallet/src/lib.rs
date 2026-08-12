@@ -55,6 +55,37 @@ pub mod storage;
 
 pub const HOME_DIR_ENV_VAR: &str = "LEE_WALLET_HOME_DIR";
 
+/// Execution bound the wallet declares on a public transaction.
+///
+/// Metering halts here, and the reservation prices it, so it trades headroom against how much the
+/// payer must hold while the transaction executes. The measured programs span roughly 44k to 644k
+/// cycles (SPECS Annex C), so this is about three times the widest of them and a fifth of
+/// `MAX_GAS_EXEC`. Unused gas is released at settlement; only the reservation is affected.
+// TODO(T11): meter a dry run instead of declaring a constant.
+pub const DEFAULT_GAS_LIMIT: u64 = 2_000_000;
+
+/// Base fee the wallet assumes when it caps its exposure, eight times the genesis minimum of 8.
+///
+/// `max_fee` is a ceiling on the *reservation*, not the fee: it exists so a transaction signed at
+/// low base fees cannot be included later at prices the sender never agreed to. Base fees move by
+/// at most 12.5% per block, so a factor of eight is about eighteen consecutive fully congested
+/// blocks of headroom.
+// TODO(T11): read the live base fees and let the caller choose the multiple.
+const ASSUMED_BASE_FEE: u128 = 64;
+
+/// Serialized size the wallet assumes when it caps its exposure. Generous: the block size limit is
+/// 1 MiB and a wallet-built invocation is a few hundred bytes.
+const ASSUMED_DATA_BYTES: u128 = 100_000;
+
+/// The `max_fee` a wallet-built public transaction carries: its reservation at [`ASSUMED_BASE_FEE`]
+/// with [`ASSUMED_DATA_BYTES`] of payload, and no tip.
+#[expect(
+    clippy::as_conversions,
+    reason = "widening a u64 constant, in a const item `u128::from` cannot be called from"
+)]
+pub const DEFAULT_MAX_FEE: u128 =
+    (DEFAULT_GAS_LIMIT as u128 + ASSUMED_DATA_BYTES) * ASSUMED_BASE_FEE;
+
 pub enum AccDecodeData {
     Skip,
     Decode(lee_core::SharedSecretKey, AccountId),
@@ -853,12 +884,20 @@ impl WalletCore {
         let account_ids = acc_manager.public_account_ids();
         let nonces = acc_manager.public_account_nonces();
 
+        // Minimal fee population: enough for a wallet-built transaction to be statically fee-valid
+        // and payable. Real estimation — metering a dry run for `gas_limit`, reading the live base
+        // fees for `max_fee`, and a tip policy — is T11.
+        let payer = acc_manager.fee_payer_account_id().ok_or_else(|| {
+            ExecutionFailureKind::TransactionBuildError(lee::error::LeeError::InvalidInput(
+                "Public transaction has no signing account to pay its fees".to_owned(),
+            ))
+        })?;
         let message = lee::public_transaction::Message::new_preserialized(
             program_id,
             account_ids,
             nonces,
             instruction_data,
-            lee::FeeFields::ZERO,
+            lee::FeeFields::new(payer, DEFAULT_GAS_LIMIT, 0, DEFAULT_MAX_FEE),
         );
 
         let message_hash = message.hash();
@@ -880,7 +919,10 @@ impl WalletCore {
     }
 
     pub async fn send_program_deployment_transaction(&self, bytecode: Vec<u8>) -> Result<HashType> {
-        // TODO(T8): designate and sign for a real fee payer once deployments are charged.
+        // Deployments are not charged: a deployment message carries no nonces, so a
+        // charged-but-failed deployment would stay re-includable and drain its payer. They still
+        // count against the block's storage cap.
+        // TBA(deployment-replay): designate and sign a real payer once that is designed.
         let message =
             lee::program_deployment_transaction::Message::new(bytecode, lee::FeeFields::ZERO);
         let transaction = ProgramDeploymentTransaction::new(

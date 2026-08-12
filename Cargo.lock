@@ -1459,19 +1459,25 @@ name = "chain_state"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "authenticated_transfer_core",
  "borsh",
+ "bridge_core",
  "common",
+ "fee_core",
  "futures",
  "lee",
  "lee_core",
  "log",
  "logos-blockchain-core",
  "logos-blockchain-zone-sdk",
+ "programs",
  "serde",
  "serde_json",
+ "system_accounts",
  "testnet_initial_state",
  "thiserror 2.0.18",
  "tokio",
+ "vault_core",
 ]
 
 [[package]]
@@ -1677,7 +1683,9 @@ dependencies = [
  "authenticated_transfer_core",
  "base64 0.22.1",
  "borsh",
+ "bridge_core",
  "clock_core",
+ "cross_zone_inbox_core",
  "fee_core",
  "hex",
  "lee",
@@ -1685,11 +1693,13 @@ dependencies = [
  "log",
  "logos-blockchain-common-http-client",
  "programs",
+ "risc0-zkvm",
  "serde",
  "serde_with",
  "sha2 0.10.9",
  "system_accounts",
  "thiserror 2.0.18",
+ "vault_core",
 ]
 
 [[package]]
@@ -9501,6 +9511,7 @@ dependencies = [
  "cross_zone",
  "cross_zone_inbox_core",
  "faucet_core",
+ "fee_core",
  "futures",
  "hex",
  "humantime-serde",
@@ -10150,6 +10161,7 @@ name = "storage"
 version = "0.1.0"
 dependencies = [
  "borsh",
+ "chain_state",
  "common",
  "lee",
  "log",

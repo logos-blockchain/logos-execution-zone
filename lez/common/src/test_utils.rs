@@ -16,6 +16,14 @@ use crate::{
 
 // Helpers
 
+/// Execution bound test transactions declare. Comfortably above the widest measured program, so a
+/// test never trips [`lee::error::LeeError::OutOfGas`] by accident.
+pub const TEST_GAS_LIMIT: u64 = 2_000_000;
+
+/// `max_fee` test transactions declare: `u64::MAX`, orders of magnitude above any fee a test can
+/// incur. Spelled as a literal because `u128::from` is not callable in a `const fn`.
+const TEST_MAX_FEE: u128 = 0xFFFF_FFFF_FFFF_FFFF;
+
 #[must_use]
 pub fn sequencer_sign_key_for_testing() -> lee::PrivateKey {
     lee::PrivateKey::try_new([37; 32]).unwrap()
@@ -106,6 +114,17 @@ pub fn produce_dummy_empty_transaction() -> LeeTransaction {
     LeeTransaction::Public(lee_tx)
 }
 
+/// Fee fields for a test transaction `payer` signs: a generous bound, no tip, and a `max_fee` high
+/// enough that the reservation never trips it.
+///
+/// Payer designation is the point — a public transaction whose payer is not fee-authorized is
+/// statically invalid, so every test transaction that is meant to *land in a block* has to name one
+/// of its own signers here.
+#[must_use]
+pub const fn test_fee_fields(payer: AccountId) -> lee::FeeFields {
+    lee::FeeFields::new(payer, TEST_GAS_LIMIT, 0, TEST_MAX_FEE)
+}
+
 #[must_use]
 pub fn create_transaction_native_token_transfer(
     from: AccountId,
@@ -124,7 +143,8 @@ pub fn create_transaction_native_token_transfer(
         authenticated_transfer_core::Instruction::Transfer {
             amount: balance_to_move,
         },
-        lee::FeeFields::ZERO,
+        // `from` signs below, so it is fee-authorized for this exact message.
+        test_fee_fields(from),
     )
     .unwrap();
     let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[signing_key]);

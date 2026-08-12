@@ -11,6 +11,7 @@ workspace = true
 lee.workspace = true
 lee_core.workspace = true
 chain_state.workspace = true
+fee_core.workspace = true
 common.workspace = true
 sequencer_core_metrics = { workspace = true, features = ["record"] }
 storage.workspace = true

@@ -459,6 +459,19 @@ impl AccountManager {
             .collect()
     }
 
+    /// The account that pays this transaction's fees: its first signer.
+    ///
+    /// A designated payer must be fee-authorized, i.e. its signature must cover the exact message.
+    /// Every signer's does, so the first one is always a valid choice. Sponsored payment (a fee
+    /// witness by an account outside the signer set) is a wallet feature for T11.
+    pub fn fee_payer_account_id(&self) -> Option<AccountId> {
+        self.states.iter().find_map(|state| match state {
+            State::Public { account, sk, .. } => sk.as_ref().map(|_| account.account_id),
+            State::PublicKeycard { account, .. } => Some(account.account_id),
+            State::Private(_) => None,
+        })
+    }
+
     pub fn public_non_keycard_account_auth(&self) -> Vec<&PrivateKey> {
         self.states
             .iter()

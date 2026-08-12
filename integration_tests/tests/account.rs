@@ -4,7 +4,9 @@
 )]
 
 use anyhow::{Context as _, Result};
-use integration_tests::{TestContext, get_account, new_account, private_mention};
+use integration_tests::{
+    INITIAL_PUBLIC_BALANCE_A, TestContext, get_account, new_account, private_mention,
+};
 use key_protocol::key_management::KeyChain;
 use lee::Data;
 use lee_core::account::Nonce;
@@ -29,7 +31,7 @@ async fn get_existing_account() -> Result<()> {
         account.program_owner,
         programs::authenticated_transfer().id()
     );
-    assert_eq!(account.balance, 10000);
+    assert_eq!(account.balance, INITIAL_PUBLIC_BALANCE_A);
     assert!(account.data.is_empty());
     assert_eq!(account.nonce.0, 1);
 

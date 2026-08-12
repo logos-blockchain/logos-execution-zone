@@ -1,7 +1,13 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use fee_core::{FeeState, params::MAX_GAS_EXEC};
+use fee_core::{
+    FeeError, FeeState,
+    params::{
+        BASE_FEE_EXEC_MAX, BASE_FEE_EXEC_MIN, BASE_FEE_STOR_MAX, BASE_FEE_STOR_MIN, D_EXEC, D_STOR,
+        MAX_GAS_EXEC, TARGET_GAS_EXEC, TARGET_GAS_STOR,
+    },
+};
 use lee_core::{
     BlockId, Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, MembershipProof, Nullifier,
     Timestamp,
@@ -232,9 +238,14 @@ impl V03State {
         }
     }
 
-    /// Applies `tx`, metering its execution against the protocol-wide cycle ceiling.
+    /// Applies `tx` under the protocol-wide cycle ceiling.
     ///
-    /// TODO: take the transaction's own `gas_limit` as the budget once fees are wired.
+    /// This is the *fee-exempt* execution path: system transactions (clock, bridge-deposit mints,
+    /// cross-zone dispatches) and genesis transactions carry no `gas_limit` of their own, so the
+    /// block cap is the only bound that applies to them. Charged transactions run under their own
+    /// `gas_limit` instead — the block transition drives those through
+    /// [`ValidatedStateDiff::from_public_transaction_metered`], since it has to keep the fee of a
+    /// reverted transaction while discarding its diff.
     pub fn transition_from_public_transaction(
         &mut self,
         tx: &PublicTransaction,
@@ -307,8 +318,100 @@ impl V03State {
         &self.fee_state
     }
 
-    /// Mutable access for the block-transition code that drives `fee_core`
-    /// (revenue recording, payout settlement, base-fee updates).
+    /// Holds `amount` from `account_id`'s balance as a fee reservation.
+    ///
+    /// SPECS §Block transition step 2: a payer that cannot cover its reservation makes the whole
+    /// block invalid, so this is fallible and never partially applied.
+    ///
+    /// **Moves the balance without asking the owning program**, exactly like [`Self::credit_fee`],
+    /// and that is the intent rather than an oversight: fees are a *ledger* effect of the block
+    /// transition, not a program invocation. The account's `program_owner` never runs, never sees
+    /// the movement, and cannot veto it — a program that maintains an invariant over its accounts'
+    /// balances (a vault, an AMM pool) must therefore treat "balance may fall by a fee its payer
+    /// authorized" as part of its threat model. The block transition is the only caller.
+    ///
+    /// # Errors
+    ///
+    /// [`LeeError::InsufficientFeeBalance`] if the account's balance is below `amount`.
+    pub fn debit_fee(&mut self, account_id: AccountId, amount: u128) -> Result<(), LeeError> {
+        let account = self.get_account_by_id_mut(account_id);
+        let balance = account.balance;
+        let Some(remaining) = balance.checked_sub(amount) else {
+            return Err(LeeError::InsufficientFeeBalance {
+                account_id,
+                required: amount,
+                available: balance,
+            });
+        };
+        account.balance = remaining;
+        Ok(())
+    }
+
+    /// Credits `amount` to `account_id`: a released reservation, or the producer's payout and
+    /// tips.
+    ///
+    /// Bypasses the owning program the same way [`Self::debit_fee`] does, and for the same reason.
+    /// Note the second-order effect: crediting an account that does not exist yet materializes it
+    /// with a non-zero balance and `program_owner` left at the default, which is a shape some
+    /// programs refuse to adopt afterwards — see the producer-account note in the task-8 report.
+    pub fn credit_fee(&mut self, account_id: AccountId, amount: u128) {
+        let account = self.get_account_by_id_mut(account_id);
+        account.balance = account
+            .balance
+            .checked_add(amount)
+            .expect("balance overflow: the total supply is below 2^64, so credits fit u128");
+    }
+
+    /// Advances the public-account nonces of `account_ids`.
+    ///
+    /// A successful transaction advances them through its diff. This is the revert path: replay
+    /// protection is consumed on inclusion, success or revert, so a charged-but-reverted
+    /// transaction may not be re-included (SPECS §Block transition; Q5).
+    pub fn advance_replay_nonces(&mut self, account_ids: &[AccountId]) {
+        for account_id in account_ids {
+            self.get_account_by_id_mut(*account_id)
+                .nonce
+                .public_account_nonce_increment();
+        }
+    }
+
+    /// Records the block's settled base revenue and settles this block's producer payout
+    /// (SPECS §Revenue distribution). Returns the payout; the caller credits the producer.
+    ///
+    /// # Errors
+    ///
+    /// [`FeeError::ConsensusFault`] if the payout would exceed the escrow — unreachable from any
+    /// state reachable through this method, and a halt condition rather than a block rejection.
+    pub fn distribute_block_revenue(&mut self, revenue_base: u128) -> Result<u128, FeeError> {
+        fee_core::distribute(&mut self.fee_state, revenue_base)
+    }
+
+    /// Moves both base fees to their values for the next block (SPECS §Base-fee update).
+    pub fn update_base_fees(&mut self, gas_used_exec: u64, gas_used_stor: u64) {
+        self.fee_state.base_fee_exec = fee_core::next_base_fee(
+            self.fee_state.base_fee_exec,
+            gas_used_exec,
+            TARGET_GAS_EXEC,
+            D_EXEC,
+            BASE_FEE_EXEC_MIN,
+            BASE_FEE_EXEC_MAX,
+        );
+        self.fee_state.base_fee_stor = fee_core::next_base_fee(
+            self.fee_state.base_fee_stor,
+            gas_used_stor,
+            TARGET_GAS_STOR,
+            D_STOR,
+            BASE_FEE_STOR_MIN,
+            BASE_FEE_STOR_MAX,
+        );
+    }
+
+    /// Wholesale mutable access to the fee state.
+    ///
+    /// Test-only on purpose: consensus state must not be rewritable by an arbitrary crate, so the
+    /// block transition goes through the narrow surface above ([`Self::distribute_block_revenue`],
+    /// [`Self::update_base_fees`]) instead.
+    #[cfg(any(test, feature = "test-utils"))]
     pub const fn fee_state_mut(&mut self) -> &mut FeeState {
         &mut self.fee_state
     }

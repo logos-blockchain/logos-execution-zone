@@ -9,8 +9,9 @@ use std::time::Duration;
 use anyhow::Result;
 use indexer_service_rpc::RpcClient as _;
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, account_balance, get_account, public_mention,
-    send, wait_for_indexer_to_catch_up,
+    INITIAL_PUBLIC_BALANCE_A, INITIAL_PUBLIC_BALANCE_B, TIME_TO_WAIT_FOR_BLOCK_SECONDS,
+    TestContext, account_balance, assert_debited_with_fee, get_account, public_mention, send,
+    wait_for_indexer_to_catch_up,
 };
 use log::info;
 use wallet::{
@@ -53,8 +54,8 @@ async fn indexer_state_consistency_with_labels() -> Result<()> {
     let acc_1_balance = account_balance(&ctx, ctx.existing_public_accounts()[0]).await?;
     let acc_2_balance = account_balance(&ctx, ctx.existing_public_accounts()[1]).await?;
 
-    assert_eq!(acc_1_balance, 9900);
-    assert_eq!(acc_2_balance, 20100);
+    assert_debited_with_fee(acc_1_balance, INITIAL_PUBLIC_BALANCE_A, 100);
+    assert_eq!(acc_2_balance, INITIAL_PUBLIC_BALANCE_B + 100);
 
     info!("Waiting for indexer to parse blocks");
     wait_for_indexer_to_catch_up(&ctx).await?;

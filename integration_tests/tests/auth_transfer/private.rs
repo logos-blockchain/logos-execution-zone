@@ -3,7 +3,8 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, account_balance,
+    INITIAL_PRIVATE_BALANCE_A, INITIAL_PRIVATE_BALANCE_B, INITIAL_PUBLIC_BALANCE_A,
+    INITIAL_PUBLIC_BALANCE_B, TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, account_balance,
     assert_private_commitment_in_state, fetch_privacy_preserving_tx, get_account, new_account,
     private_mention, public_mention, send, sync_private, verify_commitment_is_in_state,
 };
@@ -105,7 +106,7 @@ async fn deshielded_transfer_to_public_account() -> Result<()> {
         .wallet()
         .get_account_private(from)
         .context("Failed to get sender's private account")?;
-    assert_eq!(from_acc.balance, 10000);
+    assert_eq!(from_acc.balance, INITIAL_PRIVATE_BALANCE_A);
 
     send(&mut ctx, private_mention(from), public_mention(to), 100).await?;
 
@@ -120,8 +121,10 @@ async fn deshielded_transfer_to_public_account() -> Result<()> {
 
     let acc_2_balance = account_balance(&ctx, to).await?;
 
-    assert_eq!(from_acc.balance, 9900);
-    assert_eq!(acc_2_balance, 20100);
+    // A deshielded transfer is a privacy-preserving transaction, and those are uncharged: the
+    // sender moves by exactly the amount it sent.
+    assert_eq!(from_acc.balance, INITIAL_PRIVATE_BALANCE_A - 100);
+    assert_eq!(acc_2_balance, INITIAL_PUBLIC_BALANCE_B + 100);
 
     info!("Successfully deshielded transfer to public account");
 
@@ -248,8 +251,10 @@ async fn shielded_transfer_to_owned_private_account() -> Result<()> {
 
     let acc_from_balance = account_balance(&ctx, from).await?;
 
-    assert_eq!(acc_from_balance, 9900);
-    assert_eq!(acc_to.balance, 20100);
+    // A shielded transfer is a privacy-preserving transaction: uncharged, so the public sender
+    // moves by exactly the amount it sent.
+    assert_eq!(acc_from_balance, INITIAL_PUBLIC_BALANCE_A - 100);
+    assert_eq!(acc_to.balance, INITIAL_PRIVATE_BALANCE_B + 100);
 
     info!("Successfully shielded transfer to owned private account");
 
@@ -291,7 +296,8 @@ async fn shielded_transfer_to_foreign_account() -> Result<()> {
         assert!(verify_commitment_is_in_state(commitment, ctx.sequencer_client()).await);
     }
 
-    assert_eq!(acc_1_balance, 9900);
+    // Privacy-preserving, therefore uncharged.
+    assert_eq!(acc_1_balance, INITIAL_PUBLIC_BALANCE_A - 100);
 
     info!("Successfully shielded transfer to foreign account");
 

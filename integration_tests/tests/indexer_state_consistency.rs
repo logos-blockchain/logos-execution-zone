@@ -8,9 +8,9 @@ use std::time::Duration;
 use anyhow::Result;
 use indexer_service_rpc::RpcClient as _;
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, account_balance,
-    assert_private_commitment_in_state, get_account, private_mention, public_mention, send,
-    wait_for_indexer_to_catch_up,
+    INITIAL_PUBLIC_BALANCE_A, INITIAL_PUBLIC_BALANCE_B, TIME_TO_WAIT_FOR_BLOCK_SECONDS,
+    TestContext, account_balance, assert_debited_with_fee, assert_private_commitment_in_state,
+    get_account, private_mention, public_mention, send, wait_for_indexer_to_catch_up,
 };
 use lee::AccountId;
 use log::info;
@@ -35,8 +35,8 @@ async fn indexer_state_consistency() -> Result<()> {
     info!("Balance of sender: {acc_1_balance:#?}");
     info!("Balance of receiver: {acc_2_balance:#?}");
 
-    assert_eq!(acc_1_balance, 9900);
-    assert_eq!(acc_2_balance, 20100);
+    assert_debited_with_fee(acc_1_balance, INITIAL_PUBLIC_BALANCE_A, 100);
+    assert_eq!(acc_2_balance, INITIAL_PUBLIC_BALANCE_B + 100);
 
     let from: AccountId = ctx.existing_private_accounts()[0];
     let to: AccountId = ctx.existing_private_accounts()[1];

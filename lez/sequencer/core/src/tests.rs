@@ -263,8 +263,8 @@ async fn start_from_config() {
     let balance_acc_1 = sequencer.with_state(|s| s.get_account_by_id(acc1_account_id).balance);
     let balance_acc_2 = sequencer.with_state(|s| s.get_account_by_id(acc2_account_id).balance);
 
-    assert_eq!(10000, balance_acc_1);
-    assert_eq!(20000, balance_acc_2);
+    assert_eq!(1_000_000_000_000, balance_acc_1);
+    assert_eq!(2_000_000_000_000, balance_acc_2);
 }
 
 #[tokio::test]
@@ -969,6 +969,7 @@ async fn transaction_pre_check_native_transfer_other_signature() {
             .head_state_mut(),
         0,
         0,
+        fee_core::params::MAX_GAS_EXEC,
     );
 
     assert!(matches!(
@@ -987,7 +988,11 @@ async fn transaction_pre_check_native_transfer_sent_too_much() {
     let sign_key1 = create_signing_key_for_account1();
 
     let tx = common::test_utils::create_transaction_native_token_transfer(
-        acc1, 0, acc2, 10_000_000, &sign_key1,
+        acc1,
+        0,
+        acc2,
+        10_000_000_000_000,
+        &sign_key1,
     );
 
     let result = tx.transaction_stateless_check();
@@ -1003,6 +1008,7 @@ async fn transaction_pre_check_native_transfer_sent_too_much() {
             .head_state_mut(),
         0,
         0,
+        fee_core::params::MAX_GAS_EXEC,
     );
     let is_failed_at_balance_mismatch = matches!(
         result.err().unwrap(),
@@ -1033,14 +1039,17 @@ async fn transaction_execute_native_transfer() {
             .head_state_mut(),
         0,
         0,
+        fee_core::params::MAX_GAS_EXEC,
     )
     .unwrap();
 
     let bal_from = sequencer.with_state(|s| s.get_account_by_id(acc1).balance);
     let bal_to = sequencer.with_state(|s| s.get_account_by_id(acc2).balance);
 
-    assert_eq!(bal_from, 9900);
-    assert_eq!(bal_to, 20100);
+    // `execute_check_on_state` runs the state machine directly, outside the block transition,
+    // so no fee is charged here — only the transfer moves.
+    assert_eq!(bal_from, 999_999_999_900);
+    assert_eq!(bal_to, 2_000_000_000_100);
 }
 
 #[tokio::test]
@@ -1069,6 +1078,44 @@ async fn push_tx_into_mempool_blocks_until_mempool_is_full() {
 
     // Resolve the pending push
     assert!(push_fut.await.is_ok());
+}
+
+/// The builder's cap accumulator must refuse the transaction that would take a block past either
+/// ceiling, and must judge the two ceilings independently.
+///
+/// `apply_block_to_state` rejects such a block whole, so a builder that let one through would be
+/// producing blocks its own producer discards.
+#[test]
+fn block_gas_used_defers_the_transaction_that_would_bust_either_cap() {
+    use fee_core::params::{MAX_GAS_EXEC, MAX_GAS_STOR};
+
+    let contribution = |gas_exec, gas_stor| chain_state::CapContribution { gas_exec, gas_stor };
+
+    let mut used = super::BlockGasUsed::default();
+    assert_eq!(
+        used.would_exceed(contribution(MAX_GAS_EXEC, MAX_GAS_STOR)),
+        None
+    );
+    used.add(contribution(MAX_GAS_EXEC, MAX_GAS_STOR));
+
+    // Exactly full is still valid; one more of either is not.
+    assert_eq!(used.would_exceed(contribution(0, 0)), None);
+    assert_eq!(used.would_exceed(contribution(1, 0)), Some("execution gas"));
+    assert_eq!(used.would_exceed(contribution(0, 1)), Some("storage gas"));
+
+    // The two ceilings are separate: a block full of storage gas has execution gas to spare.
+    let mut used = super::BlockGasUsed::default();
+    used.add(contribution(0, MAX_GAS_STOR));
+    assert_eq!(used.would_exceed(contribution(MAX_GAS_EXEC, 0)), None);
+    assert_eq!(used.would_exceed(contribution(0, 1)), Some("storage gas"));
+
+    // Saturating, so a contribution that would overflow the total is still just "over the cap".
+    let mut used = super::BlockGasUsed::default();
+    used.add(contribution(1, 1));
+    assert_eq!(
+        used.would_exceed(contribution(u64::MAX, 0)),
+        Some("execution gas")
+    );
 }
 
 #[tokio::test]
@@ -1232,10 +1279,11 @@ async fn restart_from_storage() {
     let balance_acc_1 = sequencer.with_state(|s| s.get_account_by_id(acc1_account_id).balance);
     let balance_acc_2 = sequencer.with_state(|s| s.get_account_by_id(acc2_account_id).balance);
 
-    // Balances should be consistent with the stored block
-    assert_eq!(
-        balance_acc_1,
-        initial_public_user_accounts()[0].balance - balance_to_move
+    // Balances should be consistent with the stored block. The sender also paid the
+    // transaction's fee, so only the fee-free recipient side is an exact number.
+    assert!(
+        balance_acc_1 < initial_public_user_accounts()[0].balance - balance_to_move,
+        "the sender pays the transfer and its fee",
     );
     assert_eq!(
         balance_acc_2,
@@ -2155,7 +2203,7 @@ async fn follow_adopted_peer_block_applies_and_persists() {
     assert_eq!(stored.header.hash, peer_block.header.hash);
     assert_eq!(
         sequencer.with_state(|s| s.get_account_by_id(acc2).balance),
-        20010
+        2_000_000_000_010
     );
 }
 
@@ -2196,7 +2244,7 @@ async fn follow_redelivery_of_own_block_is_deduped() {
     assert_eq!(sequencer.chain_height(), 2);
     assert_eq!(
         sequencer.with_state(|s| s.get_account_by_id(acc2).balance),
-        20010,
+        2_000_000_000_010,
         "the transfer must not be double-applied"
     );
 }
@@ -2237,7 +2285,7 @@ async fn follow_orphan_reverts_head_and_requeues_user_txs() {
     assert_eq!(sequencer.chain_height(), 1);
     assert_eq!(
         sequencer.with_state(|s| s.get_account_by_id(acc1).balance),
-        10000,
+        1_000_000_000_000,
         "the orphaned transfer must be reverted from the head"
     );
     let (origin, requeued) = sequencer
@@ -2305,7 +2353,7 @@ async fn follow_orphan_of_a_finalized_block_requeues_nothing() {
     );
     assert_eq!(
         sequencer.with_state(|s| s.get_account_by_id(acc2).balance),
-        20010,
+        2_000_000_000_010,
         "the finalized transfer stands"
     );
     assert!(
@@ -2613,7 +2661,7 @@ async fn restart_restores_head_tier_and_recovers_from_orphan() {
     assert_eq!(head_tip.hash, block2_prime.header.hash);
     assert_eq!(
         sequencer.with_state(|s| s.get_account_by_id(acc1).balance),
-        10000,
+        1_000_000_000_000,
         "the orphaned transfer must be reverted"
     );
     let stored = sequencer.store.get_block_at_id(2).unwrap().unwrap();
@@ -2791,5 +2839,5 @@ async fn follow_update_persists_blocks_meta_and_state_atomically() {
         .unwrap()
         .get_account_by_id(acc2)
         .balance;
-    assert_eq!(stored_balance, 20010);
+    assert_eq!(stored_balance, 2_000_000_000_010);
 }

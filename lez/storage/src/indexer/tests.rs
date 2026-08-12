@@ -4,6 +4,11 @@ use tempfile::tempdir;
 
 use super::*;
 
+/// Funded well past what a real transaction's fee costs, so these storage tests exercise
+/// breakpoints rather than the fee floor.
+const ACC1_BALANCE: u128 = 1_000_000_000_000;
+const ACC2_BALANCE: u128 = 2_000_000_000_000;
+
 fn genesis_block() -> Block {
     produce_dummy_block(1, None, vec![])
 }
@@ -25,7 +30,7 @@ fn acc2() -> AccountId {
 }
 
 fn initial_state() -> lee::V03State {
-    let mut public_accounts = [(acc1(), 10000), (acc2(), 20000)]
+    let mut public_accounts = [(acc1(), ACC1_BALANCE), (acc2(), ACC2_BALANCE)]
         .into_iter()
         .map(|(id, balance)| {
             (
@@ -117,10 +122,11 @@ fn one_block_insertion() {
     assert_eq!(last_observed_l1_header, [1; 32]);
     assert!(is_first_set);
     assert_eq!(last_block.header.hash, block.header.hash);
-    assert_eq!(
+    // The sender is debited the transfer *and* its fee, so only the fee-free recipient side is
+    // an exact number.
+    assert!(
         breakpoint.get_account_by_id(acc1()).balance
-            - final_state.get_account_by_id(acc1()).balance,
-        1
+            > final_state.get_account_by_id(acc1()).balance,
     );
     assert_eq!(
         final_state.get_account_by_id(acc2()).balance
@@ -186,15 +192,15 @@ fn put_block_stores_breakpoint_in_same_batch() {
     }
 
     let bp1 = dbio.get_breakpoint(1).unwrap();
-    assert_eq!(bp1.get_account_by_id(acc1()).balance, 10000);
-    assert_eq!(bp1.get_account_by_id(acc2()).balance, 20000);
+    assert_eq!(bp1.get_account_by_id(acc1()).balance, ACC1_BALANCE);
+    assert_eq!(bp1.get_account_by_id(acc2()).balance, ACC2_BALANCE);
     // Only the boundary block schedules a write: breakpoint 0 must be the only other one.
     assert_eq!(
         dbio.get_breakpoint(0)
             .unwrap()
             .get_account_by_id(acc1())
             .balance,
-        10000
+        ACC1_BALANCE
     );
 }
 
@@ -228,12 +234,13 @@ fn state_replay_falls_back_over_missing_breakpoints() {
     dbio.delete_breakpoint(1).unwrap();
     assert!(dbio.get_breakpoint_opt(1).unwrap().is_none());
     let final_state = dbio.final_state().unwrap();
-    assert_eq!(
-        10000 - final_state.get_account_by_id(acc1()).balance,
-        u128::from(BREAKPOINT_INTERVAL) + 1
+    assert!(
+        ACC1_BALANCE - final_state.get_account_by_id(acc1()).balance
+            > u128::from(BREAKPOINT_INTERVAL) + 1,
+        "the sender pays the transfers and their fees",
     );
     assert_eq!(
-        final_state.get_account_by_id(acc2()).balance - 20000,
+        final_state.get_account_by_id(acc2()).balance - ACC2_BALANCE,
         u128::from(BREAKPOINT_INTERVAL) + 1
     );
 }

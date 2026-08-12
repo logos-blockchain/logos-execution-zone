@@ -8,6 +8,7 @@ license = { workspace = true }
 workspace = true
 
 [dependencies]
+chain_state.workspace = true
 common.workspace = true
 lee.workspace = true
 

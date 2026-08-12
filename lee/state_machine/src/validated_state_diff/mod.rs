@@ -56,6 +56,15 @@ pub struct ExecutionOutcome {
     /// budget to zero and the next iteration fails with [`LeeError::OutOfGas`]. So the excess does
     /// not compound: `cycles <= budget + cost of one instruction`. Charge with
     /// `min(cycles, gas_limit)`, never `gas_limit - cycles`.
+    ///
+    /// **On failure** the count depends on what the executor was able to report:
+    ///
+    /// * A session that halted cleanly without a decodable output comes back as `Ok`, so its real
+    ///   cycles are known and are what this carries.
+    /// * A session that ran out of gas or panicked comes back as a bail with no `SessionInfo`, so
+    ///   this carries the whole `cycle_budget`. Exact for out-of-gas (the real total is at least
+    ///   the budget); a deliberate charge for a panic, see `TBA(revert-metering)`.
+    /// * A failure raised before any session runs — signature, nonce and shape checks — is zero.
     pub cycles: u64,
 }
 
@@ -80,6 +89,9 @@ impl ValidatedStateDiff {
     /// Validates `tx` against `state`, running its chain of calls under a cumulative
     /// `cycle_budget`: each session is limited to what the previous ones left unspent, and the
     /// returned [`ExecutionOutcome`] carries the sum of the user cycles they metered.
+    ///
+    /// Discards the metering of a failed execution. The fee path charges cycles consumed up to
+    /// the failure, so it uses [`Self::from_public_transaction_metered`] instead.
     pub fn from_public_transaction(
         tx: &PublicTransaction,
         state: &V03State,
@@ -87,6 +99,49 @@ impl ValidatedStateDiff {
         timestamp: Timestamp,
         cycle_budget: u64,
     ) -> Result<(Self, ExecutionOutcome), LeeError> {
+        let (outcome, result) =
+            Self::from_public_transaction_metered(tx, state, block_id, timestamp, cycle_budget);
+        result.map(|diff| (diff, outcome))
+    }
+
+    /// [`Self::from_public_transaction`] reporting the metering of a *failed* execution too.
+    ///
+    /// A transaction that reverts is still charged for the cycles it consumed up to the failure
+    /// (SPECS §Fee assessment), so the block transition needs the outcome on both arms. The
+    /// cycle count is zero for every failure raised before the first zkVM session (signature,
+    /// nonce and shape checks).
+    pub fn from_public_transaction_metered(
+        tx: &PublicTransaction,
+        state: &V03State,
+        block_id: BlockId,
+        timestamp: Timestamp,
+        cycle_budget: u64,
+    ) -> (ExecutionOutcome, Result<Self, LeeError>) {
+        let mut cycles_used: u64 = 0;
+        let result = Self::execute_public_transaction(
+            tx,
+            state,
+            block_id,
+            timestamp,
+            cycle_budget,
+            &mut cycles_used,
+        );
+        (
+            ExecutionOutcome {
+                cycles: cycles_used,
+            },
+            result,
+        )
+    }
+
+    fn execute_public_transaction(
+        tx: &PublicTransaction,
+        state: &V03State,
+        block_id: BlockId,
+        timestamp: Timestamp,
+        cycle_budget: u64,
+        cycles_used: &mut u64,
+    ) -> Result<Self, LeeError> {
         let signer_account_ids = authenticate_public_transaction_signers(tx, state)?;
         let message = tx.message();
 
@@ -131,7 +186,6 @@ impl ValidatedStateDiff {
         let mut chained_calls =
             VecDeque::<(ChainedCall, CallerData)>::from_iter([(initial_call, initial_caller_data)]);
         let mut chain_calls_counter = 0;
-        let mut cycles_used: u64 = 0;
 
         while let Some((chained_call, caller_data)) = chained_calls.pop_front() {
             ensure!(
@@ -141,7 +195,7 @@ impl ValidatedStateDiff {
 
             // Every session in the chain shares one budget, so a call can only spend what the
             // preceding ones left; an exhausted budget halts the chain mid-way.
-            let remaining_cycles = cycle_budget.saturating_sub(cycles_used);
+            let remaining_cycles = cycle_budget.saturating_sub(*cycles_used);
             ensure!(
                 remaining_cycles > 0,
                 LeeError::OutOfGas {
@@ -158,25 +212,57 @@ impl ValidatedStateDiff {
                 "Program {:?} pre_states: {:?}, instruction_data: {:?}",
                 chained_call.program_id, chained_call.pre_states, chained_call.instruction_data
             );
-            let (mut program_output, session_cycles) = program
-                .execute(
-                    caller_data.program_id,
-                    &chained_call.pre_states,
-                    &chained_call.instruction_data,
-                    remaining_cycles,
-                )
-                // A session outgrowing what is left of the budget exhausts the whole
-                // transaction's, so report that one rather than the session's share.
-                .map_err(|err| {
-                    if matches!(err, LeeError::OutOfGas { .. }) {
+            let (mut program_output, session_cycles) = match program.execute(
+                caller_data.program_id,
+                &chained_call.pre_states,
+                &chained_call.instruction_data,
+                remaining_cycles,
+            ) {
+                Ok(executed) => executed,
+                // A session that halted cleanly but wrote no decodable output is the one failure
+                // the executor reports as `Ok`, so it comes back with an exact cycle count.
+                // Charge that: it is strictly better information than the budget, and it is what
+                // SPECS asks for ("the cycles consumed to that point").
+                Err(LeeError::MalformedProgramOutput { cycles, reason }) => {
+                    *cycles_used = cycles_used.saturating_add(cycles);
+                    return Err(LeeError::MalformedProgramOutput { cycles, reason });
+                }
+                // Every other in-session failure — the session limit, and a guest panic, which is
+                // how a program signals a revert today — leaves the executor with nothing to
+                // report: it bails without a `SessionInfo`, so the session's own count is gone.
+                // Both are metered at the whole budget.
+                //
+                // For the out-of-gas case that is exact rather than a policy: outgrowing the
+                // remaining budget means the transaction's real total is at least `cycle_budget`,
+                // so `min(cycles, gas_limit)` — the only form the fee path uses this in —
+                // evaluates to `cycle_budget`. For a panic it is a ruling: a session that
+                // destroyed its own measurement is charged the bound it was granted, which is
+                // what stops work hidden behind a panic from riding the block's execution cap for
+                // free. The payer never pays past the `gas_limit` it declared and already
+                // reserved.
+                //
+                // TBA(revert-metering): the guest exit-code refactor
+                // (`.claude/lez-fees/EXIT-CODES.md`, a separate PR) restores exact billing for
+                // *cooperative* programs — `env::exit(code)` halts with `Ok(SessionInfo)` and its
+                // real cycles, so a deliberate revert will be priced at what it actually spent.
+                // This arm does not go away then: guests build with `panic=abort` and a deployed
+                // program is user-supplied bytecode that can always choose to panic (or hit an
+                // out-of-bounds index, a division by zero, allocator exhaustion), so the
+                // full-budget charge remains for ever as the price of an uncooperative program.
+                Err(err) => {
+                    *cycles_used = (*cycles_used).max(cycle_budget);
+                    // A session outgrowing what is *left* of the budget exhausts the whole
+                    // transaction's, so report the transaction's rather than the session's share.
+                    return Err(if matches!(err, LeeError::OutOfGas { .. }) {
                         LeeError::OutOfGas {
                             budget: cycle_budget,
                         }
                     } else {
                         err
-                    }
-                })?;
-            cycles_used = cycles_used.saturating_add(session_cycles);
+                    });
+                }
+            };
+            *cycles_used = cycles_used.saturating_add(session_cycles);
             debug!(
                 "Program {:?} output: {:?}",
                 chained_call.program_id, program_output
@@ -370,18 +456,13 @@ impl ValidatedStateDiff {
             );
         }
 
-        Ok((
-            Self(StateDiff {
-                signer_account_ids,
-                public_diff: state_diff,
-                new_commitments: vec![],
-                new_nullifiers: vec![],
-                program: None,
-            }),
-            ExecutionOutcome {
-                cycles: cycles_used,
-            },
-        ))
+        Ok(Self(StateDiff {
+            signer_account_ids,
+            public_diff: state_diff,
+            new_commitments: vec![],
+            new_nullifiers: vec![],
+            program: None,
+        }))
     }
 
     pub fn from_privacy_preserving_transaction(
@@ -541,7 +622,16 @@ struct CallerData {
     authorized_accounts: HashSet<AccountId>,
 }
 
-fn authenticate_public_transaction_signers(
+/// Checks a public transaction's signatures and declared nonces against `state`, returning its
+/// signer account ids.
+///
+/// Exposed because the block transition runs it *before* the fee reservation: a transaction whose
+/// signatures or nonces do not check out is invalid (it may not be included at all), whereas one
+/// that reverts during execution is included, charged, and has its nonces advanced anyway
+/// (SPECS §Block transition; replay protection is consumed on inclusion). Splitting the two
+/// requires the authentication verdict up front, and its signer list is what the revert path
+/// advances nonces for.
+pub fn authenticate_public_transaction_signers(
     tx: &PublicTransaction,
     state: &V03State,
 ) -> Result<Vec<AccountId>, LeeError> {

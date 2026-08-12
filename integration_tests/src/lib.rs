@@ -27,6 +27,26 @@ use wallet::{
 /// Maximum time to wait for the indexer to catch up to the sequencer.
 pub const L2_TO_L1_TIMEOUT: Duration = Duration::from_mins(6);
 
+/// Genesis balance of the first prebuilt public test account.
+pub const INITIAL_PUBLIC_BALANCE_A: u128 = config::INITIAL_PUBLIC_BALANCES_FOR_WALLET[0];
+/// Genesis balance of the second prebuilt public test account.
+pub const INITIAL_PUBLIC_BALANCE_B: u128 = config::INITIAL_PUBLIC_BALANCES_FOR_WALLET[1];
+/// Genesis balance of the first prebuilt private test account.
+///
+/// Private accounts were deliberately *not* refunded alongside the public ones: a private
+/// transaction is uncharged (`FeeClass::Uncharged`), so a private payer never needs fee headroom.
+pub const INITIAL_PRIVATE_BALANCE_A: u128 = config::INITIAL_PRIVATE_BALANCES_FOR_WALLET[0];
+/// Genesis balance of the second prebuilt private test account.
+pub const INITIAL_PRIVATE_BALANCE_B: u128 = config::INITIAL_PRIVATE_BALANCES_FOR_WALLET[1];
+
+/// Upper bound on what one wallet-built transaction's fee can plausibly cost.
+///
+/// A fee is `min(cycles, gas_limit) * base_fee_exec + data_bytes * base_fee_stor`, and the wallet
+/// declares a `gas_limit` of 2,000,000. At a base fee of 8 that caps a single transaction near
+/// 1.6*10^7; this doubles it so a base fee that drifted upward during a test does not make the
+/// bound flaky.
+pub const PLAUSIBLE_MAX_FEE: u128 = 40_000_000;
+
 /// Create a private or public account at the given chain index and return its ID.
 /// Pass `cci: None` to use the wallet's next available chain index.
 pub async fn new_account(
@@ -158,6 +178,31 @@ pub async fn token_send_claiming_new_account(
     info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
     Ok(())
+}
+
+/// Asserts a fee-paying sender was debited `transferred` **and** a fee on top of it.
+///
+/// Senders can no longer be pinned to an exact balance: the fee depends on the metered cycles of
+/// whatever program ran. Bracketing keeps the assertion meaningful — it still fails if the transfer
+/// did not happen, if it happened twice, or if the fee were silently not charged.
+///
+/// Only for **public** transactions. Private (shielded, deshielded, private-to-private) transfers
+/// and deployments are `FeeClass::Uncharged`, so their payer moves by exactly the transferred
+/// amount and must be asserted with a plain `assert_eq!`.
+pub fn assert_debited_with_fee(balance: u128, initial: u128, transferred: u128) {
+    let after_transfer = initial
+        .checked_sub(transferred)
+        .expect("the account must be able to cover the transfer");
+    assert!(
+        balance < after_transfer,
+        "sender must pay a fee on top of the {transferred} it transferred: \
+         balance {balance} is not below {after_transfer}",
+    );
+    assert!(
+        balance >= after_transfer.saturating_sub(PLAUSIBLE_MAX_FEE),
+        "sender was debited far more than one transaction's fee: \
+         balance {balance} is below {after_transfer} - {PLAUSIBLE_MAX_FEE}",
+    );
 }
 
 /// Retrieve the native token balance for `account_id`.

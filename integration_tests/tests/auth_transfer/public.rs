@@ -3,7 +3,8 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, account_balance, get_account, new_account,
+    INITIAL_PUBLIC_BALANCE_A, INITIAL_PUBLIC_BALANCE_B, TIME_TO_WAIT_FOR_BLOCK_SECONDS,
+    TestContext, account_balance, assert_debited_with_fee, get_account, new_account,
     public_mention, send, send_claiming_new_account,
 };
 use lee::{PublicKey, public_transaction};
@@ -49,8 +50,8 @@ async fn successful_transfer_to_existing_account() -> Result<()> {
     info!("Balance of sender: {acc_1_balance:#?}");
     info!("Balance of receiver: {acc_2_balance:#?}");
 
-    assert_eq!(acc_1_balance, 9900);
-    assert_eq!(acc_2_balance, 20100);
+    assert_debited_with_fee(acc_1_balance, INITIAL_PUBLIC_BALANCE_A, 100);
+    assert_eq!(acc_2_balance, INITIAL_PUBLIC_BALANCE_B + 100);
 
     // The recipient already exists, so the protocol doesn't require its signature, and the
     // wallet must never sign with a key it doesn't need to use. Assert the transfer's witness
@@ -101,7 +102,7 @@ pub async fn successful_transfer_to_new_account() -> Result<()> {
     info!("Balance of sender: {acc_1_balance:#?}");
     info!("Balance of receiver: {acc_2_balance:#?}");
 
-    assert_eq!(acc_1_balance, 9900);
+    assert_debited_with_fee(acc_1_balance, INITIAL_PUBLIC_BALANCE_A, 100);
     assert_eq!(acc_2_balance, 100);
 
     Ok(())
@@ -134,8 +135,8 @@ async fn failed_transfer_with_insufficient_balance() -> Result<()> {
     info!("Balance of sender: {acc_1_balance:#?}");
     info!("Balance of receiver: {acc_2_balance:#?}");
 
-    assert_eq!(acc_1_balance, 10000);
-    assert_eq!(acc_2_balance, 20000);
+    assert_eq!(acc_1_balance, INITIAL_PUBLIC_BALANCE_A);
+    assert_eq!(acc_2_balance, INITIAL_PUBLIC_BALANCE_B);
 
     Ok(())
 }
@@ -166,8 +167,8 @@ async fn two_consecutive_successful_transfers() -> Result<()> {
     info!("Balance of sender: {acc_1_balance:#?}");
     info!("Balance of receiver: {acc_2_balance:#?}");
 
-    assert_eq!(acc_1_balance, 9900);
-    assert_eq!(acc_2_balance, 20100);
+    assert_debited_with_fee(acc_1_balance, INITIAL_PUBLIC_BALANCE_A, 100);
+    assert_eq!(acc_2_balance, INITIAL_PUBLIC_BALANCE_B + 100);
 
     info!("First TX Success!");
 
@@ -190,8 +191,8 @@ async fn two_consecutive_successful_transfers() -> Result<()> {
     info!("Balance of sender: {acc_1_balance:#?}");
     info!("Balance of receiver: {acc_2_balance:#?}");
 
-    assert_eq!(acc_1_balance, 9800);
-    assert_eq!(acc_2_balance, 20200);
+    assert_debited_with_fee(acc_1_balance, INITIAL_PUBLIC_BALANCE_A, 200);
+    assert_eq!(acc_2_balance, INITIAL_PUBLIC_BALANCE_B + 200);
 
     info!("Second TX Success!");
 
@@ -255,8 +256,8 @@ async fn successful_transfer_using_from_label() -> Result<()> {
     let acc_1_balance = account_balance(&ctx, sender).await?;
     let acc_2_balance = account_balance(&ctx, receiver).await?;
 
-    assert_eq!(acc_1_balance, 9900);
-    assert_eq!(acc_2_balance, 20100);
+    assert_debited_with_fee(acc_1_balance, INITIAL_PUBLIC_BALANCE_A, 100);
+    assert_eq!(acc_2_balance, INITIAL_PUBLIC_BALANCE_B + 100);
 
     info!("Successfully transferred using from_label");
 
@@ -293,8 +294,8 @@ async fn successful_transfer_using_to_label() -> Result<()> {
     let acc_1_balance = account_balance(&ctx, sender).await?;
     let acc_2_balance = account_balance(&ctx, receiver).await?;
 
-    assert_eq!(acc_1_balance, 9900);
-    assert_eq!(acc_2_balance, 20100);
+    assert_debited_with_fee(acc_1_balance, INITIAL_PUBLIC_BALANCE_A, 100);
+    assert_eq!(acc_2_balance, INITIAL_PUBLIC_BALANCE_B + 100);
 
     info!("Successfully transferred using to_label");
 

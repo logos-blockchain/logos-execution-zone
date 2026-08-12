@@ -1,5 +1,5 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use fee_core::params::MAX_GAS_EXEC;
+pub use fee_core::params::MAX_GAS_EXEC;
 use lee::{AccountId, ExecutionOutcome, V03State, ValidatedStateDiff};
 use lee_core::{BlockId, Timestamp};
 use log::warn;
@@ -93,8 +93,9 @@ impl LeeTransaction {
         state: &V03State,
         block_id: BlockId,
         timestamp: Timestamp,
+        cycle_budget: u64,
     ) -> Result<(ValidatedStateDiff, ExecutionOutcome), lee::error::LeeError> {
-        let (diff, outcome) = self.compute_state_diff(state, block_id, timestamp)?;
+        let (diff, outcome) = self.compute_state_diff(state, block_id, timestamp, cycle_budget)?;
 
         let restricted_modification_accounts = system_accounts::clock_account_ids()
             .into_iter()
@@ -112,14 +113,15 @@ impl LeeTransaction {
     /// [`Self::validate_on_state`] (which adds the system-account guards) and
     /// [`Self::execute_on_state`].
     ///
-    /// Only public transactions run the zkVM; the other kinds are metering-free.
-    ///
-    /// TODO: budget public execution with the transaction's own `gas_limit` once fees are wired.
+    /// Only public transactions run the zkVM; the other kinds are metering-free, so they ignore
+    /// `cycle_budget`. Charged transactions pass their own `gas_limit`; fee-exempt ones pass
+    /// [`MAX_GAS_EXEC`], the only bound that applies to them.
     fn compute_state_diff(
         &self,
         state: &V03State,
         block_id: BlockId,
         timestamp: Timestamp,
+        cycle_budget: u64,
     ) -> Result<(ValidatedStateDiff, ExecutionOutcome), lee::error::LeeError> {
         match self {
             Self::Public(tx) => ValidatedStateDiff::from_public_transaction(
@@ -127,7 +129,7 @@ impl LeeTransaction {
                 state,
                 block_id,
                 timestamp,
-                MAX_GAS_EXEC,
+                cycle_budget,
             ),
             Self::PrivacyPreserving(tx) => ValidatedStateDiff::from_privacy_preserving_transaction(
                 tx, state, block_id, timestamp,
@@ -147,9 +149,10 @@ impl LeeTransaction {
         state: &mut V03State,
         block_id: BlockId,
         timestamp: Timestamp,
+        cycle_budget: u64,
     ) -> Result<(Self, ExecutionOutcome), lee::error::LeeError> {
         let (diff, outcome) = self
-            .validate_on_state(state, block_id, timestamp)
+            .validate_on_state(state, block_id, timestamp, cycle_budget)
             .inspect_err(|err| warn!("Error at transition {err:#?}"))?;
         state.apply_state_diff(diff);
         Ok((self, outcome))
@@ -165,9 +168,10 @@ impl LeeTransaction {
         state: &mut V03State,
         block_id: BlockId,
         timestamp: Timestamp,
+        cycle_budget: u64,
     ) -> Result<(Self, ExecutionOutcome), lee::error::LeeError> {
         let (diff, outcome) = self
-            .compute_state_diff(state, block_id, timestamp)
+            .compute_state_diff(state, block_id, timestamp, cycle_budget)
             .inspect_err(|err| warn!("Error at transition {err:#?}"))?;
         state.apply_state_diff(diff);
         Ok((self, outcome))
@@ -263,6 +267,130 @@ pub fn clock_invocation(timestamp: clock_core::Instruction) -> lee::PublicTransa
     )
 }
 
+/// Whether `tx` is a **system transaction**: injected by the sequencer rather than submitted by a
+/// user.
+///
+/// Such a transaction is exempt from fees *and* from both block gas caps (tokenomics rulings
+/// Q6/Q10; this deviates from SPECS invariant 6 as written, which is a decided deviation).
+///
+/// Recognized structurally, never by the payer field: [`lee::FeeFields::ZERO`] designates
+/// [`lee::SYSTEM_PAYER`], which any user could copy. The trailing clock invocation and every
+/// transaction in the genesis block are the other two system cases; both are block-level
+/// properties, so the block transition classifies them itself.
+///
+/// The instruction shape alone is *not* enough: a bridge `Deposit` and an inbox `Dispatch` are
+/// both shapes a user could craft, and a user-crafted one that classified as system would ride for
+/// free and outside the block caps. So the witness set must also be **empty**. The sequencer's own
+/// injections are unsigned — `build_bridge_deposit_tx_from_event` and `build_inbox_dispatch_tx`
+/// both close over `WitnessSet::from_raw_parts(vec![])` — whereas a user transaction the sequencer
+/// would accept has to be signed by the accounts it debits. A user *can* still submit an unsigned
+/// deposit-shaped transaction, but the bridge and inbox programs reject one that does not
+/// correspond to a real L1 event, so it only ever wastes the block space it rides for free on.
+///
+/// Lives here rather than in the sequencer so the sequencer (building) and the indexer (replaying)
+/// classify identically — a disagreement would be a consensus split.
+#[must_use]
+pub fn is_system_transaction(tx: &LeeTransaction) -> bool {
+    let LeeTransaction::Public(public_tx) = tx else {
+        return false;
+    };
+    if !public_tx
+        .witness_set()
+        .signatures_and_public_keys()
+        .is_empty()
+    {
+        return false;
+    }
+    extract_bridge_deposit_id(tx).is_some() || extract_cross_zone_dispatch(tx).is_some()
+}
+
+/// Whether `tx` is a vault claim that sweeps the payer's **entire** vault balance.
+///
+/// Such a claim is fee-exempt. It is the bootstrap transaction of the whole ledger: genesis supply
+/// and L1 bridge deposits both credit a vault PDA, never the owner's account, so the owner's own
+/// balance — the balance fees are debited from — is zero until this transaction lands. Charging it
+/// would make every genesis-funded account and every bridged-in deposit permanently unspendable.
+///
+/// The exemption is deliberately narrow: only a claim that moves a *non-zero* amount equal to the
+/// vault's full balance qualifies. A partial claim is charged like any other public transaction
+/// (and will usually fail its reservation, which is accepted — a payer full-sweeps first). The
+/// vault account id is re-derived from the owner rather than trusted from the account list, so a
+/// forged pair cannot manufacture the exemption.
+///
+/// `vault_core::Instruction::Claim` carries an explicit `amount` and has no sweep variant, so the
+/// determination is **state-dependent**: `amount` is compared against the vault balance in `state`.
+/// Callers pass the block's *opening* state, exactly as they do for the opening base fees, so the
+/// sequencer and the indexer classify identically.
+///
+/// This is the single place the bootstrap exemption is decided.
+// TBA(fee-bootstrap): tokenomics may replace this with deferred settlement, where a claim pays its
+// fee out of the funds it sweeps. That would remove the exemption entirely; keeping the decision
+// here means it is one function to delete.
+#[must_use]
+pub fn is_full_vault_sweep(tx: &LeeTransaction, state: &V03State) -> bool {
+    let vault_program_id = programs::vault().id();
+    let Some(vault_core::Instruction::Claim { amount }) =
+        decode_instruction::<vault_core::Instruction>(tx, vault_program_id)
+    else {
+        return false;
+    };
+    let LeeTransaction::Public(public_tx) = tx else {
+        return false;
+    };
+    let [owner_id, vault_id] = public_tx.message().account_ids[..] else {
+        return false;
+    };
+    if vault_id != vault_core::compute_vault_account_id(vault_program_id, owner_id) {
+        return false;
+    }
+    // A zero-amount claim moves nothing, so exempting it would be free block space.
+    amount != 0 && amount == state.get_account_by_id(vault_id).balance
+}
+
+/// The L1 deposit operation id a bridge deposit-mint transaction carries, or `None` if `tx` is not
+/// one.
+#[must_use]
+pub fn extract_bridge_deposit_id(tx: &LeeTransaction) -> Option<HashType> {
+    let bridge_core::Instruction::Deposit {
+        l1_deposit_op_id, ..
+    } = decode_instruction::<bridge_core::Instruction>(tx, programs::bridge().id())?
+    else {
+        return None;
+    };
+    Some(HashType(l1_deposit_op_id))
+}
+
+/// The cross-zone message an inbox dispatch delivers, or `None` if `tx` is not a dispatch.
+#[must_use]
+pub fn extract_cross_zone_dispatch(
+    tx: &LeeTransaction,
+) -> Option<cross_zone_inbox_core::CrossZoneMessage> {
+    let cross_zone_inbox_core::Instruction::Dispatch(message) =
+        decode_instruction::<cross_zone_inbox_core::Instruction>(
+            tx,
+            programs::cross_zone_inbox().id(),
+        )?
+    else {
+        return None;
+    };
+    Some(message)
+}
+
+/// Decodes `tx`'s instruction as `I`, provided `tx` is a public invocation of `program_id`.
+fn decode_instruction<I: serde::de::DeserializeOwned>(
+    tx: &LeeTransaction,
+    program_id: lee::ProgramId,
+) -> Option<I> {
+    let LeeTransaction::Public(tx) = tx else {
+        return None;
+    };
+    let message = tx.message();
+    if message.program_id != program_id {
+        return None;
+    }
+    risc0_zkvm::serde::from_slice::<I, u32>(&message.instruction_data).ok()
+}
+
 fn validate_doesnt_modify_account(
     state: &V03State,
     diff: &ValidatedStateDiff,
@@ -286,7 +414,9 @@ mod tests {
     use lee::{Account, AccountId, PrivateKey, PublicKey, V03State};
     use lee_core::account::Nonce;
 
-    use super::{clock_invocation, validate_doesnt_modify_account};
+    use super::{
+        MAX_GAS_EXEC, clock_invocation, is_system_transaction, validate_doesnt_modify_account,
+    };
     use crate::test_utils::{
         any_public_transaction, create_transaction_native_token_transfer, state_and_diff,
     };
@@ -307,6 +437,55 @@ mod tests {
         assert_eq!(tx.message().payer, lee::SYSTEM_PAYER);
         assert!(tx.witness_set().signatures_and_public_keys().is_empty());
         assert!(tx.witness_set().fee_witness().is_none());
+    }
+
+    /// The system exemption is fee-*and*-cap exempt, so it must not be reachable by anything a
+    /// user can put in the mempool. A bridge `Deposit` is just an instruction shape; the thing
+    /// only the sequencer can produce is an *unsigned* one, because a user transaction the
+    /// sequencer accepts is signed by the accounts it debits. Same message, same instruction —
+    /// only the witness set differs, and only the unsigned one is a system transaction.
+    #[test]
+    fn a_signed_deposit_shaped_transaction_is_not_a_system_transaction() {
+        let signing_key = PrivateKey::try_new([9_u8; 32]).expect("valid key");
+        let recipient_id = AccountId::from(&PublicKey::new_from_private_key(&signing_key));
+        let bridge_program_id = programs::bridge().id();
+        let vault_program_id = programs::vault().id();
+
+        let message = lee::public_transaction::Message::try_new(
+            bridge_program_id,
+            vec![
+                system_accounts::bridge_account_id(),
+                vault_core::compute_vault_account_id(vault_program_id, recipient_id),
+                bridge_core::deposit_receipt_account_id(bridge_program_id, [3_u8; 32]),
+            ],
+            vec![],
+            bridge_core::Instruction::Deposit {
+                l1_deposit_op_id: [3_u8; 32],
+                vault_program_id,
+                recipient_id,
+                amount: 1_000,
+            },
+            lee::FeeFields::ZERO,
+        )
+        .expect("deposit message should be constructable");
+
+        let injected = super::LeeTransaction::Public(lee::PublicTransaction::new(
+            message.clone(),
+            lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
+        ));
+        assert!(
+            is_system_transaction(&injected),
+            "the sequencer's own unsigned deposit mint must stay exempt",
+        );
+
+        let forged = super::LeeTransaction::Public(lee::PublicTransaction::new(
+            message.clone(),
+            lee::public_transaction::WitnessSet::for_message(&message, &[&signing_key]),
+        ));
+        assert!(
+            !is_system_transaction(&forged),
+            "a user-signed deposit-shaped transaction must be charged and capped like any other",
+        );
     }
 
     #[test]
@@ -469,7 +648,7 @@ mod tests {
         );
 
         assert!(
-            tx.validate_on_state(&state, 1, 0).is_err(),
+            tx.validate_on_state(&state, 1, 0, MAX_GAS_EXEC).is_err(),
             "validate_on_state must reject a transfer that credits a clock system account",
         );
     }

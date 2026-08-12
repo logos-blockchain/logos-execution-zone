@@ -28,8 +28,12 @@ const SSK_PRIV_ACC_B: [u8; 32] = [
 
 const DEFAULT_PROGRAM_OWNER: [u32; 8] = [0, 0, 0, 0, 0, 0, 0, 0];
 
-const PUB_ACC_A_INITIAL_BALANCE: u128 = 10000;
-const PUB_ACC_B_INITIAL_BALANCE: u128 = 20000;
+// Genesis funding, in atomic units (1 LGO = 10^9). Sized for fees, not for arithmetic
+// convenience: a bare transfer costs its serialized bytes plus its metered cycles at 8 atomic
+// units each, i.e. roughly 3.5*10^5 to 5.1*10^6 for the measured programs. 10^12 leaves about
+// 200,000 such transactions of headroom per account while staying far below the 10^19 supply.
+const PUB_ACC_A_INITIAL_BALANCE: u128 = 1_000_000_000_000;
+const PUB_ACC_B_INITIAL_BALANCE: u128 = 2_000_000_000_000;
 
 const PRIV_ACC_A_INITIAL_BALANCE: u128 = 10000;
 const PRIV_ACC_B_INITIAL_BALANCE: u128 = 20000;

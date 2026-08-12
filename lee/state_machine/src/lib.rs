@@ -23,7 +23,9 @@ pub use program_deployment_transaction::ProgramDeploymentTransaction;
 pub use public_transaction::PublicTransaction;
 pub use signature::{PrivateKey, PublicKey, Signature};
 pub use state::V03State;
-pub use validated_state_diff::{ExecutionOutcome, ValidatedStateDiff};
+pub use validated_state_diff::{
+    ExecutionOutcome, ValidatedStateDiff, authenticate_public_transaction_signers,
+};
 
 pub mod encoding;
 pub mod error;

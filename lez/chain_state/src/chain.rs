@@ -145,7 +145,7 @@ impl ChainState {
         };
 
         match apply_block(tip.as_ref(), block, &mut scratch) {
-            Ok(()) => {
+            Ok(_summary) => {
                 // now that `apply_block` succeeded, actually reorg the head
                 if let Some(idx) = reorg_at {
                     self.head_blocks.truncate(idx);
@@ -272,7 +272,7 @@ impl ChainState {
 
         let mut scratch = self.final_state.clone();
         match apply_block(self.final_tip.as_ref(), block, &mut scratch) {
-            Ok(()) => {
+            Ok(_summary) => {
                 self.final_state = scratch;
                 self.final_tip = Some(Tip::from(block));
                 self.final_stall = None;
@@ -405,6 +405,52 @@ mod tests {
         assert_eq!(chain.head_tip().expect("head tip").block_id, 1);
     }
 
+    /// Orphaning a block that charged fees rewinds the fee state with it.
+    ///
+    /// The fee state lives inside the consensus state a rewind replays, so this is a property of
+    /// `ChainState`'s rewind rather than of the block transition — which is why it is tested here,
+    /// against the real `revert_orphan`, and not next to `apply_block_to_state`.
+    #[test]
+    fn fee_state_rewinds_with_an_orphaned_block() {
+        let accounts = initial_pub_accounts_private_keys();
+        let from = accounts[0].account_id;
+        let to = accounts[1].account_id;
+        let sign_key = accounts[0].pub_sign_key.clone();
+
+        let mut chain = ChainState::new(initial_state());
+        let genesis = produce_dummy_block(1, None, vec![]);
+        chain.apply_adopted(msg(1), &genesis);
+
+        let at_genesis = chain.head_state().fee_state().clone();
+        let payer_at_genesis = chain.head_state().get_account_by_id(from).balance;
+
+        let tx = create_transaction_native_token_transfer(from, 0_u64.into(), to, 10, &sign_key);
+        let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![tx]);
+        assert!(matches!(
+            chain.apply_adopted(msg(2), &block2),
+            AcceptOutcome::Applied
+        ));
+        assert_ne!(
+            chain.head_state().fee_state(),
+            &at_genesis,
+            "the charged block must have moved the fee state, or the rewind proves nothing",
+        );
+
+        chain.revert_orphan(msg(2), &block2);
+
+        assert_eq!(
+            chain.head_state().fee_state(),
+            &at_genesis,
+            "orphaning the block must put the fee state back",
+        );
+        assert_eq!(
+            chain.head_state().get_account_by_id(from).balance,
+            payer_at_genesis,
+            "and refund the fee it charged",
+        );
+        assert_head_matches_replay(&chain);
+    }
+
     #[test]
     fn orphan_reverts_head() {
         let mut chain = ChainState::new(initial_state());
@@ -517,8 +563,14 @@ mod tests {
         chain.revert_orphan(msg(3), &block3);
 
         assert_eq!(chain.head_tip().expect("head tip").block_id, 2);
-        assert_eq!(chain.head_state().get_account_by_id(from).balance, 9990);
-        assert_eq!(chain.head_state().get_account_by_id(to).balance, 20010);
+        assert!(
+            chain.head_state().get_account_by_id(from).balance < 1_000_000_000_000 - 10,
+            "the sender pays the transfer and, on top of it, the transaction's fee",
+        );
+        assert_eq!(
+            chain.head_state().get_account_by_id(to).balance,
+            2_000_000_000_010
+        );
         assert_head_matches_replay(&chain);
     }
 
@@ -559,8 +611,14 @@ mod tests {
             [AcceptOutcome::Applied, AcceptOutcome::Applied]
         ));
         assert_eq!(chain.head_tip().expect("head tip").block_id, 4);
-        assert_eq!(chain.head_state().get_account_by_id(from).balance, 9940);
-        assert_eq!(chain.head_state().get_account_by_id(to).balance, 20060);
+        assert!(
+            chain.head_state().get_account_by_id(from).balance < 1_000_000_000_000 - 60,
+            "the sender pays the transfers and, on top of them, their fees",
+        );
+        assert_eq!(
+            chain.head_state().get_account_by_id(to).balance,
+            2_000_000_000_060
+        );
         assert_head_matches_replay(&chain);
     }
 
@@ -596,7 +654,10 @@ mod tests {
             [AcceptOutcome::Applied, AcceptOutcome::Applied]
         ));
         assert_eq!(chain.head_tip().expect("head tip").block_id, 3);
-        assert_eq!(chain.head_state().get_account_by_id(to).balance, 20050);
+        assert_eq!(
+            chain.head_state().get_account_by_id(to).balance,
+            2_000_000_000_050
+        );
         assert_head_matches_replay(&chain);
     }
 
@@ -644,7 +705,10 @@ mod tests {
         let tip = chain.head_tip().expect("head tip");
         assert_eq!(tip.block_id, 2);
         assert_eq!(tip.hash, block2_prime.header.hash);
-        assert_eq!(chain.head_state().get_account_by_id(to).balance, 20000);
+        assert_eq!(
+            chain.head_state().get_account_by_id(to).balance,
+            2_000_000_000_000
+        );
         assert_head_matches_replay(&chain);
     }
 
@@ -672,7 +736,10 @@ mod tests {
             AcceptOutcome::AlreadyApplied
         ));
         assert_eq!(chain.head_tip().expect("head tip").hash, peer.header.hash);
-        assert_eq!(chain.head_state().get_account_by_id(to).balance, 20000);
+        assert_eq!(
+            chain.head_state().get_account_by_id(to).balance,
+            2_000_000_000_000
+        );
         assert_head_matches_replay(&chain);
     }
 
@@ -771,7 +838,10 @@ mod tests {
             chain.apply_adopted(msg(13), &block3_prime),
             AcceptOutcome::Applied
         ));
-        assert_eq!(chain.head_state().get_account_by_id(to).balance, 20010);
+        assert_eq!(
+            chain.head_state().get_account_by_id(to).balance,
+            2_000_000_000_010
+        );
         assert_head_matches_replay(&chain);
     }
 
@@ -844,9 +914,15 @@ mod tests {
         chain.apply_finalized(msg(2), &block2, slot(10));
 
         // Head still reflects both transfers
-        assert_eq!(chain.head_state().get_account_by_id(to).balance, 20020);
+        assert_eq!(
+            chain.head_state().get_account_by_id(to).balance,
+            2_000_000_000_020
+        );
         // ...while final reflects only the finalized prefix.
-        assert_eq!(chain.final_state().get_account_by_id(to).balance, 20010);
+        assert_eq!(
+            chain.final_state().get_account_by_id(to).balance,
+            2_000_000_000_010
+        );
         assert_head_matches_replay(&chain);
     }
 
@@ -1009,7 +1085,10 @@ mod tests {
 
         assert_eq!(chain.final_tip().expect("final tip").block_id, 2);
         assert_eq!(chain.head_tip().expect("head tip").block_id, 2);
-        assert_eq!(chain.head_state().get_account_by_id(to).balance, 20010);
+        assert_eq!(
+            chain.head_state().get_account_by_id(to).balance,
+            2_000_000_000_010
+        );
         assert_head_matches_replay(&chain);
     }
 
@@ -1028,7 +1107,13 @@ mod tests {
         let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![tx]);
         chain.apply_adopted(msg(2), &block2);
 
-        assert_eq!(chain.head_state().get_account_by_id(from).balance, 9990);
-        assert_eq!(chain.head_state().get_account_by_id(to).balance, 20010);
+        assert!(
+            chain.head_state().get_account_by_id(from).balance < 1_000_000_000_000 - 10,
+            "the sender pays the transfer and, on top of it, the transaction's fee",
+        );
+        assert_eq!(
+            chain.head_state().get_account_by_id(to).balance,
+            2_000_000_000_010
+        );
     }
 }

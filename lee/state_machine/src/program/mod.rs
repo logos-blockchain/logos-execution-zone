@@ -53,8 +53,14 @@ impl Program {
     }
 
     /// Executes the program under a `cycle_budget` of user cycles, returning its output together
-    /// with the user cycles it consumed. Outgrowing the budget is [`LeeError::OutOfGas`], with no
-    /// partial cycle count available.
+    /// with the user cycles it consumed.
+    ///
+    /// Outgrowing the budget is [`LeeError::OutOfGas`]. Two of the three error arms carry **no**
+    /// cycle count, because risc0 bails out of `execute` without a `SessionInfo` for both the
+    /// session limit and a guest panic; `ValidatedStateDiff::execute_public_transaction` meters
+    /// those at the whole budget. The third — [`LeeError::MalformedProgramOutput`], a guest that
+    /// halted cleanly without writing a decodable output — *does* carry the real count, because
+    /// risc0 returns `Ok(SessionInfo)` for any `Halted(n)`.
     ///
     /// The returned count may exceed `cycle_budget`: the executor tests its limit between
     /// instructions, so a session that terminates on the instruction crossing the line reports the
@@ -85,11 +91,18 @@ impl Program {
         // Sum of the per-segment user cycles: the metered cost of this session.
         let cycles = session_info.cycles();
 
-        // Get outputs
-        let program_output = session_info
-            .journal
-            .decode()
-            .map_err(|e| LeeError::ProgramExecutionFailed(e.to_string()))?;
+        // Get outputs. A journal that does not decode means the guest halted cleanly without
+        // writing its output — the early-`return` shape. That comes back as `Ok(SessionInfo)`, so
+        // unlike the panic and out-of-gas paths this failure *does* know what it cost; the count
+        // rides on the error rather than being thrown away with it.
+        let program_output =
+            session_info
+                .journal
+                .decode()
+                .map_err(|e| LeeError::MalformedProgramOutput {
+                    cycles,
+                    reason: e.to_string(),
+                })?;
 
         Ok((program_output, cycles))
     }

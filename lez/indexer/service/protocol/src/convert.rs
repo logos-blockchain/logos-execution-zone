@@ -844,6 +844,12 @@ impl From<indexer_core::BlockIngestError> for BlockIngestError {
             indexer_core::BlockIngestError::NonPublicGenesisTransaction => {
                 Self::NonPublicGenesisTransaction
             }
+            indexer_core::BlockIngestError::FeeValidity { tx_index, reason } => {
+                Self::FeeValidity { tx_index, reason }
+            }
+            indexer_core::BlockIngestError::GasCapExceeded { reason } => {
+                Self::GasCapExceeded { reason }
+            }
             indexer_core::BlockIngestError::StateTransition { tx_index, reason } => {
                 Self::StateTransition { tx_index, reason }
             }

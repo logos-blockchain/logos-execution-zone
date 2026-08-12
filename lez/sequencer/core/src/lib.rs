@@ -17,6 +17,7 @@ use common::{
 };
 use config::{GenesisAction, SequencerConfig};
 use cross_zone_inbox_core::CrossZoneMessage;
+use fee_core::params::{MAX_GAS_EXEC, MAX_GAS_STOR};
 use futures::StreamExt as _;
 use itertools::Itertools as _;
 use lee::{AccountId, PublicTransaction, public_transaction::Message};
@@ -70,6 +71,49 @@ const RETIRE_DISPATCH_AFTER_FAILURES: u32 = 3;
 /// since store-drained work is taken before the mempool. The rest wait one
 /// block; nothing is dropped.
 const MAX_DISPATCHES_PER_BLOCK: usize = 16;
+
+/// What the builder did with one mempool transaction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MempoolTxOutcome {
+    /// Executed and included; the working state carries its effects.
+    Applied,
+    /// Left out for good: it does not validate, or its payer cannot pay.
+    Skipped,
+    /// Valid, but it does not fit in *this* block's remaining gas. Requeued for the next one.
+    Deferred,
+}
+
+/// The block's running gas totals, against the two caps `apply_block_to_state` enforces.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct BlockGasUsed {
+    exec: u64,
+    stor: u64,
+}
+
+impl BlockGasUsed {
+    /// Which cap `contribution` would push this block past, or `None` if it fits.
+    ///
+    /// Saturating rather than checked: a total that saturates is past its cap by construction, so
+    /// the answer is the same and there is no arithmetic to panic on.
+    const fn would_exceed(
+        self,
+        contribution: chain_state::CapContribution,
+    ) -> Option<&'static str> {
+        if self.exec.saturating_add(contribution.gas_exec) > MAX_GAS_EXEC {
+            return Some("execution gas");
+        }
+        if self.stor.saturating_add(contribution.gas_stor) > MAX_GAS_STOR {
+            return Some("storage gas");
+        }
+        None
+    }
+
+    /// Adds a contribution that [`Self::would_exceed`] has already cleared.
+    const fn add(&mut self, contribution: chain_state::CapContribution) {
+        self.exec = self.exec.saturating_add(contribution.gas_exec);
+        self.stor = self.stor.saturating_add(contribution.gas_stor);
+    }
+}
 
 /// The origin of a transaction.
 #[derive(Clone, Copy)]
@@ -667,9 +711,12 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         Ok(())
     }
 
-    /// Validates and applies a single mempool transaction to the current state.
-    /// Returns `Ok(true)` if the transaction was valid and applied, `Ok(false)` if
-    /// it was skipped due to validation failure.
+    /// Validates and applies a single mempool transaction to the current state, accumulating what
+    /// it costs against the block's two gas caps.
+    ///
+    /// `gas_used` carries the running totals. A transaction that would push either total past its
+    /// cap is *deferred*, not skipped: the block it would break is this one, and the next block
+    /// starts both totals at zero, so the caller requeues it rather than dropping it.
     fn apply_mempool_transaction(
         state: &mut lee::V03State,
         origin: TransactionOrigin,
@@ -677,26 +724,109 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         block_height: u64,
         timestamp: u64,
         withdrawals: &mut Vec<WithdrawArg>,
-    ) -> bool {
+        gas_used: &mut BlockGasUsed,
+    ) -> MempoolTxOutcome {
         let tx_hash = tx.hash();
         match origin {
             TransactionOrigin::User => {
-                let validated_diff = match tx.validate_on_state(state, block_height, timestamp) {
-                    // TODO: charge the metered cycles once fees are wired.
-                    Ok((diff, _outcome)) => diff,
+                // The block this builds must pass our own `apply_block_to_state`, and there an
+                // included transaction whose payer cannot cover its reservation invalidates the
+                // *whole* block. So admission runs the same reserve-execute-settle step the apply
+                // path does, against the same working state, and skips anything that would not
+                // survive it.
+                //
+                // Budgeting by `gas_limit` and ordering by tip is T9's job; this only keeps the
+                // builder from producing a block it would itself reject.
+                let opening = state.fee_state().clone();
+                let charged = chain_state::charged_fee_view(tx, state);
+                let reserved = if let Some(view) = charged.as_ref() {
+                    let LeeTransaction::Public(public_tx) = tx else {
+                        unreachable!("only public transactions are charged");
+                    };
+                    if let Err(reason) = chain_state::check_charged_tx(public_tx, view, &opening) {
+                        error!(
+                            "Transaction with hash {tx_hash} is not statically fee-valid: {reason}, skipping it",
+                        );
+                        return MempoolTxOutcome::Skipped;
+                    }
+                    let payer = public_tx.message().payer;
+                    let reserve = fee_core::fee_reserve(view, &opening);
+                    if let Err(err) = state.debit_fee(payer, reserve) {
+                        error!(
+                            "Transaction with hash {tx_hash} cannot cover its fee reservation: {err}, skipping it",
+                        );
+                        return MempoolTxOutcome::Skipped;
+                    }
+                    Some((payer, reserve, *view))
+                } else {
+                    None
+                };
+
+                let budget = charged.map_or(MAX_GAS_EXEC, |view| match view {
+                    fee_core::FeeTxView::Public { gas_limit, .. } => gas_limit,
+                    fee_core::FeeTxView::Private { .. } => MAX_GAS_EXEC,
+                });
+
+                let validated = match tx.validate_on_state(state, block_height, timestamp, budget) {
+                    Ok((diff, outcome)) => Some((diff, outcome)),
                     Err(err) => {
                         error!(
                             "Transaction with hash {tx_hash} failed execution check with error: {err:#?}, skipping it",
                         );
-                        return false;
+                        None
                     }
                 };
+
+                let Some((validated_diff, outcome)) = validated else {
+                    // Undo the hold exactly, so the working state is as if this transaction had
+                    // never been considered. A transaction that reverts is includable and
+                    // chargeable, but a builder gains nothing by putting it in a block.
+                    if let Some((payer, reserve, _)) = reserved {
+                        state.credit_fee(payer, reserve);
+                    }
+                    return MempoolTxOutcome::Skipped;
+                };
+
+                // Cap accounting, before anything of this transaction reaches `state`. The
+                // contribution is exact rather than an upper bound: execution has already run and
+                // metered its cycles, and `validate_on_state` only *computes* a diff, so nothing
+                // has to be rolled back if the transaction turns out not to fit. The one hold
+                // taken so far — the fee reservation — is released on the way out.
+                //
+                // Sized off the same `chain_state::classify` the apply path uses, so a block this
+                // builder fills to the brim is one `apply_block_to_state` accepts. Ordering by tip
+                // and packing by `gas_limit` remain T9's job; this only enforces the ceiling.
+                if let Some(contribution) = chain_state::cap_contribution(tx, state, outcome.cycles)
+                {
+                    if let Some(over) = gas_used.would_exceed(contribution) {
+                        warn!(
+                            "Transaction with hash {tx_hash} deferred to next block: it would take                              the block's {over} past its cap",
+                        );
+                        if let Some((payer, reserve, _)) = reserved {
+                            state.credit_fee(payer, reserve);
+                        }
+                        return MempoolTxOutcome::Deferred;
+                    }
+                    gas_used.add(contribution);
+                }
 
                 if let Some(withdraw_data) = extract_bridge_withdraw_data(tx) {
                     withdrawals.push(withdraw_data);
                 }
 
                 state.apply_state_diff(validated_diff);
+
+                // Settle after the diff, whose account post-states were computed from the
+                // already-reserved balance — the same order the apply path uses.
+                if let Some((payer, reserve, view)) = reserved {
+                    let fee_core::FeeTxView::Public { gas_limit, tip, .. } = view else {
+                        unreachable!("only public transactions are charged");
+                    };
+                    let fee_base =
+                        fee_core::fee_actual_base(outcome.cycles.min(gas_limit), &view, &opening);
+                    let released = reserve.saturating_sub(fee_base.saturating_add(u128::from(tip)));
+                    state.credit_fee(payer, released);
+                }
             }
             TransactionOrigin::Sequencer => {
                 let LeeTransaction::Public(public_tx) = tx else {
@@ -720,13 +850,13 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                     error!(
                         "Sequencer-generated transaction {tx_hash} failed execution: {err:#?}, skipping it",
                     );
-                    return false;
+                    return MempoolTxOutcome::Skipped;
                 }
             }
         }
 
         info!("Validated transaction with hash {tx_hash}, including it in block");
-        true
+        MempoolTxOutcome::Applied
     }
 
     fn build_block_from_mempool(&mut self) -> Result<BlockWithMeta> {
@@ -815,6 +945,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
 
         let mut valid_transactions = Vec::new();
         let mut withdrawals = Vec::new();
+        let mut gas_used = BlockGasUsed::default();
 
         // Bridge deposit mints are drained from the store, not the mempool: the
         // follow path records the event durably but cannot enqueue the mint
@@ -926,34 +1057,46 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             }
 
             let before_tx_apply = Instant::now();
-            let applied = Self::apply_mempool_transaction(
+            let outcome = Self::apply_mempool_transaction(
                 &mut working_state,
                 origin,
                 &tx,
                 new_block_height,
                 new_block_timestamp,
                 &mut withdrawals,
+                &mut gas_used,
             );
-            if applied {
-                sequencer_core_metrics::record_mempool_transaction_application_time(
-                    origin.into(),
-                    tx.kind().into(),
-                    sequencer_core_metrics::ApplyStatus::Applied,
-                    before_tx_apply.elapsed(),
-                );
-                valid_transactions.push(tx);
-            } else {
-                sequencer_core_metrics::increment_mempool_failed_transactions_total();
-                sequencer_core_metrics::record_mempool_transaction_application_time(
-                    origin.into(),
-                    tx.kind().into(),
-                    sequencer_core_metrics::ApplyStatus::Failed,
-                    before_tx_apply.elapsed(),
-                );
-                // A failed transaction is simply left out of the block, except a
-                // dispatch: that one is re-fed from the store every turn, so one
-                // that can never execute would fail on every block for ever.
-                self.count_dispatch_failure(&tx);
+            match outcome {
+                MempoolTxOutcome::Applied => {
+                    sequencer_core_metrics::record_mempool_transaction_application_time(
+                        origin.into(),
+                        tx.kind().into(),
+                        sequencer_core_metrics::ApplyStatus::Applied,
+                        before_tx_apply.elapsed(),
+                    );
+                    valid_transactions.push(tx);
+                }
+                MempoolTxOutcome::Skipped => {
+                    sequencer_core_metrics::increment_mempool_failed_transactions_total();
+                    sequencer_core_metrics::record_mempool_transaction_application_time(
+                        origin.into(),
+                        tx.kind().into(),
+                        sequencer_core_metrics::ApplyStatus::Failed,
+                        before_tx_apply.elapsed(),
+                    );
+                    // A failed transaction is simply left out of the block, except a
+                    // dispatch: that one is re-fed from the store every turn, so one
+                    // that can never execute would fail on every block for ever.
+                    self.count_dispatch_failure(&tx);
+                }
+                // Out of block gas, exactly like running out of block bytes above: stop filling
+                // and leave this transaction at the front of the queue. Only user transactions can
+                // reach here — sequencer injections are cap-exempt — so `from_store` cannot be set
+                // and there is nothing to give up on.
+                MempoolTxOutcome::Deferred => {
+                    self.mempool.push_front((origin, tx));
+                    break;
+                }
             }
 
             if valid_transactions.len() >= self.sequencer_config.max_num_tx_in_block {

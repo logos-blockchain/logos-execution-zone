@@ -12,7 +12,11 @@ use sequencer_core::config::{BedrockConfig, CrossZoneConfig, GenesisAction, Sequ
 use url::Url;
 use wallet::config::{MultiSequencerClientConfig, SequencerConnectionData, WalletConfig};
 
-pub const INITIAL_PUBLIC_BALANCES_FOR_WALLET: [u128; 2] = [10_000, 20_000];
+// Genesis funding, in atomic units (1 LGO = 10^9). Sized for fees, not for arithmetic
+// convenience: a bare transfer costs its serialized bytes plus its metered cycles at 8 atomic
+// units each, i.e. roughly 3.5*10^5 to 5.1*10^6 for the measured programs. 10^12 leaves about
+// 200,000 such transactions of headroom per account while staying far below the 10^19 supply.
+pub const INITIAL_PUBLIC_BALANCES_FOR_WALLET: [u128; 2] = [1_000_000_000_000, 2_000_000_000_000];
 pub const INITIAL_PRIVATE_BALANCES_FOR_WALLET: [u128; 2] = [10_000, 20_000];
 
 /// Fixed sequencer signing key; exposed so the fixture generator can reopen the produced store.

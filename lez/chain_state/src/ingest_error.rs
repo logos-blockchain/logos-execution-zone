@@ -30,6 +30,18 @@ pub enum BlockIngestError {
     InvalidClockTransaction,
     #[error("Genesis block must contain only public transactions")]
     NonPublicGenesisTransaction,
+    #[error("Fee validity failed at transaction {tx_index}: {reason}")]
+    FeeValidity {
+        /// Index of the offending transaction within the block body.
+        tx_index: u64,
+        /// The `fee_core` (or reservation) rejection, rendered.
+        reason: String,
+    },
+    #[error("Block exceeds a gas cap: {reason}")]
+    GasCapExceeded {
+        /// The `fee_core` cap rejection, rendered.
+        reason: String,
+    },
     #[error("State transition failed at transaction {tx_index}: {reason}")]
     StateTransition {
         /// Index of the failing transaction within the block body.

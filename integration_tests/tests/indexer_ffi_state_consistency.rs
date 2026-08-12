@@ -10,7 +10,8 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 use indexer_service_protocol::Account;
 use integration_tests::{
-    L2_TO_L1_TIMEOUT, TIME_TO_WAIT_FOR_BLOCK_SECONDS, private_mention, public_mention,
+    INITIAL_PUBLIC_BALANCE_A, INITIAL_PUBLIC_BALANCE_B, L2_TO_L1_TIMEOUT,
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, assert_debited_with_fee, private_mention, public_mention,
     verify_commitment_is_in_state,
 };
 use lee::AccountId;
@@ -56,8 +57,8 @@ fn indexer_ffi_state_consistency() -> Result<()> {
     info!("Balance of sender: {acc_1_balance:#?}");
     info!("Balance of receiver: {acc_2_balance:#?}");
 
-    assert_eq!(acc_1_balance, 9900);
-    assert_eq!(acc_2_balance, 20100);
+    assert_debited_with_fee(acc_1_balance, INITIAL_PUBLIC_BALANCE_A, 100);
+    assert_eq!(acc_2_balance, INITIAL_PUBLIC_BALANCE_B + 100);
 
     let from: AccountId = ctx.ctx().existing_private_accounts()[0];
     let to: AccountId = ctx.ctx().existing_private_accounts()[1];

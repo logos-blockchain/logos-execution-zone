@@ -9,7 +9,10 @@ use std::time::Duration;
 
 use anyhow::Result;
 use indexer_service_protocol::Account;
-use integration_tests::{L2_TO_L1_TIMEOUT, TIME_TO_WAIT_FOR_BLOCK_SECONDS, public_mention};
+use integration_tests::{
+    INITIAL_PUBLIC_BALANCE_A, INITIAL_PUBLIC_BALANCE_B, L2_TO_L1_TIMEOUT,
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, assert_debited_with_fee, public_mention,
+};
 use log::info;
 use wallet::{
     account::Label,
@@ -68,8 +71,8 @@ fn indexer_ffi_state_consistency_with_labels() -> Result<()> {
         )
     })?;
 
-    assert_eq!(acc_1_balance, 9900);
-    assert_eq!(acc_2_balance, 20100);
+    assert_debited_with_fee(acc_1_balance, INITIAL_PUBLIC_BALANCE_A, 100);
+    assert_eq!(acc_2_balance, INITIAL_PUBLIC_BALANCE_B + 100);
 
     info!("Waiting for indexer to parse blocks");
     std::thread::sleep(L2_TO_L1_TIMEOUT);

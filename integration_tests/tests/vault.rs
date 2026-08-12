@@ -4,7 +4,7 @@
 )]
 
 use anyhow::{Context as _, Result};
-use integration_tests::{TestContext, private_mention, public_mention};
+use integration_tests::{TestContext, assert_debited_with_fee, private_mention, public_mention};
 use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 use wallet::cli::{Command, SubcommandReturnValue, programs::vault::VaultSubcommand};
@@ -50,10 +50,8 @@ async fn public_transfer_and_public_claim() -> Result<()> {
         .get_account_balance(recipient_vault_id)
         .await?;
 
-    assert_eq!(
-        sender_balance_after_transfer,
-        sender_balance_before - amount
-    );
+    // A public vault transfer is a charged public transaction: the sender pays the fee on top.
+    assert_debited_with_fee(sender_balance_after_transfer, sender_balance_before, amount);
     assert_eq!(recipient_balance_after_transfer, recipient_balance_before);
     assert_eq!(
         recipient_vault_balance_after_transfer,
@@ -79,7 +77,11 @@ async fn public_transfer_and_public_claim() -> Result<()> {
         .get_account_balance(recipient_vault_id)
         .await?;
 
-    assert_eq!(sender_balance_after_claim, sender_balance_before - amount);
+    // The claim is the recipient's transaction; it must leave the sender exactly where the
+    // transfer left it.
+    assert_eq!(sender_balance_after_claim, sender_balance_after_transfer);
+    // The claim sweeps the recipient's whole vault, so it is fee-exempt (the bootstrap
+    // exemption) and credits the recipient the full amount.
     assert_eq!(
         recipient_balance_after_claim,
         recipient_balance_before + amount

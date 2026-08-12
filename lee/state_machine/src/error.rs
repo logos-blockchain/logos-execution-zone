@@ -44,6 +44,15 @@ pub enum LeeError {
     #[error("Failed to execute program: {0}")]
     ProgramExecutionFailed(String),
 
+    /// The session halted cleanly but its journal does not decode into a `ProgramOutput` — a
+    /// program that returned without writing its output, or wrote something else.
+    ///
+    /// Carries `cycles` because this failure, unlike a panic or an out-of-gas halt, comes back
+    /// from the executor as `Ok(SessionInfo)` with an exact cycle count. Discarding the error
+    /// would discard the measurement with it, so the metering caller charges what is in here.
+    #[error("Program halted without a decodable output after {cycles} cycles: {reason}")]
+    MalformedProgramOutput { cycles: u64, reason: String },
+
     #[error("Execution ran out of gas: cycle budget of {budget} exhausted")]
     OutOfGas { budget: u64 },
 
@@ -82,6 +91,13 @@ pub enum LeeError {
 
     #[error("Execution outside of the validity window")]
     OutOfValidityWindow,
+
+    #[error("Fee payer {account_id} holds {available} but its reservation requires {required}")]
+    InsufficientFeeBalance {
+        account_id: AccountId,
+        required: u128,
+        available: u128,
+    },
 }
 
 #[derive(Error, Debug)]

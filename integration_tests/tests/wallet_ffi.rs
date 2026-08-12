@@ -21,7 +21,11 @@ use std::{
 };
 
 use anyhow::Result;
-use integration_tests::{BlockingTestContext, TIME_TO_WAIT_FOR_BLOCK_SECONDS};
+use integration_tests::{
+    BlockingTestContext, INITIAL_PRIVATE_BALANCE_A, INITIAL_PRIVATE_BALANCE_B,
+    INITIAL_PUBLIC_BALANCE_A, INITIAL_PUBLIC_BALANCE_B, TIME_TO_WAIT_FOR_BLOCK_SECONDS,
+    assert_debited_with_fee,
+};
 use lee::{
     Account, AccountId, PrivateKey, PublicKey,
     privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
@@ -600,7 +604,7 @@ fn test_wallet_ffi_get_balance_public() -> Result<()> {
         .unwrap();
         u128::from_le_bytes(out_balance)
     };
-    assert_eq!(balance, 10000);
+    assert_eq!(balance, INITIAL_PUBLIC_BALANCE_A);
 
     info!("Successfully retrieved account balance");
 
@@ -637,7 +641,7 @@ fn test_wallet_ffi_get_account_public() -> Result<()> {
         account.program_owner,
         programs::authenticated_transfer().id()
     );
-    assert_eq!(account.balance, 10000);
+    assert_eq!(account.balance, INITIAL_PUBLIC_BALANCE_A);
     assert!(account.data.is_empty());
     assert_eq!(account.nonce.0, 1);
 
@@ -677,7 +681,7 @@ fn test_wallet_ffi_get_account_private() -> Result<()> {
         account.program_owner,
         programs::authenticated_transfer().id()
     );
-    assert_eq!(account.balance, 10000);
+    assert_eq!(account.balance, INITIAL_PRIVATE_BALANCE_A);
     assert!(account.data.is_empty());
 
     unsafe {
@@ -990,8 +994,8 @@ fn test_wallet_ffi_transfer_public() -> Result<()> {
         u128::from_le_bytes(out_balance)
     };
 
-    assert_eq!(from_balance, 9900);
-    assert_eq!(to_balance, 20100);
+    assert_debited_with_fee(from_balance, INITIAL_PUBLIC_BALANCE_A, 100);
+    assert_eq!(to_balance, INITIAL_PUBLIC_BALANCE_B + 100);
 
     // Also check for transaction inclusion
     let hash_bytes = unsafe { transfer_result.tx_hash_bytes() };
@@ -1083,7 +1087,9 @@ fn test_wallet_ffi_transfer_shielded() -> Result<()> {
         u128::from_le_bytes(out_balance)
     };
 
-    assert_eq!(from_balance, 9900);
+    // A shielded transfer is a privacy-preserving transaction: uncharged, so the public sender
+    // moves by exactly the amount it sent.
+    assert_eq!(from_balance, INITIAL_PUBLIC_BALANCE_A - 100);
     assert_eq!(to_balance, 100);
 
     unsafe {
@@ -1146,8 +1152,10 @@ fn test_wallet_ffi_transfer_deshielded() -> Result<()> {
         u128::from_le_bytes(out_balance)
     };
 
-    assert_eq!(from_balance, 9900);
-    assert_eq!(to_balance, 10100);
+    // Deshielding is privacy-preserving, therefore uncharged; the sender here is a *private*
+    // account, which was not refunded when the public genesis balances were raised.
+    assert_eq!(from_balance, INITIAL_PRIVATE_BALANCE_A - 100);
+    assert_eq!(to_balance, INITIAL_PUBLIC_BALANCE_A + 100);
 
     unsafe {
         wallet_ffi_free_transfer_result(&raw mut transfer_result);
@@ -1229,7 +1237,8 @@ fn test_wallet_ffi_transfer_private() -> Result<()> {
         u128::from_le_bytes(out_balance)
     };
 
-    assert_eq!(from_balance, 9900);
+    // Private, therefore uncharged.
+    assert_eq!(from_balance, INITIAL_PRIVATE_BALANCE_A - 100);
     assert_eq!(to_balance, 100);
 
     unsafe {
@@ -1675,8 +1684,8 @@ fn test_wallet_ffi_transfer_generic_public() -> Result<()> {
         u128::from_le_bytes(out_balance)
     };
 
-    assert_eq!(from_balance, 9900);
-    assert_eq!(to_balance, 20100);
+    assert_debited_with_fee(from_balance, INITIAL_PUBLIC_BALANCE_A, 100);
+    assert_eq!(to_balance, INITIAL_PUBLIC_BALANCE_B + 100);
 
     unsafe {
         let account_identities_mut = account_identities.cast_mut();
@@ -1784,8 +1793,9 @@ fn test_wallet_ffi_transfer_generic_private() -> Result<()> {
         u128::from_le_bytes(out_balance)
     };
 
-    assert_eq!(from_balance, 9900);
-    assert_eq!(to_balance, 20100);
+    // Both sides are private accounts and the transaction is privacy-preserving: uncharged.
+    assert_eq!(from_balance, INITIAL_PRIVATE_BALANCE_A - 100);
+    assert_eq!(to_balance, INITIAL_PRIVATE_BALANCE_B + 100);
 
     unsafe {
         let account_identities_mut = account_identities.cast_mut();
@@ -1878,7 +1888,8 @@ fn test_wallet_ffi_vault_balance_and_claim_public() -> Result<()> {
         .unwrap();
         u128::from_le_bytes(out_balance)
     };
-    assert_eq!(owner_balance, 20_000 + amount);
+    // The claim sweeps the owner's whole vault, so it is fee-exempt and credits the full amount.
+    assert_eq!(owner_balance, INITIAL_PUBLIC_BALANCE_B + amount);
 
     unsafe {
         wallet_ffi_free_transfer_result(&raw mut transfer_result);
@@ -1970,7 +1981,7 @@ fn test_wallet_ffi_vault_balance_and_claim_private() -> Result<()> {
         );
         u128::from_le_bytes(out_balance)
     };
-    assert_eq!(owner_balance, 10_000 + amount);
+    assert_eq!(owner_balance, INITIAL_PRIVATE_BALANCE_A + amount);
 
     unsafe {
         wallet_ffi_free_transfer_result(&raw mut transfer_result);

@@ -431,6 +431,14 @@ pub enum BlockIngestError {
     EmptyBlock,
     InvalidClockTransaction,
     NonPublicGenesisTransaction,
+    FeeValidity {
+        /// Index of the offending transaction within the block body.
+        tx_index: u64,
+        reason: String,
+    },
+    GasCapExceeded {
+        reason: String,
+    },
     StateTransition {
         /// Index of the failing transaction within the block body.
         tx_index: u64,
