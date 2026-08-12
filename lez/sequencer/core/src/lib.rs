@@ -1,5 +1,5 @@
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, HashSet, VecDeque},
     path::Path,
     sync::{Arc, Mutex},
     time::Instant,
@@ -81,6 +81,18 @@ enum MempoolTxOutcome {
     Skipped,
     /// Valid, but it does not fit in *this* block's remaining gas. Requeued for the next one.
     Deferred,
+}
+
+/// What the pre-screen decided about a candidate, before any of it executes. See
+/// [`SequencerCore::screen_cap_budget`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CapScreen {
+    /// Nothing in the way of it: execute it.
+    Admit,
+    /// It does not fit *this* block. Requeued, with the rest of its payer's chain.
+    Defer,
+    /// It does not fit any block, so no requeue would ever pay off.
+    Drop,
 }
 
 /// The block's running gas totals, against the two caps `apply_block_to_state` enforces.
@@ -256,6 +268,13 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         config: SequencerConfig,
     ) -> (Self, MemPoolHandle<(TransactionOrigin, LeeTransaction)>) {
         sequencer_core_metrics::init();
+
+        // Operational envelope vs consensus capacity. Logged, not fatal: a sequencer that fills
+        // smaller blocks than the protocol allows still produces valid ones, and some deployments
+        // (and tests) want exactly that.
+        if let Err(reason) = config.check_block_size_envelope() {
+            warn!("{reason}");
+        }
 
         let bedrock_signing_key =
             load_or_create_signing_key(&config.home.join("bedrock_signing_key"))
@@ -623,9 +642,18 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
 
     /// Produces a new block from mempool transactions and publishes it via zone-sdk.
     pub async fn produce_new_block(&mut self) -> Result<u64> {
-        let BlockWithMeta { block, withdrawals } = self
+        let BlockWithMeta {
+            block,
+            withdrawals,
+            gas_used,
+        } = self
             .build_block_from_mempool()
             .context("Failed to build block from mempool transactions")?;
+
+        debug!(
+            "Block {} accounts {}/{MAX_GAS_EXEC} execution gas and {}/{MAX_GAS_STOR} storage gas",
+            block.header.block_id, gas_used.exec, gas_used.stor,
+        );
 
         let block_publisher::PublishOutcome {
             this_msg,
@@ -735,8 +763,9 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                 // path does, against the same working state, and skips anything that would not
                 // survive it.
                 //
-                // Budgeting by `gas_limit` and ordering by tip is T9's job; this only keeps the
-                // builder from producing a block it would itself reject.
+                // The caller budgets by declared `gas_limit` and orders by tip before it gets
+                // here; this step is what keeps the builder from producing a block it would
+                // itself reject.
                 let opening = state.fee_state().clone();
                 let charged = chain_state::charged_fee_view(tx, state);
                 let reserved = if let Some(view) = charged.as_ref() {
@@ -762,10 +791,12 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                     None
                 };
 
-                let budget = charged.map_or(MAX_GAS_EXEC, |view| match view {
-                    fee_core::FeeTxView::Public { gas_limit, .. } => gas_limit,
-                    fee_core::FeeTxView::Private { .. } => MAX_GAS_EXEC,
-                });
+                // `classify` never charges a private transaction (it is uncharged-but-capped), so
+                // the only charged view is the public one; anything else runs under the block cap.
+                let budget = match charged {
+                    Some(fee_core::FeeTxView::Public { gas_limit, .. }) => gas_limit,
+                    Some(fee_core::FeeTxView::Private { .. }) | None => MAX_GAS_EXEC,
+                };
 
                 let validated = match tx.validate_on_state(state, block_height, timestamp, budget) {
                     Ok((diff, outcome)) => Some((diff, outcome)),
@@ -794,13 +825,16 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                 // taken so far — the fee reservation — is released on the way out.
                 //
                 // Sized off the same `chain_state::classify` the apply path uses, so a block this
-                // builder fills to the brim is one `apply_block_to_state` accepts. Ordering by tip
-                // and packing by `gas_limit` remain T9's job; this only enforces the ceiling.
+                // builder fills to the brim is one `apply_block_to_state` accepts. The caller's
+                // pre-screen ([`Self::static_cap_bound`]) has already turned away everything whose
+                // declared size cannot fit; what is left is the exact check, which only the classes
+                // whose execution gas is metered rather than declared can still fail.
                 if let Some(contribution) = chain_state::cap_contribution(tx, state, outcome.cycles)
                 {
                     if let Some(over) = gas_used.would_exceed(contribution) {
                         warn!(
-                            "Transaction with hash {tx_hash} deferred to next block: it would take                              the block's {over} past its cap",
+                            "Transaction with hash {tx_hash} deferred to next block: it would take \
+                             the block's {over} past its cap",
                         );
                         if let Some((payer, reserve, _)) = reserved {
                             state.credit_fee(payer, reserve);
@@ -991,12 +1025,37 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         // it was not submitted by a user.
         let mut pending_from_store = pending_deposits;
         pending_from_store.extend(pending_dispatches);
+        // Tier two: one bounded batch of user work, ordered by tip. Whatever is
+        // left of it when the block fills up goes back, together with everything
+        // deferred along the way.
+        let mut candidates = self.drain_ordered_candidates(&working_state);
+        let mut deferred: Vec<(TransactionOrigin, LeeTransaction)> = Vec::new();
+        // Carried out of the loop rather than returned from inside it: everything drained is
+        // requeued after the loop, and an early return would take a block's worth of user
+        // transactions down with the error.
+        let mut fill_error: Option<anyhow::Error> = None;
+        // Payers one of whose transactions this block deferred: everything of theirs that follows
+        // has to be deferred with it. See the guard at the top of the loop.
+        let mut deferred_chains: HashSet<AccountId> = HashSet::new();
         while let Some((origin, tx, from_store)) = pending_from_store
             .pop_front()
             .map(|tx| (TransactionOrigin::Sequencer, tx, true))
-            .or_else(|| self.mempool.pop().map(|(origin, tx)| (origin, tx, false)))
+            .or_else(|| {
+                candidates
+                    .pop_front()
+                    .map(|(origin, tx)| (origin, tx, false))
+            })
         {
             let tx_hash = tx.hash();
+
+            if let Some(payer) = chain_already_deferred(&tx, &deferred_chains) {
+                warn!(
+                    "Transaction with hash {tx_hash} deferred to next block: an earlier transaction \
+                     of payer {payer} was deferred, so this one's nonce is not current in this block",
+                );
+                defer_unless_from_store(&mut deferred, from_store, origin, tx);
+                continue;
+            }
 
             let temp_valid_transactions = [
                 valid_transactions.as_slice(),
@@ -1012,9 +1071,16 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                 producer: self.store.producer_key().clone(),
             };
 
-            let block_size = borsh::to_vec(&temp_hashable_data)
-                .context("Failed to serialize block for size check")?
-                .len();
+            let block_size = match borsh::to_vec(&temp_hashable_data) {
+                Ok(serialized) => serialized.len(),
+                Err(err) => {
+                    fill_error = Some(
+                        anyhow::Error::new(err).context("Failed to serialize block for size check"),
+                    );
+                    defer_unless_from_store(&mut deferred, from_store, origin, tx);
+                    break;
+                }
+            };
 
             if block_size > max_block_size {
                 // Would a block carrying nothing but this still be too big? Then
@@ -1027,33 +1093,60 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                 // Measured on its own rather than from `block_size`, which also
                 // counts whatever this block already holds: a transaction that
                 // merely does not fit *today* is the ordinary deferral below.
-                if from_store
-                    && !self.fits_in_an_empty_block(
+                if from_store {
+                    match self.fits_in_an_empty_block(
                         &tx,
                         &clock_lee_tx,
                         new_block_height,
                         prev_block_hash,
                         new_block_timestamp,
-                    )?
-                {
-                    error!(
-                        "Sequencer-drained transaction {tx_hash} cannot fit in any block under the \
-                         {max_block_size} byte limit; giving up on it rather than stalling production",
-                    );
-                    self.count_dispatch_failure(&tx);
-                    continue;
+                    ) {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            error!(
+                                "Sequencer-drained transaction {tx_hash} cannot fit in any block under the \
+                                 {max_block_size} byte limit; giving up on it rather than stalling production",
+                            );
+                            self.count_dispatch_failure(&tx);
+                            continue;
+                        }
+                        Err(err) => {
+                            // Store-drained: its record re-feeds it, so there is nothing to
+                            // requeue.
+                            fill_error = Some(err);
+                            break;
+                        }
+                    }
                 }
 
                 warn!(
                     "Transaction with hash {tx_hash} deferred to next block: \
                      block size {block_size} bytes would exceed limit of {max_block_size} bytes",
                 );
-                // Anything drained from the store needs no requeue: its record
-                // stays there and is drained again on the next turn.
-                if !from_store {
-                    self.mempool.push_front((origin, tx));
-                }
+                defer_unless_from_store(&mut deferred, from_store, origin, tx);
                 break;
+            }
+
+            match Self::screen_cap_budget(&tx, &working_state, gas_used) {
+                CapScreen::Admit => {}
+                CapScreen::Defer => {
+                    // The rest of this payer's chain goes with it: the guard at the top of the loop
+                    // defers its successors rather than letting them fail authentication and be
+                    // dropped. Only a *deferral* does this — see `CapScreen::Drop` below.
+                    if let Some(payer) = ordering_payer(&tx) {
+                        deferred_chains.insert(payer);
+                    }
+                    defer_unless_from_store(&mut deferred, from_store, origin, tx);
+                    continue;
+                }
+                // Dropped, and its successors are left to fail on their own: a transaction that
+                // cannot be included by any block never advances its payer's nonce either, so
+                // nothing of that payer's was includable whatever this block did.
+                CapScreen::Drop => {
+                    sequencer_core_metrics::increment_mempool_failed_transactions_total();
+                    self.count_dispatch_failure(&tx);
+                    continue;
+                }
             }
 
             let before_tx_apply = Instant::now();
@@ -1090,11 +1183,14 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                     self.count_dispatch_failure(&tx);
                 }
                 // Out of block gas, exactly like running out of block bytes above: stop filling
-                // and leave this transaction at the front of the queue. Only user transactions can
-                // reach here — sequencer injections are cap-exempt — so `from_store` cannot be set
-                // and there is nothing to give up on.
+                // and requeue this transaction. Only user transactions can reach here — sequencer
+                // injections are cap-exempt — so `from_store` cannot be set and there is nothing
+                // to give up on.
+                //
+                // Only a class whose execution gas is *metered* rather than declared gets this far:
+                // the pre-screen above already turned away everything the declared bound rules out.
                 MempoolTxOutcome::Deferred => {
-                    self.mempool.push_front((origin, tx));
+                    deferred.push((origin, tx));
                     break;
                 }
             }
@@ -1102,6 +1198,15 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             if valid_transactions.len() >= self.sequencer_config.max_num_tx_in_block {
                 break;
             }
+        }
+
+        // Everything drained but not included goes back: what this block deferred first, then the
+        // tail of the batch it never reached. Before any error the loop carried out, so a failure
+        // to fill the block never costs the transactions it was filling it with.
+        self.requeue(deferred.into_iter().chain(candidates));
+
+        if let Some(err) = fill_error {
+            return Err(err);
         }
 
         working_state
@@ -1130,7 +1235,128 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
 
         sequencer_core_metrics::record_block_creation_time(now.elapsed());
 
-        Ok(BlockWithMeta { block, withdrawals })
+        Ok(BlockWithMeta {
+            block,
+            withdrawals,
+            gas_used,
+        })
+    }
+
+    /// One block's worth of mempool transactions, ordered by [`order_by_tip`] against `state`.
+    ///
+    /// The mempool itself stays the plain FIFO channel it is: ordering is a builder policy (SPECS
+    /// leaves producer ordering unconstrained), so it is applied to a *bounded* batch here rather
+    /// than by indexing the queue. The bound is `max_num_tx_in_block`, the most a block can include
+    /// anyway; whatever the block does not take is returned by [`Self::requeue`], so nothing is
+    /// dropped and nothing is reordered relative to what arrives later.
+    ///
+    /// `state` is the block's *opening* state. Ordering is therefore a snapshot taken before any of
+    /// the block is applied, while the classification the builder asks per transaction moves with
+    /// the working state as the block fills — a transaction can be ordered as an exempt sweep and
+    /// then charged, or the reverse, if an earlier transaction of the block moved the vault balance
+    /// that decides it. Only the ordering is affected: pricing and cap accounting are always asked
+    /// against the working state at that transaction's turn, exactly as the apply path does.
+    // TODO: fee-rate scoring (tip and base fee per unit of gas rather than the raw tip) and
+    // replacement policies both need a mempool that indexes by payer and price, not a channel.
+    fn drain_ordered_candidates(
+        &mut self,
+        state: &lee::V03State,
+    ) -> VecDeque<(TransactionOrigin, LeeTransaction)> {
+        let batch: Vec<_> = std::iter::from_fn(|| self.mempool.pop())
+            .take(self.sequencer_config.max_num_tx_in_block)
+            .collect();
+        order_by_tip(batch, state)
+    }
+
+    /// Returns drained-but-unincluded transactions to the mempool, in the order given.
+    ///
+    /// The mempool's front buffer pops LIFO, so they are pushed back-to-front. They land ahead of
+    /// whatever arrived while this block was being built, which only decides the *drain* order of
+    /// the next turn — that batch is re-sorted by tip before any of it is considered.
+    fn requeue(
+        &mut self,
+        txs: impl DoubleEndedIterator<Item = (TransactionOrigin, LeeTransaction)>,
+    ) {
+        for tx in txs.rev() {
+            self.mempool.push_front(tx);
+        }
+    }
+
+    /// Budgets `tx` against the block's remaining gas by what it *declares*, before executing it
+    /// (SPECS: a builder SHOULD budget by `gas_limit`), so a transaction that cannot fit does not
+    /// first cost a session that can burn ten million cycles.
+    ///
+    /// [`CapScreen::Defer`] is the ordinary answer: the bound is an upper one, so this can turn
+    /// away a transaction whose actual execution would have fitted, and the next block —
+    /// starting both totals at zero — takes it.
+    ///
+    /// [`CapScreen::Drop`] is for one that does not fit an *empty* block either, so no block can
+    /// ever hold it. Deferring that one would requeue it for ever, and requeued work is drained
+    /// again first thing next turn: a handful would fill every batch and the mempool behind them
+    /// would never be reached again — a stall anyone can trigger by declaring
+    /// `gas_limit = u64::MAX`, which costs nothing and needs no balance. Nothing upstream rejects
+    /// it: RPC admission bounds neither the declared gas nor the wire size against the block caps,
+    /// and the static fee-validity check that would catch it runs inside
+    /// [`Self::apply_mempool_transaction`], which this pre-screen deliberately precedes.
+    fn screen_cap_budget(
+        tx: &LeeTransaction,
+        state: &lee::V03State,
+        gas_used: BlockGasUsed,
+    ) -> CapScreen {
+        let Some(bound) = Self::static_cap_bound(tx, state) else {
+            return CapScreen::Admit;
+        };
+        let Some(over) = gas_used.would_exceed(bound) else {
+            return CapScreen::Admit;
+        };
+        let tx_hash = tx.hash();
+
+        if let Some(over_alone) = BlockGasUsed::default().would_exceed(bound) {
+            error!(
+                "Transaction with hash {tx_hash} declares more {over_alone} than an entire block \
+                 may hold; dropping it rather than deferring it for ever",
+            );
+            return CapScreen::Drop;
+        }
+
+        warn!(
+            "Transaction with hash {tx_hash} deferred to next block without executing: what it \
+             declares does not fit in the block's remaining {over}",
+        );
+        CapScreen::Defer
+    }
+
+    /// The most `tx` can contribute to the two block totals, known before it executes. `None` for a
+    /// cap-exempt transaction (the sequencer's own injections), which contributes to neither.
+    ///
+    /// Read off the same shared classification the apply path uses, per class:
+    ///
+    /// - **charged**: the `gas_limit` it declares (execution is clamped to it, so its real
+    ///   contribution can only be smaller) and its wire size, which is exact;
+    /// - **private and deployment**: protocol constants and wire size — exact, so the pre-screen is
+    ///   the whole answer for them;
+    /// - **full vault sweep**: storage only. Its execution gas is metered rather than declared, so
+    ///   the pre-screen uses zero for it and the post-execution check is what bounds it.
+    ///
+    /// Never an under-estimate of the storage side and never below the *declared* execution bound,
+    /// which is what makes this safe to defer on: it can only turn away transactions the exact
+    /// check would also have deferred, plus charged ones that would have under-run their own
+    /// declared limit.
+    fn static_cap_bound(
+        tx: &LeeTransaction,
+        state: &lee::V03State,
+    ) -> Option<chain_state::CapContribution> {
+        if let Some(view) = chain_state::charged_fee_view(tx, state)
+            && let fee_core::FeeTxView::Public { gas_limit, .. } = view
+        {
+            return Some(chain_state::CapContribution {
+                gas_exec: gas_limit,
+                gas_stor: fee_core::gas_stor(&view),
+            });
+        }
+        // Zero cycles: ignored by every class whose execution gas is a constant, and the floor for
+        // the one class where it is metered.
+        chain_state::cap_contribution(tx, state, 0)
     }
 
     /// Reads the current head state under the lock without cloning it, so callers
@@ -1325,6 +1551,119 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
 struct BlockWithMeta {
     block: Block,
     withdrawals: Vec<WithdrawArg>,
+    /// What the builder accounted against the two block caps. `apply_block_to_state` must
+    /// accumulate exactly these totals for this block.
+    gas_used: BlockGasUsed,
+}
+
+/// Orders one drained batch by what its transactions bid, without ever reordering a payer's
+/// transactions against each other.
+///
+/// **Payers compete, not transactions.** A payer's transactions form a nonce chain: fee
+/// authorization requires the payer to have signed the message, so its replay nonce advances with
+/// every one of them. Putting a later-nonce transaction first makes it fail authentication, and a
+/// transaction that fails validation is *dropped* rather than deferred — tip ordering that ignored
+/// this would destroy valid work for the crime of bidding unevenly. So each payer keeps arrival
+/// order internally, and payers are ranked by the best bid anywhere in their chain (a raise
+/// mid-chain lifts the whole chain, since everything before it has to land first anyway), ties
+/// going to whoever arrived first. The result is deterministic, and identical to plain FIFO when
+/// every bid is zero.
+///
+/// The payer is the nonce owner only for the common shape: a single signer paying for itself. A
+/// sponsored transaction (payer ≠ the account whose nonce it advances) or a multi-signer one has
+/// nonce chains this grouping does not see, and those can still be reordered across groups. Fixing
+/// that means grouping by every signer, which is a mempool index, not a per-block sort.
+///
+/// The bid is what the fee subsystem would actually *charge*, read through
+/// [`chain_state::charged_fee_view`] against `state`: a tip on a transaction the transition does
+/// not charge (a private one, a deployment, the fee-exempt full vault sweep) is never paid, so it
+/// buys no priority either. Transactions with no payer to group by form a group each.
+fn order_by_tip(
+    batch: Vec<(TransactionOrigin, LeeTransaction)>,
+    state: &lee::V03State,
+) -> VecDeque<(TransactionOrigin, LeeTransaction)> {
+    struct PayerGroup {
+        best_tip: u64,
+        first_arrival: usize,
+        txs: Vec<(TransactionOrigin, LeeTransaction)>,
+    }
+
+    let mut groups: Vec<PayerGroup> = Vec::new();
+    let mut by_payer: HashMap<AccountId, usize> = HashMap::new();
+
+    for (arrival, (origin, tx)) in batch.into_iter().enumerate() {
+        let payer = ordering_payer(&tx);
+        let index = payer
+            .and_then(|payer| by_payer.get(&payer).copied())
+            .unwrap_or_else(|| {
+                groups.push(PayerGroup {
+                    best_tip: 0,
+                    first_arrival: arrival,
+                    txs: Vec::new(),
+                });
+                groups.len().saturating_sub(1)
+            });
+        if let Some(payer) = payer {
+            by_payer.insert(payer, index);
+        }
+        let Some(group) = groups.get_mut(index) else {
+            unreachable!("the index was just resolved against `groups`");
+        };
+        group.best_tip = group.best_tip.max(charged_tip(&tx, state));
+        group.txs.push((origin, tx));
+    }
+
+    groups.sort_by_key(|group| (std::cmp::Reverse(group.best_tip), group.first_arrival));
+    groups.into_iter().flat_map(|group| group.txs).collect()
+}
+
+/// The tip `tx` bids, as the block transition would charge it: the declared tip of a charged public
+/// transaction, and zero for everything it does not charge. Read through the shared classification
+/// rather than off the wire, so a tip nobody pays cannot buy block priority.
+fn charged_tip(tx: &LeeTransaction, state: &lee::V03State) -> u64 {
+    match chain_state::charged_fee_view(tx, state) {
+        Some(fee_core::FeeTxView::Public { tip, .. }) => tip,
+        Some(fee_core::FeeTxView::Private { .. }) | None => 0,
+    }
+}
+
+/// Holds `tx` for the next block — unless the store will re-feed it anyway.
+///
+/// Anything drained from the store needs no requeue: its record stays there and is drained again on
+/// the next turn, so putting it in the mempool as well would deliver it twice.
+fn defer_unless_from_store(
+    deferred: &mut Vec<(TransactionOrigin, LeeTransaction)>,
+    from_store: bool,
+    origin: TransactionOrigin,
+    tx: LeeTransaction,
+) {
+    if !from_store {
+        deferred.push((origin, tx));
+    }
+}
+
+/// The payer of `tx`, if this block has already deferred a transaction of that payer.
+///
+/// Such a transaction's predecessor is not in this block, so its own nonce is not current here.
+/// Executing it would fail authentication — and a validation failure *drops* a transaction — so
+/// deferring one member of a chain would destroy every member behind it. The caller defers the tail
+/// instead, without executing any of it. [`order_by_tip`] keeps a payer's transactions contiguous,
+/// so this is the tail of exactly one chain.
+fn chain_already_deferred(
+    tx: &LeeTransaction,
+    deferred_chains: &HashSet<AccountId>,
+) -> Option<AccountId> {
+    ordering_payer(tx).filter(|payer| deferred_chains.contains(payer))
+}
+
+/// The account whose nonce chain `tx` belongs to for ordering purposes: the payer it declares,
+/// which fee authorization requires to be one of its signers. `None` for a transaction that
+/// declares no payer, and so shares a chain with nothing.
+const fn ordering_payer(tx: &LeeTransaction) -> Option<AccountId> {
+    match tx {
+        LeeTransaction::Public(public_tx) => Some(public_tx.message().payer),
+        LeeTransaction::PrivacyPreserving(_) | LeeTransaction::ProgramDeployment(_) => None,
+    }
 }
 
 /// Whether `deposit_op_id`'s mint is already reflected in `state` — its receipt

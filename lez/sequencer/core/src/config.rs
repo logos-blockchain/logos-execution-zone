@@ -10,6 +10,7 @@ use anyhow::Result;
 use bytesize::ByteSize;
 use common::config::BasicAuth;
 pub use cross_zone_inbox_core::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
+use fee_core::params::MAX_GAS_STOR;
 use humantime_serde;
 use lee::{AccountId, Balance};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
@@ -44,6 +45,15 @@ pub struct SequencerConfig {
     pub max_num_tx_in_block: usize,
     /// Maximum block size (includes header, user transactions, and the mandatory clock
     /// transaction).
+    ///
+    /// An *operational* envelope, local to this sequencer: how large a block it is willing to
+    /// serialize and inscribe. It is not the consensus bound. That is `MAX_GAS_STOR`
+    /// (`1_000_000` bytes of charged transaction payload), which every node enforces in the block
+    /// transition and which no configuration can raise or lower.
+    ///
+    /// Set below [`SequencerConfig::min_max_block_size`] it silently under-cuts consensus
+    /// capacity: blocks stop filling at the local limit while the protocol would still accept
+    /// more. [`SequencerConfig::check_block_size_envelope`] reports that at startup.
     #[serde(default = "default_max_block_size")]
     pub max_block_size: ByteSize,
     /// Mempool maximum size.
@@ -83,9 +93,46 @@ pub struct BedrockConfig {
 }
 
 impl SequencerConfig {
+    /// What a block spends on top of the transaction bytes the consensus storage cap counts: the
+    /// header (block id, both hashes, timestamp, producer key and signature), the mandatory clock
+    /// transaction, and borsh's length prefixes. Those are hundreds of bytes in practice; 16 KiB is
+    /// a deliberately wide margin, chosen so the 1 MiB default clears it comfortably.
+    pub const BLOCK_FRAMING_ALLOWANCE: ByteSize = ByteSize::kib(16);
     /// Address [`Self::metrics_address`] falls back to when the config omits it.
     pub const DEFAULT_METRICS_ADDRESS: SocketAddr =
         SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 9000);
+
+    /// The smallest [`Self::max_block_size`] that still lets a block carry a full consensus
+    /// storage cap's worth of transactions: `MAX_GAS_STOR` plus [`Self::BLOCK_FRAMING_ALLOWANCE`].
+    #[must_use]
+    pub const fn min_max_block_size() -> ByteSize {
+        ByteSize::b(MAX_GAS_STOR.saturating_add(Self::BLOCK_FRAMING_ALLOWANCE.as_u64()))
+    }
+
+    /// Checks the operational block-size envelope against consensus capacity.
+    ///
+    /// # Errors
+    ///
+    /// A rendered, actionable message when [`Self::max_block_size`] cuts blocks short of what the
+    /// protocol would accept. Not fatal — a smaller local limit produces smaller blocks, never
+    /// invalid ones — so callers log it rather than refuse to start.
+    pub fn check_block_size_envelope(&self) -> Result<(), String> {
+        let minimum = Self::min_max_block_size();
+        if self.max_block_size >= minimum {
+            return Ok(());
+        }
+        Err(format!(
+            "max_block_size is {} ({} bytes), below the {} ({} bytes) a block needs to carry a full \
+             MAX_GAS_STOR ({MAX_GAS_STOR} bytes) of transactions plus {} of block framing. Blocks \
+             will stop filling before they reach the consensus storage cap; raise max_block_size to \
+             at least \"{minimum}\" to use the whole cap, or keep it if smaller blocks are intended.",
+            self.max_block_size,
+            self.max_block_size.as_u64(),
+            minimum,
+            minimum.as_u64(),
+            Self::BLOCK_FRAMING_ALLOWANCE,
+        ))
+    }
 
     pub fn from_path(config_home: &Path) -> Result<Self> {
         let file = File::open(config_home)?;

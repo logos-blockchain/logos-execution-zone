@@ -1118,6 +1118,497 @@ fn block_gas_used_defers_the_transaction_that_would_bust_either_cap() {
     );
 }
 
+/// Fee fields for a test transaction: an explicit tip and gas limit, and a `max_fee` no test
+/// reservation can reach.
+fn fees_with(payer: AccountId, gas_limit: u64, tip: u64) -> lee::FeeFields {
+    lee::FeeFields::new(payer, gas_limit, tip, u128::from(u64::MAX))
+}
+
+/// A claim of `amount` from `owner`'s vault, bidding `tip`. Equal to the vault's whole balance, it
+/// is the fee-exempt bootstrap sweep: uncharged, but still counted against both block caps.
+fn vault_claim(owner: AccountId, amount: u128, tip: u64, sign_key: &PrivateKey) -> LeeTransaction {
+    let vault_program_id = programs::vault().id();
+    let vault_id = vault_core::compute_vault_account_id(vault_program_id, owner);
+    let message = lee::public_transaction::Message::try_new(
+        vault_program_id,
+        vec![owner, vault_id],
+        vec![Nonce::from(0_u128)],
+        vault_core::Instruction::Claim { amount },
+        fees_with(owner, common::test_utils::TEST_GAS_LIMIT, tip),
+    )
+    .expect("message builds");
+    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[sign_key]);
+    LeeTransaction::Public(PublicTransaction::new(message, witness_set))
+}
+
+/// A transfer of 1 unit declaring `gas_limit` and `tip`, from `nonce` of the first initial account.
+fn bid(nonce: u128, gas_limit: u64, tip: u64) -> LeeTransaction {
+    let from = initial_public_user_accounts()[0].account_id;
+    let to = initial_public_user_accounts()[1].account_id;
+    common::test_utils::create_transaction_native_token_transfer_with_fees(
+        from,
+        nonce,
+        to,
+        1,
+        &create_signing_key_for_account1(),
+        fees_with(from, gas_limit, tip),
+    )
+}
+
+/// The ordering policy: **payers** compete, never a payer's own transactions with each other.
+///
+/// A payer's transactions form a nonce chain — reordering one ahead of its predecessor makes it
+/// fail authentication, and a transaction that fails validation is dropped rather than deferred —
+/// so a chain moves as a unit, ranked by its best bid. A tip on a transaction the block transition
+/// does not charge (here the fee-exempt full vault sweep) buys nothing.
+#[test]
+fn order_by_tip_ranks_payers_and_never_reorders_a_payer_chain() {
+    const VAULT_BALANCE: u128 = 900;
+
+    let acc1 = initial_public_user_accounts()[0].account_id;
+    let acc2 = initial_public_user_accounts()[1].account_id;
+    let key2 = create_signing_key_for_account2();
+
+    let sweeper_key = PrivateKey::try_new([55_u8; 32]).unwrap();
+    let sweeper = AccountId::from(&PublicKey::new_from_private_key(&sweeper_key));
+    let mut state = testnet_initial_state::initial_state();
+    state.force_insert_account(
+        vault_core::compute_vault_account_id(programs::vault().id(), sweeper),
+        Account {
+            program_owner: programs::authenticated_transfer().id(),
+            balance: VAULT_BALANCE,
+            ..Account::default()
+        },
+    );
+
+    // acc1's chain, with the bid raised in the middle: the raise lifts the whole chain, because
+    // everything before it has to land first anyway.
+    let a0 = bid(0, common::test_utils::TEST_GAS_LIMIT, 0);
+    let a1 = bid(1, common::test_utils::TEST_GAS_LIMIT, 9);
+    let a2 = bid(2, common::test_utils::TEST_GAS_LIMIT, 0);
+    let b0 = common::test_utils::create_transaction_native_token_transfer_with_fees(
+        acc2,
+        0,
+        acc1,
+        1,
+        &key2,
+        fees_with(acc2, common::test_utils::TEST_GAS_LIMIT, 4),
+    );
+    // Fee-exempt, so the enormous tip it declares is never charged and must buy no priority.
+    let sweep = vault_claim(sweeper, VAULT_BALANCE, u64::MAX, &sweeper_key);
+
+    let batch: Vec<_> = [&a0, &a1, &b0, &sweep, &a2]
+        .into_iter()
+        .map(|tx| (TransactionOrigin::User, tx.clone()))
+        .collect();
+    let ordered = super::order_by_tip(batch, &state);
+
+    assert_eq!(
+        ordered
+            .iter()
+            .map(|(_, tx)| tx.hash())
+            .collect::<Vec<HashType>>(),
+        vec![a0.hash(), a1.hash(), a2.hash(), b0.hash(), sweep.hash()],
+        "acc1's chain (best bid 9) first and in nonce order, then acc2 (4), then the uncharged \
+         sweep, whose tip buys nothing",
+    );
+}
+
+/// End to end: a payer's chain with a mid-chain tip raise builds *whole* and in nonce order.
+///
+/// Ordering the transactions of one payer by tip would put a later nonce first, and that one fails
+/// its replay check and is dropped — the higher bid would destroy the very transactions it was
+/// meant to prioritize.
+#[tokio::test]
+async fn a_payer_chain_with_a_mid_chain_bid_raise_builds_whole() {
+    let (mut sequencer, mempool_handle) = common_setup().await;
+
+    let acc2 = initial_public_user_accounts()[1].account_id;
+    let key2 = create_signing_key_for_account2();
+    let acc1 = initial_public_user_accounts()[0].account_id;
+
+    let a0 = bid(0, common::test_utils::TEST_GAS_LIMIT, 0);
+    let a1 = bid(1, common::test_utils::TEST_GAS_LIMIT, 9);
+    let a2 = bid(2, common::test_utils::TEST_GAS_LIMIT, 0);
+    // A competing payer, bidding between the chain's two extremes: it is the chain's *best* bid it
+    // has to beat, and 4 does not beat 9.
+    let b0 = common::test_utils::create_transaction_native_token_transfer_with_fees(
+        acc2,
+        0,
+        acc1,
+        1,
+        &key2,
+        fees_with(acc2, common::test_utils::TEST_GAS_LIMIT, 4),
+    );
+
+    for tx in [&a0, &a1, &a2, &b0] {
+        mempool_handle
+            .push((TransactionOrigin::User, tx.clone()))
+            .await
+            .unwrap();
+    }
+
+    let block_id = sequencer.produce_new_block().await.unwrap();
+    let block = sequencer
+        .store
+        .get_block_at_id(block_id)
+        .unwrap()
+        .expect("produced block is stored");
+
+    assert_eq!(
+        block
+            .body
+            .transactions
+            .iter()
+            .map(LeeTransaction::hash)
+            .collect::<Vec<HashType>>(),
+        vec![
+            a0.hash(),
+            a1.hash(),
+            a2.hash(),
+            b0.hash(),
+            LeeTransaction::Public(clock_invocation(block.header.timestamp)).hash(),
+        ],
+        "the whole chain lands, in nonce order, ahead of the payer it outbids",
+    );
+    assert_eq!(
+        sequencer.mempool.len(),
+        0,
+        "nothing was deferred or dropped"
+    );
+}
+
+/// Deferring one transaction of a payer must defer the rest of that payer's chain with it.
+///
+/// The pre-screen skips past a deferred candidate, and after the payer-group sort what comes next
+/// is that same payer's later nonces. Executing those would fail authentication — the deferred
+/// predecessor is not in this block, so their nonces are not current — and a validation failure is
+/// a *drop*: one member declaring a large but perfectly legal `gas_limit` would destroy the rest of
+/// its own chain. No adversary needed.
+#[tokio::test]
+async fn deferring_one_transaction_of_a_payer_defers_the_rest_of_its_chain() {
+    let (mut sequencer, mempool_handle) = common_setup().await;
+
+    let acc1 = initial_public_user_accounts()[0].account_id;
+    let acc2 = initial_public_user_accounts()[1].account_id;
+
+    // Outbids acc1's chain, so it executes first and leaves the block with less execution budget
+    // than the chain's first member declares.
+    let b0 = common::test_utils::create_transaction_native_token_transfer_with_fees(
+        acc2,
+        0,
+        acc1,
+        1,
+        &create_signing_key_for_account2(),
+        fees_with(acc2, common::test_utils::TEST_GAS_LIMIT, 100),
+    );
+    // Legal and includable — it fits an empty block exactly — but not behind `b0`.
+    let a0 = bid(0, fee_core::params::MAX_GAS_EXEC, 10);
+    let a1 = bid(1, common::test_utils::TEST_GAS_LIMIT, 10);
+    let a2 = bid(2, common::test_utils::TEST_GAS_LIMIT, 10);
+
+    for tx in [&a0, &a1, &a2, &b0] {
+        mempool_handle
+            .push((TransactionOrigin::User, tx.clone()))
+            .await
+            .unwrap();
+    }
+
+    let first = sequencer.produce_new_block().await.unwrap();
+    let block = sequencer
+        .store
+        .get_block_at_id(first)
+        .unwrap()
+        .expect("produced block is stored");
+    assert_eq!(
+        block
+            .body
+            .transactions
+            .iter()
+            .map(LeeTransaction::hash)
+            .collect::<Vec<HashType>>(),
+        vec![
+            b0.hash(),
+            LeeTransaction::Public(clock_invocation(block.header.timestamp)).hash(),
+        ],
+        "only the transaction that fits is included",
+    );
+    assert_eq!(
+        sequencer.mempool.len(),
+        3,
+        "the whole chain is requeued, not just the member that did not fit",
+    );
+
+    // And the next block, whose budget starts at zero, takes all three in nonce order.
+    let second = sequencer.produce_new_block().await.unwrap();
+    let block = sequencer
+        .store
+        .get_block_at_id(second)
+        .unwrap()
+        .expect("produced block is stored");
+    assert_eq!(
+        block
+            .body
+            .transactions
+            .iter()
+            .map(LeeTransaction::hash)
+            .collect::<Vec<HashType>>(),
+        vec![
+            a0.hash(),
+            a1.hash(),
+            a2.hash(),
+            LeeTransaction::Public(clock_invocation(block.header.timestamp)).hash(),
+        ],
+        "the deferred chain lands whole, in nonce order",
+    );
+    assert_eq!(sequencer.mempool.len(), 0);
+}
+
+/// A transaction that declares more than an *entire* block may hold can never be included, so it
+/// must be dropped rather than deferred.
+///
+/// Deferring it would requeue it for ever, and requeued work is drained first thing next turn: a
+/// handful of these — free to submit, needing no balance, rejected by nothing upstream — would fill
+/// every batch and the mempool behind them would never be reached again.
+#[tokio::test]
+async fn a_transaction_larger_than_any_block_is_dropped_rather_than_deferred_for_ever() {
+    // Raised so the storage case below is decided by the consensus cap, not by the local envelope.
+    let config = SequencerConfig {
+        max_block_size: bytesize::ByteSize::mib(4),
+        ..setup_sequencer_config()
+    };
+    let (mut sequencer, mempool_handle) = common_setup_with_config(config).await;
+
+    // One gas past what a whole block may execute, bidding high enough to be considered first.
+    let unlimited = bid(0, fee_core::params::MAX_GAS_EXEC + 1, 1_000);
+    // The same on the storage side: more bytes than the consensus cap allows in a whole block.
+    let bloated = LeeTransaction::ProgramDeployment(lee::ProgramDeploymentTransaction::new(
+        lee::program_deployment_transaction::Message::new_feeless(vec![
+            0_u8;
+            usize::try_from(
+                fee_core::params::MAX_GAS_STOR
+            )
+            .unwrap()
+                + 1
+        ]),
+        lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
+    ));
+    // Same payer and nonce as `unlimited`: it is only includable because that one never executes.
+    let ordinary = bid(0, common::test_utils::TEST_GAS_LIMIT, 0);
+
+    for tx in [&unlimited, &bloated, &ordinary] {
+        mempool_handle
+            .push((TransactionOrigin::User, tx.clone()))
+            .await
+            .unwrap();
+    }
+
+    let block_id = sequencer.produce_new_block().await.unwrap();
+    let block = sequencer
+        .store
+        .get_block_at_id(block_id)
+        .unwrap()
+        .expect("produced block is stored");
+
+    assert_eq!(
+        block
+            .body
+            .transactions
+            .iter()
+            .map(LeeTransaction::hash)
+            .collect::<Vec<HashType>>(),
+        vec![
+            ordinary.hash(),
+            LeeTransaction::Public(clock_invocation(block.header.timestamp)).hash(),
+        ],
+        "the two unincludable transactions are gone and the block still filled behind them",
+    );
+    assert_eq!(
+        sequencer.mempool.len(),
+        0,
+        "neither is requeued: a requeued one would be drained again every turn, for ever",
+    );
+}
+
+/// The property that ties the builder to consensus: a block it builds re-applies from the parent
+/// state, and `apply_block_to_state` accumulates exactly the gas totals the builder accounted.
+///
+/// Over one mixed block: a system injection (a drained deposit mint, exempt from both caps), a
+/// charged transfer, another charged transaction whose declared `gas_limit` no longer fits and
+/// which the pre-screen must therefore defer *without executing it* — while still filling the block
+/// from what is ordered behind it — the fee-exempt full vault sweep (uncharged, execution gas
+/// metered) and a program deployment (uncharged, execution gas a constant).
+#[tokio::test]
+async fn a_mixed_block_reapplies_with_the_gas_totals_the_builder_accounted() {
+    const VAULT_BALANCE: u128 = 500_000;
+
+    let sweeper_key = PrivateKey::try_new([55_u8; 32]).unwrap();
+    let sweeper = AccountId::from(&PublicKey::new_from_private_key(&sweeper_key));
+
+    let mut config = setup_sequencer_config();
+    config.genesis = vec![
+        // The deposit mint moves funds out of the bridge account, and the sweep needs a vault to
+        // empty: `SupplyAccount` credits the recipient's *vault*, which is why the sweep exists.
+        GenesisAction::SupplyBridgeAccount { balance: 1_000_000 },
+        GenesisAction::SupplyAccount {
+            account_id: sweeper,
+            balance: VAULT_BALANCE,
+        },
+    ];
+    let (mut sequencer, mempool_handle) = common_setup_with_config(config).await;
+
+    let deposit_op_id = [21_u8; 32];
+    let recipient_id = initial_public_user_accounts()[0].account_id;
+    assert!(
+        sequencer
+            .store
+            .dbio()
+            .add_pending_deposit_event(PendingDepositEventRecord {
+                deposit_op_id: HashType(deposit_op_id),
+                source_tx_hash: HashType([7_u8; 32]),
+                amount: 1,
+                metadata: borsh::to_vec(&DepositMetadataForEncoding { recipient_id }).unwrap(),
+            })
+            .unwrap()
+    );
+
+    let acc1 = initial_public_user_accounts()[0].account_id;
+    let acc2 = initial_public_user_accounts()[1].account_id;
+    let key1 = create_signing_key_for_account1();
+    let key2 = create_signing_key_for_account2();
+    let transfer = common::test_utils::create_transaction_native_token_transfer_with_fees;
+
+    let high_tip = transfer(
+        acc1,
+        0,
+        acc2,
+        100,
+        &key1,
+        fees_with(acc1, common::test_utils::TEST_GAS_LIMIT, 100),
+    );
+    // Declares exactly the whole block's execution budget — includable in principle, so it is
+    // deferred rather than dropped, but once anything at all has executed it no longer fits. A
+    // payer of its own, so the deferral says nothing about `high_tip`'s chain.
+    let oversized = transfer(
+        acc2,
+        0,
+        acc1,
+        100,
+        &key2,
+        fees_with(acc2, fee_core::params::MAX_GAS_EXEC, 50),
+    );
+    let claim = vault_claim(sweeper, VAULT_BALANCE, 0, &sweeper_key);
+    let deploy = LeeTransaction::ProgramDeployment(lee::ProgramDeploymentTransaction::new(
+        lee::program_deployment_transaction::Message::new_feeless(
+            test_programs::clock_chain_caller().elf().to_owned(),
+        ),
+        lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
+    ));
+
+    // Pushed in an order the tip policy has to undo. The two untipped ones (the deployment, which
+    // has no payer at all, and the sweeper's claim) rank by arrival between themselves.
+    for tx in [&deploy, &oversized, &claim, &high_tip] {
+        mempool_handle
+            .push((TransactionOrigin::User, tx.clone()))
+            .await
+            .unwrap();
+    }
+
+    let parent_tip = sequencer
+        .chain()
+        .lock()
+        .unwrap()
+        .head_tip()
+        .expect("head tip set");
+    let mut parent_state = sequencer.with_state(Clone::clone);
+
+    let built = sequencer
+        .build_block_from_mempool()
+        .expect("the block builds");
+    let block_txs = &built.block.body.transactions;
+
+    assert!(
+        tx_is_bridge_deposit(&block_txs[0], deposit_op_id, 1),
+        "store-drained system injections are taken before any mempool work",
+    );
+    assert_eq!(
+        block_txs[1..]
+            .iter()
+            .map(LeeTransaction::hash)
+            .collect::<Vec<HashType>>(),
+        vec![
+            high_tip.hash(),
+            deploy.hash(),
+            claim.hash(),
+            LeeTransaction::Public(clock_invocation(built.block.header.timestamp)).hash(),
+        ],
+        "payers by best bid, the two untipped ones in arrival order, clock last",
+    );
+    assert_eq!(
+        sequencer.mempool.pop().map(|(_, tx)| tx.hash()),
+        Some(oversized.hash()),
+        "the pre-screened transaction is deferred to the next block, not dropped",
+    );
+
+    // Both transactions ordered *behind* the deferred one still made it in: the pre-screen skips a
+    // candidate that cannot fit, it does not stop filling the block.
+    assert!(
+        block_txs.iter().any(|tx| tx.hash() == deploy.hash())
+            && block_txs.iter().any(|tx| tx.hash() == claim.hash()),
+    );
+
+    let summary = chain_state::apply_block(Some(&parent_tip), &built.block, &mut parent_state)
+        .expect("the built block re-applies from the parent state");
+    assert!(
+        summary
+            .tx_outcomes
+            .iter()
+            .all(|outcome| matches!(outcome, chain_state::TxApplyOutcome::Applied)),
+        "every included transaction applies: {:?}",
+        summary.tx_outcomes,
+    );
+    assert_eq!(
+        summary.gas_used_exec, built.gas_used.exec,
+        "builder and apply path disagree on the block's execution gas",
+    );
+    assert_eq!(
+        summary.gas_used_stor, built.gas_used.stor,
+        "builder and apply path disagree on the block's storage gas",
+    );
+}
+
+/// `max_block_size` is an operational envelope; `MAX_GAS_STOR` is the consensus bound. A
+/// configuration that cannot carry a full cap's worth of transactions is reported, with the value
+/// that would fix it.
+#[test]
+fn a_block_size_below_the_consensus_storage_cap_is_reported() {
+    let generous = SequencerConfig {
+        max_block_size: bytesize::ByteSize::mib(1),
+        ..setup_sequencer_config()
+    };
+    assert_eq!(
+        generous.check_block_size_envelope(),
+        Ok(()),
+        "the 1 MiB default must clear the cap plus its framing allowance",
+    );
+    assert_eq!(
+        SequencerConfig::min_max_block_size().as_u64(),
+        fee_core::params::MAX_GAS_STOR + SequencerConfig::BLOCK_FRAMING_ALLOWANCE.as_u64(),
+    );
+
+    let cramped = SequencerConfig {
+        max_block_size: bytesize::ByteSize::kib(512),
+        ..setup_sequencer_config()
+    };
+    let reason = cramped
+        .check_block_size_envelope()
+        .expect_err("half a MiB cannot carry a full storage cap");
+    assert!(
+        reason.contains("max_block_size") && reason.contains("MAX_GAS_STOR"),
+        "the message must name both bounds it relates: {reason}",
+    );
+}
+
 #[tokio::test]
 async fn build_block_from_mempool() {
     let (mut sequencer, mempool_handle) = common_setup().await;

@@ -133,6 +133,28 @@ pub fn create_transaction_native_token_transfer(
     balance_to_move: u128,
     signing_key: &lee::PrivateKey,
 ) -> LeeTransaction {
+    // `from` signs below, so it is fee-authorized for this exact message.
+    create_transaction_native_token_transfer_with_fees(
+        from,
+        nonce,
+        to,
+        balance_to_move,
+        signing_key,
+        test_fee_fields(from),
+    )
+}
+
+/// The same transfer with fee fields the caller chooses: for tests that vary the tip a block
+/// builder orders by, or the `gas_limit` it budgets a block with.
+#[must_use]
+pub fn create_transaction_native_token_transfer_with_fees(
+    from: AccountId,
+    nonce: u128,
+    to: AccountId,
+    balance_to_move: u128,
+    signing_key: &lee::PrivateKey,
+    fees: lee::FeeFields,
+) -> LeeTransaction {
     let account_ids = vec![from, to];
     let nonces = vec![nonce.into()];
     let program_id = programs::authenticated_transfer().id();
@@ -143,8 +165,7 @@ pub fn create_transaction_native_token_transfer(
         authenticated_transfer_core::Instruction::Transfer {
             amount: balance_to_move,
         },
-        // `from` signs below, so it is fee-authorized for this exact message.
-        test_fee_fields(from),
+        fees,
     )
     .unwrap();
     let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[signing_key]);
