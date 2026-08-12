@@ -1249,9 +1249,11 @@ dependencies = [
 name = "bridge_core"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "lee_core",
  "risc0-zkvm",
  "serde",
+ "sha2 0.10.9",
 ]
 
 [[package]]

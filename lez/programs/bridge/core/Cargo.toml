@@ -11,3 +11,7 @@ workspace = true
 lee_core.workspace = true
 risc0-zkvm.workspace = true
 serde = { workspace = true, default-features = false }
+borsh.workspace = true
+
+[dev-dependencies]
+sha2.workspace = true

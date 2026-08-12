@@ -1,7 +1,10 @@
 use bridge_core::Instruction;
 use lee_core::{
     account::Account,
-    program::{AccountPostState, ChainedCall, Claim, ProgramInput, ProgramOutput, read_lee_inputs},
+    program::{
+        AccountPostState, ChainedCall, Claim, ProgramEvent, ProgramInput, ProgramOutput,
+        read_lee_inputs,
+    },
 };
 
 fn unchanged_post_states(
@@ -31,7 +34,7 @@ fn main() {
 
     let pre_states_clone = pre_states.clone();
 
-    let (post_states, chained_calls) = match instruction {
+    let (post_states, chained_calls, events) = match instruction {
         Instruction::Deposit {
             l1_deposit_op_id,
             vault_program_id,
@@ -71,7 +74,7 @@ fn main() {
             // is the only on-chain signal. Relevant once the explorer surfaces
             // deposits.
             if receipt.account != Account::default() {
-                (unchanged_post_states(&pre_states_clone), vec![])
+                (unchanged_post_states(&pre_states_clone), vec![], vec![])
             } else {
                 // First mint: claim the receipt — its existence is the record,
                 // the account's contents are never read — and chain the vault
@@ -100,7 +103,19 @@ fn main() {
                     )
                     .with_pda_seeds(vec![bridge_core::compute_bridge_seed()]),
                 ];
-                (post_states, chained_calls)
+
+                let events = vec![ProgramEvent {
+                    selector: bridge_core::Deposit::SELECTOR,
+                    data: bridge_core::Deposit {
+                        l1_deposit_op_id,
+                        vault_program_id,
+                        recipient_id,
+                        amount,
+                    }
+                    .to_bytes(),
+                }];
+
+                (post_states, chained_calls, events)
             }
         }
         Instruction::Withdraw {
@@ -125,6 +140,16 @@ fn main() {
             //     "Sender account must be owned by the authenticated transfer program"
             // );
 
+            // let events = vec![ProgramEvent {
+            //     selector: bridge_core::Withdraw::SELECTOR,
+            //     data: bridge_core::Withdraw {
+            //         sender_id: sender.account_id,
+            //         amount,
+            //         bedrock_account_pk,
+            //     }
+            //     .to_bytes(),
+            // }];
+
             // let chained_calls = vec![ChainedCall::new(
             //     auth_transfer_program_id,
             //     vec![sender, bridge],
@@ -132,7 +157,7 @@ fn main() {
             //         amount: u128::from(amount),
             //     },
             // )];
-            // (unchanged_post_states(&pre_states_clone), chained_calls)
+            // (unchanged_post_states(&pre_states_clone), chained_calls, events)
         }
     };
 
@@ -144,5 +169,6 @@ fn main() {
         post_states,
     )
     .with_chained_calls(chained_calls)
+    .with_events(events)
     .write();
 }

@@ -148,3 +148,7 @@ token_program = { path = "token", optional = true }
 
 [build-dependencies]
 build_utils = { workspace = true, optional = true }
+
+[dev-dependencies]
+bridge_core = { workspace = true }
+vault_core = { workspace = true }
