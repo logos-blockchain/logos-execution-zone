@@ -35,7 +35,7 @@ struct SequencerInstance {
 pub struct LezSequencerClient(Arc<SequencerInstance>);
 
 impl LezSequencerClient {
-    fn new(
+    pub(crate) fn new(
         client: SequencerClient,
         addr: SocketAddr,
         public_accounts: Vec<(PrivateKey, u128)>,

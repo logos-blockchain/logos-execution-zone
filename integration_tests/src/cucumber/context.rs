@@ -6,7 +6,10 @@ use testing_framework_app::{AppHostEnv, DeployContext};
 use crate::{
     cucumber::error::StepError,
     indexer_client::IndexerClient,
-    tf::{BedrockCluster, LezIndexerClient, LezRuntime, LezSequencerClient},
+    tf::{
+        BedrockCluster, LezIndexerClient, LezRuntime, LezSequencerClient,
+        LezSequencerRegistryClient,
+    },
 };
 
 /// Cucumber's view of an already deployed LEZ stack.
@@ -22,6 +25,63 @@ pub struct LezScenarioContext {
     indexer: LezIndexerClient,
     sequencer: LezSequencerClient,
     wallet: LezRuntime,
+}
+
+/// Cucumber's view of the TF-owned multi-sequencer registry deployment.
+pub struct LezSequencerRegistryScenarioContext {
+    bedrock: BedrockCluster,
+    indexer: LezIndexerClient,
+    registry: LezSequencerRegistryClient,
+}
+
+impl LezSequencerRegistryScenarioContext {
+    /// Clones the sequencer registry handles exposed by the TF deployment registry.
+    pub fn from_deployment(deployment: &DeployContext<AppHostEnv>) -> Result<Self, StepError> {
+        Ok(Self {
+            bedrock: deployment.require::<BedrockCluster>().map_err(|error| {
+                StepError::MissingComponent {
+                    component: "BedrockCluster",
+                    message: error.to_string(),
+                }
+            })?,
+            indexer: deployment.require::<LezIndexerClient>().map_err(|error| {
+                StepError::MissingComponent {
+                    component: "LezIndexerClient",
+                    message: error.to_string(),
+                }
+            })?,
+            registry: deployment
+                .require::<LezSequencerRegistryClient>()
+                .map_err(|error| StepError::MissingComponent {
+                    component: "LezSequencerRegistryClient",
+                    message: error.to_string(),
+                })?,
+        })
+    }
+
+    /// Returns the deployed Bedrock cluster handle.
+    #[must_use]
+    pub const fn bedrock(&self) -> &BedrockCluster {
+        &self.bedrock
+    }
+
+    /// Returns the deployed LEZ indexer handle.
+    #[must_use]
+    pub const fn indexer(&self) -> &LezIndexerClient {
+        &self.indexer
+    }
+
+    /// Returns the JSON-RPC client for the deployed LEZ indexer.
+    #[must_use]
+    pub fn indexer_client(&self) -> &IndexerClient {
+        self.indexer.client()
+    }
+
+    /// Returns the TF-owned sequencer registry handle.
+    #[must_use]
+    pub const fn registry(&self) -> &LezSequencerRegistryClient {
+        &self.registry
+    }
 }
 
 impl LezScenarioContext {
@@ -209,6 +269,35 @@ impl LezScenarioContext {
     ) -> Result<HashType, StepError> {
         self.wallet
             .public_transfer_to_new_account(from, to, amount)
+            .await
+            .map_err(|error| StepError::QueryFailed {
+                message: error.to_string(),
+            })
+    }
+
+    /// Assigns a label to an imported public account through the wallet actor.
+    pub async fn set_public_account_label(
+        &self,
+        account_id: AccountId,
+        label: wallet::account::Label,
+    ) -> Result<(), StepError> {
+        self.wallet
+            .set_public_account_label(account_id, label)
+            .await
+            .map_err(|error| StepError::QueryFailed {
+                message: error.to_string(),
+            })
+    }
+
+    /// Executes an authenticated public transfer using wallet-resolved labels.
+    pub async fn public_transfer_by_labels(
+        &self,
+        from: wallet::account::Label,
+        to: wallet::account::Label,
+        amount: u128,
+    ) -> Result<HashType, StepError> {
+        self.wallet
+            .public_transfer_by_labels(from, to, amount)
             .await
             .map_err(|error| StepError::QueryFailed {
                 message: error.to_string(),

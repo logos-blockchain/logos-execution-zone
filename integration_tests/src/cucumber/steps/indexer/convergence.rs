@@ -1,6 +1,8 @@
 use std::time::Duration;
 
 use cucumber::{gherkin::Step, then};
+use indexer_service_rpc::RpcClient as IndexerRpcClient;
+use sequencer_service_rpc::RpcClient as SequencerRpcClient;
 
 use super::super::log_step;
 use crate::{
@@ -14,6 +16,50 @@ use crate::{
         wait_for_indexer_to_reach_with_timeout,
     },
 };
+
+#[then("the transferred public account states match between the sequencer and indexer")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step handlers receive mutable world references"
+)]
+async fn assert_transferred_public_account_states_match(
+    world: &mut CucumberWorld,
+    step: &Step,
+) -> StepResult {
+    log_step(step);
+    let context = world.lez()?;
+    let accounts = [
+        world
+            .environment
+            .transfer_sender
+            .ok_or(StepError::MissingTransfer)?,
+        world
+            .environment
+            .transfer_receiver
+            .ok_or(StepError::MissingTransfer)?,
+    ];
+    for account in accounts {
+        let sequencer_state = SequencerRpcClient::get_account(context.sequencer_client(), account)
+            .await
+            .map_err(|error| StepError::QueryFailed {
+                message: error.to_string(),
+            })?;
+        let indexer_state =
+            IndexerRpcClient::get_account(&**context.indexer_client(), account.into())
+                .await
+                .map_err(|error| StepError::QueryFailed {
+                    message: error.to_string(),
+                })?;
+        if indexer_state != sequencer_state.into() {
+            return Err(StepError::AssertionFailed {
+                message: format!(
+                    "indexer and sequencer states differ for public account {account:?}"
+                ),
+            });
+        }
+    }
+    Ok(())
+}
 
 #[then(expr = "the indexer catches up to the sequencer within {int} seconds")]
 async fn wait_for_indexer(

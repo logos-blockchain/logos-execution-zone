@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, num::NonZeroU32, path::PathBuf, sync::Arc};
+use std::{net::SocketAddr, num::NonZeroU32, path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::{Context as _, anyhow};
 use async_trait::async_trait;
@@ -11,6 +11,7 @@ use num_bigint::BigUint;
 use tempfile::TempDir;
 use testing_framework_app::{AppDeployment, AppHostEnv, DeployContext, LocalAppCluster};
 use testing_framework_core::scenario::DynError;
+use tokio::time::{Instant, sleep};
 
 /// A TF-managed Logos blockchain cluster used as LEZ's Bedrock layer.
 ///
@@ -46,15 +47,30 @@ impl BedrockApp {
         blend_core_nodes: usize,
         test_context: String,
     ) -> Self {
-        let builder = DeploymentBuilder::new(
-            TopologyConfig::with_node_numbers(nodes)
-                .with_blend_core_nodes(blend_core_nodes)
-                .with_test_context(Some(test_context)),
-        )
-        .with_security_param(NonZeroU32::new(5).expect("five is non-zero"))
-        .with_slot_activation_coeff(1, NonZeroU32::new(2).expect("two is non-zero"))
-        .with_wallet_config(lez_funding_wallet());
-        Self::from_builder(builder)
+        Self::from_builder(lez_builder(
+            nodes,
+            blend_core_nodes,
+            test_context,
+            lez_funding_wallet(),
+            false,
+        ))
+    }
+
+    /// Creates a Bedrock deployment with separate funding notes for a
+    /// multi-sequencer committee.
+    #[must_use]
+    pub fn nodes_with_committee_funding(
+        nodes: usize,
+        blend_core_nodes: usize,
+        test_context: String,
+    ) -> Self {
+        Self::from_builder(lez_builder(
+            nodes,
+            blend_core_nodes,
+            test_context,
+            committee_funding_wallet(),
+            true,
+        ))
     }
 
     /// Creates a Bedrock deployment from a Logos deployment builder.
@@ -154,6 +170,36 @@ impl BedrockCluster {
         }
         Ok(())
     }
+
+    /// Waits until the Bedrock node has produced its first post-genesis block.
+    ///
+    /// The node wallet indexes genesis funding while processing the live chain;
+    /// callers that immediately submit a wallet-funded transaction must wait for
+    /// this transition first.
+    pub async fn wait_for_first_block(&self) -> Result<(), DynError> {
+        const TIMEOUT: Duration = Duration::from_secs(60);
+        const POLL_INTERVAL: Duration = Duration::from_millis(250);
+        let started = Instant::now();
+        let mut last_error = None;
+
+        while started.elapsed() < TIMEOUT {
+            match self.cluster.first_client() {
+                Some(client) => match client.consensus_info().await {
+                    Ok(info) if info.cryptarchia_info.height > 0 => return Ok(()),
+                    Ok(_) => {}
+                    Err(error) => last_error = Some(error.to_string()),
+                },
+                None => last_error = Some("Bedrock cluster has no node clients".to_owned()),
+            }
+            sleep(POLL_INTERVAL).await;
+        }
+
+        Err(anyhow!(
+            "Bedrock did not produce a post-genesis block after {TIMEOUT:?}: {}",
+            last_error.unwrap_or_else(|| "no readiness response".to_owned())
+        )
+        .into())
+    }
 }
 
 fn first_api_addr(cluster: &LocalAppCluster<LbcEnv>) -> Result<SocketAddr, DynError> {
@@ -168,18 +214,49 @@ fn first_api_addr(cluster: &LocalAppCluster<LbcEnv>) -> Result<SocketAddr, DynEr
         .ok_or_else(|| anyhow!("Bedrock node URL has no socket address").into())
 }
 
-fn lez_funding_wallet() -> WalletConfig {
+fn lez_builder(
+    nodes: usize,
+    blend_core_nodes: usize,
+    test_context: String,
+    wallet: WalletConfig,
+    allow_multiple_genesis_tokens: bool,
+) -> DeploymentBuilder {
+    DeploymentBuilder::new(
+        TopologyConfig::with_node_numbers(nodes)
+            .with_blend_core_nodes(blend_core_nodes)
+            .with_test_context(Some(test_context))
+            .with_allow_multiple_genesis_tokens(allow_multiple_genesis_tokens),
+    )
+    .with_security_param(NonZeroU32::new(5).expect("five is non-zero"))
+    .with_slot_activation_coeff(1, NonZeroU32::new(2).expect("two is non-zero"))
+    .with_wallet_config(wallet)
+}
+
+fn lez_funding_account() -> WalletAccount {
     const FUNDING_SECRET_KEY: [u8; 32] = [
         0x6c, 0x64, 0x5c, 0xd4, 0x63, 0x6d, 0x9c, 0x4c, 0x36, 0xa3, 0x7a, 0x9a, 0xea, 0xbc, 0xaa,
         0x33, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         0x00, 0x00,
     ];
 
-    WalletConfig::new(vec![
-        WalletAccount {
-            label: "lez-sequencer-funding".to_owned(),
-            secret_key: ZkKey::from(BigUint::from_bytes_le(&FUNDING_SECRET_KEY)),
-            value: 1_000_000_000,
-        }
-    ])
+    WalletAccount {
+        label: "lez-sequencer-funding".to_owned(),
+        secret_key: ZkKey::from(BigUint::from_bytes_le(&FUNDING_SECRET_KEY)),
+        value: 1_000_000_000,
+    }
+}
+
+fn lez_funding_wallet() -> WalletConfig {
+    WalletConfig::new(vec![lez_funding_account()])
+}
+
+fn committee_funding_wallet() -> WalletConfig {
+    WalletConfig::new(
+        std::iter::repeat_with(|| WalletAccount {
+            value: 1_000_000,
+            ..lez_funding_account()
+        })
+        .take(20)
+        .collect(),
+    )
 }

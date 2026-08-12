@@ -3,6 +3,9 @@ use thiserror::Error;
 /// Errors reported by Cucumber step implementations.
 #[derive(Debug, Error)]
 pub enum StepError {
+    /// A Gherkin argument or table value is malformed or out of range.
+    #[error("Invalid Cucumber argument: {message}")]
+    InvalidArgument { message: String },
     /// A local test-harness or filesystem operation failed.
     #[error("Logical error: {message}")]
     LogicalError { message: String },

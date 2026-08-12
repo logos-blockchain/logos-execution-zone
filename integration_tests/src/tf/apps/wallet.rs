@@ -15,9 +15,9 @@ use testing_framework_core::scenario::DynError;
 use tokio::sync::{mpsc, oneshot};
 use wallet::{
     AccountIdentity, WalletCore,
-    account::AccountIdWithPrivacy,
+    account::{AccountIdWithPrivacy, Label},
     cli::{
-        CliAccountMention, Command, SubcommandReturnValue,
+        CliAccountMention, Command, SubcommandReturnValue, account::AccountSubcommand,
         programs::native_token_transfer::AuthTransferSubcommand,
     },
     config::WalletConfigOverrides,
@@ -82,6 +82,17 @@ enum WalletRequest {
     PublicTransferToNewAccount {
         from: AccountId,
         to: AccountId,
+        amount: u128,
+        response: oneshot::Sender<Result<HashType, String>>,
+    },
+    SetPublicAccountLabel {
+        account_id: AccountId,
+        label: Label,
+        response: oneshot::Sender<Result<(), String>>,
+    },
+    PublicTransferByLabels {
+        from: Label,
+        to: Label,
         amount: u128,
         response: oneshot::Sender<Result<HashType, String>>,
     },
@@ -305,6 +316,63 @@ impl WalletActor {
                                 .map_err(|error: anyhow::Error| error.to_string());
                                 let _unused = response.send(result);
                             }
+                            WalletRequest::SetPublicAccountLabel {
+                                account_id,
+                                label,
+                                response,
+                            } => {
+                                let result = wallet::cli::execute_subcommand(
+                                    &mut components.wallet,
+                                    Command::Account(AccountSubcommand::Label {
+                                        account_id: CliAccountMention::Id(
+                                            AccountIdWithPrivacy::Public(account_id),
+                                        ),
+                                        label,
+                                    }),
+                                )
+                                .await
+                                .map(|_| ())
+                                .map_err(|error| error.to_string());
+                                let _unused = response.send(result);
+                            }
+                            WalletRequest::PublicTransferByLabels {
+                                from,
+                                to,
+                                amount,
+                                response,
+                            } => {
+                                let result = wallet::cli::execute_subcommand(
+                                    &mut components.wallet,
+                                    Command::AuthTransfer(AuthTransferSubcommand::Send {
+                                        from: CliAccountMention::Label(from),
+                                        to: Some(CliAccountMention::Label(to)),
+                                        to_npk: None,
+                                        to_vpk: None,
+                                        to_keys: None,
+                                        to_identifier: Some(0),
+                                        amount,
+                                    }),
+                                )
+                                .await
+                                .and_then(|result| {
+                                    #[expect(
+                                        clippy::wildcard_enum_match_arm,
+                                        reason = "Only TransactionExecuted is valid for a transfer request"
+                                    )]
+                                    match result {
+                                        SubcommandReturnValue::TransactionExecuted { tx_hash } => {
+                                            Ok(tx_hash)
+                                        }
+                                        other => {
+                                            anyhow::bail!(
+                                                "expected TransactionExecuted, got {other:?}"
+                                            )
+                                        }
+                                    }
+                                })
+                                .map_err(|error| error.to_string());
+                                let _unused = response.send(result);
+                            }
                             WalletRequest::WalletPassword { response } => {
                                 let _unused = response.send(Ok(components.password.clone()));
                             }
@@ -475,6 +543,36 @@ impl LezRuntime {
         amount: u128,
     ) -> Result<HashType, DynError> {
         self.request(|response| WalletRequest::PublicTransferToNewAccount {
+            from,
+            to,
+            amount,
+            response,
+        })
+        .await
+    }
+
+    /// Assigns a label to an imported public account through the wallet actor.
+    pub async fn set_public_account_label(
+        &self,
+        account_id: AccountId,
+        label: Label,
+    ) -> Result<(), DynError> {
+        self.request(|response| WalletRequest::SetPublicAccountLabel {
+            account_id,
+            label,
+            response,
+        })
+        .await
+    }
+
+    /// Executes an authenticated public transfer using wallet-resolved labels.
+    pub async fn public_transfer_by_labels(
+        &self,
+        from: Label,
+        to: Label,
+        amount: u128,
+    ) -> Result<HashType, DynError> {
+        self.request(|response| WalletRequest::PublicTransferByLabels {
             from,
             to,
             amount,

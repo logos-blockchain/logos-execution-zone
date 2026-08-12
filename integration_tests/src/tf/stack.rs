@@ -184,6 +184,12 @@ pub async fn shutdown_lez_deployment(
         failures.push(format!("sequencer: {error}"));
     }
 
+    if let Some(registry) = deployment.get::<super::LezSequencerRegistryClient>()
+        && let Err(error) = registry.shutdown().await
+    {
+        failures.push(format!("sequencer registry: {error}"));
+    }
+
     if failures.is_empty() {
         Ok(())
     } else {

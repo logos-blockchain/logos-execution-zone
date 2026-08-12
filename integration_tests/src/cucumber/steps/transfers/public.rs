@@ -1,5 +1,6 @@
 use cucumber::{gherkin::Step, when};
 use sequencer_service_rpc::RpcClient as _;
+use wallet::account::Label;
 
 use super::super::log_step;
 use crate::cucumber::{
@@ -58,6 +59,65 @@ async fn transfer_between_configured_public_accounts(
     world.environment.sender_initial_balance = Some(sender_initial_balance);
     world.environment.receiver_initial_balance = Some(receiver_initial_balance);
     world.environment.sender_initial_nonce = Some(sender_initial_nonce);
+    world.environment.transfer_hash = Some(transfer_hash);
+    world.environment.transfer_hashes = vec![transfer_hash];
+    Ok(())
+}
+
+#[when(expr = "I transfer {int} using the configured public account labels")]
+async fn transfer_between_labeled_public_accounts(
+    world: &mut CucumberWorld,
+    step: &Step,
+    amount: u128,
+) -> StepResult {
+    log_step(step);
+    let context = world.lez()?;
+    let sender_label = world
+        .environment
+        .public_sender_label
+        .clone()
+        .ok_or(StepError::MissingTransfer)?;
+    let receiver_label = world
+        .environment
+        .public_receiver_label
+        .clone()
+        .ok_or(StepError::MissingTransfer)?;
+    let accounts = context.existing_public_accounts().await?;
+    let sender = accounts
+        .first()
+        .copied()
+        .ok_or(StepError::MissingSelectedAccount)?;
+    let receiver = accounts
+        .get(1)
+        .copied()
+        .ok_or(StepError::MissingSelectedAccount)?;
+    let sender_initial_balance = context
+        .sequencer_client()
+        .get_account_balance(sender)
+        .await
+        .map_err(|error| StepError::QueryFailed {
+            message: error.to_string(),
+        })?;
+    let receiver_initial_balance = context
+        .sequencer_client()
+        .get_account_balance(receiver)
+        .await
+        .map_err(|error| StepError::QueryFailed {
+            message: error.to_string(),
+        })?;
+    let transfer_hash = context
+        .public_transfer_by_labels(
+            Label::new(&sender_label),
+            Label::new(&receiver_label),
+            amount,
+        )
+        .await?;
+
+    world.environment.transfer_sender = Some(sender);
+    world.environment.transfer_receiver = Some(receiver);
+    world.environment.transfer_amount = Some(amount);
+    world.environment.sender_initial_balance = Some(sender_initial_balance);
+    world.environment.receiver_initial_balance = Some(receiver_initial_balance);
     world.environment.transfer_hash = Some(transfer_hash);
     world.environment.transfer_hashes = vec![transfer_hash];
     Ok(())

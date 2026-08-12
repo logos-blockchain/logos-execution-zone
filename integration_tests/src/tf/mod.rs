@@ -3,7 +3,7 @@
 /// Independently deployable LEZ applications.
 pub use apps::{
     BedrockApp, BedrockCluster, IndexerApp, LezIndexerClient, LezRuntime, LezSequencerClient,
-    SequencerApp, WalletApp,
+    LezSequencerRegistryApp, LezSequencerRegistryClient, SequencerApp, WalletApp,
 };
 /// Complete-stack deployment helpers.
 pub use stack::{LezLocalApp, LezStackHandle, shutdown_lez_deployment};

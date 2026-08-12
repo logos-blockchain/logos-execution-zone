@@ -11,7 +11,7 @@ use testing_framework_core::scenario::NodeClients;
 
 use crate::{
     cucumber::{
-        context::LezScenarioContext,
+        context::{LezScenarioContext, LezSequencerRegistryScenarioContext},
         default::CUCUMBER_NODE_CONFIG_OVERRIDE,
         error::{StepError, StepResult},
     },
@@ -83,6 +83,28 @@ pub struct EnvironmentState {
     pub sender_initial_nonce: Option<lee_core::account::Nonce>,
     /// Error returned when a public transfer is rejected.
     pub transfer_rejection: Option<String>,
+    /// Label assigned to the public transfer sender.
+    pub public_sender_label: Option<String>,
+    /// Label assigned to the public transfer receiver.
+    pub public_receiver_label: Option<String>,
+    /// Sequencer height immediately after the committee reconfiguration.
+    pub committee_height_at_config: Option<u64>,
+    /// Source sequencer height recorded when another sequencer joins.
+    pub committee_join_height: Option<u64>,
+    /// Target height reached during the committee rotation phase.
+    pub committee_rotation_target: Option<u64>,
+    /// Deterministic sender used for the committee transfer.
+    pub committee_sender: Option<lee::AccountId>,
+    /// Deterministic receiver used for the committee transfer.
+    pub committee_receiver: Option<lee::AccountId>,
+    /// Receiver balance before the committee transfer.
+    pub committee_receiver_balance_before: Option<u128>,
+    /// Amount submitted through the selected sequencer.
+    pub committee_transfer_amount: Option<u128>,
+    /// Hash submitted through the selected sequencer.
+    pub committee_transfer_hash: Option<common::HashType>,
+    /// Finalized indexer height checked against the selected sequencer.
+    pub committee_indexer_finalized_height: Option<u64>,
 }
 
 /// Per-scenario state for Cucumber tests that deploy LEZ applications.
@@ -97,6 +119,8 @@ pub struct CucumberWorld {
     pub deployment: DeployContext<AppHostEnv>,
     /// Scenario-owned clones of the LEZ application handles.
     pub lez: Option<LezScenarioContext>,
+    /// Scenario-owned view of the multi-sequencer registry.
+    pub sequencer_registry: Option<LezSequencerRegistryScenarioContext>,
     /// Runtime observations collected by scenario steps.
     pub environment: EnvironmentState,
     /// A unique per-scenario context string used to isolate runtime resources.
@@ -148,6 +172,26 @@ impl CucumberWorld {
         Ok(())
     }
 
+    /// Stores the specialized sequencer registry context, rejecting duplicate setup.
+    pub fn set_sequencer_registry(
+        &mut self,
+        context: LezSequencerRegistryScenarioContext,
+    ) -> StepResult {
+        if self.sequencer_registry.is_some() || self.lez.is_some() {
+            return Err(StepError::FixtureAlreadyDeployed);
+        }
+
+        self.sequencer_registry = Some(context);
+        Ok(())
+    }
+
+    /// Returns the deployed sequencer registry context, or a typed error before setup.
+    pub fn sequencer_registry(&self) -> Result<&LezSequencerRegistryScenarioContext, StepError> {
+        self.sequencer_registry
+            .as_ref()
+            .ok_or(StepError::FixtureNotDeployed)
+    }
+
     /// Stop all runtime services and release both scenario and registry-owned
     /// handles. This is intentionally explicit because artifact cleanup must
     /// never race a still-running LEZ service.
@@ -164,6 +208,7 @@ impl CucumberWorld {
 
         let observations = self.environment.clone();
         drop(self.lez.take());
+        drop(self.sequencer_registry.take());
 
         let shutdown_result = shutdown_lez_deployment(&self.deployment).await;
         let deployment = std::mem::replace(
@@ -216,6 +261,10 @@ impl CucumberWorld {
         f.debug_struct("CucumberWorld")
             .field("deployment", &"managed deployment context")
             .field("lez", &self.lez.as_ref().map(|_| "deployed"))
+            .field(
+                "sequencer_registry",
+                &self.sequencer_registry.as_ref().map(|_| "deployed"),
+            )
             .field("environment", &self.environment)
             .field(
                 "runtime_teardown_attempted",
@@ -289,6 +338,7 @@ impl Default for CucumberWorld {
         Self {
             deployment: DeployContext::new(AppHostTopology, NodeClients::default()),
             lez: None,
+            sequencer_registry: None,
             environment: EnvironmentState::default(),
             test_context: None,
             scenario_base_dir: PathBuf::default(),

@@ -3,7 +3,9 @@ use cucumber::{gherkin::Step, given};
 use super::super::log_step;
 use crate::{
     cucumber::{
-        error::StepResult, steps::environment::helpers::deploy_lez_stack, world::CucumberWorld,
+        error::StepResult,
+        steps::environment::helpers::{deploy_lez_sequencer_registry, deploy_lez_stack},
+        world::CucumberWorld,
     },
     tf::BedrockApp,
 };
@@ -15,6 +17,26 @@ async fn deploy_lez_smoke_stack(world: &mut CucumberWorld, step: &Step) -> StepR
         world,
         BedrockApp::nodes_with_blend_core_nodes(1, 0, world.test_context()),
         false,
+        step,
+    )
+    .await
+}
+
+#[given(expr = "a LEZ multi-sequencer environment with {int} validator and {int} Blend nodes")]
+async fn deploy_lez_multi_sequencer_environment(
+    world: &mut CucumberWorld,
+    step: &Step,
+    validators: usize,
+    blend_core_nodes: usize,
+) -> StepResult {
+    log_step(step);
+    deploy_lez_sequencer_registry(
+        world,
+        BedrockApp::nodes_with_committee_funding(
+            validators,
+            blend_core_nodes,
+            world.test_context(),
+        ),
         step,
     )
     .await
