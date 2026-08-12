@@ -58,6 +58,7 @@ async fn ping_crosses_from_zone_a_to_zone_b() -> Result<()> {
             }],
             expected_block_signing_pubkey: None,
         }],
+        source_authority: None,
     };
 
     let (seq_a, _seq_a_home) = SequencerSetup::new(partial, bedrock_addr)

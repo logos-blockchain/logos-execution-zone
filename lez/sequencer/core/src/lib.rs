@@ -1522,13 +1522,13 @@ fn build_genesis_state(config: &SequencerConfig) -> (lee::V03State, Vec<LeeTrans
     );
 
     // Config txs seed the config accounts by transaction, so every node
-    // reconstructs them by replaying the genesis block. The wrapped-token minter and
-    // both emitters' pins are initialized on every zone: all three are builtins with
-    // a user-callable InitConfig, so a config PDA left default is claimable by the
-    // first initializer, hijacking the minter or repointing an emitter's outbox. The
-    // inbox allowlist is initialized only on receiving zones; the inbox is
-    // sequencer-only, so its default config PDA is not user-claimable, merely unused
-    // until the zone receives.
+    // reconstructs them by replaying the genesis block. Every program config is
+    // initialized on every zone: each is a builtin with a user-callable InitConfig,
+    // so a config PDA left default is claimable by the first initializer, which
+    // would hijack the minter, repoint an emitter's outbox, or name its own peer
+    // source. The inbox's own config is initialized only on receiving zones; the
+    // inbox is sequencer-only, so its default config PDA is not user-claimable,
+    // merely unused until the zone receives.
     let wrapped_token_config_tx = std::iter::once(cross_zone::build_wrapped_token_init_config_tx(
         config.cross_zone.as_ref(),
     ));

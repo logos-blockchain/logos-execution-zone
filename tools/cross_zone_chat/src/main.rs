@@ -375,6 +375,7 @@ fn watch_peer(peer: ZoneId, receiver_id: ProgramId) -> CrossZoneConfig {
             }],
             expected_block_signing_pubkey: None,
         }],
+        source_authority: None,
     }
 }
 

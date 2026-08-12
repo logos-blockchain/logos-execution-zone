@@ -1,4 +1,4 @@
-use cross_zone_inbox_core::inbox_source_marker_account_id;
+use cross_zone_marker_core::inbox_source_marker_account_id;
 use lee_core::{
     account::{Account, AccountWithMetadata},
     program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_lee_inputs},
@@ -34,6 +34,19 @@ fn main() {
             pre_states,
             instruction_words,
             &config,
+        ),
+        Instruction::RenounceAuthority => renounce_authority(
+            self_program_id,
+            caller_program_id,
+            pre_states,
+            instruction_words,
+        ),
+        Instruction::UpdateSources { sources } => update_sources(
+            self_program_id,
+            caller_program_id,
+            pre_states,
+            instruction_words,
+            sources,
         ),
     }
 }
@@ -110,6 +123,125 @@ fn mint(
             AccountPostState::new(marker.account),
             config_post,
             holding_post,
+        ],
+    )
+    .write();
+}
+
+/// Gives up the authority, freezing the source list for good.
+fn renounce_authority(
+    self_program_id: lee_core::program::ProgramId,
+    caller_program_id: Option<lee_core::program::ProgramId>,
+    pre_states: Vec<AccountWithMetadata>,
+    instruction_words: Vec<u32>,
+) {
+    assert!(
+        caller_program_id.is_none(),
+        "RenounceAuthority is only invoked as a top-level transaction"
+    );
+
+    // pre_states: [config PDA, authority account].
+    let [config, authority] = <[AccountWithMetadata; 2]>::try_from(pre_states)
+        .expect("RenounceAuthority requires the config and authority accounts");
+    assert_eq!(
+        config.account_id,
+        config_account_id(self_program_id),
+        "first account must be the wrapped-token config PDA"
+    );
+
+    let mut cfg = WrappedTokenConfig::from_bytes(&config.account.data.clone().into_inner())
+        .expect("config account holds a wrapped-token config");
+    let Some(expected) = cfg.authority else {
+        panic!("wrapped-token authority is already renounced");
+    };
+    assert_eq!(
+        authority.account_id, expected,
+        "second account must be the configured authority"
+    );
+    assert!(
+        authority.is_authorized,
+        "the configured authority must authorize renouncing it"
+    );
+
+    cfg.authority = None;
+    let mut config_account = config.account.clone();
+    config_account.data = cfg
+        .to_bytes()
+        .try_into()
+        .expect("wrapped-token config fits in account data");
+
+    ProgramOutput::new(
+        self_program_id,
+        caller_program_id,
+        instruction_words,
+        vec![config, authority.clone()],
+        vec![
+            AccountPostState::new(config_account),
+            AccountPostState::new(authority.account),
+        ],
+    )
+    .write();
+}
+
+/// Replaces the authorized sources, if the config names an authority and that
+/// account authorized this transaction.
+fn update_sources(
+    self_program_id: lee_core::program::ProgramId,
+    caller_program_id: Option<lee_core::program::ProgramId>,
+    pre_states: Vec<AccountWithMetadata>,
+    instruction_words: Vec<u32>,
+    sources: Vec<([u8; 32], lee_core::program::ProgramId)>,
+) {
+    // Top-level only. An account stays authorized for every call below the one
+    // that authorized it, so a program the authority signed for could otherwise
+    // chain in here and rewrite the list without the holder intending it. A
+    // governance PDA holding this needs the caller pinned to that program
+    // instead, which is a guest change that work has to make anyway.
+    assert!(
+        caller_program_id.is_none(),
+        "UpdateSources is only invoked as a top-level transaction"
+    );
+
+    // pre_states: [config PDA, authority account].
+    let [config, authority] = <[AccountWithMetadata; 2]>::try_from(pre_states)
+        .expect("UpdateSources requires the config and authority accounts");
+    assert_eq!(
+        config.account_id,
+        config_account_id(self_program_id),
+        "first account must be the wrapped-token config PDA"
+    );
+
+    let mut cfg = WrappedTokenConfig::from_bytes(&config.account.data.clone().into_inner())
+        .expect("config account holds a wrapped-token config");
+    let Some(expected) = cfg.authority else {
+        panic!("wrapped-token sources are fixed at genesis: no authority is configured");
+    };
+    assert_eq!(
+        authority.account_id, expected,
+        "second account must be the configured authority"
+    );
+    // Authorized rather than merely named, so a PDA held by a governance program
+    // works through the same delegation any signer would use.
+    assert!(
+        authority.is_authorized,
+        "the configured authority must authorize a source change"
+    );
+
+    cfg.sources = sources;
+    let mut config_account = config.account.clone();
+    config_account.data = cfg
+        .to_bytes()
+        .try_into()
+        .expect("wrapped-token config fits in account data");
+
+    ProgramOutput::new(
+        self_program_id,
+        caller_program_id,
+        instruction_words,
+        vec![config, authority.clone()],
+        vec![
+            AccountPostState::new(config_account),
+            AccountPostState::new(authority.account),
         ],
     )
     .write();

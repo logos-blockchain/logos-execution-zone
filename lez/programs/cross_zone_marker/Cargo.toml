@@ -1,5 +1,5 @@
 [package]
-name = "wrapped_token_program"
+name = "cross_zone_marker_core"
 version = "0.1.0"
 edition = "2024"
 license = { workspace = true }
@@ -8,6 +8,5 @@ license = { workspace = true }
 workspace = true
 
 [dependencies]
-cross_zone_marker_core.workspace = true
 lee_core.workspace = true
-wrapped_token_core.workspace = true
+risc0-zkvm.workspace = true

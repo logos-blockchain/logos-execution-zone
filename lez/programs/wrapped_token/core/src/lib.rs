@@ -40,6 +40,21 @@ pub enum Instruction {
     ///
     /// Required accounts (1): the wrapped-token config PDA.
     InitConfig(WrappedTokenConfig),
+    /// Replaces the authorized sources. Refused unless the config names an
+    /// authority and that account authorized the transaction.
+    ///
+    /// Required accounts (2): the config PDA, then the authority account.
+    UpdateSources { sources: Vec<(ZoneId, ProgramId)> },
+    /// Gives up the authority, leaving the source list fixed for good. Refused
+    /// unless the config names an authority and that account authorized it.
+    ///
+    /// Renounce only, never reassign. A leaked key that could rotate would move
+    /// the authority to the attacker and lock the real holder out permanently;
+    /// with only this, the worst either party achieves is freezing the list,
+    /// which is what a config with no authority does anyway.
+    ///
+    /// Required accounts (2): the config PDA, then the authority account.
+    RenounceAuthority,
 }
 
 /// Who may mint, and which peer sources they may mint for.
@@ -51,6 +66,17 @@ pub enum Instruction {
 pub struct WrappedTokenConfig {
     /// The program allowed to call `Mint`: the cross-zone inbox.
     pub minter: ProgramId,
+    /// The account allowed to change `sources`, or `None` for a list fixed at
+    /// genesis.
+    ///
+    /// Whoever holds this can authorize a new source, and a source can mint, so
+    /// its compromise is theft rather than delay. That is the key class the
+    /// central route table was rejected for, and the reason this is seeded unset:
+    /// the mechanism exists so the config format is final, and points at nothing
+    /// until there is a governance program worth pointing it at. An `AccountId`
+    /// rather than a key, so a PDA of such a program can hold it and be
+    /// authorized by delegation when it calls.
+    pub authority: Option<AccountId>,
     /// The `(src_zone, src_program_id)` pairs a mint may originate from. Empty on
     /// a zone with no peers, which authorizes nothing.
     pub sources: Vec<(ZoneId, ProgramId)>,
@@ -122,6 +148,7 @@ mod tests {
     fn config_round_trips() {
         let config = WrappedTokenConfig {
             minter: [1, 2, 3, 4, 5, 6, 7, 8],
+            authority: Some(AccountId::new([5; 32])),
             sources: vec![([7; 32], [9; 8]), ([8; 32], [4; 8])],
         };
         assert_eq!(

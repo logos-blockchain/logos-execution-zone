@@ -1,8 +1,8 @@
 use cross_zone_inbox_core::{
     CrossZoneMessage, InboxConfig, Instruction, SeenShard, inbox_config_account_id,
     inbox_config_seed, inbox_seen_shard_account_id, inbox_seen_shard_seed,
-    inbox_source_marker_account_id,
 };
+use cross_zone_marker_core::inbox_source_marker_account_id;
 use lee_core::{
     account::{Account, AccountWithMetadata},
     program::{
@@ -50,6 +50,16 @@ fn main() {
 }
 
 /// Delivers a finalized peer message to its target program, no-op on replay.
+///
+/// The inbox does not decide who may deliver what. It authenticates transport
+/// and nothing else: any program this zone hosts can be named as a target, with
+/// instruction bytes and account ids the peer chose. So a program meant to be
+/// reachable across zones MUST check the marker at position 0 against sources it
+/// authorized itself, the way `wrapped_token` and `ping_receiver` do. A program
+/// not meant to be reachable is protected only by its own asserts; several
+/// builtins currently survive incidentally, through a claim check or an owner
+/// check written for another reason, which is not the same as being safe by
+/// design.
 fn dispatch(
     self_program_id: ProgramId,
     caller_program_id: Option<ProgramId>,
