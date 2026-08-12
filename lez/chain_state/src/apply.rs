@@ -366,4 +366,29 @@ mod tests {
         assert_eq!(state.get_account_by_id(from).balance, 9900);
         assert_eq!(state.get_account_by_id(to).balance, 20100);
     }
+
+    #[test]
+    fn fee_state_is_untouched_by_block_application() {
+        // The fee state is carried by consensus state but not yet driven by the
+        // block transition: applying blocks must leave it exactly at genesis.
+        // The block transition (T8) flips this deliberately.
+        let mut state = initial_state();
+        let accounts = initial_pub_accounts_private_keys();
+        let from = accounts[0].account_id;
+        let to = accounts[1].account_id;
+        let sign_key = accounts[0].pub_sign_key.clone();
+
+        let genesis = produce_dummy_block(1, None, vec![]);
+        apply_block(None, &genesis, &mut state).expect("genesis applies");
+        let tip = tip_of(&genesis);
+
+        let tx = create_transaction_native_token_transfer(from, 0_u64.into(), to, 10, &sign_key);
+        let block = produce_dummy_block(2, Some(tip.hash), vec![tx]);
+        apply_block(Some(&tip), &block, &mut state).expect("transfer applies");
+
+        assert_eq!(
+            state.fee_state(),
+            &lee::FeeState::genesis().expect("valid fee parameters")
+        );
+    }
 }

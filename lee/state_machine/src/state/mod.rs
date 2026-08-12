@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use fee_core::params::MAX_GAS_EXEC;
+use fee_core::{FeeState, params::MAX_GAS_EXEC};
 use lee_core::{
     BlockId, Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, MembershipProof, Nullifier,
     Timestamp,
@@ -116,6 +116,9 @@ pub struct V03State {
     public_state: HashMap<AccountId, Account>,
     private_state: (CommitmentSet, NullifierSet),
     programs: HashMap<ProgramId, Program>,
+    /// Fee-subsystem state, so base fees, escrow and the payout window persist,
+    /// reorg and finalize with the rest of consensus state.
+    fee_state: FeeState,
 }
 
 impl Default for V03State {
@@ -129,6 +132,8 @@ impl Default for V03State {
             public_state: HashMap::default(),
             private_state,
             programs: HashMap::default(),
+            // Also runs the MAX = 2 * TARGET genesis parameter validation.
+            fee_state: FeeState::genesis().expect("shipped fee parameters are valid at genesis"),
         }
     }
 }
@@ -295,6 +300,19 @@ impl V03State {
         &self.programs
     }
 
+    /// Read access to the fee state, for the block transition and for RPC and
+    /// indexer consumers.
+    #[must_use]
+    pub const fn fee_state(&self) -> &FeeState {
+        &self.fee_state
+    }
+
+    /// Mutable access for the block-transition code that drives `fee_core`
+    /// (revenue recording, payout settlement, base-fee updates).
+    pub const fn fee_state_mut(&mut self) -> &mut FeeState {
+        &mut self.fee_state
+    }
+
     #[must_use]
     pub fn commitment_set_digest(&self) -> CommitmentSetDigest {
         self.private_state.0.digest()
@@ -315,10 +333,15 @@ impl V03State {
 
         // Destructure so adding a `V03State` field forces a decision here about
         // whether it belongs in the genesis fingerprint.
+        // `fee_state` is deliberately excluded: it is fully determined by the
+        // compiled-in fee parameters, so it adds nothing to a comparison of the
+        // *configured* genesis, and its Borsh encoding is rotation-dependent
+        // (ring buffer + cursor), which does not belong in a value nodes compare.
         let Self {
             public_state,
             private_state,
             programs,
+            fee_state: _,
         } = self;
 
         let mut accounts: Vec<(&AccountId, &Account)> = public_state.iter().collect();

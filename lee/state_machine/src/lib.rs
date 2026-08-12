@@ -3,6 +3,7 @@
     reason = "We prefer to group methods by functionality rather than by type for encoding"
 )]
 
+pub use fee_core::FeeState;
 pub use fees::{
     FeeFields, SYSTEM_PAYER, SignedMessage, fee_authorized_account_ids, is_fee_authorized,
 };

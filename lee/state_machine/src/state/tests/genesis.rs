@@ -1,3 +1,8 @@
+use fee_core::{
+    FeeState, distribute,
+    params::{BASE_FEE_EXEC_MIN, BASE_FEE_STOR_MIN, SMOOTHING_WINDOW},
+};
+
 use super::*;
 
 #[test]
@@ -112,6 +117,87 @@ fn builtin_programs_getter() {
     let builtin_programs = state.programs();
 
     assert_eq!(builtin_programs, &state.programs);
+}
+
+#[test]
+fn genesis_fee_state_matches_spec() {
+    let state = V03State::new();
+
+    let fee_state = state.fee_state();
+    assert_eq!(fee_state.base_fee_exec, BASE_FEE_EXEC_MIN);
+    assert_eq!(fee_state.base_fee_stor, BASE_FEE_STOR_MIN);
+    assert_eq!(fee_state.escrow, 0);
+    assert_eq!(fee_state.window, [0_u128; SMOOTHING_WINDOW]);
+    assert_eq!(fee_state.cursor, 0);
+    assert_eq!(fee_state.payout_carry, 0);
+}
+
+#[test]
+fn seeding_helpers_leave_the_fee_state_at_genesis() {
+    let state = V03State::new()
+        .with_public_account_balances([(AccountId::new([1; 32]), 100_u128)])
+        .with_test_programs();
+
+    assert_eq!(state.fee_state(), &FeeState::genesis().unwrap());
+}
+
+/// A fee state whose ring buffer is mid-rotation: `blocks` distributions of
+/// distinct revenues leave `cursor` off zero and every slot holding a
+/// different value.
+fn mid_rotation_fee_state(blocks: u128) -> FeeState {
+    let mut fee_state = FeeState::genesis().unwrap();
+    for i in 0..blocks {
+        distribute(&mut fee_state, 1_000 + i * 1_000).unwrap();
+    }
+    fee_state
+}
+
+/// Drives `fee_state` through a fixed revenue sequence, collecting the payouts.
+fn payout_sequence(fee_state: &mut FeeState, blocks: usize) -> Vec<u128> {
+    (0..blocks)
+        .map(|i| {
+            let revenue = 500 + u128::try_from(i).unwrap() * 13;
+            distribute(fee_state, revenue).unwrap()
+        })
+        .collect()
+}
+
+#[test]
+fn state_roundtrip_preserves_a_mid_rotation_fee_state() {
+    let mut state = V03State::new();
+    *state.fee_state_mut() = mid_rotation_fee_state(73);
+    assert_ne!(state.fee_state().cursor, 0, "window must be mid-rotation");
+
+    let bytes = borsh::to_vec(&state).unwrap();
+    let decoded: V03State = borsh::from_slice(&bytes).unwrap();
+    assert_eq!(state, decoded);
+
+    // The encoding pins the ring buffer *as rotated*, so what has to survive is
+    // payout behaviour, not just the bytes.
+    let mut original = state.fee_state().clone();
+    let mut restored = decoded.fee_state().clone();
+    assert_eq!(
+        payout_sequence(&mut original, SMOOTHING_WINDOW * 2),
+        payout_sequence(&mut restored, SMOOTHING_WINDOW * 2)
+    );
+    assert_eq!(original, restored);
+}
+
+#[test]
+fn cursor_position_is_semantic() {
+    // Same slot values, cursor shifted by one: the eviction order differs, so
+    // the payout sequences diverge. This is what gives the roundtrip test above
+    // its teeth, and why `FeeState` bytes are not a canonical form.
+    let mut original = mid_rotation_fee_state(73);
+    let mut rotated = original.clone();
+    let shifted = original.cursor + 1;
+    assert!(usize::from(shifted) < SMOOTHING_WINDOW);
+    rotated.cursor = shifted;
+
+    assert_ne!(
+        payout_sequence(&mut original, SMOOTHING_WINDOW),
+        payout_sequence(&mut rotated, SMOOTHING_WINDOW)
+    );
 }
 
 #[test]
