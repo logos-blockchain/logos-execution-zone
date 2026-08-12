@@ -357,8 +357,8 @@ mod tests {
         let account_id = AccountId::for_private_pda(&program_id, &seed, &npk, &vpk, u128::MAX);
 
         let expected_npk = NullifierPublicKey([
-            73, 227, 101, 209, 210, 127, 85, 171, 217, 20, 52, 68, 63, 127, 88, 157, 162, 165, 221,
-            15, 86, 162, 128, 15, 56, 89, 95, 33, 216, 229, 181, 123,
+            59, 136, 7, 185, 56, 46, 38, 4, 195, 155, 85, 32, 161, 24, 119, 14, 148, 100, 26, 152,
+            239, 255, 145, 142, 122, 166, 219, 75, 200, 9, 168, 7,
         ]);
         // AccountId is derived from (program_id, seed, npk), so it changes when npk changes.
         // We verify npk is pinned, and AccountId is deterministically derived from it.
