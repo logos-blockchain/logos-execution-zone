@@ -370,6 +370,7 @@ impl SubscriptionService {
                             let block = block.context("Failed to get L2 block data")?;
                             let block: indexer_service_protocol::Block = block.into();
 
+                            subscribers.retain(|sub| !sub.sink.is_closed());
                             for sub in &mut subscribers {
                                 if let Err(err) = sub.try_send(&block.header.block_id) {
                                     warn!(
