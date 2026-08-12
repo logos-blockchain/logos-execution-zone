@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::Path, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{Context as _, Result};
 use common::{
@@ -6,122 +6,134 @@ use common::{
     block::{Block, BlockMeta},
     transaction::LeeTransaction,
 };
+use kameo::actor::ActorRef;
 use lee::V03State;
 use lee_core::BlockId;
-use logos_blockchain_zone_sdk::{Slot, sequencer::SequencerCheckpoint};
-use storage::sequencer::{
-    RocksDBIO,
-    sequencer_cells::{
-        PeerZoneKey, PendingDepositEventRecord, WithdrawalReconciliationKey, ZoneAnchorRecord,
+use logos_blockchain_zone_sdk::sequencer::SequencerCheckpoint;
+use sequencer_storage_actor::{
+    StorageActorTrait,
+    protocol::{
+        CleanPendingBlocksUpTo, DeadLetterDispatchRecord, DeleteBlock, DeleteZoneCheckpoint,
+        DispatchFailure, DispatchOrigin, DropSettledCrossZoneDispatches, GetAllBlocks, GetBlock,
+        GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId,
+        GetLastBlockId, GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches,
+        GetPendingDepositEvents, GetPublishedHighWater, GetZoneAnchor, GetZoneCheckpointBytes,
+        MarkBlockAsFinalized, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
+        RaisePublishedHighWater, RecordDispatchFailure, RecordNewBlock, ResetAllBlocksToPending,
+        SetZoneAnchor, SetZoneCheckpointBytes, WithdrawalReconciliationKey, ZoneAnchorRecord,
     },
 };
-pub use storage::{DbResult, sequencer::DbDump};
 
-pub struct SequencerStore {
-    dbio: Arc<RocksDBIO>,
+// TODO: Refactor this to be `Cache` (or remove entirely) and move other fields to
+// [`crate::SequencerCore`].
+pub struct SequencerStore<S: StorageActorTrait> {
+    storage_ref: ActorRef<S>,
     // TODO: Consider adding the hashmap to the database for faster recovery.
     tx_hash_to_block_map: HashMap<HashType, BlockId>,
     genesis_id: u64,
     signing_key: lee::PrivateKey,
 }
 
-impl SequencerStore {
-    /// Open existing database at the given location. Fails if no database is found.
-    pub fn open_db(location: &Path, signing_key: lee::PrivateKey) -> DbResult<Self> {
-        let dbio = Arc::new(RocksDBIO::open(location)?);
-        Self::from_dbio_and_signing_key(dbio, signing_key)
-    }
+impl<S: StorageActorTrait> SequencerStore<S> {
+    pub async fn new(storage_ref: ActorRef<S>, signing_key: lee::PrivateKey) -> Result<Self> {
+        let genesis_id = storage_ref
+            .ask(GetFirstBlockId)
+            .await?
+            .context("Store holds no chain; it must be seeded with a genesis block first")?;
 
-    /// Create a fresh rocksdb at `location` from `dump`.
-    pub fn restore_db_from_dump(
-        location: &Path,
-        dump: &DbDump,
-        signing_key: lee::PrivateKey,
-    ) -> DbResult<Self> {
-        let dbio = Arc::new(RocksDBIO::restore_from_dump(location, dump)?);
-        Self::from_dbio_and_signing_key(dbio, signing_key)
-    }
-
-    /// Starting database at the start of new chain.
-    /// Creates files if necessary.
-    ///
-    /// ATTENTION: Will overwrite genesis block.
-    pub fn create_db_with_genesis(
-        location: &Path,
-        genesis_block: &Block,
-        genesis_state: &V03State,
-        signing_key: lee::PrivateKey,
-    ) -> DbResult<Self> {
-        let dbio = Arc::new(RocksDBIO::create(location, genesis_block, genesis_state)?);
-        let genesis_id = dbio.get_meta_first_block_in_db()?;
-        let tx_hash_to_block_map = block_to_transactions_map(genesis_block);
-
-        Ok(Self {
-            dbio,
-            tx_hash_to_block_map,
-            genesis_id,
-            signing_key,
-        })
-    }
-
-    fn from_dbio_and_signing_key(
-        dbio: Arc<RocksDBIO>,
-        signing_key: lee::PrivateKey,
-    ) -> DbResult<Self> {
-        let genesis_id = dbio.get_meta_first_block_in_db()?;
-        let last_id = dbio.latest_block_meta()?.map(|meta| meta.id);
+        let last_id = storage_ref
+            .ask(GetLastBlockId)
+            .await?
+            .context("Store holds a first block but no last one")?;
 
         let mut tx_hash_to_block_map = HashMap::new();
 
-        if let Some(last_id) = last_id {
-            log::info!("Preparing block cache");
-            for i in genesis_id..=last_id {
-                let block = dbio
-                    .get_block(i)?
-                    .expect("Block should be present in the database");
+        log::info!("Preparing block cache");
+        for i in genesis_id..=last_id {
+            let block = storage_ref
+                .ask(GetBlock { block_id: i })
+                .await?
+                .expect("Block should be present in the database");
 
-                tx_hash_to_block_map.extend(block_to_transactions_map(&block));
-            }
-            log::info!(
-                "Block cache prepared. Total blocks in cache: {}",
-                tx_hash_to_block_map.len()
-            );
+            tx_hash_to_block_map.extend(block_to_transactions_map(&block));
         }
+        log::info!(
+            "Block cache prepared. Total blocks in cache: {}",
+            tx_hash_to_block_map.len()
+        );
 
         Ok(Self {
-            dbio,
+            storage_ref,
             tx_hash_to_block_map,
             genesis_id,
             signing_key,
         })
     }
 
-    /// Shared handle to the underlying rocksdb. Used to persist the zone-sdk
-    /// checkpoint from the sequencer's drive task without needing &mut to the
-    /// store.
-    #[must_use]
-    pub fn dbio(&self) -> Arc<RocksDBIO> {
-        Arc::clone(&self.dbio)
+    pub async fn block_at_id(&self, id: u64) -> Result<Option<Block>> {
+        self.storage_ref
+            .ask(GetBlock { block_id: id })
+            .await
+            .map_err(Into::into)
     }
 
-    pub fn get_block_at_id(&self, id: u64) -> DbResult<Option<Block>> {
-        self.dbio.get_block(id)
+    pub async fn get_all_blocks(&self) -> Result<Vec<Block>> {
+        self.storage_ref.ask(GetAllBlocks).await.map_err(Into::into)
     }
 
-    pub fn delete_block_at_id(&mut self, block_id: u64) -> DbResult<()> {
-        self.dbio.delete_block(block_id)
+    pub async fn delete_block_at_id(&mut self, block_id: u64) -> Result<()> {
+        self.storage_ref
+            .ask(DeleteBlock { block_id })
+            .await
+            .map_err(Into::into)
     }
 
-    pub fn mark_block_as_finalized(&mut self, block_id: u64) -> DbResult<()> {
-        self.dbio.mark_block_as_finalized(block_id)
+    pub async fn mark_block_as_finalized(&mut self, block_id: u64) -> Result<()> {
+        self.storage_ref
+            .ask(MarkBlockAsFinalized { block_id })
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Reset every stored block to `Pending` so the next fresh start republishes the whole chain.
+    pub async fn reset_all_blocks_to_pending(&self) -> Result<()> {
+        self.storage_ref
+            .ask(ResetAllBlocksToPending)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Persists `block` with the effects it covers and extends the transaction
+    /// cache with the block's transactions.
+    pub async fn record_new_block(
+        &mut self,
+        block: Block,
+        withdrawals: Vec<WithdrawalReconciliationKey>,
+        state: Arc<V03State>,
+        checkpoint_bytes: Option<Vec<u8>>,
+    ) -> Result<()> {
+        let new_transactions_map = block_to_transactions_map(&block);
+        self.storage_ref
+            .ask(RecordNewBlock {
+                block,
+                withdrawals,
+                state,
+                checkpoint_bytes,
+            })
+            .await?;
+        self.tx_hash_to_block_map.extend(new_transactions_map);
+        Ok(())
     }
 
     /// Returns the transaction corresponding to the given hash, if it exists in the blockchain.
-    #[must_use]
-    pub fn get_transaction_by_hash(&self, hash: HashType) -> Option<(LeeTransaction, BlockId)> {
+    pub async fn get_transaction_by_hash(
+        &self,
+        hash: HashType,
+    ) -> Option<(LeeTransaction, BlockId)> {
         let block_id = *self.tx_hash_to_block_map.get(&hash)?;
         let block = self
-            .get_block_at_id(block_id)
+            .block_at_id(block_id)
+            .await
             .ok()
             .flatten()
             .expect("Block should be present since the hash is in the map");
@@ -135,8 +147,19 @@ impl SequencerStore {
         );
     }
 
-    pub fn latest_block_meta(&self) -> DbResult<Option<BlockMeta>> {
-        self.dbio.latest_block_meta()
+    /// The id of the chain's last block, or `None` on a store holding no chain.
+    pub async fn last_block_id(&self) -> Result<Option<BlockId>> {
+        self.storage_ref
+            .ask(GetLastBlockId)
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn latest_block_meta(&self) -> Result<Option<BlockMeta>> {
+        self.storage_ref
+            .ask(GetLatestBlockMeta)
+            .await
+            .map_err(Into::into)
     }
 
     #[must_use]
@@ -149,45 +172,22 @@ impl SequencerStore {
         &self.signing_key
     }
 
-    pub fn get_all_blocks(&self) -> impl Iterator<Item = DbResult<Block>> {
-        self.dbio.get_all_blocks()
-    }
-
-    pub(crate) fn update(
-        &mut self,
-        block: &Block,
-        withdrawals: &[WithdrawalReconciliationKey],
-        state: &V03State,
-        checkpoint: Option<&[u8]>,
-    ) -> DbResult<()> {
-        let new_transactions_map = block_to_transactions_map(block);
-        self.dbio
-            .atomic_update(block, withdrawals, state, checkpoint)?;
-        self.tx_hash_to_block_map.extend(new_transactions_map);
-        Ok(())
-    }
-
-    pub fn get_lee_state(&self) -> DbResult<V03State> {
-        self.dbio.get_lee_state()
+    /// The state after the last applied block, or `None` on a store holding no
+    /// chain.
+    pub async fn get_lee_state(&self) -> Result<Option<V03State>> {
+        self.storage_ref.ask(GetLeeState).await.map_err(Into::into)
     }
 
     /// Remove the persisted zone-sdk checkpoint so the next startup is treated as a fresh start.
-    pub fn delete_zone_checkpoint(&self) -> DbResult<()> {
-        self.dbio.delete_zone_sdk_checkpoint_bytes()
+    pub async fn delete_zone_checkpoint(&self) -> Result<()> {
+        self.storage_ref
+            .ask(DeleteZoneCheckpoint)
+            .await
+            .map_err(Into::into)
     }
 
-    /// Reset every stored block to `Pending` so the next fresh start republishes the whole chain.
-    pub fn reset_all_blocks_to_pending(&self) -> DbResult<()> {
-        self.dbio.reset_all_blocks_to_pending()
-    }
-
-    /// Single-blob [`DbDump`] of the whole store; restore with [`Self::restore_db_from_dump`].
-    pub fn dump(&self) -> DbResult<DbDump> {
-        self.dbio.dump_all()
-    }
-
-    pub fn get_zone_checkpoint(&self) -> Result<Option<SequencerCheckpoint>> {
-        let Some(bytes) = self.dbio.get_zone_sdk_checkpoint_bytes()? else {
+    pub async fn get_zone_checkpoint(&self) -> Result<Option<SequencerCheckpoint>> {
+        let Some(bytes) = self.storage_ref.ask(GetZoneCheckpointBytes).await? else {
             return Ok(None);
         };
         let checkpoint: SequencerCheckpoint = serde_json::from_slice(&bytes)
@@ -197,36 +197,131 @@ impl SequencerStore {
 
     /// Persists `checkpoint` on its own. Only valid when the effects it covers
     /// are already durable — otherwise it must ride in the same write as them,
-    /// via [`storage::sequencer::StoreUpdate`].
-    pub fn set_zone_checkpoint(&self, checkpoint: &SequencerCheckpoint) -> Result<()> {
-        self.dbio
-            .put_zone_sdk_checkpoint_bytes(&checkpoint_bytes(checkpoint)?)?;
+    /// via [`Self::record_new_block`].
+    pub async fn set_zone_checkpoint(&self, checkpoint: &SequencerCheckpoint) -> Result<()> {
+        self.storage_ref
+            .ask(SetZoneCheckpointBytes {
+                bytes: checkpoint_bytes(checkpoint)?,
+            })
+            .await?;
         Ok(())
     }
 
     /// The last channel block read back and verified from Bedrock (L1 slot +
     /// `id`/`hash`), or `None` before any block has been read from the channel.
-    pub fn get_zone_anchor(&self) -> DbResult<Option<ZoneAnchorRecord>> {
-        self.dbio.get_zone_anchor()
+    pub async fn get_zone_anchor(&self) -> Result<Option<ZoneAnchorRecord>> {
+        self.storage_ref
+            .ask(GetZoneAnchor)
+            .await
+            .map_err(Into::into)
     }
 
-    pub fn set_zone_anchor(&self, anchor: &ZoneAnchorRecord) -> DbResult<()> {
-        self.dbio.put_zone_anchor(anchor)
+    pub async fn set_zone_anchor(&self, anchor: ZoneAnchorRecord) -> Result<()> {
+        self.storage_ref
+            .ask(SetZoneAnchor { anchor })
+            .await
+            .map_err(Into::into)
     }
 
     /// The highest block id ever inscribed on the channel by this sequencer,
     /// or `None` before it has published anything.
-    pub fn published_high_water(&self) -> DbResult<Option<u64>> {
-        self.dbio.published_high_water()
+    pub async fn published_high_water(&self) -> Result<Option<u64>> {
+        self.storage_ref
+            .ask(GetPublishedHighWater)
+            .await
+            .map_err(Into::into)
     }
 
     /// Raises the published high water mark to `block_id`, never lowering it.
-    pub fn raise_published_high_water(&self, block_id: u64) -> DbResult<()> {
-        self.dbio.raise_published_high_water(block_id)
+    pub async fn raise_published_high_water(&self, block_id: u64) -> Result<()> {
+        self.storage_ref
+            .ask(RaisePublishedHighWater { block_id })
+            .await
+            .map_err(Into::into)
     }
 
-    pub fn get_pending_deposit_events(&self) -> DbResult<Vec<PendingDepositEventRecord>> {
-        self.dbio.get_pending_deposit_events()
+    pub async fn get_pending_deposit_events(&self) -> Result<Vec<PendingDepositEventRecord>> {
+        self.storage_ref
+            .ask(GetPendingDepositEvents)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// The persisted final-tier `(state, meta)`, or `None` before anything
+    /// finalized.
+    pub async fn get_final_snapshot(&self) -> Result<Option<(V03State, BlockMeta)>> {
+        self.storage_ref
+            .ask(GetFinalSnapshot)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Marks every stored pending block at or below `last_finalized` as
+    /// finalized.
+    pub async fn clean_pending_blocks_up_to(&self, last_finalized: BlockId) -> Result<()> {
+        self.storage_ref
+            .ask(CleanPendingBlocksUpTo { last_finalized })
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn pending_cross_zone_dispatches(
+        &self,
+    ) -> Result<Vec<PendingCrossZoneDispatchRecord>> {
+        self.storage_ref
+            .ask(GetPendingCrossZoneDispatches)
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn drop_settled_cross_zone_dispatches(
+        &self,
+        message_keys: Vec<[u8; 32]>,
+    ) -> Result<usize> {
+        self.storage_ref
+            .ask(DropSettledCrossZoneDispatches { message_keys })
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Counts one failed production attempt against `message_key`, giving up on
+    /// it once `retire_at` accumulate.
+    pub async fn record_dispatch_failure(
+        &self,
+        message_key: [u8; 32],
+        retire_at: u32,
+        origin: DispatchOrigin,
+    ) -> Result<DispatchFailure> {
+        self.storage_ref
+            .ask(RecordDispatchFailure {
+                message_key,
+                retire_at,
+                origin,
+            })
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn dead_letter_dispatches(&self) -> Result<Vec<DeadLetterDispatchRecord>> {
+        self.storage_ref
+            .ask(GetDeadLetterDispatches)
+            .await
+            .map_err(Into::into)
+    }
+
+    pub async fn dead_letter_dispatch_count(&self) -> Result<u64> {
+        self.storage_ref
+            .ask(GetDeadLetterDispatchCount)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// The handle to the actor behind this store, for the paths that hold no
+    /// store of their own: the publisher's follow sink and the cross-zone
+    /// watchers, each of which outlives any one caller.
+    #[must_use]
+    pub const fn storage_ref(&self) -> &ActorRef<S> {
+        &self.storage_ref
     }
 }
 
@@ -245,240 +340,180 @@ pub(crate) fn block_to_transactions_map(block: &Block) -> HashMap<HashType, u64>
         .collect()
 }
 
-/// A cross-zone watcher's delivery floor on `peer_zone`'s channel.
-///
-/// The highest slot every message of which was delivered, or `None` before it
-/// has delivered anything from that peer. Stored as a little-endian `u64`.
-///
-/// Free functions rather than only [`SequencerStore`] methods because each
-/// watcher runs as its own spawned task and holds an `Arc<RocksDBIO>`;
-/// `SequencerStore` is not `Clone`.
-pub fn get_cross_zone_peer_floor(dbio: &RocksDBIO, peer_zone: PeerZoneKey) -> Result<Option<Slot>> {
-    let Some(bytes) = dbio.get_cross_zone_peer_floor_bytes(peer_zone)? else {
-        return Ok(None);
-    };
-    let bytes: [u8; 8] = bytes.as_slice().try_into().with_context(|| {
-        format!(
-            "Stored cross-zone peer floor is {} bytes, expected 8",
-            bytes.len()
-        )
-    })?;
-    Ok(Some(Slot::new(u64::from_le_bytes(bytes))))
-}
-
-pub fn set_cross_zone_peer_floor(
-    dbio: &RocksDBIO,
-    peer_zone: PeerZoneKey,
-    floor: Slot,
-) -> Result<()> {
-    dbio.put_cross_zone_peer_floor_bytes(peer_zone, &floor.to_le_bytes())?;
-    Ok(())
-}
-
-/// Drops the stored floor so the watcher reads `peer_zone`'s channel from the
-/// peer's genesis again.
-pub fn clear_cross_zone_peer_floor(dbio: &RocksDBIO, peer_zone: PeerZoneKey) -> Result<()> {
-    dbio.delete_cross_zone_peer_floor(peer_zone)?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use common::{block::HashableBlockData, test_utils::sequencer_sign_key_for_testing};
+    use kameo::actor::Spawn as _;
+    use sequencer_storage_actor::StorageActor;
     use tempfile::tempdir;
 
     use super::*;
 
-    #[test]
-    fn get_transaction_by_hash() {
-        let temp_dir = tempdir().unwrap();
-        let path = temp_dir.path();
-
-        let signing_key = sequencer_sign_key_for_testing();
-
-        let genesis_block_hashable_data = HashableBlockData {
+    fn genesis_block(signing_key: &lee::PrivateKey) -> Block {
+        HashableBlockData {
             block_id: 0,
             prev_block_hash: HashType([0; 32]),
             timestamp: 0,
             transactions: vec![],
-        };
+        }
+        .into_pending_block(signing_key)
+    }
 
-        let genesis_block = genesis_block_hashable_data.into_pending_block(&signing_key);
-        // Start an empty node store
-        let mut node_store = SequencerStore::create_db_with_genesis(
-            path,
-            &genesis_block,
-            &testnet_initial_state::initial_state(),
-            signing_key,
+    /// Creates a fresh database at `path` seeded with `genesis` and opens a
+    /// store on the actor serving it.
+    async fn create_store(
+        path: &Path,
+        genesis: &Block,
+        signing_key: lee::PrivateKey,
+    ) -> SequencerStore<StorageActor> {
+        let storage_ref = StorageActor::spawn(StorageActor::new(path).unwrap());
+        storage_ref
+            .ask(RecordNewBlock {
+                block: genesis.clone(),
+                withdrawals: vec![],
+                state: Arc::new(testnet_initial_state::initial_state()),
+                checkpoint_bytes: None,
+            })
+            .await
+            .unwrap();
+        SequencerStore::new(storage_ref, signing_key).await.unwrap()
+    }
+
+    async fn open_store(path: &Path, signing_key: lee::PrivateKey) -> SequencerStore<StorageActor> {
+        let storage_ref = StorageActor::spawn(StorageActor::new(path).unwrap());
+        SequencerStore::new(storage_ref, signing_key).await.unwrap()
+    }
+
+    #[tokio::test]
+    async fn get_transaction_by_hash() {
+        let temp_dir = tempdir().unwrap();
+        let signing_key = sequencer_sign_key_for_testing();
+        let mut store = create_store(
+            temp_dir.path(),
+            &genesis_block(&signing_key),
+            signing_key.clone(),
         )
-        .unwrap();
+        .await;
 
         let tx = common::test_utils::produce_dummy_empty_transaction();
         let block = common::test_utils::produce_dummy_block(1, None, vec![tx.clone()]);
 
         // Try retrieve a tx that's not in the chain yet.
-        let retrieved_tx = node_store.get_transaction_by_hash(tx.hash());
-        assert_eq!(None, retrieved_tx);
+        assert_eq!(store.get_transaction_by_hash(tx.hash()).await, None);
         // Add the block with the transaction
-        let dummy_state = V03State::new();
-        node_store.update(&block, &[], &dummy_state, None).unwrap();
+        store
+            .record_new_block(block.clone(), vec![], Arc::new(V03State::new()), None)
+            .await
+            .unwrap();
         // Try again
-        let output = node_store.get_transaction_by_hash(tx.hash());
+        let output = store.get_transaction_by_hash(tx.hash()).await;
         assert_eq!(Some((tx, 1)), output);
     }
 
-    #[test]
-    fn latest_block_meta_returns_genesis_meta_initially() {
+    #[tokio::test]
+    async fn latest_block_meta_returns_genesis_meta_initially() {
         let temp_dir = tempdir().unwrap();
-        let path = temp_dir.path();
-
         let signing_key = sequencer_sign_key_for_testing();
+        let genesis = genesis_block(&signing_key);
+        let genesis_hash = genesis.header.hash;
 
-        let genesis_block_hashable_data = HashableBlockData {
-            block_id: 0,
-            prev_block_hash: HashType([0; 32]),
-            timestamp: 0,
-            transactions: vec![],
-        };
-
-        let genesis_block = genesis_block_hashable_data.into_pending_block(&signing_key);
-        let genesis_hash = genesis_block.header.hash;
-
-        let node_store = SequencerStore::create_db_with_genesis(
-            path,
-            &genesis_block,
-            &testnet_initial_state::initial_state(),
-            signing_key,
-        )
-        .unwrap();
+        let store = create_store(temp_dir.path(), &genesis, signing_key).await;
 
         // Verify that initially the latest block hash equals genesis hash
-        let latest_meta = node_store.latest_block_meta().unwrap().unwrap();
+        let latest_meta = store.latest_block_meta().await.unwrap().unwrap();
         assert_eq!(latest_meta.hash, genesis_hash);
     }
 
-    #[test]
-    fn latest_block_meta_updates_after_new_block() {
+    #[tokio::test]
+    async fn latest_block_meta_updates_after_new_block() {
         let temp_dir = tempdir().unwrap();
-        let path = temp_dir.path();
-
         let signing_key = sequencer_sign_key_for_testing();
-
-        let genesis_block_hashable_data = HashableBlockData {
-            block_id: 0,
-            prev_block_hash: HashType([0; 32]),
-            timestamp: 0,
-            transactions: vec![],
-        };
-
-        let genesis_block = genesis_block_hashable_data.into_pending_block(&signing_key);
-        let mut node_store = SequencerStore::create_db_with_genesis(
-            path,
-            &genesis_block,
-            &testnet_initial_state::initial_state(),
-            signing_key,
+        let mut store = create_store(
+            temp_dir.path(),
+            &genesis_block(&signing_key),
+            signing_key.clone(),
         )
-        .unwrap();
+        .await;
 
         // Add a new block
         let tx = common::test_utils::produce_dummy_empty_transaction();
         let block = common::test_utils::produce_dummy_block(1, None, vec![tx]);
         let block_hash = block.header.hash;
 
-        let dummy_state = V03State::new();
-        node_store.update(&block, &[], &dummy_state, None).unwrap();
+        store
+            .record_new_block(block.clone(), vec![], Arc::new(V03State::new()), None)
+            .await
+            .unwrap();
 
         // Verify that the latest block meta now equals the new block's hash
-        let latest_meta = node_store.latest_block_meta().unwrap().unwrap();
+        let latest_meta = store.latest_block_meta().await.unwrap().unwrap();
         assert_eq!(latest_meta.hash, block_hash);
     }
 
-    #[test]
-    fn mark_block_finalized() {
+    #[tokio::test]
+    async fn mark_block_finalized() {
         let temp_dir = tempdir().unwrap();
-        let path = temp_dir.path();
-
         let signing_key = sequencer_sign_key_for_testing();
-
-        let genesis_block_hashable_data = HashableBlockData {
-            block_id: 0,
-            prev_block_hash: HashType([0; 32]),
-            timestamp: 0,
-            transactions: vec![],
-        };
-
-        let genesis_block = genesis_block_hashable_data.into_pending_block(&signing_key);
-        let mut node_store = SequencerStore::create_db_with_genesis(
-            path,
-            &genesis_block,
-            &testnet_initial_state::initial_state(),
-            signing_key,
+        let mut store = create_store(
+            temp_dir.path(),
+            &genesis_block(&signing_key),
+            signing_key.clone(),
         )
-        .unwrap();
+        .await;
 
         // Add a new block with Pending status
         let tx = common::test_utils::produce_dummy_empty_transaction();
         let block = common::test_utils::produce_dummy_block(1, None, vec![tx]);
         let block_id = block.header.block_id;
 
-        let dummy_state = V03State::new();
-        node_store.update(&block, &[], &dummy_state, None).unwrap();
+        store
+            .record_new_block(block.clone(), vec![], Arc::new(V03State::new()), None)
+            .await
+            .unwrap();
 
         // Verify initial status is Pending
-        let retrieved_block = node_store.get_block_at_id(block_id).unwrap().unwrap();
+        let retrieved_block = store.block_at_id(block_id).await.unwrap().unwrap();
         assert!(matches!(
             retrieved_block.bedrock_status,
             common::block::BedrockStatus::Pending
         ));
 
         // Mark block as finalized
-        node_store.mark_block_as_finalized(block_id).unwrap();
+        store.mark_block_as_finalized(block_id).await.unwrap();
 
         // Verify status is now Finalized
-        let finalized_block = node_store.get_block_at_id(block_id).unwrap().unwrap();
+        let finalized_block = store.block_at_id(block_id).await.unwrap().unwrap();
         assert!(matches!(
             finalized_block.bedrock_status,
             common::block::BedrockStatus::Finalized
         ));
     }
 
-    #[test]
-    fn open_existing_db_caches_transactions() {
+    #[tokio::test]
+    async fn open_existing_db_caches_transactions() {
         let temp_dir = tempdir().unwrap();
         let path = temp_dir.path();
-
         let signing_key = sequencer_sign_key_for_testing();
-
-        let genesis_block_hashable_data = HashableBlockData {
-            block_id: 0,
-            prev_block_hash: HashType([0; 32]),
-            timestamp: 0,
-            transactions: vec![],
-        };
-
-        let genesis_block = genesis_block_hashable_data.into_pending_block(&signing_key);
         let tx = common::test_utils::produce_dummy_empty_transaction();
-        {
-            // Create a scope to drop the first store after creating the db
-            let mut node_store = SequencerStore::create_db_with_genesis(
-                path,
-                &genesis_block,
-                &testnet_initial_state::initial_state(),
-                signing_key.clone(),
-            )
-            .unwrap();
 
-            // Add a new block
+        let storage_weak = {
+            let mut store =
+                create_store(path, &genesis_block(&signing_key), signing_key.clone()).await;
             let block = common::test_utils::produce_dummy_block(1, None, vec![tx.clone()]);
-            node_store
-                .update(&block, &[], &V03State::new(), None)
+            store
+                .record_new_block(block.clone(), vec![], Arc::new(V03State::new()), None)
+                .await
                 .unwrap();
-        }
+            store.storage_ref().downgrade()
+        };
+        storage_weak.wait_for_shutdown_with_result(|_| ()).await;
 
         // Re-open the store and verify that the transaction is still retrievable (which means it
         // was cached correctly)
-        let node_store = SequencerStore::open_db(path, signing_key).unwrap();
-        let output = node_store.get_transaction_by_hash(tx.hash());
+        let store = open_store(path, signing_key).await;
+        let output = store.get_transaction_by_hash(tx.hash()).await;
         assert_eq!(Some((tx, 1)), output);
     }
 }

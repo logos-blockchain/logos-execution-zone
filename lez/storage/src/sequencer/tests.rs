@@ -24,7 +24,11 @@ fn state_with_balance(balance: u128) -> V03State {
 
 fn dbio_with_genesis(path: &Path) -> (RocksDBIO, Block) {
     let genesis = produce_dummy_block(1, None, vec![]);
-    let dbio = RocksDBIO::create(path, &genesis, &state_with_balance(100)).unwrap();
+    let dbio = RocksDBIO::open_or_create(path).unwrap();
+    // The same write any block takes: the first one into an empty store starts
+    // its chain.
+    dbio.atomic_update(&genesis, &[], &state_with_balance(100), None)
+        .unwrap();
     (dbio, genesis)
 }
 
@@ -68,6 +72,7 @@ fn sorted_dispatches(
 fn stored_balance(dbio: &RocksDBIO) -> u128 {
     dbio.get_lee_state()
         .unwrap()
+        .expect("the store holds a chain")
         .get_account_by_id(marker_id())
         .balance
 }
@@ -487,7 +492,7 @@ fn peer_chain_tips_round_trip_and_are_kept_per_peer() {
     // On disk, not in memory: a watcher that re-anchored on restart would take
     // whatever block reached it first, which is the id the attack picks.
     drop(dbio);
-    let reopened = RocksDBIO::open(temp_dir.path()).unwrap();
+    let reopened = RocksDBIO::open_or_create(temp_dir.path()).unwrap();
     assert_eq!(
         reopened.get_cross_zone_peer_tip(peer_a).unwrap(),
         Some(advanced)
@@ -586,7 +591,7 @@ fn dispatch_records_survive_a_reopen() {
     // On disk, not in memory: the records are what stand between the watcher's
     // durable read floor and a lost delivery across a restart.
     drop(dbio);
-    let reopened = RocksDBIO::open(temp_dir.path()).unwrap();
+    let reopened = RocksDBIO::open_or_create(temp_dir.path()).unwrap();
     assert_eq!(
         sorted_dispatches(reopened.get_pending_cross_zone_dispatches().unwrap()),
         sorted_dispatches(vec![first, second])
@@ -612,7 +617,7 @@ fn a_legacy_dispatch_blob_is_migrated_into_per_message_entries_on_open() {
         .unwrap();
     drop(dbio);
 
-    let migrated = RocksDBIO::open(temp_dir.path()).unwrap();
+    let migrated = RocksDBIO::open_or_create(temp_dir.path()).unwrap();
     assert_eq!(
         sorted_dispatches(migrated.get_pending_cross_zone_dispatches().unwrap()),
         sorted_dispatches(records.clone()),
@@ -650,7 +655,7 @@ fn a_legacy_dispatch_blob_is_migrated_into_per_message_entries_on_open() {
         .unwrap();
     drop(migrated);
 
-    let cleaned = RocksDBIO::open(temp_dir.path()).unwrap();
+    let cleaned = RocksDBIO::open_or_create(temp_dir.path()).unwrap();
     assert!(
         cleaned
             .db
@@ -687,7 +692,7 @@ fn a_legacy_blob_over_live_entries_folds_additively() {
         .unwrap();
     drop(dbio);
 
-    let merged = RocksDBIO::open(temp_dir.path()).unwrap();
+    let merged = RocksDBIO::open_or_create(temp_dir.path()).unwrap();
     assert_eq!(
         sorted_dispatches(merged.get_pending_cross_zone_dispatches().unwrap()),
         sorted_dispatches(vec![
@@ -1157,4 +1162,48 @@ fn produced_block_below_disk_head_pins_meta_and_prunes() {
     assert_eq!(meta.id, 2);
     assert_eq!(meta.hash, block2b.header.hash);
     assert_eq!(stored_balance(&dbio), 400);
+}
+
+/// A database nothing has written a genesis into answers "no chain yet" rather
+/// than failing: every one of these was a hard `get` that errored on absence.
+#[test]
+fn an_unseeded_store_reports_no_chain() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let dbio = RocksDBIO::open_or_create(dir.path()).expect("open");
+
+    assert_eq!(dbio.get_meta_first_block_in_db().unwrap(), None);
+    assert_eq!(dbio.get_meta_last_block_in_db().unwrap(), None);
+    assert!(dbio.get_lee_state().unwrap().is_none());
+    assert!(dbio.latest_block_meta().unwrap().is_none());
+    assert!(dbio.get_final_snapshot().unwrap().is_none());
+    assert!(!dbio.get_meta_is_first_block_set().unwrap());
+    assert!(dbio.get_block(1).unwrap().is_none());
+}
+
+/// The first block written to an empty store starts its chain — the property
+/// that lets a genesis go in as an ordinary block write.
+#[test]
+fn the_first_block_written_starts_the_chain() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let dbio = RocksDBIO::open_or_create(dir.path()).expect("open");
+    assert_eq!(dbio.get_meta_first_block_in_db().unwrap(), None);
+
+    let genesis = produce_dummy_block(1, None, vec![]);
+    dbio.atomic_update(&genesis, &[], &state_with_balance(100), None)
+        .expect("seed");
+
+    assert_eq!(dbio.get_meta_first_block_in_db().unwrap(), Some(1));
+    assert_eq!(dbio.get_meta_last_block_in_db().unwrap(), Some(1));
+    assert!(dbio.get_meta_is_first_block_set().unwrap());
+    assert_eq!(
+        dbio.get_block(1).unwrap().unwrap().header.hash,
+        genesis.header.hash
+    );
+
+    // A later block extends the chain rather than restarting it.
+    let second = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+    dbio.atomic_update(&second, &[], &state_with_balance(100), None)
+        .expect("extend");
+    assert_eq!(dbio.get_meta_first_block_in_db().unwrap(), Some(1));
+    assert_eq!(dbio.get_meta_last_block_in_db().unwrap(), Some(2));
 }

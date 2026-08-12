@@ -1,4 +1,5 @@
 use common::{block::Block, transaction::LeeTransaction};
+use futures::{TryFutureExt as _, TryStreamExt as _, future::ready, stream::FuturesOrdered};
 use kameo::{
     Actor,
     actor::{ActorRef, WeakActorRef},
@@ -18,6 +19,7 @@ use sequencer_core::{
     config::SequencerConfig,
     task_group::TaskGroup,
 };
+use sequencer_storage_actor::{StorageActor, StorageActorTrait};
 use tokio::select;
 use tokio_util::sync::CancellationToken;
 
@@ -32,9 +34,10 @@ use crate::{
 };
 
 // TODO: Remove `BP` once this part is moved to a separate actor
-pub struct ExecutorActor<BP: BlockPublisherTrait> {
-    sequencer: SequencerCore<BP>,
+pub struct ExecutorActor<BP: BlockPublisherTrait, S: StorageActorTrait = StorageActor> {
     mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
+    sequencer: SequencerCore<BP, S>,
+    storage_ref: ActorRef<S>,
 
     // --- TODO: Remove these fields below ---
     /// Cancelled when the publisher's drive task terminates (e.g. a panicked
@@ -46,16 +49,20 @@ pub struct ExecutorActor<BP: BlockPublisherTrait> {
     background_tasks: Vec<TaskGroup>,
 }
 
-impl<BP: BlockPublisherTrait> ExecutorActor<BP> {
-    pub async fn new(config: SequencerConfig) -> Self {
-        let (sequencer, mempool_handle) = SequencerCore::<BP>::start_from_config(config).await;
+impl<BP: BlockPublisherTrait, S: StorageActorTrait> ExecutorActor<BP, S> {
+    pub async fn new(config: SequencerConfig, storage_ref: ActorRef<S>) -> Self {
+        // TODO: Leave storage_ref as a top-level field only in `ExecutorActor`,
+        // while moving `SequencerCore` code into this actor.
+        let (sequencer, mempool_handle) =
+            SequencerCore::<BP, S>::start_from_config(config, storage_ref.clone()).await;
 
         let driver_cancellation = sequencer.block_publisher().driver_cancellation();
         let background_tasks = sequencer.background_tasks();
 
         Self {
-            sequencer,
             mempool_handle,
+            sequencer,
+            storage_ref,
             driver_cancellation,
             background_tasks,
         }
@@ -69,7 +76,9 @@ impl<BP: BlockPublisherTrait> ExecutorActor<BP> {
     }
 }
 
-impl<BP: BlockPublisherTrait + Send + 'static> Actor for ExecutorActor<BP> {
+impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Actor
+    for ExecutorActor<BP, S>
+{
     type Args = Self;
     type Error = Error;
 
@@ -116,7 +125,9 @@ impl<BP: BlockPublisherTrait + Send + 'static> Actor for ExecutorActor<BP> {
     }
 }
 
-impl<BP: BlockPublisherTrait + Send + 'static> Message<ProduceBlock> for ExecutorActor<BP> {
+impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Message<ProduceBlock>
+    for ExecutorActor<BP, S>
+{
     type Reply = Result<()>;
 
     async fn handle(
@@ -134,11 +145,11 @@ impl<BP: BlockPublisherTrait + Send + 'static> Message<ProduceBlock> for Executo
         // channel would carry two chains from there and nothing resolves that.
         // The head rewinds under us when the sdk orphans our own unfinalized
         // blocks, and recovers once they finalize, so this is a wait.
-        if let Some(high_water) = self.sequencer.rewound_below_published() {
+        if let Some(high_water) = self.sequencer.rewound_below_published().await {
             warn!(
                 "Skipping turn: head rewound to {} but block {high_water} is already inscribed; \
                  waiting for the channel to restore it",
-                self.sequencer.next_block_height().saturating_sub(1),
+                self.sequencer.next_block_height().await.saturating_sub(1),
             );
             return Ok(());
         }
@@ -161,7 +172,9 @@ impl<BP: BlockPublisherTrait + Send + 'static> Message<ProduceBlock> for Executo
     }
 }
 
-impl<BP: BlockPublisherTrait + Send + 'static> Message<Transaction> for ExecutorActor<BP> {
+impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Message<Transaction>
+    for ExecutorActor<BP, S>
+{
     type Reply = Result<()>;
 
     async fn handle(
@@ -175,7 +188,9 @@ impl<BP: BlockPublisherTrait + Send + 'static> Message<Transaction> for Executor
     }
 }
 
-impl<BP: BlockPublisherTrait + Send + 'static> Message<GetBlock> for ExecutorActor<BP> {
+impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Message<GetBlock>
+    for ExecutorActor<BP, S>
+{
     type Reply = Result<Option<Block>>;
 
     async fn handle(
@@ -183,14 +198,16 @@ impl<BP: BlockPublisherTrait + Send + 'static> Message<GetBlock> for ExecutorAct
         GetBlock { block_id }: GetBlock,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.sequencer
-            .block_store()
-            .get_block_at_id(block_id)
+        self.storage_ref
+            .ask(sequencer_storage_actor::protocol::GetBlock { block_id })
+            .await
             .map_err(Into::into)
     }
 }
 
-impl<BP: BlockPublisherTrait + Send + 'static> Message<GetBlockRange> for ExecutorActor<BP> {
+impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Message<GetBlockRange>
+    for ExecutorActor<BP, S>
+{
     type Reply = Result<Vec<Block>>;
 
     async fn handle(
@@ -199,18 +216,23 @@ impl<BP: BlockPublisherTrait + Send + 'static> Message<GetBlockRange> for Execut
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         range
-            .map_while(|block_id| {
-                self.sequencer
-                    .block_store()
-                    .get_block_at_id(block_id)
+            .map(|block_id| {
+                self.storage_ref
+                    .ask(sequencer_storage_actor::protocol::GetBlock { block_id })
+                    .into_future()
                     .map_err(Into::into)
-                    .transpose()
             })
-            .collect::<Result<Vec<_>>>()
+            .collect::<FuturesOrdered<_>>()
+            .try_take_while(|block_opt| ready(Ok(block_opt.is_some())))
+            .try_filter_map(|block_opt| ready(Ok(block_opt)))
+            .try_collect()
+            .await
     }
 }
 
-impl<BP: BlockPublisherTrait + Send + 'static> Message<GetLastBlockId> for ExecutorActor<BP> {
+impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Message<GetLastBlockId>
+    for ExecutorActor<BP, S>
+{
     type Reply = Result<BlockId>;
 
     async fn handle(
@@ -218,11 +240,13 @@ impl<BP: BlockPublisherTrait + Send + 'static> Message<GetLastBlockId> for Execu
         GetLastBlockId: GetLastBlockId,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        Ok(self.sequencer.chain_height())
+        Ok(self.sequencer.chain_height().await)
     }
 }
 
-impl<BP: BlockPublisherTrait + Send + 'static> Message<GetAccountBalance> for ExecutorActor<BP> {
+impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait>
+    Message<GetAccountBalance> for ExecutorActor<BP, S>
+{
     type Reply = Balance;
 
     async fn handle(
@@ -232,10 +256,13 @@ impl<BP: BlockPublisherTrait + Send + 'static> Message<GetAccountBalance> for Ex
     ) -> Self::Reply {
         self.sequencer
             .with_state(|state| state.get_account_by_id(account_id).balance)
+            .await
     }
 }
 
-impl<BP: BlockPublisherTrait + Send + 'static> Message<GetTransaction> for ExecutorActor<BP> {
+impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Message<GetTransaction>
+    for ExecutorActor<BP, S>
+{
     type Reply = Option<(LeeTransaction, BlockId)>;
 
     async fn handle(
@@ -246,10 +273,13 @@ impl<BP: BlockPublisherTrait + Send + 'static> Message<GetTransaction> for Execu
         self.sequencer
             .block_store()
             .get_transaction_by_hash(tx_hash)
+            .await
     }
 }
 
-impl<BP: BlockPublisherTrait + Send + 'static> Message<GetAccountNonces> for ExecutorActor<BP> {
+impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait>
+    Message<GetAccountNonces> for ExecutorActor<BP, S>
+{
     type Reply = Vec<Nonce>;
 
     async fn handle(
@@ -257,16 +287,20 @@ impl<BP: BlockPublisherTrait + Send + 'static> Message<GetAccountNonces> for Exe
         GetAccountNonces { account_ids }: GetAccountNonces,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.sequencer.with_state(|state| {
-            account_ids
-                .into_iter()
-                .map(|account_id| state.get_account_by_id(account_id).nonce)
-                .collect()
-        })
+        self.sequencer
+            .with_state(|state| {
+                account_ids
+                    .into_iter()
+                    .map(|account_id| state.get_account_by_id(account_id).nonce)
+                    .collect()
+            })
+            .await
     }
 }
 
-impl<BP: BlockPublisherTrait + Send + 'static> Message<GetProofsAndRoot> for ExecutorActor<BP> {
+impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait>
+    Message<GetProofsAndRoot> for ExecutorActor<BP, S>
+{
     type Reply = (
         Vec<Option<lee_core::MembershipProof>>,
         lee_core::CommitmentSetDigest,
@@ -277,17 +311,21 @@ impl<BP: BlockPublisherTrait + Send + 'static> Message<GetProofsAndRoot> for Exe
         GetProofsAndRoot { commitments }: GetProofsAndRoot,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.sequencer.with_state(|state| {
-            let proofs = commitments
-                .iter()
-                .map(|commitment| state.get_proof_for_commitment(commitment))
-                .collect();
-            (proofs, state.commitment_root())
-        })
+        self.sequencer
+            .with_state(|state| {
+                let proofs = commitments
+                    .iter()
+                    .map(|commitment| state.get_proof_for_commitment(commitment))
+                    .collect();
+                (proofs, state.commitment_root())
+            })
+            .await
     }
 }
 
-impl<BP: BlockPublisherTrait + Send + 'static> Message<GetAccount> for ExecutorActor<BP> {
+impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Message<GetAccount>
+    for ExecutorActor<BP, S>
+{
     type Reply = GetAccountReply;
 
     async fn handle(
@@ -298,12 +336,15 @@ impl<BP: BlockPublisherTrait + Send + 'static> Message<GetAccount> for ExecutorA
         GetAccountReply {
             account: self
                 .sequencer
-                .with_state(|state| state.get_account_by_id(account_id)),
+                .with_state(|state| state.get_account_by_id(account_id))
+                .await,
         }
     }
 }
 
-impl<BP: BlockPublisherTrait + Send + 'static> Message<GetChannelId> for ExecutorActor<BP> {
+impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait> Message<GetChannelId>
+    for ExecutorActor<BP, S>
+{
     type Reply = GetChannelIdReply;
 
     async fn handle(
@@ -317,8 +358,8 @@ impl<BP: BlockPublisherTrait + Send + 'static> Message<GetChannelId> for Executo
     }
 }
 
-impl<BP: BlockPublisherTrait + Send + 'static> Message<GetCrossZoneDeadLetters>
-    for ExecutorActor<BP>
+impl<BP: BlockPublisherTrait + Send + Sync + 'static, S: StorageActorTrait>
+    Message<GetCrossZoneDeadLetters> for ExecutorActor<BP, S>
 {
     type Reply = Result<GetCrossZoneDeadLettersReply>;
 
@@ -327,10 +368,14 @@ impl<BP: BlockPublisherTrait + Send + 'static> Message<GetCrossZoneDeadLetters>
         GetCrossZoneDeadLetters: GetCrossZoneDeadLetters,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        let (total_retired, retained) = self.sequencer.cross_zone_dead_letters()?;
+        let (total_retired, retained) = self
+            .sequencer
+            .cross_zone_dead_letters()
+            .await
+            .map_err(Error::CrossZoneDeadLettersUnavailable)?;
         Ok(GetCrossZoneDeadLettersReply {
             total_retired,
-            retained,
+            retained: retained.into_iter().collect(),
         })
     }
 }

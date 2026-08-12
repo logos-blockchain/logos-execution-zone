@@ -1,23 +1,31 @@
+use std::collections::BTreeMap;
+
 use anyhow::Result;
 use bytesize::ByteSize;
-use common::transaction::LeeTransaction;
+use common::{
+    HashType,
+    block::{BedrockStatus, Block, BlockBody, BlockHeader, BlockMeta},
+    transaction::LeeTransaction,
+};
 use kameo::{actor::Spawn as _, error::SendError};
 use lee::{
-    AccountId, PrivateKey, PublicKey, PublicTransaction,
+    Account, AccountId, PrivateKey, PublicKey, PublicTransaction, Signature, V03State,
     public_transaction::{Message, WitnessSet},
 };
+use mockall::predicate::{always, eq};
 use num_bigint::BigUint;
 use sequencer_core::{
     config::{BedrockConfig, SequencerConfig},
     mock::MockBlockPublisher,
 };
+use sequencer_storage_actor::mock::MockStorageActor;
+use tempfile::TempDir;
 use tokio::test;
 
 use crate::{ExecutorActor, protocol};
 
-fn sequencer_config() -> (SequencerConfig, tempfile::TempDir) {
-    let home = tempfile::tempdir().expect("Failed to create tmp home dir");
-
+fn sequencer_config() -> (SequencerConfig, TempDir) {
+    let home = TempDir::new().expect("Failed to create temporary home directory");
     let config = SequencerConfig {
         home: home.path().to_path_buf(),
         max_num_tx_in_block: 10,
@@ -62,13 +70,111 @@ fn test_transaction() -> LeeTransaction {
     PublicTransaction::new(message, witness_set).into()
 }
 
+fn prepare_mock_storage_with_empty_genesis() -> MockStorageActor {
+    let genesis_block_meta = BlockMeta {
+        id: 1,
+        hash: HashType::default(),
+    };
+    let genesis_block = Block {
+        header: BlockHeader {
+            block_id: genesis_block_meta.id,
+            prev_block_hash: HashType::default(),
+            hash: genesis_block_meta.hash,
+            timestamp: 0,
+            signature: Signature { value: [0; 64] },
+        },
+        body: BlockBody {
+            transactions: vec![],
+        },
+        bedrock_status: BedrockStatus::Pending,
+    };
+    let state = V03State::new().with_public_accounts([(
+        system_accounts::sequencer_stake_config_account_id(),
+        Account {
+            data: sequencer_stake_core::SequencerStakeConfig {
+                minimum_sequencer_stake: 0,
+                entries: BTreeMap::new(),
+            }
+            .to_bytes()
+            .try_into()
+            .expect("Sequencer stake config must fit into Data"),
+            ..Account::default()
+        },
+    )]);
+
+    let mut mock_storage = MockStorageActor::new();
+
+    mock_storage
+        .expect_handle_get_first_block_id()
+        .returning(|_, _| Ok(Some(1)));
+
+    mock_storage
+        .expect_handle_get_last_block_id()
+        .returning(|_, _| Ok(Some(1)));
+
+    let genesis_block_clone = genesis_block.clone();
+    mock_storage
+        .expect_handle_get_block()
+        .with(
+            eq(sequencer_storage_actor::protocol::GetBlock { block_id: 1 }),
+            always(),
+        )
+        .returning(move |_, _| Ok(Some(genesis_block_clone.clone())));
+
+    let state_clone = state.clone();
+    mock_storage
+        .expect_handle_get_lee_state()
+        .returning(move |_, _| Ok(Some(state_clone.clone())));
+
+    let genesis_block_meta_clone = genesis_block_meta.clone();
+    mock_storage
+        .expect_handle_get_final_snapshot()
+        .returning(move |_, _| Ok(Some((state.clone(), genesis_block_meta_clone.clone()))));
+
+    mock_storage
+        .expect_handle_get_all_blocks()
+        .returning(move |_, _| Ok(vec![genesis_block.clone()]));
+
+    mock_storage
+        .expect_handle_get_zone_checkpoint_bytes()
+        .returning(|_, _| Ok(None));
+
+    mock_storage
+        .expect_handle_get_zone_anchor()
+        .returning(|_, _| Ok(None));
+
+    mock_storage
+        .expect_handle_get_latest_block_meta()
+        .returning(move |_, _| Ok(Some(genesis_block_meta.clone())));
+
+    mock_storage
+        .expect_handle_raise_published_high_water()
+        .returning(|_, _| Ok(()));
+
+    mock_storage
+        .expect_handle_get_dead_letter_dispatches()
+        .returning(|_, _| Ok(vec![]));
+
+    mock_storage
+}
+
 #[test]
 async fn handle_transaction_fails_on_full_mempool() -> Result<()> {
     let _res = env_logger::try_init();
 
     let (config, _home) = sequencer_config();
     let mempool_max_size = config.mempool_max_size;
-    let executor = ExecutorActor::spawn(ExecutorActor::<MockBlockPublisher>::new(config).await);
+
+    let mock_storage = prepare_mock_storage_with_empty_genesis();
+    let storage_ref = MockStorageActor::spawn(mock_storage);
+
+    let executor = ExecutorActor::spawn(
+        ExecutorActor::<MockBlockPublisher, _>::new(config, storage_ref.clone()).await,
+    );
+
+    storage_ref
+        .tell(sequencer_storage_actor::mock::Checkpoint)
+        .await?;
 
     // Fill mempool
     for _ in 0..mempool_max_size {

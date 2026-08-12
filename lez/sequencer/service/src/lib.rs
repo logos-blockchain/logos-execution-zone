@@ -9,6 +9,7 @@ pub use sequencer_core::config::*;
 use sequencer_core::load_or_create_signing_key;
 use sequencer_executor_actor::ExecutorActor;
 use sequencer_rpc_server_actor::RpcServerActor;
+use sequencer_storage_actor::StorageActor;
 use tokio::select;
 
 use crate::actor_handle::ActorHandle;
@@ -29,6 +30,7 @@ pub struct SequencerHandle {
     scheduler: ActorHandle<Scheduler>,
     rpc_server: ActorHandle<RpcServerActor>,
     executor: ActorHandle<ExecutorActor<BlockPublisher>>,
+    storage: ActorHandle<StorageActor>,
     addr: SocketAddr,
     /// Held for its lifetime: dropping it stops the gossip drive task.
     /// `None` when gossip is unconfigured.
@@ -40,6 +42,7 @@ impl SequencerHandle {
         scheduler: ActorHandle<Scheduler>,
         rpc_server: ActorHandle<RpcServerActor>,
         executor: ActorHandle<ExecutorActor<BlockPublisher>>,
+        storage: ActorHandle<StorageActor>,
         addr: SocketAddr,
         gossip: Option<sequencer_core::gossip::GossipNetwork>,
     ) -> Self {
@@ -47,6 +50,7 @@ impl SequencerHandle {
             scheduler,
             rpc_server,
             executor,
+            storage,
             addr,
             gossip,
         }
@@ -59,6 +63,7 @@ impl SequencerHandle {
             scheduler,
             rpc_server,
             executor,
+            storage,
             addr: _,
             gossip: _,
         } = self;
@@ -67,6 +72,7 @@ impl SequencerHandle {
         scheduler.shutdown().await;
         rpc_server.shutdown().await;
         executor.shutdown().await;
+        storage.shutdown().await;
     }
 
     /// Wait for any of the sequencer tasks to fail and return the error.
@@ -79,6 +85,7 @@ impl SequencerHandle {
             executor,
             rpc_server,
             scheduler,
+            storage,
             addr: _,
             gossip: _,
         } = self;
@@ -91,6 +98,9 @@ impl SequencerHandle {
                 Err(err)
             }
             Err(err) = scheduler.failed() => {
+                Err(err)
+            }
+            Err(err) = storage.failed() => {
                 Err(err)
             }
         }
@@ -106,11 +116,15 @@ impl SequencerHandle {
             executor,
             rpc_server,
             scheduler,
+            storage,
             addr: _,
             gossip: _,
         } = self;
 
-        executor.is_healthy() && rpc_server.is_healthy() && scheduler.is_healthy()
+        executor.is_healthy()
+            && rpc_server.is_healthy()
+            && scheduler.is_healthy()
+            && storage.is_healthy()
     }
 
     #[must_use]
@@ -132,19 +146,21 @@ pub async fn run(config: SequencerConfig, listen_addr: SocketAddr) -> Result<Seq
     let block_timeout = config.block_create_timeout;
     let max_block_size = config.max_block_size;
 
-    // Captured before `config` moves into the executor; gossip needs them after.
     let gossip_config = config.gossip.clone();
     let bedrock_config = config.bedrock_config.clone();
     let sequencer_home = config.home.clone();
 
-    let executor = ExecutorActor::new(config).await;
+    let storage =
+        StorageActor::new(&config.db_path()).context("Failed to initialize Storage Actor")?;
+    let storage_ref = StorageActor::spawn(storage);
+    info!("Storage Actor spawned");
+
+    let executor = ExecutorActor::new(config, storage_ref.clone()).await;
     let mempool_handle = executor.mempool_handle();
     let executor_ref = ExecutorActor::spawn(executor);
     info!("Executor Actor spawned");
 
-    // Gossip is constructed only when configured; a `None` config means no
-    // sockets and no tasks. Startup failure here is a hard error
-    // (misconfiguration); after startup, gossip never halts the node.
+    // TODO: Should be a separate actor
     let gossip_network = match gossip_config {
         None => None,
         Some(gossip_config) => {
@@ -171,12 +187,13 @@ pub async fn run(config: SequencerConfig, listen_addr: SocketAddr) -> Result<Seq
         .map(sequencer_core::gossip::GossipNetwork::tx_publisher);
 
     let rpc_server = RpcServerActor::new(
-        executor_ref.clone(),
         listen_addr,
         max_block_size,
+        executor_ref.clone(),
         tx_publisher,
     )
-    .await?;
+    .await
+    .context("Failed to initialize RPC Server Actor")?;
     let addr = rpc_server.addr();
     let rpc_server_ref = RpcServerActor::spawn(rpc_server);
     info!("RPC Server Actor spawned");
@@ -199,6 +216,7 @@ pub async fn run(config: SequencerConfig, listen_addr: SocketAddr) -> Result<Seq
         ActorHandle::new(scheduler_ref),
         ActorHandle::new(rpc_server_ref),
         ActorHandle::new(executor_ref),
+        ActorHandle::new(storage_ref),
         addr,
         gossip_network,
     ))

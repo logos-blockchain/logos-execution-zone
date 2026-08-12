@@ -17,22 +17,21 @@ use rocksdb::{
 };
 
 use crate::{
-    CF_BLOCK_NAME, CF_META_NAME, DB_META_FIRST_BLOCK_IN_DB_KEY, DBIO, DbResult,
+    CF_BLOCK_NAME, CF_META_NAME, DBIO, DbResult,
     cells::shared_cells::{BlockCell, FirstBlockCell, FirstBlockSetCell, LastBlockCell},
     error::DbError,
     sequencer::sequencer_cells::{
         DeadLetterCrossZoneDispatchCountCell, DeadLetterCrossZoneDispatchesCellOwned,
         DeadLetterCrossZoneDispatchesCellRef, DeadLetterDispatchRecord, DispatchOrigin,
         FinalBlockMetaCellOwned, FinalBlockMetaCellRef, FinalLeeStateCellOwned,
-        FinalLeeStateCellRef, LEEStateCellOwned, LEEStateCellRef, LastFinalizedBlockIdCell,
-        LatestBlockMetaCellOwned, LatestBlockMetaCellRef,
-        LegacyPendingCrossZoneDispatchesCellOwned, PeerChainTip, PeerFloorCellOwned,
-        PeerFloorCellRef, PeerTipCell, PeerZoneKey, PendingCrossZoneDispatchCellOwned,
-        PendingCrossZoneDispatchCellRef, PendingCrossZoneDispatchCountCell,
-        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, PendingDepositEventsCellOwned,
-        PendingDepositEventsCellRef, PublishedHighWaterCell, UnseenWithdrawCountCell,
-        WithdrawalReconciliationKey, ZoneAnchorCell, ZoneAnchorRecord, ZoneSdkCheckpointCellOwned,
-        ZoneSdkCheckpointCellRef,
+        FinalLeeStateCellRef, LEEStateCellOwned, LEEStateCellRef, LatestBlockMetaCellOwned,
+        LatestBlockMetaCellRef, LegacyPendingCrossZoneDispatchesCellOwned, PeerChainTip,
+        PeerFloorCellOwned, PeerFloorCellRef, PeerTipCell, PeerZoneKey,
+        PendingCrossZoneDispatchCellOwned, PendingCrossZoneDispatchCellRef,
+        PendingCrossZoneDispatchCountCell, PendingCrossZoneDispatchRecord,
+        PendingDepositEventRecord, PendingDepositEventsCellOwned, PendingDepositEventsCellRef,
+        PublishedHighWaterCell, UnseenWithdrawCountCell, WithdrawalReconciliationKey,
+        ZoneAnchorCell, ZoneAnchorRecord, ZoneSdkCheckpointCellOwned, ZoneSdkCheckpointCellRef,
     },
 };
 
@@ -271,33 +270,15 @@ impl RocksDBIO {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
-    pub fn open(path: &Path) -> DbResult<Self> {
-        let db_opts = Options::default();
-        Self::open_inner(path, &db_opts)
-    }
-
-    pub fn create(path: &Path, genesis_block: &Block, genesis_state: &V03State) -> DbResult<Self> {
+    /// Opens the database at `path`, creating an empty one when there is none.
+    ///
+    /// An empty one holds no chain: every read of the first or last block fails
+    /// until [`Self::write_genesis`] seeds it.
+    pub fn open_or_create(path: &Path) -> DbResult<Self> {
         let mut db_opts = Options::default();
         db_opts.create_missing_column_families(true);
         db_opts.create_if_missing(true);
-        let dbio = Self::open_inner(path, &db_opts)?;
-
-        let is_start_set = dbio.get_meta_is_first_block_set()?;
-        if !is_start_set {
-            let block_id = genesis_block.header.block_id;
-            // TODO: Shouldn't this be atomic (batched)?
-            dbio.put_meta_first_block_in_db(genesis_block)?;
-            dbio.put_meta_is_first_block_set()?;
-            dbio.put_meta_last_block_in_db(block_id)?;
-            dbio.put_meta_last_finalized_block_id(None)?;
-            dbio.put_meta_latest_block_meta(&BlockMeta {
-                id: genesis_block.header.block_id,
-                hash: genesis_block.header.hash,
-            })?;
-            dbio.put_lee_state_in_db(genesis_state)?;
-        }
-
-        Ok(dbio)
+        Self::open_inner(path, &db_opts)
     }
 
     /// Dump every key/value pair across all column families into a [`DbDump`]. Column families are
@@ -497,20 +478,20 @@ impl RocksDBIO {
 
     // Meta
 
-    pub fn get_meta_first_block_in_db(&self) -> DbResult<u64> {
-        self.get::<FirstBlockCell>(()).map(|cell| cell.0)
+    /// The id of the chain's first block, or `None` when this database holds no
+    /// chain yet — nothing has written a genesis into it.
+    pub fn get_meta_first_block_in_db(&self) -> DbResult<Option<u64>> {
+        Ok(self.get_opt::<FirstBlockCell>(())?.map(|cell| cell.0))
     }
 
-    pub fn get_meta_last_block_in_db(&self) -> DbResult<u64> {
-        self.get::<LastBlockCell>(()).map(|cell| cell.0)
+    /// The id of the chain's last block, or `None` when this database holds no
+    /// chain yet.
+    pub fn get_meta_last_block_in_db(&self) -> DbResult<Option<u64>> {
+        Ok(self.get_opt::<LastBlockCell>(())?.map(|cell| cell.0))
     }
 
     pub fn get_meta_is_first_block_set(&self) -> DbResult<bool> {
         Ok(self.get_opt::<FirstBlockSetCell>(())?.is_some())
-    }
-
-    pub fn put_lee_state_in_db(&self, state: &V03State) -> DbResult<()> {
-        self.put(&LEEStateCellRef(state), ())
     }
 
     pub fn put_lee_state_in_db_batch(
@@ -521,42 +502,6 @@ impl RocksDBIO {
         self.put_batch(&LEEStateCellRef(state), (), batch)
     }
 
-    pub fn put_meta_first_block_in_db(&self, block: &Block) -> DbResult<()> {
-        let cf_meta = self.meta_column();
-        self.db
-            .put_cf(
-                &cf_meta,
-                borsh::to_vec(&DB_META_FIRST_BLOCK_IN_DB_KEY).map_err(|err| {
-                    DbError::borsh_cast_message(
-                        err,
-                        Some("Failed to serialize DB_META_FIRST_BLOCK_IN_DB_KEY".to_owned()),
-                    )
-                })?,
-                borsh::to_vec(&block.header.block_id).map_err(|err| {
-                    DbError::borsh_cast_message(
-                        err,
-                        Some("Failed to serialize first block id".to_owned()),
-                    )
-                })?,
-            )
-            .map_err(|rerr| DbError::rocksdb_cast_message(rerr, None))?;
-
-        let mut batch = WriteBatch::default();
-        self.put_block(block, true, &mut batch)?;
-        self.db.write(batch).map_err(|rerr| {
-            DbError::rocksdb_cast_message(
-                rerr,
-                Some("Failed to write first block in db".to_owned()),
-            )
-        })?;
-
-        Ok(())
-    }
-
-    pub fn put_meta_last_block_in_db(&self, block_id: u64) -> DbResult<()> {
-        self.put(&LastBlockCell(block_id), ())
-    }
-
     fn put_meta_last_block_in_db_batch(
         &self,
         block_id: u64,
@@ -565,16 +510,13 @@ impl RocksDBIO {
         self.put_batch(&LastBlockCell(block_id), (), batch)
     }
 
-    pub fn put_meta_last_finalized_block_id(&self, block_id: Option<u64>) -> DbResult<()> {
-        self.put(&LastFinalizedBlockIdCell(block_id), ())
-    }
-
-    pub fn put_meta_is_first_block_set(&self) -> DbResult<()> {
-        self.put(&FirstBlockSetCell(true), ())
-    }
-
-    fn put_meta_latest_block_meta(&self, block_meta: &BlockMeta) -> DbResult<()> {
-        self.put(&LatestBlockMetaCellRef(block_meta), ())
+    fn put_meta_first_block_in_db_batch(
+        &self,
+        block_id: u64,
+        batch: &mut WriteBatch,
+    ) -> DbResult<()> {
+        self.put_batch(&FirstBlockCell(block_id), (), batch)?;
+        self.put_batch(&FirstBlockSetCell(true), (), batch)
     }
 
     fn put_meta_latest_block_meta_batch(
@@ -1243,22 +1185,6 @@ impl RocksDBIO {
         Ok(unmatched.is_empty())
     }
 
-    pub fn put_block(&self, block: &Block, first: bool, batch: &mut WriteBatch) -> DbResult<()> {
-        if !first {
-            // A produced block is the new head tip by construction: pin the
-            // tip meta and drop any stale higher blocks a preceding reorg left
-            // behind (mirrors `store_followed_blocks`).
-            let last_curr_block = self.get_meta_last_block_in_db()?;
-            for stale_id in block.header.block_id.saturating_add(1)..=last_curr_block {
-                self.delete_block_payload(stale_id, batch)?;
-            }
-            self.put_meta_last_block_in_db_batch(block.header.block_id, batch)?;
-            self.put_meta_latest_block_meta_batch(&BlockMeta::from(block), batch)?;
-        }
-
-        self.put_block_payload(block, batch)
-    }
-
     /// Stages deletion of a block payload into `batch`.
     fn delete_block_payload(&self, block_id: u64, batch: &mut WriteBatch) -> DbResult<()> {
         let cf_block = self.block_column();
@@ -1311,8 +1237,10 @@ impl RocksDBIO {
         self.put_batch(&FinalBlockMetaCellRef(meta), (), batch)
     }
 
-    pub fn get_lee_state(&self) -> DbResult<V03State> {
-        self.get::<LEEStateCellOwned>(()).map(|val| val.0)
+    /// The state after the last applied block, or `None` when this database
+    /// holds no chain yet.
+    pub fn get_lee_state(&self) -> DbResult<Option<V03State>> {
+        Ok(self.get_opt::<LEEStateCellOwned>(())?.map(|val| val.0))
     }
 
     pub fn delete_block(&self, block_id: u64) -> DbResult<()> {
@@ -1349,6 +1277,15 @@ impl RocksDBIO {
         let mut batch = WriteBatch::default();
         for block in to_write.values() {
             self.put_block_payload(block, &mut batch)?;
+        }
+
+        // The lowest block written to a store that holds no chain starts one.
+        // Nothing else records where a chain begins, and without it every read
+        // that walks from the first block has no lower bound.
+        if let Some((first_id, _)) = to_write.first_key_value()
+            && self.get_meta_first_block_in_db()?.is_none()
+        {
+            self.put_meta_first_block_in_db_batch(*first_id, &mut batch)?;
         }
         self.db.write(batch).map_err(|rerr| {
             DbError::rocksdb_cast_message(
@@ -1460,7 +1397,9 @@ impl RocksDBIO {
             zone_anchor,
         } = *update;
 
-        let last_block_in_db = self.get_meta_last_block_in_db()?;
+        // 0 stands in for "no chain yet": nothing to sweep above the new tip,
+        // and any tip this update pins is a change.
+        let last_block_in_db = self.get_meta_last_block_in_db()?.unwrap_or(0);
         let mut batch = WriteBatch::default();
 
         if let Some(bytes) = checkpoint {
@@ -1504,6 +1443,15 @@ impl RocksDBIO {
         }
         for block in to_write.values() {
             self.put_block_payload(block, &mut batch)?;
+        }
+
+        // The lowest block written to a store that holds no chain starts one.
+        // Nothing else records where a chain begins, and without it every read
+        // that walks from the first block has no lower bound.
+        if let Some((first_id, _)) = to_write.first_key_value()
+            && self.get_meta_first_block_in_db()?.is_none()
+        {
+            self.put_meta_first_block_in_db_batch(*first_id, &mut batch)?;
         }
 
         let accepted_deposits = self.stage_pending_deposit_events(

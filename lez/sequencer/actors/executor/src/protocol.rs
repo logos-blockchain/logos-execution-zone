@@ -6,7 +6,6 @@ use lee_core::{
     BlockId, Commitment,
     account::{Account, AccountId},
 };
-use sequencer_core::DeadLetterDispatchRecord;
 
 #[derive(Copy, Clone)]
 pub struct ProduceBlock;
@@ -62,5 +61,5 @@ pub struct GetCrossZoneDeadLetters;
 #[derive(Reply)]
 pub struct GetCrossZoneDeadLettersReply {
     pub total_retired: u64,
-    pub retained: Vec<DeadLetterDispatchRecord>,
+    pub retained: Vec<sequencer_storage_actor::protocol::DeadLetterDispatchRecord>,
 }

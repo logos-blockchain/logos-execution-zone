@@ -1,0 +1,25 @@
+[package]
+name = "sequencer_storage_actor"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+mock = ["dep:mockall"]
+
+[dependencies]
+lee_core.workspace = true
+lee.workspace = true
+common.workspace = true
+storage.workspace = true
+
+kameo.workspace = true
+thiserror.workspace = true
+mockall = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tempfile.workspace = true
