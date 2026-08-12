@@ -66,16 +66,20 @@ pub enum Instruction {
 pub struct WrappedTokenConfig {
     /// The program allowed to call `Mint`: the cross-zone inbox.
     pub minter: ProgramId,
+    /// The program allowed to reach `UpdateSources` and `RenounceAuthority`
+    /// through a chained call, or `None` for top-level only.
+    ///
+    /// Exists because a PDA cannot sign: a program-held authority acts only by
+    /// its own program delegating it on a chained call. Unset closes the ambient
+    /// path where any program the authority signed for could rewrite the list.
+    pub governance: Option<ProgramId>,
     /// The account allowed to change `sources`, or `None` for a list fixed at
     /// genesis.
     ///
     /// Whoever holds this can authorize a new source, and a source can mint, so
-    /// its compromise is theft rather than delay. That is the key class the
-    /// central route table was rejected for, and the reason this is seeded unset:
-    /// the mechanism exists so the config format is final, and points at nothing
-    /// until there is a governance program worth pointing it at. An `AccountId`
-    /// rather than a key, so a PDA of such a program can hold it and be
-    /// authorized by delegation when it calls.
+    /// its compromise is theft rather than delay; it is seeded unset until there
+    /// is a governance program worth pointing it at. An `AccountId` rather than
+    /// a key, so a PDA of such a program can hold it and act by delegation.
     pub authority: Option<AccountId>,
     /// The `(src_zone, src_program_id)` pairs a mint may originate from. Empty on
     /// a zone with no peers, which authorizes nothing.
@@ -148,6 +152,7 @@ mod tests {
     fn config_round_trips() {
         let config = WrappedTokenConfig {
             minter: [1, 2, 3, 4, 5, 6, 7, 8],
+            governance: Some([2; 8]),
             authority: Some(AccountId::new([5; 32])),
             sources: vec![([7; 32], [9; 8]), ([8; 32], [4; 8])],
         };

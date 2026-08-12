@@ -64,31 +64,28 @@ pub struct CrossZonePeer {
 /// operator intends each target to accept.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CrossZoneConfig {
+    /// Read once at startup by the watchers and the verifier, so adding a peer
+    /// zone needs a config change and a restart on both sequencer and indexer.
     pub peers: Vec<CrossZonePeer>,
     /// Account allowed to change which peer sources each target program accepts,
     /// seeded into every target's own config at genesis.
     ///
-    /// Unset by default, which leaves those lists fixed at genesis. Setting it
-    /// lets a source be authorized later without a reset. Adding a peer zone is
-    /// more than that: the watchers read the peer list once at startup, so it also
-    /// needs a config change and a restart on both the sequencer and the indexer,
-    /// and this field itself can only ever be set at genesis.
+    /// Unset by default, which leaves those lists fixed at genesis. It can only
+    /// ever be set at genesis and there is no rotation. One value seeds every
+    /// target, including the ones that mint, and whoever holds it can authorize
+    /// a source, so its compromise is theft rather than delay.
     ///
-    /// Must be a fresh, never-used account. The target claims it on first use,
-    /// because the state machine refuses an unowned post state whose pre-state is
-    /// not exactly default, and neither target has any instruction that moves this
-    /// account's balance afterwards, so anything sent to it is frozen for good and
-    /// no other program can ever claim it. Renouncing seizes it the same way, and
-    /// whichever target is used first is the one that ends up owning it.
-    ///
-    /// It is a value-authorizing key: whoever holds it can authorize a source, and
-    /// a source can mint, so its compromise is theft rather than delay. One value
-    /// seeds every target, so setting it for one program grants it over all of
-    /// them, including the ones that mint. There is no rotation: changing it means
-    /// a new genesis. An `AccountId` rather than a key so a PDA of a governance
-    /// program can hold it later without changing this format.
+    /// Must be a fresh, never-used account: the first use has the target claim
+    /// it, renouncing seizes it the same way, whichever target acts first owns
+    /// it, and anything sent to it is frozen for good. An `AccountId` rather
+    /// than a key so a governance program's PDA can hold it later.
     #[serde(default)]
     pub source_authority: Option<AccountId>,
+    /// Program allowed to act on the source authority's behalf through a chained
+    /// call, seeded into every target's config at genesis. Needed only for a PDA
+    /// authority, which cannot sign; unset means the authority acts at top level.
+    #[serde(default)]
+    pub source_governance: Option<ProgramId>,
 }
 
 /// A finalized outbound message observed on a peer zone, addressed to a program

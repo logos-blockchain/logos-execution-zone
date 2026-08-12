@@ -137,22 +137,28 @@ fn renounce_authority(
     pre_states: Vec<AccountWithMetadata>,
     instruction_words: Vec<u32>,
 ) {
-    assert!(
-        caller_program_id.is_none(),
-        "RenounceAuthority is only invoked as a top-level transaction"
-    );
-
-    // pre_states: [config PDA, authority account].
-    let [config, authority] = <[AccountWithMetadata; 2]>::try_from(pre_states)
-        .expect("RenounceAuthority requires the config and authority accounts");
+    // The config is read before the account list is validated, so who may call
+    // is decided first; an inbox-delivered call fails here on its prepended marker.
+    let config_meta = pre_states
+        .first()
+        .expect("RenounceAuthority requires the config account");
     assert_eq!(
-        config.account_id,
+        config_meta.account_id,
         config_account_id(self_program_id),
         "first account must be the wrapped-token config PDA"
     );
-
-    let mut cfg = WrappedTokenConfig::from_bytes(&config.account.data.clone().into_inner())
+    let mut cfg = WrappedTokenConfig::from_bytes(&config_meta.account.data.clone().into_inner())
         .expect("config account holds a wrapped-token config");
+    // Top-level, or the governance program the config names; see
+    // `WrappedTokenConfig::governance` for why the escape hatch exists.
+    assert!(
+        caller_program_id.is_none() || caller_program_id == cfg.governance,
+        "the authority acts at top level, or through the configured governance program"
+    );
+
+    let [config, authority] = <[AccountWithMetadata; 2]>::try_from(pre_states)
+        .expect("this instruction requires exactly the config and authority accounts");
+
     let Some(expected) = cfg.authority else {
         panic!("wrapped-token authority is already renounced");
     };
@@ -160,11 +166,8 @@ fn renounce_authority(
         authority.account_id, expected,
         "second account must be the configured authority"
     );
-    // The program claims this account, and a claim cannot rescue a first use: the
-    // state machine checks post states before it applies claims, so an unowned
-    // account that is not exactly default is refused and, since renouncing is
-    // refused for the same reason, the wrapped-token source list would be frozen for the
-    // life of the zone. Say so here rather than let it surface as a rule number.
+    // Claims apply after post-state validation, so a first use must find the
+    // account untouched; an unowned account with history is refused for good.
     assert!(
         authority.account == Account::default()
             || authority.account.program_owner != DEFAULT_PROGRAM_ID,
@@ -189,10 +192,8 @@ fn renounce_authority(
         vec![config, authority.clone()],
         vec![
             AccountPostState::new(config_account),
-            // Claimed on first use, not merely echoed: an unowned account whose
-            // pre-state is not exactly default cannot be returned with a default
-            // owner (state-machine rule 7), and the authority's own signature
-            // bumps its nonce, so echoing it works once and never again.
+            // Claimed on first use: the authority's own signature bumps its
+            // nonce, so merely echoing it would work once and never again.
             AccountPostState::new_claimed_if_default(authority.account, Claim::Authorized),
         ],
     )
@@ -208,27 +209,28 @@ fn update_sources(
     instruction_words: Vec<u32>,
     sources: Vec<([u8; 32], lee_core::program::ProgramId)>,
 ) {
-    // Top-level only. An account stays authorized for every call below the one
-    // that authorized it, so a program the authority signed for could otherwise
-    // chain in here and rewrite the list without the holder intending it. A
-    // governance PDA holding this needs the caller pinned to that program
-    // instead, which is a guest change that work has to make anyway.
-    assert!(
-        caller_program_id.is_none(),
-        "UpdateSources is only invoked as a top-level transaction"
-    );
-
-    // pre_states: [config PDA, authority account].
-    let [config, authority] = <[AccountWithMetadata; 2]>::try_from(pre_states)
-        .expect("UpdateSources requires the config and authority accounts");
+    // The config is read before the account list is validated, so who may call
+    // is decided first; an inbox-delivered call fails here on its prepended marker.
+    let config_meta = pre_states
+        .first()
+        .expect("UpdateSources requires the config account");
     assert_eq!(
-        config.account_id,
+        config_meta.account_id,
         config_account_id(self_program_id),
         "first account must be the wrapped-token config PDA"
     );
-
-    let mut cfg = WrappedTokenConfig::from_bytes(&config.account.data.clone().into_inner())
+    let mut cfg = WrappedTokenConfig::from_bytes(&config_meta.account.data.clone().into_inner())
         .expect("config account holds a wrapped-token config");
+    // Top-level, or the governance program the config names; see
+    // `WrappedTokenConfig::governance` for why the escape hatch exists.
+    assert!(
+        caller_program_id.is_none() || caller_program_id == cfg.governance,
+        "the authority acts at top level, or through the configured governance program"
+    );
+
+    let [config, authority] = <[AccountWithMetadata; 2]>::try_from(pre_states)
+        .expect("this instruction requires exactly the config and authority accounts");
+
     let Some(expected) = cfg.authority else {
         panic!("wrapped-token sources are fixed at genesis: no authority is configured");
     };
@@ -236,13 +238,8 @@ fn update_sources(
         authority.account_id, expected,
         "second account must be the configured authority"
     );
-    // Authorized rather than merely named, so a PDA held by a governance program
-    // works through the same delegation any signer would use.
-    // The program claims this account, and a claim cannot rescue a first use: the
-    // state machine checks post states before it applies claims, so an unowned
-    // account that is not exactly default is refused and, since renouncing is
-    // refused for the same reason, the wrapped-token source list would be frozen for the
-    // life of the zone. Say so here rather than let it surface as a rule number.
+    // Claims apply after post-state validation, so a first use must find the
+    // account untouched; an unowned account with history is refused for good.
     assert!(
         authority.account == Account::default()
             || authority.account.program_owner != DEFAULT_PROGRAM_ID,
@@ -267,10 +264,8 @@ fn update_sources(
         vec![config, authority.clone()],
         vec![
             AccountPostState::new(config_account),
-            // Claimed on first use, not merely echoed: an unowned account whose
-            // pre-state is not exactly default cannot be returned with a default
-            // owner (state-machine rule 7), and the authority's own signature
-            // bumps its nonce, so echoing it works once and never again.
+            // Claimed on first use: the authority's own signature bumps its
+            // nonce, so merely echoing it would work once and never again.
             AccountPostState::new_claimed_if_default(authority.account, Claim::Authorized),
         ],
     )

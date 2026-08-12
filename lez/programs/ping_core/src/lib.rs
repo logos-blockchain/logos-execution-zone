@@ -55,6 +55,9 @@ pub enum ReceiverInstruction {
 pub struct ReceiverConfig {
     /// The program allowed to call `Record`: the cross-zone inbox.
     pub deliverer: ProgramId,
+    /// The program allowed to reach the authority instructions through a chained
+    /// call, or `None` for top-level only. See `WrappedTokenConfig::governance`.
+    pub governance: Option<ProgramId>,
     /// The account allowed to change `sources`, or `None` for a list fixed at
     /// genesis. Seeded unset; see `WrappedTokenConfig::authority` for why.
     pub authority: Option<AccountId>,
@@ -195,6 +198,7 @@ mod tests {
     fn receiver_config_round_trips() {
         let config = ReceiverConfig {
             deliverer: [1; 8],
+            governance: None,
             authority: None,
             sources: vec![([7; 32], [9; 8])],
         };

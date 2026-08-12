@@ -263,6 +263,7 @@ pub fn build_wrapped_token_init_config_tx(
         vec![wrapped_token_core::config_account_id(wrapped_token_id)],
         wrapped_token_core::Instruction::InitConfig(wrapped_token_core::WrappedTokenConfig {
             minter: programs::cross_zone_inbox().id(),
+            governance: cross_zone.and_then(|cross_zone| cross_zone.source_governance),
             authority: cross_zone.and_then(|cross_zone| cross_zone.source_authority),
             sources,
         }),
@@ -312,6 +313,7 @@ pub fn build_ping_receiver_init_config_tx(
         vec![ping_core::receiver_config_account_id(receiver_id)],
         ping_core::ReceiverInstruction::InitConfig(ping_core::ReceiverConfig {
             deliverer: programs::cross_zone_inbox().id(),
+            governance: cross_zone.and_then(|cross_zone| cross_zone.source_governance),
             authority: cross_zone.and_then(|cross_zone| cross_zone.source_authority),
             sources,
         }),
@@ -355,6 +357,7 @@ mod tests {
                 expected_block_signing_pubkey: None,
             }],
             source_authority: None,
+            source_governance: None,
         };
         let _tx = build_wrapped_token_init_config_tx(Some(&cross_zone));
     }

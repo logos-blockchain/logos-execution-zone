@@ -23,6 +23,16 @@ pub const fn chain_caller() -> Program {
 
 #[must_use]
 #[inline]
+pub const fn authority_proxy() -> Program {
+    use guests::{AUTHORITY_PROXY_ELF, AUTHORITY_PROXY_ID, AUTHORITY_PROXY_PATH};
+
+    let _unused = AUTHORITY_PROXY_PATH;
+
+    Program::new_unchecked(AUTHORITY_PROXY_ID, Cow::Borrowed(AUTHORITY_PROXY_ELF))
+}
+
+#[must_use]
+#[inline]
 pub const fn claimer() -> Program {
     use guests::{CLAIMER_ELF, CLAIMER_ID, CLAIMER_PATH};
 
