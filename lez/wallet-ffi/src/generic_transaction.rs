@@ -3,6 +3,7 @@ use std::{
     ffi::{c_char, CString},
 };
 
+use common::HashType;
 use lee::{privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program};
 
 use crate::{
@@ -388,6 +389,43 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_private_transaction(
             map_execution_error(e)
         }
     }
+}
+
+/// Poll transaction for its status.
+///
+/// # Parameters
+/// - `handle`: Valid pointer to wallet handle.
+/// - `tx_hash`: Bytes of a transaction hash,
+/// - `transaction_status`: Valid pointer into `bool`.
+///
+/// # Returns
+/// - `true` if seen included, `false` othervise.
+///
+/// # Safety
+/// - `handle` must be a valid pointer.
+#[no_mangle]
+pub unsafe extern "C" fn wallet_ffi_poll_transaction_status(
+    handle: *mut WalletHandle,
+    tx_hash: FfiBytes32,
+    // ToDo: Replace with status enum.
+    transaction_status: *mut bool,
+) -> WalletFfiError {
+    let wrapper = match get_wallet(handle) {
+        Ok(w) => w,
+        Err(e) => return e,
+    };
+
+    let wallet = match wrapper.core.lock() {
+        Ok(w) => w,
+        Err(e) => {
+            print_error(format!("Failed to lock wallet: {e}"));
+            return WalletFfiError::InternalError;
+        }
+    };
+
+    *transaction_status = block_on(wallet.poll_transaction(HashType(tx_hash.data))).is_ok();
+
+    WalletFfiError::Success
 }
 
 /// Free a transaction result returned by `wallet_ffi_send_generic_public_transaction` or

@@ -348,9 +348,9 @@ Check the `run_hello_world_private.rs` file to see how it is used.
 
 # 8. Account authorization mechanism
 The Hello world example does not enforce any authorization on the input account. This means any user can execute it on any account, regardless of ownership.
-LEE provides a mechanism for programs to enforce proper authorization before an execution can succeed. The meaning of authorization differs between public and private accounts:
-- Public accounts: authorization requires that the transaction is signed with the account’s signing key.
-- Private accounts: authorization requires that the circuit verifies knowledge of the account’s nullifier secret key.
+LEE provides a mechanism for programs to enforce proper authorization before an execution can succeed. For both private and public accounts, the authorization is checked against knowledge of a secret key, yet the check is different:
+- Public accounts: the transaction is signed with the account’s signing key.
+- Private accounts: the circuit verifies knowledge of the account’s authorization secret key (`ask`), the key from which the account’s nullifier secret key is derived.
 
 From the program development perspective it is very simple: input accounts come with a flag indicating whether they has been properly authorized. And so, the only difference between the program `hello_world.rs` and `hello_world_with_authorization.rs` is in the lines
 

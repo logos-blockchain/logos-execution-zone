@@ -2,8 +2,8 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    Commitment, CommitmentSetDigest, Identifier, MembershipProof, Nullifier, NullifierPublicKey,
-    NullifierSecretKey,
+    AuthorizationSecretKey, Commitment, CommitmentSetDigest, Identifier, MembershipProof,
+    Nullifier, NullifierPublicKey, NullifierSecretKey,
     account::{Account, AccountWithMetadata},
     encryption::{EncryptedAccountData, ViewTag, ViewingPublicKey},
     program::{BlockValidityWindow, PdaSeed, ProgramId, ProgramOutput, TimestampValidityWindow},
@@ -48,8 +48,9 @@ pub struct PrivateWitness {
 pub enum WitnessKind {
     /// Standalone private account. The `account_id` is derived as
     /// `AccountId::for_regular_private_account(&npk, vpk, identifier)` and matched against
-    /// `pre_state.account_id`.
-    Regular,
+    /// `pre_state.account_id`. An honest authorized account's `npk` for Id computation gets
+    /// derived from the supplied `ask`.
+    Regular { ask: Option<AuthorizationSecretKey> },
     /// Private PDA. The npk-to-account_id binding is proven upstream via `Claim::Pda(seed)` or a
     /// caller's `pda_seeds` match. The identifier diversifies the PDA within the
     /// `(program_id, seed, npk)` family: `AccountId::for_private_pda` uses it as the 4th input.

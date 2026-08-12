@@ -76,7 +76,7 @@ fn transition_from_privacy_preserving_transaction_private() {
         &sender_account_id,
         &Account {
             program_owner: crate::test_methods::simple_balance_transfer().id(),
-            nonce: sender_nonce.private_account_nonce_increment(&sender_keys.nsk),
+            nonce: sender_nonce.private_account_nonce_increment(&sender_keys.nsk()),
             balance: sender_private_account.balance - balance_to_move,
             data: Data::default(),
         },
@@ -84,7 +84,7 @@ fn transition_from_privacy_preserving_transaction_private() {
 
     let sender_pre_commitment = Commitment::new(&sender_account_id, &sender_private_account);
     let expected_new_nullifier =
-        Nullifier::for_account_update(&sender_pre_commitment, &sender_keys.nsk);
+        Nullifier::for_account_update(&sender_pre_commitment, &sender_keys.nsk());
 
     let expected_new_commitment_2 = Commitment::new(
         &recipient_account_id,
@@ -211,7 +211,7 @@ fn transition_from_privacy_preserving_transaction_deshielded() {
         &sender_account_id,
         &Account {
             program_owner: crate::test_methods::simple_balance_transfer().id(),
-            nonce: sender_nonce.private_account_nonce_increment(&sender_keys.nsk),
+            nonce: sender_nonce.private_account_nonce_increment(&sender_keys.nsk()),
             balance: sender_private_account.balance - balance_to_move,
             data: Data::default(),
         },
@@ -219,7 +219,7 @@ fn transition_from_privacy_preserving_transaction_deshielded() {
 
     let sender_pre_commitment = Commitment::new(&sender_account_id, &sender_private_account);
     let expected_new_nullifier =
-        Nullifier::for_account_update(&sender_pre_commitment, &sender_keys.nsk);
+        Nullifier::for_account_update(&sender_pre_commitment, &sender_keys.nsk());
 
     assert!(state.private_state.0.contains(&sender_pre_commitment));
     assert!(!state.private_state.0.contains(&expected_new_commitment));
@@ -525,10 +525,12 @@ fn malicious_authorization_changer_should_fail_in_privacy_preserving_circuit() {
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: WitnessKind::Regular,
+                kind: WitnessKind::Regular {
+                    ask: Some(recipient_keys.ask),
+                },
                 nullifier: NullifierWitness::Update {
                     view_tag: 0,
-                    nsk: recipient_keys.nsk,
+                    nsk: recipient_keys.nsk(),
                     membership_proof: state
                         .get_proof_for_commitment(&recipient_commitment)
                         .expect("recipient's commitment must be in state"),

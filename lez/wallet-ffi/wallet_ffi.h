@@ -249,6 +249,7 @@ typedef struct FfiAccountIdentity {
    * C-compatible string.
    */
   char *key_path;
+  struct FfiBytes32 authorization_secret_key;
   struct FfiBytes32 nullifier_secret_key;
   struct FfiBytes32 nullifier_public_key;
   const uint8_t *viewing_public_key;
@@ -667,6 +668,24 @@ enum WalletFfiError wallet_ffi_send_generic_private_transaction(struct WalletHan
                                                                 uintptr_t instruction_words_size,
                                                                 const struct FfiProgramWithDependencies *program_with_dependencies,
                                                                 struct FfiTransactionResult *out_result);
+
+/**
+ * Poll transaction for its status.
+ *
+ * # Parameters
+ * - `handle`: Valid pointer to wallet handle.
+ * - `tx_hash`: Bytes of a transaction hash,
+ * - `transaction_status`: Valid pointer into `bool`.
+ *
+ * # Returns
+ * - `true` if seen included, `false` othervise.
+ *
+ * # Safety
+ * - `handle` must be a valid pointer.
+ */
+enum WalletFfiError wallet_ffi_poll_transaction_status(struct WalletHandle *handle,
+                                                       struct FfiBytes32 tx_hash,
+                                                       bool *transaction_status);
 
 /**
  * Free a transaction result returned by `wallet_ffi_send_generic_public_transaction` or

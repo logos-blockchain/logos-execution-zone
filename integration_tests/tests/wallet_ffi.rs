@@ -284,6 +284,12 @@ unsafe extern "C" {
     ) -> LabelList;
 
     fn wallet_ffi_free_label_list(label_list: *mut LabelList) -> error::WalletFfiError;
+
+    fn wallet_ffi_poll_transaction_status(
+        handle: *mut WalletHandle,
+        tx_hash: FfiBytes32,
+        transaction_status: *mut bool,
+    ) -> error::WalletFfiError;
 }
 
 fn new_wallet_ffi_with_test_context_config(
@@ -987,8 +993,18 @@ fn test_wallet_ffi_transfer_public() -> Result<()> {
     assert_eq!(from_balance, 9900);
     assert_eq!(to_balance, 20100);
 
+    // Also check for transaction inclusion
+    let hash_bytes = unsafe { transfer_result.tx_hash_bytes() };
+    let mut is_included = false;
+
     unsafe {
-        wallet_ffi_free_transfer_result(&raw mut transfer_result);
+        wallet_ffi_poll_transaction_status(wallet_ffi_handle, hash_bytes, &raw mut is_included)
+            .unwrap();
+    }
+
+    assert!(is_included);
+
+    unsafe {
         wallet_ffi_destroy(wallet_ffi_handle);
     }
 

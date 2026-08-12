@@ -142,7 +142,9 @@ fn validity_window_works_in_privacy_preserving_transactions(
                 vpk: account_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: WitnessKind::Regular,
+                kind: WitnessKind::Regular {
+                    ask: Some(account_keys.ask),
+                },
                 nullifier: NullifierWitness::Init {
                     npk: account_keys.npk(),
                     commitment_root: DUMMY_COMMITMENT_HASH,
@@ -210,7 +212,9 @@ fn timestamp_validity_window_works_in_privacy_preserving_transactions(
                 vpk: account_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: WitnessKind::Regular,
+                kind: WitnessKind::Regular {
+                    ask: Some(account_keys.ask),
+                },
                 nullifier: NullifierWitness::Init {
                     npk: account_keys.npk(),
                     commitment_root: DUMMY_COMMITMENT_HASH,

@@ -329,10 +329,12 @@ fn authorized_public_account_claiming_succeeds_when_executed_privately() {
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: WitnessKind::Regular,
+                kind: WitnessKind::Regular {
+                    ask: Some(sender_keys.ask),
+                },
                 nullifier: NullifierWitness::Update {
                     view_tag: 0,
-                    nsk: sender_keys.nsk,
+                    nsk: sender_keys.nsk(),
                     membership_proof: state
                         .get_proof_for_commitment(&sender_commitment)
                         .expect("sender's commitment must be in state"),
@@ -353,7 +355,7 @@ fn authorized_public_account_claiming_succeeds_when_executed_privately() {
         .transition_from_privacy_preserving_transaction(&tx, 1, 0)
         .unwrap();
 
-    let nullifier = Nullifier::for_account_update(&sender_commitment, &sender_keys.nsk);
+    let nullifier = Nullifier::for_account_update(&sender_commitment, &sender_keys.nsk());
     assert!(state.private_state.1.contains(&nullifier));
 
     assert_eq!(
@@ -420,8 +422,8 @@ fn private_chained_call(number_of_calls: u32) {
     dependencies.insert(simple_transfers.id(), simple_transfers);
     let program_with_deps = ProgramWithDependencies::new(chain_caller, dependencies);
 
-    let from_new_nonce = Nonce::default().private_account_nonce_increment(&from_keys.nsk);
-    let to_new_nonce = Nonce::default().private_account_nonce_increment(&to_keys.nsk);
+    let from_new_nonce = Nonce::default().private_account_nonce_increment(&from_keys.nsk());
+    let to_new_nonce = Nonce::default().private_account_nonce_increment(&to_keys.nsk());
 
     let from_expected_post = Account {
         balance: initial_balance - u128::from(number_of_calls) * amount,
@@ -446,10 +448,12 @@ fn private_chained_call(number_of_calls: u32) {
                 vpk: from_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: WitnessKind::Regular,
+                kind: WitnessKind::Regular {
+                    ask: Some(from_keys.ask),
+                },
                 nullifier: NullifierWitness::Update {
                     view_tag: 0,
-                    nsk: from_keys.nsk,
+                    nsk: from_keys.nsk(),
                     membership_proof: state
                         .get_proof_for_commitment(&from_commitment)
                         .expect("from's commitment must be in state"),
@@ -459,10 +463,12 @@ fn private_chained_call(number_of_calls: u32) {
                 vpk: to_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: WitnessKind::Regular,
+                kind: WitnessKind::Regular {
+                    ask: Some(to_keys.ask),
+                },
                 nullifier: NullifierWitness::Update {
                     view_tag: 0,
-                    nsk: to_keys.nsk,
+                    nsk: to_keys.nsk(),
                     membership_proof: state
                         .get_proof_for_commitment(&to_commitment)
                         .expect("to's commitment must be in state"),

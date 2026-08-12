@@ -15,7 +15,9 @@ pub use encryption::{
     EncryptedAccountData, EncryptionScheme, EphemeralPublicKey, EphemeralSecretKey,
     ML_KEM_768_CIPHERTEXT_LEN, SharedSecretKey, ViewTag,
 };
-pub use nullifier::{Identifier, Nullifier, NullifierPublicKey, NullifierSecretKey};
+pub use nullifier::{
+    AuthorizationSecretKey, Identifier, Nullifier, NullifierPublicKey, NullifierSecretKey,
+};
 pub use program::PrivateAccountKind;
 
 pub mod account;

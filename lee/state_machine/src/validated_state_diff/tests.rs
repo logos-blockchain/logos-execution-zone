@@ -168,10 +168,12 @@ fn privacy_malicious_programs_cannot_drain_public_victim() {
             vpk: attacker_keys.vpk(),
             random_seed: [0; 32],
             identifier: 0,
-            kind: WitnessKind::Regular,
+            kind: WitnessKind::Regular {
+                ask: Some(attacker_keys.ask),
+            },
             nullifier: NullifierWitness::Update {
                 view_tag: 0,
-                nsk: attacker_keys.nsk,
+                nsk: attacker_keys.nsk(),
                 membership_proof,
             },
         }),
@@ -330,10 +332,12 @@ fn privacy_malicious_programs_cannot_drain_private_victim() {
             vpk: attacker_keys.vpk(),
             random_seed: [0; 32],
             identifier: 0,
-            kind: WitnessKind::Regular,
+            kind: WitnessKind::Regular {
+                ask: Some(attacker_keys.ask),
+            },
             nullifier: NullifierWitness::Update {
                 view_tag: 0,
-                nsk: attacker_keys.nsk,
+                nsk: attacker_keys.nsk(),
                 membership_proof,
             },
         }),

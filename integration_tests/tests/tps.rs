@@ -22,8 +22,8 @@ use lee::{
     public_transaction as putx,
 };
 use lee_core::{
-    DUMMY_COMMITMENT_HASH, InputAccountIdentity, MembershipProof, NullifierPublicKey,
-    NullifierWitness, PrivateWitness, WitnessKind,
+    AuthorizationSecretKey, DUMMY_COMMITMENT_HASH, InputAccountIdentity, MembershipProof,
+    NullifierPublicKey, NullifierSecretKey, NullifierWitness, PrivateWitness, WitnessKind,
     account::{AccountWithMetadata, Nonce, data::Data},
     encryption::ViewingPublicKey,
 };
@@ -256,7 +256,8 @@ pub async fn tps_test() -> Result<()> {
 #[expect(dead_code, reason = "No idea if we need this, should we remove it?")]
 fn build_privacy_transaction() -> PrivacyPreservingTransaction {
     let program = programs::authenticated_transfer();
-    let sender_nsk = [1; 32];
+    let sender_ask = AuthorizationSecretKey([1; 32]);
+    let sender_nsk = NullifierSecretKey::from(&sender_ask);
     let sender_vpk = ViewingPublicKey::from_seed(&[99_u8; 32], &[100_u8; 32]);
     let sender_npk = NullifierPublicKey::from(&sender_nsk);
     let sender_pre = AccountWithMetadata::new(
@@ -269,7 +270,8 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
         true,
         AccountId::for_regular_private_account(&sender_npk, &sender_vpk, 0),
     );
-    let recipient_nsk = [2; 32];
+    let recipient_ask = AuthorizationSecretKey([2; 32]);
+    let recipient_nsk = NullifierSecretKey::from(&recipient_ask);
     let recipient_vpk = ViewingPublicKey::from_seed(&[101_u8; 32], &[102_u8; 32]);
     let recipient_npk = NullifierPublicKey::from(&recipient_nsk);
     let recipient_pre = AccountWithMetadata::new(
@@ -297,7 +299,9 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
                 vpk: sender_vpk,
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: WitnessKind::Regular,
+                kind: WitnessKind::Regular {
+                    ask: Some(sender_ask),
+                },
                 nullifier: NullifierWitness::Update {
                     view_tag: 0,
                     nsk: sender_nsk,
@@ -308,7 +312,9 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
                 vpk: recipient_vpk,
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: WitnessKind::Regular,
+                kind: WitnessKind::Regular {
+                    ask: Some(recipient_ask),
+                },
                 nullifier: NullifierWitness::Init {
                     npk: recipient_npk,
                     commitment_root: DUMMY_COMMITMENT_HASH,

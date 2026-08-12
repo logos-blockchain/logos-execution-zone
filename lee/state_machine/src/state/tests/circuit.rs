@@ -65,10 +65,12 @@ fn circuit_fails_if_invalid_auth_keys_are_provided() {
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: WitnessKind::Regular,
+                kind: WitnessKind::Regular {
+                    ask: Some(recipient_keys.ask),
+                },
                 nullifier: NullifierWitness::Update {
                     view_tag: 0,
-                    nsk: recipient_keys.nsk,
+                    nsk: recipient_keys.nsk(),
                     membership_proof: (0, vec![]),
                 },
             }),
@@ -76,7 +78,9 @@ fn circuit_fails_if_invalid_auth_keys_are_provided() {
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: WitnessKind::Regular,
+                kind: WitnessKind::Regular {
+                    ask: Some(recipient_keys.ask),
+                },
                 nullifier: NullifierWitness::Init {
                     npk: recipient_keys.npk(),
                     commitment_root: DUMMY_COMMITMENT_HASH,
@@ -121,10 +125,12 @@ fn circuit_should_fail_if_new_private_account_with_non_default_balance_is_provid
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: WitnessKind::Regular,
+                kind: WitnessKind::Regular {
+                    ask: Some(sender_keys.ask),
+                },
                 nullifier: NullifierWitness::Update {
                     view_tag: 0,
-                    nsk: sender_keys.nsk,
+                    nsk: sender_keys.nsk(),
                     membership_proof: (0, vec![]),
                 },
             }),
@@ -132,7 +138,9 @@ fn circuit_should_fail_if_new_private_account_with_non_default_balance_is_provid
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: WitnessKind::Regular,
+                kind: WitnessKind::Regular {
+                    ask: Some(recipient_keys.ask),
+                },
                 nullifier: NullifierWitness::Init {
                     npk: recipient_keys.npk(),
                     commitment_root: DUMMY_COMMITMENT_HASH,
@@ -177,10 +185,12 @@ fn circuit_should_fail_if_new_private_account_with_non_default_program_owner_is_
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: WitnessKind::Regular,
+                kind: WitnessKind::Regular {
+                    ask: Some(sender_keys.ask),
+                },
                 nullifier: NullifierWitness::Update {
                     view_tag: 0,
-                    nsk: sender_keys.nsk,
+                    nsk: sender_keys.nsk(),
                     membership_proof: (0, vec![]),
                 },
             }),
@@ -188,7 +198,9 @@ fn circuit_should_fail_if_new_private_account_with_non_default_program_owner_is_
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: WitnessKind::Regular,
+                kind: WitnessKind::Regular {
+                    ask: Some(recipient_keys.ask),
+                },
                 nullifier: NullifierWitness::Init {
                     npk: recipient_keys.npk(),
                     commitment_root: DUMMY_COMMITMENT_HASH,
@@ -233,10 +245,12 @@ fn circuit_should_fail_if_new_private_account_with_non_default_data_is_provided(
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: WitnessKind::Regular,
+                kind: WitnessKind::Regular {
+                    ask: Some(sender_keys.ask),
+                },
                 nullifier: NullifierWitness::Update {
                     view_tag: 0,
-                    nsk: sender_keys.nsk,
+                    nsk: sender_keys.nsk(),
                     membership_proof: (0, vec![]),
                 },
             }),
@@ -244,7 +258,9 @@ fn circuit_should_fail_if_new_private_account_with_non_default_data_is_provided(
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: WitnessKind::Regular,
+                kind: WitnessKind::Regular {
+                    ask: Some(recipient_keys.ask),
+                },
                 nullifier: NullifierWitness::Init {
                     npk: recipient_keys.npk(),
                     commitment_root: DUMMY_COMMITMENT_HASH,
@@ -289,10 +305,12 @@ fn circuit_should_fail_if_new_private_account_with_non_default_nonce_is_provided
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: WitnessKind::Regular,
+                kind: WitnessKind::Regular {
+                    ask: Some(sender_keys.ask),
+                },
                 nullifier: NullifierWitness::Update {
                     view_tag: 0,
-                    nsk: sender_keys.nsk,
+                    nsk: sender_keys.nsk(),
                     membership_proof: (0, vec![]),
                 },
             }),
@@ -300,7 +318,9 @@ fn circuit_should_fail_if_new_private_account_with_non_default_nonce_is_provided
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: WitnessKind::Regular,
+                kind: WitnessKind::Regular {
+                    ask: Some(recipient_keys.ask),
+                },
                 nullifier: NullifierWitness::Init {
                     npk: recipient_keys.npk(),
                     commitment_root: DUMMY_COMMITMENT_HASH,
@@ -343,10 +363,12 @@ fn circuit_should_fail_if_new_private_account_is_provided_with_default_values_bu
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: WitnessKind::Regular,
+                kind: WitnessKind::Regular {
+                    ask: Some(sender_keys.ask),
+                },
                 nullifier: NullifierWitness::Update {
                     view_tag: 0,
-                    nsk: sender_keys.nsk,
+                    nsk: sender_keys.nsk(),
                     membership_proof: (0, vec![]),
                 },
             }),
@@ -354,7 +376,9 @@ fn circuit_should_fail_if_new_private_account_is_provided_with_default_values_bu
                 vpk: recipient_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: WitnessKind::Regular,
+                kind: WitnessKind::Regular {
+                    ask: Some(recipient_keys.ask),
+                },
                 nullifier: NullifierWitness::Init {
                     npk: recipient_keys.npk(),
                     commitment_root: DUMMY_COMMITMENT_HASH,
@@ -749,10 +773,12 @@ fn circuit_should_fail_if_there_are_repeated_ids() {
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: WitnessKind::Regular,
+                kind: WitnessKind::Regular {
+                    ask: Some(sender_keys.ask),
+                },
                 nullifier: NullifierWitness::Update {
                     view_tag: 0,
-                    nsk: sender_keys.nsk,
+                    nsk: sender_keys.nsk(),
                     membership_proof: (1, vec![]),
                 },
             }),
@@ -760,10 +786,12 @@ fn circuit_should_fail_if_there_are_repeated_ids() {
                 vpk: sender_keys.vpk(),
                 random_seed: [0; 32],
                 identifier: 0,
-                kind: WitnessKind::Regular,
+                kind: WitnessKind::Regular {
+                    ask: Some(sender_keys.ask),
+                },
                 nullifier: NullifierWitness::Update {
                     view_tag: 0,
-                    nsk: sender_keys.nsk,
+                    nsk: sender_keys.nsk(),
                     membership_proof: (1, vec![]),
                 },
             }),
@@ -802,9 +830,11 @@ fn private_authorized_uninitialized_account() {
             vpk: private_keys.vpk(),
             random_seed: [0; 32],
             identifier: 0,
-            kind: WitnessKind::Regular,
+            kind: WitnessKind::Regular {
+                ask: Some(private_keys.ask),
+            },
             nullifier: NullifierWitness::Init {
-                npk: NullifierPublicKey::from(&private_keys.nsk),
+                npk: NullifierPublicKey::from(&private_keys.nsk()),
                 commitment_root: DUMMY_COMMITMENT_HASH,
             },
         })],
@@ -851,7 +881,9 @@ fn private_unauthorized_uninitialized_account_can_still_be_claimed() {
             vpk: private_keys.vpk(),
             random_seed: [0; 32],
             identifier: 0,
-            kind: WitnessKind::Regular,
+            kind: WitnessKind::Regular {
+                ask: Some(private_keys.ask),
+            },
             nullifier: NullifierWitness::Init {
                 npk: private_keys.npk(),
                 commitment_root: DUMMY_COMMITMENT_HASH,
@@ -904,9 +936,11 @@ fn private_account_claimed_then_used_without_init_flag_should_fail() {
             vpk: private_keys.vpk(),
             random_seed: [0; 32],
             identifier: 0,
-            kind: WitnessKind::Regular,
+            kind: WitnessKind::Regular {
+                ask: Some(private_keys.ask),
+            },
             nullifier: NullifierWitness::Init {
-                npk: NullifierPublicKey::from(&private_keys.nsk),
+                npk: NullifierPublicKey::from(&private_keys.nsk()),
                 commitment_root: DUMMY_COMMITMENT_HASH,
             },
         })],
@@ -949,9 +983,11 @@ fn private_account_claimed_then_used_without_init_flag_should_fail() {
             vpk: private_keys.vpk(),
             random_seed: [0; 32],
             identifier: 0,
-            kind: WitnessKind::Regular,
+            kind: WitnessKind::Regular {
+                ask: Some(private_keys.ask),
+            },
             nullifier: NullifierWitness::Init {
-                npk: NullifierPublicKey::from(&private_keys.nsk),
+                npk: NullifierPublicKey::from(&private_keys.nsk()),
                 commitment_root: DUMMY_COMMITMENT_HASH,
             },
         })],
@@ -1104,7 +1140,7 @@ fn two_private_pda_family_members_receive_and_spend() {
                     kind: WitnessKind::Pda { binding: None },
                     nullifier: NullifierWitness::Update {
                         view_tag: 0,
-                        nsk: alice_keys.nsk,
+                        nsk: alice_keys.nsk(),
                         membership_proof: state
                             .get_proof_for_commitment(&commitment_pda_0)
                             .expect("pda_0 must be in state"),
@@ -1143,7 +1179,7 @@ fn two_private_pda_family_members_receive_and_spend() {
                     kind: WitnessKind::Pda { binding: None },
                     nullifier: NullifierWitness::Update {
                         view_tag: 0,
-                        nsk: alice_keys.nsk,
+                        nsk: alice_keys.nsk(),
                         membership_proof: state
                             .get_proof_for_commitment(&commitment_pda_1)
                             .expect("pda_1 must be in state"),
@@ -1174,7 +1210,7 @@ fn two_private_pda_family_members_receive_and_spend() {
         balance: 0,
         nonce: alice_pda_1_account
             .nonce
-            .private_account_nonce_increment(&alice_keys.nsk),
+            .private_account_nonce_increment(&alice_keys.nsk()),
         ..Account::default()
     };
     let commitment_pda_1_after_spend =
@@ -1199,7 +1235,7 @@ fn two_private_pda_family_members_receive_and_spend() {
                     },
                     nullifier: NullifierWitness::Update {
                         view_tag: 0,
-                        nsk: alice_keys.nsk,
+                        nsk: alice_keys.nsk(),
                         membership_proof: state
                             .get_proof_for_commitment(&commitment_pda_1_after_spend)
                             .expect("pda_1 after spend must be in state"),
