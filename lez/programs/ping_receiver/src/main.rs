@@ -1,7 +1,10 @@
 use cross_zone_marker_core::inbox_source_marker_account_id;
 use lee_core::{
     account::{Account, AccountWithMetadata},
-    program::{AccountPostState, Claim, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs},
+    program::{
+        AccountPostState, Claim, DEFAULT_PROGRAM_ID, ProgramId, ProgramInput, ProgramOutput,
+        read_lee_inputs,
+    },
 };
 use ping_core::{
     ReceiverConfig, ReceiverInstruction, ping_record_pda, ping_record_seed,
@@ -64,7 +67,7 @@ fn record(
     assert_eq!(
         config.account_id,
         receiver_config_account_id(self_program_id),
-        "Second account must be the receiver config PDA"
+        "second account must be the receiver config PDA"
     );
     let cfg = ReceiverConfig::from_bytes(&config.account.data.clone().into_inner())
         .expect("config account holds a receiver config");
@@ -86,7 +89,7 @@ fn record(
     assert_eq!(
         record.account_id,
         ping_record_pda(self_program_id),
-        "Third account must be the ping record PDA"
+        "third account must be the ping record PDA"
     );
 
     let mut post_account = record.account.clone();
@@ -138,6 +141,16 @@ fn renounce_authority(
         authority.account_id, expected,
         "second account must be the configured authority"
     );
+    // The program claims this account, and a claim cannot rescue a first use: the
+    // state machine checks post states before it applies claims, so an unowned
+    // account that is not exactly default is refused and, since renouncing is
+    // refused for the same reason, the receiver source list would be frozen for the
+    // life of the zone. Say so here rather than let it surface as a rule number.
+    assert!(
+        authority.account == Account::default()
+            || authority.account.program_owner != DEFAULT_PROGRAM_ID,
+        "the authority account must be untouched before its first use as one"
+    );
     assert!(
         authority.is_authorized,
         "the configured authority must authorize renouncing it"
@@ -157,7 +170,11 @@ fn renounce_authority(
         vec![config, authority.clone()],
         vec![
             AccountPostState::new(config_account),
-            AccountPostState::new(authority.account),
+            // Claimed on first use, not merely echoed: an unowned account whose
+            // pre-state is not exactly default cannot be returned with a default
+            // owner (state-machine rule 7), and the authority's own signature
+            // bumps its nonce, so echoing it works once and never again.
+            AccountPostState::new_claimed_if_default(authority.account, Claim::Authorized),
         ],
     )
     .write();
@@ -200,6 +217,16 @@ fn update_sources(
         authority.account_id, expected,
         "second account must be the configured authority"
     );
+    // The program claims this account, and a claim cannot rescue a first use: the
+    // state machine checks post states before it applies claims, so an unowned
+    // account that is not exactly default is refused and, since renouncing is
+    // refused for the same reason, the receiver source list would be frozen for the
+    // life of the zone. Say so here rather than let it surface as a rule number.
+    assert!(
+        authority.account == Account::default()
+            || authority.account.program_owner != DEFAULT_PROGRAM_ID,
+        "the authority account must be untouched before its first use as one"
+    );
     assert!(
         authority.is_authorized,
         "the configured authority must authorize a source change"
@@ -219,7 +246,11 @@ fn update_sources(
         vec![config, authority.clone()],
         vec![
             AccountPostState::new(config_account),
-            AccountPostState::new(authority.account),
+            // Claimed on first use, not merely echoed: an unowned account whose
+            // pre-state is not exactly default cannot be returned with a default
+            // owner (state-machine rule 7), and the authority's own signature
+            // bumps its nonce, so echoing it works once and never again.
+            AccountPostState::new_claimed_if_default(authority.account, Claim::Authorized),
         ],
     )
     .write();

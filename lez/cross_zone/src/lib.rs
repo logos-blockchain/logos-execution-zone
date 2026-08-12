@@ -204,15 +204,17 @@ pub fn build_holding_account(holder: AccountId, amount: Balance) -> (AccountId, 
 /// The `(src_zone, src_program_id)` pairs the operator's routes name for one
 /// target.
 ///
-/// Panics on a route naming a target this zone does not host. Nothing downstream
-/// would notice otherwise: the route is dropped here, the watcher no longer
-/// filters targets, and every delivery would fail at a program that does not
-/// exist and dead-letter after three attempts. A typo in a config file should not
-/// cost a channel silently.
+/// Panics on a route naming a program that does not authorize cross-zone sources.
+/// Nothing downstream would notice otherwise: the route is dropped here, the
+/// watcher no longer filters targets, and every delivery would be refused by a
+/// program that never opted in, dead-lettering after three attempts. A typo in a
+/// config file should not cost a channel silently.
+///
+/// Only the sequencer builds genesis, so an indexer handed the same typo starts
+/// normally and only the sequencer refuses to boot.
 fn sources_for_target(
     cross_zone: Option<&CrossZoneConfig>,
     target_program_id: ProgramId,
-    hosted: &[ProgramId],
 ) -> Vec<(ZoneId, ProgramId)> {
     let Some(cross_zone) = cross_zone else {
         return Vec::new();
@@ -221,8 +223,9 @@ fn sources_for_target(
     for peer in &cross_zone.peers {
         for route in &peer.allowed_routes {
             assert!(
-                hosted.contains(&route.target_program_id),
-                "cross-zone route names a target this zone does not host"
+                cross_zone_targets().contains(&route.target_program_id),
+                "cross-zone route names {:?}, which does not authorize cross-zone sources",
+                route.target_program_id
             );
             if route.target_program_id == target_program_id {
                 sources.push((peer.channel_id, route.src_program_id));
@@ -254,7 +257,7 @@ pub fn build_wrapped_token_init_config_tx(
     cross_zone: Option<&CrossZoneConfig>,
 ) -> lee::PublicTransaction {
     let wrapped_token_id = programs::wrapped_token().id();
-    let sources = sources_for_target(cross_zone, wrapped_token_id, &cross_zone_targets());
+    let sources = sources_for_target(cross_zone, wrapped_token_id);
     genesis_public_tx(
         wrapped_token_id,
         vec![wrapped_token_core::config_account_id(wrapped_token_id)],
@@ -303,7 +306,7 @@ pub fn build_ping_receiver_init_config_tx(
     cross_zone: Option<&CrossZoneConfig>,
 ) -> lee::PublicTransaction {
     let receiver_id = programs::ping_receiver().id();
-    let sources = sources_for_target(cross_zone, receiver_id, &cross_zone_targets());
+    let sources = sources_for_target(cross_zone, receiver_id);
     genesis_public_tx(
         receiver_id,
         vec![ping_core::receiver_config_account_id(receiver_id)],
@@ -335,12 +338,13 @@ fn genesis_public_tx<I: Serialize>(
 mod tests {
     use super::*;
 
-    /// A route naming a target this zone does not host is an operator typo that
-    /// nothing downstream would report: dropped here, unfiltered by the watcher,
-    /// and dead-lettered at a program that does not exist.
+    /// A route naming a program that never opted into cross-zone sources is an
+    /// operator typo that nothing downstream would report: the fan-out would drop
+    /// it, the watcher no longer filters targets, and every delivery would be
+    /// refused by the target and dead-lettered.
     #[test]
-    #[should_panic(expected = "does not host")]
-    fn a_route_to_an_unhosted_target_is_refused_at_genesis() {
+    #[should_panic(expected = "does not authorize cross-zone sources")]
+    fn a_route_to_a_program_that_does_not_authorize_sources_is_refused() {
         let cross_zone = CrossZoneConfig {
             peers: vec![CrossZonePeer {
                 channel_id: [2; 32],

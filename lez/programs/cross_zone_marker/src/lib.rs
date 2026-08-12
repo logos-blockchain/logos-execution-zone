@@ -42,11 +42,9 @@ pub fn inbox_source_marker_account_id(
     )
 }
 
-/// Seed of the source marker. Targets compare addresses rather than seeds, so
-/// they use [`inbox_source_marker_account_id`]; this is exposed for callers that
-/// need the seed itself.
-#[must_use]
-pub fn inbox_source_marker_seed(src_zone: &ZoneId, src_program_id: ProgramId) -> PdaSeed {
+/// Seed of the source marker. Private: nothing claims this account, so no caller
+/// needs the seed, only the address.
+fn inbox_source_marker_seed(src_zone: &ZoneId, src_program_id: ProgramId) -> PdaSeed {
     use risc0_zkvm::sha::{Impl, Sha256 as _};
 
     let mut bytes = [0_u8; 96];

@@ -49,8 +49,8 @@ pub struct CrossZonePeer {
     /// No longer enforced in transit: the inbox delivers to whatever a message
     /// names, and the target refuses a source it did not authorize. This is the
     /// operator's statement of intent, fanned out at genesis into each target's
-    /// own config. A route naming a target this zone does not host is dropped
-    /// there, silently.
+    /// own config. A route naming a program that does not authorize cross-zone
+    /// sources is refused there, at genesis.
     pub allowed_routes: Vec<CrossZoneRoute>,
     /// The peer's block-signing public key, pinned to reject blocks inscribed by
     /// anyone other than that zone's sequencer. `None` skips the check (the
@@ -73,6 +73,13 @@ pub struct CrossZoneConfig {
     /// more than that: the watchers read the peer list once at startup, so it also
     /// needs a config change and a restart on both the sequencer and the indexer,
     /// and this field itself can only ever be set at genesis.
+    ///
+    /// Must be a fresh, never-used account. The target claims it on first use,
+    /// because the state machine refuses an unowned post state whose pre-state is
+    /// not exactly default, and neither target has any instruction that moves this
+    /// account's balance afterwards, so anything sent to it is frozen for good and
+    /// no other program can ever claim it. Renouncing seizes it the same way, and
+    /// whichever target is used first is the one that ends up owning it.
     ///
     /// It is a value-authorizing key: whoever holds it can authorize a source, and
     /// a source can mint, so its compromise is theft rather than delay. One value

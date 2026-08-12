@@ -1313,6 +1313,41 @@ fn the_authority_can_renounce_itself_and_only_itself() {
         "rejected for the wrong reason: {err:?}"
     );
 
+    // Named but not signing. Separate from the case above, which fails one line
+    // earlier on the address.
+    let Err(unsigned) =
+        ValidatedStateDiff::from_public_transaction(&renounce(authority, &other_key), &state, 1, 0)
+    else {
+        panic!("naming the authority without its signature must not renounce it");
+    };
+    assert!(
+        format!("{unsigned:?}").contains("must authorize renouncing it"),
+        "rejected for the wrong reason: {unsigned:?}"
+    );
+
+    // Substituting another account for the config is refused. Renounce is the one
+    // instruction that destroys the authority for good, so this guard matters most
+    // here.
+    let substituted = Message::try_new(
+        wrapped_token_id,
+        vec![ping_record_pda(wrapped_token_id), authority],
+        vec![0_u128.into()],
+        wrapped_token_core::Instruction::RenounceAuthority,
+    )
+    .expect("build renounce message");
+    let swapped_tx = PublicTransaction::new(
+        substituted.clone(),
+        WitnessSet::for_message(&substituted, &[&key]),
+    );
+    let Err(swapped) = ValidatedStateDiff::from_public_transaction(&swapped_tx, &state, 1, 0)
+    else {
+        panic!("a renounce over a substituted config account must not execute");
+    };
+    assert!(
+        format!("{swapped:?}").contains("must be the wrapped-token config PDA"),
+        "rejected for the wrong reason: {swapped:?}"
+    );
+
     let diff =
         ValidatedStateDiff::from_public_transaction(&renounce(authority, &key), &state, 1, 0)
             .expect("the authority renounces itself");
@@ -1342,13 +1377,261 @@ fn the_authority_can_renounce_itself_and_only_itself() {
         wrapped_token_core::Instruction::UpdateSources { sources: vec![] },
     )
     .expect("build update message");
-    let tx = PublicTransaction::new(update.clone(), WitnessSet::for_message(&update, &[&key]));
-    let Err(frozen) = ValidatedStateDiff::from_public_transaction(&tx, &state, 2, 0) else {
+    let frozen_tx =
+        PublicTransaction::new(update.clone(), WitnessSet::for_message(&update, &[&key]));
+    let Err(frozen) = ValidatedStateDiff::from_public_transaction(&frozen_tx, &state, 2, 0) else {
         panic!("a renounced authority must not still change sources");
     };
     assert!(
         format!("{frozen:?}").contains("fixed at genesis"),
         "rejected for the wrong reason: {frozen:?}"
+    );
+}
+
+/// The receiver's authority path is a mirror of the token's, and a mirror is
+/// exactly where a copy-paste slip hides. Same battery, run against it.
+#[test]
+fn the_receiver_authority_path_holds() {
+    let receiver_id = programs::ping_receiver().id();
+    let config_id = receiver_config_account_id(receiver_id);
+    let src_zone = [2_u8; 32];
+    let sender_id = programs::ping_sender().id();
+
+    let key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let authority = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let other_key = PrivateKey::try_new([8; 32]).expect("valid key");
+    let other = AccountId::from(&PublicKey::new_from_private_key(&other_key));
+
+    let update = |account: AccountId, signer: &PrivateKey, nonce: u128| {
+        let message = Message::try_new(
+            receiver_id,
+            vec![config_id, account],
+            vec![nonce.into()],
+            ping_core::ReceiverInstruction::UpdateSources {
+                sources: vec![(src_zone, sender_id)],
+            },
+        )
+        .expect("build update message");
+        let witness = WitnessSet::for_message(&message, &[signer]);
+        PublicTransaction::new(message, witness)
+    };
+    let renounce = |account: AccountId, signer: &PrivateKey, nonce: u128| {
+        let message = Message::try_new(
+            receiver_id,
+            vec![config_id, account],
+            vec![nonce.into()],
+            ping_core::ReceiverInstruction::RenounceAuthority,
+        )
+        .expect("build renounce message");
+        let witness = WitnessSet::for_message(&message, &[signer]);
+        PublicTransaction::new(message, witness)
+    };
+    let rejects = |state: &V03State, tx: &PublicTransaction, expected: &str| {
+        let Err(err) = ValidatedStateDiff::from_public_transaction(tx, state, 1, 0) else {
+            panic!("expected a rejection mentioning {expected}");
+        };
+        assert!(
+            format!("{err:?}").contains(expected),
+            "rejected for the wrong reason: {err:?}"
+        );
+    };
+
+    // With no authority configured, nothing moves.
+    let mut unset = base_state();
+    seed_receiver_config(&mut unset, None, vec![]);
+    rejects(&unset, &update(authority, &key, 0), "fixed at genesis");
+    rejects(&unset, &renounce(authority, &key, 0), "already renounced");
+
+    // With one configured: the wrong account, and the right account without its
+    // own signature, are both refused for their own reasons.
+    let mut state = base_state();
+    seed_receiver_config(&mut state, Some(authority), vec![]);
+    rejects(
+        &state,
+        &update(other, &other_key, 0),
+        "must be the configured authority",
+    );
+    rejects(
+        &state,
+        &renounce(other, &other_key, 0),
+        "must be the configured authority",
+    );
+    rejects(
+        &state,
+        &update(authority, &other_key, 0),
+        "must authorize a source change",
+    );
+    rejects(
+        &state,
+        &renounce(authority, &other_key, 0),
+        "must authorize renouncing it",
+    );
+
+    // The authority itself works, and renouncing is one-way.
+    let diff =
+        ValidatedStateDiff::from_public_transaction(&update(authority, &key, 0), &state, 1, 0)
+            .expect("the configured authority changes sources");
+    state.apply_state_diff(diff);
+    let cfg = ping_core::ReceiverConfig::from_bytes(
+        &state.get_account_by_id(config_id).data.into_inner(),
+    )
+    .expect("config decodes");
+    assert_eq!(cfg.sources, vec![(src_zone, sender_id)]);
+    assert_eq!(cfg.deliverer, programs::cross_zone_inbox().id());
+
+    let renounce_diff =
+        ValidatedStateDiff::from_public_transaction(&renounce(authority, &key, 1), &state, 2, 0)
+            .expect("the authority renounces itself");
+    state.apply_state_diff(renounce_diff);
+    let renounced_cfg = ping_core::ReceiverConfig::from_bytes(
+        &state.get_account_by_id(config_id).data.into_inner(),
+    )
+    .expect("config decodes");
+    assert_eq!(renounced_cfg.authority, None, "the authority is gone");
+    assert_eq!(
+        renounced_cfg.sources,
+        vec![(src_zone, sender_id)],
+        "renouncing freezes the list it had"
+    );
+    rejects(&state, &update(authority, &key, 2), "fixed at genesis");
+    rejects(&state, &renounce(authority, &key, 2), "already renounced");
+}
+
+/// The guards that survive a deletion otherwise: the caller pins on renounce for
+/// both targets and on the receiver's update, the config-address checks the
+/// substitution cases miss, and the token's already-renounced branch.
+#[test]
+fn the_remaining_authority_guards_hold() {
+    let wrapped_token_id = programs::wrapped_token().id();
+    let receiver_id = programs::ping_receiver().id();
+    let inbox_id = programs::cross_zone_inbox().id();
+    let self_zone = [1_u8; 32];
+    let src_zone = [2_u8; 32];
+
+    let key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let authority = AccountId::from(&PublicKey::new_from_private_key(&key));
+
+    let rejects = |state: &V03State, tx: &PublicTransaction, expected: &str| {
+        let Err(err) = ValidatedStateDiff::from_public_transaction(tx, state, 1, 0) else {
+            panic!("expected a rejection mentioning {expected}");
+        };
+        assert!(
+            format!("{err:?}").contains(expected),
+            "rejected for the wrong reason: {err:?}"
+        );
+    };
+    let signed = |program: lee_core::program::ProgramId,
+                  accounts: Vec<AccountId>,
+                  instruction_words: Vec<u32>| {
+        let message =
+            Message::new_preserialized(program, accounts, vec![0_u128.into()], instruction_words);
+        let witness = WitnessSet::for_message(&message, &[&key]);
+        PublicTransaction::new(message, witness)
+    };
+
+    let mut state = base_state();
+    seed_inbox_config(&mut state, self_zone);
+    seed_wrapped_config(&mut state, Some(authority), vec![]);
+    seed_receiver_config(&mut state, Some(authority), vec![]);
+
+    // Config address, on the instruction each target's substitution case misses.
+    rejects(
+        &state,
+        &signed(
+            wrapped_token_id,
+            vec![ping_record_pda(wrapped_token_id), authority],
+            risc0_zkvm::serde::to_vec(&wrapped_token_core::Instruction::UpdateSources {
+                sources: vec![(src_zone, programs::bridge_lock().id())],
+            })
+            .expect("serialize"),
+        ),
+        "must be the wrapped-token config PDA",
+    );
+    for (words, expected) in [
+        (
+            risc0_zkvm::serde::to_vec(&ping_core::ReceiverInstruction::UpdateSources {
+                sources: vec![(src_zone, programs::ping_sender().id())],
+            })
+            .expect("serialize"),
+            "must be the receiver config PDA",
+        ),
+        (
+            risc0_zkvm::serde::to_vec(&ping_core::ReceiverInstruction::RenounceAuthority)
+                .expect("serialize"),
+            "must be the receiver config PDA",
+        ),
+    ] {
+        rejects(
+            &state,
+            &signed(
+                receiver_id,
+                vec![ping_record_pda(receiver_id), authority],
+                words,
+            ),
+            expected,
+        );
+    }
+
+    // Reached through the inbox rather than top-level, for the three caller pins
+    // that had no chained test.
+    for (target, config_id, words) in [
+        (
+            wrapped_token_id,
+            wrapped_token_core::config_account_id(wrapped_token_id),
+            risc0_zkvm::serde::to_vec(&wrapped_token_core::Instruction::RenounceAuthority)
+                .expect("serialize"),
+        ),
+        (
+            receiver_id,
+            receiver_config_account_id(receiver_id),
+            risc0_zkvm::serde::to_vec(&ping_core::ReceiverInstruction::RenounceAuthority)
+                .expect("serialize"),
+        ),
+        (
+            receiver_id,
+            receiver_config_account_id(receiver_id),
+            risc0_zkvm::serde::to_vec(&ping_core::ReceiverInstruction::UpdateSources {
+                sources: vec![(src_zone, programs::ping_sender().id())],
+            })
+            .expect("serialize"),
+        ),
+    ] {
+        let msg = CrossZoneMessage {
+            src_zone,
+            src_block_id: 5,
+            src_block_hash: SRC_BLOCK_HASH,
+            src_tx_index: 0,
+            src_program_id: programs::bridge_lock().id(),
+            target_program_id: target,
+            payload: words.iter().flat_map(|word| word.to_le_bytes()).collect(),
+            l1_inclusion_witness: None,
+        };
+        let message = Message::try_new(
+            inbox_id,
+            dispatch_accounts(inbox_id, &msg, vec![config_id, authority]),
+            vec![],
+            InboxInstruction::Dispatch(msg),
+        )
+        .expect("build dispatch message");
+        let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
+        rejects(&state, &tx, "only invoked as a top-level transaction");
+    }
+
+    // The token's already-renounced branch, which only the receiver covered.
+    let mut unset = base_state();
+    seed_wrapped_config(&mut unset, None, vec![]);
+    rejects(
+        &unset,
+        &signed(
+            wrapped_token_id,
+            vec![
+                wrapped_token_core::config_account_id(wrapped_token_id),
+                authority,
+            ],
+            risc0_zkvm::serde::to_vec(&wrapped_token_core::Instruction::RenounceAuthority)
+                .expect("serialize"),
+        ),
+        "already renounced",
     );
 }
 

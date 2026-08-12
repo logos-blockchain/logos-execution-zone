@@ -56,10 +56,14 @@ fn main() {
 /// instruction bytes and account ids the peer chose. So a program meant to be
 /// reachable across zones MUST check the marker at position 0 against sources it
 /// authorized itself, the way `wrapped_token` and `ping_receiver` do. A program
-/// not meant to be reachable is protected only by its own asserts; several
-/// builtins currently survive incidentally, through a claim check or an owner
-/// check written for another reason, which is not the same as being safe by
-/// design.
+/// not meant to be reachable has only whatever its own code happens to do. Today
+/// every other builtin refuses, but by three different accidents: four assert
+/// `caller_program_id` is none; several run to completion and are stopped by the
+/// host, either because they try to claim the marker without its authorization or
+/// because they chain into its zero program id; and the rest are saved by an
+/// address assert on a PDA. None of that was written with cross-zone delivery in
+/// mind. User-deployed programs are reachable too, and were written with no
+/// expectation of an inbox caller at all.
 fn dispatch(
     self_program_id: ProgramId,
     caller_program_id: Option<ProgramId>,
