@@ -938,6 +938,98 @@ struct LabelList wallet_ffi_get_all_labels_for_account(struct WalletHandle *hand
 enum WalletFfiError wallet_ffi_free_label_list(struct LabelList *label_list);
 
 /**
+ * Execute client rotation.
+ *
+ * Actualizes clients with statistics present, callibrates clients without statistics.
+ * Re-chooses leaders according to a `distribution_limit` config variable.
+ *
+ * # Parameters
+ * - `handle`: Valid wallet handle
+ *
+ * # Returns
+ * - `Success` if deployment was submitted successfully
+ * - Error code on other failures
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+ */
+enum WalletFfiError wallet_ffi_client_rotation(struct WalletHandle *handle);
+
+/**
+ * Get `callibration_limit` config var.
+ *
+ * # Parameters
+ * - `handle`: Valid wallet handle
+ * - `callibration_limit`: Valid pointer into `usize`
+ *
+ * # Returns
+ * - `Success` if deployment was submitted successfully
+ * - Error code on other failures
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+ * - `callibration_limit` must be a non-null pointer into `usize`
+ */
+enum WalletFfiError wallet_ffi_get_callibration_limit(struct WalletHandle *handle,
+                                                      uintptr_t *callibration_limit);
+
+/**
+ * Get `distribution_limit` config var.
+ *
+ * # Parameters
+ * - `handle`: Valid wallet handle
+ * - `distribution_limit`: Valid pointer into `usize`
+ *
+ * # Returns
+ * - `Success` if deployment was submitted successfully
+ * - Error code on other failures
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+ * - `distribution_limit` must be a non-null pointer into `usize`
+ */
+enum WalletFfiError wallet_ffi_get_distribution_limit(struct WalletHandle *handle,
+                                                      uintptr_t *distribution_limit);
+
+/**
+ * Set `callibration_limit` config var.
+ *
+ * For changes to be applied, execute `wallet_ffi_client_rotation`.
+ *
+ * # Parameters
+ * - `handle`: Valid wallet handle
+ * - `callibration_limit`: `usize`
+ *
+ * # Returns
+ * - `Success` if deployment was submitted successfully
+ * - Error code on other failures
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+ */
+enum WalletFfiError wallet_ffi_set_callibration_limit(struct WalletHandle *handle,
+                                                      uintptr_t callibration_limit);
+
+/**
+ * Get `distribution_limit` config var.
+ *  
+ * For changes to be applied, execute `wallet_ffi_client_rotation`.
+ *
+ * # Parameters
+ * - `handle`: Valid wallet handle
+ * - `distribution_limit`: `usize`
+ *
+ * # Returns
+ * - `Success` if deployment was submitted successfully
+ * - Error code on other failures
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+ */
+enum WalletFfiError wallet_ffi_set_distribution_limit(struct WalletHandle *handle,
+                                                      uintptr_t distribution_limit);
+
+/**
  * Produce account id for public PDA.
  *
  * # Parameters

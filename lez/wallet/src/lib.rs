@@ -199,6 +199,12 @@ impl WalletCore {
         &self.config
     }
 
+    /// Get configuration(mut) with applied overrides.
+    #[must_use]
+    pub const fn config_mut(&mut self) -> &mut WalletConfig {
+        &mut self.config
+    }
+
     pub fn set_config(&mut self, config: WalletConfig) {
         self.config = config;
     }
