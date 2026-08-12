@@ -56,7 +56,9 @@ pub type Nonce = u128;
 #[derive(
     Debug, Copy, Clone, PartialEq, Eq, Hash, SerializeDisplay, DeserializeFromStr, JsonSchema,
 )]
-pub struct ProgramId(pub [u32; 8]);
+pub struct ProgramId(
+    #[schemars(with = "String", description = "base58-encoded program id")] pub [u32; 8],
+);
 
 impl Display for ProgramId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -103,6 +105,7 @@ impl FromStr for ProgramId {
 #[derive(
     Debug, Copy, Clone, PartialEq, Eq, Hash, SerializeDisplay, DeserializeFromStr, JsonSchema,
 )]
+#[schemars(with = "String", description = "base58-encoded account id")]
 pub struct AccountId {
     pub value: [u8; 32],
 }
@@ -356,7 +359,7 @@ pub struct Data(
 #[derive(
     Debug, Copy, Clone, PartialEq, Eq, Hash, SerializeDisplay, DeserializeFromStr, JsonSchema,
 )]
-pub struct HashType(pub [u8; 32]);
+pub struct HashType(#[schemars(with = "String", description = "hex-encoded hash")] pub [u8; 32]);
 
 impl Display for HashType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -709,6 +712,72 @@ mod tests {
             let back: PeerHealth = serde_json::from_str(&json).expect("deserialize");
             assert_eq!(back, health);
         }
+    }
+
+    #[test]
+    fn identifier_encodings_are_pinned() {
+        let account = AccountId { value: [1; 32] };
+        let program = ProgramId([1; 8]);
+        let selector = Selector([1; 8]);
+        let hash = HashType([1; 32]);
+
+        for (json, expected) in [
+            (
+                serde_json::to_value(account).expect("serialize"),
+                "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi",
+            ),
+            (
+                serde_json::to_value(program).expect("serialize"),
+                "4uQeVjgVccFGKht1dTy7bqxH3WehditPsgHyN1FSvRM",
+            ),
+            (
+                serde_json::to_value(selector).expect("serialize"),
+                "0101010101010101",
+            ),
+            (
+                serde_json::to_value(hash).expect("serialize"),
+                "0101010101010101010101010101010101010101010101010101010101010101",
+            ),
+        ] {
+            assert_eq!(json, serde_json::json!(expected));
+        }
+
+        assert_eq!(
+            serde_json::from_value::<AccountId>(serde_json::json!(
+                "4vJ9JU1bJJE96FWSJKvHsmmFADCg4gpZQff4P3bkLKi"
+            ))
+            .expect("deserialize"),
+            account
+        );
+        assert_eq!(
+            serde_json::from_value::<Selector>(serde_json::json!("0101010101010101"))
+                .expect("deserialize"),
+            selector
+        );
+    }
+
+    #[test]
+    fn event_record_wire_shape_is_pinned() {
+        let record = EventRecord {
+            block_id: 7,
+            tx_index: 1,
+            tx_hash: HashType([2; 32]),
+            program_id: ProgramId([1; 8]),
+            selector: Selector([1; 8]),
+            data: vec![1, 2, 3],
+        };
+
+        assert_eq!(
+            serde_json::to_value(&record).expect("serialize"),
+            serde_json::json!({
+                "block_id": 7,
+                "tx_index": 1,
+                "tx_hash": "0202020202020202020202020202020202020202020202020202020202020202",
+                "program_id": "4uQeVjgVccFGKht1dTy7bqxH3WehditPsgHyN1FSvRM",
+                "selector": "0101010101010101",
+                "data": "AQID",
+            })
+        );
     }
 
     #[test]
