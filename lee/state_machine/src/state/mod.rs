@@ -67,12 +67,6 @@ impl CommitmentSet {
     }
 }
 
-/// Merkle tree of `ProgramCommitment`s, appended to on every program-deployment transaction.
-/// Phase 1 of the program-upgrade proposal (`upgrade_proposal.md`) — see `ProgramCommitment`'s
-/// own doc comment for the bootstrap definition currently in use. Mirrors `CommitmentSet`'s
-/// shape; doesn't need a `root_history` the way `CommitmentSet` does, since nothing currently
-/// checks program-commitment proofs against a historical root (that lands with the
-/// privacy-preserving circuit integration in Phase 1 PR 2).
 #[cfg_attr(test, derive(Debug))]
 #[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ProgramCommitmentDigest {
@@ -94,10 +88,6 @@ impl ProgramCommitmentDigest {
             .map(|path| (index, path))
     }
 
-    /// All committed `ProgramCommitment` values, in unspecified (`HashMap` iteration) order.
-    /// For an order-independent view — e.g. for hashing into `genesis_fingerprint` — sort the
-    /// result first; the Merkle root from `digest()` is insertion-order-dependent and not
-    /// suitable for that on its own.
     pub(crate) fn commitments(&self) -> impl Iterator<Item = &ProgramCommitment> {
         self.commitments.keys()
     }
@@ -118,6 +108,67 @@ impl ProgramCommitmentDigest {
             merkle_tree: MerkleTree::with_capacity(capacity),
             commitments: HashMap::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod program_commitment_digest_tests {
+    use super::{ProgramCommitment, ProgramCommitmentDigest, ProgramId};
+
+    fn commitment(id: u32) -> ProgramCommitment {
+        let program_id: ProgramId = [id, 0, 0, 0, 0, 0, 0, 0];
+        ProgramCommitment::new(program_id)
+    }
+
+    #[test]
+    fn incremental_extend_matches_single_extend() {
+        let mut a = ProgramCommitmentDigest::with_capacity(8);
+        a.extend(&[commitment(1), commitment(2), commitment(3)]);
+
+        let mut b = ProgramCommitmentDigest::with_capacity(8);
+        b.extend(&[commitment(1)]);
+        b.extend(&[commitment(2)]);
+        b.extend(&[commitment(3)]);
+
+        assert_eq!(a.digest(), b.digest());
+    }
+
+    /// `digest()` is a Merkle root over insertion order, not a set commitment — see the
+    /// type's doc comment. Same commitments in a different order must therefore produce a
+    /// different root; callers needing an order-independent view use `commitments()` instead.
+    #[test]
+    fn same_commitments_in_different_order_yield_different_roots() {
+        let mut a = ProgramCommitmentDigest::with_capacity(8);
+        a.extend(&[commitment(1), commitment(2), commitment(3)]);
+
+        let mut b = ProgramCommitmentDigest::with_capacity(8);
+        b.extend(&[commitment(3), commitment(2), commitment(1)]);
+
+        assert_ne!(a.digest(), b.digest());
+    }
+
+    /// Unlike `digest()`, `commitments()` is the order-independent view: the same
+    /// commitments inserted in a different order still yield the same *set*.
+    #[test]
+    fn same_commitments_in_different_order_yield_same_commitment_set() {
+        let mut a = ProgramCommitmentDigest::with_capacity(8);
+        a.extend(&[commitment(1), commitment(2), commitment(3)]);
+
+        let mut b = ProgramCommitmentDigest::with_capacity(8);
+        b.extend(&[commitment(3), commitment(2), commitment(1)]);
+
+        let a_set: std::collections::HashSet<_> = a.commitments().copied().collect();
+        let b_set: std::collections::HashSet<_> = b.commitments().copied().collect();
+
+        assert_eq!(a_set, b_set);
+    }
+
+    #[test]
+    fn empty_digest_is_deterministic() {
+        let a = ProgramCommitmentDigest::with_capacity(8);
+        let b = ProgramCommitmentDigest::with_capacity(8);
+
+        assert_eq!(a.digest(), b.digest());
     }
 }
 
