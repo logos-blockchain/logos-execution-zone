@@ -112,6 +112,10 @@ impl BorshDeserialize for NullifierSet {
 #[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(test, derive(Debug))]
 pub struct V03State {
+    /// Deployed programs live here too, as `Account`s keyed by `AccountId::from(program_id)`
+    /// (see that impl's doc comment), with the elf held in `Account.data` and `program_owner`
+    /// set to the reserved `PROGRAM_STORAGE_OWNER` (see its doc comment for why that ownership
+    /// choice is load-bearing now that these accounts are reachable via ordinary dispatch).
     public_state: HashMap<AccountId, Account>,
     private_state: (CommitmentSet, NullifierSet),
 }
@@ -327,6 +331,7 @@ impl V03State {
 
         let mut accounts: Vec<(&AccountId, &Account)> = public_state.iter().collect();
         accounts.sort_by(|a, b| a.0.as_ref().cmp(b.0.as_ref()));
+
         let account_count = u64::try_from(accounts.len()).expect("account count fits in u64");
 
         let mut hasher = Sha256::new();
