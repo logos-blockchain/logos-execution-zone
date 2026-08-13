@@ -710,10 +710,8 @@ pub fn validate_execution(
 
         let account_program_owner = pre.account.program_owner;
 
-        // 5. Decreasing balance only allowed if owned by executing program
-        if post.account.balance < pre.account.balance
-            && account_program_owner != executing_program_id
-        {
+        // 5. Decreasing balance requires the account to be authorized
+        if post.account.balance < pre.account.balance && !pre.is_authorized {
             return Err(ExecutionValidationError::UnauthorizedBalanceDecrease {
                 account_id: pre.account_id,
                 owner_program_id: account_program_owner,
