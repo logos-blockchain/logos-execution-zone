@@ -22,7 +22,9 @@ members = [
   "lez/sequencer/service",
   "lez/sequencer/service/protocol",
   "lez/sequencer/service/rpc",
-  "lez/sequencer/service/metrics",
+  "lez/sequencer/actors/executor",
+  "lez/sequencer/actors/rpc_server",
+  "lez/sequencer/actors/rpc_server/metrics",
   "lez/indexer/core",
   "lez/indexer/service",
   "lez/indexer/service/protocol",
@@ -84,7 +86,9 @@ sequencer_core = { path = "lez/sequencer/core" }
 sequencer_core_metrics = { path = "lez/sequencer/core/metrics" }
 sequencer_service_protocol = { path = "lez/sequencer/service/protocol" }
 sequencer_service_rpc = { path = "lez/sequencer/service/rpc" }
-sequencer_service_metrics = { path = "lez/sequencer/service/metrics" }
+sequencer_executor_actor = { path = "lez/sequencer/actors/executor" }
+sequencer_rpc_server_actor = { path = "lez/sequencer/actors/rpc_server" }
+sequencer_rpc_server_actor_metrics = { path = "lez/sequencer/actors/rpc_server/metrics" }
 sequencer_service = { path = "lez/sequencer/service" }
 indexer_core = { path = "lez/indexer/core" }
 indexer_service = { path = "lez/indexer/service" }
@@ -130,6 +134,8 @@ tokio = { version = "1.50", features = [
 tokio-util = "0.7.18"
 risc0-zkvm = { version = "3.0.5", default-features = false, features = ['std'] }
 risc0-build = "3.0.5"
+kameo = "0.22.2"
+kameo_actors = "0.8.1"
 anyhow = "1.0.98"
 derive_more = "2.1.1"
 num_cpus = "1.13.1"
@@ -343,6 +349,8 @@ clippy.let-underscore-untyped = "allow"
 # Reason: this lint is actually bad as it forces to use wildcard `..` instead of
 # field-by-field `_` which may lead to subtle bugs when new fields are added to the struct.
 clippy.unneeded-field-pattern = "allow"
+# Reason: this lint makes no sense for us.
+clippy.error_impl_error = "allow"
 
 # Nursery
 clippy.nursery = { level = "deny", priority = -1 }

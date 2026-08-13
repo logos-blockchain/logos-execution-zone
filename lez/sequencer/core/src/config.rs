@@ -93,6 +93,16 @@ impl SequencerConfig {
 
         Ok(serde_json::from_reader(reader)?)
     }
+
+    /// Where this sequencer's database lives, suffixed with the channel id like
+    /// the indexer's, so several sequencers can share a home directory. Only the
+    /// database is per-channel; `bedrock_signing_key` stays unsuffixed, so
+    /// sequencers sharing a home share one Bedrock identity.
+    #[must_use]
+    pub fn db_path(&self) -> PathBuf {
+        self.home
+            .join(format!("rocksdb-{}", self.bedrock_config.channel_id))
+    }
 }
 
 const fn default_max_block_size() -> ByteSize {

@@ -48,6 +48,7 @@ async fn user_origin_inbox_call_rejected() -> Result<()> {
     let msg = CrossZoneMessage {
         src_zone: [2; 32],
         src_block_id: 1,
+        src_block_hash: [7; 32],
         src_tx_index: 0,
         src_program_id: [9; 8],
         target_program_id: programs::ping_receiver().id(),

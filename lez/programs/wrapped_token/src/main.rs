@@ -3,8 +3,8 @@ use lee_core::{
     program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_lee_inputs},
 };
 use wrapped_token_core::{
-    Instruction, balance_bytes, config_account_id, config_seed, holding_account_id, holding_seed,
-    minter_bytes, read_balance, read_minter,
+    Instruction, MAX_MINT_AMOUNT, balance_bytes, config_account_id, config_seed,
+    holding_account_id, holding_seed, minter_bytes, read_balance, read_minter,
 };
 
 fn main() {
@@ -70,6 +70,11 @@ fn mint(
         "second account must be the recipient holding PDA"
     );
 
+    assert!(
+        amount <= MAX_MINT_AMOUNT,
+        "mint amount exceeds the per-mint cap"
+    );
+    // The backstop against accumulation, which the per-mint cap does not bound.
     let new_balance = read_balance(&holding.account.data.clone().into_inner())
         .checked_add(amount)
         .expect("wrapped-token balance overflow");

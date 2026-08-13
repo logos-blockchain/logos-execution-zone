@@ -122,11 +122,11 @@ pub trait BlockPublisherTrait: Sized {
     ///
     /// The checkpoint must be persisted with the block — restoring an older one
     /// drops the inscription from the pending set, and it is never resubmitted.
-    async fn publish_block(
-        &self,
-        block: &Block,
+    fn publish_block<'blk, 'pbl: 'blk>(
+        &'pbl self,
+        block: &'blk Block,
         withdrawals: Vec<WithdrawArg>,
-    ) -> Result<PublishOutcome>;
+    ) -> impl Future<Output = Result<PublishOutcome>> + Send + 'blk;
 
     fn channel_id(&self) -> ChannelId;
 
@@ -350,9 +350,9 @@ impl BlockPublisherTrait for ZoneSdkPublisher {
         })
     }
 
-    async fn publish_block(
-        &self,
-        block: &Block,
+    async fn publish_block<'blk, 'pbl: 'blk>(
+        &'pbl self,
+        block: &'blk Block,
         withdrawals: Vec<WithdrawArg>,
     ) -> Result<PublishOutcome> {
         let data = borsh::to_vec(block).context("Failed to serialize block")?;

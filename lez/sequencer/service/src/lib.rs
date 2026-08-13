@@ -1,103 +1,65 @@
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::net::SocketAddr;
 
-use anyhow::{Context as _, Result, anyhow};
-use bytesize::ByteSize;
-use common::transaction::LeeTransaction;
+use anyhow::Result;
 use futures::never::Never;
-use jsonrpsee::server::ServerHandle;
-use log::{error, warn};
-use mempool::MemPoolHandle;
-#[cfg(not(feature = "standalone"))]
-use sequencer_core::SequencerCore;
-#[cfg(feature = "standalone")]
-use sequencer_core::SequencerCoreWithMockClients as SequencerCore;
+use kameo::actor::Spawn as _;
+use kameo_actors::scheduler::{Scheduler, SetInterval};
+use log::info;
 pub use sequencer_core::config::*;
-use sequencer_core::{
-    TransactionOrigin,
-    block_publisher::{BlockPublisherTrait as _, Ed25519Key},
-    task_group::{StoreRelease, TaskGroup},
-};
-use sequencer_service_rpc::RpcServer as _;
-use tokio::{sync::Mutex, task::JoinHandle};
-use tokio_util::sync::CancellationToken;
+use sequencer_executor_actor::ExecutorActor;
+use sequencer_rpc_server_actor::RpcServerActor;
+use tokio::select;
 
-pub mod service;
+use crate::actor_handle::ActorHandle;
 
-const REQUEST_BODY_MAX_SIZE: ByteSize = ByteSize::mib(10);
+mod actor_handle;
+
+#[cfg(not(feature = "standalone"))]
+type BlockPublisher = sequencer_core::block_publisher::ZoneSdkPublisher;
+
+#[cfg(feature = "standalone")]
+type BlockPublisher = sequencer_core::mock::MockBlockPublisher;
 
 /// Handle to manage the sequencer and its tasks.
 ///
-/// Implements `Drop` to ensure all tasks are aborted and the RPC server is stopped when dropped.
+/// Implements `Drop` to ensure all actors are killed when dropped.
 pub struct SequencerHandle {
+    // NOTE: Order of fields matters as it affects drop order.
+    scheduler: ActorHandle<Scheduler>,
+    rpc_server: ActorHandle<RpcServerActor>,
+    executor: ActorHandle<ExecutorActor<BlockPublisher>>,
     addr: SocketAddr,
-    server_handle: ServerHandle,
-    main_loop_handle: JoinHandle<Result<Never>>,
-    /// Cancelled when the publisher's drive task terminates (e.g. a panicked
-    /// persist sink); no channel events are processed past that point.
-    driver_cancellation: CancellationToken,
-    /// The core's background tasks, taken before the core was shared. This
-    /// handle owns no reference to the core itself, so without these there is
-    /// nothing to wait on: aborting the main loop only starts the teardown.
-    background_tasks: Vec<TaskGroup>,
-    /// The store, weakly. Every strong reference lives inside something this
-    /// handle stops, so watching the count go to zero is how shutdown knows the
-    /// database file is actually closed rather than assuming it from drop order.
-    store: StoreRelease,
 }
 
 impl SequencerHandle {
     const fn new(
+        scheduler: ActorHandle<Scheduler>,
+        rpc_server: ActorHandle<RpcServerActor>,
+        executor: ActorHandle<ExecutorActor<BlockPublisher>>,
         addr: SocketAddr,
-        server_handle: ServerHandle,
-        main_loop_handle: JoinHandle<Result<Never>>,
-        driver_cancellation: CancellationToken,
-        background_tasks: Vec<TaskGroup>,
-        store: StoreRelease,
     ) -> Self {
         Self {
+            scheduler,
+            rpc_server,
+            executor,
             addr,
-            server_handle,
-            main_loop_handle,
-            driver_cancellation,
-            background_tasks,
-            store,
         }
     }
 
     /// Stops the sequencer and waits for every part of it to be gone.
-    ///
-    /// `Drop` alone cannot do this: it aborts the main loop without awaiting it,
-    /// and the core lives behind `Arc`s held by that task and the RPC server, so
-    /// after a plain drop the store is still open for an unbounded stretch. That
-    /// is why restarting a sequencer on the same home directory used to need a
-    /// sleep, and why an in-process restart could fail outright with a `RocksDB`
-    /// lock error.
-    ///
-    /// Order matters: the main loop stops first so nothing new is produced while
-    /// the publisher is torn down, then the background tasks that hold the store,
-    /// then the server. Consuming `self` drops the last references, so the store
-    /// is closed by the time this returns.
-    pub async fn shutdown(mut self) {
-        self.main_loop_handle.abort();
-        if let Err(err) = (&mut self.main_loop_handle).await
-            && err.is_panic()
-        {
-            error!("Sequencer main loop panicked before shutdown: {err}");
-        }
+    /// executor itself.
+    pub async fn shutdown(self) {
+        let Self {
+            scheduler,
+            rpc_server,
+            executor,
+            addr: _,
+        } = self;
 
-        for tasks in &self.background_tasks {
-            tasks.shutdown().await;
-        }
-
-        if let Err(err) = self.server_handle.stop() {
-            error!("An error occurred while stopping Sequencer RPC server: {err}");
-        }
-        self.server_handle.clone().stopped().await;
-
-        // Nothing this handle owns holds the store, so waiting here rather than
-        // after the drop is the same thing, and it keeps the guarantee inside
-        // the call the caller awaits.
-        wait_for_store_release(&self.store).await;
+        // NOTE: Order of shutdown matters. Make sure it follows the order of fields in the struct.
+        scheduler.shutdown().await;
+        rpc_server.shutdown().await;
+        executor.shutdown().await;
     }
 
     /// Wait for any of the sequencer tasks to fail and return the error.
@@ -105,30 +67,23 @@ impl SequencerHandle {
         clippy::integer_division_remainder_used,
         reason = "Generated by select! macro, can't be easily rewritten to avoid this lint"
     )]
-    pub async fn failed(&mut self) -> Result<Never> {
+    pub async fn failed(&self) -> Result<Never> {
         let Self {
+            executor,
+            rpc_server,
+            scheduler,
             addr: _,
-            server_handle,
-            main_loop_handle,
-            driver_cancellation,
-            background_tasks: _,
-            store: _,
         } = self;
 
-        // Cloned rather than taken: `stopped()` consumes a handle, and taking
-        // this one would leave `shutdown` with no way to stop the server.
-        let server_handle = server_handle.clone();
-        tokio::select! {
-            () = server_handle.stopped() => {
-                Err(anyhow!("RPC Server stopped"))
+        select! {
+            Err(err) = executor.failed() => {
+                Err(err)
             }
-            res = main_loop_handle => {
-                res
-                    .context("Main loop task panicked")?
-                    .context("Main loop exited unexpectedly")
+            Err(err) = rpc_server.failed() => {
+                Err(err)
             }
-            () = driver_cancellation.cancelled() => {
-                Err(anyhow!("Publisher drive task terminated"))
+            Err(err) = scheduler.failed() => {
+                Err(err)
             }
         }
     }
@@ -140,21 +95,13 @@ impl SequencerHandle {
     #[must_use]
     pub fn is_healthy(&self) -> bool {
         let Self {
+            executor,
+            rpc_server,
+            scheduler,
             addr: _,
-            server_handle,
-            main_loop_handle,
-            driver_cancellation,
-            background_tasks,
-            store: _,
         } = self;
 
-        let stopped = server_handle.is_stopped()
-            || main_loop_handle.is_finished()
-            || driver_cancellation.is_cancelled()
-            // A watcher only ends by panicking, and a peer whose deliveries have
-            // silently stopped is exactly what this predicate exists to catch.
-            || background_tasks.iter().any(TaskGroup::any_finished);
-        !stopped
+        executor.is_healthy() && rpc_server.is_healthy() && scheduler.is_healthy()
     }
 
     #[must_use]
@@ -163,157 +110,37 @@ impl SequencerHandle {
     }
 }
 
-impl Drop for SequencerHandle {
-    fn drop(&mut self) {
-        let Self {
-            addr: _,
-            server_handle,
-            main_loop_handle,
-            driver_cancellation: _,
-            background_tasks: _,
-            store: _,
-        } = self;
-
-        main_loop_handle.abort();
-
-        if let Err(err) = server_handle.stop() {
-            error!("An error occurred while stopping Sequencer RPC server: {err}");
-        }
-    }
-}
-
-/// Waits until nothing holds the store any more.
-///
-/// Everything that holds one lives inside a task or a server this handle has
-/// already stopped, but the last drop happens on whichever thread ran them, not
-/// on this one. Without this the caller can reopen the database a moment too
-/// early and hit a `RocksDB` lock error, which is the kind of failure that shows
-/// up as an occasional flake rather than a bug.
-async fn wait_for_store_release(store: &StoreRelease) {
-    /// Long enough for a drop that is already in flight, short enough that a
-    /// leak is reported rather than hung on.
-    const RELEASE_TIMEOUT: Duration = Duration::from_secs(10);
-    const POLL: Duration = Duration::from_millis(10);
-
-    let released = tokio::time::timeout(RELEASE_TIMEOUT, async {
-        while store.holders() > 0 {
-            tokio::time::sleep(POLL).await;
-        }
-    })
-    .await;
-
-    if released.is_err() {
-        error!(
-            "Sequencer store still held by {} reference(s) after shutdown; something outlived the tasks it should have died with",
-            store.holders()
-        );
-    }
-}
-
 pub async fn run(config: SequencerConfig, listen_addr: SocketAddr) -> Result<SequencerHandle> {
-    sequencer_service_metrics::init();
-
     let block_timeout = config.block_create_timeout;
     let max_block_size = config.max_block_size;
 
-    let (sequencer_core, mempool_handle): (SequencerCore, _) =
-        SequencerCore::start_from_config(config).await;
+    let executor = ExecutorActor::new(config).await;
+    let executor_ref = ExecutorActor::spawn(executor);
+    info!("Executor Actor spawned");
 
-    log::info!("Sequencer core set up");
+    let rpc_server = RpcServerActor::new(executor_ref.clone(), listen_addr, max_block_size).await?;
+    let addr = rpc_server.addr();
+    let rpc_server_ref = RpcServerActor::spawn(rpc_server);
+    info!("RPC Server Actor spawned");
 
-    let driver_cancellation = sequencer_core.block_publisher().driver_cancellation();
-    // Taken while the core is still owned here: once it is behind the `Arc`
-    // below, the only owners are the RPC server and the main loop task, and
-    // neither hands it back.
-    let background_tasks = sequencer_core.background_tasks();
-    let store = sequencer_core.store_release();
-    let seq_core_wrapped = Arc::new(Mutex::new(sequencer_core));
-    let mempool_handle_for_server = mempool_handle.clone();
-
-    let (server_handle, addr) = run_server(
-        Arc::clone(&seq_core_wrapped),
-        mempool_handle_for_server,
-        listen_addr,
-        max_block_size.as_u64(),
-    )
-    .await?;
-    log::info!("RPC server started");
-
-    log::info!("Starting main sequencer loop");
-    let main_loop_handle = tokio::spawn(main_loop(seq_core_wrapped, block_timeout));
-
-    let _ = mempool_handle;
+    let scheduler_ref = Scheduler::spawn(Scheduler::new());
+    scheduler_ref
+        .tell(
+            SetInterval::new(
+                executor_ref.downgrade(),
+                block_timeout,
+                sequencer_executor_actor::protocol::ProduceBlock,
+            )
+            .start_delay(block_timeout)
+            .set_missed_tick_behaviour(tokio::time::MissedTickBehavior::Delay),
+        )
+        .await?;
+    info!("Block production scheduler started");
 
     Ok(SequencerHandle::new(
+        ActorHandle::new(scheduler_ref),
+        ActorHandle::new(rpc_server_ref),
+        ActorHandle::new(executor_ref),
         addr,
-        server_handle,
-        main_loop_handle,
-        driver_cancellation,
-        background_tasks,
-        store,
     ))
-}
-
-async fn run_server(
-    sequencer: Arc<Mutex<SequencerCore>>,
-    mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
-    listen_addr: SocketAddr,
-    max_block_size: u64,
-) -> Result<(ServerHandle, SocketAddr)> {
-    let server = jsonrpsee::server::ServerBuilder::with_config(
-        jsonrpsee::server::ServerConfigBuilder::new()
-            .max_request_body_size(
-                u32::try_from(REQUEST_BODY_MAX_SIZE.as_u64())
-                    .expect("REQUEST_BODY_MAX_SIZE should be less than u32::MAX"),
-            )
-            .build(),
-    )
-    .build(listen_addr)
-    .await
-    .context("Failed to build RPC server")?;
-
-    let addr = server
-        .local_addr()
-        .context("Failed to get local address of RPC server")?;
-
-    log::info!("Starting Sequencer Service RPC server on {addr}");
-
-    let service = service::SequencerService::new(sequencer, mempool_handle, max_block_size);
-    let handle = server.start(service.into_rpc());
-    Ok((handle, addr))
-}
-
-async fn main_loop(seq_core: Arc<Mutex<SequencerCore>>, block_timeout: Duration) -> Result<Never> {
-    loop {
-        tokio::time::sleep(block_timeout).await;
-
-        let mut state = seq_core.lock().await;
-
-        // Only produce on our turn.
-        if !state.is_our_turn() {
-            continue;
-        }
-
-        // Never inscribe a second block at a height we already published: the
-        // channel would carry two chains from there and nothing resolves that.
-        // The head rewinds under us when the sdk orphans our own unfinalized
-        // blocks, and recovers once they finalize, so this is a wait.
-        if let Some(high_water) = state.rewound_below_published() {
-            warn!(
-                "Skipping turn: head rewound to {} but block {high_water} is already inscribed; \
-                 waiting for the channel to restore it",
-                state.next_block_height().saturating_sub(1),
-            );
-            continue;
-        }
-
-        log::info!("Our turn: collecting transactions from mempool, creating block");
-        let id = state.produce_new_block().await?;
-        let author_identity = hex::encode(
-            Ed25519Key::from_bytes(&state.sequencer_config().signing_key)
-                .public_key()
-                .as_bytes(),
-        );
-        log::info!("Block with id {id} created by {author_identity:?}");
-    }
 }

@@ -13,7 +13,6 @@ use std::{path::Path, time::Duration};
 use anyhow::{Context as _, Result, bail};
 use indexer_service_rpc::RpcClient as _;
 use lee::{AccountId, PrivateKey, PublicKey};
-use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use sequencer_core::config::GenesisAction;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use test_fixtures::{
@@ -237,8 +236,11 @@ async fn empty_local_reconstructs_from_populated_bedrock() -> Result<()> {
     // lost its local DB.
     drop(handle_a);
     tokio::time::sleep(Duration::from_secs(2)).await;
-    std::fs::remove_dir_all(home_a.path().join("rocksdb"))
-        .context("Failed to wipe sequencer L2 store")?;
+    std::fs::remove_dir_all(home_a.path().join(format!(
+        "rocksdb-{}",
+        test_fixtures::config::bedrock_channel_id()
+    )))
+    .context("Failed to wipe sequencer L2 store")?;
 
     // Sequencer B restarts on the same home from that empty store and reconstructs.
     let handle_b = SequencerSetup::new(slow_blocks(), bedrock_addr)
@@ -274,11 +276,13 @@ async fn empty_local_reconstructs_from_populated_bedrock() -> Result<()> {
 /// Case 3: local store is not empty, but the Bedrock channel is empty.
 ///
 /// A sequencer produces blocks (committing to a channel), is stopped, and is
-/// restarted against a fresh/empty channel — i.e. the channel it committed to
-/// was wiped or the node points at a different chain. Startup must fail rather
-/// than silently resume onto a foreign channel. Crucially this must hold even
-/// though the sequencer only ever *produced* (so it never recorded a per-block
-/// anchor): the committed-but-missing-channel invariant catches it.
+/// restarted with the same channel id against a Bedrock node where that channel
+/// is empty — i.e. the channel it committed to was wiped. Startup must fail
+/// rather than silently resume onto a foreign channel. Crucially this must hold
+/// even though the sequencer only ever *produced* (so it never recorded a
+/// per-block anchor): the committed-but-missing-channel invariant catches it.
+/// A *different* channel id no longer exercises this, because the db path is
+/// per-channel and a new id simply fresh-starts beside the old store.
 #[test]
 async fn nonempty_local_against_empty_channel_fails_startup() -> Result<()> {
     const PRODUCED_TARGET: u64 = 3;
@@ -310,9 +314,12 @@ async fn nonempty_local_against_empty_channel_fails_startup() -> Result<()> {
     drop(handle_a);
     tokio::time::sleep(Duration::from_secs(2)).await;
 
-    // Restart on the SAME home (A's committed store: blocks + checkpoint) but
-    // pointed at a fresh, never-used channel — the channel it committed to is gone.
-    let empty_channel = ChannelId::from([0x5a_u8; 32]);
+    // Restart on the SAME home (A's committed store: blocks + checkpoint) and the
+    // SAME channel id, but against a fresh Bedrock node where that channel does
+    // not exist — the channel it committed to is gone.
+    let (_bedrock_b, bedrock_addr_b) = setup_bedrock_node()
+        .await
+        .context("Failed to setup second Bedrock")?;
 
     // Startup aborts on the missing-channel invariant (a panic in
     // `start_from_config`). Run it on a dedicated OS thread with its own runtime
@@ -325,8 +332,7 @@ async fn nonempty_local_against_empty_channel_fails_startup() -> Result<()> {
         runtime.block_on(async {
             tokio::time::timeout(
                 Duration::from_secs(90),
-                SequencerSetup::new(slow_blocks(), bedrock_addr)
-                    .with_channel_id(empty_channel)
+                SequencerSetup::new(slow_blocks(), bedrock_addr_b)
                     .with_genesis(genesis)
                     .setup_at(&home_a_path),
             )
@@ -473,7 +479,10 @@ async fn local_behind_channel_reconstructs_forward() -> Result<()> {
     ];
 
     let home = tempfile::tempdir().context("Failed to create sequencer home")?;
-    let rocksdb = home.path().join("rocksdb");
+    let rocksdb = home.path().join(format!(
+        "rocksdb-{}",
+        test_fixtures::config::bedrock_channel_id()
+    ));
 
     // Bring the sequencer up to an early tip, then stop it so its store is at rest.
     {

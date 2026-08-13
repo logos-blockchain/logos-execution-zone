@@ -4,7 +4,7 @@ use lee_core::{
     account::AccountWithMetadata,
     program::{AccountPostState, ChainedCall, Claim, ProgramInput, ProgramOutput, read_lee_inputs},
 };
-use wrapped_token_core::Instruction as WrappedInstruction;
+use wrapped_token_core::{Instruction as WrappedInstruction, MAX_MINT_AMOUNT};
 
 fn main() {
     let (
@@ -43,6 +43,13 @@ fn main() {
     assert_eq!(
         mint_amount, amount,
         "locked amount must equal the wrapped mint amount"
+    );
+    // Before the debit, not on the destination: nothing releases an escrow, so
+    // an amount the destination will not mint has to fail in the submitter's own
+    // transaction.
+    assert!(
+        amount <= MAX_MINT_AMOUNT,
+        "locked amount exceeds what the wrapped token will mint"
     );
 
     // pre_states: [holder holding (authorized), escrow PDA, outbox PDA].

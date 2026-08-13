@@ -29,6 +29,8 @@ pub enum ConfigSubcommand {
         user: Option<String>,
         password: Option<String>,
     },
+    /// Remove sequencer from a list.
+    RemoveSequencer { addr: String },
 }
 
 impl ConfigSubcommand {
@@ -201,6 +203,21 @@ impl WalletSubcommand for ConfigSubcommand {
                 };
 
                 wallet_core.config.sequencers.push(seq_connection_data);
+
+                Ok(SubcommandReturnValue::Empty)
+            }
+            Self::RemoveSequencer { addr } => {
+                let url_addr = addr.parse()?;
+
+                let (idx, _) = wallet_core
+                    .config
+                    .sequencers
+                    .iter()
+                    .enumerate()
+                    .find(|(_, conn_data)| conn_data.sequencer_addr == url_addr)
+                    .ok_or_else(|| anyhow::anyhow!("Sequencer with this addr is not found"))?;
+
+                wallet_core.config.sequencers.remove(idx);
 
                 Ok(SubcommandReturnValue::Empty)
             }

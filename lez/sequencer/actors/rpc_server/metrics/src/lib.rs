@@ -1,4 +1,4 @@
-//! This crate provides all metrics exposed by the sequencer service crate.
+//! This crate provides all metrics exposed by RPC Server Actor.
 
 #[cfg(feature = "record")]
 pub use record::*;

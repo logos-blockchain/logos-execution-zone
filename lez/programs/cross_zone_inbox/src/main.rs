@@ -1,6 +1,6 @@
 use cross_zone_inbox_core::{
     CrossZoneMessage, InboxConfig, Instruction, SeenShard, inbox_config_account_id,
-    inbox_config_seed, inbox_seen_shard_account_id, inbox_seen_shard_seed, message_key,
+    inbox_config_seed, inbox_seen_shard_account_id, inbox_seen_shard_seed,
 };
 use lee_core::{
     account::{Account, AccountWithMetadata},
@@ -94,16 +94,28 @@ fn dispatch(
         "No route from this source program to this target program for this peer"
     );
 
-    let key = message_key(&msg.src_zone, msg.src_block_id, msg.src_tx_index);
     let mut shard =
         SeenShard::from_bytes(&seen.account.data.clone().into_inner()).expect("seen shard decodes");
-    let already_seen = shard.contains(&key);
+
+    // One block id, one delivering block. The address binds the zone and block
+    // id but not which block claimed them, so an equivocating peer's two blocks
+    // at one id land here; the first binds the shard and the second aborts.
+    //
+    // Before the replay check, not after: reaching the replay branch first would
+    // turn a wrong-block delivery into a silent no-op, which the indexer's
+    // already-seen short circuit would then wave through.
+    assert!(
+        shard.binds(&msg.src_block_hash),
+        "Seen shard is bound to a different peer block at this block id"
+    );
+
+    let already_seen = shard.contains(msg.src_tx_index);
 
     // On replay this is a no-op: the seen shard is untouched and no call is made.
     let (seen_post, chained_calls) = if already_seen {
         (unchanged(&seen), vec![])
     } else {
-        shard.insert(key);
+        shard.insert(msg.src_block_hash, msg.src_tx_index);
         let mut seen_account = seen.account.clone();
         seen_account.data = shard
             .to_bytes()

@@ -1,5 +1,5 @@
 [package]
-name = "sequencer_service_metrics"
+name = "sequencer_rpc_server_actor_metrics"
 version = "0.1.0"
 edition = "2024"
 license = { workspace = true }

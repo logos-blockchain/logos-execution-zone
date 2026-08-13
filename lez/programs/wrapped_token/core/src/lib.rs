@@ -8,6 +8,18 @@ use lee_core::{
 };
 use serde::{Deserialize, Serialize};
 
+/// The most one mint may credit.
+///
+/// The peer zone chooses the amount and the balance is a `u128`, so unbounded
+/// one delivery pins a holding near the maximum, every later honest mint
+/// overflows into a guest panic, and the holding is bricked for inbound
+/// transfers at a cost of one message. The cap does not remove that ceiling, it
+/// makes reaching it cost 2^64 deliveries instead of one.
+///
+/// `u64::MAX` is the bridge's bound, not one native balances obey. `bridge_lock`
+/// refuses a larger amount at the source so it fails before escrowing.
+pub const MAX_MINT_AMOUNT: u128 = 0xFFFF_FFFF_FFFF_FFFF;
+
 const CONFIG_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/WrappedTokenConfig/00/";
 const HOLDING_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/WrappedTokenHold/00000";
 

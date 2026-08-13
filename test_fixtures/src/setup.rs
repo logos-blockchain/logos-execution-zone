@@ -119,8 +119,9 @@ impl SequencerSetup {
             genesis
         } else {
             let dump = load_prebuilt_dump()?;
-            // `SequencerCore::open_or_create_store` looks for `<home>/rocksdb`.
-            let dst = home.join("rocksdb");
+            // `SequencerCore::open_or_create_store` looks for the channel-suffixed
+            // db under its home, so the restore has to land on the same name.
+            let dst = home.join(format!("rocksdb-{channel_id}"));
             let _store = SequencerStore::restore_db_from_dump(
                 &dst,
                 &dump,

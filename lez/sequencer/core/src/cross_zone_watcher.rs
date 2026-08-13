@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use common::{HashType, block::Block, transaction::LeeTransaction};
-use cross_zone::{build_dispatch_from_emission, extract_emission};
+use cross_zone::{EmissionSource, build_dispatch_from_emission, extract_emission};
 use cross_zone_inbox_core::{CrossZoneRoute, message_key, routes_permit};
 use futures::{Stream, StreamExt as _};
 use lee::{GENESIS_BLOCK_ID, PublicKey};
@@ -468,7 +468,7 @@ where
                         );
                     }
                     Link::Next(block_hash) => {
-                        if !record_block_deliveries(&block, peer, dbio) {
+                        if !record_block_deliveries(&block, block_hash, peer, dbio) {
                             // Recording a delivery is what makes it survive the
                             // mempool. Letting the pass finish here would move
                             // the floor past this slot on a store that just
@@ -545,7 +545,15 @@ fn advance_cursor(dbio: &RocksDBIO, peer_zone: [u8; 32], cursor: &mut Option<Slo
 /// Returns `false` if a delivery could not be recorded, which the caller turns
 /// into a stall: the record is the only thing standing between a durable read
 /// position and a lost message.
-fn record_block_deliveries(block: &Block, peer: &PeerContext, dbio: &RocksDBIO) -> bool {
+///
+/// `block_hash` is the value [`link_against`] recomputed from the block's own
+/// contents, not `block.header.hash`, which the signature does not cover.
+fn record_block_deliveries(
+    block: &Block,
+    block_hash: HashType,
+    peer: &PeerContext,
+    dbio: &RocksDBIO,
+) -> bool {
     let peer_zone = peer.peer_zone;
     let self_zone = peer.self_zone;
     let allowed_routes = peer.allowed_routes.as_slice();
@@ -583,10 +591,13 @@ fn record_block_deliveries(block: &Block, peer: &PeerContext, dbio: &RocksDBIO) 
 
         let src_tx_index = u32::try_from(index).unwrap_or(u32::MAX);
         let dispatch = build_dispatch_from_emission(
-            peer_zone,
-            block.header.block_id,
-            src_tx_index,
-            message.program_id,
+            &EmissionSource {
+                src_zone: peer_zone,
+                src_block_id: block.header.block_id,
+                src_block_hash: block_hash.0,
+                src_tx_index,
+                src_program_id: message.program_id,
+            },
             emission.target_program_id,
             &emission.target_accounts,
             emission.payload,
@@ -1142,6 +1153,42 @@ mod tests {
         assert_eq!(
             records[0].failed_attempts, 0,
             "a delivery that has never been attempted starts with a clean count"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_recorded_delivery_names_the_hash_the_watcher_validated() {
+        let (_dir, dbio) = store();
+        let mut cursor = None;
+        let mut tip = None;
+
+        consume_peer_stream(
+            stream::iter(vec![peer_block_msg(1, 0)]),
+            &peer_context(),
+            &dbio,
+            &mut cursor,
+            &mut tip,
+        )
+        .await;
+
+        let records = dbio.get_pending_cross_zone_dispatches().unwrap();
+        assert_eq!(records.len(), 1, "the delivery must be recorded");
+        let tx = borsh::from_slice::<LeeTransaction>(&records[0].transaction).unwrap();
+        let LeeTransaction::Public(public_tx) = tx else {
+            panic!("a dispatch is a public transaction");
+        };
+        let Ok(cross_zone_inbox_core::Instruction::Dispatch(msg)) =
+            risc0_zkvm::serde::from_slice(&public_tx.message().instruction_data)
+        else {
+            panic!("the recorded transaction is an inbox dispatch");
+        };
+
+        // The indexer recomputes this independently when it re-derives the same
+        // transaction; a different block here is what makes the two disagree.
+        assert_eq!(
+            msg.src_block_hash,
+            chain_block(1).recompute_hash().0,
+            "the delivery names the block the watcher read it from"
         );
     }
 

@@ -32,18 +32,21 @@ use mempool::{MemPool, MemPoolHandle};
 pub use mock::SequencerCoreWithMockClients;
 use num_bigint::BigUint;
 pub use storage::error::DbError;
+// Re-exported because `cross_zone_dead_letters` returns it and the service
+// crate does not depend on `storage`, so it could not otherwise name the type.
+pub use storage::sequencer::sequencer_cells::DeadLetterDispatchRecord;
 use storage::sequencer::{
-    RocksDBIO, StoreUpdate,
+    DispatchFailure, RocksDBIO, StoreUpdate,
     sequencer_cells::{
-        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, WithdrawalReconciliationKey,
-        ZoneAnchorRecord,
+        DispatchOrigin, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
+        WithdrawalReconciliationKey, ZoneAnchorRecord,
     },
 };
 
 use crate::{
     block_publisher::{BlockPublisherTrait, MsgId, NoteId, ZoneSdkPublisher},
     block_store::SequencerStore,
-    task_group::{StoreRelease, TaskGroup},
+    task_group::TaskGroup,
 };
 
 pub mod block_publisher;
@@ -116,7 +119,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     /// initializing its state with the accounts defined in the configuration file.
     fn open_or_create_store(config: &SequencerConfig) -> (SequencerStore, lee::V03State) {
         let signing_key = lee::PrivateKey::try_new(config.signing_key).unwrap();
-        let db_path = config.home.join("rocksdb");
+        let db_path = config.db_path();
 
         if db_path.exists() {
             let store = SequencerStore::open_db(&db_path, signing_key).unwrap_or_else(|err| {
@@ -130,6 +133,14 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                 .expect("Failed to read state from store");
             (store, state)
         } else {
+            let legacy = config.home.join("rocksdb");
+            if legacy.exists() {
+                warn!(
+                    "Ignoring pre-channel-suffix database at {}; rename it to {} to resume it",
+                    legacy.display(),
+                    db_path.display()
+                );
+            }
             warn!(
                 "Database not found at {}, starting from genesis",
                 db_path.display()
@@ -333,6 +344,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         };
 
         sequencer_core_metrics::record_chain_height(sequencer_core.chain_height());
+        record_dead_letter_gauge(&sequencer_core.store.dbio());
 
         (sequencer_core, mempool_handle)
     }
@@ -794,18 +806,22 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             (prev, height, chain.head_state().clone(), pending)
         };
 
-        if !settled.is_empty()
-            && let Err(err) = self
+        if !settled.is_empty() {
+            if let Err(err) = self
                 .store
                 .dbio()
                 .drop_settled_cross_zone_dispatches(&settled)
-        {
-            // Only bookkeeping: the deliveries themselves are irreversible, and
-            // the next turn tries again.
-            warn!(
-                "Failed to drop {} settled delivery record(s): {err:#}",
-                settled.len()
-            );
+            {
+                // Only bookkeeping: the deliveries themselves are irreversible,
+                // and the next turn tries again.
+                warn!(
+                    "Failed to drop {} settled delivery record(s): {err:#}",
+                    settled.len()
+                );
+            }
+            // A settled delivery may be one this node had given up on, which
+            // takes its dead letter with it.
+            record_dead_letter_gauge(&self.store.dbio());
         }
 
         let mut valid_transactions = Vec::new();
@@ -1074,8 +1090,8 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     /// A delivery's payload and target accounts are chosen on the peer zone and
     /// validated by nobody in between, so one can fail for good; but a failure
     /// can equally be a property of the moment, so give up only after several.
-    /// Giving up drops the record, which is also what keeps a peer from growing
-    /// the pending list with deliveries that can never execute.
+    /// Giving up moves the record to the dead letter: a peer cannot grow the
+    /// pending list with deliveries that never execute, and it stays findable.
     fn count_dispatch_failure(&self, tx: &LeeTransaction) {
         let Some(message) = extract_cross_zone_dispatch(tx) else {
             return;
@@ -1085,17 +1101,37 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             message.src_block_id,
             message.src_tx_index,
         );
+        let origin = DispatchOrigin {
+            src_zone: message.src_zone,
+            src_block_id: message.src_block_id,
+            src_tx_index: message.src_tx_index,
+        };
         match self
             .store
             .dbio()
-            .record_dispatch_failure(key, RETIRE_DISPATCH_AFTER_FAILURES)
+            .record_dispatch_failure(key, RETIRE_DISPATCH_AFTER_FAILURES, origin)
         {
-            Ok(true) => error!(
-                "Giving up on cross-zone delivery {} after {RETIRE_DISPATCH_AFTER_FAILURES} failed attempts; it will not be retried",
+            Ok(DispatchFailure::Retired(record)) => {
+                sequencer_core_metrics::increment_cross_zone_dispatches_retired_total();
+                record_dead_letter_gauge(&self.store.dbio());
+                error!(
+                    "Giving up on cross-zone delivery {} from peer zone {} block {} transaction {} ({} bytes) after {} failed attempts. This node will not retry it; unless another sequencer carries it, the message is not delivered. Kept in the dead letter.",
+                    hex::encode(key),
+                    hex::encode(origin.src_zone),
+                    origin.src_block_id,
+                    origin.src_tx_index,
+                    record.transaction_bytes,
+                    record.failed_attempts
+                );
+            }
+            Ok(DispatchFailure::Retried { failed_attempts }) => warn!(
+                "Cross-zone delivery {} failed to execute ({failed_attempts} of {RETIRE_DISPATCH_AFTER_FAILURES} attempts), will retry next block",
                 hex::encode(key)
             ),
-            Ok(false) => warn!(
-                "Cross-zone delivery {} failed to execute, will retry next block",
+            // Not a give-up: the ordinary case is a delivery that already
+            // settled, so its record is gone and there is nothing left to lose.
+            Ok(DispatchFailure::Absent) => debug!(
+                "Cross-zone delivery {} failed to execute but has no pending record; nothing to count",
                 hex::encode(key)
             ),
             Err(err) => error!(
@@ -1105,11 +1141,16 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         }
     }
 
-    /// A weak reference to this sequencer's store, for a shutdown path that
-    /// needs to observe the database actually closing rather than infer it.
-    #[must_use]
-    pub fn store_release(&self) -> StoreRelease {
-        StoreRelease::new(&self.store.dbio())
+    /// The deliveries this node has given up on, and how many times it has.
+    ///
+    /// Retained is read first so the pair can only skew towards a total that
+    /// leads its list, an ordinary evicted or settled state. The other order
+    /// would report entries against a total of zero.
+    pub fn cross_zone_dead_letters(&self) -> Result<(u64, Vec<DeadLetterDispatchRecord>), DbError> {
+        let dbio = self.store.dbio();
+        let retained = dbio.get_dead_letter_cross_zone_dispatches()?;
+        let total = dbio.get_dead_letter_cross_zone_dispatch_count()?;
+        Ok((total, retained))
     }
 
     /// Every background task that holds this sequencer's store handle.
@@ -1188,10 +1229,14 @@ fn deposit_already_minted(state: &lee::V03State, deposit_op_id: HashType) -> boo
 
 /// Whether a cross-zone delivery is already on the chain we are building on.
 ///
-/// The inbox records every delivered message key in a seen shard and no-ops a
-/// replay, so that shard is the same kind of answer the deposit receipt gives:
-/// state, not bookkeeping. An orphan reverts the entry with the block, so the
-/// next turn re-delivers with nothing of ours to unwind.
+/// The inbox records each peer block's delivered indices in that block's seen
+/// shard and no-ops a replay, so the shard is the same kind of answer the
+/// deposit receipt gives: state, not bookkeeping. An orphan reverts the entry
+/// with the block, so the next turn re-delivers with nothing to unwind.
+///
+/// Both halves matter. A shard bound to a different peer block is not this
+/// delivery's replay record, it is what will make it abort, and calling that
+/// delivered would drop the record instead of dead-lettering it.
 fn dispatch_already_delivered(state: &lee::V03State, message: &CrossZoneMessage) -> bool {
     let shard_id = cross_zone_inbox_core::inbox_seen_shard_account_id(
         programs::cross_zone_inbox().id(),
@@ -1200,13 +1245,25 @@ fn dispatch_already_delivered(state: &lee::V03State, message: &CrossZoneMessage)
     );
     state.get_account_by_id_ref(shard_id).is_some_and(|shard| {
         cross_zone_inbox_core::SeenShard::from_bytes(shard.data.as_ref()).is_ok_and(|seen| {
-            seen.contains(&cross_zone_inbox_core::message_key(
-                &message.src_zone,
-                message.src_block_id,
-                message.src_tx_index,
-            ))
+            seen.binds(&message.src_block_hash) && seen.contains(message.src_tx_index)
         })
     })
+}
+
+/// Publishes how many given-up-on deliveries are retained.
+///
+/// Read from the store because the list falls as well as rises (eviction, and
+/// reconciliation when a delivery settles elsewhere). Costs a read and a decode,
+/// so call it only where one of those can have happened.
+fn record_dead_letter_gauge(dbio: &RocksDBIO) {
+    match dbio.get_dead_letter_cross_zone_dispatches() {
+        Ok(records) => {
+            sequencer_core_metrics::record_cross_zone_dead_letter_dispatches(records.len());
+        }
+        Err(err) => {
+            warn!("Failed to read the cross-zone dead letter for its gauge: {err:#}");
+        }
+    }
 }
 
 /// Feed one channel delta into the follow state and mirror it to the store:
@@ -1399,6 +1456,9 @@ fn apply_follow_update(
     };
 
     sequencer_core_metrics::record_chain_height(head_height);
+    // The runtime reconcile path: finalizing another sequencer's block drops the
+    // dead letter of a delivery this node gave up on.
+    record_dead_letter_gauge(dbio);
 
     if outcome.accepted_deposits > 0 {
         log::info!(

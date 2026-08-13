@@ -6,8 +6,8 @@ use jsonrpsee::types::ErrorObjectOwned;
 #[cfg(feature = "client")]
 pub use jsonrpsee::{core::ClientError, http_client::HttpClientBuilder as SequencerClientBuilder};
 use sequencer_service_protocol::{
-    Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest, HashType,
-    LeeTransaction, MembershipProof, Nonce, ProgramId,
+    Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest,
+    CrossZoneDeadLetterReport, HashType, LeeTransaction, MembershipProof, Nonce, ProgramId,
 };
 
 #[cfg(all(not(feature = "server"), not(feature = "client")))]
@@ -90,4 +90,13 @@ pub trait Rpc {
 
     #[method(name = "getChannelId")]
     async fn get_channel_id(&self) -> Result<ChannelId, ErrorObjectOwned>;
+
+    /// The cross-zone deliveries this sequencer has given up on.
+    ///
+    /// Its own method rather than folded into `checkHealth`: one undeliverable
+    /// peer message must not read as an unhealthy node.
+    #[method(name = "getCrossZoneDeadLetters")]
+    async fn get_cross_zone_dead_letters(
+        &self,
+    ) -> Result<CrossZoneDeadLetterReport, ErrorObjectOwned>;
 }

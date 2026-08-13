@@ -9,27 +9,21 @@ license = { workspace = true }
 workspace = true
 
 [dependencies]
-common.workspace = true
-lee.workspace = true
-mempool.workspace = true
 sequencer_core = { workspace = true, features = ["testnet"] }
-sequencer_service_protocol.workspace = true
-sequencer_service_rpc = { workspace = true, features = ["server"] }
-sequencer_service_metrics = { workspace = true, features = ["record"] }
-programs.workspace = true
+sequencer_executor_actor.workspace = true
+sequencer_rpc_server_actor.workspace = true
 
 clap = { workspace = true, features = ["derive", "env"] }
 anyhow.workspace = true
 env_logger.workspace = true
+kameo.workspace = true
+kameo_actors.workspace = true
 hex.workspace = true
 log.workspace = true
 metrics-exporter-prometheus.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
-jsonrpsee.workspace = true
 futures.workspace = true
-bytesize.workspace = true
-borsh.workspace = true
 
 [features]
 default = []

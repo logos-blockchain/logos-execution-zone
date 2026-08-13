@@ -31,6 +31,21 @@ pub struct Emission {
     pub payload: Vec<u8>,
 }
 
+/// Where a delivery came from on the peer chain.
+///
+/// One struct so the watcher and the verifier fill the same field list: their
+/// dispatch transactions for one emission must be byte-identical.
+///
+/// `src_block_hash` is the recomputed hash on both sides, never the declared
+/// `header.hash`, which the signature does not cover.
+pub struct EmissionSource {
+    pub src_zone: ZoneId,
+    pub src_block_id: u64,
+    pub src_block_hash: [u8; 32],
+    pub src_tx_index: u32,
+    pub src_program_id: ProgramId,
+}
+
 /// Whether a program may only be invoked by sequencer-origin transactions.
 ///
 /// The cross-zone inbox is injected solely by the watcher; a user-submitted call
@@ -118,19 +133,17 @@ fn build_inbox_dispatch_tx(
 /// Option B check).
 #[must_use]
 pub fn build_dispatch_from_emission(
-    src_zone: ZoneId,
-    src_block_id: u64,
-    src_tx_index: u32,
-    src_program_id: ProgramId,
+    source: &EmissionSource,
     target_program_id: ProgramId,
     target_accounts: &[[u8; 32]],
     payload: Vec<u8>,
 ) -> lee::PublicTransaction {
     let msg = CrossZoneMessage {
-        src_zone,
-        src_block_id,
-        src_tx_index,
-        src_program_id,
+        src_zone: source.src_zone,
+        src_block_id: source.src_block_id,
+        src_block_hash: source.src_block_hash,
+        src_tx_index: source.src_tx_index,
+        src_program_id: source.src_program_id,
         target_program_id,
         payload,
         l1_inclusion_witness: None,

@@ -1,0 +1,26 @@
+[package]
+name = "sequencer_rpc_server_actor"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+lee.workspace = true
+common.workspace = true
+programs.workspace = true
+sequencer_core.workspace = true
+sequencer_service_protocol.workspace = true
+sequencer_service_rpc = { workspace = true, features = ["server"] }
+sequencer_rpc_server_actor_metrics = { workspace = true, features = ["record"] }
+sequencer_executor_actor.workspace = true
+
+kameo.workspace = true
+tokio.workspace = true
+log.workspace = true
+thiserror.workspace = true
+jsonrpsee.workspace = true
+borsh.workspace = true
+bytesize.workspace = true
