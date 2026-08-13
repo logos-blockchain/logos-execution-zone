@@ -1,4 +1,6 @@
-use lee_core::program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::program::{
+    AccountPostState, ChainedCall, ProgramInput, ProgramOutput, read_lee_inputs,
+};
 use risc0_zkvm::sha::{Impl, Sha256 as _};
 
 const PRIZE: u128 = 150;
@@ -43,7 +45,6 @@ impl Challenge {
 /// A pinata program.
 fn main() {
     // Read input accounts.
-    // It is expected to receive only two accounts: [pinata_account, winner_account]
     let (
         ProgramInput {
             self_program_id,
@@ -54,41 +55,52 @@ fn main() {
         instruction_words,
     ) = read_lee_inputs::<Instruction>();
 
-    let Ok([pinata, winner]) = <[_; 2]>::try_from(pre_states) else {
+    let Ok([challenge, prize_pda, winner]) = <[_; 3]>::try_from(pre_states) else {
         return;
     };
 
-    let data = Challenge::new(&pinata.account.data);
+    assert_eq!(
+        prize_pda.account_id,
+        pinata_core::compute_pinata_prize_account_id(self_program_id),
+        "Second account must be the prize-pool PDA"
+    );
+
+    let data = Challenge::new(&challenge.account.data);
 
     if !data.validate_solution(solution) {
         return;
     }
 
-    let mut pinata_post = pinata.account.clone();
-    let mut winner_post = winner.account.clone();
-    pinata_post.balance = pinata_post
-        .balance
-        .checked_sub(PRIZE)
-        .expect("Not enough balance in the pinata");
-    pinata_post.data = data
+    let mut challenge_post = challenge.account.clone();
+    let prize_pda_post = prize_pda.account.clone();
+    let winner_post = winner.account.clone();
+    challenge_post.data = data
         .next_data()
         .to_vec()
         .try_into()
         .expect("33 bytes should fit into Data");
-    winner_post.balance = winner_post
-        .balance
-        .checked_add(PRIZE)
-        .expect("Overflow when adding prize to winner");
+
+    let mut prize_authorized = prize_pda.clone();
+    prize_authorized.is_authorized = true;
+
+    let chained_call = ChainedCall::new(
+        prize_authorized.account.program_owner.into(),
+        vec![prize_authorized, winner.clone()],
+        &authenticated_transfer_core::Instruction::Transfer { amount: PRIZE },
+    )
+    .with_pda_seeds(vec![pinata_core::compute_pinata_prize_seed()]);
 
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_words,
-        vec![pinata, winner],
+        vec![challenge, prize_pda, winner],
         vec![
-            AccountPostState::new_claimed_if_default(pinata_post, Claim::Authorized),
+            AccountPostState::new(challenge_post),
+            AccountPostState::new(prize_pda_post),
             AccountPostState::new(winner_post),
         ],
     )
+    .with_chained_calls(vec![chained_call])
     .write();
 }

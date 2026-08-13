@@ -9,5 +9,7 @@ workspace = true
 
 [dependencies]
 lee_core.workspace = true
+authenticated_transfer_core.workspace = true
+pinata_core.workspace = true
 
 risc0-zkvm.workspace = true
