@@ -112,9 +112,13 @@ impl ValidatedStateDiff {
                 LeeError::MaxChainedCallsDepthExceeded
             );
 
-            let Some(program_account) = state
-                .programs()
-                .get(&AccountId::from(chained_call.program_id))
+            // Check that the `program_id` corresponds to a deployed program. Deployed programs
+            // live in `public_state`, keyed by `AccountId::from(program_id)` (see that impl's
+            // doc comment), holding the elf as a plain `Account`; reconstruct a `Program` from
+            // it via `new_unchecked` to execute, skipping a redundant image-id recomputation
+            // since the id/elf pairing was already validated once, at deployment time.
+            let Some(program_account) =
+                state.get_account_by_id_ref(AccountId::from(chained_call.program_id))
             else {
                 return Err(LeeError::InvalidInput("Unknown program".into()));
             };
@@ -449,8 +453,8 @@ impl ValidatedStateDiff {
         // TODO: remove clone
         let program = Program::new(tx.message.bytecode.clone().into())?;
         if state
-            .programs()
-            .contains_key(&AccountId::from(program.id()))
+            .get_account_by_id_ref(AccountId::from(program.id()))
+            .is_some()
         {
             return Err(LeeError::ProgramAlreadyExists);
         }
