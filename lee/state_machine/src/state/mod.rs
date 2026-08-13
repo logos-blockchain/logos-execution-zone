@@ -113,6 +113,11 @@ impl BorshDeserialize for NullifierSet {
 pub struct V03State {
     public_state: HashMap<AccountId, Account>,
     private_state: (CommitmentSet, NullifierSet),
+    /// Deployed programs, stored as `Account`s keyed by `AccountId::from(program_id)` (see that
+    /// impl's doc comment) rather than by `ProgramId` directly, with the elf held in
+    /// `Account.data`. Kept as its own map rather than folded into `public_state`: nothing in
+    /// dispatch/execution reads or writes it, so it isn't part of the account-mutation surface
+    /// `program_owner`-based authorization governs — this is host-side bookkeeping only.
     programs: HashMap<AccountId, Account>,
 }
 
@@ -319,6 +324,8 @@ impl V03State {
         let mut accounts: Vec<(&AccountId, &Account)> = public_state.iter().collect();
         accounts.sort_by(|a, b| a.0.as_ref().cmp(b.0.as_ref()));
 
+        // `programs` is `Account`-shaped now, same as `public_state` — reuse the identical
+        // sort-then-hash-id-plus-encoded-account pattern rather than a bespoke `ProgramId` loop.
         let mut program_accounts: Vec<(&AccountId, &Account)> = programs.iter().collect();
         program_accounts.sort_by(|a, b| a.0.as_ref().cmp(b.0.as_ref()));
 
