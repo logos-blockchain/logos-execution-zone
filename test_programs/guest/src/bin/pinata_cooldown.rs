@@ -4,16 +4,18 @@
 //! After each prize claim the program records the current timestamp; the next claim is only
 //! allowed once a configurable cooldown period has elapsed.
 //!
-//! Expected pre-states (in order):
-//!   0 - pinata account (authorized, owned by this program)
-//!   1 - winner account
-//!   2 - clock account `CLOCK_01`.
-//!
 //! Pinata account data layout (24 bytes):
 //!   [prize: u64 LE | `cooldown_ms`: u64 LE | `last_claim_timestamp`: u64 LE].
 
 use clock_core::{CLOCK_01_PROGRAM_ACCOUNT_ID, ClockAccountData};
-use lee_core::program::{AccountPostState, Claim, ProgramInput, ProgramOutput, read_lee_inputs};
+use lee_core::{
+    account::AccountId,
+    program::{
+        AccountPostState, ChainedCall, PdaSeed, ProgramInput, ProgramOutput, read_lee_inputs,
+    },
+};
+
+const PRIZE_SEED: PdaSeed = PdaSeed::new([0; 32]);
 
 type Instruction = ();
 
@@ -56,12 +58,17 @@ fn main() {
         instruction_words,
     ) = read_lee_inputs::<Instruction>();
 
-    let Ok([pinata, winner, clock_pre]) = <[_; 3]>::try_from(pre_states) else {
-        panic!("Expected exactly 3 input accounts: pinata, winner, clock");
+    let Ok([pinata, prize_pda, winner, clock_pre]) = <[_; 4]>::try_from(pre_states) else {
+        panic!("Expected exactly 4 input accounts: pinata, prize_pda, winner, clock");
     };
 
     // Check the clock account is the system clock account
     assert_eq!(clock_pre.account_id, CLOCK_01_PROGRAM_ACCOUNT_ID);
+    assert_eq!(
+        prize_pda.account_id,
+        AccountId::for_public_pda(&self_program_id, &PRIZE_SEED),
+        "Second account must be the prize-pool PDA"
+    );
 
     let clock_data = ClockAccountData::from_bytes(&clock_pre.account.data.clone().into_inner());
     let current_timestamp = clock_data.timestamp;
@@ -77,16 +84,21 @@ fn main() {
     );
 
     let mut pinata_post = pinata.account.clone();
-    let mut winner_post = winner.account.clone();
+    let prize_pda_post = prize_pda.account.clone();
+    let winner_post = winner.account.clone();
+    let clock_post = clock_pre.account.clone();
 
-    pinata_post.balance = pinata_post
-        .balance
-        .checked_sub(pinata_state.prize)
-        .expect("Not enough balance in the pinata");
-    winner_post.balance = winner_post
-        .balance
-        .checked_add(pinata_state.prize)
-        .expect("Overflow when adding prize to winner");
+    let mut prize_authorized = prize_pda.clone();
+    prize_authorized.is_authorized = true;
+
+    let chained_call = ChainedCall::new(
+        prize_authorized.account.program_owner,
+        vec![prize_authorized, winner.clone()],
+        &authenticated_transfer_core::Instruction::Transfer {
+            amount: pinata_state.prize,
+        },
+    )
+    .with_pda_seeds(vec![PRIZE_SEED]);
 
     // Update the last claim timestamp.
     let updated_state = PinataState {
@@ -98,19 +110,18 @@ fn main() {
         .try_into()
         .expect("Pinata state should fit in account data");
 
-    // Clock account is read-only.
-    let clock_post = clock_pre.account.clone();
-
     ProgramOutput::new(
         self_program_id,
         caller_program_id,
         instruction_words,
-        vec![pinata, winner, clock_pre],
+        vec![pinata, prize_pda, winner, clock_pre],
         vec![
-            AccountPostState::new_claimed_if_default(pinata_post, Claim::Authorized),
+            AccountPostState::new(pinata_post),
+            AccountPostState::new(prize_pda_post),
             AccountPostState::new(winner_post),
             AccountPostState::new(clock_post),
         ],
     )
+    .with_chained_calls(vec![chained_call])
     .write();
 }
