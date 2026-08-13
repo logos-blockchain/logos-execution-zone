@@ -12,15 +12,25 @@ use crate::{
 
 pub const DEFAULT_PROGRAM_ID: ProgramId = [0; 8];
 
-/// TODO: Placeholder `program_owner` for uninitialized `Account`.
+/// Sentinel `AccountId` meaning "no program has claimed this account yet".
+///
+/// The `AccountId`-typed counterpart to `DEFAULT_PROGRAM_ID`, used wherever
+/// `Account.program_owner` (which is `AccountId`-typed) needs to be compared against or set to
+/// the unclaimed state. Kept as a distinct, named constant rather than an inline
+/// `AccountId::default()` at each comparison site, for the same readability reason
+/// `DEFAULT_PROGRAM_ID` itself exists.
 pub const DEFAULT_PROGRAM_OWNER: AccountId = AccountId::new([0; 32]);
 
 pub const MAX_NUMBER_CHAINED_CALLS: usize = 10;
 
 pub type ProgramId = [u32; 8];
 
-/// FIXME: This is a temporary conversion; will be removed once `Program` to `Account`
-/// migration is complete.
+/// Derives the `AccountId` under which a program's data is stored, directly from its
+/// `ProgramId`, by reinterpreting the 8 little-endian `u32` words as 32 raw bytes.
+///
+/// A 1:1, information-preserving mapping (both types are exactly 32 bytes) rather than a
+/// hash — `ProgramId` is already content-derived (RISC0's `image_id`), so no extra domain
+/// separation is needed just to use it as a `HashMap<AccountId, Account>` key.
 impl From<ProgramId> for AccountId {
     fn from(program_id: ProgramId) -> Self {
         let bytes: Vec<u8> = program_id
@@ -31,6 +41,14 @@ impl From<ProgramId> for AccountId {
     }
 }
 
+/// The inverse of `From<ProgramId> for AccountId`: splits the 32 bytes back into 8
+/// little-endian `u32` words.
+///
+/// Valid because the forward conversion is a pure reinterpretation, not a hash — every
+/// `AccountId` currently stored in `Account.program_owner` was itself produced by that
+/// conversion, so recovering the originating `ProgramId` is always meaning-preserving
+/// here. This is *not* a general "which program owns this account" lookup; it only makes
+/// sense for `AccountId`s known to have come from a `ProgramId` in the first place.
 impl From<AccountId> for ProgramId {
     fn from(account_id: AccountId) -> Self {
         let mut program_id = [0_u32; 8];
