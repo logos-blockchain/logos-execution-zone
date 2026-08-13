@@ -33,7 +33,7 @@ impl AccountForTests {
     fn definition_account_auth() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [5_u32; 8],
+                program_owner: [5_u32; 8].into(),
                 balance: 0_u128,
                 data: Data::from(&TokenDefinition::Fungible {
                     name: String::from("test"),
@@ -50,7 +50,7 @@ impl AccountForTests {
     fn definition_account_without_auth() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [5_u32; 8],
+                program_owner: [5_u32; 8].into(),
                 balance: 0_u128,
                 data: Data::from(&TokenDefinition::Fungible {
                     name: String::from("test"),
@@ -67,7 +67,7 @@ impl AccountForTests {
     fn holding_different_definition() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [5_u32; 8],
+                program_owner: [5_u32; 8].into(),
                 balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::pool_definition_id_diff(),
@@ -83,7 +83,7 @@ impl AccountForTests {
     fn holding_same_definition_with_authorization() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [5_u32; 8],
+                program_owner: [5_u32; 8].into(),
                 balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::pool_definition_id(),
@@ -99,7 +99,7 @@ impl AccountForTests {
     fn holding_same_definition_without_authorization() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [5_u32; 8],
+                program_owner: [5_u32; 8].into(),
                 balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::pool_definition_id(),
@@ -115,7 +115,7 @@ impl AccountForTests {
     fn holding_same_definition_without_authorization_overflow() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [5_u32; 8],
+                program_owner: [5_u32; 8].into(),
                 balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::pool_definition_id(),
@@ -131,7 +131,7 @@ impl AccountForTests {
     fn definition_account_post_burn() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [5_u32; 8],
+                program_owner: [5_u32; 8].into(),
                 balance: 0_u128,
                 data: Data::from(&TokenDefinition::Fungible {
                     name: String::from("test"),
@@ -148,7 +148,7 @@ impl AccountForTests {
     fn holding_account_post_burn() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [5_u32; 8],
+                program_owner: [5_u32; 8].into(),
                 balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::pool_definition_id(),
@@ -172,7 +172,7 @@ impl AccountForTests {
     fn init_mint() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [0_u32; 8],
+                program_owner: [0_u32; 8].into(),
                 balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::pool_definition_id(),
@@ -188,7 +188,7 @@ impl AccountForTests {
     fn holding_account_same_definition_mint() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [5_u32; 8],
+                program_owner: [5_u32; 8].into(),
                 balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::pool_definition_id(),
@@ -204,7 +204,7 @@ impl AccountForTests {
     fn definition_account_mint() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [5_u32; 8],
+                program_owner: [5_u32; 8].into(),
                 balance: 0_u128,
                 data: Data::from(&TokenDefinition::Fungible {
                     name: String::from("test"),
@@ -221,7 +221,7 @@ impl AccountForTests {
     fn holding_same_definition_with_authorization_and_large_balance() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [5_u32; 8],
+                program_owner: [5_u32; 8].into(),
                 balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::pool_definition_id(),
@@ -237,7 +237,7 @@ impl AccountForTests {
     fn definition_account_with_authorization_nonfungible() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [5_u32; 8],
+                program_owner: [5_u32; 8].into(),
                 balance: 0_u128,
                 data: Data::from(&TokenDefinition::NonFungible {
                     name: String::from("test"),
@@ -262,7 +262,7 @@ impl AccountForTests {
     fn holding_account_init() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [5_u32; 8],
+                program_owner: [5_u32; 8].into(),
                 balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::pool_definition_id(),
@@ -278,7 +278,7 @@ impl AccountForTests {
     fn definition_account_unclaimed() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [0_u32; 8],
+                program_owner: [0_u32; 8].into(),
                 balance: 0_u128,
                 data: Data::from(&TokenDefinition::Fungible {
                     name: String::from("test"),
@@ -295,7 +295,7 @@ impl AccountForTests {
     fn holding_account_unclaimed() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [0_u32; 8],
+                program_owner: [0_u32; 8].into(),
                 balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::pool_definition_id(),
@@ -311,7 +311,7 @@ impl AccountForTests {
     fn holding_account2_init() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [5_u32; 8],
+                program_owner: [5_u32; 8].into(),
                 balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::pool_definition_id(),
@@ -327,7 +327,7 @@ impl AccountForTests {
     fn holding_account2_init_post_transfer() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [5_u32; 8],
+                program_owner: [5_u32; 8].into(),
                 balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::pool_definition_id(),
@@ -343,7 +343,7 @@ impl AccountForTests {
     fn holding_account_init_post_transfer() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [5_u32; 8],
+                program_owner: [5_u32; 8].into(),
                 balance: 0_u128,
                 data: Data::from(&TokenHolding::Fungible {
                     definition_id: IdForTests::pool_definition_id(),
@@ -359,7 +359,7 @@ impl AccountForTests {
     fn holding_account_master_nft() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [5_u32; 8],
+                program_owner: [5_u32; 8].into(),
                 balance: 0_u128,
                 data: Data::from(&TokenHolding::NftMaster {
                     definition_id: IdForTests::pool_definition_id(),
@@ -375,7 +375,7 @@ impl AccountForTests {
     fn holding_account_master_nft_insufficient_balance() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [5_u32; 8],
+                program_owner: [5_u32; 8].into(),
                 balance: 0_u128,
                 data: Data::from(&TokenHolding::NftMaster {
                     definition_id: IdForTests::pool_definition_id(),
@@ -391,7 +391,7 @@ impl AccountForTests {
     fn holding_account_master_nft_after_print() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [5_u32; 8],
+                program_owner: [5_u32; 8].into(),
                 balance: 0_u128,
                 data: Data::from(&TokenHolding::NftMaster {
                     definition_id: IdForTests::pool_definition_id(),
@@ -407,7 +407,7 @@ impl AccountForTests {
     fn holding_account_printed_nft() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [0_u32; 8],
+                program_owner: [0_u32; 8].into(),
                 balance: 0_u128,
                 data: Data::from(&TokenHolding::NftPrintedCopy {
                     definition_id: IdForTests::pool_definition_id(),
@@ -423,7 +423,7 @@ impl AccountForTests {
     fn holding_account_with_master_nft_transferred_to() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [0_u32; 8],
+                program_owner: [0_u32; 8].into(),
                 balance: 0_u128,
                 data: Data::from(&TokenHolding::NftMaster {
                     definition_id: IdForTests::pool_definition_id(),
@@ -439,7 +439,7 @@ impl AccountForTests {
     fn holding_account_master_nft_post_transfer() -> AccountWithMetadata {
         AccountWithMetadata {
             account: Account {
-                program_owner: [5_u32; 8],
+                program_owner: [5_u32; 8].into(),
                 balance: 0_u128,
                 data: Data::from(&TokenHolding::NftMaster {
                     definition_id: IdForTests::pool_definition_id(),
@@ -534,7 +534,7 @@ impl IdForTests {
 fn new_definition_non_default_first_account_should_fail() {
     let definition_account = AccountWithMetadata {
         account: Account {
-            program_owner: [1, 2, 3, 4, 5, 6, 7, 8],
+            program_owner: [1, 2, 3, 4, 5, 6, 7, 8].into(),
             ..Account::default()
         },
         is_authorized: true,
@@ -563,7 +563,7 @@ fn new_definition_non_default_second_account_should_fail() {
     };
     let holding_account = AccountWithMetadata {
         account: Account {
-            program_owner: [1, 2, 3, 4, 5, 6, 7, 8],
+            program_owner: [1, 2, 3, 4, 5, 6, 7, 8].into(),
             ..Account::default()
         },
         is_authorized: true,

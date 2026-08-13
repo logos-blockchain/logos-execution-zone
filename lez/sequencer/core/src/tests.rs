@@ -1530,7 +1530,7 @@ async fn block_production_aborts_when_clock_account_data_is_corrupted() {
 //         0,
 //     );
 //     let sender_private_account = Account {
-//         program_owner: programs::authenticated_transfer().id(),
+//         program_owner: programs::authenticated_transfer().id().into(),
 //         balance: 100,
 //         nonce: Nonce(0xdead_beef),
 //         data: Data::default(),
@@ -1657,7 +1657,7 @@ fn time_locked_transfer_succeeds_when_deadline_has_passed() {
     state.force_insert_account(
         recipient_id,
         Account {
-            program_owner: programs::authenticated_transfer().id(),
+            program_owner: programs::authenticated_transfer().id().into(),
             ..Account::default()
         },
     );
@@ -1667,7 +1667,7 @@ fn time_locked_transfer_succeeds_when_deadline_has_passed() {
     state.force_insert_account(
         sender_id,
         Account {
-            program_owner: test_programs::time_locked_transfer().id(),
+            program_owner: test_programs::time_locked_transfer().id().into(),
             balance: 100,
             ..Account::default()
         },
@@ -1706,7 +1706,7 @@ fn time_locked_transfer_fails_when_deadline_is_in_the_future() {
     state.force_insert_account(
         recipient_id,
         Account {
-            program_owner: programs::authenticated_transfer().id(),
+            program_owner: programs::authenticated_transfer().id().into(),
             ..Account::default()
         },
     );
@@ -1716,7 +1716,7 @@ fn time_locked_transfer_fails_when_deadline_is_in_the_future() {
     state.force_insert_account(
         sender_id,
         Account {
-            program_owner: test_programs::time_locked_transfer().id(),
+            program_owner: test_programs::time_locked_transfer().id().into(),
             balance: 100,
             ..Account::default()
         },
@@ -1791,14 +1791,14 @@ fn pinata_cooldown_claim_succeeds_after_cooldown() {
     state.force_insert_account(
         winner_id,
         Account {
-            program_owner: programs::authenticated_transfer().id(),
+            program_owner: programs::authenticated_transfer().id().into(),
             ..Account::default()
         },
     );
     state.force_insert_account(
         pinata_id,
         Account {
-            program_owner: test_programs::pinata_cooldown().id(),
+            program_owner: test_programs::pinata_cooldown().id().into(),
             balance: 1000,
             data: pinata_cooldown_data(prize, cooldown_ms, last_claim_timestamp)
                 .try_into()
@@ -1838,14 +1838,14 @@ fn pinata_cooldown_claim_fails_during_cooldown() {
     state.force_insert_account(
         winner_id,
         Account {
-            program_owner: programs::authenticated_transfer().id(),
+            program_owner: programs::authenticated_transfer().id().into(),
             ..Account::default()
         },
     );
     state.force_insert_account(
         pinata_id,
         Account {
-            program_owner: test_programs::pinata_cooldown().id(),
+            program_owner: test_programs::pinata_cooldown().id().into(),
             balance: 1000,
             data: pinata_cooldown_data(prize, cooldown_ms, last_claim_timestamp)
                 .try_into()
@@ -1884,7 +1884,7 @@ fn pda_mechanism_with_pinata_token_program() {
         balance: 150,
     };
     let expected_winner_token_holding_post = Account {
-        program_owner: token.id(),
+        program_owner: token.id().into(),
         data: Data::from(&expected_winner_account_holding),
         ..Account::default()
     };
@@ -1895,7 +1895,7 @@ fn pda_mechanism_with_pinata_token_program() {
     state.force_insert_account(
         pinata_definition_id,
         Account {
-            program_owner: pinata_token.id(),
+            program_owner: pinata_token.id().into(),
             // Difficulty: 3
             data: vec![3; 33].try_into().unwrap(),
             ..Account::default()
@@ -1922,7 +1922,7 @@ fn pda_mechanism_with_pinata_token_program() {
     state.force_insert_account(
         pinata_token_definition_id,
         Account {
-            program_owner: token.id(),
+            program_owner: token.id().into(),
             data: Data::from(&token_definition),
             ..Account::default()
         },
@@ -1930,7 +1930,7 @@ fn pda_mechanism_with_pinata_token_program() {
     state.force_insert_account(
         pinata_token_holding_id,
         Account {
-            program_owner: token.id(),
+            program_owner: token.id().into(),
             data: Data::from(&token_holding),
             ..Account::default()
         },
@@ -1938,7 +1938,7 @@ fn pda_mechanism_with_pinata_token_program() {
     state.force_insert_account(
         winner_token_holding_id,
         Account {
-            program_owner: token.id(),
+            program_owner: token.id().into(),
             data: Data::from(&winner_holding),
             ..Account::default()
         },

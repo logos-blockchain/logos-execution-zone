@@ -8,7 +8,7 @@ use lee_core::{
     account::{Account, AccountId, AccountWithMetadata},
     encryption::ViewingPublicKey,
     program::{
-        AccountPostState, BlockValidityWindow, ChainedCall, Claim, DEFAULT_PROGRAM_ID,
+        AccountPostState, BlockValidityWindow, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER,
         MAX_NUMBER_CHAINED_CALLS, PdaSeed, ProgramId, ProgramOutput, TimestampValidityWindow,
         validate_execution,
     },
@@ -225,7 +225,7 @@ impl ExecutionState {
         for (account_id, post) in execution_state
             .pre_states
             .iter()
-            .filter(|a| a.account.program_owner == DEFAULT_PROGRAM_ID)
+            .filter(|a| a.account.program_owner == DEFAULT_PROGRAM_OWNER)
             .map(|a| {
                 let post = execution_state
                     .post_states
@@ -237,7 +237,7 @@ impl ExecutionState {
             .map(|(pre, post)| (pre.account_id, post))
         {
             assert_ne!(
-                post.program_owner, DEFAULT_PROGRAM_ID,
+                post.program_owner, DEFAULT_PROGRAM_OWNER,
                 "Account {account_id} was modified but not claimed"
             );
         }
@@ -365,7 +365,7 @@ impl ExecutionState {
                 // The invoked program can only claim accounts with default program id.
                 assert_eq!(
                     post.account().program_owner,
-                    DEFAULT_PROGRAM_ID,
+                    DEFAULT_PROGRAM_OWNER,
                     "Cannot claim an initialized account {pre_account_id}"
                 );
 
@@ -439,7 +439,7 @@ impl ExecutionState {
                     }
                 }
 
-                post.account_mut().program_owner = program_id;
+                post.account_mut().program_owner = AccountId::from(program_id);
             }
 
             post_states_entry.insert_entry(post.into_account());

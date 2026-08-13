@@ -13,12 +13,12 @@ fn flash_swap_successful() {
     let amount_out: u128 = 100;
 
     let vault_account = Account {
-        program_owner: token.id(),
+        program_owner: token.id().into(),
         balance: initial_balance,
         ..Account::default()
     };
     let receiver_account = Account {
-        program_owner: token.id(),
+        program_owner: token.id().into(),
         balance: 0,
         ..Account::default()
     };
@@ -64,12 +64,12 @@ fn flash_swap_callback_keeps_funds_rollback() {
     let amount_out: u128 = 100;
 
     let vault_account = Account {
-        program_owner: token.id(),
+        program_owner: token.id().into(),
         balance: initial_balance,
         ..Account::default()
     };
     let receiver_account = Account {
-        program_owner: token.id(),
+        program_owner: token.id().into(),
         balance: 0,
         ..Account::default()
     };
@@ -121,12 +121,12 @@ fn flash_swap_self_call_targets_correct_program() {
     let initial_balance: u128 = 1000;
 
     let vault_account = Account {
-        program_owner: token.id(),
+        program_owner: token.id().into(),
         balance: initial_balance,
         ..Account::default()
     };
     let receiver_account = Account {
-        program_owner: token.id(),
+        program_owner: token.id().into(),
         balance: 0,
         ..Account::default()
     };
@@ -167,7 +167,7 @@ fn flash_swap_standalone_invariant_check_rejected() {
     let vault_id = AccountId::for_public_pda(&initiator.id(), &PdaSeed::new([0_u8; 32]));
 
     let vault_account = Account {
-        program_owner: token.id(),
+        program_owner: token.id().into(),
         balance: 1000,
         ..Account::default()
     };

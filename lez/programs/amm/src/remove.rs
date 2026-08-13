@@ -113,7 +113,8 @@ pub fn remove_liquidity(
 
     pool_post.data = Data::from(&pool_post_definition);
 
-    let token_program_id = user_holding_a.account.program_owner;
+    let token_program_id: lee_core::program::ProgramId =
+        user_holding_a.account.program_owner.into();
 
     // Chaincall for Token A withdraw
     let call_token_a = ChainedCall::new(

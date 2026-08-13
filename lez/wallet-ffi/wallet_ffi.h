@@ -180,13 +180,6 @@ typedef struct FfiAccountList {
 } FfiAccountList;
 
 /**
- * Program ID - 8 u32 values (32 bytes total).
- */
-typedef struct FfiProgramId {
-  uint32_t data[8];
-} FfiProgramId;
-
-/**
  * U128 - 16 bytes little endian.
  */
 typedef struct FfiU128 {
@@ -200,7 +193,7 @@ typedef struct FfiU128 {
  * byte arrays since C doesn't have native u128 support.
  */
 typedef struct FfiAccount {
-  struct FfiProgramId program_owner;
+  struct FfiBytes32 program_owner;
   /**
    * Balance as little-endian [u8; 16].
    */
@@ -256,6 +249,13 @@ typedef struct FfiAccountIdentity {
   uintptr_t viewing_public_key_len;
   struct FfiU128 identifier;
 } FfiAccountIdentity;
+
+/**
+ * Program ID - 8 u32 values (32 bytes total).
+ */
+typedef struct FfiProgramId {
+  uint32_t data[8];
+} FfiProgramId;
 
 /**
  * Result of a generic transaction operation.

@@ -111,7 +111,8 @@ pub fn new_definition(
     let pool_pda_seed = compute_pool_pda_seed(definition_token_a_id, definition_token_b_id);
     let pool_post = AccountPostState::new_claimed_if_default(pool_post, Claim::Pda(pool_pda_seed));
 
-    let token_program_id = user_holding_a.account.program_owner;
+    let token_program_id: lee_core::program::ProgramId =
+        user_holding_a.account.program_owner.into();
 
     // Chain call for Token A (user_holding_a -> Vault_A)
     let vault_a_seed = compute_vault_pda_seed(pool.account_id, definition_token_a_id);

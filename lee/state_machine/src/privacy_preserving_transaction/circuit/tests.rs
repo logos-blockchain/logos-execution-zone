@@ -50,7 +50,7 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_pre_accounts() 
     let program = crate::test_methods::simple_balance_transfer();
     let sender = AccountWithMetadata::new(
         Account {
-            program_owner: program.id(),
+            program_owner: program.id().into(),
             balance: 100,
             ..Account::default()
         },
@@ -65,14 +65,14 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_pre_accounts() 
     let balance_to_move: u128 = 37;
 
     let expected_sender_post = Account {
-        program_owner: program.id(),
+        program_owner: program.id().into(),
         balance: 100 - balance_to_move,
         nonce: Nonce::default(),
         data: Data::default(),
     };
 
     let expected_recipient_post = Account {
-        program_owner: program.id(),
+        program_owner: program.id().into(),
         balance: balance_to_move,
         nonce: Nonce::private_account_nonce_init(&recipient_account_id),
         data: Data::default(),
@@ -134,7 +134,7 @@ fn prove_privacy_preserving_execution_circuit_fully_private() {
         Account {
             balance: 100,
             nonce: sender_nonce,
-            program_owner: program.id(),
+            program_owner: program.id().into(),
             data: Data::default(),
         },
         true,
@@ -165,13 +165,13 @@ fn prove_privacy_preserving_execution_circuit_fully_private() {
     let program = crate::test_methods::simple_balance_transfer();
 
     let expected_private_account_1 = Account {
-        program_owner: program.id(),
+        program_owner: program.id().into(),
         balance: 100 - balance_to_move,
         nonce: sender_nonce.private_account_nonce_increment(&sender_keys.nsk()),
         ..Default::default()
     };
     let expected_private_account_2 = Account {
-        program_owner: program.id(),
+        program_owner: program.id().into(),
         balance: balance_to_move,
         nonce: Nonce::private_account_nonce_init(&recipient_account_id),
         ..Default::default()
@@ -317,7 +317,7 @@ fn update_note_view_tag_is_the_supplied_value() {
     let identifier: u128 = 99;
     let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
     let account = Account {
-        program_owner: program.id(),
+        program_owner: program.id().into(),
         balance: 1,
         ..Account::default()
     };
@@ -508,7 +508,7 @@ fn private_pda_withdraw() {
     let recipient_id = AccountId::new([88; 32]);
     let recipient_pre = AccountWithMetadata::new(
         Account {
-            program_owner: simple_transfer.id(),
+            program_owner: simple_transfer.id().into(),
             balance: 10000,
             ..Account::default()
         },
@@ -562,7 +562,7 @@ fn shared_account_receives_via_simple_transfer() {
     let sender_id = AccountId::new([99; 32]);
     let sender = AccountWithMetadata::new(
         Account {
-            program_owner: program.id(),
+            program_owner: program.id().into(),
             balance: 1000,
             ..Account::default()
         },
@@ -702,7 +702,7 @@ fn private_authorized_update_encrypts_regular_kind_with_identifier() {
     );
     let ssk = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &esk).0;
     let account = Account {
-        program_owner: program.id(),
+        program_owner: program.id().into(),
         balance: 1,
         ..Account::default()
     };
@@ -747,7 +747,7 @@ fn seeded_regular_account(
 ) -> (AccountId, AccountWithMetadata, lee_core::MembershipProof) {
     let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
     let account = Account {
-        program_owner: program.id(),
+        program_owner: program.id().into(),
         balance: 1,
         ..Account::default()
     };
@@ -916,7 +916,7 @@ fn unauthorized_private_init_can_be_claimed() {
         &output.private_actions[0].nullifier,
     )
     .unwrap();
-    assert_eq!(claimed.program_owner, program_id);
+    assert_eq!(claimed.program_owner, program_id.into());
 }
 
 /// A program that asserts authorization over its pre-states rejects a regular private account
@@ -966,7 +966,7 @@ fn private_pda_update_encrypts_pda_kind_with_identifier() {
     );
     let ssk = SharedSecretKey::encapsulate_deterministic(&keys.vpk(), &esk).0;
     let pda_account = Account {
-        program_owner: simple_transfer_id,
+        program_owner: simple_transfer_id.into(),
         balance: 1,
         ..Account::default()
     };
@@ -1051,7 +1051,7 @@ fn private_pda_update_identifier_mismatch_fails() {
     let simple_transfer_id = simple_transfer.id();
     let pda_id = AccountId::for_private_pda(&program.id(), &seed, &npk, &keys.vpk(), 5);
     let pda_account = Account {
-        program_owner: simple_transfer_id,
+        program_owner: simple_transfer_id.into(),
         balance: 1,
         ..Account::default()
     };

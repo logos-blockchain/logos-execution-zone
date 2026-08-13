@@ -60,9 +60,10 @@ fn main() {
     }
 
     // Verify all clock accounts are owned by this program (assigned at genesis).
-    if pre_01.account.program_owner != self_program_id
-        || pre_10.account.program_owner != self_program_id
-        || pre_50.account.program_owner != self_program_id
+    let self_account_id: lee_core::account::AccountId = self_program_id.into();
+    if pre_01.account.program_owner != self_account_id
+        || pre_10.account.program_owner != self_account_id
+        || pre_50.account.program_owner != self_account_id
     {
         panic!("Clock accounts must be owned by the clock program");
     }

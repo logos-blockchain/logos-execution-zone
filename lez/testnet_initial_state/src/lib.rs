@@ -4,6 +4,7 @@ use key_protocol::key_management::{
     KeyChain, key_tree::chain_index::ChainIndex, secret_holders::SecretSpendingKey,
 };
 use lee::{Account, AccountId, Data, PrivateKey, PublicKey, V03State, program::Program};
+use lee_core::program::DEFAULT_PROGRAM_OWNER;
 use serde::{Deserialize, Serialize};
 
 const PRIVATE_KEY_PUB_ACC_A: [u8; 32] = [
@@ -25,8 +26,6 @@ const SSK_PRIV_ACC_B: [u8; 32] = [
     48, 175, 124, 10, 230, 240, 166, 14, 249, 254, 157, 226, 208, 124, 122, 177, 203, 139, 192,
     180, 43, 120, 55, 151, 50, 21, 113, 22, 254, 83, 148, 56,
 ];
-
-const DEFAULT_PROGRAM_OWNER: [u32; 8] = [0, 0, 0, 0, 0, 0, 0, 0];
 
 const PUB_ACC_A_INITIAL_BALANCE: u128 = 10000;
 const PUB_ACC_B_INITIAL_BALANCE: u128 = 20000;
@@ -155,7 +154,7 @@ fn initial_private_accounts() -> Vec<(lee_core::Commitment, lee_core::Nullifier)
 
             let mut acc = init_comm_data.account.clone();
 
-            acc.program_owner = programs::authenticated_transfer().id();
+            acc.program_owner = programs::authenticated_transfer().id().into();
 
             (
                 lee_core::Commitment::new(&account_id, &acc),
@@ -191,7 +190,7 @@ fn initial_public_accounts() -> HashMap<AccountId, Account> {
             (
                 acc_data.account_id,
                 Account {
-                    program_owner: programs::authenticated_transfer().id(),
+                    program_owner: programs::authenticated_transfer().id().into(),
                     balance: acc_data.balance,
                     ..Default::default()
                 },
