@@ -1846,13 +1846,14 @@ fn pinata_cooldown_data(prize: u128, cooldown_ms: u64, last_claim_timestamp: u64
 
 fn pinata_cooldown_transaction(
     pinata_id: AccountId,
+    prize_pda_id: AccountId,
     winner_id: AccountId,
     clock_account_id: AccountId,
 ) -> PublicTransaction {
     let program_id = test_programs::pinata_cooldown().id();
     let message = lee::public_transaction::Message::try_new(
         program_id,
-        vec![pinata_id, winner_id, clock_account_id],
+        vec![pinata_id, prize_pda_id, winner_id, clock_account_id],
         vec![],
         (),
     )
@@ -1876,6 +1877,11 @@ fn pinata_cooldown_claim_succeeds_after_cooldown() {
     let block_timestamp = genesis_timestamp + cooldown_ms;
     let mut state = state_with_clock_and_program(test_programs::pinata_cooldown(), block_timestamp);
 
+    let prize_pda_id = AccountId::for_public_pda(
+        &test_programs::pinata_cooldown().id(),
+        &PdaSeed::new([0; 32]),
+    );
+
     // The winner must be a non-default account so the program may credit it without claiming.
     state.force_insert_account(
         winner_id,
@@ -1885,10 +1891,17 @@ fn pinata_cooldown_claim_succeeds_after_cooldown() {
         },
     );
     state.force_insert_account(
+        prize_pda_id,
+        Account {
+            program_owner: programs::authenticated_transfer().id().into(),
+            balance: 1000,
+            ..Account::default()
+        },
+    );
+    state.force_insert_account(
         pinata_id,
         Account {
             program_owner: test_programs::pinata_cooldown().id().into(),
-            balance: 1000,
             data: pinata_cooldown_data(prize, cooldown_ms, last_claim_timestamp)
                 .try_into()
                 .unwrap(),
@@ -1898,6 +1911,7 @@ fn pinata_cooldown_claim_succeeds_after_cooldown() {
 
     let tx = pinata_cooldown_transaction(
         pinata_id,
+        prize_pda_id,
         winner_id,
         system_accounts::clock_account_ids()[0],
     );
@@ -1906,7 +1920,7 @@ fn pinata_cooldown_claim_succeeds_after_cooldown() {
         .transition_from_public_transaction(&tx, 2, block_timestamp)
         .unwrap();
 
-    assert_eq!(state.get_account_by_id(pinata_id).balance, 1000 - prize);
+    assert_eq!(state.get_account_by_id(prize_pda_id).balance, 1000 - prize);
     assert_eq!(state.get_account_by_id(winner_id).balance, prize);
 }
 
@@ -1924,6 +1938,11 @@ fn pinata_cooldown_claim_fails_during_cooldown() {
     let block_timestamp = genesis_timestamp + 100;
     let mut state = state_with_clock_and_program(test_programs::pinata_cooldown(), block_timestamp);
 
+    let prize_pda_id = AccountId::for_public_pda(
+        &test_programs::pinata_cooldown().id(),
+        &PdaSeed::new([0; 32]),
+    );
+
     state.force_insert_account(
         winner_id,
         Account {
@@ -1932,10 +1951,17 @@ fn pinata_cooldown_claim_fails_during_cooldown() {
         },
     );
     state.force_insert_account(
+        prize_pda_id,
+        Account {
+            program_owner: programs::authenticated_transfer().id().into(),
+            balance: 1000,
+            ..Account::default()
+        },
+    );
+    state.force_insert_account(
         pinata_id,
         Account {
             program_owner: test_programs::pinata_cooldown().id().into(),
-            balance: 1000,
             data: pinata_cooldown_data(prize, cooldown_ms, last_claim_timestamp)
                 .try_into()
                 .unwrap(),
@@ -1945,6 +1971,7 @@ fn pinata_cooldown_claim_fails_during_cooldown() {
 
     let tx = pinata_cooldown_transaction(
         pinata_id,
+        prize_pda_id,
         winner_id,
         system_accounts::clock_account_ids()[0],
     );
@@ -1952,7 +1979,7 @@ fn pinata_cooldown_claim_fails_during_cooldown() {
     let result = state.transition_from_public_transaction(&tx, 2, block_timestamp);
 
     assert!(result.is_err(), "Claim should fail during cooldown period");
-    assert_eq!(state.get_account_by_id(pinata_id).balance, 1000);
+    assert_eq!(state.get_account_by_id(prize_pda_id).balance, 1000);
     assert_eq!(state.get_account_by_id(winner_id).balance, 0);
 }
 
