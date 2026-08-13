@@ -749,6 +749,10 @@ pub fn validate_execution(
     post_states: &[AccountPostState],
     executing_account_id: AccountId,
 ) -> Result<(), ExecutionValidationError> {
+    // `program_owner` is `AccountId`-typed; convert once up front rather than at each
+    // comparison below (see `From<ProgramId> for AccountId`'s doc comment).
+    let executing_account_id = AccountId::from(executing_program_id);
+
     // 1. Check account ids are all different
     if !validate_uniqueness_of_account_ids(pre_states) {
         return Err(ExecutionValidationError::PreStateAccountIdsNotUnique);
