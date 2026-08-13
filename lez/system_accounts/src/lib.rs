@@ -24,6 +24,20 @@ pub fn pinata_account() -> Account {
 }
 
 #[must_use]
+pub fn pinata_prize_account_id() -> AccountId {
+    pinata_core::compute_pinata_prize_account_id(programs::pinata().id())
+}
+
+#[must_use]
+pub fn pinata_prize_account() -> Account {
+    Account {
+        program_owner: programs::authenticated_transfer().id(),
+        balance: 1_500_000,
+        ..Account::default()
+    }
+}
+
+#[must_use]
 pub fn faucet_account_id() -> AccountId {
     faucet_core::compute_faucet_account_id(programs::faucet().id())
 }

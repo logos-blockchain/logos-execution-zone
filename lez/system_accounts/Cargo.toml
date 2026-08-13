@@ -11,5 +11,6 @@ workspace = true
 lee_core.workspace = true
 faucet_core.workspace = true
 bridge_core.workspace = true
+pinata_core.workspace = true
 clock_core.workspace = true
 programs.workspace = true
