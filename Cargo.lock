@@ -7692,7 +7692,9 @@ dependencies = [
 name = "pinata_program"
 version = "0.1.0"
 dependencies = [
+ "authenticated_transfer_core",
  "lee_core",
+ "pinata_core",
  "risc0-zkvm",
 ]
 

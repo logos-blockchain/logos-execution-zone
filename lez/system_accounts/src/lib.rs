@@ -16,7 +16,7 @@ pub fn pinata_account_id() -> AccountId {
 pub fn pinata_account() -> Account {
     Account {
         program_owner: programs::pinata().id(),
-        balance: 1_500_000,
+        balance: 0,
         // Difficulty: 3
         data: vec![3; 33].try_into().expect("Should fit"),
         nonce: Nonce::default(),

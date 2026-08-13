@@ -21,6 +21,7 @@ impl Pinata<'_> {
             .send_pub_tx(
                 vec![
                     AccountIdentity::PublicNoSign(pinata_account_id),
+                    AccountIdentity::PublicNoSign(system_accounts::pinata_prize_account_id()),
                     AccountIdentity::PublicNoSign(winner_account_id),
                 ],
                 instruction_data,
@@ -55,6 +56,7 @@ impl Pinata<'_> {
             .send_privacy_preserving_tx(
                 vec![
                     AccountIdentity::Public(pinata_account_id),
+                    AccountIdentity::Public(system_accounts::pinata_prize_account_id()),
                     self.0
                         .resolve_private_account(winner_account_id)
                         .ok_or(ExecutionFailureKind::KeyNotFoundError)?,
