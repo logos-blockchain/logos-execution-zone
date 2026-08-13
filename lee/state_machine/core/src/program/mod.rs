@@ -12,13 +12,7 @@ use crate::{
 
 pub const DEFAULT_PROGRAM_ID: ProgramId = [0; 8];
 
-/// Sentinel `AccountId` meaning "no program has claimed this account yet".
-///
-/// The `AccountId`-typed counterpart to `DEFAULT_PROGRAM_ID`, used wherever
-/// `Account.program_owner` (which is `AccountId`-typed) needs to be compared against or set to
-/// the unclaimed state. Kept as a distinct, named constant rather than an inline
-/// `AccountId::default()` at each comparison site, for the same readability reason
-/// `DEFAULT_PROGRAM_ID` itself exists.
+/// TODO: Placeholder `program_owner` for uninitialized `Account`.
 pub const DEFAULT_PROGRAM_OWNER: AccountId = AccountId::new([0; 32]);
 
 pub const MAX_NUMBER_CHAINED_CALLS: usize = 10;
@@ -41,14 +35,6 @@ impl From<ProgramId> for AccountId {
     }
 }
 
-/// The inverse of `From<ProgramId> for AccountId`: splits the 32 bytes back into 8
-/// little-endian `u32` words.
-///
-/// Valid because the forward conversion is a pure reinterpretation, not a hash — every
-/// `AccountId` currently stored in `Account.program_owner` was itself produced by that
-/// conversion, so recovering the originating `ProgramId` is always meaning-preserving
-/// here. This is *not* a general "which program owns this account" lookup; it only makes
-/// sense for `AccountId`s known to have come from a `ProgramId` in the first place.
 impl From<AccountId> for ProgramId {
     fn from(account_id: AccountId) -> Self {
         let mut program_id = [0_u32; 8];
