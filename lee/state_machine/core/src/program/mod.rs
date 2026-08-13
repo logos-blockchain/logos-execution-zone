@@ -31,12 +31,8 @@ pub const MAX_NUMBER_CHAINED_CALLS: usize = 10;
 
 pub type ProgramId = [u32; 8];
 
-/// Derives the `AccountId` under which a program's data is stored, directly from its
-/// `ProgramId`, by reinterpreting the 8 little-endian `u32` words as 32 raw bytes.
-///
-/// A 1:1, information-preserving mapping (both types are exactly 32 bytes) rather than a
-/// hash — `ProgramId` is already content-derived (RISC0's `image_id`), so no extra domain
-/// separation is needed just to use it as a `HashMap<AccountId, Account>` key.
+/// TODO: This is a temporary conversion; will be removed once `Program` to `Account`
+/// migration is complete.
 impl From<ProgramId> for AccountId {
     fn from(program_id: ProgramId) -> Self {
         let bytes: Vec<u8> = program_id
