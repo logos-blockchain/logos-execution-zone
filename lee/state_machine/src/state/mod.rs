@@ -112,10 +112,6 @@ impl BorshDeserialize for NullifierSet {
 #[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(test, derive(Debug))]
 pub struct V03State {
-    /// Deployed programs live here too, as `Account`s keyed by `AccountId::from(program_id)`
-    /// (see that impl's doc comment), with the elf held in `Account.data` and `program_owner`
-    /// set to the reserved `PROGRAM_STORAGE_OWNER` (see its doc comment for why that ownership
-    /// choice is load-bearing now that these accounts are reachable via ordinary dispatch).
     public_state: HashMap<AccountId, Account>,
     private_state: (CommitmentSet, NullifierSet),
 }

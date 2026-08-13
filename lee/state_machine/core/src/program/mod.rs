@@ -15,23 +15,8 @@ pub const DEFAULT_PROGRAM_ID: ProgramId = [0; 8];
 /// TODO: Placeholder `program_owner` for uninitialized `Account`.
 pub const DEFAULT_PROGRAM_OWNER: AccountId = AccountId::new([0; 32]);
 
-/// Sentinel `AccountId` that owns every deployed program's storage account.
-///
-/// Now that program accounts live directly in `public_state` (Program-as-Account), a real
-/// owner value matters: `DEFAULT_PROGRAM_OWNER` would leave them unclaimed, letting an
-/// ordinary program invocation "claim" one via the normal claim path and then legitimately
-/// rewrite its `data` (the elf) as if it were the program's own account — corrupting deployed
-/// bytecode through completely ordinary dispatch. Self-ownership (`program_owner` equal to the
-/// account's own id) is just as broken: it authorizes exactly the program whose invocation
-/// would touch its own storage account.
-///
-/// This value is reserved instead — no real `ProgramId`'s image id will ever equal it (it's a
-/// fixed, distinctive bit pattern, not a hash, so collision with a real cryptographic digest is
-/// as implausible as with `DEFAULT_PROGRAM_ID`), and it is a sentinel `Program::execute`s never
-/// executes at, so no ordinary transaction can ever supply a `chained_call.program_id` whose
-/// derived owner matches it. That makes every program's storage account unwritable via normal
-/// dispatch, by construction, until a real loader program is designed and registered to hold
-/// this authority deliberately.
+/// TODO: Temporary placeholder for program deployment program id; this serves as
+/// `program_owner` for program `Account`s.
 pub const PROGRAM_STORAGE_OWNER: AccountId = AccountId::new([0xFF; 32]);
 
 pub const MAX_NUMBER_CHAINED_CALLS: usize = 10;
