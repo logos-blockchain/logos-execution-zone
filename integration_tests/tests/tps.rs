@@ -269,7 +269,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
         Account {
             balance: 100,
             nonce: Nonce(0xdead_beef),
-            program_owner: program.id(),
+            program_owner: program.id().into(),
             data: Data::default(),
         },
         true,

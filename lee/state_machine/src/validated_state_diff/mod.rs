@@ -8,7 +8,7 @@ use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, PublicAction, Timestamp,
     account::{Account, AccountId, AccountWithMetadata},
     program::{
-        CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_ID, compute_public_authorized_pdas,
+        CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, compute_public_authorized_pdas,
         validate_execution,
     },
 };
@@ -224,7 +224,7 @@ impl ValidatedStateDiff {
 
                 // The invoked program can only claim accounts with default program id.
                 ensure!(
-                    post.account().program_owner == DEFAULT_PROGRAM_ID,
+                    post.account().program_owner == DEFAULT_PROGRAM_OWNER,
                     InvalidProgramBehaviorError::ClaimedNonDefaultAccount { account_id }
                 );
 
@@ -251,7 +251,7 @@ impl ValidatedStateDiff {
                     }
                 }
 
-                post.account_mut().program_owner = chained_call.program_id;
+                post.account_mut().program_owner = AccountId::from(chained_call.program_id);
             }
 
             // Update the state diff
@@ -297,7 +297,7 @@ impl ValidatedStateDiff {
         // Check that all modified uninitialized accounts where claimed
         for (account_id, post) in state_diff.iter().filter_map(|(account_id, post)| {
             let pre = state.get_account_by_id(*account_id);
-            if pre.program_owner != DEFAULT_PROGRAM_ID {
+            if pre.program_owner != DEFAULT_PROGRAM_OWNER {
                 return None;
             }
             if pre == *post {
@@ -306,7 +306,7 @@ impl ValidatedStateDiff {
             Some((*account_id, post))
         }) {
             ensure!(
-                post.program_owner != DEFAULT_PROGRAM_ID,
+                post.program_owner != DEFAULT_PROGRAM_OWNER,
                 InvalidProgramBehaviorError::DefaultAccountModifiedWithoutClaim { account_id }
             );
         }

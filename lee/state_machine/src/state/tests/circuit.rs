@@ -5,7 +5,7 @@ fn circuit_fails_if_visibility_masks_have_incorrect_lenght() {
     let program = crate::test_methods::simple_balance_transfer();
     let public_account_1 = AccountWithMetadata::new(
         Account {
-            program_owner: program.id(),
+            program_owner: program.id().into(),
             balance: 100,
             ..Account::default()
         },
@@ -14,7 +14,7 @@ fn circuit_fails_if_visibility_masks_have_incorrect_lenght() {
     );
     let public_account_2 = AccountWithMetadata::new(
         Account {
-            program_owner: program.id(),
+            program_owner: program.id().into(),
             balance: 0,
             ..Account::default()
         },
@@ -40,7 +40,7 @@ fn circuit_fails_if_invalid_auth_keys_are_provided() {
     let recipient_keys = test_private_account_keys_2();
     let private_account_1 = AccountWithMetadata::new(
         Account {
-            program_owner: program.id(),
+            program_owner: program.id().into(),
             balance: 100,
             ..Account::default()
         },
@@ -100,7 +100,7 @@ fn circuit_should_fail_if_new_private_account_with_non_default_balance_is_provid
     let recipient_keys = test_private_account_keys_2();
     let private_account_1 = AccountWithMetadata::new(
         Account {
-            program_owner: program.id(),
+            program_owner: program.id().into(),
             balance: 100,
             ..Account::default()
         },
@@ -160,7 +160,7 @@ fn circuit_should_fail_if_new_private_account_with_non_default_program_owner_is_
     let recipient_keys = test_private_account_keys_2();
     let private_account_1 = AccountWithMetadata::new(
         Account {
-            program_owner: program.id(),
+            program_owner: program.id().into(),
             balance: 100,
             ..Account::default()
         },
@@ -170,7 +170,7 @@ fn circuit_should_fail_if_new_private_account_with_non_default_program_owner_is_
     let private_account_2 = AccountWithMetadata::new(
         Account {
             // Non default program_owner
-            program_owner: [0, 1, 2, 3, 4, 5, 6, 7],
+            program_owner: [0, 1, 2, 3, 4, 5, 6, 7].into(),
             ..Account::default()
         },
         true,
@@ -220,7 +220,7 @@ fn circuit_should_fail_if_new_private_account_with_non_default_data_is_provided(
     let recipient_keys = test_private_account_keys_2();
     let private_account_1 = AccountWithMetadata::new(
         Account {
-            program_owner: program.id(),
+            program_owner: program.id().into(),
             balance: 100,
             ..Account::default()
         },
@@ -280,7 +280,7 @@ fn circuit_should_fail_if_new_private_account_with_non_default_nonce_is_provided
     let recipient_keys = test_private_account_keys_2();
     let private_account_1 = AccountWithMetadata::new(
         Account {
-            program_owner: program.id(),
+            program_owner: program.id().into(),
             balance: 100,
             ..Account::default()
         },
@@ -341,7 +341,7 @@ fn circuit_should_fail_if_new_private_account_is_provided_with_default_values_bu
     let recipient_keys = test_private_account_keys_2();
     let private_account_1 = AccountWithMetadata::new(
         Account {
-            program_owner: program.id(),
+            program_owner: program.id().into(),
             balance: 100,
             ..Account::default()
         },
@@ -401,7 +401,7 @@ fn private_pda_without_binding_fails() {
     let keys = test_private_account_keys_1();
     let public_account_1 = AccountWithMetadata::new(
         Account {
-            program_owner: program.id(),
+            program_owner: program.id().into(),
             balance: 100,
             ..Account::default()
         },
@@ -1001,7 +1001,7 @@ fn private_pda_top_level_reuse_rejected_by_binding_check() {
     let account_id = AccountId::for_private_pda(&program.id(), &seed, &npk, &keys.vpk(), u128::MAX);
     let owned_pre_state = AccountWithMetadata::new(
         Account {
-            program_owner: program.id(),
+            program_owner: program.id().into(),
             ..Account::default()
         },
         false,
@@ -1024,7 +1024,7 @@ fn private_accounts_can_only_be_initialized_once() {
     let sender_nonce = Nonce(0xdead_beef);
 
     let sender_private_account = Account {
-        program_owner: crate::test_methods::simple_balance_transfer().id(),
+        program_owner: crate::test_methods::simple_balance_transfer().id().into(),
         balance: 100,
         nonce: sender_nonce,
         data: Data::default(),
@@ -1049,7 +1049,7 @@ fn private_accounts_can_only_be_initialized_once() {
         .unwrap();
 
     let sender_private_account = Account {
-        program_owner: crate::test_methods::simple_balance_transfer().id(),
+        program_owner: crate::test_methods::simple_balance_transfer().id().into(),
         balance: 100,
         nonce: sender_nonce,
         data: Data::default(),
@@ -1079,7 +1079,7 @@ fn circuit_should_fail_if_there_are_repeated_ids() {
     let sender_keys = test_private_account_keys_1();
     let private_account_1 = AccountWithMetadata::new(
         Account {
-            program_owner: program.id(),
+            program_owner: program.id().into(),
             balance: 100,
             ..Account::default()
         },
@@ -1291,7 +1291,7 @@ fn private_account_claimed_then_used_without_init_flag_should_fail() {
     // Prepare new state of account
     let account_metadata = {
         let mut acc = authorized_account;
-        acc.account.program_owner = crate::test_methods::claimer().id();
+        acc.account.program_owner = crate::test_methods::claimer().id().into();
         acc
     };
 
@@ -1349,13 +1349,13 @@ fn two_private_pda_family_members_receive_and_spend() {
         V03State::new().with_public_accounts(public_state_from_balances(&[(funder_id, 500)]));
 
     let alice_pda_0_account = Account {
-        program_owner: simple_transfer_id,
+        program_owner: simple_transfer_id.into(),
         balance: amount,
         nonce: Nonce::private_account_nonce_init(&alice_pda_0_id),
         ..Account::default()
     };
     let alice_pda_1_account = Account {
-        program_owner: simple_transfer_id,
+        program_owner: simple_transfer_id.into(),
         balance: amount,
         nonce: Nonce::private_account_nonce_init(&alice_pda_1_id),
         ..Account::default()
@@ -1506,7 +1506,7 @@ fn two_private_pda_family_members_receive_and_spend() {
     // Re-fund alice_pda_1 top-level via simple_transfer using a private-PDA update with an
     // external seed.
     let alice_pda_1_account_after_spend = Account {
-        program_owner: simple_transfer_id,
+        program_owner: simple_transfer_id.into(),
         balance: 0,
         nonce: alice_pda_1_account
             .nonce

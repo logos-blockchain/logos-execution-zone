@@ -191,7 +191,8 @@ fn init_config(
     // rewriting its own config data on a later call.
     if config_meta.account != Account::default() {
         assert_eq!(
-            config_meta.account.program_owner, self_program_id,
+            config_meta.account.program_owner,
+            self_program_id.into(),
             "inbox config PDA is owned by another program"
         );
         assert_eq!(

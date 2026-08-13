@@ -50,7 +50,7 @@ fn seed_inbox_config(state: &mut V03State, self_zone: [u8; 32]) {
     *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
         inbox_config_account_id(inbox_id),
         Account {
-            program_owner: inbox_id,
+            program_owner: inbox_id.into(),
             balance: 0,
             data: config
                 .to_bytes()
@@ -75,7 +75,7 @@ fn seed_wrapped_config(
     *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
         wrapped_token_core::config_account_id(wrapped_token_id),
         Account {
-            program_owner: wrapped_token_id,
+            program_owner: wrapped_token_id.into(),
             data: config
                 .to_bytes()
                 .try_into()
@@ -99,7 +99,7 @@ fn seed_receiver_config(
     *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
         receiver_config_account_id(receiver_id),
         Account {
-            program_owner: receiver_id,
+            program_owner: receiver_id.into(),
             data: config
                 .to_bytes()
                 .try_into()
@@ -116,7 +116,7 @@ fn seed_ping_sender_config(state: &mut V03State) {
     *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
         sender_config_account_id(sender_id),
         Account {
-            program_owner: sender_id,
+            program_owner: sender_id.into(),
             data: outbox_bytes(programs::cross_zone_outbox().id())
                 .to_vec()
                 .try_into()
@@ -133,7 +133,7 @@ fn seed_bridge_lock_config(state: &mut V03State) {
     *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
         bridge_lock_core::config_account_id(bridge_lock_id),
         Account {
-            program_owner: bridge_lock_id,
+            program_owner: bridge_lock_id.into(),
             data: bridge_lock_core::config_bytes(
                 programs::cross_zone_outbox().id(),
                 programs::wrapped_token().id(),
@@ -346,7 +346,7 @@ fn lock_escrows_balance_and_emits_to_outbox() {
     state = state.with_public_accounts([(
         holder_id,
         Account {
-            program_owner: bridge_lock_id,
+            program_owner: bridge_lock_id.into(),
             balance: INITIAL_BALANCE,
             ..Default::default()
         },
@@ -469,7 +469,7 @@ fn a_second_emit_at_the_same_slot_is_rejected() {
     let mut state = base_state().with_public_accounts([(
         holder_id,
         Account {
-            program_owner: programs::bridge_lock().id(),
+            program_owner: programs::bridge_lock().id().into(),
             balance: INITIAL_BALANCE,
             ..Default::default()
         },
@@ -517,7 +517,7 @@ fn two_emitters_share_an_ordinal_without_colliding() {
     let mut state = base_state().with_public_accounts([(
         holder_id,
         Account {
-            program_owner: bridge_lock_id,
+            program_owner: bridge_lock_id.into(),
             balance: INITIAL_BALANCE,
             ..Default::default()
         },
@@ -607,7 +607,7 @@ fn a_lock_naming_another_target_program_is_rejected() {
     let mut state = base_state().with_public_accounts([(
         holder_id,
         Account {
-            program_owner: bridge_lock_id,
+            program_owner: bridge_lock_id.into(),
             balance: INITIAL_BALANCE,
             ..Default::default()
         },
@@ -653,7 +653,7 @@ fn a_lock_naming_other_mint_accounts_is_rejected() {
     let mut state = base_state().with_public_accounts([(
         holder_id,
         Account {
-            program_owner: bridge_lock_id,
+            program_owner: bridge_lock_id.into(),
             balance: INITIAL_BALANCE,
             ..Default::default()
         },
@@ -712,7 +712,7 @@ fn a_lock_with_a_substituted_config_account_is_rejected() {
         (
             holder_id,
             Account {
-                program_owner: bridge_lock_id,
+                program_owner: bridge_lock_id.into(),
                 balance: INITIAL_BALANCE,
                 ..Default::default()
             },
@@ -720,7 +720,7 @@ fn a_lock_with_a_substituted_config_account_is_rejected() {
         (
             decoy_id,
             Account {
-                program_owner: bridge_lock_id,
+                program_owner: bridge_lock_id.into(),
                 data: bridge_lock_core::config_bytes([3; 8], [4; 8])
                     .to_vec()
                     .try_into()
@@ -777,7 +777,7 @@ fn a_lock_before_the_pins_are_set_is_rejected() {
     let state = base_state().with_public_accounts([(
         holder_id,
         Account {
-            program_owner: bridge_lock_id,
+            program_owner: bridge_lock_id.into(),
             balance: INITIAL_BALANCE,
             ..Default::default()
         },
@@ -1181,7 +1181,7 @@ fn mint_replay_rejected() {
     state = state.with_public_accounts([(
         seen_id,
         Account {
-            program_owner: inbox_id,
+            program_owner: inbox_id.into(),
             balance: 0,
             data: shard
                 .to_bytes()
@@ -1258,7 +1258,7 @@ fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
     state = state.with_public_accounts([(
         seen_id,
         Account {
-            program_owner: inbox_id,
+            program_owner: inbox_id.into(),
             balance: 0,
             data: shard
                 .to_bytes()

@@ -1,6 +1,4 @@
-use indexer_service_protocol::ProgramId;
-
-use crate::api::types::{FfiBytes32, FfiProgramId, FfiU128};
+use crate::api::types::{FfiBytes32, FfiU128};
 
 /// Account data structure - C-compatible version of lee Account.
 ///
@@ -8,7 +6,7 @@ use crate::api::types::{FfiBytes32, FfiProgramId, FfiU128};
 /// byte arrays since C doesn't have native u128 support.
 #[repr(C)]
 pub struct FfiAccount {
-    pub program_owner: FfiProgramId,
+    pub program_owner: FfiBytes32,
     /// Balance as little-endian [u8; 16].
     pub balance: FfiU128,
     /// Pointer to account data bytes.
@@ -40,11 +38,8 @@ impl From<lee::Account> for FfiAccount {
 
         let (data, data_len, data_cap) = data.into_inner().into_raw_parts();
 
-        let program_owner = FfiProgramId {
-            data: program_owner,
-        };
         Self {
-            program_owner,
+            program_owner: FfiBytes32::from_account_id(&program_owner),
             balance: balance.into(),
             data,
             data_len,
@@ -66,7 +61,9 @@ impl From<FfiAccount> for indexer_service_protocol::Account {
         } = value;
 
         Self {
-            program_owner: ProgramId(program_owner.data),
+            program_owner: indexer_service_protocol::AccountId {
+                value: program_owner.data,
+            },
             balance: balance.into(),
             data: indexer_service_protocol::Data(unsafe {
                 Vec::from_raw_parts(data, data_len, data_cap)
@@ -88,7 +85,9 @@ impl From<&FfiAccount> for indexer_service_protocol::Account {
         } = value;
 
         Self {
-            program_owner: ProgramId(program_owner.data),
+            program_owner: indexer_service_protocol::AccountId {
+                value: program_owner.data,
+            },
             balance: balance.into(),
             data: indexer_service_protocol::Data(unsafe {
                 Vec::from_raw_parts(data, data_len, data_cap)

@@ -132,7 +132,7 @@ fn program_output_try_with_block_validity_window_empty_range_fails() {
 #[test]
 fn post_state_new_with_claim_constructor() {
     let account = Account {
-        program_owner: [1, 2, 3, 4, 5, 6, 7, 8],
+        program_owner: [1, 2, 3, 4, 5, 6, 7, 8].into(),
         balance: 1337,
         data: vec![0xde, 0xad, 0xbe, 0xef].try_into().unwrap(),
         nonce: 10_u128.into(),
@@ -147,7 +147,7 @@ fn post_state_new_with_claim_constructor() {
 #[test]
 fn post_state_new_without_claim_constructor() {
     let account = Account {
-        program_owner: [1, 2, 3, 4, 5, 6, 7, 8],
+        program_owner: [1, 2, 3, 4, 5, 6, 7, 8].into(),
         balance: 1337,
         data: vec![0xde, 0xad, 0xbe, 0xef].try_into().unwrap(),
         nonce: 10_u128.into(),
@@ -162,7 +162,7 @@ fn post_state_new_without_claim_constructor() {
 #[test]
 fn post_state_account_getter() {
     let mut account = Account {
-        program_owner: [1, 2, 3, 4, 5, 6, 7, 8],
+        program_owner: [1, 2, 3, 4, 5, 6, 7, 8].into(),
         balance: 1337,
         data: vec![0xde, 0xad, 0xbe, 0xef].try_into().unwrap(),
         nonce: 10_u128.into(),

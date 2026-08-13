@@ -110,7 +110,7 @@ impl V03State {
     #[must_use]
     pub fn with_account_owned_by_burner_program(mut self) -> Self {
         let account = Account {
-            program_owner: crate::test_methods::burner().id(),
+            program_owner: crate::test_methods::burner().id().into(),
             balance: 100,
             ..Default::default()
         };
@@ -187,7 +187,7 @@ fn public_state_from_balances(initial_data: &[(AccountId, u128)]) -> HashMap<Acc
             (
                 account_id,
                 Account {
-                    program_owner: crate::test_methods::simple_balance_transfer().id(),
+                    program_owner: crate::test_methods::simple_balance_transfer().id().into(),
                     balance,
                     ..Account::default()
                 },
@@ -447,7 +447,7 @@ fn deshielded_balance_transfer_for_tests(
 fn valid_private_transfer_tx_and_state() -> (V03State, PrivacyPreservingTransaction) {
     let sender_keys = test_private_account_keys_1();
     let sender_private_account = Account {
-        program_owner: crate::test_methods::simple_balance_transfer().id(),
+        program_owner: crate::test_methods::simple_balance_transfer().id().into(),
         balance: 100,
         nonce: Nonce(0xdead_beef),
         ..Account::default()

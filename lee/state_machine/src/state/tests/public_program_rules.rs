@@ -96,7 +96,7 @@ fn program_should_fail_if_it_drops_a_declared_account() {
             (
                 AccountId::new([1; 32]),
                 Account {
-                    program_owner: crate::test_methods::dropped_account().id(),
+                    program_owner: crate::test_methods::dropped_account().id().into(),
                     balance: 100,
                     ..Account::default()
                 },
@@ -104,7 +104,7 @@ fn program_should_fail_if_it_drops_a_declared_account() {
             (
                 AccountId::new([2; 32]),
                 Account {
-                    program_owner: crate::test_methods::dropped_account().id(),
+                    program_owner: crate::test_methods::dropped_account().id().into(),
                     balance: 0,
                     ..Account::default()
                 },
@@ -136,7 +136,7 @@ fn program_should_fail_if_modifies_program_owner_with_only_non_default_program_o
     let initial_data = [(
         AccountId::new([1; 32]),
         Account {
-            program_owner: crate::test_methods::simple_balance_transfer().id(),
+            program_owner: crate::test_methods::simple_balance_transfer().id().into(),
             ..Account::default()
         },
     )];
@@ -268,7 +268,7 @@ fn program_should_fail_if_transfers_balance_from_non_owned_account() {
     let program_id = crate::test_methods::simple_balance_transfer().id();
     assert_ne!(
         state.get_account_by_id(sender_account_id).program_owner,
-        program_id
+        program_id.into()
     );
     let message = public_transaction::Message::try_new(
         program_id,
@@ -285,8 +285,8 @@ fn program_should_fail_if_transfers_balance_from_non_owned_account() {
     assert!(matches!(
         result,
         Err(LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::ExecutionValidationFailed(
-            ExecutionValidationError::UnauthorizedBalanceDecrease { account_id: err_account_id, owner_program_id, executing_program_id }
-        ))) if err_account_id == sender_account_id && owner_program_id != program_id && executing_program_id == program_id
+            ExecutionValidationError::UnauthorizedBalanceDecrease { account_id: err_account_id, owner_account_id, executing_program_id }
+        ))) if err_account_id == sender_account_id && owner_account_id != program_id.into() && executing_program_id == program_id
     ));
 }
 
@@ -303,7 +303,7 @@ fn program_should_fail_if_modifies_data_of_non_owned_account() {
     assert_ne!(state.get_account_by_id(account_id), Account::default());
     assert_ne!(
         state.get_account_by_id(account_id).program_owner,
-        program_id
+        program_id.into()
     );
     let message =
         public_transaction::Message::try_new(program_id, vec![account_id], vec![], vec![0])
@@ -356,7 +356,7 @@ fn program_should_fail_if_does_not_preserve_total_balance_by_burning() {
     let account_id = AccountId::new([252; 32]);
     assert_eq!(
         state.get_account_by_id(account_id).program_owner,
-        program_id
+        program_id.into()
     );
     let balance_to_burn: u128 = 1;
     assert!(state.get_account_by_id(account_id).balance > balance_to_burn);

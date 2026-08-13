@@ -82,7 +82,7 @@ fn get_account_by_account_id_non_default_account() {
     let initial_data = [(
         account_id,
         Account {
-            program_owner: crate::test_methods::simple_balance_transfer().id(),
+            program_owner: crate::test_methods::simple_balance_transfer().id().into(),
             balance: 100,
             ..Account::default()
         },

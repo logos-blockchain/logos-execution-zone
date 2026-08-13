@@ -201,7 +201,7 @@ pub fn build_inbox_init_config_tx(self_zone: ZoneId) -> lee::PublicTransaction {
 #[must_use]
 pub fn build_holding_account(holder: AccountId, amount: Balance) -> (AccountId, Account) {
     let account = Account {
-        program_owner: programs::bridge_lock().id(),
+        program_owner: programs::bridge_lock().id().into(),
         balance: amount,
         ..Default::default()
     };

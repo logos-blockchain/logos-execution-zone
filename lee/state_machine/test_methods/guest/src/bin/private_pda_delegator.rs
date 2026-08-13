@@ -30,7 +30,7 @@ fn main() {
 
     let mut pre_for_callee = pre.clone();
     pre_for_callee.is_authorized = true;
-    pre_for_callee.account.program_owner = self_program_id;
+    pre_for_callee.account.program_owner = self_program_id.into();
 
     let chained_call = ChainedCall {
         program_id: callee_program_id,
