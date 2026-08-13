@@ -112,6 +112,11 @@ impl ValidatedStateDiff {
                 LeeError::MaxChainedCallsDepthExceeded
             );
 
+            // Check that the `program_id` corresponds to a deployed program. `programs` is
+            // keyed by `AccountId::from(program_id)`, not `program_id` itself (see that impl's
+            // doc comment), and holds the elf as a plain `Account`; reconstruct a `Program` from
+            // it via `new_unchecked` to execute, skipping a redundant image-id recomputation
+            // since the id/elf pairing was already validated once, at deployment time.
             let Some(program_account) = state
                 .programs()
                 .get(&AccountId::from(chained_call.program_id))
