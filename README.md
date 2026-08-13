@@ -70,8 +70,6 @@ Both public and private executions use the same Risc0 VM bytecode. Public transa
 This design keeps public transactions as fast as any RISC-V–based VM and makes private transactions efficient for validators. It also supports parallel execution similar to Solana, improving throughput. The main computational cost for privacy-preserving transactions is on the user side, where ZK proofs are generated.
 
 ---
----
----
 
 # Versioning
 

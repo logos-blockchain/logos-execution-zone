@@ -86,10 +86,21 @@ pub fn validate_static_tx(tx: &FeeTxView, state: &FeeState) -> Result<(), FeeErr
 /// execution cap is dynamic and enforced by the caller as metered cycles
 /// become known; see [`accumulate_gas_used`].
 ///
+/// **Not yet consumed by the live protocol, and it does not agree with it.** The block transition
+/// enforces the storage cap in `chain_state::apply::validate_block_storage_cap`, over every
+/// non-system transaction's *real serialized wire size* — including private ones, which this
+/// function would price at the `PRIVATE_GAS_STOR` constant instead (see [`gas_stor`]). It also
+/// splits per-transaction static validity out to each transaction's turn, because whether a vault
+/// claim is the fee-exempt full sweep depends on the vault balance at that point in the block.
+/// Wiring this in unchanged would make the sequencer and the block transition disagree.
+///
 /// # Errors
 ///
 /// Returns [`FeeError::InvalidBlock`] on the first failing transaction, or
 /// if the cumulative storage total exceeds `MAX_GAS_STOR`.
+// TBA(INCREMENTIAL): once the constant-size private wire format lands (T3/T5) and
+// `PRIVATE_GAS_STOR` is re-pinned against it, the two rules coincide and this can become the
+// shared implementation.
 pub fn validate_static_block(txs: &[FeeTxView], state: &FeeState) -> Result<(), FeeError> {
     let mut total_stor: u128 = 0;
     for tx in txs {
@@ -148,6 +159,10 @@ pub fn accumulate_gas_used(running_total: u64, amount: u64, cap: u64) -> Result<
 /// supplies `authorized`: the account ids whose fee authorization verified at
 /// the wire layer (`lee::fee_authorized_account_ids`). All this seam decides is
 /// membership.
+///
+/// Called from `chain_state::check_charged_tx`, the one gate both the block
+/// transition and the sequencer's block builder run a charged transaction
+/// through.
 ///
 /// # Errors
 ///
@@ -316,10 +331,13 @@ mod tests {
         ));
     }
 
+    /// Arithmetic of *this* function, not a statement about the live protocol: with private
+    /// storage gas priced at the `PRIVATE_GAS_STOR` constant,
+    /// `floor(MAX_GAS_STOR / PRIVATE_GAS_STOR) = 4` fit. The block transition charges private
+    /// transactions their real wire size instead, so the number a real block admits is its own —
+    /// see [`validate_static_block`]'s note.
     #[test]
-    fn four_private_txs_fit_the_storage_cap_exactly_at_the_operating_limit() {
-        // SPECS §Fee-validity: floor(MAX_GAS_STOR / PRIVATE_GAS_STOR) = 4
-        // private transactions fit under the current proof size.
+    fn under_the_constant_private_size_four_private_txs_fit_this_functions_storage_cap() {
         let state = genesis();
         let txs = [FeeTxView::Private { payer: PAYER }; 4];
         assert!(validate_static_block(&txs, &state).is_ok());

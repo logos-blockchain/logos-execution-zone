@@ -1,9 +1,12 @@
 use fee_core::{
     FeeState, distribute,
-    params::{BASE_FEE_EXEC_MIN, BASE_FEE_STOR_MIN, SMOOTHING_WINDOW},
+    params::{BASE_FEE_EXEC_MIN, BASE_FEE_STOR_MIN, FEE_PARAMS, FeeParams, SMOOTHING_WINDOW},
 };
 
 use super::*;
+
+/// One named single-parameter edit, for `fingerprint_covers_every_fee_parameter`.
+type ParamMutation = (&'static str, fn(&mut FeeParams));
 
 #[test]
 fn new_works() {
@@ -211,4 +214,61 @@ fn state_serialization_roundtrip() {
     let bytes = borsh::to_vec(&state).unwrap();
     let state_from_bytes: V03State = borsh::from_slice(&bytes).unwrap();
     assert_eq!(state, state_from_bytes);
+}
+
+fn fingerprint_test_state() -> V03State {
+    V03State::new()
+        .with_public_account_balances([(AccountId::new([1; 32]), 100_u128)])
+        .with_test_programs()
+}
+
+#[test]
+fn fingerprint_covers_every_fee_parameter() {
+    // Nodes built from different revisions can agree on every seeded account and still
+    // fork at the first charged block, so each parameter has to reach the digest. The
+    // production path hashes compiled-in constants; a test can only vary them through
+    // the parameter view.
+    let state = fingerprint_test_state();
+    let baseline = state.genesis_fingerprint();
+    assert_eq!(baseline, state.genesis_fingerprint_with_params(&FEE_PARAMS));
+
+    let mutations: [ParamMutation; FeeParams::FINGERPRINT_WORDS] = [
+        ("TARGET_GAS_EXEC", |p| p.target_gas_exec += 1),
+        ("MAX_GAS_EXEC", |p| p.max_gas_exec += 1),
+        ("TARGET_GAS_STOR", |p| p.target_gas_stor += 1),
+        ("MAX_GAS_STOR", |p| p.max_gas_stor += 1),
+        ("D_EXEC", |p| p.d_exec += 1),
+        ("D_STOR", |p| p.d_stor += 1),
+        ("BASE_FEE_EXEC_MIN", |p| p.base_fee_exec_min += 1),
+        ("BASE_FEE_STOR_MIN", |p| p.base_fee_stor_min += 1),
+        ("BASE_FEE_EXEC_MAX", |p| p.base_fee_exec_max += 1),
+        ("BASE_FEE_STOR_MAX", |p| p.base_fee_stor_max += 1),
+        ("SMOOTHING_WINDOW", |p| p.smoothing_window += 1),
+        ("PRIVATE_VERIFY_GAS", |p| p.private_verify_gas += 1),
+        ("PROOF_BYTES", |p| p.proof_bytes += 1),
+        ("PRIVATE_PAD_BYTES", |p| p.private_pad_bytes += 1),
+        ("PRIVATE_GAS_STOR", |p| p.private_gas_stor += 1),
+    ];
+
+    for (name, mutate) in mutations {
+        let mut params = FEE_PARAMS;
+        mutate(&mut params);
+        assert_ne!(
+            baseline,
+            state.genesis_fingerprint_with_params(&params),
+            "{name} does not reach the genesis fingerprint"
+        );
+    }
+}
+
+#[test]
+fn fingerprint_ignores_the_fee_state() {
+    // Fee *state* is derived from the parameters and its encoding is rotation-dependent,
+    // so it stays out; only the parameters above are folded in.
+    let mut state = fingerprint_test_state();
+    let baseline = state.genesis_fingerprint();
+
+    *state.fee_state_mut() = mid_rotation_fee_state(73);
+
+    assert_eq!(baseline, state.genesis_fingerprint());
 }

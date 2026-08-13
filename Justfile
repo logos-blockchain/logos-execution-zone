@@ -121,13 +121,16 @@ get-sequencer-metrics:
     curl http://localhost:9000/metrics
 
 # Import test accounts supplied in sequencer configuration.
+# The amounts must equal the account's full vault balance in
+# `lez/sequencer/service/configs/debug/sequencer_config.json`: only a full sweep is
+# fee-exempt, and the account holds nothing to pay a partial claim with.
 wallet-import-test-accounts:
     @echo "⚙️ Initializing accounts"
     just run-wallet account import public --private-key 7f273098f25b71e6c005a9519f2678da8d1c7f01f6a27778e2d9948abdf901fb
-    just run-wallet vault claim --account-id Public/CbgR6tj5kWx5oziiFptM7jMvrQeYY3Mzaao6ciuhSr2r --amount 10000
+    just run-wallet vault claim --account-id Public/CbgR6tj5kWx5oziiFptM7jMvrQeYY3Mzaao6ciuhSr2r --amount 1000000000000
 
     just run-wallet account import public --private-key f434f8741720014586ae43356d2aec6257da086222f604ddb75d69733b86fc4c
-    just run-wallet vault claim --account-id Public/2RHZhw9h534Zr3eq2RGhQete2Hh667foECzXPmSkGni2 --amount 20000
+    just run-wallet vault claim --account-id Public/2RHZhw9h534Zr3eq2RGhQete2Hh667foECzXPmSkGni2 --amount 2000000000000
 
     just run-wallet account list
 
@@ -151,7 +154,8 @@ cross-zone-chat:
     @echo "💬 Cross-zone chat demo — open the printed localhost URL"
     {{DEMO_ENV}} RISC0_DEV_MODE=1 cargo run -p cross_zone_chat --release
 
-# Clean runtime data
+# Clean runtime data. Required, not just convenient, after a consensus-state format
+# change (e.g. the fee state added to `V03State`): an existing RocksDB will not decode.
 clean:
     @echo "🧹 Cleaning run artifacts"
     rm -rf lez/sequencer/service/bedrock_signing_key

@@ -421,25 +421,35 @@ impl V03State {
         self.private_state.0.digest()
     }
 
-    /// Order-independent fingerprint of the genesis-relevant state: the public
-    /// account set, the deployed program set, and the commitment-set digest.
+    /// Order-independent fingerprint of the genesis-relevant state — the public account
+    /// set, the deployed program set, the commitment-set digest — plus the compiled-in
+    /// fee parameters.
     ///
-    /// The sequencer and the indexer build the directly-seeded part of genesis
-    /// (base builtins plus any directly-seeded accounts) separately from their own
-    /// configs, so a divergence there would otherwise go unnoticed. Both nodes log
-    /// this at startup; equal values mean the two genesis states agree. Entries are
-    /// sorted by id before hashing, so the value does not depend on `HashMap`
+    /// The sequencer and the indexer build the directly-seeded part of genesis (base
+    /// builtins plus any directly-seeded accounts) separately from their own configs, so
+    /// a divergence there would otherwise go unnoticed. This is a diagnostic, not a
+    /// handshake: nothing compares it across the wire, and its one caller logs it at
+    /// sequencer startup for an operator to compare by eye against another node's line.
+    ///
+    /// Entries are sorted by id before hashing, so the value does not depend on `HashMap`
     /// iteration order.
     #[must_use]
     pub fn genesis_fingerprint(&self) -> [u8; 32] {
+        self.genesis_fingerprint_with_params(&fee_core::params::FEE_PARAMS)
+    }
+
+    /// [`Self::genesis_fingerprint`] against an arbitrary parameter set, so a test can
+    /// vary parameters that are compiled-in constants in production.
+    fn genesis_fingerprint_with_params(&self, params: &fee_core::params::FeeParams) -> [u8; 32] {
         use sha2::{Digest as _, Sha256};
 
         // Destructure so adding a `V03State` field forces a decision here about
         // whether it belongs in the genesis fingerprint.
         // `fee_state` is deliberately excluded: it is fully determined by the
-        // compiled-in fee parameters, so it adds nothing to a comparison of the
-        // *configured* genesis, and its Borsh encoding is rotation-dependent
-        // (ring buffer + cursor), which does not belong in a value nodes compare.
+        // compiled-in fee parameters — which are hashed below, in their own right —
+        // so it adds nothing to a comparison of the *configured* genesis, and its
+        // Borsh encoding is rotation-dependent (ring buffer + cursor), which does
+        // not belong in a value nodes compare.
         let Self {
             public_state,
             private_state,
@@ -472,6 +482,17 @@ impl V03State {
             }
         }
         hasher.update(private_state.0.digest());
+
+        // The fee parameters are compiled-in constants, not state: two nodes built from
+        // different revisions agree on every account above and still fork at the first
+        // charged block. Folding them in makes that mismatch visible in the logged value.
+        // Length-prefixed and in `FeeParams`' documented order.
+        let param_words = params.fingerprint_words();
+        let param_count = u64::try_from(param_words.len()).expect("parameter count fits in u64");
+        hasher.update(param_count.to_le_bytes());
+        for word in param_words {
+            hasher.update(word.to_le_bytes());
+        }
 
         let mut out = [0_u8; 32];
         out.copy_from_slice(&hasher.finalize());

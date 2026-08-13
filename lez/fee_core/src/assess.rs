@@ -53,6 +53,13 @@ impl FeeTxView {
 }
 
 /// Storage gas, known before execution.
+///
+/// The [`FeeTxView::Private`] arm is **not consumed by the live protocol yet**: nothing builds a
+/// `FeeTxView::Private`, and the block transition charges a private transaction its real serialized
+/// wire size against the storage cap (`chain_state::apply::classify`, the `PrivacyPreserving` arm),
+/// not `PRIVATE_GAS_STOR`. The constant is the declared intent for the padded wire format.
+// TBA(INCREMENTIAL): re-pin `PRIVATE_GAS_STOR` against the constant-size wire format (T3/T5), at
+// which point the live path can switch to this arm and the two agree again.
 #[must_use]
 pub const fn gas_stor(tx: &FeeTxView) -> u64 {
     match tx {

@@ -1,0 +1,23 @@
+# Fees
+
+A public transaction names a *payer* account and signs its `gas_limit`, `tip`, and `max_fee` alongside the rest of the message. On inclusion it pays `gas_exec * base_fee_exec + gas_stor * base_fee_stor + tip`, where `gas_exec` is the metered execution cycle count (halted at `gas_limit`) and `gas_stor` is the transaction's serialized length in bytes. Each base fee moves by at most ±12.5% per block toward a per-block target, so prices react to congestion but never jump.
+
+What is charged today, and what merely consumes block capacity:
+
+| Transaction | Charged | Counted against the block caps |
+| --- | --- | --- |
+| Public, user-submitted | yes | yes |
+| System: sequencer injections (bridge-deposit mints, cross-zone dispatch) and every genesis transaction | no | no |
+| Private | no | yes — constant execution gas, real serialized bytes |
+| Program deployment | no | yes, storage only (no execution gas) |
+| Full vault sweep (a claim of the vault's *entire* balance) | no | yes, metered like a public transaction |
+
+The three uncharged rows — private, deployment, and full sweep — are deliberate and temporary; each is marked in the source with a `TBA(...)` note naming what has to be decided before it goes away. `TBA(INCREMENTIAL)`/`TBA(Q3)`: the private fee mechanism, who a fully-shielded transaction's payer is, and the constant-size wire format that will replace a private transaction's real byte count with a fixed one. `TBA(deployment-replay)`: deployments carry no nonce, so a charged-but-failed deployment would stay re-includable and drain its payer. `TBA(fee-bootstrap)`: the sweep exemption below, which tokenomics may replace with a claim that pays out of the funds it sweeps.
+
+**Bootstrapping an account.** An account funded at genesis or bridged in from the L1 starts with its balance in a *vault*, and holds nothing itself — so it cannot pay for the transaction that funds it. (Accounts seeded directly into the initial state, as `lez/testnet_initial_state` does, are already funded and skip this.) The way out is a full sweep: a vault claim for exactly the vault's whole balance is fee-exempt. A partial claim is charged like any other public transaction and will normally fail its reservation, so sweep first and split afterwards. `just wallet-import-test-accounts` does this for the debug accounts.
+
+**Wallet defaults** (`lez/wallet/src/lib.rs`): `gas_limit` is `DEFAULT_GAS_LIMIT` = 2,000,000 (about three times the widest measured program), `tip` is 0, and `max_fee` is `DEFAULT_MAX_FEE`, priced at eight times the genesis minimum base fee. `max_fee` caps the *reservation*, not the fee: it stops a transaction signed at low base fees from being included later at prices the sender never agreed to. In practice a wallet-built transaction stops being includable once base fees rise past roughly 67 atomic units per gas — about twenty-two consecutive fully congested blocks away from genesis (the up-step is a floored `b / 8` with a guaranteed +1, so the integer sequence 8, 9, …, 64, 72 takes 22 blocks to clear it). Unused gas is released at settlement; only the reservation is held meanwhile.
+
+**Operators: initialize the producer account before it produces its first charged block.** Block fees are credited to the account derived from the sequencer's block-producing key. Crediting an account that does not exist yet materializes it with a balance but *no owning program*, and nothing can adopt it afterwards: `Initialize` requires an untouched account, and a transfer to it cannot claim it either. A producer that earns before it initializes has its payouts stranded permanently, with no recovery — the funds are unspendable and the only way out is a fresh key. So run the ordinary initialization for the producer account first, sponsored by a funded account (the producer has nothing of its own to pay that transaction's fee with; the fee witness exists for exactly this). The sequencer logs a warning at startup if its producer account is missing or still default-owned.
+
+Fee constants are protocol-fixed in `lez/fee_core/src/params.rs`. Changing any of them is a protocol-version change, and nodes built from different values will fork; the genesis fingerprint the sequencer logs at startup covers them, so two nodes' lines can be compared by eye.

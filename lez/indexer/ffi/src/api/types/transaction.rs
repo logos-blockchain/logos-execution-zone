@@ -65,7 +65,7 @@ impl From<Box<FfiPublicTransactionBody>> for PublicTransaction {
                     std_vec.into_iter().map(Into::into).collect()
                 },
                 instruction_data: value.message.instruction_data.into(),
-                // TODO(T8): the C ABI does not carry fee fields yet, so they
+                // TODO(fees-edges): the C ABI does not carry fee fields yet, so they
                 // come back zeroed here, as `proof` already does below.
                 payer: AccountId { value: [0; 32] },
                 gas_limit: 0,
@@ -107,7 +107,7 @@ impl From<PublicMessage> for FfiPublicMessage {
             account_ids,
             nonces,
             instruction_data,
-            // TODO(T8): surface the fee fields over the C ABI.
+            // TODO(fees-edges): surface the fee fields over the C ABI.
             payer: _,
             gas_limit: _,
             tip: _,
@@ -364,7 +364,7 @@ impl From<Box<FfiProgramDeploymentTransactionBody>> for ProgramDeploymentTransac
             hash: HashType(value.hash.data),
             message: ProgramDeploymentMessage {
                 bytecode: value.message.into(),
-                // TODO(T8): the C ABI does not carry fee fields yet.
+                // TODO(fees-edges): the C ABI does not carry fee fields yet.
                 payer: AccountId { value: [0; 32] },
                 gas_limit: 0,
                 tip: 0,

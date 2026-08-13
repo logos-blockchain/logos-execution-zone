@@ -14,7 +14,7 @@ pub fn PublicTxDetails(tx: PublicTransaction) -> impl IntoView {
         message,
         witness_set,
     } = tx;
-    // TODO(T8): surface the fee fields once they carry real values.
+    // TODO(fees-edges): surface the fee fields once they carry real values.
     let PublicMessage {
         program_id,
         account_ids,
@@ -135,7 +135,7 @@ pub fn ProgramDeploymentTxDetails(tx: ProgramDeploymentTransaction) -> impl Into
         message,
         witness_set: _,
     } = tx;
-    // TODO(T8): surface the fee fields once they carry real values.
+    // TODO(fees-edges): surface the fee fields once they carry real values.
     let ProgramDeploymentMessage {
         bytecode,
         payer: _,

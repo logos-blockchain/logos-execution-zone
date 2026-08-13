@@ -456,7 +456,12 @@ pub fn cap_contribution(
     }
 }
 
-/// Static fee-validity and payer authorization for one charged transaction, at `opening`.
+/// Static fee-validity, replay-burn and payer authorization for one charged transaction, at
+/// `opening`.
+///
+/// The single gate both sides go through: the apply path calls it inside
+/// [`settle_charged_transaction`], the sequencer's block builder calls it before it admits a
+/// transaction, so a rule added here cannot be enforced by one and not the other.
 ///
 /// # Errors
 ///
@@ -467,12 +472,33 @@ pub fn check_charged_tx(
     opening: &lee::FeeState,
 ) -> Result<(), String> {
     fee_core::validate_static_tx(view, opening).map_err(|err| format!("{err}"))?;
-    if !lee::is_fee_authorized(public_tx.message(), public_tx.witness_set()) {
-        return Err(format!(
-            "payer {} is not authorized to pay this transaction's fees",
-            public_tx.message().payer
-        ));
+    // A charged transaction MUST burn at least one nonce. Fee authorization can come from the fee
+    // witness alone, which carries no nonce of its own: a transaction with no signer signatures
+    // would be charged to its payer, advance nothing on either the success or the revert path, and
+    // stay includable byte-for-byte for ever — an unbounded drain on the payer. Only the signer
+    // signatures buy replay protection, so a charged transaction must carry at least one.
+    if public_tx
+        .witness_set()
+        .signatures_and_public_keys()
+        .is_empty()
+    {
+        return Err(
+            "a charged transaction must carry at least one signer signature, so that including it \
+             burns a nonce: a fee witness alone consumes no replay protection"
+                .to_owned(),
+        );
     }
+    // The D1 seam, through its one production caller: `lee` verifies the signatures and hands
+    // `fee_core` the set of accounts whose fee authorization checked out; `fee_core` decides
+    // membership and nothing else, so the rule stays where PLAN D1 put it and the crate stays pure.
+    let authorized: Vec<PayerId> =
+        lee::fee_authorized_account_ids(public_tx.message(), public_tx.witness_set())
+            .iter()
+            .map(|account_id| PayerId(*account_id.value()))
+            .collect();
+    let payer = public_tx.message().payer;
+    fee_core::authorize_payer(PayerId(*payer.value()), &authorized)
+        .map_err(|err| format!("{err} (payer {payer})"))?;
     Ok(())
 }
 
@@ -1093,6 +1119,160 @@ mod tests {
         );
     }
 
+    /// A charged transaction MUST burn a nonce, and only its *signer* signatures buy one.
+    ///
+    /// A transaction with no signer signatures at all is still charged (it is neither system-shaped
+    /// nor a full sweep) and is still fee-authorized, because the fee witness alone satisfies that
+    /// check. But `authenticate_public_transaction_signers` returns an empty signer list for it, so
+    /// neither the revert path's `advance_replay_nonces` nor a successful diff advances anything —
+    /// the identical bytes stay includable for ever, draining the sponsor once per block. Rejected
+    /// outright, on both the apply path and the builder's gate.
+    #[test]
+    fn a_fee_witness_only_charged_transaction_is_rejected() {
+        let accounts = initial_pub_accounts_private_keys();
+        let from = accounts[0].account_id;
+        let to = accounts[1].account_id;
+        let sponsor_key = lee::PrivateKey::try_new([33_u8; 32]).expect("valid key");
+        let sponsor = lee::AccountId::from(&lee::PublicKey::new_from_private_key(&sponsor_key));
+
+        let mut state = initial_state();
+        state.force_insert_account(sponsor, funded_account(1_000_000_000_000));
+        let genesis = produce_dummy_block(1, None, vec![]);
+        apply_block(None, &genesis, &mut state).expect("genesis applies");
+        let tip = tip_of(&genesis);
+        let opening = state.fee_state().clone();
+        let before_sponsor = state.get_account_by_id(sponsor).balance;
+
+        // No signers whatsoever: an empty nonce list and an empty signature list, with the
+        // sponsor's fee witness as the only authorization the transaction carries.
+        let message = lee::public_transaction::Message::try_new(
+            programs::authenticated_transfer().id(),
+            vec![from, to],
+            vec![],
+            authenticated_transfer_core::Instruction::Transfer { amount: 10 },
+            common::test_utils::test_fee_fields(sponsor),
+        )
+        .expect("message builds");
+        let public_tx = lee::PublicTransaction::new(
+            message.clone(),
+            lee::public_transaction::WitnessSet::for_message(&message, &[])
+                .with_fee_signer(&message, &sponsor_key),
+        );
+        let tx = LeeTransaction::Public(public_tx.clone());
+
+        // It really is charged, and really is fee-authorized: what rejects it below is the
+        // replay-burn rule, not one of the checks that were already there.
+        let view = charged_fee_view(&tx, &state).expect("a fee-witness-only transfer is charged");
+        assert!(
+            lee::is_fee_authorized(public_tx.message(), public_tx.witness_set()),
+            "the fee witness alone satisfies payer authorization, which is the hole",
+        );
+
+        let block = produce_dummy_block(2, Some(tip.hash), vec![tx]);
+        let err = apply_block(Some(&tip), &block, &mut state).expect_err("should reject");
+        let BlockIngestError::FeeValidity {
+            tx_index: 0,
+            reason,
+        } = &err
+        else {
+            panic!("expected a fee-validity rejection at tx 0, got {err:?}");
+        };
+        assert!(
+            reason.contains("signer signature"),
+            "expected the replay-burn rule to name itself, got: {reason}",
+        );
+        assert_eq!(
+            state.get_account_by_id(sponsor).balance,
+            before_sponsor,
+            "the sponsor must not be debited by a transaction that burns no nonce",
+        );
+
+        // The builder runs the same gate, so it skips such a transaction instead of building a
+        // block it would then reject itself.
+        assert!(
+            check_charged_tx(&public_tx, &view, &opening).is_err(),
+            "the builder's gate must reject it too",
+        );
+    }
+
+    /// The ordinary sponsored shape — one signer plus the payer's fee witness — is untouched by the
+    /// rule above: it applies, the SPONSOR pays, and the SIGNER's nonce is what inclusion burns.
+    #[test]
+    fn a_sponsored_transaction_charges_the_sponsor_and_burns_the_signers_nonce() {
+        let accounts = initial_pub_accounts_private_keys();
+        let from = accounts[0].account_id;
+        let sign_key = accounts[0].pub_sign_key.clone();
+        let to = accounts[1].account_id;
+        let sponsor_key = lee::PrivateKey::try_new([34_u8; 32]).expect("valid key");
+        let sponsor = lee::AccountId::from(&lee::PublicKey::new_from_private_key(&sponsor_key));
+
+        let mut state = initial_state();
+        state.force_insert_account(sponsor, funded_account(1_000_000_000_000));
+        let genesis = produce_dummy_block(1, None, vec![]);
+        apply_block(None, &genesis, &mut state).expect("genesis applies");
+        let tip = tip_of(&genesis);
+        let before_sponsor = state.get_account_by_id(sponsor).balance;
+        let before_from = state.get_account_by_id(from).balance;
+        let before_nonce = state.get_account_by_id(from).nonce;
+
+        let tx = sponsored_transfer(from, to, 0, 10, &sign_key, sponsor, &sponsor_key);
+        let block = produce_dummy_block(2, Some(tip.hash), vec![tx]);
+        let summary = apply_block(Some(&tip), &block, &mut state).expect("the block applies");
+
+        assert_eq!(summary.tx_outcomes.as_slice(), [TxApplyOutcome::Applied]);
+        assert!(summary.revenue_base > 0, "the transaction was charged");
+        assert_eq!(
+            state.get_account_by_id(sponsor).balance,
+            before_sponsor - summary.revenue_base,
+            "the sponsor pays the fee, not the signer",
+        );
+        assert_eq!(
+            state.get_account_by_id(from).balance,
+            before_from - 10,
+            "the signer pays only what it sent",
+        );
+        assert_eq!(
+            state.get_account_by_id(from).nonce.0,
+            before_nonce.0 + 1,
+            "inclusion burns the signer's nonce",
+        );
+        assert_eq!(
+            state.get_account_by_id(sponsor).nonce.0,
+            0,
+            "the sponsor signs no nonce, so it has none to burn",
+        );
+    }
+
+    /// Both authorization routes at once: the payer is one of the signers *and* a redundant fee
+    /// witness for itself rides along. Q1 is "at least one route verified", not "exactly one", so
+    /// this is accepted — the extra witness is merely a signature that also happens to check out.
+    #[test]
+    fn a_payer_that_is_both_a_signer_and_a_fee_witness_is_accepted() {
+        let accounts = initial_pub_accounts_private_keys();
+        let from = accounts[0].account_id;
+        let sign_key = accounts[0].pub_sign_key.clone();
+        let to = accounts[1].account_id;
+
+        let mut state = initial_state();
+        let genesis = produce_dummy_block(1, None, vec![]);
+        apply_block(None, &genesis, &mut state).expect("genesis applies");
+        let tip = tip_of(&genesis);
+        let before_nonce = state.get_account_by_id(from).nonce;
+
+        // Payer == signer, and the same key signs the fee witness too.
+        let tx = sponsored_transfer(from, to, 0, 10, &sign_key, from, &sign_key);
+        let block = produce_dummy_block(2, Some(tip.hash), vec![tx]);
+        let summary = apply_block(Some(&tip), &block, &mut state).expect("the block applies");
+
+        assert_eq!(summary.tx_outcomes.as_slice(), [TxApplyOutcome::Applied]);
+        assert!(summary.revenue_base > 0);
+        assert_eq!(
+            state.get_account_by_id(from).nonce.0,
+            before_nonce.0 + 1,
+            "a redundant fee witness changes nothing about the nonce burn",
+        );
+    }
+
     /// A payer that cannot cover its reservation invalidates the whole block, rather than being
     /// skipped: inclusion is the producer's choice and its consequence.
     #[test]
@@ -1348,8 +1528,9 @@ mod tests {
             apply_block(None, &genesis, &mut state).expect("genesis applies");
             let tip = tip_of(&genesis);
 
-            // The builder sizes against the state the transaction will run on, which is the
-            // block's opening state — the same one `classify` is handed.
+            // The builder sizes against the working state at the transaction's turn, which for a
+            // one-transaction block is the block's opening state — the same one `classify` is
+            // handed here.
             let opening_state = state.clone();
             let block = produce_dummy_block(2, Some(tip.hash), vec![tx.clone()]);
             let summary = apply_block(Some(&tip), &block, &mut state).expect("applies");
@@ -1878,6 +2059,39 @@ mod tests {
     // it is deterministic, which is what this one used to do.
 
     // Helpers for the fee tests.
+
+    /// An ordinary spendable account holding `balance`: what an initialized payer looks like.
+    fn funded_account(balance: u128) -> lee::Account {
+        lee::Account {
+            program_owner: programs::authenticated_transfer().id(),
+            balance,
+            ..lee::Account::default()
+        }
+    }
+
+    /// A transfer signed by `sign_key` but paid for by `payer`, whose fee witness rides along.
+    /// `payer` may be the signer itself, which is the both-routes case.
+    fn sponsored_transfer(
+        from: lee::AccountId,
+        to: lee::AccountId,
+        nonce: u128,
+        amount: u128,
+        sign_key: &lee::PrivateKey,
+        payer: lee::AccountId,
+        payer_key: &lee::PrivateKey,
+    ) -> LeeTransaction {
+        let message = lee::public_transaction::Message::try_new(
+            programs::authenticated_transfer().id(),
+            vec![from, to],
+            vec![nonce.into()],
+            authenticated_transfer_core::Instruction::Transfer { amount },
+            common::test_utils::test_fee_fields(payer),
+        )
+        .expect("message builds");
+        let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[sign_key])
+            .with_fee_signer(&message, payer_key);
+        LeeTransaction::Public(lee::PublicTransaction::new(message, witness_set))
+    }
 
     fn signed_transfer_with_fees(
         from: lee::AccountId,

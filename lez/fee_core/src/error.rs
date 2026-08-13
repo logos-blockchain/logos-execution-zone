@@ -49,8 +49,9 @@ pub enum InvalidBlockError {
     /// A caller-driven cumulative gas accumulation overflowed `u64`.
     #[error("gas accumulation overflowed u64")]
     GasAccumulationOverflow,
-    /// D1: the payer is not a member of the tx's signer set.
-    #[error("payer is not a member of the signer set")]
+    /// D1: the payer is not among the accounts whose fee authorization
+    /// accompanies the tx (a witness signature or the fee witness).
+    #[error("payer is not among the tx's fee-authorized accounts")]
     UnauthorizedPayer,
     /// D3: a private tx's public-signer set was empty.
     #[error("private transaction has an empty public-signer set")]

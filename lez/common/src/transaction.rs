@@ -319,8 +319,10 @@ pub fn is_system_transaction(tx: &LeeTransaction) -> bool {
 ///
 /// `vault_core::Instruction::Claim` carries an explicit `amount` and has no sweep variant, so the
 /// determination is **state-dependent**: `amount` is compared against the vault balance in `state`.
-/// Callers pass the block's *opening* state, exactly as they do for the opening base fees, so the
-/// sequencer and the indexer classify identically.
+/// Callers pass the *working* state at this transaction's turn in the block — not the block's
+/// opening state — so an earlier transaction that moved the vault balance is visible here. Both the
+/// block transition and the sequencer's block builder ask it that way (see
+/// `sequencer_core::drain_ordered_candidates`), so they classify identically.
 ///
 /// This is the single place the bootstrap exemption is decided.
 // TBA(fee-bootstrap): tokenomics may replace this with deferred settlement, where a claim pays its

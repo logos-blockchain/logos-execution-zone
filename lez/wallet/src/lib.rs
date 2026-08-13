@@ -61,16 +61,17 @@ pub const HOME_DIR_ENV_VAR: &str = "LEE_WALLET_HOME_DIR";
 /// payer must hold while the transaction executes. The measured programs span roughly 44k to 644k
 /// cycles (SPECS Annex C), so this is about three times the widest of them and a fifth of
 /// `MAX_GAS_EXEC`. Unused gas is released at settlement; only the reservation is affected.
-// TODO(T11): meter a dry run instead of declaring a constant.
+// TODO(fees-edges): meter a dry run instead of declaring a constant.
 pub const DEFAULT_GAS_LIMIT: u64 = 2_000_000;
 
 /// Base fee the wallet assumes when it caps its exposure, eight times the genesis minimum of 8.
 ///
 /// `max_fee` is a ceiling on the *reservation*, not the fee: it exists so a transaction signed at
 /// low base fees cannot be included later at prices the sender never agreed to. Base fees move by
-/// at most 12.5% per block, so a factor of eight is about eighteen consecutive fully congested
-/// blocks of headroom.
-// TODO(T11): read the live base fees and let the caller choose the multiple.
+/// at most 12.5% per block, so a factor of eight is about twenty-two consecutive fully congested
+/// blocks of headroom (the up-step is a floored `b / 8` with a guaranteed +1, so the integer
+/// sequence 8, 9, …, 63, 70 takes 22 blocks to clear the price this `max_fee` stops paying).
+// TODO(fees-edges): read the live base fees and let the caller choose the multiple.
 const ASSUMED_BASE_FEE: u128 = 64;
 
 /// Serialized size the wallet assumes when it caps its exposure. Generous: the block size limit is

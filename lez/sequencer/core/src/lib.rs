@@ -285,6 +285,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         );
 
         let (store, state) = Self::open_or_create_store(&config);
+        warn_if_producer_account_is_unadoptable(&state, store.producer_key());
 
         let chain = Arc::new(Mutex::new(Self::restore_chain_state(
             &config, &store, &state,
@@ -1919,6 +1920,33 @@ fn apply_follow_update(
             warn!("Dropping orphaned transaction {tx_hash} on resubmit: {err}");
         }
     }
+}
+
+/// Warns when the account this sequencer's block fees are credited to cannot spend them.
+///
+/// `credit_fee` materializes a missing account with a balance and the *default* program owner, and
+/// nothing can adopt it afterwards — `Initialize` requires an untouched account, and a transfer to
+/// it cannot claim it either. So a producer that earns before it initializes has its payouts
+/// stranded for good. Warn-only: the sequencer produces perfectly valid blocks either way, and the
+/// operator may not have run the (sponsored) initialization yet on a fresh chain.
+// TODO(producer-payout-adoption): the real fix is adoption semantics for a fee-materialized
+// account, so an earn-first producer can still claim its payouts. Tracked separately.
+fn warn_if_producer_account_is_unadoptable(state: &lee::V03State, producer_key: &lee::PublicKey) {
+    let producer = AccountId::from(producer_key);
+    let account = state.get_account_by_id(producer);
+    if account.program_owner != lee_core::program::DEFAULT_PROGRAM_ID {
+        return;
+    }
+    warn!(
+        "Producer account {producer} is {}: block fees credited to it will be permanently \
+         unspendable. Initialize it (a normal initialization, sponsored by a funded account) \
+         before this sequencer produces its first charged block.",
+        if account.balance == 0 {
+            "not initialized"
+        } else {
+            "already holding a stranded payout and can no longer be adopted"
+        }
+    );
 }
 
 /// The pre-genesis state: `testnet_initial_state` plus the bridge-lock holdings,

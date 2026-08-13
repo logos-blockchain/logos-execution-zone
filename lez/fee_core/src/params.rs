@@ -47,6 +47,108 @@ pub const PRIVATE_GAS_STOR: u64 = const_add(PRIVATE_PAD_BYTES, PROOF_BYTES);
 /// balance or credit can overflow 128-bit arithmetic.
 pub const TOTAL_SUPPLY: u128 = 10_000_000_000_000_000_000;
 
+/// The compiled-in parameter set: every constant above, in one value.
+pub const FEE_PARAMS: FeeParams = FeeParams {
+    target_gas_exec: TARGET_GAS_EXEC,
+    max_gas_exec: MAX_GAS_EXEC,
+    target_gas_stor: TARGET_GAS_STOR,
+    max_gas_stor: MAX_GAS_STOR,
+    d_exec: D_EXEC,
+    d_stor: D_STOR,
+    base_fee_exec_min: BASE_FEE_EXEC_MIN,
+    base_fee_stor_min: BASE_FEE_STOR_MIN,
+    base_fee_exec_max: BASE_FEE_EXEC_MAX,
+    base_fee_stor_max: BASE_FEE_STOR_MAX,
+    smoothing_window: SMOOTHING_WINDOW,
+    private_verify_gas: PRIVATE_VERIFY_GAS,
+    proof_bytes: PROOF_BYTES,
+    private_pad_bytes: PRIVATE_PAD_BYTES,
+    private_gas_stor: PRIVATE_GAS_STOR,
+};
+
+/// The SPECS §Parameters set as one value.
+///
+/// [`FEE_PARAMS`] is the compiled-in set and the only one production code uses; the type
+/// exists so code that folds the parameters into a digest (the genesis fingerprint) can be
+/// exercised against a modified set, which a test cannot get by recompiling constants.
+///
+/// `TOTAL_SUPPLY` is not part of it: it is a ledger bound, not a fee parameter, and genesis
+/// balances are compared directly by whatever hashes these.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FeeParams {
+    pub target_gas_exec: u64,
+    pub max_gas_exec: u64,
+    pub target_gas_stor: u64,
+    pub max_gas_stor: u64,
+    pub d_exec: u64,
+    pub d_stor: u64,
+    pub base_fee_exec_min: u64,
+    pub base_fee_stor_min: u64,
+    pub base_fee_exec_max: u64,
+    pub base_fee_stor_max: u64,
+    pub smoothing_window: usize,
+    pub private_verify_gas: u64,
+    pub proof_bytes: u64,
+    pub private_pad_bytes: u64,
+    pub private_gas_stor: u64,
+}
+
+impl FeeParams {
+    /// Number of words [`Self::fingerprint_words`] returns.
+    pub const FINGERPRINT_WORDS: usize = 15;
+
+    /// The parameters in the fixed order SPECS §Parameters lists them, for hashing.
+    ///
+    /// The order is part of every digest built from it, so it must stay stable: a new
+    /// parameter is appended, never inserted, and none is dropped. Changing it changes
+    /// every fingerprint without any protocol change, which defeats the comparison.
+    ///
+    /// Order: `TARGET_GAS_EXEC`, `MAX_GAS_EXEC`, `TARGET_GAS_STOR`, `MAX_GAS_STOR`,
+    /// `D_EXEC`, `D_STOR`, `BASE_FEE_EXEC_MIN`, `BASE_FEE_STOR_MIN`, `BASE_FEE_EXEC_MAX`,
+    /// `BASE_FEE_STOR_MAX`, `SMOOTHING_WINDOW`, `PRIVATE_VERIFY_GAS`, `PROOF_BYTES`,
+    /// `PRIVATE_PAD_BYTES`, `PRIVATE_GAS_STOR`.
+    #[must_use]
+    pub fn fingerprint_words(&self) -> [u64; Self::FINGERPRINT_WORDS] {
+        // Destructured without `..` so a new parameter breaks compilation here (and on
+        // `FINGERPRINT_WORDS`) instead of silently missing every digest built from this.
+        let &Self {
+            target_gas_exec,
+            max_gas_exec,
+            target_gas_stor,
+            max_gas_stor,
+            d_exec,
+            d_stor,
+            base_fee_exec_min,
+            base_fee_stor_min,
+            base_fee_exec_max,
+            base_fee_stor_max,
+            smoothing_window,
+            private_verify_gas,
+            proof_bytes,
+            private_pad_bytes,
+            private_gas_stor,
+        } = self;
+
+        [
+            target_gas_exec,
+            max_gas_exec,
+            target_gas_stor,
+            max_gas_stor,
+            d_exec,
+            d_stor,
+            base_fee_exec_min,
+            base_fee_stor_min,
+            base_fee_exec_max,
+            base_fee_stor_max,
+            u64::try_from(smoothing_window).expect("SMOOTHING_WINDOW fits in u64"),
+            private_verify_gas,
+            proof_bytes,
+            private_pad_bytes,
+            private_gas_stor,
+        ]
+    }
+}
+
 // Compile-time guard: caught regardless of build profile. `validate_genesis_params`
 // below is the runtime-checked counterpart used by fallible constructors.
 const _: () = assert!(MAX_GAS_EXEC == const_mul(2, TARGET_GAS_EXEC));
@@ -105,6 +207,32 @@ mod tests {
     #[test]
     fn private_gas_stor_matches_spec_value() {
         assert_eq!(PRIVATE_GAS_STOR, 224_063);
+    }
+
+    #[test]
+    fn fee_params_mirrors_the_compiled_constants() {
+        // Written out in SPECS order rather than from `FEE_PARAMS`, so a field wired to
+        // the wrong constant (the two `_MAX`es, the two `_MIN`s) fails here.
+        assert_eq!(
+            FEE_PARAMS.fingerprint_words(),
+            [
+                TARGET_GAS_EXEC,
+                MAX_GAS_EXEC,
+                TARGET_GAS_STOR,
+                MAX_GAS_STOR,
+                D_EXEC,
+                D_STOR,
+                BASE_FEE_EXEC_MIN,
+                BASE_FEE_STOR_MIN,
+                BASE_FEE_EXEC_MAX,
+                BASE_FEE_STOR_MAX,
+                u64::try_from(SMOOTHING_WINDOW).unwrap(),
+                PRIVATE_VERIFY_GAS,
+                PROOF_BYTES,
+                PRIVATE_PAD_BYTES,
+                PRIVATE_GAS_STOR,
+            ]
+        );
     }
 
     #[test]
