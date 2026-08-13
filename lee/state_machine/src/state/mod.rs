@@ -4,8 +4,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     BlockId, Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, MembershipProof, Nullifier,
     Timestamp,
-    account::{Account, AccountId},
-    program::ProgramId,
+    account::{Account, AccountId, Data},
 };
 
 use crate::{
@@ -114,7 +113,12 @@ impl BorshDeserialize for NullifierSet {
 pub struct V03State {
     public_state: HashMap<AccountId, Account>,
     private_state: (CommitmentSet, NullifierSet),
-    programs: HashMap<ProgramId, Program>,
+    /// Deployed programs, stored as `Account`s keyed by `AccountId::from(program_id)` (see that
+    /// impl's doc comment) rather than by `ProgramId` directly, with the elf held in
+    /// `Account.data`. Kept as its own map rather than folded into `public_state`: nothing in
+    /// dispatch/execution reads or writes it, so it isn't part of the account-mutation surface
+    /// `program_owner`-based authorization governs — this is host-side bookkeeping only.
+    programs: HashMap<AccountId, Account>,
 }
 
 impl Default for V03State {
@@ -190,13 +194,19 @@ impl V03State {
     #[must_use]
     pub fn with_programs(mut self, programs: impl IntoIterator<Item = Program>) -> Self {
         for program in programs {
-            self.insert_program(program);
+            self.insert_program(&program);
         }
         self
     }
 
-    pub(crate) fn insert_program(&mut self, program: Program) {
-        self.programs.insert(program.id(), program);
+    pub(crate) fn insert_program(&mut self, program: &Program) {
+        let account_id = AccountId::from(program.id());
+        let account = Account {
+            data: Data::try_from(program.elf().to_vec())
+                .expect("elf must fit under DATA_MAX_LENGTH"),
+            ..Account::default()
+        };
+        self.programs.insert(account_id, account);
     }
 
     pub fn apply_state_diff(&mut self, diff: ValidatedStateDiff) {
@@ -222,7 +232,7 @@ impl V03State {
         self.private_state.0.extend(&new_commitments);
         self.private_state.1.extend(&new_nullifiers);
         if let Some(program) = program {
-            self.insert_program(program);
+            self.insert_program(&program);
         }
     }
 
@@ -281,7 +291,7 @@ impl V03State {
         self.private_state.0.get_proof_for(commitment)
     }
 
-    pub(crate) const fn programs(&self) -> &HashMap<ProgramId, Program> {
+    pub(crate) const fn programs(&self) -> &HashMap<AccountId, Account> {
         &self.programs
     }
 
@@ -314,11 +324,14 @@ impl V03State {
         let mut accounts: Vec<(&AccountId, &Account)> = public_state.iter().collect();
         accounts.sort_by(|a, b| a.0.as_ref().cmp(b.0.as_ref()));
 
-        let mut program_ids: Vec<ProgramId> = programs.keys().copied().collect();
-        program_ids.sort_unstable();
+        // `programs` is `Account`-shaped now, same as `public_state` — reuse the identical
+        // sort-then-hash-id-plus-encoded-account pattern rather than a bespoke `ProgramId` loop.
+        let mut program_accounts: Vec<(&AccountId, &Account)> = programs.iter().collect();
+        program_accounts.sort_by(|a, b| a.0.as_ref().cmp(b.0.as_ref()));
 
         let account_count = u64::try_from(accounts.len()).expect("account count fits in u64");
-        let program_count = u64::try_from(program_ids.len()).expect("program count fits in u64");
+        let program_count =
+            u64::try_from(program_accounts.len()).expect("program count fits in u64");
 
         let mut hasher = Sha256::new();
         hasher.update(account_count.to_le_bytes());
@@ -330,10 +343,12 @@ impl V03State {
             hasher.update(&bytes);
         }
         hasher.update(program_count.to_le_bytes());
-        for id in program_ids {
-            for word in id {
-                hasher.update(word.to_le_bytes());
-            }
+        for (id, account) in program_accounts {
+            hasher.update(id.as_ref());
+            let bytes = borsh::to_vec(account).expect("Account is BorshSerialize");
+            let len = u64::try_from(bytes.len()).expect("program account encoding fits in u64");
+            hasher.update(len.to_le_bytes());
+            hasher.update(&bytes);
         }
         hasher.update(private_state.0.digest());
 

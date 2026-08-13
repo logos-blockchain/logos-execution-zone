@@ -4,7 +4,15 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use bytesize::ByteSize;
 use serde::{Deserialize, Serialize};
 
-pub const DATA_MAX_LENGTH: ByteSize = ByteSize::kib(100);
+/// Raised from the original 100 KiB to accommodate program elfs stored directly in
+/// `Account.data` under the Program-as-Account migration.
+///
+/// Observed elfs currently run 375 KB-520 KB, plus 631 KB for the fixed
+/// privacy-preserving circuit itself. This value is a rough placeholder, not a considered
+/// protocol constant yet — it still needs to be refined against real transaction/block-size
+/// budgets (e.g. `SequencerConfig::max_block_size`, currently 1 MiB) before this is something
+/// production traffic should rely on.
+pub const DATA_MAX_LENGTH: ByteSize = ByteSize::kib(700);
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, BorshSerialize)]
 pub struct Data(Vec<u8>);

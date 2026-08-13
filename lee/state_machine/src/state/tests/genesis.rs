@@ -67,11 +67,12 @@ fn insert_program() {
     let mut state = V03State::new();
     let program_to_insert = crate::test_methods::simple_balance_transfer();
     let program_id = program_to_insert.id();
-    assert!(!state.programs.contains_key(&program_id));
+    let account_id = lee_core::account::AccountId::from(program_id);
+    assert!(!state.programs.contains_key(&account_id));
 
-    state.insert_program(program_to_insert);
+    state.insert_program(&program_to_insert);
 
-    assert!(state.programs.contains_key(&program_id));
+    assert!(state.programs.contains_key(&account_id));
 }
 
 #[test]

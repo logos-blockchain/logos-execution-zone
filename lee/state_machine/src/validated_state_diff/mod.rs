@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::{HashMap, HashSet, VecDeque},
     hash::Hash,
 };
@@ -111,10 +112,21 @@ impl ValidatedStateDiff {
                 LeeError::MaxChainedCallsDepthExceeded
             );
 
-            // Check that the `program_id` corresponds to a deployed program
-            let Some(program) = state.programs().get(&chained_call.program_id) else {
+            // Check that the `program_id` corresponds to a deployed program. `programs` is
+            // keyed by `AccountId::from(program_id)`, not `program_id` itself (see that impl's
+            // doc comment), and holds the elf as a plain `Account`; reconstruct a `Program` from
+            // it via `new_unchecked` to execute, skipping a redundant image-id recomputation
+            // since the id/elf pairing was already validated once, at deployment time.
+            let Some(program_account) = state
+                .programs()
+                .get(&AccountId::from(chained_call.program_id))
+            else {
                 return Err(LeeError::InvalidInput("Unknown program".into()));
             };
+            let program = Program::new_unchecked(
+                chained_call.program_id,
+                Cow::Owned(program_account.data.to_vec()),
+            );
 
             debug!(
                 "Program {:?} pre_states: {:?}, instruction_data: {:?}",
@@ -441,7 +453,10 @@ impl ValidatedStateDiff {
     ) -> Result<Self, LeeError> {
         // TODO: remove clone
         let program = Program::new(tx.message.bytecode.clone().into())?;
-        if state.programs().contains_key(&program.id()) {
+        if state
+            .programs()
+            .contains_key(&AccountId::from(program.id()))
+        {
             return Err(LeeError::ProgramAlreadyExists);
         }
         Ok(Self(StateDiff {
