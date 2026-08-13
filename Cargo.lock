@@ -11615,7 +11615,6 @@ dependencies = [
  "associated_token_account_core",
  "async-stream",
  "authenticated_transfer_core",
- "base58",
  "bincode",
  "bip39",
  "bridge_core",
