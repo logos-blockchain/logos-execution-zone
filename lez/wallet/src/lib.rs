@@ -37,7 +37,7 @@ use url::Url;
 
 use crate::{
     account::{AccountIdWithPrivacy, Label},
-    config::WalletConfigOverrides,
+    config::{SequencerConnectionData, WalletConfigOverrides},
     multi_client::{MultiSequencerClient, Statistics, extract_statistics_from_path},
     poller::{TxPoller, multi_poll},
     storage::key_chain::{NullifierIndex, SharedAccountEntry},
@@ -312,6 +312,26 @@ impl WalletCore {
         config_file.sync_all().await?;
 
         log::info!("Stored data at {}", self.config_path.display());
+
+        Ok(())
+    }
+
+    /// Add sequencer to the list.
+    pub fn add_sequencer(&mut self, conn_data: SequencerConnectionData) {
+        self.config.sequencers.push(conn_data);
+    }
+
+    /// Remove known sequencer from the list.
+    pub fn remove_sequencer(&mut self, addr: &Url) -> Result<()> {
+        let (idx, _) = self
+            .config
+            .sequencers
+            .iter()
+            .enumerate()
+            .find(|(_, conn_data)| &conn_data.sequencer_addr == addr)
+            .ok_or_else(|| anyhow::anyhow!("Sequencer with this addr is not found"))?;
+
+        self.config.sequencers.remove(idx);
 
         Ok(())
     }

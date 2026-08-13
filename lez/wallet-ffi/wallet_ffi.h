@@ -947,7 +947,7 @@ enum WalletFfiError wallet_ffi_free_label_list(struct LabelList *label_list);
  * - `handle`: Valid wallet handle
  *
  * # Returns
- * - `Success` if deployment was submitted successfully
+ * - `Success` rotation passed
  * - Error code on other failures
  *
  * # Safety
@@ -963,7 +963,7 @@ enum WalletFfiError wallet_ffi_client_rotation(struct WalletHandle *handle);
  * - `callibration_limit`: Valid pointer into `usize`
  *
  * # Returns
- * - `Success` if deployment was submitted successfully
+ * - `Success` if config fetched successfully
  * - Error code on other failures
  *
  * # Safety
@@ -981,7 +981,7 @@ enum WalletFfiError wallet_ffi_get_callibration_limit(struct WalletHandle *handl
  * - `distribution_limit`: Valid pointer into `usize`
  *
  * # Returns
- * - `Success` if deployment was submitted successfully
+ * - `Success` if config fetched successfully
  * - Error code on other failures
  *
  * # Safety
@@ -1001,7 +1001,7 @@ enum WalletFfiError wallet_ffi_get_distribution_limit(struct WalletHandle *handl
  * - `callibration_limit`: `usize`
  *
  * # Returns
- * - `Success` if deployment was submitted successfully
+ * - `Success` if config updated successfully
  * - Error code on other failures
  *
  * # Safety
@@ -1020,7 +1020,7 @@ enum WalletFfiError wallet_ffi_set_callibration_limit(struct WalletHandle *handl
  * - `distribution_limit`: `usize`
  *
  * # Returns
- * - `Success` if deployment was submitted successfully
+ * - `Success` if config updated successfully
  * - Error code on other failures
  *
  * # Safety
@@ -1028,6 +1028,49 @@ enum WalletFfiError wallet_ffi_set_callibration_limit(struct WalletHandle *handl
  */
 enum WalletFfiError wallet_ffi_set_distribution_limit(struct WalletHandle *handle,
                                                       uintptr_t distribution_limit);
+
+/**
+ * Remove sequencer from the list.
+ *  
+ * For changes to be applied, execute `wallet_ffi_client_rotation`.
+ *
+ * # Parameters
+ * - `handle`: Valid wallet handle
+ * - `addr`: C-compatible string, representing an URL address of the sequencer.
+ *
+ * # Returns
+ * - `Success` if removal passed
+ * - Error code on other failures
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+ * - `addr` must be a non-null C-compatible string.
+ */
+enum WalletFfiError wallet_ffi_remove_sequencer(struct WalletHandle *handle, const char *addr);
+
+/**
+ * Add sequencer to the list.
+ *  
+ * For changes to be applied, execute `wallet_ffi_client_rotation`.
+ *
+ * # Parameters
+ * - `handle`: Valid wallet handle
+ * - `addr`: C-compatible string, representing an URL address of the sequencer.
+ * - `user`: C-compatible string, representing a name of a user, can be `nullptr`.
+ * - `password`: C-compatible string, representing a password, can be `nullptr`.
+ *
+ * # Returns
+ * - `Success` if addition passed
+ * - Error code on other failures
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+ * - `addr` must be a non-null C-compatible string.
+ */
+enum WalletFfiError wallet_ffi_add_sequencer(struct WalletHandle *handle,
+                                             const char *addr,
+                                             const char *user,
+                                             const char *password);
 
 /**
  * Produce account id for public PDA.
