@@ -11,7 +11,7 @@ pub use assess::{FeeTxView, PayerId, fee_actual_base, fee_reserve, gas_stor};
 pub use distribute::{distribute, record_revenue, settle_payout};
 pub use error::{ConsensusFaultError, FeeError, InvalidBlockError};
 pub use state::FeeState;
-pub use update::next_base_fee;
+pub use update::{next_base_fee, step_base_fees, stepped_base_fees};
 pub use validity::{
     DeploymentFeePolicy, accumulate_gas_used, authorize_payer, authorize_private_payer,
     deployment_policy, validate_static_block, validate_static_tx,

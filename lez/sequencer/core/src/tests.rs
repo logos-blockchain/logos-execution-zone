@@ -31,7 +31,7 @@ use tempfile::tempdir;
 use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
 
 use crate::{
-    MAX_DISPATCHES_PER_BLOCK, RETIRE_DISPATCH_AFTER_FAILURES, TransactionOrigin,
+    BlockResource, MAX_DISPATCHES_PER_BLOCK, RETIRE_DISPATCH_AFTER_FAILURES, TransactionOrigin,
     apply_follow_update,
     block_publisher::FollowUpdate,
     block_store::SequencerStore,
@@ -1100,21 +1100,30 @@ fn block_gas_used_defers_the_transaction_that_would_bust_either_cap() {
 
     // Exactly full is still valid; one more of either is not.
     assert_eq!(used.would_exceed(contribution(0, 0)), None);
-    assert_eq!(used.would_exceed(contribution(1, 0)), Some("execution gas"));
-    assert_eq!(used.would_exceed(contribution(0, 1)), Some("storage gas"));
+    assert_eq!(
+        used.would_exceed(contribution(1, 0)),
+        Some(BlockResource::ExecutionGas)
+    );
+    assert_eq!(
+        used.would_exceed(contribution(0, 1)),
+        Some(BlockResource::StorageGas)
+    );
 
     // The two ceilings are separate: a block full of storage gas has execution gas to spare.
     let mut used = super::BlockGasUsed::default();
     used.add(contribution(0, MAX_GAS_STOR));
     assert_eq!(used.would_exceed(contribution(MAX_GAS_EXEC, 0)), None);
-    assert_eq!(used.would_exceed(contribution(0, 1)), Some("storage gas"));
+    assert_eq!(
+        used.would_exceed(contribution(0, 1)),
+        Some(BlockResource::StorageGas)
+    );
 
     // Saturating, so a contribution that would overflow the total is still just "over the cap".
     let mut used = super::BlockGasUsed::default();
     used.add(contribution(1, 1));
     assert_eq!(
         used.would_exceed(contribution(u64::MAX, 0)),
-        Some("execution gas")
+        Some(BlockResource::ExecutionGas)
     );
 }
 
@@ -1368,8 +1377,9 @@ async fn deferring_one_transaction_of_a_payer_defers_the_rest_of_its_chain() {
 /// must be dropped rather than deferred.
 ///
 /// Deferring it would requeue it for ever, and requeued work is drained first thing next turn: a
-/// handful of these — free to submit, needing no balance, rejected by nothing upstream — would fill
-/// every batch and the mempool behind them would never be reached again.
+/// handful of these — free to submit and needing no balance — would fill every batch and the
+/// mempool behind them would never be reached again. RPC admission turns them away at the door;
+/// this is the backstop for everything that reaches a mempool by another route.
 #[tokio::test]
 async fn a_transaction_larger_than_any_block_is_dropped_rather_than_deferred_for_ever() {
     // Raised so the storage case below is decided by the consensus cap, not by the local envelope.

@@ -95,6 +95,23 @@ enum CapScreen {
     Drop,
 }
 
+/// One of the two block resources. Named rather than spelled out at each use so callers that have
+/// to report which cap was hit (the RPC's admission errors) can map it without matching prose.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BlockResource {
+    ExecutionGas,
+    StorageGas,
+}
+
+impl std::fmt::Display for BlockResource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ExecutionGas => write!(f, "execution gas"),
+            Self::StorageGas => write!(f, "storage gas"),
+        }
+    }
+}
+
 /// The block's running gas totals, against the two caps `apply_block_to_state` enforces.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct BlockGasUsed {
@@ -110,12 +127,12 @@ impl BlockGasUsed {
     const fn would_exceed(
         self,
         contribution: chain_state::CapContribution,
-    ) -> Option<&'static str> {
+    ) -> Option<BlockResource> {
         if self.exec.saturating_add(contribution.gas_exec) > MAX_GAS_EXEC {
-            return Some("execution gas");
+            return Some(BlockResource::ExecutionGas);
         }
         if self.stor.saturating_add(contribution.gas_stor) > MAX_GAS_STOR {
-            return Some("storage gas");
+            return Some(BlockResource::StorageGas);
         }
         None
     }
@@ -827,7 +844,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                 //
                 // Sized off the same `chain_state::classify` the apply path uses, so a block this
                 // builder fills to the brim is one `apply_block_to_state` accepts. The caller's
-                // pre-screen ([`Self::static_cap_bound`]) has already turned away everything whose
+                // pre-screen ([`static_cap_bound`]) has already turned away everything whose
                 // declared size cannot fit; what is left is the exact check, which only the classes
                 // whose execution gas is metered rather than declared can still fail.
                 if let Some(contribution) = chain_state::cap_contribution(tx, state, outcome.cycles)
@@ -1295,16 +1312,16 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
     /// ever hold it. Deferring that one would requeue it for ever, and requeued work is drained
     /// again first thing next turn: a handful would fill every batch and the mempool behind them
     /// would never be reached again — a stall anyone can trigger by declaring
-    /// `gas_limit = u64::MAX`, which costs nothing and needs no balance. Nothing upstream rejects
-    /// it: RPC admission bounds neither the declared gas nor the wire size against the block caps,
-    /// and the static fee-validity check that would catch it runs inside
-    /// [`Self::apply_mempool_transaction`], which this pre-screen deliberately precedes.
+    /// `gas_limit = u64::MAX`, which costs nothing and needs no balance. RPC admission rejects
+    /// those at ingest off the same [`exceeds_empty_block`] bound, so this arm is the backstop for
+    /// what is already in a mempool (or arrived through another path), not the only guard.
     fn screen_cap_budget(
         tx: &LeeTransaction,
         state: &lee::V03State,
         gas_used: BlockGasUsed,
     ) -> CapScreen {
-        let Some(bound) = Self::static_cap_bound(tx, state) else {
+        let Some(bound) = static_cap_bound(tx, state, chain_state::charged_fee_view(tx, state))
+        else {
             return CapScreen::Admit;
         };
         let Some(over) = gas_used.would_exceed(bound) else {
@@ -1312,7 +1329,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         };
         let tx_hash = tx.hash();
 
-        if let Some(over_alone) = BlockGasUsed::default().would_exceed(bound) {
+        if let Some(over_alone) = exceeds_empty_block(bound) {
             error!(
                 "Transaction with hash {tx_hash} declares more {over_alone} than an entire block \
                  may hold; dropping it rather than deferring it for ever",
@@ -1325,39 +1342,6 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
              declares does not fit in the block's remaining {over}",
         );
         CapScreen::Defer
-    }
-
-    /// The most `tx` can contribute to the two block totals, known before it executes. `None` for a
-    /// cap-exempt transaction (the sequencer's own injections), which contributes to neither.
-    ///
-    /// Read off the same shared classification the apply path uses, per class:
-    ///
-    /// - **charged**: the `gas_limit` it declares (execution is clamped to it, so its real
-    ///   contribution can only be smaller) and its wire size, which is exact;
-    /// - **private and deployment**: protocol constants and wire size — exact, so the pre-screen is
-    ///   the whole answer for them;
-    /// - **full vault sweep**: storage only. Its execution gas is metered rather than declared, so
-    ///   the pre-screen uses zero for it and the post-execution check is what bounds it.
-    ///
-    /// Never an under-estimate of the storage side and never below the *declared* execution bound,
-    /// which is what makes this safe to defer on: it can only turn away transactions the exact
-    /// check would also have deferred, plus charged ones that would have under-run their own
-    /// declared limit.
-    fn static_cap_bound(
-        tx: &LeeTransaction,
-        state: &lee::V03State,
-    ) -> Option<chain_state::CapContribution> {
-        if let Some(view) = chain_state::charged_fee_view(tx, state)
-            && let fee_core::FeeTxView::Public { gas_limit, .. } = view
-        {
-            return Some(chain_state::CapContribution {
-                gas_exec: gas_limit,
-                gas_stor: fee_core::gas_stor(&view),
-            });
-        }
-        // Zero cycles: ignored by every class whose execution gas is a constant, and the floor for
-        // the one class where it is metered.
-        chain_state::cap_contribution(tx, state, 0)
     }
 
     /// Reads the current head state under the lock without cloning it, so callers
@@ -1555,6 +1539,56 @@ struct BlockWithMeta {
     /// What the builder accounted against the two block caps. `apply_block_to_state` must
     /// accumulate exactly these totals for this block.
     gas_used: BlockGasUsed,
+}
+
+/// The most `tx` can contribute to the two block totals, known before it executes. `None` for a
+/// cap-exempt transaction (the sequencer's own injections), which contributes to neither.
+///
+/// Read off the same shared classification the apply path uses, per class:
+///
+/// - **charged**: the `gas_limit` it declares (execution is clamped to it, so its real contribution
+///   can only be smaller) and its wire size, which is exact;
+/// - **private and deployment**: protocol constants and wire size — exact, so the pre-screen is the
+///   whole answer for them;
+/// - **full vault sweep**: storage only. Its execution gas is metered rather than declared, so the
+///   pre-screen uses zero for it and the post-execution check is what bounds it.
+///
+/// Never an under-estimate of the storage side and never below the *declared* execution bound,
+/// which is what makes this safe to defer on: it can only turn away transactions the exact
+/// check would also have deferred, plus charged ones that would have under-run their own
+/// declared limit.
+///
+/// `charged` is the transaction's charged view, which the caller passes in rather than having it
+/// recomputed: classifying decodes the transaction's instruction, and the ingest path already
+/// holds one.
+#[must_use]
+pub fn static_cap_bound(
+    tx: &LeeTransaction,
+    state: &lee::V03State,
+    charged: Option<fee_core::FeeTxView>,
+) -> Option<chain_state::CapContribution> {
+    if let Some(view) = charged
+        && let fee_core::FeeTxView::Public { gas_limit, .. } = view
+    {
+        return Some(chain_state::CapContribution {
+            gas_exec: gas_limit,
+            gas_stor: fee_core::gas_stor(&view),
+        });
+    }
+    // Zero cycles: ignored by every class whose execution gas is a constant, and the floor for
+    // the one class where it is metered.
+    chain_state::cap_contribution(tx, state, 0)
+}
+
+/// Which block cap a contribution this size busts on an *empty* block, or `None` if some block
+/// could hold it.
+///
+/// The line between "does not fit this block" (an ordinary deferral) and "fits no block": the
+/// builder drops the second kind rather than requeueing it for ever, and RPC admission turns it
+/// away at ingest. Both sides read this one bound so they cannot disagree about which is which.
+#[must_use]
+pub fn exceeds_empty_block(contribution: chain_state::CapContribution) -> Option<BlockResource> {
+    BlockGasUsed::default().would_exceed(contribution)
 }
 
 /// Orders one drained batch by what its transactions bid, without ever reordering a payer's

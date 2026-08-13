@@ -9559,15 +9559,20 @@ name = "sequencer_service"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "authenticated_transfer_core",
  "borsh",
+ "bridge_core",
  "bytesize",
+ "chain_state",
  "clap",
  "common",
  "env_logger",
+ "fee_core",
  "futures",
  "hex",
  "jsonrpsee",
  "lee",
+ "lee_core",
  "log",
  "mempool",
  "metrics-exporter-prometheus",
@@ -9576,8 +9581,11 @@ dependencies = [
  "sequencer_service_metrics",
  "sequencer_service_protocol",
  "sequencer_service_rpc",
+ "system_accounts",
+ "testnet_initial_state",
  "tokio",
  "tokio-util",
+ "vault_core",
 ]
 
 [[package]]
@@ -9595,7 +9603,10 @@ dependencies = [
  "hex",
  "lee",
  "lee_core",
+ "serde",
+ "serde_json",
  "serde_with",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

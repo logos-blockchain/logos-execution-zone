@@ -6,8 +6,8 @@ use jsonrpsee::types::ErrorObjectOwned;
 #[cfg(feature = "client")]
 pub use jsonrpsee::{core::ClientError, http_client::HttpClientBuilder as SequencerClientBuilder};
 use sequencer_service_protocol::{
-    Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest, HashType,
-    LeeTransaction, MembershipProof, Nonce, ProgramId,
+    Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest, FeeStateQuote,
+    HashType, LeeTransaction, MembershipProof, Nonce, ProgramId,
 };
 
 #[cfg(all(not(feature = "server"), not(feature = "client")))]
@@ -42,6 +42,11 @@ pub trait Rpc {
     // TODO: expand healthcheck response into some kind of report
     #[method(name = "checkHealth")]
     async fn check_health(&self) -> Result<(), ErrorObjectOwned>;
+
+    /// Current base fees, the band the next block's can land in, and the protocol caps — what a
+    /// wallet needs to choose `gas_limit` and `max_fee` before it signs. See [`FeeStateQuote`].
+    #[method(name = "getFeeState")]
+    async fn get_fee_state(&self) -> Result<FeeStateQuote, ErrorObjectOwned>;
 
     // TODO: These functions should be removed after wallet starts using indexer
     // for this type of queries.

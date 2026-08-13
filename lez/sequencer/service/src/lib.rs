@@ -21,6 +21,7 @@ use sequencer_service_rpc::RpcServer as _;
 use tokio::{sync::Mutex, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
+pub mod fees;
 pub mod service;
 
 const REQUEST_BODY_MAX_SIZE: ByteSize = ByteSize::mib(10);

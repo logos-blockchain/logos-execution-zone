@@ -9,7 +9,9 @@ license = { workspace = true }
 workspace = true
 
 [dependencies]
+chain_state.workspace = true
 common.workspace = true
+fee_core.workspace = true
 lee.workspace = true
 mempool.workspace = true
 sequencer_core = { workspace = true, features = ["testnet"] }
@@ -30,6 +32,15 @@ jsonrpsee.workspace = true
 futures.workspace = true
 bytesize.workspace = true
 borsh.workspace = true
+
+[dev-dependencies]
+authenticated_transfer_core.workspace = true
+bridge_core.workspace = true
+lee = { workspace = true, features = ["test-utils"] }
+lee_core.workspace = true
+system_accounts.workspace = true
+testnet_initial_state.workspace = true
+vault_core.workspace = true
 
 [features]
 default = []

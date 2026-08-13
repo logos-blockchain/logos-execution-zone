@@ -6,6 +6,49 @@
 
 use std::cmp::Ordering;
 
+use crate::{
+    params::{
+        BASE_FEE_EXEC_MAX, BASE_FEE_EXEC_MIN, BASE_FEE_STOR_MAX, BASE_FEE_STOR_MIN, D_EXEC, D_STOR,
+        TARGET_GAS_EXEC, TARGET_GAS_STOR,
+    },
+    state::FeeState,
+};
+
+/// Both base fees one block on, at the gas the block used.
+///
+/// The single place each resource is wired to its own target, denominator and saturation bounds.
+/// The block transition moves the fee state through [`step_base_fees`]; anything that *quotes* the
+/// next block's prices without moving state (the sequencer's fee RPC) reads them here, so a quote
+/// cannot drift from what the transition will actually do.
+#[must_use]
+pub fn stepped_base_fees(state: &FeeState, gas_used_exec: u64, gas_used_stor: u64) -> (u64, u64) {
+    (
+        next_base_fee(
+            state.base_fee_exec,
+            gas_used_exec,
+            TARGET_GAS_EXEC,
+            D_EXEC,
+            BASE_FEE_EXEC_MIN,
+            BASE_FEE_EXEC_MAX,
+        ),
+        next_base_fee(
+            state.base_fee_stor,
+            gas_used_stor,
+            TARGET_GAS_STOR,
+            D_STOR,
+            BASE_FEE_STOR_MIN,
+            BASE_FEE_STOR_MAX,
+        ),
+    )
+}
+
+/// Moves both base fees to their values for the next block (SPECS §Base-fee update).
+pub fn step_base_fees(state: &mut FeeState, gas_used_exec: u64, gas_used_stor: u64) {
+    let (base_fee_exec, base_fee_stor) = stepped_base_fees(state, gas_used_exec, gas_used_stor);
+    state.base_fee_exec = base_fee_exec;
+    state.base_fee_stor = base_fee_stor;
+}
+
 /// Computes the next base fee for one resource.
 ///
 /// Takes the current value `b`, gas used `g`, `target`, adjustment

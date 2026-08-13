@@ -1,13 +1,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use fee_core::{
-    FeeError, FeeState,
-    params::{
-        BASE_FEE_EXEC_MAX, BASE_FEE_EXEC_MIN, BASE_FEE_STOR_MAX, BASE_FEE_STOR_MIN, D_EXEC, D_STOR,
-        MAX_GAS_EXEC, TARGET_GAS_EXEC, TARGET_GAS_STOR,
-    },
-};
+use fee_core::{FeeError, FeeState, params::MAX_GAS_EXEC};
 use lee_core::{
     BlockId, Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, MembershipProof, Nullifier,
     Timestamp,
@@ -388,22 +382,7 @@ impl V03State {
 
     /// Moves both base fees to their values for the next block (SPECS §Base-fee update).
     pub fn update_base_fees(&mut self, gas_used_exec: u64, gas_used_stor: u64) {
-        self.fee_state.base_fee_exec = fee_core::next_base_fee(
-            self.fee_state.base_fee_exec,
-            gas_used_exec,
-            TARGET_GAS_EXEC,
-            D_EXEC,
-            BASE_FEE_EXEC_MIN,
-            BASE_FEE_EXEC_MAX,
-        );
-        self.fee_state.base_fee_stor = fee_core::next_base_fee(
-            self.fee_state.base_fee_stor,
-            gas_used_stor,
-            TARGET_GAS_STOR,
-            D_STOR,
-            BASE_FEE_STOR_MIN,
-            BASE_FEE_STOR_MAX,
-        );
+        fee_core::step_base_fees(&mut self.fee_state, gas_used_exec, gas_used_stor);
     }
 
     /// Wholesale mutable access to the fee state.

@@ -12,10 +12,12 @@ use sequencer_core::{
     DbError, SequencerCore, TransactionOrigin, block_publisher::BlockPublisherTrait,
 };
 use sequencer_service_protocol::{
-    Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest, HashType,
-    MembershipProof, Nonce, ProgramId,
+    Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest, FeeStateQuote,
+    HashType, MembershipProof, Nonce, ProgramId,
 };
 use tokio::sync::Mutex;
+
+use crate::fees;
 
 const NOT_FOUND_ERROR_CODE: i32 = -31999;
 
@@ -48,55 +50,15 @@ impl<BC: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::Rpc
 
         let tx_hash = tx.hash();
 
-        let res = async move {
-            // Reserve ~200 bytes for block header overhead
-            const BLOCK_HEADER_OVERHEAD: u64 = 200;
-
-            let encoded_tx =
-                borsh::to_vec(&tx).expect("Transaction borsh serialization should not fail");
-            let tx_size =
-                u64::try_from(encoded_tx.len()).expect("Transaction size should fit in u64");
-
-            let max_tx_size = self.max_block_size.saturating_sub(BLOCK_HEADER_OVERHEAD);
-
-            if tx_size > max_tx_size {
-                return Err(ErrorObjectOwned::owned(
-                    ErrorCode::InvalidParams.code(),
-                    format!("Transaction too large: size {tx_size}, max {max_tx_size}"),
-                    None::<()>,
-                ));
-            }
-
-            let authenticated_tx = tx
-                .transaction_stateless_check()
-                .inspect_err(|err| warn!("Error at pre_check {err:#?}"))
-                .map_err(|err| {
-                    ErrorObjectOwned::owned(
-                        ErrorCode::InvalidParams.code(),
-                        format!("{err:?}"),
-                        None::<()>,
-                    )
-                })?;
-
-            // Sequencer-only programs (the cross-zone inbox) are injected by the
-            // watcher; a user must not invoke them top-level, or anyone could forge
-            // an inbound cross-zone delivery. Chained user calls are already rejected
-            // by the inbox guest's caller-is-none assertion.
-            if let LeeTransaction::Public(public_tx) = &authenticated_tx
-                && sequencer_core::is_sequencer_only_program(public_tx.message().program_id)
-            {
-                return Err(ErrorObjectOwned::owned(
-                    ErrorCode::InvalidParams.code(),
-                    "Program is sequencer-only and cannot be invoked by a user transaction"
-                        .to_owned(),
-                    None::<()>,
-                ));
-            }
-
-            Ok(authenticated_tx)
+        let admitted = {
+            // FIXME(fees-edges): `main_loop` holds this lock across `produce_new_block`, so ingest
+            // stalls for a whole build; `with_state` needs only `&self`, so handing the service a
+            // direct state handle would drop the outer lock.
+            let sequencer = self.sequencer.lock().await;
+            sequencer.with_state(|state| admit(tx, self.max_block_size, state))
         };
 
-        let authenticated_tx = res.await.inspect_err(|err| {
+        let authenticated_tx = admitted.inspect_err(|err| {
             sequencer_service_metrics::increment_before_mempool_failed_transactions_total();
             error!("Transaction failed before reaching mempool: {err:#?}");
         })?;
@@ -111,6 +73,11 @@ impl<BC: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::Rpc
 
     async fn check_health(&self) -> Result<(), ErrorObjectOwned> {
         Ok(())
+    }
+
+    async fn get_fee_state(&self) -> Result<FeeStateQuote, ErrorObjectOwned> {
+        let sequencer = self.sequencer.lock().await;
+        Ok(sequencer.with_state(|state| fees::fee_quote(state.fee_state())))
     }
 
     async fn get_block(&self, block_id: BlockId) -> Result<Option<Block>, ErrorObjectOwned> {
@@ -219,6 +186,131 @@ impl<BC: BlockPublisherTrait + Send + Sync + 'static> sequencer_service_rpc::Rpc
     }
 }
 
+/// Everything a submitted transaction must clear before it reaches the mempool: it has to fit a
+/// block on its own, be well-formed and signed, not impersonate a sequencer injection, and pass
+/// fee admission against the head `state`.
+///
+/// One gate rather than a sequence of them at the call site, so nothing can reach
+/// [`sequencer_service_rpc::RpcServer::send_transaction`]'s mempool push having passed only part
+/// of it.
+fn admit(
+    tx: LeeTransaction,
+    max_block_size: u64,
+    state: &lee::V03State,
+) -> Result<LeeTransaction, ErrorObjectOwned> {
+    // Reserve ~200 bytes for block header overhead
+    const BLOCK_HEADER_OVERHEAD: u64 = 200;
+
+    let encoded_tx = borsh::to_vec(&tx).expect("Transaction borsh serialization should not fail");
+    let tx_size = u64::try_from(encoded_tx.len()).expect("Transaction size should fit in u64");
+
+    let max_tx_size = max_block_size.saturating_sub(BLOCK_HEADER_OVERHEAD);
+
+    if tx_size > max_tx_size {
+        return Err(ErrorObjectOwned::owned(
+            ErrorCode::InvalidParams.code(),
+            format!("Transaction too large: size {tx_size}, max {max_tx_size}"),
+            None::<()>,
+        ));
+    }
+
+    let authenticated_tx = tx
+        .transaction_stateless_check()
+        .inspect_err(|err| warn!("Error at pre_check {err:#?}"))
+        .map_err(|err| {
+            ErrorObjectOwned::owned(
+                ErrorCode::InvalidParams.code(),
+                format!("{err:?}"),
+                None::<()>,
+            )
+        })?;
+
+    // Sequencer-only programs (the cross-zone inbox) are injected by the
+    // watcher; a user must not invoke them top-level, or anyone could forge
+    // an inbound cross-zone delivery. Chained user calls are already rejected
+    // by the inbox guest's caller-is-none assertion.
+    if let LeeTransaction::Public(public_tx) = &authenticated_tx
+        && sequencer_core::is_sequencer_only_program(public_tx.message().program_id)
+    {
+        return Err(ErrorObjectOwned::owned(
+            ErrorCode::InvalidParams.code(),
+            "Program is sequencer-only and cannot be invoked by a user transaction".to_owned(),
+            None::<()>,
+        ));
+    }
+
+    // Fee admission: what no block of this chain would include, or what the payer visibly cannot
+    // afford right now (see `fees::screen`).
+    fees::screen(&authenticated_tx, state)
+        .map_err(|rejection| fees::rejection_error(&rejection))?;
+
+    Ok(authenticated_tx)
+}
+
 fn internal_error(err: &DbError) -> ErrorObjectOwned {
     ErrorObjectOwned::owned(ErrorCode::InternalError.code(), err.to_string(), None::<()>)
+}
+
+/// The ingest path, exercised where it is decided: `send_transaction` does nothing but call
+/// [`admit`] and push what it returns, so a fee-invalid transaction being refused here is the same
+/// refusal a client sees.
+#[cfg(test)]
+mod tests {
+    use common::test_utils::create_transaction_native_token_transfer_with_fees;
+    use lee::FeeFields;
+    use sequencer_service_protocol::AdmissionRejection;
+    use testnet_initial_state::{initial_pub_accounts_private_keys, initial_state};
+
+    use super::*;
+
+    /// Generous enough that the size check never decides these tests.
+    const MAX_BLOCK_SIZE: u64 = 0x0010_0000;
+
+    #[test]
+    fn the_ingest_path_admits_a_funded_transfer() {
+        let state = initial_state();
+        let accounts = initial_pub_accounts_private_keys();
+        let tx = common::test_utils::create_transaction_native_token_transfer(
+            accounts[0].account_id,
+            0,
+            accounts[1].account_id,
+            10,
+            &accounts[0].pub_sign_key,
+        );
+
+        admit(tx, MAX_BLOCK_SIZE, &state).expect("a well-formed, funded transfer is admitted");
+    }
+
+    /// The fee screen is part of the ingest path, not something only `fees::screen`'s own tests
+    /// reach: a transaction that is perfectly well-formed and correctly signed, and fails nothing
+    /// but fee admission, must not reach the mempool.
+    #[test]
+    fn the_ingest_path_rejects_a_fee_invalid_transaction() {
+        let state = initial_state();
+        let accounts = initial_pub_accounts_private_keys();
+        let payer = accounts[0].account_id;
+        let tx = create_transaction_native_token_transfer_with_fees(
+            payer,
+            0,
+            accounts[1].account_id,
+            10,
+            &accounts[0].pub_sign_key,
+            FeeFields::new(payer, common::test_utils::TEST_GAS_LIMIT, 0, 1),
+        );
+
+        let err = admit(tx, MAX_BLOCK_SIZE, &state).expect_err("its max_fee covers nothing");
+        assert_eq!(
+            err.code(),
+            AdmissionRejection::MaxFeeBelowReserve {
+                fee_reserve: 0,
+                max_fee: 0,
+            }
+            .code(),
+            "the rejection must arrive under the max_fee check's own code",
+        );
+        assert!(
+            err.data().is_some(),
+            "and carry the structured rejection in `data`",
+        );
+    }
 }
