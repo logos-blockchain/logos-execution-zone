@@ -257,6 +257,10 @@ pub fn initial_state_testnet() -> V03State {
         system_accounts::pinata_account_id(),
         system_accounts::pinata_account(),
     );
+    initial_public_accounts.insert(
+        system_accounts::pinata_prize_account_id(),
+        system_accounts::pinata_prize_account(),
+    );
 
     let mut programs = initial_programs();
     programs.push(programs::pinata());

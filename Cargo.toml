@@ -113,6 +113,7 @@ ata_program = { path = "lez/programs/associated_token_account" }
 authenticated_transfer_core = { path = "lez/programs/authenticated_transfer/core" }
 faucet_core = { path = "lez/programs/faucet/core" }
 bridge_core = { path = "lez/programs/bridge/core" }
+pinata_core = { path = "lez/programs/pinata/core" }
 vault_core = { path = "lez/programs/vault/core" }
 cross_zone_inbox_core = { path = "lez/programs/cross_zone_inbox/core" }
 cross_zone_outbox_core = { path = "lez/programs/cross_zone_outbox/core" }

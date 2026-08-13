@@ -7674,6 +7674,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
+name = "pinata_core"
+version = "0.1.0"
+dependencies = [
+ "lee_core",
+]
+
+[[package]]
 name = "pinata_program"
 version = "0.1.0"
 dependencies = [
@@ -10398,6 +10405,7 @@ dependencies = [
  "clock_core",
  "faucet_core",
  "lee_core",
+ "pinata_core",
  "programs",
  "sequencer_stake_core",
 ]
