@@ -134,7 +134,7 @@ impl ExecutionState {
             pda_seeds: Vec::new(),
         };
         let initial_caller_data = CallerData {
-            program_id: None,
+            caller_account_id: None,
             authorized_accounts: HashSet::new(),
         };
         let mut chained_calls =
@@ -197,8 +197,7 @@ impl ExecutionState {
             // by spoofing caller_account_id (e.g. passing caller_account_id = self_account_id
             // to bypass access control checks).
             assert_eq!(
-                program_output.caller_account_id,
-                caller_data.program_id.map(AccountId::from),
+                program_output.caller_account_id, caller_data.caller_account_id,
                 "Program output caller_account_id does not match actual caller"
             );
 
@@ -227,7 +226,7 @@ impl ExecutionState {
                 chained_calls.push_front((
                     next_call,
                     CallerData {
-                        program_id: Some(current_program_id),
+                        caller_account_id: Some(chained_call.program_account_id),
                         authorized_accounts: authorized_accounts.clone(),
                     },
                 ));
@@ -607,7 +606,11 @@ fn match_caller_seed_as_public_pda(
     caller_pda_seeds: &[PdaSeed],
     account_id: AccountId,
 ) -> Option<(PdaSeed, ProgramId)> {
-    let caller_program_id = caller.program_id?;
+    // Recover the real `ProgramId` (RISC0 image id): on this branch every program account lives
+    // at the direct `AccountId::from(program_id)` bijection, so this round-trip is exact.
+    // `for_public_pda`'s derivation formula is pinned to the caller's actual image id, not its
+    // dispatch-facing `AccountId`.
+    let caller_program_id = ProgramId::from(caller.caller_account_id?);
     // Costy for calls with multiple seeds in one call.
     caller_pda_seeds.iter().find_map(|seed| {
         if AccountId::for_public_pda(&caller_program_id, seed) == account_id {
@@ -628,7 +631,7 @@ fn match_caller_seed_as_private_pda(
     pre_state_position: usize,
 ) -> Option<(PdaSeed, ProgramId)> {
     let (npk, vpk, identifier) = private_pda_by_position.get(&pre_state_position)?;
-    let caller_program_id = caller.program_id?;
+    let caller_program_id = ProgramId::from(caller.caller_account_id?);
     // Costy for calls with multiple seeds in one call.
     caller_pda_seeds.iter().find_map(|seed| {
         if AccountId::for_private_pda(&caller_program_id, seed, npk, vpk, *identifier) == account_id
