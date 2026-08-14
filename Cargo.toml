@@ -57,7 +57,6 @@ members = [
   "lez/programs/ping_sender",
   "lez/programs/ping_receiver",
   "lez/programs/sequencer_stake",
-  "lez/programs/loader",
   "lez/programs/loader/core",
   "lez/cross_zone",
 
@@ -127,7 +126,6 @@ wrapped_token_core = { path = "lez/programs/wrapped_token/core" }
 ping_core = { path = "lez/programs/ping_core" }
 sequencer_stake_core = { path = "lez/programs/sequencer_stake/core" }
 loader_core = { path = "lez/programs/loader/core" }
-loader_program = { path = "lez/programs/loader" }
 cross_zone = { path = "lez/cross_zone" }
 build_utils = { path = "build_utils" }
 test_methods = { path = "lee/state_machine/test_methods" }
