@@ -54,7 +54,6 @@ members = [
   "lez/programs/wrapped_token",
   "lez/programs/ping_sender",
   "lez/programs/ping_receiver",
-  "lez/programs/loader",
   "lez/programs/loader/core",
   "lez/cross_zone",
 
@@ -121,7 +120,6 @@ bridge_lock_core = { path = "lez/programs/bridge_lock/core" }
 wrapped_token_core = { path = "lez/programs/wrapped_token/core" }
 ping_core = { path = "lez/programs/ping_core" }
 loader_core = { path = "lez/programs/loader/core" }
-loader_program = { path = "lez/programs/loader" }
 cross_zone = { path = "lez/cross_zone" }
 build_utils = { path = "build_utils" }
 test_programs = { path = "test_programs" }
