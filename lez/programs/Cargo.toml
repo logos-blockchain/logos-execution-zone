@@ -119,6 +119,7 @@ programs = [
   "dep:wrapped_token_core",
   "dep:ping_core",
   "dep:sequencer_stake_core",
+  "dep:pinata_core",
 ]
 
 [dependencies]
@@ -139,6 +140,7 @@ bridge_lock_core = { workspace = true, optional = true }
 wrapped_token_core = { workspace = true, optional = true }
 ping_core = { workspace = true, optional = true }
 sequencer_stake_core = { workspace = true, optional = true }
+pinata_core = { workspace = true, optional = true }
 
 amm_program = { path = "amm", optional = true }
 associated_token_account_program = { path = "associated_token_account", optional = true }

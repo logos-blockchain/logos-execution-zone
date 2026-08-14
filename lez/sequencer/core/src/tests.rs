@@ -1703,7 +1703,11 @@ async fn block_production_aborts_when_clock_account_data_is_corrupted() {
 /// accounts initialized, and the clock advanced to `clock_timestamp` so that reads of the
 /// `CLOCK_01` account observe it.
 fn state_with_clock_and_program(program: Program, clock_timestamp: u64) -> V03State {
-    let mut state = V03State::new().with_programs([programs::clock(), program]);
+    let mut state = V03State::new().with_programs([
+        programs::clock(),
+        program,
+        programs::authenticated_transfer(),
+    ]);
     for clock_id in system_accounts::clock_account_ids() {
         state.force_insert_account(clock_id, system_accounts::clock_account());
     }
