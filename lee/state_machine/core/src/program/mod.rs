@@ -238,7 +238,7 @@ impl AccountId {
 
 #[derive(Debug)]
 pub struct CallerData {
-    pub program_id: Option<ProgramId>,
+    pub caller_account_id: Option<AccountId>,
     pub authorized_accounts: HashSet<AccountId>,
 }
 
