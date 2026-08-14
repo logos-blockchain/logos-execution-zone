@@ -38,8 +38,12 @@ async fn deploy_and_execute_program() -> Result<()> {
         .wallet()
         .get_account_public_signing_key(account_id)
         .unwrap();
-    let message =
-        lee::public_transaction::Message::try_new(claimer.id(), vec![account_id], nonces, ())?;
+    let message = lee::public_transaction::Message::try_new(
+        claimer.id().into(),
+        vec![account_id],
+        nonces,
+        (),
+    )?;
     let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[private_key]);
     let transaction = lee::PublicTransaction::new(message, witness_set);
     let _response = ctx

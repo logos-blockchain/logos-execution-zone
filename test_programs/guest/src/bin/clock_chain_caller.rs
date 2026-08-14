@@ -28,7 +28,7 @@ fn main() {
         .collect();
 
     let chained_call = ChainedCall {
-        program_id: clock_program_id,
+        program_account_id: clock_program_id.into(),
         instruction_data: to_vec(&timestamp).unwrap(),
         pre_states: pre_states.clone(),
         pda_seeds: vec![],

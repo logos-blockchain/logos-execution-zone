@@ -1,8 +1,5 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee_core::{
-    account::Nonce,
-    program::{InstructionData, ProgramId},
-};
+use lee_core::{account::Nonce, program::InstructionData};
 use serde::Serialize;
 use sha2::{Digest as _, Sha256};
 
@@ -10,34 +7,17 @@ use crate::{AccountId, error::LeeError, program::Program};
 
 const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Public/\x00\x00\x00\x00\x00\x00\x00";
 
-#[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Message {
-    pub program_id: ProgramId,
+    pub program_account_id: AccountId,
     pub account_ids: Vec<AccountId>,
     pub nonces: Vec<Nonce>,
     pub instruction_data: InstructionData,
 }
 
-impl std::fmt::Debug for Message {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let program_id_hex = hex::encode(
-            self.program_id
-                .iter()
-                .flat_map(|n| n.to_le_bytes())
-                .collect::<Vec<u8>>(),
-        );
-        f.debug_struct("Message")
-            .field("program_id", &program_id_hex)
-            .field("account_ids", &self.account_ids)
-            .field("nonces", &self.nonces)
-            .field("instruction_data", &self.instruction_data)
-            .finish()
-    }
-}
-
 impl Message {
     pub fn try_new<T: Serialize>(
-        program_id: ProgramId,
+        program_account_id: AccountId,
         account_ids: Vec<AccountId>,
         nonces: Vec<Nonce>,
         instruction: T,
@@ -45,7 +25,7 @@ impl Message {
         let instruction_data = Program::serialize_instruction(instruction)?;
 
         Ok(Self {
-            program_id,
+            program_account_id,
             account_ids,
             nonces,
             instruction_data,
@@ -54,13 +34,13 @@ impl Message {
 
     #[must_use]
     pub const fn new_preserialized(
-        program_id: ProgramId,
+        program_account_id: AccountId,
         account_ids: Vec<AccountId>,
         nonces: Vec<Nonce>,
         instruction_data: InstructionData,
     ) -> Self {
         Self {
-            program_id,
+            program_account_id,
             account_ids,
             nonces,
             instruction_data,
@@ -92,14 +72,15 @@ mod tests {
     #[test]
     fn hash_public_pinned() {
         let msg = Message::new_preserialized(
-            [1_u32; 8],
+            AccountId::from([1_u32; 8]),
             vec![AccountId::new([42_u8; 32])],
             vec![Nonce(5)],
             vec![],
         );
 
-        // program_id: [1_u32; 8], each word as LE u32
-        let program_id_bytes: &[u8] = &[
+        // program_account_id: AccountId::from([1_u32; 8]) is the LE-word-flattened bytes of the
+        // array
+        let account_id_bytes: &[u8] = &[
             1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1,
             0, 0, 0,
         ];
@@ -110,7 +91,7 @@ mod tests {
         let instruction_data_bytes: &[u8] = &[0_u8; 4];
 
         let expected_borsh_vec: Vec<u8> = [
-            program_id_bytes,
+            account_id_bytes,
             &[1_u8, 0, 0, 0], // account_ids len=1
             account_ids_bytes,
             nonces_bytes,

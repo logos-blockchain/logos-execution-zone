@@ -66,7 +66,7 @@ fn main() {
             .expect("transfer instruction serialization");
 
         chained_calls.push(ChainedCall {
-            program_id: instruction.token_program_id,
+            program_account_id: instruction.token_program_id.into(),
             pre_states: vec![receiver_authorized, vault_pre.clone()],
             instruction_data: transfer_instruction,
             pda_seeds: vec![PdaSeed::new([1_u8; 32])],

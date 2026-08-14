@@ -234,8 +234,8 @@ impl AccountId {
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
 pub struct ChainedCall {
-    /// The program ID of the program to execute.
-    pub program_id: ProgramId,
+    /// The `AccountId` of the program to execute.
+    pub program_account_id: AccountId,
     pub pre_states: Vec<AccountWithMetadata>,
     /// The instruction data to pass.
     pub instruction_data: InstructionData,
@@ -248,12 +248,12 @@ pub struct ChainedCall {
 impl ChainedCall {
     /// Creates a new chained call serializing the given instruction.
     pub fn new<I: Serialize>(
-        program_id: ProgramId,
+        program_account_id: AccountId,
         pre_states: Vec<AccountWithMetadata>,
         instruction: &I,
     ) -> Self {
         Self {
-            program_id,
+            program_account_id,
             pre_states,
             instruction_data: risc0_zkvm::serde::to_vec(instruction)
                 .expect("Serialization to Vec<u32> should not fail"),
@@ -623,20 +623,20 @@ pub enum ExecutionValidationError {
     ModifiedProgramOwner { account_id: AccountId },
 
     #[error(
-        "Trying to decrease balance of account {account_id} owned by {owner_account_id:?} in a program {executing_program_id:?} which is not the owner"
+        "Trying to decrease balance of account {account_id} owned by {owner_account_id:?} in a program {executing_account_id:?} which is not the owner"
     )]
     UnauthorizedBalanceDecrease {
         account_id: AccountId,
         owner_account_id: AccountId,
-        executing_program_id: ProgramId,
+        executing_account_id: AccountId,
     },
 
     #[error(
-        "Unauthorized modification of data for account {account_id} which is not default and not owned by executing program {executing_program_id:?}"
+        "Unauthorized modification of data for account {account_id} which is not default and not owned by executing program {executing_account_id:?}"
     )]
     UnauthorizedDataModification {
         account_id: AccountId,
-        executing_program_id: ProgramId,
+        executing_account_id: AccountId,
     },
 
     #[error(
@@ -700,16 +700,12 @@ pub fn read_lee_inputs<T: DeserializeOwned>() -> (ProgramInput<T>, InstructionDa
 /// # Parameters
 /// - `pre_states`: The list of input accounts, each annotated with authorization metadata.
 /// - `post_states`: The list of resulting accounts after executing the program logic.
-/// - `executing_program_id`: The identifier of the program that was executed.
+/// - `executing_account_id`: The `AccountId` of the program that was executed.
 pub fn validate_execution(
     pre_states: &[AccountWithMetadata],
     post_states: &[AccountPostState],
-    executing_program_id: ProgramId,
+    executing_account_id: AccountId,
 ) -> Result<(), ExecutionValidationError> {
-    // `program_owner` is `AccountId`-typed; convert once up front rather than at each
-    // comparison below (see `From<ProgramId> for AccountId`'s doc comment).
-    let executing_account_id = AccountId::from(executing_program_id);
-
     // 1. Check account ids are all different
     if !validate_uniqueness_of_account_ids(pre_states) {
         return Err(ExecutionValidationError::PreStateAccountIdsNotUnique);
@@ -749,7 +745,7 @@ pub fn validate_execution(
             return Err(ExecutionValidationError::UnauthorizedBalanceDecrease {
                 account_id: pre.account_id,
                 owner_account_id: account_program_owner,
-                executing_program_id,
+                executing_account_id,
             });
         }
 
@@ -761,7 +757,7 @@ pub fn validate_execution(
         {
             return Err(ExecutionValidationError::UnauthorizedDataModification {
                 account_id: pre.account_id,
-                executing_program_id,
+                executing_account_id,
             });
         }
 

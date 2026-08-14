@@ -392,7 +392,7 @@ fn program_id_account_id_conversion_round_trips() {
         0xddee_ff00,
         0xcafe_babe,
         0xdead_beef,
-        0x0badf00d,
+        0x0bad_f00d,
         0xfeed_face,
     ];
     assert_eq!(ProgramId::from(AccountId::from(program_id)), program_id);

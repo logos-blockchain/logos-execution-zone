@@ -124,7 +124,7 @@ fn main() {
             let transfer_instruction =
                 risc0_zkvm::serde::to_vec(&amount_out).expect("transfer instruction serialization");
             let call_1 = ChainedCall {
-                program_id: token_program_id,
+                program_account_id: token_program_id.into(),
                 pre_states: vec![vault_authorized, receiver_pre.clone()],
                 instruction_data: transfer_instruction,
                 pda_seeds: vec![PdaSeed::new([0_u8; 32])],
@@ -134,7 +134,7 @@ fn main() {
             // Receives the post-transfer states as its pre_states. The callback may run
             // arbitrary logic (arbitrage, etc.) and is expected to return funds to the vault.
             let call_2 = ChainedCall {
-                program_id: callback_program_id,
+                program_account_id: callback_program_id.into(),
                 pre_states: vec![vault_after_transfer, receiver_after_transfer],
                 instruction_data: callback_instruction_data,
                 pda_seeds: vec![],
@@ -152,7 +152,7 @@ fn main() {
                 })
                 .expect("invariant instruction serialization");
             let call_3 = ChainedCall {
-                program_id: self_program_id, // self-referential chained call
+                program_account_id: self_program_id.into(), // self-referential chained call
                 pre_states: vec![vault_after_callback],
                 instruction_data: invariant_instruction,
                 pda_seeds: vec![],

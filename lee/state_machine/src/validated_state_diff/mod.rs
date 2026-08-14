@@ -91,7 +91,7 @@ impl ValidatedStateDiff {
         let mut state_diff: HashMap<AccountId, Account> = HashMap::new();
 
         let initial_call = ChainedCall {
-            program_id: message.program_id,
+            program_account_id: message.program_account_id,
             instruction_data: message.instruction_data.clone(),
             pre_states: input_pre_states,
             pda_seeds: vec![],
@@ -112,17 +112,22 @@ impl ValidatedStateDiff {
                 LeeError::MaxChainedCallsDepthExceeded
             );
 
-            let Some(program_account) = state.get_program(chained_call.program_id) else {
+            let Some(program_account) = state.get_program(chained_call.program_account_id) else {
                 return Err(LeeError::InvalidInput("Unknown program".into()));
             };
-            let program = Program::new_unchecked(
-                chained_call.program_id,
-                Cow::Owned(program_account.data.to_vec()),
-            );
+            // Recover the real `ProgramId` (RISC0 image id) from the account's address: on this
+            // branch every program account lives at the direct `AccountId::from(program_id)`
+            // bijection, so this round-trip is exact. Needed wherever execution/PDA derivation
+            // requires the underlying image id rather than the dispatch-facing `AccountId`.
+            let program_id = ProgramId::from(chained_call.program_account_id);
+            let program =
+                Program::new_unchecked(program_id, Cow::Owned(program_account.data.to_vec()));
 
             debug!(
                 "Program {:?} pre_states: {:?}, instruction_data: {:?}",
-                chained_call.program_id, chained_call.pre_states, chained_call.instruction_data
+                chained_call.program_account_id,
+                chained_call.pre_states,
+                chained_call.instruction_data
             );
             let mut program_output = program.execute(
                 caller_data.program_id,
@@ -131,7 +136,7 @@ impl ValidatedStateDiff {
             )?;
             debug!(
                 "Program {:?} output: {:?}",
-                chained_call.program_id, program_output
+                chained_call.program_account_id, program_output
             );
 
             let authorized_pdas =
@@ -178,10 +183,10 @@ impl ValidatedStateDiff {
 
             // Verify that the program output's self_program_id matches the expected program ID.
             ensure!(
-                program_output.self_program_id == chained_call.program_id,
+                AccountId::from(program_output.self_program_id) == chained_call.program_account_id,
                 InvalidProgramBehaviorError::MismatchedProgramId {
-                    expected: chained_call.program_id,
-                    actual: program_output.self_program_id
+                    expected: chained_call.program_account_id,
+                    actual: AccountId::from(program_output.self_program_id)
                 }
             );
 
@@ -199,7 +204,7 @@ impl ValidatedStateDiff {
             validate_execution(
                 &program_output.pre_states,
                 &program_output.post_states,
-                chained_call.program_id,
+                chained_call.program_account_id,
             )
             .map_err(InvalidProgramBehaviorError::ExecutionValidationFailed)?;
 
@@ -237,7 +242,7 @@ impl ValidatedStateDiff {
                         // The program can only claim accounts that correspond to the PDAs it is
                         // authorized to claim. The public-execution path only sees public
                         // accounts, so the public-PDA derivation is the correct formula here.
-                        let pda = AccountId::for_public_pda(&chained_call.program_id, &seed);
+                        let pda = AccountId::for_public_pda(&program_id, &seed);
                         ensure!(
                             account_id == pda,
                             InvalidProgramBehaviorError::MismatchedPdaClaim {
@@ -248,7 +253,7 @@ impl ValidatedStateDiff {
                     }
                 }
 
-                post.account_mut().program_owner = AccountId::from(chained_call.program_id);
+                post.account_mut().program_owner = chained_call.program_account_id;
             }
 
             // Update the state diff
@@ -283,7 +288,7 @@ impl ValidatedStateDiff {
                 chained_calls.push_front((
                     new_call,
                     CallerData {
-                        program_id: Some(chained_call.program_id),
+                        program_id: Some(program_id),
                         authorized_accounts: authorized_accounts.clone(),
                     },
                 ));
@@ -448,7 +453,7 @@ impl ValidatedStateDiff {
     ) -> Result<Self, LeeError> {
         // TODO: remove clone
         let program = Program::new(tx.message.bytecode.clone().into())?;
-        if state.get_program(program.id()).is_some() {
+        if state.get_program(AccountId::from(program.id())).is_some() {
             return Err(LeeError::ProgramAlreadyExists);
         }
         Ok(Self(StateDiff {

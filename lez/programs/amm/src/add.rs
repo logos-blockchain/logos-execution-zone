@@ -138,7 +138,7 @@ pub fn add_liquidity(
 
     // Chain call for Token A (UserHoldingA -> Vault_A)
     let call_token_a = ChainedCall::new(
-        token_program_id,
+        token_program_id.into(),
         vec![user_holding_a.clone(), vault_a.clone()],
         &token_core::Instruction::Transfer {
             amount_to_transfer: actual_amount_a,
@@ -146,7 +146,7 @@ pub fn add_liquidity(
     );
     // Chain call for Token B (UserHoldingB -> Vault_B)
     let call_token_b = ChainedCall::new(
-        token_program_id,
+        token_program_id.into(),
         vec![user_holding_b.clone(), vault_b.clone()],
         &token_core::Instruction::Transfer {
             amount_to_transfer: actual_amount_b,
@@ -156,7 +156,7 @@ pub fn add_liquidity(
     let mut pool_definition_lp_auth = pool_definition_lp.clone();
     pool_definition_lp_auth.is_authorized = true;
     let call_token_lp = ChainedCall::new(
-        token_program_id,
+        token_program_id.into(),
         vec![pool_definition_lp_auth, user_holding_lp.clone()],
         &token_core::Instruction::Mint {
             amount_to_mint: delta_lp,

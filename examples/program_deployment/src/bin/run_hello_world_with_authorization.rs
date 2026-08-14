@@ -65,7 +65,8 @@ async fn main() {
         .await
         .expect("Node should be reachable to query account data");
     let signing_keys = [&signing_key];
-    let message = Message::try_new(program.id(), vec![account_id], nonces, greeting).unwrap();
+    let message =
+        Message::try_new(program.id().into(), vec![account_id], nonces, greeting).unwrap();
     // Pass the signing key to sign the message. This will be used by the node
     // to flag the pre_state as `is_authorized` when executing the program
     let witness_set = WitnessSet::for_message(&message, &signing_keys);

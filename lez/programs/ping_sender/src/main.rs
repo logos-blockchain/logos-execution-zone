@@ -85,7 +85,7 @@ fn send(
         .expect("config account holds an outbox program id");
 
     let call = ChainedCall::new(
-        outbox_program_id,
+        outbox_program_id.into(),
         vec![outbox.clone()],
         &OutboxInstruction::Emit {
             target_zone,

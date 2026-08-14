@@ -151,7 +151,7 @@ fn tx_is_bridge_deposit(
         return false;
     };
 
-    if public_tx.message.program_id != programs::bridge().id() {
+    if public_tx.message.program_account_id != programs::bridge().id().into() {
         return false;
     }
 
@@ -1397,7 +1397,7 @@ async fn transactions_touching_clock_account_are_dropped_from_block() {
     // be dropped because their diffs touch the clock accounts.
     let crafted_clock_tx = {
         let message = lee::public_transaction::Message::try_new(
-            programs::clock().id(),
+            programs::clock().id().into(),
             system_accounts::clock_account_ids().to_vec(),
             vec![],
             42_u64,
@@ -1459,7 +1459,7 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
     let timestamp: u64 = 0;
 
     let message = lee::public_transaction::Message::try_new(
-        clock_chain_caller_id,
+        clock_chain_caller_id.into(),
         system_accounts::clock_account_ids().to_vec(),
         vec![], // no signers
         (clock_program_id, timestamp),
@@ -1635,7 +1635,7 @@ fn time_locked_transfer_transaction(
 ) -> PublicTransaction {
     let program_id = test_programs::time_locked_transfer().id();
     let message = lee::public_transaction::Message::try_new(
-        program_id,
+        program_id.into(),
         vec![from, to, clock_account_id],
         vec![Nonce(from_nonce)],
         (amount, deadline),
@@ -1762,7 +1762,7 @@ fn pinata_cooldown_transaction(
 ) -> PublicTransaction {
     let program_id = test_programs::pinata_cooldown().id();
     let message = lee::public_transaction::Message::try_new(
-        program_id,
+        program_id.into(),
         vec![pinata_id, winner_id, clock_account_id],
         vec![],
         (),
@@ -1947,7 +1947,7 @@ fn pda_mechanism_with_pinata_token_program() {
     // Submit a solution to the pinata program to claim the prize
     let solution: u128 = 989_106;
     let message = lee::public_transaction::Message::try_new(
-        pinata_token.id(),
+        pinata_token.id().into(),
         vec![
             pinata_definition_id,
             pinata_token_holding_id,
@@ -1983,7 +1983,7 @@ fn resubmittable_txs_drops_clock_and_bridge_deposits() {
     .unwrap();
     let withdraw_tx = {
         let message = lee::public_transaction::Message::try_new(
-            programs::bridge().id(),
+            programs::bridge().id().into(),
             vec![system_accounts::bridge_account_id()],
             vec![],
             bridge_core::Instruction::Withdraw {

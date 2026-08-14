@@ -128,7 +128,7 @@ fn build_ping_tx(target_zone: [u8; 32], receiver_id: ProgramId) -> LeeTransactio
     let sender_id = programs::ping_sender().id();
     let outbox_account = outbox_pda(outbox_id, sender_id, &target_zone, ordinal);
     let message = Message::try_new(
-        sender_id,
+        sender_id.into(),
         vec![sender_config_account_id(sender_id), outbox_account],
         vec![],
         send,

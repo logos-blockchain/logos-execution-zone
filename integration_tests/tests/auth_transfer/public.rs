@@ -311,7 +311,7 @@ async fn cannot_transfer_funds_from_system_faucet_account() -> Result<()> {
 
     let amount = 1_u128;
     let message = public_transaction::Message::try_new(
-        programs::authenticated_transfer().id(),
+        programs::authenticated_transfer().id().into(),
         vec![faucet_account_id, recipient],
         vec![],
         authenticated_transfer_core::Instruction::Transfer { amount },
@@ -353,7 +353,7 @@ async fn cannot_execute_faucet_program() -> Result<()> {
 
     let amount = 1_u128;
     let message = public_transaction::Message::try_new(
-        programs::faucet().id(),
+        programs::faucet().id().into(),
         vec![faucet_account_id, recipient_vault_id],
         vec![],
         faucet_core::Instruction::GenesisTransferVault {
@@ -406,7 +406,7 @@ async fn user_tx_that_chain_calls_faucet_is_dropped() -> Result<()> {
     let amount: u128 = 1;
 
     let message = public_transaction::Message::try_new(
-        faucet_chain_caller.id(),
+        faucet_chain_caller.id().into(),
         vec![faucet_account_id, attacker_vault_id],
         vec![],
         (faucet_program_id, vault_program_id, attacker, amount),

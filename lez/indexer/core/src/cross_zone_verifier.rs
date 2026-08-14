@@ -11,7 +11,7 @@ use cross_zone_inbox_core::{
     CrossZoneMessage, Instruction as InboxInstruction, MessageKey, ZoneId, message_key,
 };
 use futures::{Stream, StreamExt as _};
-use lee::{GENESIS_BLOCK_ID, PublicKey};
+use lee::{GENESIS_BLOCK_ID, ProgramId, PublicKey};
 use log::{debug, error, warn};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_zone_sdk::{
@@ -390,7 +390,7 @@ impl CrossZoneVerifier {
         let LeeTransaction::Public(public_tx) = tx else {
             return None;
         };
-        if public_tx.message().program_id != programs::cross_zone_inbox().id() {
+        if public_tx.message().program_account_id != programs::cross_zone_inbox().id().into() {
             return None;
         }
         match risc0_zkvm::serde::from_slice::<InboxInstruction, _>(
@@ -444,8 +444,9 @@ impl CrossZoneVerifier {
             )));
         };
         let message = emission_tx.message();
+        let message_program_id = ProgramId::from(message.program_account_id);
         let emission =
-            extract_emission(message.program_id, &message.instruction_data).ok_or_else(|| {
+            extract_emission(message_program_id, &message.instruction_data).ok_or_else(|| {
                 CrossZoneVerifyError::Forged(anyhow!(
                     "peer transaction at src_tx_index is not a recognized emitter"
                 ))
@@ -465,7 +466,7 @@ impl CrossZoneVerifier {
                 src_block_id: msg.src_block_id,
                 src_block_hash: peer_block.recompute_hash().0,
                 src_tx_index: msg.src_tx_index,
-                src_program_id: message.program_id,
+                src_program_id: message_program_id,
             },
             emission.target_program_id,
             &emission.target_accounts,
@@ -755,7 +756,7 @@ mod tests {
             payload: payload.to_vec(),
             ordinal: 0,
         };
-        let message = Message::try_new(programs::ping_sender().id(), vec![], vec![], send)
+        let message = Message::try_new(programs::ping_sender().id().into(), vec![], vec![], send)
             .expect("emission serializes");
         LeeTransaction::Public(PublicTransaction::new(
             message,

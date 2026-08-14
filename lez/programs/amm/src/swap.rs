@@ -186,7 +186,7 @@ fn swap_logic(
 
     let mut chained_calls = Vec::new();
     chained_calls.push(ChainedCall::new(
-        token_program_id,
+        token_program_id.into(),
         vec![user_deposit, vault_deposit],
         &token_core::Instruction::Transfer {
             amount_to_transfer: swap_amount_in,
@@ -205,7 +205,7 @@ fn swap_logic(
 
     chained_calls.push(
         ChainedCall::new(
-            token_program_id,
+            token_program_id.into(),
             vec![vault_withdraw, user_withdraw],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: withdraw_amount,
@@ -318,7 +318,7 @@ fn exact_output_swap_logic(
 
     let mut chained_calls = Vec::new();
     chained_calls.push(ChainedCall::new(
-        token_program_id,
+        token_program_id.into(),
         vec![user_deposit, vault_deposit],
         &token_core::Instruction::Transfer {
             amount_to_transfer: deposit_amount,
@@ -337,7 +337,7 @@ fn exact_output_swap_logic(
 
     chained_calls.push(
         ChainedCall::new(
-            token_program_id,
+            token_program_id.into(),
             vec![vault_withdraw, user_withdraw],
             &token_core::Instruction::Transfer {
                 amount_to_transfer: exact_amount_out,

@@ -33,7 +33,7 @@ fn main() {
     pre_for_callee.account.program_owner = self_program_id.into();
 
     let chained_call = ChainedCall {
-        program_id: callee_program_id,
+        program_account_id: callee_program_id.into(),
         instruction_data: to_vec(&()).unwrap(),
         pre_states: vec![pre_for_callee],
         pda_seeds: vec![delegated_seed],

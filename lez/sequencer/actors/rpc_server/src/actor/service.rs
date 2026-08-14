@@ -78,7 +78,9 @@ impl<BP: BlockPublisherTrait + Send + 'static> sequencer_service_rpc::RpcServer 
             // an inbound cross-zone delivery. Chained user calls are already rejected
             // by the inbox guest's caller-is-none assertion.
             if let LeeTransaction::Public(public_tx) = &authenticated_tx
-                && sequencer_core::is_sequencer_only_program(public_tx.message().program_id)
+                && sequencer_core::is_sequencer_only_program(lee::ProgramId::from(
+                    public_tx.message().program_account_id,
+                ))
             {
                 return Err(ErrorObjectOwned::owned(
                     ErrorCode::InvalidParams.code(),

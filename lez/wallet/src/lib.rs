@@ -854,7 +854,7 @@ impl WalletCore {
         let nonces = acc_manager.public_account_nonces();
 
         let message = lee::public_transaction::Message::new_preserialized(
-            program_id,
+            program_id.into(),
             account_ids,
             nonces,
             instruction_data,

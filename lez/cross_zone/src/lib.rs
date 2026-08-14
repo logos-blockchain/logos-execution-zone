@@ -127,7 +127,7 @@ fn build_inbox_dispatch_tx(
     account_ids.extend(target_account_ids);
 
     let message = lee::public_transaction::Message::try_new(
-        inbox_id,
+        inbox_id.into(),
         account_ids,
         vec![],
         Instruction::Dispatch(msg.clone()),
@@ -306,9 +306,13 @@ fn genesis_public_tx<I: Serialize>(
     account_ids: Vec<AccountId>,
     instruction: I,
 ) -> lee::PublicTransaction {
-    let message =
-        lee::public_transaction::Message::try_new(program_id, account_ids, vec![], instruction)
-            .expect("genesis instruction must serialize");
+    let message = lee::public_transaction::Message::try_new(
+        program_id.into(),
+        account_ids,
+        vec![],
+        instruction,
+    )
+    .expect("genesis instruction must serialize");
     lee::PublicTransaction::new(
         message,
         lee::public_transaction::WitnessSet::from_raw_parts(vec![]),

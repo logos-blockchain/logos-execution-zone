@@ -151,7 +151,7 @@ async fn count_inbox_transactions(client: &SequencerClient, from: u64, to: u64) 
         };
         for tx in &block.body.transactions {
             if let LeeTransaction::Public(public_tx) = tx
-                && public_tx.message().program_id == inbox_id
+                && public_tx.message().program_account_id == inbox_id.into()
             {
                 count = count.saturating_add(1);
             }
@@ -206,7 +206,7 @@ fn build_ping_tx(target_zone: [u8; 32], receiver_id: ProgramId) -> LeeTransactio
     let sender_id = programs::ping_sender().id();
     let outbox_account = outbox_pda(outbox_id, sender_id, &target_zone, ordinal);
     let message = Message::try_new(
-        sender_id,
+        sender_id.into(),
         vec![sender_config_account_id(sender_id), outbox_account],
         vec![],
         send,
