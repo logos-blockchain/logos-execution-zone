@@ -6,8 +6,8 @@ type Instruction = Vec<u8>;
 fn main() {
     let (
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction: data,
         },
@@ -25,8 +25,8 @@ fn main() {
         .expect("provided data should fit into data limit");
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_words,
         vec![pre],
         vec![AccountPostState::new_claimed(

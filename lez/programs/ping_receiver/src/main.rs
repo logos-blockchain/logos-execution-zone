@@ -1,6 +1,6 @@
 use cross_zone_marker_core::inbox_source_marker_account_id;
 use lee_core::{
-    account::{Account, AccountWithMetadata},
+    account::{Account, AccountId, AccountWithMetadata},
     program::{
         AccountPostState, Claim, DEFAULT_PROGRAM_OWNER, ProgramId, ProgramInput, ProgramOutput,
         read_lee_inputs,
@@ -14,8 +14,8 @@ use ping_core::{
 fn main() {
     let (
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction,
         },
@@ -24,15 +24,15 @@ fn main() {
 
     match instruction {
         ReceiverInstruction::Record { payload } => record(
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction_words,
             payload,
         ),
         ReceiverInstruction::InitConfig(config) => init_config(
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction_words,
             &config,
@@ -54,12 +54,17 @@ fn main() {
 }
 
 fn record(
-    self_program_id: ProgramId,
-    caller_program_id: Option<ProgramId>,
+    self_account_id: AccountId,
+    caller_account_id: Option<AccountId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_words: Vec<u32>,
     payload: Vec<u8>,
 ) {
+    // Recover the real `ProgramId` (RISC0 image id): on this branch every program account lives
+    // at the direct `AccountId::from(program_id)` bijection, so this round-trip is exact. Needed
+    // for the PDA-derivation helpers below, which are pinned to the actual image id.
+    let self_program_id = ProgramId::from(self_account_id);
+
     // pre_states: [source marker, config PDA, record PDA].
     let [marker, config, record] = <[AccountWithMetadata; 3]>::try_from(pre_states)
         .expect("Record requires the source marker, config, and record accounts");
@@ -72,8 +77,8 @@ fn record(
     let cfg = ReceiverConfig::from_bytes(&config.account.data)
         .expect("config account holds a receiver config");
     assert_eq!(
-        caller_program_id,
-        Some(cfg.deliverer),
+        caller_account_id,
+        Some(cfg.deliverer.into()),
         "Record is only callable by the authorized deliverer (the cross-zone inbox)"
     );
     // Which peer sent it is this program's own business. Without this the record
@@ -98,8 +103,8 @@ fn record(
         AccountPostState::new_claimed_if_default(post_account, Claim::Pda(ping_record_seed()));
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_words,
         vec![marker.clone(), config.clone(), record],
         vec![
@@ -256,14 +261,14 @@ fn update_sources(
 /// Writes the deliverer and the authorized peer sources into the config PDA
 /// exactly once at genesis.
 fn init_config(
-    self_program_id: ProgramId,
-    caller_program_id: Option<ProgramId>,
+    self_account_id: AccountId,
+    caller_account_id: Option<AccountId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_words: Vec<u32>,
     config_value: &ReceiverConfig,
 ) {
     assert!(
-        caller_program_id.is_none(),
+        caller_account_id.is_none(),
         "InitConfig is a top-level genesis transaction"
     );
 
@@ -272,7 +277,7 @@ fn init_config(
         .expect("InitConfig requires the config account");
     assert_eq!(
         config.account_id,
-        receiver_config_account_id(self_program_id),
+        receiver_config_account_id(self_account_id.into()),
         "account must be the receiver config PDA"
     );
     // Init-once, idempotent under genesis replay: a `default` config is a first
@@ -281,8 +286,7 @@ fn init_config(
     // `new_claimed_if_default` alone would not stop a later self-owned rewrite.
     if config.account != Account::default() {
         assert_eq!(
-            config.account.program_owner,
-            self_program_id.into(),
+            config.account.program_owner, self_account_id,
             "receiver config PDA is owned by another program"
         );
         assert_eq!(
@@ -303,8 +307,8 @@ fn init_config(
     );
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_words,
         vec![config],
         vec![config_post],

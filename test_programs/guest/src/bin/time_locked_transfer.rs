@@ -18,8 +18,8 @@ type Instruction = (u128, u64);
 fn main() {
     let (
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction: (amount, deadline),
         },
@@ -58,8 +58,8 @@ fn main() {
     let clock_post = clock_pre.account.clone();
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_words,
         vec![sender_pre, receiver_pre, clock_pre],
         vec![

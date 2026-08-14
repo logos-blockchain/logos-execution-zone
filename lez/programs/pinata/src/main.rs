@@ -46,8 +46,8 @@ fn main() {
     // It is expected to receive only two accounts: [pinata_account, winner_account]
     let (
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction: solution,
         },
@@ -81,8 +81,8 @@ fn main() {
         .expect("Overflow when adding prize to winner");
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_words,
         vec![pinata, winner],
         vec![

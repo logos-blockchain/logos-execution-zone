@@ -1,5 +1,5 @@
 //! Flash swap initiator, demonstrates the "prep → callback → assert" pattern using
-//! generalized multi tail-calls with `self_program_id` and `caller_program_id`.
+//! generalized multi tail-calls with `self_account_id` and `caller_account_id`.
 //!
 //! # Pattern
 //!
@@ -14,16 +14,16 @@
 //! - `Initiate` (external): the top-level entrypoint. Emits 3 chained calls:
 //!   1. Token transfer out (vault → receiver)
 //!   2. User callback (arbitrary logic, e.g. arbitrage)
-//!   3. Self-call to `InvariantCheck` (using `self_program_id` to reference itself)
+//!   3. Self-call to `InvariantCheck` (using `self_account_id` to reference itself)
 //!
 //! - `InvariantCheck` (internal): enforces that the vault balance was restored after the callback.
-//!   Uses `caller_program_id == Some(self_program_id)` to prevent standalone calls (this is the
+//!   Uses `caller_account_id == Some(self_account_id)` to prevent standalone calls (this is the
 //!   visibility enforcement mechanism).
 //!
 //! # What this demonstrates
 //!
-//! - `self_program_id`: enables a program to chain back to itself (step 3 above)
-//! - `caller_program_id`: enables a program to restrict which callers can invoke an instruction
+//! - `self_account_id`: enables a program to chain back to itself (step 3 above)
+//! - `caller_account_id`: enables a program to restrict which callers can invoke an instruction
 //! - Computed intermediate states: the initiator computes expected intermediate account states from
 //!   the `pre_states` and amount, keeping the instruction minimal.
 //! - Atomic rollback: if the callback doesn't return funds, the invariant check fails, and all
@@ -35,7 +35,7 @@
 //! - `flash_swap_successful`: full round-trip, funds returned, state unchanged
 //! - `flash_swap_callback_keeps_funds_rollback`: callback keeps funds, full rollback
 //! - `flash_swap_self_call_targets_correct_program`: zero-amount self-call isolation test
-//! - `flash_swap_standalone_invariant_check_rejected`: `caller_program_id` access control
+//! - `flash_swap_standalone_invariant_check_rejected`: `caller_account_id` access control
 
 use lee_core::program::{
     AccountPostState, ChainedCall, PdaSeed, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
@@ -62,17 +62,17 @@ pub enum FlashSwapInstruction {
     /// Internal: verify the vault invariant holds after callback execution.
     ///
     /// Access control: only callable as a chained call from this program itself.
-    /// This is enforced by checking `caller_program_id == Some(self_program_id)`.
+    /// This is enforced by checking `caller_account_id == Some(self_account_id)`.
     /// Any attempt to call this instruction as a standalone top-level transaction
-    /// will be rejected because `caller_program_id` will be `None`.
+    /// will be rejected because `caller_account_id` will be `None`.
     InvariantCheck { min_vault_balance: u128 },
 }
 
 fn main() {
     let (
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction,
         },
@@ -141,7 +141,7 @@ fn main() {
             };
 
             // Chained call 3: Self-call to enforce the invariant.
-            // Uses `self_program_id` to reference this program, the key feature that enables
+            // Uses `self_account_id` to reference this program, the key feature that enables
             // the "prep → callback → assert" pattern without a separate checker program.
             // If the callback did not return funds, vault_after_callback.balance <
             // min_vault_balance and this call will panic, rolling back the entire
@@ -152,7 +152,7 @@ fn main() {
                 })
                 .expect("invariant instruction serialization");
             let call_3 = ChainedCall {
-                program_account_id: self_program_id.into(), // self-referential chained call
+                program_account_id: self_account_id, // self-referential chained call
                 pre_states: vec![vault_after_callback],
                 instruction_data: invariant_instruction,
                 pda_seeds: vec![],
@@ -161,8 +161,8 @@ fn main() {
             // The initiator itself makes no direct state changes.
             // All mutations happen inside the chained calls (token transfers).
             ProgramOutput::new(
-                self_program_id,
-                caller_program_id,
+                self_account_id,
+                caller_account_id,
                 instruction_words,
                 vec![vault_pre.clone(), receiver_pre.clone()],
                 vec![
@@ -177,12 +177,12 @@ fn main() {
         FlashSwapInstruction::InvariantCheck { min_vault_balance } => {
             // Visibility enforcement: `InvariantCheck` is an internal instruction.
             // It must only be called as a chained call from this program itself (via `Initiate`).
-            // When called as a top-level transaction, `caller_program_id` is `None` → panics.
-            // When called as a chained call from `Initiate`, `caller_program_id` is
-            // `Some(self_program_id)` → passes.
+            // When called as a top-level transaction, `caller_account_id` is `None` → panics.
+            // When called as a chained call from `Initiate`, `caller_account_id` is
+            // `Some(self_account_id)` → passes.
             assert_eq!(
-                caller_program_id,
-                Some(self_program_id),
+                caller_account_id,
+                Some(self_account_id),
                 "InvariantCheck is an internal instruction: must be called by flash_swap_initiator \
                  via a chained call",
             );
@@ -203,8 +203,8 @@ fn main() {
 
             // Pass-through: no state changes in the invariant check step.
             ProgramOutput::new(
-                self_program_id,
-                caller_program_id,
+                self_account_id,
+                caller_account_id,
                 instruction_words,
                 vec![vault.clone()],
                 vec![AccountPostState::new(vault.account)],

@@ -14,8 +14,8 @@ use wrapped_token_core::{
 fn main() {
     let (
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction,
         },
@@ -24,16 +24,16 @@ fn main() {
 
     match instruction {
         Instruction::Mint { recipient, amount } => mint(
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction_words,
             recipient,
             amount,
         ),
         Instruction::InitConfig(config) => init_config(
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction_words,
             &config,
@@ -55,13 +55,18 @@ fn main() {
 }
 
 fn mint(
-    self_program_id: lee_core::program::ProgramId,
-    caller_program_id: Option<lee_core::program::ProgramId>,
+    self_account_id: lee_core::account::AccountId,
+    caller_account_id: Option<lee_core::account::AccountId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_words: Vec<u32>,
     recipient: [u8; 32],
     amount: u128,
 ) {
+    // Recover the real `ProgramId` (RISC0 image id): on this branch every program account lives
+    // at the direct `AccountId::from(program_id)` bijection, so this round-trip is exact. Needed
+    // for the PDA-derivation helpers below, which are pinned to the actual image id.
+    let self_program_id = lee_core::program::ProgramId::from(self_account_id);
+
     // pre_states: [source marker, config PDA, recipient holding PDA].
     let [marker, config, holding] = <[AccountWithMetadata; 3]>::try_from(pre_states)
         .expect("Mint requires the source marker, config, and recipient holding accounts");
@@ -76,8 +81,8 @@ fn mint(
     let cfg = WrappedTokenConfig::from_bytes(&config.account.data)
         .expect("config account holds a wrapped-token config");
     assert_eq!(
-        caller_program_id,
-        Some(cfg.minter),
+        caller_account_id,
+        Some(cfg.minter.into()),
         "Mint is only callable by the authorized minter (the cross-zone inbox)"
     );
     // The inbox vouches only that the message arrived; which peer sent it is this
@@ -118,8 +123,8 @@ fn mint(
     let config_post = AccountPostState::new(config.account.clone());
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_words,
         vec![marker.clone(), config, holding],
         vec![
@@ -276,14 +281,14 @@ fn update_sources(
 /// Writes the minter and the authorized peer sources into the config PDA exactly
 /// once at genesis.
 fn init_config(
-    self_program_id: lee_core::program::ProgramId,
-    caller_program_id: Option<lee_core::program::ProgramId>,
+    self_account_id: lee_core::account::AccountId,
+    caller_account_id: Option<lee_core::account::AccountId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_words: Vec<u32>,
     config_value: &WrappedTokenConfig,
 ) {
     assert!(
-        caller_program_id.is_none(),
+        caller_account_id.is_none(),
         "InitConfig is a top-level genesis transaction"
     );
 
@@ -292,7 +297,7 @@ fn init_config(
         .expect("InitConfig requires the config account");
     assert_eq!(
         config.account_id,
-        config_account_id(self_program_id),
+        config_account_id(self_account_id.into()),
         "account must be the wrapped-token config PDA"
     );
     // Init-once, idempotent under genesis replay: a `default` config is a first
@@ -303,8 +308,7 @@ fn init_config(
     // rewriting its own config data on a later call.
     if config.account != Account::default() {
         assert_eq!(
-            config.account.program_owner,
-            self_program_id.into(),
+            config.account.program_owner, self_account_id,
             "wrapped-token config PDA is owned by another program"
         );
         assert_eq!(
@@ -323,8 +327,8 @@ fn init_config(
         AccountPostState::new_claimed_if_default(config_account, Claim::Pda(config_seed()));
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_words,
         vec![config],
         vec![config_post],
