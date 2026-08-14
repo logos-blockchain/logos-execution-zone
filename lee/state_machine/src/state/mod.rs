@@ -5,7 +5,7 @@ use lee_core::{
     BlockId, Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, MembershipProof, Nullifier,
     Timestamp,
     account::{Account, AccountId, Data},
-    program::{PROGRAM_STORAGE_OWNER, ProgramId},
+    program::PROGRAM_STORAGE_OWNER,
 };
 
 use crate::{

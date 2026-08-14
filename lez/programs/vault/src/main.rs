@@ -49,7 +49,7 @@ fn main() {
 
             vec![
                 ChainedCall::new(
-                    sender.account.program_owner.into(),
+                    sender.account.program_owner,
                     vec![sender, recipient_vault_for_callee],
                     &AuthTransferInstruction::Transfer { amount },
                 )
@@ -73,7 +73,7 @@ fn main() {
 
             vec![
                 ChainedCall::new(
-                    owner_vault_for_callee.account.program_owner.into(),
+                    owner_vault_for_callee.account.program_owner,
                     vec![owner_vault_for_callee, owner],
                     &AuthTransferInstruction::Transfer { amount },
                 )
