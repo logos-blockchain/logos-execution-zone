@@ -46,12 +46,15 @@ num-bigint.workspace = true
 risc0-zkvm.workspace = true
 futures.workspace = true
 itertools.workspace = true
+libp2p.workspace = true
 
 [features]
 default = []
 testnet = []
 # Generate mock external clients implementations for testing
 mock = []
+# Enable mDNS-based local peer discovery for gossip.
+mdns = []
 
 [dev-dependencies]
 futures.workspace = true

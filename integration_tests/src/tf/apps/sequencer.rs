@@ -1,4 +1,5 @@
 use std::{
+    future::Future,
     net::SocketAddr,
     path::PathBuf,
     sync::{Arc, Mutex},
@@ -117,6 +118,50 @@ impl SequencerApp {
         self.state_dir = Some(dir.into());
         self
     }
+
+    #[expect(
+        clippy::manual_async_fn,
+        reason = "An explicit Send + 'static future is required by the TF deployment boundary"
+    )]
+    fn deploy_inner(
+        self,
+    ) -> impl Future<Output = Result<LezSequencerClient, DynError>> + Send + 'static {
+        async move {
+            let public_accounts = config::default_public_accounts_for_wallet();
+            let private_accounts = config::default_private_accounts_for_wallet();
+            let genesis = config::genesis_from_accounts(&public_accounts, &private_accounts);
+            // If the sequencer moves to a separate process, create a `LocalProcessApp`
+            // with its `LaunchSpec` here so TF owns the process lifecycle.
+            let setup = SequencerSetup::new(self.config, self.bedrock_addr).with_genesis(genesis);
+            let (service, state_dir);
+            if let Some(home) = self.state_dir {
+                service = setup
+                    .setup_in_owned(home)
+                    .await
+                    .context("failed to set up LEZ sequencer")?;
+                state_dir = None;
+            } else {
+                let (sequencer, temp_dir) = setup
+                    .setup()
+                    .await
+                    .context("failed to set up LEZ sequencer")?;
+                service = sequencer;
+                state_dir = Some(temp_dir);
+            }
+            let addr = service.addr();
+            let url = config::addr_to_url(UrlProtocol::Http, addr)?;
+            let client = SequencerClientBuilder::default().build(url)?;
+
+            Ok(LezSequencerClient::new(
+                client,
+                addr,
+                public_accounts,
+                private_accounts,
+                service,
+                state_dir,
+            ))
+        }
+    }
 }
 
 #[async_trait]
@@ -124,38 +169,6 @@ impl AppDeployment<AppHostEnv> for SequencerApp {
     type Handle = LezSequencerClient;
 
     async fn deploy(self, _ctx: &mut DeployContext<AppHostEnv>) -> Result<Self::Handle, DynError> {
-        let public_accounts = config::default_public_accounts_for_wallet();
-        let private_accounts = config::default_private_accounts_for_wallet();
-        let genesis = config::genesis_from_accounts(&public_accounts, &private_accounts);
-        // If the sequencer moves to a separate process, create a `LocalProcessApp`
-        // with its `LaunchSpec` here so TF owns the process lifecycle.
-        let setup = SequencerSetup::new(self.config, self.bedrock_addr).with_genesis(genesis);
-        let (service, state_dir);
-        if let Some(home) = self.state_dir {
-            service = setup
-                .setup_in(&home)
-                .await
-                .context("failed to set up LEZ sequencer")?;
-            state_dir = None;
-        } else {
-            let (sequencer, temp_dir) = setup
-                .setup()
-                .await
-                .context("failed to set up LEZ sequencer")?;
-            service = sequencer;
-            state_dir = Some(temp_dir);
-        }
-        let addr = service.addr();
-        let url = config::addr_to_url(UrlProtocol::Http, addr)?;
-        let client = SequencerClientBuilder::default().build(url)?;
-
-        Ok(LezSequencerClient::new(
-            client,
-            addr,
-            public_accounts,
-            private_accounts,
-            service,
-            state_dir,
-        ))
+        self.deploy_inner().await
     }
 }

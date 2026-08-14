@@ -232,7 +232,7 @@ async fn deploy_registered_sequencer(
     let (service, owned_state_dir) = if let Some(state_dir) = state_dir {
         (
             setup
-                .setup_in(&state_dir)
+                .setup_in_owned(state_dir)
                 .await
                 .context("failed to set up registered sequencer")?,
             None,

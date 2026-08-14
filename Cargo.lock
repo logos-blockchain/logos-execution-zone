@@ -1281,6 +1281,7 @@ name = "bridge_lock_core"
 version = "0.1.0"
 dependencies = [
  "lee_core",
+ "risc0-zkvm",
  "serde",
 ]
 
@@ -2146,6 +2147,7 @@ dependencies = [
  "log",
  "ping_core",
  "programs",
+ "rand 0.8.6",
  "risc0-zkvm",
  "sequencer_service_rpc",
  "serde",
@@ -2511,7 +2513,7 @@ dependencies = [
  "clap",
  "json-pretty-compact",
  "sequencer_core_metrics",
- "sequencer_service_metrics",
+ "sequencer_rpc_server_actor_metrics",
  "serde",
  "serde_json",
 ]
@@ -2813,6 +2815,12 @@ name = "downcast-rs"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
+
+[[package]]
+name = "downcast-rs"
+version = "2.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "117240f60069e65410b3ae1bb213295bd828f707b5bec6596a1afc8793ce0cbc"
 
 [[package]]
 name = "downloader"
@@ -5289,6 +5297,46 @@ dependencies = [
  "jiff",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "kameo"
+version = "0.22.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7cbab7323ed30490812f43ef6416a9e21bb150e9633e451ed124ca276b1ca82a"
+dependencies = [
+ "downcast-rs 2.0.2",
+ "dyn-clone",
+ "futures",
+ "kameo_macros",
+ "serde",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "kameo_actors"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "069ef0ae25f4da6f817ce7d81f7990b3d12c3ae398b59e6e16e37b5fcc92a443"
+dependencies = [
+ "futures",
+ "glob",
+ "kameo",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "kameo_macros"
+version = "0.21.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f7566055976eb86ee8e8fbafa0fbdad985c5d7c3f4eed04fc11bb495f71e3856"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -9739,7 +9787,9 @@ dependencies = [
 name = "ping_core"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "lee_core",
+ "risc0-zkvm",
  "serde",
 ]
 
@@ -9747,6 +9797,7 @@ dependencies = [
 name = "ping_receiver_program"
 version = "0.1.0"
 dependencies = [
+ "cross_zone_inbox_core",
  "lee_core",
  "ping_core",
 ]
@@ -11101,7 +11152,7 @@ version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4382d3af3a4ebdae7f64ba6edd9114fff92c89808004c4943b393377a25d001"
 dependencies = [
- "downcast-rs",
+ "downcast-rs 1.2.1",
  "paste",
 ]
 
@@ -11615,6 +11666,7 @@ dependencies = [
  "key_protocol",
  "lee",
  "lee_core",
+ "libp2p",
  "log",
  "logos-blockchain-core 0.0.0 (git+https://github.com/logos-blockchain/logos-blockchain.git?rev=e2a1c3b7ef2191c224f998b94332c5926c789f9d)",
  "logos-blockchain-http-api-common 0.0.0 (git+https://github.com/logos-blockchain/logos-blockchain.git?rev=e2a1c3b7ef2191c224f998b94332c5926c789f9d)",
@@ -11651,36 +11703,75 @@ dependencies = [
 ]
 
 [[package]]
-name = "sequencer_service"
+name = "sequencer_executor_actor"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "borsh",
  "bytesize",
- "clap",
  "common",
  "env_logger",
- "futures",
  "hex",
- "jsonrpsee",
+ "kameo",
  "lee",
+ "lee_core",
  "log",
  "mempool",
- "metrics-exporter-prometheus",
- "programs",
+ "num-bigint 0.4.6",
  "sequencer_core",
- "sequencer_service_metrics",
- "sequencer_service_protocol",
- "sequencer_service_rpc",
+ "storage",
+ "tempfile",
+ "test_programs",
+ "thiserror 2.0.18",
  "tokio",
  "tokio-util",
 ]
 
 [[package]]
-name = "sequencer_service_metrics"
+name = "sequencer_rpc_server_actor"
+version = "0.1.0"
+dependencies = [
+ "borsh",
+ "bytesize",
+ "common",
+ "jsonrpsee",
+ "kameo",
+ "lee",
+ "log",
+ "programs",
+ "sequencer_core",
+ "sequencer_executor_actor",
+ "sequencer_rpc_server_actor_metrics",
+ "sequencer_service_protocol",
+ "sequencer_service_rpc",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
+name = "sequencer_rpc_server_actor_metrics"
 version = "0.1.0"
 dependencies = [
  "metrics",
+]
+
+[[package]]
+name = "sequencer_service"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "env_logger",
+ "futures",
+ "hex",
+ "kameo",
+ "kameo_actors",
+ "log",
+ "metrics-exporter-prometheus",
+ "sequencer_core",
+ "sequencer_executor_actor",
+ "sequencer_rpc_server_actor",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -11691,6 +11782,7 @@ dependencies = [
  "hex",
  "lee",
  "lee_core",
+ "serde",
  "serde_with",
 ]
 
@@ -13120,6 +13212,7 @@ dependencies = [
  "signal-hook-registry",
  "socket2 0.6.4",
  "tokio-macros",
+ "tracing",
  "windows-sys 0.61.2",
 ]
 
@@ -14840,6 +14933,7 @@ dependencies = [
 name = "wrapped_token_core"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "lee_core",
  "risc0-zkvm",
  "serde",
@@ -14849,6 +14943,7 @@ dependencies = [
 name = "wrapped_token_program"
 version = "0.1.0"
 dependencies = [
+ "cross_zone_inbox_core",
  "lee_core",
  "wrapped_token_core",
 ]

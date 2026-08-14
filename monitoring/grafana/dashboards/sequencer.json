@@ -346,6 +346,86 @@
       ],
       "title": "Submitted vs failed transactions (per minute)",
       "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "fixed", "fixedColor": "red" }, "unit": "short", "decimals": 0 },
+        "overrides": [ ]
+      },
+      "gridPos": { "h": 7, "w": 6, "x": 0, "y": 41 },
+      "id": 11,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "cross_zone_dispatches_retired_total",
+          "legendFormat": "given up on",
+          "refId": "A"
+        }
+      ],
+      "title": "Cross-zone deliveries given up on since startup",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "fixed", "fixedColor": "orange" }, "unit": "short", "decimals": 0 },
+        "overrides": [ ]
+      },
+      "gridPos": { "h": 7, "w": 6, "x": 6, "y": 41 },
+      "id": 12,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": { "calcs": [ "lastNotNull" ], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "cross_zone_dead_letter_dispatches",
+          "legendFormat": "retained",
+          "refId": "A"
+        }
+      ],
+      "title": "Dead letters retained",
+      "type": "stat"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "drawStyle": "line", "lineWidth": 1, "fillOpacity": 10 },
+          "unit": "short",
+          "min": 0.0
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "given up on" },
+            "properties": [ { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } } ]
+          }
+        ]
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 41 },
+      "id": 13,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "calcs": [ "last", "max" ] },
+        "tooltip": { "mode": "single" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "rate(cross_zone_dispatches_retired_total[$__rate_interval]) * 60",
+          "legendFormat": "given up on",
+          "refId": "A"
+        }
+      ],
+      "title": "Cross-zone deliveries given up on (per minute)",
+      "type": "timeseries"
     }
   ],
   "refresh": "5s",

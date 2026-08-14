@@ -6,7 +6,6 @@
 
 use anyhow::Result;
 use integration_tests::TestContext;
-use log::info;
 use tokio::test;
 use wallet::cli::{Command, config::ConfigSubcommand};
 
@@ -33,7 +32,7 @@ async fn modify_config_field() -> Result<()> {
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
-    info!("Successfully modified and restored config field");
+    log::info!("Successfully modified and restored config field");
 
     Ok(())
 }

@@ -35,8 +35,20 @@ pub enum GenesisAction {
     },
 }
 
+/// Sequencer p2p gossip configuration. Absent (`None`) disables gossip
+/// entirely: no sockets, no background tasks.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GossipConfig {
+    /// Multiaddr to listen on.
+    #[serde(default = "default_gossip_listen_addr")]
+    pub listen_addr: libp2p::Multiaddr,
+    /// Peer multiaddrs to dial at startup, optionally with `/p2p/<peer_id>`.
+    #[serde(default)]
+    pub bootstrap_peers: Vec<libp2p::Multiaddr>,
+}
+
 // TODO: Provide default values
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SequencerConfig {
     /// Home dir of sequencer storage.
     pub home: PathBuf,
@@ -67,9 +79,12 @@ pub struct SequencerConfig {
     /// Address the Prometheus metrics exporter binds to.
     #[serde(default = "default_metrics_address")]
     pub metrics_address: Option<SocketAddr>,
+    /// Sequencer p2p gossip configuration. `None` disables gossip.
+    #[serde(default)]
+    pub gossip: Option<GossipConfig>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BedrockConfig {
     /// Bedrock channel ID.
     pub channel_id: ChannelId,
@@ -93,10 +108,26 @@ impl SequencerConfig {
 
         Ok(serde_json::from_reader(reader)?)
     }
+
+    /// Where this sequencer's database lives, suffixed with the channel id like
+    /// the indexer's, so several sequencers can share a home directory. Only the
+    /// database is per-channel; `bedrock_signing_key` stays unsuffixed, so
+    /// sequencers sharing a home share one Bedrock identity.
+    #[must_use]
+    pub fn db_path(&self) -> PathBuf {
+        self.home
+            .join(format!("rocksdb-{}", self.bedrock_config.channel_id))
+    }
 }
 
 const fn default_max_block_size() -> ByteSize {
     ByteSize::mib(1)
+}
+
+fn default_gossip_listen_addr() -> libp2p::Multiaddr {
+    "/ip4/0.0.0.0/udp/0/quic-v1"
+        .parse()
+        .expect("hardcoded default gossip listen addr is a valid multiaddr")
 }
 
 #[expect(clippy::unnecessary_wraps, reason = "Required by serde")]

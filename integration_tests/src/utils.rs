@@ -193,6 +193,7 @@ pub async fn sync_private(ctx: &mut TestContext) -> anyhow::Result<()> {
 }
 
 /// Look up a restored private account for `account_id`, panicking with `label` if absent.
+#[must_use]
 pub fn restored_private_account<'ctx>(
     ctx: &'ctx TestContext,
     account_id: AccountId,

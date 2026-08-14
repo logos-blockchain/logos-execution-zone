@@ -14,18 +14,14 @@ use indexer_service_rpc::RpcClient as _;
 use integration_tests::{
     config::{self, SequencerPartialConfig},
     indexer_client::IndexerClient,
-    setup::{SequencerSetup, indexer_client, sequencer_client, setup_bedrock_node, setup_indexer},
 };
-use logos_blockchain_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
-use sequencer_core::{block_publisher::post_channel_config, config::BedrockConfig};
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
+use test_fixtures::{
+    MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
+};
 use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
 use tokio::test;
 
-/// 1 s bedrock slots: rotate the turn every ~20 s of tenure; steal a stalled
-/// turn after ~30 s (bounds the stall while B is accredited but not started).
-const POSTING_TIMEFRAME_SLOTS: u32 = 20;
-const POSTING_TIMEOUT_SLOTS: u32 = 30;
 const PHASE_TIMEOUT: Duration = Duration::from_secs(360);
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
 const TRANSFER_AMOUNT: u128 = 10;
@@ -34,86 +30,74 @@ const ROTATION_BLOCKS: u64 = 8;
 
 #[test]
 async fn multi_sequencer_committee_converges() -> Result<()> {
-    let (_bedrock, bedrock_addr) = setup_bedrock_node()
-        .await
-        .context("Failed to set up Bedrock node")?;
-
-    // Fixed seeds so A can accredit B's public key before B exists.
-    let key_a = [0xA1_u8; ED25519_SECRET_KEY_SIZE];
-    let key_b = [0xB2_u8; ED25519_SECRET_KEY_SIZE];
-    let pub_a = Ed25519Key::from_bytes(&key_a).public_key();
-    let pub_b = Ed25519Key::from_bytes(&key_b).public_key();
-
+    let bedrock_channel_id = config::bedrock_channel_id();
     let partial = SequencerPartialConfig {
         block_create_timeout: Duration::from_secs(5),
         ..SequencerPartialConfig::default()
     };
 
-    // Phase 1: A solo (its first inscription creates the channel), plus an indexer.
-    let (seq_a, _a_home) = SequencerSetup::new(partial, bedrock_addr)
-        .with_genesis(vec![])
-        .with_bedrock_signing_key(key_a)
-        .setup()
-        .await
-        .context("Failed to set up sequencer A")?;
-    let a = sequencer_client(seq_a.addr())?;
-    let (idx, _idx_home) = setup_indexer(bedrock_addr, config::bedrock_channel_id(), None)
-        .await
-        .context("Failed to set up indexer")?;
-    let indexer = indexer_client(idx.addr()).await?;
+    let ctx = MultiZoneTestContextBuilder::default()
+        .with_zone(
+            ZoneTestContextBuilder::new(MultiNodeTestContextConfig {
+                num_nodes: 2,
+                bedrock_channel: bedrock_channel_id,
+            })
+            .disable_wallet()
+            .with_sequencer_partial_config(partial)
+            .with_genesis(vec![]),
+        )
+        .build()
+        .await?;
 
-    wait_for_height(&a, 2, "sequencer A to produce past genesis").await?;
+    let mut seq_iterator = ctx.sequencer_components_iter(bedrock_channel_id).unwrap();
 
-    // Phase 2: live roster change to [A, B] with rotation enabled, posted
-    // straight to bedrock with A's admin key (the operator one-shot path).
-    post_channel_config(
-        &BedrockConfig {
-            channel_id: config::bedrock_channel_id(),
-            node_url: config::addr_to_url(config::UrlProtocol::Http, bedrock_addr)?,
-            funding_key: config::bedrock_funding_key(),
-            auth: None,
-            priority_fee: sequencer_core::config::default_priority_fee(),
-        },
-        &Ed25519Key::from_bytes(&key_a),
-        vec![pub_a, pub_b],
-        POSTING_TIMEFRAME_SLOTS,
-        POSTING_TIMEOUT_SLOTS,
-        1,
-        1,
-    )
-    .await
-    .context("Failed to configure the channel committee")?;
+    let seq_client_a = &(seq_iterator.next().unwrap().sequencer_client);
+    let seq_client_b = &(seq_iterator.next().unwrap().sequencer_client);
 
-    let height_at_config = a.get_last_block_id().await?;
+    let indexer = ctx.indexer_client();
+
+    wait_for_height(seq_client_a, 2, "sequencer A to produce past genesis").await?;
+
+    log::info!("Passed wait for height A to be at least 2");
+
+    let height_at_config = seq_client_a.get_last_block_id().await?;
     wait_for_height(
-        &a,
+        seq_client_a,
         height_at_config + 1,
         "A to produce after the roster change",
     )
     .await?;
 
-    // Phase 3: B joins live and syncs the existing chain.
-    let (seq_b, _b_home) = SequencerSetup::new(partial, bedrock_addr)
-        .with_genesis(vec![])
-        .with_bedrock_signing_key(key_b)
-        .setup()
-        .await
-        .context("Failed to set up sequencer B")?;
-    let b = sequencer_client(seq_b.addr())?;
+    log::info!(
+        "Passed wait for height A to be at least {}",
+        height_at_config + 1
+    );
 
-    let join_height = a.get_last_block_id().await?;
-    wait_for_height(&b, join_height, "B to sync to A's height at join").await?;
+    let join_height = seq_client_a.get_last_block_id().await?;
+    wait_for_height(seq_client_b, join_height, "B to sync to A's height at join").await?;
+
+    log::info!("Passed wait for height B to be at least {join_height}");
 
     // Phase 4: rotation + convergence over ≈4 turn windows.
     let rotation_target = join_height + ROTATION_BLOCKS;
     wait_for_height(
-        &a,
+        seq_client_a,
         rotation_target,
         "the chain to advance across turn windows",
     )
     .await?;
-    wait_for_height(&b, rotation_target, "B to follow across turn windows").await?;
-    assert_same_chain(&a, &b).await?;
+
+    log::info!("Passed wait for height A to be at least {rotation_target}");
+
+    wait_for_height(
+        seq_client_b,
+        rotation_target,
+        "B to follow across turn windows",
+    )
+    .await?;
+    assert_same_chain(seq_client_a, seq_client_b).await?;
+
+    log::info!("Passed wait for height B to be at least {rotation_target}");
 
     // Phase 5: a tx submitted only to B is included by B and visible on A.
     let accounts = initial_public_user_accounts();
@@ -121,8 +105,8 @@ async fn multi_sequencer_committee_converges() -> Result<()> {
     let to = accounts[1].account_id;
     let sign_key = initial_pub_accounts_private_keys()[0].pub_sign_key.clone();
 
-    let to_balance_before = a.get_account_balance(to).await?;
-    let nonce = b.get_accounts_nonces(vec![from]).await?[0];
+    let to_balance_before = seq_client_a.get_account_balance(to).await?;
+    let nonce = seq_client_b.get_accounts_nonces(vec![from]).await?[0];
     let tx = common::test_utils::create_transaction_native_token_transfer(
         from,
         nonce.0,
@@ -130,21 +114,30 @@ async fn multi_sequencer_committee_converges() -> Result<()> {
         TRANSFER_AMOUNT,
         &sign_key,
     );
-    b.send_transaction(tx)
+    seq_client_b
+        .send_transaction(tx)
         .await
         .context("Failed to submit the transfer to B")?;
 
-    wait_for_balance(&a, to, to_balance_before + TRANSFER_AMOUNT).await?;
+    wait_for_balance(seq_client_a, to, to_balance_before + TRANSFER_AMOUNT).await?;
+
+    log::info!(
+        "Passed wait for height balance {to} to be {}",
+        to_balance_before + TRANSFER_AMOUNT
+    );
 
     // Phase 6: the indexer finalizes the same chain, with no stall.
-    wait_for_finalized(&indexer, join_height).await?;
+    wait_for_finalized(indexer, join_height).await?;
+
+    log::info!("Passed indexer to see finalized {join_height}");
+
     let finalized = indexer.get_last_finalized_block_id().await?.unwrap_or(0);
     for id in 1..=finalized {
         let block_i = indexer
             .get_block_by_id(id)
             .await?
             .with_context(|| format!("Indexer is missing finalized block {id}"))?;
-        let block_a = a
+        let block_a = seq_client_a
             .get_block(id)
             .await?
             .with_context(|| format!("A is missing block {id}"))?;
@@ -165,6 +158,8 @@ async fn multi_sequencer_committee_converges() -> Result<()> {
 
 /// Polls the sequencer until its chain height reaches `target`.
 async fn wait_for_height(client: &SequencerClient, target: u64, what: &str) -> Result<()> {
+    log::info!("Waiting for {what:?}, target is {target}");
+
     let wait = async {
         loop {
             if client.get_last_block_id().await? >= target {
@@ -184,6 +179,8 @@ async fn wait_for_balance(
     account: lee::AccountId,
     expected: u128,
 ) -> Result<()> {
+    log::info!("Waiting for {account} to have {expected} tokens");
+
     let wait = async {
         loop {
             if client.get_account_balance(account).await? == expected {
@@ -199,6 +196,8 @@ async fn wait_for_balance(
 
 /// Polls the indexer until its finalized height reaches `target`.
 async fn wait_for_finalized(indexer: &IndexerClient, target: u64) -> Result<()> {
+    log::info!("Waiting for indexer to see target finalized, target is {target}");
+
     let wait = async {
         loop {
             if indexer.get_last_finalized_block_id().await?.unwrap_or(0) >= target {

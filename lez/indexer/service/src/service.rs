@@ -16,7 +16,7 @@ use jsonrpsee::{
     core::{Serialize, SubscriptionResult, async_trait},
     types::{ErrorCode, ErrorObject, ErrorObjectOwned},
 };
-use log::{debug, error, info, warn};
+use log::{debug, error, warn};
 use tokio::{sync::mpsc::UnboundedSender, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
@@ -53,7 +53,7 @@ impl indexer_service_rpc::RpcServer for IndexerService {
         subscription_sink: jsonrpsee::PendingSubscriptionSink,
     ) -> SubscriptionResult {
         let sink = subscription_sink.accept().await?;
-        info!(
+        log::info!(
             "Accepted new subscription to finalized blocks with ID {:?}",
             sink.subscription_id()
         );
@@ -281,14 +281,14 @@ impl SubscriptionService {
                 loop {
                     tokio::select! {
                         () = shutdown.cancelled() => {
-                            info!("Shutdown requested; stopping block ingestion");
+                            log::info!("Shutdown requested; stopping block ingestion");
                             return Ok(());
                         }
                         sub = sub_receiver.recv() => {
                             let Some(subscription) = sub else {
                                 bail!("Subscription receiver closed unexpectedly");
                             };
-                            info!("Added new subscription with ID {:?}", subscription.sink.subscription_id());
+                            log::info!("Added new subscription with ID {:?}", subscription.sink.subscription_id());
                             subscribers.push(subscription);
                         }
                         block_opt = block_stream.next() => {
@@ -397,7 +397,7 @@ impl<T> Subscription<T> {
 
 impl<T> Drop for Subscription<T> {
     fn drop(&mut self) {
-        info!(
+        log::info!(
             "Subscription with ID {:?} is being dropped",
             self.sink.subscription_id()
         );

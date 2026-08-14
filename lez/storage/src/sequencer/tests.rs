@@ -41,6 +41,15 @@ fn dispatch_record(seed: u8) -> PendingCrossZoneDispatchRecord {
     PendingCrossZoneDispatchRecord::recorded([seed; 32], vec![seed; 4])
 }
 
+/// The peer coordinates a dead letter carries, distinct per seed.
+fn dispatch_origin(seed: u8) -> DispatchOrigin {
+    DispatchOrigin {
+        src_zone: [seed; 32],
+        src_block_id: u64::from(seed),
+        src_tx_index: u32::from(seed),
+    }
+}
+
 /// A distinct message key per index, for filling the pending list.
 fn key_from_index(index: usize) -> [u8; 32] {
     let mut key = [0_u8; 32];
@@ -606,7 +615,7 @@ fn finalized_dispatch_records_are_removed_by_message_key() {
 }
 
 #[test]
-fn record_dispatch_failure_drops_the_record_at_the_limit() {
+fn record_dispatch_failure_retires_the_record_at_the_limit() {
     let temp_dir = tempdir().unwrap();
     let (dbio, _genesis) = dbio_with_genesis(temp_dir.path());
 
@@ -616,34 +625,227 @@ fn record_dispatch_failure_drops_the_record_at_the_limit() {
     dbio.add_pending_cross_zone_dispatches(vec![record, survivor.clone()])
         .unwrap();
 
-    assert!(!dbio.record_dispatch_failure(key, 3).unwrap());
     assert_eq!(
-        dbio.get_pending_cross_zone_dispatches().unwrap()[0].failed_attempts,
-        1,
+        dbio.record_dispatch_failure(key, 3, dispatch_origin(1))
+            .unwrap(),
+        DispatchFailure::Retried { failed_attempts: 1 },
         "a failure short of the limit is counted, not given up on"
     );
-    assert!(!dbio.record_dispatch_failure(key, 3).unwrap());
-    assert!(
-        dbio.record_dispatch_failure(key, 3).unwrap(),
-        "the third failure is the one it is given up on"
+    assert_eq!(
+        dbio.get_pending_cross_zone_dispatches().unwrap()[0].failed_attempts,
+        1
     );
+    assert_eq!(
+        dbio.record_dispatch_failure(key, 3, dispatch_origin(1))
+            .unwrap(),
+        DispatchFailure::Retried { failed_attempts: 2 }
+    );
+    let DispatchFailure::Retired(retired) = dbio
+        .record_dispatch_failure(key, 3, dispatch_origin(1))
+        .unwrap()
+    else {
+        panic!("the third failure is the one it is given up on");
+    };
+    assert_eq!(retired.message_key, key);
+    assert_eq!(retired.origin, dispatch_origin(1));
+    assert_eq!(retired.failed_attempts, 3);
 
-    // Dropped rather than flagged: a delivery the drain will never feed into a
-    // block again is one nothing would ever remove, so flagging it would let a
-    // peer that can make deliveries fail grow the list without bound.
+    // It has to leave the pending list, which the drain re-feeds every turn, or
+    // a delivery that can never execute would be retried for ever.
     assert_eq!(
         dbio.get_pending_cross_zone_dispatches().unwrap(),
         vec![survivor],
-        "giving up on a delivery drops its record and leaves the others alone"
+        "giving up on a delivery takes its record out and leaves the others alone"
     );
 
-    // A key with no record reads as given up on: there is nothing left to count
-    // against, and nothing will feed it into a block.
-    assert!(
-        dbio.record_dispatch_failure(key, 3).unwrap(),
-        "a failure against a dropped delivery must not re-create its record"
+    // A key with no record is not a give-up: nothing was counted and nothing was
+    // abandoned. This is the shape of a delivery that settled and then failed a
+    // later attempt.
+    assert_eq!(
+        dbio.record_dispatch_failure(key, 3, dispatch_origin(1))
+            .unwrap(),
+        DispatchFailure::Absent,
+        "a failure against a retired delivery must not re-create its record"
     );
     assert_eq!(dbio.get_pending_cross_zone_dispatches().unwrap().len(), 1);
+}
+
+#[test]
+fn a_retired_dispatch_moves_into_the_dead_letter_identified_by_its_origin() {
+    let temp_dir = tempdir().unwrap();
+    let (dbio, _genesis) = dbio_with_genesis(temp_dir.path());
+
+    let record = dispatch_record(7);
+    let key = record.message_key;
+    let encoded_len = u32::try_from(record.transaction.len()).unwrap();
+    dbio.add_pending_cross_zone_dispatches(vec![record])
+        .unwrap();
+
+    assert!(
+        dbio.get_dead_letter_cross_zone_dispatches()
+            .unwrap()
+            .is_empty()
+    );
+    for _ in 0..3 {
+        dbio.record_dispatch_failure(key, 3, dispatch_origin(7))
+            .unwrap();
+    }
+
+    let dead_letters = dbio.get_dead_letter_cross_zone_dispatches().unwrap();
+    assert_eq!(dead_letters.len(), 1);
+    assert_eq!(dead_letters[0].message_key, key);
+    assert_eq!(
+        dead_letters[0].origin,
+        dispatch_origin(7),
+        "the peer coordinates are what let the message be read back off the peer channel"
+    );
+    assert_eq!(dead_letters[0].transaction_bytes, encoded_len);
+    assert_eq!(dbio.get_dead_letter_cross_zone_dispatch_count().unwrap(), 1);
+}
+
+#[test]
+fn a_dead_letter_is_dropped_once_its_delivery_settles_elsewhere() {
+    let temp_dir = tempdir().unwrap();
+    let (dbio, _genesis) = dbio_with_genesis(temp_dir.path());
+
+    let record = dispatch_record(7);
+    let key = record.message_key;
+    dbio.add_pending_cross_zone_dispatches(vec![record])
+        .unwrap();
+    dbio.record_dispatch_failure(key, 1, dispatch_origin(7))
+        .unwrap();
+    assert_eq!(
+        dbio.get_dead_letter_cross_zone_dispatches().unwrap().len(),
+        1
+    );
+
+    // A delivery this node gave up on can still reach another sequencer's block.
+    dbio.drop_settled_cross_zone_dispatches(&[key]).unwrap();
+    assert!(
+        dbio.get_dead_letter_cross_zone_dispatches()
+            .unwrap()
+            .is_empty()
+    );
+
+    // The count is how often this node gave up, which stays true whatever
+    // happened next, and is what keeps the list readable as "still outstanding".
+    assert_eq!(dbio.get_dead_letter_cross_zone_dispatch_count().unwrap(), 1);
+}
+
+#[test]
+fn a_dead_letter_is_dropped_by_the_settlement_path_inside_a_store_update() {
+    let temp_dir = tempdir().unwrap();
+    let (dbio, genesis) = dbio_with_genesis(temp_dir.path());
+
+    let record = dispatch_record(7);
+    let key = record.message_key;
+    dbio.add_pending_cross_zone_dispatches(vec![record])
+        .unwrap();
+    dbio.record_dispatch_failure(key, 1, dispatch_origin(7))
+        .unwrap();
+    assert_eq!(
+        dbio.get_dead_letter_cross_zone_dispatches().unwrap().len(),
+        1
+    );
+
+    // The ordinary route, unlike the standalone drop: a block carrying the
+    // delivery becomes irreversible and the update that records that also
+    // reconciles the dead letter, in the same batch.
+    let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
+    dbio.store_update(&StoreUpdate {
+        blocks: &[(&block2, true)],
+        remove_dispatch_records: &[key],
+        ..StoreUpdate::new(&state_with_balance(200))
+    })
+    .unwrap();
+
+    assert!(
+        dbio.get_dead_letter_cross_zone_dispatches()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(dbio.get_dead_letter_cross_zone_dispatch_count().unwrap(), 1);
+}
+
+#[test]
+fn one_delivery_that_always_fails_takes_one_dead_letter_slot() {
+    let temp_dir = tempdir().unwrap();
+    let (dbio, _genesis) = dbio_with_genesis(temp_dir.path());
+
+    // A watcher rebuilding a peer tip re-reads from genesis, so the same
+    // never-executing delivery retires repeatedly (see `record_dispatch_failure`).
+    let key = key_from_index(1);
+    let other = key_from_index(2);
+    dbio.add_pending_cross_zone_dispatches(vec![PendingCrossZoneDispatchRecord::recorded(
+        other,
+        vec![1, 2, 3, 4],
+    )])
+    .unwrap();
+    dbio.record_dispatch_failure(other, 1, dispatch_origin(2))
+        .unwrap();
+
+    for _ in 0..5 {
+        dbio.add_pending_cross_zone_dispatches(vec![PendingCrossZoneDispatchRecord::recorded(
+            key,
+            vec![1, 2, 3, 4],
+        )])
+        .unwrap();
+        dbio.record_dispatch_failure(key, 1, dispatch_origin(1))
+            .unwrap();
+    }
+
+    let dead_letters = dbio.get_dead_letter_cross_zone_dispatches().unwrap();
+    assert_eq!(
+        dead_letters.len(),
+        2,
+        "one entry per delivery, not per retirement"
+    );
+    assert_eq!(
+        dead_letters[0].message_key, other,
+        "the other message is not evicted"
+    );
+
+    // The count still measures give-ups, so the repetition remains visible.
+    assert_eq!(dbio.get_dead_letter_cross_zone_dispatch_count().unwrap(), 6);
+}
+
+#[test]
+fn dead_letters_evict_the_oldest_at_the_cap_but_keep_counting() {
+    let temp_dir = tempdir().unwrap();
+    let (dbio, _genesis) = dbio_with_genesis(temp_dir.path());
+
+    let retirements = MAX_DEAD_LETTER_CROSS_ZONE_DISPATCHES + 3;
+    for index in 0..retirements {
+        let key = key_from_index(index);
+        dbio.add_pending_cross_zone_dispatches(vec![PendingCrossZoneDispatchRecord::recorded(
+            key,
+            vec![1, 2, 3, 4],
+        )])
+        .unwrap();
+        dbio.record_dispatch_failure(key, 1, dispatch_origin(1))
+            .unwrap();
+    }
+
+    let dead_letters = dbio.get_dead_letter_cross_zone_dispatches().unwrap();
+    assert_eq!(dead_letters.len(), MAX_DEAD_LETTER_CROSS_ZONE_DISPATCHES);
+    assert_eq!(
+        dead_letters[0].message_key,
+        key_from_index(3),
+        "the oldest retained entry is the fourth retirement, the first three having been evicted"
+    );
+    assert_eq!(
+        dead_letters[dead_letters.len() - 1].message_key,
+        key_from_index(retirements - 1),
+        "the newest retirement is kept"
+    );
+
+    // What eviction must not do is hide that the evicted ones happened: a node
+    // that lost hundreds of messages would otherwise look like one that lost the
+    // cap.
+    assert_eq!(
+        dbio.get_dead_letter_cross_zone_dispatch_count().unwrap(),
+        u64::try_from(retirements).unwrap()
+    );
 }
 
 #[test]

@@ -8,7 +8,9 @@ use lee::{AccountId, PrivateKey, PublicKey};
 use lee_core::Identifier;
 use logos_blockchain_key_management_system_service::keys::ZkPublicKey;
 use num_bigint::BigUint;
-use sequencer_core::config::{BedrockConfig, CrossZoneConfig, GenesisAction, SequencerConfig};
+use sequencer_core::config::{
+    BedrockConfig, CrossZoneConfig, GenesisAction, GossipConfig, SequencerConfig,
+};
 use url::Url;
 use wallet::config::{MultiSequencerClientConfig, SequencerConnectionData, WalletConfig};
 
@@ -79,6 +81,26 @@ impl std::fmt::Display for UrlProtocol {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+/// Config for test context in multi-node case.
+pub struct MultiNodeTestContextConfig {
+    pub num_nodes: usize,
+    pub bedrock_channel: ChannelId,
+}
+
+impl Default for MultiNodeTestContextConfig {
+    fn default() -> Self {
+        Self {
+            num_nodes: 1,
+            bedrock_channel: bedrock_channel_id(),
+        }
+    }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "All fields are necessary and better to keep separate"
+)]
 pub fn sequencer_config(
     partial: SequencerPartialConfig,
     home: PathBuf,
@@ -87,6 +109,8 @@ pub fn sequencer_config(
     funding_key: ZkPublicKey,
     genesis_transactions: Vec<GenesisAction>,
     cross_zone: Option<CrossZoneConfig>,
+    signing_key: Option<[u8; 32]>,
+    gossip: Option<GossipConfig>,
 ) -> Result<SequencerConfig> {
     let SequencerPartialConfig {
         max_num_tx_in_block,
@@ -104,7 +128,7 @@ pub fn sequencer_config(
         block_create_timeout,
         retry_pending_blocks_timeout: Duration::from_secs(5),
         genesis: genesis_transactions,
-        signing_key: SEQUENCER_SIGNING_KEY,
+        signing_key: signing_key.unwrap_or(SEQUENCER_SIGNING_KEY),
         bedrock_config: BedrockConfig {
             channel_id,
             node_url: addr_to_url(UrlProtocol::Http, bedrock_addr)
@@ -115,6 +139,7 @@ pub fn sequencer_config(
         },
         cross_zone,
         metrics_address: Some(SequencerConfig::DEFAULT_METRICS_ADDRESS),
+        gossip,
     })
 }
 
@@ -201,13 +226,19 @@ pub fn genesis_from_accounts(
         .collect()
 }
 
-pub fn wallet_config(sequencer_addr: SocketAddr) -> Result<WalletConfig> {
-    Ok(WalletConfig {
-        sequencers: vec![SequencerConnectionData {
-            sequencer_addr: addr_to_url(UrlProtocol::Http, sequencer_addr)
+pub fn wallet_config(sequencer_addrs: &[SocketAddr]) -> Result<WalletConfig> {
+    let mut sequencers = vec![];
+
+    for addr in sequencer_addrs {
+        sequencers.push(SequencerConnectionData {
+            sequencer_addr: addr_to_url(UrlProtocol::Http, *addr)
                 .context("Failed to convert sequencer addr to URL")?,
             basic_auth: None,
-        }],
+        });
+    }
+
+    Ok(WalletConfig {
+        sequencers,
         seq_poll_timeout: Duration::from_secs(30),
         seq_tx_poll_max_blocks: 15,
         seq_poll_max_retries: 10,
@@ -271,6 +302,31 @@ pub fn bedrock_channel_id_b() -> ChannelId {
     ChannelId::from(channel_id)
 }
 
+/// Generate sequencer signing key from `u32` number via repeating le bytes 8 times.
+#[must_use]
+pub fn sequencer_signing_key_from_seed(seed: u32) -> [u8; 32] {
+    seed.to_le_bytes()
+        .repeat(8)
+        .try_into()
+        .unwrap_or_else(|_| unreachable!())
+}
+
+/// Generate bedrock channel id from `u32` number via repeating le bytes 8 times.
+///
+/// Counting from the end of `u32` to guarantee, that it is different from
+/// `sequencer_signing_key_from_seed`.
+#[must_use]
+pub fn bedrock_channel_id_from_seed(seed: u32) -> ChannelId {
+    let channel_id: [u8; 32] =
+    // Useless in this case, but will make clippy happy
+    u32::MAX.saturating_sub(seed)
+        .to_le_bytes()
+        .repeat(8)
+        .try_into()
+        .unwrap_or_else(|_| unreachable!());
+    ChannelId::from(channel_id)
+}
+
 /// Funding key of the Bedrock test node, matching `funding_pk` in `bedrock/node-config.yaml`.
 #[must_use]
 pub fn bedrock_funding_key() -> ZkPublicKey {
@@ -305,6 +361,8 @@ mod tests {
             bedrock_channel_id(),
             bedrock_funding_key(),
             Vec::new(),
+            None,
+            None,
             None,
         )
         .expect("custom priority fee should produce a valid sequencer config");

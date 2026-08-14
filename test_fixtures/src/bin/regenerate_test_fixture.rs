@@ -57,7 +57,7 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
             .context("Failed to setup Sequencer for fixture generation")?;
 
     let (mut wallet, _temp_wallet_dir, _wallet_password) = setup_wallet(
-        sequencer_handle.addr(),
+        &[sequencer_handle.addr()],
         &initial_public_accounts,
         &initial_private_accounts,
         WalletConfigOverrides::default(),
@@ -76,7 +76,9 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
     drop(wallet);
     drop(sequencer_handle);
 
-    let db_path = temp_sequencer_dir.path().join("rocksdb");
+    let db_path = temp_sequencer_dir
+        .path()
+        .join(format!("rocksdb-{}", config::bedrock_channel_id()));
     let store = open_store_with_retry(&db_path)
         .await
         .context("Failed to reopen sequencer store after shutdown")?;

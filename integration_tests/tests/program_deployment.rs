@@ -7,12 +7,11 @@ use std::{io::Write as _, time::Duration};
 
 use anyhow::Result;
 use common::transaction::LeeTransaction;
-use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext,
-    utils::{get_account, new_account},
-};
-use log::info;
+use integration_tests::{TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, get_account, new_account};
 use sequencer_service_rpc::RpcClient as _;
+use test_fixtures::{
+    MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
+};
 use tokio::test;
 use wallet::{cli::Command, config::WalletConfigOverrides};
 
@@ -48,7 +47,7 @@ async fn deploy_and_execute_program() -> Result<()> {
         .send_transaction(LeeTransaction::Public(transaction))
         .await?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     // Waiting for long time as it may take some time for such a big transaction to be included in a
     // block
     tokio::time::sleep(Duration::from_secs(2 * TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
@@ -61,7 +60,7 @@ async fn deploy_and_execute_program() -> Result<()> {
     assert_eq!(post_state_account.data.as_ref(), expected_data);
     assert_eq!(post_state_account.nonce.0, 1);
 
-    info!("Successfully deployed and executed program");
+    log::info!("Successfully deployed and executed program");
 
     Ok(())
 }
@@ -71,13 +70,17 @@ async fn deploy_invalid_program_fails() -> Result<()> {
     // An invalid program bytecode is rejected by the sequencer during block production, so the
     // deployment transaction is never included in a block. Shrink the wallet's polling window so
     // the command gives up quickly instead of waiting for the full default timeout.
-    let mut ctx = TestContext::builder()
-        .with_wallet_config_overrides(WalletConfigOverrides {
-            seq_poll_timeout: Some(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)),
-            seq_tx_poll_max_blocks: Some(5),
-            seq_poll_max_retries: Some(2),
-            ..WalletConfigOverrides::default()
-        })
+
+    let mut ctx = MultiZoneTestContextBuilder::default()
+        .with_zone(
+            ZoneTestContextBuilder::new(MultiNodeTestContextConfig::default())
+                .with_wallet_config_overrides(WalletConfigOverrides {
+                    seq_poll_timeout: Some(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)),
+                    seq_tx_poll_max_blocks: Some(5),
+                    seq_poll_max_retries: Some(2),
+                    ..WalletConfigOverrides::default()
+                }),
+        )
         .build()
         .await?;
 
@@ -95,7 +98,7 @@ async fn deploy_invalid_program_fails() -> Result<()> {
         "Deploying an invalid program should fail, but got: {result:?}"
     );
 
-    info!("Deploying an invalid program failed as expected");
+    log::info!("Deploying an invalid program failed as expected");
 
     Ok(())
 }

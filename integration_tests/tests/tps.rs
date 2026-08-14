@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context as _, Result};
 use bytesize::ByteSize;
 use common::transaction::LeeTransaction;
-use integration_tests::{TestContext, config::SequencerPartialConfig};
+use integration_tests::config::SequencerPartialConfig;
 use lee::{
     Account, AccountId, PrivacyPreservingTransaction, PrivateKey, PublicKey, PublicTransaction,
     privacy_preserving_transaction::{self as pptx, circuit},
@@ -27,9 +27,11 @@ use lee_core::{
     account::{AccountWithMetadata, Nonce, data::Data},
     encryption::ViewingPublicKey,
 };
-use log::info;
 use sequencer_core::config::GenesisAction;
 use sequencer_service_rpc::RpcClient as _;
+use test_fixtures::{
+    MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
+};
 use tokio::test;
 
 pub(crate) struct TpsTestManager {
@@ -179,9 +181,13 @@ pub async fn tps_test() -> Result<()> {
     let target_tps = 8;
 
     let tps_test = TpsTestManager::new(target_tps, num_transactions);
-    let ctx = TestContext::builder()
-        .with_sequencer_partial_config(TpsTestManager::generate_sequencer_partial_config())
-        .with_genesis(tps_test.generate_genesis())
+
+    let ctx = MultiZoneTestContextBuilder::default()
+        .with_zone(
+            ZoneTestContextBuilder::new(MultiNodeTestContextConfig::default())
+                .with_sequencer_partial_config(TpsTestManager::generate_sequencer_partial_config())
+                .with_genesis(tps_test.generate_genesis()),
+        )
         .build()
         .await?;
 
@@ -192,7 +198,7 @@ pub async fn tps_test() -> Result<()> {
         .context("Failed to claim vault funds for TPS accounts")?;
 
     let target_time = tps_test.target_time();
-    info!(
+    log::info!(
         "TPS test begin. Target time is {target_time:?} for {num_transactions} transactions ({target_tps} TPS)"
     );
 
@@ -206,7 +212,7 @@ pub async fn tps_test() -> Result<()> {
             .send_transaction(LeeTransaction::Public(tx))
             .await
             .unwrap();
-        info!("Sent tx {i}");
+        log::info!("Sent tx {i}");
         tx_hashes.push(tx_hash);
     }
 
@@ -226,7 +232,7 @@ pub async fn tps_test() -> Result<()> {
                 });
 
             if tx_obj.is_ok_and(|opt| opt.is_some()) {
-                info!("Found tx {i} with hash {tx_hash}");
+                log::info!("Found tx {i} with hash {tx_hash}");
                 break;
             }
         }
@@ -235,7 +241,7 @@ pub async fn tps_test() -> Result<()> {
 
     let tx_processed = tx_hashes.len();
     let actual_tps = tx_processed as u64 / time_elapsed;
-    info!("Processed {tx_processed} transactions in {time_elapsed:?} ({actual_tps} TPS)",);
+    log::info!("Processed {tx_processed} transactions in {time_elapsed:?} ({actual_tps} TPS)",);
 
     assert_eq!(tx_processed, num_transactions);
 
@@ -244,7 +250,7 @@ pub async fn tps_test() -> Result<()> {
         "Elapsed time {time_elapsed:?} exceeded target time {target_time:?}"
     );
 
-    info!("TPS test finished successfully");
+    log::info!("TPS test finished successfully");
 
     Ok(())
 }

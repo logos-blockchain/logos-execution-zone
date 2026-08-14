@@ -17,8 +17,11 @@ use indexer_ffi::{
         types::{FfiAccountId, FfiOption, FfiVec, account::FfiAccount, block::FfiBlock},
     },
 };
-use integration_tests::{BlockingTestContext, TestContext, utils::L2_TO_L1_TIMEOUT};
+use integration_tests::{BlockingTestContext, L2_TO_L1_TIMEOUT};
 use tempfile::TempDir;
+use test_fixtures::{
+    MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
+};
 
 unsafe extern "C" {
     pub unsafe fn query_last_block(indexer: *const IndexerServiceFFI) -> LastBlockIdResult;
@@ -83,7 +86,12 @@ pub fn setup_indexer_ffi(bedrock_addr: SocketAddr) -> Result<(IndexerServiceFFI,
 }
 
 pub fn setup() -> Result<(BlockingTestContext, IndexerServiceFFI, TempDir)> {
-    let ctx = TestContext::builder().disable_indexer().build_blocking()?;
+    let ctx = MultiZoneTestContextBuilder::default()
+        .with_zone(
+            ZoneTestContextBuilder::new(MultiNodeTestContextConfig::default()).disable_indexer(),
+        )
+        .build_blocking()?;
+
     // Don't borrow `ctx.runtime()`: `ctx` (and its by-value tokio runtime) is
     // moved into the returned tuple, which would leave any pointer into it
     // dangling. Pass a null runtime so the FFI owns its own — the same path the
@@ -93,7 +101,7 @@ pub fn setup() -> Result<(BlockingTestContext, IndexerServiceFFI, TempDir)> {
 }
 
 /// Poll the indexer FFI until its last finalized block id reaches `min_block_id`
-/// or until [`integration_tests::utils::L2_TO_L1_TIMEOUT`] elapses.
+/// or until [`integration_tests::L2_TO_L1_TIMEOUT`] elapses.
 ///
 /// This avoids blindly sleeping for the full timeout: the indexer typically
 /// catches up in a fraction of that time, so we return as soon as it does and

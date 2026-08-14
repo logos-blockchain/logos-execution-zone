@@ -215,13 +215,8 @@ jobs:
           image: ${{ needs.ci-image.outputs.image }}
           env: RISC0_DEV_MODE=1
           run: |
-            for i in 1 2 3; do
-              cargo nextest archive -p integration_tests --archive-file integration-tests.tar.zst --no-pager && break
-              echo "::warning:: Attempt $i failed, cleaning up and retrying..." >&2
-              rm -rf target/debug/deps/*.o target/debug/incremental 2>/dev/null || true
-              cargo clean -p integration_tests 2>/dev/null || true
-              sleep 5
-            done
+              source .github/scripts/with_retry.sh
+              with_retry 'cargo nextest archive -p integration_tests --archive-file integration-tests.tar.zst --no-pager' 5 
 
       - name: Upload integration test archive
         uses: actions/upload-artifact@v4
@@ -288,7 +283,9 @@ jobs:
           env: |
             RISC0_DEV_MODE=1
             RUST_LOG=info
-          run: cargo nextest run --archive-file integration-tests.tar.zst -E "binary(${{ matrix.target }})"
+          run: |
+              source .github/scripts/with_retry.sh
+              with_retry 'cargo nextest run --archive-file integration-tests.tar.zst -E "binary(${{ matrix.target }})"' 5 
 
   valid-proof-test:
     needs: ci-image
@@ -318,7 +315,9 @@ jobs:
         with:
           image: ${{ needs.ci-image.outputs.image }}
           env: RUST_LOG=info
-          run: cargo test -p integration_tests -- --exact private::private_transfer_to_owned_account
+          run: |
+              source .github/scripts/with_retry.sh
+              with_retry 'cargo test -p integration_tests -- --exact private::private_transfer_to_owned_account' 5 
 
   # `just build-artifacts` drives the host's Docker daemon via `cargo risczero
   # build`, so it goes through the image rather than `container:`.

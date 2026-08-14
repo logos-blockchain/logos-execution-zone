@@ -4,8 +4,7 @@
 )]
 
 use anyhow::Result;
-use integration_tests::{TestContext, utils::wait_for_indexer_to_catch_up};
-use log::info;
+use integration_tests::{TestContext, wait_for_indexer_to_catch_up};
 
 #[tokio::test]
 async fn indexer_test_run() -> Result<()> {
@@ -16,8 +15,8 @@ async fn indexer_test_run() -> Result<()> {
     let last_block_seq =
         sequencer_service_rpc::RpcClient::get_last_block_id(ctx.sequencer_client()).await?;
 
-    info!("Last block on seq now is {last_block_seq}");
-    info!("Last block on ind now is {last_block_indexer}");
+    log::info!("Last block on seq now is {last_block_seq}");
+    log::info!("Last block on ind now is {last_block_indexer}");
 
     assert!(last_block_indexer > 0);
 

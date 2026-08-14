@@ -9,23 +9,27 @@ use std::time::Duration;
 use anyhow::Result;
 use bytesize::ByteSize;
 use common::transaction::LeeTransaction;
-use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, config::SequencerPartialConfig,
-};
+use integration_tests::{TIME_TO_WAIT_FOR_BLOCK_SECONDS, config::SequencerPartialConfig};
 use lee::program::Program;
 use sequencer_service_rpc::RpcClient as _;
+use test_fixtures::{
+    MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
+};
 use tokio::test;
 
 #[test]
 async fn reject_oversized_transaction() -> Result<()> {
-    let ctx = TestContext::builder()
-        .with_sequencer_partial_config(SequencerPartialConfig {
-            max_num_tx_in_block: 100,
-            max_block_size: ByteSize::mib(1),
-            mempool_max_size: 1000,
-            block_create_timeout: Duration::from_secs(10),
-            priority_fee: sequencer_core::config::default_priority_fee(),
-        })
+    let ctx = MultiZoneTestContextBuilder::default()
+        .with_zone(
+            ZoneTestContextBuilder::new(MultiNodeTestContextConfig::default())
+                .with_sequencer_partial_config(SequencerPartialConfig {
+                    max_num_tx_in_block: 100,
+                    max_block_size: ByteSize::mib(1),
+                    mempool_max_size: 1000,
+                    block_create_timeout: Duration::from_secs(10),
+                    priority_fee: sequencer_core::config::default_priority_fee(),
+                }),
+        )
         .build()
         .await?;
 
@@ -62,14 +66,17 @@ async fn reject_oversized_transaction() -> Result<()> {
 
 #[test]
 async fn accept_transaction_within_limit() -> Result<()> {
-    let ctx = TestContext::builder()
-        .with_sequencer_partial_config(SequencerPartialConfig {
-            max_num_tx_in_block: 100,
-            max_block_size: ByteSize::mib(1),
-            mempool_max_size: 1000,
-            block_create_timeout: Duration::from_secs(10),
-            priority_fee: sequencer_core::config::default_priority_fee(),
-        })
+    let ctx = MultiZoneTestContextBuilder::default()
+        .with_zone(
+            ZoneTestContextBuilder::new(MultiNodeTestContextConfig::default())
+                .with_sequencer_partial_config(SequencerPartialConfig {
+                    max_num_tx_in_block: 100,
+                    max_block_size: ByteSize::mib(1),
+                    mempool_max_size: 1000,
+                    block_create_timeout: Duration::from_secs(10),
+                    priority_fee: sequencer_core::config::default_priority_fee(),
+                }),
+        )
         .build()
         .await?;
 
@@ -104,14 +111,17 @@ async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
     let max_program_size = claimer.elf().len().max(chain_caller.elf().len());
     let block_size = ByteSize::b((max_program_size + 10 * 1024) as u64);
 
-    let ctx = TestContext::builder()
-        .with_sequencer_partial_config(SequencerPartialConfig {
-            max_num_tx_in_block: 100,
-            max_block_size: block_size,
-            mempool_max_size: 1000,
-            block_create_timeout: Duration::from_secs(10),
-            priority_fee: sequencer_core::config::default_priority_fee(),
-        })
+    let ctx = MultiZoneTestContextBuilder::default()
+        .with_zone(
+            ZoneTestContextBuilder::new(MultiNodeTestContextConfig::default())
+                .with_sequencer_partial_config(SequencerPartialConfig {
+                    max_num_tx_in_block: 100,
+                    max_block_size: block_size,
+                    mempool_max_size: 1000,
+                    block_create_timeout: Duration::from_secs(10),
+                    priority_fee: sequencer_core::config::default_priority_fee(),
+                }),
+        )
         .build()
         .await?;
 

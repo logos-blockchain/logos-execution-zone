@@ -23,9 +23,9 @@ use logos_blockchain_core::{
 use logos_blockchain_key_management_system_service::keys::ZkPublicKey;
 use logos_blockchain_zone_sdk::sequencer::DepositInfo;
 use mempool::MemPoolHandle;
-use ping_core::{ReceiverInstruction, ping_record_pda};
+use ping_core::{ReceiverInstruction, ping_record_pda, receiver_config_account_id};
 use storage::sequencer::sequencer_cells::{
-    PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
+    DispatchOrigin, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
 };
 use tempfile::tempdir;
 use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
@@ -92,6 +92,7 @@ fn setup_sequencer_config() -> SequencerConfig {
         genesis: vec![],
         cross_zone: None,
         metrics_address: None,
+        gossip: None,
     }
 }
 
@@ -208,14 +209,28 @@ fn ping_payload(payload: &[u8]) -> Vec<u8> {
 fn dispatch_tx(src_block_id: u64, payload: Vec<u8>) -> LeeTransaction {
     let receiver_id = programs::ping_receiver().id();
     LeeTransaction::Public(cross_zone::build_dispatch_from_emission(
-        PEER_ZONE,
-        src_block_id,
-        0,
-        programs::ping_sender().id(),
+        &cross_zone::EmissionSource {
+            src_zone: PEER_ZONE,
+            src_block_id,
+            src_block_hash: peer_block_hash(src_block_id),
+            src_tx_index: 0,
+            src_program_id: programs::ping_sender().id(),
+        },
         receiver_id,
-        &[ping_record_pda(receiver_id).into_value()],
+        &[
+            receiver_config_account_id(receiver_id).into_value(),
+            ping_record_pda(receiver_id).into_value(),
+        ],
         payload,
     ))
+}
+
+/// A stand-in for the peer block's recomputed hash, distinct per block id. These
+/// records are seeded into the store, so no real block exists to hash.
+fn peer_block_hash(src_block_id: u64) -> [u8; 32] {
+    let mut hash = [0_u8; 32];
+    hash[..8].copy_from_slice(&src_block_id.to_le_bytes());
+    hash
 }
 
 /// The pending record the watcher would leave behind for that dispatch.
@@ -285,7 +300,7 @@ async fn start_from_config_opens_existing_db_if_it_exists() {
     let genesis_block = genesis_hashable_data.into_pending_block(&signing_key);
 
     SequencerStore::create_db_with_genesis(
-        &config.home.join("rocksdb"),
+        &config.db_path(),
         &genesis_block,
         &genesis_state,
         signing_key,
@@ -305,7 +320,7 @@ async fn start_from_config_panics_when_db_open_returns_non_not_found_error() {
     let temp_dir = tempdir().unwrap();
     config.home = temp_dir.path().to_path_buf();
 
-    let db_path = config.home.join("rocksdb");
+    let db_path = config.db_path();
 
     std::fs::create_dir_all(&config.home).unwrap();
     // Force RocksDB open to fail with an IO error by placing a file at DB path.
@@ -337,7 +352,7 @@ async fn unfulfilled_deposit_events_are_drained_from_the_store_on_production() {
 
     {
         let signing_key = lee::PrivateKey::try_new(config.signing_key).unwrap();
-        let store = SequencerStore::open_db(&config.home.join("rocksdb"), signing_key).unwrap();
+        let store = SequencerStore::open_db(&config.db_path(), signing_key).unwrap();
 
         let inserted = store
             .dbio()
@@ -697,14 +712,44 @@ async fn a_dispatch_that_never_executes_is_given_up_on_after_repeated_failures()
         );
     }
 
-    // The attempt at the limit gives up on it, and giving up drops the record.
-    // Anything else leaves an entry no later block can ever remove, which is how
-    // a peer that can make deliveries fail would grow this list without bound.
+    // The attempt at the limit gives up on it, which takes the record out of the
+    // pending list. Anything else leaves an entry no later block can ever
+    // remove, which is how a peer that can make deliveries fail would grow this
+    // list without bound.
     sequencer.produce_new_block().await.unwrap();
     assert!(
         pending_dispatches(&sequencer).is_empty(),
-        "giving up on a delivery must drop its record, not flag it"
+        "giving up on a delivery must take its record out of the pending list"
     );
+
+    // The dead letter is the only record that this happened, and the origin is
+    // what identifies which message stopped being attempted.
+    let dbio = sequencer.store.dbio();
+    let dead_letters = dbio.get_dead_letter_cross_zone_dispatches().unwrap();
+    assert_eq!(dead_letters.len(), 1);
+    assert_eq!(
+        dead_letters[0].origin,
+        DispatchOrigin {
+            src_zone: PEER_ZONE,
+            src_block_id: 13,
+            src_tx_index: 0,
+        }
+    );
+    assert_eq!(
+        dead_letters[0].message_key,
+        cross_zone_inbox_core::message_key(&PEER_ZONE, 13, 0)
+    );
+    assert!(dead_letters[0].transaction_bytes > 0);
+    assert_eq!(
+        dead_letters[0].failed_attempts,
+        RETIRE_DISPATCH_AFTER_FAILURES
+    );
+    assert_eq!(dbio.get_dead_letter_cross_zone_dispatch_count().unwrap(), 1);
+
+    // The same view the RPC serves, so an operator sees what the store holds.
+    let (total_retired, retained) = sequencer.cross_zone_dead_letters().unwrap();
+    assert_eq!(total_retired, 1);
+    assert_eq!(retained, dead_letters);
 
     // And nothing re-feeds it, so it stops costing a guest execution per block.
     let block_id = sequencer.produce_new_block().await.unwrap();

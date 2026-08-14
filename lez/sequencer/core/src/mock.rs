@@ -1,4 +1,10 @@
-use std::time::Duration;
+#![expect(
+    clippy::elidable_lifetime_names,
+    clippy::manual_async_fn,
+    reason = "Explicit futures preserve the lifetime and Send bounds required by the actor runtime"
+)]
+
+use std::{future::Future, time::Duration};
 
 use anyhow::Result;
 use common::block::Block;
@@ -52,27 +58,29 @@ impl MockBlockPublisher {
 }
 
 impl BlockPublisherTrait for MockBlockPublisher {
-    async fn new(
-        config: &BedrockConfig,
+    fn new<'config>(
+        config: &'config BedrockConfig,
         _bedrock_signing_key: Ed25519Key,
         _resubmit_interval: Duration,
         _initial_checkpoint: Option<SequencerCheckpoint>,
         _on_follow: OnFollowSink,
-    ) -> Result<Self> {
-        Ok(Self {
-            channel_id: config.channel_id,
-            driver_cancellation: CancellationToken::new(),
-            // An existing but empty channel: `None` means *missing*, which the
-            // startup guard reads as a wiped Bedrock. Tests that want that say
-            // so via [`Self::with_canned_channel`].
-            tip_slot: Some(Slot::from(0)),
-            messages: Vec::new(),
-        })
+    ) -> impl Future<Output = Result<Self>> + Send + 'config {
+        async move {
+            Ok(Self {
+                channel_id: config.channel_id,
+                driver_cancellation: CancellationToken::new(),
+                // An existing but empty channel: `None` means *missing*, which the
+                // startup guard reads as a wiped Bedrock. Tests that want that say
+                // so via [`Self::with_canned_channel`].
+                tip_slot: Some(Slot::from(0)),
+                messages: Vec::new(),
+            })
+        }
     }
 
-    async fn publish_block(
-        &self,
-        block: &Block,
+    async fn publish_block<'blk, 'pbl: 'blk>(
+        &'pbl self,
+        block: &'blk Block,
         withdrawals: Vec<WithdrawArg>,
     ) -> Result<PublishOutcome> {
         // Deterministic per-block id so head dedup behaves in tests.
@@ -97,21 +105,27 @@ impl BlockPublisherTrait for MockBlockPublisher {
         self.driver_cancellation.clone()
     }
 
-    async fn channel_tip_slot(&self) -> Result<Option<Slot>> {
-        Ok(self.tip_slot)
+    fn channel_tip_slot<'publisher>(
+        &'publisher self,
+    ) -> impl Future<Output = Result<Option<Slot>>> + Send + 'publisher {
+        async move { Ok(self.tip_slot) }
     }
 
-    async fn read_channel_after(
-        &self,
+    fn read_channel_after<'publisher>(
+        &'publisher self,
         after_slot: Option<Slot>,
-    ) -> Result<impl Stream<Item = (ZoneMessage, Slot)> + '_> {
-        // Mirror `next_messages`: `after_slot` is exclusive.
-        let messages = self
-            .messages
-            .iter()
-            .filter(move |(_, slot)| after_slot.is_none_or(|after| *slot > after))
-            .cloned();
-        Ok(futures::stream::iter(messages))
+    ) -> impl Future<Output = Result<impl Stream<Item = (ZoneMessage, Slot)> + Send + 'publisher>>
+    + Send
+    + 'publisher {
+        async move {
+            // Mirror `next_messages`: `after_slot` is exclusive.
+            let messages = self
+                .messages
+                .iter()
+                .filter(move |(_, slot)| after_slot.is_none_or(|after| *slot > after))
+                .cloned();
+            Ok(futures::stream::iter(messages))
+        }
     }
 }
 

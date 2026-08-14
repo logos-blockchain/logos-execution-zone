@@ -6,16 +6,18 @@
 //! Two zones (sequencer + indexer each, on separate channels) sharing one
 //! Bedrock node, each producing and finalizing blocks independently.
 
-use std::{net::SocketAddr, time::Duration};
+use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use indexer_service_rpc::RpcClient as _;
 use integration_tests::{
     config::{self, SequencerPartialConfig},
     indexer_client::IndexerClient,
-    setup::{SequencerSetup, setup_bedrock_node, setup_indexer},
 };
-use sequencer_service_rpc::{RpcClient as _, SequencerClientBuilder};
+use sequencer_service_rpc::{RpcClient as _, SequencerClient};
+use test_fixtures::{
+    MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
+};
 use tokio::test;
 
 const ZONE_LIVE_TIMEOUT: Duration = Duration::from_secs(360);
@@ -25,38 +27,45 @@ const MIN_BLOCK_ID: u64 = 2;
 
 #[test]
 async fn two_zones_share_one_bedrock_and_both_advance() -> Result<()> {
-    // Declared first so it outlives both zones (drops run in reverse order).
-    let (_bedrock, bedrock_addr) = setup_bedrock_node()
-        .await
-        .context("Failed to set up shared Bedrock node")?;
-
-    let partial = SequencerPartialConfig::default();
     let channel_a = config::bedrock_channel_id();
     let channel_b = config::bedrock_channel_id_b();
+    let partial = SequencerPartialConfig::default();
 
-    // Empty genesis is enough: the clock transaction drives block production.
-    let (seq_a, _seq_a_home) = SequencerSetup::new(partial, bedrock_addr)
-        .with_channel_id(channel_a)
-        .with_genesis(vec![])
-        .setup()
-        .await
-        .context("Failed to set up zone A sequencer")?;
-    let (idx_a, _idx_a_home) = setup_indexer(bedrock_addr, channel_a, None)
-        .await
-        .context("Failed to set up zone A indexer")?;
-    let (seq_b, _seq_b_home) = SequencerSetup::new(partial, bedrock_addr)
-        .with_channel_id(channel_b)
-        .with_genesis(vec![])
-        .setup()
-        .await
-        .context("Failed to set up zone B sequencer")?;
-    let (idx_b, _idx_b_home) = setup_indexer(bedrock_addr, channel_b, None)
-        .await
-        .context("Failed to set up zone B indexer")?;
+    let ctx = MultiZoneTestContextBuilder::default()
+        .with_zone(
+            ZoneTestContextBuilder::new(MultiNodeTestContextConfig {
+                num_nodes: 1,
+                bedrock_channel: channel_a,
+            })
+            .disable_wallet()
+            .with_sequencer_partial_config(partial)
+            .with_genesis(vec![]),
+        )
+        .with_zone(
+            ZoneTestContextBuilder::new(MultiNodeTestContextConfig {
+                num_nodes: 1,
+                bedrock_channel: channel_b,
+            })
+            .disable_wallet()
+            .with_sequencer_partial_config(partial)
+            .with_genesis(vec![]),
+        )
+        .build()
+        .await?;
+
+    let ind_client_a = ctx.indexer_client_zone(channel_a).unwrap();
+    let ind_client_b = ctx.indexer_client_zone(channel_b).unwrap();
+
+    let seq_client_a = &ctx
+        .zone_default_sequencer_component(channel_a)
+        .sequencer_client;
+    let seq_client_b = &ctx
+        .zone_default_sequencer_component(channel_b)
+        .sequencer_client;
 
     let (height_a, height_b) = tokio::try_join!(
-        wait_until_zone_live("A", seq_a.addr(), idx_a.addr()),
-        wait_until_zone_live("B", seq_b.addr(), idx_b.addr()),
+        wait_until_zone_live("A", seq_client_a, ind_client_a),
+        wait_until_zone_live("B", seq_client_b, ind_client_b),
     )?;
 
     assert!(
@@ -75,31 +84,22 @@ async fn two_zones_share_one_bedrock_and_both_advance() -> Result<()> {
 /// to it. Returns the indexer's finalized block id.
 async fn wait_until_zone_live(
     label: &str,
-    sequencer_addr: SocketAddr,
-    indexer_addr: SocketAddr,
+    sequencer_client: &SequencerClient,
+    indexer_client: &IndexerClient,
 ) -> Result<u64> {
-    let sequencer_url = config::addr_to_url(config::UrlProtocol::Http, sequencer_addr)
-        .context("Failed to build sequencer URL")?;
-    let sequencer = SequencerClientBuilder::default()
-        .build(sequencer_url)
-        .context("Failed to build sequencer client")?;
-
-    let indexer_url = config::addr_to_url(config::UrlProtocol::Ws, indexer_addr)
-        .context("Failed to build indexer URL")?;
-    let indexer = IndexerClient::new(&indexer_url)
-        .await
-        .context("Failed to build indexer client")?;
-
     let wait = async {
         loop {
-            if sequencer.get_last_block_id().await? >= MIN_BLOCK_ID {
+            if sequencer_client.get_last_block_id().await? >= MIN_BLOCK_ID {
                 break;
             }
             tokio::time::sleep(Duration::from_secs(2)).await;
         }
-        let target = sequencer.get_last_block_id().await?;
+        let target = sequencer_client.get_last_block_id().await?;
         loop {
-            let finalized = indexer.get_last_finalized_block_id().await?.unwrap_or(0);
+            let finalized = indexer_client
+                .get_last_finalized_block_id()
+                .await?
+                .unwrap_or(0);
             if finalized >= target {
                 log::info!(
                     "Zone {label} live: sequencer at {target}, indexer finalized {finalized}"

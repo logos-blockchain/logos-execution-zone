@@ -9,12 +9,10 @@
 //! own block-reading, emission-extraction, delivery-building, and trust model; a
 //! shared trait is best lifted from that first real adapter, not from this one.
 
-use std::collections::BTreeMap;
-
 pub use cross_zone_inbox_core::{CrossZoneConfig, CrossZonePeer};
 use cross_zone_inbox_core::{
     CrossZoneMessage, InboxConfig, Instruction, ZoneId, inbox_config_account_id,
-    inbox_seen_shard_account_id,
+    inbox_seen_shard_account_id, inbox_source_marker_account_id,
 };
 use lee_core::{
     account::{Account, AccountId, Balance},
@@ -29,6 +27,21 @@ pub struct Emission {
     pub target_program_id: ProgramId,
     pub target_accounts: Vec<[u8; 32]>,
     pub payload: Vec<u8>,
+}
+
+/// Where a delivery came from on the peer chain.
+///
+/// One struct so the watcher and the verifier fill the same field list: their
+/// dispatch transactions for one emission must be byte-identical.
+///
+/// `src_block_hash` is the recomputed hash on both sides, never the declared
+/// `header.hash`, which the signature does not cover.
+pub struct EmissionSource {
+    pub src_zone: ZoneId,
+    pub src_block_id: u64,
+    pub src_block_hash: [u8; 32],
+    pub src_tx_index: u32,
+    pub src_program_id: ProgramId,
 }
 
 /// Whether a program may only be invoked by sequencer-origin transactions.
@@ -49,13 +62,18 @@ pub fn is_sequencer_only_program(program_id: ProgramId) -> bool {
 #[must_use]
 pub fn extract_emission(program_id: ProgramId, instruction_data: &[u32]) -> Option<Emission> {
     if program_id == programs::ping_sender().id() {
-        let ping_core::SenderInstruction::Send {
+        // Not every transaction to an emitter emits: `InitConfig` is one of its
+        // instructions, so a non-`Send` decode is an ordinary non-emitting tx.
+        let Ok(ping_core::SenderInstruction::Send {
             target_zone,
             target_program_id,
             target_accounts,
             payload,
             ..
-        } = risc0_zkvm::serde::from_slice(instruction_data).ok()?;
+        }) = risc0_zkvm::serde::from_slice(instruction_data)
+        else {
+            return None;
+        };
         Some(Emission {
             target_zone,
             target_program_id,
@@ -63,13 +81,16 @@ pub fn extract_emission(program_id: ProgramId, instruction_data: &[u32]) -> Opti
             payload,
         })
     } else if program_id == programs::bridge_lock().id() {
-        let bridge_lock_core::Instruction::Lock {
+        let Ok(bridge_lock_core::Instruction::Lock {
             target_zone,
             target_program_id,
             target_accounts,
             payload,
             ..
-        } = risc0_zkvm::serde::from_slice(instruction_data).ok()?;
+        }) = risc0_zkvm::serde::from_slice(instruction_data)
+        else {
+            return None;
+        };
         Some(Emission {
             target_zone,
             target_program_id,
@@ -88,12 +109,20 @@ fn build_inbox_dispatch_tx(
     msg: &CrossZoneMessage,
     target_account_ids: Vec<AccountId>,
 ) -> lee::PublicTransaction {
-    let mut account_ids = Vec::with_capacity(target_account_ids.len().saturating_add(2));
+    let mut account_ids = Vec::with_capacity(target_account_ids.len().saturating_add(3));
     account_ids.push(inbox_config_account_id(inbox_id));
     account_ids.push(inbox_seen_shard_account_id(
         inbox_id,
         &msg.src_zone,
         msg.src_block_id,
+    ));
+    // Declared here rather than derived by the guest, since a guest cannot
+    // conjure an account. Both the watcher and the verifier build it through this
+    // one function, so they cannot disagree about the source a target will see.
+    account_ids.push(inbox_source_marker_account_id(
+        inbox_id,
+        &msg.src_zone,
+        msg.src_program_id,
     ));
     account_ids.extend(target_account_ids);
 
@@ -118,19 +147,17 @@ fn build_inbox_dispatch_tx(
 /// Option B check).
 #[must_use]
 pub fn build_dispatch_from_emission(
-    src_zone: ZoneId,
-    src_block_id: u64,
-    src_tx_index: u32,
-    src_program_id: ProgramId,
+    source: &EmissionSource,
     target_program_id: ProgramId,
     target_accounts: &[[u8; 32]],
     payload: Vec<u8>,
 ) -> lee::PublicTransaction {
     let msg = CrossZoneMessage {
-        src_zone,
-        src_block_id,
-        src_tx_index,
-        src_program_id,
+        src_zone: source.src_zone,
+        src_block_id: source.src_block_id,
+        src_block_hash: source.src_block_hash,
+        src_tx_index: source.src_tx_index,
+        src_program_id: source.src_program_id,
         target_program_id,
         payload,
         l1_inclusion_witness: None,
@@ -143,33 +170,18 @@ pub fn build_dispatch_from_emission(
     build_inbox_dispatch_tx(programs::cross_zone_inbox().id(), &msg, target_ids)
 }
 
-/// The inbox config a zone derives from its cross-zone config: the per-peer
-/// delivery routes plus its own zone id.
-fn inbox_config(self_zone: ZoneId, cross_zone: &CrossZoneConfig) -> InboxConfig {
-    let mut allowed_routes = BTreeMap::new();
-    for peer in &cross_zone.peers {
-        allowed_routes.insert(peer.channel_id, peer.allowed_routes.clone());
-    }
-    InboxConfig {
-        self_zone,
-        allowed_routes,
-    }
-}
-
 /// The genesis transaction that initializes this zone's inbox config PDA.
 ///
-/// Lets the inbox guest authorize inbound peer messages; replaying it seeds the
-/// same account on every node, keeping their state consistent.
+/// The operator's per-peer routes no longer live here. They are fanned out into
+/// each target program's own config, so all the inbox keeps is its zone id.
+/// Replaying this seeds the same account on every node.
 #[must_use]
-pub fn build_inbox_init_config_tx(
-    self_zone: ZoneId,
-    cross_zone: &CrossZoneConfig,
-) -> lee::PublicTransaction {
+pub fn build_inbox_init_config_tx(self_zone: ZoneId) -> lee::PublicTransaction {
     let inbox_id = programs::cross_zone_inbox().id();
     genesis_public_tx(
         inbox_id,
         vec![inbox_config_account_id(inbox_id)],
-        Instruction::InitConfig(inbox_config(self_zone, cross_zone)),
+        Instruction::InitConfig(InboxConfig { self_zone }),
     )
 }
 
@@ -189,16 +201,101 @@ pub fn build_holding_account(holder: AccountId, amount: Balance) -> (AccountId, 
 }
 
 /// The genesis transaction that pins the cross-zone inbox as the wrapped-token
-/// minter, without importing the inbox id into the guest.
+/// minter and names the peer sources it may mint for, without importing either id
+/// into the guest.
+///
+/// The sources are the operator's own peer routes aimed at this token, moved from
+/// the inbox's allowlist to the token's own config: the same information, enforced
+/// by the program that owns the value. A zone with no peers gets an empty list,
+/// which authorizes nothing, and the config is still seeded so its PDA cannot be
+/// claimed by a first initializer.
 #[must_use]
-pub fn build_wrapped_token_init_config_tx() -> lee::PublicTransaction {
+pub fn build_wrapped_token_init_config_tx(
+    cross_zone: Option<&CrossZoneConfig>,
+) -> lee::PublicTransaction {
     let wrapped_token_id = programs::wrapped_token().id();
+    let sources = cross_zone
+        .map(|cross_zone| {
+            cross_zone
+                .peers
+                .iter()
+                .flat_map(|peer| {
+                    peer.allowed_routes
+                        .iter()
+                        .filter(|route| route.target_program_id == wrapped_token_id)
+                        .map(|route| (peer.channel_id, route.src_program_id))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     genesis_public_tx(
         wrapped_token_id,
         vec![wrapped_token_core::config_account_id(wrapped_token_id)],
-        wrapped_token_core::Instruction::InitConfig {
+        wrapped_token_core::Instruction::InitConfig(wrapped_token_core::WrappedTokenConfig {
             minter: programs::cross_zone_inbox().id(),
+            sources,
+        }),
+    )
+}
+
+/// The genesis transaction that pins the outbox `ping_sender` chains into,
+/// without importing the outbox id into the guest.
+#[must_use]
+pub fn build_ping_sender_init_config_tx() -> lee::PublicTransaction {
+    let ping_sender_id = programs::ping_sender().id();
+    genesis_public_tx(
+        ping_sender_id,
+        vec![ping_core::sender_config_account_id(ping_sender_id)],
+        ping_core::SenderInstruction::InitConfig {
+            outbox_program_id: programs::cross_zone_outbox().id(),
         },
+    )
+}
+
+/// The genesis transaction that pins the outbox `bridge_lock` chains into and the
+/// wrapped token it mints, without importing either id into the guest.
+#[must_use]
+pub fn build_bridge_lock_init_config_tx() -> lee::PublicTransaction {
+    let bridge_lock_id = programs::bridge_lock().id();
+    genesis_public_tx(
+        bridge_lock_id,
+        vec![bridge_lock_core::config_account_id(bridge_lock_id)],
+        bridge_lock_core::Instruction::InitConfig {
+            outbox_program_id: programs::cross_zone_outbox().id(),
+            target_program_id: programs::wrapped_token().id(),
+        },
+    )
+}
+
+/// The genesis transaction naming the peer sources `ping_receiver` accepts a
+/// delivery from, fanned out of the operator's routes exactly as the wrapped
+/// token's is.
+#[must_use]
+pub fn build_ping_receiver_init_config_tx(
+    cross_zone: Option<&CrossZoneConfig>,
+) -> lee::PublicTransaction {
+    let receiver_id = programs::ping_receiver().id();
+    let sources = cross_zone
+        .map(|cross_zone| {
+            cross_zone
+                .peers
+                .iter()
+                .flat_map(|peer| {
+                    peer.allowed_routes
+                        .iter()
+                        .filter(|route| route.target_program_id == receiver_id)
+                        .map(|route| (peer.channel_id, route.src_program_id))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    genesis_public_tx(
+        receiver_id,
+        vec![ping_core::receiver_config_account_id(receiver_id)],
+        ping_core::ReceiverInstruction::InitConfig(ping_core::ReceiverConfig {
+            deliverer: programs::cross_zone_inbox().id(),
+            sources,
+        }),
     )
 }
 

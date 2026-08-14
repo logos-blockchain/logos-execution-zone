@@ -6,13 +6,13 @@ use std::{
 
 use anyhow::anyhow;
 use common::{block::Block, transaction::LeeTransaction};
-use cross_zone::{build_dispatch_from_emission, extract_emission};
+use cross_zone::{EmissionSource, build_dispatch_from_emission, extract_emission};
 use cross_zone_inbox_core::{
     CrossZoneMessage, Instruction as InboxInstruction, MessageKey, ZoneId, message_key,
 };
 use futures::{Stream, StreamExt as _};
 use lee::{GENESIS_BLOCK_ID, PublicKey};
-use log::{debug, error, info, warn};
+use log::{debug, error, warn};
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
 use logos_blockchain_zone_sdk::{
     CommonHttpClient, Slot, ZoneMessage, adapter::NodeHttpClient, indexer::ZoneIndexer,
@@ -62,6 +62,11 @@ pub enum CrossZoneVerifyError {
         waited: Duration,
     },
 }
+
+/// The replay key plus the source block, which is what the inbox treats as one
+/// delivery. Skipping re-derivation on the key alone would wave through a
+/// dispatch the guest refuses, parking the block and holding ingestion.
+type SeenKey = (MessageKey, [u8; 32]);
 
 /// One peer zone's cached blocks, plus how far this reader has read them as an
 /// unbroken hash-linked run from the peer's genesis.
@@ -184,7 +189,7 @@ impl PeerBlocks {
                 );
                 return false;
             }
-            info!(
+            log::info!(
                 "Peer zone {} block {}: replacing held block {} with {}, which continues the verified run where the held one never could.",
                 hex::encode(zone),
                 block.header.block_id,
@@ -278,7 +283,7 @@ pub struct CrossZoneVerifier {
     /// optional: a peer with no configured key is not signature-checked.
     peer_pubkeys: HashMap<ZoneId, PublicKey>,
     peers: PeerBlocks,
-    seen: Arc<RwLock<HashSet<MessageKey>>>,
+    seen: Arc<RwLock<HashSet<SeenKey>>>,
 }
 
 impl CrossZoneVerifier {
@@ -330,17 +335,14 @@ impl CrossZoneVerifier {
     /// forged dispatch reuse it to skip re-derivation while the inbox delivers the
     /// forgery. A key already seen is a replay the inbox no-ops, so it is accepted
     /// without re-derivation rather than halting on a legitimate re-delivery.
-    pub async fn verify_block(
-        &self,
-        block: &Block,
-    ) -> Result<Vec<MessageKey>, CrossZoneVerifyError> {
+    pub async fn verify_block(&self, block: &Block) -> Result<Vec<SeenKey>, CrossZoneVerifyError> {
         let mut verified = Vec::new();
         for tx in &block.body.transactions {
             let Some(msg) = Self::decode_dispatch(tx) else {
                 continue;
             };
 
-            let key = message_key(&msg.src_zone, msg.src_block_id, msg.src_tx_index);
+            let key = seen_key(&msg);
             if self.seen.read().await.contains(&key) {
                 debug!(
                     "Skipping already-seen cross-zone dispatch from zone {} block {} tx {} (replay no-op)",
@@ -361,7 +363,7 @@ impl CrossZoneVerifier {
                 )));
             }
 
-            info!(
+            log::info!(
                 "Verified cross-zone dispatch from zone {} block {} tx {}",
                 hex::encode(msg.src_zone),
                 msg.src_block_id,
@@ -375,7 +377,7 @@ impl CrossZoneVerifier {
     /// Marks the given dispatch keys seen, so a later replay of them is accepted
     /// without re-derivation. Call only after the block that carried them has been
     /// applied on chain (see [`Self::verify_block`]).
-    pub async fn record_seen(&self, keys: Vec<MessageKey>) {
+    pub async fn record_seen(&self, keys: Vec<SeenKey>) {
         if keys.is_empty() {
             return;
         }
@@ -455,11 +457,16 @@ impl CrossZoneVerifier {
             )));
         }
 
+        // Recomputed rather than read from `msg`, which would make the field
+        // attest to itself.
         Ok(build_dispatch_from_emission(
-            msg.src_zone,
-            msg.src_block_id,
-            msg.src_tx_index,
-            message.program_id,
+            &EmissionSource {
+                src_zone: msg.src_zone,
+                src_block_id: msg.src_block_id,
+                src_block_hash: peer_block.recompute_hash().0,
+                src_tx_index: msg.src_tx_index,
+                src_program_id: message.program_id,
+            },
             emission.target_program_id,
             &emission.target_accounts,
             emission.payload,
@@ -506,7 +513,7 @@ impl CrossZoneVerifier {
                 });
             }
             if !waited.is_zero() && waited.as_secs().is_multiple_of(LAG_LOG_INTERVAL.as_secs()) {
-                info!(
+                log::info!(
                     "Waiting for peer zone {} to finalize block {} ({}s); reader is behind",
                     hex::encode(zone),
                     block_id,
@@ -526,6 +533,13 @@ struct PeerPass {
     cursor: Option<Slot>,
     /// Set when the pass ended early on a message that would not decode.
     stalled_at: Option<Slot>,
+}
+
+fn seen_key(msg: &CrossZoneMessage) -> SeenKey {
+    (
+        message_key(&msg.src_zone, msg.src_block_id, msg.src_tx_index),
+        msg.src_block_hash,
+    )
 }
 
 /// Whether a block read off a peer's channel may enter the cache. The channel
@@ -577,7 +591,7 @@ async fn read_peer(
     peers: PeerBlocks,
     poll_interval: Duration,
 ) {
-    info!(
+    log::info!(
         "Cross-zone peer reader started for {}",
         hex::encode(peer_zone)
     );
@@ -704,7 +718,7 @@ mod tests {
     };
     use logos_blockchain_core::mantle::ops::channel::{MsgId, inscribe::Inscription};
     use logos_blockchain_zone_sdk::ZoneBlock;
-    use ping_core::{SenderInstruction, ping_record_pda};
+    use ping_core::{SenderInstruction, ping_record_pda, receiver_config_account_id};
 
     use super::*;
 
@@ -732,10 +746,12 @@ mod tests {
     fn emission(payload: &[u8]) -> LeeTransaction {
         let receiver_id = programs::ping_receiver().id();
         let send = SenderInstruction::Send {
-            outbox_program_id: programs::cross_zone_outbox().id(),
             target_zone: SELF_ZONE,
             target_program_id: receiver_id,
-            target_accounts: vec![ping_record_pda(receiver_id).into_value()],
+            target_accounts: vec![
+                receiver_config_account_id(receiver_id).into_value(),
+                ping_record_pda(receiver_id).into_value(),
+            ],
             payload: payload.to_vec(),
             ordinal: 0,
         };
@@ -808,14 +824,34 @@ mod tests {
 
     /// The dispatch a watcher would inject for a `PEER_BLOCK_ID` emission of `payload`.
     fn dispatch(payload: &[u8]) -> LeeTransaction {
+        dispatch_naming_block_hash(payload, source_block_hash(payload))
+    }
+
+    /// The recomputed hash of the `PEER_BLOCK_ID` block carrying `payload`,
+    /// which is what an honest watcher puts in the dispatch.
+    fn source_block_hash(payload: &[u8]) -> [u8; 32] {
+        peer_chain(payload)
+            .last()
+            .expect("chain reaches PEER_BLOCK_ID")
+            .recompute_hash()
+            .0
+    }
+
+    fn dispatch_naming_block_hash(payload: &[u8], src_block_hash: [u8; 32]) -> LeeTransaction {
         let receiver_id = programs::ping_receiver().id();
         LeeTransaction::Public(build_dispatch_from_emission(
-            PEER_ZONE,
-            PEER_BLOCK_ID,
-            0,
-            programs::ping_sender().id(),
+            &EmissionSource {
+                src_zone: PEER_ZONE,
+                src_block_id: PEER_BLOCK_ID,
+                src_block_hash,
+                src_tx_index: 0,
+                src_program_id: programs::ping_sender().id(),
+            },
             receiver_id,
-            &[ping_record_pda(receiver_id).into_value()],
+            &[
+                receiver_config_account_id(receiver_id).into_value(),
+                ping_record_pda(receiver_id).into_value(),
+            ],
             payload.to_vec(),
         ))
     }
@@ -830,6 +866,24 @@ mod tests {
             .verify_block(&block)
             .await
             .expect("dispatch matching the peer emission verifies");
+    }
+
+    #[tokio::test]
+    async fn rejects_dispatch_naming_the_wrong_source_block_hash() {
+        let verifier = verifier();
+        cache_chain(&verifier, peer_chain(b"hi")).await;
+
+        // Only the claimed source hash is wrong. Detectable because the verifier
+        // recomputes it from the resolved block instead of reading the field.
+        let block =
+            produce_dummy_block(9, None, vec![dispatch_naming_block_hash(b"hi", [0xab; 32])]);
+        assert!(
+            matches!(
+                verifier.verify_block(&block).await,
+                Err(CrossZoneVerifyError::Forged(_))
+            ),
+            "a delivery claiming a source block hash the peer block does not have is forged"
+        );
     }
 
     #[tokio::test]
@@ -892,16 +946,50 @@ mod tests {
         // Mark the delivery seen, as the ingest loop does once the block applies.
         verifier.record_seen(keys).await;
 
-        // A payload that cannot re-derive, under the key just recorded. Accepted
-        // only by the seen-key short circuit, since the inbox no-ops it on
-        // chain; `unaccepted_dispatch_does_not_poison_seen` asserts the same
-        // input is rejected when the key was never recorded, which is what makes
-        // this one about the short circuit rather than re-derivation.
-        let replay = produce_dummy_block(10, None, vec![dispatch(b"forged")]);
+        // A payload that cannot re-derive, under the key just recorded, which
+        // now names the source block as well as the coordinates. Accepted only
+        // by the seen-key short circuit, since the inbox no-ops it on chain;
+        // `unaccepted_dispatch_does_not_poison_seen` asserts the same input is
+        // rejected when the key was never recorded, which is what makes this one
+        // about the short circuit rather than re-derivation.
+        let replay = produce_dummy_block(
+            10,
+            None,
+            vec![dispatch_naming_block_hash(
+                b"forged",
+                source_block_hash(b"hi"),
+            )],
+        );
         verifier
             .verify_block(&replay)
             .await
             .expect("a replay is accepted as an on-chain no-op");
+    }
+
+    #[tokio::test]
+    async fn a_seen_coordinate_does_not_excuse_a_different_source_block() {
+        let verifier = verifier();
+        cache_chain(&verifier, peer_chain(b"hi")).await;
+
+        let first = produce_dummy_block(9, None, vec![dispatch(b"hi")]);
+        let keys = verifier.verify_block(&first).await.expect("first verifies");
+        verifier.record_seen(keys).await;
+
+        // Same coordinates as the delivery just seen, different source block.
+        // The inbox refuses rather than no-ops it, so skipping re-derivation
+        // would wave through a dispatch that parks the block.
+        let other = produce_dummy_block(
+            10,
+            None,
+            vec![dispatch_naming_block_hash(b"hi", [0xab; 32])],
+        );
+        assert!(
+            matches!(
+                verifier.verify_block(&other).await,
+                Err(CrossZoneVerifyError::Forged(_))
+            ),
+            "the seen set must agree with the guest on what counts as a replay"
+        );
     }
 
     #[tokio::test]

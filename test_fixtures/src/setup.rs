@@ -28,6 +28,7 @@ use crate::{
     private_mention, public_mention,
 };
 
+#[derive(Debug)]
 pub struct SequencerSetup {
     partial: config::SequencerPartialConfig,
     bedrock_addr: SocketAddr,
@@ -35,6 +36,7 @@ pub struct SequencerSetup {
     genesis_transactions: Option<Vec<GenesisAction>>,
     cross_zone: Option<sequencer_core::config::CrossZoneConfig>,
     bedrock_signing_key: Option<[u8; ED25519_SECRET_KEY_SIZE]>,
+    gossip: Option<sequencer_core::config::GossipConfig>,
 }
 
 impl SequencerSetup {
@@ -47,6 +49,7 @@ impl SequencerSetup {
             genesis_transactions: None,
             cross_zone: None,
             bedrock_signing_key: None,
+            gossip: None,
         }
     }
 
@@ -83,27 +86,46 @@ impl SequencerSetup {
         self
     }
 
+    /// Enable p2p gossip with the given configuration.
+    /// If not set, the sequencer runs without gossip.
+    #[must_use]
+    pub fn with_gossip(mut self, gossip: sequencer_core::config::GossipConfig) -> Self {
+        self.gossip = Some(gossip);
+        self
+    }
+
     /// Set up the sequencer in a fresh temporary home directory, returning the
     /// owning [`TempDir`] alongside the handle.
     pub async fn setup(self) -> Result<(SequencerHandle, TempDir)> {
         let temp_sequencer_dir =
             tempfile::tempdir().context("Failed to create temp dir for sequencer home")?;
 
-        let sequencer_handle = self.setup_at(temp_sequencer_dir.path()).await?;
+        let sequencer_handle = self
+            .setup_owned(temp_sequencer_dir.path().to_owned())
+            .await?;
 
         Ok((sequencer_handle, temp_sequencer_dir))
     }
 
     /// Set up the sequencer in an explicit home directory owned by the caller.
     pub async fn setup_in(self, home: &Path) -> Result<SequencerHandle> {
-        std::fs::create_dir_all(home).context("Failed to create sequencer home")?;
-        self.setup_at(home).await
+        self.setup_owned(home.to_owned()).await
+    }
+
+    /// Set up the sequencer in an explicit owned home directory.
+    pub async fn setup_in_owned(self, home: PathBuf) -> Result<SequencerHandle> {
+        std::fs::create_dir_all(&home).context("Failed to create sequencer home")?;
+        self.setup_owned(home).await
     }
 
     /// Set up the sequencer in an explicit `home` directory owned by the caller.
     ///
     /// Useful for tests that restart the sequencer against the same on-disk store.
     pub async fn setup_at(self, home: &Path) -> Result<SequencerHandle> {
+        self.setup_owned(home.to_owned()).await
+    }
+
+    async fn setup_owned(self, home: PathBuf) -> Result<SequencerHandle> {
         let Self {
             partial,
             bedrock_addr,
@@ -111,6 +133,7 @@ impl SequencerSetup {
             genesis_transactions,
             cross_zone,
             bedrock_signing_key,
+            gossip,
         } = self;
 
         debug!("Using sequencer home at {}", home.display());
@@ -124,8 +147,9 @@ impl SequencerSetup {
             genesis
         } else {
             let dump = load_prebuilt_dump()?;
-            // `SequencerCore::open_or_create_store` looks for `<home>/rocksdb`.
-            let dst = home.join("rocksdb");
+            // `SequencerCore::open_or_create_store` looks for the channel-suffixed
+            // db under its home, so the restore has to land on the same name.
+            let dst = home.join(format!("rocksdb-{channel_id}"));
             let _store = SequencerStore::restore_db_from_dump(
                 &dst,
                 &dump,
@@ -139,12 +163,14 @@ impl SequencerSetup {
 
         let config = config::sequencer_config(
             partial,
-            home.to_owned(),
+            home.clone(),
             bedrock_addr,
             channel_id,
             config::bedrock_funding_key(),
             genesis_transactions,
             cross_zone,
+            bedrock_signing_key,
+            gossip,
         )
         .context("Failed to create Sequencer config")?;
 
@@ -300,7 +326,7 @@ pub async fn setup_indexer_at(
 }
 
 pub async fn setup_wallet(
-    sequencer_addr: SocketAddr,
+    sequencer_addrs: &[SocketAddr],
     initial_public_accounts: &[(PrivateKey, u128)],
     initial_private_accounts: &[InitialPrivateAccountForWallet],
     config_overrides: WalletConfigOverrides,
@@ -308,7 +334,7 @@ pub async fn setup_wallet(
     let temp_wallet_dir =
         tempfile::tempdir().context("Failed to create temp dir for wallet home")?;
     let (wallet, _state_dir, password) = setup_wallet_at(
-        sequencer_addr,
+        sequencer_addrs,
         initial_public_accounts,
         initial_private_accounts,
         config_overrides,
@@ -321,13 +347,14 @@ pub async fn setup_wallet(
 
 /// Set up the wallet in an explicit home directory owned by the caller.
 pub async fn setup_wallet_at(
-    sequencer_addr: SocketAddr,
+    sequencer_addrs: &[SocketAddr],
     initial_public_accounts: &[(PrivateKey, u128)],
     initial_private_accounts: &[InitialPrivateAccountForWallet],
     config_overrides: WalletConfigOverrides,
     home: &Path,
 ) -> Result<(WalletCore, PathBuf, String)> {
-    let config = config::wallet_config(sequencer_addr).context("Failed to create Wallet config")?;
+    let config =
+        config::wallet_config(sequencer_addrs).context("Failed to create Wallet config")?;
     let config_serialized =
         serde_json::to_string_pretty(&config).context("Failed to serialize Wallet config")?;
 

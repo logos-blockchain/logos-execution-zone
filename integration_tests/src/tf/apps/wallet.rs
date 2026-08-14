@@ -680,7 +680,7 @@ impl AppDeployment<AppHostEnv> for WalletApp {
                 runtime.block_on(async move {
                     let (wallet, initialized_state_dir, password) = match setup_state_dir {
                         Some(setup_home) => crate::setup::setup_wallet_at(
-                            sequencer_addr,
+                            std::slice::from_ref(&sequencer_addr),
                             &setup_public_accounts,
                             &setup_private_accounts,
                             WalletConfigOverrides::default(),
@@ -690,7 +690,7 @@ impl AppDeployment<AppHostEnv> for WalletApp {
                         .context("failed to set up LEZ wallet")
                         .map(|(wallet, _, password)| (wallet, None, password)),
                         None => setup_wallet(
-                            sequencer_addr,
+                            std::slice::from_ref(&sequencer_addr),
                             &setup_public_accounts,
                             &setup_private_accounts,
                             WalletConfigOverrides::default(),

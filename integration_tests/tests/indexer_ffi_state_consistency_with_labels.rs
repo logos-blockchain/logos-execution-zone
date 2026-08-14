@@ -9,8 +9,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use indexer_service_protocol::Account;
-use integration_tests::{TIME_TO_WAIT_FOR_BLOCK_SECONDS, public_mention, utils::L2_TO_L1_TIMEOUT};
-use log::info;
+use integration_tests::{L2_TO_L1_TIMEOUT, TIME_TO_WAIT_FOR_BLOCK_SECONDS, public_mention};
 use wallet::{
     account::Label,
     cli::{Command, programs::native_token_transfer::AuthTransferSubcommand},
@@ -52,7 +51,7 @@ fn indexer_ffi_state_consistency_with_labels() -> Result<()> {
 
     ctx.block_on_mut(|ctx| wallet::cli::execute_subcommand(ctx.wallet_mut(), command))?;
 
-    info!("Waiting for next block creation");
+    log::info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
 
     let acc_1_balance = ctx.block_on(|ctx| {
@@ -71,7 +70,7 @@ fn indexer_ffi_state_consistency_with_labels() -> Result<()> {
     assert_eq!(acc_1_balance, 9900);
     assert_eq!(acc_2_balance, 20100);
 
-    info!("Waiting for indexer to parse blocks");
+    log::info!("Waiting for indexer to parse blocks");
     std::thread::sleep(L2_TO_L1_TIMEOUT);
 
     let acc1_ind_state_ffi = unsafe {
@@ -95,7 +94,7 @@ fn indexer_ffi_state_consistency_with_labels() -> Result<()> {
 
     assert_eq!(acc1_ind_state, acc1_seq_state.into());
 
-    info!("Indexer state is consistent after label-based transfer");
+    log::info!("Indexer state is consistent after label-based transfer");
 
     Ok(())
 }
