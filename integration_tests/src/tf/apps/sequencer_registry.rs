@@ -8,6 +8,7 @@ use std::{
 use anyhow::{Context as _, anyhow};
 use async_trait::async_trait;
 use logos_blockchain_key_management_system_service::keys::ED25519_SECRET_KEY_SIZE;
+use sequencer_core::config::GenesisAction;
 use sequencer_service_rpc::SequencerClientBuilder;
 use testing_framework_app::{AppDeployment, AppHostEnv, DeployContext};
 use testing_framework_core::scenario::DynError;
@@ -28,6 +29,8 @@ struct SequencerRegistryInstance {
     config: SequencerPartialConfig,
     registered: Mutex<HashMap<String, RegisteredSequencer>>,
     started: Mutex<HashMap<String, LezSequencerClient>>,
+    initial_committee_aliases: Mutex<Option<Vec<String>>>,
+    genesis: Mutex<Option<Vec<GenesisAction>>>,
     bedrock_addr: SocketAddr,
     scenario_base_dir: Option<PathBuf>,
 }
@@ -46,6 +49,8 @@ impl LezSequencerRegistryClient {
             config,
             registered: Mutex::new(HashMap::new()),
             started: Mutex::new(HashMap::new()),
+            initial_committee_aliases: Mutex::new(None),
+            genesis: Mutex::new(None),
             bedrock_addr,
             scenario_base_dir,
         }))
@@ -58,6 +63,18 @@ impl LezSequencerRegistryClient {
         signing_key: [u8; ED25519_SECRET_KEY_SIZE],
     ) -> Result<(), DynError> {
         let alias = alias.into();
+        if self
+            .0
+            .genesis
+            .lock()
+            .map_err(|error| anyhow!("sequencer registry lock poisoned: {error}"))?
+            .is_some()
+        {
+            return Err(anyhow!(
+                "cannot register sequencer alias '{alias}' after sequencer startup"
+            )
+            .into());
+        }
         let mut registered = self
             .0
             .registered
@@ -78,6 +95,84 @@ impl LezSequencerRegistryClient {
 
     fn config(&self) -> SequencerPartialConfig {
         self.0.config
+    }
+
+    /// Selects the registered aliases that will be staked in shared genesis.
+    pub fn configure_initial_committee(&self, aliases: &[String]) -> Result<(), DynError> {
+        if aliases.is_empty() {
+            return Err(anyhow!("the initial committee must contain at least one alias").into());
+        }
+
+        let genesis = self
+            .0
+            .genesis
+            .lock()
+            .map_err(|error| anyhow!("sequencer registry lock poisoned: {error}"))?;
+        if genesis.is_some() {
+            return Err(
+                anyhow!("cannot configure the initial committee after sequencer startup").into(),
+            );
+        }
+
+        let registered = self
+            .0
+            .registered
+            .lock()
+            .map_err(|error| anyhow!("sequencer registry lock poisoned: {error}"))?;
+        for alias in aliases {
+            if !registered.contains_key(alias) {
+                return Err(anyhow!("initial committee alias '{alias}' is not registered").into());
+            }
+        }
+        drop(registered);
+
+        let mut configured = self
+            .0
+            .initial_committee_aliases
+            .lock()
+            .map_err(|error| anyhow!("sequencer registry lock poisoned: {error}"))?;
+        if configured.is_some() {
+            return Err(anyhow!("the initial committee is already configured").into());
+        }
+        *configured = Some(aliases.to_vec());
+        Ok(())
+    }
+
+    fn genesis(&self) -> Result<Vec<GenesisAction>, DynError> {
+        let mut genesis = self
+            .0
+            .genesis
+            .lock()
+            .map_err(|error| anyhow!("sequencer registry lock poisoned: {error}"))?;
+        if let Some(genesis) = genesis.as_ref() {
+            return Ok(genesis.clone());
+        }
+
+        let aliases = self
+            .0
+            .initial_committee_aliases
+            .lock()
+            .map_err(|error| anyhow!("sequencer registry lock poisoned: {error}"))?
+            .clone()
+            .ok_or_else(|| anyhow!("the initial committee has not been configured"))?;
+        let registered = self
+            .0
+            .registered
+            .lock()
+            .map_err(|error| anyhow!("sequencer registry lock poisoned: {error}"))?;
+        let signing_keys = aliases
+            .iter()
+            .map(|alias| {
+                registered
+                    .get(alias)
+                    .map(|registration| registration.signing_key)
+                    .ok_or_else(|| anyhow!("initial committee alias '{alias}' is not registered"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let generated = test_fixtures::config::genesis_sequencer_stakes(&signing_keys)
+            .context("failed to build founding sequencer stakes")?;
+        *genesis = Some(generated.clone());
+        Ok(generated)
     }
 
     /// Starts the registered sequencer identified by `alias`.
@@ -105,10 +200,12 @@ impl LezSequencerRegistryClient {
             .scenario_base_dir
             .as_ref()
             .map(|dir| dir.join("lez").join(format!("sequencer-{alias}")));
+        let genesis = self.genesis()?;
         let sequencer = deploy_registered_sequencer(
             registration.config,
             self.0.bedrock_addr,
             registration.signing_key,
+            genesis,
             state_dir,
         )
         .await?;
@@ -224,10 +321,11 @@ async fn deploy_registered_sequencer(
     config: SequencerPartialConfig,
     bedrock_addr: SocketAddr,
     signing_key: [u8; ED25519_SECRET_KEY_SIZE],
+    genesis: Vec<GenesisAction>,
     state_dir: Option<PathBuf>,
 ) -> Result<LezSequencerClient, DynError> {
     let setup = SequencerSetup::new(config, bedrock_addr)
-        .with_genesis(Vec::new())
+        .with_genesis(genesis)
         .with_bedrock_signing_key(signing_key);
     let (service, owned_state_dir) = if let Some(state_dir) = state_dir {
         (

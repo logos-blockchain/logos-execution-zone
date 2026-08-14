@@ -11,15 +11,6 @@ use crate::{
 mod actions;
 mod assertions;
 
-/// Committee configuration values parsed from a Cucumber table.
-pub(crate) struct CommitteeConfigArguments {
-    pub posting_timeframe: u32,
-    pub posting_timeout: u32,
-    pub withdraw_threshold: u16,
-    pub deposit_threshold: u16,
-    pub authorized_sequencers: Vec<String>,
-}
-
 pub(crate) fn parse_sequencer_registrations(
     step: &Step,
 ) -> Result<Vec<(String, [u8; ED25519_SECRET_KEY_SIZE])>, StepError> {
@@ -76,20 +67,17 @@ pub(crate) fn parse_sequencer_registrations(
         .collect()
 }
 
-pub(crate) fn parse_committee_config(step: &Step) -> Result<CommitteeConfigArguments, StepError> {
+pub(crate) fn parse_committee_config(
+    step: &Step,
+    leader_alias: &str,
+) -> Result<Vec<String>, StepError> {
     let table = step
         .table
         .as_ref()
         .ok_or_else(|| StepError::InvalidArgument {
             message: "committee configuration requires a table".to_owned(),
         })?;
-    let expected = [
-        "posting_timeframe",
-        "posting_timeout",
-        "withdraw_threshold",
-        "deposit_threshold",
-        "authorized_sequencers",
-    ];
+    let expected = ["authorized_sequencers"];
     if table.rows.first() != Some(&expected.iter().map(ToString::to_string).collect::<Vec<_>>()) {
         return Err(StepError::InvalidArgument {
             message: "committee configuration table has invalid headers".to_owned(),
@@ -106,23 +94,7 @@ pub(crate) fn parse_committee_config(step: &Step) -> Result<CommitteeConfigArgum
             message: "committee configuration requires exactly one complete data row".to_owned(),
         });
     }
-    let parse_u32 = |value: &str, name: &str| {
-        value
-            .trim()
-            .parse::<u32>()
-            .map_err(|_error| StepError::InvalidArgument {
-                message: format!("{name} '{value}' is not a u32"),
-            })
-    };
-    let parse_u16 = |value: &str, name: &str| {
-        value
-            .trim()
-            .parse::<u16>()
-            .map_err(|_error| StepError::InvalidArgument {
-                message: format!("{name} '{value}' is not a u16"),
-            })
-    };
-    let authorized_sequencers = row[4]
+    let authorized_sequencers = row[0]
         .split(',')
         .map(str::trim)
         .filter(|alias| !alias.is_empty())
@@ -133,13 +105,26 @@ pub(crate) fn parse_committee_config(step: &Step) -> Result<CommitteeConfigArgum
             message: "authorized_sequencers must contain at least one alias".to_owned(),
         });
     }
-    Ok(CommitteeConfigArguments {
-        posting_timeframe: parse_u32(&row[0], expected[0])?,
-        posting_timeout: parse_u32(&row[1], expected[1])?,
-        withdraw_threshold: parse_u16(&row[2], expected[2])?,
-        deposit_threshold: parse_u16(&row[3], expected[3])?,
-        authorized_sequencers,
-    })
+    let mut unique_aliases = HashSet::new();
+    if authorized_sequencers
+        .iter()
+        .any(|alias| !unique_aliases.insert(alias))
+    {
+        return Err(StepError::InvalidArgument {
+            message: "authorized_sequencers must not contain duplicate aliases".to_owned(),
+        });
+    }
+    if !authorized_sequencers
+        .iter()
+        .any(|alias| alias == leader_alias)
+    {
+        return Err(StepError::InvalidArgument {
+            message: format!(
+                "committee leader '{leader_alias}' must be included in authorized_sequencers"
+            ),
+        });
+    }
+    Ok(authorized_sequencers)
 }
 
 pub(crate) fn require_sequencer(

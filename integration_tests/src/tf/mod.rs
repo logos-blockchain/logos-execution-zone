@@ -17,3 +17,5 @@ mod apps;
 mod stack;
 /// Indexer convergence polling implementation.
 pub mod wait;
+
+pub const TARGET: &str = "tf";

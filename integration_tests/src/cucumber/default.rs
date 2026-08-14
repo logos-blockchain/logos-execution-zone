@@ -1,5 +1,7 @@
 use std::{fs, path::PathBuf};
 
+use tracing_subscriber::{EnvFilter, fmt};
+
 const FEATURES_DIR_REL: &str = "cucumber_tests/features/";
 /// Environment variable controlling the maximum number of concurrent scenarios.
 pub const MAX_CUCUMBER_CONCURRENT_SCENARIOS: &str = "MAX_CUCUMBER_CONCURRENT_SCENARIOS";
@@ -9,10 +11,22 @@ pub const SCENARIO_OUTPUT_DIR_REL: &str = "cucumber_tests/temp";
 pub const ARTEFACTS: &str = "cucumber_artefacts";
 const CUCUMBER_RETRIES: &str = "CUCUMBER_RETRIES";
 const TF_KEEP_LOGS: &str = "TF_KEEP_LOGS";
+const RUST_LOG: &str = "RUST_LOG";
 /// Environment variable enabling removal of successful scenario artifacts.
 pub const CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL: &str = "CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL";
 /// Environment variable selecting an existing node deployment configuration.
 pub const CUCUMBER_NODE_CONFIG_OVERRIDE: &str = "CUCUMBER_NODE_CONFIG_OVERRIDE";
+
+/// Installs the Cucumber tracing subscriber using `RUST_LOG` or an `info` default.
+pub fn init_tracing() {
+    logos_blockchain_testing_framework::env::set_default_env(RUST_LOG, "info");
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let _unused = fmt()
+        .with_env_filter(filter)
+        .with_target(true)
+        .with_writer(std::io::stderr)
+        .try_init();
+}
 
 /// Returns the path to the features directory, panicking if it does not exist.
 #[must_use]

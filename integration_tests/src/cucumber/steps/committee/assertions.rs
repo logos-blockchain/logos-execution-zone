@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use cucumber::{gherkin::Step, then};
 use indexer_service_rpc::RpcClient as IndexerRpcClient;
@@ -23,6 +23,39 @@ use crate::{
 };
 
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
+
+async fn common_hash_state(
+    first: &sequencer_service_rpc::SequencerClient,
+    second: &sequencer_service_rpc::SequencerClient,
+) -> Result<(u64, u64, Option<u64>), StepError> {
+    let first_height = SequencerRpcClient::get_last_block_id(first)
+        .await
+        .map_err(|error| StepError::QueryFailed {
+            message: error.to_string(),
+        })?;
+    let second_height = SequencerRpcClient::get_last_block_id(second)
+        .await
+        .map_err(|error| StepError::QueryFailed {
+            message: error.to_string(),
+        })?;
+    for block_id in 1..=first_height.min(second_height) {
+        let first_block = SequencerRpcClient::get_block(first, block_id)
+            .await
+            .map_err(|error| StepError::QueryFailed {
+                message: error.to_string(),
+            })?;
+        let second_block = SequencerRpcClient::get_block(second, block_id)
+            .await
+            .map_err(|error| StepError::QueryFailed {
+                message: error.to_string(),
+            })?;
+        if !matches!((&first_block, &second_block), (Some(a), Some(b)) if a.header.hash == b.header.hash)
+        {
+            return Ok((first_height, second_height, Some(block_id)));
+        }
+    }
+    Ok((first_height, second_height, None))
+}
 
 #[then(
     expr = "transfer {string} is included in a block on sequencer {string} within {int} seconds"
@@ -144,7 +177,9 @@ async fn sequencer_observes_receiver_balance_increase(
     Ok(())
 }
 
-#[then(expr = "sequencers {string} and {string} have identical common block hashes")]
+#[then(
+    expr = "sequencers {string} and {string} have identical common block hashes within {int} seconds"
+)]
 #[expect(
     clippy::needless_pass_by_ref_mut,
     reason = "Cucumber step handlers receive mutable world references"
@@ -154,47 +189,32 @@ async fn sequencers_have_identical_common_block_hashes(
     step: &Step,
     first_alias: String,
     second_alias: String,
+    timeout_seconds: u64,
 ) -> StepResult {
     log_step(step);
     let registry = world.sequencer_registry()?.registry();
     let first = require_sequencer(registry, &first_alias)?;
     let second = require_sequencer(registry, &second_alias)?;
-    let first_height = SequencerRpcClient::get_last_block_id(first.client())
-        .await
-        .map_err(|error| StepError::QueryFailed {
-            message: error.to_string(),
-        })?;
-    let second_height = SequencerRpcClient::get_last_block_id(second.client())
-        .await
-        .map_err(|error| StepError::QueryFailed {
-            message: error.to_string(),
-        })?;
-    for block_id in 1..=first_height.min(second_height) {
-        let first_block = SequencerRpcClient::get_block(first.client(), block_id)
-            .await
-            .map_err(|error| StepError::QueryFailed {
-                message: error.to_string(),
-            })?
-            .ok_or_else(|| StepError::QueryFailed {
-                message: format!("sequencer '{first_alias}' is missing block {block_id}"),
-            })?;
-        let second_block = SequencerRpcClient::get_block(second.client(), block_id)
-            .await
-            .map_err(|error| StepError::QueryFailed {
-                message: error.to_string(),
-            })?
-            .ok_or_else(|| StepError::QueryFailed {
-                message: format!("sequencer '{second_alias}' is missing block {block_id}"),
-            })?;
-        if first_block.header.hash != second_block.header.hash {
-            return Err(StepError::AssertionFailed {
+    let timeout = Duration::from_secs(timeout_seconds);
+    let started = Instant::now();
+    loop {
+        let (first_height, second_height, first_divergent_block) =
+            common_hash_state(first.client(), second.client()).await?;
+        if first_divergent_block.is_none() {
+            return Ok(());
+        }
+        let elapsed = started.elapsed();
+        if elapsed >= timeout {
+            return Err(StepError::Timeout {
                 message: format!(
-                    "sequencers '{first_alias}' and '{second_alias}' diverge at block {block_id}"
+                    "sequencers '{first_alias}' and '{second_alias}' did not converge through block {} within {timeout:?}; heights were {first_height} and {second_height}",
+                    first_divergent_block.unwrap_or_default()
                 ),
             });
         }
+        let remaining = timeout.saturating_sub(elapsed);
+        tokio::time::sleep(POLL_INTERVAL.min(remaining)).await;
     }
-    Ok(())
 }
 
 #[then(

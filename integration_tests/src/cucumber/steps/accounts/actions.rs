@@ -1,10 +1,10 @@
 use cucumber::{gherkin::Step, given};
 use lee::Account;
-use log::{error, warn};
 use sequencer_service_rpc::RpcClient as _;
+use tracing::warn;
 use wallet::account::Label;
 
-use super::super::log_step;
+use super::super::{TARGET, log_step};
 use crate::cucumber::{
     error::{StepError, StepResult},
     world::CucumberWorld,
@@ -18,7 +18,7 @@ async fn create_new_public_account(world: &mut CucumberWorld, step: &Step) -> St
     match context.sequencer_client().get_account(account).await {
         Ok(state) if state == Account::default() => {}
         Ok(state) => {
-            warn!(
+            warn!(target: TARGET,
                 "Cucumber step '{}' found non-default state for fresh public account {account:?}",
                 step.value
             );
@@ -29,7 +29,7 @@ async fn create_new_public_account(world: &mut CucumberWorld, step: &Step) -> St
             });
         }
         Err(error) => {
-            error!(
+            warn!(target: TARGET,
                 "Cucumber step '{}' failed to query fresh public account {account:?}: {error}",
                 step.value
             );

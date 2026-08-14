@@ -2,7 +2,10 @@ use std::time::Duration;
 
 use cucumber::{gherkin::Step, given, when};
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
-use sequencer_core::{block_publisher::post_channel_config, config::BedrockConfig};
+use sequencer_core::{
+    block_publisher::{Ed25519PublicKey, read_channel_state},
+    config::BedrockConfig,
+};
 use sequencer_service_rpc::RpcClient as _;
 use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
 
@@ -78,6 +81,47 @@ async fn register_lez_sequencers(world: &mut CucumberWorld, step: &Step) -> Step
     Ok(())
 }
 
+#[given(expr = "sequencer {string} configures the committee")]
+#[expect(
+    clippy::unused_async,
+    reason = "Cucumber step handlers use the framework's mutable-world signature"
+)]
+async fn configure_committee(
+    world: &mut CucumberWorld,
+    step: &Step,
+    leader_alias: String,
+) -> StepResult {
+    log_step(step);
+    let authorized_sequencers = parse_committee_config(step, &leader_alias)?;
+    let registry = world.sequencer_registry()?.registry();
+    if registry.signing_key(&leader_alias).is_none() {
+        return Err(StepError::InvalidArgument {
+            message: format!("committee leader '{leader_alias}' is not registered"),
+        });
+    }
+    for alias in &authorized_sequencers {
+        if registry.signing_key(alias).is_none() {
+            return Err(StepError::InvalidArgument {
+                message: format!("authorized sequencer '{alias}' is not registered"),
+            });
+        }
+    }
+    registry
+        .configure_initial_committee(&authorized_sequencers)
+        .map_err(|error| StepError::InvalidArgument {
+            message: format!(
+                "step '{}' could not configure the committee: {error}",
+                step.value
+            ),
+        })?;
+    world.environment.committee_configuration =
+        Some(crate::cucumber::world::CommitteeConfiguration {
+            leader_alias,
+            authorized_sequencers,
+        });
+    Ok(())
+}
+
 #[when(expr = "I start sequencer {string}")]
 #[expect(
     clippy::needless_pass_by_ref_mut,
@@ -121,104 +165,6 @@ async fn sequencer_reaches_block(
     .await
 }
 
-#[when(expr = "sequencer {string} configures the committee")]
-async fn configure_committee(
-    world: &mut CucumberWorld,
-    step: &Step,
-    leader_alias: String,
-) -> StepResult {
-    log_step(step);
-    let configuration = parse_committee_config(step)?;
-    let context = world.sequencer_registry()?;
-    let registry = context.registry();
-    let leader_key =
-        registry
-            .signing_key(&leader_alias)
-            .ok_or_else(|| StepError::InvalidArgument {
-                message: format!("sequencer '{leader_alias}' is not registered"),
-            })?;
-    let authorized_keys = configuration
-        .authorized_sequencers
-        .iter()
-        .map(|alias| {
-            registry
-                .signing_key(alias)
-                .map(|key| Ed25519Key::from_bytes(&key).public_key())
-                .ok_or_else(|| StepError::InvalidArgument {
-                    message: format!("authorized sequencer '{alias}' is not registered"),
-                })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let leader = require_sequencer(registry, &leader_alias)?;
-    let bedrock_addr = context.bedrock().primary_api_addr();
-    post_channel_config(
-        &BedrockConfig {
-            channel_id: config::bedrock_channel_id(),
-            node_url: config::addr_to_url(UrlProtocol::Http, bedrock_addr).map_err(|error| {
-                StepError::QueryFailed {
-                    message: error.to_string(),
-                }
-            })?,
-            funding_key: config::bedrock_funding_key(),
-            auth: None,
-            priority_fee: 10_000,
-        },
-        &Ed25519Key::from_bytes(&leader_key),
-        authorized_keys,
-        configuration.posting_timeframe,
-        configuration.posting_timeout,
-        configuration.withdraw_threshold,
-        configuration.deposit_threshold,
-    )
-    .await
-    .map_err(|error| StepError::QueryFailed {
-        message: format!("failed to configure the committee: {error:#}"),
-    })?;
-    world.environment.committee_height_at_config =
-        Some(leader.client().get_last_block_id().await.map_err(|error| {
-            StepError::QueryFailed {
-                message: error.to_string(),
-            }
-        })?);
-    Ok(())
-}
-
-#[when(
-    expr = "sequencer {string} advances after the committee reconfiguration within {int} seconds"
-)]
-#[expect(
-    clippy::needless_pass_by_ref_mut,
-    reason = "Cucumber step handlers use the framework's mutable-world signature"
-)]
-async fn sequencer_advances_after_reconfiguration(
-    world: &mut CucumberWorld,
-    step: &Step,
-    alias: String,
-    timeout_seconds: u64,
-) -> StepResult {
-    log_step(step);
-    let configured_height =
-        world
-            .environment
-            .committee_height_at_config
-            .ok_or(StepError::MissingObservation {
-                field: "committee reconfiguration height",
-            })?;
-    let sequencer = require_sequencer(world.sequencer_registry()?.registry(), &alias)?;
-    let target = configured_height
-        .checked_add(1)
-        .ok_or_else(|| StepError::AssertionFailed {
-            message: "committee reconfiguration height overflowed".to_owned(),
-        })?;
-    wait_for_height(
-        sequencer.client(),
-        target,
-        timeout_seconds,
-        &format!("sequencer '{alias}' after committee reconfiguration"),
-    )
-    .await
-}
-
 #[when(expr = "sequencer {string} synchronizes to sequencer {string} within {int} seconds")]
 async fn sequencer_synchronizes(
     world: &mut CucumberWorld,
@@ -247,6 +193,152 @@ async fn sequencer_synchronizes(
     )
     .await?;
     world.environment.committee_join_height = Some(join_height);
+    Ok(())
+}
+
+#[when(expr = "the committee configured by sequencer {string} is active within {int} seconds")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step handlers receive the framework's mutable-world signature"
+)]
+async fn committee_is_active(
+    world: &mut CucumberWorld,
+    step: &Step,
+    leader_alias: String,
+    timeout_seconds: u64,
+) -> StepResult {
+    log_step(step);
+    let configuration = world.environment.committee_configuration.as_ref().ok_or(
+        StepError::MissingObservation {
+            field: "committee configuration",
+        },
+    )?;
+    if configuration.leader_alias != leader_alias {
+        return Err(StepError::AssertionFailed {
+            message: format!(
+                "committee was configured by '{}', not '{leader_alias}'",
+                configuration.leader_alias
+            ),
+        });
+    }
+    let context = world.sequencer_registry()?;
+    require_sequencer(context.registry(), &leader_alias)?;
+    let expected_keys = configuration
+        .authorized_sequencers
+        .iter()
+        .map(|alias| {
+            let signing_key = context.registry().signing_key(alias).ok_or_else(|| {
+                StepError::InvalidArgument {
+                    message: format!("authorized sequencer '{alias}' is not registered"),
+                }
+            })?;
+            Ok(Ed25519Key::from_bytes(&signing_key).public_key().to_bytes())
+        })
+        .collect::<Result<Vec<_>, StepError>>()?;
+    let bedrock_config = BedrockConfig {
+        channel_id: config::bedrock_channel_id(),
+        node_url: config::addr_to_url(UrlProtocol::Http, context.bedrock().primary_api_addr())
+            .map_err(|error| StepError::QueryFailed {
+                message: error.to_string(),
+            })?,
+        funding_key: config::bedrock_funding_key(),
+        auth: None,
+        priority_fee: 10_000,
+    };
+    let timeout = Duration::from_secs(timeout_seconds);
+    let wait = async {
+        loop {
+            let state = read_channel_state(&bedrock_config).await.map_err(|error| {
+                StepError::QueryFailed {
+                    message: error.to_string(),
+                }
+            })?;
+            let active = state.is_some_and(|state| {
+                let mut actual_keys = state
+                    .accredited_keys
+                    .iter()
+                    .map(Ed25519PublicKey::to_bytes)
+                    .collect::<Vec<_>>();
+                actual_keys.sort_unstable();
+                let mut expected_keys = expected_keys.clone();
+                expected_keys.sort_unstable();
+                actual_keys == expected_keys
+            });
+            if active {
+                return Ok::<(), StepError>(());
+            }
+            tokio::time::sleep(POLL_INTERVAL).await;
+        }
+    };
+    tokio::time::timeout(timeout, wait)
+        .await
+        .map_err(|_elapsed| StepError::Timeout {
+            message: format!(
+                "committee configured by '{leader_alias}' was not active within {timeout:?}"
+            ),
+        })??;
+    Ok(())
+}
+
+#[when(expr = "sequencer {string} becomes the posting turn within {int} seconds")]
+#[expect(
+    clippy::needless_pass_by_ref_mut,
+    reason = "Cucumber step handlers receive the framework's mutable-world signature"
+)]
+async fn sequencer_becomes_posting_turn(
+    world: &mut CucumberWorld,
+    step: &Step,
+    alias: String,
+    timeout_seconds: u64,
+) -> StepResult {
+    log_step(step);
+    let context = world.sequencer_registry()?;
+    let signing_key =
+        context
+            .registry()
+            .signing_key(&alias)
+            .ok_or_else(|| StepError::InvalidArgument {
+                message: format!("sequencer '{alias}' is not registered"),
+            })?;
+    let expected_key: Ed25519PublicKey = Ed25519Key::from_bytes(&signing_key).public_key();
+    let bedrock_config = BedrockConfig {
+        channel_id: config::bedrock_channel_id(),
+        node_url: config::addr_to_url(UrlProtocol::Http, context.bedrock().primary_api_addr())
+            .map_err(|error| StepError::QueryFailed {
+                message: error.to_string(),
+            })?,
+        funding_key: config::bedrock_funding_key(),
+        auth: None,
+        priority_fee: 10_000,
+    };
+    let timeout = Duration::from_secs(timeout_seconds);
+    let wait = async {
+        loop {
+            let is_turn = read_channel_state(&bedrock_config)
+                .await
+                .map_err(|error| StepError::QueryFailed {
+                    message: error.to_string(),
+                })?
+                .and_then(|state| {
+                    state
+                        .accredited_keys
+                        .get(usize::from(state.tip_sequencer))
+                        .copied()
+                })
+                == Some(expected_key);
+            if is_turn {
+                return Ok::<(), StepError>(());
+            }
+            tokio::time::sleep(POLL_INTERVAL).await;
+        }
+    };
+    tokio::time::timeout(timeout, wait)
+        .await
+        .map_err(|_elapsed| StepError::Timeout {
+            message: format!(
+                "sequencer '{alias}' did not become the posting turn within {timeout:?}"
+            ),
+        })??;
     Ok(())
 }
 

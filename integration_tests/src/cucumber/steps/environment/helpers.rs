@@ -1,8 +1,9 @@
 use std::{path::PathBuf, time::Duration};
 
 use cucumber::gherkin::Step;
-use log::error;
+use tracing::warn;
 
+use super::super::TARGET;
 use crate::{
     config::SequencerPartialConfig,
     cucumber::{
@@ -42,7 +43,7 @@ pub(crate) async fn deploy_lez_stack(
     };
 
     world.deployment_mut().deploy(app).await.map_err(|error| {
-        error!(
+        warn!(target: TARGET,
             "Cucumber step '{}' failed during deployment: {error:?}",
             step.value
         );

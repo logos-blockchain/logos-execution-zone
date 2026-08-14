@@ -4811,6 +4811,8 @@ dependencies = [
  "testnet_initial_state",
  "thiserror 2.0.20",
  "tokio",
+ "tracing",
+ "tracing-subscriber 0.3.23",
  "vault_core",
  "wallet",
  "wallet-ffi",

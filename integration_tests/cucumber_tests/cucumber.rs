@@ -4,9 +4,9 @@ use std::{
     io,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, atomic::AtomicBool},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
-use chrono::Local;
 use cucumber::{
     StatsWriter as _, World as _, WriterExt as _, event::ScenarioFinished, writer,
     writer::Verbosity,
@@ -19,9 +19,11 @@ use integration_tests::cucumber::{
     world::CucumberWorld,
 };
 use logos_blockchain_testing_framework::{
-    is_truthy_env, reap_all_stale_port_blocks, release_reserved_port_block,
+    hash_str, is_truthy_env, reap_all_stale_port_blocks, release_reserved_port_block,
 };
+use tracing::{info, warn};
 
+pub const TARGET: &str = "cucumber_main";
 const LEZ_CUCUMBER_RUN: &str = "LEZ_CUCUMBER_RUN";
 type ScenarioAttempts = Arc<Mutex<HashMap<String, u8>>>;
 
@@ -29,6 +31,7 @@ type ScenarioAttempts = Arc<Mutex<HashMap<String, u8>>>;
 #[expect(clippy::print_stdout, reason = "Cucumber logs test code")]
 async fn main() {
     logos_blockchain_testing_framework::env::set_default_env(LEZ_CUCUMBER_RUN, "true");
+    integration_tests::cucumber::default::init_tracing();
     reap_all_stale_port_blocks();
     println!("args: {:?}", std::env::args());
 
@@ -40,7 +43,7 @@ async fn main() {
         .append(true)
         .create(true)
         .open(output_dir.join("cucumber-output-junit.xml"))
-        .inspect_err(|err| println!("Failed to open output file: {err}"))
+        .inspect_err(|err| warn!(target: TARGET, "Failed to open output file: {err}"))
         .expect("should create or open output file");
     let mut world = CucumberWorld::cucumber()
         // Re-outputs Failed steps for easier navigation.
@@ -71,7 +74,7 @@ async fn main() {
                 let output_dir_clone = output_dir.clone();
                 let scenario_attempts_clone = ScenarioAttempts::clone(&scenario_attempts);
                 async move {
-                    println!(
+                    info!(target: TARGET,
                         "\nStarting - {}: {} ({}: {})\n",
                         scenario.keyword, scenario.name, feature.keyword, feature.name,
                     );
@@ -87,7 +90,7 @@ async fn main() {
         });
 
     if let Some(retries) = get_retries()
-        .inspect_err(|e| println!("{e}"))
+        .inspect_err(|e| warn!(target: TARGET, "{e}"))
         .expect("should parse retries")
     {
         // Makes failed Scenarios being retried the specified number of times.
@@ -100,7 +103,7 @@ async fn main() {
             let teardown_failure_flag = Arc::clone(&teardown_failure_flag);
             Box::pin(async move {
                 // Runs after the scenario has completed; useful for capturing final state/logs.
-                println!(
+                info!(target: TARGET,
                     "\nFinished - {}: {} ({}: {})\n",
                     scenario.keyword, scenario.name, feature.keyword, feature.name,
                 );
@@ -115,7 +118,7 @@ async fn main() {
                     let teardown_result = world.stop_runtime().await;
                     if let Err(error) = &teardown_result {
                         teardown_failure_flag.store(true, std::sync::atomic::Ordering::Relaxed);
-                        println!("Cucumber runtime teardown failed: {error}");
+                        warn!(target: TARGET, "Cucumber runtime teardown failed: {error}");
                     }
 
                     // Rewrite the dump after teardown so teardown state and
@@ -128,12 +131,12 @@ async fn main() {
                         && matches!(scenario_finished, ScenarioFinished::StepPassed)
                         && is_truthy_env(CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL)
                     {
-                        println!(
+                        info!(target: TARGET,
                             "Env var '{CUCUMBER_REMOVE_ARTEFACTS_IF_SUCCESSFUL}' set, removing all \
                             artefacts\n"
                         );
                         if let Err(e) = world.clear_scenario_artifacts() {
-                            println!("{e}");
+                            warn!(target: TARGET, "{e}");
                         }
                     }
                 }
@@ -160,7 +163,6 @@ fn get_max_concurrent_scenarios() -> usize {
         .unwrap_or(1)
 }
 
-#[expect(clippy::print_stdout, reason = "Cucumber logs test code")]
 fn prepare_world_for_scenario(
     world: &mut CucumberWorld,
     output_dir: &Path,
@@ -172,7 +174,7 @@ fn prepare_world_for_scenario(
         scenario_output_dir(output_dir, scenario_attempts, feature_name, scenario_name);
 
     if let Err(err) = std::fs::create_dir_all(&scenario_dir) {
-        println!(
+        warn!(target: TARGET,
             "Failed to create scenario artifact directory '{}': {err}",
             scenario_dir.display()
         );
@@ -181,7 +183,13 @@ fn prepare_world_for_scenario(
     world.set_scenario_base_dir(&scenario_dir);
     world.apply_deployment_config_override_path();
 
-    world.set_test_context(Local::now().format("%y%m%d%H%M%S").to_string());
+    let started_at_ns = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+
+    let raw_context = format!("{}::{started_at_ns}", scenario_dir.display());
+    world.set_test_context(hash_str(&raw_context));
 }
 
 fn scenario_output_dir(

@@ -7,3 +7,5 @@ mod error;
 pub mod steps;
 /// Per-scenario Cucumber world and lifecycle management.
 pub mod world;
+
+pub const TARGET: &str = "cucumber";

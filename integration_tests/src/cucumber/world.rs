@@ -57,6 +57,15 @@ pub enum RuntimeTeardownState {
     Failed(String),
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+/// Committee configuration declared by a multi-sequencer Cucumber scenario.
+pub struct CommitteeConfiguration {
+    /// Alias of the sequencer that declares the configuration.
+    pub leader_alias: String,
+    /// Registered aliases authorized in the founding committee.
+    pub authorized_sequencers: Vec<String>,
+}
+
 #[derive(Clone, Debug, Default)]
 /// Observable account and indexer state recorded during a scenario.
 pub struct EnvironmentState {
@@ -102,8 +111,6 @@ pub struct EnvironmentState {
     pub public_sender_label: Option<String>,
     /// Label assigned to the public transfer receiver.
     pub public_receiver_label: Option<String>,
-    /// Sequencer height immediately after the committee reconfiguration.
-    pub committee_height_at_config: Option<u64>,
     /// Source sequencer height recorded when another sequencer joins.
     pub committee_join_height: Option<u64>,
     /// Target height reached during the committee rotation phase.
@@ -118,6 +125,8 @@ pub struct EnvironmentState {
     pub committee_indexer_target_height: Option<u64>,
     /// Actual indexer finalized height reached during convergence.
     pub committee_indexer_finalized_height: Option<u64>,
+    /// Committee configuration declared before sequencer startup.
+    pub committee_configuration: Option<CommitteeConfiguration>,
 }
 
 /// Per-scenario state for Cucumber tests that deploy LEZ applications.

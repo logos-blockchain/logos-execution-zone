@@ -6,6 +6,8 @@ pub mod environment;
 pub mod indexer;
 pub mod transfers;
 
+pub const TARGET: &str = "cucumber_steps";
+
 pub(super) fn log_step(step: &Step) {
-    log::debug!("Executing Cucumber step: {}", step.value);
+    tracing::info!(target: TARGET, "Executing Cucumber step: {}", step.value);
 }
