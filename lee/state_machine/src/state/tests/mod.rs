@@ -35,6 +35,7 @@ mod authenticated_transfer;
 mod changer_claimer;
 mod circuit;
 mod claiming;
+mod clear;
 mod flash_swap;
 mod genesis;
 mod privacy_preserving;

@@ -114,6 +114,9 @@ pub enum InvalidProgramBehaviorError {
     #[error(transparent)]
     ExecutionValidationFailed(#[from] lee_core::program::ExecutionValidationError),
 
+    #[error(transparent)]
+    ClearValidationFailed(#[from] lee_core::program::ClearValidationError),
+
     #[error("Trying to claim account {account_id} which is not default")]
     ClaimedNonDefaultAccount { account_id: AccountId },
 

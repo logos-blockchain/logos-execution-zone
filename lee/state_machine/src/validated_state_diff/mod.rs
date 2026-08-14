@@ -5,10 +5,10 @@ use std::{
 
 use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, PublicAction, Timestamp,
-    account::{Account, AccountId, AccountWithMetadata},
+    account::{Account, AccountId, AccountWithMetadata, Data},
     program::{
-        CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_ID, compute_public_authorized_pdas,
-        validate_execution,
+        CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_ID, SystemInstruction,
+        compute_public_authorized_pdas, validate_clear, validate_execution,
     },
 };
 use log::debug;
@@ -110,6 +110,49 @@ impl ValidatedStateDiff {
                 chain_calls_counter <= MAX_NUMBER_CHAINED_CALLS,
                 LeeError::MaxChainedCallsDepthExceeded
             );
+
+            if chained_call.program_id == DEFAULT_PROGRAM_ID {
+                let instruction: SystemInstruction =
+                    risc0_zkvm::serde::from_slice(&chained_call.instruction_data)
+                        .map_err(|e| LeeError::InstructionSerializationError(e.to_string()))?;
+
+                let authorized_pdas =
+                    compute_public_authorized_pdas(caller_data.program_id, &chained_call.pda_seeds);
+                let is_authorized = |account_id: &AccountId| {
+                    authorized_pdas.contains(account_id)
+                        || caller_data.authorized_accounts.contains(account_id)
+                };
+
+                match instruction {
+                    SystemInstruction::Clear => {
+                        for pre_state in &chained_call.pre_states {
+                            let account_id = pre_state.account_id;
+                            let pre = AccountWithMetadata::new(
+                                state_diff
+                                    .get(&account_id)
+                                    .cloned()
+                                    .unwrap_or_else(|| state.get_account_by_id(account_id)),
+                                is_authorized(&account_id),
+                                account_id,
+                            );
+                            let post = Account {
+                                program_owner: DEFAULT_PROGRAM_ID,
+                                balance: pre.account.balance,
+                                data: Data::default(),
+                                nonce: pre.account.nonce,
+                            };
+                            validate_clear(&pre, &post)
+                                .map_err(InvalidProgramBehaviorError::ClearValidationFailed)?;
+                            state_diff.insert(account_id, post);
+                        }
+                    }
+                }
+
+                chain_calls_counter = chain_calls_counter
+                    .checked_add(1)
+                    .expect("we check the max depth at the beginning of the loop");
+                continue;
+            }
 
             // Check that the `program_id` corresponds to a deployed program
             let Some(program) = state.programs().get(&chained_call.program_id) else {

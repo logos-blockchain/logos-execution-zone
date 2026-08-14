@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     BlockId, Identifier, NullifierPublicKey, Timestamp,
-    account::{Account, AccountId, AccountWithMetadata},
+    account::{Account, AccountId, AccountWithMetadata, Data},
     encryption::ViewingPublicKey,
 };
 
@@ -267,6 +267,11 @@ pub enum Claim {
     /// seed; the `AccountId` is derived from `(program_id, seed)`, regardless of whether the
     /// account is public or private.
     Pda(PdaSeed),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SystemInstruction {
+    Clear,
 }
 
 impl AccountPostState {
@@ -628,6 +633,15 @@ pub enum ExecutionValidationError {
     },
 }
 
+#[derive(thiserror::Error, Debug)]
+pub enum ClearValidationError {
+    #[error("Unauthorized clear of account {account_id}")]
+    NotAuthorized { account_id: AccountId },
+
+    #[error("Invalid clear transition for account {account_id}")]
+    InvalidTransition { account_id: AccountId },
+}
+
 /// Computes the set of public-PDA `AccountId`s the callee is authorized to mutate.
 ///
 /// Returns only public-form derivations, suitable for contexts where all accounts are public
@@ -759,6 +773,31 @@ pub fn validate_execution(
         return Err(ExecutionValidationError::MismatchedTotalBalance {
             total_balance_pre_states,
             total_balance_post_states,
+        });
+    }
+
+    Ok(())
+}
+
+pub fn validate_clear(
+    pre: &AccountWithMetadata,
+    post: &Account,
+) -> Result<(), ClearValidationError> {
+    if !pre.is_authorized {
+        return Err(ClearValidationError::NotAuthorized {
+            account_id: pre.account_id,
+        });
+    }
+
+    let expected = Account {
+        program_owner: DEFAULT_PROGRAM_ID,
+        balance: pre.account.balance,
+        data: Data::default(),
+        nonce: pre.account.nonce,
+    };
+    if *post != expected {
+        return Err(ClearValidationError::InvalidTransition {
+            account_id: pre.account_id,
         });
     }
 
