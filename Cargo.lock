@@ -5595,6 +5595,7 @@ dependencies = [
  "hex-literal 1.1.0",
  "k256 0.13.4",
  "lee_core",
+ "loader_core",
  "log",
  "rand 0.8.6",
  "risc0-binfmt",
@@ -6364,6 +6365,26 @@ name = "litemap"
 version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92daf443525c4cce67b150400bc2316076100ce0b3686209eb8cf3c31612e6f0"
+
+[[package]]
+name = "loader_core"
+version = "0.1.0"
+dependencies = [
+ "borsh",
+ "bytemuck",
+ "lee_core",
+ "risc0-binfmt",
+ "risc0-zkvm",
+ "serde",
+]
+
+[[package]]
+name = "loader_program"
+version = "0.1.0"
+dependencies = [
+ "lee_core",
+ "loader_core",
+]
 
 [[package]]
 name = "lock_api"
@@ -9421,6 +9442,7 @@ dependencies = [
  "faucet_core",
  "lee",
  "lee_core",
+ "loader_core",
  "ping_core",
  "risc0-zkvm",
  "sequencer_stake_core",
@@ -10974,6 +10996,7 @@ dependencies = [
  "lee",
  "lee_core",
  "libp2p",
+ "loader_core",
  "log",
  "logos-blockchain-core",
  "logos-blockchain-http-api-common",
@@ -10984,6 +11007,7 @@ dependencies = [
  "ping_core",
  "programs",
  "rand 0.8.6",
+ "risc0-binfmt",
  "risc0-zkvm",
  "sequencer_core_metrics",
  "sequencer_stake_core",
