@@ -8,8 +8,9 @@ use lee_core::{
     BlockId, Commitment, Nullifier, PrivacyPreservingCircuitOutput, PublicAction, Timestamp,
     account::{Account, AccountId, AccountWithMetadata},
     program::{
-        CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, ProgramId, TransactionEvent,
-        compute_public_authorized_pdas, pre_states_match_accounts, validate_execution,
+        CallerData, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, ProgramId, ProgramOutput,
+        RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID, TransactionEvent, compute_public_authorized_pdas,
+        pre_states_match_accounts, validate_execution,
     },
 };
 use log::debug;
@@ -103,16 +104,11 @@ impl ValidatedStateDiff {
                 LeeError::MaxChainedCallsDepthExceeded
             );
 
-            let Some(program_account) = state.get_program(chained_call.program_account_id) else {
-                return Err(LeeError::InvalidInput("Unknown program".into()));
-            };
             // Recover the real `ProgramId` (RISC0 image id) from the account's address: on this
             // branch every program account lives at the direct `AccountId::from(program_id)`
             // bijection, so this round-trip is exact. Needed wherever execution/PDA derivation
             // requires the underlying image id rather than the dispatch-facing `AccountId`.
             let program_id = ProgramId::from(chained_call.program_account_id);
-            let program =
-                Program::new_unchecked(program_id, Cow::Owned(program_account.data.to_vec()));
 
             let authorized_pdas = compute_public_authorized_pdas(
                 caller_data.caller_account_id,
@@ -159,11 +155,47 @@ impl ValidatedStateDiff {
                 "Program {:?} pre_states: {:?}, instruction_data: {:?}",
                 chained_call.program_account_id, real_pre_states, chained_call.instruction_data
             );
-            let mut program_output = program.execute(
-                caller_data.caller_account_id,
-                &real_pre_states,
-                &chained_call.instruction_data,
-            )?;
+            let mut program_output = if chained_call.program_account_id
+                == RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID
+            {
+                // Runs `Deploy` as native Rust instead of interpreting a guest ELF — see
+                // `RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID`'s doc comment for why.
+                //
+                // `execute_deploy` validates its input via `assert!`/`.expect(...)`, exactly
+                // like every guest program in this codebase, relying here on `catch_unwind` to
+                // play the same role the zkVM executor plays for a real guest: converting a
+                // rejected input into a graceful `Err` instead of unwinding past this call.
+                let loader_core::Instruction::Deploy { bytecode } =
+                    borsh::from_slice(&chained_call.instruction_data).map_err(|e| {
+                        LeeError::InvalidInput(format!("invalid Deploy instruction: {e}"))
+                    })?;
+                let deploy_pre_states = real_pre_states.clone();
+                let post_states = std::panic::catch_unwind(|| {
+                    loader_core::execute_deploy(program_id, deploy_pre_states, bytecode)
+                })
+                .map_err(|_panic_payload| {
+                    LeeError::ProgramExecutionFailed("Deploy rejected the given input".into())
+                })?;
+                ProgramOutput::new(
+                    chained_call.program_account_id,
+                    caller_data.caller_account_id,
+                    chained_call.instruction_data.clone(),
+                    real_pre_states.clone(),
+                    post_states,
+                )
+            } else {
+                let Some(program_account) = state.get_program(chained_call.program_account_id)
+                else {
+                    return Err(LeeError::InvalidInput("Unknown program".into()));
+                };
+                let program =
+                    Program::new_unchecked(program_id, Cow::Owned(program_account.data.to_vec()));
+                program.execute(
+                    caller_data.caller_account_id,
+                    &real_pre_states,
+                    &chained_call.instruction_data,
+                )?
+            };
             debug!(
                 "Program {:?} output: {:?}",
                 chained_call.program_account_id, program_output

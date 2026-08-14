@@ -57,6 +57,8 @@ members = [
   "lez/programs/ping_sender",
   "lez/programs/ping_receiver",
   "lez/programs/sequencer_stake",
+  "lez/programs/loader",
+  "lez/programs/loader/core",
   "lez/cross_zone",
 
   "test_programs",
@@ -124,6 +126,8 @@ bridge_lock_core = { path = "lez/programs/bridge_lock/core" }
 wrapped_token_core = { path = "lez/programs/wrapped_token/core" }
 ping_core = { path = "lez/programs/ping_core" }
 sequencer_stake_core = { path = "lez/programs/sequencer_stake/core" }
+loader_core = { path = "lez/programs/loader/core" }
+loader_program = { path = "lez/programs/loader" }
 cross_zone = { path = "lez/cross_zone" }
 build_utils = { path = "build_utils" }
 test_methods = { path = "lee/state_machine/test_methods" }
@@ -142,6 +146,7 @@ tokio-util = "0.7.18"
 async-trait = "0.1"
 trait-variant = "0.1.2"
 risc0-zkvm = { version = "3.0.5", default-features = false, features = ['std'] }
+risc0-binfmt = "3.0.2"
 risc0-build = "3.0.5"
 kameo = "0.22.2"
 kameo_actors = "0.8.1"

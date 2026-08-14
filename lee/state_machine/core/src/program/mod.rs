@@ -19,6 +19,26 @@ pub const DEFAULT_PROGRAM_OWNER: AccountId = AccountId::new([0; 32]);
 /// `program_owner` for program `Account`s.
 pub const PROGRAM_STORAGE_OWNER: AccountId = AccountId::new([0xFF; 32]);
 
+/// Reserved `AccountId` for the native "Deploy" dispatch shortcut.
+///
+/// `SHA256(domain_separator || label)`, where `domain_separator` is
+/// `/LEE/v0.3/AccountId/State/` and `label` is `DeploymentProgram`, each padded with trailing
+/// zero bytes to 32 bytes before concatenation — the same domain-separation construction used
+/// throughout this module, just with no variable input, since this is a single fixed address
+/// rather than a per-caller derivation.
+///
+/// Dispatch recognizes this exact `AccountId` and runs the deploy logic as native Rust instead
+/// of interpreting a guest ELF: computing a program's image id inside the zkVM costs roughly
+/// 1,400-1,500 cycles per byte of deployed bytecode (measured against every real program in
+/// this repo), pushing a real deployment to 500M-900M cycles against the 32M public-execution
+/// cap, whereas the equivalent native computation costs low tens of milliseconds. A caller
+/// targeting this address converts it to the `ProgramId` a `Message`/`ChainedCall` expects via
+/// the existing `From<AccountId> for ProgramId` bijection.
+pub const RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID: AccountId = AccountId::new([
+    89, 158, 44, 108, 43, 137, 255, 57, 188, 48, 148, 179, 39, 111, 31, 202, 167, 23, 56, 0, 167,
+    29, 152, 150, 161, 186, 155, 209, 69, 138, 145, 201,
+]);
+
 pub const MAX_NUMBER_CHAINED_CALLS: usize = 10;
 
 pub type ProgramId = [u32; 8];

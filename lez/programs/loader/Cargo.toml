@@ -1,0 +1,9 @@
+[package]
+name = "loader_program"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+
+[dependencies]
+lee_core.workspace = true
+loader_core.workspace = true
