@@ -133,6 +133,13 @@ impl<S> Default for StallState<S> {
 }
 
 impl<S: Copy + PartialEq + PartialOrd> StallState<S> {
+    /// The slot the reader is stuck on and for how many passes, or `None` when
+    /// it is not stuck.
+    #[must_use]
+    pub const fn current(&self) -> Option<(S, u32)> {
+        self.stalled
+    }
+
     /// Folds one pass in: `stuck_on` is the slot the pass ended inside, `None`
     /// for a pass that ended cleanly. Returns the slot the reader is stuck on
     /// and how long it has been stuck, so the caller can say so on the
@@ -421,6 +428,7 @@ mod tests {
         // nothing here ever moves a cursor.
         let passes = vec![(Some(4), Some(3)); 3];
         assert_eq!(run_stalls(&passes).stalled, Some((4, 3)));
+        assert_eq!(run_stalls(&passes).current(), Some((4, 3)));
 
         let long = vec![
             (Some(4), Some(3));

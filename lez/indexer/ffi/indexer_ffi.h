@@ -491,9 +491,10 @@ struct LastBlockIdResult query_last_block(const struct IndexerServiceFFI *indexe
  * Query the indexer's current sync status as a JSON C-string.
  *
  * The JSON schema is owned by `indexer_core` (`IndexerStatus`): an object with
- * `state` (`Starting`/`Syncing`/`CaughtUp`/`Error`/`Stalled`),
- * `indexed_block_id`, `last_error`, and `stall_reason`. Lets a client
- * distinguish "still catching up" from "something went wrong".
+ * `state` (`Starting`/`Syncing`/`CaughtUp`/`Error`/`Stalled`/`Halted`),
+ * `indexed_block_id`, `last_error`, `stall_reason`, `cross_zone_halt`, and
+ * `cross_zone_peers`. Lets a client distinguish "still catching up" from
+ * "something went wrong".
  *
  * # Arguments
  *

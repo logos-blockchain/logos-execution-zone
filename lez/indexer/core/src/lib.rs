@@ -16,8 +16,8 @@ use retry::ApplyRetryGate;
 use crate::{
     block_store::IndexerStore,
     config::IndexerConfig,
-    cross_zone_verifier::{CrossZoneVerifier, CrossZoneVerifyError},
-    status::{IndexerStatus, IndexerSyncStatus},
+    cross_zone_verifier::{CrossZoneVerifier, CrossZoneVerifyError, ForgedDispatch, SeenKey},
+    status::{CrossZoneHalt, IndexerStatus, IndexerSyncStatus},
 };
 
 pub mod block_store;
@@ -131,12 +131,25 @@ impl IndexerCore {
         // finalized blocks. `None` when cross-zone messaging is disabled.
         let verifier = CrossZoneVerifier::start(&config);
 
+        let store = IndexerStore::open_db(&home, genesis_accounts)?;
+        // A persisted halt outlives the process: report it from boot with its
+        // stored reason. The ingest loop may still start and re-halt
+        // identically, which refreshes the record.
+        let initial_status = match store.get_cross_zone_halt() {
+            Ok(Some(halt)) => IndexerSyncStatus::halted(halt.to_string()),
+            Ok(None) => IndexerSyncStatus::starting(),
+            Err(err) => {
+                warn!("Failed to read cross-zone halt record at startup: {err:#}");
+                IndexerSyncStatus::starting()
+            }
+        };
+
         Ok(Self {
             zone_indexer: Arc::new(zone_indexer),
-            store: IndexerStore::open_db(&home, genesis_accounts)?,
+            store,
             node,
             config,
-            status: Arc::new(ArcSwap::from_pointee(IndexerSyncStatus::starting())),
+            status: Arc::new(ArcSwap::from_pointee(initial_status)),
             verifier,
         })
     }
@@ -211,10 +224,23 @@ impl IndexerCore {
                 None
             }
         };
+        let cross_zone_halt = match self.store.get_cross_zone_halt() {
+            Ok(halt) => halt,
+            Err(err) => {
+                warn!("Failed to read cross-zone halt record for status: {err:#}");
+                None
+            }
+        };
         IndexerStatus {
             sync,
             indexed_block_id,
             stall_reason,
+            cross_zone_halt,
+            cross_zone_peers: self
+                .verifier
+                .as_ref()
+                .map(CrossZoneVerifier::peer_statuses)
+                .unwrap_or_default(),
         }
     }
 
@@ -231,6 +257,80 @@ impl IndexerCore {
         if let Err(err) = self.store.set_zone_cursor(&slot) {
             warn!("Failed to persist indexer cursor: {err:#}");
         }
+    }
+
+    /// Clears the persisted halt record once the block it names applies, or
+    /// once a block at the recorded id applies under a different hash, which
+    /// proves the record stale. Called only after [`AcceptOutcome::Applied`],
+    /// never before apply. `pending_halt` mirrors the record so the hot path
+    /// compares in memory instead of reading the store per block.
+    fn clear_halt_for_block(&self, block: &Block, pending_halt: &mut Option<CrossZoneHalt>) {
+        let Some(halt) = pending_halt.as_ref() else {
+            return;
+        };
+        if halt.block_hash != block.header.hash && halt.block_id != block.header.block_id {
+            return;
+        }
+        if halt.block_hash != block.header.hash {
+            warn!(
+                "Cross-zone halt record is stale: block {} applied with hash {}, not the recorded {}. Clearing it.",
+                block.header.block_id, block.header.hash, halt.block_hash
+            );
+        }
+        if let Err(err) = self.store.set_cross_zone_halt(&None) {
+            warn!("Failed to clear cross-zone halt record: {err:#}");
+            return;
+        }
+        *pending_halt = None;
+    }
+
+    /// The keys to record for an operator-listed block. Checked before
+    /// verification: a listed block skips it entirely, so listing a hash also
+    /// clears a dead-peer retry loop, not only a forged verdict. `None` when
+    /// the hash is not listed.
+    fn accept_listed(&self, block: &Block) -> Option<Vec<SeenKey>> {
+        if !self
+            .config
+            .cross_zone_accept_unverified
+            .contains(&block.header.hash)
+        {
+            return None;
+        }
+        error!(
+            "Accepting block {} without cross-zone verification: hash {} is listed in cross_zone_accept_unverified.",
+            block.header.block_id, block.header.hash
+        );
+        Some(self.verifier.as_ref().map_or_else(
+            || CrossZoneVerifier::unverified_dispatch_keys(block),
+            |verifier| verifier.accept_unverified(block),
+        ))
+    }
+
+    /// Persists the halt record for a forged verdict and flips the status; the
+    /// caller ends ingestion.
+    fn handle_forged(
+        &self,
+        block: &Block,
+        forged: &ForgedDispatch,
+        pending_halt: &mut Option<CrossZoneHalt>,
+    ) {
+        error!(
+            "Cross-zone verification failed for block {}: {forged}. Halting indexer ingestion.",
+            block.header.block_id
+        );
+        let halt = CrossZoneHalt {
+            block_id: block.header.block_id,
+            block_hash: block.header.hash,
+            src_zone: hex::encode(forged.src_zone),
+            src_block_id: forged.src_block_id,
+            src_tx_index: forged.src_tx_index,
+            verdict: forged.verdict.clone(),
+        };
+        if let Err(err) = self.store.set_cross_zone_halt(&Some(halt.clone())) {
+            error!("Failed to persist cross-zone halt record: {err:#}");
+        }
+        self.set_status(IndexerSyncStatus::halted(halt.to_string()));
+        *pending_halt = Some(halt);
     }
 
     /// Parks on an inscription that could not be parsed as an L2 block:
@@ -268,6 +368,15 @@ impl IndexerCore {
         async_stream::stream! {
             let mut cursor = initial_cursor;
             let mut retry_gate = ApplyRetryGate::new();
+            // In-memory mirror of the persisted halt record, so clearing it
+            // when the recorded block later applies needs no per-block read.
+            let mut pending_halt = match self.store.get_cross_zone_halt() {
+                Ok(halt) => halt,
+                Err(err) => {
+                    warn!("Failed to read cross-zone halt record: {err:#}");
+                    None
+                }
+            };
 
             if let Some(slot) = &cursor {
                 log::info!("Resuming indexer from cursor {slot:?}");
@@ -334,36 +443,35 @@ impl IndexerCore {
                     // a dispatch just because a sequencer signed the block: a
                     // forged one halts ingestion rather than persisting invalid
                     // state, while a replay is accepted since the inbox no-ops it
-                    // on chain. The verified keys are marked seen only once the
-                    // block applies (below), so a block that does not apply
-                    // cannot poison the seen-set.
-                    let verified_keys = match &self.verifier {
-                        Some(verifier) => match verifier.verify_block(&block).await {
-                            Ok(keys) => keys,
-                            Err(err @ CrossZoneVerifyError::Forged(_)) => {
-                                error!(
-                                    "Cross-zone verification failed for block {}: {err}. Halting indexer ingestion.",
-                                    block.header.block_id
-                                );
-                                self.set_status(IndexerSyncStatus::error(format!(
-                                    "cross-zone verification failed: {err}"
-                                )));
-                                return;
-                            }
-                            // Not judged either way yet, so retry rather than halt.
-                            Err(err @ CrossZoneVerifyError::PeerUnavailable { .. }) => {
-                                error!(
-                                    "Cross-zone verification of block {} stalled: {err}. Holding the cursor and retrying.",
-                                    block.header.block_id
-                                );
-                                self.set_status(IndexerSyncStatus::error(format!(
-                                    "cross-zone peer unavailable: {err}"
-                                )));
-                                had_cycle_error = true;
-                                break;
-                            }
+                    // on chain. An operator-listed block hash skips verification
+                    // entirely, ahead of it, so listing clears a dead-peer retry
+                    // loop as well as a forged verdict. The keys are marked seen
+                    // only once the block applies (below), so a block that does
+                    // not apply cannot poison the seen-set.
+                    let verified_keys = match self.accept_listed(&block) {
+                        Some(keys) => keys,
+                        None => match &self.verifier {
+                            Some(verifier) => match verifier.verify_block(&block, slot).await {
+                                Ok(keys) => keys,
+                                Err(CrossZoneVerifyError::Forged(forged)) => {
+                                    self.handle_forged(&block, &forged, &mut pending_halt);
+                                    return;
+                                }
+                                // Not judged either way yet, so retry rather than halt.
+                                Err(err @ CrossZoneVerifyError::PeerUnavailable { .. }) => {
+                                    error!(
+                                        "Cross-zone verification of block {} stalled: {err}. Holding the cursor and retrying.",
+                                        block.header.block_id
+                                    );
+                                    self.set_status(IndexerSyncStatus::error(format!(
+                                        "cross-zone peer unavailable: {err}"
+                                    )));
+                                    had_cycle_error = true;
+                                    break;
+                                }
+                            },
+                            None => Vec::new(),
                         },
-                        None => Vec::new(),
                     };
 
                     match self.store.accept_block(&block, slot).await {
@@ -371,6 +479,10 @@ impl IndexerCore {
                             if let Some(verifier) = &self.verifier {
                                 verifier.record_seen(verified_keys).await;
                             }
+                            // Only an applied block may clear the halt record;
+                            // clearing earlier would drop it for a block that
+                            // never reaches the chain state.
+                            self.clear_halt_for_block(&block, &mut pending_halt);
                             retry_gate.reset();
                             log::info!("Indexed L2 block {} at channel {}", block.header.block_id, self.config.channel_id);
                             self.set_status(IndexerSyncStatus::syncing());
@@ -527,6 +639,13 @@ mod tests {
     }
 
     fn unreachable_core(dir: &std::path::Path) -> IndexerCore {
+        unreachable_core_accepting(dir, Vec::new())
+    }
+
+    fn unreachable_core_accepting(
+        dir: &std::path::Path,
+        cross_zone_accept_unverified: Vec<HashType>,
+    ) -> IndexerCore {
         let config = IndexerConfig {
             consensus_info_polling_interval: Duration::from_secs(1),
             bedrock_config: ClientConfig {
@@ -536,6 +655,7 @@ mod tests {
             channel_id: ChannelId::from([1; 32]),
             allow_chain_reset: false,
             cross_zone: None,
+            cross_zone_accept_unverified,
             bridge_lock_holdings: Vec::new(),
         };
         IndexerCore::open(config, dir).expect("open core")
@@ -637,5 +757,168 @@ mod tests {
         let anchor = core.get_startup_anchor().expect("anchor").expect("present");
         let expected = Anchor::new(Slot::from(1_010), Some((3, block3.header.hash)));
         assert_eq!(anchor, expected);
+    }
+
+    /// An inbox dispatch transaction with fixed source coordinates, so blocks
+    /// in these tests carry a decodable dispatch key.
+    fn dispatch_tx() -> common::transaction::LeeTransaction {
+        let receiver_id = programs::ping_receiver().id();
+        common::transaction::LeeTransaction::Public(cross_zone::build_dispatch_from_emission(
+            &cross_zone::EmissionSource {
+                src_zone: [2; 32],
+                src_block_id: 5,
+                src_block_hash: [3; 32],
+                src_tx_index: 0,
+                src_program_id: programs::ping_sender().id(),
+            },
+            receiver_id,
+            &[
+                ping_core::receiver_config_account_id(receiver_id).into_value(),
+                ping_core::ping_record_pda(receiver_id).into_value(),
+            ],
+            b"hi".to_vec(),
+        ))
+    }
+
+    fn forged_verdict() -> ForgedDispatch {
+        ForgedDispatch {
+            src_zone: [2; 32],
+            src_block_id: 5,
+            src_tx_index: 0,
+            verdict: "re-derivation mismatch".to_owned(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_forged_verdict_persists_a_halt_record_and_halts() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let core = unreachable_core(dir.path());
+        let block = common::test_utils::produce_dummy_block(9, None, vec![dispatch_tx()]);
+
+        let mut pending = None;
+        core.handle_forged(&block, &forged_verdict(), &mut pending);
+
+        let halt = core
+            .store
+            .get_cross_zone_halt()
+            .expect("get")
+            .expect("the halt record is persisted");
+        assert_eq!(halt.block_id, 9);
+        assert_eq!(halt.block_hash, block.header.hash);
+        assert_eq!(halt.src_zone, hex::encode([2_u8; 32]));
+        assert_eq!(halt.src_block_id, 5);
+        assert_eq!(halt.src_tx_index, 0);
+        assert_eq!(pending, Some(halt.clone()));
+
+        let status = core.status();
+        assert_eq!(status.sync.state, crate::status::IndexerSyncState::Halted);
+        assert_eq!(status.cross_zone_halt, Some(halt));
+    }
+
+    #[tokio::test]
+    async fn startup_with_a_halt_record_reports_halted() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let core = unreachable_core(dir.path());
+        let block = common::test_utils::produce_dummy_block(9, None, vec![dispatch_tx()]);
+        let mut pending = None;
+        core.handle_forged(&block, &forged_verdict(), &mut pending);
+        drop(core);
+
+        let reopened = unreachable_core(dir.path());
+        let status = reopened.status();
+        assert_eq!(status.sync.state, crate::status::IndexerSyncState::Halted);
+        let reason = status
+            .sync
+            .last_error
+            .expect("the stored reason is reported");
+        assert!(reason.contains("re-derivation mismatch"), "{reason}");
+        assert!(status.cross_zone_halt.is_some());
+    }
+
+    #[tokio::test]
+    async fn an_accept_listed_block_is_taken_before_verification() {
+        // The gate runs ahead of `verify_block`, so a listed block never
+        // touches the verifier: it clears a dead-peer PeerUnavailable loop
+        // just as it clears a forged verdict.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let block = common::test_utils::produce_dummy_block(9, None, vec![dispatch_tx()]);
+        let core = unreachable_core_accepting(dir.path(), vec![block.header.hash]);
+
+        let keys = core
+            .accept_listed(&block)
+            .expect("a listed hash is accepted");
+        assert_eq!(
+            keys,
+            CrossZoneVerifier::unverified_dispatch_keys(&block),
+            "the block's dispatch keys are what gets marked seen"
+        );
+        assert_eq!(keys.len(), 1);
+
+        // The override names one hash only; any other block is not accepted.
+        let other = common::test_utils::produce_dummy_block(
+            10,
+            Some(block.header.hash),
+            vec![dispatch_tx()],
+        );
+        assert!(core.accept_listed(&other).is_none());
+    }
+
+    #[tokio::test]
+    async fn the_halt_record_clears_only_after_the_block_applies() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let block = common::test_utils::produce_dummy_block(9, None, vec![dispatch_tx()]);
+        let core = unreachable_core_accepting(dir.path(), vec![block.header.hash]);
+
+        // A previous run halted on this block; the operator then listed it.
+        let mut pending = None;
+        core.handle_forged(&block, &forged_verdict(), &mut pending);
+
+        // Acceptance alone must not clear the record: the block has not
+        // applied yet, and a crash before apply must re-halt identically.
+        core.accept_listed(&block).expect("listed");
+        assert!(core.store.get_cross_zone_halt().expect("get").is_some());
+        assert!(pending.is_some());
+
+        // What the ingest loop does on AcceptOutcome::Applied.
+        core.clear_halt_for_block(&block, &mut pending);
+        assert!(core.store.get_cross_zone_halt().expect("get").is_none());
+        assert!(pending.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_halting_block_that_applies_clears_the_record() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let core = unreachable_core(dir.path());
+        let block = common::test_utils::produce_dummy_block(9, None, vec![dispatch_tx()]);
+        let mut pending = None;
+        core.handle_forged(&block, &forged_verdict(), &mut pending);
+
+        // A different block applying leaves the record alone.
+        let other = common::test_utils::produce_dummy_block(8, None, vec![]);
+        core.clear_halt_for_block(&other, &mut pending);
+        assert!(core.store.get_cross_zone_halt().expect("get").is_some());
+
+        // The halting block itself applying clears it.
+        core.clear_halt_for_block(&block, &mut pending);
+        assert!(core.store.get_cross_zone_halt().expect("get").is_none());
+        assert!(pending.is_none());
+    }
+
+    #[tokio::test]
+    async fn a_different_hash_applying_at_the_halted_id_clears_the_stale_record() {
+        // The channel can come to serve a different block at the recorded id
+        // (e.g. after a chain reset); once one applies, the record provably
+        // describes a block the chain no longer carries.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let core = unreachable_core(dir.path());
+        let block = common::test_utils::produce_dummy_block(9, None, vec![dispatch_tx()]);
+        let mut pending = None;
+        core.handle_forged(&block, &forged_verdict(), &mut pending);
+
+        let different = common::test_utils::produce_dummy_block(9, None, vec![]);
+        assert_ne!(different.header.hash, block.header.hash);
+        core.clear_halt_for_block(&different, &mut pending);
+        assert!(core.store.get_cross_zone_halt().expect("get").is_none());
+        assert!(pending.is_none());
     }
 }

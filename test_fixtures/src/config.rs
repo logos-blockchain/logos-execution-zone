@@ -250,6 +250,7 @@ pub fn indexer_config(
 ) -> Result<IndexerConfig> {
     Ok(IndexerConfig {
         consensus_info_polling_interval: Duration::from_secs(1),
+        cross_zone_accept_unverified: Vec::new(),
         bedrock_config: ClientConfig {
             addr: addr_to_url(UrlProtocol::Http, bedrock_addr)
                 .context("Failed to convert bedrock addr to URL")?,

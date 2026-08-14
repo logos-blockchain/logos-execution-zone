@@ -5,7 +5,7 @@ use crate::{
     DBIO as _,
     cells::shared_cells::{FirstBlockSetCell, LastBlockCell},
     indexer::indexer_cells::{
-        BreakpointCellRef, LastObservedL1LibHeaderCell, StallReasonCellRef,
+        BreakpointCellRef, CrossZoneHaltCellRef, LastObservedL1LibHeaderCell, StallReasonCellRef,
         ZoneSdkIndexerCursorCellRef,
     },
 };
@@ -35,6 +35,10 @@ impl RocksDBIO {
 
     pub fn put_stall_reason_bytes(&self, bytes: &[u8]) -> DbResult<()> {
         self.put(&StallReasonCellRef(bytes), ())
+    }
+
+    pub fn put_cross_zone_halt_bytes(&self, bytes: &[u8]) -> DbResult<()> {
+        self.put(&CrossZoneHaltCellRef(bytes), ())
     }
 
     // State
