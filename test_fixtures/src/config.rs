@@ -6,11 +6,13 @@ use indexer_service::{ChannelId, ClientConfig, IndexerConfig};
 use key_protocol::key_management::{KeyChain, secret_holders::SeedHolder};
 use lee::{AccountId, PrivateKey, PublicKey};
 use lee_core::Identifier;
-use logos_blockchain_key_management_system_service::keys::ZkPublicKey;
+use logos_blockchain_key_management_system_service::keys::{Ed25519Key, ZkPublicKey};
 use num_bigint::BigUint;
-use sequencer_core::config::{
-    BedrockConfig, CrossZoneConfig, GenesisAction, GossipConfig, SequencerConfig,
+use sequencer_core::{
+    config::{BedrockConfig, CrossZoneConfig, GenesisAction, GossipConfig, SequencerConfig},
+    sign_genesis_stake,
 };
+use sequencer_stake_core::SequencerKey;
 use url::Url;
 use wallet::config::{MultiSequencerClientConfig, SequencerConnectionData, WalletConfig};
 
@@ -19,6 +21,13 @@ pub const INITIAL_PRIVATE_BALANCES_FOR_WALLET: [u128; 2] = [10_000, 20_000];
 
 /// Fixed sequencer signing key; exposed so the fixture generator can reopen the produced store.
 pub const SEQUENCER_SIGNING_KEY: [u8; 32] = [37; 32];
+
+/// Key of the account holding the sequencer's genesis stake. Separate from
+/// [`SEQUENCER_SIGNING_KEY`]: block signing and stake control are distinct roles.
+pub const SEQUENCER_STAKE_KEY: [u8; 32] = [55; 32];
+
+/// Bedrock signing key used by the prebuilt dump as first accredited key.
+pub const SEQUENCER_BEDROCK_SIGNING_KEY: [u8; 32] = [77; 32];
 
 // Fixed entropy seeds for the default accounts: deterministic so one prebuilt database is reusable,
 // and distinct from the `testnet_initial_state` accounts to avoid depending on / double-funding
@@ -309,6 +318,37 @@ pub fn sequencer_signing_key_from_seed(seed: u32) -> [u8; 32] {
         .repeat(8)
         .try_into()
         .unwrap_or_else(|_| unreachable!())
+}
+
+/// Seed of the account owning sequencer `index`'s founding stake.
+fn founding_stake_owner_seed(index: usize) -> [u8; 32] {
+    if index == 0 {
+        return SEQUENCER_STAKE_KEY;
+    }
+    let mut seed = [0x70; 32];
+    seed[0] = u8::try_from(index).expect("Test contexts never run enough sequencers to overflow");
+    seed
+}
+
+/// Genesis entries staking every sequencer in `sequencer_signing_keys`, so the
+/// creator opens the channel already accrediting all of them.
+pub fn genesis_sequencer_stakes(sequencer_signing_keys: &[[u8; 32]]) -> Result<Vec<GenesisAction>> {
+    sequencer_signing_keys
+        .iter()
+        .enumerate()
+        .map(|(index, signing_key)| {
+            let public_key = Ed25519Key::from_bytes(signing_key).public_key();
+            let sequencer_key = SequencerKey::new(public_key.to_bytes())
+                .context("Sequencer signing key is not a valid Ed25519 point")?;
+            let owner = PrivateKey::try_new(founding_stake_owner_seed(index))
+                .context("Failed to build the founding stake ownership key")?;
+            Ok(GenesisAction::StakeSequencer {
+                sequencer_key,
+                ownership_public_key: PublicKey::new_from_private_key(&owner),
+                stake_signature: sign_genesis_stake(index, sequencer_key, &owner),
+            })
+        })
+        .collect()
 }
 
 /// Generate bedrock channel id from `u32` number via repeating le bytes 8 times.

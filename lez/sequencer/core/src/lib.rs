@@ -2,7 +2,7 @@ use std::{
     collections::VecDeque,
     path::Path,
     sync::{Arc, Mutex},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context as _, Result, anyhow};
@@ -21,7 +21,8 @@ use futures::StreamExt as _;
 use itertools::Itertools as _;
 use lee::{AccountId, PublicTransaction, public_transaction::Message};
 use lee_core::GENESIS_BLOCK_ID;
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
+use logos_blockchain_core::mantle::ops::channel::Ed25519PublicKey;
 use logos_blockchain_key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, Ed25519Key};
 use logos_blockchain_zone_sdk::{
     Slot, ZoneMessage,
@@ -42,6 +43,7 @@ use storage::sequencer::{
         WithdrawalReconciliationKey, ZoneAnchorRecord,
     },
 };
+use tokio_retry::{Retry, strategy::FixedInterval};
 
 use crate::{
     block_publisher::{BlockPublisherTrait, MsgId, NoteId, ZoneSdkPublisher},
@@ -51,6 +53,7 @@ use crate::{
 
 pub mod block_publisher;
 pub mod block_store;
+pub mod committee_discovery;
 pub mod config;
 pub mod cross_zone_watcher;
 pub mod gossip;
@@ -74,6 +77,25 @@ const RETIRE_DISPATCH_AFTER_FAILURES: u32 = 3;
 /// since store-drained work is taken before the mempool. The rest wait one
 /// block; nothing is dropped.
 const MAX_DISPATCHES_PER_BLOCK: usize = 16;
+
+/// Fixed, public key behind a genesis-only funding account: the faucet can
+/// only be called top-level, not as `Stake`'s mover, so this account is a
+/// pass-through that receives faucet funds and then moves them into the real
+/// stake account. Not a secret: every node derives the same account, and it
+/// holds nothing once genesis has run.
+// TODO: replace the faucet pass-through with a real deposit from Bedrock,
+// once that path exists, instead of a fixed genesis-only key.
+const GENESIS_STAKE_FUNDING_KEY: [u8; 32] = [9; 32];
+
+/// A number of Bedrock slots, as opposed to a [`Slot`] position.
+type SlotCount = u64;
+
+/// A founding sequencer's key, plus the ownership account attesting to its stake.
+type FoundingStake = (
+    sequencer_stake_core::SequencerKey,
+    lee::PublicKey,
+    lee::Signature,
+);
 
 /// The origin of a transaction.
 #[derive(Clone, Copy)]
@@ -113,15 +135,26 @@ pub struct SequencerCore<BP: BlockPublisherTrait = ZoneSdkPublisher> {
     /// store handle, so leaving them running would keep the `RocksDB` lock held
     /// and make the home directory unopenable by a restarting sequencer.
     watchers: TaskGroup,
+    /// Channel tip slot as of the last committee-config submission.
+    last_committee_submission_slot: Option<Slot>,
 }
 
 impl<BP: BlockPublisherTrait> SequencerCore<BP> {
+    const CHANNEL_PROBE_RETRIES: usize = 29;
+    const CHANNEL_PROBE_RETRY_DELAY: Duration = Duration::from_secs(2);
+    /// Channel slots between committee-config submissions; a margin over
+    /// observed Bedrock confirmation lag.
+    const COMMITTEE_SUBMISSION_COOLDOWN: SlotCount = 10;
+
     /// Starts the sequencer using the provided configuration.
     /// If an existing database is found, the sequencer state is loaded from it and
     /// assumed to represent the correct latest state consistent with Bedrock-finalized data.
     /// If no database is found, the sequencer performs a fresh start from genesis,
     /// initializing its state with the accounts defined in the configuration file.
-    fn open_or_create_store(config: &SequencerConfig) -> (SequencerStore, lee::V03State) {
+    fn open_or_create_store(
+        config: &SequencerConfig,
+        bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
+    ) -> (SequencerStore, lee::V03State) {
         let signing_key = lee::PrivateKey::try_new(config.signing_key).unwrap();
         let db_path = config.db_path();
 
@@ -150,7 +183,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                 db_path.display()
             );
 
-            let (genesis_state, genesis_txs) = build_genesis_state(config);
+            let (genesis_state, genesis_txs) = build_genesis_state(config, bootstrap_sequencer_key);
 
             let hashable_data = HashableBlockData {
                 block_id: GENESIS_BLOCK_ID,
@@ -232,7 +265,36 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             hex::encode(bedrock_signing_key.public_key().to_bytes())
         );
 
-        let (store, state) = Self::open_or_create_store(&config);
+        let own_sequencer_key =
+            sequencer_stake_core::SequencerKey::new(bedrock_signing_key.public_key().to_bytes())
+                .expect("our own Bedrock public key is a valid Ed25519 public key");
+
+        // Only seed our own key into genesis as the bootstrap sequencer if the
+        // channel doesn't exist yet. Otherwise it's someone else's channel and
+        // we join later, the normal self-join way.
+        let channel_probe_retry_strategy =
+            FixedInterval::new(Self::CHANNEL_PROBE_RETRY_DELAY).take(Self::CHANNEL_PROBE_RETRIES);
+        let channel_already_exists = Retry::start(channel_probe_retry_strategy, || async {
+            BP::channel_exists(&config.bedrock_config)
+                .await
+                .inspect_err(|err| warn!("Failed to probe Bedrock channel: {err:#}"))
+        })
+        .await
+        .expect("Failed to probe Bedrock channel");
+        if channel_already_exists {
+            info!("Channel already exists; joining as a non channel creator");
+        } else {
+            info!("Channel does not exist yet; starting it as channel creator");
+        }
+        let bootstrap_sequencer_key = (!channel_already_exists).then_some(own_sequencer_key);
+
+        let (store, state) = Self::open_or_create_store(&config, bootstrap_sequencer_key);
+
+        assert!(
+            committee_discovery::config_is_readable(&state),
+            "sequencer_stake config account is absent or undecodable; this chain's state is not \
+             one this sequencer can operate on"
+        );
 
         let chain = Arc::new(Mutex::new(Self::restore_chain_state(
             &config, &store, &state,
@@ -311,17 +373,27 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                 "First pending block on fresh start should be the genesis block"
             );
 
+            // The channel is born holding only its creator's key, so a configured
+            // founding set is applied by the same tx that writes genesis; the
+            // committee is never observable without it.
+            let founding_committee = founding_committee(&config, own_sequencer_key);
+
             let mut last_checkpoint = None;
             for block in &pending_blocks {
-                let outcome = block_publisher
-                    .publish_block(block, vec![])
-                    .await
-                    .unwrap_or_else(|err| {
-                        panic!(
-                            "Failed to publish block {} on fresh start: {err:#}",
-                            block.header.block_id
-                        )
-                    });
+                let publish = match &founding_committee {
+                    Some(keys) if block.header.block_id == GENESIS_BLOCK_ID => {
+                        block_publisher
+                            .publish_genesis_creating_channel(block, keys.clone())
+                            .await
+                    }
+                    _ => block_publisher.publish_block(block, vec![]).await,
+                };
+                let outcome = publish.unwrap_or_else(|err| {
+                    panic!(
+                        "Failed to publish block {} on fresh start: {err:#}",
+                        block.header.block_id
+                    )
+                });
                 last_checkpoint = Some(outcome.checkpoint);
                 store
                     .raise_published_high_water(block.header.block_id)
@@ -345,6 +417,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             sequencer_config: config,
             block_publisher,
             watchers,
+            last_committee_submission_slot: None,
         };
 
         sequencer_core_metrics::record_chain_height(sequencer_core.chain_height());
@@ -589,10 +662,18 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         })
     }
 
-    /// Produces a new block from mempool transactions and publishes it via zone-sdk.
-    pub async fn produce_new_block(&mut self) -> Result<u64> {
-        let BlockWithMeta { block, withdrawals } = self
-            .build_block_from_mempool()
+    /// Runs everything this sequencer owes its turn: builds a block from
+    /// mempool transactions, publishes it via zone-sdk, and submits any
+    /// committee-config update the new state calls for.
+    pub async fn run_production_turn(&mut self) -> Result<u64> {
+        let live_accredited_keys = self.live_accredited_sequencer_keys().await;
+
+        let BlockWithMeta {
+            block,
+            withdrawals,
+            committee_update,
+        } = self
+            .build_block_from_mempool(live_accredited_keys.as_deref())
             .context("Failed to build block from mempool transactions")?;
 
         let block_publisher::PublishOutcome {
@@ -611,6 +692,10 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
             .raise_published_high_water(block.header.block_id)
             .context("Failed to persist published high water mark")?;
 
+        // Independent Mantle tx, not bundled with the block above — join/exit
+        // config updates don't need to be.
+        self.submit_committee_update(committee_update).await;
+
         let withdrawal_reconciliation_keys: Vec<_> = released_notes
             .iter()
             .map(withdrawal_reconciliation_key)
@@ -624,6 +709,78 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         )?;
 
         Ok(block.header.block_id)
+    }
+
+    /// Live committee snapshot for gating `FinalizeUnstake` inclusion and
+    /// committee updates. `None` if it could not be read.
+    async fn live_accredited_sequencer_keys(
+        &self,
+    ) -> Option<Vec<sequencer_stake_core::SequencerKey>> {
+        match self.block_publisher.accredited_keys().await {
+            Ok(keys) => Some(
+                keys.iter()
+                    .filter_map(|key| {
+                        sequencer_stake_core::SequencerKey::new(key.to_bytes()).or_else(|| {
+                            warn!(
+                                "Ignoring accredited key {}: not a valid Ed25519 public key",
+                                hex::encode(key.to_bytes())
+                            );
+                            None
+                        })
+                    })
+                    .collect(),
+            ),
+            Err(err) => {
+                warn!(
+                    "Failed to read live committee snapshot; skipping FinalizeUnstake inclusion \
+                     and committee updates this round: {err:#}"
+                );
+                None
+            }
+        }
+    }
+
+    /// Whether the channel has advanced far enough past `last_submission` to
+    /// submit again. A missing tip counts as no advance.
+    fn committee_cooldown_elapsed(last_submission: Option<Slot>, tip: Option<Slot>) -> bool {
+        let Some(last_submission) = last_submission else {
+            return true;
+        };
+        tip.is_some_and(|tip| {
+            tip.into_inner()
+                .saturating_sub(last_submission.into_inner())
+                >= Self::COMMITTEE_SUBMISSION_COOLDOWN
+        })
+    }
+
+    async fn submit_committee_update(
+        &mut self,
+        committee_update: Option<Vec<sequencer_stake_core::SequencerKey>>,
+    ) {
+        let Some(new_keys) = committee_update else {
+            return;
+        };
+        let tip_slot = match self.block_publisher.channel_tip_slot().await {
+            Ok(tip_slot) => tip_slot,
+            Err(err) => {
+                warn!("Failed to read channel tip slot; skipping committee update: {err:#}");
+                return;
+            }
+        };
+        if !Self::committee_cooldown_elapsed(self.last_committee_submission_slot, tip_slot) {
+            return;
+        }
+        let new_keys = new_keys
+            .into_iter()
+            .map(|key| {
+                Ed25519PublicKey::from_bytes(&key.to_bytes())
+                    .expect("sequencer key was decoded from a valid Ed25519 public key")
+            })
+            .collect();
+        self.last_committee_submission_slot = tip_slot;
+        if let Err(err) = self.block_publisher.submit_channel_config(new_keys).await {
+            warn!("Failed to submit committee channel-config update: {err:#}");
+        }
     }
 
     /// Applies our own freshly-published block to the head with the [`MsgId`] the
@@ -753,7 +910,10 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         true
     }
 
-    fn build_block_from_mempool(&mut self) -> Result<BlockWithMeta> {
+    fn build_block_from_mempool(
+        &mut self,
+        live_accredited_keys: Option<&[sequencer_stake_core::SequencerKey]>,
+    ) -> Result<BlockWithMeta> {
         let now = Instant::now();
 
         // Decoded outside the chain lock, and read before it is taken: the usual
@@ -791,7 +951,13 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         // The delivery records are classified in here rather than after, so the
         // final state can be read by reference. Cloning it cost a full state
         // copy on every block of every zone, cross-zone or not.
-        let (prev_block_hash, new_block_height, mut working_state, pending_dispatches) = {
+        let (
+            prev_block_hash,
+            new_block_height,
+            mut working_state,
+            pending_dispatches,
+            finalize_unstake_txs,
+        ) = {
             let chain = self.chain.lock().expect("chain state mutex poisoned");
             let tip = chain.head_tip();
             let height = tip.as_ref().map_or(GENESIS_BLOCK_ID, |head| {
@@ -820,7 +986,13 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                 }
             }
 
-            (prev, height, chain.head_state().clone(), pending)
+            (
+                prev,
+                height,
+                chain.head_state().clone(),
+                pending,
+                build_finalize_unstake_txs(chain.head_state()),
+            )
         };
 
         if !settled.is_empty() {
@@ -888,6 +1060,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
         // it was not submitted by a user.
         let mut pending_from_store = pending_deposits;
         pending_from_store.extend(pending_dispatches);
+        pending_from_store.extend(finalize_unstake_txs);
         while let Some((origin, tx, from_store)) = pending_from_store
             .pop_front()
             .map(|tx| (TransactionOrigin::Sequencer, tx, true))
@@ -952,6 +1125,17 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
                 break;
             }
 
+            // Block-validity rule: a not-yet-valid FinalizeUnstake is dropped
+            // outright, not applied — whether it arrived via the mempool
+            // (anyone may submit one, per spec) or from this sequencer's own
+            // discovery above. It re-appears on its own once conditions are
+            // met (mempool: whoever wants it finalized resubmits;
+            // discovery-sourced: reconstructed fresh next block), so it
+            // doesn't need requeuing here.
+            if !finalize_unstake_is_includable(&working_state, &tx, live_accredited_keys) {
+                continue;
+            }
+
             let before_tx_apply = Instant::now();
             let applied = Self::apply_mempool_transaction(
                 &mut working_state,
@@ -1013,7 +1197,14 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
 
         sequencer_core_metrics::record_block_creation_time(now.elapsed());
 
-        Ok(BlockWithMeta { block, withdrawals })
+        let committee_update = live_accredited_keys
+            .and_then(|keys| committee_discovery::committee_update(&working_state, keys));
+
+        Ok(BlockWithMeta {
+            block,
+            withdrawals,
+            committee_update,
+        })
     }
 
     /// Reads the current head state under the lock without cloning it, so callers
@@ -1232,6 +1423,7 @@ impl<BP: BlockPublisherTrait> SequencerCore<BP> {
 struct BlockWithMeta {
     block: Block,
     withdrawals: Vec<WithdrawArg>,
+    committee_update: Option<Vec<sequencer_stake_core::SequencerKey>>,
 }
 
 /// Whether `deposit_op_id`'s mint is already reflected in `state` — its receipt
@@ -1509,8 +1701,9 @@ fn apply_follow_update(
 }
 
 /// The pre-genesis state: `testnet_initial_state` plus the bridge-lock holdings,
-/// the only accounts seeded outside any transaction. Cross-zone config is seeded
-/// by genesis `InitConfig` transactions and reconstructed by replaying them.
+/// the only accounts seeded outside any transaction. Everything else, including
+/// the bootstrap sequencer's own stake, is applied as a genesis transaction in
+/// [`build_genesis_state`] so followers replay it instead of guessing it.
 fn build_initial_state(config: &SequencerConfig) -> lee::V03State {
     #[cfg(not(feature = "testnet"))]
     let base = testnet_initial_state::initial_state();
@@ -1530,7 +1723,10 @@ fn build_initial_state(config: &SequencerConfig) -> lee::V03State {
 /// genesis transactions. Returns the final state and the list of
 /// [`LeeTransaction`]s that should be committed to the genesis block so external
 /// observers can replay them.
-fn build_genesis_state(config: &SequencerConfig) -> (lee::V03State, Vec<LeeTransaction>) {
+fn build_genesis_state(
+    config: &SequencerConfig,
+    bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
+) -> (lee::V03State, Vec<LeeTransaction>) {
     let mut state = build_initial_state(config);
 
     // Fingerprint the directly-seeded state, before genesis txs, so it matches the indexer's.
@@ -1570,9 +1766,24 @@ fn build_genesis_state(config: &SequencerConfig) -> (lee::V03State, Vec<LeeTrans
             Some(build_supply_bridge_account_genesis_transaction(*balance))
         }
         // Seeded directly in `build_initial_state` (holdings via `build_holding_account`), not a
-        // genesis tx.
-        GenesisAction::SupplyBridgeLockHolding { .. } => None,
+        // genesis tx. Stakes are built separately below.
+        GenesisAction::SupplyBridgeLockHolding { .. } | GenesisAction::StakeSequencer { .. } => {
+            None
+        }
     });
+
+    // The creator falls back to staking itself, signing with the key it owns.
+    let mut staked = founding_stakes(config);
+    if staked.is_empty() {
+        staked.extend(bootstrap_sequencer_key.map(|key| {
+            let key_path = config.home.join("sequencer_stake_signing_key");
+            let owner = load_or_create_stake_signing_key(&key_path)
+                .expect("Failed to load or create the stake signing key");
+            let signature = sign_genesis_stake(0, key, &owner);
+            (key, lee::PublicKey::new_from_private_key(&owner), signature)
+        }));
+    }
+    let bootstrap_stake_txs = build_stake_genesis_transactions(&staked);
 
     let genesis_txs = wrapped_token_config_tx
         .chain(ping_sender_config_tx)
@@ -1580,6 +1791,7 @@ fn build_genesis_state(config: &SequencerConfig) -> (lee::V03State, Vec<LeeTrans
         .chain(bridge_lock_config_tx)
         .chain(inbox_config_tx)
         .chain(supply_txs)
+        .chain(bootstrap_stake_txs)
         .chain(std::iter::once(clock_invocation(0)))
         .inspect(|tx| {
             state
@@ -1592,13 +1804,180 @@ fn build_genesis_state(config: &SequencerConfig) -> (lee::V03State, Vec<LeeTrans
     (state, genesis_txs)
 }
 
+fn founding_stakes(config: &SequencerConfig) -> Vec<FoundingStake> {
+    config
+        .genesis
+        .iter()
+        .filter_map(|action| match action {
+            GenesisAction::StakeSequencer {
+                sequencer_key,
+                ownership_public_key,
+                stake_signature,
+            } => Some((
+                *sequencer_key,
+                ownership_public_key.clone(),
+                stake_signature.clone(),
+            )),
+            GenesisAction::SupplyAccount { .. }
+            | GenesisAction::SupplyBridgeAccount { .. }
+            | GenesisAction::SupplyBridgeLockHolding { .. } => None,
+        })
+        .collect()
+}
+
+/// The accredited keys a newly created channel should carry, `own_key` first
+/// because creation gives the turn to index 0. `None` leaves creation to the
+/// plain inscription path.
+fn founding_committee(
+    config: &SequencerConfig,
+    own_key: sequencer_stake_core::SequencerKey,
+) -> Option<Vec<block_publisher::Ed25519PublicKey>> {
+    let mut keys: Vec<_> = founding_stakes(config)
+        .into_iter()
+        .map(|(key, ..)| key)
+        .collect();
+    if keys.is_empty() {
+        return None;
+    }
+    keys.sort_unstable();
+    keys.retain(|key| *key != own_key);
+
+    Some(
+        std::iter::once(own_key)
+            .chain(keys)
+            .map(|key| {
+                block_publisher::Ed25519PublicKey::from_bytes(&key.to_bytes())
+                    .expect("sequencer key was decoded from a valid Ed25519 public key")
+            })
+            .collect(),
+    )
+}
+
+fn genesis_stake_funding_account() -> AccountId {
+    let key = lee::PrivateKey::try_new(GENESIS_STAKE_FUNDING_KEY)
+        .expect("GENESIS_STAKE_FUNDING_KEY is a valid private key");
+    AccountId::from(&lee::PublicKey::new_from_private_key(&key))
+}
+
+/// The exact `Stake` message the founding sequencer at `index` must sign. Shared
+/// offchain by the genesis sequencer.
+fn genesis_stake_message(
+    index: usize,
+    sequencer_key: sequencer_stake_core::SequencerKey,
+    ownership_id: AccountId,
+) -> Message {
+    let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
+    let mover_instruction_data = lee::program::Program::serialize_instruction(
+        authenticated_transfer_core::Instruction::Transfer { amount },
+    )
+    .expect("Failed to serialize genesis mover instruction");
+    // A nonce counts how many times an account has signed. The funding account
+    // signed the faucet tx already, so its count starts at 1 here.
+    let funding_nonce = u128::try_from(index)
+        .expect("founding sequencer count fits in u128")
+        .checked_add(1)
+        .expect("genesis funding nonce overflow");
+
+    Message::try_new(
+        programs::sequencer_stake().id(),
+        vec![
+            genesis_stake_funding_account(),
+            ownership_id,
+            system_accounts::sequencer_stake_config_account_id(),
+        ],
+        vec![
+            lee_core::account::Nonce(funding_nonce),
+            lee_core::account::Nonce(0),
+        ],
+        sequencer_stake_core::Instruction::Stake {
+            sequencer_key,
+            amount,
+            mover_program_id: programs::authenticated_transfer().id(),
+            mover_instruction_data,
+        },
+    )
+    .expect("Failed to build genesis Stake message")
+}
+
+/// Signs the founding sequencer at `index`'s genesis `Stake`, for an operator
+/// producing their `GenesisAction::StakeSequencer` entry.
+#[must_use]
+pub fn sign_genesis_stake(
+    index: usize,
+    sequencer_key: sequencer_stake_core::SequencerKey,
+    ownership_key: &lee::PrivateKey,
+) -> lee::Signature {
+    let ownership_id = AccountId::from(&lee::PublicKey::new_from_private_key(ownership_key));
+    let message = genesis_stake_message(index, sequencer_key, ownership_id);
+    lee::Signature::new(ownership_key, &message.hash())
+}
+
+/// The founding sequencers' `Stake`s, funded via the faucet. Real transactions,
+/// not raw state, so followers replay them instead of missing them.
+fn build_stake_genesis_transactions(staked: &[FoundingStake]) -> Vec<PublicTransaction> {
+    if staked.is_empty() {
+        return Vec::new();
+    }
+
+    let funding_key = lee::PrivateKey::try_new(GENESIS_STAKE_FUNDING_KEY).unwrap();
+    let funding_public_key = lee::PublicKey::new_from_private_key(&funding_key);
+    let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
+    let total = u128::try_from(staked.len())
+        .ok()
+        .and_then(|count| amount.checked_mul(count))
+        .expect("genesis stake total overflow");
+
+    let fund_message = Message::try_new(
+        programs::faucet().id(),
+        vec![
+            system_accounts::faucet_account_id(),
+            genesis_stake_funding_account(),
+        ],
+        vec![lee_core::account::Nonce(0)],
+        faucet_core::Instruction::GenesisTransferDirect { amount: total },
+    )
+    .expect("Failed to build genesis funding message");
+    // The funding account signs even though it is only receiving. It is a brand
+    // new account, so the transfer claims it, and a claim needs that account's
+    // own signature.
+    let fund_witness_set =
+        lee::public_transaction::WitnessSet::for_message(&fund_message, &[&funding_key]);
+
+    let mut txs = vec![PublicTransaction::new(fund_message, fund_witness_set)];
+
+    for (index, (sequencer_key, ownership_public_key, signature)) in staked.iter().enumerate() {
+        let ownership_id = AccountId::from(ownership_public_key);
+        let stake_message = genesis_stake_message(index, *sequencer_key, ownership_id);
+        let stake_witness_set = lee::public_transaction::WitnessSet::from_raw_parts(vec![
+            (
+                lee::Signature::new(&funding_key, &stake_message.hash()),
+                funding_public_key.clone(),
+            ),
+            (signature.clone(), ownership_public_key.clone()),
+        ]);
+
+        // Redundant with the signature check every tx gets, but names the entry.
+        assert!(
+            stake_witness_set.is_valid_for(&stake_message),
+            "genesis stake signature does not match founding sequencer {index} ({})",
+            hex::encode(sequencer_key)
+        );
+
+        txs.push(PublicTransaction::new(stake_message, stake_witness_set));
+    }
+
+    txs
+}
+
 /// Bridge-lock holder balances configured for this zone's genesis.
 fn bridge_lock_holdings(
     genesis: &[GenesisAction],
 ) -> impl Iterator<Item = (lee::AccountId, lee::Balance)> + '_ {
     genesis.iter().filter_map(|action| match action {
         GenesisAction::SupplyBridgeLockHolding { holder, amount } => Some((*holder, *amount)),
-        GenesisAction::SupplyAccount { .. } | GenesisAction::SupplyBridgeAccount { .. } => None,
+        GenesisAction::SupplyAccount { .. }
+        | GenesisAction::SupplyBridgeAccount { .. }
+        | GenesisAction::StakeSequencer { .. } => None,
     })
 }
 
@@ -1690,6 +2069,84 @@ fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Resu
         },
     )
     .context("Failed to build bridge deposit message")?;
+
+    let witness_set = lee::public_transaction::WitnessSet::from_raw_parts(vec![]);
+    Ok(LeeTransaction::Public(PublicTransaction::new(
+        message,
+        witness_set,
+    )))
+}
+
+/// Block-validity gate for a `FinalizeUnstake`, applied uniformly regardless
+/// of where the transaction came from. Passes through unconditionally for
+/// anything that isn't a `FinalizeUnstake` call.
+fn finalize_unstake_is_includable(
+    state: &lee::V03State,
+    tx: &LeeTransaction,
+    live_accredited_keys: Option<&[sequencer_stake_core::SequencerKey]>,
+) -> bool {
+    let Some(ownership_id) = finalize_unstake_ownership_account(tx) else {
+        return true;
+    };
+    // Without a committee snapshot there is nothing to check a FinalizeUnstake
+    // against, so none is includable this block.
+    live_accredited_keys.is_some_and(|live_accredited_keys| {
+        committee_discovery::finalize_unstake_is_valid(state, ownership_id, live_accredited_keys)
+    })
+}
+
+/// The ownership account a `FinalizeUnstake` call targets, or `None` if `tx`
+/// isn't one.
+fn finalize_unstake_ownership_account(tx: &LeeTransaction) -> Option<AccountId> {
+    let LeeTransaction::Public(tx) = tx else {
+        return None;
+    };
+
+    let message = tx.message();
+    if message.program_id != programs::sequencer_stake().id() {
+        return None;
+    }
+
+    match risc0_zkvm::serde::from_slice::<sequencer_stake_core::Instruction, u32>(
+        &message.instruction_data,
+    ) {
+        Ok(sequencer_stake_core::Instruction::FinalizeUnstake) => {
+            message.account_ids.first().copied()
+        }
+        Ok(_) | Err(_) => None,
+    }
+}
+
+/// A `FinalizeUnstake` for every release `state` has pending. Whether each one
+/// is actually includable is decided later, uniformly, by
+/// [`finalize_unstake_is_includable`].
+fn build_finalize_unstake_txs(state: &lee::V03State) -> VecDeque<LeeTransaction> {
+    committee_discovery::finalize_unstake_candidates(state)
+        .into_iter()
+        .filter_map(|(ownership_id, pending)| {
+            build_finalize_unstake_tx(ownership_id, pending)
+                .inspect_err(|err| warn!("Failed to build FinalizeUnstake tx: {err:#}"))
+                .ok()
+        })
+        .collect()
+}
+
+// Unsigned: FinalizeUnstake needs no authorization, per the program.
+fn build_finalize_unstake_tx(
+    ownership_id: AccountId,
+    pending: sequencer_stake_core::PendingUnstake,
+) -> Result<LeeTransaction> {
+    let message = Message::try_new(
+        programs::sequencer_stake().id(),
+        vec![
+            ownership_id,
+            pending.destination,
+            system_accounts::sequencer_stake_config_account_id(),
+        ],
+        vec![],
+        sequencer_stake_core::Instruction::FinalizeUnstake,
+    )
+    .context("Failed to build FinalizeUnstake message")?;
 
     let witness_set = lee::public_transaction::WitnessSet::from_raw_parts(vec![]);
     Ok(LeeTransaction::Public(PublicTransaction::new(
@@ -1890,16 +2347,14 @@ fn withdrawal_reconciliation_key(note_id: &NoteId) -> WithdrawalReconciliationKe
     WithdrawalReconciliationKey { released_note_id }
 }
 
-/// Load signing key from file or generate a new one if it doesn't exist.
-pub fn load_or_create_signing_key(path: &Path) -> Result<Ed25519Key> {
+/// Load key bytes from file or generate a new set if it doesn't exist.
+fn load_or_create_key_bytes(path: &Path) -> Result<[u8; ED25519_SECRET_KEY_SIZE]> {
     if path.exists() {
         let key_bytes = std::fs::read(path)?;
 
-        let key_array: [u8; ED25519_SECRET_KEY_SIZE] = key_bytes
+        key_bytes
             .try_into()
-            .map_err(|_bytes| anyhow!("Found key with incorrect length"))?;
-
-        Ok(Ed25519Key::from_bytes(&key_array))
+            .map_err(|_bytes| anyhow!("Found key with incorrect length"))
     } else {
         let mut key_bytes = [0_u8; ED25519_SECRET_KEY_SIZE];
         rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut key_bytes);
@@ -1908,8 +2363,22 @@ pub fn load_or_create_signing_key(path: &Path) -> Result<Ed25519Key> {
             std::fs::create_dir_all(parent)?;
         }
         std::fs::write(path, key_bytes)?;
-        Ok(Ed25519Key::from_bytes(&key_bytes))
+        Ok(key_bytes)
     }
+}
+
+/// Load signing key from file or generate a new one if it doesn't exist.
+pub fn load_or_create_signing_key(path: &Path) -> Result<Ed25519Key> {
+    Ok(Ed25519Key::from_bytes(&load_or_create_key_bytes(path)?))
+}
+
+/// Load the key owning this sequencer's genesis stake, or generate one.
+///
+/// Only read when a solo sequencer creates the channel: a configured founding
+/// set carries a signature instead, so the key never reaches the node.
+pub fn load_or_create_stake_signing_key(path: &Path) -> Result<lee::PrivateKey> {
+    let bytes = load_or_create_key_bytes(path)?;
+    lee::PrivateKey::try_new(bytes).context("stake signing key file holds an invalid private key")
 }
 
 #[cfg(test)]

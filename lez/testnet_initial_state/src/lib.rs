@@ -212,6 +212,10 @@ fn initial_public_accounts() -> HashMap<AccountId, Account> {
                 .into_iter()
                 .map(|clock_id| (clock_id, system_accounts::clock_account())),
         )
+        .chain([(
+            system_accounts::sequencer_stake_config_account_id(),
+            system_accounts::sequencer_stake_config_account(),
+        )])
         .collect()
 }
 
@@ -225,6 +229,7 @@ fn initial_programs() -> Vec<Program> {
         programs::vault(),
         programs::faucet(),
         programs::bridge(),
+        programs::sequencer_stake(),
         // Cross-zone programs are builtins: their bytecode is baked into every node,
         // so registering them in the base state (rather than shipping ELFs through
         // the genesis block, which exceeds the inscription size limit) keeps the two

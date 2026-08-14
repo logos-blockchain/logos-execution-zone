@@ -151,10 +151,10 @@ impl<BP: BlockPublisherTrait + Send + 'static> Message<ProduceBlock> for Executo
             return Ok(());
         }
 
-        info!("Our turn: collecting transactions from mempool, creating block");
+        info!("Our turn: producing a block and any committee update");
         let id = self
             .sequencer
-            .produce_new_block()
+            .run_production_turn()
             .await
             .map_err(Error::BlockProductionFailed)?;
 

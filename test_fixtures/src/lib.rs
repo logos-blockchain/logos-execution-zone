@@ -10,13 +10,8 @@ use indexer_service::{ChannelId, IndexerHandle};
 use lee::{AccountId, PrivacyPreservingTransaction, PrivateKey};
 use lee_core::Commitment;
 use log::{debug, error};
-use sequencer_core::{
-    block_publisher::{Ed25519Key, post_channel_config},
-    config::GenesisAction,
-};
-use sequencer_service::{
-    BedrockConfig, CrossZoneConfig, GossipConfig, SequencerHandle, default_priority_fee,
-};
+use sequencer_core::config::GenesisAction;
+use sequencer_service::{CrossZoneConfig, GossipConfig, SequencerHandle};
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use serde::Serialize;
 use tempfile::TempDir;
@@ -27,10 +22,7 @@ use wallet::{
 };
 
 use crate::{
-    config::{
-        InitialPrivateAccountForWallet, MultiNodeTestContextConfig, SequencerPartialConfig,
-        bedrock_funding_key,
-    },
+    config::{InitialPrivateAccountForWallet, MultiNodeTestContextConfig, SequencerPartialConfig},
     indexer_client::IndexerClient,
     setup::{
         SequencerSetup, setup_bedrock_node, setup_indexer,
@@ -45,10 +37,6 @@ pub mod setup;
 
 // TODO: Remove this and control time from tests
 pub const TIME_TO_WAIT_FOR_BLOCK_SECONDS: u64 = 12;
-/// 1 s bedrock slots: rotate the turn every ~20 s of tenure; steal a stalled
-/// turn after ~30 s (bounds the stall while B is accredited but not started).
-const POSTING_TIMEFRAME_SLOTS: u32 = 20;
-const POSTING_TIMEOUT_SLOTS: u32 = 30;
 
 pub(crate) const BEDROCK_SERVICE_WITH_OPEN_PORT: &str = "logos-blockchain-node-0";
 pub(crate) const BEDROCK_SERVICE_PORT: u16 = 18080;
@@ -641,6 +629,24 @@ impl ZoneTestContextBuilder {
 
         debug!("Test context setup");
 
+        let mut sequencer_keys = vec![config::SEQUENCER_SIGNING_KEY];
+        sequencer_keys.extend((1..mn_config.num_nodes).map(|i| {
+            config::sequencer_signing_key_from_seed(
+                u32::try_from(i).expect("Not being able to fit is realistically impossible"),
+            )
+        }));
+
+        let genesis_transactions = if mn_config.num_nodes == 1 {
+            genesis_transactions
+        } else {
+            let mut actions = config::genesis_sequencer_stakes(&sequencer_keys)
+                .context("Failed to build the founding sequencer stakes")?;
+            actions.extend(genesis_transactions.unwrap_or_default());
+            // Returning Some() forces a live build below: the prebuilt dump stakes only one
+            // sequencer.
+            Some(actions)
+        };
+
         // The fixture bakes in the default accounts + genesis, so custom genesis / from_scratch
         // must build live. Otherwise load the fixture (fails if it is missing).
         let use_prebuilt = !from_scratch && genesis_transactions.is_none();
@@ -672,16 +678,6 @@ impl ZoneTestContextBuilder {
 
         let mut sequencer_addrs = vec![];
         let mut sequencer_components = vec![];
-
-        let mut sequencer_keys = vec![];
-
-        sequencer_keys.push(config::SEQUENCER_SIGNING_KEY);
-
-        sequencer_keys.extend((1..mn_config.num_nodes).map(|i| {
-            config::sequencer_signing_key_from_seed(
-                u32::try_from(i).expect("Not being able to fit is realistically impossible"),
-            )
-        }));
 
         // First, need to start a leader.
         let leader_gossip = enable_gossip.then(|| GossipConfig {
@@ -727,16 +723,7 @@ impl ZoneTestContextBuilder {
         sequencer_addrs.push(leader_addr);
         sequencer_components.push(leader_components);
 
-        // Skip posting chain config with just one node.
-        if mn_config.num_nodes != 1 {
-            post_chain_config_with_default_parameters(
-                mn_config.bedrock_channel,
-                bedrock_addr,
-                sequencer_keys.clone(),
-            )
-            .await?;
-        }
-
+        // Followers are already accredited by their genesis stakes.
         for sequencer_key in sequencer_keys.into_iter().skip(1) {
             let (sequencer_addr, sequencer_component) = build_sequencer_components(
                 follower_sequencer_partial_config.unwrap_or(partial_config),
@@ -1043,6 +1030,12 @@ pub async fn verify_commitment_is_in_state(
         .is_some()
 }
 
+/// Initializes the global logger once, for tests that build their fixtures
+/// without going through [`TestContextBuilder`].
+pub fn init_logger() {
+    *LOGGER;
+}
+
 fn dir_size_bytes(path: &Path) -> u64 {
     let mut total = 0_u64;
     let Ok(entries) = std::fs::read_dir(path) else {
@@ -1062,47 +1055,6 @@ fn dir_size_bytes(path: &Path) -> u64 {
         }
     }
     total
-}
-
-async fn post_chain_config_with_default_parameters(
-    channel_id: ChannelId,
-    bedrock_addr: SocketAddr,
-    sequencer_keys: Vec<[u8; 32]>,
-) -> Result<()> {
-    log::info!(
-        "Sequencer committee is {:?} at {channel_id}",
-        sequencer_keys
-            .iter()
-            .map(|key| Ed25519Key::from_bytes(key).public_key().as_bytes().to_vec())
-            .map(hex::encode)
-            .collect::<Vec<_>>()
-    );
-
-    post_channel_config(
-        &BedrockConfig {
-            channel_id,
-            node_url: config::addr_to_url(config::UrlProtocol::Http, bedrock_addr)?,
-            auth: None,
-            funding_key: bedrock_funding_key(),
-            priority_fee: default_priority_fee(),
-        },
-        &Ed25519Key::from_bytes(
-            sequencer_keys
-                .first()
-                .expect("Must be at least one sequencer"),
-        ),
-        sequencer_keys
-            .clone()
-            .into_iter()
-            .map(|key| Ed25519Key::from_bytes(&key).public_key())
-            .collect(),
-        POSTING_TIMEFRAME_SLOTS,
-        POSTING_TIMEOUT_SLOTS,
-        1,
-        1,
-    )
-    .await
-    .context("Failed to configure the channel committee")
 }
 
 async fn wait_until_genesis(client: &SequencerClient) -> Result<()> {
@@ -1155,11 +1107,13 @@ async fn build_sequencer_components(
         genesis_transactions.unwrap_or_default()
     };
 
+    // The prebuilt dump carries a genesis stake for the key the fixture generator
+    // ran with, so a node restoring it has to sign Bedrock with that same key.
     if !use_prebuilt {
-        sequencer_setup = sequencer_setup.with_genesis(genesis_actions);
+        sequencer_setup = sequencer_setup
+            .with_genesis(genesis_actions)
+            .with_bedrock_signing_key(sequencer_key);
     }
-
-    sequencer_setup = sequencer_setup.with_bedrock_signing_key(sequencer_key);
     sequencer_setup = sequencer_setup.with_channel_id(bedrock_channel_id);
     if let Some(cross_zone_config) = cross_zone_config.clone() {
         sequencer_setup = sequencer_setup.with_cross_zone(cross_zone_config);

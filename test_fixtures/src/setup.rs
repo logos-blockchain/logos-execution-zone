@@ -77,6 +77,14 @@ impl SequencerSetup {
         self
     }
 
+    /// Build a sequencer that joins a channel another node already created,
+    /// replaying its genesis from the channel instead of the prebuilt dump.
+    #[must_use]
+    pub fn joining_existing_channel(mut self) -> Self {
+        self.genesis_transactions = Some(Vec::new());
+        self
+    }
+
     /// Pre-write a bedrock (Ed25519, 32-byte seed) signing key into the home
     /// before boot, so tests know the sequencer's public key in advance (e.g.
     /// to accredit a committee member that has not started yet).
@@ -138,10 +146,21 @@ impl SequencerSetup {
 
         debug!("Using sequencer home at {}", home.display());
 
+        let bedrock_signing_key = bedrock_signing_key.or_else(|| {
+            genesis_transactions
+                .is_none()
+                .then_some(config::SEQUENCER_BEDROCK_SIGNING_KEY)
+        });
         if let Some(key_bytes) = bedrock_signing_key {
             std::fs::write(home.join("bedrock_signing_key"), key_bytes)
                 .context("Failed to write pre-generated bedrock signing key")?;
         }
+        // Pinned like the bedrock key: the prebuilt dump stakes this account.
+        std::fs::write(
+            home.join("sequencer_stake_signing_key"),
+            config::SEQUENCER_STAKE_KEY,
+        )
+        .context("Failed to write pre-generated stake signing key")?;
 
         let genesis_transactions = if let Some(genesis) = genesis_transactions {
             genesis
