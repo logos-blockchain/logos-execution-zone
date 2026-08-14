@@ -42,7 +42,7 @@ fn claiming_mechanism() {
 }
 
 #[test]
-fn unauthorized_public_account_claiming_fails() {
+fn permissionless_public_account_claiming_succeeds() {
     let program = crate::test_methods::simple_balance_transfer();
     let account_key = PrivateKey::try_new([9; 32]).unwrap();
     let account_id = AccountId::from(&PublicKey::new_from_private_key(&account_key));
@@ -56,10 +56,15 @@ fn unauthorized_public_account_claiming_fails() {
     let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
     let tx = PublicTransaction::new(message, witness_set);
 
-    let result = state.transition_from_public_transaction(&tx, 2, 0);
+    state.transition_from_public_transaction(&tx, 2, 0).unwrap();
 
-    assert!(matches!(result, Err(LeeError::InvalidProgramBehavior(_))));
-    assert_eq!(state.get_account_by_id(account_id), Account::default());
+    assert_eq!(
+        state.get_account_by_id(account_id),
+        Account {
+            program_owner: program.id(),
+            ..Account::default()
+        }
+    );
 }
 
 #[test]
@@ -278,19 +283,21 @@ fn claiming_mechanism_within_chain_call() {
 }
 
 #[test]
-fn unauthorized_public_account_claiming_fails_when_executed_privately() {
+fn permissionless_public_account_claiming_succeeds_when_executed_privately() {
     let program = crate::test_methods::simple_balance_transfer();
+    let program_id = program.id();
     let account_id = AccountId::new([11; 32]);
     let public_account = AccountWithMetadata::new(Account::default(), false, account_id);
 
-    let result = execute_and_prove(
+    let (output, _proof) = execute_and_prove(
         vec![public_account],
         Program::serialize_instruction(0_u128).unwrap(),
         vec![InputAccountIdentity::Public],
         &program.into(),
-    );
+    )
+    .unwrap();
 
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert_eq!(output.public_actions[0].post.program_owner, program_id);
 }
 
 #[test]
