@@ -89,11 +89,6 @@ name = "sequencer_stake"
 path = "sequencer_stake/src/main.rs"
 required-features = ["programs"]
 
-[[bin]]
-name = "loader"
-path = "loader/src/main.rs"
-required-features = ["programs"]
-
 [features]
 # TODO: Uncomment once https://github.com/risc0/risc0/issues/3772 is resolved.
 # default = ["artifacts"]
@@ -125,7 +120,6 @@ programs = [
   "dep:wrapped_token_core",
   "dep:ping_core",
   "dep:sequencer_stake_core",
-  "dep:loader_core",
 ]
 
 [dependencies]
@@ -148,7 +142,6 @@ bridge_lock_core = { workspace = true, optional = true }
 wrapped_token_core = { workspace = true, optional = true }
 ping_core = { workspace = true, optional = true }
 sequencer_stake_core = { workspace = true, optional = true }
-loader_core = { workspace = true, optional = true }
 
 amm_program = { path = "amm", optional = true }
 associated_token_account_program = { path = "associated_token_account", optional = true }
