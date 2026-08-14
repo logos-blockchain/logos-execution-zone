@@ -78,7 +78,7 @@ fn main() {
 
             vec![
                 ChainedCall::new(
-                    faucet_for_transfer.account.program_owner.into(),
+                    faucet_for_transfer.account.program_owner,
                     vec![faucet_for_transfer, recipient],
                     &authenticated_transfer_core::Instruction::Transfer { amount },
                 )

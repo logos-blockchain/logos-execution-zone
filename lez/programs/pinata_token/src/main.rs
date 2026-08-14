@@ -87,7 +87,7 @@ fn main() {
     pinata_token_holding_for_chain_call.is_authorized = true;
 
     let chained_call = ChainedCall::new(
-        pinata_token_holding_post.program_owner.into(),
+        pinata_token_holding_post.program_owner,
         vec![
             pinata_token_holding_for_chain_call,
             winner_token_holding.clone(),
