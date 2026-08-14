@@ -339,3 +339,61 @@ fn compute_public_authorized_pdas_no_caller_returns_empty() {
     let result = compute_public_authorized_pdas(None, &[seed]);
     assert!(result.is_empty());
 }
+
+#[test]
+fn account_id_from_program_id_reinterprets_words_as_le_bytes() {
+    let program_id: ProgramId = [
+        0x0403_0201,
+        0x0807_0605,
+        0x0c0b_0a09,
+        0x100f_0e0d,
+        0x1413_1211,
+        0x1817_1615,
+        0x1c1b_1a19,
+        0x201f_1e1d,
+    ];
+    let expected: [u8; 32] = [
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+        26, 27, 28, 29, 30, 31, 32,
+    ];
+    assert_eq!(AccountId::from(program_id).value(), &expected);
+}
+
+#[test]
+fn account_id_from_default_program_id_is_default_program_owner() {
+    assert_eq!(AccountId::from(DEFAULT_PROGRAM_ID), DEFAULT_PROGRAM_OWNER);
+}
+
+#[test]
+fn program_id_from_account_id_reinterprets_le_bytes_as_words() {
+    let account_id = AccountId::new([
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+        26, 27, 28, 29, 30, 31, 32,
+    ]);
+    let expected: ProgramId = [
+        0x0403_0201,
+        0x0807_0605,
+        0x0c0b_0a09,
+        0x100f_0e0d,
+        0x1413_1211,
+        0x1817_1615,
+        0x1c1b_1a19,
+        0x201f_1e1d,
+    ];
+    assert_eq!(ProgramId::from(account_id), expected);
+}
+
+#[test]
+fn program_id_account_id_conversion_round_trips() {
+    let program_id: ProgramId = [
+        0x1122_3344,
+        0x5566_7788,
+        0x99aa_bbcc,
+        0xddee_ff00,
+        0xcafe_babe,
+        0xdead_beef,
+        0x0badf00d,
+        0xfeed_face,
+    ];
+    assert_eq!(ProgramId::from(AccountId::from(program_id)), program_id);
+}
