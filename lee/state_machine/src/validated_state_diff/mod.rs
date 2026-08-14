@@ -158,10 +158,8 @@ impl ValidatedStateDiff {
                 else {
                     return Err(LeeError::InvalidInput("Unknown program".into()));
                 };
-                let program = Program::new_unchecked(
-                    program_id,
-                    Cow::Owned(program_account.data.to_vec()),
-                );
+                let program =
+                    Program::new_unchecked(program_id, Cow::Owned(program_account.data.to_vec()));
                 program.execute(
                     caller_data.caller_account_id,
                     &chained_call.pre_states,
