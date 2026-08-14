@@ -1,5 +1,6 @@
 use lee_core::program::{
-    AccountPostState, ChainedCall, ProgramId, ProgramInput, ProgramOutput, read_lee_inputs,
+    AccountPostState, ChainedCall, InstructionData, ProgramId, ProgramInput, ProgramOutput,
+    read_lee_inputs,
 };
 
 /// Forwards a single chained call to `target_program_id` with `instruction_data`, passing
@@ -8,13 +9,13 @@ use lee_core::program::{
 /// Exists purely as test infrastructure: lets a test exercise "program X invokes program Y via
 /// a chained call" for an arbitrary Y and instruction, without needing a purpose-built guest for
 /// every target program under test.
-type Instruction = (ProgramId, Vec<u32>);
+type Instruction = (ProgramId, InstructionData);
 
 fn main() {
     let (
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction: (target_program_id, instruction_data),
         },
@@ -27,15 +28,15 @@ fn main() {
         .collect();
 
     let chained_call = ChainedCall {
-        program_id: target_program_id,
+        program_account_id: target_program_id.into(),
         instruction_data,
-        pre_states: pre_states.clone(),
+        pre_state_ids: pre_states.iter().map(|pre| pre.account_id).collect(),
         pda_seeds: vec![],
     };
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_words,
         pre_states,
         post_states,

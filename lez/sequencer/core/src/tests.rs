@@ -4563,7 +4563,7 @@ fn loader_rejects_wrong_number_of_accounts() {
     let extra = AccountId::new([9; 32]);
 
     let message = lee::public_transaction::Message::try_new(
-        loader_id,
+        loader_id.into(),
         vec![target, extra],
         vec![],
         loader_core::Instruction::Deploy { bytecode },
@@ -4597,15 +4597,14 @@ fn loader_deploys_program_via_chained_call() {
     let image_id: ProgramId = risc0_binfmt::compute_image_id(&bytecode).unwrap().into();
     let target = loader_core::deploy_account_id(loader_id, image_id, 0, AccountId::default());
 
-    let inner_instruction_data = lee::program::Program::serialize_instruction(
-        loader_core::Instruction::Deploy {
+    let inner_instruction_data =
+        lee::program::Program::serialize_instruction(loader_core::Instruction::Deploy {
             bytecode: bytecode.clone(),
-        },
-    )
-    .unwrap();
+        })
+        .unwrap();
 
     let message = lee::public_transaction::Message::try_new(
-        forwarder.id(),
+        forwarder.id().into(),
         vec![target],
         vec![],
         (loader_id, inner_instruction_data),
@@ -4619,7 +4618,10 @@ fn loader_deploys_program_via_chained_call() {
         .expect("Deploy via chained call should succeed");
 
     let deployed = state.get_account_by_id(target);
-    assert_eq!(deployed.program_owner, RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID);
+    assert_eq!(
+        deployed.program_owner,
+        RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID
+    );
 
     let program_data = loader_core::ProgramData::try_from(&deployed.data)
         .expect("deployed account data should decode as ProgramData");
