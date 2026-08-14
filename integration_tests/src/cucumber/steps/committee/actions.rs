@@ -7,13 +7,17 @@ use sequencer_service_rpc::RpcClient as _;
 use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
 
 use super::{
-    super::log_step, parse_committee_config, parse_sequencer_registrations, require_sequencer,
+    super::{
+        log_step,
+        transfers::helpers::{ensure_transfer_name_available, insert_transfer_artifact},
+    },
+    parse_committee_config, parse_sequencer_registrations, require_sequencer,
 };
 use crate::{
     config::{self, UrlProtocol},
     cucumber::{
         error::{StepError, StepResult},
-        world::CucumberWorld,
+        world::{CucumberWorld, TransferArtifact, TransferKind},
     },
 };
 
@@ -193,10 +197,13 @@ async fn sequencer_advances_after_reconfiguration(
     timeout_seconds: u64,
 ) -> StepResult {
     log_step(step);
-    let configured_height = world
-        .environment
-        .committee_height_at_config
-        .ok_or(StepError::MissingTransfer)?;
+    let configured_height =
+        world
+            .environment
+            .committee_height_at_config
+            .ok_or(StepError::MissingObservation {
+                field: "committee reconfiguration height",
+            })?;
     let sequencer = require_sequencer(world.sequencer_registry()?.registry(), &alias)?;
     let target = configured_height
         .checked_add(1)
@@ -255,10 +262,13 @@ async fn sequencers_advance_across_rotation_blocks(
     timeout_seconds: u64,
 ) -> StepResult {
     log_step(step);
-    let join_height = world
-        .environment
-        .committee_join_height
-        .ok_or(StepError::MissingTransfer)?;
+    let join_height =
+        world
+            .environment
+            .committee_join_height
+            .ok_or(StepError::MissingObservation {
+                field: "committee join height",
+            })?;
     let target =
         join_height
             .checked_add(rotation_blocks)
@@ -287,7 +297,7 @@ async fn sequencers_advance_across_rotation_blocks(
 }
 
 #[when(
-    expr = "I submit {int} from deterministic public account {int} to account {int} through sequencer {string}"
+    expr = "I submit {int} from deterministic public account {int} to account {int} through sequencer {string} as {string}"
 )]
 async fn submit_committee_transfer(
     world: &mut CucumberWorld,
@@ -296,8 +306,10 @@ async fn submit_committee_transfer(
     sender_index: usize,
     receiver_index: usize,
     sequencer_alias: String,
+    transfer_name: String,
 ) -> StepResult {
     log_step(step);
+    ensure_transfer_name_available(world, &transfer_name)?;
     let registry = world.sequencer_registry()?.registry();
     let sequencer = require_sequencer(registry, &sequencer_alias)?;
     let accounts = initial_public_user_accounts();
@@ -313,13 +325,13 @@ async fn submit_committee_transfer(
             message: format!("receiver account index {receiver_index} is out of range"),
         })?
         .account_id;
-    let receiver_balance_before = sequencer
-        .client()
-        .get_account_balance(receiver)
-        .await
-        .map_err(|error| StepError::QueryFailed {
-            message: error.to_string(),
-        })?;
+    if world.environment.committee_receiver != Some(receiver) {
+        return Err(StepError::AssertionFailed {
+            message: format!(
+                "transfer receiver {receiver:?} does not match the recorded observer baseline"
+            ),
+        });
+    }
     let nonce = sequencer
         .client()
         .get_accounts_nonces(vec![sender])
@@ -353,10 +365,46 @@ async fn submit_committee_transfer(
         .map_err(|error| StepError::QueryFailed {
             message: error.to_string(),
         })?;
-    world.environment.committee_sender = Some(sender);
     world.environment.committee_receiver = Some(receiver);
-    world.environment.committee_transfer_amount = Some(amount);
-    world.environment.committee_receiver_balance_before = Some(receiver_balance_before);
-    world.environment.committee_transfer_hash = Some(transaction_hash);
+    insert_transfer_artifact(
+        world,
+        transfer_name,
+        TransferArtifact {
+            hash: transaction_hash,
+            sender,
+            receiver,
+            amount,
+            kind: TransferKind::Public,
+            inclusion_block: None,
+        },
+    )?;
+    Ok(())
+}
+
+#[when(expr = "I record deterministic public account {int} balance on sequencer {string}")]
+async fn record_committee_balance_baseline(
+    world: &mut CucumberWorld,
+    step: &Step,
+    account_index: usize,
+    observer_alias: String,
+) -> StepResult {
+    log_step(step);
+    let account = initial_public_user_accounts()
+        .get(account_index)
+        .ok_or_else(|| StepError::InvalidArgument {
+            message: format!("account index {account_index} is out of range"),
+        })?
+        .account_id;
+    let observer = require_sequencer(world.sequencer_registry()?.registry(), &observer_alias)?;
+    let balance = observer
+        .client()
+        .get_account_balance(account)
+        .await
+        .map_err(|error| StepError::QueryFailed {
+            message: error.to_string(),
+        })?;
+    world.environment.committee_receiver = Some(account);
+    world.environment.committee_receiver_balance_before = Some(balance);
+    world.environment.committee_balance_observer = Some(observer_alias);
     Ok(())
 }

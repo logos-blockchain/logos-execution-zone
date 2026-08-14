@@ -62,7 +62,7 @@ impl LezSequencerRegistryClient {
             .0
             .registered
             .lock()
-            .map_err(|error| anyhow!("committee sequencer lock poisoned: {error}"))?;
+            .map_err(|error| anyhow!("sequencer registry lock poisoned: {error}"))?;
         if registered.contains_key(&alias) {
             return Err(anyhow!("sequencer alias '{alias}' is already registered").into());
         }
@@ -86,7 +86,7 @@ impl LezSequencerRegistryClient {
             .0
             .registered
             .lock()
-            .map_err(|error| anyhow!("committee sequencer lock poisoned: {error}"))?
+            .map_err(|error| anyhow!("sequencer registry lock poisoned: {error}"))?
             .get(alias)
             .copied()
             .ok_or_else(|| anyhow!("sequencer alias '{alias}' is not registered"))?;
@@ -94,7 +94,7 @@ impl LezSequencerRegistryClient {
             .0
             .started
             .lock()
-            .map_err(|error| anyhow!("committee sequencer lock poisoned: {error}"))?
+            .map_err(|error| anyhow!("sequencer registry lock poisoned: {error}"))?
             .contains_key(alias)
         {
             return Ok(());
@@ -105,7 +105,7 @@ impl LezSequencerRegistryClient {
             .scenario_base_dir
             .as_ref()
             .map(|dir| dir.join("lez").join(format!("sequencer-{alias}")));
-        let sequencer = deploy_committee_sequencer(
+        let sequencer = deploy_registered_sequencer(
             registration.config,
             self.0.bedrock_addr,
             registration.signing_key,
@@ -119,7 +119,7 @@ impl LezSequencerRegistryClient {
                 .0
                 .started
                 .lock()
-                .map_err(|error| anyhow!("committee sequencer lock poisoned: {error}"))?;
+                .map_err(|error| anyhow!("sequencer registry lock poisoned: {error}"))?;
             if started.contains_key(alias) {
                 true
             } else {
@@ -159,7 +159,7 @@ impl LezSequencerRegistryClient {
             .0
             .started
             .lock()
-            .map_err(|error| anyhow!("committee sequencer lock poisoned: {error}"))?
+            .map_err(|error| anyhow!("sequencer registry lock poisoned: {error}"))?
             .drain()
             .collect::<Vec<_>>();
         let mut failures = Vec::new();
@@ -171,7 +171,11 @@ impl LezSequencerRegistryClient {
         if failures.is_empty() {
             Ok(())
         } else {
-            Err(anyhow!("committee shutdown failed:\n- {}", failures.join("\n- ")).into())
+            Err(anyhow!(
+                "sequencer registry shutdown failed:\n- {}",
+                failures.join("\n- ")
+            )
+            .into())
         }
     }
 }
@@ -185,7 +189,7 @@ pub struct LezSequencerRegistryApp {
 }
 
 impl LezSequencerRegistryApp {
-    /// Creates a committee deployment whose first member connects to Bedrock.
+    /// Creates an empty sequencer registry connected to the Bedrock endpoint.
     #[must_use]
     pub const fn new(config: SequencerPartialConfig, bedrock_addr: SocketAddr) -> Self {
         Self {
@@ -195,7 +199,7 @@ impl LezSequencerRegistryApp {
         }
     }
 
-    /// Places committee sequencer state below the scenario artifact directory.
+    /// Places registered sequencer state below the scenario artifact directory.
     #[must_use]
     pub fn with_scenario_base_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.scenario_base_dir = Some(dir.into());
@@ -216,7 +220,7 @@ impl AppDeployment<AppHostEnv> for LezSequencerRegistryApp {
     }
 }
 
-async fn deploy_committee_sequencer(
+async fn deploy_registered_sequencer(
     config: SequencerPartialConfig,
     bedrock_addr: SocketAddr,
     signing_key: [u8; ED25519_SECRET_KEY_SIZE],
@@ -230,14 +234,14 @@ async fn deploy_committee_sequencer(
             setup
                 .setup_in(&state_dir)
                 .await
-                .context("failed to set up committee sequencer")?,
+                .context("failed to set up registered sequencer")?,
             None,
         )
     } else {
         let (service, temporary_state_dir) = setup
             .setup()
             .await
-            .context("failed to set up committee sequencer")?;
+            .context("failed to set up registered sequencer")?;
         (service, Some(temporary_state_dir))
     };
     let addr = service.addr();

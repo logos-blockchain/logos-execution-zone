@@ -29,9 +29,18 @@ pub enum StepError {
     /// No account balance was recorded by an earlier scenario step.
     #[error("No observed balance is available")]
     MissingObservedBalance,
-    /// No transfer was recorded by an earlier scenario step.
-    #[error("No transfer is available")]
-    MissingTransfer,
+    /// A required scenario observation was not recorded by an earlier step.
+    #[error("Missing scenario observation: {field}")]
+    MissingObservation { field: &'static str },
+    /// A named successful transfer does not exist in the scenario registry.
+    #[error("Unknown transfer artifact '{name}'")]
+    UnknownTransferArtifact { name: String },
+    /// A scenario attempted to reuse a successful-transfer artifact name.
+    #[error("Duplicate transfer artifact '{name}'")]
+    DuplicateTransferArtifact { name: String },
+    /// A named transfer has not yet been observed in a block.
+    #[error("Transfer artifact '{name}' has no recorded inclusion block")]
+    MissingTransferInclusion { name: String },
     /// LEZ application deployment failed.
     #[error("Deployment failed: {message}")]
     DeploymentFailed { message: String },

@@ -153,7 +153,7 @@ pub async fn wait_for_indexer_to_index_transactions_with_timeout(
                 all_indexed &= indexed;
             }
 
-            if all_indexed {
+            if all_indexed && last_indexer_block >= target_block {
                 return Ok::<u64, String>(last_indexer_block);
             }
 

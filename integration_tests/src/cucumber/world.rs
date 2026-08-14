@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     env, fmt,
     fmt::Debug,
     path::{Path, PathBuf},
@@ -17,6 +18,32 @@ use crate::{
     },
     tf::shutdown_lez_deployment,
 };
+
+/// Classifies a successful transfer recorded by a Cucumber scenario.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TransferKind {
+    /// A public authenticated transfer.
+    Public,
+    /// A privacy-preserving authenticated transfer.
+    Private,
+}
+
+/// Identifies one successful transfer and records its inclusion lifecycle.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TransferArtifact {
+    /// Transaction hash returned by the sequencer.
+    pub hash: common::HashType,
+    /// Sending account.
+    pub sender: lee::AccountId,
+    /// Receiving account.
+    pub receiver: lee::AccountId,
+    /// Amount transferred.
+    pub amount: u128,
+    /// Transaction kind.
+    pub kind: TransferKind,
+    /// Block containing the transaction, once observed.
+    pub inclusion_block: Option<u64>,
+}
 
 /// Lifecycle state recorded for explicit and fallback runtime teardown.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -41,20 +68,8 @@ pub struct EnvironmentState {
     pub expected_balance: Option<u128>,
     /// Last indexer block observed by the convergence step.
     pub observed_indexer_height: Option<u64>,
-    /// Sender account for the public transfer scenario.
-    pub transfer_sender: Option<lee::AccountId>,
-    /// Receiver account for the public transfer scenario.
-    pub transfer_receiver: Option<lee::AccountId>,
     /// Fresh recipient account created for the new-account transfer scenario.
     pub new_public_account: Option<lee::AccountId>,
-    /// Sender account for the private transfer scenario.
-    pub private_transfer_sender: Option<lee::AccountId>,
-    /// Receiver account for the private transfer scenario.
-    pub private_transfer_receiver: Option<lee::AccountId>,
-    /// Amount submitted in the private transfer scenario.
-    pub private_transfer_amount: Option<u128>,
-    /// Cumulative amount submitted in the public transfer scenario.
-    pub transfer_amount: Option<u128>,
     /// Sender balance recorded before the public transfer.
     pub sender_initial_balance: Option<u128>,
     /// Receiver balance recorded before the public transfer.
@@ -71,18 +86,18 @@ pub struct EnvironmentState {
     pub private_sender_observed_balance: Option<u128>,
     /// Receiver private balance observed after the private transfer.
     pub private_receiver_observed_balance: Option<u128>,
-    /// Hash returned for the public transfer.
-    pub transfer_hash: Option<common::HashType>,
-    /// Block containing the public transfer.
-    pub transfer_included_block: Option<u64>,
-    /// All transfer hashes submitted in this scenario.
-    pub transfer_hashes: Vec<common::HashType>,
-    /// Blocks containing the transfers in submission order.
-    pub transfer_included_blocks: Vec<u64>,
+    /// Successful transfers recorded by their scenario-provided names.
+    pub transfers: HashMap<String, TransferArtifact>,
     /// Sender nonce before the first public transfer.
     pub sender_initial_nonce: Option<lee_core::account::Nonce>,
     /// Error returned when a public transfer is rejected.
     pub transfer_rejection: Option<String>,
+    /// Sender account for a rejected public transfer.
+    pub rejected_transfer_sender: Option<lee::AccountId>,
+    /// Receiver account for a rejected public transfer.
+    pub rejected_transfer_receiver: Option<lee::AccountId>,
+    /// Amount requested by a rejected public transfer.
+    pub rejected_transfer_amount: Option<u128>,
     /// Label assigned to the public transfer sender.
     pub public_sender_label: Option<String>,
     /// Label assigned to the public transfer receiver.
@@ -93,17 +108,15 @@ pub struct EnvironmentState {
     pub committee_join_height: Option<u64>,
     /// Target height reached during the committee rotation phase.
     pub committee_rotation_target: Option<u64>,
-    /// Deterministic sender used for the committee transfer.
-    pub committee_sender: Option<lee::AccountId>,
-    /// Deterministic receiver used for the committee transfer.
+    /// Deterministic receiver used for the committee transfer baseline.
     pub committee_receiver: Option<lee::AccountId>,
     /// Receiver balance before the committee transfer.
     pub committee_receiver_balance_before: Option<u128>,
-    /// Amount submitted through the selected sequencer.
-    pub committee_transfer_amount: Option<u128>,
-    /// Hash submitted through the selected sequencer.
-    pub committee_transfer_hash: Option<common::HashType>,
-    /// Finalized indexer height checked against the selected sequencer.
+    /// Alias whose balance was recorded as the transfer observer baseline.
+    pub committee_balance_observer: Option<String>,
+    /// Sequencer height used as the indexer convergence target.
+    pub committee_indexer_target_height: Option<u64>,
+    /// Actual indexer finalized height reached during convergence.
     pub committee_indexer_finalized_height: Option<u64>,
 }
 
