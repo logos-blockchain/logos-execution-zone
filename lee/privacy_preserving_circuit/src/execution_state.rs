@@ -156,42 +156,6 @@ impl ExecutionState {
                 "Mismatched instruction data between chained call and program output"
             );
 
-            // Check that `program_output` is consistent with the execution of the corresponding
-            // program. The System Program has no guest ELF, so instead of verifying a recursive
-            // proof we structurally validate the clear transition, which fully pins the
-            // prover-supplied post state.
-            if chained_call.program_id == DEFAULT_PROGRAM_ID {
-                let instruction: SystemInstruction = from_slice(&program_output.instruction_data)
-                    .expect("System Program instruction must deserialize");
-                match instruction {
-                    SystemInstruction::Clear => {
-                        assert_eq!(
-                            program_output.pre_states.len(),
-                            program_output.post_states.len(),
-                            "System Program clear pre/post state length mismatch"
-                        );
-                        for (pre, post) in program_output
-                            .pre_states
-                            .iter()
-                            .zip(program_output.post_states.iter())
-                        {
-                            if let Err(err) = validate_clear(pre, post.account()) {
-                                panic!(
-                                    "Invalid clear in program {:?}: {err}",
-                                    chained_call.program_id
-                                );
-                            }
-                        }
-                    }
-                }
-            } else {
-                let program_output_words =
-                    &to_vec(&program_output).expect("program_output must be serializable");
-                env::verify(chained_call.program_id, program_output_words).unwrap_or_else(
-                    |_: Infallible| unreachable!("Infallible error is never constructed"),
-                );
-            }
-
             // Verify that the program output's self_program_id matches the expected program ID.
             // This ensures the proof commits to which program produced the output.
             assert_eq!(
@@ -208,11 +172,51 @@ impl ExecutionState {
                 "Program output caller_program_id does not match actual caller"
             );
 
-            // Check that the program is well behaved. The System Program's clear intentionally
-            // violates `validate_execution` (nonce bump, owner → default, data zeroed) and is
-            // validated by `validate_clear` above instead.
+            // Check that `program_output` is consistent with the execution of the corresponding
+            // program and that the program is well behaved. The System Program has no guest ELF,
+            // so its clear skips both recursive-proof verification and `validate_execution`: the
+            // clear intentionally violates `validate_execution` (owner → default, data zeroed,
+            // default-owner-with-data: rules 4, 6, 7) and is instead structurally validated here,
+            // which fully pins the prover-supplied post state. Every other program is verified
+            // against its proof and then checked by `validate_execution`.
             // See the # Programs section for the definition of the `validate_execution` method.
-            if chained_call.program_id != DEFAULT_PROGRAM_ID {
+            if chained_call.program_id == DEFAULT_PROGRAM_ID {
+                let instruction: SystemInstruction = from_slice(&program_output.instruction_data)
+                    .expect("System Program instruction must deserialize");
+                match instruction {
+                    SystemInstruction::Clear => {
+                        assert_eq!(
+                            program_output.pre_states.len(),
+                            program_output.post_states.len(),
+                            "System Program clear pre/post state length mismatch"
+                        );
+                        for (pre, post) in program_output
+                            .pre_states
+                            .iter()
+                            .zip(program_output.post_states.iter())
+                        {
+                            let expected = match validate_clear(pre) {
+                                Ok(expected) => expected,
+                                Err(err) => panic!(
+                                    "Invalid clear in program {:?}: {err}",
+                                    chained_call.program_id
+                                ),
+                            };
+                            assert_eq!(
+                                post.account(),
+                                &expected,
+                                "System Program clear produced a non-cleared post"
+                            );
+                        }
+                    }
+                }
+            } else {
+                let program_output_words =
+                    &to_vec(&program_output).expect("program_output must be serializable");
+                env::verify(chained_call.program_id, program_output_words).unwrap_or_else(
+                    |_: Infallible| unreachable!("Infallible error is never constructed"),
+                );
+
                 let validated_execution = validate_execution(
                     &program_output.pre_states,
                     &program_output.post_states,

@@ -111,17 +111,20 @@ impl ValidatedStateDiff {
                 LeeError::MaxChainedCallsDepthExceeded
             );
 
+            let authorized_pdas =
+                compute_public_authorized_pdas(caller_data.program_id, &chained_call.pda_seeds);
+
+            // Account is authorized if it is either in the caller's authorized accounts or in the
+            // list of PDAs the caller has authorized.
+            let is_authorized = |account_id: &AccountId| {
+                authorized_pdas.contains(account_id)
+                    || caller_data.authorized_accounts.contains(account_id)
+            };
+
             if chained_call.program_id == DEFAULT_PROGRAM_ID {
                 let instruction: SystemInstruction =
                     risc0_zkvm::serde::from_slice(&chained_call.instruction_data)
                         .map_err(|e| LeeError::InstructionSerializationError(e.to_string()))?;
-
-                let authorized_pdas =
-                    compute_public_authorized_pdas(caller_data.program_id, &chained_call.pda_seeds);
-                let is_authorized = |account_id: &AccountId| {
-                    authorized_pdas.contains(account_id)
-                        || caller_data.authorized_accounts.contains(account_id)
-                };
 
                 match instruction {
                     SystemInstruction::Clear => {
@@ -135,13 +138,7 @@ impl ValidatedStateDiff {
                                 is_authorized(&account_id),
                                 account_id,
                             );
-                            let post = Account {
-                                program_owner: DEFAULT_PROGRAM_ID,
-                                balance: pre.account.balance,
-                                data: Data::default(),
-                                nonce: pre.account.nonce,
-                            };
-                            validate_clear(&pre, &post)
+                            let post = validate_clear(&pre)
                                 .map_err(InvalidProgramBehaviorError::ClearValidationFailed)?;
                             state_diff.insert(account_id, post);
                         }
@@ -172,16 +169,6 @@ impl ValidatedStateDiff {
                 "Program {:?} output: {:?}",
                 chained_call.program_id, program_output
             );
-
-            let authorized_pdas =
-                compute_public_authorized_pdas(caller_data.program_id, &chained_call.pda_seeds);
-
-            // Account is authorized if it is either in the caller's authorized accounts or in the
-            // list of PDAs the caller has authorized.
-            let is_authorized = |account_id: &AccountId| {
-                authorized_pdas.contains(account_id)
-                    || caller_data.authorized_accounts.contains(account_id)
-            };
 
             for pre in &program_output.pre_states {
                 let account_id = pre.account_id;

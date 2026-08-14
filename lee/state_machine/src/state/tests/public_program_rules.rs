@@ -1,3 +1,5 @@
+use lee_core::program::DEFAULT_PROGRAM_ID;
+
 use super::*;
 
 #[test]
@@ -448,7 +450,7 @@ fn default_owner_credited_without_claim_succeeds() {
     state.transition_from_public_transaction(&tx, 1, 0).unwrap();
 
     let credited = state.get_account_by_id(recipient);
-    assert_eq!(credited.program_owner, Account::default().program_owner);
+    assert_eq!(credited.program_owner, DEFAULT_PROGRAM_ID);
     assert_eq!(credited.data, Data::default());
     assert!(credited.balance > 0);
 }

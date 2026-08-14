@@ -1363,8 +1363,8 @@ fn private_default_owner_spent_without_claim_succeeds() {
     assert!(sender_post.balance < 500_000);
 }
 
-fn prove_forged_clear(
-    forged_post: Account,
+fn prove_clear_with_posts(
+    post_states: Vec<AccountPostState>,
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
     let keys = test_private_account_keys_1();
     let identifier: u128 = 7;
@@ -1387,7 +1387,7 @@ fn prove_forged_clear(
             None,
             Program::serialize_instruction(SystemInstruction::Clear).unwrap(),
             vec![pre],
-            vec![AccountPostState::new(forged_post)],
+            post_states,
         )],
         account_identities: vec![InputAccountIdentity::Private(PrivateWitness {
             vpk: keys.vpk(),
@@ -1418,7 +1418,7 @@ fn private_clear_inflating_balance_is_rejected() {
         nonce: Nonce(3),
     };
     assert!(matches!(
-        prove_forged_clear(forged),
+        prove_clear_with_posts(vec![AccountPostState::new(forged)]),
         Err(LeeError::CircuitProvingError(_))
     ));
 }
@@ -1432,7 +1432,7 @@ fn private_clear_retaining_data_is_rejected() {
         nonce: Nonce(3),
     };
     assert!(matches!(
-        prove_forged_clear(forged),
+        prove_clear_with_posts(vec![AccountPostState::new(forged)]),
         Err(LeeError::CircuitProvingError(_))
     ));
 }
@@ -1446,53 +1446,15 @@ fn private_clear_to_non_default_owner_is_rejected() {
         nonce: Nonce(3),
     };
     assert!(matches!(
-        prove_forged_clear(forged),
+        prove_clear_with_posts(vec![AccountPostState::new(forged)]),
         Err(LeeError::CircuitProvingError(_))
     ));
 }
 
 #[test]
 fn private_clear_length_mismatch_is_rejected() {
-    let keys = test_private_account_keys_1();
-    let identifier: u128 = 7;
-    let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), identifier);
-    let pre_account = Account {
-        program_owner: crate::test_methods::noop().id(),
-        balance: 55,
-        data: Data::default(),
-        nonce: Nonce(3),
-    };
-    let commitment_pre = Commitment::new(&account_id, &pre_account);
-    let mut commitment_set = CommitmentSet::with_capacity(1);
-    commitment_set.extend(std::slice::from_ref(&commitment_pre));
-    let membership_proof = commitment_set.get_proof_for(&commitment_pre).unwrap();
-    let pre = AccountWithMetadata::new(pre_account, true, account_id);
-
-    let circuit_input = PrivacyPreservingCircuitInput {
-        program_outputs: vec![ProgramOutput::new(
-            DEFAULT_PROGRAM_ID,
-            None,
-            Program::serialize_instruction(SystemInstruction::Clear).unwrap(),
-            vec![pre],
-            vec![],
-        )],
-        account_identities: vec![InputAccountIdentity::Private(PrivateWitness {
-            vpk: keys.vpk(),
-            random_seed: [0; 32],
-            identifier,
-            kind: WitnessKind::Regular {
-                ask: Some(keys.ask),
-            },
-            nullifier: NullifierWitness::Update {
-                view_tag: 0,
-                nsk: keys.nsk(),
-                membership_proof,
-            },
-        })],
-        program_id: DEFAULT_PROGRAM_ID,
-        dummy_inputs: vec![],
-    };
-
-    let result = prove_synthesized_input(&circuit_input);
-    assert!(matches!(result, Err(LeeError::CircuitProvingError(_))));
+    assert!(matches!(
+        prove_clear_with_posts(vec![]),
+        Err(LeeError::CircuitProvingError(_))
+    ));
 }

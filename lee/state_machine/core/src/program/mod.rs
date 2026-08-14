@@ -637,9 +637,6 @@ pub enum ExecutionValidationError {
 pub enum ClearValidationError {
     #[error("Unauthorized clear of account {account_id}")]
     NotAuthorized { account_id: AccountId },
-
-    #[error("Invalid clear transition for account {account_id}")]
-    InvalidTransition { account_id: AccountId },
 }
 
 /// Computes the set of public-PDA `AccountId`s the callee is authorized to mutate.
@@ -778,29 +775,19 @@ pub fn validate_execution(
     Ok(())
 }
 
-pub fn validate_clear(
-    pre: &AccountWithMetadata,
-    post: &Account,
-) -> Result<(), ClearValidationError> {
+pub fn validate_clear(pre: &AccountWithMetadata) -> Result<Account, ClearValidationError> {
     if !pre.is_authorized {
         return Err(ClearValidationError::NotAuthorized {
             account_id: pre.account_id,
         });
     }
 
-    let expected = Account {
+    Ok(Account {
         program_owner: DEFAULT_PROGRAM_ID,
         balance: pre.account.balance,
         data: Data::default(),
         nonce: pre.account.nonce,
-    };
-    if *post != expected {
-        return Err(ClearValidationError::InvalidTransition {
-            account_id: pre.account_id,
-        });
-    }
-
-    Ok(())
+    })
 }
 
 fn validate_uniqueness_of_account_ids(pre_states: &[AccountWithMetadata]) -> bool {
