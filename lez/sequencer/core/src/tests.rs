@@ -12,7 +12,10 @@ use kameo::actor::Spawn as _;
 use lee::{
     Account, AccountId, Data, PrivateKey, PublicKey, PublicTransaction, V03State, program::Program,
 };
-use lee_core::{account::Nonce, program::PdaSeed};
+use lee_core::{
+    account::Nonce,
+    program::{PdaSeed, ProgramId, RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID},
+};
 use logos_blockchain_core::{
     events::DepositRecreatedNotes,
     mantle::{
@@ -3658,4 +3661,111 @@ fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
         record.pending_unstake.map(|pending| pending.amount),
         Some(system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE)
     );
+}
+
+fn deploy_transaction(target: AccountId, bytecode: Vec<u8>) -> PublicTransaction {
+    let loader_id: ProgramId = RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID.into();
+    let message = lee::public_transaction::Message::try_new(
+        loader_id,
+        vec![target],
+        vec![],
+        loader_core::Instruction::Deploy { bytecode },
+    )
+    .unwrap();
+    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[]);
+    PublicTransaction::new(message, witness_set)
+}
+
+#[test]
+fn loader_deploys_program() {
+    let loader_id: ProgramId = RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID.into();
+    let mut state = V03State::new();
+
+    let bytecode = test_programs::claimer().elf().to_vec();
+    let image_id: ProgramId = risc0_binfmt::compute_image_id(&bytecode).unwrap().into();
+    let target = loader_core::deploy_account_id(loader_id, image_id, 0, AccountId::default());
+
+    assert_eq!(state.get_account_by_id(target), Account::default());
+
+    let tx = deploy_transaction(target, bytecode.clone());
+    state
+        .transition_from_public_transaction(&tx, 1, 0)
+        .expect("Deploy should succeed against an unclaimed target");
+
+    let deployed = state.get_account_by_id(target);
+    assert_eq!(
+        deployed.program_owner,
+        RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID
+    );
+
+    let program_data = loader_core::ProgramData::try_from(&deployed.data)
+        .expect("deployed account data should decode as ProgramData");
+    assert_eq!(program_data.image_id, image_id);
+    assert_eq!(program_data.segment_number, 0);
+    assert_eq!(program_data.update_auth, AccountId::default());
+    assert_eq!(program_data.elf_segment, bytecode);
+}
+
+#[test]
+fn loader_rejects_redeploying_an_already_deployed_program() {
+    let loader_id: ProgramId = RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID.into();
+    let mut state = V03State::new();
+
+    let bytecode = test_programs::claimer().elf().to_vec();
+    let image_id: ProgramId = risc0_binfmt::compute_image_id(&bytecode).unwrap().into();
+    let target = loader_core::deploy_account_id(loader_id, image_id, 0, AccountId::default());
+
+    let tx = deploy_transaction(target, bytecode.clone());
+    state
+        .transition_from_public_transaction(&tx, 1, 0)
+        .expect("First deploy should succeed");
+
+    let tx = deploy_transaction(target, bytecode);
+    let result = state.transition_from_public_transaction(&tx, 2, 0);
+
+    assert!(
+        result.is_err(),
+        "Redeploying to an already-claimed program account should fail, but got: {result:?}"
+    );
+}
+
+/// Runs the real `loader_program` guest ELF end-to-end (via `Program::execute_for_test`, which
+/// uses a session limit well above production's `MAX_NUM_CYCLES_PUBLIC_EXECUTION` since running
+/// a real guest to completion for this comparison is the whole point) and checks its output
+/// against calling `execute_deploy` natively with the same inputs.
+///
+/// This doesn't re-verify `execute_deploy`'s own logic — the guest and the native dispatch path
+/// both call that exact function, so it can't diverge between them. What this catches is drift
+/// in the thin wrapper code on each side: the guest's `read_lee_inputs`/`ProgramOutput::write`
+/// glue in `loader_program::main`, versus dispatch's manual `risc0_zkvm::serde::from_slice` and
+/// `ProgramOutput::new(..)` construction in `from_public_transaction`.
+#[test]
+fn loader_native_execution_matches_real_guest_execution() {
+    let loader = programs::loader();
+    let bytecode = test_programs::claimer().elf().to_vec();
+
+    let image_id: ProgramId = risc0_binfmt::compute_image_id(&bytecode).unwrap().into();
+    let target = loader_core::deploy_account_id(loader.id(), image_id, 0, AccountId::default());
+
+    let pre_states = vec![lee_core::account::AccountWithMetadata::new(
+        Account::default(),
+        false,
+        target,
+    )];
+    let instruction_data =
+        lee::program::Program::serialize_instruction(loader_core::Instruction::Deploy {
+            bytecode: bytecode.clone(),
+        })
+        .unwrap();
+
+    let guest_output = loader
+        .execute_for_test(None, &pre_states, &instruction_data)
+        .expect("real guest execution should succeed");
+
+    let native_post_states = loader_core::execute_deploy(loader.id(), pre_states.clone(), bytecode);
+
+    assert_eq!(guest_output.self_program_id, loader.id());
+    assert_eq!(guest_output.caller_program_id, None);
+    assert_eq!(guest_output.pre_states, pre_states);
+    assert_eq!(guest_output.post_states, native_post_states);
 }
