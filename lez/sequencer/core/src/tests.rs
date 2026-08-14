@@ -3728,3 +3728,113 @@ fn loader_rejects_redeploying_an_already_deployed_program() {
         "Redeploying to an already-claimed program account should fail, but got: {result:?}"
     );
 }
+
+#[test]
+fn loader_rejects_invalid_bytecode() {
+    let mut state = V03State::new();
+
+    // execute_deploy panics on compute_image_id before it ever looks at the target account, so
+    // any account works here.
+    let bytecode = b"this is not a valid RISC0 program binary".to_vec();
+    let target = AccountId::new([7; 32]);
+
+    let tx = deploy_transaction(target, bytecode);
+    let result = state.transition_from_public_transaction(&tx, 1, 0);
+
+    assert!(
+        result.is_err(),
+        "Deploying invalid bytecode should fail, but got: {result:?}"
+    );
+}
+
+#[test]
+fn loader_rejects_wrong_target_account() {
+    let mut state = V03State::new();
+
+    let bytecode = test_programs::claimer().elf().to_vec();
+    // Deliberately not the PDA this bytecode's image_id would derive to.
+    let wrong_target = AccountId::new([7; 32]);
+
+    let tx = deploy_transaction(wrong_target, bytecode);
+    let result = state.transition_from_public_transaction(&tx, 1, 0);
+
+    assert!(
+        result.is_err(),
+        "Deploying to the wrong target account should fail, but got: {result:?}"
+    );
+}
+
+#[test]
+fn loader_rejects_wrong_number_of_accounts() {
+    let loader_id: ProgramId = RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID.into();
+    let mut state = V03State::new();
+
+    let bytecode = test_programs::claimer().elf().to_vec();
+    let image_id: ProgramId = risc0_binfmt::compute_image_id(&bytecode).unwrap().into();
+    let target = loader_core::deploy_account_id(loader_id, image_id, 0, AccountId::default());
+    let extra = AccountId::new([9; 32]);
+
+    let message = lee::public_transaction::Message::try_new(
+        loader_id,
+        vec![target, extra],
+        vec![],
+        loader_core::Instruction::Deploy { bytecode },
+    )
+    .unwrap();
+    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[]);
+    let tx = PublicTransaction::new(message, witness_set);
+
+    let result = state.transition_from_public_transaction(&tx, 1, 0);
+
+    assert!(
+        result.is_err(),
+        "Deploying with the wrong number of accounts should fail, but got: {result:?}"
+    );
+}
+
+#[test]
+#[ignore = "known limitation: the forwarding program has to carry the deployed bytecode through \
+            its own instruction_data to build the chained call, which blows the interpreted \
+            32M-cycle public-execution cap for any realistically-sized program (the native \
+            Deploy fast-path only covers the loader's own execution, not the caller's). Root \
+            cause is ChainedCall/Message still referencing programs by ProgramId rather than \
+            AccountId, which also means dispatch can't locate a Deploy-created (PDA-addressed) \
+            program at all; tracked for marvin/program-as-account-3-1."]
+fn loader_deploys_program_via_chained_call() {
+    let loader_id: ProgramId = RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID.into();
+    let forwarder = test_programs::chained_call_forwarder();
+    let mut state = V03State::new().with_programs([forwarder.clone()]);
+
+    let bytecode = test_programs::claimer().elf().to_vec();
+    let image_id: ProgramId = risc0_binfmt::compute_image_id(&bytecode).unwrap().into();
+    let target = loader_core::deploy_account_id(loader_id, image_id, 0, AccountId::default());
+
+    let inner_instruction_data = lee::program::Program::serialize_instruction(
+        loader_core::Instruction::Deploy {
+            bytecode: bytecode.clone(),
+        },
+    )
+    .unwrap();
+
+    let message = lee::public_transaction::Message::try_new(
+        forwarder.id(),
+        vec![target],
+        vec![],
+        (loader_id, inner_instruction_data),
+    )
+    .unwrap();
+    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[]);
+    let tx = PublicTransaction::new(message, witness_set);
+
+    state
+        .transition_from_public_transaction(&tx, 1, 0)
+        .expect("Deploy via chained call should succeed");
+
+    let deployed = state.get_account_by_id(target);
+    assert_eq!(deployed.program_owner, RESERVED_DEPLOYMENT_PROGRAM_ACCOUNT_ID);
+
+    let program_data = loader_core::ProgramData::try_from(&deployed.data)
+        .expect("deployed account data should decode as ProgramData");
+    assert_eq!(program_data.image_id, image_id);
+    assert_eq!(program_data.elf_segment, bytecode);
+}
