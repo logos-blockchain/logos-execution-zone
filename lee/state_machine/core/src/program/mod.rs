@@ -256,11 +256,10 @@ pub struct AccountPostState {
 /// of the account.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Claim {
-    /// The program requests ownership of the account which was authorized by the signer.
+    /// The program requests ownership of the account.
     ///
     /// Note that it's possible to successfully execute program outputting [`AccountPostState`] with
-    /// `is_authorized == false` and `claim == Some(Claim::Authorized)`.
-    /// This will give no error if program had authorization in pre state and may be useful
+    /// `is_authorized == false` and `claim == Some(Claim::Authorized)`, which may be useful
     /// if program decides to give up authorization for a chained call.
     Authorized,
     /// The program requests ownership of the account through a PDA. The program emits the

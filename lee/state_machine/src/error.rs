@@ -120,9 +120,6 @@ pub enum InvalidProgramBehaviorError {
     #[error("Trying to claim account {account_id} which is not default")]
     ClaimedNonDefaultAccount { account_id: AccountId },
 
-    #[error("Trying to claim account {account_id} which is not authorized")]
-    ClaimedUnauthorizedAccount { account_id: AccountId },
-
     #[error("PDA claim mismatch: expected {expected:?}, actual {actual:?}")]
     MismatchedPdaClaim {
         expected: AccountId,

@@ -255,13 +255,8 @@ impl ValidatedStateDiff {
                 );
 
                 match claim {
-                    Claim::Authorized => {
-                        // The program can only claim accounts that were authorized by the signer.
-                        ensure!(
-                            pre.is_authorized,
-                            InvalidProgramBehaviorError::ClaimedUnauthorizedAccount { account_id }
-                        );
-                    }
+                    // Claiming is permissionless: Authorized is a no-op.
+                    Claim::Authorized => {}
                     Claim::Pda(seed) => {
                         // The program can only claim accounts that correspond to the PDAs it is
                         // authorized to claim. The public-execution path only sees public

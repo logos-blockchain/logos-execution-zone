@@ -463,36 +463,17 @@ impl ExecutionState {
                     .expect("Pre state must exist at this point");
 
                 let account_identity = &account_identities[pre_state_position];
-                if account_identity.is_public() {
-                    match claim {
-                        Claim::Authorized => {
-                            // Note: no need to check authorized pdas because we have already
-                            // checked consistency of authorization above.
-                            assert!(
-                                pre_is_authorized,
-                                "Cannot claim unauthorized account {pre_account_id}"
-                            );
-                        }
-                        Claim::Pda(seed) => {
+                match claim {
+                    // Claiming is permissionless: Authorized is a no-op for any account.
+                    Claim::Authorized => {}
+                    Claim::Pda(seed) => {
+                        if account_identity.is_public() {
                             let pda = AccountId::for_public_pda(&program_id, &seed);
                             assert_eq!(
                                 pre_account_id, pda,
                                 "Invalid PDA claim for account {pre_account_id} which does not match derived PDA {pda}"
                             );
-                            assert_family_binding(
-                                &mut self.pda_family_binding,
-                                program_id,
-                                seed,
-                                pre_account_id,
-                            );
-                        }
-                    }
-                } else {
-                    // Private accounts: don't enforce the claim semantics. Unauthorized private
-                    // claiming is intentionally allowed
-                    match claim {
-                        Claim::Authorized => {}
-                        Claim::Pda(seed) => {
+                        } else {
                             let (npk, vpk, identifier) = self
                                 .private_pda_by_position
                                 .get(&pre_state_position)
@@ -516,13 +497,13 @@ impl ExecutionState {
                                 program_id,
                                 seed,
                             );
-                            assert_family_binding(
-                                &mut self.pda_family_binding,
-                                program_id,
-                                seed,
-                                pre_account_id,
-                            );
                         }
+                        assert_family_binding(
+                            &mut self.pda_family_binding,
+                            program_id,
+                            seed,
+                            pre_account_id,
+                        );
                     }
                 }
 
