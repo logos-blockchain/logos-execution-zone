@@ -4,7 +4,7 @@ use bridge_lock_core::{
 };
 use cross_zone_outbox_core::Instruction as OutboxInstruction;
 use lee_core::{
-    account::{Account, AccountWithMetadata},
+    account::{Account, AccountId, AccountWithMetadata},
     program::{
         AccountPostState, ChainedCall, Claim, DEFAULT_PROGRAM_OWNER, ProgramId, ProgramInput,
         ProgramOutput, read_lee_inputs,
@@ -15,8 +15,8 @@ use wrapped_token_core::{Instruction as WrappedInstruction, MAX_MINT_AMOUNT};
 fn main() {
     let (
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction,
         },
@@ -24,7 +24,7 @@ fn main() {
     ) = read_lee_inputs::<Instruction>();
 
     assert!(
-        caller_program_id.is_none(),
+        caller_account_id.is_none(),
         "bridge_lock is only invoked as a top-level user transaction"
     );
 
@@ -37,8 +37,8 @@ fn main() {
             payload,
             ordinal,
         } => lock(
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction_data,
             amount,
@@ -52,16 +52,16 @@ fn main() {
             outbox_program_id,
             target_program_id,
         } => init_config(
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction_data,
             outbox_program_id,
             target_program_id,
         ),
         Instruction::InitHolding { holder } => init_holding(
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction_data,
             &holder,
@@ -72,12 +72,17 @@ fn main() {
 /// Idempotent claim: a re-run on a funded holding must be a byte-identical
 /// echo, or a stranger's `InitHolding` could reset a balance.
 fn init_holding(
-    self_program_id: ProgramId,
-    caller_program_id: Option<ProgramId>,
+    self_account_id: AccountId,
+    caller_account_id: Option<AccountId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: Vec<u8>,
     holder: &[u8; 32],
 ) {
+    // Recover the real `ProgramId` (RISC0 image id): on this branch every program account lives
+    // at the direct `AccountId::from(program_id)` bijection, so this round-trip is exact. Needed
+    // for the PDA-derivation helper below, which is pinned to the actual image id.
+    let self_program_id = ProgramId::from(self_account_id);
+
     // pre_states: [holding PDA].
     let [holding] = <[AccountWithMetadata; 1]>::try_from(pre_states)
         .expect("InitHolding requires the holding account");
@@ -89,7 +94,7 @@ fn init_holding(
     if holding.account.program_owner != DEFAULT_PROGRAM_OWNER {
         assert_eq!(
             holding.account.program_owner,
-            self_program_id.into(),
+            self_account_id,
             "bridge-lock holding PDA is owned by another program"
         );
     }
@@ -99,8 +104,8 @@ fn init_holding(
     );
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         vec![holding],
         vec![holding_post],
@@ -113,8 +118,8 @@ fn init_holding(
     reason = "the emission fields are passed through verbatim"
 )]
 fn lock(
-    self_program_id: ProgramId,
-    caller_program_id: Option<ProgramId>,
+    self_account_id: AccountId,
+    caller_account_id: Option<AccountId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: Vec<u8>,
     amount: u128,
@@ -124,6 +129,11 @@ fn lock(
     payload: Vec<u8>,
     ordinal: u32,
 ) {
+    // Recover the real `ProgramId` (RISC0 image id): on this branch every program account lives
+    // at the direct `AccountId::from(program_id)` bijection, so this round-trip is exact. Needed
+    // for the PDA-derivation helpers below, which are pinned to the actual image id.
+    let self_program_id = ProgramId::from(self_account_id);
+
     // pre_states: [config PDA, holder (authorized, echoed), holding PDA,
     // escrow PDA, outbox PDA].
     let [config, holder, holding, escrow, outbox] =
@@ -231,8 +241,8 @@ fn lock(
     let config_post = AccountPostState::new(config.account.clone());
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         vec![config, holder.clone(), holding, escrow, outbox.clone()],
         vec![
@@ -251,8 +261,8 @@ fn lock(
 /// Writes the outbox program and the mint target into the config PDA exactly once
 /// at genesis.
 fn init_config(
-    self_program_id: ProgramId,
-    caller_program_id: Option<ProgramId>,
+    self_account_id: AccountId,
+    caller_account_id: Option<AccountId>,
     pre_states: Vec<AccountWithMetadata>,
     instruction_data: Vec<u8>,
     outbox_program_id: ProgramId,
@@ -263,7 +273,7 @@ fn init_config(
         .expect("InitConfig requires the config account");
     assert_eq!(
         config.account_id,
-        config_account_id(self_program_id),
+        config_account_id(self_account_id.into()),
         "account must be the bridge-lock config PDA"
     );
     // Init-once, idempotent under genesis replay: a `default` config is a first
@@ -272,8 +282,7 @@ fn init_config(
     // `new_claimed_if_default` alone would not stop a later self-owned rewrite.
     if config.account != Account::default() {
         assert_eq!(
-            config.account.program_owner,
-            self_program_id.into(),
+            config.account.program_owner, self_account_id,
             "bridge-lock config PDA is owned by another program"
         );
         assert_eq!(
@@ -292,8 +301,8 @@ fn init_config(
         AccountPostState::new_claimed_if_default(config_account, Claim::Pda(config_seed()));
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         vec![config],
         vec![config_post],

@@ -7,8 +7,8 @@ type Instruction = ();
 fn main() {
     let (
         ProgramInput {
-            self_program_id: _, // ignore the correct ID
-            caller_program_id,
+            self_account_id: _, // ignore the correct ID
+            caller_account_id,
             pre_states,
             instruction: (),
         },
@@ -20,10 +20,10 @@ fn main() {
         .map(|a| AccountPostState::new(a.account.clone()))
         .collect();
 
-    // Deliberately output wrong self_program_id
+    // Deliberately output wrong self_account_id
     ProgramOutput::new(
-        DEFAULT_PROGRAM_ID, // WRONG: should be self_program_id
-        caller_program_id,
+        DEFAULT_PROGRAM_ID.into(), // WRONG: should be self_account_id
+        caller_account_id,
         instruction_data,
         pre_states,
         post_states,

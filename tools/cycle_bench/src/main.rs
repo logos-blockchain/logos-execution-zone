@@ -35,7 +35,7 @@ use lee::program::Program;
 use lee_core::{
     Timestamp,
     account::{Account, AccountId, AccountWithMetadata, Data},
-    program::{InstructionData, ProgramId},
+    program::InstructionData,
 };
 use risc0_zkvm::{ExecutorEnv, default_executor, default_prover};
 use serde::Serialize;
@@ -203,7 +203,7 @@ impl Case {
             pre_states,
             instruction_data,
         } = self;
-        let caller_program_id: Option<ProgramId> = None;
+        let caller_account_id: Option<AccountId> = None;
 
         // One warmup pass discarded, then `exec_iters` samples. The executor has
         // large per-call setup overhead (ELF parsing, env init); reporting both
@@ -213,8 +213,9 @@ impl Case {
         let total = exec_iters.saturating_add(1).max(2);
         for iter in 0..total {
             let mut env_builder = ExecutorEnv::builder();
-            program.write_inputs(
-                caller_program_id,
+Program::write_inputs(
+                AccountId::from(program.id()),
+                caller_account_id,
                 &pre_states,
                 &instruction_data,
                 &mut env_builder,
@@ -240,8 +241,9 @@ impl Case {
         let mut prove_segments = None;
         if prove {
             let mut env_builder = ExecutorEnv::builder();
-            program.write_inputs(
-                caller_program_id,
+Program::write_inputs(
+                AccountId::from(program.id()),
+                caller_account_id,
                 &pre_states,
                 &instruction_data,
                 &mut env_builder,

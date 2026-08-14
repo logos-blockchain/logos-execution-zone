@@ -138,7 +138,7 @@ pub fn execute_and_prove_with_padded_inputs(
     let mut chained_calls =
         VecDeque::from_iter([(initial_call, initial_program, None, HashSet::new())]);
     let mut chain_calls_counter = 0;
-    while let Some((chained_call, program, caller_program_id, caller_authorized_accounts)) =
+    while let Some((chained_call, program, caller_account_id, caller_authorized_accounts)) =
         chained_calls.pop_front()
     {
         if chain_calls_counter >= MAX_NUMBER_CHAINED_CALLS {
@@ -149,9 +149,12 @@ pub fn execute_and_prove_with_padded_inputs(
         // the top), used only to build this callee's input. The top-level call's pre_states
         // came straight from the caller, not a `ChainedCall`, and are used as-is.
         let authorized_pdas =
-            compute_public_authorized_pdas(caller_program_id, &chained_call.pda_seeds);
+            compute_public_authorized_pdas(caller_account_id, &chained_call.pda_seeds);
 
-        let real_pre_states: Vec<AccountWithMetadata> = if let Some(caller_id) = caller_program_id {
+        let real_pre_states: Vec<AccountWithMetadata> = if let Some(caller_account_id) =
+            caller_account_id
+        {
+            let caller_id = ProgramId::from(caller_account_id);
             let mut resolved = Vec::with_capacity(chained_call.pre_state_ids.len());
             for account_id in &chained_call.pre_state_ids {
                 let account = materialized_state.get(account_id).cloned().ok_or(
@@ -196,7 +199,7 @@ pub fn execute_and_prove_with_padded_inputs(
 
         let inner_receipt = execute_and_prove_program(
             program,
-            caller_program_id,
+            caller_account_id,
             &real_pre_states,
             &chained_call.instruction_data,
         )?;
@@ -236,7 +239,8 @@ pub fn execute_and_prove_with_padded_inputs(
                 .get(position)
                 .and_then(InputAccountIdentity::npk_vpk_if_private_pda);
             let pda_match = authorized_pdas.contains(&account_id)
-                || caller_program_id.is_some_and(|caller_id| {
+                || caller_account_id.is_some_and(|caller_account_id| {
+                    let caller_id = ProgramId::from(caller_account_id);
                     private_pda_witness.is_some_and(|(npk, vpk, identifier)| {
                         chained_call.pda_seeds.iter().any(|seed| {
                             AccountId::for_private_pda(&caller_id, seed, &npk, &vpk, identifier)
@@ -287,7 +291,7 @@ pub fn execute_and_prove_with_padded_inputs(
             chained_calls.push_front((
                 new_call,
                 next_program,
-                Some(ProgramId::from(chained_call.program_account_id)),
+                Some(chained_call.program_account_id),
                 authorized_output_accounts.clone(),
             ));
         }
@@ -329,14 +333,15 @@ pub fn execute_and_prove_with_padded_inputs(
 
 fn execute_and_prove_program(
     program: &Program,
-    caller_program_id: Option<ProgramId>,
+    caller_account_id: Option<AccountId>,
     pre_states: &[AccountWithMetadata],
     instruction_data: &InstructionData,
 ) -> Result<Receipt, LeeError> {
     // Write inputs to the program
     let mut env_builder = ExecutorEnv::builder();
-    program.write_inputs(
-        caller_program_id,
+    Program::write_inputs(
+        AccountId::from(program.id()),
+        caller_account_id,
         pre_states,
         instruction_data,
         &mut env_builder,

@@ -5,8 +5,8 @@ type Instruction = ();
 fn main() {
     let (
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             ..
         },
@@ -22,8 +22,8 @@ fn main() {
     account_post.nonce.public_account_nonce_increment();
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         vec![pre],
         vec![AccountPostState::new(account_post)],

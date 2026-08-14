@@ -11,8 +11,8 @@ type Instruction = PdaSeed;
 fn main() {
     let (
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction: seed,
         },
@@ -27,8 +27,8 @@ fn main() {
     let claim_b = AccountPostState::new_claimed(pre_b.account.clone(), Claim::Pda(seed));
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_data,
         vec![pre_a, pre_b],
         vec![claim_a, claim_b],

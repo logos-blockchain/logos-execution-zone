@@ -72,7 +72,7 @@ impl OutboxRecord {
 /// destination zone, and a per-emitter per-zone ordinal.
 ///
 /// `emitter` is the program that called `Emit`, which the guest takes from
-/// `caller_program_id` rather than from the instruction. Without it in the
+/// `caller_account_id` rather than from the instruction. Without it in the
 /// address two programs share a slot and one overwrites the other.
 #[must_use]
 pub fn outbox_pda(

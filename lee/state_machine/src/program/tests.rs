@@ -53,9 +53,14 @@ fn journal_is_the_borsh_frame_of_the_output_and_echoes_instruction_data() {
     ];
 
     let mut env_builder = ExecutorEnv::builder();
-    program
-        .write_inputs(None, &pre_states, &instruction_data, &mut env_builder)
-        .unwrap();
+    Program::write_inputs(
+        AccountId::from(program.id()),
+        None,
+        &pre_states,
+        &instruction_data,
+        &mut env_builder,
+    )
+    .unwrap();
     let session_info = default_executor()
         .execute(env_builder.build().unwrap(), program.elf())
         .unwrap();
