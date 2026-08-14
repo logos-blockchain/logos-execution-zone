@@ -13,8 +13,8 @@ type Instruction = (ProgramId, Vec<u32>);
 fn main() {
     let (
         ProgramInput {
-            self_program_id,
-            caller_program_id,
+            self_account_id,
+            caller_account_id,
             pre_states,
             instruction: (target_program_id, instruction_data),
         },
@@ -27,15 +27,15 @@ fn main() {
         .collect();
 
     let chained_call = ChainedCall {
-        program_id: target_program_id,
+        program_account_id: target_program_id.into(),
         instruction_data,
         pre_states: pre_states.clone(),
         pda_seeds: vec![],
     };
 
     ProgramOutput::new(
-        self_program_id,
-        caller_program_id,
+        self_account_id,
+        caller_account_id,
         instruction_words,
         pre_states,
         post_states,
